@@ -113,13 +113,33 @@ class HAClient {
           return;
         }
         if (msg.type === "event" && this._runs.has(msg.id)) {
-          this._runs.get(msg.id).onEvent(msg.event);
+          const run = this._runs.get(msg.id);
+          run.onEvent(msg.event);
+          // Pipeline runs complete on `run-end` (the actual event), not on
+          // the first `result` message — that's only an ack the subscription
+          // was accepted. Tear down the run here.
+          if (msg.event?.type === "run-end") {
+            this._runs.delete(msg.id);
+            run.onResult({ success: true });
+          } else if (msg.event?.type === "error") {
+            this._runs.delete(msg.id);
+            run.onResult({
+              success: false,
+              error: { message: msg.event.data?.message || "pipeline error" },
+            });
+          }
           return;
         }
         if (msg.type === "result" && this._runs.has(msg.id)) {
+          // For assist_pipeline/run the result is just the subscription ACK
+          // and the pipeline events stream after — we only tear down on
+          // success=false. For everything else (subscribe_events, plain
+          // calls) the result IS terminal — flagged via _terminalOnResult.
           const run = this._runs.get(msg.id);
-          this._runs.delete(msg.id);
-          run.onResult(msg);
+          if (!msg.success || run._terminalOnResult) {
+            this._runs.delete(msg.id);
+            run.onResult(msg);
+          }
           return;
         }
         // pong / unknown — ignore
@@ -188,13 +208,20 @@ class HAClient {
         onEvent: (ev) => { try { onEvent(ev); } catch (e) { console.error(e); } },
         onResult: (res) => {
           if (timeoutHandle) clearTimeout(timeoutHandle);
+          console.log("[ha result]", res);
           if (res.success) resolve({ t0, elapsedMs: performance.now() - t0 });
-          else             reject(new Error(res.error?.message || "pipeline failed"));
+          else             reject(new Error(
+            res.error?.message ||
+            JSON.stringify(res.error) ||
+            "pipeline failed"
+          ));
         },
       });
       try {
+        console.log("[ha send]", payload);
         this.ws.send(JSON.stringify(payload));
       } catch (e) {
+        console.error("[ha send fail]", e);
         this._runs.delete(id);
         reject(e);
         return;
@@ -212,6 +239,146 @@ class HAClient {
     };
 
     return { id, done, cancel };
+  }
+
+  /* Voice pipeline run: start_stage=stt, end_stage=tts.
+   *
+   * Returns { id, audioHandlerReady, sendAudioChunk, done, cancel }.
+   * Caller awaits audioHandlerReady to learn the binary handler id from
+   * HA's run-start event, then calls sendAudioChunk(Uint8Array) per
+   * captured frame. End the stream by sending an empty Uint8Array. */
+  runVoicePipeline({
+    onEvent = () => {},
+    conversationId = null,
+    pipelineId = null,
+  } = {}) {
+    if (!this.ws || this.ws.readyState !== 1) {
+      return Promise.reject(new Error("not connected"));
+    }
+    const id = this._msgId++;
+    const payload = {
+      id,
+      type: "assist_pipeline/run",
+      start_stage: "stt",
+      end_stage: "tts",
+      input: { sample_rate: 16000 },
+      // HA 2026.5 rejects audio_settings as an invalid extra key — noise
+      // suppression / AGC live in the satellite or pipeline config now.
+    };
+    if (conversationId) payload.conversation_id = conversationId;
+    if (pipelineId)     payload.pipeline = pipelineId;
+
+    const t0 = performance.now();
+    let stt_handler_id = null;
+    let audioReadyResolve, audioReadyReject;
+    const audioHandlerReady = new Promise((res, rej) => {
+      audioReadyResolve = res;
+      audioReadyReject = rej;
+    });
+    let timeoutHandle = null;
+
+    const wrappedOnEvent = (ev) => {
+      if (ev?.type === "run-start") {
+        // run-start.data.runner_data.stt_binary_handler_id is the binary
+        // handler — every audio frame must be prefixed with this byte.
+        stt_handler_id = ev?.data?.runner_data?.stt_binary_handler_id;
+        if (stt_handler_id != null) audioReadyResolve(stt_handler_id);
+      }
+      try { onEvent(ev); } catch (e) { console.error(e); }
+    };
+
+    const done = new Promise((resolve, reject) => {
+      this._runs.set(id, {
+        t0,
+        onEvent: wrappedOnEvent,
+        onResult: (res) => {
+          if (timeoutHandle) clearTimeout(timeoutHandle);
+          if (res.success) resolve({ t0, elapsedMs: performance.now() - t0 });
+          else             reject(new Error(res.error?.message || "voice pipeline failed"));
+        },
+      });
+      try {
+        console.log("[ha voice send]", payload);
+        this.ws.send(JSON.stringify(payload));
+      } catch (e) {
+        this._runs.delete(id);
+        audioReadyReject(e);
+        reject(e);
+        return;
+      }
+      timeoutHandle = setTimeout(() => {
+        if (!this._runs.has(id)) return;
+        this._runs.delete(id);
+        audioReadyReject(new Error("voice run timeout"));
+        reject(new Error("voice run timeout"));
+      }, HG_HA_RUN_TIMEOUT_MS);
+    });
+
+    const sendAudioChunk = (pcmBytes) => {
+      if (stt_handler_id == null || this.ws?.readyState !== 1) return;
+      // Prepend the handler-id byte. HA expects raw PCM s16le 16kHz mono
+      // following one byte of handler id, all as one binary frame.
+      const frame = new Uint8Array(1 + pcmBytes.byteLength);
+      frame[0] = stt_handler_id;
+      frame.set(pcmBytes, 1);
+      try { this.ws.send(frame); } catch (e) { console.error("[audio send]", e); }
+    };
+
+    const cancel = () => {
+      if (this._runs.has(id)) this._runs.delete(id);
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    };
+
+    return { id, audioHandlerReady, sendAudioChunk, done, cancel };
+  }
+
+  /* Subscribe to HA event_type stream. Returns an unsubscribe function. */
+  subscribeEvents(eventType, onEvent) {
+    if (!this.ws || this.ws.readyState !== 1) {
+      throw new Error("not connected");
+    }
+    const id = this._msgId++;
+    this._runs.set(id, {
+      t0: performance.now(),
+      onEvent: (ev) => { try { onEvent(ev); } catch (e) { console.error(e); } },
+      onResult: () => {},
+    });
+    const payload = { id, type: "subscribe_events" };
+    if (eventType) payload.event_type = eventType;
+    try { this.ws.send(JSON.stringify(payload)); } catch {}
+    return () => {
+      if (!this._runs.has(id)) return;
+      this._runs.delete(id);
+      try {
+        const unsubId = this._msgId++;
+        this.ws?.send(JSON.stringify({ id: unsubId, type: "unsubscribe_events", subscription: id }));
+      } catch {}
+    };
+  }
+
+  /* Generic WS call → result promise (no event subscription). */
+  call(payload) {
+    if (!this.ws || this.ws.readyState !== 1) {
+      return Promise.reject(new Error("not connected"));
+    }
+    const id = this._msgId++;
+    payload.id = id;
+    return new Promise((resolve, reject) => {
+      // Use the _runs map but only listen for result.
+      this._runs.set(id, {
+        t0: performance.now(),
+        onEvent: () => {},
+        onResult: (res) => {
+          if (res.success) resolve(res.result);
+          else             reject(new Error(res.error?.message || "ws call failed"));
+        },
+      });
+      // Re-tweak: WS messages of type=result for non-run calls also need
+      // tear-down, so flag this run as terminal-on-result.
+      this._runs.get(id)._terminalOnResult = true;
+      try { this.ws.send(JSON.stringify(payload)); }
+      catch (e) { this._runs.delete(id); reject(e); }
+    });
   }
 }
 

@@ -7,13 +7,33 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows
+            runs-on: windows-latest
+            bundle_glob: app/src-tauri/target/release/bundle/msi/Home_*_x64_en-US.msi
+            tauri_target: ""
+          - name: macos-arm64
+            runs-on: macos-14
+            bundle_glob: app/src-tauri/target/release/bundle/dmg/Home_*_aarch64.dmg
+            tauri_target: aarch64-apple-darwin
+          - name: macos-x64
+            runs-on: macos-13
+            bundle_glob: app/src-tauri/target/release/bundle/dmg/Home_*_x64.dmg
+            tauri_target: x86_64-apple-darwin
+
+    runs-on: ${{ matrix.runs-on }}
+
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.tauri_target }}
 
       - name: Cache Rust build
         uses: actions/cache@v4
@@ -22,20 +42,26 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             app/src-tauri/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('app/src-tauri/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ matrix.name }}-cargo-${{ hashFiles('app/src-tauri/Cargo.lock') }}
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2.0" --locked
 
-      - name: Build .msi
+      - name: Build (Windows)
+        if: matrix.name == 'windows'
         working-directory: app/src-tauri
         run: cargo tauri build
 
-      - name: Upload .msi to release
+      - name: Build (macOS)
+        if: startsWith(matrix.name, 'macos')
+        working-directory: app/src-tauri
+        run: cargo tauri build --target ${{ matrix.tauri_target }}
+
+      - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
           draft: true
-          files: app/src-tauri/target/release/bundle/msi/Home_*_x64_en-US.msi
+          files: ${{ matrix.bundle_glob }}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

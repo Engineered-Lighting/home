@@ -38,15 +38,18 @@ less ominous.
 
 ### Model sizing
 
-| Model                  | VRAM (FP8) | Where it fits | Notes                                  |
-|------------------------|-----------:|---------------|-----------------------------------------|
-| qwen3-32b-instruct-fp8 |    ~22 GB  | 4090 / 6000   | Default; what I run                     |
-| qwen3.6-27b            |    ~20 GB  | 4090 / 6000   | What's currently active in my stack     |
-| qwen3-14b              |    ~10 GB  | 12 GB GPUs    | Smaller, slightly worse tool-calling    |
-| qwen3-7b               |     ~6 GB  | Most GPUs     | Lowest end; basic intents only          |
+The default unified model is `Qwen/Qwen2.5-VL-32B-Instruct-AWQ`
+(~20 GB VRAM, INT4 quantized). It handles text chat, tool calls,
+*and* image inputs for camera-aware intents in one process.
 
-Set the model via `VLLM_MODEL` and `VLLM_SERVED_NAME` in
-`stack/.env`.
+| Model                                        | VRAM   | Where it fits | Notes                                        |
+|----------------------------------------------|-------:|---------------|----------------------------------------------|
+| Qwen/Qwen2.5-VL-32B-Instruct-AWQ (default)   | ~20 GB | RTX 4090 / 6000 | Vision + text + tool calls in one process |
+| Qwen/Qwen2.5-VL-7B-Instruct-AWQ              |  ~5 GB | 12 GB+ GPUs   | Smaller; weaker on multi-step intents        |
+| Qwen/Qwen2.5-VL-72B-Instruct-AWQ             | ~40 GB | 48 GB+ GPUs   | Flagship; slowest TTFT                       |
+
+To swap, edit the `--model` and `--served-model-name` lines in
+`stack/docker-compose.yml`. (Env-var overrides return in v0.2.)
 
 ---
 
@@ -93,10 +96,15 @@ Devices & Services → Add Integration → Extended OpenAI Conversation.
 Configure:
 - **Base URL:** `http://<ai-box-ip>:8000/v1`
 - **API Key:** any non-empty string (vLLM ignores it)
-- **Model:** the served name you set in `stack/.env` (default:
-  `qwen3.6-27b`)
+- **Model:** `qwen2.5-vl-32b` (matches the `--served-model-name`
+  in `stack/docker-compose.yml`)
 - **Temperature:** 0.4 (lower = more deterministic device actions)
 - **Max tokens:** 512
+
+If you previously had this configured for `qwen3.6-27b`, just change
+the model name field and reload the integration (Settings → Devices
+& Services → Extended OpenAI Conversation → ⋮ → Reload). HA picks up
+the new model name without needing a full restart.
 
 The default system prompt covers most home-automation intents.
 

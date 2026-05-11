@@ -1,25 +1,27 @@
-"""
-Vision sidecar: HA camera snapshot + Ollama vision model -> short text.
+"""Vision sidecar: HA camera snapshot → vLLM (multimodal) → short text.
 
-Exposes a tiny HTTP API that the primary text LLM (Qwen3.6-27B-FP8 in vLLM)
-calls via the Extended OpenAI Conversation `describe_camera` tool. The
-sidecar pulls a fresh JPEG from Home Assistant's camera_proxy and passes it
-to Ollama running on the host. Returns a one-paragraph description.
+The primary LLM (Qwen3-VL-30B-A3B-Instruct on vLLM) is now natively
+multimodal, so this sidecar's job is just to fetch the right camera
+frame from HA and hand it to vLLM as an OpenAI-style multimodal
+chat-completion request. Returns a short description.
 
-Why a sidecar (instead of switching the primary LLM to a VL model):
-- Keeps the text path fast (Qwen3.6 first-token <100 ms)
-- Vision query is rare; pay the latency only when asked
-- Vision model loads on demand and unloads after OLLAMA_KEEP_ALIVE
+Why still a sidecar (vs HA's Extended OpenAI Conv handling images
+directly): HA's `describe_camera` tool call gives the agent a clean
+text-only response, and we keep camera-grab logic out of HA's prompt
+template. Also lets us cap image size, normalize formats, and add
+camera aliases (driveway / front door / outside → camera.driveway).
 
 Env:
-  HA_URL                   default http://192.168.0.125:8123
-  HA_TOKEN                 required
-  OLLAMA_URL               default http://192.168.0.100:11434 (Ubuntu LAN IP)
-  VISION_MODEL             default qwen3-vl:8b
-  VISION_NUM_CTX           default 8192
+  HA_URL            default http://192.168.0.125:8123
+  HA_TOKEN          required
+  VLLM_URL          default http://vllm:8000  (sidecar runs in the same
+                    docker network; vllm is reachable by service name)
+  VISION_MODEL      default qwen3-vl-30b      (served-model-name from vLLM)
+  VISION_MAX_TOKENS default 200
 """
 from __future__ import annotations
 import base64
+import logging
 import os
 import time
 from typing import Optional
@@ -28,13 +30,16 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+log = logging.getLogger("vision-sidecar")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
 HA_URL = os.environ.get("HA_URL", "http://192.168.0.125:8123")
 HA_TOKEN = os.environ["HA_TOKEN"]
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://192.168.0.100:11434")
-VISION_MODEL = os.environ.get("VISION_MODEL", "qwen3-vl:8b")
-VISION_NUM_CTX = int(os.environ.get("VISION_NUM_CTX", "8192"))
+VLLM_URL = os.environ.get("VLLM_URL", "http://vllm:8000")
+VISION_MODEL = os.environ.get("VISION_MODEL", "qwen3-vl-30b")
+VISION_MAX_TOKENS = int(os.environ.get("VISION_MAX_TOKENS", "200"))
 
-# Map friendly camera names the LLM is likely to say -> HA entity IDs.
+# Friendly camera names → HA entity IDs.
 CAMERA_ALIASES = {
     "kitchen": "camera.kitchen",
     "living_room": "camera.living_room",
@@ -55,7 +60,7 @@ def resolve_entity(name: str) -> str:
     return CAMERA_ALIASES.get(n) or f"camera.{n.replace(' ', '_')}"
 
 
-app = FastAPI(title="hav-vision-sidecar")
+app = FastAPI(title="hav-vision-sidecar", version="0.2.0")
 
 
 class DescribeIn(BaseModel):
@@ -78,7 +83,6 @@ def healthz() -> dict:
 
 @app.get("/cameras")
 async def list_cameras() -> dict:
-    """List camera entities exposed in HA. Useful for debugging."""
     async with httpx.AsyncClient(timeout=10) as c:
         r = await c.get(
             f"{HA_URL}/api/states",
@@ -99,8 +103,8 @@ async def describe(body: DescribeIn) -> DescribeOut:
     question = (body.question or "What is happening in this scene? Reply with one short sentence.").strip()
 
     t0 = time.monotonic()
-    async with httpx.AsyncClient(timeout=30) as c:
-        # 1. Get a fresh JPEG from HA's camera proxy.
+    async with httpx.AsyncClient(timeout=60) as c:
+        # 1. Fresh JPEG from HA's camera proxy.
         r = await c.get(
             f"{HA_URL}/api/camera_proxy/{entity_id}",
             headers={"Authorization": f"Bearer {HA_TOKEN}"},
@@ -110,34 +114,57 @@ async def describe(body: DescribeIn) -> DescribeOut:
                 502, f"HA camera_proxy returned {r.status_code} for {entity_id}"
             )
         jpeg_b64 = base64.b64encode(r.content).decode()
+        log.info("camera_proxy %s → %d bytes", entity_id, len(r.content))
 
-        # 2. Hand the image + question to the vision model on Ollama.
-        ollama_body = {
-            "model": VISION_MODEL,
-            "prompt": (
-                "You are looking at a fresh snapshot from a home security camera "
-                f"named {entity_id}. Answer briefly and naturally for a voice "
-                f"assistant. Question: {question}"
-            ),
-            "images": [jpeg_b64],
-            "stream": False,
-            "options": {
-                "num_ctx": VISION_NUM_CTX,
-                "temperature": 0.3,
-                "num_predict": 200,
+        # 2. Multimodal chat completion via vLLM (OpenAI-compatible).
+        #    Qwen3-VL accepts image data URLs in the message content list.
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are reading a single snapshot from a home security "
+                    "camera. Answer briefly and naturally for a voice assistant. "
+                    "Use one short sentence. Don't say 'in the image' or "
+                    "'I see' — describe directly."
+                ),
             },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{jpeg_b64}"},
+                    },
+                    {
+                        "type": "text",
+                        "text": f"Camera: {entity_id}. {question}",
+                    },
+                ],
+            },
+        ]
+        vllm_body = {
+            "model": VISION_MODEL,
+            "messages": messages,
+            "stream": False,
+            "max_tokens": VISION_MAX_TOKENS,
+            "temperature": 0.3,
         }
         r = await c.post(
-            f"{OLLAMA_URL}/api/generate", json=ollama_body, timeout=90
+            f"{VLLM_URL}/v1/chat/completions",
+            json=vllm_body,
+            timeout=60,
         )
         if r.status_code != 200:
-            raise HTTPException(502, f"Ollama returned {r.status_code}: {r.text[:500]}")
-        out = r.json().get("response", "").strip()
+            raise HTTPException(502, f"vLLM returned {r.status_code}: {r.text[:500]}")
+        resp = r.json()
+        out = (resp.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
 
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
+    log.info("describe %s ok in %dms: %r", entity_id, elapsed_ms, out[:80])
     return DescribeOut(
         camera=body.camera,
         entity_id=entity_id,
         description=out,
-        latency_ms=int((time.monotonic() - t0) * 1000),
+        latency_ms=elapsed_ms,
         model=VISION_MODEL,
     )

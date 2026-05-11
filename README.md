@@ -21,15 +21,20 @@ entirely on your hardware — your voice, your model, your data.
 
 - A 420×720 always-on chat window in your favourite corner, resizable
   to whatever shape suits you.
+- **Live camera card** at the top of the chat — collapsed row showing
+  camera count, expands to a tab strip + live MJPEG feed of the
+  selected camera. Slots for V-JEPA-2 activity labels.
 - Real-time view of every assistant step: thinking, tool calls, device
-  actions (with success/error + latency), streaming reply text.
+  actions (collapsed `▸ action` cards), streaming reply text.
+- **Voice mode** in the app: click the mic, talk, get a TTS reply
+  back. Same HA pipeline as your Voice PE.
+- **All conversations in one feed** — typed turns from the app, voice
+  mode from the app, and Voice PE wake-word turns at your speaker
+  all appear in the same Home window via the chat-tee SSE stream.
 - Live system metrics from the AI box: GPU util, VRAM, CPU, RAM, plus
   TTFT + tok/s from the local LLM.
-- Dark mode by default; a restrained "paper terminal" light mode.
-- Token-streaming where Home Assistant supports it
-  (`intent-progress`); graceful fallback otherwise.
-- Conversation memory across turns. History persists between
-  launches.
+- Dark default + parchment "paper terminal" light mode.
+- Conversation memory across turns. History persists between launches.
 
 ## What you need
 

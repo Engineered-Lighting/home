@@ -785,6 +785,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   useEffect(() => {
     const client = new HAClient();
     haClientRef.current = client;
+    // Expose to non-React modules (vision hook signs camera URLs through it).
+    window.__hav_haClient = client;
     const off = client.onConnection(({ state, message }) => {
       // Map HAClient states to the UI's connection states.
       if (state === "connecting")          setConnection("connecting");
@@ -796,7 +798,37 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     return () => { off(); client.disconnect(); haClientRef.current = null; };
   }, [addEvent]);
 
-  /* ── Connect (HA WS auth + optional /v1/models discovery) ────────── */
+  /* Probe for the sidecar — tries a few common URLs and uses the first
+   * one that returns /healthz. Helps when the AI box is on a different
+   * host than HA (the typical case). */
+  const probeMetricsBase = useCallback(async (haUrl) => {
+    const candidates = [];
+    try {
+      const u = new URL(haUrl.replace(/^ws/, "http"));
+      // 1. Same host as HA (works for single-box setups).
+      candidates.push(`http://${u.hostname}:8092`);
+      // 2. Same /24 with .100 (the typical AI-box address in this repo's
+      //    reference setup).
+      const m = u.hostname.match(/^(\d+\.\d+\.\d+)\.\d+$/);
+      if (m) candidates.push(`http://${m[1]}.100:8092`);
+      // 3. localhost.
+      candidates.push("http://localhost:8092");
+    } catch {
+      candidates.push("http://localhost:8092");
+    }
+    for (const cand of candidates) {
+      try {
+        const r = await tauriFetch(`${cand}/healthz`);
+        if (r.ok) {
+          const j = await r.json();
+          if (j?.ok) return cand;
+        }
+      } catch {}
+    }
+    return null;
+  }, []);
+
+  /* ── Connect (HA WS auth + sidecar discovery) ────────── */
   const connectTo = useCallback(async (haUrl, accessToken) => {
     if (!haUrl || !accessToken) return;
     setEndpoint(haUrl);
@@ -810,32 +842,54 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       addEvent({ kind: "system", text: `unreachable · ${e?.message || haUrl}`, tone: "error" });
       return;
     }
-    // Auxiliary: discover the vLLM model name + ctx for the picker. This is
-    // optional — if it fails (CORS, no vLLM on :8000 of the same host) we just
-    // skip the picker and go straight online.
-    try {
-      const mBase = metricsBase || metricsBaseFromEndpoint(haUrl);
-      if (!metricsBase) setMetricsBase(mBase);
-      const aiHost = new URL(mBase).hostname;
-      const r = await tauriFetch(`http://${aiHost}:8000/v1/models`);
-      const j = await r.json();
-      const data = j?.data || [];
-      if (data.length > 0) {
-        setAvailableModels(data.map((m) => ({
-          name: m.id,
-          ctx: m.max_model_len ? `${Math.round(m.max_model_len / 1024)}k` : "",
-        })));
-        setConnection("picking-model");
-        addEvent({ kind: "system", text: `connected · ${data.length} model${data.length === 1 ? "" : "s"} on the ai box`, tone: "ok" });
-        return;
+    // Always re-probe for the sidecar on connect — if a persisted
+    // metricsBase is stale (e.g. wrong host saved in localStorage from a
+    // prior session), the probe finds the correct one. User-set values via
+    // /metrics still win because they save BEFORE this runs on reconnect.
+    let mBase = await probeMetricsBase(haUrl);
+    if (mBase) {
+      if (mBase !== metricsBase) {
+        setMetricsBase(mBase);
+        addEvent({ kind: "system", text: `sidecar · ${mBase}`, tone: "ok" });
       }
-    } catch {
-      // No vLLM reachable from here, or CORS-blocked. Not fatal — HA's agent
-      // already has its own model binding.
+    } else if (metricsBase) {
+      // No probe candidate worked, but we have a saved value — try it.
+      mBase = metricsBase;
+      addEvent({
+        kind: "system",
+        tone: "warn",
+        text: `sidecar probe failed. trying saved · ${mBase}`,
+      });
+    } else {
+      addEvent({
+        kind: "system",
+        tone: "warn",
+        text: "sidecar unreachable. run /metrics <ai-box-url:8092> to set it. without this you won't see voice pe conversations or live metrics.",
+      });
+    }
+    // Auxiliary: discover the vLLM model name + ctx for the picker. Optional.
+    if (mBase) {
+      try {
+        const aiHost = new URL(mBase).hostname;
+        const r = await tauriFetch(`http://${aiHost}:8000/v1/models`);
+        const j = await r.json();
+        const data = j?.data || [];
+        if (data.length > 0) {
+          setAvailableModels(data.map((m) => ({
+            name: m.id,
+            ctx: m.max_model_len ? `${Math.round(m.max_model_len / 1024)}k` : "",
+          })));
+          setConnection("picking-model");
+          addEvent({ kind: "system", text: `${data.length} model${data.length === 1 ? "" : "s"} on the ai box`, tone: "ok" });
+          return;
+        }
+      } catch {
+        // CORS or unreachable — non-fatal; HA's agent has its own model binding.
+      }
     }
     setConnection("online");
     addEvent({ kind: "system", text: `connected · home assistant ${haClientRef.current.haVersion || ""}`, tone: "ok" });
-  }, [addEvent, metricsBase]);
+  }, [addEvent, metricsBase, probeMetricsBase]);
 
   const confirmModel = useCallback((name) => {
     if (name) setModel(name);
@@ -890,72 +944,25 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       return;
     }
 
+    // Local instant feedback for the user's typed message. The matching
+    // SSE event (when the sidecar tees the chat completion) will dedupe
+    // against this by content and only add the assistant + tool_calls.
     addEvent({ kind: "user", text });
-
-    // Create the streaming home event eagerly so intent-progress chunks
-    // can flow into it.
-    const homeId = nextId();
-    streamingIds.current.add(homeId);
-    setEvents((prev) => [...prev, { id: homeId, kind: "home", time: fmtTime(), text: "", streaming: true }]);
-
     const thinkingId = nextId();
     setEvents((prev) => [...prev, { id: thinkingId, kind: "thinking", time: fmtTime(), text: "calling assistant…" }]);
 
     const t0 = performance.now();
-    let progressArrived = false;
-    let firstChunkAt = null;
-
     const onEvent = (haEvent) => {
       if (!haEvent || !haEvent.type) return;
-      if (haEvent.type === "intent-start") {
-        // Replace generic "calling assistant" with model-specific note if HA
-        // surfaces it. Not load-bearing — just a small UX detail.
-        return;
-      }
-      if (haEvent.type === "intent-progress") {
-        const p = extractIntentProgress(haEvent);
-        if (p && p.textDelta) {
-          if (firstChunkAt === null) firstChunkAt = performance.now();
-          progressArrived = true;
-          setEvents((prev) => prev.map((e) =>
-            e.id === homeId ? { ...e, text: (e.text || "") + p.textDelta } : e
-          ));
-        }
-        return;
-      }
+      console.log("[ha event]", haEvent.type, haEvent.data);
       if (haEvent.type === "intent-end") {
-        const { speech, convId, toolCalls, actions } = extractIntentEnd(haEvent);
+        const { convId } = extractIntentEnd(haEvent);
         if (convId) setConversationId(convId);
-
-        // Insert tool calls + actions BEFORE the home reply visually.
-        // We do this by patching the in-flight stream + inserting cards above it.
-        setEvents((prev) => {
-          const tcEvents = toolCalls.map((tc) => ({
-            id: nextId(), kind: "tool", time: fmtTime(),
-            name: tc.name, args: tc.args, status: tc.status, latency: null,
-          }));
-          const acEvents = actions.map((a) => ({
-            id: nextId(), kind: "action", time: fmtTime(),
-            title: a.title, service: a.service, target: a.target,
-            attrs: a.attrs, status: a.status, reason: a.reason,
-          }));
-          if (tcEvents.length === 0 && acEvents.length === 0) return prev;
-          // Insert just before the streaming home event.
-          const homeIdx = prev.findIndex((e) => e.id === homeId);
-          if (homeIdx === -1) return [...prev, ...tcEvents, ...acEvents];
-          return [...prev.slice(0, homeIdx), ...tcEvents, ...acEvents, ...prev.slice(homeIdx)];
-        });
-
-        // If progress never arrived, the speech text lands here as a single chunk.
-        if (!progressArrived && speech) {
-          setEvents((prev) => prev.map((e) => e.id === homeId ? { ...e, text: speech } : e));
-        }
         return;
       }
       if (haEvent.type === "error") {
         const msg = haEvent.data?.message || "pipeline error";
         addEvent({ kind: "system", text: msg, tone: "error" });
-        return;
       }
     };
 
@@ -968,20 +975,14 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
 
     try {
       const { elapsedMs } = await run.done;
-      setMetrics((prev) => ({
-        ...prev,
-        e2e: Math.round(elapsedMs),
-        ttft: firstChunkAt !== null ? Math.round(firstChunkAt - t0) : prev.ttft,
-      }));
+      setMetrics((prev) => ({ ...prev, e2e: Math.round(elapsedMs) }));
     } catch (e) {
       addEvent({ kind: "system", text: e?.message || "pipeline failed", tone: "error" });
     } finally {
-      // Remove the "calling assistant…" thinking line.
       setEvents((prev) => prev.filter((e) => e.id !== thinkingId));
-      finishStream(homeId);
       if (activeRunRef.current?.id === run.id) activeRunRef.current = null;
     }
-  }, [connection, conversationId, addEvent, finishStream]);
+  }, [connection, conversationId, addEvent]);
 
   /* ── Stop / cancel an in-flight run ────────────────────────────────── */
   const stopStreaming = useCallback(() => {
@@ -1156,10 +1157,317 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     return () => window.removeEventListener("keydown", onKey);
   }, [stopStreaming]);
 
-  /* ── Voice mode (Phase 1 scaffold — real audio in Phase 2 wiring) ──── */
-  const toggleMic = useCallback(() => {
-    setVoice((v) => v.state === "inactive" ? { state: "listening" } : { state: "inactive" });
+  /* ── Voice mode: mic → HA STT → pipeline → HA TTS → speakers ─────────── */
+  const voiceCtxRef = useRef(null);
+  const voiceStreamRef = useRef(null);
+  const voiceRunRef = useRef(null);
+  const voiceTtsAudioRef = useRef(null);
+
+  const stopVoiceMode = useCallback((newState = "inactive") => {
+    try { voiceRunRef.current?.cancel?.(); } catch {}
+    voiceRunRef.current = null;
+    try { voiceStreamRef.current?.getTracks?.().forEach((t) => t.stop()); } catch {}
+    voiceStreamRef.current = null;
+    try { voiceCtxRef.current?.close?.(); } catch {}
+    voiceCtxRef.current = null;
+    setVoice({ state: newState });
   }, []);
+
+  const startVoiceMode = useCallback(async () => {
+    if (!haClientRef.current || connection !== "online") {
+      addEvent({ kind: "system", text: "connect first to use voice", tone: "warn" });
+      return;
+    }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          sampleRate: 16000,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
+      });
+    } catch (e) {
+      console.error("[mic] getUserMedia failed:", e);
+      setVoice({ state: "no-mic" });
+      addEvent({ kind: "system", text: `mic unavailable · ${e?.message || e}`, tone: "warn" });
+      return;
+    }
+    voiceStreamRef.current = stream;
+    setVoice({ state: "listening" });
+
+    // Build AudioContext at 16k for HA (browser will resample from device rate).
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AudioCtx({ sampleRate: 16000 });
+    voiceCtxRef.current = ctx;
+
+    // Local feedback while the user is still talking. The transcript
+    // updates on stt-end; the SSE feed adds the assistant reply +
+    // tool_calls afterward (dedupes against this voice event by text).
+    const voiceId = nextId();
+    setEvents((prev) => [...prev, {
+      id: voiceId, kind: "voice", time: fmtTime(), text: "listening…",
+    }]);
+
+    const t0 = performance.now();
+
+    const onVoiceEvent = (haEvent) => {
+      if (!haEvent || !haEvent.type) return;
+      console.log("[ha voice]", haEvent.type, haEvent.data);
+      if (haEvent.type === "stt-end") {
+        const transcript = haEvent.data?.stt_output?.text || "";
+        if (transcript) {
+          setEvents((prev) => prev.map((e) =>
+            e.id === voiceId ? { ...e, text: transcript } : e
+          ));
+        }
+        setVoice({ state: "processing" });
+        return;
+      }
+      if (haEvent.type === "intent-end") {
+        const { convId } = extractIntentEnd(haEvent);
+        if (convId) setConversationId(convId);
+        return;
+      }
+      if (haEvent.type === "tts-end") {
+        // Audio is reachable via HA at /api/tts_proxy/<url>. Play it.
+        const u = haEvent.data?.tts_output?.url || haEvent.data?.tts_output?.media_id;
+        if (u) {
+          setVoice({ state: "speaking" });
+          const audioUrl = u.startsWith("/") ? (endpoint.replace(/\/+$/, "") + u) : u;
+          try {
+            const a = new Audio(audioUrl);
+            voiceTtsAudioRef.current = a;
+            a.onended = () => { setVoice({ state: "inactive" }); };
+            a.onerror = () => { setVoice({ state: "inactive" }); };
+            // HA may serve audio with the long-lived token in cookies; if not,
+            // we can pre-fetch with auth and play a blob.
+            a.play().catch((err) => {
+              console.error("[tts play]", err);
+              addEvent({ kind: "system", text: `tts playback blocked · ${err.message}`, tone: "warn" });
+              setVoice({ state: "inactive" });
+            });
+          } catch (e) {
+            console.error("[tts]", e);
+            setVoice({ state: "inactive" });
+          }
+        } else {
+          setVoice({ state: "inactive" });
+        }
+        return;
+      }
+      if (haEvent.type === "error") {
+        addEvent({ kind: "system", text: haEvent.data?.message || "voice pipeline error", tone: "error" });
+      }
+    };
+
+    const run = haClientRef.current.runVoicePipeline({
+      onEvent: onVoiceEvent,
+      conversationId,
+    });
+    voiceRunRef.current = run;
+
+    // Wait for the handler id, then start streaming PCM frames from mic.
+    let handlerReady = false;
+    run.audioHandlerReady.then(() => { handlerReady = true; }).catch((e) => {
+      console.error("[voice handler]", e);
+      stopVoiceMode("inactive");
+    });
+
+    // Stream audio via AudioWorklet if available, fall back to ScriptProcessor.
+    // We capture, convert float32 → int16 LE, and ship as binary frames.
+    const source = ctx.createMediaStreamSource(stream);
+    const FRAME_SIZE = 4096;
+    let processorNode;
+    try {
+      // ScriptProcessor is deprecated but ubiquitous; AudioWorklet would need
+      // a separate module file. For v0.1 simplicity, ScriptProcessor is fine.
+      processorNode = ctx.createScriptProcessor(FRAME_SIZE, 1, 1);
+    } catch (e) {
+      console.error("[audio] no processor", e);
+      stopVoiceMode("no-mic");
+      return;
+    }
+    processorNode.onaudioprocess = (e) => {
+      if (!handlerReady || !run) return;
+      const f32 = e.inputBuffer.getChannelData(0);
+      const i16 = new Int16Array(f32.length);
+      for (let i = 0; i < f32.length; i++) {
+        const v = Math.max(-1, Math.min(1, f32[i]));
+        i16[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+      }
+      run.sendAudioChunk(new Uint8Array(i16.buffer));
+    };
+    source.connect(processorNode);
+    // Route to a silent destination so the script-processor stays alive
+    // without re-routing the mic to the speakers (would echo).
+    const muteGain = ctx.createGain();
+    muteGain.gain.value = 0;
+    processorNode.connect(muteGain);
+    muteGain.connect(ctx.destination);
+
+    // When the run completes, clean up the mic.
+    run.done.finally(() => {
+      try { source.disconnect(); processorNode.disconnect(); muteGain.disconnect(); } catch {}
+      try { stream.getTracks().forEach((t) => t.stop()); } catch {}
+      voiceStreamRef.current = null;
+      voiceRunRef.current = null;
+      // Do NOT set inactive here — let tts-end's audio onended handler do it,
+      // so the speaking state lasts through playback.
+      setMetrics((prev) => ({
+        ...prev,
+        e2e: Math.round(performance.now() - t0),
+      }));
+    });
+  }, [connection, conversationId, addEvent, endpoint, stopVoiceMode]);
+
+  const toggleMic = useCallback(() => {
+    if (voice.state === "inactive" || voice.state === "no-mic") {
+      startVoiceMode();
+    } else {
+      stopVoiceMode("inactive");
+    }
+  }, [voice.state, startVoiceMode, stopVoiceMode]);
+
+  /* ── Single source of truth: SSE feed from the chat-tee sidecar ────────
+   *
+   * The sidecar proxies vLLM and broadcasts every chat completion — user
+   * text, assistant text, tool_calls. With HA's prefer_local_intents set
+   * to false, every turn (typed, voice mode, Voice PE) routes through the
+   * LLM, so this stream carries the full conversation history regardless
+   * of where it originated.
+   *
+   * Dedup with locally-rendered events: when the SSE event's user_msg
+   * matches the most-recent user/voice event in the feed, we skip the
+   * user side (keeps instant feedback for typed turns) and add the rest. */
+  const seenSsEvents = useRef(new Set());
+  useEffect(() => {
+    if (connection !== "online") return undefined;
+    const base = metricsBase || metricsBaseFromEndpoint(endpoint);
+    let es;
+    try {
+      es = new EventSource(`${base}/conversations/stream?backfill_n=0`);
+    } catch (e) {
+      console.warn("[sse] not supported:", e);
+      return undefined;
+    }
+    console.log("[sse] subscribing to", `${base}/conversations/stream`);
+    es.onopen = () => console.log("[sse] open");
+    es.onmessage = (ev) => {
+      let entry;
+      try { entry = JSON.parse(ev.data); }
+      catch { return; }
+      console.log("[sse] event", entry);
+      const dedup = entry.id || `${entry.ts}-${(entry.user || "").slice(0, 30)}`;
+      if (seenSsEvents.current.has(dedup)) return;
+      seenSsEvents.current.add(dedup);
+      if (seenSsEvents.current.size > 200) {
+        seenSsEvents.current = new Set(Array.from(seenSsEvents.current).slice(-100));
+      }
+
+      // Flatten tool_calls into action cards. Extended OpenAI Conv's
+      // `execute_services` wraps a list of HA service calls — split into one
+      // card per unique {domain.service}, aggregating targets.
+      const actionCards = [];
+      for (const tc of entry.tool_calls || []) {
+        const fn = tc.function || {};
+        const name = fn.name || "tool";
+        const parsed = fn.arguments_parsed
+          || (() => { try { return JSON.parse(fn.arguments || "{}"); } catch { return {}; } })();
+
+        if (name === "execute_services" && parsed && Array.isArray(parsed.list)) {
+          // Group by service key to coalesce many entity actions into one card.
+          const groups = new Map();
+          for (const call of parsed.list) {
+            const dom = call.domain || "";
+            const svc = call.service || "";
+            const key = `${dom}.${svc}`;
+            if (!groups.has(key)) groups.set(key, { service: key, targets: new Set(), attrsList: [] });
+            const g = groups.get(key);
+            const sd = call.service_data || {};
+            const tgt = sd.entity_id || sd.area_id || sd.device_id;
+            (Array.isArray(tgt) ? tgt : [tgt]).filter(Boolean).forEach((t) => g.targets.add(t));
+            const attrs = { ...sd };
+            delete attrs.entity_id; delete attrs.area_id; delete attrs.device_id;
+            if (Object.keys(attrs).length > 0) g.attrsList.push(attrs);
+          }
+          for (const g of groups.values()) {
+            const targets = Array.from(g.targets);
+            const targetStr = targets.length === 0 ? null
+              : targets.length === 1 ? targets[0]
+              : `${targets.length} targets`;
+            const mergedAttrs = g.attrsList.length === 1
+              ? { ...g.attrsList[0] }
+              : g.attrsList.reduce((acc, a) => { Object.entries(a).forEach(([k,v]) => acc[k] = v); return acc; }, {});
+            if (targets.length > 1) mergedAttrs.targets = targets;
+            actionCards.push({
+              id: nextId(), kind: "action", time: fmtTime(),
+              title: `${g.service}${targetStr ? " · " + targetStr : ""}`,
+              service: g.service,
+              target: targetStr,
+              attrs: mergedAttrs,
+              status: "success",
+            });
+          }
+        } else {
+          // Non-execute_services tool call — render as a compact tool row.
+          actionCards.push({
+            id: nextId(), kind: "tool", time: fmtTime(),
+            name, args: parsed, status: "success", latency: null,
+          });
+        }
+      }
+
+      setEvents((prev) => {
+        // Look back ~8 events for a matching user/voice line.
+        let matchIdx = -1;
+        const lookbackStart = Math.max(0, prev.length - 8);
+        for (let i = prev.length - 1; i >= lookbackStart; i--) {
+          const e = prev[i];
+          if ((e.kind === "user" || e.kind === "voice") &&
+              (e.text || "").trim() === (entry.user || "").trim()) {
+            matchIdx = i; break;
+          }
+        }
+        const newUserEvents = [];
+        if (matchIdx === -1 && entry.user) {
+          // No local user event → originated outside the Home app (Voice PE).
+          newUserEvents.push({
+            id: nextId(), kind: "voice", time: fmtTime(),
+            text: entry.user,
+          });
+        }
+        const assistantEvent = entry.assistant
+          ? [{ id: nextId(), kind: "home", time: fmtTime(), text: entry.assistant }]
+          : [];
+        return [...prev, ...newUserEvents, ...actionCards, ...assistantEvent];
+      });
+    };
+    es.onerror = (e) => {
+      console.warn("[sse] error — will auto-reconnect");
+    };
+    return () => { try { es.close(); } catch {} };
+  }, [connection, endpoint, metricsBase]);
+
+  /* ── Voice PE activity indicator (header + voice state) ──────────────
+   *
+   * State_changed events for assist_satellite are still useful for
+   * showing "Voice PE is listening" in the connection-dot area, even
+   * though we no longer render placeholder turns here. The actual turn
+   * content arrives via the SSE feed above. */
+  useEffect(() => {
+    if (connection !== "online" || !haClientRef.current) return undefined;
+    const unsub = haClientRef.current.subscribeEvents("state_changed", (ev) => {
+      const d = ev?.data;
+      if (!d?.entity_id?.startsWith?.("assist_satellite.")) return;
+      const newState = d.new_state?.state;
+      if (newState !== d.old_state?.state) {
+        console.log("[voicepe state]", d.old_state?.state, "→", newState);
+      }
+    });
+    return unsub;
+  }, [connection]);
 
   return (
     <div ref={rootRef} data-theme={theme} style={{
@@ -1177,6 +1485,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         voice={voice}
         connection={connection}
       />
+      {connection === "online" && (
+        <HomeVisionCard haUrl={endpoint} token={token} />
+      )}
       <div
         ref={feedRef}
         className="hg-scroll"

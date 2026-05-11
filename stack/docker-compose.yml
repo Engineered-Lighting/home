@@ -6,15 +6,21 @@
 
 services:
   # =========================================================
-  # LLM: Qwen3.6-27B-FP8 served via vLLM (OpenAI-compatible).
-  # Reachable at  http://${UBUNTU_IP}:8000/v1
+  # LLM + vision: Qwen3-VL-30B-A3B-Instruct served via vLLM. MoE (3B
+  # active params per token), native multimodal, Hermes tool calls.
+  # Not exposed on the host — only the metrics-sidecar (which proxies
+  # + tees chat completions) can reach it via the docker network.
   # =========================================================
   vllm:
     image: vllm/vllm-openai:latest
     container_name: hav-vllm
     restart: unless-stopped
-    ports:
-      - "${VLLM_PORT:-8000}:8000"
+    # vLLM is no longer published on the host — only reachable from the
+    # metrics-sidecar (which proxies + tees chat completions to clients).
+    # External HA traffic to :8000 now hits the sidecar, which forwards
+    # to vllm:8000 inside the docker network.
+    expose:
+      - "8000"
     volumes:
       - hf_cache:/root/.cache/huggingface
       - vllm_cache:/root/.cache/vllm
@@ -26,30 +32,36 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
     # List form avoids shell escaping for --default-chat-template-kwargs JSON.
     command:
+      # Unified vision + tool-call model. Qwen3-VL-30B-A3B is a MoE with
+      # only 3B active params per token (fast inference) but 30B total
+      # knowledge, native multimodal vision, and Qwen3-family tool-call
+      # behavior (qwen3_xml parser unchanged).
       - --model
-      - ${VLLM_MODEL:-Qwen/Qwen3.6-27B-FP8}
+      - Qwen/Qwen3-VL-30B-A3B-Instruct
       - --served-model-name
-      - ${VLLM_SERVED_NAME:-qwen3.6-27b}
+      - qwen3-vl-30b
       - --max-model-len
-      - "${VLLM_MAX_LEN:-16384}"
+      - "16384"
+      # 0.75 = ~72 GB on the 96 GB GPU. The model weights are ~60 GB in
+      # BF16 — anything less than ~65 GB makes vLLM OOM after loading
+      # the model and trying to allocate KV cache. Leaves ~24 GB free
+      # for V-JEPA-2 + vision encoder buffers.
       - --gpu-memory-utilization
-      - "${VLLM_GPU_UTIL:-0.70}"
+      - "0.75"
       - --max-num-seqs
-      - "${VLLM_MAX_SEQS:-4}"
-      - --kv-cache-dtype
-      - fp8
+      - "4"
       - --enable-prefix-caching
-      # Qwen3.6 defaults to "thinking" responses ("Thinking Process: ..."). For
-      # voice we want direct answers; disable thinking at the chat-template level
-      # so every request (including HA's) skips it.
+      # Vision: cap multimodal items per request to bound encoder VRAM.
+      - --limit-mm-per-prompt
+      - '{"image": 4, "video": 0}'
       - --default-chat-template-kwargs
       - '{"enable_thinking": false}'
-      # HA's Extended OpenAI Conversation sends tool_choice="auto" so device
-      # control works. vLLM requires explicit enabling + a parser matching the
-      # model family. Qwen3 uses Hermes-style tool-call output.
       - --enable-auto-tool-choice
+      # Qwen3-VL emits tool calls in Hermes format (JSON inside <tool_call>
+      # tags), unlike text-only Qwen3 which uses qwen3_xml. Switching parser
+      # accordingly — confirmed via direct vLLM probe.
       - --tool-call-parser
-      - qwen3_xml
+      - hermes
       - --port
       - "8000"
       - --host
@@ -196,9 +208,12 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # Vision sidecar: turns "look at the kitchen" tool calls from the primary
-  # text LLM into a description by pulling a HA camera snapshot and asking
-  # the Ollama-hosted Qwen3-VL model. Keeps the primary text path fast.
+  # =========================================================
+  # Vision sidecar — frame-grabber + multimodal proxy.
+  # Not a model. Pulls a fresh JPEG from HA's camera_proxy and forwards
+  # it to vllm (which is now a vision-capable Qwen3-VL-30B-A3B) as an
+  # OpenAI-style multimodal chat completion. Returns a short description.
+  # =========================================================
   vision-sidecar:
     build:
       context: ./services/vision
@@ -210,9 +225,12 @@ services:
     environment:
       HA_URL: ${HA_URL:-http://<ha-host>:8123}
       HA_TOKEN: ${HA_TOKEN:?HA_TOKEN must be set in .env for vision sidecar}
-      OLLAMA_URL: ${OLLAMA_URL:-http://<ai-box>:11434}
-      VISION_MODEL: ${VISION_MODEL:-qwen3-vl:8b}
-      VISION_NUM_CTX: ${VISION_NUM_CTX:-8192}
+      VLLM_URL: ${VLLM_URL:-http://vllm:8000}
+      VISION_MODEL: ${VISION_MODEL:-qwen3-vl-30b}
+      VISION_MAX_TOKENS: ${VISION_MAX_TOKENS:-200}
+    depends_on:
+      vllm:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8091/healthz').read()\""]
       interval: 30s
@@ -239,9 +257,13 @@ services:
     container_name: hav-metrics-sidecar
     restart: unless-stopped
     ports:
+      # 8000: chat proxy — HA's Extended OpenAI Conv calls this for /v1/*
+      # 8092: telemetry + conversation SSE stream for the Home desktop app
+      - "${VLLM_PORT:-8000}:8092"
       - "${METRICS_SIDECAR_PORT:-8092}:8092"
     environment:
       VLLM_METRICS_URL: ${VLLM_METRICS_URL:-http://vllm:8000/metrics}
+      VLLM_UPSTREAM_URL: ${VLLM_UPSTREAM_URL:-http://vllm:8000}
       SCRAPE_INTERVAL_S: ${SCRAPE_INTERVAL_S:-2.0}
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: utility

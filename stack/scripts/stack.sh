@@ -63,7 +63,7 @@ smoke_test() {
     c_red "  kokoro /v1/models: FAIL"; ok=0
   fi
 
-  # Vision sidecar
+  # Vision sidecar — camera frame grabber + multimodal proxy to vllm.
   if curl -fsS -m 5 http://localhost:8091/healthz >/dev/null 2>&1; then
     c_green "  vision-sidecar /healthz: OK"
   else

@@ -10,7 +10,9 @@ rust-version = "1.75"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# devtools feature is enabled here so right-click → Inspect works on the
+# production .msi too. Trivial size overhead (~200 KB), worth it for debug.
+tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-http = "2"
 tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }

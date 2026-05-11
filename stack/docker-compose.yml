@@ -1,0 +1,285 @@
+# Local Home Assistant voice assistant stack.
+# See ADR.md for design rationale and README.md for operating instructions.
+# Bring up:   docker compose up -d
+# Tear down:  docker compose down
+# Tail logs:  docker compose logs -f <service>
+
+services:
+  # =========================================================
+  # LLM: Qwen3.6-27B-FP8 served via vLLM (OpenAI-compatible).
+  # Reachable at  http://${UBUNTU_IP}:8000/v1
+  # =========================================================
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: hav-vllm
+    restart: unless-stopped
+    ports:
+      - "${VLLM_PORT:-8000}:8000"
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+      - vllm_cache:/root/.cache/vllm
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+      HF_HUB_ENABLE_HF_TRANSFER: "1"
+      VLLM_ALLOW_LONG_MAX_MODEL_LEN: "1"
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    # List form avoids shell escaping for --default-chat-template-kwargs JSON.
+    command:
+      - --model
+      - ${VLLM_MODEL:-Qwen/Qwen3.6-27B-FP8}
+      - --served-model-name
+      - ${VLLM_SERVED_NAME:-qwen3.6-27b}
+      - --max-model-len
+      - "${VLLM_MAX_LEN:-16384}"
+      - --gpu-memory-utilization
+      - "${VLLM_GPU_UTIL:-0.70}"
+      - --max-num-seqs
+      - "${VLLM_MAX_SEQS:-4}"
+      - --kv-cache-dtype
+      - fp8
+      - --enable-prefix-caching
+      # Qwen3.6 defaults to "thinking" responses ("Thinking Process: ..."). For
+      # voice we want direct answers; disable thinking at the chat-template level
+      # so every request (including HA's) skips it.
+      - --default-chat-template-kwargs
+      - '{"enable_thinking": false}'
+      # HA's Extended OpenAI Conversation sends tool_choice="auto" so device
+      # control works. vLLM requires explicit enabling + a parser matching the
+      # model family. Qwen3 uses Hermes-style tool-call output.
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - qwen3_xml
+      - --port
+      - "8000"
+      - --host
+      - "0.0.0.0"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    shm_size: "16gb"
+    healthcheck:
+      # vllm/vllm-openai ships python; avoid dependence on curl in the image.
+      test:
+        - CMD-SHELL
+        - python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      # First start may pull ~30 GB of weights from HF; allow 15 minutes.
+      start_period: 900s
+    networks: [homeai]
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  # =========================================================
+  # STT: NVIDIA Parakeet TDT v3 + Silero VAD via Wyoming.
+  # Source: vrsttl/wyoming-parakeet-silero-wrapper (built locally).
+  # Reachable at  tcp://${UBUNTU_IP}:10300
+  # Run scripts/setup.sh once to clone the upstream repo.
+  # =========================================================
+  wyoming-parakeet:
+    build:
+      context: ./services/stt
+      dockerfile: Dockerfile.parakeet
+    image: home-ai-voice/wyoming-parakeet:local
+    container_name: hav-wyoming-parakeet
+    restart: unless-stopped
+    ports:
+      - "${PARAKEET_PORT:-10300}:10300"
+    volumes:
+      - parakeet_cache:/root/.cache/huggingface
+      - ./services/stt/parakeet-wyoming-wrapper/config.yaml:/app/config.yaml:ro
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks: [homeai]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # =========================================================
+  # TTS engine: Chatterbox (OpenAI-compatible /v1/audio/speech).
+  # Internal-facing; consumed by wyoming-chatterbox below.
+  # Exposed on host for direct curl-based testing during bring-up.
+  # =========================================================
+  # TTS engine: Kokoro (82M params, multiple named voices, OpenAI-compatible
+  # /v1/audio/speech). Built locally for Blackwell sm_120 (cu128 + torch 2.7).
+  # Voice swap: TTS_VOICE in .env (am_michael default; also am_onyx, am_fenrir,
+  # am_eric, am_adam, am_liam, am_puck, am_echo, bm_george).
+  kokoro-tts:
+    build:
+      context: ./services/tts
+      dockerfile: Dockerfile.kokoro-blackwell
+    image: home-ai-voice/kokoro-tts:blackwell
+    container_name: hav-kokoro-tts
+    restart: unless-stopped
+    ports:
+      - "${KOKORO_PORT:-8880}:8880"
+    environment:
+      USE_GPU: "true"
+      PYTHONUNBUFFERED: "1"
+      API_LOG_LEVEL: "INFO"
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8880/v1/models').read()\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    networks: [homeai]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # =========================================================
+  # Wyoming bridge for TTS: exposes Chatterbox to HA Assist.
+  # Reachable at  tcp://${UBUNTU_IP}:10301
+  # =========================================================
+  # Wyoming bridge for TTS: exposes Kokoro to HA Assist via Wyoming protocol.
+  # Voice swap: edit TTS_VOICE in .env (am_michael, am_onyx, am_eric, etc.).
+  #
+  # Streaming: TTS_STREAMING_MODELS enables sentence-boundary chunking via
+  # pySBD. The LLM response is split by sentence; each is synthesized in
+  # parallel (up to 3 concurrent) and pushed to HA as Wyoming AudioChunk
+  # events incrementally. First audio reaches Voice PE while later
+  # sentences are still being generated.
+  wyoming-kokoro:
+    image: ghcr.io/roryeckel/wyoming_openai:latest
+    container_name: hav-wyoming-kokoro
+    restart: unless-stopped
+    depends_on:
+      kokoro-tts:
+        condition: service_healthy
+    ports:
+      - "${WYOMING_TTS_PORT:-10301}:10300"
+    environment:
+      WYOMING_URI: tcp://0.0.0.0:10300
+      WYOMING_LOG_LEVEL: INFO
+      WYOMING_LANGUAGES: ${WYOMING_LANG:-en}
+      TTS_OPENAI_URL: http://kokoro-tts:8880/v1
+      TTS_BACKEND: OPENAI
+      TTS_MODELS: ${TTS_MODEL:-kokoro}
+      TTS_STREAMING_MODELS: ${TTS_MODEL:-kokoro}
+      TTS_VOICES: ${TTS_VOICE:-am_michael}
+      TTS_SPEED: "1.0"
+    networks: [homeai]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Vision sidecar: turns "look at the kitchen" tool calls from the primary
+  # text LLM into a description by pulling a HA camera snapshot and asking
+  # the Ollama-hosted Qwen3-VL model. Keeps the primary text path fast.
+  vision-sidecar:
+    build:
+      context: ./services/vision
+    image: home-ai-voice/vision-sidecar:local
+    container_name: hav-vision-sidecar
+    restart: unless-stopped
+    ports:
+      - "${VISION_SIDECAR_PORT:-8091}:8091"
+    environment:
+      HA_URL: ${HA_URL:-http://<ha-host>:8123}
+      HA_TOKEN: ${HA_TOKEN:?HA_TOKEN must be set in .env for vision sidecar}
+      OLLAMA_URL: ${OLLAMA_URL:-http://<ai-box>:11434}
+      VISION_MODEL: ${VISION_MODEL:-qwen3-vl:8b}
+      VISION_NUM_CTX: ${VISION_NUM_CTX:-8192}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8091/healthz').read()\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks: [homeai]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # =========================================================
+  # Metrics sidecar — exposes a single JSON endpoint for the Home
+  # desktop client to poll. Scrapes vLLM's Prometheus metrics for
+  # token throughput, NVML for GPU util / VRAM, psutil for CPU / RAM.
+  # Reachable at  http://${UBUNTU_IP}:8092/metrics
+  # =========================================================
+  metrics-sidecar:
+    build:
+      context: ./services/metrics-sidecar
+    image: home-ai-voice/metrics-sidecar:local
+    container_name: hav-metrics-sidecar
+    restart: unless-stopped
+    ports:
+      - "${METRICS_SIDECAR_PORT:-8092}:8092"
+    environment:
+      VLLM_METRICS_URL: ${VLLM_METRICS_URL:-http://vllm:8000/metrics}
+      SCRAPE_INTERVAL_S: ${SCRAPE_INTERVAL_S:-2.0}
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8092/healthz').read()\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      - vllm
+    networks: [homeai]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  homeai:
+    driver: bridge
+    name: homeai-net
+
+volumes:
+  hf_cache:
+    name: hav_hf_cache
+  vllm_cache:
+    name: hav_vllm_cache
+  chatterbox_models:
+    name: hav_chatterbox_models
+  chatterbox_voices:
+    name: hav_chatterbox_voices
+  parakeet_cache:
+    name: hav_parakeet_cache

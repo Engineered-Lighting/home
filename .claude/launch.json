@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "home-frontend",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "5173", "--directory", "C:\\Claude\\home\\app\\src"],
+      "port": 5173
+    }
+  ]
+}

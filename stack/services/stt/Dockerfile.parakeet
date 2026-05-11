@@ -1,0 +1,42 @@
+# Custom build for vrsttl/wyoming-parakeet-silero-wrapper.
+# Upstream Dockerfile (python:3.13 base, missing apt-update) is broken; we
+# also need PyTorch with sm_120 (Blackwell) kernels — only available on
+# cu128 wheels (torch>=2.7).
+FROM nvidia/cuda:12.8.1-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PATH=/opt/venv/bin:$PATH
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-venv \
+        ffmpeg libsndfile1 \
+        git curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && python3 -m venv /opt/venv \
+ && /opt/venv/bin/pip install --upgrade pip wheel
+
+# Install Blackwell-capable PyTorch (cu128, torch>=2.7) BEFORE the rest of the
+# requirements so nemo-toolkit's transitive deps don't pull a CPU/older wheel.
+RUN /opt/venv/bin/pip install \
+        torch==2.7.0 torchaudio==2.7.0 \
+        --index-url https://download.pytorch.org/whl/cu128
+
+WORKDIR /app
+
+COPY parakeet-wyoming-wrapper/requirements.txt /app/requirements.txt
+RUN /opt/venv/bin/pip install -r /app/requirements.txt
+
+# Force-reinstall torch from cu128 in case nemo-toolkit downgraded it.
+RUN /opt/venv/bin/pip install --force-reinstall --no-deps \
+        torch==2.7.0 torchaudio==2.7.0 \
+        --index-url https://download.pytorch.org/whl/cu128
+
+COPY parakeet-wyoming-wrapper/ /app/
+
+VOLUME ["/root/.cache/huggingface"]
+EXPOSE 10300
+
+ENTRYPOINT ["python3", "wyoming_vad_asr_server.py"]

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.tauri.app/config/2.0.0",
+  "productName": "Home",
+  "version": "0.1.0",
+  "identifier": "com.engineeredlighting.home",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Home",
+        "label": "main",
+        "width": 420,
+        "height": 720,
+        "minWidth": 360,
+        "minHeight": 480,
+        "resizable": true,
+        "decorations": false,
+        "shadow": true,
+        "transparent": false,
+        "fullscreen": false,
+        "skipTaskbar": false,
+        "alwaysOnTop": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi", "dmg"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico",
+      "icons/icon.icns"
+    ],
+    "copyright": "© 2026 Engineered Lighting",
+    "category": "Productivity",
+    "shortDescription": "Local AI chat client for Home Assistant",
+    "longDescription": "Home is a self-hosted chat client for Home Assistant. Talk to your house, watch it think, see what it's doing in real time. Runs entirely on your hardware."
+  }
+}

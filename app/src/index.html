@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <title>Home</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="home-tokens.css" />
+  <style>
+    html, body, #root { height: 100%; width: 100%; margin: 0; }
+    body {
+      background: var(--hg-bg-0);
+      color: var(--hg-fg-0);
+      overflow: hidden;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    /* Re-allow text selection in the conversation feed + inputs. */
+    .hg-scroll, .hg-scroll *, input, textarea { user-select: text; -webkit-user-select: text; }
+  </style>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel" src="home-tauri.jsx"></script>
+  <script type="text/babel" src="home-ha.jsx"></script>
+  <script type="text/babel" src="home-icons.jsx"></script>
+  <script type="text/babel" src="home-events.jsx"></script>
+  <script type="text/babel" src="home-script.jsx"></script>
+  <script type="text/babel" src="home-app.jsx"></script>
+  <script type="text/babel" src="home-mount.jsx"></script>
+</body>
+</html>

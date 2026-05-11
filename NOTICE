@@ -1,0 +1,30 @@
+home — local AI for your house
+Copyright (c) 2026 Engineered Lighting
+
+This product bundles or links against the following open-source software:
+
+Frontend
+  · React 18.3.1                      MIT       https://react.dev
+  · ReactDOM 18.3.1                   MIT       https://react.dev
+  · Babel Standalone 7.29.0           MIT       https://babeljs.io
+  · Geist Sans + Geist Mono           OFL-1.1   https://vercel.com/font
+
+Desktop shell
+  · Tauri 2.x                          MIT/Apache-2.0  https://tauri.app
+  · tauri-plugin-http 2.x              MIT/Apache-2.0
+  · tauri-plugin-shell 2.x             MIT/Apache-2.0
+  · WebView2 / WebKit (system)         Microsoft / Apple
+
+Stack (Ubuntu AI box)
+  · vLLM                               Apache-2.0  https://github.com/vllm-project/vllm
+  · Wyoming Parakeet                   MIT         https://github.com/rhasspy/wyoming
+  · Kokoro-FastAPI                     MIT
+  · wyoming_openai bridge              MIT
+  · FastAPI                            MIT         https://fastapi.tiangolo.com
+  · pynvml                             BSD-3       https://pypi.org/project/pynvml
+  · psutil                             BSD-3       https://github.com/giampaolo/psutil
+  · httpx                              BSD-3       https://www.python-httpx.org
+
+License texts for each dependency live in their respective upstream
+repositories. Where MIT/BSD-3 is named, the canonical license text from
+each project applies unmodified.

@@ -1,0 +1,53 @@
+# Kokoro-FastAPI built for NVIDIA Blackwell (sm_120).
+# Upstream ghcr.io/remsky/kokoro-fastapi-gpu ships torch cu124 without sm_120
+# kernels and crashes on RTX 6000 Blackwell at model load. Same pattern as our
+# parakeet + chatterbox builds: CUDA 12.8 runtime + Python 3.10 + cu128 torch.
+FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PATH=/opt/venv/bin:$PATH \
+    PYTHONUNBUFFERED=1
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        software-properties-common \
+ && add-apt-repository -y ppa:deadsnakes/ppa \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends \
+        python3.10 python3.10-venv python3.10-dev \
+        espeak-ng espeak-ng-data libsndfile1 ffmpeg \
+        build-essential cmake pkg-config \
+        git curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && python3.10 -m venv /opt/venv \
+ && /opt/venv/bin/pip install --upgrade pip wheel setuptools
+
+# CUDA-built PyTorch 2.7 (sm_120-capable) FIRST.
+RUN /opt/venv/bin/pip install \
+        torch==2.7.0 torchaudio==2.7.0 \
+        --index-url https://download.pytorch.org/whl/cu128
+
+WORKDIR /app
+
+# Copy the cloned source. setup.sh on the host clones it next to this Dockerfile.
+COPY kokoro-fastapi/ /app/
+
+# Install base (non-extra) deps from the upstream pyproject. The [gpu] extra
+# pins torch==2.8.0+cu126 which is not on public PyPI; we install our own
+# cu128 wheels (already done above) and skip that extra.
+RUN /opt/venv/bin/pip install "." \
+ && /opt/venv/bin/pip install --force-reinstall --no-deps \
+        torch==2.7.0 torchaudio==2.7.0 \
+        --index-url https://download.pytorch.org/whl/cu128
+
+# Pre-download voices+model (mirrors what entrypoint.sh does, lets the image
+# start without a network pull on first run).
+RUN /opt/venv/bin/python docker/scripts/download_model.py --output api/src/models/v1_0 || true
+
+ENV USE_GPU=true \
+    PYTHONPATH=/app:/app/api
+
+EXPOSE 8880
+CMD ["/opt/venv/bin/uvicorn", "api.src.main:app", "--host", "0.0.0.0", "--port", "8880", "--workers", "1"]

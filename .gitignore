@@ -1,0 +1,47 @@
+# Rust / Tauri build artifacts
+target/
+**/target/
+src-tauri/gen/
+*.msi
+*.dmg
+*.app
+*.exe
+*.AppImage
+release.log
+build.log
+
+# Node / web tooling (none yet, but reserve it for future)
+node_modules/
+dist/
+.cache/
+.parcel-cache/
+
+# Local dev artifacts
+.env
+.env.local
+*.bak
+*.bak.*
+*.swp
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor noise
+.idea/
+.vscode/launch.json
+.vscode/settings.json
+*.iml
+
+# Python virtualenvs for local sidecar testing
+.venv/
+__pycache__/
+*.pyc
+
+# Tauri-generated platform projects we don't want committed
+src-tauri/gen/android/
+src-tauri/gen/apple/
+
+# Source PNG for icons — generated via tools/make-icon.py, regen don't track
+app/src-tauri/icons/source.png

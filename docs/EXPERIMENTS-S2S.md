@@ -1,4 +1,69 @@
-# Experiment — full-duplex speech-to-speech (PersonaPlex)
+# Experiment — full-duplex speech-to-speech
+
+## Phase 2 status (2026-05-12): Moshi architecture deployed
+
+Phase 2 abandons PersonaPlex entirely in favor of vanilla Kyutai Moshi
+as the streaming Interaction model. Bridge refactor + entity discovery
+shipped through Phase 2.5b. **6/6 harness PASS on every phase.**
+
+Shipped:
+- **Phase 2.0** — Moshi audition on Blackwell sm_120: boots in 15 s,
+  14.68 GB VRAM (vs my 24 GB estimate), 26 ms median frame cadence
+  (faster than the 80 ms / 12.5 Hz Mimi target), inner-monologue
+  text channel exposes per-step tokens.
+- **Phase 2.1** — vLLM swapped from `Qwen3-VL-30B-A3B-Instruct-FP8`
+  (67.9 GB at gpu_mem_util=0.70) to `Qwen3-VL-4B-Instruct-FP8`
+  (19.5 GB at 0.15). Tool-call probe **117 ms** steady-state (was
+  155 ms on the 30B). 6/6 harness PASS preserved.
+- **Phase 2.2** — PersonaPlex containers (`hav-s2s-model`,
+  `hav-personaplex-bridge` legacy backend) stopped and gated behind
+  the `s2s` Docker Compose profile only. Default `docker compose up -d`
+  no longer brings them up.
+- **Phase 2.3** — New `services/moshi-listener/` service running.
+  FastAPI WebSocket on internal port 8899, vanilla Kyutai
+  `moshiko-pytorch-bf16` weights, Blackwell-compatible
+  cu128+torch2.7 stack. `/healthz` returns 200 once the model is
+  loaded.
+- **Phase 2.4** — Bridge rewritten around `MoshiListenerBackend` +
+  `MoshiListenerUpstream` + `ResultQueue`. PersistentUpstream
+  pattern (Phase 1.5a) carried forward with Parakeet at the
+  upstream level so no first-frame drop on attach. `S2S_BACKEND=
+  moshi-listener` is the new default in `.env`. Harness 6/6 PASS.
+- **Phase 2.5b** — `EntityResolver` + dynamic tool schema + system
+  prompt. Bridge now loads HA's area and entity registries at boot,
+  subscribes to `*_registry_updated` events to stay fresh, and
+  generates the tool schema based on what domains exist. For this
+  HA setup: 8 areas, 1445 entities, **4 tools** (light + media_player;
+  lock/climate hidden since user has no such entities). Resolver
+  validated on 9 real phrases — "all my lights everywhere" resolves
+  to 23 entities; "sink light" matches 3; "ambient lights" matches
+  both ambient_left/right; "chandelier" returns 0 (typed
+  entity_not_found error).
+
+VRAM landscape after Phase 2 rollout (with PersonaPlex retired):
+
+| Component | VRAM |
+|---|---|
+| vLLM Qwen3-VL-4B FP8 | 19.5 GB |
+| Moshi listener | 14.7 GB |
+| Parakeet | 3.4 GB |
+| Kokoro (HA fallback only) | 1.7 GB |
+| ComfyUI (user's other project) | 0.7 GB |
+| **Total** | **~40 GB / 96 GB** |
+| **Free (V-JEPA-2 slot)** | **~56 GB** |
+
+Known real-world gap: most of the user's lights aren't tagged to HA
+areas in Settings → Areas. The resolver falls back to entity_id /
+friendly_name token matching, which means "kitchen lights" only
+matches `light.kitchen_floodlight_timed` (the one entity literally
+containing "kitchen") not `light.sink`, `light.island_*`,
+`light.dining_*` — even though those ARE kitchen lights. Fix is
+on the HA side: tag entities to areas in HA. Until then, behavior
+is best-effort token matching.
+
+---
+
+## Phase 1.5 status (2026-05-12 earlier): PersonaPlex + Phase 1.5a..d
 
 Status: **Phase 1.5a + 1.5b + 1.5c + 1.5d deployed; 6/6 PASS on the harness suite.**
 Bridge architecture moved from "open new upstream WS per client" to

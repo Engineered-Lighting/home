@@ -1,12 +1,15 @@
 # Experiment — full-duplex speech-to-speech (PersonaPlex)
 
-Status: **Phase 1.5a + 1.5b + 1.5c deployed; 6/6 PASS on the harness suite.**
+Status: **Phase 1.5a + 1.5b + 1.5c + 1.5d deployed; 6/6 PASS on the harness suite.**
 Bridge architecture moved from "open new upstream WS per client" to
 "single persistent upstream session, multiplex clients onto it" (1.5a,
 Thinking-Machines-inspired) plus intent-fire-on-match (1.5b) plus a
-Parakeet side-channel with per-client utterance boundaries (1.5c).
-S-01 hits tier2 (real `light.sink` state change in HA, 7.9 s); S-02..S-04
-hit tier4 (intent dispatched); S-13/S-14 correctly don't dispatch.
+Parakeet side-channel with per-client utterance boundaries (1.5c) plus
+FP8 Qwen3-VL on vLLM (1.5d, 155 ms TTFT on a `light_turn_off` tool call
+via hermes parser). On the FP8 backend BOTH S-01 (`light.sink`, 7.9 s)
+and S-02 (`light.living_room_lights`, 8.9 s) hit tier2 — actual device
+state changes in HA; S-03/S-04 hit tier4 intent; S-13/S-14 correctly
+don't dispatch.
 
 ## Phase 1.5 changes (since the original Phase 1 docs below)
 
@@ -180,19 +183,28 @@ PersonaPlex is a continuously-running full-duplex model; it decides
 when to speak. The system prompt requests action-announcement BEFORE
 acknowledgement, but compliance is ~50%.
 
-## VRAM budget on the 96 GB Blackwell
+## VRAM budget on the 96 GB Blackwell (post-Phase 1.5d)
 
 | Service | VRAM | Notes |
 |---|---|---|
-| vLLM (Qwen3-VL-30B BF16, gpu_mem_util=0.65) | 62 GB | Dropped from 0.75 to make room |
-| PersonaPlex 7B BF16 | 17 GB | Idle/streaming |
+| vLLM (Qwen3-VL-30B-A3B-Instruct-FP8, gpu_mem_util=0.70) | 68 GB | FP8 weights + KV cache. 155 ms TTFT on a tool call. |
+| PersonaPlex 7B BF16 | 19 GB | Idle/streaming |
 | Parakeet STT | 3 GB | |
-| Kokoro TTS | 3 GB | |
-| ComfyUI + oracle-ml (occasional) | ~1.5 GB | |
-| **Total** | **~87 GB** | **~10 GB headroom** |
+| Kokoro TTS | 1.7 GB | |
+| ComfyUI + oracle-ml (occasional) | ~0.7 GB | |
+| **Total** | **~93 GB** | **~4 GB headroom** |
 
-For future V-JEPA-2 integration, FP8 quantization of Qwen3-VL frees
-~30 GB. Migration deferred per user; documented in plan file.
+Phase 1.5d notes:
+- The full plan called for `gpu_memory_utilization=0.75` + `--kv-cache-dtype fp8`
+  + `--calculate-kv-scales`. Neither stuck: 0.75 OOMs at startup (free
+  VRAM after PersonaPlex + Parakeet + Kokoro is ~69 GiB; 0.75 asks for
+  71). FP8 KV cache + auto-calibration produces garbled output on
+  vLLM 0.20 + Qwen3-VL-FP8 (likely a model/calibration compatibility
+  issue worth a separate bug). We kept FP8 weights (the main latency
+  win) and reverted those two flags.
+- For future V-JEPA-2, current headroom is tight (~4 GB). Two paths:
+  drop vLLM util to 0.65 (frees ~5 GB), or move Parakeet/Kokoro to
+  CPU/another GPU.
 
 ## Files
 

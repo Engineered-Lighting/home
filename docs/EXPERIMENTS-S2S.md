@@ -1,8 +1,36 @@
 # Experiment — full-duplex speech-to-speech (PersonaPlex)
 
-Status: **Phase 1 partial — 3 of 6 scenarios passing.** Bridge architecture
-is correct; PersonaPlex's response quality degrades across consecutive
-sessions, which limits multi-scenario suites without mitigations.
+Status: **Phase 1.5a + 1.5b + 1.5c deployed.** Bridge architecture moved
+from "open new upstream WS per client" to "single persistent upstream
+session, multiplex clients onto it" (1.5a, Thinking-Machines-inspired)
+plus intent-fire-on-match (1.5b) plus a Parakeet side-channel for
+reliable user-text classification (1.5c). End-to-end validation pending
+a fresh harness run.
+
+## Phase 1.5 changes (since the original Phase 1 docs below)
+
+- **1.5a — PersistentUpstream**: bridge boot opens ONE upstream WS to
+  `moshi.server` and keeps it open. Clients attach/detach onto the
+  same session; the 6.7 s `moshi.server` handshake is paid once at
+  bridge boot, not per mic press. Side benefit: the "session
+  degradation across consecutive sessions" failure mode that drove
+  the every-10-attempts moshi-restart workaround stops applying —
+  there is only one session for the lifetime of the bridge.
+- **1.5b — intent-fire-on-match**: classifier runs on every text-buffer
+  update with a `_looks_like_complete_object()` guard (verb + device
+  noun present). Fires the HA dispatch the instant the regex matches,
+  not on the 800 ms idle timer or the sentence terminator. Dedupe
+  protects against the trailing-period double-fire.
+- **1.5c — Parakeet side-channel**: bridge forks the user PCM stream
+  into a parallel Wyoming TCP client to `wyoming-parakeet:10300`.
+  Parakeet emits a Transcript event with reliable ASR-grade text;
+  bridge classifies on that text via `_extract_user_intent()` (an
+  imperative-form regex distinct from the assistant-announce-phrase
+  regex). When the user says "turn off the kitchen lights," we no
+  longer depend on PersonaPlex echoing the right announce-phrase to
+  trigger dispatch — Parakeet's text fires it directly.
+
+## Phase 1 details (kept for reference)
 
 ## What it is
 
@@ -186,6 +214,24 @@ For future V-JEPA-2 integration, FP8 quantization of Qwen3-VL frees
 - `app/src/home-s2s.jsx` — bridge WebSocket client
 - `app/src/home-app.jsx` — `/s2s` slash command + mic toggle integration
 - `app/src/index.html` — loads home-s2s.jsx
+
+## Validating Phase 1.5
+
+```bash
+# Confirm the new bridge is up with all 1.5 features
+ssh hav-ubuntu "docker logs --tail 20 hav-personaplex-bridge"
+# Look for: PersistentUpstream: handshake done, ready for clients
+# Look for: ParakeetTap: ready (Transcribe session open)
+# Look for: HA WS authenticated
+
+# Run the 6-scenario suite against Phase 1.5c
+ssh hav-ubuntu "ha_token=\$(docker exec hav-personaplex-bridge env | grep '^HA_TOKEN=' | cut -d= -f2-) && \
+  docker exec -e HA_TOKEN=\"\$ha_token\" -e TEST_TIMEOUT_S=60 hav-personaplex-bridge \
+    python /app/run_scenario.py --suite"
+# Expected: action scenarios (S-01..S-04) should reliably PASS via the
+# Parakeet path even when PersonaPlex's text channel doesn't match —
+# eliminates the alternating-fail pattern from Phase 1.
+```
 
 ## Restart procedure
 

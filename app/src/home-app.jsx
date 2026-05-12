@@ -1456,14 +1456,52 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         else if (state === "idle" || state === "inactive") setVoice({ state: "inactive" });
       },
       onTranscript: (role, text, partial) => {
-        if (!text || partial) return;
+        if (!text) return;
         if (role === "user") {
+          // User-side partials still ignored: the Parakeet transcript
+          // arrives all at once at end-of-utterance, no streaming.
+          if (partial) return;
           lastUserText = text;
           setEvents((prev) => prev.map((e) =>
             e.id === voiceId ? { ...e, text } : e
           ));
-        } else if (role === "assistant") {
-          addEvent({ kind: "home", text });
+          return;
+        }
+        // Assistant transcript: stream partials so the UI updates as
+        // PersonaPlex speaks instead of dumping the whole utterance at
+        // end-of-speech (PersonaPlex can ramble for 60+ seconds).
+        if (role === "assistant") {
+          if (partial) {
+            setEvents((prev) => {
+              // Append/replace the live streaming home event for this turn.
+              const last = prev[prev.length - 1];
+              if (last && last.kind === "home" && last.streaming) {
+                return [...prev.slice(0, -1), { ...last, text }];
+              }
+              return [...prev, {
+                id: nextId(),
+                kind: "home",
+                time: fmtTime(),
+                text,
+                streaming: true,
+              }];
+            });
+            return;
+          }
+          // Final: lock in the last streaming home event (or add a new
+          // one if none exists yet).
+          setEvents((prev) => {
+            const last = prev[prev.length - 1];
+            if (last && last.kind === "home" && last.streaming) {
+              return [...prev.slice(0, -1), { ...last, text, streaming: false }];
+            }
+            return [...prev, {
+              id: nextId(),
+              kind: "home",
+              time: fmtTime(),
+              text,
+            }];
+          });
           setMetrics((prev) => ({
             ...prev,
             e2e: Math.round(performance.now() - t0),

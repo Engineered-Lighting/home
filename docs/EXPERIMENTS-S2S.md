@@ -1,11 +1,12 @@
 # Experiment — full-duplex speech-to-speech (PersonaPlex)
 
-Status: **Phase 1.5a + 1.5b + 1.5c deployed.** Bridge architecture moved
-from "open new upstream WS per client" to "single persistent upstream
-session, multiplex clients onto it" (1.5a, Thinking-Machines-inspired)
-plus intent-fire-on-match (1.5b) plus a Parakeet side-channel for
-reliable user-text classification (1.5c). End-to-end validation pending
-a fresh harness run.
+Status: **Phase 1.5a + 1.5b + 1.5c deployed; 6/6 PASS on the harness suite.**
+Bridge architecture moved from "open new upstream WS per client" to
+"single persistent upstream session, multiplex clients onto it" (1.5a,
+Thinking-Machines-inspired) plus intent-fire-on-match (1.5b) plus a
+Parakeet side-channel with per-client utterance boundaries (1.5c).
+S-01 hits tier2 (real `light.sink` state change in HA, 7.9 s); S-02..S-04
+hit tier4 (intent dispatched); S-13/S-14 correctly don't dispatch.
 
 ## Phase 1.5 changes (since the original Phase 1 docs below)
 

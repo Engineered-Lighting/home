@@ -208,7 +208,10 @@ function ActionContent({ id, title, service, target, attrs = {}, status = "pendi
         style={{
           ...T_SYNTAX,
           display: "grid",
-          gridTemplateColumns: open ? "1.4ch 5ch minmax(0,1fr) auto" : "1.4ch auto",
+          // 5ch was too narrow — the word "action" itself is ~6ch in
+          // Geist Mono, so when open and a title follows, the two ran
+          // together visually. 8ch reserves real breathing room.
+          gridTemplateColumns: open ? "1.4ch 8ch minmax(0,1fr) auto" : "1.4ch auto",
           columnGap: 8,
           alignItems: "baseline",
           cursor: "pointer",

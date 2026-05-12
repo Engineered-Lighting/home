@@ -257,7 +257,9 @@ function HomeVisionCard({
             paused={!open}
           />
 
-          {/* Meta strip below the frame */}
+          {/* Meta strip below the frame — activity only.
+              "live · stream" was redundant noise; the frame is visibly
+              moving, that's its own signal. */}
           <div style={{
             display: "flex", alignItems: "center", gap: 8,
             padding: "7px 14px",
@@ -277,9 +279,6 @@ function HomeVisionCard({
                 {active.activityConfidence.toFixed(2)}
               </span>
             )}
-            <div style={{ flex: 1 }}/>
-            <span>live</span>
-            <span style={{ color: "var(--hg-fg-3)" }}>· 1fps</span>
           </div>
         </div>
       )}

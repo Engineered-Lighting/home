@@ -6,6 +6,12 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  # action-gh-release needs to write assets to releases. Org default is
+  # read-only — without this it fails with "Resource not accessible by
+  # integration."
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -20,10 +26,10 @@ jobs:
             runs-on: macos-14
             bundle_glob: app/src-tauri/target/release/bundle/dmg/Home_*_aarch64.dmg
             tauri_target: aarch64-apple-darwin
-          - name: macos-x64
-            runs-on: macos-13
-            bundle_glob: app/src-tauri/target/release/bundle/dmg/Home_*_x64.dmg
-            tauri_target: x86_64-apple-darwin
+          # Intel macOS (macos-13) was added but stayed queued for 3+ hours
+          # on contended free-tier runners. Apple Silicon is the dominant
+          # platform; Intel Mac users can build from source via
+          # `cargo tauri build` (instructions in app/README.md).
 
     runs-on: ${{ matrix.runs-on }}
 

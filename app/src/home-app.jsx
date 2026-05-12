@@ -476,11 +476,12 @@ const SLASH_CMDS = [
   { cmd: "/connect",  hint: "<url>",   desc: "connect to a local model endpoint" },
   { cmd: "/endpoint", hint: "<url>",   desc: "change endpoint url" },
   { cmd: "/model",    hint: "<name>",  desc: "switch active model" },
+  { cmd: "/s2s",      hint: "on|off",  desc: "toggle experimental s2s voice mode" },
   { cmd: "/clear",    hint: "",        desc: "clear the conversation" },
   { cmd: "/help",     hint: "",        desc: "list commands" },
 ];
 
-function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, onStop }) {
+function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, onStop, s2sMode }) {
   const inputRef = useRef(null);
   const [sel, setSel] = useState(0);
   const isSlash = value.startsWith("/");
@@ -591,6 +592,21 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
             >{isSlash ? "run" : "send"} <IconSend size={11} /></button>
           )}
         </div>
+        {s2sMode && (
+          <span
+            title="experimental s2s mode (full-duplex) — toggle with /s2s off"
+            style={{
+              fontFamily: "'Geist Mono', monospace",
+              fontSize: 8, letterSpacing: "0.18em",
+              color: "var(--hg-ice)",
+              border: "1px solid var(--hg-ice)",
+              padding: "1px 4px",
+              borderRadius: 2,
+              textTransform: "uppercase",
+              opacity: 0.85,
+            }}
+          >s2s</span>
+        )}
         <MicButton state={voice.state} onClick={onMicToggle} />
       </div>
     </div>
@@ -703,6 +719,19 @@ function metricsBaseFromEndpoint(endpoint) {
   }
 }
 
+function s2sBaseFromEndpoint(endpoint) {
+  // The S2S bridge runs on the AI box (NOT the HA host), but until
+  // the user explicitly sets one via /s2s <url> we make a best-guess:
+  // same host as HA on port 8094. If the bridge actually lives on a
+  // different machine, /s2s <url> overrides this.
+  try {
+    const u = new URL(endpoint.replace(/^ws/, "http"));
+    return `http://${u.hostname}:8094`;
+  } catch {
+    return "http://192.168.0.100:8094";
+  }
+}
+
 function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voiceOverride, themeOverride, autoplay = true }) {
   const initialPrefs = useMemo(() => loadPrefs({
     endpoint: "",
@@ -710,6 +739,14 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     model: "",
     theme: "dark",
     metricsBase: "",
+    // S2S experiment — full-duplex speech-to-speech via the
+    // personaplex-bridge sidecar. Off by default; toggled per-window
+    // with `/s2s on|off`. Existing HA voice pipeline keeps working
+    // regardless of this flag.
+    s2sMode: false,
+    s2sBase: "",
+    s2sToken: "",       // BRIDGE_TOKEN — set via /s2s token <hex>
+    s2sVoice: "",       // default voice prompt; empty = bridge default (NATM2.pt)
   }), []);
   const initialEventsFromStorage = useMemo(
     () => (initialEvents ? initialEvents : loadEvents()),
@@ -735,6 +772,10 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   const [token, setToken] = useState(initialPrefs.token);
   const [model, setModel] = useState(initialPrefs.model);
   const [metricsBase, setMetricsBase] = useState(initialPrefs.metricsBase);
+  const [s2sMode, setS2sMode] = useState(!!initialPrefs.s2sMode);
+  const [s2sBase, setS2sBase] = useState(initialPrefs.s2sBase || "");
+  const [s2sToken, setS2sToken] = useState(initialPrefs.s2sToken || "");
+  const [s2sVoice, setS2sVoice] = useState(initialPrefs.s2sVoice || "");
   const [availableModels, setAvailableModels] = useState(null);
   const [metrics, setMetrics] = useState(DEFAULT_METRICS);
   const [conversationId, setConversationId] = useState(initialConvId);
@@ -759,8 +800,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
 
   /* Persist prefs whenever they change */
   useEffect(() => {
-    savePrefs({ endpoint, token, model, theme, metricsBase });
-  }, [endpoint, token, model, theme, metricsBase]);
+    savePrefs({ endpoint, token, model, theme, metricsBase, s2sMode, s2sBase, s2sToken, s2sVoice });
+  }, [endpoint, token, model, theme, metricsBase, s2sMode, s2sBase, s2sToken, s2sVoice]);
 
   /* Persist events on change (debounced via rAF — cheap enough at our scale) */
   useEffect(() => {
@@ -1087,6 +1128,58 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         if (arg) { setMetricsBase(arg); addEvent({ kind: "system", text: `metrics base · ${arg}`, tone: "ok" }); }
         else addEvent({ kind: "system", text: `metrics base · ${metricsBase || metricsBaseFromEndpoint(endpoint)}`, tone: "info" });
         return true;
+      case "s2s": {
+        // Toggle/configure the experimental full-duplex S2S backend.
+        //   /s2s                       → show current state
+        //   /s2s on | off              → flip the per-window toggle
+        //   /s2s token <hex>           → set BRIDGE_TOKEN for WS auth
+        //   /s2s voice <name>          → set voice prompt (e.g. NATM2.pt)
+        //   /s2s <url>                 → set the bridge URL
+        const parts = arg.trim().split(/\s+/);
+        const sub = parts[0] || "";
+        if (!sub) {
+          const url = s2sBase || s2sBaseFromEndpoint(endpoint);
+          addEvent({ kind: "system",
+            text: `s2s · ${s2sMode ? "on" : "off"} · ${url} · voice=${s2sVoice || "default"} · token=${s2sToken ? "<set>" : "<unset>"}`,
+            tone: "info" });
+          return true;
+        }
+        if (sub === "on") {
+          setS2sMode(true);
+          const url = s2sBase || s2sBaseFromEndpoint(endpoint);
+          addEvent({ kind: "system", text: `s2s mode · on · ${url || "(set url with /s2s <url>)"}${s2sToken ? "" : " · WARN: no token set"}`, tone: s2sToken ? "ok" : "warn" });
+          return true;
+        }
+        if (sub === "off") {
+          setS2sMode(false);
+          addEvent({ kind: "system", text: "s2s mode · off · using ha pipeline", tone: "ok" });
+          return true;
+        }
+        if (sub === "token") {
+          const t = parts.slice(1).join(" ");
+          if (t) {
+            setS2sToken(t);
+            addEvent({ kind: "system", text: "s2s token updated", tone: "ok" });
+          } else {
+            addEvent({ kind: "system", text: "usage: /s2s token <hex>", tone: "info" });
+          }
+          return true;
+        }
+        if (sub === "voice") {
+          const v = parts.slice(1).join(" ");
+          if (v) {
+            setS2sVoice(v);
+            addEvent({ kind: "system", text: `s2s voice · ${v}`, tone: "ok" });
+          } else {
+            addEvent({ kind: "system", text: `s2s voice · ${s2sVoice || "(default — NATM2.pt)"}`, tone: "info" });
+          }
+          return true;
+        }
+        // Anything else → treat as a URL.
+        setS2sBase(sub);
+        addEvent({ kind: "system", text: `s2s bridge · ${sub}`, tone: "ok" });
+        return true;
+      }
       case "clear":
         stopStreaming();
         setEvents([]);
@@ -1100,13 +1193,13 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         addEvent({ kind: "system", text: "home v0.1.0 · engineered-lighting/home · MIT", tone: "info" });
         return true;
       case "help":
-        addEvent({ kind: "system", text: "/connect <url> <token> · /token <t> · /model <name> · /metrics <url> · /clear · /demo · /about · /help", tone: "info" });
+        addEvent({ kind: "system", text: "/connect <url> <token> · /token <t> · /model <name> · /metrics <url> · /s2s on|off|<url> · /clear · /demo · /about · /help", tone: "info" });
         return true;
       default:
         addEvent({ kind: "system", text: `unknown command: /${cmd}`, tone: "warn" });
         return true;
     }
-  }, [addEvent, connectTo, endpoint, metricsBase, playScript, stopStreaming, token]);
+  }, [addEvent, connectTo, endpoint, metricsBase, playScript, stopStreaming, token, s2sMode, s2sBase, s2sToken, s2sVoice]);
 
   /* ── Free-form user input ─────────────────────────────────────────── */
   const sendInput = useCallback(() => {
@@ -1322,13 +1415,79 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     });
   }, [connection, conversationId, addEvent, endpoint, stopVoiceMode]);
 
-  const toggleMic = useCallback(() => {
-    if (voice.state === "inactive" || voice.state === "no-mic") {
-      startVoiceMode();
-    } else {
-      stopVoiceMode("inactive");
+  /* ── Experimental S2S voice mode (via personaplex-bridge) ─────────────
+   * Runs in parallel to the HA voice pipeline — toggled by `/s2s on`.
+   * Same MicButton/voice-state UI, but audio is routed through the
+   * bridge WS and the bridge speaks back through Web Audio directly
+   * (no HA TTS, no Voice PE). Chat-tee teeing keeps text turns in
+   * the same conversation feed. */
+  const s2sRunRef = useRef(null);
+  const stopS2sMode = useCallback((newState = "inactive") => {
+    try { s2sRunRef.current?.stop?.(); } catch (e) { /* noop */ }
+    s2sRunRef.current = null;
+    setVoice({ state: newState });
+  }, []);
+  const startS2sMode = useCallback(async () => {
+    if (!window.startS2SRun) {
+      addEvent({ kind: "system", text: "s2s module not loaded", tone: "warn" });
+      return;
     }
-  }, [voice.state, startVoiceMode, stopVoiceMode]);
+    const base = s2sBase || s2sBaseFromEndpoint(endpoint);
+    if (!base) {
+      addEvent({ kind: "system", text: "set bridge url with /s2s <url>", tone: "warn" });
+      return;
+    }
+    setVoice({ state: "listening" });
+    const voiceId = nextId();
+    setEvents((prev) => [...prev, {
+      id: voiceId, kind: "voice", time: fmtTime(), text: "listening… (s2s)",
+    }]);
+    const t0 = performance.now();
+    let lastUserText = "";
+    const run = await window.startS2SRun({
+      s2sBase: base,
+      s2sToken: s2sToken || undefined,
+      voicePrompt: s2sVoice || undefined,
+      conversationId,
+      onState: (state) => {
+        if (state === "listening")      setVoice({ state: "listening" });
+        else if (state === "processing") setVoice({ state: "processing" });
+        else if (state === "speaking")  setVoice({ state: "speaking" });
+        else if (state === "idle" || state === "inactive") setVoice({ state: "inactive" });
+      },
+      onTranscript: (role, text, partial) => {
+        if (!text || partial) return;
+        if (role === "user") {
+          lastUserText = text;
+          setEvents((prev) => prev.map((e) =>
+            e.id === voiceId ? { ...e, text } : e
+          ));
+        } else if (role === "assistant") {
+          addEvent({ kind: "home", text });
+          setMetrics((prev) => ({
+            ...prev,
+            e2e: Math.round(performance.now() - t0),
+          }));
+        }
+      },
+      onError: (msg) => {
+        addEvent({ kind: "system", text: `s2s · ${msg}`, tone: "error" });
+        setVoice({ state: "inactive" });
+      },
+    });
+    s2sRunRef.current = run;
+  }, [s2sBase, s2sToken, s2sVoice, endpoint, conversationId, addEvent]);
+
+  const toggleMic = useCallback(() => {
+    const idle = voice.state === "inactive" || voice.state === "no-mic";
+    if (s2sMode) {
+      if (idle) startS2sMode();
+      else stopS2sMode("inactive");
+      return;
+    }
+    if (idle) startVoiceMode();
+    else stopVoiceMode("inactive");
+  }, [voice.state, s2sMode, startVoiceMode, stopVoiceMode, startS2sMode, stopS2sMode]);
 
   /* ── Single source of truth: SSE feed from the chat-tee sidecar ────────
    *
@@ -1528,6 +1687,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         onMicToggle={toggleMic}
         isStreaming={streamingIds.current.size > 0 || events.some(e => e.streaming)}
         onStop={stopStreaming}
+        s2sMode={s2sMode}
       />
     </div>
   );

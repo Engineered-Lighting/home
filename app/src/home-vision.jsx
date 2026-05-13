@@ -56,13 +56,24 @@ function _haBaseFromWs(haUrl) {
 function useCameraSignedStream({ entity, haUrl, paused = false, stagger = 0 }) {
   const [signed, setSigned] = React.useState(null);
   const [err, setErr] = React.useState(null);
-  // Phase 1.5d: bump on stream-death so consumers can remount the
-  // <img> element and force a fresh MJPEG connection. HA's
-  // camera_proxy_stream occasionally goes silent (Frigate process
-  // restart, RTSP dropout, network blip) without firing an onError —
-  // the img just stops getting new frames and shows the last one
-  // (or black if it never got one). Periodic refresh + onError-
-  // triggered refresh covers both failure modes.
+  // Phase 1.5d / Phase B post-deploy fix: bump on stream-death so
+  // consumers can remount the <img> element and force a fresh MJPEG
+  // connection. HA's camera_proxy_stream occasionally goes silent
+  // (Frigate restart, RTSP dropout, network blip) without firing an
+  // onError — the img just stops getting new frames and shows the
+  // last one (or black if it never got one).
+  //
+  // Recovery triggers (in order of speed of detection):
+  //   1. img onError handler → onError-triggered reload (instant)
+  //   2. visibilitychange / window focus → user returns from idle
+  //      and we proactively remount (~0ms after user looks)
+  //   3. periodic setInterval (2 min when active, was 5 min) → catches
+  //      stale streams during continuous viewing
+  //
+  // The visibilitychange trigger is THE key fix for the user-reported
+  // "black tiles after 5+ min idle" symptom: browsers throttle
+  // setInterval when tabs are unfocused, so the periodic remount
+  // doesn't fire reliably. Detecting user return is more robust.
   const [streamKey, setStreamKey] = React.useState(0);
   const reload = React.useCallback(() => {
     setStreamKey((k) => k + 1);
@@ -100,23 +111,18 @@ function useCameraSignedStream({ entity, haUrl, paused = false, stagger = 0 }) {
     };
     // Phase 1.5f: stagger the initial sign+stream-attach so 5
     // simultaneous mounts (e.g. carousel reopen) don't slam HA's
-    // camera_proxy_stream all at once. Only the first 1-2 succeed
-    // when they hit Frigate's go2rtc concurrent-consumer limit; rest
-    // stall silently with a black frame. Spreading the connections
-    // 200ms apart (~1s total for 5 cameras) lets each handshake
-    // complete before the next starts.
+    // camera_proxy_stream all at once.
     if (stagger > 0) {
       staggerTimer = setTimeout(() => { sign(); }, stagger);
     } else {
       sign();
     }
-    // Periodic remount: every 5 minutes, bump the streamKey so the
-    // img element is recreated and the MJPEG handshake re-runs. Even
-    // if the existing connection is healthy, the cost is one frame's
-    // worth of black, which is invisible in normal viewing.
+    // Periodic remount: every 2 minutes (down from 5). Even if the
+    // existing connection is healthy, the cost is one frame's worth
+    // of black, which is invisible in normal viewing.
     refreshTimer = setInterval(() => {
       setStreamKey((k) => k + 1);
-    }, 5 * 60 * 1000);
+    }, 2 * 60 * 1000);
     return () => {
       cancelled = true;
       if (resignTimer) clearTimeout(resignTimer);
@@ -124,6 +130,36 @@ function useCameraSignedStream({ entity, haUrl, paused = false, stagger = 0 }) {
       if (staggerTimer) clearTimeout(staggerTimer);
     };
   }, [entity, haUrl, paused, stagger]);
+  // Phase B post-deploy: proactive remount on visibility/focus return.
+  // This is what catches "black tiles after 5+ min idle" — when the
+  // user looks back at the app, any streams that quietly died during
+  // background-throttling get remounted within a frame.
+  React.useEffect(() => {
+    if (paused) return undefined;
+    let lastForceAt = 0;
+    const forceReload = (reason) => {
+      // Debounce: don't remount more than once per 10s for the same
+      // reason set. Initial-page-focus + visibility events fire close
+      // together; we only want one remount.
+      const now = Date.now();
+      if (now - lastForceAt < 10000) return;
+      lastForceAt = now;
+      console.log(`[vision] ${reason} → remount ${entity}`);
+      setStreamKey((k) => k + 1);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        forceReload("visibilitychange→visible");
+      }
+    };
+    const onFocus = () => forceReload("window focus");
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [entity, paused]);
   return { src: signed, err, streamKey, reload };
 }
 
@@ -225,6 +261,22 @@ function HomeVisionCard({
   const [hasEverOpened, setHasEverOpened] = React.useState(defaultOpen);
   React.useEffect(() => {
     if (open) setHasEverOpened(true);
+  }, [open]);
+  // Phase B post-deploy fix: bump openCount on every open→true
+  // transition. The MJPEG streams may silently die during a long
+  // closed period (browser tab-throttling stops the periodic
+  // remount, HA may close idle MJPEG connections). When the user
+  // reopens the drawer, force all tiles to remount by changing
+  // their `key` (drives a fresh signed URL fetch + handshake).
+  const [openCount, setOpenCount] = React.useState(defaultOpen ? 1 : 0);
+  const prevOpenRef = React.useRef(defaultOpen);
+  React.useEffect(() => {
+    if (open && !prevOpenRef.current) {
+      // closed → open transition
+      setOpenCount((c) => c + 1);
+      console.log("[vision] drawer reopened; forcing stream remount");
+    }
+    prevOpenRef.current = open;
   }, [open]);
   const active = cameras[idx];
   const occupied = cameras.filter((c) => (labels[c.id] || []).length > 0).length;
@@ -481,6 +533,11 @@ function HomeVisionCard({
                   }}
                 >
                   <HomeVisionFrame
+                    // Phase B post-deploy: key includes openCount so the
+                    // Frame component remounts on every drawer reopen,
+                    // forcing a fresh signed URL + MJPEG handshake.
+                    // Catches streams that died during long closed periods.
+                    key={`${c.id}-${openCount}`}
                     camera={c}
                     haUrl={haUrl}
                     token={token}

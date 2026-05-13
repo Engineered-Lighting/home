@@ -447,11 +447,16 @@ function MetricTile({ label, value, suffix, history, color, accent }) {
   );
 }
 
-function MetricsStrip({ metrics }) {
+function MetricsStrip({ metrics, metricsBase, bridgeHealth }) {
   const [expanded, setExpanded] = useState(false);
   const [history, setHistory] = useState({
     ttft: [], tps: [], gpu: [], vram: [], cpu: [],
   });
+  // F.3 (revised): trace metrics live INSIDE this drawer instead of a
+  // separate floating panel. Poll /traces/summary + /traces/latest every
+  // 5s. Only when expanded — keeps the network quiet most of the time.
+  const [traceSummary, setTraceSummary] = useState(null);
+  const [lastTrace, setLastTrace] = useState(null);
   useEffect(() => {
     setHistory((h) => {
       const next = {};
@@ -463,6 +468,28 @@ function MetricsStrip({ metrics }) {
       return next;
     });
   }, [metrics.ttft, metrics.tps, metrics.gpu, metrics.vram, metrics.cpu]);
+  useEffect(() => {
+    if (!expanded || !metricsBase) return undefined;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const [s, l] = await Promise.all([
+          fetch(`${metricsBase}/traces/summary?window=1h`, { cache: "no-store" }),
+          fetch(`${metricsBase}/traces/latest?n=1`, { cache: "no-store" }),
+        ]);
+        if (cancelled) return;
+        if (s.ok) setTraceSummary(await s.json());
+        if (l.ok) {
+          const j = await l.json();
+          setLastTrace(j.traces?.[j.traces.length - 1] || null);
+        }
+      } catch {}
+    };
+    tick();
+    const id = setInterval(tick, 5000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [expanded, metricsBase]);
+  const fmtMs = (v) => (v == null || v === 0) ? "—" : `${Math.round(v)}ms`;
 
   return (
     <div style={{ borderTop: "1px solid var(--hg-border-soft)", background: "var(--hg-bg-0)" }}>
@@ -536,6 +563,109 @@ function MetricsStrip({ metrics }) {
             }}/>
           </div>
           <span style={{ color: "var(--hg-fg-1)" }}>{metrics.vram}<span style={{ color: "var(--hg-fg-4)" }}> / {metrics.vramMax} GB</span></span>
+        </div>
+      )}
+      {/* Master plan F.3 (revised): bridge + voice-turn latency lives inside
+          this drawer alongside GPU/VRAM/CPU. Two columns: left = bridge
+          health, right = last-turn breakdown + p50/p90 across recent traces. */}
+      {expanded && (bridgeHealth || traceSummary) && (
+        <div style={{
+          padding: "10px 16px 12px",
+          borderTop: "1px solid var(--hg-border-soft)",
+          fontFamily: "'Geist Mono', monospace",
+          fontSize: 10.5,
+          color: "var(--hg-fg-2)",
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+          gap: 18,
+          fontVariantNumeric: "tabular-nums",
+        }}>
+          {/* Bridge health */}
+          {bridgeHealth && (
+            <div>
+              <div style={{ color: "var(--hg-fg-5)", letterSpacing: "0.16em", textTransform: "uppercase", fontSize: 9, marginBottom: 6 }}>bridge</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr auto", rowGap: 2, color: "var(--hg-fg-1)" }}>
+                <span style={{ color: "var(--hg-fg-3)" }}>uptime</span>
+                <span>{Math.floor((bridgeHealth.uptime_s || 0) / 60)}m</span>
+                <span style={{ color: "var(--hg-fg-3)" }}>warmup</span>
+                <span style={{ color: bridgeHealth.warmup_complete ? "var(--hg-fg-1)" : "var(--hg-warn)" }}>{bridgeHealth.warmup_complete ? "done" : "in progress"}</span>
+                <span style={{ color: "var(--hg-fg-3)" }}>ha</span>
+                <span>{bridgeHealth.ha_connected ? "✓" : "✗ offline"}</span>
+                <span style={{ color: "var(--hg-fg-3)" }}>rooms</span>
+                <span>{bridgeHealth.rooms_loaded || 0}</span>
+                <span style={{ color: "var(--hg-fg-3)" }}>media players</span>
+                <span>{bridgeHealth.media_players_registered || 0}</span>
+                <span style={{ color: "var(--hg-fg-3)" }}>tts</span>
+                <span>{bridgeHealth.tts_engine || "—"}</span>
+                {bridgeHealth.last_trace_age_s != null && (
+                  <>
+                    <span style={{ color: "var(--hg-fg-3)" }}>last trace</span>
+                    <span>{Math.round(bridgeHealth.last_trace_age_s)}s ago</span>
+                  </>
+                )}
+              </div>
+              {bridgeHealth.stale_media_integrations && bridgeHealth.stale_media_integrations.length > 0 && (
+                <div style={{ marginTop: 6, color: "var(--hg-warn)" }}>
+                  ⚠ {bridgeHealth.stale_media_integrations.length} stale media
+                </div>
+              )}
+            </div>
+          )}
+          {/* Last turn breakdown */}
+          {lastTrace && (
+            <div>
+              <div style={{ color: "var(--hg-fg-5)", letterSpacing: "0.16em", textTransform: "uppercase", fontSize: 9, marginBottom: 6 }}>
+                last turn · {lastTrace.is_voice ? "voice" : "text"} · {lastTrace.cold ? "cold" : "warm"}
+              </div>
+              <div style={{ color: "var(--hg-fg-2)", marginBottom: 4, fontSize: 10 }}>{(lastTrace.user_text || "").slice(0, 36)}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr auto", rowGap: 2, color: "var(--hg-fg-1)" }}>
+                {[
+                  ["pipeline", "t_pipeline_intent_end"],
+                  ["synth", "t_synth_done"],
+                  ["ttfa", "t_first_audio_sent"],
+                  ["done", "t_done"],
+                  ["audio", "audio_duration_ms"],
+                ].map(([label, key]) => (
+                  <React.Fragment key={key}>
+                    <span style={{ color: "var(--hg-fg-3)" }}>{label}</span>
+                    <span>{fmtMs(lastTrace[key])}</span>
+                  </React.Fragment>
+                ))}
+              </div>
+            </div>
+          )}
+          {/* p50/p90 across the rolling 1h window */}
+          {traceSummary && traceSummary.count > 0 && (
+            <div>
+              <div style={{ color: "var(--hg-fg-5)", letterSpacing: "0.16em", textTransform: "uppercase", fontSize: 9, marginBottom: 6 }}>
+                p50 / p90 · n={traceSummary.count}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", columnGap: 8, rowGap: 2, color: "var(--hg-fg-1)" }}>
+                {[
+                  ["pipeline end", "t_pipeline_intent_end"],
+                  ["synth done", "t_synth_done"],
+                  ["ttfa", "t_first_audio_sent"],
+                ].map(([label, key]) => {
+                  const s = traceSummary.stamps && traceSummary.stamps[key];
+                  if (!s) return null;
+                  return (
+                    <React.Fragment key={key}>
+                      <span style={{ color: "var(--hg-fg-3)" }}>{label}</span>
+                      <span>{fmtMs(s.p50)}</span>
+                      <span style={{ color: "var(--hg-fg-3)" }}>{fmtMs(s.p90)}</span>
+                    </React.Fragment>
+                  );
+                })}
+                {traceSummary.ttfa_ms && (
+                  <>
+                    <span style={{ color: "var(--hg-ice-bright)" }}>voice ttfa</span>
+                    <span style={{ color: "var(--hg-ice-bright)" }}>{fmtMs(traceSummary.ttfa_ms.p50)}</span>
+                    <span style={{ color: "var(--hg-ice-bright)" }}>{fmtMs(traceSummary.ttfa_ms.p90)}</span>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -1614,7 +1744,10 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
 
   /* ── Slash command parser ─────────────────────────────────────────── */
   const handleCommand = useCallback((raw) => {
-    const [cmd, ...rest] = raw.trim().slice(1).split(/\s+/);
+    // Trim AGAIN after stripping the leading slash so "/ find office"
+    // (with a space the user accidentally typed) becomes "find office"
+    // not " find office" → empty cmd.
+    const [cmd, ...rest] = raw.trim().slice(1).trim().split(/\s+/);
     const arg = rest.join(" ");
     switch (cmd) {
       case "connect":
@@ -2585,12 +2718,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         sidecarOnline={sidecarOnline}
         bridgeOnline={bridgeOnline}
       />
-      {debugMode && (
-        <DebugPanel
-          metricsBase={metricsBase || metricsBaseFromEndpoint(endpoint)}
-          bridgeHealth={bridgeHealth}
-        />
-      )}
+      {/* F.3 revised: latency lives inside MetricsStrip now (expanded view)
+          alongside GPU/VRAM. No separate floating panel. */}
       <WelcomeBanner
         identity={identity}
         arrival={arrival}
@@ -2644,7 +2773,12 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           </div>
         )}
       </div>
-      <MetricsStrip metrics={metrics} style={metricsStyle} />
+      <MetricsStrip
+        metrics={metrics}
+        style={metricsStyle}
+        metricsBase={metricsBase || metricsBaseFromEndpoint(endpoint)}
+        bridgeHealth={bridgeHealth}
+      />
       <VoiceBanner voice={voice} onRetry={toggleMic} />
       <InputRow
         value={input}

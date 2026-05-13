@@ -15,6 +15,10 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-http = "2"
 tauri-plugin-shell = "2"
+# Single-instance plugin: prevents a second home.exe from creating a
+# second window. Second launch focuses the existing window instead.
+# Avoids "two app windows fighting over MJPEG TCP connections to HA".
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

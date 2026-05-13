@@ -18,7 +18,7 @@ let _id = 0;
 const nextId = () => `e-${++_id}`;
 
 /* ── Header ──────────────────────────────────────────────────────────── */
-function HomeHeader({ theme, onToggleTheme, voice, connection }) {
+function HomeHeader({ theme, onToggleTheme, voice, connection, sidecarOnline, bridgeOnline }) {
   const isLive = voice.state !== "inactive" && voice.state !== "no-mic";
   const statusText =
     voice.state === "listening"  ? "listening"  :
@@ -27,6 +27,17 @@ function HomeHeader({ theme, onToggleTheme, voice, connection }) {
     connection === "online"       ? "online"     :
     connection === "connecting"   ? "connecting" :
     connection === "auth_invalid" ? "bad token"  : "offline";
+  // Phase B F0-08: surface sidecar/bridge offline as a warning pill.
+  // sidecarOnline = false means SSE chat-tee is broken → assistant
+  // replies won't reach the feed even if HA fires. bridgeOnline = false
+  // means voice mode is broken (no identity/media events, no s2s WS).
+  // Both null = unknown (first probe pending) — hide pill.
+  const sidecarDown = sidecarOnline === false;
+  const bridgeDown = bridgeOnline === false;
+  const showWarn = (connection === "online") && (sidecarDown || bridgeDown);
+  const warnText = sidecarDown && bridgeDown ? "voice + chat offline"
+                 : sidecarDown ? "chat-tee offline"
+                 : bridgeDown ? "voice bridge offline" : "";
   const iconBtn = {
     background: "transparent", border: "none", padding: 4, cursor: "pointer",
     color: "var(--hg-fg-3)",
@@ -61,6 +72,33 @@ function HomeHeader({ theme, onToggleTheme, voice, connection }) {
         }}>engineered lighting</span>
       </div>
       <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 10, fontSize: 11.5 }}>
+        {/* Phase B F0-08: backend liveness warning pill. Only renders
+            when HA itself is online but a downstream service (sidecar
+            chat-tee OR bridge for voice) is unreachable. */}
+        {showWarn && (
+          <span title={warnText} style={{
+            display: "inline-flex", alignItems: "center", gap: 5,
+            border: "1px solid var(--hg-warn)",
+            color: "var(--hg-warn)",
+            padding: "2px 7px",
+            borderRadius: 2,
+            fontFamily: "'Geist Mono', monospace",
+            fontSize: 9,
+            letterSpacing: "0.12em",
+            textTransform: "uppercase",
+          }}>
+            <span style={{
+              width: 6, height: 6, borderRadius: 999,
+              background: "var(--hg-warn)",
+              animation: "hgPulse 2s ease-in-out infinite",
+            }} />
+            {warnText}
+          </span>
+        )}
+        {/* Phase 1.5b: SEEN identity pill removed from header. The
+            face-rec affordances live below now — name chip in the
+            vision drawer, named perception line in the chat feed.
+            The header stays clean. */}
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <ConnectionDot state={isLive ? "live" : connection} />
           {(isLive || connection !== "online") && (
@@ -118,6 +156,104 @@ function ConnectionDot({ state }) {
     offline: "error",
   };
   return <StatusDot tone={toneMap[state] || "idle"} size={5} />;
+}
+
+/* ── WelcomeBanner — Phase 1 identity UX ─────────────────────────────
+ *
+ * Two trigger paths feed this:
+ *   1. ARRIVAL — bridge fires {type:"presence", event:"arrived", display_name}
+ *      via either WS or chat-tee SSE when person.<X> flips not_home → home.
+ *      Always fires, ignores cooldown. The strongest signal.
+ *   2. SESSION-START — when app boots with a recent high-confidence face
+ *      identity (within 5 min) AND no recent welcome (welcomedAt > 2h ago).
+ *
+ * Both auto-dismiss after 8 seconds or after the user interacts.
+ *
+ * Time-of-day phrasing for greetings — only "Good morning" inside the
+ * 6am-9pm window so we don't say "Good morning" at 3am.
+ */
+const WELCOMED_AT_KEY = "hg-welcomedAt";
+function getGreeting(name) {
+  const h = new Date().getHours();
+  if (h >= 6 && h < 12) return `Good morning, ${name}.`;
+  if (h >= 12 && h < 17) return `Good afternoon, ${name}.`;
+  if (h >= 17 && h < 21) return `Good evening, ${name}.`;
+  return `Hey ${name}.`;
+}
+
+function WelcomeBanner({ identity, arrival, onDismiss }) {
+  const [bannerText, setBannerText] = useState(null);
+  const [bannerKey, setBannerKey] = useState(0);
+
+  // Arrival path — always fires, regardless of welcomedAt cooldown.
+  useEffect(() => {
+    if (!arrival || !arrival.display_name) return;
+    const name = arrival.display_name;
+    const greeting = getGreeting(name);
+    setBannerText(`Welcome back. ${greeting}`);
+    setBannerKey((k) => k + 1);
+    try {
+      localStorage.setItem(WELCOMED_AT_KEY, String(Date.now() / 1000));
+    } catch {}
+  }, [arrival && arrival.ts, arrival && arrival.display_name]);
+
+  // Session-start path — checks recent face match + cooldown on mount.
+  useEffect(() => {
+    if (!identity || !identity.name) return;
+    if (identity.confidence_band !== "high") return;
+    const ageS = (Date.now() / 1000) - (identity.ts || 0);
+    if (ageS > 300) return; // 5 min freshness
+    let welcomedAt = 0;
+    try {
+      welcomedAt = parseFloat(localStorage.getItem(WELCOMED_AT_KEY) || "0");
+    } catch {}
+    const cooldownExpired = (Date.now() / 1000 - welcomedAt) > 7200; // 2h
+    if (!cooldownExpired) return;
+    setBannerText(getGreeting(identity.name));
+    setBannerKey((k) => k + 1);
+    try {
+      localStorage.setItem(WELCOMED_AT_KEY, String(Date.now() / 1000));
+    } catch {}
+    // Intentionally only runs on first match per mount — onMount semantics.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Auto-dismiss after 8 seconds.
+  useEffect(() => {
+    if (!bannerText) return;
+    const t = setTimeout(() => {
+      setBannerText(null);
+      if (typeof onDismiss === "function") onDismiss();
+    }, 8000);
+    return () => clearTimeout(t);
+  }, [bannerKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!bannerText) return null;
+  return (
+    <div
+      key={bannerKey}
+      style={{
+        padding: "10px 20px",
+        borderBottom: "1px solid var(--hg-border-soft)",
+        background: "var(--hg-bg-0)",
+        fontFamily: "'Geist Mono', ui-monospace, monospace",
+        fontSize: 12,
+        color: "var(--hg-ice-bright)",
+        letterSpacing: "0.04em",
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        animation: "hg-fade 320ms ease-out",
+      }}
+    >
+      <span style={{
+        width: 6, height: 6, borderRadius: 999,
+        background: "var(--hg-ice-bright)",
+        boxShadow: "0 0 6px var(--hg-ice-glow)",
+      }}/>
+      <span>{bannerText}</span>
+    </div>
+  );
 }
 
 /* ── Metrics: collapsed strip + expandable mini-dashboard ───────────── */
@@ -212,7 +348,14 @@ function MetricsStrip({ metrics }) {
       </div>
       {expanded && (
         <div style={{
-          display: "grid", gridTemplateColumns: "repeat(5, 1fr)",
+          // Responsive grid: auto-fit picks how many columns fit at
+          // the current width (each tile clamped to ≥ 110 px). Narrow
+          // window → wraps onto multiple rows; wide window → 5 in a
+          // single row with extra breathing room from 1fr stretch.
+          // Replaces the old fixed `repeat(5, 1fr)` which squished
+          // tiles into unreadable strips on narrow windows.
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))",
           borderTop: "1px solid var(--hg-border-soft)",
           animation: "hg-fade-up 240ms cubic-bezier(.4,0,.2,1)",
         }}>
@@ -220,23 +363,7 @@ function MetricsStrip({ metrics }) {
           <MetricTile label="tok/s" value={metrics.tps}             history={history.tps}  color="var(--hg-fg-2)" />
           <MetricTile label="gpu"   value={metrics.gpu}  suffix="%" history={history.gpu}  color="var(--hg-fg-2)" />
           <MetricTile label="vram"  value={metrics.vram} suffix={`/${metrics.vramMax}g`} history={history.vram} color="var(--hg-fg-2)" />
-          <div style={{
-            padding: "10px 12px 8px",
-            display: "flex", flexDirection: "column", gap: 4,
-          }}>
-            <div style={{
-              fontFamily: "'Geist Mono', monospace", fontSize: 9, letterSpacing: "0.18em",
-              textTransform: "uppercase", color: "var(--hg-fg-5)",
-            }}>cpu</div>
-            <div style={{
-              display: "flex", alignItems: "baseline", gap: 3,
-              fontFamily: "'Geist Mono', monospace", fontVariantNumeric: "tabular-nums",
-            }}>
-              <span style={{ fontSize: 16, color: "var(--hg-fg-0)", fontWeight: 500 }}>{metrics.cpu}</span>
-              <span style={{ fontSize: 10, color: "var(--hg-fg-4)" }}>%</span>
-            </div>
-            <Sparkline data={history.cpu} color="var(--hg-fg-2)" height={20} />
-          </div>
+          <MetricTile label="cpu"   value={metrics.cpu}  suffix="%" history={history.cpu}  color="var(--hg-fg-2)" />
         </div>
       )}
       {expanded && (
@@ -473,15 +600,22 @@ function SigRow({ label, value }) {
 
 /* ── Input row ───────────────────────────────────────────────────────── */
 const SLASH_CMDS = [
-  { cmd: "/connect",  hint: "<url>",   desc: "connect to a local model endpoint" },
+  { cmd: "/connect",  hint: "<url> [<token>]", desc: "connect to a Home Assistant endpoint" },
   { cmd: "/endpoint", hint: "<url>",   desc: "change endpoint url" },
+  { cmd: "/token",    hint: "<token>", desc: "update the HA long-lived access token" },
   { cmd: "/model",    hint: "<name>",  desc: "switch active model" },
-  { cmd: "/s2s",      hint: "on|off",  desc: "toggle experimental s2s voice mode" },
+  { cmd: "/metrics",  hint: "<url>",   desc: "set the metrics-sidecar base url" },
+  { cmd: "/s2s",      hint: "<url> | token <hex> | voice <name>", desc: "configure s2s bridge — url, token, or per-session voice override" },
+  { cmd: "/voice",    hint: "<name>",  desc: "swap Kokoro TTS voice (e.g. am_eric, af_heart)" },
+  { cmd: "/voices",   hint: "",        desc: "list popular voice names" },
+  { cmd: "/debug",    hint: "on|off",  desc: "show/hide internal diag events ([parakeet], [direct], etc.)" },
+  { cmd: "/demo",     hint: "",        desc: "play the scripted demo conversation" },
   { cmd: "/clear",    hint: "",        desc: "clear the conversation" },
+  { cmd: "/about",    hint: "",        desc: "show version + repo info" },
   { cmd: "/help",     hint: "",        desc: "list commands" },
 ];
 
-function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, onStop, s2sMode }) {
+function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, onStop }) {
   const inputRef = useRef(null);
   const [sel, setSel] = useState(0);
   const isSlash = value.startsWith("/");
@@ -592,26 +726,17 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
             >{isSlash ? "run" : "send"} <IconSend size={11} /></button>
           )}
         </div>
-        {s2sMode && (
-          <span
-            title="experimental s2s mode (full-duplex) — toggle with /s2s off"
-            style={{
-              fontFamily: "'Geist Mono', monospace",
-              fontSize: 8, letterSpacing: "0.18em",
-              color: "var(--hg-ice)",
-              border: "1px solid var(--hg-ice)",
-              padding: "1px 4px",
-              borderRadius: 2,
-              textTransform: "uppercase",
-              opacity: 0.85,
-            }}
-          >s2s</span>
-        )}
         <MicButton state={voice.state} onClick={onMicToggle} />
       </div>
     </div>
   );
 }
+
+/* VoiceModeButton + the /s2s on|off slash command + the persistent
+ * `s2sMode` toggle were retired in Phase 1.5. Voice mode is now
+ * always-available; tap the mic icon to enter a voice session, tap
+ * again to end it. Bridge default voice is Chatterbox-Gianna; swap
+ * voices per-session with /voice <name>. */
 
 function MicButton({ state, onClick }) {
   const isOff = state === "inactive";
@@ -619,10 +744,17 @@ function MicButton({ state, onClick }) {
   const isListening = state === "listening";
   const isProcessing = state === "processing";
   const isSpeaking = state === "speaking";
+  // Phase 1.5c: "active" = any non-idle/error state. The reactive
+  // LiveWaveform replaces the static IconWaveLive so the icon pulses
+  // with real audio whenever the session is open. Source flips to
+  // "player" during the speaking state, "mic" during everything else
+  // (listening picks up user voice, thinking/transcribing/ready show
+  // a quiet idle pose since no audio is flowing).
+  const isActive = !isOff && !isErr;
 
   const bg = (isListening || isSpeaking) ? "var(--hg-ice-glow)" : "transparent";
   const fg = isErr ? "var(--hg-warn)"
-            : (isListening || isSpeaking || isProcessing) ? "var(--hg-ice-bright)"
+            : (isActive || isProcessing) ? "var(--hg-ice-bright)"
             : "var(--hg-fg-1)";
   const animation =
     isListening ? "hg-breathe 1.8s ease-in-out infinite"
@@ -651,8 +783,8 @@ function MicButton({ state, onClick }) {
         <svg width="16" height="16" viewBox="0 0 24 24" style={{ animation: "hg-rotate 1.1s linear infinite" }}>
           <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="14 60" strokeLinecap="round" />
         </svg>
-      ) : isListening || isSpeaking ? (
-        <IconWaveLive bars={5} height={12} color="currentColor" />
+      ) : isActive ? (
+        <LiveWaveform source={isSpeaking ? "player" : "mic"} bars={5} height={11} />
       ) : (
         <IconMic size={15} />
       )}
@@ -661,7 +793,22 @@ function MicButton({ state, onClick }) {
 }
 
 /* ── Voice mode banner — quiet text strip above input ────────────────── */
-function VoiceBanner({ voice }) {
+/* VoiceBanner — visible status strip below the chat feed. Now supports
+ * the expanded voice-mode state set (May 2026):
+ *
+ *   inactive     → banner hidden (voice mode off OR ready-idle and we
+ *                  suppress the banner to reduce noise)
+ *   ready        → "voice mode — tap mic to speak" (voice mode on, idle)
+ *   listening    → mic capturing user speech (wave animation)
+ *   transcribing → STT in flight (brief flash, ~200ms typically)
+ *   thinking     → LLM is generating the response
+ *   speaking     → TTS PCM streaming, audio playing back
+ *   error        → mic denied / WS down / TTS down — tap to retry
+ *
+ * The bridge drives transcribing/thinking/speaking via
+ * `{type: "state", state: "..."}` WS control messages on the s2s channel.
+ * Listening/inactive are driven locally by the mic state. */
+function VoiceBanner({ voice, onRetry }) {
   if (voice.state === "inactive") return null;
   const base = {
     padding: "6px 16px",
@@ -678,12 +825,141 @@ function VoiceBanner({ voice }) {
       </div>
     );
   }
+  if (voice.state === "error") {
+    return (
+      <div style={{ ...base, color: "var(--hg-warn)" }}>
+        <StatusDot tone="error" size={5} />
+        <span>{voice.message || "voice error"}</span>
+        <button
+          onClick={onRetry}
+          style={{
+            marginLeft: "auto",
+            background: "transparent",
+            border: "1px solid var(--hg-warn)",
+            color: "var(--hg-warn)",
+            fontFamily: "'Geist Mono', monospace",
+            fontSize: 9,
+            letterSpacing: "0.16em",
+            textTransform: "uppercase",
+            padding: "2px 6px",
+            borderRadius: 2,
+            cursor: "pointer",
+          }}
+        >retry</button>
+      </div>
+    );
+  }
+  if (voice.state === "ready") {
+    return (
+      <div style={{ ...base, color: "var(--hg-fg-3)" }}>
+        <StatusDot tone="ok" size={5} />
+        <span style={{ letterSpacing: "0.12em" }}>voice mode</span>
+        <span style={{ marginLeft: "auto", color: "var(--hg-fg-4)" }}>tap mic to speak</span>
+      </div>
+    );
+  }
+  if (voice.state === "transcribing") {
+    return (
+      <div style={{ ...base, color: "var(--hg-ice)" }}>
+        <StatusDot tone="info" size={5} />
+        <span>transcribing…</span>
+      </div>
+    );
+  }
+  if (voice.state === "thinking") {
+    return (
+      <div style={{ ...base, color: "var(--hg-ice)" }}>
+        <span style={{
+          display: "inline-block",
+          width: 14, height: 4,
+          background: "linear-gradient(90deg, var(--hg-ice) 0%, transparent 100%)",
+          animation: "hg-breathe 1.6s ease-in-out infinite",
+        }}/>
+        <span>thinking…</span>
+      </div>
+    );
+  }
+  // Active states with wave: listening, speaking. The wave is now
+  // driven by a real AnalyserNode (mic input during listening, player
+  // output during speaking) — see LiveWaveform below.
   return (
     <div style={{ ...base, color: "var(--hg-ice)" }}>
-      <IconWaveLive bars={18} height={9} color="var(--hg-ice)" />
+      <LiveWaveform
+        source={voice.state === "speaking" ? "player" : "mic"}
+        bars={18} height={9}
+      />
       <span>{voice.state}…</span>
       <span style={{ marginLeft: "auto", color: "var(--hg-fg-4)" }}>tap mic to end</span>
     </div>
+  );
+}
+
+/* LiveWaveform — Phase 1.5 item 6.
+ *
+ * Reads from window.s2sAnalysers.{mic|player} (set up in home-s2s.jsx)
+ * each animation frame, and writes scaleY transforms to the bar spans.
+ * Falls back to a neutral idle pose when the named analyser isn't
+ * available yet (e.g. before the assistant has played any audio for
+ * the speaking-state analyser to attach).
+ *
+ * Lightweight: 18 transforms per frame, no React re-render in the
+ * loop (refs only). At 60fps that's ~1080 GPU-cheap composite-only
+ * style updates per second. */
+function LiveWaveform({ source = "mic", bars = 18, height = 9 }) {
+  const refs = useRef([]);
+  const heights = useRef(new Array(bars).fill(0.25));
+  useEffect(() => {
+    const buf = new Uint8Array(64);
+    let raf = 0;
+    const tick = () => {
+      const a = (typeof window !== "undefined" && window.s2sAnalysers)
+        ? window.s2sAnalysers[source] : null;
+      if (a) {
+        try { a.getByteFrequencyData(buf); }
+        catch (e) { /* dead analyser */ }
+        for (let i = 0; i < bars; i++) {
+          // Sample lower frequency bins (speech sits below 4 kHz);
+          // the upper bins are noise/silence on speech audio.
+          const idx = Math.floor((i / bars) * 32);
+          const v = buf[idx] / 255;
+          heights.current[i] = heights.current[i] * 0.55 + v * 0.45;
+          const el = refs.current[i];
+          if (el) {
+            el.style.transform = `scaleY(${0.2 + heights.current[i] * 1.1})`;
+          }
+        }
+      } else {
+        // Idle: settle bars towards a neutral resting pose so the
+        // transition out of a session isn't jarring.
+        for (let i = 0; i < bars; i++) {
+          heights.current[i] = heights.current[i] * 0.85 + 0.25 * 0.15;
+          const el = refs.current[i];
+          if (el) {
+            el.style.transform = `scaleY(${0.2 + heights.current[i] * 1.1})`;
+          }
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [source, bars]);
+  return (
+    <span style={{
+      display: "inline-flex", gap: 2, alignItems: "center",
+      height, color: "var(--hg-ice)",
+    }}>
+      {Array.from({ length: bars }).map((_, i) => (
+        <span key={i} ref={(el) => (refs.current[i] = el)} style={{
+          width: 2, height,
+          background: "var(--hg-ice-bright)",
+          transformOrigin: "center",
+          transform: "scaleY(0.25)",
+          transition: "transform 60ms linear",
+          borderRadius: 1,
+        }}/>
+      ))}
+    </span>
   );
 }
 
@@ -708,28 +984,24 @@ const DEFAULT_METRICS = {
   gpu: 0, vram: 0, vramMax: 0, cpu: 0, ram: 0, ramMax: 0,
 };
 
-function metricsBaseFromEndpoint(endpoint) {
-  // ws://192.168.0.125:8123  →  http://192.168.0.125:8092
-  // Default to the same host as HA, swapping :8123 (or any port) for :8092.
-  try {
-    const u = new URL(endpoint.replace(/^ws/, "http"));
-    return `http://${u.hostname}:8092`;
-  } catch {
-    return "http://192.168.0.100:8092";
+// Phase 1.5: the AI box always serves the metrics-sidecar (port 8092)
+// and the personaplex-bridge (port 8094). They do NOT run on HAOS.
+// Earlier versions derived these from the HA endpoint hostname, which
+// pointed fresh installs at HAOS:8092/8094 where nothing was listening
+// and silently broke voice mode + identity UX. Default to the AI-box
+// LAN IP; /metrics <url> and /s2s <url> still override per-install.
+function metricsBaseFromEndpoint(_endpoint) {
+  if (typeof window !== "undefined" && window.HG_DEFAULT_METRICS_BASE) {
+    return window.HG_DEFAULT_METRICS_BASE;
   }
+  return "http://192.168.0.100:8092";
 }
 
-function s2sBaseFromEndpoint(endpoint) {
-  // The S2S bridge runs on the AI box (NOT the HA host), but until
-  // the user explicitly sets one via /s2s <url> we make a best-guess:
-  // same host as HA on port 8094. If the bridge actually lives on a
-  // different machine, /s2s <url> overrides this.
-  try {
-    const u = new URL(endpoint.replace(/^ws/, "http"));
-    return `http://${u.hostname}:8094`;
-  } catch {
-    return "http://192.168.0.100:8094";
+function s2sBaseFromEndpoint(_endpoint) {
+  if (typeof window !== "undefined" && window.HG_DEFAULT_S2S_BASE) {
+    return window.HG_DEFAULT_S2S_BASE;
   }
+  return "http://192.168.0.100:8094";
 }
 
 function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voiceOverride, themeOverride, autoplay = true }) {
@@ -747,6 +1019,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     s2sBase: "",
     s2sToken: "",       // BRIDGE_TOKEN — set via /s2s token <hex>
     s2sVoice: "",       // default voice prompt; empty = bridge default (NATM2.pt)
+    kokoroVoice: "",    // Kokoro TTS voice — set via /voice <name>; empty = bridge default (am_eric)
+    debugMode: false,   // Show internal diag events ([parakeet], [direct], [kokoro], etc.) in feed
   }), []);
   const initialEventsFromStorage = useMemo(
     () => (initialEvents ? initialEvents : loadEvents()),
@@ -772,13 +1046,55 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   const [token, setToken] = useState(initialPrefs.token);
   const [model, setModel] = useState(initialPrefs.model);
   const [metricsBase, setMetricsBase] = useState(initialPrefs.metricsBase);
-  const [s2sMode, setS2sMode] = useState(!!initialPrefs.s2sMode);
   const [s2sBase, setS2sBase] = useState(initialPrefs.s2sBase || "");
   const [s2sToken, setS2sToken] = useState(initialPrefs.s2sToken || "");
   const [s2sVoice, setS2sVoice] = useState(initialPrefs.s2sVoice || "");
+  const [kokoroVoice, setKokoroVoice] = useState(initialPrefs.kokoroVoice || "");
+  const [debugMode, setDebugMode] = useState(!!initialPrefs.debugMode);
+  // Phase 1.5: `s2sMode` is transient session state, not persisted. The
+  // VOICE pill + VoiceModeButton are retired; mic-tap is the single
+  // entry point. Boots with s2sMode=false; flipped to true while a
+  // voice session is active.
+  const [s2sMode, setS2sMode] = useState(false);
+  // Phase B F0-08: liveness of the metrics-sidecar (chat-tee SSE source
+  // of truth) + the personaplex-bridge (voice + identity events).
+  // null = unknown (first probe pending), true = healthy, false = down.
+  // Polled every 15s; surfaces a warning pill in the header when down.
+  const [sidecarOnline, setSidecarOnline] = useState(null);
+  const [bridgeOnline, setBridgeOnline] = useState(null);
+  // Phase 1 identity (May 2026) — drives the "seen by" header pill,
+  // vision-tile name chip, and WelcomeBanner. Latest face match from
+  // either the s2s WS or the chat-tee SSE stream.
+  //   {name, camera, score, confidence_band, ts, first_seen_today} | null
+  const [identity, setIdentity] = useState(null);
+  // arrival event from person.<X> not_home → home. Fires WelcomeBanner
+  // regardless of face state. Reset to null after the banner displays.
+  //   {display_name, person, ts} | null
+  const [arrival, setArrival] = useState(null);
+  // Phase 2: per-room media state. Keyed by room name. Each entry is
+  // {entity_id, state, app_name, title, artist, category, ts}.
+  // Cleared per-entity on "media event=cleared" messages.
+  //   { living_room: {...}, kitchen: {...} }
+  const [media, setMedia] = useState({});
+  // Phase 1.5 item 7: responsive wide-mode. At >=700px the layout
+  // switches from portrait (single camera frame + tabs) to landscape
+  // (camera carousel + wide chat). Tracks window.innerWidth so the
+  // user can drag the Tauri window between modes live.
+  const [wideMode, setWideMode] = useState(
+    typeof window !== "undefined" && window.innerWidth >= 700
+  );
+  useEffect(() => {
+    const onResize = () => setWideMode(window.innerWidth >= 700);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   const [availableModels, setAvailableModels] = useState(null);
   const [metrics, setMetrics] = useState(DEFAULT_METRICS);
   const [conversationId, setConversationId] = useState(initialConvId);
+  // Live Frigate-derived detection labels per camera, e.g.
+  //   { kitchen: ["person"], driveway: ["car", "person"] }
+  // Sourced from binary_sensor.{camera}_{label}_occupancy state_changed events.
+  const [cameraLabels, setCameraLabels] = useState({});
 
   const feedRef = useRef(null);
   const timers = useRef([]);
@@ -798,10 +1114,12 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     if (feedRef.current) feedRef.current.scrollTop = feedRef.current.scrollHeight;
   }, [events]);
 
-  /* Persist prefs whenever they change */
+  /* Persist prefs whenever they change. Note: `s2sMode` is deliberately
+   * NOT persisted — it's transient session state (Phase 1.5). The home
+   * app always boots with voice mode inactive; mic-tap activates it. */
   useEffect(() => {
-    savePrefs({ endpoint, token, model, theme, metricsBase, s2sMode, s2sBase, s2sToken, s2sVoice });
-  }, [endpoint, token, model, theme, metricsBase, s2sMode, s2sBase, s2sToken, s2sVoice]);
+    savePrefs({ endpoint, token, model, theme, metricsBase, s2sBase, s2sToken, s2sVoice, kokoroVoice, debugMode });
+  }, [endpoint, token, model, theme, metricsBase, s2sBase, s2sToken, s2sVoice, kokoroVoice, debugMode]);
 
   /* Persist events on change (debounced via rAF — cheap enough at our scale) */
   useEffect(() => {
@@ -1129,9 +1447,10 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         else addEvent({ kind: "system", text: `metrics base · ${metricsBase || metricsBaseFromEndpoint(endpoint)}`, tone: "info" });
         return true;
       case "s2s": {
-        // Toggle/configure the experimental full-duplex S2S backend.
+        // Configure the s2s bridge URL/token/voice. The voice-mode
+        // on/off toggle moved to a dedicated Voice button in the
+        // InputRow (May 2026) — `/s2s on|off` no longer works.
         //   /s2s                       → show current state
-        //   /s2s on | off              → flip the per-window toggle
         //   /s2s token <hex>           → set BRIDGE_TOKEN for WS auth
         //   /s2s voice <name>          → set voice prompt (e.g. NATM2.pt)
         //   /s2s <url>                 → set the bridge URL
@@ -1140,19 +1459,14 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         if (!sub) {
           const url = s2sBase || s2sBaseFromEndpoint(endpoint);
           addEvent({ kind: "system",
-            text: `s2s · ${s2sMode ? "on" : "off"} · ${url} · voice=${s2sVoice || "default"} · token=${s2sToken ? "<set>" : "<unset>"}`,
+            text: `s2s · ${url} · voice=${s2sVoice || "default"} · token=${s2sToken ? "<set>" : "<unset>"} · (tap the mic icon to enter voice mode)`,
             tone: "info" });
           return true;
         }
-        if (sub === "on") {
-          setS2sMode(true);
-          const url = s2sBase || s2sBaseFromEndpoint(endpoint);
-          addEvent({ kind: "system", text: `s2s mode · on · ${url || "(set url with /s2s <url>)"}${s2sToken ? "" : " · WARN: no token set"}`, tone: s2sToken ? "ok" : "warn" });
-          return true;
-        }
-        if (sub === "off") {
-          setS2sMode(false);
-          addEvent({ kind: "system", text: "s2s mode · off · using ha pipeline", tone: "ok" });
+        if (sub === "on" || sub === "off") {
+          addEvent({ kind: "system",
+            text: "voice mode is now triggered by tapping the mic icon. `/s2s on|off` is retired.",
+            tone: "warn" });
           return true;
         }
         if (sub === "token") {
@@ -1180,6 +1494,63 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         addEvent({ kind: "system", text: `s2s bridge · ${sub}`, tone: "ok" });
         return true;
       }
+      case "debug": {
+        // Show/hide internal diag events ([parakeet], [direct],
+        // [kokoro], [camera], [error], [moshi]) in the feed.
+        //   /debug                → show current state
+        //   /debug on | off       → set explicitly
+        //   /debug toggle         → flip
+        const v = (arg || "").trim().toLowerCase();
+        let next = debugMode;
+        if (v === "on" || v === "true" || v === "1") next = true;
+        else if (v === "off" || v === "false" || v === "0") next = false;
+        else if (v === "toggle" || v === "") next = !debugMode;
+        setDebugMode(next);
+        addEvent({ kind: "system",
+          text: `debug · ${next ? "on — showing diag events (parakeet/direct/kokoro/camera/error)" : "off — clean feed"}`,
+          tone: next ? "warn" : "ok" });
+        return true;
+      }
+      case "voice":
+      case "voices": {
+        // Kokoro TTS voice swap (Stage 2 TM-shaped pipeline).
+        //   /voice                    → show current + recommended list
+        //   /voice <name>             → set voice for this and future sessions
+        //   /voices                   → alias of `/voice` with no arg
+        const POPULAR = [
+          "am_eric (male, natural — default)",
+          "am_onyx (male, deeper)",
+          "am_michael (male, classic)",
+          "am_liam (male, younger)",
+          "bm_george (male, British)",
+          "bm_fable (male, British narrator)",
+          "af_heart (female, warm)",
+          "af_bella (female, conversational)",
+          "af_nicole (female, soft)",
+          "af_nova (female, energetic)",
+        ];
+        const v = (arg || "").trim();
+        if (cmd === "voices" || !v) {
+          addEvent({ kind: "system",
+            text: `voice · ${kokoroVoice || "(bridge default)"} · try: ${POPULAR.join(" · ")}`,
+            tone: "info" });
+          return true;
+        }
+        // Strip parenthetical descriptions if the user pasted one of
+        // the suggestions verbatim ("am_eric (male, natural...)").
+        const name = v.split(/\s+/)[0];
+        setKokoroVoice(name);
+        // Push a runtime set_voice message to any active S2S session
+        // so the change applies immediately without remic-ing.
+        try {
+          const run = s2sRunRef.current;
+          if (run && typeof run.setVoice === "function") {
+            run.setVoice(name);
+          }
+        } catch (e) { /* noop */ }
+        addEvent({ kind: "system", text: `voice · ${name}`, tone: "ok" });
+        return true;
+      }
       case "clear":
         stopStreaming();
         setEvents([]);
@@ -1192,14 +1563,26 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       case "version":
         addEvent({ kind: "system", text: "home v0.1.0 · engineered-lighting/home · MIT", tone: "info" });
         return true;
-      case "help":
-        addEvent({ kind: "system", text: "/connect <url> <token> · /token <t> · /model <name> · /metrics <url> · /s2s on|off|<url> · /clear · /demo · /about · /help", tone: "info" });
+      case "help": {
+        // Phase 1.5: vertical list with descriptions. Builds from
+        // SLASH_CMDS (which auto-complete already uses) so the help
+        // output stays in sync as commands are added/renamed.
+        const lines = SLASH_CMDS.map((c) => {
+          const sig = c.hint ? `${c.cmd} ${c.hint}` : c.cmd;
+          return `  ${sig}  —  ${c.desc}`;
+        });
+        addEvent({
+          kind: "system",
+          text: "commands:\n" + lines.join("\n"),
+          tone: "info",
+        });
         return true;
+      }
       default:
         addEvent({ kind: "system", text: `unknown command: /${cmd}`, tone: "warn" });
         return true;
     }
-  }, [addEvent, connectTo, endpoint, metricsBase, playScript, stopStreaming, token, s2sMode, s2sBase, s2sToken, s2sVoice]);
+  }, [addEvent, connectTo, endpoint, metricsBase, playScript, stopStreaming, token, s2sBase, s2sToken, s2sVoice, kokoroVoice, debugMode]);
 
   /* ── Free-form user input ─────────────────────────────────────────── */
   const sendInput = useCallback(() => {
@@ -1426,6 +1809,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     try { s2sRunRef.current?.stop?.(); } catch (e) { /* noop */ }
     s2sRunRef.current = null;
     setVoice({ state: newState });
+    setS2sMode(false);
   }, []);
   const startS2sMode = useCallback(async () => {
     if (!window.startS2SRun) {
@@ -1437,6 +1821,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       addEvent({ kind: "system", text: "set bridge url with /s2s <url>", tone: "warn" });
       return;
     }
+    setS2sMode(true);
     setVoice({ state: "listening" });
     const voiceId = nextId();
     setEvents((prev) => [...prev, {
@@ -1448,11 +1833,22 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       s2sBase: base,
       s2sToken: s2sToken || undefined,
       voicePrompt: s2sVoice || undefined,
+      kokoroVoice: kokoroVoice || undefined,
       conversationId,
-      onState: (state) => {
-        if (state === "listening")      setVoice({ state: "listening" });
-        else if (state === "processing") setVoice({ state: "processing" });
-        else if (state === "speaking")  setVoice({ state: "speaking" });
+      onState: (state, message) => {
+        // Forward states from the bridge. New states from May 2026:
+        //   transcribing → Parakeet end-of-utterance, transcript in flight
+        //   thinking     → LLM is generating the response
+        //   ready        → voice mode active but idle (banner shows
+        //                  "voice mode — tap mic to speak")
+        //   error        → mic/WS/TTS failure — banner shows retry CTA
+        // `processing` from older bridges maps to `thinking` for clarity.
+        if (state === "listening") setVoice({ state: "listening" });
+        else if (state === "transcribing") setVoice({ state: "transcribing" });
+        else if (state === "thinking" || state === "processing") setVoice({ state: "thinking" });
+        else if (state === "speaking") setVoice({ state: "speaking" });
+        else if (state === "ready") setVoice({ state: "ready" });
+        else if (state === "error") setVoice({ state: "error", message: message || "voice error" });
         else if (state === "idle" || state === "inactive") setVoice({ state: "inactive" });
       },
       onTranscript: (role, text, partial) => {
@@ -1512,20 +1908,72 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         addEvent({ kind: "system", text: `s2s · ${msg}`, tone: "error" });
         setVoice({ state: "inactive" });
       },
+      onIdentity: (msg) => {
+        // Phase 1: face-rec match (or identity_clear when name is null).
+        if (!msg.name) {
+          // identity_clear — drop the pill if it's for the current camera.
+          setIdentity((cur) => (cur && cur.camera === msg.camera ? null : cur));
+          return;
+        }
+        setIdentity({
+          name: msg.name,
+          camera: msg.camera,
+          score: msg.score,
+          confidence_band: msg.confidence_band,
+          ts: msg.ts,
+          first_seen_today: !!msg.first_seen_today,
+        });
+      },
+      onPresence: (msg) => {
+        // Phase 1: person.<X> arrival. Triggers WelcomeBanner with the
+        // strong arrival path (always fires, ignores welcomedAt cooldown).
+        if (msg.event === "arrived") {
+          setArrival({
+            display_name: msg.display_name,
+            person: msg.person,
+            ts: msg.ts,
+          });
+        }
+      },
+      onMedia: (msg) => {
+        // Phase 2: media_player.* state change broadcast from bridge.
+        if (msg.event === "active" && msg.room) {
+          setMedia((cur) => ({
+            ...cur,
+            [msg.room]: {
+              entity_id: msg.entity_id,
+              state: msg.state,
+              app_name: msg.app_name,
+              title: msg.title,
+              artist: msg.artist,
+              category: msg.category,
+              ts: msg.ts,
+            },
+          }));
+        } else if (msg.event === "cleared" && msg.room) {
+          setMedia((cur) => {
+            if (cur[msg.room] && cur[msg.room].entity_id === msg.entity_id) {
+              const { [msg.room]: _drop, ...rest } = cur;
+              return rest;
+            }
+            return cur;
+          });
+        }
+      },
     });
     s2sRunRef.current = run;
-  }, [s2sBase, s2sToken, s2sVoice, endpoint, conversationId, addEvent]);
+  }, [s2sBase, s2sToken, s2sVoice, kokoroVoice, endpoint, conversationId, addEvent]);
 
+  /* Phase 1.5: every mic-tap goes through the s2s flow. The dedicated
+   * "voice mode toggle" is retired — mic-tap IS the voice trigger. Tap
+   * to enter (open WS, start listening), tap again to cancel mid-turn.
+   * The bridge defaults voice_mode=true on attach so we don't need a
+   * separate set_voice_mode message. */
   const toggleMic = useCallback(() => {
     const idle = voice.state === "inactive" || voice.state === "no-mic";
-    if (s2sMode) {
-      if (idle) startS2sMode();
-      else stopS2sMode("inactive");
-      return;
-    }
-    if (idle) startVoiceMode();
-    else stopVoiceMode("inactive");
-  }, [voice.state, s2sMode, startVoiceMode, stopVoiceMode, startS2sMode, stopS2sMode]);
+    if (idle) startS2sMode();
+    else stopS2sMode("inactive");
+  }, [voice.state, startS2sMode, stopS2sMode]);
 
   /* ── Single source of truth: SSE feed from the chat-tee sidecar ────────
    *
@@ -1542,6 +1990,21 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   useEffect(() => {
     if (connection !== "online") return undefined;
     const base = metricsBase || metricsBaseFromEndpoint(endpoint);
+    // Phase 1.5 one-time warning: if the saved metricsBase points at the
+    // HAOS host (where nothing serves :8092), the SSE feed will silently
+    // fail. Most likely cause: a fresh install hit the old fallback
+    // before we fixed it. Surface this in the console so users find it
+    // when debugging "no perception events / no identity pill".
+    try {
+      const haHost = endpoint ? new URL(endpoint.replace(/^ws/, "http")).hostname : null;
+      const baseHost = base ? new URL(base).hostname : null;
+      if (metricsBase && haHost && baseHost === haHost && base.endsWith(":8092")) {
+        console.warn(
+          "[home] metricsBase points at the HA host (%s:8092). The sidecar runs on the AI box, not HAOS. Run /metrics http://<ai-box-ip>:8092 if SSE feed isn't working.",
+          haHost,
+        );
+      }
+    } catch {}
     let es;
     try {
       es = new EventSource(`${base}/conversations/stream?backfill_n=0`);
@@ -1556,6 +2019,61 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       try { entry = JSON.parse(ev.data); }
       catch { return; }
       console.log("[sse] event", entry);
+      // Phase 1: identity / presence events come through the SSE pipe
+      // too (so text-only mode still gets the UX). Dispatch to the same
+      // setters the WS handler uses and return early — these events
+      // carry no chat text and shouldn't enter the events feed.
+      if (entry.source === "s2s:identity" && entry.identity) {
+        const i = entry.identity;
+        if (i.type === "identity_clear") {
+          setIdentity((cur) => (cur && cur.camera === i.camera ? null : cur));
+        } else if (i.type === "identity" && i.name) {
+          setIdentity({
+            name: i.name, camera: i.camera, score: i.score,
+            confidence_band: i.confidence_band, ts: i.ts,
+            first_seen_today: !!i.first_seen_today,
+          });
+        }
+        return;
+      }
+      if (entry.source === "s2s:presence" && entry.presence) {
+        const p = entry.presence;
+        if (p.event === "arrived") {
+          setArrival({
+            display_name: p.display_name, person: p.person, ts: p.ts,
+          });
+        }
+        return;
+      }
+      if (entry.source === "s2s:media" && entry.media) {
+        const m = entry.media;
+        if (m.event === "active" && m.room) {
+          setMedia((cur) => ({
+            ...cur,
+            [m.room]: {
+              entity_id: m.entity_id,
+              state: m.state,
+              app_name: m.app_name,
+              title: m.title,
+              artist: m.artist,
+              category: m.category,
+              ts: m.ts,
+            },
+          }));
+        } else if (m.event === "cleared" && m.room) {
+          setMedia((cur) => {
+            // Only clear if the room's current entry was THIS entity.
+            // Another entity in the same room (e.g. living_room has
+            // both Apple TV + Sonos) shouldn't be wiped.
+            if (cur[m.room] && cur[m.room].entity_id === m.entity_id) {
+              const { [m.room]: _drop, ...rest } = cur;
+              return rest;
+            }
+            return cur;
+          });
+        }
+        return;
+      }
       const dedup = entry.id || `${entry.ts}-${(entry.user || "").slice(0, 30)}`;
       if (seenSsEvents.current.has(dedup)) return;
       seenSsEvents.current.add(dedup);
@@ -1635,10 +2153,57 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             text: entry.user,
           });
         }
+        // Tag bridge-emitted diag events ([parakeet] heard, [direct]
+        // chitchat, [kokoro] speaking, [camera] driveway, etc.) so the
+        // /debug toggle can show/hide them without losing them entirely.
+        // Bridge posts these via post_diag_event() with
+        // `source: "s2s:diag:<channel>"`. Real LLM-spoken responses
+        // arrive with source "s2s:moshi-listener-parakeet" or vLLM
+        // proxy sources — those stay kind="home".
+        const isDiag = typeof entry.source === "string"
+          && entry.source.startsWith("s2s:diag:");
+        const diagChannel = isDiag
+          ? entry.source.slice("s2s:diag:".length)
+          : undefined;
+        // The "perception" channel is the assistant's silent observation
+        // of what the camera sees (vision-sidecar / Frigate detection).
+        // Surface it inline as its own kind so the UI can render it
+        // distinctly — italic, dimmed, no avatar — and so the /debug
+        // toggle doesn't hide it (perception is the point, not noise).
+        const isPerception = isDiag && diagChannel === "perception";
+        // Strip the "[perception] " prefix the bridge prepends in
+        // post_diag_event so the rendered line is just the body.
+        const cleanedText = isPerception
+          ? entry.assistant.replace(/^\[perception\]\s*/, "")
+          : entry.assistant;
         const assistantEvent = entry.assistant
-          ? [{ id: nextId(), kind: "home", time: fmtTime(), text: entry.assistant }]
+          ? [{
+              id: nextId(),
+              kind: isPerception ? "perception" : (isDiag ? "diag" : "home"),
+              channel: diagChannel,
+              time: fmtTime(),
+              text: cleanedText,
+            }]
           : [];
-        return [...prev, ...newUserEvents, ...actionCards, ...assistantEvent];
+        // Defensive dedupe (May 2026): assistant text occasionally arrives
+        // from two sources within a few seconds (chat-tee SSE + WS
+        // transcript). The bridge-side fix removes the WS transcript for
+        // assistant role, but this guard catches any legacy/stale source
+        // we haven't tracked down. Scan back 20 events (action cards +
+        // perceptions can interleave between duplicates, so a tighter
+        // window misses).
+        return [...prev, ...newUserEvents, ...actionCards, ...assistantEvent.filter((ev) => {
+          if (ev.kind !== "home" && ev.kind !== "perception") return true;
+          const target = (ev.text || "").trim();
+          if (!target) return true;
+          const lookback = prev.slice(-20);
+          for (const e of lookback) {
+            if (e.kind === ev.kind && (e.text || "").trim() === target) {
+              return false;
+            }
+          }
+          return true;
+        })];
       });
     };
     es.onerror = (e) => {
@@ -1646,6 +2211,53 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     };
     return () => { try { es.close(); } catch {} };
   }, [connection, endpoint, metricsBase]);
+
+  /* ── Phase B F0-08: sidecar + bridge healthz poll ─────────────────────
+   *
+   * Poll the metrics-sidecar (chat tee + telemetry) every 15s. If it
+   * stops responding, the home app silently loses assistant replies via
+   * SSE — surfacing a clear "sidecar offline" indicator lets the user
+   * understand why their messages aren't getting answered.
+   *
+   * Bridge poll: the personaplex-bridge powers voice mode + identity +
+   * media events. If it's down, voice mode breaks. Poll its /healthz too
+   * — assumes bridge is at the same host as the sidecar on port 8094.
+   */
+  useEffect(() => {
+    const base = metricsBase || metricsBaseFromEndpoint(endpoint);
+    if (!base) return undefined;
+    let cancelled = false;
+
+    // Derive bridge URL: same host as sidecar, port 8094.
+    let bridgeUrl = "";
+    try {
+      const u = new URL(base);
+      bridgeUrl = `${u.protocol}//${u.hostname}:8094`;
+    } catch {}
+
+    const poll = async () => {
+      // Sidecar
+      try {
+        const r = await fetch(`${base}/healthz`, { cache: "no-store" });
+        if (!cancelled) setSidecarOnline(r.ok);
+      } catch {
+        if (!cancelled) setSidecarOnline(false);
+      }
+      // Bridge
+      if (bridgeUrl) {
+        try {
+          const r2 = await fetch(`${bridgeUrl}/healthz`, { cache: "no-store" });
+          if (!cancelled) setBridgeOnline(r2.ok);
+        } catch {
+          if (!cancelled) setBridgeOnline(false);
+        }
+      }
+    };
+
+    poll();  // immediate
+    const id = setInterval(poll, 15000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [metricsBase, endpoint]);
 
   /* ── Voice PE activity indicator (header + voice state) ──────────────
    *
@@ -1666,6 +2278,57 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     return unsub;
   }, [connection]);
 
+  /* ── Frigate detection labels → vision drawer ────────────────────────
+   *
+   * Subscribes to binary_sensor.{camera}_{label}_occupancy state changes
+   * and maintains a per-camera Set of currently-active labels (person,
+   * cat, car, etc.). Hydrates from get_states so labels show immediately
+   * on app open, not just after the next transition. The bridge has its
+   * own occupancy tracking for the LLM side; this hook is UI-only. */
+  useEffect(() => {
+    if (connection !== "online" || !haClientRef.current) return undefined;
+    const client = haClientRef.current;
+    const cameraIds = (window.HG_CAMERAS || []).map((c) => c.id);
+    if (cameraIds.length === 0) return undefined;
+    const re = new RegExp(`^binary_sensor\\.(${cameraIds.join("|")})_([a-z0-9_]+)_occupancy$`);
+
+    let cancelled = false;
+    client.call({ type: "get_states" }).then((states) => {
+      if (cancelled) return;
+      const next = {};
+      for (const s of states) {
+        const m = s.entity_id.match(re);
+        if (!m) continue;
+        const [, cam, label] = m;
+        if (label === "all") continue;          // aggregate sensor, skip
+        if (s.state !== "on") continue;
+        (next[cam] ||= new Set()).add(label.replace(/_/g, " "));
+      }
+      setCameraLabels(Object.fromEntries(
+        Object.entries(next).map(([k, v]) => [k, [...v].sort()])
+      ));
+    }).catch(() => {});
+
+    const unsub = client.subscribeEvents("state_changed", (ev) => {
+      const d = ev?.data;
+      if (!d?.entity_id) return;
+      const m = d.entity_id.match(re);
+      if (!m) return;
+      const [, cam, label] = m;
+      if (label === "all") return;
+      const nice = label.replace(/_/g, " ");
+      const isOn = d.new_state?.state === "on";
+      setCameraLabels((prev) => {
+        const cur = new Set(prev[cam] || []);
+        if (isOn) cur.add(nice);
+        else      cur.delete(nice);
+        return { ...prev, [cam]: [...cur].sort() };
+      });
+    });
+
+    return () => { cancelled = true; try { unsub(); } catch {} };
+  }, [connection]);
+
   return (
     <div ref={rootRef} data-theme={theme} style={{
       "--hg-row-py": density === "condensed" ? `${8}px` : `${14}px`,
@@ -1681,9 +2344,23 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         onToggleTheme={() => setTheme((t) => t === "dark" ? "light" : "dark")}
         voice={voice}
         connection={connection}
+        sidecarOnline={sidecarOnline}
+        bridgeOnline={bridgeOnline}
+      />
+      <WelcomeBanner
+        identity={identity}
+        arrival={arrival}
+        onDismiss={() => setArrival(null)}
       />
       {connection === "online" && (
-        <HomeVisionCard haUrl={endpoint} token={token} />
+        <HomeVisionCard
+          haUrl={endpoint}
+          token={token}
+          labels={cameraLabels}
+          identity={identity}
+          media={media}
+          wideMode={wideMode}
+        />
       )}
       <div
         ref={feedRef}
@@ -1706,9 +2383,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             onPickModel={confirmModel}
           />
         ) : (
-          <div style={{ maxWidth: 640, margin: "0 auto" }}>
+          <div style={{
+            // Phase 1.5 item 7: chat widens with the window past 700px,
+            // capped at 1200px so very wide displays still feel readable.
+            maxWidth: wideMode ? "min(1200px, 95vw)" : 640,
+            margin: "0 auto",
+          }}>
             <BootBanner metrics={metrics} />
-            {groupEventsBySpeaker(events).map((g, i) => (
+            {groupEventsBySpeaker(
+              debugMode ? events : events.filter((e) => e.kind !== "diag")
+            ).map((g, i) => (
               <TurnBlock key={i} group={g} density={density}
                 onConfirmAction={confirmAction} onCancelAction={cancelAction} />
             ))}
@@ -1716,7 +2400,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         )}
       </div>
       <MetricsStrip metrics={metrics} style={metricsStyle} />
-      <VoiceBanner voice={voice} />
+      <VoiceBanner voice={voice} onRetry={toggleMic} />
       <InputRow
         value={input}
         onChange={setInput}
@@ -1725,7 +2409,6 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         onMicToggle={toggleMic}
         isStreaming={streamingIds.current.size > 0 || events.some(e => e.streaming)}
         onStop={stopStreaming}
-        s2sMode={s2sMode}
       />
     </div>
   );

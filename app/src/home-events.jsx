@@ -185,7 +185,10 @@ function ToolContent({ name, args = {}, status = "success", latency }) {
 function ActionContent({ id, title, service, target, attrs = {}, status = "pending", latency, reason, onConfirm, onCancel }) {
   const needsConfirm = status === "pending-confirm";
   const isErr = status === "error";
-  const [open, setOpen] = React.useState(needsConfirm);
+  // Phase B F0-07: auto-open error cards so the user sees the failure
+  // reason immediately, not buried behind a click. Same for pending-confirm
+  // (already auto-opened before this change).
+  const [open, setOpen] = React.useState(needsConfirm || isErr);
   const caret = open ? "▾" : "▸";
 
   // Build the key/value rows shown when expanded.
@@ -300,9 +303,38 @@ function SyntaxLine({ label, labelStyle, head, tail = [], status }) {
 
 function SystemContent({ text, tone }) {
   const isErr = tone === "error";
+  // Phase 1.5: `whiteSpace: pre-line` lets multi-line system events
+  // (notably the new /help vertical list) render with line breaks
+  // intact. wordBreak softens long lines at narrow viewports.
   return (
-    <div style={{ ...T_SYNTAX, ...(isErr ? HG_WARN : HG_DIM), fontStyle: "italic" }}>
+    <div style={{
+      ...T_SYNTAX, ...(isErr ? HG_WARN : HG_DIM),
+      fontStyle: "italic",
+      whiteSpace: "pre-line",
+      wordBreak: "break-word",
+    }}>
       <span style={HG_FAINT}>system  </span>{text}
+    </div>
+  );
+}
+
+/* The assistant's silent observation channel — vision-sidecar
+ * descriptions triggered by Frigate person detection. Rendered in
+ * italic, lower weight, with a faint "perceived" label so it's
+ * visually distinct from anything the assistant SPOKE. The user
+ * asked for a different font weight to signal "this is perception,
+ * not speech." */
+function PerceptionContent({ text }) {
+  return (
+    <div style={{
+      ...T_SYNTAX,
+      ...HG_DIM,
+      fontStyle: "italic",
+      fontWeight: 300,
+      opacity: 0.75,
+    }}>
+      <span style={{ ...HG_FAINT, fontWeight: 400 }}>perceived  </span>
+      {text}
     </div>
   );
 }
@@ -310,13 +342,14 @@ function SystemContent({ text, tone }) {
 /* ── Event dispatch ──────────────────────────────────────────────────── */
 function EventContent({ e, onConfirm, onCancel }) {
   switch (e.kind) {
-    case "user":     return <UserContent text={e.text} />;
-    case "voice":    return <VoiceContent text={e.text} />;
-    case "thinking": return <ThinkingContent text={e.text} />;
-    case "tool":     return <ToolContent name={e.name} args={e.args} status={e.status} latency={e.latency} />;
-    case "action":   return <ActionContent id={e.id} title={e.title} service={e.service} target={e.target} attrs={e.attrs} status={e.status} latency={e.latency} reason={e.reason} onConfirm={onConfirm} onCancel={onCancel} />;
-    case "home":     return <HomeContent text={e.text} streaming={e.streaming} />;
-    case "system":   return <SystemContent text={e.text} tone={e.tone} />;
+    case "user":       return <UserContent text={e.text} />;
+    case "voice":      return <VoiceContent text={e.text} />;
+    case "thinking":   return <ThinkingContent text={e.text} />;
+    case "tool":       return <ToolContent name={e.name} args={e.args} status={e.status} latency={e.latency} />;
+    case "action":     return <ActionContent id={e.id} title={e.title} service={e.service} target={e.target} attrs={e.attrs} status={e.status} latency={e.latency} reason={e.reason} onConfirm={onConfirm} onCancel={onCancel} />;
+    case "home":       return <HomeContent text={e.text} streaming={e.streaming} />;
+    case "perception": return <PerceptionContent text={e.text} />;
+    case "system":     return <SystemContent text={e.text} tone={e.tone} />;
     default: return null;
   }
 }
@@ -325,6 +358,7 @@ function EventContent({ e, onConfirm, onCancel }) {
 function speakerOf(e) {
   if (e.kind === "user" || e.kind === "voice") return "you";
   if (e.kind === "system") return "system";
+  if (e.kind === "perception") return "perception";
   return "home";
 }
 

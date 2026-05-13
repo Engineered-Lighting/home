@@ -56,7 +56,23 @@
       this.ctx = new AudioCtx({ sampleRate: this.outputRate });
       this.gain = this.ctx.createGain();
       this.gain.gain.value = 1.0;
-      this.gain.connect(this.ctx.destination);
+      // Phase 1.5 item 6: AnalyserNode taps the gain output so the
+      // VoiceBanner's "speaking" waveform reflects the assistant's
+      // actual TTS audio. We chain gain → analyser → destination so
+      // the audio still plays normally.
+      try {
+        this.analyser = this.ctx.createAnalyser();
+        this.analyser.fftSize = 128;
+        this.analyser.smoothingTimeConstant = 0.5;
+        this.gain.connect(this.analyser);
+        this.analyser.connect(this.ctx.destination);
+        window.s2sAnalysers = window.s2sAnalysers || {};
+        window.s2sAnalysers.player = this.analyser;
+      } catch (e) {
+        // Browser doesn't support AnalyserNode? Fall back to direct
+        // connect — the wave just won't animate.
+        this.gain.connect(this.ctx.destination);
+      }
       this.cursor = this.ctx.currentTime + 0.05;
     }
     push(bytes) {
@@ -78,6 +94,10 @@
       try { this.ctx?.close(); } catch (e) { /* noop */ }
       this.ctx = null;
       this.cursor = 0;
+      this.analyser = null;
+      try {
+        if (window.s2sAnalysers) window.s2sAnalysers.player = null;
+      } catch (e) { /* noop */ }
     }
   }
 
@@ -100,16 +120,20 @@
     s2sBase,
     s2sToken,
     voicePrompt,
+    kokoroVoice,
     conversationId,
     conversationSummary,
     onState,
     onTranscript,
     onError,
+    onIdentity,
+    onPresence,
+    onMedia,
   }) {
     const url = bridgeWsUrl(s2sBase, s2sToken);
     if (!url) {
       onError?.("invalid s2s base url");
-      return { stop: () => {} };
+      return { stop: () => {}, setVoice: () => {}, setVoiceMode: () => {} };
     }
 
     // Acquire mic first — if it fails we don't bother with the WS.
@@ -125,7 +149,7 @@
       });
     } catch (e) {
       onError?.(`mic unavailable · ${e?.message || e}`);
-      return { stop: () => {} };
+      return { stop: () => {}, setVoice: () => {}, setVoiceMode: () => {} };
     }
 
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -154,6 +178,12 @@
       try { source?.disconnect(); } catch (e) { /* noop */ }
       try { stream.getTracks().forEach((t) => t.stop()); } catch (e) { /* noop */ }
       try { inCtx.close(); } catch (e) { /* noop */ }
+      // Phase 1.5: clear the mic analyser reference so the LiveWaveform
+      // component falls back to its idle state instead of trying to
+      // sample a dead AudioContext.
+      try {
+        if (window.s2sAnalysers) window.s2sAnalysers.mic = null;
+      } catch (e) { /* noop */ }
       // Close the WebSocket so the bridge releases its upstream lock —
       // otherwise the next mic press gets "another s2s session is
       // active" until the WS times out (~20-40s). Player keeps the
@@ -172,8 +202,15 @@
           sample_rate: MIC_SAMPLE_RATE,
           conversation_id: conversationId || null,
           voice_prompt: voicePrompt || undefined,
+          // Stage 2 (TM-shaped): per-session Kokoro voice. Bridge falls
+          // back to its env default (BRIDGE_KOKORO_VOICE) if omitted.
+          kokoro_voice: kokoroVoice || undefined,
           conversation_summary: conversationSummary || undefined,
         }));
+        // The s2s run is only spawned when voice mode is on, so we
+        // explicitly assert that to the bridge — keeps the bridge's
+        // voice_mode flag in sync from the first message.
+        ws.send(JSON.stringify({ type: "set_voice_mode", on: true }));
       } catch (e) { /* noop */ }
 
       // Start streaming mic frames.
@@ -190,6 +227,17 @@
         const bytes = f32ToI16(ev.inputBuffer.getChannelData(0));
         try { ws.send(bytes); } catch (e) { /* noop */ }
       };
+      // Phase 1.5 item 6: mic AnalyserNode for the live-waveform UI.
+      // 128-bin FFT is fine for a 18-bar visualizer; smoothing 0.5
+      // gives natural bar movement without strobing.
+      try {
+        const micAnalyser = inCtx.createAnalyser();
+        micAnalyser.fftSize = 128;
+        micAnalyser.smoothingTimeConstant = 0.5;
+        source.connect(micAnalyser);
+        window.s2sAnalysers = window.s2sAnalysers || {};
+        window.s2sAnalysers.mic = micAnalyser;
+      } catch (e) { /* noop */ }
       source.connect(processorNode);
       muteGain = inCtx.createGain();
       muteGain.gain.value = 0;
@@ -204,13 +252,60 @@
         try { msg = JSON.parse(ev.data); } catch { return; }
         switch (msg.type) {
           case "state":
-            onState?.(msg.state);
+            // Forwards listening / transcribing / thinking / speaking /
+            // ready / error from the bridge to the VoiceBanner state
+            // machine. New state values from May 2026: transcribing,
+            // thinking, ready, error. Older clients only saw listening /
+            // processing / speaking — the home app is forwards-compatible
+            // (unknown states still display as `<state>…`).
+            onState?.(msg.state, msg.message);
             return;
           case "transcript":
             onTranscript?.(msg.role, msg.text || "", !!msg.partial);
             return;
           case "audio_meta":
             player.setRate(msg.sample_rate || 24000);
+            return;
+          case "voice_mode":
+            // Bridge ack of set_voice_mode — no UI action needed; just
+            // log so we can see the round-trip in dev tools.
+            console.log("[s2s] voice_mode ack:", msg.on);
+            return;
+          case "tts_error":
+            // Bridge couldn't synthesize speech. Text still flowed via
+            // SSE; this surfaces a toast in the home app so user knows
+            // why no audio played. onError reuses the existing error
+            // pipe but doesn't tear down the WS (audio degraded, not
+            // session-ending).
+            console.warn("[s2s] tts_error:", msg);
+            onState?.("error", `voice playback degraded · ${msg.engine || "tts"}`);
+            return;
+          case "identity":
+            // Phase 1: Frigate face-rec emitted a match. Payload:
+            // {name, camera, score, confidence_band, ts, first_seen_today}
+            // Home app uses this for the "Seen by" header pill,
+            // vision-tile name chip, and (when confidence_band=="high")
+            // the WelcomeBanner.
+            onIdentity?.(msg);
+            return;
+          case "identity_clear":
+            // Frigate's _last_recognized_face flipped back to None/Unknown
+            // for a camera. Drop the seen-by pill for that camera.
+            onIdentity?.({ ...msg, name: null });
+            return;
+          case "presence":
+            // person.<X> arrival / departure event. The "arrived"
+            // variant fires the WelcomeBanner regardless of face match.
+            onPresence?.(msg);
+            return;
+          case "media":
+            // Phase 2: media_player.* state change. Payload:
+            //   {event: "active", room, entity_id, state, app_name,
+            //    title, artist, category, ts}
+            //   or {event: "cleared", room, entity_id, ts}
+            // Home app uses this for the per-camera media sub-line in
+            // the vision drawer.
+            onMedia?.(msg);
             return;
           case "error":
             onError?.(msg.message || "s2s error");
@@ -243,7 +338,32 @@
       onState?.("inactive");
     });
 
-    return { stop };
+    // Runtime voice swap — handleCommand calls this when the user runs
+    // /voice <name>. Sends a `set_voice` WS message so the change
+    // applies to the next TTS synth without needing to re-mic.
+    const setVoice = (voice) => {
+      if (!voice || stopped) return;
+      try {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "set_voice", voice }));
+        }
+      } catch (e) { /* noop */ }
+    };
+
+    // Voice-mode toggle without closing the WS. Bridge gates
+    // enqueue_speech on its voice_mode flag — when off, mic still works
+    // (so the WS stays useful) but no audio playback. Called by the
+    // home app's Voice button via window.startS2SRun's returned handle.
+    const setVoiceMode = (on) => {
+      if (stopped) return;
+      try {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "set_voice_mode", on: !!on }));
+        }
+      } catch (e) { /* noop */ }
+    };
+
+    return { stop, setVoice, setVoiceMode };
   }
 
   // Surface to the rest of the app.

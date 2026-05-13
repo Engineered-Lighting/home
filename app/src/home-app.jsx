@@ -181,6 +181,156 @@ function getGreeting(name) {
   return `Hey ${name}.`;
 }
 
+/* Master plan F.3 / F0-01: developer debug panel.
+ *
+ * Slides in from the right when debugMode is on. Shows live latency
+ * data from the metrics-sidecar's /traces/summary + the bridge's
+ * /healthz. Useful for spotting:
+ *   - which stage of a voice turn is slow
+ *   - whether the bridge is healthy + warm
+ *   - whether trace pipeline is alive
+ *
+ * Polls every 5s. Closes when debugMode flips off. */
+function DebugPanel({ metricsBase, bridgeHealth }) {
+  const [summary, setSummary] = useState(null);
+  const [latest, setLatest] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    if (!metricsBase) return undefined;
+    let cancelled = false;
+    const fetchData = async () => {
+      try {
+        const [sRes, lRes] = await Promise.all([
+          fetch(`${metricsBase}/traces/summary?window=1h`, { cache: "no-store" }),
+          fetch(`${metricsBase}/traces/latest?n=1`, { cache: "no-store" }),
+        ]);
+        if (cancelled) return;
+        if (sRes.ok) setSummary(await sRes.json());
+        if (lRes.ok) {
+          const j = await lRes.json();
+          setLatest(j.traces?.[j.traces.length - 1] || null);
+        }
+        setErr(null);
+      } catch (e) {
+        if (!cancelled) setErr(String(e.message || e));
+      }
+    };
+    fetchData();
+    const id = setInterval(fetchData, 5000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [metricsBase]);
+  const fmtMs = (v) => (v == null || v === 0) ? "—" : `${Math.round(v)}ms`;
+  const stages = [
+    { key: "t_parakeet_done", label: "STT (Parakeet)" },
+    { key: "t_pipeline_start", label: "pipeline start" },
+    { key: "t_pipeline_intent_end", label: "pipeline end" },
+    { key: "t_synth_start", label: "synth start" },
+    { key: "t_synth_done", label: "synth done" },
+    { key: "t_first_audio_sent", label: "ttfa" },
+    { key: "t_done", label: "turn done" },
+  ];
+  return (
+    <div className="hg-fade" style={{
+      position: "fixed",
+      top: 60,
+      right: 12,
+      width: 320,
+      maxHeight: "calc(100vh - 84px)",
+      overflowY: "auto",
+      background: "var(--hg-bg-1)",
+      border: "1px solid var(--hg-border)",
+      borderRadius: 4,
+      padding: 14,
+      zIndex: 99,
+      fontFamily: "'Geist Mono', monospace",
+      fontSize: 10,
+      lineHeight: 1.5,
+      boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+    }}>
+      <div style={{
+        textTransform: "uppercase",
+        letterSpacing: "0.18em",
+        color: "var(--hg-fg-3)",
+        marginBottom: 10,
+        borderBottom: "1px solid var(--hg-border-soft)",
+        paddingBottom: 6,
+      }}>debug · latency</div>
+      {err && (
+        <div style={{ color: "var(--hg-warn)", marginBottom: 8 }}>err · {err.slice(0, 60)}</div>
+      )}
+      {/* Bridge health snapshot */}
+      {bridgeHealth && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ color: "var(--hg-fg-3)", marginBottom: 4 }}>bridge</div>
+          <div style={{ color: "var(--hg-fg-1)" }}>
+            uptime {Math.floor((bridgeHealth.uptime_s || 0) / 60)}m ·
+            {" "}rooms {bridgeHealth.rooms_loaded || 0} ·
+            {" "}media {bridgeHealth.media_players_registered || 0}
+          </div>
+          <div style={{ color: bridgeHealth.warmup_complete ? "var(--hg-fg-2)" : "var(--hg-warn)" }}>
+            warmup {bridgeHealth.warmup_complete ? "done" : "in progress"} ·
+            {" "}ha {bridgeHealth.ha_connected ? "✓" : "✗"} ·
+            {" "}tts {bridgeHealth.tts_engine || "—"}
+          </div>
+          {bridgeHealth.stale_media_integrations && bridgeHealth.stale_media_integrations.length > 0 && (
+            <div style={{ color: "var(--hg-warn)" }}>
+              ⚠ {bridgeHealth.stale_media_integrations.length} stale media
+            </div>
+          )}
+        </div>
+      )}
+      {/* Last turn breakdown */}
+      {latest && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ color: "var(--hg-fg-3)", marginBottom: 4 }}>
+            last turn · {latest.is_voice ? "voice" : "text"}{latest.cold ? " · cold" : " · warm"}
+          </div>
+          <div style={{ color: "var(--hg-fg-2)", marginBottom: 4, fontSize: 9 }}>
+            {(latest.user_text || "").slice(0, 40)}
+          </div>
+          {stages.map(({ key, label }) => (
+            <div key={key} style={{ display: "grid", gridTemplateColumns: "1fr auto", color: "var(--hg-fg-1)" }}>
+              <span style={{ color: "var(--hg-fg-3)" }}>{label}</span>
+              <span>{fmtMs(latest[key])}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {/* p50 summary */}
+      {summary && summary.stamps && (
+        <div>
+          <div style={{ color: "var(--hg-fg-3)", marginBottom: 4 }}>
+            p50 / p90 (n={summary.count})
+          </div>
+          {stages.map(({ key, label }) => {
+            const s = summary.stamps[key];
+            if (!s) return null;
+            return (
+              <div key={key} style={{ display: "grid", gridTemplateColumns: "1fr auto auto", columnGap: 8, color: "var(--hg-fg-1)" }}>
+                <span style={{ color: "var(--hg-fg-3)" }}>{label}</span>
+                <span>{fmtMs(s.p50)}</span>
+                <span style={{ color: "var(--hg-fg-3)" }}>{fmtMs(s.p90)}</span>
+              </div>
+            );
+          })}
+          {summary.ttfa_ms && (
+            <div style={{
+              marginTop: 8, paddingTop: 6,
+              borderTop: "1px solid var(--hg-border-soft)",
+              display: "grid", gridTemplateColumns: "1fr auto auto", columnGap: 8,
+              color: "var(--hg-ice-bright)",
+            }}>
+              <span>ttfa (voice)</span>
+              <span>{fmtMs(summary.ttfa_ms.p50)}</span>
+              <span>{fmtMs(summary.ttfa_ms.p90)}</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function WelcomeBanner({ identity, arrival, onDismiss }) {
   const [bannerText, setBannerText] = useState(null);
   const [bannerKey, setBannerKey] = useState(0);
@@ -612,6 +762,7 @@ const SLASH_CMDS = [
   { cmd: "/demo",     hint: "",        desc: "play the scripted demo conversation" },
   { cmd: "/clear",    hint: "",        desc: "clear the conversation" },
   { cmd: "/about",    hint: "",        desc: "show version + repo info" },
+  { cmd: "/find",     hint: "<text>",  desc: "search past chat events for matching text" },
   { cmd: "/help",     hint: "",        desc: "list commands" },
 ];
 
@@ -1062,6 +1213,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   // Polled every 15s; surfaces a warning pill in the header when down.
   const [sidecarOnline, setSidecarOnline] = useState(null);
   const [bridgeOnline, setBridgeOnline] = useState(null);
+  // Master plan F.3: full bridge /healthz snapshot for the DebugPanel
+  // (only populated when debugMode is on to avoid wasted polls).
+  const [bridgeHealth, setBridgeHealth] = useState(null);
   // Phase 1 identity (May 2026) — drives the "seen by" header pill,
   // vision-tile name chip, and WelcomeBanner. Latest face match from
   // either the s2s WS or the chat-tee SSE stream.
@@ -1371,6 +1525,47 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     setEvents((prev) => prev.map((e) => e.id === id ? { ...e, status: "cancelled" } : e));
   }, []);
 
+  // Master plan F.1: undo a successful action by firing its inverse
+  // service against the original target. The inverse mapping lives in
+  // home-events.jsx (INVERSE_SERVICE); home-app just routes the call.
+  const undoAction = useCallback(async ({ id, originalService, inverseService, target, attrs }) => {
+    const client = haClientRef.current;
+    if (!client) throw new Error("HA not connected");
+    const [domain, service] = inverseService.split(".");
+    // target can be either "area.<name>" or "entity.<id>" or null+attrs.entity_id
+    const serviceData = {};
+    const callTarget = {};
+    if (target?.startsWith("area.")) {
+      callTarget.area_id = target.slice(5);
+    } else if (target?.startsWith("entity.")) {
+      callTarget.entity_id = target.slice(7);
+    } else if (attrs?.entity_id) {
+      callTarget.entity_id = attrs.entity_id;
+    }
+    console.log("[undo]", originalService, "→", inverseService, "target", callTarget);
+    try {
+      await client.call({
+        type: "call_service",
+        domain,
+        service,
+        service_data: serviceData,
+        target: callTarget,
+      });
+      addEvent({
+        kind: "system",
+        text: `↺ undone — fired ${inverseService}`,
+        tone: "info",
+      });
+    } catch (e) {
+      addEvent({
+        kind: "system",
+        text: `↺ undo failed — ${e.message || e}`,
+        tone: "error",
+      });
+      throw e;
+    }
+  }, [addEvent]);
+
   /* ── Scripted demo player (for /demo) ──────────────────────────────── */
   const streamHomeLocal = useCallback((text, opts = {}) => {
     const id = nextId();
@@ -1574,6 +1769,44 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         addEvent({
           kind: "system",
           text: "commands:\n" + lines.join("\n"),
+          tone: "info",
+        });
+        return true;
+      }
+      // Master plan F.4: search past events for matching text. Uses the
+      // events array already in memory; doesn't hit the bridge.
+      case "find": {
+        const query = (arg || "").trim().toLowerCase();
+        if (!query) {
+          addEvent({ kind: "system", text: "usage: /find <text>", tone: "info" });
+          return true;
+        }
+        const fields = (e) => [
+          e.text || "",
+          e.title || "",
+          e.service || "",
+          e.target || "",
+          (e.args && JSON.stringify(e.args)) || "",
+          (e.attrs && JSON.stringify(e.attrs)) || "",
+        ].join(" ").toLowerCase();
+        const hits = events.filter((e) => fields(e).includes(query));
+        if (hits.length === 0) {
+          addEvent({ kind: "system", text: `no matches for "${arg}"`, tone: "info" });
+          return true;
+        }
+        const lines = hits.slice(-15).map((e) => {
+          const t = e.time || "";
+          const head = e.kind === "user" ? "you" :
+                       e.kind === "voice" ? "voice" :
+                       e.kind === "action" ? `action · ${e.service || ""} · ${e.target || ""}` :
+                       e.kind === "perception" ? "perception" : e.kind;
+          const body = (e.text || e.title || JSON.stringify(e.attrs || {}) || "").slice(0, 80);
+          return `  ${t}  ${head}  ${body}`;
+        });
+        const more = hits.length > 15 ? `\n  …showing last 15 of ${hits.length} matches` : "";
+        addEvent({
+          kind: "system",
+          text: `${hits.length} match${hits.length === 1 ? "" : "es"} for "${arg}":\n` + lines.join("\n") + more,
           tone: "info",
         });
         return true;
@@ -2243,11 +2476,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       } catch {
         if (!cancelled) setSidecarOnline(false);
       }
-      // Bridge
+      // Bridge — also capture full body for DebugPanel
       if (bridgeUrl) {
         try {
           const r2 = await fetch(`${bridgeUrl}/healthz`, { cache: "no-store" });
-          if (!cancelled) setBridgeOnline(r2.ok);
+          if (!cancelled) {
+            setBridgeOnline(r2.ok);
+            if (r2.ok) {
+              try { setBridgeHealth(await r2.json()); } catch {}
+            }
+          }
         } catch {
           if (!cancelled) setBridgeOnline(false);
         }
@@ -2347,6 +2585,12 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         sidecarOnline={sidecarOnline}
         bridgeOnline={bridgeOnline}
       />
+      {debugMode && (
+        <DebugPanel
+          metricsBase={metricsBase || metricsBaseFromEndpoint(endpoint)}
+          bridgeHealth={bridgeHealth}
+        />
+      )}
       <WelcomeBanner
         identity={identity}
         arrival={arrival}
@@ -2394,7 +2638,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
               debugMode ? events : events.filter((e) => e.kind !== "diag")
             ).map((g, i) => (
               <TurnBlock key={i} group={g} density={density}
-                onConfirmAction={confirmAction} onCancelAction={cancelAction} />
+                onConfirmAction={confirmAction} onCancelAction={cancelAction}
+                onUndoAction={undoAction} />
             ))}
           </div>
         )}

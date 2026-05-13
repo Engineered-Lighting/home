@@ -182,7 +182,25 @@ function ToolContent({ name, args = {}, status = "success", latency }) {
   );
 }
 
-function ActionContent({ id, title, service, target, attrs = {}, status = "pending", latency, reason, onConfirm, onCancel }) {
+// Master plan F.1: inverse-service mapping for the undo button.
+// Returns null if the service has no clean inverse (e.g. media_play
+// can't be cleanly undone — was it idle or paused before?).
+const INVERSE_SERVICE = {
+  "light.turn_on": "light.turn_off",
+  "light.turn_off": "light.turn_on",
+  "switch.turn_on": "switch.turn_off",
+  "switch.turn_off": "switch.turn_on",
+  "fan.turn_on": "fan.turn_off",
+  "fan.turn_off": "fan.turn_on",
+  "cover.open_cover": "cover.close_cover",
+  "cover.close_cover": "cover.open_cover",
+  "media_player.media_play": "media_player.media_pause",
+  "media_player.media_pause": "media_player.media_play",
+  "media_player.turn_on": "media_player.turn_off",
+  "media_player.turn_off": "media_player.turn_on",
+};
+
+function ActionContent({ id, title, service, target, attrs = {}, status = "pending", latency, reason, onConfirm, onCancel, onUndo, traceId }) {
   const needsConfirm = status === "pending-confirm";
   const isErr = status === "error";
   // Phase B F0-07: auto-open error cards so the user sees the failure
@@ -190,6 +208,10 @@ function ActionContent({ id, title, service, target, attrs = {}, status = "pendi
   // (already auto-opened before this change).
   const [open, setOpen] = React.useState(needsConfirm || isErr);
   const caret = open ? "▾" : "▸";
+  // F.1 + F.2: undo + why state
+  const [undoFiring, setUndoFiring] = React.useState(false);
+  const [undoDone, setUndoDone] = React.useState(false);
+  const canUndo = onUndo && status === "success" && service in INVERSE_SERVICE && !undoDone;
 
   // Build the key/value rows shown when expanded.
   // Order is intentional: service first (what was called), target second
@@ -261,6 +283,46 @@ function ActionContent({ id, title, service, target, attrs = {}, status = "pendi
                 color: "var(--hg-fg-2)", padding: "4px 10px", cursor: "pointer",
                 fontFamily: HG_MONO, fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase",
               }}>cancel esc</button>
+            </div>
+          )}
+          {/* Master plan F.1: undo button for successful, reversible actions.
+              Hidden if service has no clean inverse or already-undone. */}
+          {canUndo && (
+            <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center" }}>
+              <button
+                disabled={undoFiring}
+                onClick={async () => {
+                  if (undoFiring) return;
+                  setUndoFiring(true);
+                  try {
+                    const inverse = INVERSE_SERVICE[service];
+                    await onUndo({ id, originalService: service, inverseService: inverse, target, attrs });
+                    setUndoDone(true);
+                  } catch (e) {
+                    console.warn("[action-undo] failed", e);
+                  } finally {
+                    setUndoFiring(false);
+                  }
+                }}
+                className="hg-focusable"
+                style={{
+                  background: "transparent",
+                  border: "1px solid var(--hg-border)",
+                  color: undoFiring ? "var(--hg-fg-4)" : "var(--hg-fg-2)",
+                  padding: "4px 10px",
+                  cursor: undoFiring ? "default" : "pointer",
+                  fontFamily: HG_MONO, fontSize: 10,
+                  letterSpacing: "0.14em", textTransform: "uppercase",
+                }}
+              >{undoFiring ? "undoing…" : "undo"}</button>
+              <span style={{ ...HG_FAINT, fontSize: 9 }}>
+                will call {INVERSE_SERVICE[service]}
+              </span>
+            </div>
+          )}
+          {undoDone && (
+            <div style={{ marginTop: 10, fontSize: 10, color: "var(--hg-fg-3)", fontFamily: HG_MONO }}>
+              ↺ reverted
             </div>
           )}
         </div>
@@ -340,13 +402,13 @@ function PerceptionContent({ text }) {
 }
 
 /* ── Event dispatch ──────────────────────────────────────────────────── */
-function EventContent({ e, onConfirm, onCancel }) {
+function EventContent({ e, onConfirm, onCancel, onUndo }) {
   switch (e.kind) {
     case "user":       return <UserContent text={e.text} />;
     case "voice":      return <VoiceContent text={e.text} />;
     case "thinking":   return <ThinkingContent text={e.text} />;
     case "tool":       return <ToolContent name={e.name} args={e.args} status={e.status} latency={e.latency} />;
-    case "action":     return <ActionContent id={e.id} title={e.title} service={e.service} target={e.target} attrs={e.attrs} status={e.status} latency={e.latency} reason={e.reason} onConfirm={onConfirm} onCancel={onCancel} />;
+    case "action":     return <ActionContent id={e.id} title={e.title} service={e.service} target={e.target} attrs={e.attrs} status={e.status} latency={e.latency} reason={e.reason} traceId={e.traceId} onConfirm={onConfirm} onCancel={onCancel} onUndo={onUndo} />;
     case "home":       return <HomeContent text={e.text} streaming={e.streaming} />;
     case "perception": return <PerceptionContent text={e.text} />;
     case "system":     return <SystemContent text={e.text} tone={e.tone} />;
@@ -378,14 +440,14 @@ function groupEventsBySpeaker(events) {
 }
 
 /* ── Turn block ──────────────────────────────────────────────────────── */
-function TurnBlock({ group, density, onConfirmAction, onCancelAction }) {
+function TurnBlock({ group, density, onConfirmAction, onCancelAction, onUndoAction }) {
   const tone = group.speaker === "system" ? "system" : group.speaker;
   return (
     <div className="hg-fade">
       <TurnHeader speaker={group.speaker} time={group.time} tone={tone} />
       <TurnBody density={density}>
         {group.events.map((e) => (
-          <EventContent key={e.id} e={e} onConfirm={onConfirmAction} onCancel={onCancelAction} />
+          <EventContent key={e.id} e={e} onConfirm={onConfirmAction} onCancel={onCancelAction} onUndo={onUndoAction} />
         ))}
       </TurnBody>
     </div>

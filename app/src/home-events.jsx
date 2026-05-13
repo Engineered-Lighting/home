@@ -227,31 +227,79 @@ function ActionContent({ id, title, service, target, attrs = {}, status = "pendi
 
   return (
     <div>
-      {/* Header row — caret + label always, summary + status only when open */}
+      {/* Header row — always shows caret + label + title + status. Undo
+          button (when applicable) sits inline to the right of status so
+          it's discoverable without expanding. */}
       <div
-        onClick={() => setOpen(o => !o)}
         style={{
           ...T_SYNTAX,
           display: "grid",
-          // 5ch was too narrow — the word "action" itself is ~6ch in
-          // Geist Mono, so when open and a title follows, the two ran
-          // together visually. 8ch reserves real breathing room.
-          gridTemplateColumns: open ? "1.4ch 8ch minmax(0,1fr) auto" : "1.4ch auto",
+          gridTemplateColumns: canUndo
+            ? "1.4ch 8ch minmax(0,1fr) auto auto"
+            : "1.4ch 8ch minmax(0,1fr) auto",
           columnGap: 8,
           alignItems: "baseline",
-          cursor: "pointer",
           userSelect: "none",
         }}
       >
-        <span style={{ color: "var(--hg-fg-4)" }}>{caret}</span>
-        <span style={isErr ? HG_WARN : HG_DIM}>action</span>
-        {open && (
-          <>
-            <span style={isErr ? HG_WARN : HG_FG}>{title || ""}</span>
-            <span style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-              <StatusText status={status} latency={latency} />
-            </span>
-          </>
+        <span
+          onClick={() => setOpen(o => !o)}
+          style={{ color: "var(--hg-fg-4)", cursor: "pointer" }}
+        >{caret}</span>
+        <span
+          onClick={() => setOpen(o => !o)}
+          style={{ ...(isErr ? HG_WARN : HG_DIM), cursor: "pointer" }}
+        >action</span>
+        <span
+          onClick={() => setOpen(o => !o)}
+          style={{ ...(isErr ? HG_WARN : HG_FG), cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+        >{title || service || ""}</span>
+        <span
+          onClick={() => setOpen(o => !o)}
+          style={{ textAlign: "right", whiteSpace: "nowrap", cursor: "pointer" }}
+        >
+          <StatusText status={status} latency={latency} />
+        </span>
+        {/* F.1 (revised): inline undo button in the header — visible
+            without requiring expansion. */}
+        {canUndo && (
+          <button
+            disabled={undoFiring}
+            onClick={async (ev) => {
+              ev.stopPropagation();
+              if (undoFiring) return;
+              setUndoFiring(true);
+              try {
+                const inverse = INVERSE_SERVICE[service];
+                await onUndo({ id, originalService: service, inverseService: inverse, target, attrs });
+                setUndoDone(true);
+              } catch (e) {
+                console.warn("[action-undo] failed", e);
+              } finally {
+                setUndoFiring(false);
+              }
+            }}
+            className="hg-focusable"
+            style={{
+              background: "transparent",
+              border: "1px solid var(--hg-border)",
+              color: undoFiring ? "var(--hg-fg-4)" : "var(--hg-fg-2)",
+              padding: "1px 7px",
+              cursor: undoFiring ? "default" : "pointer",
+              fontFamily: HG_MONO,
+              fontSize: 9,
+              letterSpacing: "0.12em",
+              textTransform: "uppercase",
+              lineHeight: 1.3,
+              marginLeft: 8,
+            }}
+            title={`Fire ${INVERSE_SERVICE[service]} on the same target`}
+          >{undoFiring ? "…" : "undo"}</button>
+        )}
+        {undoDone && (
+          <span style={{ ...HG_FAINT, fontSize: 9, marginLeft: 8 }}>
+            ↺
+          </span>
         )}
       </div>
 
@@ -285,44 +333,11 @@ function ActionContent({ id, title, service, target, attrs = {}, status = "pendi
               }}>cancel esc</button>
             </div>
           )}
-          {/* Master plan F.1: undo button for successful, reversible actions.
-              Hidden if service has no clean inverse or already-undone. */}
-          {canUndo && (
-            <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center" }}>
-              <button
-                disabled={undoFiring}
-                onClick={async () => {
-                  if (undoFiring) return;
-                  setUndoFiring(true);
-                  try {
-                    const inverse = INVERSE_SERVICE[service];
-                    await onUndo({ id, originalService: service, inverseService: inverse, target, attrs });
-                    setUndoDone(true);
-                  } catch (e) {
-                    console.warn("[action-undo] failed", e);
-                  } finally {
-                    setUndoFiring(false);
-                  }
-                }}
-                className="hg-focusable"
-                style={{
-                  background: "transparent",
-                  border: "1px solid var(--hg-border)",
-                  color: undoFiring ? "var(--hg-fg-4)" : "var(--hg-fg-2)",
-                  padding: "4px 10px",
-                  cursor: undoFiring ? "default" : "pointer",
-                  fontFamily: HG_MONO, fontSize: 10,
-                  letterSpacing: "0.14em", textTransform: "uppercase",
-                }}
-              >{undoFiring ? "undoing…" : "undo"}</button>
-              <span style={{ ...HG_FAINT, fontSize: 9 }}>
-                will call {INVERSE_SERVICE[service]}
-              </span>
-            </div>
-          )}
+          {/* F.1: undo button moved to header row above; show only the
+              "reverted" confirmation here when it applies. */}
           {undoDone && (
             <div style={{ marginTop: 10, fontSize: 10, color: "var(--hg-fg-3)", fontFamily: HG_MONO }}>
-              ↺ reverted
+              ↺ reverted — fired {INVERSE_SERVICE[service]}
             </div>
           )}
         </div>

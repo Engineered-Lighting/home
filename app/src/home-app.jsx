@@ -20,10 +20,11 @@ const nextId = () => `e-${++_id}`;
 /* ── Header ──────────────────────────────────────────────────────────── */
 function HomeHeader({ theme, onToggleTheme, voice, connection, sidecarOnline, bridgeOnline }) {
   const isLive = voice.state !== "inactive" && voice.state !== "no-mic";
+  // Phase 1 bugfix: header no longer mirrors the voice state (listening /
+  // processing / speaking) — that's already shown in the bottom VoiceBanner
+  // with a waveform animation. Header only conveys CONNECTION state now,
+  // plus the optional offline-pill for downstream services.
   const statusText =
-    voice.state === "listening"  ? "listening"  :
-    voice.state === "processing" ? "processing" :
-    voice.state === "speaking"   ? "speaking"   :
     connection === "online"       ? "online"     :
     connection === "connecting"   ? "connecting" :
     connection === "auth_invalid" ? "bad token"  : "offline";
@@ -100,12 +101,14 @@ function HomeHeader({ theme, onToggleTheme, voice, connection, sidecarOnline, br
             vision drawer, named perception line in the chat feed.
             The header stays clean. */}
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          {/* Phase 1 bugfix: dot pulses ice-blue while a voice session is
+              live (mic open OR speaking), but the text label only shows
+              non-online states (connecting / bad token / offline). The
+              voice state itself lives in the bottom VoiceBanner. */}
           <ConnectionDot state={isLive ? "live" : connection} />
-          {(isLive || connection !== "online") && (
+          {connection !== "online" && (
             <span style={{
-              color: isLive ? "var(--hg-ice)"
-                    : connection === "auth_invalid" ? "var(--hg-warn)"
-                    : "var(--hg-fg-3)",
+              color: connection === "auth_invalid" ? "var(--hg-warn)" : "var(--hg-fg-3)",
               fontFamily: "'Geist Mono', monospace",
               fontSize: 10, letterSpacing: "0.12em",
             }}>{statusText}</span>
@@ -181,17 +184,12 @@ function getGreeting(name) {
   return `Hey ${name}.`;
 }
 
-/* Master plan F.3 / F0-01: developer debug panel.
- *
- * Slides in from the right when debugMode is on. Shows live latency
- * data from the metrics-sidecar's /traces/summary + the bridge's
- * /healthz. Useful for spotting:
- *   - which stage of a voice turn is slow
- *   - whether the bridge is healthy + warm
- *   - whether trace pipeline is alive
- *
- * Polls every 5s. Closes when debugMode flips off. */
-function DebugPanel({ metricsBase, bridgeHealth }) {
+/* (Removed) DebugPanel — its functionality moved into MetricsStrip
+ * expanded view so trace + bridge health live next to GPU/VRAM/CPU
+ * (single drawer, no floating overlay). See MetricsStrip for the
+ * current implementation. */
+// eslint-disable-next-line no-unused-vars
+function _DebugPanel_REMOVED_({ metricsBase, bridgeHealth }) {
   const [summary, setSummary] = useState(null);
   const [latest, setLatest] = useState(null);
   const [err, setErr] = useState(null);
@@ -473,9 +471,12 @@ function MetricsStrip({ metrics, metricsBase, bridgeHealth }) {
     let cancelled = false;
     const tick = async () => {
       try {
+        // Phase 1 bugfix: native fetch() from Tauri origin gets CORS-blocked
+        // by the metrics-sidecar. tauriFetch uses Tauri's HTTP plugin which
+        // bypasses webview CORS, so these polls actually return data.
         const [s, l] = await Promise.all([
-          fetch(`${metricsBase}/traces/summary?window=1h`, { cache: "no-store" }),
-          fetch(`${metricsBase}/traces/latest?n=1`, { cache: "no-store" }),
+          tauriFetch(`${metricsBase}/traces/summary?window=1h`, { cache: "no-store" }),
+          tauriFetch(`${metricsBase}/traces/latest?n=1`, { cache: "no-store" }),
         ]);
         if (cancelled) return;
         if (s.ok) setTraceSummary(await s.json());
@@ -483,7 +484,10 @@ function MetricsStrip({ metrics, metricsBase, bridgeHealth }) {
           const j = await l.json();
           setLastTrace(j.traces?.[j.traces.length - 1] || null);
         }
-      } catch {}
+      } catch (e) {
+        // Don't silently swallow — log once so it's debuggable in DevTools.
+        console.warn("[metrics] trace poll failed:", e?.message || e);
+      }
     };
     tick();
     const id = setInterval(tick, 5000);
@@ -1559,18 +1563,32 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         const r = await tauriFetch(`${base}/metrics`);
         const m = await r.json();
         if (cancelled) return;
-        setMetrics((prev) => ({
-          ...prev,
-          model:   m.model    || prev.model,
-          ttft:    m.ttft_ms ?? prev.ttft,
-          tps:     m.tps     ?? prev.tps,
-          gpu:     m.gpu_util_pct  ?? prev.gpu,
-          vram:    m.vram_used_gb  ?? prev.vram,
-          vramMax: m.vram_total_gb ?? prev.vramMax,
-          cpu:     m.cpu_pct       ?? prev.cpu,
-          ram:     m.ram_used_gb   ?? prev.ram,
-          ramMax:  m.ram_total_gb  ?? prev.ramMax,
-        }));
+        // Phase 1 bugfix: NVML reports 103 GB total on the user's RTX 6000
+        // Blackwell (96 GB spec) — includes ECC/fabric overhead the driver
+        // doesn't expose as user-allocatable. Clamp to the spec-sheet value
+        // so the UI shows what the user expects. Known Blackwell sizes:
+        //   RTX 6000  96 GB
+        //   B100/B200 192 GB
+        // If NVML reports 96..104, treat as 96. Same idea for 192..200.
+        const KNOWN_VRAM_SPECS = [96, 192];
+        setMetrics((prev) => {
+          const reportedMax = m.vram_total_gb ?? prev.vramMax;
+          const specMax = KNOWN_VRAM_SPECS.find(
+            (s) => reportedMax >= s && reportedMax <= s + 8
+          ) ?? reportedMax;
+          return {
+            ...prev,
+            model:   m.model    || prev.model,
+            ttft:    m.ttft_ms ?? prev.ttft,
+            tps:     m.tps     ?? prev.tps,
+            gpu:     m.gpu_util_pct  ?? prev.gpu,
+            vram:    m.vram_used_gb  ?? prev.vram,
+            vramMax: specMax,
+            cpu:     m.cpu_pct       ?? prev.cpu,
+            ram:     m.ram_used_gb   ?? prev.ram,
+            ramMax:  m.ram_total_gb  ?? prev.ramMax,
+          };
+        });
       } catch {
         // sidecar down — keep last-known values
       }
@@ -1656,21 +1674,38 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   }, []);
 
   // Master plan F.1: undo a successful action by firing its inverse
-  // service against the original target. The inverse mapping lives in
-  // home-events.jsx (INVERSE_SERVICE); home-app just routes the call.
+  // service against the original target.
+  //
+  // Phase 1 bugfix: multi-target actions store the literal label
+  // "18 targets" in `target` and the actual entity_ids in `attrs.targets`.
+  // The old code only checked `target.startsWith("area.")` etc. and
+  // `attrs.entity_id` (singular), so undo on "all lights off" sent NO
+  // selector and HA rejected with:
+  //   "must contain at least one of entity_id, device_id, area_id, ..."
+  // New precedence: attrs.targets[] (array) > attrs.entity_id (str|arr)
+  //   > target "area.X" > target "entity.X".
   const undoAction = useCallback(async ({ id, originalService, inverseService, target, attrs }) => {
     const client = haClientRef.current;
     if (!client) throw new Error("HA not connected");
     const [domain, service] = inverseService.split(".");
-    // target can be either "area.<name>" or "entity.<id>" or null+attrs.entity_id
     const serviceData = {};
     const callTarget = {};
-    if (target?.startsWith("area.")) {
-      callTarget.area_id = target.slice(5);
-    } else if (target?.startsWith("entity.")) {
-      callTarget.entity_id = target.slice(7);
+    if (Array.isArray(attrs?.targets) && attrs.targets.length > 0) {
+      // Multi-target case — the entity_ids that fired originally
+      callTarget.entity_id = attrs.targets;
     } else if (attrs?.entity_id) {
+      // Single or pre-arrayed entity_id stored in attrs
       callTarget.entity_id = attrs.entity_id;
+    } else if (target?.startsWith?.("area.")) {
+      callTarget.area_id = target.slice(5);
+    } else if (target?.startsWith?.("entity.")) {
+      callTarget.entity_id = target.slice(7);
+    }
+    if (!callTarget.entity_id && !callTarget.area_id) {
+      const msg = `↺ undo unsupported — no resolvable target (target=${JSON.stringify(target)})`;
+      console.warn("[undo]", msg);
+      addEvent({ kind: "system", text: msg, tone: "error" });
+      throw new Error("no resolvable target");
     }
     console.log("[undo]", originalService, "→", inverseService, "target", callTarget);
     try {
@@ -2602,25 +2637,32 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     } catch {}
 
     const poll = async () => {
+      // Phase 1 bugfix: native fetch() is CORS-blocked from the Tauri
+      // origin against http://192.168.0.100:* — sets sidecarOnline /
+      // bridgeOnline to false even when both are healthy, which raises
+      // the "VOICE BRIDGE OFFLINE" pill incorrectly. tauriFetch routes
+      // through Tauri's HTTP plugin (no webview CORS).
       // Sidecar
       try {
-        const r = await fetch(`${base}/healthz`, { cache: "no-store" });
+        const r = await tauriFetch(`${base}/healthz`, { cache: "no-store" });
         if (!cancelled) setSidecarOnline(r.ok);
-      } catch {
+      } catch (e) {
         if (!cancelled) setSidecarOnline(false);
+        console.warn("[health] sidecar poll failed:", e?.message || e);
       }
-      // Bridge — also capture full body for DebugPanel
+      // Bridge — also capture full body for MetricsStrip
       if (bridgeUrl) {
         try {
-          const r2 = await fetch(`${bridgeUrl}/healthz`, { cache: "no-store" });
+          const r2 = await tauriFetch(`${bridgeUrl}/healthz`, { cache: "no-store" });
           if (!cancelled) {
             setBridgeOnline(r2.ok);
             if (r2.ok) {
               try { setBridgeHealth(await r2.json()); } catch {}
             }
           }
-        } catch {
+        } catch (e) {
           if (!cancelled) setBridgeOnline(false);
+          console.warn("[health] bridge poll failed:", e?.message || e);
         }
       }
     };

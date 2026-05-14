@@ -18,6 +18,430 @@
 const HM_FONT_MONO = "'Geist Mono', ui-monospace, monospace";
 const HM_FONT_SANS = "'Geist', system-ui, sans-serif";
 
+/* Typography weight system — kill the 500-everywhere problem.
+ *   400 = labels, secondary text
+ *   600 = hero numerals, primary state
+ * No 500 in this file. */
+const HM_WEIGHT_LABEL = 400;
+const HM_WEIGHT_HERO  = 600;
+
+/* ── Surface ───────────────────────────────────────────────────────────
+ *
+ * The card shell only — no semantics. Owns radius/border/bg/padding/hover.
+ * Compose with Card for semantics (title/body/meta).
+ */
+function Surface({ children, tone = "default", pad = 14, style = {}, onClick }) {
+  const isInteractive = !!onClick;
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        background: tone === "elevated" ? "var(--hg-bg-1)" : "var(--hg-bg-1)",
+        border: "1px solid var(--hg-border-soft)",
+        borderRadius: 6,
+        padding: pad,
+        cursor: isInteractive ? "pointer" : "default",
+        transition: "border-color 220ms, background 220ms",
+        ...(isInteractive && {
+          ":hover": { borderColor: "var(--hg-border)" },
+        }),
+        ...style,
+      }}
+    >{children}</div>
+  );
+}
+
+/* ── StatRow ───────────────────────────────────────────────────────────
+ *
+ * One-line label-value-unit triplet. Tabular-nums on the value.
+ * Use this anywhere you'd write a key:value pair.
+ */
+function StatRow({ label, value, unit, tone = "default" }) {
+  const valColor = tone === "warn" ? "var(--hg-warn)"
+                : tone === "crit" ? "var(--hg-crit)"
+                : "var(--hg-fg-1)";
+  return (
+    <div style={{
+      display: "grid",
+      gridTemplateColumns: "1fr auto auto",
+      columnGap: 8,
+      alignItems: "baseline",
+      fontFamily: HM_FONT_MONO,
+      fontSize: 11,
+      lineHeight: 1.6,
+    }}>
+      <span style={{ color: "var(--hg-fg-4)", fontWeight: HM_WEIGHT_LABEL }}>{label}</span>
+      <span style={{ color: valColor, fontWeight: HM_WEIGHT_HERO }}>{value}</span>
+      {unit && <span style={{ color: "var(--hg-fg-4)", fontSize: 10 }}>{unit}</span>}
+    </div>
+  );
+}
+
+/* ── Card ──────────────────────────────────────────────────────────────
+ *
+ * Composes Surface with a title row + body slot + optional meta footer.
+ *   <Card title="ACTIVE ROOM" badge="warm" meta="22s ago">{body}</Card>
+ */
+function Card({ title, badge, meta, children, pad = 14 }) {
+  return (
+    <Surface pad={pad}>
+      {(title || badge) && (
+        <div style={{
+          display: "flex", alignItems: "baseline", justifyContent: "space-between",
+          marginBottom: 8, gap: 8,
+        }}>
+          {title && (
+            <span style={{
+              fontFamily: HM_FONT_MONO,
+              fontSize: 9.5,
+              letterSpacing: "0.18em",
+              textTransform: "uppercase",
+              color: "var(--hg-fg-4)",
+              fontWeight: HM_WEIGHT_LABEL,
+            }}>{title}</span>
+          )}
+          {badge && (
+            <span style={{
+              fontFamily: HM_FONT_MONO,
+              fontSize: 9,
+              letterSpacing: "0.12em",
+              textTransform: "uppercase",
+              color: ({
+                ice:  "var(--hg-ice-bright)",
+                warn: "var(--hg-warn)",
+                crit: "var(--hg-crit)",
+              })[badge.tone] || "var(--hg-fg-3)",
+              border: `1px solid ${({
+                ice:  "var(--hg-ice-bright)",
+                warn: "var(--hg-warn)",
+                crit: "var(--hg-crit)",
+              })[badge.tone] || "var(--hg-border)"}`,
+              padding: "1px 6px",
+              borderRadius: 2,
+              fontWeight: HM_WEIGHT_LABEL,
+            }}>{badge.text || badge}</span>
+          )}
+        </div>
+      )}
+      <div>{children}</div>
+      {meta && (
+        <div style={{
+          fontFamily: HM_FONT_MONO,
+          fontSize: 9.5,
+          color: "var(--hg-fg-5)",
+          marginTop: 8,
+          letterSpacing: "0.08em",
+        }}>{meta}</div>
+      )}
+    </Surface>
+  );
+}
+
+/* ── Arc ───────────────────────────────────────────────────────────────
+ *
+ * Compact radial meter — SVG circle with stroke arc. Used ONLY for
+ * fraction-of-total metrics where the value moves across the range
+ * (e.g. VRAM 86/96 GB). NOT for percent metrics that idle near 0%.
+ */
+function Arc({ value, max, size = 56, label, unit }) {
+  const v = (typeof value === "number" && isFinite(value)) ? value : 0;
+  const pct = max ? Math.max(0, Math.min(100, (v / max) * 100)) : 0;
+  const stroke = pct > 90 ? "var(--hg-crit)"
+                : pct > 70 ? "var(--hg-warn)"
+                : "var(--hg-ice-bright)";
+  const r = (size / 2) - 4;
+  const c = 2 * Math.PI * r;
+  const offset = c * (1 - pct / 100);
+  return (
+    <div style={{
+      display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
+      width: size + 8,
+    }}>
+      <div style={{ position: "relative", width: size, height: size }}>
+        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}
+          style={{ transform: "rotate(-90deg)" }}>
+          <circle cx={size/2} cy={size/2} r={r} fill="none"
+            stroke="var(--hg-border-soft)" strokeWidth="3" />
+          <circle cx={size/2} cy={size/2} r={r} fill="none"
+            stroke={stroke} strokeWidth="3"
+            strokeDasharray={c} strokeDashoffset={offset}
+            strokeLinecap="round"
+            style={{ transition: "stroke-dashoffset 500ms, stroke 300ms" }} />
+        </svg>
+        <div style={{
+          position: "absolute", inset: 0,
+          display: "flex", flexDirection: "column",
+          alignItems: "center", justifyContent: "center",
+          fontFamily: HM_FONT_MONO,
+          fontFeatureSettings: '"tnum"',
+        }}>
+          <span style={{ fontSize: 14, color: "var(--hg-fg-0)", fontWeight: HM_WEIGHT_HERO, lineHeight: 1 }}>
+            {Math.round(pct)}
+          </span>
+          <span style={{ fontSize: 8, color: "var(--hg-fg-4)", marginTop: 1 }}>%</span>
+        </div>
+      </div>
+      {label && (
+        <div style={{
+          fontFamily: HM_FONT_MONO,
+          fontSize: 9,
+          letterSpacing: "0.16em",
+          textTransform: "uppercase",
+          color: "var(--hg-fg-4)",
+          fontWeight: HM_WEIGHT_LABEL,
+        }}>{label}</div>
+      )}
+      {unit && (
+        <div style={{
+          fontFamily: HM_FONT_MONO,
+          fontSize: 9,
+          color: "var(--hg-fg-5)",
+        }}>{unit}</div>
+      )}
+    </div>
+  );
+}
+
+/* Helper: data variance check. If history is essentially flat, sparkline
+ * is meaningless — return null and let MetricCard show value-only. */
+function _hasVariance(history, max = 100) {
+  if (!Array.isArray(history) || history.length < 3) return false;
+  const nums = history.filter((v) => typeof v === "number" && isFinite(v));
+  if (nums.length < 3) return false;
+  const lo = Math.min(...nums);
+  const hi = Math.max(...nums);
+  const range = hi - lo;
+  // Variance >2% of max OR >2 absolute units (for ttft where max is huge)
+  return range > Math.max(2, max * 0.02);
+}
+
+/* ── MetricCard v2 ─────────────────────────────────────────────────────
+ *
+ * Auto-picks visualization:
+ *   viz="auto" (default): sparkline if data has variance >2%, else dot
+ *   viz="arc": radial — only for fraction-of-total values (VRAM)
+ *   viz="bar": horizontal mini-bar (for state-loaded values)
+ *   viz="none": value-only
+ *
+ * Hero numeral (600 weight), unit (400, faint), label below or above.
+ */
+function MetricCard({ label, value, max = 100, unit, history = [],
+                     viz = "auto", warnAt = 70, critAt = 90,
+                     hint }) {
+  const hasValue = value != null && isFinite(value);
+  const pct = hasValue && max ? Math.max(0, Math.min(100, (value / max) * 100)) : 0;
+  const valColor = pct > critAt ? "var(--hg-crit)"
+                  : pct > warnAt ? "var(--hg-warn)"
+                  : "var(--hg-fg-0)";
+
+  // Auto-decide viz
+  let actualViz = viz;
+  if (viz === "auto") {
+    actualViz = _hasVariance(history, max) ? "spark" : "none";
+  }
+
+  const valueFmt = hasValue
+    ? (Number.isInteger(value) ? value.toString() : value.toFixed(value < 10 ? 1 : 0))
+    : "—";
+
+  if (actualViz === "arc") {
+    return <Arc value={value} max={max} label={label} unit={unit} size={64} />;
+  }
+
+  return (
+    <div style={{
+      display: "flex", flexDirection: "column", gap: 4,
+      minWidth: 0,
+    }}>
+      <div style={{
+        fontFamily: HM_FONT_MONO,
+        fontSize: 9.5,
+        letterSpacing: "0.18em",
+        textTransform: "uppercase",
+        color: "var(--hg-fg-4)",
+        fontWeight: HM_WEIGHT_LABEL,
+      }}>{label}</div>
+      <div style={{
+        display: "flex", alignItems: "baseline", gap: 3,
+        fontFamily: HM_FONT_MONO,
+        fontFeatureSettings: '"tnum"',
+      }}>
+        <span style={{
+          fontSize: 18, lineHeight: 1,
+          color: hasValue ? valColor : "var(--hg-fg-5)",
+          fontWeight: HM_WEIGHT_HERO,
+        }}>{valueFmt}</span>
+        {unit && (
+          <span style={{
+            fontSize: 9.5, color: "var(--hg-fg-4)",
+            fontWeight: HM_WEIGHT_LABEL,
+          }}>{unit}</span>
+        )}
+        {actualViz === "none" && hasValue && (
+          <span style={{
+            marginLeft: "auto", width: 5, height: 5, borderRadius: 999,
+            background: pct > critAt ? "var(--hg-crit)" : pct > warnAt ? "var(--hg-warn)" : "var(--hg-fg-3)",
+            alignSelf: "center",
+            opacity: 0.6,
+          }} />
+        )}
+      </div>
+      {actualViz === "spark" && (
+        <Sparkline data={history} max={max} width={80} height={14}
+                   warnAt={warnAt} critAt={critAt} />
+      )}
+      {actualViz === "bar" && hasValue && (
+        <div style={{ height: 3, background: "var(--hg-border-soft)", position: "relative", marginTop: 2 }}>
+          <div style={{
+            position: "absolute", inset: 0,
+            width: `${pct}%`,
+            background: pct > critAt ? "var(--hg-crit)" : pct > warnAt ? "var(--hg-warn)" : "var(--hg-fg-1)",
+            transition: "width 500ms cubic-bezier(.4,0,.2,1)",
+          }} />
+        </div>
+      )}
+      {hint && (
+        <div style={{
+          fontFamily: HM_FONT_MONO, fontSize: 9,
+          color: "var(--hg-fg-5)", marginTop: 2,
+        }}>{hint}</div>
+      )}
+    </div>
+  );
+}
+
+/* ── TimelineStrip ─────────────────────────────────────────────────────
+ *
+ * Compact horizontal pipeline timing strip. Stages render as labeled
+ * segments along a horizontal track. Slowest stage highlighted.
+ * Used in PipelineCard for last voice turn.
+ */
+function TimelineStrip({ stages = [], totalMs = 1 }) {
+  if (!stages.length || totalMs <= 0) return null;
+  // Find slowest stage for emphasis
+  const slowestDur = Math.max(...stages.map((s) => s.dur || 0));
+  return (
+    <div>
+      {/* Bar track */}
+      <div style={{
+        position: "relative",
+        height: 6,
+        background: "var(--hg-border-soft)",
+        borderRadius: 3,
+        marginBottom: 6,
+        overflow: "hidden",
+      }}>
+        {stages.reduce((acc, s) => {
+          const leftPct = (acc.cursor / totalMs) * 100;
+          const widthPct = Math.max(0.2, (s.dur / totalMs) * 100);
+          const isSlowest = s.dur > 0 && s.dur === slowestDur;
+          acc.elements.push(
+            <div key={s.label} style={{
+              position: "absolute", top: 0, bottom: 0,
+              left: `${leftPct}%`,
+              width: `${widthPct}%`,
+              background: isSlowest ? "var(--hg-ice-bright)" : "var(--hg-fg-2)",
+              opacity: s.dur > 0 ? (isSlowest ? 1 : 0.55) : 0,
+              transition: "all 400ms",
+            }} />
+          );
+          acc.cursor += s.dur;
+          return acc;
+        }, { cursor: 0, elements: [] }).elements}
+      </div>
+      {/* Stage labels */}
+      <div style={{
+        display: "flex", justifyContent: "space-between", flexWrap: "wrap",
+        fontFamily: HM_FONT_MONO,
+        fontSize: 9.5,
+        gap: 6,
+      }}>
+        {stages.map((s) => {
+          const isSlowest = s.dur > 0 && s.dur === slowestDur;
+          return (
+            <span key={s.label} style={{
+              display: "inline-flex", gap: 4, alignItems: "baseline",
+              color: isSlowest ? "var(--hg-fg-1)" : "var(--hg-fg-4)",
+              fontWeight: isSlowest ? HM_WEIGHT_HERO : HM_WEIGHT_LABEL,
+            }}>
+              <span>{s.label}</span>
+              <span style={{ fontFeatureSettings: '"tnum"' }}>{s.dur > 0 ? `${Math.round(s.dur)}` : "—"}</span>
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ── RoomGrid ──────────────────────────────────────────────────────────
+ *
+ * Tile grid for spatial room state. 3-column on wide, 2-column on narrow.
+ * Each tile: name, occupancy glyph, age, optional secondary line.
+ * Occupied rooms get bg-1 + ice-bright dot.
+ */
+function RoomGrid({ rooms = [] }) {
+  if (!rooms.length) return null;
+  return (
+    <div style={{
+      display: "grid",
+      gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+      gap: 8,
+    }}>
+      {rooms.map((r) => {
+        const occupied = r.occupied;
+        return (
+          <div key={r.id} style={{
+            padding: "10px 12px",
+            background: occupied ? "var(--hg-bg-2)" : "transparent",
+            border: `1px solid ${occupied ? "var(--hg-border)" : "var(--hg-border-soft)"}`,
+            borderRadius: 5,
+            minHeight: 56,
+            display: "flex", flexDirection: "column",
+            justifyContent: "space-between", gap: 4,
+            transition: "background 300ms, border-color 300ms",
+          }}>
+            <div style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6,
+            }}>
+              <span style={{
+                fontFamily: HM_FONT_MONO,
+                fontSize: 10.5,
+                color: occupied ? "var(--hg-fg-1)" : "var(--hg-fg-3)",
+                fontWeight: occupied ? HM_WEIGHT_HERO : HM_WEIGHT_LABEL,
+                letterSpacing: "0.02em",
+                textTransform: "none",
+              }}>{r.name || r.id.replace(/_/g, " ")}</span>
+              <span style={{
+                width: 5, height: 5, borderRadius: 999,
+                background: occupied ? "var(--hg-ice-bright)" : "var(--hg-fg-5)",
+                flexShrink: 0,
+              }} />
+            </div>
+            <div style={{
+              display: "flex", justifyContent: "space-between", gap: 4,
+              fontFamily: HM_FONT_MONO, fontSize: 9.5,
+            }}>
+              <span style={{ color: occupied ? "var(--hg-fg-2)" : "var(--hg-fg-5)" }}>
+                {occupied ? (r.identity || "occupied") : "empty"}
+              </span>
+              <span style={{ color: "var(--hg-fg-5)", fontFeatureSettings: '"tnum"' }}>
+                {r.age || ""}
+              </span>
+            </div>
+            {r.secondary && (
+              <div style={{
+                fontFamily: HM_FONT_MONO, fontSize: 9,
+                color: "var(--hg-fg-4)", marginTop: 2,
+              }}>{r.secondary}</div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ── HealthDot ─────────────────────────────────────────────────────────
  *
  * 6px round dot. Indicates section/machine health at a glance.
@@ -405,53 +829,6 @@ function Sparkline({ data = [], width = 60, height = 12, max, warnAt = 70, critA
   );
 }
 
-/* ── MetricCard ────────────────────────────────────────────────────────
- *
- * Hero metric: label + big value + unit + inline sparkline. Used in
- * the AI / Network tabs.
- *   LABEL
- *   12 %
- *   ▁▂▃▅▆▄▃▂
- */
-function MetricCard({ label, value, unit, history = [], max = 100, warnAt = 70, critAt = 90 }) {
-  const hasValue = value != null && isFinite(value);
-  const pct = hasValue && max ? (value / max) * 100 : 0;
-  const valueColor = pct > critAt ? "var(--hg-crit)"
-                    : pct > warnAt ? "var(--hg-warn)"
-                    : "var(--hg-fg-0)";
-  return (
-    <div style={{
-      display: "flex", flexDirection: "column", gap: 5,
-      minWidth: 0,
-    }}>
-      <div style={{
-        fontFamily: HM_FONT_MONO,
-        fontSize: 9.5,
-        letterSpacing: "0.18em",
-        textTransform: "uppercase",
-        color: "var(--hg-fg-4)",
-      }}>{label}</div>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
-        <span style={{
-          fontFamily: HM_FONT_MONO,
-          fontFeatureSettings: '"tnum"',
-          fontSize: 18, fontWeight: 500,
-          color: hasValue ? valueColor : "var(--hg-fg-4)",
-          lineHeight: 1,
-        }}>{hasValue ? (Number.isInteger(value) ? value : value.toFixed(value < 10 ? 1 : 0)) : "—"}</span>
-        {unit && (
-          <span style={{
-            fontFamily: HM_FONT_MONO,
-            fontSize: 10,
-            color: "var(--hg-fg-4)",
-          }}>{unit}</span>
-        )}
-      </div>
-      <Sparkline data={history} max={max === 100 ? 100 : undefined} width={80} height={14}
-                 warnAt={warnAt} critAt={critAt} />
-    </div>
-  );
-}
 
 /* ── Tabs ──────────────────────────────────────────────────────────────
  *
@@ -462,10 +839,10 @@ function MetricCard({ label, value, unit, history = [], max = 100, warnAt = 70, 
 function Tabs({ value, onChange, tabs = [], extra = null }) {
   return (
     <div style={{
-      display: "flex", alignItems: "center", gap: 0,
+      display: "flex", alignItems: "center", gap: 2,
       borderBottom: "1px solid var(--hg-border-soft)",
-      padding: "0 8px",
-      minHeight: 32,
+      padding: "6px 10px",
+      minHeight: 38,
     }}>
       {tabs.map((t) => {
         const active = t.id === value;
@@ -475,20 +852,25 @@ function Tabs({ value, onChange, tabs = [], extra = null }) {
             onClick={() => onChange?.(t.id)}
             className="hg-focusable"
             style={{
-              background: "transparent",
-              border: "none",
-              padding: "8px 10px",
+              background: active ? "var(--hg-bg-2)" : "transparent",
+              border: "1px solid",
+              borderColor: active ? "var(--hg-border)" : "transparent",
+              padding: "5px 11px",
               cursor: "pointer",
               fontFamily: HM_FONT_MONO,
               fontSize: 10.5,
-              letterSpacing: "0.14em",
+              letterSpacing: "0.10em",
               textTransform: "lowercase",
               color: active ? "var(--hg-fg-0)" : "var(--hg-fg-4)",
-              borderBottom: active ? "1px solid var(--hg-fg-0)" : "1px solid transparent",
-              marginBottom: -1,
-              transition: "color 200ms, border-color 200ms",
+              fontWeight: active ? HM_WEIGHT_HERO : HM_WEIGHT_LABEL,
+              borderRadius: 4,
+              transition: "color 200ms, background 200ms, border-color 200ms",
+              display: "inline-flex", alignItems: "center", gap: 6,
             }}
-          >{t.label}{t.warn ? <HealthDot tone="warn" size={4} /> : null}</button>
+          >
+            <span>{t.label}</span>
+            {t.warn && <HealthDot tone="warn" size={4} />}
+          </button>
         );
       })}
       {extra && (
@@ -676,17 +1058,26 @@ function DiagModal({ open, onClose, bridgeHealth, visionHealth, traceSummary, la
 
 /* Export to window so home-app.jsx can pick them up. */
 Object.assign(window, {
+  // Tray v4 — primary primitives
+  HmSurface: Surface,
+  HmCard: Card,
+  HmStatRow: StatRow,
+  HmMetricCard: MetricCard,
+  HmArc: Arc,
+  HmTimelineStrip: TimelineStrip,
+  HmRoomGrid: RoomGrid,
+  // Carried from v3 — still useful for chips, modals, scroll wrapper
+  HmTabs: Tabs,
+  HmTrayBody: TrayBody,
+  HmStatusLine: StatusLine,
+  HmHealthDot: HealthDot,
+  HmEmptyState: EmptyState,
+  HmDiagModal: DiagModal,
+  HmSparkline: Sparkline,        // exposed for direct use if needed
+  // Legacy v2 — kept for any external usage; will deprecate
   HmSection: Section,
   HmMeterRow: MeterRow,
   HmTimelineRow: TimelineRow,
-  HmStatusLine: StatusLine,
-  HmEmptyState: EmptyState,
-  HmHealthDot: HealthDot,
-  HmSparkline: Sparkline,
-  HmMetricCard: MetricCard,
-  HmTabs: Tabs,
-  HmTrayBody: TrayBody,
   HmRoomRow: RoomRow,
-  HmDiagModal: DiagModal,
   HmMeterGroup: MeterGroup,
 });

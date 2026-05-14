@@ -401,17 +401,50 @@ function SystemContent({ text, tone }) {
  * visually distinct from anything the assistant SPOKE. The user
  * asked for a different font weight to signal "this is perception,
  * not speech." */
+/* Tray v4: compact perception chip — replaces italic prose log.
+ * Format: [glyph] room — short summary           age
+ * Expandable on click to show full text. */
 function PerceptionContent({ text }) {
+  const [expanded, setExpanded] = React.useState(false);
+  // Parse the text — bridge emits "perceived ROOM: SUMMARY" or just SUMMARY.
+  // Try to extract a room name from the first colon-prefixed token.
+  let room = null;
+  let summary = text || "";
+  const m = /^([a-z_]+)\s*:\s*(.+)$/i.exec(summary.trim());
+  if (m) {
+    room = m[1].replace(/_/g, " ");
+    summary = m[2];
+  }
+  const short = expanded ? summary : (summary.length > 90 ? summary.slice(0, 88) + "…" : summary);
   return (
-    <div style={{
-      ...T_SYNTAX,
-      ...HG_DIM,
-      fontStyle: "italic",
-      fontWeight: 300,
-      opacity: 0.75,
-    }}>
-      <span style={{ ...HG_FAINT, fontWeight: 400 }}>perceived  </span>
-      {text}
+    <div
+      onClick={() => summary.length > 90 && setExpanded((v) => !v)}
+      style={{
+        ...T_SYNTAX,
+        display: "grid",
+        gridTemplateColumns: room ? "minmax(80px, 120px) 1fr auto" : "auto 1fr auto",
+        columnGap: 10,
+        alignItems: "baseline",
+        cursor: summary.length > 90 ? "pointer" : "default",
+        color: "var(--hg-fg-3)",
+        fontSize: 11,
+        lineHeight: 1.5,
+        paddingTop: 2, paddingBottom: 2,
+      }}
+    >
+      <span style={{
+        ...HG_FAINT,
+        fontWeight: 400,
+        letterSpacing: "0.06em",
+        color: "var(--hg-fg-4)",
+      }}>{room ? room : "perceived"}</span>
+      <span style={{
+        color: "var(--hg-fg-2)",
+        fontFamily: "'Geist', system-ui, sans-serif",
+        fontSize: 12,
+        fontWeight: 400,
+      }}>{short}</span>
+      <span />
     </div>
   );
 }

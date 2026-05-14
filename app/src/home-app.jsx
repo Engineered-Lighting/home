@@ -494,11 +494,18 @@ function _networkTone(networkMetrics) {
   return _toneFromPct(Math.max(...samples));
 }
 
-/* ── MetricsStrip v3 ────────────────────────────────────────────────────
+/* ── MetricsStrip v4 ────────────────────────────────────────────────────
  *
- * Compact, tabbed, glanceable. Summary row always visible; expanded
- * body is tabbed with scroll-clamped max-height so the chat input is
- * always reachable.
+ * Designed product surface. Status strip always visible, tabs with
+ * pill-style active state, content composed from Cards. Each tab
+ * answers ONE question.
+ *
+ *   NOW:     "what's happening in my house right now?"
+ *   AI:      "is the model healthy?"
+ *   HOME:    "where are people / what does HA see?"
+ *   NETWORK: "is the network healthy?"
+ *
+ * Last voice turn lives in AI (it's historical, not "now").
  */
 function MetricsStrip({
   metrics, metricsHistory, metricsBase,
@@ -506,6 +513,7 @@ function MetricsStrip({
   roomContext,
   voice, identity, media,
   recentPerceptions = [],
+  cameraLabels = {},
 }) {
   const [expanded, setExpanded] = useState(false);
   const [activeTab, setActiveTab] = useState("now");
@@ -513,7 +521,6 @@ function MetricsStrip({
   const [traceSummary, setTraceSummary] = useState(null);
   const [lastTrace, setLastTrace] = useState(null);
 
-  /* Trace polling — only when expanded AND on now/ai tab (others don't need it). */
   useEffect(() => {
     if (!expanded || !metricsBase) return undefined;
     if (activeTab !== "now" && activeTab !== "ai" && !diagOpen) return undefined;
@@ -539,12 +546,11 @@ function MetricsStrip({
     return () => { cancelled = true; clearInterval(id); };
   }, [expanded, activeTab, diagOpen, metricsBase]);
 
-  /* ── Derived state ──────────────────────────────────────────────────── */
-  const aiTone   = _aiBoxTone(metrics, bridgeHealth);
+  /* ── Derived state ───────────────────────────────────────────────── */
+  const aiTone = _aiBoxTone(metrics, bridgeHealth);
   const homeTone = _homeTone(hostMetrics);
-  const netTone  = _networkTone(networkMetrics);
+  const netTone = _networkTone(networkMetrics);
 
-  // Voice + chat state for summary row
   const voiceState = voice?.state || "inactive";
   const aiPhrase =
     voiceState === "listening"   ? "listening"
@@ -554,34 +560,27 @@ function MetricsStrip({
     : voiceState === "ready"     ? "ready"
     : bridgeHealth?.warmup_complete === false ? "warming"
     : "idle";
+  const aiIsTransient = ["listening", "transcribing", "thinking", "speaking"].includes(voiceState);
 
-  // Last activity: derive from identity (most recent face match)
   const lastActivity = identity?.name && identity?.camera
-    ? `${identity.name} · ${identity.camera.replace(/_/g, " ")}`
+    ? { name: identity.name, room: identity.camera.replace(/_/g, " ") }
     : null;
   const lastActivityAge = identity?.ts
     ? Math.max(0, Math.floor(Date.now() / 1000 - identity.ts))
     : null;
 
-  // Any critical warning to surface?
   let warnChip = null;
   if (bridgeHealth?.stale_media_integrations?.length > 0) {
     warnChip = { text: `${bridgeHealth.stale_media_integrations.length} stale media`, tone: "warn" };
   } else if (bridgeHealth && !bridgeHealth.ha_connected) {
-    warnChip = { text: "ha disconnected", tone: "crit" };
+    warnChip = { text: "ha down", tone: "crit" };
   } else if (networkMetrics?.switches?.some((sw) => (sw.mem || 0) > 90)) {
     warnChip = { text: "switch ram high", tone: "warn" };
   }
 
-  // Overall summary tone
-  const summaryTone = warnChip?.tone || (aiTone === "warn" || homeTone === "warn" || netTone === "warn" ? "warn"
-    : aiTone === "crit" || homeTone === "crit" || netTone === "crit" ? "crit"
-    : "ok");
-
-  // ttfa headline value
   const ttfaP50 = traceSummary?.ttfa_ms?.p50 != null ? Math.round(traceSummary.ttfa_ms.p50) : null;
+  const ttfaP90 = traceSummary?.ttfa_ms?.p90 != null ? Math.round(traceSummary.ttfa_ms.p90) : null;
 
-  /* ── Tabs definition ────────────────────────────────────────────────── */
   const tabs = [
     { id: "now",     label: "now" },
     { id: "ai",      label: "ai" },
@@ -589,470 +588,508 @@ function MetricsStrip({
     { id: "network", label: "network", warn: netTone === "warn" || netTone === "crit" },
   ];
 
-  /* ── Tab content renderers (each is a small focused subtree) ───────── */
+  // Active room derived from identity. Falls back to last-active per
+  // RoomContextStore if available.
+  const activeRoom = identity?.camera || null;
+  const activeRoomMedia = activeRoom ? media?.[activeRoom] : null;
+
+  /* ── Tab renderers ───────────────────────────────────────────────── */
 
   const renderNow = () => {
-    const total = lastTrace?.t_done || 1;
-    const stages = lastTrace ? [
-      { label: "stt",   start: 0, dur: lastTrace.t_parakeet_done || 0 },
-      { label: "llm",   start: lastTrace.t_parakeet_done || 0,
-        dur: Math.max(0, (lastTrace.t_pipeline_intent_end || 0) - (lastTrace.t_parakeet_done || 0)) },
-      { label: "synth", start: lastTrace.t_pipeline_intent_end || 0,
-        dur: Math.max(0, (lastTrace.t_synth_done || 0) - (lastTrace.t_pipeline_intent_end || 0)) },
-      { label: "audio", start: lastTrace.t_first_audio_sent || 0,
-        dur: Math.max(0, (lastTrace.t_done || 0) - (lastTrace.t_first_audio_sent || 0)) },
-    ] : [];
-
-    // Active room context: combine identity + media
-    const activeRoom = identity?.camera || null;
-    const activeRoomMedia = activeRoom && media?.[activeRoom];
-    const activeRoomMediaText = activeRoomMedia?.app_name
-      ? `${activeRoomMedia.app_name} · ${activeRoomMedia.state}`
-      : null;
-
+    const latest = recentPerceptions.length > 0
+      ? recentPerceptions[recentPerceptions.length - 1] : null;
     return (
-      <>
-        {/* Last voice turn timeline */}
-        {lastTrace ? (
-          <div style={{ marginBottom: 14 }}>
-            <div style={{
-              display: "flex", alignItems: "baseline", justifyContent: "space-between",
-              marginBottom: 6, gap: 12, flexWrap: "wrap",
-            }}>
-              <span style={{
-                fontFamily: "'Geist Mono', monospace",
-                fontSize: 9.5, letterSpacing: "0.18em",
-                textTransform: "uppercase",
-                color: "var(--hg-fg-4)",
-              }}>last voice turn</span>
-              <span style={{
-                fontFamily: "'Geist Mono', monospace",
-                fontSize: 10,
-                color: "var(--hg-fg-3)",
-                fontVariantNumeric: "tabular-nums",
-              }}>
-                {Math.round(lastTrace.t_first_audio_sent || 0)}ms ttfa · {lastTrace.cold ? "cold" : "warm"}
-              </span>
-            </div>
-            {lastTrace.user_text && (
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "1fr 1fr",
+        gap: 10,
+      }}>
+        {/* Active room card — hero */}
+        <HmCard
+          title="ACTIVE ROOM"
+          badge={activeRoom ? { text: aiPhrase, tone: aiIsTransient ? "ice" : null } : null}
+          meta={activeRoom && lastActivityAge != null
+            ? `${lastActivityAge < 60 ? lastActivityAge + "s" : Math.round(lastActivityAge / 60) + "m"} ago`
+            : null}
+        >
+          {activeRoom ? (
+            <>
               <div style={{
                 fontFamily: "'Geist', system-ui, sans-serif",
-                fontSize: 12.5, color: "var(--hg-fg-2)",
-                marginBottom: 8,
-              }}>"{lastTrace.user_text.slice(0, 80)}"</div>
-            )}
-            {stages.map((s) => (
-              <HmTimelineRow key={s.label}
-                label={s.label}
-                startMs={s.start} durMs={s.dur} totalMs={total} />
-            ))}
-          </div>
-        ) : (
-          <HmEmptyState message="no recent voice turn" />
-        )}
-
-        {/* Active room mini-card */}
-        {(activeRoom || lastActivity) && (
-          <div style={{
-            marginTop: 14, paddingTop: 14,
-            borderTop: "1px solid var(--hg-border-soft)",
-          }}>
+                fontSize: 17, fontWeight: 600,
+                color: "var(--hg-fg-0)",
+                letterSpacing: "-0.01em",
+                marginBottom: 4,
+              }}>{activeRoom.replace(/_/g, " ")}</div>
+              {identity?.name && (
+                <div style={{
+                  fontFamily: "'Geist Mono', monospace",
+                  fontSize: 11, color: "var(--hg-fg-2)",
+                  marginBottom: 2,
+                }}>{identity.name}</div>
+              )}
+              {(cameraLabels[activeRoom] || []).length > 0 && (
+                <div style={{
+                  fontFamily: "'Geist Mono', monospace",
+                  fontSize: 10, color: "var(--hg-fg-4)",
+                }}>{(cameraLabels[activeRoom] || []).slice(0, 3).join(" · ")}</div>
+              )}
+              {activeRoomMedia && (activeRoomMedia.state === "playing" || activeRoomMedia.state === "paused") && (
+                <div style={{
+                  fontFamily: "'Geist Mono', monospace",
+                  fontSize: 11, color: "var(--hg-fg-2)",
+                  marginTop: 6, paddingTop: 6,
+                  borderTop: "1px solid var(--hg-border-soft)",
+                }}>
+                  <span style={{ color: "var(--hg-fg-4)" }}>▶ </span>
+                  {activeRoomMedia.app_name} · {activeRoomMedia.state}
+                  {activeRoomMedia.title && (
+                    <div style={{ color: "var(--hg-fg-3)", fontSize: 10, marginTop: 2 }}>
+                      {activeRoomMedia.title}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          ) : (
             <div style={{
               fontFamily: "'Geist Mono', monospace",
-              fontSize: 9.5, letterSpacing: "0.18em",
-              textTransform: "uppercase",
-              color: "var(--hg-fg-4)",
-              marginBottom: 8,
-            }}>active room {activeRoom && `· ${activeRoom.replace(/_/g, " ")}`}</div>
-            {identity?.name && (
-              <div style={{
-                fontFamily: "'Geist Mono', monospace",
-                fontSize: 11,
-                color: "var(--hg-fg-1)",
-                marginBottom: 4,
-              }}>
-                • {identity.name} {lastActivityAge != null && (
-                  <span style={{ color: "var(--hg-fg-4)" }}>· {lastActivityAge < 60 ? `${lastActivityAge}s` : `${Math.round(lastActivityAge / 60)}m`} ago</span>
-                )}
-              </div>
-            )}
-            {activeRoomMediaText && (
-              <div style={{
-                fontFamily: "'Geist Mono', monospace",
-                fontSize: 11,
-                color: "var(--hg-fg-2)",
-              }}>▶ {activeRoomMediaText}</div>
-            )}
-          </div>
-        )}
+              fontSize: 11, color: "var(--hg-fg-5)",
+              fontStyle: "normal",
+            }}>no recent presence</div>
+          )}
+        </HmCard>
 
-        {/* System status pills */}
-        <div style={{
-          marginTop: 14, paddingTop: 14,
-          borderTop: "1px solid var(--hg-border-soft)",
-        }}>
-          <div style={{
-            fontFamily: "'Geist Mono', monospace",
-            fontSize: 9.5, letterSpacing: "0.18em",
-            textTransform: "uppercase",
-            color: "var(--hg-fg-4)",
-            marginBottom: 8,
-          }}>system</div>
-          <div style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-            gap: "6px 14px",
-            fontFamily: "'Geist Mono', monospace",
-            fontSize: 10.5,
-          }}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
-              <HmHealthDot tone={aiTone} />
-              <span style={{ color: "var(--hg-fg-2)" }}>ai box</span>
-              <span style={{ color: "var(--hg-fg-1)", marginLeft: "auto" }}>{aiPhrase}</span>
-            </span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
-              <HmHealthDot tone={bridgeHealth?.ha_connected ? "ok" : "crit"} />
-              <span style={{ color: "var(--hg-fg-2)" }}>haos</span>
-              <span style={{ color: "var(--hg-fg-1)", marginLeft: "auto" }}>{bridgeHealth?.ha_connected ? "ok" : "down"}</span>
-            </span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
-              <HmHealthDot tone={bridgeHealth?.warmup_complete ? "ok" : "warn"} />
-              <span style={{ color: "var(--hg-fg-2)" }}>bridge</span>
-              <span style={{ color: "var(--hg-fg-1)", marginLeft: "auto" }}>{Math.floor((bridgeHealth?.uptime_s || 0) / 60)}m</span>
-            </span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
-              <HmHealthDot tone={netTone} />
-              <span style={{ color: "var(--hg-fg-2)" }}>network</span>
-              <span style={{ color: "var(--hg-fg-1)", marginLeft: "auto" }}>{networkMetrics?.clientsKnown ? `${networkMetrics.clientsOnline}/${networkMetrics.clientsKnown}` : "—"}</span>
-            </span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
-              <HmHealthDot tone={visionHealth?.phash_enabled ? "ok" : "idle"} />
-              <span style={{ color: "var(--hg-fg-2)" }}>vision</span>
-              <span style={{ color: "var(--hg-fg-1)", marginLeft: "auto" }}>{visionHealth?.phash_enabled ? `${Math.round((visionHealth.phash_hit_rate || 0) * 100)}%` : "—"}</span>
-            </span>
-          </div>
+        {/* Latest perception card */}
+        <HmCard
+          title="LAST PERCEPTION"
+          meta={recentPerceptions.length > 1 ? `+${recentPerceptions.length - 1} earlier` : null}
+        >
+          {latest ? (() => {
+            const txt = latest.text || "";
+            const m = /^([a-z_]+)\s*:\s*(.+)$/i.exec(txt);
+            const room = m ? m[1].replace(/_/g, " ") : null;
+            const summary = m ? m[2] : txt;
+            return (
+              <>
+                {room && (
+                  <div style={{
+                    fontFamily: "'Geist Mono', monospace",
+                    fontSize: 10, letterSpacing: "0.08em",
+                    color: "var(--hg-fg-4)", marginBottom: 4,
+                  }}>{room}</div>
+                )}
+                <div style={{
+                  fontFamily: "'Geist', system-ui, sans-serif",
+                  fontSize: 12.5,
+                  color: "var(--hg-fg-1)",
+                  lineHeight: 1.45,
+                }}>{summary.slice(0, 140)}</div>
+              </>
+            );
+          })() : (
+            <div style={{
+              fontFamily: "'Geist Mono', monospace",
+              fontSize: 11, color: "var(--hg-fg-5)",
+            }}>no observations yet</div>
+          )}
+        </HmCard>
+
+        {/* System status — spans both columns */}
+        <div style={{ gridColumn: "1 / -1" }}>
+          <HmCard title="SYSTEM">
+            <div style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+              gap: "6px 14px",
+            }}>
+              {[
+                { label: "ai", tone: aiTone, value: aiPhrase },
+                { label: "haos", tone: bridgeHealth?.ha_connected ? "ok" : "crit",
+                  value: bridgeHealth?.ha_connected ? "ok" : "down" },
+                { label: "bridge", tone: bridgeHealth?.warmup_complete ? "ok" : "warn",
+                  value: `${Math.floor((bridgeHealth?.uptime_s || 0) / 60)}m` },
+                { label: "network", tone: netTone,
+                  value: networkMetrics?.clientsKnown ? `${networkMetrics.clientsOnline}/${networkMetrics.clientsKnown}` : "—" },
+                { label: "vision", tone: visionHealth?.phash_enabled ? "ok" : "idle",
+                  value: visionHealth?.phash_enabled ? `${Math.round((visionHealth.phash_hit_rate || 0) * 100)}%` : "—" },
+                { label: "ttfa", tone: ttfaP50 == null ? "idle" : (ttfaP50 > 1200 ? "warn" : "ok"),
+                  value: ttfaP50 != null ? `${ttfaP50}ms` : "—" },
+              ].map((s) => (
+                <span key={s.label} style={{
+                  display: "inline-flex", alignItems: "center", gap: 7,
+                  fontFamily: "'Geist Mono', monospace", fontSize: 10.5,
+                }}>
+                  <HmHealthDot tone={s.tone} />
+                  <span style={{ color: "var(--hg-fg-4)", fontWeight: 400 }}>{s.label}</span>
+                  <span style={{ color: "var(--hg-fg-1)", marginLeft: "auto", fontWeight: 600, fontFeatureSettings: '"tnum"' }}>{s.value}</span>
+                </span>
+              ))}
+            </div>
+          </HmCard>
         </div>
-      </>
+      </div>
     );
   };
 
-  const renderAi = () => (
-    <>
+  const renderAi = () => {
+    const stages = lastTrace ? [
+      { label: "stt",   dur: lastTrace.t_parakeet_done || 0 },
+      { label: "llm",   dur: Math.max(0, (lastTrace.t_pipeline_intent_end || 0) - (lastTrace.t_parakeet_done || 0)) },
+      { label: "synth", dur: Math.max(0, (lastTrace.t_synth_done || 0) - (lastTrace.t_pipeline_intent_end || 0)) },
+      { label: "audio", dur: Math.max(0, (lastTrace.t_done || 0) - (lastTrace.t_first_audio_sent || 0)) },
+    ] : [];
+    const totalMs = lastTrace?.t_done || 1;
+
+    return (
       <div style={{
         display: "grid",
-        gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
-        gap: 18,
+        gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+        gap: 10,
       }}>
-        <HmMetricCard label="gpu"  value={metrics.gpu}  unit="%"
-                      history={metricsHistory.gpu} max={100} />
-        <HmMetricCard label="vram" value={metrics.vram}
-                      unit={`/ ${metrics.vramMax || 96} g`}
-                      history={metricsHistory.vram} max={metrics.vramMax || 96} />
-        <HmMetricCard label="cpu"  value={metrics.cpu}  unit="%"
-                      history={metricsHistory.cpu} max={100} />
-        <HmMetricCard label="ram"  value={metrics.ram}
-                      unit={`/ ${metrics.ramMax || 64} g`}
-                      history={metricsHistory.ram} max={metrics.ramMax || 64} />
-        <HmMetricCard label="ttft" value={metrics.ttft} unit="ms"
-                      history={metricsHistory.ttft} max={1500} warnAt={50} critAt={80} />
-        <HmMetricCard label="tok/s" value={metrics.tps}
-                      history={metricsHistory.tps} max={120} warnAt={101} critAt={101} />
-      </div>
-      <div style={{
-        marginTop: 18, paddingTop: 12,
-        borderTop: "1px solid var(--hg-border-soft)",
-      }}>
-        <HmStatusLine items={[
-          { label: "model",  value: metrics.model || "—" },
-          { label: "tts",    value: bridgeHealth?.tts_engine || "—" },
-          { label: "uptime", value: `${Math.floor((bridgeHealth?.uptime_s || 0) / 60)}m` },
-          bridgeHealth?.warmup_complete
-            ? { label: "", value: "warm", tone: "ok" }
-            : { label: "", value: "warming", tone: "warn" },
-          { label: "rooms", value: bridgeHealth?.rooms_loaded || 0 },
-          { label: "media", value: bridgeHealth?.media_players_registered || 0 },
-        ]} />
-      </div>
-      {traceSummary?.count > 0 && (
-        <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--hg-border-soft)" }}>
+        {/* Model card */}
+        <HmCard
+          title="MODEL"
+          badge={bridgeHealth?.warmup_complete
+            ? { text: "warm", tone: "ice" }
+            : { text: "warming", tone: "warn" }}
+        >
           <div style={{
             fontFamily: "'Geist Mono', monospace",
-            fontSize: 9.5, letterSpacing: "0.18em",
-            textTransform: "uppercase",
-            color: "var(--hg-fg-4)",
-            marginBottom: 6,
-          }}>rolling latency p50 · p90 · n={traceSummary.count}</div>
-          {[
-            ["llm response",  "t_pipeline_intent_end"],
-            ["synth done",    "t_synth_done"],
-            ["voice ttfa",    "t_first_audio_sent"],
-          ].map(([label, key]) => {
-            const s = traceSummary.stamps?.[key];
-            if (!s) return null;
-            return (
-              <HmMeterRow key={key}
-                label={label}
-                text={`${Math.round(s.p50)} · ${Math.round(s.p90)} ms`}
-                hideBar />
-            );
-          })}
-        </div>
-      )}
-    </>
-  );
+            fontSize: 13, color: "var(--hg-fg-0)",
+            fontWeight: 600,
+            marginBottom: 8,
+          }}>{metrics.model || "—"}</div>
+          <HmStatRow label="tts" value={bridgeHealth?.tts_engine || "—"} />
+          <HmStatRow label="uptime" value={`${Math.floor((bridgeHealth?.uptime_s || 0) / 60)}m`} />
+          <HmStatRow label="rooms" value={bridgeHealth?.rooms_loaded || 0} />
+          <HmStatRow label="media" value={bridgeHealth?.media_players_registered || 0} />
+        </HmCard>
+
+        {/* Latency trend card */}
+        <HmCard title="LATENCY">
+          <HmMetricCard
+            label="ttft"
+            value={metrics.ttft}
+            unit="ms"
+            history={metricsHistory.ttft}
+            max={1500}
+            warnAt={50} critAt={80}
+          />
+          {ttfaP50 != null && (
+            <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid var(--hg-border-soft)" }}>
+              <HmStatRow label="voice ttfa p50" value={ttfaP50} unit="ms"
+                         tone={ttfaP50 > 1200 ? "warn" : "default"} />
+              {ttfaP90 != null && (
+                <HmStatRow label="voice ttfa p90" value={ttfaP90} unit="ms" />
+              )}
+            </div>
+          )}
+        </HmCard>
+
+        {/* Pipeline card */}
+        {lastTrace && (
+          <HmCard
+            title="LAST VOICE TURN"
+            badge={{ text: lastTrace.cold ? "cold" : "warm", tone: lastTrace.cold ? "warn" : "ice" }}
+            meta={lastTrace.user_text ? `"${lastTrace.user_text.slice(0, 60)}"` : null}
+          >
+            <HmTimelineStrip stages={stages} totalMs={totalMs} />
+          </HmCard>
+        )}
+
+        {/* Resource cards — Arc only for VRAM, bar+number for others */}
+        <HmCard title="RESOURCES">
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "auto 1fr 1fr",
+            gap: 12,
+            alignItems: "center",
+          }}>
+            {/* VRAM Arc (the only one with meaningful range usage) */}
+            <HmArc value={metrics.vram} max={metrics.vramMax || 96} size={56} label="vram" />
+            {/* GPU + CPU + RAM as compact metric cards */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <HmMetricCard label="gpu" value={metrics.gpu} unit="%" max={100}
+                            history={metricsHistory.gpu} viz="auto" />
+              <HmMetricCard label="cpu" value={metrics.cpu} unit="%" max={100}
+                            history={metricsHistory.cpu} viz="auto" />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <HmMetricCard label="ram" value={metrics.ram} max={metrics.ramMax || 64}
+                            unit={`/${metrics.ramMax || 64}g`}
+                            history={metricsHistory.ram} viz="auto" />
+              <HmMetricCard label="tok/s" value={metrics.tps} max={120}
+                            history={metricsHistory.tps} viz="auto"
+                            warnAt={101} critAt={101} />
+            </div>
+          </div>
+        </HmCard>
+      </div>
+    );
+  };
 
   const renderHome = () => {
     const occupancy = roomContext?.state?.occupancy || {};
     const visual = roomContext?.state?.visual || {};
-    const roomNames = Object.keys(roomContext?.config || {}).sort();
+    const roomNames = Object.keys(roomContext?.config || {})
+      .filter((r) => r !== "office")  // skip office since it's no-camera placeholder
+      .sort();
     const nowS = Date.now() / 1000;
 
+    // Build room tiles
+    const rooms = roomNames.map((id) => {
+      const occ = occupancy[id];
+      const occupied = occ?.status === "present";
+      const ageS = occ?.last_seen ? Math.max(0, nowS - occ.last_seen) : null;
+      const ageStr = ageS == null ? "" :
+        ageS < 60 ? `${Math.round(ageS)}s`
+        : ageS < 3600 ? `${Math.round(ageS / 60)}m`
+        : `${Math.round(ageS / 3600)}h`;
+      const isActiveRoom = identity?.camera === id;
+      const m = media?.[id];
+      return {
+        id, occupied, age: ageStr,
+        identity: isActiveRoom && identity?.name ? identity.name : null,
+        secondary: m?.app_name ? `▶ ${m.app_name}` : null,
+      };
+    });
+
     return (
-      <>
-        {/* Host system metrics */}
-        <div style={{ marginBottom: 14 }}>
-          <div style={{
-            fontFamily: "'Geist Mono', monospace",
-            fontSize: 9.5, letterSpacing: "0.18em",
-            textTransform: "uppercase",
-            color: "var(--hg-fg-4)",
-            marginBottom: 8,
-          }}>haos host</div>
-          {hostMetrics ? (
-            <div style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
-              gap: 18,
-            }}>
-              <HmMetricCard label="cpu"  value={hostMetrics.cpu}  unit="%" max={100} />
-              <HmMetricCard label="ram"  value={hostMetrics.ram}  unit="%" max={100} />
-              {hostMetrics.disk != null && (
-                <HmMetricCard label="disk" value={hostMetrics.disk} unit="%" max={100} />
-              )}
-              {hostMetrics.uptime && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                  <div style={{ fontFamily: "'Geist Mono', monospace", fontSize: 9.5, letterSpacing: "0.18em", textTransform: "uppercase", color: "var(--hg-fg-4)" }}>uptime</div>
-                  <div style={{ fontFamily: "'Geist Mono', monospace", fontSize: 14, color: "var(--hg-fg-1)" }}>{hostMetrics.uptime}</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {/* Room occupancy grid — hero of HOME tab */}
+        {rooms.length > 0 && (
+          <HmCard title="ROOMS">
+            <HmRoomGrid rooms={rooms} />
+          </HmCard>
+        )}
+
+        {/* HA + Frigate status side-by-side */}
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: 10,
+        }}>
+          <HmCard title="HAOS HOST"
+                  badge={hostMetrics ? null : { text: "not set up", tone: "warn" }}>
+            {hostMetrics ? (
+              <>
+                <HmMetricCard label="cpu" value={hostMetrics.cpu} unit="%" max={100} viz="bar" />
+                <div style={{ marginTop: 8 }}>
+                  <HmMetricCard label="ram" value={hostMetrics.ram} unit="%" max={100} viz="bar" />
                 </div>
-              )}
-            </div>
-          ) : (
-            <HmEmptyState
-              message="system monitor not enabled"
-              action={{
-                label: "how",
-                tooltip: "HA → Settings → Devices & Services → + Add Integration → System Monitor.\nSelect processor_use, memory_use_percent, disk_use_percent.\nRestart HA if entities don't appear within 60s.",
-              }} />
-          )}
-        </div>
+                {hostMetrics.disk != null && (
+                  <div style={{ marginTop: 8 }}>
+                    <HmMetricCard label="disk" value={hostMetrics.disk} unit="%" max={100} viz="bar" />
+                  </div>
+                )}
+                {hostMetrics.uptime && (
+                  <div style={{ marginTop: 8 }}>
+                    <HmStatRow label="uptime" value={hostMetrics.uptime} />
+                  </div>
+                )}
+              </>
+            ) : (
+              <HmEmptyState
+                message="enable system monitor"
+                action={{
+                  label: "how",
+                  tooltip: "HA → Settings → Devices & Services → + Add Integration → System Monitor.\nSelect processor_use, memory_use_percent, disk_use_percent.\nRestart HA if entities don't appear within 60s.",
+                }} />
+            )}
+          </HmCard>
 
-        {/* Frigate */}
-        <div style={{ marginBottom: 14 }}>
-          <div style={{
-            fontFamily: "'Geist Mono', monospace",
-            fontSize: 9.5, letterSpacing: "0.18em",
-            textTransform: "uppercase",
-            color: "var(--hg-fg-4)",
-            marginBottom: 8,
-          }}>frigate</div>
-          <HmEmptyState
-            message="telemetry not enabled"
-            action={{
-              label: "how",
-              tooltip: "Drop tools/ha_packages/frigate_stats.yaml from HomeAIVoice repo into\n/config/packages/frigate_stats.yaml on HAOS.\nEnsure configuration.yaml has:\n  homeassistant:\n    packages: !include_dir_named packages\nRestart HA. The tray auto-picks up sensor.frigate_* entities.",
-            }} />
-        </div>
-
-        {/* Occupancy table */}
-        {roomNames.length > 0 && (
-          <div style={{ marginBottom: 14, paddingTop: 12, borderTop: "1px solid var(--hg-border-soft)" }}>
+          <HmCard title="FRIGATE"
+                  badge={{ text: "5 cameras", tone: "ice" }}>
             <div style={{
               fontFamily: "'Geist Mono', monospace",
-              fontSize: 9.5, letterSpacing: "0.18em",
-              textTransform: "uppercase",
-              color: "var(--hg-fg-4)",
+              fontSize: 10.5, color: "var(--hg-fg-3)",
               marginBottom: 8,
-            }}>occupancy</div>
-            {roomNames.map((room) => {
-              const occ = occupancy[room];
-              const occupied = occ?.status === "present";
-              const ageS = occ?.last_seen ? Math.max(0, nowS - occ.last_seen) : null;
-              return (
-                <HmRoomRow
-                  key={room}
-                  room={room}
-                  occupant={occupied ? "occupied" : null}
-                  ageS={ageS}
-                />
-              );
-            })}
-          </div>
-        )}
+            }}>5 streams · all running</div>
+            <HmEmptyState
+              message="enable stats sensors"
+              action={{
+                label: "how",
+                tooltip: "Drop tools/ha_packages/frigate_stats.yaml from HomeAIVoice repo into\n/config/packages/frigate_stats.yaml on HAOS.\nEnsure configuration.yaml has:\n  homeassistant:\n    packages: !include_dir_named packages\nRestart HA. Tray auto-picks up sensor.frigate_*.",
+              }} />
+          </HmCard>
+        </div>
 
         {/* Latest perceptions */}
         {recentPerceptions.length > 0 && (
-          <div style={{ paddingTop: 12, borderTop: "1px solid var(--hg-border-soft)" }}>
-            <div style={{
-              fontFamily: "'Geist Mono', monospace",
-              fontSize: 9.5, letterSpacing: "0.18em",
-              textTransform: "uppercase",
-              color: "var(--hg-fg-4)",
-              marginBottom: 8,
-            }}>recent perception</div>
-            {recentPerceptions.slice(-3).reverse().map((p, i) => (
-              <div key={i} style={{
-                fontFamily: "'Geist', system-ui, sans-serif",
-                fontSize: 11.5,
-                color: "var(--hg-fg-2)",
-                marginBottom: 4,
-                fontStyle: "italic",
-              }}>{p.text || p}</div>
-            ))}
-          </div>
+          <HmCard title="RECENT PERCEPTION">
+            {recentPerceptions.slice(-3).reverse().map((p, i) => {
+              const txt = p.text || "";
+              const m = /^([a-z_]+)\s*:\s*(.+)$/i.exec(txt);
+              const room = m ? m[1].replace(/_/g, " ") : null;
+              const summary = m ? m[2] : txt;
+              return (
+                <div key={i} style={{
+                  display: "grid",
+                  gridTemplateColumns: "minmax(90px, 110px) 1fr",
+                  columnGap: 10,
+                  alignItems: "baseline",
+                  marginBottom: 4,
+                  fontFamily: "'Geist Mono', monospace",
+                  fontSize: 10.5,
+                }}>
+                  <span style={{ color: "var(--hg-fg-4)", fontWeight: 400 }}>{room || "—"}</span>
+                  <span style={{
+                    color: "var(--hg-fg-2)",
+                    fontFamily: "'Geist', system-ui, sans-serif",
+                    fontSize: 12,
+                    fontWeight: 400,
+                    lineHeight: 1.4,
+                  }}>{summary.slice(0, 120)}</span>
+                </div>
+              );
+            })}
+          </HmCard>
         )}
-      </>
+      </div>
     );
   };
 
-  const renderNetwork = () => (
-    <>
-      {networkMetrics?.udm && (
-        <div style={{ marginBottom: 18 }}>
-          <div style={{
-            display: "flex", alignItems: "baseline", justifyContent: "space-between",
-            marginBottom: 8,
-          }}>
-            <span style={{
-              fontFamily: "'Geist Mono', monospace",
-              fontSize: 9.5, letterSpacing: "0.18em",
-              textTransform: "uppercase",
-              color: "var(--hg-fg-4)",
-            }}>cloud gateway · udm</span>
-            <span style={{
-              fontFamily: "'Geist Mono', monospace",
-              fontSize: 10, color: "var(--hg-fg-4)",
-            }}>{networkMetrics.udm.state || "—"}</span>
-          </div>
-          <div style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
-            gap: 18,
-          }}>
-            <HmMetricCard label="cpu" value={networkMetrics.udm.cpu} unit="%" max={100} />
-            <HmMetricCard label="ram" value={networkMetrics.udm.mem} unit="%" max={100} />
-          </div>
-        </div>
-      )}
-      {(networkMetrics?.switches || []).map((sw) => (
-        <div key={sw.name} style={{ marginBottom: 18 }}>
-          <div style={{
-            display: "flex", alignItems: "baseline", justifyContent: "space-between",
-            marginBottom: 8,
-          }}>
-            <span style={{
-              fontFamily: "'Geist Mono', monospace",
-              fontSize: 9.5, letterSpacing: "0.18em",
-              textTransform: "uppercase",
-              color: "var(--hg-fg-4)",
-            }}>{sw.name}</span>
-            <span style={{
-              fontFamily: "'Geist Mono', monospace",
-              fontSize: 10,
-              color: sw.state === "connected" ? "var(--hg-fg-4)" : "var(--hg-warn)",
-            }}>{sw.state || "—"}</span>
-          </div>
-          <div style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
-            gap: 18,
-          }}>
-            <HmMetricCard label="cpu" value={sw.cpu} unit="%" max={100} />
-            <HmMetricCard label="ram" value={sw.mem} unit="%" max={100} />
-          </div>
-        </div>
-      ))}
-      {networkMetrics?.clientsKnown > 0 && (
-        <div style={{ paddingTop: 12, borderTop: "1px solid var(--hg-border-soft)" }}>
-          <div style={{
-            fontFamily: "'Geist Mono', monospace",
-            fontSize: 9.5, letterSpacing: "0.18em",
-            textTransform: "uppercase",
-            color: "var(--hg-fg-4)",
-            marginBottom: 6,
-          }}>clients</div>
-          <div style={{
-            display: "inline-flex", gap: 4, marginBottom: 4,
-          }}>
-            {Array.from({ length: networkMetrics.clientsKnown }).map((_, i) => (
-              <span key={i} style={{
-                width: 6, height: 6, borderRadius: 999,
-                background: i < networkMetrics.clientsOnline ? "var(--hg-fg-1)" : "var(--hg-border)",
-              }} />
-            ))}
-          </div>
-          <div style={{
-            fontFamily: "'Geist Mono', monospace",
-            fontSize: 11, color: "var(--hg-fg-2)",
-          }}>
-            <span style={{ color: "var(--hg-fg-1)" }}>{networkMetrics.clientsOnline}</span>
-            <span style={{ color: "var(--hg-fg-4)" }}> / {networkMetrics.clientsKnown} online</span>
-          </div>
-        </div>
-      )}
-      {!networkMetrics?.udm && (!networkMetrics?.switches || networkMetrics.switches.length === 0) && (
-        <HmEmptyState
-          message="no unifi devices detected"
-          action={{
-            label: "how",
-            tooltip: "HA → Settings → Devices & Services → + Add Integration → Unifi Network.\nGrant API access to your UDM / switches / APs.",
-          }} />
-      )}
-    </>
-  );
+  const renderNetwork = () => {
+    const allDevices = [
+      ...(networkMetrics?.udm ? [{ ...networkMetrics.udm, name: "cloud gateway · UDM", isUdm: true }] : []),
+      ...(networkMetrics?.switches || []),
+    ];
+    if (allDevices.length === 0) {
+      return (
+        <HmCard title="UNIFI">
+          <HmEmptyState
+            message="no unifi devices detected"
+            action={{
+              label: "how",
+              tooltip: "HA → Settings → Devices & Services → + Add Integration → Unifi Network.\nGrant API access to your UDM / switches / APs.",
+            }} />
+        </HmCard>
+      );
+    }
+    const worstMem = Math.max(...allDevices.map((d) => d.mem || 0));
+    const overallTone = worstMem > 90 ? "crit" : worstMem > 70 ? "warn" : "ok";
 
-  /* ── Render ─────────────────────────────────────────────────────────── */
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {/* Overall health card */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <HmCard title="NETWORK"
+                  badge={{ text: overallTone === "ok" ? "healthy" : "watch", tone: overallTone === "ok" ? "ice" : "warn" }}>
+            <div style={{
+              fontFamily: "'Geist', system-ui, sans-serif",
+              fontSize: 22, fontWeight: 600,
+              color: "var(--hg-fg-0)",
+              fontVariantNumeric: "tabular-nums",
+              lineHeight: 1,
+              marginBottom: 4,
+            }}>
+              {allDevices.length}
+              <span style={{ fontSize: 11, color: "var(--hg-fg-4)", fontWeight: 400 }}> devices</span>
+            </div>
+            <HmStatRow label="worst mem" value={`${Math.round(worstMem)}%`}
+                       tone={worstMem > 90 ? "crit" : worstMem > 70 ? "warn" : "default"} />
+          </HmCard>
+
+          {/* Clients card */}
+          {networkMetrics?.clientsKnown > 0 && (
+            <HmCard title="CLIENTS">
+              <div style={{
+                fontFamily: "'Geist', system-ui, sans-serif",
+                fontSize: 22, fontWeight: 600,
+                color: "var(--hg-fg-0)",
+                fontVariantNumeric: "tabular-nums",
+                lineHeight: 1, marginBottom: 6,
+              }}>
+                {networkMetrics.clientsOnline}
+                <span style={{ fontSize: 11, color: "var(--hg-fg-4)", fontWeight: 400 }}>
+                  {" / "}{networkMetrics.clientsKnown} online
+                </span>
+              </div>
+              <div style={{ display: "inline-flex", gap: 3, flexWrap: "wrap", marginTop: 4 }}>
+                {Array.from({ length: networkMetrics.clientsKnown }).map((_, i) => (
+                  <span key={i} style={{
+                    width: 5, height: 5, borderRadius: 999,
+                    background: i < networkMetrics.clientsOnline ? "var(--hg-ice-bright)" : "var(--hg-border)",
+                  }} />
+                ))}
+              </div>
+            </HmCard>
+          )}
+        </div>
+
+        {/* Device cards */}
+        {allDevices.map((d) => (
+          <HmCard
+            key={d.name}
+            title={d.name.toUpperCase()}
+            badge={d.state && d.state !== "connected"
+              ? { text: d.state, tone: "warn" }
+              : { text: "connected", tone: "ice" }}
+          >
+            <div style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 14,
+            }}>
+              <HmMetricCard label="cpu" value={d.cpu} unit="%" max={100} viz="bar" />
+              <HmMetricCard label="ram" value={d.mem} unit="%" max={100} viz="bar" />
+            </div>
+          </HmCard>
+        ))}
+      </div>
+    );
+  };
+
   return (
-    <div style={{ borderTop: "1px solid var(--hg-border-soft)", background: "var(--hg-bg-0)" }}>
-      {/* SUMMARY ROW — always visible, ~36px */}
+    <div style={{
+      borderTop: "1px solid var(--hg-border-soft)",
+      background: "var(--hg-bg-0)",
+      fontFeatureSettings: '"tnum"',
+    }}>
+      {/* SUMMARY STRIP — always visible, ~34px */}
       <button
         onClick={() => setExpanded((x) => !x)}
         className="hg-focusable"
         style={{
           width: "100%",
-          padding: "9px 14px",
+          padding: "8px 14px",
           background: "transparent",
           border: "none",
           textAlign: "left",
           cursor: "pointer",
-          display: "flex",
-          alignItems: "center",
-          gap: 14,
+          display: "flex", alignItems: "center", gap: 14,
           fontFamily: "'Geist Mono', monospace",
           fontSize: 10.5,
           color: "var(--hg-fg-3)",
-          fontVariantNumeric: "tabular-nums",
           userSelect: "none",
-          minHeight: 36,
+          minHeight: 34,
         }}
       >
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
-          <HmHealthDot tone={summaryTone} />
-          <span style={{ color: "var(--hg-fg-1)", letterSpacing: "0.02em" }}>{aiPhrase}</span>
-        </span>
-        {lastActivity && (
+        {/* AI status group */}
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <span style={{
-            color: "var(--hg-fg-3)",
-            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-            maxWidth: 200,
-          }}>
-            {lastActivity}
-            {lastActivityAge != null && lastActivityAge < 600 && (
-              <span style={{ color: "var(--hg-fg-5)" }}>
-                {" · "}{lastActivityAge < 60 ? `${lastActivityAge}s` : `${Math.round(lastActivityAge / 60)}m`}
-              </span>
-            )}
+            width: 6, height: 6, borderRadius: 999,
+            background: aiIsTransient ? "var(--hg-ice-bright)" : "var(--hg-fg-3)",
+            animation: aiIsTransient ? "hg-pulse-dot 1.4s ease-in-out infinite" : "none",
+          }} />
+          <span style={{ color: "var(--hg-fg-1)", fontWeight: 600 }}>{aiPhrase}</span>
+        </span>
+
+        {/* Last activity */}
+        {lastActivity && lastActivityAge != null && lastActivityAge < 600 && (
+          <span style={{ display: "inline-flex", gap: 4, color: "var(--hg-fg-3)", alignItems: "baseline" }}>
+            <span style={{ color: "var(--hg-fg-4)" }}>·</span>
+            <span style={{ color: "var(--hg-fg-2)" }}>{lastActivity.name}</span>
+            <span style={{ color: "var(--hg-fg-4)" }}>in</span>
+            <span style={{ color: "var(--hg-fg-2)" }}>{lastActivity.room}</span>
+            <span style={{ color: "var(--hg-fg-5)" }}>
+              · {lastActivityAge < 60 ? `${lastActivityAge}s` : `${Math.round(lastActivityAge / 60)}m`}
+            </span>
           </span>
         )}
+
+        {/* Warn chip */}
         {warnChip && (
           <span style={{
             color: warnChip.tone === "crit" ? "var(--hg-crit)" : "var(--hg-warn)",
@@ -1061,20 +1098,34 @@ function MetricsStrip({
             textTransform: "uppercase",
             border: `1px solid ${warnChip.tone === "crit" ? "var(--hg-crit)" : "var(--hg-warn)"}`,
             padding: "1px 6px",
+            borderRadius: 3,
+            fontWeight: 400,
           }}>{warnChip.text}</span>
         )}
+
+        {/* Right cluster */}
         <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 12 }}>
           {ttfaP50 != null && (
-            <span style={{ color: "var(--hg-fg-3)" }}>
-              <span style={{ color: "var(--hg-fg-5)" }}>ttfa</span>{" "}
-              <span style={{ color: "var(--hg-fg-1)" }}>{ttfaP50}ms</span>
+            <span style={{ color: "var(--hg-fg-3)", display: "inline-flex", gap: 4 }}>
+              <span style={{ color: "var(--hg-fg-5)" }}>ttfa</span>
+              <span style={{ color: "var(--hg-fg-1)", fontWeight: 600 }}>{ttfaP50}</span>
+              <span style={{ color: "var(--hg-fg-5)" }}>ms</span>
             </span>
           )}
+          <span style={{ display: "inline-flex", gap: 6 }}>
+            <HmHealthDot tone={bridgeHealth?.ha_connected ? "ok" : "crit"} />
+            <span style={{ color: "var(--hg-fg-4)", fontSize: 10 }}>ha</span>
+          </span>
+          <span style={{ display: "inline-flex", gap: 6 }}>
+            <HmHealthDot tone={netTone} />
+            <span style={{ color: "var(--hg-fg-4)", fontSize: 10 }}>net</span>
+          </span>
           <span style={{
             color: "var(--hg-fg-4)",
             transition: "transform 220ms cubic-bezier(.4,0,.2,1)",
             transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
             display: "inline-flex", alignItems: "center", justifyContent: "center", width: 14, height: 14,
+            marginLeft: 4,
           }}>
             <svg width="9" height="6" viewBox="0 0 9 6" fill="none">
               <path d="M1 1L4.5 4.5L8 1" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
@@ -1083,9 +1134,8 @@ function MetricsStrip({
         </span>
       </button>
 
-      {/* EXPANDED: tabs + scrollable body */}
       {expanded && (
-        <div style={{ animation: "hg-fade-up 200ms cubic-bezier(.4,0,.2,1)" }}>
+        <div style={{ animation: "hg-fade-up 220ms cubic-bezier(.4,0,.2,1)" }}>
           <HmTabs
             value={activeTab}
             onChange={setActiveTab}
@@ -1096,21 +1146,25 @@ function MetricsStrip({
                 className="hg-focusable"
                 title="diagnostics"
                 style={{
-                  background: "transparent", border: "none",
-                  padding: "6px 10px",
+                  background: "transparent", border: "1px solid var(--hg-border-soft)",
+                  padding: "4px 8px",
                   cursor: "pointer",
-                  color: "var(--hg-fg-4)",
+                  color: "var(--hg-fg-3)",
                   fontFamily: "'Geist Mono', monospace",
-                  fontSize: 13,
+                  fontSize: 11,
+                  borderRadius: 4,
+                  transition: "border-color 200ms, color 200ms",
                 }}
-              >⚙</button>
+              >diag</button>
             }
           />
-          <HmTrayBody maxHeight={320}>
-            {activeTab === "now"     && renderNow()}
-            {activeTab === "ai"      && renderAi()}
-            {activeTab === "home"    && renderHome()}
-            {activeTab === "network" && renderNetwork()}
+          <HmTrayBody maxHeight={340}>
+            <div key={activeTab} style={{ animation: "hg-fade-up 160ms ease-out" }}>
+              {activeTab === "now"     && renderNow()}
+              {activeTab === "ai"      && renderAi()}
+              {activeTab === "home"    && renderHome()}
+              {activeTab === "network" && renderNetwork()}
+            </div>
           </HmTrayBody>
         </div>
       )}
@@ -3582,7 +3636,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         voice={voice}
         identity={identity}
         media={media}
-        recentPerceptions={events.filter((e) => e.kind === "perception").slice(-3)}
+        cameraLabels={cameraLabels}
+        recentPerceptions={events.filter((e) => e.kind === "perception").slice(-5)}
       />
       <VoiceBanner voice={voice} onRetry={toggleMic} />
       <InputRow

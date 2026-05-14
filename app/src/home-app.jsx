@@ -445,230 +445,64 @@ function MetricTile({ label, value, suffix, history, color, accent }) {
   );
 }
 
-/* ── Phase 2 metrics visual components ────────────────────────────────── */
+/* ── Metrics Tray v2 ────────────────────────────────────────────────────
+ *
+ * The previous Phase 2 implementation used a chaotic visual vocabulary
+ * (BigBar with rainbow hues, StatusDotGrid, WaterfallTrace per-stage
+ * hue rotation, MetricTile sparklines mixed in one drawer). Tray v2
+ * replaces all of it with the strict primitives from home-metrics.jsx
+ * (HmSection / HmMeterRow / HmTimelineRow / HmStatusLine / HmHealthDot
+ * / HmEmptyState / HmMeterGroup). Single accent color, single bar style,
+ * consistent typography, consistent spacing. Data subscriptions
+ * (metrics, bridgeHealth, networkMetrics, visionHealth, hostMetrics,
+ * traceSummary, lastTrace) are unchanged — only presentation is rewritten.
+ */
 
-/* BigBar — hero single-percentage display. Inspired by the orange-bar
- * "10%" inspiration image. Vertical mode: bar fills bottom-to-top.
- * Color is hue-shifted from green→amber→red as % climbs. */
-function BigBar({ label, value, max = 100, suffix = "%", height = 64, gradient = true }) {
-  const v = (typeof value === "number" && isFinite(value)) ? value : 0;
-  const pct = Math.max(0, Math.min(100, (v / max) * 100));
-  // Hue: 200 (ice blue) at 0% → 30 (amber) at 70% → 0 (red) at 95%
-  const hue = pct < 70 ? 200 - (pct / 70) * 170 : pct < 95 ? 30 - (pct - 70) * 1.2 : 0;
-  const color = gradient ? `hsl(${hue}, 85%, 60%)` : "var(--hg-ice-bright)";
-  return (
-    <div style={{
-      display: "flex", flexDirection: "column", alignItems: "stretch",
-      minWidth: 0, gap: 6,
-    }}>
-      <div style={{
-        fontFamily: "'Geist Mono', monospace", fontSize: 9,
-        letterSpacing: "0.18em", textTransform: "uppercase",
-        color: "var(--hg-fg-5)",
-      }}>{label}</div>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 6 }}>
-        <div style={{
-          position: "relative",
-          width: 8, height,
-          background: "var(--hg-border-soft)",
-          flexShrink: 0,
-        }}>
-          <div style={{
-            position: "absolute", left: 0, right: 0, bottom: 0,
-            height: `${pct}%`,
-            background: color,
-            transition: "height 600ms cubic-bezier(.4,0,.2,1), background 400ms",
-          }} />
-        </div>
-        <div style={{
-          fontFamily: "'Geist Mono', monospace",
-          fontVariantNumeric: "tabular-nums",
-          display: "flex", alignItems: "baseline", gap: 2,
-        }}>
-          <span style={{ fontSize: 20, color, fontWeight: 500 }}>{Math.round(v)}</span>
-          <span style={{ fontSize: 10, color: "var(--hg-fg-4)" }}>{suffix}</span>
-        </div>
-      </div>
-    </div>
-  );
+/* Health-tone helper — distills a metric into ok/warn/crit/idle for
+ * the section-header HealthDot and the collapsed view. */
+function _toneFromPct(pct, warnAt = 70, critAt = 90) {
+  if (pct == null || !isFinite(pct)) return "idle";
+  if (pct > critAt) return "crit";
+  if (pct > warnAt) return "warn";
+  return "ok";
 }
 
-/* StatusDotGrid — N dots in a grid, filled if online. Inspired by
- * the "3 out of 20" dot grid. Used for connected-clients count. */
-function StatusDotGrid({ label, online = 0, total = 0, accent = "var(--hg-ice-bright)" }) {
-  const cells = Math.max(total, online);
-  const dotsPerRow = 8;
-  const items = Array.from({ length: cells }, (_, i) => i < online);
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
-      <div style={{
-        fontFamily: "'Geist Mono', monospace", fontSize: 9,
-        letterSpacing: "0.18em", textTransform: "uppercase",
-        color: "var(--hg-fg-5)",
-      }}>{label}</div>
-      <div style={{
-        display: "grid",
-        gridTemplateColumns: `repeat(${dotsPerRow}, 1fr)`,
-        gap: 3, maxWidth: 8 * 12,
-      }}>
-        {items.map((on, i) => (
-          <span key={i} style={{
-            width: 6, height: 6, borderRadius: 999,
-            background: on ? accent : "var(--hg-border)",
-            transition: "background 300ms",
-          }} />
-        ))}
-        {cells === 0 && (
-          <span style={{ color: "var(--hg-fg-4)", fontSize: 10, gridColumn: "1 / -1" }}>—</span>
-        )}
-      </div>
-      <div style={{
-        fontFamily: "'Geist Mono', monospace",
-        fontVariantNumeric: "tabular-nums", fontSize: 11,
-        color: "var(--hg-fg-1)",
-      }}>
-        <span style={{ color: accent }}>{online}</span>
-        <span style={{ color: "var(--hg-fg-4)" }}> / {total} online</span>
-      </div>
-    </div>
-  );
+function _aiBoxTone(metrics, bridgeHealth) {
+  if (!bridgeHealth?.ha_connected) return "warn";
+  const vramPct = metrics.vramMax ? (metrics.vram / metrics.vramMax) * 100 : null;
+  return _toneFromPct(vramPct);
 }
 
-/* WaterfallTrace — last voice turn's stage breakdown as a horizontal
- * bar chart. Each row is one pipeline stage, width proportional to ms.
- * Stages are stacked top-to-bottom in chronological order. */
-function WaterfallTrace({ trace }) {
-  if (!trace) {
-    return (
-      <div style={{ color: "var(--hg-fg-4)", fontSize: 10, fontStyle: "italic" }}>
-        no recent voice turn
-      </div>
-    );
+function _homeTone(hostMetrics) {
+  if (!hostMetrics) return "idle";
+  const max = Math.max(hostMetrics.cpu ?? 0, hostMetrics.ram ?? 0, hostMetrics.disk ?? 0);
+  return _toneFromPct(max);
+}
+
+function _networkTone(networkMetrics) {
+  if (!networkMetrics?.udm && (!networkMetrics?.switches || networkMetrics.switches.length === 0)) return "idle";
+  const samples = [];
+  if (networkMetrics.udm) {
+    if (networkMetrics.udm.cpu != null) samples.push(networkMetrics.udm.cpu);
+    if (networkMetrics.udm.mem != null) samples.push(networkMetrics.udm.mem);
   }
-  const stages = [
-    { key: "t_parakeet_done", from: 0, label: "stt" },
-    { key: "t_pipeline_intent_end", from: "t_parakeet_done", label: "llm" },
-    { key: "t_synth_done", from: "t_pipeline_intent_end", label: "synth" },
-    { key: "t_first_audio_sent", from: "t_synth_done", label: "first audio" },
-    { key: "t_done", from: "t_first_audio_sent", label: "audio playback" },
-  ];
-  const totalMs = trace.t_done || 1;
-  const rows = stages.map(({ key, from, label }) => {
-    const end = typeof trace[key] === "number" ? trace[key] : 0;
-    const start = from === 0 ? 0 : (typeof trace[from] === "number" ? trace[from] : 0);
-    const dur = Math.max(0, end - start);
-    return { label, start, dur, ok: end > 0 };
-  });
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-      {rows.map((r, i) => {
-        const leftPct = (r.start / totalMs) * 100;
-        const widthPct = Math.max(0.5, (r.dur / totalMs) * 100);
-        const hue = i * 35 + 30; // amber → red gradient per stage
-        return (
-          <div key={r.label} style={{
-            display: "grid",
-            gridTemplateColumns: "70px 1fr 50px",
-            columnGap: 6,
-            alignItems: "center",
-            fontFamily: "'Geist Mono', monospace",
-            fontSize: 9,
-          }}>
-            <span style={{ color: "var(--hg-fg-3)" }}>{r.label}</span>
-            <div style={{
-              height: 6,
-              background: "var(--hg-border-soft)",
-              position: "relative",
-            }}>
-              {r.ok && (
-                <div style={{
-                  position: "absolute",
-                  left: `${leftPct}%`,
-                  width: `${widthPct}%`,
-                  top: 0, bottom: 0,
-                  background: `hsl(${hue}, 80%, 55%)`,
-                  transition: "all 400ms",
-                }} />
-              )}
-            </div>
-            <span style={{
-              color: r.ok ? "var(--hg-fg-1)" : "var(--hg-fg-4)",
-              fontVariantNumeric: "tabular-nums",
-              textAlign: "right",
-            }}>
-              {r.ok ? `${Math.round(r.dur)}ms` : "—"}
-            </span>
-          </div>
-        );
-      })}
-    </div>
-  );
+  for (const sw of networkMetrics.switches || []) {
+    if (sw.cpu != null) samples.push(sw.cpu);
+    if (sw.mem != null) samples.push(sw.mem);
+  }
+  if (!samples.length) return "ok";
+  return _toneFromPct(Math.max(...samples));
 }
 
-/* MetricSection — wraps a group of metrics with a labeled header
- * and consistent card styling. */
-function MetricSection({ title, accent, status, children }) {
-  return (
-    <div style={{
-      padding: "12px 16px",
-      borderTop: "1px solid var(--hg-border-soft)",
-    }}>
-      <div style={{
-        display: "flex", alignItems: "center", gap: 8, marginBottom: 10,
-      }}>
-        <span style={{
-          width: 6, height: 6, borderRadius: 999,
-          background: accent || "var(--hg-fg-3)",
-        }} />
-        <span style={{
-          fontFamily: "'Geist Mono', monospace",
-          fontSize: 9, letterSpacing: "0.22em",
-          textTransform: "uppercase",
-          color: "var(--hg-fg-2)",
-        }}>{title}</span>
-        {status && (
-          <span style={{
-            marginLeft: "auto",
-            fontFamily: "'Geist Mono', monospace",
-            fontSize: 9, letterSpacing: "0.12em",
-            color: "var(--hg-fg-4)",
-          }}>{status}</span>
-        )}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function MetricsStrip({ metrics, metricsBase, bridgeHealth, networkMetrics, visionHealth }) {
+function MetricsStrip({ metrics, metricsBase, bridgeHealth, networkMetrics, visionHealth, hostMetrics }) {
   const [expanded, setExpanded] = useState(false);
-  const [history, setHistory] = useState({
-    ttft: [], tps: [], gpu: [], vram: [], cpu: [],
-  });
-  // F.3 (revised): trace metrics live INSIDE this drawer instead of a
-  // separate floating panel. Poll /traces/summary + /traces/latest every
-  // 5s. Only when expanded — keeps the network quiet most of the time.
   const [traceSummary, setTraceSummary] = useState(null);
   const [lastTrace, setLastTrace] = useState(null);
-  useEffect(() => {
-    setHistory((h) => {
-      const next = {};
-      const keys = ["ttft", "tps", "gpu", "vram", "cpu"];
-      for (const k of keys) {
-        const arr = [...(h[k] || []), metrics[k]];
-        next[k] = arr.slice(-40);
-      }
-      return next;
-    });
-  }, [metrics.ttft, metrics.tps, metrics.gpu, metrics.vram, metrics.cpu]);
   useEffect(() => {
     if (!expanded || !metricsBase) return undefined;
     let cancelled = false;
     const tick = async () => {
       try {
-        // Phase 1 bugfix: native fetch() from Tauri origin gets CORS-blocked
-        // by the metrics-sidecar. tauriFetch uses Tauri's HTTP plugin which
-        // bypasses webview CORS, so these polls actually return data.
         const [s, l] = await Promise.all([
           tauriFetch(`${metricsBase}/traces/summary?window=1h`, { cache: "no-store" }),
           tauriFetch(`${metricsBase}/traces/latest?n=1`, { cache: "no-store" }),
@@ -680,7 +514,6 @@ function MetricsStrip({ metrics, metricsBase, bridgeHealth, networkMetrics, visi
           setLastTrace(j.traces?.[j.traces.length - 1] || null);
         }
       } catch (e) {
-        // Don't silently swallow — log once so it's debuggable in DevTools.
         console.warn("[metrics] trace poll failed:", e?.message || e);
       }
     };
@@ -688,62 +521,63 @@ function MetricsStrip({ metrics, metricsBase, bridgeHealth, networkMetrics, visi
     const id = setInterval(tick, 5000);
     return () => { cancelled = true; clearInterval(id); };
   }, [expanded, metricsBase]);
-  const fmtMs = (v) => (v == null || v === 0) ? "—" : `${Math.round(v)}ms`;
+
+  /* ── Derived health tones for the collapsed glance summary ─────────── */
+  const aiTone   = _aiBoxTone(metrics, bridgeHealth);
+  const homeTone = _homeTone(hostMetrics);
+  const netTone  = _networkTone(networkMetrics);
+
+  /* ── Collapsed summary helpers ─────────────────────────────────────── */
+  const aiHeadline = bridgeHealth?.warmup_complete === false ? "warming"
+                    : (metrics.ttft != null ? `${metrics.ttft}ms ttft` : "—");
+  const haosHeadline = bridgeHealth?.ha_connected
+    ? (hostMetrics ? `cpu ${Math.round(hostMetrics.cpu ?? 0)}%` : "ha ok")
+    : "offline";
+  const netHeadline = networkMetrics?.clientsKnown
+    ? `${networkMetrics.clientsOnline}/${networkMetrics.clientsKnown} online`
+    : (networkMetrics?.udm ? "ok" : "—");
 
   return (
     <div style={{ borderTop: "1px solid var(--hg-border-soft)", background: "var(--hg-bg-0)" }}>
-      <div
+      {/* ── COLLAPSED ROW: 3 machine glance blocks + caret ───────────── */}
+      <button
         onClick={() => setExpanded((x) => !x)}
+        className="hg-focusable"
         style={{
-          padding: "6px 12px 6px 16px",
-          display: "flex", alignItems: "center", gap: 0,
-          fontFamily: "'Geist Mono', ui-monospace, monospace",
-          fontSize: 11,
+          width: "100%",
+          padding: "10px 16px",
+          background: "transparent",
+          border: "none",
+          textAlign: "left",
+          cursor: "pointer",
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr 1fr auto",
+          alignItems: "center",
+          gap: 18,
+          fontFamily: "'Geist Mono', monospace",
+          fontSize: 10.5,
           color: "var(--hg-fg-3)",
           fontVariantNumeric: "tabular-nums",
-          cursor: "pointer",
           userSelect: "none",
         }}
       >
-        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, display: "flex", alignItems: "center", gap: 14 }}>
-          {/* Phase 2 collapsed view: 3 machine dots + key headline metric per machine */}
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-            <span style={{
-              width: 6, height: 6, borderRadius: 999,
-              background: (metrics.gpu != null) ? "var(--hg-ice-bright)" : "var(--hg-fg-5)",
-            }} />
-            <span style={{ color: "var(--hg-fg-2)" }}>{metrics.model || "ai box"}</span>
-            <span style={{ color: "var(--hg-fg-4)" }}>ttft</span>
-            <Num v={metrics.ttft} suffix="ms" />
-            <span style={{ color: "var(--hg-fg-4)" }}>gpu</span>
-            <Num v={metrics.gpu} suffix="%" />
-          </span>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-            <span style={{
-              width: 6, height: 6, borderRadius: 999,
-              background: bridgeHealth?.ha_connected ? "var(--hg-ice-bright)" : "var(--hg-warn)",
-            }} />
-            <span style={{ color: "var(--hg-fg-2)" }}>haos</span>
-            {bridgeHealth?.stale_media_integrations?.length > 0 && (
-              <span style={{ color: "var(--hg-warn)" }}>⚠</span>
-            )}
-          </span>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-            <span style={{
-              width: 6, height: 6, borderRadius: 999,
-              background: (networkMetrics?.clientsKnown > 0 || networkMetrics?.udm) ? "var(--hg-ice-bright)" : "var(--hg-fg-5)",
-            }} />
-            <span style={{ color: "var(--hg-fg-2)" }}>net</span>
-            {networkMetrics?.clientsKnown > 0 && (
-              <>
-                <Num v={networkMetrics.clientsOnline} />
-                <span style={{ color: "var(--hg-fg-4)" }}>online</span>
-              </>
-            )}
-          </span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <HmHealthDot tone={aiTone} />
+          <span style={{ color: "var(--hg-fg-2)", letterSpacing: "0.02em" }}>ai box</span>
+          <span style={{ color: "var(--hg-fg-1)", marginLeft: "auto" }}>{aiHeadline}</span>
+        </span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <HmHealthDot tone={homeTone === "idle" ? "ok" : homeTone} />
+          <span style={{ color: "var(--hg-fg-2)" }}>haos</span>
+          <span style={{ color: "var(--hg-fg-1)", marginLeft: "auto" }}>{haosHeadline}</span>
+        </span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <HmHealthDot tone={netTone} />
+          <span style={{ color: "var(--hg-fg-2)" }}>network</span>
+          <span style={{ color: "var(--hg-fg-1)", marginLeft: "auto" }}>{netHeadline}</span>
         </span>
         <span style={{
-          marginLeft: 10, color: "var(--hg-fg-4)", flexShrink: 0,
+          color: "var(--hg-fg-4)",
           transition: "transform 220ms cubic-bezier(.4,0,.2,1)",
           transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
           display: "inline-flex", alignItems: "center", justifyContent: "center", width: 14, height: 14,
@@ -752,218 +586,227 @@ function MetricsStrip({ metrics, metricsBase, bridgeHealth, networkMetrics, visi
             <path d="M1 1L4.5 4.5L8 1" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </span>
-      </div>
-      {/* ─ Expanded view — 4 sections (Pipeline / AI box / Home / Network) ── */}
+      </button>
+
+      {/* ── EXPANDED: 4 sections, identical visual grammar ──────────── */}
       {expanded && (
         <div style={{ animation: "hg-fade-up 240ms cubic-bezier(.4,0,.2,1)" }}>
-          {/* ── PIPELINE: end-to-end voice turn breakdown ───────────────── */}
-          <MetricSection
-            title="pipeline · voice turn"
-            accent="var(--hg-ice-bright)"
+          {/* ── PIPELINE ──────────────────────────────────────────── */}
+          <HmSection
+            title="pipeline"
+            subtitle="voice turn"
+            tone={traceSummary?.count > 0 ? "ok" : "idle"}
             status={traceSummary?.count ? `n=${traceSummary.count} last hour` : "no data"}
           >
-            <div style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-              gap: 18,
-              fontFamily: "'Geist Mono', monospace",
-              fontSize: 10,
-              fontVariantNumeric: "tabular-nums",
-            }}>
-              <div>
-                <div style={{ color: "var(--hg-fg-5)", marginBottom: 6, letterSpacing: "0.12em", textTransform: "uppercase" }}>
-                  last turn{lastTrace ? ` · ${lastTrace.is_voice ? "voice" : "text"} · ${lastTrace.cold ? "cold" : "warm"}` : ""}
+            {/* Last-turn waterfall — collapses to empty-state when no recent turn */}
+            {lastTrace ? (
+              <>
+                <div style={{
+                  fontFamily: "'Geist Mono', monospace",
+                  fontSize: 10,
+                  color: "var(--hg-fg-3)",
+                  marginBottom: 8,
+                  display: "flex", gap: 12, flexWrap: "wrap",
+                }}>
+                  <span>last turn</span>
+                  <span style={{ color: "var(--hg-fg-4)" }}>·</span>
+                  <span>{lastTrace.is_voice ? "voice" : "text"}</span>
+                  <span style={{ color: "var(--hg-fg-4)" }}>·</span>
+                  <span>{lastTrace.cold ? "cold" : "warm"}</span>
+                  <span style={{ color: "var(--hg-fg-4)" }}>·</span>
+                  <span style={{ color: "var(--hg-fg-2)" }}>"{(lastTrace.user_text || "").slice(0, 60)}"</span>
                 </div>
-                <div style={{ color: "var(--hg-fg-2)", marginBottom: 8, fontSize: 11, minHeight: 14 }}>
-                  {lastTrace ? `"${(lastTrace.user_text || "").slice(0, 50)}"` : "—"}
-                </div>
-                <WaterfallTrace trace={lastTrace} />
-              </div>
-              <div>
-                <div style={{ color: "var(--hg-fg-5)", marginBottom: 6, letterSpacing: "0.12em", textTransform: "uppercase" }}>
-                  rolling latency p50 / p90
-                </div>
-                {traceSummary?.count > 0 ? (
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", columnGap: 12, rowGap: 4, color: "var(--hg-fg-1)" }}>
-                    {[
-                      ["llm response", "t_pipeline_intent_end"],
-                      ["synth done", "t_synth_done"],
-                      ["ttfa", "t_first_audio_sent"],
-                    ].map(([label, key]) => {
-                      const s = traceSummary.stamps?.[key];
-                      if (!s) return null;
-                      return (
-                        <React.Fragment key={key}>
-                          <span style={{ color: "var(--hg-fg-3)" }}>{label}</span>
-                          <span>{fmtMs(s.p50)}</span>
-                          <span style={{ color: "var(--hg-fg-4)" }}>{fmtMs(s.p90)}</span>
-                        </React.Fragment>
-                      );
-                    })}
-                    {traceSummary.ttfa_ms && (
-                      <>
-                        <span style={{ color: "var(--hg-ice-bright)", fontWeight: 500 }}>voice ttfa</span>
-                        <span style={{ color: "var(--hg-ice-bright)", fontWeight: 500 }}>{fmtMs(traceSummary.ttfa_ms.p50)}</span>
-                        <span style={{ color: "var(--hg-ice)" }}>{fmtMs(traceSummary.ttfa_ms.p90)}</span>
-                      </>
-                    )}
-                  </div>
-                ) : (
-                  <div style={{ color: "var(--hg-fg-4)", fontStyle: "italic" }}>no trace data yet — try a voice turn</div>
-                )}
-                {visionHealth?.phash_enabled && (
-                  <div style={{ marginTop: 12, paddingTop: 8, borderTop: "1px solid var(--hg-border-soft)" }}>
-                    <div style={{ color: "var(--hg-fg-5)", marginBottom: 4, letterSpacing: "0.12em", textTransform: "uppercase" }}>
-                      vision cache
-                    </div>
-                    <div style={{ color: "var(--hg-fg-1)" }}>
-                      <span style={{ color: "var(--hg-ice-bright)" }}>{Math.round((visionHealth.phash_hit_rate || 0) * 100)}%</span>
-                      <span style={{ color: "var(--hg-fg-4)" }}> hits · {visionHealth.phash_hits}/{visionHealth.phash_hits + visionHealth.phash_misses} · {visionHealth.phash_cameras_cached} cameras cached</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </MetricSection>
+                {(() => {
+                  const total = lastTrace.t_done || 1;
+                  const stages = [
+                    { label: "stt", start: 0, dur: lastTrace.t_parakeet_done || 0 },
+                    { label: "llm", start: lastTrace.t_parakeet_done || 0,
+                      dur: Math.max(0, (lastTrace.t_pipeline_intent_end || 0) - (lastTrace.t_parakeet_done || 0)) },
+                    { label: "synth", start: lastTrace.t_pipeline_intent_end || 0,
+                      dur: Math.max(0, (lastTrace.t_synth_done || 0) - (lastTrace.t_pipeline_intent_end || 0)) },
+                    { label: "first audio", start: lastTrace.t_synth_done || 0,
+                      dur: Math.max(0, (lastTrace.t_first_audio_sent || 0) - (lastTrace.t_synth_done || 0)) },
+                    { label: "audio playback", start: lastTrace.t_first_audio_sent || 0,
+                      dur: Math.max(0, (lastTrace.t_done || 0) - (lastTrace.t_first_audio_sent || 0)) },
+                  ];
+                  return stages.map((s) => (
+                    <HmTimelineRow key={s.label}
+                      label={s.label}
+                      startMs={s.start} durMs={s.dur} totalMs={total} />
+                  ));
+                })()}
+              </>
+            ) : (
+              <HmEmptyState message="no recent voice turn" />
+            )}
 
-          {/* ── AI BOX: Ubuntu, GPU, vLLM ───────────────────────────────── */}
-          <MetricSection
-            title="ai box · 192.168.0.100"
-            accent="var(--hg-ice-bright)"
-            status={metrics.model || ""}
-          >
-            <div style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-              gap: 14,
-              alignItems: "flex-end",
-            }}>
-              <BigBar label="gpu"  value={metrics.gpu}  max={100} suffix="%" />
-              <BigBar label="vram" value={metrics.vram} max={metrics.vramMax || 96} suffix={`/${metrics.vramMax}g`} />
-              <BigBar label="cpu"  value={metrics.cpu}  max={100} suffix="%" gradient={false} />
-              <BigBar label="ram"  value={metrics.ram}  max={metrics.ramMax || 64} suffix={`/${metrics.ramMax}g`} gradient={false} />
-            </div>
-            <div style={{
-              marginTop: 14, display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-              gap: 14,
-            }}>
-              <MetricTile label="ttft"  value={metrics.ttft} suffix="ms" history={history.ttft} color="var(--hg-fg-2)" />
-              <MetricTile label="tok/s" value={metrics.tps}             history={history.tps}  color="var(--hg-fg-2)" />
-            </div>
-            {bridgeHealth && (
-              <div style={{
-                marginTop: 12,
-                fontFamily: "'Geist Mono', monospace", fontSize: 10,
-                color: "var(--hg-fg-3)",
-                fontVariantNumeric: "tabular-nums",
-              }}>
-                bridge · uptime {Math.floor((bridgeHealth.uptime_s || 0) / 60)}m
-                <Sep />
-                {bridgeHealth.warmup_complete ? "warm" : <span style={{ color: "var(--hg-warn)" }}>warming</span>}
-                <Sep />
-                ha {bridgeHealth.ha_connected ? "✓" : <span style={{ color: "var(--hg-warn)" }}>✗</span>}
-                <Sep />
-                rooms <Num v={bridgeHealth.rooms_loaded} />
-                <Sep />
-                media <Num v={bridgeHealth.media_players_registered} />
-                <Sep />
-                tts <span style={{ color: "var(--hg-fg-1)" }}>{bridgeHealth.tts_engine || "—"}</span>
-                {bridgeHealth.stale_media_integrations?.length > 0 && (
-                  <>
-                    <Sep />
-                    <span style={{ color: "var(--hg-warn)" }}>
-                      ⚠ {bridgeHealth.stale_media_integrations.length} stale media
-                    </span>
-                  </>
+            {/* Rolling latency */}
+            {traceSummary?.count > 0 && (
+              <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--hg-border-soft)" }}>
+                <div style={{
+                  fontFamily: "'Geist Mono', monospace",
+                  fontSize: 9.5,
+                  letterSpacing: "0.18em",
+                  textTransform: "uppercase",
+                  color: "var(--hg-fg-4)",
+                  marginBottom: 6,
+                }}>rolling p50 · p90</div>
+                {(() => {
+                  const rows = [
+                    ["llm response",  "t_pipeline_intent_end"],
+                    ["synth done",    "t_synth_done"],
+                    ["ttfa",          "t_first_audio_sent"],
+                  ];
+                  return rows.map(([label, key]) => {
+                    const s = traceSummary.stamps?.[key];
+                    if (!s) return null;
+                    return (
+                      <HmMeterRow key={key}
+                        label={label}
+                        text={`${Math.round(s.p50)} · ${Math.round(s.p90)} ms`}
+                        hideBar />
+                    );
+                  });
+                })()}
+                {traceSummary.ttfa_ms && (
+                  <HmMeterRow
+                    label="voice ttfa"
+                    text={`${Math.round(traceSummary.ttfa_ms.p50)} · ${Math.round(traceSummary.ttfa_ms.p90)} ms`}
+                    hideBar />
                 )}
               </div>
             )}
-          </MetricSection>
 
-          {/* ── HOME: HAOS host + Frigate (mostly placeholder until user
-                enables the integrations) ──────────────────────────────── */}
-          <MetricSection
-            title="home · haos 192.168.0.125"
-            accent="var(--hg-fg-3)"
-            status="frigate · 5 cameras"
-          >
-            <div style={{
-              fontFamily: "'Geist Mono', monospace", fontSize: 10,
-              color: "var(--hg-fg-3)",
-            }}>
-              <div style={{ marginBottom: 4 }}>
-                <span style={{ color: "var(--hg-fg-2)" }}>cameras streaming:</span> living_room · kitchen · dining_room · workshop · driveway
-              </div>
-              <div style={{ marginTop: 10, color: "var(--hg-fg-4)", fontStyle: "italic", lineHeight: 1.5 }}>
-                no host CPU/RAM/disk sensors detected.<br />
-                enable in HA: <span style={{ color: "var(--hg-fg-2)", fontStyle: "normal" }}>Settings → Devices → Add Integration → System Monitor</span><br />
-                no Frigate stats sensors detected.<br />
-                enable in HA: <span style={{ color: "var(--hg-fg-2)", fontStyle: "normal" }}>Settings → Devices → Frigate → enable telemetry</span>
-              </div>
-            </div>
-          </MetricSection>
-
-          {/* ── NETWORK: Unifi devices + clients ────────────────────────── */}
-          <MetricSection
-            title="network · unifi"
-            accent="var(--hg-ice)"
-            status={networkMetrics.clientsKnown > 0 ? `${networkMetrics.clientsOnline}/${networkMetrics.clientsKnown} clients` : ""}
-          >
-            <div style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-              gap: 18,
-            }}>
-              {networkMetrics.udm && (
-                <div>
-                  <div style={{
-                    fontFamily: "'Geist Mono', monospace", fontSize: 9,
-                    letterSpacing: "0.18em", textTransform: "uppercase",
-                    color: "var(--hg-fg-5)", marginBottom: 8,
-                  }}>cloud gateway (UDM)</div>
-                  <div style={{ display: "flex", gap: 14, alignItems: "flex-end" }}>
-                    <BigBar label="cpu" value={networkMetrics.udm.cpu || 0} max={100} suffix="%" height={48} />
-                    <BigBar label="ram" value={networkMetrics.udm.mem || 0} max={100} suffix="%" height={48} />
-                  </div>
-                </div>
-              )}
-              {networkMetrics.switches.map((sw) => (
-                <div key={sw.name}>
-                  <div style={{
-                    fontFamily: "'Geist Mono', monospace", fontSize: 9,
-                    letterSpacing: "0.18em", textTransform: "uppercase",
-                    color: "var(--hg-fg-5)", marginBottom: 8,
-                  }}>{sw.name}{sw.state && sw.state !== "connected" && (
-                    <span style={{ color: "var(--hg-warn)", marginLeft: 6 }}>· {sw.state}</span>
-                  )}</div>
-                  <div style={{ display: "flex", gap: 14, alignItems: "flex-end" }}>
-                    <BigBar label="cpu" value={sw.cpu || 0} max={100} suffix="%" height={48} />
-                    <BigBar label="ram" value={sw.mem || 0} max={100} suffix="%" height={48} />
-                  </div>
-                </div>
-              ))}
-              {networkMetrics.clientsKnown > 0 && (
-                <StatusDotGrid
-                  label="connected clients"
-                  online={networkMetrics.clientsOnline}
-                  total={networkMetrics.clientsKnown}
-                  accent="var(--hg-ice-bright)"
+            {/* Vision cache */}
+            {visionHealth?.phash_enabled && (
+              <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--hg-border-soft)" }}>
+                <HmMeterRow
+                  label="vision cache"
+                  value={(visionHealth.phash_hit_rate || 0) * 100}
+                  unit="%"
                 />
-              )}
-              {!networkMetrics.udm && networkMetrics.switches.length === 0 && (
-                <div style={{ color: "var(--hg-fg-4)", fontFamily: "'Geist Mono', monospace", fontSize: 10, fontStyle: "italic", gridColumn: "1 / -1" }}>
-                  no unifi sensors detected.<br />
-                  add the Unifi integration in HA and grant access to your UDM / switches / APs.
-                </div>
-              )}
+                <HmStatusLine items={[
+                  { label: "hits",   value: visionHealth.phash_hits },
+                  { label: "misses", value: visionHealth.phash_misses },
+                  { label: "cameras", value: visionHealth.phash_cameras_cached },
+                ]} />
+              </div>
+            )}
+          </HmSection>
+
+          {/* ── AI BOX ────────────────────────────────────────────── */}
+          <HmSection
+            title="ai box"
+            subtitle="192.168.0.100"
+            tone={aiTone}
+            status={metrics.model || ""}
+          >
+            <HmMeterRow label="gpu"   value={metrics.gpu}  max={100} unit="%" />
+            <HmMeterRow label="vram"  value={metrics.vram} max={metrics.vramMax || 96} unit={`/ ${metrics.vramMax || 96} g`} />
+            <HmMeterRow label="cpu"   value={metrics.cpu}  max={100} unit="%" />
+            <HmMeterRow label="ram"   value={metrics.ram}  max={metrics.ramMax || 64} unit={`/ ${metrics.ramMax || 64} g`} />
+            <HmMeterRow label="ttft"  value={metrics.ttft} unit="ms" hideBar />
+            <HmMeterRow label="tok/s" value={metrics.tps}  unit=""   hideBar />
+            {bridgeHealth && (
+              <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--hg-border-soft)" }}>
+                <HmStatusLine items={[
+                  { label: "bridge", value: bridgeHealth.ha_connected ? "ok" : "offline",
+                    tone: bridgeHealth.ha_connected ? "ok" : "crit" },
+                  { label: "uptime", value: `${Math.floor((bridgeHealth.uptime_s || 0) / 60)}m` },
+                  { label: "", value: bridgeHealth.warmup_complete ? "warm" : "warming",
+                    tone: bridgeHealth.warmup_complete ? "ok" : "warn" },
+                  { label: "rooms", value: bridgeHealth.rooms_loaded || 0 },
+                  { label: "media", value: bridgeHealth.media_players_registered || 0 },
+                  { label: "tts",   value: bridgeHealth.tts_engine || "—" },
+                  bridgeHealth.stale_media_integrations?.length > 0
+                    ? { label: "stale", value: `${bridgeHealth.stale_media_integrations.length} media`, tone: "warn" }
+                    : null,
+                ]} />
+              </div>
+            )}
+          </HmSection>
+
+          {/* ── HOME (HAOS) ───────────────────────────────────────── */}
+          <HmSection
+            title="home"
+            subtitle="haos 192.168.0.125"
+            tone={homeTone}
+            status={`${bridgeHealth?.rooms_loaded || 0} rooms · 5 cameras`}
+          >
+            {hostMetrics ? (
+              <>
+                <HmMeterRow label="host cpu" value={hostMetrics.cpu} unit="%" />
+                <HmMeterRow label="host ram" value={hostMetrics.ram} unit="%" />
+                {hostMetrics.disk != null && (
+                  <HmMeterRow label="host disk" value={hostMetrics.disk} unit="%" />
+                )}
+                {hostMetrics.uptime && (
+                  <HmMeterRow label="uptime" text={hostMetrics.uptime} hideBar />
+                )}
+              </>
+            ) : (
+              <HmEmptyState
+                message="host telemetry not enabled"
+                action={{
+                  label: "enable",
+                  tooltip: "In HA: Settings → Devices & Services → Add Integration → System Monitor.\nSelect CPU, RAM, disk_use_percent. Restart HA if entities don't appear within 60s.",
+                }} />
+            )}
+            {/* Frigate */}
+            <div style={{ marginTop: hostMetrics ? 12 : 8 }}>
+              <HmEmptyState
+                message="frigate telemetry not enabled"
+                action={{
+                  label: "enable",
+                  tooltip: "Two options:\n(1) HACS Frigate integration → Configure → Stats sensors.\n(2) Drop the REST sensor YAML I wrote to /config/packages/frigate_stats.yaml and restart HA.",
+                }} />
             </div>
-          </MetricSection>
+          </HmSection>
+
+          {/* ── NETWORK ───────────────────────────────────────────── */}
+          <HmSection
+            title="network"
+            subtitle="unifi"
+            tone={netTone}
+            status={networkMetrics?.clientsKnown ? `${networkMetrics.clientsOnline} / ${networkMetrics.clientsKnown} clients` : ""}
+          >
+            {networkMetrics?.udm && (
+              <HmMeterGroup label="cloud gateway · udm">
+                <HmMeterRow label="cpu" value={networkMetrics.udm.cpu} unit="%" />
+                <HmMeterRow label="ram" value={networkMetrics.udm.mem} unit="%" />
+              </HmMeterGroup>
+            )}
+            {(networkMetrics?.switches || []).map((sw) => (
+              <HmMeterGroup key={sw.name} label={sw.name + (sw.state && sw.state !== "connected" ? `  ·  ${sw.state}` : "")}>
+                <HmMeterRow label="cpu" value={sw.cpu} unit="%" />
+                <HmMeterRow label="ram" value={sw.mem} unit="%" />
+              </HmMeterGroup>
+            ))}
+            {networkMetrics?.clientsKnown > 0 && (
+              <HmMeterGroup label="clients">
+                <HmMeterRow
+                  label="online"
+                  value={networkMetrics.clientsOnline}
+                  max={networkMetrics.clientsKnown}
+                  unit={` / ${networkMetrics.clientsKnown}`}
+                  warnAt={101} critAt={101} />
+              </HmMeterGroup>
+            )}
+            {!networkMetrics?.udm && (!networkMetrics?.switches || networkMetrics.switches.length === 0) && (
+              <HmEmptyState
+                message="no unifi devices detected"
+                action={{
+                  label: "configure",
+                  tooltip: "Add the Unifi integration in HA → Settings → Devices & Services → + Add Integration → Unifi Network. Grant API access to your UDM / switches / APs.",
+                }} />
+            )}
+          </HmSection>
         </div>
       )}
     </div>
   );
 }
+
 
 function Sep() {
   return <span style={{ display: "inline-block", width: 14 }}> </span>;
@@ -1650,6 +1493,11 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   });
   // Vision-sidecar phash health.
   const [visionHealth, setVisionHealth] = useState(null);
+  // Tray v2: HAOS host system metrics from HA's System Monitor integration.
+  // Populated by a state_changed subscription that filters across the
+  // multiple known entity_id patterns the integration uses.
+  // Shape: { cpu, ram, disk, uptime } — all may be null until sensors exist.
+  const [hostMetrics, setHostMetrics] = useState(null);
   // Phase 1 identity (May 2026) — drives the "seen by" header pill,
   // vision-tile name chip, and WelcomeBanner. Latest face match from
   // either the s2s WS or the chat-tee SSE stream.
@@ -3172,6 +3020,87 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     return () => { cancelled = true; try { unsub(); } catch {} };
   }, [connection]);
 
+  /* ── Tray v2: HAOS host system metrics from HA's System Monitor ─────
+   *
+   * Subscribes to whichever entity_id pattern HA's System Monitor
+   * integration is actually using (varies between HA versions /
+   * configurations). Tolerant of:
+   *   sensor.processor_use_percent / sensor.processor_use
+   *   sensor.system_monitor_processor_use(_percent)
+   *   sensor.memory_use_percent / sensor.system_monitor_memory_use_percent
+   *   sensor.disk_use_percent / sensor.system_monitor_disk_use_percent
+   *   sensor.last_boot
+   *
+   * If NONE are present, hostMetrics stays null → drawer shows the
+   * "host telemetry not enabled" empty-state row with a tooltip.
+   */
+  useEffect(() => {
+    if (connection !== "online" || !haClientRef.current) return undefined;
+    const client = haClientRef.current;
+    let cancelled = false;
+
+    const cpuRe  = /^sensor\.(system_monitor_)?(processor_use|cpu_use)/;
+    const ramRe  = /^sensor\.(system_monitor_)?(memory_use_percent|ram_use)/;
+    const diskRe = /^sensor\.(system_monitor_)?disk_use_percent/;
+    const bootRe = /^sensor\.last_boot$/;
+
+    const fmtUptime = (isoTs) => {
+      if (!isoTs) return null;
+      try {
+        const boot = new Date(isoTs);
+        const secs = Math.max(0, (Date.now() - boot.getTime()) / 1000);
+        const d = Math.floor(secs / 86400);
+        const h = Math.floor((secs % 86400) / 3600);
+        const m = Math.floor((secs % 3600) / 60);
+        if (d > 0) return `${d}d ${h}h`;
+        if (h > 0) return `${h}h ${m}m`;
+        return `${m}m`;
+      } catch { return null; }
+    };
+
+    const rebuild = async () => {
+      try {
+        const states = await client.call({ type: "get_states" });
+        if (cancelled) return;
+        let cpu = null, ram = null, disk = null, uptime = null;
+        for (const s of states) {
+          const eid = s.entity_id;
+          const val = parseFloat(s.state);
+          if (cpuRe.test(eid) && isFinite(val)) cpu = val;
+          else if (ramRe.test(eid) && isFinite(val)) ram = val;
+          else if (diskRe.test(eid) && isFinite(val)) disk = val;
+          else if (bootRe.test(eid)) uptime = fmtUptime(s.state);
+        }
+        const any = (cpu != null) || (ram != null) || (disk != null) || uptime;
+        setHostMetrics(any ? { cpu, ram, disk, uptime } : null);
+      } catch (e) {
+        console.warn("[host] state load failed:", e?.message || e);
+      }
+    };
+    rebuild();
+
+    const unsub = client.subscribeEvents("state_changed", (ev) => {
+      const d = ev?.data;
+      const eid = d?.entity_id;
+      if (!eid) return;
+      const newState = d.new_state?.state;
+      if (!(cpuRe.test(eid) || ramRe.test(eid) || diskRe.test(eid) || bootRe.test(eid))) {
+        return;
+      }
+      const val = parseFloat(newState);
+      setHostMetrics((prev) => {
+        const cur = prev || { cpu: null, ram: null, disk: null, uptime: null };
+        if (cpuRe.test(eid)) cur.cpu = isFinite(val) ? val : cur.cpu;
+        else if (ramRe.test(eid)) cur.ram = isFinite(val) ? val : cur.ram;
+        else if (diskRe.test(eid)) cur.disk = isFinite(val) ? val : cur.disk;
+        else if (bootRe.test(eid)) cur.uptime = fmtUptime(newState);
+        return { ...cur };
+      });
+    });
+
+    return () => { cancelled = true; try { unsub(); } catch {} };
+  }, [connection]);
+
   /* ── Phase 2: vision-sidecar health (phash hit rate, cameras cached) ── */
   useEffect(() => {
     const base = metricsBase || metricsBaseFromEndpoint(endpoint);
@@ -3277,6 +3206,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         bridgeHealth={bridgeHealth}
         networkMetrics={networkMetrics}
         visionHealth={visionHealth}
+        hostMetrics={hostMetrics}
       />
       <VoiceBanner voice={voice} onRetry={toggleMic} />
       <InputRow

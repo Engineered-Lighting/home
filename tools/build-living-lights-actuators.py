@@ -781,7 +781,17 @@ def _emit_detection_automation(light_entity, owning_zones, camera) -> str:
     jsonl_block = _emit_jsonl_payload_block(light_entity, camera, owning_zones, indent=20)
     return f"""  - alias: "Living Lights — manual touch detection ({light_entity})"
     id: living_lights_manual_detect_{light_slug}
-    mode: single
+    # M19: queued (not single) so rapid slider scrubs / multi-step brightness
+    # changes within the 3-s settle window don't drop the FINAL evidence with
+    # "Already running" warnings. `max: 20` is the burst headroom — a normal
+    # slider scrub fires 3-8 state-change events before settling; 20 covers
+    # extreme bursts (Hue-app rapid dimming, RGB picker sweeps) with margin.
+    # Each queued instance still respects the variables-block dedupe logic
+    # (last_override_context_id flicker-count guards downstream JSONL
+    # duplication), so a 20-event burst produces at most one logged
+    # override_event per truly-distinct context.
+    mode: queued
+    max: 20
     triggers:
       - trigger: state
         entity_id: {light_entity}

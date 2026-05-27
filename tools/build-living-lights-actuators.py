@@ -742,6 +742,7 @@ def _emit_jsonl_payload_block(light_entity, camera, owning_zones, indent=18):
         ind + f"    'state': pred_{primary_slug}_state,",
         ind + "    'profile': profile_state,",
         ind + "    'tv_playing': tv_playing,",
+        ind + "    'gaming_active': gaming_active,",
         ind + "    'asleep': asleep_state,",
         ind + "    'night_safe': night_safe_state,",
         ind + "    'user_at_home': user_at_home_state,",
@@ -819,6 +820,12 @@ def _emit_detection_automation(light_entity, owning_zones, camera) -> str:
           shadow_mode: "{{{{ is_state('input_boolean.living_lights_shadow', 'on') }}}}"
           profile_state: "{{{{ states('sensor.living_lights_profile') }}}}"
           tv_playing: "{{{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}}}"
+          # M22a-aligned: gaming context dimension. Mirrors the classifier's
+          # `gaming_active` truth so override_event.context records the
+          # gaming state at the moment the user touched a light. Downstream
+          # M22 + Codex session-classification can read this to learn that
+          # gaming sessions are a distinct policy context.
+          gaming_active: "{{{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}}}"
           asleep_state: "{{{{ is_state('input_boolean.living_lights_asleep', 'on') }}}}"
           night_safe_state: "{{{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}}}"
           user_at_home_state: "{{{{ is_state('input_boolean.user_at_home', 'on') }}}}"
@@ -859,6 +866,7 @@ def _emit_detection_automation(light_entity, owning_zones, camera) -> str:
               state: "{{{{ pred_{primary_slug}_state }}}}"
               profile: "{{{{ profile_state }}}}"
               tv_playing: "{{{{ tv_playing }}}}"
+              gaming_active: "{{{{ gaming_active }}}}"
               asleep: "{{{{ asleep_state }}}}"
               night_safe: "{{{{ night_safe_state }}}}"
               user_at_home: "{{{{ user_at_home_state }}}}"

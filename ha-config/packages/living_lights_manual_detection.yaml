@@ -87,6 +87,12 @@ automation:
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
           tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          # M22a-aligned: gaming context dimension. Mirrors the classifier's
+          # `gaming_active` truth so override_event.context records the
+          # gaming state at the moment the user touched a light. Downstream
+          # M22 + Codex session-classification can read this to learn that
+          # gaming sessions are a distinct policy context.
+          gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
           asleep_state: "{{ is_state('input_boolean.living_lights_asleep', 'on') }}"
           night_safe_state: "{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}"
           user_at_home_state: "{{ is_state('input_boolean.user_at_home', 'on') }}"
@@ -130,6 +136,7 @@ automation:
               state: "{{ pred_dining_left_state }}"
               profile: "{{ profile_state }}"
               tv_playing: "{{ tv_playing }}"
+              gaming_active: "{{ gaming_active }}"
               asleep: "{{ asleep_state }}"
               night_safe: "{{ night_safe_state }}"
               user_at_home: "{{ user_at_home_state }}"
@@ -166,6 +173,7 @@ automation:
                         'state': pred_dining_left_state,
                         'profile': profile_state,
                         'tv_playing': tv_playing,
+                        'gaming_active': gaming_active,
                         'asleep': asleep_state,
                         'night_safe': night_safe_state,
                         'user_at_home': user_at_home_state,
@@ -245,6 +253,12 @@ automation:
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
           tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          # M22a-aligned: gaming context dimension. Mirrors the classifier's
+          # `gaming_active` truth so override_event.context records the
+          # gaming state at the moment the user touched a light. Downstream
+          # M22 + Codex session-classification can read this to learn that
+          # gaming sessions are a distinct policy context.
+          gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
           asleep_state: "{{ is_state('input_boolean.living_lights_asleep', 'on') }}"
           night_safe_state: "{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}"
           user_at_home_state: "{{ is_state('input_boolean.user_at_home', 'on') }}"
@@ -288,6 +302,7 @@ automation:
               state: "{{ pred_dining_right_state }}"
               profile: "{{ profile_state }}"
               tv_playing: "{{ tv_playing }}"
+              gaming_active: "{{ gaming_active }}"
               asleep: "{{ asleep_state }}"
               night_safe: "{{ night_safe_state }}"
               user_at_home: "{{ user_at_home_state }}"
@@ -324,6 +339,7 @@ automation:
                         'state': pred_dining_right_state,
                         'profile': profile_state,
                         'tv_playing': tv_playing,
+                        'gaming_active': gaming_active,
                         'asleep': asleep_state,
                         'night_safe': night_safe_state,
                         'user_at_home': user_at_home_state,
@@ -455,6 +471,12 @@ automation:
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
           tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          # M22a-aligned: gaming context dimension. Mirrors the classifier's
+          # `gaming_active` truth so override_event.context records the
+          # gaming state at the moment the user touched a light. Downstream
+          # M22 + Codex session-classification can read this to learn that
+          # gaming sessions are a distinct policy context.
+          gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
           asleep_state: "{{ is_state('input_boolean.living_lights_asleep', 'on') }}"
           night_safe_state: "{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}"
           user_at_home_state: "{{ is_state('input_boolean.user_at_home', 'on') }}"
@@ -510,6 +532,7 @@ automation:
               state: "{{ pred_front_door_state }}"
               profile: "{{ profile_state }}"
               tv_playing: "{{ tv_playing }}"
+              gaming_active: "{{ gaming_active }}"
               asleep: "{{ asleep_state }}"
               night_safe: "{{ night_safe_state }}"
               user_at_home: "{{ user_at_home_state }}"
@@ -548,6 +571,7 @@ automation:
                         'state': pred_front_door_state,
                         'profile': profile_state,
                         'tv_playing': tv_playing,
+                        'gaming_active': gaming_active,
                         'asleep': asleep_state,
                         'night_safe': night_safe_state,
                         'user_at_home': user_at_home_state,
@@ -627,6 +651,12 @@ automation:
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
           tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          # M22a-aligned: gaming context dimension. Mirrors the classifier's
+          # `gaming_active` truth so override_event.context records the
+          # gaming state at the moment the user touched a light. Downstream
+          # M22 + Codex session-classification can read this to learn that
+          # gaming sessions are a distinct policy context.
+          gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
           asleep_state: "{{ is_state('input_boolean.living_lights_asleep', 'on') }}"
           night_safe_state: "{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}"
           user_at_home_state: "{{ is_state('input_boolean.user_at_home', 'on') }}"
@@ -670,6 +700,7 @@ automation:
               state: "{{ pred_sink_state }}"
               profile: "{{ profile_state }}"
               tv_playing: "{{ tv_playing }}"
+              gaming_active: "{{ gaming_active }}"
               asleep: "{{ asleep_state }}"
               night_safe: "{{ night_safe_state }}"
               user_at_home: "{{ user_at_home_state }}"
@@ -706,6 +737,7 @@ automation:
                         'state': pred_sink_state,
                         'profile': profile_state,
                         'tv_playing': tv_playing,
+                        'gaming_active': gaming_active,
                         'asleep': asleep_state,
                         'night_safe': night_safe_state,
                         'user_at_home': user_at_home_state,
@@ -785,6 +817,12 @@ automation:
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
           tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          # M22a-aligned: gaming context dimension. Mirrors the classifier's
+          # `gaming_active` truth so override_event.context records the
+          # gaming state at the moment the user touched a light. Downstream
+          # M22 + Codex session-classification can read this to learn that
+          # gaming sessions are a distinct policy context.
+          gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
           asleep_state: "{{ is_state('input_boolean.living_lights_asleep', 'on') }}"
           night_safe_state: "{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}"
           user_at_home_state: "{{ is_state('input_boolean.user_at_home', 'on') }}"
@@ -828,6 +866,7 @@ automation:
               state: "{{ pred_island_left_state }}"
               profile: "{{ profile_state }}"
               tv_playing: "{{ tv_playing }}"
+              gaming_active: "{{ gaming_active }}"
               asleep: "{{ asleep_state }}"
               night_safe: "{{ night_safe_state }}"
               user_at_home: "{{ user_at_home_state }}"
@@ -864,6 +903,7 @@ automation:
                         'state': pred_island_left_state,
                         'profile': profile_state,
                         'tv_playing': tv_playing,
+                        'gaming_active': gaming_active,
                         'asleep': asleep_state,
                         'night_safe': night_safe_state,
                         'user_at_home': user_at_home_state,
@@ -943,6 +983,12 @@ automation:
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
           tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          # M22a-aligned: gaming context dimension. Mirrors the classifier's
+          # `gaming_active` truth so override_event.context records the
+          # gaming state at the moment the user touched a light. Downstream
+          # M22 + Codex session-classification can read this to learn that
+          # gaming sessions are a distinct policy context.
+          gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
           asleep_state: "{{ is_state('input_boolean.living_lights_asleep', 'on') }}"
           night_safe_state: "{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}"
           user_at_home_state: "{{ is_state('input_boolean.user_at_home', 'on') }}"
@@ -986,6 +1032,7 @@ automation:
               state: "{{ pred_island_right_state }}"
               profile: "{{ profile_state }}"
               tv_playing: "{{ tv_playing }}"
+              gaming_active: "{{ gaming_active }}"
               asleep: "{{ asleep_state }}"
               night_safe: "{{ night_safe_state }}"
               user_at_home: "{{ user_at_home_state }}"
@@ -1022,6 +1069,7 @@ automation:
                         'state': pred_island_right_state,
                         'profile': profile_state,
                         'tv_playing': tv_playing,
+                        'gaming_active': gaming_active,
                         'asleep': asleep_state,
                         'night_safe': night_safe_state,
                         'user_at_home': user_at_home_state,
@@ -1101,6 +1149,12 @@ automation:
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
           tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          # M22a-aligned: gaming context dimension. Mirrors the classifier's
+          # `gaming_active` truth so override_event.context records the
+          # gaming state at the moment the user touched a light. Downstream
+          # M22 + Codex session-classification can read this to learn that
+          # gaming sessions are a distinct policy context.
+          gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
           asleep_state: "{{ is_state('input_boolean.living_lights_asleep', 'on') }}"
           night_safe_state: "{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}"
           user_at_home_state: "{{ is_state('input_boolean.user_at_home', 'on') }}"
@@ -1144,6 +1198,7 @@ automation:
               state: "{{ pred_office_state }}"
               profile: "{{ profile_state }}"
               tv_playing: "{{ tv_playing }}"
+              gaming_active: "{{ gaming_active }}"
               asleep: "{{ asleep_state }}"
               night_safe: "{{ night_safe_state }}"
               user_at_home: "{{ user_at_home_state }}"
@@ -1180,6 +1235,7 @@ automation:
                         'state': pred_office_state,
                         'profile': profile_state,
                         'tv_playing': tv_playing,
+                        'gaming_active': gaming_active,
                         'asleep': asleep_state,
                         'night_safe': night_safe_state,
                         'user_at_home': user_at_home_state,
@@ -1289,6 +1345,12 @@ automation:
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
           tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          # M22a-aligned: gaming context dimension. Mirrors the classifier's
+          # `gaming_active` truth so override_event.context records the
+          # gaming state at the moment the user touched a light. Downstream
+          # M22 + Codex session-classification can read this to learn that
+          # gaming sessions are a distinct policy context.
+          gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
           asleep_state: "{{ is_state('input_boolean.living_lights_asleep', 'on') }}"
           night_safe_state: "{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}"
           user_at_home_state: "{{ is_state('input_boolean.user_at_home', 'on') }}"
@@ -1338,6 +1400,7 @@ automation:
               state: "{{ pred_weights_state }}"
               profile: "{{ profile_state }}"
               tv_playing: "{{ tv_playing }}"
+              gaming_active: "{{ gaming_active }}"
               asleep: "{{ asleep_state }}"
               night_safe: "{{ night_safe_state }}"
               user_at_home: "{{ user_at_home_state }}"
@@ -1375,6 +1438,7 @@ automation:
                         'state': pred_weights_state,
                         'profile': profile_state,
                         'tv_playing': tv_playing,
+                        'gaming_active': gaming_active,
                         'asleep': asleep_state,
                         'night_safe': night_safe_state,
                         'user_at_home': user_at_home_state,
@@ -1484,6 +1548,12 @@ automation:
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
           tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          # M22a-aligned: gaming context dimension. Mirrors the classifier's
+          # `gaming_active` truth so override_event.context records the
+          # gaming state at the moment the user touched a light. Downstream
+          # M22 + Codex session-classification can read this to learn that
+          # gaming sessions are a distinct policy context.
+          gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
           asleep_state: "{{ is_state('input_boolean.living_lights_asleep', 'on') }}"
           night_safe_state: "{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}"
           user_at_home_state: "{{ is_state('input_boolean.user_at_home', 'on') }}"
@@ -1533,6 +1603,7 @@ automation:
               state: "{{ pred_front_left_state }}"
               profile: "{{ profile_state }}"
               tv_playing: "{{ tv_playing }}"
+              gaming_active: "{{ gaming_active }}"
               asleep: "{{ asleep_state }}"
               night_safe: "{{ night_safe_state }}"
               user_at_home: "{{ user_at_home_state }}"
@@ -1570,6 +1641,7 @@ automation:
                         'state': pred_front_left_state,
                         'profile': profile_state,
                         'tv_playing': tv_playing,
+                        'gaming_active': gaming_active,
                         'asleep': asleep_state,
                         'night_safe': night_safe_state,
                         'user_at_home': user_at_home_state,
@@ -1657,6 +1729,12 @@ automation:
           shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') }}"
           profile_state: "{{ states('sensor.living_lights_profile') }}"
           tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          # M22a-aligned: gaming context dimension. Mirrors the classifier's
+          # `gaming_active` truth so override_event.context records the
+          # gaming state at the moment the user touched a light. Downstream
+          # M22 + Codex session-classification can read this to learn that
+          # gaming sessions are a distinct policy context.
+          gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
           asleep_state: "{{ is_state('input_boolean.living_lights_asleep', 'on') }}"
           night_safe_state: "{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}"
           user_at_home_state: "{{ is_state('input_boolean.user_at_home', 'on') }}"
@@ -1700,6 +1778,7 @@ automation:
               state: "{{ pred_sofa_state }}"
               profile: "{{ profile_state }}"
               tv_playing: "{{ tv_playing }}"
+              gaming_active: "{{ gaming_active }}"
               asleep: "{{ asleep_state }}"
               night_safe: "{{ night_safe_state }}"
               user_at_home: "{{ user_at_home_state }}"
@@ -1736,6 +1815,7 @@ automation:
                         'state': pred_sofa_state,
                         'profile': profile_state,
                         'tv_playing': tv_playing,
+                        'gaming_active': gaming_active,
                         'asleep': asleep_state,
                         'night_safe': night_safe_state,
                         'user_at_home': user_at_home_state,
@@ -2010,82 +2090,6 @@ automation:
         data:
           datetime: "1970-01-01 00:00:00"
 
-  - alias: "Living Lights — voice override resets manual (office)"
-    id: living_lights_voice_resets_manual_office
-    mode: parallel
-    max: 4
-    triggers:
-      - trigger: state
-        entity_id: input_text.living_lights_override_text_office
-    conditions:
-      - condition: template
-        value_template: >-
-          {{ trigger.to_state.state not in ['', 'unknown', 'unavailable']
-               and trigger.to_state.state != trigger.from_state.state }}
-    actions:
-      - action: input_datetime.set_datetime
-        target:
-          entity_id: input_datetime.living_lights_zone_office_last_manual_at
-        data:
-          datetime: "1970-01-01 00:00:00"
-
-  - alias: "Living Lights — voice override resets manual (sofa)"
-    id: living_lights_voice_resets_manual_sofa
-    mode: parallel
-    max: 4
-    triggers:
-      - trigger: state
-        entity_id: input_text.living_lights_override_text_sofa
-    conditions:
-      - condition: template
-        value_template: >-
-          {{ trigger.to_state.state not in ['', 'unknown', 'unavailable']
-               and trigger.to_state.state != trigger.from_state.state }}
-    actions:
-      - action: input_datetime.set_datetime
-        target:
-          entity_id: input_datetime.living_lights_zone_sofa_last_manual_at
-        data:
-          datetime: "1970-01-01 00:00:00"
-
-  - alias: "Living Lights — voice override resets manual (dining_right)"
-    id: living_lights_voice_resets_manual_dining_right
-    mode: parallel
-    max: 4
-    triggers:
-      - trigger: state
-        entity_id: input_text.living_lights_override_text_dining_right
-    conditions:
-      - condition: template
-        value_template: >-
-          {{ trigger.to_state.state not in ['', 'unknown', 'unavailable']
-               and trigger.to_state.state != trigger.from_state.state }}
-    actions:
-      - action: input_datetime.set_datetime
-        target:
-          entity_id: input_datetime.living_lights_zone_dining_right_last_manual_at
-        data:
-          datetime: "1970-01-01 00:00:00"
-
-  - alias: "Living Lights — voice override resets manual (sink)"
-    id: living_lights_voice_resets_manual_sink
-    mode: parallel
-    max: 4
-    triggers:
-      - trigger: state
-        entity_id: input_text.living_lights_override_text_sink
-    conditions:
-      - condition: template
-        value_template: >-
-          {{ trigger.to_state.state not in ['', 'unknown', 'unavailable']
-               and trigger.to_state.state != trigger.from_state.state }}
-    actions:
-      - action: input_datetime.set_datetime
-        target:
-          entity_id: input_datetime.living_lights_zone_sink_last_manual_at
-        data:
-          datetime: "1970-01-01 00:00:00"
-
   - alias: "Living Lights — voice override resets manual (front_left)"
     id: living_lights_voice_resets_manual_front_left
     mode: parallel
@@ -2121,6 +2125,44 @@ automation:
       - action: input_datetime.set_datetime
         target:
           entity_id: input_datetime.living_lights_zone_front_door_last_manual_at
+        data:
+          datetime: "1970-01-01 00:00:00"
+
+  - alias: "Living Lights — voice override resets manual (sink)"
+    id: living_lights_voice_resets_manual_sink
+    mode: parallel
+    max: 4
+    triggers:
+      - trigger: state
+        entity_id: input_text.living_lights_override_text_sink
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ trigger.to_state.state not in ['', 'unknown', 'unavailable']
+               and trigger.to_state.state != trigger.from_state.state }}
+    actions:
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.living_lights_zone_sink_last_manual_at
+        data:
+          datetime: "1970-01-01 00:00:00"
+
+  - alias: "Living Lights — voice override resets manual (office)"
+    id: living_lights_voice_resets_manual_office
+    mode: parallel
+    max: 4
+    triggers:
+      - trigger: state
+        entity_id: input_text.living_lights_override_text_office
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ trigger.to_state.state not in ['', 'unknown', 'unavailable']
+               and trigger.to_state.state != trigger.from_state.state }}
+    actions:
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.living_lights_zone_office_last_manual_at
         data:
           datetime: "1970-01-01 00:00:00"
 
@@ -2162,6 +2204,25 @@ automation:
         data:
           datetime: "1970-01-01 00:00:00"
 
+  - alias: "Living Lights — voice override resets manual (sofa)"
+    id: living_lights_voice_resets_manual_sofa
+    mode: parallel
+    max: 4
+    triggers:
+      - trigger: state
+        entity_id: input_text.living_lights_override_text_sofa
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ trigger.to_state.state not in ['', 'unknown', 'unavailable']
+               and trigger.to_state.state != trigger.from_state.state }}
+    actions:
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.living_lights_zone_sofa_last_manual_at
+        data:
+          datetime: "1970-01-01 00:00:00"
+
   - alias: "Living Lights — voice override resets manual (weights)"
     id: living_lights_voice_resets_manual_weights
     mode: parallel
@@ -2178,6 +2239,25 @@ automation:
       - action: input_datetime.set_datetime
         target:
           entity_id: input_datetime.living_lights_zone_weights_last_manual_at
+        data:
+          datetime: "1970-01-01 00:00:00"
+
+  - alias: "Living Lights — voice override resets manual (dining_right)"
+    id: living_lights_voice_resets_manual_dining_right
+    mode: parallel
+    max: 4
+    triggers:
+      - trigger: state
+        entity_id: input_text.living_lights_override_text_dining_right
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ trigger.to_state.state not in ['', 'unknown', 'unavailable']
+               and trigger.to_state.state != trigger.from_state.state }}
+    actions:
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.living_lights_zone_dining_right_last_manual_at
         data:
           datetime: "1970-01-01 00:00:00"
 

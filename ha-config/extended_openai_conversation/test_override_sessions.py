@@ -289,5 +289,100 @@ class TestCollapseEndToEnd(unittest.TestCase):
         self.assertEqual(sink["intent_confidence"], "low")  # only 1 user event
 
 
+class TestContractFixture(unittest.TestCase):
+    """M22a — the canonical fixture for an automation-tail session lives
+    at stack/services/intelligence/tests/fixtures/office_override_session_
+    automation_tail.json so the downstream intelligence service (Codex)
+    can reference the same wire shape. This test enforces that the
+    fixture continues to satisfy the M22 contract — every required field
+    is present, every learning_value_source uses one of the three
+    allowed enum values, and the canonical automation-tail case carries
+    the exact spec values (final=0, user_landed=58, learning=58,
+    source="user_landed")."""
+
+    FIXTURE_PATH = os.path.normpath(os.path.join(
+        _HERE, "..", "..", "stack", "services", "intelligence",
+        "tests", "fixtures",
+        "office_override_session_automation_tail.json",
+    ))
+
+    REQUIRED_FIELDS = (
+        "session_final_actual_pct",
+        "session_user_landed_pct",
+        "automation_tail_detected",
+        "session_tail_path",
+        "session_observed_path",
+        "intent_confidence",
+        "learning_value_pct",
+        "learning_value_source",
+    )
+
+    ALLOWED_LEARNING_SOURCES = {"user_landed", "final_actual", "off_session"}
+    ALLOWED_INTENT_CONFIDENCE = {"high", "medium", "low"}
+
+    def setUp(self) -> None:
+        import json
+        with open(self.FIXTURE_PATH, encoding="utf-8") as f:
+            self.fixture = json.load(f)
+
+    def test_all_required_fields_present(self):
+        missing = [f for f in self.REQUIRED_FIELDS if f not in self.fixture]
+        self.assertEqual(missing, [],
+                         f"fixture missing M22 contract fields: {missing}")
+
+    def test_learning_value_source_is_in_allowed_enum(self):
+        self.assertIn(
+            self.fixture["learning_value_source"],
+            self.ALLOWED_LEARNING_SOURCES,
+        )
+
+    def test_intent_confidence_is_in_allowed_enum(self):
+        self.assertIn(
+            self.fixture["intent_confidence"],
+            self.ALLOWED_INTENT_CONFIDENCE,
+        )
+
+    def test_canonical_automation_tail_values(self):
+        # The fixture is THE M22 canonical example — final=0, landed=58,
+        # learn=58, source=user_landed, tail detected, path ends [0,0].
+        self.assertEqual(self.fixture["session_final_actual_pct"], 0)
+        self.assertEqual(self.fixture["session_user_landed_pct"], 58)
+        self.assertEqual(self.fixture["learning_value_pct"], 58)
+        self.assertEqual(self.fixture["learning_value_source"], "user_landed")
+        self.assertTrue(self.fixture["automation_tail_detected"])
+        self.assertEqual(self.fixture["session_tail_path"], [0, 0])
+
+    def test_classifier_reproduces_fixture_from_its_path(self):
+        # The fixture's session_observed_path + final actual_pct should
+        # round-trip through the live classifier and produce the same
+        # M22 fields. This is the round-trip guarantee — both the HA
+        # endpoint and Codex's downstream re-derivation see the same
+        # truth.
+        r = _classify_session_intent(
+            self.fixture["session_observed_path"],
+            final_actual_pct=self.fixture["actual_pct"],
+        )
+        self.assertEqual(
+            r["session_final_actual_pct"],
+            self.fixture["session_final_actual_pct"],
+        )
+        self.assertEqual(
+            r["session_user_landed_pct"],
+            self.fixture["session_user_landed_pct"],
+        )
+        self.assertEqual(
+            r["learning_value_pct"],
+            self.fixture["learning_value_pct"],
+        )
+        self.assertEqual(
+            r["learning_value_source"],
+            self.fixture["learning_value_source"],
+        )
+        self.assertEqual(
+            r["automation_tail_detected"],
+            self.fixture["automation_tail_detected"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

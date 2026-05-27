@@ -2752,49 +2752,6 @@ mqtt:
         {% endif %}
 
 automation:
-  - alias: "Living Lights — refresh classifier + dwell on startup"
-    id: living_lights_refresh_classifiers
-    triggers:
-      - trigger: homeassistant
-        event: start
-      - trigger: time_pattern
-        minutes: "/5"
-    actions:
-      - delay:
-          seconds: 5
-      - action: homeassistant.update_entity
-        target:
-          entity_id:
-            - sensor.dining_room_dining_left_lighting_state
-            - sensor.dining_room_dining_left_dwell
-            - sensor.dining_room_dining_right_lighting_state
-            - sensor.dining_room_dining_right_dwell
-            - sensor.kitchen_sink_lighting_state
-            - sensor.kitchen_sink_dwell
-            - sensor.kitchen_island_left_lighting_state
-            - sensor.kitchen_island_left_dwell
-            - sensor.kitchen_island_right_lighting_state
-            - sensor.kitchen_island_right_dwell
-            - sensor.living_room_sofa_lighting_state
-            - sensor.living_room_sofa_dwell
-            - sensor.living_room_front_left_lighting_state
-            - sensor.living_room_front_left_dwell
-            - sensor.living_room_weights_lighting_state
-            - sensor.living_room_weights_dwell
-            - sensor.living_room_office_lighting_state
-            - sensor.living_room_office_dwell
-            - sensor.living_room_front_door_lighting_state
-            - sensor.living_room_front_door_dwell
-            - sensor.living_room_whole_living_room_lighting_state
-            - sensor.living_room_whole_living_room_dwell
-            - sensor.workshop_workshop_zone_lighting_state
-            - sensor.workshop_workshop_zone_dwell
-            - sensor.driveway_e28_lighting_state
-            - sensor.driveway_e28_dwell
-            - sensor.dining_room_whole_dining_room_lighting_state
-            - sensor.dining_room_whole_dining_room_dwell
-            - sensor.kitchen_whole_kitchen_lighting_state
-            - sensor.kitchen_whole_kitchen_dwell
   - alias: "Living Lights — asleep ON (house quiet overnight)"
     id: living_lights_asleep_on
     mode: single

@@ -704,27 +704,24 @@ def emit_mqtt() -> str:
 
 
 def emit_automations() -> str:
-    """The package's single `automation:` block: the startup classifier
-    refresh + the two asleep ON/OFF automations."""
-    lines = ["automation:",
-             # ── Belt-and-suspenders classifier/dwell refresh ──
-             '  - alias: "Living Lights — refresh classifier + dwell on startup"',
-             "    id: living_lights_refresh_classifiers",
-             "    triggers:",
-             "      - trigger: homeassistant",
-             "        event: start",
-             "      - trigger: time_pattern",
-             '        minutes: "/5"',
-             "    actions:",
-             "      - delay:",
-             "          seconds: 5",
-             "      - action: homeassistant.update_entity",
-             "        target:",
-             "          entity_id:"]
-    for slug, meta in ZONES.items():
-        cam = meta["camera"]
-        lines.append(f"            - sensor.{cam}_{slug}_lighting_state")
-        lines.append(f"            - sensor.{cam}_{slug}_dwell")
+    """The package's single `automation:` block: the asleep ON/OFF
+    automations.
+
+    MD.1 — the prior "refresh classifier + dwell" belt-and-suspenders
+    automation (5-min time_pattern + homeassistant.update_entity on every
+    classifier + dwell sensor) was removed. Calling update_entity on a
+    trigger-based template sensor invokes the coordinator's
+    `_async_update_data` which raises NotImplementedError — generating
+    recurring "Update for sensor.<...>_dwell fails" log noise without
+    any functional benefit. The classifier sensors already have their
+    own state-triggers (occupancy, anticipated, etc.) + a 5-second
+    time_pattern; dwell sensors have a 15-second time_pattern. Pulling
+    a 5-minute refresh on top added zero refresh value and produced
+    only noise. The startup-refresh case is covered by HA's normal
+    startup state-load (trigger templates initialize on `homeassistant`
+    event during boot).
+    """
+    lines = ["automation:"]
     # ── Asleep ON: house quiet ASLEEP_IDLE_MINUTES, overnight, user home ──
     lines += [
         '  - alias: "Living Lights — asleep ON (house quiet overnight)"',

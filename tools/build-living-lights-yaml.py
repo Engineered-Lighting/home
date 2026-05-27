@@ -384,6 +384,40 @@ def emit_input_number() -> str:
         "    unit_of_measurement: '%'",
         "    icon: mdi:gamepad-variant",
         "    mode: slider",
+        # ── Per-modifier color-temperature overrides ─────────────
+        # Each is 0 by default = "inherit from the ToD curve". Any
+        # non-zero value activates an override for that modifier
+        # (clamped to AL min/max in the template). Cascade priority
+        # matches the brightness cascade: asleep > gaming >
+        # working_hours > tv > ToD curve.
+        "  living_lights_asleep_ct_k:",
+        '    name: "Living Lights — asleep color temp (0 = inherit ToD)"',
+        "    min: 0", "    max: 4500", "    step: 50",
+        "    initial: 0",
+        "    unit_of_measurement: 'K'",
+        "    icon: mdi:sleep",
+        "    mode: slider",
+        "  living_lights_gaming_ct_k:",
+        '    name: "Living Lights — gaming color temp (0 = inherit ToD)"',
+        "    min: 0", "    max: 4500", "    step: 50",
+        "    initial: 0",
+        "    unit_of_measurement: 'K'",
+        "    icon: mdi:gamepad-variant",
+        "    mode: slider",
+        "  living_lights_working_hours_ct_k:",
+        '    name: "Living Lights — working-hours color temp (0 = inherit ToD)"',
+        "    min: 0", "    max: 4500", "    step: 50",
+        "    initial: 0",
+        "    unit_of_measurement: 'K'",
+        "    icon: mdi:briefcase-clock",
+        "    mode: slider",
+        "  living_lights_movie_ct_k:",
+        '    name: "Living Lights — movie color temp (0 = inherit ToD)"',
+        "    min: 0", "    max: 4500", "    step: 50",
+        "    initial: 0",
+        "    unit_of_measurement: 'K'",
+        "    icon: mdi:television",
+        "    mode: slider",
         # ── Group 4: Time-of-day (CT buckets + factor multipliers) ──
         # Color temperature anchors per bucket. Drag a slider to make
         # that bucket warmer (lower K) or cooler (higher K).
@@ -650,12 +684,33 @@ _CLASSIFIER_SENSOR = r"""      - name: "@@CAM_TITLE@@ @@SLUG_TITLE@@ Lighting St
           predicted_color_temp_kelvin: >
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set warm = state_attr('sensor.living_lights_profile', 'tod_color_warm') | int(2700) %}
+            {# Per-modifier CT overrides. 0 = inherit (fall through to the
+               ToD curve). Non-zero = use this Kelvin value. Cascade
+               priority matches the brightness cascade: asleep > gaming >
+               working_hours > tv > ToD. #}
+            {% set asleep_state = is_state('input_boolean.living_lights_asleep', 'on') %}
+            {% set tv_playing_state = states('@@MOVIE_MP@@') not in ['off', 'unavailable', 'unknown'] %}
+            {% set gaming_active_state = is_state('input_boolean.living_lights_gaming_enabled', 'on')
+                                         and state_attr('@@GAMING_SENSOR@@', 'game')
+                                             not in [none, '', 'unavailable', 'unknown'] %}
+            {% set working_hours_active_state = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
+            {% set asleep_ct = states('input_number.living_lights_asleep_ct_k') | int(0) %}
+            {% set gaming_ct = states('input_number.living_lights_gaming_ct_k') | int(0) %}
+            {% set working_hours_ct = states('input_number.living_lights_working_hours_ct_k') | int(0) %}
+            {% set movie_ct = states('input_number.living_lights_movie_ct_k') | int(0) %}
             {# Warmth bias — additive on the cascade output, scope-gated,
                clamped to AL min (2000) / max (4000) to keep Hue happy. #}
             {% set warmth_bias_k = states('input_number.living_lights_warmth_bias_k') | int(0) %}
             {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
             {% set bias_active = bias_scope in ['all', '@@SLUG@@'] %}
-            {% set raw_ct = 2000 if night else warm %}
+            {# Cascade for raw CT. night_safe forces 2000K; otherwise the
+               modifier overrides apply in priority order; otherwise ToD. #}
+            {% set raw_ct = 2000 if night
+                            else asleep_ct if (asleep_state and asleep_ct > 0)
+                            else gaming_ct if (gaming_active_state and gaming_ct > 0)
+                            else working_hours_ct if (working_hours_active_state and working_hours_ct > 0)
+                            else movie_ct if (tv_playing_state and movie_ct > 0)
+                            else warm %}
             {% set final_ct = raw_ct + (warmth_bias_k if bias_active else 0) %}
             {{ [[2000, final_ct] | max, 4000] | min }}
           dwell_ms: >
@@ -925,6 +980,11 @@ def emit_template() -> str:
         "living_lights_asleep_cap_pct",
         "living_lights_movie_dim_pct",
         "living_lights_gaming_dim_pct",
+        # Per-modifier CT overrides — drag a slider, classifier re-evals.
+        "living_lights_asleep_ct_k",
+        "living_lights_gaming_ct_k",
+        "living_lights_working_hours_ct_k",
+        "living_lights_movie_ct_k",
     ]:
         classifier_trigger_entities.append(f"input_number.{inum}")
     # Bias scope helper — flipping 'all' <-> '<slug>' should also
@@ -1366,6 +1426,62 @@ def emit_automations() -> str:
         "          night_safe: \"{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}\"",
         "          user_at_home: \"{{ is_state('input_boolean.user_at_home', 'on') }}\"",
         "          source_user_id: \"{{ trigger.to_state.context.user_id | default(none, true) }}\"",
+        # ── CT actuator (Living Lights owns CT, AL CT adapt is off) ──
+        # Adaptive Lighting's `adapt_color_temp_home` switch is OFF (set
+        # post-deploy via service call; persists across HA restart). That
+        # means nothing autonomously drives CT anymore — AL only drives
+        # brightness, and brightness adapt was already off per AR-1, so AL
+        # is effectively "let LL run the show, just sit there as a
+        # reference signal for ct convergence fallback".
+        #
+        # The Living Lights brightness pilots already inject CT on every
+        # `light.turn_on` they fire (CT convergence, commit 51c427b). So
+        # CT propagates whenever brightness changes (presence/motion/etc).
+        # But for time-of-day boundary crossings (e.g., morning→midday at
+        # 09:00, midday→afternoon at 13:00) with no concurrent brightness
+        # activity, the bulbs would stay at the prior bucket's CT forever.
+        # This actuator fills that gap.
+        #
+        # Trigger: profile sensor's tod_color_warm attribute changes (which
+        # happens at bucket boundaries AND whenever the user drags a ToD CT
+        # bucket slider) OR the warmth_bias_k changes (user drags warmth
+        # bias). Action: push the office-classifier's predicted CT to all
+        # controlled lights. `mode: single` drops overlapping triggers so
+        # rapid slider drags don't queue up a backlog.
+        '  - alias: "Living Lights — CT actuator (own CT post-AL-disable)"',
+        "    id: living_lights_ct_actuator",
+        "    mode: single",
+        "    triggers:",
+        "      - trigger: state",
+        "        entity_id: sensor.living_lights_profile",
+        "        attribute: tod_color_warm",
+        "      - trigger: state",
+        "        entity_id:",
+        "          - input_number.living_lights_warmth_bias_k",
+        "          - input_text.living_lights_bias_zone_scope",
+        "    conditions:",
+        "      - condition: state",
+        "        entity_id: input_boolean.living_lights_enabled",
+        '        state: "on"',
+        "      - condition: state",
+        "        entity_id: input_boolean.living_lights_shadow",
+        '        state: "off"',
+        "    actions:",
+        "      - action: light.turn_on",
+        "        target:",
+        "          entity_id:",
+        "            - light.office",
+        "            - light.front_left",
+        "            - light.front_right",
+        "            - light.rear_left",
+        "            - light.rear_right",
+        "            - light.sink",
+        "            - light.island_left",
+        "            - light.island_right",
+        "        data:",
+        "          color_temp_kelvin: >",
+        "            {{ state_attr('sensor.living_room_office_lighting_state', 'predicted_color_temp_kelvin') | int(2700) }}",
+        "          transition: 3",
     ]
     return "\n".join(lines) + "\n"
 

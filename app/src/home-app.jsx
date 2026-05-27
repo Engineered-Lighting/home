@@ -2671,6 +2671,23 @@ function metricsBaseFromEndpoint(_endpoint) {
   return "http://192.168.0.100:8092";
 }
 
+function intelligenceBaseFromEndpoint(metricsBase, _endpoint) {
+  try {
+    const saved = localStorage.getItem("hg-intelligence-base");
+    if (saved) return saved.replace(/\/+$/, "");
+  } catch {}
+  if (typeof window !== "undefined" && window.HG_DEFAULT_INTELLIGENCE_BASE) {
+    return window.HG_DEFAULT_INTELLIGENCE_BASE.replace(/\/+$/, "");
+  }
+  const source = metricsBase || metricsBaseFromEndpoint(_endpoint);
+  try {
+    const u = new URL(source);
+    return `${u.protocol}//${u.hostname}:8095`;
+  } catch {
+    return "http://192.168.0.100:8095";
+  }
+}
+
 function s2sBaseFromEndpoint(_endpoint) {
   if (typeof window !== "undefined" && window.HG_DEFAULT_S2S_BASE) {
     return window.HG_DEFAULT_S2S_BASE;
@@ -5313,6 +5330,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           let overridesRes = null;
           let decisionsRes = null;
           let pendingRes = null;
+          let activityRes = null;
           try {
             const r = await tauriFetch(`${base}/api/states/${sensorId}`, {
               headers, cache: "no-store",
@@ -5341,10 +5359,30 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             );
             if (r.ok) pendingRes = await r.json();
           } catch (_) { /* tolerate */ }
+          try {
+            const intelligenceBase = intelligenceBaseFromEndpoint(metricsBase, endpoint);
+            const r = await tauriFetch(
+              `${intelligenceBase}/api/intelligence/lighting-activity?zone=${encodeURIComponent(zone)}&hours=24&limit=5`,
+              { cache: "no-store" },
+            );
+            if (r.ok) activityRes = await r.json();
+          } catch (_) { /* tolerate */ }
 
           // Compose the chat-feed entry.
           const friendlyZone = zone.replace(/_/g, " ");
           const lines = [`**${friendlyZone}** — /why-light`];
+          const formatLightValue = (state) => {
+            if (!state) return "?";
+            if (state.state === "off") return "off";
+            const parts = [];
+            if (state.color_temp_kelvin != null && isFinite(Number(state.color_temp_kelvin))) {
+              parts.push(`${Math.round(Number(state.color_temp_kelvin))}K`);
+            }
+            if (state.brightness_pct != null && isFinite(Number(state.brightness_pct))) {
+              parts.push(`${Math.round(Number(state.brightness_pct))}%`);
+            }
+            return parts.length ? parts.join(" ") : (state.state || "?");
+          };
           if (classifier) {
             const stateNow = classifier.state || "unknown";
             const a = classifier.attributes || {};
@@ -5415,6 +5453,22 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           } else {
             lines.push("no pending preferences captured for this zone yet");
           }
+          const activity = (activityRes && activityRes.episodes) || [];
+          if (activity.length > 0) {
+            const summary = activityRes.summary || {};
+            const totalEpisodes = summary.episode_count || activity.length;
+            lines.push(`recent light changes: ${totalEpisodes} episode${totalEpisodes === 1 ? "" : "s"} (showing last 3)`);
+            for (const ep of activity.slice(0, 3)) {
+              const from = formatLightValue(ep.first_state);
+              const to = formatLightValue(ep.last_state);
+              const source = String(ep.source_class || "unknown_source").replace(/_/g, " ");
+              const interp = String(ep.interpretation || "not_used_for_learning").replace(/_/g, " ");
+              const folded = ep.event_count > 1 ? ` Â· ${ep.event_count} raw events` : "";
+              lines.push(`  â€¢ ${ep.end_ts || "?"} â€” ${from} â†’ ${to} Â· ${source} Â· ${interp}${folded}`);
+            }
+          } else {
+            lines.push("no universal lighting activity episodes ingested yet");
+          }
           const decisions = (decisionsRes && decisionsRes.entries) || [];
           if (decisions.length > 0) {
             lines.push(`last classifier transitions (newest first, up to 5):`);
@@ -5433,7 +5487,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             kind: "system",
             text: lines.join("\n"),
             tone: "info",
-            meta: { whyLight: { zone, classifier, overrides, decisions, latestPending } },
+            meta: { whyLight: { zone, classifier, overrides, decisions, latestPending, activity } },
           });
         })();
         return true;
@@ -7244,37 +7298,36 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           onClose={() => setLightsOpen(false)}
           client={haClientRef.current}
           sim={sim}
-          askClaude={(topic) => {
-            // Pre-fill the chat input with a structured prompt for the
-            // frozen-knob "Ask Claude" handoff. Topic identifies which
-            // frozen layer the user clicked.
-            const prompts = {
-              anticipator:
-                "I want to adjust the kinematic anticipator at addons/predictive-lighting/anticipate.py. Current constants:\n" +
-                "  SPEED_THRESHOLD = 0.025\n" +
-                "  HYSTERESIS_BUFFER_N = 5\n" +
-                "  HYSTERESIS_MAJORITY = 3\n" +
-                "  MIN_HOLD_S = 2.5\n" +
-                "  CHAIN_DEPTH = 2\n" +
-                "  ANTICIPATED_DECAY_S = 12\n\n" +
-                "Please walk me through what each does and propose a change.",
-              pilot_transitions:
-                "I want to adjust the pilot transition timings in tools/build-living-lights-actuators.py. Current:\n" +
-                "  RAMP_FAST_S = 2.0\n" +
-                "  RAMP_SLOW_S = 10.0\n" +
-                "  VACANT_TRANSITION_S = 6.0\n" +
-                "  AWAY_TRANSITION_S = 2.0\n" +
-                "  PASS_TRANSITION_S = 0.3\n" +
-                "  ANTICIPATED_TRANSITION_S = 1.5\n\n" +
-                "Please explain each and propose a change.",
-              adaptive_lighting:
-                "I want to adjust Adaptive Lighting in ha-config/packages/adaptive_lighting.yaml.\n" +
-                "Current: min_color_temp=2000, max_color_temp=4000, interval=90s.\n" +
-                "Please explain the trade-offs and propose a change. (HA restart required.)",
-            };
-            const text = prompts[topic] || `I want to adjust the ${topic} layer of Living Lights. Please walk me through it.`;
+          askExternal={(payload) => {
+            // Pre-fill the chat input with a structured `/ask`-prefixed
+            // message containing full layer context + the user's intent.
+            // The `/ask` prefix forces external-provider routing (ChatGPT)
+            // for that single turn — bypasses the local Qwen3-VL
+            // classifier, which has no code-editing tools and would just
+            // refuse / give a generic answer for these change requests.
+            //
+            // The user reviews the populated message + presses Send to
+            // dispatch. Nothing happens automatically; this is just a
+            // structured-prompt bootstrap.
+            const { title, intro, knobs, fileLocation, whyFrozen, userIntent } = payload || {};
+            const knobsBlock = (knobs || []).map(k => {
+              const cur = k.current != null ? ` = ${k.current}` : "";
+              const desc = k.desc ? `  — ${k.desc}` : "";
+              return `  ${k.name}${cur}${desc}`;
+            }).join("\n");
+            const text =
+              `/ask I want to change a layer of my Living Lights automation system.\n\n` +
+              `Layer: ${title}\n` +
+              `File location: ${fileLocation}\n` +
+              `Why it's hard to change: ${whyFrozen}\n\n` +
+              `What this layer does:\n${intro}\n\n` +
+              `What's tunable (with current values):\n${knobsBlock}\n\n` +
+              `What I want changed:\n${userIntent}\n\n` +
+              `Please:\n` +
+              `1. Explain what changing this would actually do — trade-offs, side effects, things to watch for.\n` +
+              `2. Propose specific values to try (give me concrete numbers, not ranges).\n` +
+              `3. Tell me exactly how to apply the change — file path + the lines to edit + any rebuild/restart steps.`;
             if (typeof setInput === "function") setInput(text);
-            else if (typeof setComposerText === "function") setComposerText(text);
           }}
         />
       )}

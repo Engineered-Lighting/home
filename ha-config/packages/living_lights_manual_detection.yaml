@@ -93,6 +93,13 @@ automation:
           # M22 + Codex session-classification can read this to learn that
           # gaming sessions are a distinct policy context.
           gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
+          # Working-hours context dimension. Reads the composite binary_sensor
+          # the observability package emits (toggle + woke_up + weekday + 08-18).
+          # Capturing this in override_event.context lets downstream learning
+          # treat workday-touches as a distinct policy context (R-WH-23 / M22a).
+          # NOT added to dedupe_key — keeps the existing 7-tuple Codex contract
+          # stable. Promoted to policy_context + session_key in a follow-up.
+          working_hours_active: "{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}"
           asleep_state: "{{ is_state('input_boolean.living_lights_asleep', 'on') }}"
           night_safe_state: "{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}"
           user_at_home_state: "{{ is_state('input_boolean.user_at_home', 'on') }}"
@@ -137,6 +144,7 @@ automation:
               profile: "{{ profile_state }}"
               tv_playing: "{{ tv_playing }}"
               gaming_active: "{{ gaming_active }}"
+              working_hours_active: "{{ working_hours_active }}"
               asleep: "{{ asleep_state }}"
               night_safe: "{{ night_safe_state }}"
               user_at_home: "{{ user_at_home_state }}"
@@ -174,6 +182,7 @@ automation:
                         'profile': profile_state,
                         'tv_playing': tv_playing,
                         'gaming_active': gaming_active,
+                        'working_hours_active': working_hours_active,
                         'asleep': asleep_state,
                         'night_safe': night_safe_state,
                         'user_at_home': user_at_home_state,
@@ -259,6 +268,13 @@ automation:
           # M22 + Codex session-classification can read this to learn that
           # gaming sessions are a distinct policy context.
           gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
+          # Working-hours context dimension. Reads the composite binary_sensor
+          # the observability package emits (toggle + woke_up + weekday + 08-18).
+          # Capturing this in override_event.context lets downstream learning
+          # treat workday-touches as a distinct policy context (R-WH-23 / M22a).
+          # NOT added to dedupe_key — keeps the existing 7-tuple Codex contract
+          # stable. Promoted to policy_context + session_key in a follow-up.
+          working_hours_active: "{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}"
           asleep_state: "{{ is_state('input_boolean.living_lights_asleep', 'on') }}"
           night_safe_state: "{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}"
           user_at_home_state: "{{ is_state('input_boolean.user_at_home', 'on') }}"
@@ -303,6 +319,7 @@ automation:
               profile: "{{ profile_state }}"
               tv_playing: "{{ tv_playing }}"
               gaming_active: "{{ gaming_active }}"
+              working_hours_active: "{{ working_hours_active }}"
               asleep: "{{ asleep_state }}"
               night_safe: "{{ night_safe_state }}"
               user_at_home: "{{ user_at_home_state }}"
@@ -340,6 +357,7 @@ automation:
                         'profile': profile_state,
                         'tv_playing': tv_playing,
                         'gaming_active': gaming_active,
+                        'working_hours_active': working_hours_active,
                         'asleep': asleep_state,
                         'night_safe': night_safe_state,
                         'user_at_home': user_at_home_state,
@@ -477,6 +495,13 @@ automation:
           # M22 + Codex session-classification can read this to learn that
           # gaming sessions are a distinct policy context.
           gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
+          # Working-hours context dimension. Reads the composite binary_sensor
+          # the observability package emits (toggle + woke_up + weekday + 08-18).
+          # Capturing this in override_event.context lets downstream learning
+          # treat workday-touches as a distinct policy context (R-WH-23 / M22a).
+          # NOT added to dedupe_key — keeps the existing 7-tuple Codex contract
+          # stable. Promoted to policy_context + session_key in a follow-up.
+          working_hours_active: "{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}"
           asleep_state: "{{ is_state('input_boolean.living_lights_asleep', 'on') }}"
           night_safe_state: "{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}"
           user_at_home_state: "{{ is_state('input_boolean.user_at_home', 'on') }}"
@@ -533,6 +558,7 @@ automation:
               profile: "{{ profile_state }}"
               tv_playing: "{{ tv_playing }}"
               gaming_active: "{{ gaming_active }}"
+              working_hours_active: "{{ working_hours_active }}"
               asleep: "{{ asleep_state }}"
               night_safe: "{{ night_safe_state }}"
               user_at_home: "{{ user_at_home_state }}"
@@ -572,6 +598,7 @@ automation:
                         'profile': profile_state,
                         'tv_playing': tv_playing,
                         'gaming_active': gaming_active,
+                        'working_hours_active': working_hours_active,
                         'asleep': asleep_state,
                         'night_safe': night_safe_state,
                         'user_at_home': user_at_home_state,
@@ -657,6 +684,13 @@ automation:
           # M22 + Codex session-classification can read this to learn that
           # gaming sessions are a distinct policy context.
           gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
+          # Working-hours context dimension. Reads the composite binary_sensor
+          # the observability package emits (toggle + woke_up + weekday + 08-18).
+          # Capturing this in override_event.context lets downstream learning
+          # treat workday-touches as a distinct policy context (R-WH-23 / M22a).
+          # NOT added to dedupe_key — keeps the existing 7-tuple Codex contract
+          # stable. Promoted to policy_context + session_key in a follow-up.
+          working_hours_active: "{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}"
           asleep_state: "{{ is_state('input_boolean.living_lights_asleep', 'on') }}"
           night_safe_state: "{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}"
           user_at_home_state: "{{ is_state('input_boolean.user_at_home', 'on') }}"
@@ -701,6 +735,7 @@ automation:
               profile: "{{ profile_state }}"
               tv_playing: "{{ tv_playing }}"
               gaming_active: "{{ gaming_active }}"
+              working_hours_active: "{{ working_hours_active }}"
               asleep: "{{ asleep_state }}"
               night_safe: "{{ night_safe_state }}"
               user_at_home: "{{ user_at_home_state }}"
@@ -738,6 +773,7 @@ automation:
                         'profile': profile_state,
                         'tv_playing': tv_playing,
                         'gaming_active': gaming_active,
+                        'working_hours_active': working_hours_active,
                         'asleep': asleep_state,
                         'night_safe': night_safe_state,
                         'user_at_home': user_at_home_state,
@@ -823,6 +859,13 @@ automation:
           # M22 + Codex session-classification can read this to learn that
           # gaming sessions are a distinct policy context.
           gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
+          # Working-hours context dimension. Reads the composite binary_sensor
+          # the observability package emits (toggle + woke_up + weekday + 08-18).
+          # Capturing this in override_event.context lets downstream learning
+          # treat workday-touches as a distinct policy context (R-WH-23 / M22a).
+          # NOT added to dedupe_key — keeps the existing 7-tuple Codex contract
+          # stable. Promoted to policy_context + session_key in a follow-up.
+          working_hours_active: "{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}"
           asleep_state: "{{ is_state('input_boolean.living_lights_asleep', 'on') }}"
           night_safe_state: "{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}"
           user_at_home_state: "{{ is_state('input_boolean.user_at_home', 'on') }}"
@@ -867,6 +910,7 @@ automation:
               profile: "{{ profile_state }}"
               tv_playing: "{{ tv_playing }}"
               gaming_active: "{{ gaming_active }}"
+              working_hours_active: "{{ working_hours_active }}"
               asleep: "{{ asleep_state }}"
               night_safe: "{{ night_safe_state }}"
               user_at_home: "{{ user_at_home_state }}"
@@ -904,6 +948,7 @@ automation:
                         'profile': profile_state,
                         'tv_playing': tv_playing,
                         'gaming_active': gaming_active,
+                        'working_hours_active': working_hours_active,
                         'asleep': asleep_state,
                         'night_safe': night_safe_state,
                         'user_at_home': user_at_home_state,
@@ -989,6 +1034,13 @@ automation:
           # M22 + Codex session-classification can read this to learn that
           # gaming sessions are a distinct policy context.
           gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
+          # Working-hours context dimension. Reads the composite binary_sensor
+          # the observability package emits (toggle + woke_up + weekday + 08-18).
+          # Capturing this in override_event.context lets downstream learning
+          # treat workday-touches as a distinct policy context (R-WH-23 / M22a).
+          # NOT added to dedupe_key — keeps the existing 7-tuple Codex contract
+          # stable. Promoted to policy_context + session_key in a follow-up.
+          working_hours_active: "{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}"
           asleep_state: "{{ is_state('input_boolean.living_lights_asleep', 'on') }}"
           night_safe_state: "{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}"
           user_at_home_state: "{{ is_state('input_boolean.user_at_home', 'on') }}"
@@ -1033,6 +1085,7 @@ automation:
               profile: "{{ profile_state }}"
               tv_playing: "{{ tv_playing }}"
               gaming_active: "{{ gaming_active }}"
+              working_hours_active: "{{ working_hours_active }}"
               asleep: "{{ asleep_state }}"
               night_safe: "{{ night_safe_state }}"
               user_at_home: "{{ user_at_home_state }}"
@@ -1070,6 +1123,7 @@ automation:
                         'profile': profile_state,
                         'tv_playing': tv_playing,
                         'gaming_active': gaming_active,
+                        'working_hours_active': working_hours_active,
                         'asleep': asleep_state,
                         'night_safe': night_safe_state,
                         'user_at_home': user_at_home_state,
@@ -1155,6 +1209,13 @@ automation:
           # M22 + Codex session-classification can read this to learn that
           # gaming sessions are a distinct policy context.
           gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
+          # Working-hours context dimension. Reads the composite binary_sensor
+          # the observability package emits (toggle + woke_up + weekday + 08-18).
+          # Capturing this in override_event.context lets downstream learning
+          # treat workday-touches as a distinct policy context (R-WH-23 / M22a).
+          # NOT added to dedupe_key — keeps the existing 7-tuple Codex contract
+          # stable. Promoted to policy_context + session_key in a follow-up.
+          working_hours_active: "{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}"
           asleep_state: "{{ is_state('input_boolean.living_lights_asleep', 'on') }}"
           night_safe_state: "{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}"
           user_at_home_state: "{{ is_state('input_boolean.user_at_home', 'on') }}"
@@ -1199,6 +1260,7 @@ automation:
               profile: "{{ profile_state }}"
               tv_playing: "{{ tv_playing }}"
               gaming_active: "{{ gaming_active }}"
+              working_hours_active: "{{ working_hours_active }}"
               asleep: "{{ asleep_state }}"
               night_safe: "{{ night_safe_state }}"
               user_at_home: "{{ user_at_home_state }}"
@@ -1236,6 +1298,7 @@ automation:
                         'profile': profile_state,
                         'tv_playing': tv_playing,
                         'gaming_active': gaming_active,
+                        'working_hours_active': working_hours_active,
                         'asleep': asleep_state,
                         'night_safe': night_safe_state,
                         'user_at_home': user_at_home_state,
@@ -1351,6 +1414,13 @@ automation:
           # M22 + Codex session-classification can read this to learn that
           # gaming sessions are a distinct policy context.
           gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
+          # Working-hours context dimension. Reads the composite binary_sensor
+          # the observability package emits (toggle + woke_up + weekday + 08-18).
+          # Capturing this in override_event.context lets downstream learning
+          # treat workday-touches as a distinct policy context (R-WH-23 / M22a).
+          # NOT added to dedupe_key — keeps the existing 7-tuple Codex contract
+          # stable. Promoted to policy_context + session_key in a follow-up.
+          working_hours_active: "{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}"
           asleep_state: "{{ is_state('input_boolean.living_lights_asleep', 'on') }}"
           night_safe_state: "{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}"
           user_at_home_state: "{{ is_state('input_boolean.user_at_home', 'on') }}"
@@ -1401,6 +1471,7 @@ automation:
               profile: "{{ profile_state }}"
               tv_playing: "{{ tv_playing }}"
               gaming_active: "{{ gaming_active }}"
+              working_hours_active: "{{ working_hours_active }}"
               asleep: "{{ asleep_state }}"
               night_safe: "{{ night_safe_state }}"
               user_at_home: "{{ user_at_home_state }}"
@@ -1439,6 +1510,7 @@ automation:
                         'profile': profile_state,
                         'tv_playing': tv_playing,
                         'gaming_active': gaming_active,
+                        'working_hours_active': working_hours_active,
                         'asleep': asleep_state,
                         'night_safe': night_safe_state,
                         'user_at_home': user_at_home_state,
@@ -1554,6 +1626,13 @@ automation:
           # M22 + Codex session-classification can read this to learn that
           # gaming sessions are a distinct policy context.
           gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
+          # Working-hours context dimension. Reads the composite binary_sensor
+          # the observability package emits (toggle + woke_up + weekday + 08-18).
+          # Capturing this in override_event.context lets downstream learning
+          # treat workday-touches as a distinct policy context (R-WH-23 / M22a).
+          # NOT added to dedupe_key — keeps the existing 7-tuple Codex contract
+          # stable. Promoted to policy_context + session_key in a follow-up.
+          working_hours_active: "{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}"
           asleep_state: "{{ is_state('input_boolean.living_lights_asleep', 'on') }}"
           night_safe_state: "{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}"
           user_at_home_state: "{{ is_state('input_boolean.user_at_home', 'on') }}"
@@ -1604,6 +1683,7 @@ automation:
               profile: "{{ profile_state }}"
               tv_playing: "{{ tv_playing }}"
               gaming_active: "{{ gaming_active }}"
+              working_hours_active: "{{ working_hours_active }}"
               asleep: "{{ asleep_state }}"
               night_safe: "{{ night_safe_state }}"
               user_at_home: "{{ user_at_home_state }}"
@@ -1642,6 +1722,7 @@ automation:
                         'profile': profile_state,
                         'tv_playing': tv_playing,
                         'gaming_active': gaming_active,
+                        'working_hours_active': working_hours_active,
                         'asleep': asleep_state,
                         'night_safe': night_safe_state,
                         'user_at_home': user_at_home_state,
@@ -1735,6 +1816,13 @@ automation:
           # M22 + Codex session-classification can read this to learn that
           # gaming sessions are a distinct policy context.
           gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
+          # Working-hours context dimension. Reads the composite binary_sensor
+          # the observability package emits (toggle + woke_up + weekday + 08-18).
+          # Capturing this in override_event.context lets downstream learning
+          # treat workday-touches as a distinct policy context (R-WH-23 / M22a).
+          # NOT added to dedupe_key — keeps the existing 7-tuple Codex contract
+          # stable. Promoted to policy_context + session_key in a follow-up.
+          working_hours_active: "{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}"
           asleep_state: "{{ is_state('input_boolean.living_lights_asleep', 'on') }}"
           night_safe_state: "{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}"
           user_at_home_state: "{{ is_state('input_boolean.user_at_home', 'on') }}"
@@ -1779,6 +1867,7 @@ automation:
               profile: "{{ profile_state }}"
               tv_playing: "{{ tv_playing }}"
               gaming_active: "{{ gaming_active }}"
+              working_hours_active: "{{ working_hours_active }}"
               asleep: "{{ asleep_state }}"
               night_safe: "{{ night_safe_state }}"
               user_at_home: "{{ user_at_home_state }}"
@@ -1816,6 +1905,7 @@ automation:
                         'profile': profile_state,
                         'tv_playing': tv_playing,
                         'gaming_active': gaming_active,
+                        'working_hours_active': working_hours_active,
                         'asleep': asleep_state,
                         'night_safe': night_safe_state,
                         'user_at_home': user_at_home_state,
@@ -2090,25 +2180,6 @@ automation:
         data:
           datetime: "1970-01-01 00:00:00"
 
-  - alias: "Living Lights — voice override resets manual (front_left)"
-    id: living_lights_voice_resets_manual_front_left
-    mode: parallel
-    max: 4
-    triggers:
-      - trigger: state
-        entity_id: input_text.living_lights_override_text_front_left
-    conditions:
-      - condition: template
-        value_template: >-
-          {{ trigger.to_state.state not in ['', 'unknown', 'unavailable']
-               and trigger.to_state.state != trigger.from_state.state }}
-    actions:
-      - action: input_datetime.set_datetime
-        target:
-          entity_id: input_datetime.living_lights_zone_front_left_last_manual_at
-        data:
-          datetime: "1970-01-01 00:00:00"
-
   - alias: "Living Lights — voice override resets manual (front_door)"
     id: living_lights_voice_resets_manual_front_door
     mode: parallel
@@ -2125,63 +2196,6 @@ automation:
       - action: input_datetime.set_datetime
         target:
           entity_id: input_datetime.living_lights_zone_front_door_last_manual_at
-        data:
-          datetime: "1970-01-01 00:00:00"
-
-  - alias: "Living Lights — voice override resets manual (sink)"
-    id: living_lights_voice_resets_manual_sink
-    mode: parallel
-    max: 4
-    triggers:
-      - trigger: state
-        entity_id: input_text.living_lights_override_text_sink
-    conditions:
-      - condition: template
-        value_template: >-
-          {{ trigger.to_state.state not in ['', 'unknown', 'unavailable']
-               and trigger.to_state.state != trigger.from_state.state }}
-    actions:
-      - action: input_datetime.set_datetime
-        target:
-          entity_id: input_datetime.living_lights_zone_sink_last_manual_at
-        data:
-          datetime: "1970-01-01 00:00:00"
-
-  - alias: "Living Lights — voice override resets manual (office)"
-    id: living_lights_voice_resets_manual_office
-    mode: parallel
-    max: 4
-    triggers:
-      - trigger: state
-        entity_id: input_text.living_lights_override_text_office
-    conditions:
-      - condition: template
-        value_template: >-
-          {{ trigger.to_state.state not in ['', 'unknown', 'unavailable']
-               and trigger.to_state.state != trigger.from_state.state }}
-    actions:
-      - action: input_datetime.set_datetime
-        target:
-          entity_id: input_datetime.living_lights_zone_office_last_manual_at
-        data:
-          datetime: "1970-01-01 00:00:00"
-
-  - alias: "Living Lights — voice override resets manual (island_right)"
-    id: living_lights_voice_resets_manual_island_right
-    mode: parallel
-    max: 4
-    triggers:
-      - trigger: state
-        entity_id: input_text.living_lights_override_text_island_right
-    conditions:
-      - condition: template
-        value_template: >-
-          {{ trigger.to_state.state not in ['', 'unknown', 'unavailable']
-               and trigger.to_state.state != trigger.from_state.state }}
-    actions:
-      - action: input_datetime.set_datetime
-        target:
-          entity_id: input_datetime.living_lights_zone_island_right_last_manual_at
         data:
           datetime: "1970-01-01 00:00:00"
 
@@ -2204,6 +2218,25 @@ automation:
         data:
           datetime: "1970-01-01 00:00:00"
 
+  - alias: "Living Lights — voice override resets manual (dining_right)"
+    id: living_lights_voice_resets_manual_dining_right
+    mode: parallel
+    max: 4
+    triggers:
+      - trigger: state
+        entity_id: input_text.living_lights_override_text_dining_right
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ trigger.to_state.state not in ['', 'unknown', 'unavailable']
+               and trigger.to_state.state != trigger.from_state.state }}
+    actions:
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.living_lights_zone_dining_right_last_manual_at
+        data:
+          datetime: "1970-01-01 00:00:00"
+
   - alias: "Living Lights — voice override resets manual (sofa)"
     id: living_lights_voice_resets_manual_sofa
     mode: parallel
@@ -2220,6 +2253,25 @@ automation:
       - action: input_datetime.set_datetime
         target:
           entity_id: input_datetime.living_lights_zone_sofa_last_manual_at
+        data:
+          datetime: "1970-01-01 00:00:00"
+
+  - alias: "Living Lights — voice override resets manual (island_right)"
+    id: living_lights_voice_resets_manual_island_right
+    mode: parallel
+    max: 4
+    triggers:
+      - trigger: state
+        entity_id: input_text.living_lights_override_text_island_right
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ trigger.to_state.state not in ['', 'unknown', 'unavailable']
+               and trigger.to_state.state != trigger.from_state.state }}
+    actions:
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.living_lights_zone_island_right_last_manual_at
         data:
           datetime: "1970-01-01 00:00:00"
 
@@ -2242,13 +2294,13 @@ automation:
         data:
           datetime: "1970-01-01 00:00:00"
 
-  - alias: "Living Lights — voice override resets manual (dining_right)"
-    id: living_lights_voice_resets_manual_dining_right
+  - alias: "Living Lights — voice override resets manual (office)"
+    id: living_lights_voice_resets_manual_office
     mode: parallel
     max: 4
     triggers:
       - trigger: state
-        entity_id: input_text.living_lights_override_text_dining_right
+        entity_id: input_text.living_lights_override_text_office
     conditions:
       - condition: template
         value_template: >-
@@ -2257,7 +2309,7 @@ automation:
     actions:
       - action: input_datetime.set_datetime
         target:
-          entity_id: input_datetime.living_lights_zone_dining_right_last_manual_at
+          entity_id: input_datetime.living_lights_zone_office_last_manual_at
         data:
           datetime: "1970-01-01 00:00:00"
 
@@ -2277,5 +2329,43 @@ automation:
       - action: input_datetime.set_datetime
         target:
           entity_id: input_datetime.living_lights_zone_dining_left_last_manual_at
+        data:
+          datetime: "1970-01-01 00:00:00"
+
+  - alias: "Living Lights — voice override resets manual (sink)"
+    id: living_lights_voice_resets_manual_sink
+    mode: parallel
+    max: 4
+    triggers:
+      - trigger: state
+        entity_id: input_text.living_lights_override_text_sink
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ trigger.to_state.state not in ['', 'unknown', 'unavailable']
+               and trigger.to_state.state != trigger.from_state.state }}
+    actions:
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.living_lights_zone_sink_last_manual_at
+        data:
+          datetime: "1970-01-01 00:00:00"
+
+  - alias: "Living Lights — voice override resets manual (front_left)"
+    id: living_lights_voice_resets_manual_front_left
+    mode: parallel
+    max: 4
+    triggers:
+      - trigger: state
+        entity_id: input_text.living_lights_override_text_front_left
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ trigger.to_state.state not in ['', 'unknown', 'unavailable']
+               and trigger.to_state.state != trigger.from_state.state }}
+    actions:
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.living_lights_zone_front_left_last_manual_at
         data:
           datetime: "1970-01-01 00:00:00"

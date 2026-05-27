@@ -36,6 +36,14 @@ input_boolean:
     name: "Living Lights — gaming mode (Steam-driven)"
     icon: mdi:gamepad-variant
     initial: false
+  living_lights_working_hours_enabled:
+    name: "Living Lights — working hours bright mode"
+    icon: mdi:briefcase-clock
+    initial: true
+  living_lights_woke_up_today:
+    name: "Living Lights — woke up today (latch)"
+    icon: mdi:weather-sunny-alert
+    initial: false
   living_lights_learning_enabled:
     name: "Living Lights — learning loop (preference capture)"
     icon: mdi:school
@@ -271,6 +279,26 @@ input_text:
     max: 64
     icon: mdi:identifier
 
+input_number:
+  living_lights_working_hours_floor_pct:
+    name: "Living Lights — working-hours vacant floor (%)"
+    min: 0
+    max: 100
+    step: 5
+    initial: 80
+    unit_of_measurement: '%'
+    icon: mdi:briefcase-arrow-up-down
+    mode: slider
+  living_lights_working_hours_present_pct:
+    name: "Living Lights — working-hours present target (%)"
+    min: 0
+    max: 100
+    step: 5
+    initial: 95
+    unit_of_measurement: '%'
+    icon: mdi:briefcase-eye
+    mode: slider
+
 input_datetime:
   living_lights_zone_dining_left_last_manual_at:
     name: "dining_left — last manual touch"
@@ -500,6 +528,28 @@ template:
         icon: mdi:weather-night
         state: >
           {{ is_state('input_boolean.homeai_sleep', 'on') }}
+
+  - trigger:
+      - platform: homeassistant
+        event: start
+      - platform: state
+        entity_id:
+          - input_boolean.living_lights_working_hours_enabled
+          - input_boolean.living_lights_woke_up_today
+      - platform: time_pattern
+        minutes: "/1"
+    binary_sensor:
+      - name: "Living Lights working hours active"
+        unique_id: living_lights_working_hours_active
+        icon: mdi:briefcase-clock
+        state: >
+          {% set h = now().hour + now().minute / 60 %}
+          {% set is_weekday = now().weekday() < 5 %}
+          {% set in_window = 8 <= h < 18 %}
+          {{ is_state('input_boolean.living_lights_working_hours_enabled', 'on')
+             and is_state('input_boolean.living_lights_woke_up_today', 'on')
+             and is_weekday
+             and in_window }}
 
   - trigger:
       - platform: homeassistant
@@ -1064,6 +1114,13 @@ template:
             {% set gaming_active = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                    and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                        not in [none, '', 'unavailable', 'unknown'] %}
+            {# Working-hours modifier — read live from the working_hours_active
+               composite binary_sensor (toggle + woke_up + weekday + 08-18). The
+               input_number reads carry literal fallbacks matching the initial
+               values so a missing helper degrades gracefully. #}
+            {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
+            {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
+            {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.dining_room_dining_left_activity') %}
             {% set stable_obj = states.binary_sensor.dining_room_dining_left_person_occupancy_stable %}
@@ -1080,7 +1137,7 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = 30 if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (8 if tv_playing else (50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -1094,7 +1151,7 @@ template:
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
           ramp_initial_pct: >
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
@@ -1160,6 +1217,13 @@ template:
             {% set gaming_active = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                    and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                        not in [none, '', 'unavailable', 'unknown'] %}
+            {# Working-hours modifier — read live from the working_hours_active
+               composite binary_sensor (toggle + woke_up + weekday + 08-18). The
+               input_number reads carry literal fallbacks matching the initial
+               values so a missing helper degrades gracefully. #}
+            {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
+            {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
+            {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.dining_room_dining_right_activity') %}
             {% set stable_obj = states.binary_sensor.dining_room_dining_right_person_occupancy_stable %}
@@ -1176,7 +1240,7 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = 30 if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (8 if tv_playing else (50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -1190,7 +1254,7 @@ template:
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
           ramp_initial_pct: >
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
@@ -1256,6 +1320,13 @@ template:
             {% set gaming_active = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                    and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                        not in [none, '', 'unavailable', 'unknown'] %}
+            {# Working-hours modifier — read live from the working_hours_active
+               composite binary_sensor (toggle + woke_up + weekday + 08-18). The
+               input_number reads carry literal fallbacks matching the initial
+               values so a missing helper degrades gracefully. #}
+            {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
+            {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
+            {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.kitchen_sink_activity') %}
             {% set stable_obj = states.binary_sensor.kitchen_sink_person_occupancy_stable %}
@@ -1272,7 +1343,7 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = 30 if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (8 if tv_playing else (50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -1286,7 +1357,7 @@ template:
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
           ramp_initial_pct: >
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
@@ -1352,6 +1423,13 @@ template:
             {% set gaming_active = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                    and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                        not in [none, '', 'unavailable', 'unknown'] %}
+            {# Working-hours modifier — read live from the working_hours_active
+               composite binary_sensor (toggle + woke_up + weekday + 08-18). The
+               input_number reads carry literal fallbacks matching the initial
+               values so a missing helper degrades gracefully. #}
+            {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
+            {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
+            {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.kitchen_island_left_activity') %}
             {% set stable_obj = states.binary_sensor.kitchen_island_left_person_occupancy_stable %}
@@ -1368,7 +1446,7 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = 30 if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (8 if tv_playing else (50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -1382,7 +1460,7 @@ template:
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
           ramp_initial_pct: >
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
@@ -1448,6 +1526,13 @@ template:
             {% set gaming_active = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                    and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                        not in [none, '', 'unavailable', 'unknown'] %}
+            {# Working-hours modifier — read live from the working_hours_active
+               composite binary_sensor (toggle + woke_up + weekday + 08-18). The
+               input_number reads carry literal fallbacks matching the initial
+               values so a missing helper degrades gracefully. #}
+            {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
+            {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
+            {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.kitchen_island_right_activity') %}
             {% set stable_obj = states.binary_sensor.kitchen_island_right_person_occupancy_stable %}
@@ -1464,7 +1549,7 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = 30 if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (8 if tv_playing else (50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -1478,7 +1563,7 @@ template:
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
           ramp_initial_pct: >
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
@@ -1544,6 +1629,13 @@ template:
             {% set gaming_active = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                    and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                        not in [none, '', 'unavailable', 'unknown'] %}
+            {# Working-hours modifier — read live from the working_hours_active
+               composite binary_sensor (toggle + woke_up + weekday + 08-18). The
+               input_number reads carry literal fallbacks matching the initial
+               values so a missing helper degrades gracefully. #}
+            {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
+            {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
+            {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.living_room_sofa_activity') %}
             {% set stable_obj = states.binary_sensor.living_room_sofa_person_occupancy_stable %}
@@ -1560,7 +1652,7 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = 30 if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (3 if gaming_active else 8 if tv_playing else (50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (3 if gaming_active else working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -1575,7 +1667,7 @@ template:
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if gaming_active %}3{% elif tv_playing %}8{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if gaming_active %}3{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif tv_playing %}8{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
           ramp_initial_pct: >
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
@@ -1641,6 +1733,13 @@ template:
             {% set gaming_active = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                    and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                        not in [none, '', 'unavailable', 'unknown'] %}
+            {# Working-hours modifier — read live from the working_hours_active
+               composite binary_sensor (toggle + woke_up + weekday + 08-18). The
+               input_number reads carry literal fallbacks matching the initial
+               values so a missing helper degrades gracefully. #}
+            {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
+            {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
+            {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.living_room_front_left_activity') %}
             {% set stable_obj = states.binary_sensor.living_room_front_left_person_occupancy_stable %}
@@ -1657,7 +1756,7 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = 30 if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (3 if gaming_active else 8 if tv_playing else (50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (3 if gaming_active else working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -1672,7 +1771,7 @@ template:
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if gaming_active %}3{% elif tv_playing %}8{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if gaming_active %}3{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif tv_playing %}8{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
           ramp_initial_pct: >
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
@@ -1738,6 +1837,13 @@ template:
             {% set gaming_active = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                    and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                        not in [none, '', 'unavailable', 'unknown'] %}
+            {# Working-hours modifier — read live from the working_hours_active
+               composite binary_sensor (toggle + woke_up + weekday + 08-18). The
+               input_number reads carry literal fallbacks matching the initial
+               values so a missing helper degrades gracefully. #}
+            {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
+            {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
+            {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.living_room_weights_activity') %}
             {% set stable_obj = states.binary_sensor.living_room_weights_person_occupancy_stable %}
@@ -1754,7 +1860,7 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = 30 if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (3 if gaming_active else 8 if tv_playing else (50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (3 if gaming_active else working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -1769,7 +1875,7 @@ template:
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if gaming_active %}3{% elif tv_playing %}8{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if gaming_active %}3{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif tv_playing %}8{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
           ramp_initial_pct: >
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
@@ -1835,6 +1941,13 @@ template:
             {% set gaming_active = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                    and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                        not in [none, '', 'unavailable', 'unknown'] %}
+            {# Working-hours modifier — read live from the working_hours_active
+               composite binary_sensor (toggle + woke_up + weekday + 08-18). The
+               input_number reads carry literal fallbacks matching the initial
+               values so a missing helper degrades gracefully. #}
+            {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
+            {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
+            {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.living_room_office_activity') %}
             {% set stable_obj = states.binary_sensor.living_room_office_person_occupancy_stable %}
@@ -1851,7 +1964,7 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = 30 if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (0 if gaming_active else 8 if tv_playing else (50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (0 if gaming_active else working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -1866,7 +1979,7 @@ template:
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if gaming_active %}0{% elif tv_playing %}8{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if gaming_active %}0{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif tv_playing %}8{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
           ramp_initial_pct: >
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
@@ -1932,6 +2045,13 @@ template:
             {% set gaming_active = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                    and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                        not in [none, '', 'unavailable', 'unknown'] %}
+            {# Working-hours modifier — read live from the working_hours_active
+               composite binary_sensor (toggle + woke_up + weekday + 08-18). The
+               input_number reads carry literal fallbacks matching the initial
+               values so a missing helper degrades gracefully. #}
+            {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
+            {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
+            {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.living_room_front_door_activity') %}
             {% set stable_obj = states.binary_sensor.living_room_front_door_person_occupancy_stable %}
@@ -1948,7 +2068,7 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = 30 if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (3 if gaming_active else 8 if tv_playing else (50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (3 if gaming_active else working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -1963,7 +2083,7 @@ template:
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if gaming_active %}3{% elif tv_playing %}8{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if gaming_active %}3{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif tv_playing %}8{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
           ramp_initial_pct: >
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
@@ -2029,6 +2149,13 @@ template:
             {% set gaming_active = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                    and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                        not in [none, '', 'unavailable', 'unknown'] %}
+            {# Working-hours modifier — read live from the working_hours_active
+               composite binary_sensor (toggle + woke_up + weekday + 08-18). The
+               input_number reads carry literal fallbacks matching the initial
+               values so a missing helper degrades gracefully. #}
+            {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
+            {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
+            {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.living_room_whole_living_room_activity') %}
             {% set stable_obj = states.binary_sensor.living_room_whole_living_room_person_occupancy_stable %}
@@ -2045,7 +2172,7 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = 30 if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (8 if tv_playing else (50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -2060,7 +2187,7 @@ template:
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if tv_playing %}8{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif tv_playing %}8{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
           ramp_initial_pct: >
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
@@ -2126,6 +2253,13 @@ template:
             {% set gaming_active = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                    and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                        not in [none, '', 'unavailable', 'unknown'] %}
+            {# Working-hours modifier — read live from the working_hours_active
+               composite binary_sensor (toggle + woke_up + weekday + 08-18). The
+               input_number reads carry literal fallbacks matching the initial
+               values so a missing helper degrades gracefully. #}
+            {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
+            {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
+            {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.workshop_workshop_zone_activity') %}
             {% set stable_obj = states.binary_sensor.workshop_workshop_zone_person_occupancy_stable %}
@@ -2142,7 +2276,7 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = 30 if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (8 if tv_playing else (50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -2156,7 +2290,7 @@ template:
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
           ramp_initial_pct: >
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
@@ -2222,6 +2356,13 @@ template:
             {% set gaming_active = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                    and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                        not in [none, '', 'unavailable', 'unknown'] %}
+            {# Working-hours modifier — read live from the working_hours_active
+               composite binary_sensor (toggle + woke_up + weekday + 08-18). The
+               input_number reads carry literal fallbacks matching the initial
+               values so a missing helper degrades gracefully. #}
+            {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
+            {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
+            {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.driveway_e28_activity') %}
             {% set stable_obj = states.binary_sensor.driveway_e28_person_occupancy_stable %}
@@ -2238,7 +2379,7 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = 30 if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (8 if tv_playing else (50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -2252,7 +2393,7 @@ template:
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
           ramp_initial_pct: >
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
@@ -2318,6 +2459,13 @@ template:
             {% set gaming_active = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                    and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                        not in [none, '', 'unavailable', 'unknown'] %}
+            {# Working-hours modifier — read live from the working_hours_active
+               composite binary_sensor (toggle + woke_up + weekday + 08-18). The
+               input_number reads carry literal fallbacks matching the initial
+               values so a missing helper degrades gracefully. #}
+            {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
+            {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
+            {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.dining_room_whole_dining_room_activity') %}
             {% set stable_obj = states.binary_sensor.dining_room_whole_dining_room_person_occupancy_stable %}
@@ -2334,7 +2482,7 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = 30 if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (8 if tv_playing else (50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -2348,7 +2496,7 @@ template:
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
           ramp_initial_pct: >
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
@@ -2414,6 +2562,13 @@ template:
             {% set gaming_active = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                    and state_attr('sensor.steam_steam_76561198136331341', 'game')
                                        not in [none, '', 'unavailable', 'unknown'] %}
+            {# Working-hours modifier — read live from the working_hours_active
+               composite binary_sensor (toggle + woke_up + weekday + 08-18). The
+               input_number reads carry literal fallbacks matching the initial
+               values so a missing helper degrades gracefully. #}
+            {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
+            {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
+            {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.kitchen_whole_kitchen_activity') %}
             {% set stable_obj = states.binary_sensor.kitchen_whole_kitchen_person_occupancy_stable %}
@@ -2430,7 +2585,7 @@ template:
                asleep state's job, not a blanket clock cap. #}
             {% set cap = 30 if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (8 if tv_playing else (50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -2444,7 +2599,7 @@ template:
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
           ramp_initial_pct: >
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
@@ -2846,3 +3001,98 @@ automation:
             {{ (agent_response.response.speech.plain.speech
                | default(agent_response.speech.plain.speech, true)
                | default('Acknowledged.', true))[:200] }}
+  - alias: "Living Lights — working hours morning latch"
+    id: living_lights_working_hours_morning_latch
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.living_lights_any_occupied
+        to: "on"
+        for:
+          minutes: 2
+    conditions:
+      - condition: state
+        entity_id: input_boolean.living_lights_working_hours_enabled
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.living_lights_woke_up_today
+        state: "off"
+      - condition: template
+        value_template: "{{ 5 <= now().hour < 12 }}"
+    actions:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.living_lights_woke_up_today
+  - alias: "Living Lights — working hours start catch-up"
+    id: living_lights_working_hours_start_catchup
+    mode: single
+    triggers:
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: state
+        entity_id: input_boolean.living_lights_working_hours_enabled
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.living_lights_woke_up_today
+        state: "off"
+      - condition: template
+        value_template: "{{ 8 <= now().hour < 18 }}"
+      - condition: state
+        entity_id: binary_sensor.living_lights_any_occupied
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.living_lights_asleep
+        state: "off"
+    actions:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.living_lights_woke_up_today
+  - alias: "Living Lights — working hours morning resume"
+    id: living_lights_working_hours_morning_resume
+    mode: single
+    triggers:
+      - trigger: time
+        at: "05:00:00"
+      - trigger: time
+        at: "08:00:00"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.living_lights_working_hours_enabled
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.living_lights_woke_up_today
+        state: "off"
+      - condition: state
+        entity_id: binary_sensor.living_lights_any_occupied
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.living_lights_asleep
+        state: "off"
+    actions:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.living_lights_woke_up_today
+  - alias: "Living Lights — working hours reset at 04:00"
+    id: living_lights_working_hours_reset_at_0400
+    mode: single
+    triggers:
+      - trigger: time
+        at: "04:00:00"
+    actions:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.living_lights_woke_up_today
+  - alias: "Living Lights — working hours reset on asleep"
+    id: living_lights_working_hours_reset_on_asleep
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.living_lights_asleep
+        to: "on"
+        for:
+          minutes: 10
+    actions:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.living_lights_woke_up_today

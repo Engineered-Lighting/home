@@ -453,6 +453,12 @@ def emit_capture_automations(zones) -> str:
           # `office|midday|present|F|F|F|T`). Downstream owner adds gaming to
           # policy_context + session_key when ready.
           gaming_active: "{{{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}}}"
+          # Working-hours context (R-WH-23 / M22a-aligned). Same rationale
+          # as gaming_active: captured into pending_preference.context so
+          # downstream can learn that workday-preferences are a distinct
+          # policy context. NOT in dedupe_key — preserves the 7-tuple Codex
+          # contract until policy_context + session_key are promoted.
+          working_hours_active: "{{{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}}}"
           asleep_state: "{{{{ is_state('input_boolean.living_lights_asleep', 'on') }}}}"
           night_safe_state: "{{{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}}}"
           user_at_home_state: "{{{{ is_state('input_boolean.user_at_home', 'on') }}}}"
@@ -574,6 +580,7 @@ def emit_capture_automations(zones) -> str:
                 'state': primary_state,
                 'tv_playing': tv_playing,
                 'gaming_active': gaming_active,
+                'working_hours_active': working_hours_active,
                 'asleep': asleep_state,
                 'night_safe': night_safe_state,
                 'user_at_home': user_at_home_state,
@@ -627,6 +634,7 @@ def emit_capture_automations(zones) -> str:
               state: "{{{{ primary_state }}}}"
               tv_playing: "{{{{ tv_playing }}}}"
               gaming_active: "{{{{ gaming_active }}}}"
+              working_hours_active: "{{{{ working_hours_active }}}}"
               asleep: "{{{{ asleep_state }}}}"
               night_safe: "{{{{ night_safe_state }}}}"
               user_at_home: "{{{{ user_at_home_state }}}}"

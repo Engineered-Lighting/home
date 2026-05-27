@@ -743,6 +743,7 @@ def _emit_jsonl_payload_block(light_entity, camera, owning_zones, indent=18):
         ind + "    'profile': profile_state,",
         ind + "    'tv_playing': tv_playing,",
         ind + "    'gaming_active': gaming_active,",
+        ind + "    'working_hours_active': working_hours_active,",
         ind + "    'asleep': asleep_state,",
         ind + "    'night_safe': night_safe_state,",
         ind + "    'user_at_home': user_at_home_state,",
@@ -826,6 +827,13 @@ def _emit_detection_automation(light_entity, owning_zones, camera) -> str:
           # M22 + Codex session-classification can read this to learn that
           # gaming sessions are a distinct policy context.
           gaming_active: "{{{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}}}"
+          # Working-hours context dimension. Reads the composite binary_sensor
+          # the observability package emits (toggle + woke_up + weekday + 08-18).
+          # Capturing this in override_event.context lets downstream learning
+          # treat workday-touches as a distinct policy context (R-WH-23 / M22a).
+          # NOT added to dedupe_key — keeps the existing 7-tuple Codex contract
+          # stable. Promoted to policy_context + session_key in a follow-up.
+          working_hours_active: "{{{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}}}"
           asleep_state: "{{{{ is_state('input_boolean.living_lights_asleep', 'on') }}}}"
           night_safe_state: "{{{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}}}"
           user_at_home_state: "{{{{ is_state('input_boolean.user_at_home', 'on') }}}}"
@@ -867,6 +875,7 @@ def _emit_detection_automation(light_entity, owning_zones, camera) -> str:
               profile: "{{{{ profile_state }}}}"
               tv_playing: "{{{{ tv_playing }}}}"
               gaming_active: "{{{{ gaming_active }}}}"
+              working_hours_active: "{{{{ working_hours_active }}}}"
               asleep: "{{{{ asleep_state }}}}"
               night_safe: "{{{{ night_safe_state }}}}"
               user_at_home: "{{{{ user_at_home_state }}}}"

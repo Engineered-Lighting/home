@@ -105,6 +105,20 @@ GAMING_DIM_ZONES = {"sofa", "front_left", "weights", "front_door"}
 # (yielding the double "steam" prefix in the entity id). Confirmed via
 # core.entity_registry post-integration setup on 2026-05-27.
 GAMING_SENSOR = "sensor.steam_steam_76561198136331341"
+
+# Working-hours modifier — weekday 08:00-18:00 brightness boost. When the
+# user is genuinely awake (`woke_up_today` latched) AND it's a weekday
+# inside the working window AND the master toggle is on, `working_hours_active`
+# flips true and the classifier raises the floor + present target everywhere.
+# Goal: house stays bright + responsive while sitting at the desk — even
+# when the office Frigate polygon misses a still desk-sitter (vacant floor
+# rises to 80, present rises to 95).
+#
+# Thresholds are user-tunable via input_number (live, no regen). Asleep,
+# away, manual_override, presence_override, and gaming still win over
+# working_hours (gaming is a strong opt-in signal — see R-WH-6).
+WORKING_HOURS_FLOOR_PCT_INITIAL = 80    # input_number initial; vacant during working hours
+WORKING_HOURS_PRESENT_PCT_INITIAL = 95  # input_number initial; present during working hours
 # Confidence ramp — occupancy targets, ToD-scaled + clamped by the cap.
 RAMP_TARGET_PCT = 80       # `present` ramp destination
 RAMP_INITIAL_PCT = 50      # fast-reaction level
@@ -187,6 +201,22 @@ def emit_input_boolean() -> str:
              '    name: "Living Lights — gaming mode (Steam-driven)"',
              "    icon: mdi:gamepad-variant",
              "    initial: false",
+             # Working-hours modifier — master toggle (default ON so the
+             # behavior is live for the user's typical work week without
+             # extra setup; flip OFF for vacation days / holidays).
+             '  living_lights_working_hours_enabled:',
+             '    name: "Living Lights — working hours bright mode"',
+             "    icon: mdi:briefcase-clock",
+             "    initial: true",
+             # Wake-up latch. Set by the morning-latch automation when
+             # sustained presence is detected during 05:00-12:00; reset at
+             # 04:00 nightly + on sustained asleep. Default OFF so a fresh
+             # deploy / midnight crossover does NOT auto-engage working
+             # hours until the user actually wakes up.
+             '  living_lights_woke_up_today:',
+             '    name: "Living Lights — woke up today (latch)"',
+             "    icon: mdi:weather-sunny-alert",
+             "    initial: false",
              '  living_lights_learning_enabled:',
              '    name: "Living Lights — learning loop (preference capture)"',
              "    icon: mdi:school",
@@ -228,6 +258,40 @@ def emit_input_text() -> str:
     return "\n".join(lines) + "\n"
 
 
+def emit_input_number() -> str:
+    """User-tunable thresholds for working-hours brightness, settable
+    live from the HA UI without regenerating YAML. Templates read these
+    via `states('input_number.living_lights_working_hours_*_pct')` with
+    a literal fallback that matches the initial value so a missing
+    helper degrades gracefully.
+
+    `step: 5` so the UI slider clicks in 5% increments (fine enough to
+    matter, coarse enough to avoid fiddling).
+    """
+    lines = [
+        "input_number:",
+        "  living_lights_working_hours_floor_pct:",
+        '    name: "Living Lights — working-hours vacant floor (%)"',
+        "    min: 0",
+        "    max: 100",
+        "    step: 5",
+        f"    initial: {WORKING_HOURS_FLOOR_PCT_INITIAL}",
+        "    unit_of_measurement: '%'",
+        "    icon: mdi:briefcase-arrow-up-down",
+        "    mode: slider",
+        "  living_lights_working_hours_present_pct:",
+        '    name: "Living Lights — working-hours present target (%)"',
+        "    min: 0",
+        "    max: 100",
+        "    step: 5",
+        f"    initial: {WORKING_HOURS_PRESENT_PCT_INITIAL}",
+        "    unit_of_measurement: '%'",
+        "    icon: mdi:briefcase-eye",
+        "    mode: slider",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def emit_input_datetime() -> str:
     lines = ["input_datetime:"]
     for slug in ZONES:
@@ -254,23 +318,30 @@ def _present_target(is_watch: bool,
                     is_gaming_off: bool,
                     is_gaming_dim: bool) -> str:
     """Single-line Jinja for a `present` zone's brightness target — the
-    confidence ramp's destination. Gaming, then movie, then V-JEPA 2
-    activity, then fall back to the default RAMP_TARGET_PCT.
+    confidence ramp's destination. Gaming, then working-hours, then
+    movie, then V-JEPA 2 activity, then fall back to the default
+    RAMP_TARGET_PCT.
 
     Gaming (R-G1) is the highest-priority MODIFIER in this cascade — when
     `gaming_active` is true and the zone is in GAMING_OFF_ZONES, the
     present target is 0 (office goes off even with the user at the desk).
     When in GAMING_DIM_ZONES, the present target is GAMING_DIM_PCT (LR
-    stays dim even when the user walks past). Movie mode (tv_playing)
-    falls in next: a watch zone (MOVIE_WATCH_ZONES) dims to floor while
-    the TV plays. Then the V-JEPA 2 activity seam (belief-gated). Default
-    fallback: RAMP_TARGET_PCT, cap-clamped, floored at `floor`.
+    stays dim even when the user walks past). Working-hours next: when
+    `working_hours_active` is true (weekday 08-18 + woke-up latched + master
+    on), the present target rises to `working_hours_present_pct` (default 95)
+    house-wide so the desk + surrounds stay bright + responsive. Cap-clamped
+    so per-bulb max calibration is respected (R-WH-4). Movie mode falls in
+    next: a watch zone dims to floor while the TV plays. Then the V-JEPA 2
+    activity seam (belief-gated). Default fallback: RAMP_TARGET_PCT,
+    cap-clamped, floored at `floor`.
 
-    `floor`, `cap`, `tv_playing`, `gaming_active`, `belief`, `activity`
-    are all in scope where this splices in. Activity targets are
-    prescriptive — they are cap-clamped only, free to go below the floor
-    (e.g. napping). Gaming targets are also free to go below the floor
-    (e.g. office=0, LR=3 even during the day when floor>3)."""
+    `floor`, `cap`, `tv_playing`, `gaming_active`, `working_hours_active`,
+    `working_hours_present_pct`, `belief`, `activity` are all in scope where
+    this splices in. Activity targets are prescriptive — they are cap-clamped
+    only, free to go below the floor (e.g. napping). Gaming targets are also
+    free to go below the floor (e.g. office=0, LR=3 even during the day
+    when floor>3). Working-hours intentionally dominates TV: a user watching
+    background news during work still wants the bright workday surface."""
     branches = []
     opened = False
     if is_gaming_off:
@@ -279,14 +350,19 @@ def _present_target(is_watch: bool,
     elif is_gaming_dim:
         branches.append("{% if gaming_active %}" + str(GAMING_DIM_PCT))
         opened = True
+    # Working-hours is uniform across every zone — same target, same
+    # input_number, same cap-clamp. Slots BETWEEN gaming and tv_playing
+    # so a Steam-launched game still wins (gaming is a strong opt-in
+    # user signal; the user can flip working_hours_enabled OFF for
+    # gaming-on-workdays edge cases per R-WH-6).
+    kw = "{% elif" if opened else "{% if"
+    branches.append(kw + " working_hours_active %}"
+                    + "{{ [working_hours_present_pct, cap] | min }}")
+    opened = True
     if is_watch:
-        kw = "{% elif" if opened else "{% if"
-        branches.append(kw + " tv_playing %}" + str(MOVIE_DIM_PCT))
-        opened = True
+        branches.append("{% elif tv_playing %}" + str(MOVIE_DIM_PCT))
     for act, pct in ACTIVITY_PROFILES.items():
-        kw = "{% elif" if opened else "{% if"
-        opened = True
-        branches.append(kw + " belief and activity == '" + act + "' %}"
+        branches.append("{% elif belief and activity == '" + act + "' %}"
                         + "{{ [" + str(pct) + ", cap] | min }}")
     branches.append("{% else %}{{ [floor, [" + str(RAMP_TARGET_PCT)
                     + ", cap] | min] | max }}{% endif %}")
@@ -344,6 +420,13 @@ _CLASSIFIER_SENSOR = r"""      - name: "@@CAM_TITLE@@ @@SLUG_TITLE@@ Lighting St
             {% set gaming_active = is_state('input_boolean.living_lights_gaming_enabled', 'on')
                                    and state_attr('@@GAMING_SENSOR@@', 'game')
                                        not in [none, '', 'unavailable', 'unknown'] %}
+            {# Working-hours modifier — read live from the working_hours_active
+               composite binary_sensor (toggle + woke_up + weekday + 08-18). The
+               input_number reads carry literal fallbacks matching the initial
+               values so a missing helper degrades gracefully. #}
+            {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
+            {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(@@WORKING_HOURS_FLOOR_INIT@@) %}
+            {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(@@WORKING_HOURS_PRESENT_INIT@@) %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('@@ACTIVITY_ENTITY@@') %}
             {% set stable_obj = states.@@STABLE_ENTITY@@ %}
@@ -360,7 +443,7 @@ _CLASSIFIER_SENSOR = r"""      - name: "@@CAM_TITLE@@ @@SLUG_TITLE@@ Lighting St
                asleep state's job, not a blanket clock cap. #}
             {% set cap = @@ASLEEP_CAP@@ if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (@@GAMING_FLOOR@@@@MOVIE_DIM@@ if tv_playing else (@@VACANT_DAY@@ if profile in ['morning', 'midday', 'afternoon', 'evening'] else @@VACANT_NIGHT@@)) %}
+            {% set floor = 0 if asleep else (@@GAMING_FLOOR@@working_hours_floor_pct if working_hours_active else @@MOVIE_DIM@@ if tv_playing else (working_hours_floor_pct if working_hours_active else @@VACANT_DAY@@ if profile in ['morning', 'midday', 'afternoon', 'evening'] else @@VACANT_NIGHT@@)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -478,6 +561,33 @@ def emit_template() -> str:
         icon: mdi:weather-night
         state: >
           {{ is_state('input_boolean.homeai_sleep', 'on') }}""")
+
+    # Working-hours binary_sensor — composite of: master toggle on AND
+    # woke-up latch on AND weekday AND time within 08:00-18:00. The
+    # time_pattern minutes "/1" trigger ensures the 08:00 + 18:00
+    # boundary crossings are picked up within 60 s (R-WH-13). State
+    # changes on the two booleans fire instantly via state triggers.
+    parts.append("""  - trigger:
+      - platform: homeassistant
+        event: start
+      - platform: state
+        entity_id:
+          - input_boolean.living_lights_working_hours_enabled
+          - input_boolean.living_lights_woke_up_today
+      - platform: time_pattern
+        minutes: "/1"
+    binary_sensor:
+      - name: "Living Lights working hours active"
+        unique_id: living_lights_working_hours_active
+        icon: mdi:briefcase-clock
+        state: >
+          {% set h = now().hour + now().minute / 60 %}
+          {% set is_weekday = now().weekday() < 5 %}
+          {% set in_window = 8 <= h < 18 %}
+          {{ is_state('input_boolean.living_lights_working_hours_enabled', 'on')
+             and is_state('input_boolean.living_lights_woke_up_today', 'on')
+             and is_weekday
+             and in_window }}""")
 
     # Per-zone dwell sensors (one trigger block per camera batch)
     occupancy_entity_ids = [_slug_to_entity_id(s) for s in ZONES]
@@ -628,6 +738,10 @@ def emit_template() -> str:
                        .replace("@@MOVIE_MP@@", MOVIE_MEDIA_PLAYER)
                        .replace("@@GAMING_SENSOR@@", GAMING_SENSOR)
                        .replace("@@GAMING_FLOOR@@", gaming_floor)
+                       .replace("@@WORKING_HOURS_FLOOR_INIT@@",
+                                str(WORKING_HOURS_FLOOR_PCT_INITIAL))
+                       .replace("@@WORKING_HOURS_PRESENT_INIT@@",
+                                str(WORKING_HOURS_PRESENT_PCT_INITIAL))
                        .replace("@@VACANT_DAY@@", str(VACANT_DAY_PCT))
                        .replace("@@VACANT_NIGHT@@", str(VACANT_NIGHT_PCT))
                        .replace("@@ANTICIPATED_PCT@@", str(ANTICIPATED_PCT))
@@ -834,6 +948,128 @@ def emit_automations() -> str:
         "            {{ (agent_response.response.speech.plain.speech",
         "               | default(agent_response.speech.plain.speech, true)",
         "               | default('Acknowledged.', true))[:200] }}",
+        # ── Working-hours: morning latch (presence-driven, narrow window) ──
+        # Trigger: sustained presence anywhere for 2 min during 05:00-12:00.
+        # The 2-min debounce filters out phantom 5 AM Frigate flickers
+        # (R-WH-14); the 05:00 lower bound prevents 03:00 bathroom trips
+        # from latching. master toggle + woke_up_today gate is checked
+        # in conditions so a re-deploy with woke_up already on doesn't
+        # double-fire.
+        '  - alias: "Living Lights — working hours morning latch"',
+        "    id: living_lights_working_hours_morning_latch",
+        "    mode: single",
+        "    triggers:",
+        "      - trigger: state",
+        "        entity_id: binary_sensor.living_lights_any_occupied",
+        '        to: "on"',
+        "        for:",
+        '          minutes: 2',
+        "    conditions:",
+        "      - condition: state",
+        "        entity_id: input_boolean.living_lights_working_hours_enabled",
+        '        state: "on"',
+        "      - condition: state",
+        "        entity_id: input_boolean.living_lights_woke_up_today",
+        '        state: "off"',
+        "      - condition: template",
+        "        value_template: \"{{ 5 <= now().hour < 12 }}\"",
+        "    actions:",
+        "      - action: input_boolean.turn_on",
+        "        target:",
+        "          entity_id: input_boolean.living_lights_woke_up_today",
+        # ── Working-hours: HA-restart catch-up ──
+        # If HA restarts mid-workday with the user present + not asleep,
+        # immediately arm the latch instead of waiting for the next presence
+        # state transition (which may not come — the user may already be
+        # at the desk for hours). R-WH-2 fold.
+        '  - alias: "Living Lights — working hours start catch-up"',
+        "    id: living_lights_working_hours_start_catchup",
+        "    mode: single",
+        "    triggers:",
+        "      - trigger: homeassistant",
+        "        event: start",
+        "    conditions:",
+        "      - condition: state",
+        "        entity_id: input_boolean.living_lights_working_hours_enabled",
+        '        state: "on"',
+        "      - condition: state",
+        "        entity_id: input_boolean.living_lights_woke_up_today",
+        '        state: "off"',
+        "      - condition: template",
+        "        value_template: \"{{ 8 <= now().hour < 18 }}\"",
+        "      - condition: state",
+        "        entity_id: binary_sensor.living_lights_any_occupied",
+        '        state: "on"',
+        "      - condition: state",
+        "        entity_id: input_boolean.living_lights_asleep",
+        '        state: "off"',
+        "    actions:",
+        "      - action: input_boolean.turn_on",
+        "        target:",
+        "          entity_id: input_boolean.living_lights_woke_up_today",
+        # ── Working-hours: morning resume (cron arm-if-still-here) ──
+        # Handles the "user is in zone when the 04:00 reset fires" case.
+        # No state transition has happened, so the morning_latch can't
+        # fire. The cron tick at 05:00 + 08:00 re-arms if conditions hold.
+        # R-WH-1 fold.
+        '  - alias: "Living Lights — working hours morning resume"',
+        "    id: living_lights_working_hours_morning_resume",
+        "    mode: single",
+        "    triggers:",
+        "      - trigger: time",
+        '        at: "05:00:00"',
+        "      - trigger: time",
+        '        at: "08:00:00"',
+        "    conditions:",
+        "      - condition: state",
+        "        entity_id: input_boolean.living_lights_working_hours_enabled",
+        '        state: "on"',
+        "      - condition: state",
+        "        entity_id: input_boolean.living_lights_woke_up_today",
+        '        state: "off"',
+        "      - condition: state",
+        "        entity_id: binary_sensor.living_lights_any_occupied",
+        '        state: "on"',
+        "      - condition: state",
+        "        entity_id: input_boolean.living_lights_asleep",
+        '        state: "off"',
+        "    actions:",
+        "      - action: input_boolean.turn_on",
+        "        target:",
+        "          entity_id: input_boolean.living_lights_woke_up_today",
+        # ── Working-hours: daily 04:00 reset ──
+        # Resets the latch every day at 04:00. Moved from 00:00 (R-WH-1
+        # fold) so users genuinely working past midnight aren't kicked
+        # out of working-hours mid-session. Anyone working at 4 AM is
+        # exceptional and can manually flip the latch back on.
+        '  - alias: "Living Lights — working hours reset at 04:00"',
+        "    id: living_lights_working_hours_reset_at_0400",
+        "    mode: single",
+        "    triggers:",
+        "      - trigger: time",
+        '        at: "04:00:00"',
+        "    actions:",
+        "      - action: input_boolean.turn_off",
+        "        target:",
+        "          entity_id: input_boolean.living_lights_woke_up_today",
+        # ── Working-hours: asleep-triggered reset ──
+        # If the user takes a sustained nap or goes to bed mid-day
+        # (illness, jet lag, weekend Saturday-but-also-actually-asleep),
+        # 10 min of asleep clears the latch so working_hours doesn't
+        # blast the room when they get up briefly.
+        '  - alias: "Living Lights — working hours reset on asleep"',
+        "    id: living_lights_working_hours_reset_on_asleep",
+        "    mode: single",
+        "    triggers:",
+        "      - trigger: state",
+        "        entity_id: input_boolean.living_lights_asleep",
+        '        to: "on"',
+        "        for:",
+        '          minutes: 10',
+        "    actions:",
+        "      - action: input_boolean.turn_off",
+        "        target:",
+        "          entity_id: input_boolean.living_lights_woke_up_today",
     ]
     return "\n".join(lines) + "\n"
 
@@ -858,6 +1094,7 @@ def main() -> int:
     parts = [HEADER,
              emit_input_boolean(),
              emit_input_text(),
+             emit_input_number(),
              emit_input_datetime(),
              emit_template(),
              emit_mqtt(),

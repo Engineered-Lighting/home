@@ -22,6 +22,20 @@ manual-detection trigger, with headroom for hesitation).
 
 `pending_preference` is unaffected — it's already deduped at the
 capture-on-vacant gate and remains the durable preference label.
+
+M22 — intent vs automation aftermath. Live data showed sessions where the
+trailing values are pilot-driven turn-offs (path ends [..., 58, 58, 0, 0]).
+Treating the literal final 0 as "the user's choice" pollutes learning
+aggregation. M22 adds an intent classifier that splits the path into
+(user_path, tail) where the trailing 0s after a stable nonzero run are
+marked as automation aftermath. The collapsed session now carries BOTH:
+  - session_final_actual_pct  — literal last observed value (observability)
+  - session_user_landed_pct   — last value BEFORE the off-tail (intent)
+  - learning_value_pct        — preferred for aggregation (intent if
+                                 automation_tail_detected else final)
+plus `automation_tail_detected`, `session_tail_path`, `intent_confidence`,
+and `learning_value_source`. The session_observed_path stays unchanged for
+auditability — the new fields are added alongside, not in place of.
 """
 from __future__ import annotations
 
@@ -57,6 +71,145 @@ _FOLLOW_FINAL_FIELDS = (
     "context_id",
     "ts",
 )
+
+
+def _is_off_value(v: Any) -> bool:
+    """A path entry counts as "off" if it's 0, None, or missing.
+    Anything else (including 1-pct dim) is treated as "user is touching
+    a light that's on". 0% is the only HA value indicating a light_state
+    of 'off' (the manual-detection automation emits `actual_pct: 0` for
+    off lights), so 0 is a robust signal for automation turn-off."""
+    if v is None:
+        return True
+    try:
+        return int(v) == 0
+    except (TypeError, ValueError):
+        return True  # un-coercible → safer to treat as off than as a real pct
+
+
+def _split_user_path_and_tail(
+    path: list[Any],
+) -> tuple[list[Any], list[Any]]:
+    """Walk from the end of `path` backwards counting trailing 0/off
+    entries. Returns (user_path, tail).
+
+    Edge cases:
+      - All-off path → (path, []). The whole session is an intentional
+        off (no automation tail, since there's no preceding nonzero run).
+      - No trailing zeros → (path, []). All the activity was the user.
+      - Mixed path ending in zeros after a nonzero run → split.
+    """
+    if not path:
+        return [], []
+    # Find the index of the LAST non-off value; everything strictly after
+    # that is the trailing-off tail.
+    last_nonzero_idx = -1
+    for i, v in enumerate(path):
+        if not _is_off_value(v):
+            last_nonzero_idx = i
+    if last_nonzero_idx < 0:
+        # Whole path is off → intentional off session, no automation tail
+        return list(path), []
+    if last_nonzero_idx == len(path) - 1:
+        # Last value is nonzero → no trailing off-tail
+        return list(path), []
+    return list(path[: last_nonzero_idx + 1]), list(path[last_nonzero_idx + 1:])
+
+
+def _classify_session_intent(
+    path: list[Any],
+    final_actual_pct: Any,
+    final_light_state: Any = None,
+) -> dict[str, Any]:
+    """M22 — distinguish user intent from automation aftermath.
+
+    Heuristic v1:
+      - Trailing 0/off values in the path are candidate automation tail.
+      - If there's a stable nonzero user run before the tail → mark
+        automation_tail_detected=true and prefer that user value for
+        learning.
+      - All-off session → intentional off; learning value is 0.
+      - Path ending nonzero (no tail) → final value wins (legacy M20).
+
+    `intent_confidence`:
+      - "high": no tail (path ended nonzero, clear final) OR tail with
+        a stable user run (≥ 2 identical values at the tail of user_path).
+      - "medium": tail detected, user_path has ≥ 2 values that differ
+        (user was still scrubbing when automation cut in).
+      - "low": tail detected with only 1 user-side event before it
+        (could be a glitch — not enough data to be confident).
+
+    `learning_value_source`:
+      - "user_landed"  — preferred user value before automation tail
+      - "final_actual" — no tail; final actual_pct is the answer
+      - "off_session"  — whole session was off; user intended off
+    """
+    user_path, tail = _split_user_path_and_tail(path)
+
+    # All-zero (or empty) session → intentional off.
+    if not user_path or all(_is_off_value(v) for v in user_path):
+        return {
+            "session_final_actual_pct": int(final_actual_pct or 0),
+            "session_user_landed_pct": 0,
+            "automation_tail_detected": False,
+            "session_tail_path": [],
+            "intent_confidence": "high",
+            "learning_value_pct": 0,
+            "learning_value_source": "off_session",
+        }
+
+    # No automation tail → no second-guessing; final is the answer.
+    if not tail:
+        # Prefer the explicit final_actual_pct; fall back to the last
+        # path value if final_actual_pct is None / missing (defensive
+        # against shapes where actual_pct didn't reach the collapser).
+        try:
+            if final_actual_pct is not None:
+                final_int = int(final_actual_pct)
+            else:
+                final_int = int(user_path[-1]) if user_path[-1] is not None else 0
+        except (TypeError, ValueError):
+            final_int = 0
+        return {
+            "session_final_actual_pct": final_int,
+            "session_user_landed_pct": final_int,
+            "automation_tail_detected": False,
+            "session_tail_path": [],
+            "intent_confidence": "high",
+            "learning_value_pct": final_int,
+            "learning_value_source": "final_actual",
+        }
+
+    # Automation tail detected. Pick the last user-side value.
+    user_landed_raw = user_path[-1]
+    try:
+        user_landed = int(user_landed_raw) if user_landed_raw is not None else 0
+    except (TypeError, ValueError):
+        user_landed = 0
+
+    # Confidence: stable user run (last 2 identical) is "high"; a single
+    # user event is "low"; otherwise "medium".
+    if len(user_path) >= 2 and user_path[-1] == user_path[-2]:
+        confidence = "high"
+    elif len(user_path) >= 2:
+        confidence = "medium"
+    else:
+        confidence = "low"
+
+    try:
+        final_int = int(final_actual_pct) if final_actual_pct is not None else 0
+    except (TypeError, ValueError):
+        final_int = 0
+
+    return {
+        "session_final_actual_pct": final_int,
+        "session_user_landed_pct": user_landed,
+        "automation_tail_detected": True,
+        "session_tail_path": tail,
+        "intent_confidence": confidence,
+        "learning_value_pct": user_landed,
+        "learning_value_source": "user_landed",
+    }
 
 
 def _parse_ts(ts: Any) -> float | None:
@@ -152,5 +305,25 @@ def collapse_into_sessions(
             new_sess["session_collapsed"] = False
             sessions.append(new_sess)
             last_idx_by_light[light] = len(sessions) - 1
+
+    # M22 — classify intent vs automation aftermath for each session.
+    # The classifier reads the session's final actual_pct + path and
+    # attaches session_final_actual_pct / session_user_landed_pct /
+    # automation_tail_detected / session_tail_path / intent_confidence /
+    # learning_value_pct / learning_value_source. Pure additive — the
+    # legacy M20 fields (session_observed_path, session_event_count,
+    # final-event-wins actual_pct, etc.) stay untouched.
+    for sess in sessions:
+        try:
+            classification = _classify_session_intent(
+                sess.get("session_observed_path") or [],
+                sess.get("actual_pct"),
+                sess.get("light_state"),
+            )
+            sess.update(classification)
+        except Exception:  # pylint: disable=broad-except
+            # Be defensive — never poison the response if classifier hits
+            # an unexpected shape. The legacy M20 view still works.
+            pass
 
     return sessions

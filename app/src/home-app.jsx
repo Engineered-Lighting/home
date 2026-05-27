@@ -17,17 +17,39 @@ function fmtTime(d = new Date()) {
 let _id = 0;
 const nextId = () => `e-${++_id}`;
 
+/* ── Tauri-side ASR correction ───────────────────────────────────────
+ * Mirrors HA-side PERSON_NAME_ALIASES (ha-config/extended_openai_conversation/
+ * const.py). Applied to every event text rendered as a bubble (user echo,
+ * AI response, perception caption) so the home app never visually shows
+ * the forbidden spellings — even when the source skipped the HA-side
+ * backstop (e.g., chat-tee SSE renders raw vLLM completions, parakeet
+ * STT user-bubble echo bypasses the bridge correction, etc).
+ * Whole-word case-insensitive; preserves possessives ('Marcello's' → 'Marcelo's')
+ * because apostrophe is a non-word char that anchors \b.
+ * Keep in sync with const.py PERSON_NAME_ALIASES + bridge ASR_CORRECTIONS. */
+const ASR_ALIASES = {
+  "marcello": "Marcelo",
+  "marcella": "Marcelo",
+  "marsello": "Marcelo",
+  "marsella": "Marcelo",
+  "marselo":  "Marcelo",
+  "marsailo": "Marcelo",
+  "marsaylo": "Marcelo",
+  "marsailla":"Marcelo",
+  "marsaila": "Marcelo",
+};
+const ASR_RE = new RegExp(
+  "\\b(" + Object.keys(ASR_ALIASES).join("|") + ")\\b",
+  "gi",
+);
+function applyAsrCorrection(text) {
+  if (typeof text !== "string" || !text) return text;
+  return text.replace(ASR_RE, (m) => ASR_ALIASES[m.toLowerCase()] || m);
+}
+
 /* ── Header ──────────────────────────────────────────────────────────── */
-function HomeHeader({ theme, onToggleTheme, voice, connection, sidecarOnline, bridgeOnline }) {
+function HomeHeader({ theme, onToggleTheme, voice, connection, sidecarOnline, bridgeOnline, sim, muteState, onUnmuteClick, onOpenPeople, onOpenIntelligence, aiStackState, metrics }) {
   const isLive = voice.state !== "inactive" && voice.state !== "no-mic";
-  // Phase 1 bugfix: header no longer mirrors the voice state (listening /
-  // processing / speaking) — that's already shown in the bottom VoiceBanner
-  // with a waveform animation. Header only conveys CONNECTION state now,
-  // plus the optional offline-pill for downstream services.
-  const statusText =
-    connection === "online"       ? "online"     :
-    connection === "connecting"   ? "connecting" :
-    connection === "auth_invalid" ? "bad token"  : "offline";
   // Phase B F0-08: surface sidecar/bridge offline as a warning pill.
   // sidecarOnline = false means SSE chat-tee is broken → assistant
   // replies won't reach the feed even if HA fires. bridgeOnline = false
@@ -35,7 +57,17 @@ function HomeHeader({ theme, onToggleTheme, voice, connection, sidecarOnline, br
   // Both null = unknown (first probe pending) — hide pill.
   const sidecarDown = sidecarOnline === false;
   const bridgeDown = bridgeOnline === false;
-  const showWarn = (connection === "online") && (sidecarDown || bridgeDown);
+  // Tray v5: global header state is now layered. "online" means
+  // core app + HA + bridge + sidecar all reachable. If HA is online
+  // but a downstream is down, we show "degraded" (not "offline") so
+  // the header doesn't contradict the drawer's live AI metrics.
+  const isDegraded = connection === "online" && (sidecarDown || bridgeDown);
+  const statusText =
+    connection === "online" && !isDegraded  ? "online"     :
+    isDegraded                              ? "degraded"   :
+    connection === "connecting"             ? "connecting" :
+    connection === "auth_invalid"           ? "bad token"  : "offline";
+  const showWarn = isDegraded;
   const warnText = sidecarDown && bridgeDown ? "voice + chat offline"
                  : sidecarDown ? "chat-tee offline"
                  : bridgeDown ? "voice bridge offline" : "";
@@ -96,6 +128,94 @@ function HomeHeader({ theme, onToggleTheme, voice, connection, sidecarOnline, br
             {warnText}
           </span>
         )}
+        {/* A-1 + F-18 (Addendum 27) — capability-flag chip. Derives
+            per-capability health from buildStackList(aiStackState,
+            metrics) and renders a precise impact chip ("vision offline
+            · face captions + describe_clip unavailable") instead of
+            the existing vague pills. Hidden when everything is ok.
+            Color tracks worst status: offline = crit, degraded = warn.
+            Tooltip lists every degraded/offline capability with its
+            impact text. Mounted AFTER the existing showWarn pill so
+            during a major outage (e.g., sidecar + vllm both down)
+            both render: upstream first, capability detail second. */}
+        {(() => {
+          if (sim?.active) return null;        // sim mode: skip — fixture services may be empty
+          if (!window.buildStackList || !window.summarizeCapabilityHealth) return null;
+          let summary;
+          try {
+            const services = window.buildStackList(aiStackState, metrics);
+            summary = window.summarizeCapabilityHealth(services);
+          } catch { return null; }
+          if (!summary) return null;           // all ok — hide
+          const isCrit = summary.worst_status === "offline";
+          const color = isCrit ? "var(--hg-crit)" : "var(--hg-warn)";
+          return (
+            <span title={summary.tooltip_text} style={{
+              display: "inline-flex", alignItems: "center", gap: 5,
+              border: `1px solid ${color}`,
+              color,
+              padding: "2px 7px",
+              borderRadius: 2,
+              fontFamily: "'Geist Mono', monospace",
+              fontSize: 9,
+              letterSpacing: "0.12em",
+              textTransform: "uppercase",
+              cursor: "help",
+            }}>
+              <span style={{
+                width: 6, height: 6, borderRadius: 999,
+                background: color,
+                animation: isCrit ? "hgPulse 1.4s ease-in-out infinite" : "none",
+              }} />
+              {summary.chip_text}
+            </span>
+          );
+        })()}
+        {muteState?.muted && (
+          <span
+            onClick={onUnmuteClick}
+            title={`Jarvis muted (${muteState.reason || "unknown"}) — click to unmute`}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 5,
+              border: "1px solid var(--hg-fg-3)",
+              color: "var(--hg-fg-2)",
+              padding: "2px 7px",
+              borderRadius: 2,
+              fontFamily: "'Geist Mono', monospace",
+              fontSize: 9,
+              letterSpacing: "0.12em",
+              textTransform: "uppercase",
+              cursor: "pointer",
+            }}
+          >
+            <span style={{
+              width: 6, height: 6, borderRadius: 999,
+              background: "var(--hg-fg-2)",
+            }} />
+            muted · {muteState.reason || "manual"}
+          </span>
+        )}
+        {/* Simulation Mode pill — unmissable amber chip so the designer
+            (or anyone) instantly knows the data is mocked. */}
+        {sim?.active && (
+          <span title="Simulation Mode — everything you see is mocked. Type /simulation off to exit." style={{
+            display: "inline-flex", alignItems: "center", gap: 5,
+            border: "1px solid var(--hg-warn)",
+            color: "var(--hg-warn)",
+            padding: "2px 7px",
+            borderRadius: 2,
+            fontFamily: "'Geist Mono', monospace",
+            fontSize: 9,
+            letterSpacing: "0.12em",
+            textTransform: "uppercase",
+          }}>
+            <span style={{
+              width: 6, height: 6, borderRadius: 999,
+              background: "var(--hg-warn)",
+            }} />
+            sim · {sim.scenario || "—"}
+          </span>
+        )}
         {/* Phase 1.5b: SEEN identity pill removed from header. The
             face-rec affordances live below now — name chip in the
             vision drawer, named perception line in the chat feed.
@@ -105,15 +225,56 @@ function HomeHeader({ theme, onToggleTheme, voice, connection, sidecarOnline, br
               live (mic open OR speaking), but the text label only shows
               non-online states (connecting / bad token / offline). The
               voice state itself lives in the bottom VoiceBanner. */}
-          <ConnectionDot state={isLive ? "live" : connection} />
-          {connection !== "online" && (
-            <span style={{
-              color: connection === "auth_invalid" ? "var(--hg-warn)" : "var(--hg-fg-3)",
+          <ConnectionDot state={isLive ? "live" : isDegraded ? "degraded" : connection} />
+          {(connection !== "online" || isDegraded) && (
+            <span title={isDegraded ? warnText : ""} style={{
+              color: connection === "auth_invalid" ? "var(--hg-warn)"
+                   : isDegraded ? "var(--hg-warn)"
+                   : "var(--hg-fg-3)",
               fontFamily: "'Geist Mono', monospace",
               fontSize: 10, letterSpacing: "0.12em",
             }}>{statusText}</span>
           )}
         </span>
+        {onOpenPeople && (
+          <button
+            aria-label="Open people — relationships and identities"
+            title="people · relationships and identities"
+            className="hg-focusable"
+            onClick={onOpenPeople}
+            style={iconBtn}
+            onMouseEnter={hoverBright} onMouseLeave={unhover}
+          >
+            {/* Two-figure glyph — recognizable without leaning on emoji. */}
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <circle cx="5" cy="4.2" r="1.6" stroke="currentColor" strokeWidth="1.1" />
+              <path d="M2 11c0-1.7 1.3-3 3-3s3 1.3 3 3" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+              <circle cx="9.8" cy="5.2" r="1.3" stroke="currentColor" strokeWidth="1.1" />
+              <path d="M8 11c0-1.4 0.9-2.4 2-2.7" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+            </svg>
+          </button>
+        )}
+        {onOpenIntelligence && (
+          <button
+            aria-label="Open intelligence atlas"
+            title="intelligence atlas"
+            className="hg-focusable"
+            onClick={onOpenIntelligence}
+            style={iconBtn}
+            onMouseEnter={hoverBright} onMouseLeave={unhover}
+          >
+            {window.IconNeuralNetwork
+              ? <window.IconNeuralNetwork size={16} />
+              : (
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <circle cx="3.4" cy="4.2" r="1.35" stroke="currentColor" strokeWidth="1.1" />
+                  <circle cx="11.9" cy="3.7" r="1.35" stroke="currentColor" strokeWidth="1.1" />
+                  <circle cx="8" cy="11.8" r="1.35" stroke="currentColor" strokeWidth="1.1" />
+                  <path d="M4.6 4.6l6 5.8M10.9 4.8L8.6 10.4M4.4 5.1l2.7 5.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+                </svg>
+              )}
+          </button>
+        )}
         <button
           aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
           className="hg-focusable"
@@ -157,6 +318,7 @@ function ConnectionDot({ state }) {
     online: "live", live: "live",
     connecting: "pending",
     offline: "error",
+    degraded: "warn",
   };
   return <StatusDot tone={toneMap[state] || "idle"} size={5} />;
 }
@@ -473,8 +635,10 @@ function _aiBoxTone(metrics, bridgeHealth) {
   return _toneFromPct(vramPct);
 }
 
-function _homeTone(hostMetrics) {
-  if (!hostMetrics) return "idle";
+function _homeTone(hostMetrics, frigateMetrics) {
+  // If neither HAOS host nor Frigate stats are wired, the section is idle.
+  if (!hostMetrics && !frigateMetrics) return "idle";
+  if (!hostMetrics) return "ok"; // Only Frigate present — healthy by default.
   const max = Math.max(hostMetrics.cpu ?? 0, hostMetrics.ram ?? 0, hostMetrics.disk ?? 0);
   return _toneFromPct(max);
 }
@@ -494,6 +658,64 @@ function _networkTone(networkMetrics) {
   return _toneFromPct(Math.max(...samples));
 }
 
+/* Tiny presentational footer for the External Reasoning provider —
+ * shown under the AI Stack card in the AI tab when a key is configured.
+ * Reads from window.__EXTERNAL_STATS (rolling 20-call buffer) so it
+ * updates whenever MetricsStrip re-renders (~15s poll cycle). */
+function _ExternalProviderFooter() {
+  const stats = window.__EXTERNAL_STATS || [];
+  const provider = window.openaiProvider;
+  if (!provider) return null;
+  const recent = stats.slice(-1)[0];
+  const okCalls = stats.filter((s) => s.ok).length;
+  const failCalls = stats.length - okCalls;
+  // p50 latency over the OK calls.
+  const okLats = stats.filter((s) => s.ok && typeof s.latencyMs === "number").map((s) => s.latencyMs).sort((a, b) => a - b);
+  const p50 = okLats.length ? okLats[Math.floor(okLats.length / 2)] : null;
+  let tone = "idle";
+  if (recent) {
+    if (!recent.ok && (recent.error === "auth_failed" || recent.error === "http_error")) tone = "crit";
+    else if (!recent.ok)                                                                   tone = "warn";
+    else if (Date.now() - recent.ts < 30 * 60 * 1000)                                       tone = "ok";
+  }
+  const color =
+    tone === "ok"   ? "var(--hg-ice-bright)" :
+    tone === "warn" ? "var(--hg-warn)"       :
+    tone === "crit" ? "var(--hg-crit)"       :
+                       "var(--hg-fg-5)";
+  return (
+    <div style={{
+      fontFamily: "'Geist Mono', ui-monospace, monospace",
+      fontSize: 9.5,
+      letterSpacing: "0.06em",
+      color: "var(--hg-fg-5)",
+      padding: "4px 12px",
+      background: "var(--hg-bg-1, rgba(255,255,255,0.02))",
+      border: "1px solid var(--hg-border-soft)",
+      borderRadius: 4,
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      flexWrap: "wrap",
+    }}>
+      <span style={{ color }}>●</span>
+      <span style={{ fontWeight: 600, letterSpacing: "0.12em", textTransform: "uppercase" }}>external</span>
+      <span>·</span>
+      <span>{provider.name || "openai"}</span>
+      {p50 != null && (<>
+        <span>·</span>
+        <span>p50 <span style={{ color: "var(--hg-fg-2)" }}>{p50}ms</span></span>
+      </>)}
+      <span>·</span>
+      <span>{okCalls} ok{failCalls > 0 ? ` · ${failCalls} fail` : ""}</span>
+      {recent && !recent.ok && (<>
+        <span>·</span>
+        <span style={{ color: "var(--hg-warn)" }}>last: {recent.error || "fail"}</span>
+      </>)}
+    </div>
+  );
+}
+
 /* ── MetricsStrip v4 ────────────────────────────────────────────────────
  *
  * Designed product surface. Status strip always visible, tabs with
@@ -510,32 +732,195 @@ function _networkTone(networkMetrics) {
 function MetricsStrip({
   metrics, metricsHistory, metricsBase,
   bridgeHealth, networkMetrics, visionHealth, hostMetrics,
+  frigateMetrics,
+  // Tray v5: connection-state signals threaded through so the AI tab's
+  // dependency-health strip can render plain-language status for the
+  // AI Box (sidecarOnline) and Bridge (bridgeOnline) without re-polling.
+  connection = "offline",
+  sidecarOnline = null,
+  bridgeOnline = null,
+  // AI Stack Control (Phase 1): the supervisor-driven umbrella status.
+  // Both polled in home-app.jsx and passed down so the AiStackCard
+  // doesn't duplicate the 15-s heartbeat. See home-ai-stack.jsx.
+  aiStackOnline = null,
+  aiStackState = null,
   roomContext,
   voice, identity, media,
   recentPerceptions = [],
   cameraLabels = {},
+  // Sim Mode: trace state is now controlled by HomeApp (lifted from
+  // internal state) so simulation scenarios can inject mock traces.
+  // In live mode the trace-poll effect below writes to these via the
+  // setters provided as props.
+  traceSummary = null,
+  lastTrace = null,
+  setTraceSummary = () => {},
+  setLastTrace = () => {},
+  // Addendum 16 F-2: callback fired with the FULL trace array on each
+  // poll so HomeApp's lab writer can backfill missed traces (was: only
+  // the most recent was passed via setLastTrace, dropping any trace
+  // that landed between the 5 s polls).
+  onTracesFetched = () => {},
+  // Addendum 17: routing-log entries fetched from HA, used by HomeApp
+  // to backfill EXTERNAL turns into the lab history. External turns
+  // bypass vLLM entirely (sidecar never sees them), so without this
+  // hook the lab undercounts conversation activity.
+  onRoutingLogFetched = () => {},
+  // Proactive-assistant coordinator UI state (home-proactive.jsx) — a
+  // single status row in the AI tab. { phase, away, reason, room, ... }
+  proactive = null,
+  simActive = false,
+  // Lab tab (Addendum 10) — buffer refs lifted from HomeApp + a tick
+  // to trigger re-render on sample/turn append.
+  labTurnsRef = { current: [] },
+  labSamplesRef = { current: [] },
+  labTick = 0,
+  // HA token + endpoint — passed for diag-pane log streaming (future)
+  // AND routing-log poll (Addendum 17, external-turn visibility).
+  token = "",
+  endpoint = "",
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [activeTab, setActiveTab] = useState("now");
+  // Tray v5: `ai` is the most important tab — it answers "is the AI ready,
+  // responsive, healthy" in 3 seconds. `now` was removed because once
+  // perception/occupancy left the drawer, it duplicated `ai`'s dependency
+  // strip. `home` was renamed `infra` because "home" clashes with the
+  // app brand. Tab order: ai · infra · network.
+  const [activeTab, setActiveTab] = useState("ai");
   const [diagOpen, setDiagOpen] = useState(false);
-  const [traceSummary, setTraceSummary] = useState(null);
-  const [lastTrace, setLastTrace] = useState(null);
+
+  // Drag-resizable tray body. Persisted to localStorage so it survives
+  // reloads. Initial value reads from storage; clamped at use site.
+  const TRAY_HEIGHT_KEY = "hg-tray-height-v1";
+  const TRAY_MIN_HEIGHT = 160;
+  const TRAY_MAX_HEIGHT_VH = 0.85; // 85% of viewport
+  const [trayHeight, setTrayHeight] = useState(() => {
+    try {
+      const v = parseInt(window.localStorage.getItem(TRAY_HEIGHT_KEY) || "", 10);
+      if (Number.isFinite(v) && v >= TRAY_MIN_HEIGHT) return v;
+    } catch {}
+    return 340;
+  });
+  const trayDragStateRef = useRef(null);
+  const onTrayHandlePointerDown = useCallback((e) => {
+    e.preventDefault();
+    // Capture pointer so dragging works outside the handle's bounds.
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+    trayDragStateRef.current = {
+      startY: e.clientY,
+      startHeight: trayHeight,
+      pointerId: e.pointerId,
+    };
+  }, [trayHeight]);
+  const onTrayHandlePointerMove = useCallback((e) => {
+    const st = trayDragStateRef.current;
+    if (!st || st.pointerId !== e.pointerId) return;
+    // Drag UP increases height (tray grows upward), drag DOWN shrinks it.
+    const delta = st.startY - e.clientY;
+    const maxH = Math.floor(window.innerHeight * TRAY_MAX_HEIGHT_VH);
+    const next = Math.max(TRAY_MIN_HEIGHT, Math.min(maxH, st.startHeight + delta));
+    setTrayHeight(next);
+  }, []);
+  const onTrayHandlePointerUp = useCallback((e) => {
+    const st = trayDragStateRef.current;
+    if (!st || st.pointerId !== e.pointerId) return;
+    trayDragStateRef.current = null;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
+    try { window.localStorage.setItem(TRAY_HEIGHT_KEY, String(trayHeight)); } catch {}
+  }, [trayHeight]);
+
+  // Shared adapter: /conversations/recent OR /conversations/stream entry
+  // → trace with pre-built 2-stage breakdown (prefill / gen) derived
+  // from ttft_observed_ms. Used by BOTH the 5s poll (warm-start +
+  // SSE fallback) AND the SSE subscriber (real-time per Addendum 29
+  // Change 1).
+  const mapSidecarEntryToTrace = useCallback((e) => {
+    const totalMs = e.upstream_ms || 0;
+    const ttft = e.ttft_observed_ms || 0;
+    const prefillMs = Math.min(ttft, totalMs);
+    const genMs = Math.max(0, totalMs - prefillMs);
+    // CRITICAL: use the sidecar's REAL wall-clock timestamp (e.ts is unix
+    // seconds, e.t_request_started is monotonic seconds — we want e.ts).
+    // Old code used `Date.now() - totalMs` which assumed the turn just
+    // ended; but entries from /conversations/recent can be 30+ seconds
+    // old. The mismatch put the turn's [startedAt, endedAt] window in
+    // the wrong time slice, so real GPU samples (which have correct
+    // wall-clock t) fell outside it and never aggregated into the per-
+    // turn anchors. Result: GPU/CPU lines showed flat for turns that
+    // really did use the GPU heavily. Fall back to Date.now() only when
+    // ts is missing (very old / non-conformant entries).
+    let tEnd;
+    if (typeof e.ts === "number" && e.ts > 0) {
+      tEnd = e.ts * 1000;            // sidecar ts is seconds
+    } else {
+      tEnd = Date.now();
+    }
+    const tStart = tEnd - totalMs;
+    return {
+      turn_id: e.id,
+      user_text: e.user || "",
+      // Change 5: dual-line tooltip needs both sides.
+      assistant_text: e.assistant || "",
+      // Change 4: pass tool_calls through so multi-round grouping can
+      // splice tool segments between consecutive rounds.
+      tool_calls: Array.isArray(e.tool_calls) ? e.tool_calls : [],
+      t_done: totalMs,
+      stages: [
+        { label: "prefill", ms: prefillMs, startedAt: tStart,             endedAt: tStart + prefillMs },
+        { label: "gen",     ms: genMs,     startedAt: tStart + prefillMs, endedAt: tEnd                },
+      ],
+      cold: false,
+    };
+  }, []);
 
   useEffect(() => {
+    // Sim Mode: skip the real trace polling — fixtures are injected
+    // directly via the lifted setters.
+    if (simActive) return undefined;
     if (!expanded || !metricsBase) return undefined;
-    if (activeTab !== "now" && activeTab !== "ai" && !diagOpen) return undefined;
+    if (activeTab !== "now" && activeTab !== "ai" && activeTab !== "trace" && !diagOpen) return undefined;
     let cancelled = false;
     const tick = async () => {
       try {
-        const [s, l] = await Promise.all([
-          tauriFetch(`${metricsBase}/traces/summary?window=1h`, { cache: "no-store" }),
-          tauriFetch(`${metricsBase}/traces/latest?n=1`, { cache: "no-store" }),
-        ]);
+        // Sidecar-side: 2026-05-18 fix — sidecar exposes /conversations/recent
+        // (not /traces/latest, which was a planned-but-never-shipped path).
+        // /traces/summary also doesn't exist; we derive a minimal summary
+        // from the entries client-side.
+        // HA-side: routing log (every conversation, including external
+        // which bypasses vLLM and produces no sidecar trace).
+        const fetches = [
+          tauriFetch(`${metricsBase}/conversations/recent?n=50`, { cache: "no-store" }),
+        ];
+        const wantRoutingLog = !!(endpoint && token);
+        if (wantRoutingLog) {
+          fetches.push(
+            tauriFetch(
+              `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/routing_log?tail=50`,
+              { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" },
+            ),
+          );
+        }
+        const results = await Promise.all(fetches);
         if (cancelled) return;
-        if (s.ok) setTraceSummary(await s.json());
-        if (l.ok) {
+        const [l, r] = results;
+        if (l && l.ok) {
           const j = await l.json();
-          setLastTrace(j.traces?.[j.traces.length - 1] || null);
+          const entries = Array.isArray(j.entries) ? j.entries : [];
+          const traces = entries.map(mapSidecarEntryToTrace);
+          // Derive a tiny summary so existing consumers of setTraceSummary
+          // keep working (count + p50 of LLM ms is enough for the rail).
+          if (traces.length > 0) {
+            const llmMsList = traces.map((t) => t.t_done).sort((a, b) => a - b);
+            const p50 = llmMsList[Math.floor(llmMsList.length / 2)] || 0;
+            setTraceSummary({ count: traces.length, p50_llm_ms: p50, window_s: 3600 });
+            setLastTrace(traces[traces.length - 1]);
+            onTracesFetched(traces);
+          }
+        }
+        if (r && r.ok) {
+          const j = await r.json();
+          const entries = Array.isArray(j.entries) ? j.entries : [];
+          if (entries.length > 0) onRoutingLogFetched(entries);
         }
       } catch (e) {
         console.warn("[metrics] trace poll failed:", e?.message || e);
@@ -544,11 +929,97 @@ function MetricsStrip({
     tick();
     const id = setInterval(tick, 5000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [expanded, activeTab, diagOpen, metricsBase]);
+  }, [expanded, activeTab, diagOpen, metricsBase, simActive, endpoint, token, mapSidecarEntryToTrace]);
+
+  // Addendum 29 Change 1: SSE subscription for real-time turn arrival.
+  // The sidecar broadcasts every completion via /conversations/stream;
+  // subscribing means new turns reach the lab tab within ~200ms of the
+  // LLM call finishing instead of waiting up to 5s for the next poll.
+  // The 5s poll above stays as warm-start (initial render) + SSE
+  // fallback (reconnects on error with exponential backoff).
+  useEffect(() => {
+    if (simActive) return undefined;
+    if (!expanded || !metricsBase) return undefined;
+    if (activeTab !== "now" && activeTab !== "ai" && activeTab !== "trace" && !diagOpen) return undefined;
+    // EventSource is available in WebView2; create once per (tab,base)
+    // and tear down on cleanup. Don't use EventSource if it's missing
+    // (older webviews, test envs): fall through to poll-only.
+    if (typeof EventSource === "undefined") {
+      console.warn("[trace-sse] EventSource not available — falling back to 5s poll");
+      return undefined;
+    }
+    let cancelled = false;
+    let es = null;
+    let backoffMs = 1000;
+    const maxBackoffMs = 30000;
+    let reconnectTimer = null;
+    const url = `${metricsBase.replace(/\/+$/, "")}/conversations/stream`;
+    const connect = () => {
+      if (cancelled) return;
+      try {
+        es = new EventSource(url);
+      } catch (err) {
+        console.warn("[trace-sse] EventSource ctor failed:", err?.message || err);
+        return;
+      }
+      es.onopen = () => {
+        backoffMs = 1000;
+        if (typeof window !== "undefined") {
+          window.__SSE_TRACE_CONNECTED = true;
+          window.__SSE_TRACE_CONNECT_TS = Date.now();
+        }
+      };
+      es.onmessage = (ev) => {
+        if (cancelled) return;
+        try {
+          const entry = JSON.parse(ev.data);
+          if (!entry || typeof entry !== "object") return;
+          const trace = mapSidecarEntryToTrace(entry);
+          // Track event-arrival timestamps so the autonomous probe
+          // (AV29-1 cross-correlation) can detect missed turns.
+          if (typeof window !== "undefined") {
+            window.__SSE_TRACE_LAST_EVENT_TS = Date.now();
+            window.__SSE_TRACE_EVENT_COUNT = (window.__SSE_TRACE_EVENT_COUNT || 0) + 1;
+          }
+          // Reuse the bulk handler so dedup + persistence are identical.
+          onTracesFetched([trace]);
+          // Also set lastTrace so consumers that watched the poll's
+          // single-turn signal continue working.
+          setLastTrace(trace);
+        } catch (parseErr) {
+          // Malformed event — ignore, but log once for diagnostics.
+          console.warn("[trace-sse] parse fail:", parseErr?.message);
+        }
+      };
+      es.onerror = () => {
+        if (cancelled) return;
+        if (typeof window !== "undefined") {
+          window.__SSE_TRACE_CONNECTED = false;
+          window.__SSE_TRACE_LAST_ERROR_TS = Date.now();
+        }
+        try { es && es.close(); } catch {}
+        es = null;
+        // Reconnect with exponential backoff. Poll path keeps running
+        // in parallel so even sustained SSE outage doesn't block trace
+        // updates entirely — they just slow back down to ~5s cadence.
+        reconnectTimer = setTimeout(connect, backoffMs);
+        backoffMs = Math.min(maxBackoffMs, backoffMs * 2);
+      };
+    };
+    connect();
+    return () => {
+      cancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      try { es && es.close(); } catch {}
+      if (typeof window !== "undefined") {
+        window.__SSE_TRACE_CONNECTED = false;
+      }
+    };
+  }, [expanded, activeTab, diagOpen, metricsBase, simActive, mapSidecarEntryToTrace, onTracesFetched]);
 
   /* ── Derived state ───────────────────────────────────────────────── */
   const aiTone = _aiBoxTone(metrics, bridgeHealth);
-  const homeTone = _homeTone(hostMetrics);
+  const homeTone = _homeTone(hostMetrics, frigateMetrics);
   const netTone = _networkTone(networkMetrics);
 
   const voiceState = voice?.state || "inactive";
@@ -581,11 +1052,24 @@ function MetricsStrip({
   const ttfaP50 = traceSummary?.ttfa_ms?.p50 != null ? Math.round(traceSummary.ttfa_ms.p50) : null;
   const ttfaP90 = traceSummary?.ttfa_ms?.p90 != null ? Math.round(traceSummary.ttfa_ms.p90) : null;
 
+  // Tray v6: network tab dropped — without app↔HA / app↔AI-box latency
+  // or throughput instrumentation, the network tab was just UniFi device
+  // CPU/RAM (low signal). AI Box / HAOS / Bridge reachability lives in
+  // the AI tab's dep-strip now. UniFi diagnostics retained in /diag.
+  // Lab tab tier — derive once so we can set the tab warn flag.
+  const _labBaseline = window.computeBaseline
+    ? window.computeBaseline(labTurnsRef.current)
+    : { p50: null, hasBaseline: false };
+  const _labTier = window.deriveLabTier
+    ? window.deriveLabTier(metrics, aiStackState, lastTrace, _labBaseline)
+    : { tier: "ready" };
+  const _labWarn = _labTier.tier !== "ready" && _labTier.tier !== "warming";
+
   const tabs = [
-    { id: "now",     label: "now" },
-    { id: "ai",      label: "ai" },
-    { id: "home",    label: "home", warn: homeTone === "warn" || homeTone === "crit" },
-    { id: "network", label: "network", warn: netTone === "warn" || netTone === "crit" },
+    { id: "ai",      label: "ai",    warn: _labWarn },
+    { id: "infra",   label: "infra", warn: homeTone === "warn" || homeTone === "crit" },
+    { id: "intel",   label: "intel" },
+    { id: "trace",   label: "trace" },
   ];
 
   // Active room derived from identity. Falls back to last-active per
@@ -595,300 +1079,236 @@ function MetricsStrip({
 
   /* ── Tab renderers ───────────────────────────────────────────────── */
 
-  const renderNow = () => {
-    const latest = recentPerceptions.length > 0
-      ? recentPerceptions[recentPerceptions.length - 1] : null;
-    return (
-      <div style={{
-        display: "grid",
-        gridTemplateColumns: "1fr 1fr",
-        gap: 10,
-      }}>
-        {/* Active room card — hero */}
-        <HmCard
-          title="ACTIVE ROOM"
-          badge={activeRoom ? { text: aiPhrase, tone: aiIsTransient ? "ice" : null } : null}
-          meta={activeRoom && lastActivityAge != null
-            ? `${lastActivityAge < 60 ? lastActivityAge + "s" : Math.round(lastActivityAge / 60) + "m"} ago`
-            : null}
-        >
-          {activeRoom ? (
-            <>
-              <div style={{
-                fontFamily: "'Geist', system-ui, sans-serif",
-                fontSize: 17, fontWeight: 600,
-                color: "var(--hg-fg-0)",
-                letterSpacing: "-0.01em",
-                marginBottom: 4,
-              }}>{activeRoom.replace(/_/g, " ")}</div>
-              {identity?.name && (
-                <div style={{
-                  fontFamily: "'Geist Mono', monospace",
-                  fontSize: 11, color: "var(--hg-fg-2)",
-                  marginBottom: 2,
-                }}>{identity.name}</div>
-              )}
-              {(cameraLabels[activeRoom] || []).length > 0 && (
-                <div style={{
-                  fontFamily: "'Geist Mono', monospace",
-                  fontSize: 10, color: "var(--hg-fg-4)",
-                }}>{(cameraLabels[activeRoom] || []).slice(0, 3).join(" · ")}</div>
-              )}
-              {activeRoomMedia && (activeRoomMedia.state === "playing" || activeRoomMedia.state === "paused") && (
-                <div style={{
-                  fontFamily: "'Geist Mono', monospace",
-                  fontSize: 11, color: "var(--hg-fg-2)",
-                  marginTop: 6, paddingTop: 6,
-                  borderTop: "1px solid var(--hg-border-soft)",
-                }}>
-                  <span style={{ color: "var(--hg-fg-4)" }}>▶ </span>
-                  {activeRoomMedia.app_name} · {activeRoomMedia.state}
-                  {activeRoomMedia.title && (
-                    <div style={{ color: "var(--hg-fg-3)", fontSize: 10, marginTop: 2 }}>
-                      {activeRoomMedia.title}
-                    </div>
-                  )}
-                </div>
-              )}
-            </>
-          ) : (
-            <div style={{
-              fontFamily: "'Geist Mono', monospace",
-              fontSize: 11, color: "var(--hg-fg-5)",
-              fontStyle: "normal",
-            }}>no recent presence</div>
-          )}
-        </HmCard>
-
-        {/* Latest perception card */}
-        <HmCard
-          title="LAST PERCEPTION"
-          meta={recentPerceptions.length > 1 ? `+${recentPerceptions.length - 1} earlier` : null}
-        >
-          {latest ? (() => {
-            const txt = latest.text || "";
-            const m = /^([a-z_]+)\s*:\s*(.+)$/i.exec(txt);
-            const room = m ? m[1].replace(/_/g, " ") : null;
-            const summary = m ? m[2] : txt;
-            return (
-              <>
-                {room && (
-                  <div style={{
-                    fontFamily: "'Geist Mono', monospace",
-                    fontSize: 10, letterSpacing: "0.08em",
-                    color: "var(--hg-fg-4)", marginBottom: 4,
-                  }}>{room}</div>
-                )}
-                <div style={{
-                  fontFamily: "'Geist', system-ui, sans-serif",
-                  fontSize: 12.5,
-                  color: "var(--hg-fg-1)",
-                  lineHeight: 1.45,
-                }}>{summary.slice(0, 140)}</div>
-              </>
-            );
-          })() : (
-            <div style={{
-              fontFamily: "'Geist Mono', monospace",
-              fontSize: 11, color: "var(--hg-fg-5)",
-            }}>no observations yet</div>
-          )}
-        </HmCard>
-
-        {/* System status — spans both columns */}
-        <div style={{ gridColumn: "1 / -1" }}>
-          <HmCard title="SYSTEM">
-            <div style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
-              gap: "6px 14px",
-            }}>
-              {[
-                { label: "ai", tone: aiTone, value: aiPhrase },
-                { label: "haos", tone: bridgeHealth?.ha_connected ? "ok" : "crit",
-                  value: bridgeHealth?.ha_connected ? "ok" : "down" },
-                { label: "bridge", tone: bridgeHealth?.warmup_complete ? "ok" : "warn",
-                  value: `${Math.floor((bridgeHealth?.uptime_s || 0) / 60)}m` },
-                { label: "network", tone: netTone,
-                  value: networkMetrics?.clientsKnown ? `${networkMetrics.clientsOnline}/${networkMetrics.clientsKnown}` : "—" },
-                { label: "vision", tone: visionHealth?.phash_enabled ? "ok" : "idle",
-                  value: visionHealth?.phash_enabled ? `${Math.round((visionHealth.phash_hit_rate || 0) * 100)}%` : "—" },
-                { label: "ttfa", tone: ttfaP50 == null ? "idle" : (ttfaP50 > 1200 ? "warn" : "ok"),
-                  value: ttfaP50 != null ? `${ttfaP50}ms` : "—" },
-              ].map((s) => (
-                <span key={s.label} style={{
-                  display: "inline-flex", alignItems: "center", gap: 7,
-                  fontFamily: "'Geist Mono', monospace", fontSize: 10.5,
-                }}>
-                  <HmHealthDot tone={s.tone} />
-                  <span style={{ color: "var(--hg-fg-4)", fontWeight: 400 }}>{s.label}</span>
-                  <span style={{ color: "var(--hg-fg-1)", marginLeft: "auto", fontWeight: 600, fontFeatureSettings: '"tnum"' }}>{s.value}</span>
-                </span>
-              ))}
-            </div>
-          </HmCard>
-        </div>
-      </div>
-    );
+  // Tray v5 helpers — formatting for the v5-redesigned cards.
+  const fmtAge = (s) => {
+    if (s == null || !isFinite(s)) return null;
+    if (s < 60) return `${Math.round(s)}s ago`;
+    if (s < 3600) return `${Math.round(s / 60)}m ago`;
+    return `${Math.round(s / 3600)}h ago`;
   };
+  const fmtUptime = (s) => {
+    if (!s || !isFinite(s)) return null;
+    if (s < 60) return `${Math.round(s)}s`;
+    if (s < 3600) return `${Math.round(s / 60)}m`;
+    return `${Math.round(s / 3600)}h`;
+  };
+
+  // Dependency-health states for the strip atop the AI tab. Plain-language
+  // labels; tone drives the dot color and the value color.
+  //   Model            → metrics.model + warmup status (was MODEL card, v6 folded here)
+  //   AI Stack         → aiStackState.overall (NEW — umbrella status; see home-ai-stack.jsx)
+  //   metrics-sidecar  → sidecarOnline / unknown / offline (RENAMED from "ai box")
+  //   HAOS             → connection + bridgeHealth.ha_connected, with a degraded fork
+  //   Bridge           → bridgeOnline + warmup_complete + uptime
+  //   TTS              → bridgeHealth.tts_engine name when bridge healthy; else unknown
+  //   Frigate          → frigateMetrics non-null OR camera labels flowing → online
+  const depStates = (() => {
+    const items = [];
+    // Model — folded in from the old MODEL card. The state value is the
+    // model name itself; tone reflects ready/warming/degraded/offline.
+    let modelTone = "idle", modelState = "unknown";
+    if (metrics.model) {
+      modelState = metrics.model;
+      if (bridgeOnline === false) modelTone = "crit";
+      else if (bridgeHealth?.ha_connected === false) modelTone = "warn";
+      else if (bridgeHealth?.warmup_complete === false) modelTone = "warn";
+      else modelTone = "ok";
+    }
+    items.push({ label: "model", state: modelState, tone: modelTone });
+    // AI Stack — umbrella status across vLLM / STT / TTS / sidecars on the
+    // Ubuntu AI box, as reported by the stack-supervisor on :8093.
+    // Distinct from the "metrics-sidecar" chip below (which reports only
+    // the chat-tee :8092 liveness) — this is the whole-stack rollup.
+    if (!aiStackOnline) items.push({ label: "ai stack", state: aiStackOnline === false ? "unreachable" : "unknown", tone: aiStackOnline === false ? "crit" : "idle" });
+    else if (aiStackState?.overall) {
+      const o = aiStackState.overall;
+      const tone =
+        o === "ready"                                        ? "ok"   :
+        o === "warming"  || o === "partial" ||
+        o === "starting" || o === "stopping"                 ? "warn" :
+        o === "offline"  || o === "error"                    ? "crit" :
+                                                                "idle";
+      items.push({ label: "ai stack", state: o, tone });
+    }
+    else items.push({ label: "ai stack", state: "no token", tone: "idle" });
+    // metrics-sidecar (was "ai box" — renamed so it no longer overlaps
+    // with the new "ai stack" umbrella; this chip is just the :8092
+    // /healthz reachability check).
+    if (sidecarOnline === true) items.push({ label: "metrics-sidecar", state: "online", tone: "ok" });
+    else if (sidecarOnline === false) items.push({ label: "metrics-sidecar", state: "offline", tone: "crit" });
+    else items.push({ label: "metrics-sidecar", state: "unknown", tone: "idle" });
+    // HAOS
+    const haUp = connection === "online";
+    const bridgeSeesHa = bridgeHealth?.ha_connected;
+    if (haUp && bridgeSeesHa) items.push({ label: "haos", state: "connected", tone: "ok" });
+    else if (haUp || bridgeSeesHa) items.push({ label: "haos", state: "degraded", tone: "warn" });
+    else if (connection === "auth_invalid") items.push({ label: "haos", state: "bad token", tone: "crit" });
+    else items.push({ label: "haos", state: "offline", tone: "crit" });
+    // Bridge — value carries uptime when warm, plain state otherwise
+    const upStr = fmtUptime(bridgeHealth?.uptime_s);
+    if (bridgeOnline === false) items.push({ label: "bridge", state: "offline", tone: "crit" });
+    else if (bridgeHealth?.warmup_complete === true) {
+      items.push({ label: "bridge", state: upStr ? `warm · ${upStr}` : "warm", tone: "ok" });
+    }
+    else if (bridgeHealth?.warmup_complete === false) items.push({ label: "bridge", state: "warming", tone: "warn" });
+    else items.push({ label: "bridge", state: "unknown", tone: "idle" });
+    // TTS
+    if (bridgeOnline === false) items.push({ label: "tts", state: "offline", tone: "crit" });
+    else if (bridgeHealth?.tts_engine) items.push({ label: "tts", state: bridgeHealth.tts_engine, tone: "ok" });
+    else items.push({ label: "tts", state: "unknown", tone: "idle" });
+    // Frigate — proxy: stats sensors populated OR camera labels arriving in last 60s
+    const labelsFlowing = cameraLabels && Object.keys(cameraLabels).length > 0;
+    if (frigateMetrics || labelsFlowing) items.push({ label: "frigate", state: "online", tone: "ok" });
+    else items.push({ label: "frigate", state: "unknown", tone: "idle" });
+    return items;
+  })();
 
   const renderAi = () => {
-    const stages = lastTrace ? [
-      { label: "stt",   dur: lastTrace.t_parakeet_done || 0 },
-      { label: "llm",   dur: Math.max(0, (lastTrace.t_pipeline_intent_end || 0) - (lastTrace.t_parakeet_done || 0)) },
-      { label: "synth", dur: Math.max(0, (lastTrace.t_synth_done || 0) - (lastTrace.t_pipeline_intent_end || 0)) },
-      { label: "audio", dur: Math.max(0, (lastTrace.t_done || 0) - (lastTrace.t_first_audio_sent || 0)) },
-    ] : [];
-    const totalMs = lastTrace?.t_done || 1;
-
+    // AI tab — migrated to display the 3 lab components: pressured
+    // banner + 8-service grid + 4 resource pills. Composes the same
+    // pieces HmLabTab used to render directly. The Lab tab now keeps
+    // only the chart card + summary header + diag pane.
+    if (!window.LabBanner || !window.LabStackList || !window.LabResPills
+        || !window.deriveLabTier || !window.buildStackList) {
+      return (
+        <div style={{
+          padding: "20px 0", fontFamily: "'Geist Mono', monospace",
+          fontSize: 10.5, color: "var(--hg-fg-3)", textAlign: "center",
+        }}>lab components not loaded</div>
+      );
+    }
+    const _baseline = window.computeBaseline
+      ? window.computeBaseline(labTurnsRef.current)
+      : null;
+    const _tier = window.deriveLabTier(metrics, aiStackState, lastTrace, _baseline);
+    const _services = window.buildStackList(aiStackState, metrics);
+    // Banner action dispatcher (e.g., 'stop ai models' on the pressured
+    // banner) — delegates to HomeStackActions. Supervisor URL is the
+    // metrics-sidecar host on port 8093.
+    const _supervisorUrl = (() => {
+      const base = metricsBase || metricsBaseFromEndpoint(endpoint);
+      try {
+        if (base) {
+          const u = new URL(base);
+          return `${u.protocol}//${u.hostname}:8093`;
+        }
+      } catch {}
+      return null;
+    })();
+    const _stackToken =
+      (typeof window !== "undefined" && window.__STACK_TOKEN) ||
+      (typeof localStorage !== "undefined" && localStorage.getItem("hg-stack-token-DEV")) ||
+      "";
+    const _onBannerAction = async (verb) => {
+      const HSA = window.HomeStackActions;
+      if (!HSA || !_supervisorUrl || !_stackToken) {
+        addEvent({
+          kind: "system", tone: "warn",
+          text: "stack supervisor not configured — set token via /stack-token",
+        });
+        return;
+      }
+      let result;
+      if (verb === "stopStack")      result = await HSA.stop({ supervisorUrl: _supervisorUrl, stackToken: _stackToken });
+      else if (verb === "start")     result = await HSA.start({ supervisorUrl: _supervisorUrl, stackToken: _stackToken });
+      else if (verb === "restart")   result = await HSA.restart({ supervisorUrl: _supervisorUrl, stackToken: _stackToken });
+      else if (verb === "freeGpu")   result = await HSA.freeGpu({ supervisorUrl: _supervisorUrl, stackToken: _stackToken });
+      else return;
+      if (result && !result.ok) {
+        addEvent({
+          kind: "system", tone: "warn",
+          text: `${verb} failed: ${result.error || ("HTTP " + (result.status || "?"))}`,
+        });
+      } else if (result && result.ok) {
+        addEvent({ kind: "system", text: `${verb}: dispatched`, tone: "ok" });
+      }
+    };
     return (
-      <div style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-        gap: 10,
-      }}>
-        {/* Model card */}
-        <HmCard
-          title="MODEL"
-          badge={bridgeHealth?.warmup_complete
-            ? { text: "warm", tone: "ice" }
-            : { text: "warming", tone: "warn" }}
-        >
-          <div style={{
-            fontFamily: "'Geist Mono', monospace",
-            fontSize: 13, color: "var(--hg-fg-0)",
-            fontWeight: 600,
-            marginBottom: 8,
-          }}>{metrics.model || "—"}</div>
-          <HmStatRow label="tts" value={bridgeHealth?.tts_engine || "—"} />
-          <HmStatRow label="uptime" value={`${Math.floor((bridgeHealth?.uptime_s || 0) / 60)}m`} />
-          <HmStatRow label="rooms" value={bridgeHealth?.rooms_loaded || 0} />
-          <HmStatRow label="media" value={bridgeHealth?.media_players_registered || 0} />
-        </HmCard>
-
-        {/* Latency trend card */}
-        <HmCard title="LATENCY">
-          <HmMetricCard
-            label="ttft"
-            value={metrics.ttft}
-            unit="ms"
-            history={metricsHistory.ttft}
-            max={1500}
-            warnAt={50} critAt={80}
-          />
-          {ttfaP50 != null && (
-            <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid var(--hg-border-soft)" }}>
-              <HmStatRow label="voice ttfa p50" value={ttfaP50} unit="ms"
-                         tone={ttfaP50 > 1200 ? "warn" : "default"} />
-              {ttfaP90 != null && (
-                <HmStatRow label="voice ttfa p90" value={ttfaP90} unit="ms" />
-              )}
-            </div>
-          )}
-        </HmCard>
-
-        {/* Pipeline card */}
-        {lastTrace && (
-          <HmCard
-            title="LAST VOICE TURN"
-            badge={{ text: lastTrace.cold ? "cold" : "warm", tone: lastTrace.cold ? "warn" : "ice" }}
-            meta={lastTrace.user_text ? `"${lastTrace.user_text.slice(0, 60)}"` : null}
-          >
-            <HmTimelineStrip stages={stages} totalMs={totalMs} />
-          </HmCard>
-        )}
-
-        {/* Resource cards — Arc only for VRAM, bar+number for others */}
-        <HmCard title="RESOURCES">
-          <div style={{
-            display: "grid",
-            gridTemplateColumns: "auto 1fr 1fr",
-            gap: 12,
-            alignItems: "center",
-          }}>
-            {/* VRAM Arc (the only one with meaningful range usage) */}
-            <HmArc value={metrics.vram} max={metrics.vramMax || 96} size={56} label="vram" />
-            {/* GPU + CPU + RAM as compact metric cards */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <HmMetricCard label="gpu" value={metrics.gpu} unit="%" max={100}
-                            history={metricsHistory.gpu} viz="auto" />
-              <HmMetricCard label="cpu" value={metrics.cpu} unit="%" max={100}
-                            history={metricsHistory.cpu} viz="auto" />
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <HmMetricCard label="ram" value={metrics.ram} max={metrics.ramMax || 64}
-                            unit={`/${metrics.ramMax || 64}g`}
-                            history={metricsHistory.ram} viz="auto" />
-              <HmMetricCard label="tok/s" value={metrics.tps} max={120}
-                            history={metricsHistory.tps} viz="auto"
-                            warnAt={101} critAt={101} />
-            </div>
-          </div>
-        </HmCard>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <window.LabBanner banner={_tier.banner} onAction={_onBannerAction} />
+        {window.LabStackPane
+          ? <window.LabStackPane services={_services} metrics={metrics} />
+          : <window.LabStackList services={_services} /> /* fallback if helpers missing */}
+        <window.LabResPills metrics={metrics} />
       </div>
     );
   };
 
-  const renderHome = () => {
-    const occupancy = roomContext?.state?.occupancy || {};
-    const visual = roomContext?.state?.visual || {};
-    const roomNames = Object.keys(roomContext?.config || {})
-      .filter((r) => r !== "office")  // skip office since it's no-camera placeholder
-      .sort();
-    const nowS = Date.now() / 1000;
 
-    // Build room tiles
-    const rooms = roomNames.map((id) => {
-      const occ = occupancy[id];
-      const occupied = occ?.status === "present";
-      const ageS = occ?.last_seen ? Math.max(0, nowS - occ.last_seen) : null;
-      const ageStr = ageS == null ? "" :
-        ageS < 60 ? `${Math.round(ageS)}s`
-        : ageS < 3600 ? `${Math.round(ageS / 60)}m`
-        : `${Math.round(ageS / 3600)}h`;
-      const isActiveRoom = identity?.camera === id;
-      const m = media?.[id];
-      return {
-        id, occupied, age: ageStr,
-        identity: isActiveRoom && identity?.name ? identity.name : null,
-        secondary: m?.app_name ? `▶ ${m.app_name}` : null,
-      };
-    });
+  // Tray v6: renderInfra cleanup pass.
+  //   - Frigate CPU dropped: it's a per-thread sum (e.g. 341% = 3.41
+  //     cores' worth) that overlaps the HAOS HOST CPU which already
+  //     covers everything running on the LattePanda.
+  //   - MEDIA INTEGRATIONS card dropped: low-signal under normal use.
+  //     stale-media counts surface in the HA BRIDGE card as warn chips.
+  //   - HAOS RAM falls back to absolute GB when System Monitor doesn't
+  //     expose the `_percent` variant.
+  //   - HAOS card spans two-up alongside FRIGATE; HA BRIDGE goes full
+  //     width below so it doesn't leave dead space.
+  const renderInfra = () => {
+    const stale = bridgeHealth?.stale_media_integrations || [];
+    const roomsLoaded = bridgeHealth?.rooms_loaded || 0;
+    const mediaRegistered = bridgeHealth?.media_players_registered || 0;
+    const heartbeat = bridgeHealth?.last_trace_age_s != null
+      ? fmtAge(bridgeHealth.last_trace_age_s)
+      : null;
+    const uptime = fmtUptime(bridgeHealth?.uptime_s);
+
+    // Bridge/API badge
+    let bridgeBadge;
+    if (!bridgeHealth) bridgeBadge = { text: "offline", tone: "crit" };
+    else if (bridgeHealth.ha_connected === false) bridgeBadge = { text: "degraded", tone: "warn" };
+    else if (bridgeHealth.warmup_complete === false) bridgeBadge = { text: "warming", tone: "warn" };
+    else if (stale.length > 0) bridgeBadge = { text: `${stale.length} stale media`, tone: "warn" };
+    else bridgeBadge = { text: "connected", tone: "ok" };
+
+    // Non-default feature flags (chips, only when interesting)
+    const flagChips = [];
+    if (bridgeHealth?.dry_run === true) flagChips.push({ label: "DRY RUN", tone: "warn" });
+    if (bridgeHealth?.voice_rewriter === true) flagChips.push({ label: "VOICE REWRITER", tone: "ice" });
+    if (bridgeHealth?.direct_dispatch === true) flagChips.push({ label: "DIRECT DISPATCH", tone: "ice" });
 
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {/* Room occupancy grid — hero of HOME tab */}
-        {rooms.length > 0 && (
-          <HmCard title="ROOMS">
-            <HmRoomGrid rooms={rooms} />
-          </HmCard>
-        )}
-
-        {/* HA + Frigate status side-by-side */}
+        {/* Row 1: HAOS HOST + FRIGATE side-by-side, equal-height */}
         <div style={{
           display: "grid",
           gridTemplateColumns: "1fr 1fr",
           gap: 10,
+          alignItems: "stretch",
         }}>
           <HmCard title="HAOS HOST"
                   badge={hostMetrics ? null : { text: "not set up", tone: "warn" }}>
             {hostMetrics ? (
-              <>
-                <HmMetricCard label="cpu" value={hostMetrics.cpu} unit="%" max={100} viz="bar" />
-                <div style={{ marginTop: 8 }}>
+              <div style={{
+                display: "flex", flexDirection: "column", gap: 10,
+                height: "100%",
+              }}>
+                {hostMetrics.cpu != null && (
+                  <HmMetricCard label="cpu" value={hostMetrics.cpu} unit="%" max={100} viz="bar" />
+                )}
+                {/* RAM as bar (matches CPU). If only absolute GB is known
+                    (the user's System Monitor exposes raw MB, not %),
+                    fall back to a heuristic 32GB total — LattePanda
+                    Sigma typically ships 16-32GB; if your box is 16GB
+                    the bar will read ~75% (still legible). */}
+                {hostMetrics.ram != null ? (
                   <HmMetricCard label="ram" value={hostMetrics.ram} unit="%" max={100} viz="bar" />
-                </div>
-                {hostMetrics.disk != null && (
-                  <div style={{ marginTop: 8 }}>
-                    <HmMetricCard label="disk" value={hostMetrics.disk} unit="%" max={100} viz="bar" />
-                  </div>
-                )}
+                ) : hostMetrics.ramGb != null ? (
+                  <HmMetricCard
+                    label="ram"
+                    value={hostMetrics.ramGb}
+                    unit={`/32 gb`}
+                    max={32}
+                    viz="bar"
+                  />
+                ) : null}
+                {/* spacer pushes uptime to bottom so card matches Frigate height */}
+                <div style={{ flex: 1 }} />
                 {hostMetrics.uptime && (
-                  <div style={{ marginTop: 8 }}>
-                    <HmStatRow label="uptime" value={hostMetrics.uptime} />
-                  </div>
+                  <HmStatRow label="uptime" value={hostMetrics.uptime} />
                 )}
-              </>
+              </div>
             ) : (
               <HmEmptyState
                 message="enable system monitor"
@@ -900,143 +1320,246 @@ function MetricsStrip({
           </HmCard>
 
           <HmCard title="FRIGATE"
-                  badge={{ text: "5 cameras", tone: "ice" }}>
-            <div style={{
-              fontFamily: "'Geist Mono', monospace",
-              fontSize: 10.5, color: "var(--hg-fg-3)",
-              marginBottom: 8,
-            }}>5 streams · all running</div>
-            <HmEmptyState
-              message="enable stats sensors"
-              action={{
-                label: "how",
-                tooltip: "Drop tools/ha_packages/frigate_stats.yaml from HomeAIVoice repo into\n/config/packages/frigate_stats.yaml on HAOS.\nEnsure configuration.yaml has:\n  homeassistant:\n    packages: !include_dir_named packages\nRestart HA. Tray auto-picks up sensor.frigate_*.",
-              }} />
+                  badge={frigateMetrics
+                    ? { text: `${Object.keys(frigateMetrics.fps || {}).length} cameras`, tone: "ok" }
+                    : { text: "5 cameras", tone: "ice" }}>
+            {frigateMetrics ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {/* Coral TPU = the only Frigate-specific compute metric;
+                    overall CPU lives on the HAOS HOST card. */}
+                {frigateMetrics.coralMs != null && (
+                  <HmStatRow label="coral inference"
+                             value={`${(Math.round(frigateMetrics.coralMs * 10) / 10).toFixed(1)} ms`}
+                             tone={frigateMetrics.coralMs > 15 ? "warn" : "default"} />
+                )}
+                {frigateMetrics.fps && Object.keys(frigateMetrics.fps).length > 0 && (
+                  <div style={{ marginTop: 4 }}>
+                    {Object.entries(frigateMetrics.fps).sort(([a], [b]) => a.localeCompare(b)).map(([cam, fps]) => (
+                      <HmStatRow key={cam}
+                        label={cam.replace(/_/g, " ")}
+                        value={`${Math.round(fps * 10) / 10} fps`} />
+                    ))}
+                  </div>
+                )}
+                {frigateMetrics.uptime && (
+                  <HmStatRow label="uptime" value={frigateMetrics.uptime} />
+                )}
+              </div>
+            ) : (
+              <HmEmptyState
+                message="enable stats sensors"
+                action={{
+                  label: "how",
+                  tooltip: "Drop tools/ha_packages/frigate_stats.yaml from HomeAIVoice repo into\n/config/packages/frigate_stats.yaml on HAOS.\nEnsure configuration.yaml has:\n  homeassistant:\n    packages: !include_dir_named packages\nRestart HA. Tray auto-picks up sensor.frigate_*.",
+                }} />
+            )}
           </HmCard>
         </div>
 
-        {/* Latest perceptions */}
-        {recentPerceptions.length > 0 && (
-          <HmCard title="RECENT PERCEPTION">
-            {recentPerceptions.slice(-3).reverse().map((p, i) => {
-              const txt = p.text || "";
-              const m = /^([a-z_]+)\s*:\s*(.+)$/i.exec(txt);
-              const room = m ? m[1].replace(/_/g, " ") : null;
-              const summary = m ? m[2] : txt;
-              return (
-                <div key={i} style={{
-                  display: "grid",
-                  gridTemplateColumns: "minmax(90px, 110px) 1fr",
-                  columnGap: 10,
-                  alignItems: "baseline",
-                  marginBottom: 4,
-                  fontFamily: "'Geist Mono', monospace",
-                  fontSize: 10.5,
+        {/* HA BRIDGE / API — full width below */}
+        <HmCard title="HA BRIDGE / API" badge={bridgeBadge}>
+          {!bridgeHealth ? (
+            <div style={{
+              fontFamily: "'Geist Mono', monospace",
+              fontSize: 11, color: "var(--hg-fg-5)",
+            }}>bridge unreachable</div>
+          ) : (
+            <div style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+              gap: "6px 18px",
+              alignItems: "baseline",
+            }}>
+              {uptime && <HmStatRow label="uptime" value={uptime} />}
+              {heartbeat && <HmStatRow label="heartbeat" value={heartbeat} />}
+              <HmStatRow label="rooms" value={roomsLoaded} />
+              <HmStatRow label="media players" value={mediaRegistered} />
+              {flagChips.length > 0 && (
+                <div style={{
+                  display: "flex", flexWrap: "wrap", gap: 4,
+                  gridColumn: "1 / -1",
+                  paddingTop: 6, marginTop: 2,
+                  borderTop: "1px solid var(--hg-border-soft)",
                 }}>
-                  <span style={{ color: "var(--hg-fg-4)", fontWeight: 400 }}>{room || "—"}</span>
-                  <span style={{
-                    color: "var(--hg-fg-2)",
-                    fontFamily: "'Geist', system-ui, sans-serif",
-                    fontSize: 12,
-                    fontWeight: 400,
-                    lineHeight: 1.4,
-                  }}>{summary.slice(0, 120)}</span>
+                  {flagChips.map((c) => (
+                    <span key={c.label} style={{
+                      fontFamily: "'Geist Mono', monospace",
+                      fontSize: 9, letterSpacing: "0.1em",
+                      padding: "2px 6px",
+                      border: `1px solid var(--hg-${c.tone === "warn" ? "warn" : "ice"})`,
+                      color: `var(--hg-${c.tone === "warn" ? "warn" : "ice-bright"})`,
+                      borderRadius: 2,
+                    }}>{c.label}</span>
+                  ))}
                 </div>
-              );
-            })}
-          </HmCard>
-        )}
+              )}
+            </div>
+          )}
+        </HmCard>
       </div>
     );
   };
 
-  const renderNetwork = () => {
+  // Lab tab (Addendum 10) — time-aligned chart with stage trace +
+  // GPU/VRAM/CPU/RAM. Delegates to window.HmLabTab (declared in
+  // home-metrics-lab.jsx). Internal diag-pane toggle is local.
+  const renderLab = () => {
+    if (!window.HmLabTab) {
+      return (
+        <div style={{
+          padding: "20px 0", fontFamily: "'Geist Mono', monospace",
+          fontSize: 10.5, color: "var(--hg-fg-3)", textAlign: "center",
+        }}>HmLabTab not loaded</div>
+      );
+    }
+    const _supervisorUrl = (() => {
+      const base = metricsBase || metricsBaseFromEndpoint(endpoint);
+      try {
+        if (base) {
+          const u = new URL(base);
+          return `${u.protocol}//${u.hostname}:8093`;
+        }
+      } catch {}
+      return null;
+    })();
+    const _stackToken =
+      (typeof window !== "undefined" && window.__STACK_TOKEN) ||
+      (typeof localStorage !== "undefined" && localStorage.getItem("hg-stack-token-DEV")) ||
+      "";
+    return (
+      <window.HmLabTab
+        metrics={metrics}
+        metricsHistory={metricsHistory}
+        aiStackOnline={aiStackOnline}
+        aiStackState={aiStackState}
+        lastTrace={lastTrace}
+        traceSummary={traceSummary}
+        labTurns={labTurnsRef.current}
+        labSamples={labSamplesRef.current}
+        labTick={labTick}
+        supervisorUrl={_supervisorUrl}
+        stackToken={_stackToken}
+        tokenConfigured={!!_stackToken}
+        simActive={simActive}
+        diagOpen={false}
+        setDiagOpen={() => {}}
+      />
+    );
+  };
+
+  // Tray v6: renderNetwork removed entirely (see tabs[] comment above).
+  // UniFi data still flows in via `networkMetrics` and is available in
+  // the diagnostics modal for power-users. The function below is kept
+  // disabled-by-default purely for the diag modal's reuse, but its
+  // output isn't wired to any tab. Safe to delete in a later pass.
+  // eslint-disable-next-line no-unused-vars
+  const _renderNetwork_unused = () => {
     const allDevices = [
       ...(networkMetrics?.udm ? [{ ...networkMetrics.udm, name: "cloud gateway · UDM", isUdm: true }] : []),
       ...(networkMetrics?.switches || []),
     ];
-    if (allDevices.length === 0) {
-      return (
-        <HmCard title="UNIFI">
-          <HmEmptyState
-            message="no unifi devices detected"
-            action={{
-              label: "how",
-              tooltip: "HA → Settings → Devices & Services → + Add Integration → Unifi Network.\nGrant API access to your UDM / switches / APs.",
-            }} />
-        </HmCard>
-      );
-    }
-    const worstMem = Math.max(...allDevices.map((d) => d.mem || 0));
-    const overallTone = worstMem > 90 ? "crit" : worstMem > 70 ? "warn" : "ok";
+    const worstMem = allDevices.length > 0
+      ? Math.max(...allDevices.map((d) => d.mem || 0))
+      : null;
+    const worstMemTone = worstMem == null ? "idle"
+      : worstMem > 90 ? "crit"
+      : worstMem > 70 ? "warn"
+      : "ok";
+
+    // Reachability items — same plain-language vocabulary as the AI tab's dep strip
+    const reachItems = [];
+    if (sidecarOnline === true) reachItems.push({ label: "ai box", state: "online", tone: "ok" });
+    else if (sidecarOnline === false) reachItems.push({ label: "ai box", state: "offline", tone: "crit" });
+    else reachItems.push({ label: "ai box", state: "unknown", tone: "idle" });
+    const haUp = connection === "online";
+    if (haUp && bridgeHealth?.ha_connected) reachItems.push({ label: "haos", state: "connected", tone: "ok" });
+    else if (haUp || bridgeHealth?.ha_connected) reachItems.push({ label: "haos", state: "degraded", tone: "warn" });
+    else reachItems.push({ label: "haos", state: "offline", tone: "crit" });
+    if (bridgeOnline === true) reachItems.push({ label: "bridge", state: "online", tone: "ok" });
+    else if (bridgeOnline === false) reachItems.push({ label: "bridge", state: "offline", tone: "crit" });
+    else reachItems.push({ label: "bridge", state: "unknown", tone: "idle" });
 
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {/* Overall health card */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <HmCard title="NETWORK"
-                  badge={{ text: overallTone === "ok" ? "healthy" : "watch", tone: overallTone === "ok" ? "ice" : "warn" }}>
-            <div style={{
-              fontFamily: "'Geist', system-ui, sans-serif",
-              fontSize: 22, fontWeight: 600,
-              color: "var(--hg-fg-0)",
-              fontVariantNumeric: "tabular-nums",
-              lineHeight: 1,
-              marginBottom: 4,
-            }}>
-              {allDevices.length}
-              <span style={{ fontSize: 11, color: "var(--hg-fg-4)", fontWeight: 400 }}> devices</span>
-            </div>
-            <HmStatRow label="worst mem" value={`${Math.round(worstMem)}%`}
-                       tone={worstMem > 90 ? "crit" : worstMem > 70 ? "warn" : "default"} />
-          </HmCard>
-
-          {/* Clients card */}
-          {networkMetrics?.clientsKnown > 0 && (
-            <HmCard title="CLIENTS">
+        {/* Network Health — single compact card */}
+        <HmCard title="NETWORK HEALTH"
+                badge={worstMemTone === "warn" || worstMemTone === "crit"
+                  ? { text: "watch", tone: worstMemTone }
+                  : { text: "healthy", tone: "ok" }}>
+          <HmDepHealthStrip items={reachItems} />
+          <div style={{ marginTop: 10 }}>
+            {networkMetrics?.clientsKnown > 0 && (
+              <HmStatRow
+                label="clients"
+                value={`${networkMetrics.clientsOnline} / ${networkMetrics.clientsKnown}`}
+                tone={networkMetrics.clientsOnline < networkMetrics.clientsKnown ? "warn" : "default"}
+              />
+            )}
+            {worstMem != null && (
+              <HmStatRow
+                label="worst device mem"
+                value={`${Math.round(worstMem)}%`}
+                tone={worstMemTone === "warn" || worstMemTone === "crit" ? worstMemTone : "default"}
+              />
+            )}
+            {allDevices.length === 0 && networkMetrics?.clientsKnown == null && (
               <div style={{
-                fontFamily: "'Geist', system-ui, sans-serif",
-                fontSize: 22, fontWeight: 600,
-                color: "var(--hg-fg-0)",
-                fontVariantNumeric: "tabular-nums",
-                lineHeight: 1, marginBottom: 6,
-              }}>
-                {networkMetrics.clientsOnline}
-                <span style={{ fontSize: 11, color: "var(--hg-fg-4)", fontWeight: 400 }}>
-                  {" / "}{networkMetrics.clientsKnown} online
-                </span>
-              </div>
-              <div style={{ display: "inline-flex", gap: 3, flexWrap: "wrap", marginTop: 4 }}>
-                {Array.from({ length: networkMetrics.clientsKnown }).map((_, i) => (
-                  <span key={i} style={{
-                    width: 5, height: 5, borderRadius: 999,
-                    background: i < networkMetrics.clientsOnline ? "var(--hg-ice-bright)" : "var(--hg-border)",
-                  }} />
-                ))}
-              </div>
-            </HmCard>
-          )}
-        </div>
+                fontFamily: "'Geist Mono', monospace",
+                fontSize: 10.5, color: "var(--hg-fg-5)",
+                marginTop: 4,
+              }}>no unifi telemetry</div>
+            )}
+          </div>
+        </HmCard>
 
-        {/* Device cards */}
-        {allDevices.map((d) => (
-          <HmCard
-            key={d.name}
-            title={d.name.toUpperCase()}
-            badge={d.state && d.state !== "connected"
-              ? { text: d.state, tone: "warn" }
-              : { text: "connected", tone: "ice" }}
-          >
-            <div style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 14,
-            }}>
-              <HmMetricCard label="cpu" value={d.cpu} unit="%" max={100} viz="bar" />
-              <HmMetricCard label="ram" value={d.mem} unit="%" max={100} viz="bar" />
+        {/* UniFi diagnostics — collapsed by default. Background data. */}
+        {allDevices.length > 0 ? (
+          <details style={{
+            background: "var(--hg-bg-1)",
+            border: "1px solid var(--hg-border-soft)",
+            borderRadius: 4,
+            padding: "10px 12px",
+          }}>
+            <summary style={{
+              cursor: "pointer",
+              fontFamily: "'Geist Mono', monospace",
+              fontSize: 10, letterSpacing: "0.16em",
+              textTransform: "uppercase",
+              color: "var(--hg-fg-4)",
+              outline: "none",
+              fontWeight: 400,
+            }}>unifi diagnostics · {allDevices.length} devices</summary>
+            <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+              {allDevices.map((d) => (
+                <HmCard
+                  key={d.name}
+                  title={d.name.toUpperCase()}
+                  badge={d.state && d.state !== "connected"
+                    ? { text: d.state, tone: "warn" }
+                    : { text: "connected", tone: "ice" }}
+                >
+                  <div style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: 14,
+                  }}>
+                    <HmMetricCard label="cpu" value={d.cpu} unit="%" max={100} viz="bar" />
+                    <HmMetricCard label="ram" value={d.mem} unit="%" max={100} viz="bar" />
+                  </div>
+                </HmCard>
+              ))}
             </div>
+          </details>
+        ) : (
+          <HmCard title="UNIFI">
+            <HmEmptyState
+              message="no unifi devices detected"
+              action={{
+                label: "how",
+                tooltip: "HA → Settings → Devices & Services → + Add Integration → Unifi Network.\nGrant API access to your UDM / switches / APs.",
+              }} />
           </HmCard>
-        ))}
+        )}
       </div>
     );
   };
@@ -1047,6 +1570,41 @@ function MetricsStrip({
       background: "var(--hg-bg-0)",
       fontFeatureSettings: '"tnum"',
     }}>
+      {/* DRAG HANDLE — only visible when tray expanded. Sits on the
+          border between chat feed and tray; drag UP to grow the tray,
+          DOWN to shrink. Width-100%, 6px tall, ns-resize cursor on
+          hover so the affordance is discoverable. */}
+      {expanded && (
+        <div
+          onPointerDown={onTrayHandlePointerDown}
+          onPointerMove={onTrayHandlePointerMove}
+          onPointerUp={onTrayHandlePointerUp}
+          onPointerCancel={onTrayHandlePointerUp}
+          title="Drag to resize"
+          aria-label="Resize metrics tray"
+          role="separator"
+          style={{
+            height: 6,
+            width: "100%",
+            cursor: "ns-resize",
+            background: "transparent",
+            position: "relative",
+            touchAction: "none",
+            zIndex: 2,
+          }}
+        >
+          {/* Subtle 1px line that brightens on hover for visual feedback */}
+          <div style={{
+            position: "absolute", left: "50%", top: 2,
+            width: 40, height: 2,
+            transform: "translateX(-50%)",
+            background: "var(--hg-fg-4)",
+            borderRadius: 1,
+            opacity: 0.5,
+            pointerEvents: "none",
+          }} />
+        </div>
+      )}
       {/* SUMMARY STRIP — always visible, ~34px */}
       <button
         onClick={() => setExpanded((x) => !x)}
@@ -1066,14 +1624,30 @@ function MetricsStrip({
           minHeight: 34,
         }}
       >
-        {/* AI status group */}
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+        {/* AI status group — v6.2: during transient voice states (listening,
+            speaking, transcribing, thinking) we render the LiveWaveform +
+            state word INLINE here. The standalone VoiceBanner is hidden in
+            that case so there's just one persistent strip above the input
+            row. Idle / ready / warming still show the plain phrase. */}
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
           <span style={{
             width: 6, height: 6, borderRadius: 999,
             background: aiIsTransient ? "var(--hg-ice-bright)" : "var(--hg-fg-3)",
             animation: aiIsTransient ? "hg-pulse-dot 1.4s ease-in-out infinite" : "none",
           }} />
-          <span style={{ color: "var(--hg-fg-1)", fontWeight: 600 }}>{aiPhrase}</span>
+          {aiIsTransient && (voiceState === "listening" || voiceState === "speaking") ? (
+            <>
+              <LiveWaveform
+                source={voiceState === "speaking" ? "player" : "mic"}
+                bars={14} height={8}
+              />
+              <span style={{ color: "var(--hg-ice)", fontWeight: 600 }}>{voiceState}…</span>
+            </>
+          ) : aiIsTransient ? (
+            <span style={{ color: "var(--hg-ice)", fontWeight: 600 }}>{voiceState}…</span>
+          ) : (
+            <span style={{ color: "var(--hg-fg-1)", fontWeight: 600 }}>{aiPhrase}</span>
+          )}
         </span>
 
         {/* Last activity */}
@@ -1103,23 +1677,73 @@ function MetricsStrip({
           }}>{warnChip.text}</span>
         )}
 
-        {/* Right cluster */}
-        <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 12 }}>
-          {ttfaP50 != null && (
-            <span style={{ color: "var(--hg-fg-3)", display: "inline-flex", gap: 4 }}>
-              <span style={{ color: "var(--hg-fg-5)" }}>ttfa</span>
-              <span style={{ color: "var(--hg-fg-1)", fontWeight: 600 }}>{ttfaP50}</span>
-              <span style={{ color: "var(--hg-fg-5)" }}>ms</span>
+        {/* Right cluster — minimalist headline metrics visible WITHOUT
+            expanding the tray. Replaces the redundant `ha` dot (HA health
+            already surfaces in the header warn pill).
+            Shows whichever of these are available right now:
+              · last voice turn total ms — most-recent latency
+              · ttft (live LLM warmth signal)
+              · vram % — memory pressure
+              · gpu %  — only when actively spiking (>5%)
+            All three feed into the chevron for a glanceable status row. */}
+        <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 14 }}>
+          {lastTrace?.t_done > 0 && (() => {
+            const ms = Math.round(lastTrace.t_done);
+            const sec = (ms / 1000).toFixed(ms >= 10000 ? 0 : 1);
+            const tone = ms > 2500 ? "var(--hg-warn)" : "var(--hg-fg-1)";
+            return (
+              <span style={{ color: "var(--hg-fg-5)", display: "inline-flex", gap: 4 }}>
+                <span>last</span>
+                <span style={{ color: tone, fontWeight: 600 }}>{sec}s</span>
+              </span>
+            );
+          })()}
+          {metrics.ttft != null && metrics.ttft > 0 && (
+            <span style={{ color: "var(--hg-fg-5)", display: "inline-flex", gap: 4 }}>
+              <span>ttft</span>
+              <span style={{
+                color: metrics.ttft > 200 ? "var(--hg-warn)" : "var(--hg-fg-1)",
+                fontWeight: 600,
+              }}>{Math.round(metrics.ttft)}</span>
+              <span>ms</span>
             </span>
           )}
-          <span style={{ display: "inline-flex", gap: 6 }}>
-            <HmHealthDot tone={bridgeHealth?.ha_connected ? "ok" : "crit"} />
-            <span style={{ color: "var(--hg-fg-4)", fontSize: 10 }}>ha</span>
-          </span>
-          <span style={{ display: "inline-flex", gap: 6 }}>
-            <HmHealthDot tone={netTone} />
-            <span style={{ color: "var(--hg-fg-4)", fontSize: 10 }}>net</span>
-          </span>
+          {metrics.vram != null && metrics.vramMax && (() => {
+            const pct = (metrics.vram / metrics.vramMax) * 100;
+            const tone = pct > 90 ? "var(--hg-crit)" : pct > 75 ? "var(--hg-warn)" : "var(--hg-fg-1)";
+            return (
+              <span style={{ color: "var(--hg-fg-5)", display: "inline-flex", gap: 4 }}>
+                <span>vram</span>
+                <span style={{ color: tone, fontWeight: 600 }}>{Math.round(pct)}%</span>
+              </span>
+            );
+          })()}
+          {metrics.gpu != null && metrics.gpu >= 5 && (
+            <span style={{ color: "var(--hg-fg-5)", display: "inline-flex", gap: 4 }}>
+              <span>gpu</span>
+              <span style={{
+                color: metrics.gpu > 90 ? "var(--hg-crit)"
+                     : metrics.gpu > 70 ? "var(--hg-warn)"
+                     : "var(--hg-fg-1)",
+                fontWeight: 600,
+              }}>{Math.round(metrics.gpu)}%</span>
+            </span>
+          )}
+          {/* F-19 (Addendum 27 P0): GPU temp pill. NVML temp from sidecar
+              /metrics. Thresholds match the Lab tab's THRESHOLDS.temp
+              (warn 78°C, crit 90°C — Addendum 12 calibration). Rendered
+              only when the sidecar exposes gpu_temp_c. */}
+          {metrics.tempC != null && (
+            <span style={{ color: "var(--hg-fg-5)", display: "inline-flex", gap: 4 }}>
+              <span>temp</span>
+              <span style={{
+                color: metrics.tempC >= 90 ? "var(--hg-crit)"
+                     : metrics.tempC >= 78 ? "var(--hg-warn)"
+                     : "var(--hg-fg-1)",
+                fontWeight: 600,
+              }}>{Math.round(metrics.tempC)}°c</span>
+            </span>
+          )}
           <span style={{
             color: "var(--hg-fg-4)",
             transition: "transform 220ms cubic-bezier(.4,0,.2,1)",
@@ -1158,12 +1782,16 @@ function MetricsStrip({
               >diag</button>
             }
           />
-          <HmTrayBody maxHeight={340}>
+          <HmTrayBody maxHeight={trayHeight}>
             <div key={activeTab} style={{ animation: "hg-fade-up 160ms ease-out" }}>
-              {activeTab === "now"     && renderNow()}
               {activeTab === "ai"      && renderAi()}
-              {activeTab === "home"    && renderHome()}
-              {activeTab === "network" && renderNetwork()}
+              {activeTab === "infra"   && renderInfra()}
+              {activeTab === "intel"   && (
+                window.HomeIntelligenceTab
+                  ? <window.HomeIntelligenceTab metricsBase={metricsBase} endpoint={endpoint} />
+                  : <div style={{ color: "var(--hg-fg-4)", fontSize: 12 }}>intelligence module not loaded</div>
+              )}
+              {activeTab === "trace"   && renderLab()}
             </div>
           </HmTrayBody>
         </div>
@@ -1192,7 +1820,11 @@ function Num({ v, suffix }) {
 /* ── First-run connection prompt ─────────────────────────────────────── */
 function FirstRun({ connection, endpoint, token, onConnect, availableModels, onPickModel }) {
   const [url, setUrl] = useState(endpoint || "http://192.168.0.125:8123");
-  const [tok, setTok] = useState(token || "");
+  // Start the token field empty when the last connection failed — a rejected
+  // token shouldn't be pre-filled, or the user just retries the dead token.
+  const [tok, setTok] = useState(
+    (connection === "offline" || connection === "auth_invalid") ? "" : (token || "")
+  );
   const isConnecting   = connection === "connecting";
   const isOffline      = connection === "offline";
   const isAuthInvalid  = connection === "auth_invalid";
@@ -1311,18 +1943,16 @@ function FirstRun({ connection, endpoint, token, onConnect, availableModels, onP
       </form>
       <div style={{ marginTop: 36, fontFamily: "'Geist Mono', monospace", fontSize: 11, color: "var(--hg-fg-4)", lineHeight: 1.7 }}>
         get a token at <span style={{ color: "var(--hg-fg-2)" }}>profile → security → long-lived access tokens</span><br/>
-        type <span style={{ color: "var(--hg-fg-2)" }}>/help</span> below to see all commands
+        type <span style={{ color: "var(--hg-fg-2)" }}>/help</span> for commands · <span style={{ color: "var(--hg-fg-2)" }}>/simulation</span> to explore with mock data
       </div>
     </div>
   );
 }
 
-function BootBanner({ metrics }) {
-  // Refined wordmark + EL signature + calm system signature.
-  // Lives at the top of the feed; scrolls up as the conversation grows.
-  // The ASCII art uses Geist Mono and a faint light-cone preamble — a quiet,
-  // McCall-style projection of light onto the wordmark.
-  const cone = [
+/* Boot wordmark + light-cone — hoisted to module scope so both the static
+ * in-feed BootBanner and the animated BootSequence render the exact same art.
+ * Verbatim from the original BootBanner; the escaping is load-bearing. */
+const BOOT_CONE = [
     "               \u00b7               ",
     "             \u00b7   \u00b7             ",
     "           \u00b7       \u00b7           ",
@@ -1332,13 +1962,32 @@ function BootBanner({ metrics }) {
     "   \u00b7                       \u00b7   ",
     " \u00b7                           \u00b7 ",
   ];
-  const art = [
+const BOOT_ART = [
     "    __                          ",
     "   / /_   ____   ____ ___   ___ ",
     "  / __ \\ / __ \\ / __ `__ \\ / _ \\",
     " / / / // /_/ // / / / / //  __/",
     "/_/ /_/ \\____//_/ /_/ /_/ \\___/ ",
-  ];
+];
+
+/* The exact condition under which FirstRun (vs the chat feed) is the visible
+ * surface — extracted verbatim from HomeApp's render gate so the gate,
+ * routeOnboarding, and the boot focus effect can never disagree. */
+function isFirstRunVisible(connection, events) {
+  return (connection !== "online" && connection !== "reconnecting" && events.length === 0)
+    || connection === "picking-model"
+    || connection === "auth_invalid"
+    || (connection === "offline"      && events.length === 0)
+    || (connection === "disconnected" && events.length === 0);
+}
+
+function BootBanner({ metrics }) {
+  // Refined wordmark + EL signature + calm system signature.
+  // Lives at the top of the feed; scrolls up as the conversation grows.
+  // The ASCII art uses Geist Mono and a faint light-cone preamble — a quiet,
+  // McCall-style projection of light onto the wordmark.
+  const cone = BOOT_CONE;
+  const art = BOOT_ART;
   return (
     <div className="hg-boot" style={{
       padding: "56px 24px 36px",
@@ -1378,6 +2027,165 @@ function BootBanner({ metrics }) {
   );
 }
 
+/* BootSequence — the animated boot logo. Plays on every launch — a calm,
+ * unhurried type-in (~4s, skippable). Reuses BootBanner's exact styling so the
+ * boot logo and the in-feed BootBanner are visually identical — this one just
+ * types itself in. HomeApp owns the mode decision; this component is purely
+ * presentational.
+ *
+ * Props: { mode, onComplete }
+ *  - "animate"  — slow char-by-char reveal → sig fade → calm hold → onComplete()
+ *  - "instant"  — full art immediately + a short calm hold → onComplete()
+ *                 (the prefers-reduced-motion fallback)
+ *  - "settling" — full art + a faint pulsing "connecting…" line; no onComplete
+ *                 (HomeApp's settling effect owns the exit)
+ */
+function BootSequence({ mode, onComplete }) {
+  // Boot timing — deliberately slow + relaxed. It plays every launch and it's
+  // skippable (any key/click), so there's no rush. Tunable here.
+  const STEP_CHARS = 2;          // chars revealed per tick
+  const STEP_MS = 40;            // tick interval → ~3.3s to type the wordmark
+  const ANIMATE_HOLD_MS = 900;   // calm hold after the sig fades in
+  const INSTANT_HOLD_MS = 650;   // reduced-motion hold (no typing)
+  const TOTAL = BOOT_ART.join("\n").length;
+  const [revealed, setRevealed] = useState(mode === "animate" ? 0 : TOTAL);
+  const [showSig, setShowSig] = useState(mode !== "animate");
+  const doneRef = useRef(false);
+
+  // Keep `onComplete` in a ref so `finish` is a STABLE callback. Without this,
+  // if the parent passes an inline-arrow `onComplete` (new ref every render),
+  // `finish` would change every parent render — the hold-timeout effects below
+  // would re-run and clear+re-arm their setTimeout, so on a frequently
+  // re-rendering parent the timeout never fires and the boot sequence hangs.
+  const onCompleteRef = useRef(onComplete);
+  useEffect(() => { onCompleteRef.current = onComplete; }, [onComplete]);
+
+  const finish = useCallback(() => {
+    if (doneRef.current) return;
+    doneRef.current = true;
+    const cb = onCompleteRef.current;
+    if (cb) cb();
+  }, []);
+
+  // Char reveal — animate only. Cleared on unmount and on any mode change.
+  useEffect(() => {
+    if (mode !== "animate") return;
+    const iv = setInterval(() => {
+      setRevealed((r) => {
+        if (r >= TOTAL) { clearInterval(iv); return r; }
+        return Math.min(r + STEP_CHARS, TOTAL);
+      });
+    }, STEP_MS);
+    return () => clearInterval(iv);
+  }, [mode, TOTAL]);
+
+  // Skip — any key/click jumps the reveal straight to the end (animate only).
+  useEffect(() => {
+    if (mode !== "animate") return;
+    const skip = () => setRevealed(TOTAL);
+    document.addEventListener("keydown", skip);
+    document.addEventListener("click", skip);
+    return () => {
+      document.removeEventListener("keydown", skip);
+      document.removeEventListener("click", skip);
+    };
+  }, [mode, TOTAL]);
+
+  // Animate: once fully revealed → sig fades in, calm hold → onComplete().
+  useEffect(() => {
+    if (mode !== "animate" || revealed < TOTAL) return;
+    setShowSig(true);
+    const t = setTimeout(finish, ANIMATE_HOLD_MS);
+    return () => clearTimeout(t);
+  }, [mode, revealed, TOTAL, finish]);
+
+  // Instant: a calm hold, then onComplete().
+  useEffect(() => {
+    if (mode !== "instant") return;
+    const t = setTimeout(finish, INSTANT_HOLD_MS);
+    return () => clearTimeout(t);
+  }, [mode, finish]);
+
+  // Map the global `revealed` count onto per-line reveal offsets. Each line is
+  // always rendered full-width (revealed span + transparent unrevealed span)
+  // so there's zero layout shift; the block cursor sits at the frontier.
+  let offset = 0;
+  const artLines = BOOT_ART.map((line) => {
+    const start = offset;
+    offset += line.length + 1; // +1 for the joining "\n"
+    const n = Math.max(0, Math.min(line.length, revealed - start));
+    const isCurrent = mode === "animate" && revealed >= start && n < line.length;
+    return { line, n, isCurrent };
+  });
+
+  return (
+    <div style={{
+      flex: 1,
+      display: "flex", flexDirection: "column",
+      alignItems: "center", justifyContent: "center",
+      background: "var(--hg-bg-0)",
+      fontFamily: "'Geist Mono', monospace",
+      animation: "hg-fade-up 600ms ease-out",
+    }}>
+      {/* Cone of light */}
+      <div style={{
+        whiteSpace: "pre",
+        fontSize: 9, lineHeight: 1.2,
+        color: "var(--hg-fg-5)",
+        textAlign: "center",
+        marginBottom: 4,
+      }}>{BOOT_CONE.map((l, i) => (
+        <div key={i} style={{ opacity: 0.20 + i * 0.07 }}>{l}</div>
+      ))}</div>
+
+      {/* Wordmark — typed in, zero layout shift */}
+      <div style={{
+        whiteSpace: "pre",
+        fontSize: 11, lineHeight: 1.2,
+        color: "var(--hg-fg-0)",
+        textAlign: "center",
+        fontWeight: 500,
+      }}>{artLines.map(({ line, n, isCurrent }, i) => (
+        <div key={i}>
+          <span>{line.slice(0, n)}</span>
+          {isCurrent && (
+            <span style={{
+              background: "var(--hg-fg-0)", color: "transparent",
+              animation: "hg-caret-blink 1.05s steps(1) infinite",
+            }}>{line.slice(n, n + 1) || " "}</span>
+          )}
+          <span style={{ color: "transparent" }}>
+            {isCurrent ? line.slice(n + 1) : line.slice(n)}
+          </span>
+        </div>
+      ))}</div>
+
+      {/* Brand signature — fades in once the wordmark finishes */}
+      <div style={{
+        marginTop: 36,
+        textAlign: "center",
+        fontFamily: "'Geist Mono', monospace",
+        fontSize: 10,
+        letterSpacing: "0.28em",
+        color: "var(--hg-fg-4)",
+        opacity: showSig ? 1 : 0,
+        transition: "opacity 450ms ease-out",
+      }}>engineered lighting</div>
+
+      {/* Settling — a faint, slowly-pulsing "connecting…" line */}
+      {mode === "settling" && (
+        <div style={{
+          marginTop: 18,
+          fontFamily: "'Geist Mono', monospace",
+          fontSize: 9.5, letterSpacing: "0.18em",
+          color: "var(--hg-fg-5)",
+          animation: "hg-pulse-dot 1.6s ease-in-out infinite",
+        }}>connecting…</div>
+      )}
+    </div>
+  );
+}
+
 function SigRow({ label, value }) {
   return (
     <div style={{ display: "flex", alignItems: "center" }}>
@@ -1389,26 +2197,79 @@ function SigRow({ label, value }) {
 }
 
 /* ── Input row ───────────────────────────────────────────────────────── */
-const SLASH_CMDS = [
-  { cmd: "/connect",  hint: "<url> [<token>]", desc: "connect to a Home Assistant endpoint" },
-  { cmd: "/endpoint", hint: "<url>",   desc: "change endpoint url" },
-  { cmd: "/token",    hint: "<token>", desc: "update the HA long-lived access token" },
-  { cmd: "/model",    hint: "<name>",  desc: "switch active model" },
-  { cmd: "/metrics",  hint: "<url>",   desc: "set the metrics-sidecar base url" },
-  { cmd: "/s2s",      hint: "<url> | token <hex> | voice <name>", desc: "configure s2s bridge — url, token, or per-session voice override" },
-  { cmd: "/voice",    hint: "<name>",  desc: "swap Kokoro TTS voice (e.g. am_eric, af_heart)" },
-  { cmd: "/voices",   hint: "",        desc: "list popular voice names" },
-  { cmd: "/debug",    hint: "on|off",  desc: "show/hide internal diag events ([parakeet], [direct], etc.)" },
-  { cmd: "/demo",     hint: "",        desc: "play the scripted demo conversation" },
-  { cmd: "/clear",    hint: "",        desc: "clear the conversation" },
-  { cmd: "/about",    hint: "",        desc: "show version + repo info" },
-  { cmd: "/find",     hint: "<text>",  desc: "search past chat events for matching text" },
-  { cmd: "/help",     hint: "",        desc: "list commands" },
+// Categories drive /help grouping + ordering. Each SLASH_CMDS entry
+// carries a `category` field; the help renderer collects by category
+// in the order defined here. Adding a new command? Pick the best-fit
+// category from this list (or add a new one — keep the list small).
+const SLASH_CMD_CATEGORIES = [
+  { id: "connection", label: "connection",        desc: "set up + maintain the link to HA + the AI stack" },
+  { id: "agent",      label: "ask the agent",      desc: "speak to the agent + steer routing" },
+  { id: "vision",     label: "vision + cameras",   desc: "frigate, multi-frame describe, snapshots" },
+  { id: "world",      label: "world + recap",      desc: "live state, recap, explainability" },
+  { id: "voice",      label: "voice + audio",      desc: "TTS swap, mute, voice modes" },
+  { id: "debug",      label: "debug + observability", desc: "search chat, see internals, route logs" },
+  { id: "mode",       label: "modes + lifecycle",  desc: "simulation, demo, clear, proactive" },
+  { id: "meta",       label: "meta",               desc: "list this list" },
 ];
 
-function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, onStop }) {
+const SLASH_CMDS = [
+  // ── connection ────────────────────────────────────────────────
+  { cmd: "/connect",  hint: "<url> [<token>]", desc: "connect to a Home Assistant endpoint", category: "connection" },
+  { cmd: "/endpoint", hint: "<url>",   desc: "change endpoint url", category: "connection" },
+  { cmd: "/token",    hint: "<token>", desc: "update the HA long-lived access token", category: "connection" },
+  { cmd: "/stack-token", hint: "<token>", desc: "save STACK_TOKEN for AI stack supervisor (from /opt/home-ai-voice/.env)", category: "connection" },
+  { cmd: "/metrics",  hint: "<url>",   desc: "set the metrics-sidecar base url", category: "connection" },
+  { cmd: "/s2s",      hint: "<url> | token <hex> | voice <name>", desc: "configure s2s bridge — url, token, or per-session voice override", category: "connection" },
+  // ── ask the agent ─────────────────────────────────────────────
+  { cmd: "/ask",        hint: "<text>",     desc: "force external/general provider for this question (bypasses classifier)", category: "agent" },
+  { cmd: "/local",      hint: "<text>",     desc: "force local home agent for this question (bypasses classifier)", category: "agent" },
+  { cmd: "/route",      hint: "<text>",     desc: "show how the classifier would route this text (no dispatch)", category: "agent" },
+  { cmd: "/external",   hint: "on|off|status|set-key", desc: "external provider config + auto-routing toggle", category: "agent" },
+  { cmd: "/agent-tools", hint: "",            desc: "list every LLM tool the agent can call (grouped by capability)", category: "agent" },
+  { cmd: "/model",    hint: "<name>",  desc: "switch active model", category: "agent" },
+  // ── vision + cameras ──────────────────────────────────────────
+  { cmd: "/cameras",    hint: "",            desc: "show a thumbnail snapshot of every configured camera (from the M1 cache or live)", category: "vision" },
+  { cmd: "/describe-clip", hint: "<camera> [frames] [interval_s]", desc: "watch a multi-frame clip from a camera and describe motion. e.g. /describe-clip kitchen, /describe-clip driveway 6 1.5", category: "vision" },
+  { cmd: "/find-clips", hint: "<query>",    desc: "search Frigate clips via semantic-search CLIP (e.g. 'package on porch'). Returns recent matches with thumbnails.", category: "vision" },
+  { cmd: "/spatial",    hint: "",           desc: "open the light-footprint map — Addendum 38 Phase 1 calibration review: which lights illuminate which space", category: "vision" },
+  { cmd: "/look",       hint: "<camera> <question>", desc: "ask the vision model a spatial question about a camera — it reasons by 'pointing' (boxing what it sees), rendered as the paper's two-panel figure. e.g. /look kitchen what is on the counter", category: "vision" },
+  // ── world + recap ─────────────────────────────────────────────
+  { cmd: "/world-state",hint: "[<room>|--raw]", desc: "open world-state drawer. <room> pre-filters to one room (click × to clear). '--raw' dumps full JSON inline instead.", category: "world" },
+  { cmd: "/recap",      hint: "[hours]",    desc: "summarize recent home activity. e.g. /recap (last 6h) · /recap 24 (today) · /recap 168 (past week)", category: "world" },
+  { cmd: "/why",        hint: "[conv-id]",  desc: "open explainability drawer — routing decision + tool calls + final text for the most recent (or specified) conv_id", category: "world" },
+  { cmd: "/why-light",  hint: "<zone>",     desc: "explain the last lighting decision for a zone — current classifier state, recent manual overrides (last 24h), and the last few state transitions from the shadow log. Pass no zone to list available zones.", category: "world" },
+  { cmd: "/lights",     hint: "",           desc: "open the Living Lights tuning drawer — 'right now' status, quick warmth/brightness bias sliders, and grouped knobs for the cascade (ToD, working hours, asleep, gaming, movie, defaults). No long chat required.", category: "world" },
+  // ── voice + audio ─────────────────────────────────────────────
+  { cmd: "/mute",     hint: "[2h|30m|movie]", desc: "mute Jarvis (manual, or for a duration, or for a movie). 'Hey Jarvis, stop' works by voice.", category: "voice" },
+  { cmd: "/unmute",   hint: "",        desc: "clear manual mute (TV-active + movie_mode auto-signals still apply)", category: "voice" },
+  { cmd: "/voice",    hint: "<name>",  desc: "swap Kokoro TTS voice (e.g. am_eric, af_heart)", category: "voice" },
+  { cmd: "/voices",   hint: "",        desc: "list popular voice names", category: "voice" },
+  // ── debug + observability ─────────────────────────────────────
+  { cmd: "/find",       hint: "<text>",     desc: "search past chat events for matching text", category: "debug" },
+  { cmd: "/debug",    hint: "on|off",  desc: "show/hide internal diag events ([parakeet], [direct], etc.)", category: "debug" },
+  { cmd: "/test",       hint: "classifier|external-privacy|external-suite", desc: "run built-in test suites and print a pass/fail summary", category: "debug" },
+  { cmd: "/lab-dump",       hint: "",       desc: "dump labSamplesRef + labTurnsRef + anchor stats as JSON (Addendum 32 evidence-gathering for line-graph flatness bug)", category: "debug" },
+  { cmd: "/lab-dump-watch", hint: "<sec>|stop", desc: "auto-dump every N seconds for 12 iterations (timing-window evidence)", category: "debug" },
+  // ── modes + lifecycle ─────────────────────────────────────────
+  { cmd: "/simulation", hint: "[scenario | off]", desc: "enter design-review mode (no real services — mocked everything)", category: "mode" },
+  { cmd: "/sim",        hint: "<scenario>", desc: "switch simulation scenario · /sim scenarios to list", category: "mode" },
+  { cmd: "/proactive",  hint: "[mode on|off | test … | reset]", desc: "proactive-assistant status, mode overrides, and no-leave event tests", category: "mode" },
+  { cmd: "/demo",     hint: "",        desc: "play the scripted demo conversation", category: "mode" },
+  { cmd: "/clear",    hint: "",        desc: "clear the conversation", category: "mode" },
+  // ── meta ──────────────────────────────────────────────────────
+  { cmd: "/about",    hint: "",        desc: "show version + repo info", category: "meta" },
+  { cmd: "/help",       hint: "",           desc: "list commands grouped by category (click any entry to fill the input)", category: "meta" },
+];
+
+function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, onStop, focusToken }) {
   const inputRef = useRef(null);
   const [sel, setSel] = useState(0);
+  // HomeApp bumps `focusToken` to pull focus here (e.g. when the chat feed
+  // becomes the live surface after boot). The `if (focusToken)` guard makes
+  // the mount run (initial focusToken === 0) a no-op — InputRow is always
+  // mounted, including behind the FirstRun form, so an unguarded focus()
+  // would steal focus from FirstRun's endpoint field on every boot.
+  useEffect(() => { if (focusToken) inputRef.current?.focus(); }, [focusToken]);
   const isSlash = value.startsWith("/");
   const firstTok = value.split(/\s+/)[0];
   const matches = isSlash ? SLASH_CMDS.filter((c) => c.cmd.startsWith(firstTok)) : [];
@@ -1517,6 +2378,19 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
             >{isSlash ? "run" : "send"} <IconSend size={11} /></button>
           )}
         </div>
+        {/* v6: inline "tap mic to end" hint next to the mic button while
+            a voice session is active. The VoiceBanner used to carry this
+            hint on the right edge, but moving it here collapses the two
+            persistent strips into one. */}
+        {(voice.state === "listening" || voice.state === "speaking") && (
+          <span style={{
+            fontFamily: "'Geist Mono', ui-monospace, monospace",
+            fontSize: 9.5,
+            letterSpacing: "0.12em",
+            color: "var(--hg-fg-4)",
+            whiteSpace: "nowrap",
+          }}>tap mic to end</span>
+        )}
         <MicButton state={voice.state} onClick={onMicToggle} />
       </div>
     </div>
@@ -1601,6 +2475,15 @@ function MicButton({ state, onClick }) {
  * Listening/inactive are driven locally by the mic state. */
 function VoiceBanner({ voice, onRetry }) {
   if (voice.state === "inactive") return null;
+  // v6.2: transient states (listening / speaking / transcribing /
+  // thinking) are now displayed inline in the MetricsStrip summary so
+  // there's only one persistent strip above the input row. VoiceBanner
+  // only renders for error / no-mic / ready states that genuinely need
+  // a dedicated callout.
+  if (voice.state === "listening" || voice.state === "speaking"
+      || voice.state === "transcribing" || voice.state === "thinking") {
+    return null;
+  }
   const base = {
     padding: "6px 16px",
     borderTop: "1px solid var(--hg-border-soft)",
@@ -1673,6 +2556,7 @@ function VoiceBanner({ voice, onRetry }) {
   // Active states with wave: listening, speaking. The wave is now
   // driven by a real AnalyserNode (mic input during listening, player
   // output during speaking) — see LiveWaveform below.
+  // v6: "tap mic to end" hint moved to InputRow next to the mic button.
   return (
     <div style={{ ...base, color: "var(--hg-ice)" }}>
       <LiveWaveform
@@ -1680,7 +2564,6 @@ function VoiceBanner({ voice, onRetry }) {
         bars={18} height={9}
       />
       <span>{voice.state}…</span>
-      <span style={{ marginLeft: "auto", color: "var(--hg-fg-4)" }}>tap mic to end</span>
     </div>
   );
 }
@@ -1795,6 +2678,78 @@ function s2sBaseFromEndpoint(_endpoint) {
   return "http://192.168.0.100:8094";
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Dedup-lookup helpers — pure predicates shared by:
+//   1. SSE chat-tee handler (renders LOCAL turns via metrics-sidecar
+//      broadcast of vLLM completions).
+//   2. extended_openai_conversation.conversation.finished subscriber
+//      (renders EXTERNAL turns + any other HA-routed turn the SSE feed
+//      doesn't see).
+// Both sources can fire for the same conversation_id with the same
+// text, in either order, depending on race timing. These predicates
+// catch the duplicate by exact text match within a bounded lookback
+// window — keeping the dedup symmetric across fire orders.
+// ─────────────────────────────────────────────────────────────────────
+// Dedup helpers — used by every source that adds chat bubbles. Match
+// by EXACT text + recent time window. The time window matters because
+// the same question/answer can recur turn-to-turn (e.g., user asks
+// "do you see me?" 5 times, agent returns the same canned phrasing
+// each time — we MUST render all 5). The historical 20-event lookback
+// without a time gate caused the 2nd+ identical answers to be eaten.
+//
+// 8s window catches the cross-source race (SSE + WS event firing for
+// the same turn within ~1s) without folding distinct turns. Same
+// window for user + assistant since the racing-source problem is
+// symmetric.
+function _withinWindow(eventTimeStr, windowMs = 8000, nowDate = new Date()) {
+  // ev.time is fmtTime() output: "HH:MM:SS" 24h. We only care about
+  // very recent (< windowMs) so reconstruct a Date for "today" and
+  // compare. If parsing fails, conservatively return true (treat as
+  // recent — preserves old dedup-by-count behavior as fallback).
+  if (typeof eventTimeStr !== "string") return true;
+  const m = eventTimeStr.match(/^(\d{2}):(\d{2}):(\d{2})$/);
+  if (!m) return true;
+  const d = new Date(nowDate);
+  d.setHours(+m[1], +m[2], +m[3], 0);
+  let diff = nowDate.getTime() - d.getTime();
+  // Handle midnight wrap: if event "looks" like it's in the future,
+  // assume it was yesterday and add 24h.
+  if (diff < -windowMs) diff += 86400000;
+  return diff >= 0 && diff <= windowMs;
+}
+
+function findRecentUserIdx(prev, text, lookback = 8, windowMs = 8000) {
+  const target = (text || "").trim();
+  if (!target) return -1;
+  const now = new Date();
+  const start = Math.max(0, prev.length - lookback);
+  for (let i = prev.length - 1; i >= start; i--) {
+    const e = prev[i];
+    if ((e.kind === "user" || e.kind === "voice") &&
+        (e.text || "").trim() === target &&
+        _withinWindow(e.time, windowMs, now)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function findRecentAssistantIdx(prev, text, kind = "home", lookback = 20, windowMs = 8000) {
+  const target = (text || "").trim();
+  if (!target) return -1;
+  const now = new Date();
+  const start = Math.max(0, prev.length - lookback);
+  for (let i = prev.length - 1; i >= start; i--) {
+    const e = prev[i];
+    if (e.kind === kind &&
+        (e.text || "").trim() === target &&
+        _withinWindow(e.time, windowMs, now)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voiceOverride, themeOverride, autoplay = true }) {
   const initialPrefs = useMemo(() => loadPrefs({
     endpoint: "",
@@ -1829,6 +2784,11 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     ? { state: voiceOverride }
     : voiceInternal;
   const setVoice = setVoiceInternal;
+  // Surface voice.state on window so non-React readers (e.g., the metrics
+  // poll's adaptive-cadence adapter) can sample it without prop-drilling.
+  useEffect(() => {
+    if (typeof window !== "undefined") window.__hav_voiceState = voice.state;
+  }, [voice.state]);
   const [connection, setConnection] = useState(
     initialEvents ? "online"
     : (initialPrefs.endpoint && initialPrefs.token ? "reconnecting" : "disconnected")
@@ -1853,9 +2813,60 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   // Polled every 15s; surfaces a warning pill in the header when down.
   const [sidecarOnline, setSidecarOnline] = useState(null);
   const [bridgeOnline, setBridgeOnline] = useState(null);
+  // Phase 4A.9 Jarvis mute — composite state read from
+  // binary_sensor.jarvis_muted_effective_2. Header pill renders when on.
+  const [muteState, setMuteState] = useState({ muted: false, reason: "", until: "" });
+  // Addendum 14 / Slice 3 — people overlay open state. Header button opens;
+  // Escape or close button closes. Voice replies continue to flow into the
+  // underlying chat feed while the overlay is open.
+  const [peopleOpen, setPeopleOpen] = useState(false);
+  const [intelligenceOpen, setIntelligenceOpen] = useState(false);
+  // Addendum 27 / M5 — explainability drawer state. Stores the conv_id
+  // whose routing-log entries the drawer renders, or null when closed.
+  // Open via /why slash command or by clicking any kind:"home"/"action"/
+  // "external" bubble while debugMode is on.
+  const [explainConvId, setExplainConvId] = useState(null);
+  // Addendum 27 / F-32 — world-state debug drawer open state.
+  // Toggled via /world-state slash command. Reads from the existing
+  // /api/extended_openai_conversation/world_state endpoint.
+  const [worldStateDrawerOpen, setWorldStateDrawerOpen] = useState(false);
+  // /lights drawer — Living Lights tuning surface. One panel with
+  // "Right now" status + global bias knobs + cascade-priority sliders
+  // for the 15 promoted constants (vacant baselines, ToD CT buckets,
+  // movie/gaming/asleep ceilings). See home-lights.jsx.
+  const [lightsOpen, setLightsOpen] = useState(false);
+  // Per-room filter applied when /world-state <room> opens the drawer.
+  // Cleared via the × chip in the drawer header.
+  const [worldStateInitialRoom, setWorldStateInitialRoom] = useState(null);
+  // Addendum 38 Phase 1 — /spatial light-footprint drawer open state.
+  const [spatialDrawerOpen, setSpatialDrawerOpen] = useState(false);
+  // Phase 0.5 "Thinking with Visual Primitives" — /look drawer state.
+  // lookInitial seeds the drawer from the command args; its `nonce`
+  // re-keys the drawer so a repeated /look re-runs cleanly.
+  const [lookDrawerOpen, setLookDrawerOpen] = useState(false);
+  const [lookInitial, setLookInitial] = useState({ camera: null, question: "", nonce: 0 });
   // Master plan F.3: full bridge /healthz snapshot for the DebugPanel
   // (only populated when debugMode is on to avoid wasted polls).
   const [bridgeHealth, setBridgeHealth] = useState(null);
+  // AI Stack Control (Phase 1, read-only): liveness of the stack-supervisor
+  // (:8093 — separate from the docker-compose stack so it survives `stack.sh
+  // down`) and its aggregate status payload. Polled every 15s alongside
+  // sidecar/bridge below. See home-ai-stack.jsx.
+  const [aiStackOnline, setAiStackOnline] = useState(null);
+  const [aiStackState, setAiStackState] = useState(null);
+  // External Reasoning Fallback (see home-external.jsx + the plan at
+  // ~/.claude/plans/keen-doodling-parasol.md): modal visibility for
+  // `/external set-key`, and an AbortController ref shared across the
+  // dispatch path so a new send/Esc cancels any in-flight external
+  // stream. Stored in a ref (not state) because cancelling shouldn't
+  // re-render — it just aborts the fetch.
+  const [externalKeyModalOpen, setExternalKeyModalOpen] = useState(false);
+  const currentExternalCtrlRef = useRef(null);
+  // ID of the in-flight external assistant event we're streaming
+  // chunks into. Carried so onChunk/onDone can target the right event
+  // (rather than always mutating the last appended event, which
+  // breaks if anything else appends mid-stream).
+  const currentExternalEventIdRef = useRef(null);
   // Master plan Phase 2: live network metrics (Unifi via HA WS).
   // Currently surfaces UDM Cloud Gateway + 2 USW Flex switches + count
   // of Unifi-attached device trackers in `home` state.
@@ -1872,6 +2883,12 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   // multiple known entity_id patterns the integration uses.
   // Shape: { cpu, ram, disk, uptime } — all may be null until sensors exist.
   const [hostMetrics, setHostMetrics] = useState(null);
+  // Frigate stats from /config/packages/frigate_stats.yaml REST scrape +
+  // template sensors. Populated by a state_changed subscription on the
+  // sensor.frigate_* family. Stays null when the package isn't installed
+  // so the FRIGATE card shows the "enable stats sensors" empty-state.
+  // Shape: { totalCpu, coralMs, uptime, fps: { living_room, kitchen, ... } }
+  const [frigateMetrics, setFrigateMetrics] = useState(null);
   // Tray v3: per-room occupancy snapshot from bridge /rooms endpoint.
   // Shape: { rooms: { living_room: { occupant, age_s, media }, ... } }
   // The bridge already tracks this via RoomContextStore.
@@ -1914,6 +2931,393 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   //   { kitchen: ["person"], driveway: ["car", "person"] }
   // Sourced from binary_sensor.{camera}_{label}_occupancy state_changed events.
   const [cameraLabels, setCameraLabels] = useState({});
+  // Lifted from MetricsStrip so sim scenarios can inject mock traces.
+  // In live mode the MetricsStrip's poll effect writes via these
+  // setters (passed in as props).
+  const [traceSummary, setTraceSummary] = useState(null);
+  const [lastTrace, setLastTrace] = useState(null);
+
+  // Lab tab (Addendum 10): rolling buffers for time-aligned chart.
+  // refs (not state) to avoid re-render storms; labTick triggers
+  // refresh when relevant. Per-turn samples on each LabTurn means
+  // the 21-call history survives even when turns are minutes apart.
+  //
+  // Addendum 13 fix C.2: seed labTurnsRef from localStorage on mount
+  // so the chart survives app restarts (until TTL = 6h). Opt-out by
+  // setting localStorage.setItem('hg-lab-persist','off'). Persistence
+  // logic lives in window.HomeMetricsLabHelpers.{loadLabTurnsFromStorage,
+  // persistLabTurns}; pure-function tested in tools/run-lab-tests.js.
+  const LAB_STORAGE_KEY = "hg-lab-turns-v1";
+  const LAB_STORAGE_TTL_MS = 6 * 60 * 60 * 1000;
+  const labTurnsRef = useRef((function () {
+    try {
+      if (typeof window === "undefined") return [];
+      if (window.localStorage && window.localStorage.getItem("hg-lab-persist") === "off") return [];
+      const H = window.HomeMetricsLabHelpers;
+      if (!H || typeof H.loadLabTurnsFromStorage !== "function") return [];
+      return H.loadLabTurnsFromStorage(window.localStorage, LAB_STORAGE_KEY, LAB_STORAGE_TTL_MS);
+    } catch (e) { return []; }
+  })());
+  const labSamplesRef = useRef([]);
+  const [labTick, setLabTick] = useState(0);
+
+  // Addendum 32 Phase A: expose lab buffers + tick on window for
+  // /lab-dump inspection. We expose the REF OBJECTS (not .current) so
+  // external reads always see the live latest state without
+  // triggering React re-renders. Mirrors the existing
+  // window.__INFLIGHT_LAST_STUB pattern (home-app.jsx:3796).
+  // window.__hav_lastAnchorStats is populated from inside
+  // buildDenseStageAnchors (helpers.js) — the AR32-7 H9 probe.
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    window.__hav_labSamplesRef = labSamplesRef;
+    window.__hav_labTurnsRef = labTurnsRef;
+    return () => {
+      try { delete window.__hav_labSamplesRef; } catch {}
+      try { delete window.__hav_labTurnsRef; } catch {}
+    };
+  }, []);
+  useEffect(() => {
+    if (typeof window !== "undefined") window.__hav_renderTick = labTick;
+  }, [labTick]);
+
+  // Addendum 29 Change 2 / AV29-4: periodic sweep evicts in-flight
+  // stubs older than 60s (orphaned by silently-failed dispatches).
+  // 5s cadence balances responsiveness against wakeup cost. Helper is
+  // pure (tested via Node) so this useEffect is just a thin scheduler.
+  useEffect(() => {
+    const H = window.HomeMetricsLabHelpers;
+    if (!H || typeof H.evictStaleInFlight !== "function") return undefined;
+    const id = setInterval(() => {
+      try {
+        const before = labTurnsRef.current.length;
+        const after = H.evictStaleInFlight(labTurnsRef.current, Date.now(), 60000);
+        if (after.length !== before) {
+          labTurnsRef.current = after;
+          setLabTick((t) => t + 1);
+        }
+      } catch (e) {
+        // Silent — eviction is best-effort.
+      }
+    }, 5000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Debounced persistence: after each turn write, schedule a save in 2s.
+  // Multiple rapid turns collapse to one write. No write in sim mode.
+  const labPersistTimer = useRef(null);
+  const schedulePersistLabTurns = useCallback(() => {
+    try {
+      if (window.__SIM_ACTIVE) return;
+      if (window.localStorage && window.localStorage.getItem("hg-lab-persist") === "off") return;
+      const H = window.HomeMetricsLabHelpers;
+      if (!H || typeof H.persistLabTurns !== "function") return;
+      if (labPersistTimer.current) clearTimeout(labPersistTimer.current);
+      labPersistTimer.current = setTimeout(() => {
+        try { H.persistLabTurns(window.localStorage, LAB_STORAGE_KEY, labTurnsRef.current); }
+        catch (e) { /* quota / serialization error — silent */ }
+      }, 2000);
+    } catch (e) {}
+  }, []);
+
+  // Lab turn writer: convert a single trace object → LabTurn + push to
+  // labTurnsRef. Dedupes by turn_id (with a defensive secondary key on
+  // t_done+user_text in case bridge omits turn_id). Returns true if a
+  // new turn was appended, false if it was a duplicate. Pure-ish: the
+  // only side-effect is the ref push + cap.
+  const processTrace = useCallback((trace) => {
+    if (!trace || !trace.t_done) return false;
+    // Primary dedup: turn_id. Secondary (defense vs AR16-7): t_done +
+    // user_text hash — collision window is microseconds-wide but worth
+    // guarding against the rare same-ms / same-text edge.
+    const turnId = trace.turn_id || `t-${trace.t_done}-${(trace.user_text || "").slice(0,16)}`;
+    if (labTurnsRef.current.find((t) => t.id === turnId)) return false;
+    // Idempotency under SSE/poll race: also check sidecar_ids on
+    // already-grouped turns (AV29-18).
+    if (labTurnsRef.current.find(
+      (t) => Array.isArray(t.sidecar_ids) && t.sidecar_ids.indexOf(String(turnId)) !== -1
+    )) return false;
+    // Addendum 29 Change 3: multi-round grouping. Before creating a NEW
+    // turn, see if this trace belongs to an in-flight turn (same
+    // user_text within a 2.5s window). Multi-round tool-using turns
+    // produce N sidecar entries with the same user text; the grouping
+    // helper collapses them into one bar with N×(prefill+gen) stages
+    // + tool segments spliced in by Change 4. Helper tests:
+    // tools/run-lab-tests.js → "Addendum 29 Change 3" suite.
+    const H = (typeof window !== "undefined" && window.HomeMetricsLabHelpers) || null;
+    if (H && typeof H.findTurnToGroupInto === "function") {
+      // Use the real wall-clock startedAt from the adapter's stages when
+      // present (same fix as the new-turn path above — fixes off-by-up-to-
+      // 30-seconds when /conversations/recent returns aged entries).
+      let groupStartedAt;
+      if (Array.isArray(trace.stages) && trace.stages.length > 0
+          && Number.isFinite(trace.stages[0].startedAt)) {
+        groupStartedAt = trace.stages[0].startedAt;
+      } else {
+        groupStartedAt = Date.now() - (trace.t_done || 0);
+      }
+      const traceForGroup = {
+        turn_id: turnId,
+        user_text: trace.user_text,
+        assistant_text: trace.assistant_text || "",
+        startedAt: groupStartedAt,
+        t_done: trace.t_done,
+        stages: trace.stages || null,
+      };
+      const groupTarget = H.findTurnToGroupInto(labTurnsRef.current, traceForGroup, 2500);
+      if (groupTarget && typeof H.mergeTraceIntoTurn === "function") {
+        // Addendum 29 Change 2: real trace arrived for an in-flight stub
+        // → clear the flag so the renderer stops showing the pulsing
+        // band and renders the real stages (which the merge below
+        // appends).
+        if (groupTarget.inFlight) {
+          groupTarget.inFlight = false;
+          if (typeof window !== "undefined") {
+            window.__INFLIGHT_LAST_CLEARED_TS = Date.now();
+          }
+        }
+        // Build the stages for the new round (same logic as the new-turn
+        // path below, but only the stages portion).
+        let newStages;
+        if (Array.isArray(trace.stages) && trace.stages.length > 0) {
+          newStages = trace.stages;
+        } else {
+          const startNew = Date.now() - (trace.t_done || 0);
+          const sttN   = trace.t_parakeet_done || 0;
+          const llmN   = Math.max(0, (trace.t_pipeline_intent_end || 0) - sttN);
+          const synthN = Math.max(0, (trace.t_synth_done || 0) - (trace.t_pipeline_intent_end || 0));
+          const audioN = Math.max(0, (trace.t_done || 0) - (trace.t_first_audio_sent || 0));
+          newStages = [
+            { label: "stt",   ms: sttN,   startedAt: startNew,                                    endedAt: startNew + sttN },
+            { label: "llm",   ms: llmN,   startedAt: startNew + sttN,                              endedAt: startNew + sttN + llmN },
+            { label: "synth", ms: synthN, startedAt: startNew + sttN + llmN,                       endedAt: startNew + sttN + llmN + synthN },
+            { label: "audio", ms: audioN, startedAt: startNew + sttN + llmN + synthN,              endedAt: startNew + (trace.t_done || 0) },
+          ];
+        }
+        H.mergeTraceIntoTurn(groupTarget, {
+          turn_id: turnId,
+          user_text: trace.user_text,
+          assistant_text: trace.assistant_text || "",
+          stages: newStages,
+          // Change 4: pass tool_calls so the helper updates pending_tools
+          // for the NEXT merge to splice them into the bar.
+          tool_calls: Array.isArray(trace.tool_calls) ? trace.tool_calls : [],
+        });
+        return true; // counts as appended
+      }
+    }
+    const total = trace.t_done || 0;
+    // CRITICAL: prefer the adapter-supplied stages' real wall-clock
+    // timestamps (sidecar wall-clock ts) over Date.now(). Without this,
+    // turns that arrived 10+ seconds ago via /conversations/recent
+    // poll get assigned a startedAt of "now-totalMs", which doesn't
+    // overlap with the labSamplesRef wall-clock window — so GPU/CPU
+    // samples DURING the real turn get filtered out and the per-turn
+    // anchors render flat. Take startedAt/endedAt from the first/last
+    // stage when present; only fall back to Date.now() when no stages.
+    let startedAt, endedAt;
+    if (Array.isArray(trace.stages) && trace.stages.length > 0) {
+      const fs = trace.stages[0];
+      const ls = trace.stages[trace.stages.length - 1];
+      startedAt = Number.isFinite(fs.startedAt) ? fs.startedAt : (Date.now() - total);
+      endedAt = Number.isFinite(ls.endedAt) ? ls.endedAt : Date.now();
+    } else {
+      startedAt = Date.now() - total;
+      endedAt = Date.now();
+    }
+    // 2026-05-18: allow the adapter to pre-supply a stages array (typed
+    // turns from /conversations/recent use this path with prefill/gen
+    // stages derived from ttft_observed_ms). Voice turns coming from
+    // the bridge with t_* fields take the legacy 4-stage build below.
+    let stages;
+    if (Array.isArray(trace.stages) && trace.stages.length > 0) {
+      stages = trace.stages;
+    } else {
+      const stt   = trace.t_parakeet_done || 0;
+      const llm   = Math.max(0, (trace.t_pipeline_intent_end || 0) - stt);
+      const synth = Math.max(0, (trace.t_synth_done || 0) - (trace.t_pipeline_intent_end || 0));
+      const audio = Math.max(0, (trace.t_done || 0) - (trace.t_first_audio_sent || 0));
+      stages = [
+        { label: "stt",   ms: stt,   startedAt: startedAt,                          endedAt: startedAt + stt },
+        { label: "llm",   ms: llm,   startedAt: startedAt + stt,                    endedAt: startedAt + stt + llm },
+        { label: "synth", ms: synth, startedAt: startedAt + stt + llm,              endedAt: startedAt + stt + llm + synth },
+        { label: "audio", ms: audio, startedAt: startedAt + stt + llm + synth,      endedAt },
+      ];
+    }
+    // Sample window: include samples ±3 seconds around the turn for
+    // resource-line aggregation. The ±3s is "samples that surround
+    // this turn", NOT "this turn was 6 seconds longer" — stage
+    // durations remain honest. With the metrics poll at 750ms idle
+    // / 250ms active, a 1-second typed turn at strict ±250ms window
+    // catches 0-2 samples, leaving most stage sub-anchors to fall
+    // back to synthetic baselines (the flat-line bug). ±3s catches
+    // 6-12 samples, enough for stage-wide-fallback (see
+    // buildDenseStageAnchors) to populate real anchors across most
+    // stages.
+    //
+    // Previous behavior extended ±30s AND prepended an "ambient"
+    // stage that lied about turn duration (made every bar look ~30s
+    // wide). The lookback-only widening keeps bars honest while
+    // resource lines get sufficient samples.
+    const samples = labSamplesRef.current
+      .filter((s) => s.t >= startedAt - 3000 && s.t <= endedAt + 3000)
+      .map((s) => ({ ...s }));
+    let effectiveTotal = total;
+    let effectiveStartedAt = startedAt;
+    // Change 4: seed pending_tools from this trace's tool_calls so the
+    // NEXT round's merge can splice them as labeled segments between
+    // this round's gen and the next round's prefill.
+    const pendingTools = Array.isArray(trace.tool_calls)
+      ? trace.tool_calls
+          .map((tc) => tc && tc.function && tc.function.name)
+          .filter((n) => typeof n === "string" && n.length > 0)
+      : [];
+    labTurnsRef.current.push({
+      id: turnId,
+      startedAt: effectiveStartedAt,
+      endedAt,
+      totalMs: effectiveTotal,
+      stages, samples,
+      transcript: trace.user_text,
+      // Addendum 29 Change 5: dual-line tooltip needs both sides of the
+      // conversation. assistant_text is empty for in-flight stubs +
+      // tool-call-only rounds; tooltip renderer hides the line in those
+      // cases (AV29-12).
+      assistant_text: trace.assistant_text || "",
+      // Change 3: track which sidecar IDs have been folded into this
+      // turn so future SSE/poll deliveries with the same id don't
+      // double-append (AV29-18). Seeded with the current trace's id.
+      sidecar_ids: [String(turnId)],
+      // Change 4: pending tool names awaiting their next-round signal.
+      pending_tools: pendingTools,
+      cold: !!trace.cold,
+      slow: false, crit: false,
+    });
+    if (labTurnsRef.current.length > 32) {
+      labTurnsRef.current = labTurnsRef.current.slice(-32);
+    }
+    return true;
+  }, [labTurnsRef, labSamplesRef]);
+
+  // Live-mode trace appender — called by both:
+  //   (a) the lastTrace useEffect (back-compat, single trace per poll)
+  //   (b) MetricsStrip.onTracesFetched (F-2: backfill from n=50 array)
+  useEffect(() => {
+    if (window.__SIM_ACTIVE) return;
+    if (processTrace(lastTrace)) {
+      setLabTick((t) => t + 1);
+      schedulePersistLabTurns();
+    }
+  }, [lastTrace, processTrace, schedulePersistLabTurns]);
+
+  // Addendum 16 F-2: bulk-traces handler. Fired by MetricsStrip with the
+  // full sidecar buffer (cap 50) on each poll. Dedupes via processTrace
+  // so re-seeing existing turns is a no-op. Persists once at the end.
+  const handleTracesFetched = useCallback((traces) => {
+    if (window.__SIM_ACTIVE) return;
+    if (!Array.isArray(traces) || traces.length === 0) return;
+    let appended = 0;
+    for (const t of traces) {
+      if (processTrace(t)) appended++;
+    }
+    if (appended > 0) {
+      setLabTick((t) => t + 1);
+      schedulePersistLabTurns();
+    }
+  }, [processTrace, schedulePersistLabTurns]);
+
+  // Addendum 17: routing-log entries → slim LabTurns for EXTERNAL turns.
+  // The sidecar only sees vLLM completions; external turns route to OpenAI
+  // directly and produce no sidecar trace. Without this synthesis the lab
+  // history undercounts conversation activity (visible as gaps where the
+  // user asked general-knowledge questions). Dedup by conv_id against
+  // labTurnsRef so we don't double-render turns the sidecar also captured.
+  const processRoutingLogEntry = useCallback((entry) => {
+    if (!entry || entry.dispatched !== "external") return false;
+    const id = entry.conv_id || `r-${entry.ts}-${(entry.text || "").slice(0, 16)}`;
+    if (labTurnsRef.current.find((t) => t.id === id)) return false;
+    const tsMs = entry.ts ? Date.parse(entry.ts) : Date.now();
+    if (!Number.isFinite(tsMs)) return false;
+    const total = Math.max(0, entry.ext_latency_ms || 0);
+    const endedAt = tsMs;
+    const startedAt = endedAt - total;
+    // Pseudo-stages for visual rhythm — the real data is one number
+    // (round-trip latency). The split (5% / 90% / 5%) matches the
+    // typical shape of an OpenAI call: brief prompt assembly, dominant
+    // server-side processing, brief response decode. Purple shading
+    // varies per stage so the bar reads as segmented like local turns.
+    const reqMs = Math.round(total * 0.05);
+    const recvMs = Math.round(total * 0.05);
+    const apiMs = Math.max(0, total - reqMs - recvMs);
+    const stages = [
+      { label: "ext_req",  ms: reqMs,  startedAt,                            endedAt: startedAt + reqMs },
+      { label: "ext_api",  ms: apiMs,  startedAt: startedAt + reqMs,         endedAt: startedAt + reqMs + apiMs },
+      { label: "ext_recv", ms: recvMs, startedAt: startedAt + reqMs + apiMs, endedAt },
+    ];
+    labTurnsRef.current.push({
+      id,
+      startedAt, endedAt, totalMs: total,
+      stages,
+      samples: labSamplesRef.current
+        .filter((s) => s.t >= startedAt && s.t <= endedAt + 250)
+        .map((s) => ({ ...s })),
+      transcript: entry.text,
+      cold: false,
+      slow: false, crit: false,
+      route: "external",
+    });
+    if (labTurnsRef.current.length > 32) {
+      labTurnsRef.current = labTurnsRef.current.slice(-32);
+    }
+    return true;
+  }, []);
+
+  const handleRoutingLogFetched = useCallback((entries) => {
+    if (window.__SIM_ACTIVE) return;
+    if (!Array.isArray(entries) || entries.length === 0) return;
+    let appended = 0;
+    for (const e of entries) {
+      if (processRoutingLogEntry(e)) appended++;
+    }
+    if (appended > 0) {
+      // Re-sort labTurnsRef by startedAt to keep history chronological
+      // (routing-log entries can interleave with sidecar traces).
+      labTurnsRef.current.sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
+      setLabTick((t) => t + 1);
+      schedulePersistLabTurns();
+    }
+  }, [processRoutingLogEntry, schedulePersistLabTurns]);
+
+  // (Sim injection useEffect lives below — needs `sim` after useSimulation
+  // call; deferred until after that hook initializes.)
+
+  // Simulation Mode: per-room camera-state map ("online-empty",
+  // "offline", etc.) consumed by HomeVisionFrame's simulationSrc prop.
+  // Stays null in live mode. See simulation-cameras.jsx.
+  const [simCameraStates, setSimCameraStates] = useState(null);
+
+  // Proactive-assistant coordinator UI state (see home-proactive.jsx).
+  // The coordinator hook (called below) drives this; sim scenarios drive
+  // it directly via the sim setters. ONE useState — render-stability.
+  //   { phase, reason, room, person, away, sightingLevel, sinceTs }
+  const [proactive, setProactive] = useState(
+    window.PROACTIVE_IDLE_STATE || { phase: "idle", away: false, reason: null, room: null, person: null, sightingLevel: "none", sinceTs: 0 }
+  );
+
+  // Simulation Mode hook (see simulation.jsx). Reads URL params /
+  // localStorage on boot; provides activate/deactivate/setScenario.
+  // The hook writes synthetic data into the real setters below.
+  const sim = window.useSimulation({
+    setMetrics, setMetricsHistory,
+    setBridgeHealth, setHostMetrics, setFrigateMetrics,
+    setNetworkMetrics, setVisionHealth,
+    setTraceSummary, setLastTrace,
+    setIdentity, setMedia, setCameraLabels, setSimCameraStates,
+    setConnection, setSidecarOnline, setBridgeOnline,
+    setVoice: setVoiceInternal, setEvents,
+    // proactive deltas merge (a timeline step may patch just `phase`)
+    setProactive: (val) => setProactive((prev) => ({ ...prev, ...val })),
+  });
 
   const feedRef = useRef(null);
   const timers = useRef([]);
@@ -1922,16 +3326,54 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   const haClientRef = useRef(null);
   const activeRunRef = useRef(null); // { id, cancel }
 
+  /* ── First-run boot sequence ──────────────────────────────────────────
+   * bootPhase: "logo" → "settling" → "ready". The animated BootSequence
+   * plays on every launch (fast + skippable); routeOnboarding then teaches
+   * the right next step without nagging returning users. */
+  const [onboarding] = useState(() => loadOnboarding({ seenHelpHint: false }));
+  const [bootMode] = useState(() =>
+    (typeof window !== "undefined" && window.matchMedia
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+      ? "instant" : "animate"
+  );
+  const [bootPhase, setBootPhase] = useState("logo");
+  const [focusToken, setFocusToken] = useState(0);
+  const onboardedRef = useRef(false);
+  const focusedRef = useRef(false);
+
+  // hg-fill-input listener — any component (currently HelpContent) can
+  // dispatch a CustomEvent("hg-fill-input", {detail: "<command>"}) to
+  // populate the chat input + focus it. Avoids prop-drilling setInput
+  // through every event renderer. The user just clicks → command lands
+  // in the input → they hit Enter.
+  useEffect(() => {
+    const onFill = (ev) => {
+      const cmd = ev?.detail;
+      if (typeof cmd !== "string" || !cmd) return;
+      setInput(cmd);
+      setFocusToken((t) => t + 1);  // bump focus token → InputRow useEffect focuses
+    };
+    window.addEventListener("hg-fill-input", onFill);
+    return () => window.removeEventListener("hg-fill-input", onFill);
+  }, []);
+  // Stable callback — passed to BootSequence's onComplete. Must NOT be an
+  // inline arrow: BootSequence keys effects off it, and an unstable ref would
+  // churn its hold-timeout (see BootSequence). setBootPhase is stable.
+  const handleBootComplete = useCallback(() => setBootPhase("settling"), []);
+
   /* Theme → DOM */
   useEffect(() => {
     if (rootRef.current) rootRef.current.dataset.theme = theme;
     document.documentElement.dataset.theme = theme;
   }, [theme]);
 
-  /* Auto-scroll to bottom on new events */
+  /* Auto-scroll to bottom on new events. `bootPhase` is in the deps because
+   * the feed div is unmounted during boot — without it the scroll-to-bottom
+   * never fires on the → "ready" transition and returning users would land
+   * at the top of their history. */
   useEffect(() => {
     if (feedRef.current) feedRef.current.scrollTop = feedRef.current.scrollHeight;
-  }, [events]);
+  }, [events, bootPhase]);
 
   /* Persist prefs whenever they change. Note: `s2sMode` is deliberately
    * NOT persisted — it's transient session state (Phase 1.5). The home
@@ -1940,9 +3382,11 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     savePrefs({ endpoint, token, model, theme, metricsBase, s2sBase, s2sToken, s2sVoice, kokoroVoice, debugMode });
   }, [endpoint, token, model, theme, metricsBase, s2sBase, s2sToken, s2sVoice, kokoroVoice, debugMode]);
 
-  /* Persist events on change (debounced via rAF — cheap enough at our scale) */
+  /* Persist events on change (debounced via rAF — cheap enough at our scale).
+   * Onboarding-injected hints (`e.onboarding`) are session-scoped UI, not
+   * chat history — filtered out so they never persist or stack across launches. */
   useEffect(() => {
-    const id = requestAnimationFrame(() => saveEvents(events));
+    const id = requestAnimationFrame(() => saveEvents(events.filter((e) => !e.onboarding)));
     return () => cancelAnimationFrame(id);
   }, [events]);
 
@@ -1951,13 +3395,98 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
 
   /* Helpers to push events */
   const addEvent = useCallback((ev) => {
-    setEvents((prev) => [...prev, { id: nextId(), time: fmtTime(), ...ev }]);
+    // Apply ASR correction to bubble text so the rendered text never
+    // shows forbidden spellings, regardless of source (SSE raw vLLM,
+    // HA WS event, parakeet STT echo, etc).
+    const corrected = ev?.text
+      ? { ...ev, text: applyAsrCorrection(ev.text) }
+      : ev;
+    setEvents((prev) => [...prev, { id: nextId(), time: fmtTime(), ...corrected }]);
   }, []);
+
+  // Lab sim-mode injection (Addendum 10). Runs after `sim` is available
+  // from useSimulation. When a lab fixture is in the snapshot, overwrite
+  // the refs + bump tick.
+  useEffect(() => {
+    window.__SIM_ACTIVE = !!sim?.active;
+    const labFixture = sim?.snapshot?.lab;
+    if (sim?.active && labFixture) {
+      labTurnsRef.current = [...(labFixture.turns || [])];
+      labSamplesRef.current = [...(labFixture.samples || [])];
+      setLabTick((t) => t + 1);
+    }
+  }, [sim?.active, sim?.snapshot?.lab]);
+
+  /* ── Proactive-assistant coordinator (home-proactive.jsx) ───────────────
+   * Owns the two-stage arrival confirmation + room-entry conversational
+   * policy. Fed by three transports: the HA-WS `homeai_proactive`
+   * subscription it opens itself, the SSE `s2s:proactive` branch, and
+   * `observeIdentity` off the existing `s2s:identity` events. Drives the
+   * `proactive` state above. Every returned callback is render-stable. */
+  const frigateOnline = frigateMetrics != null;
+  const proactiveCoord = window.useProactiveCoordinator({
+    connection, haClientRef, simActive: sim.active,
+    debugMode, media, frigateOnline, addEvent, setProactiveState: setProactive,
+  });
 
   const finishStream = useCallback((id, patch = {}) => {
     streamingIds.current.delete(id);
     setEvents((prev) => prev.map((e) => e.id === id ? { ...e, ...patch, streaming: false } : e));
   }, []);
+
+  /* ── Boot phase driver: "settling" → "ready" ──────────────────────────
+   * "logo" → "settling" is owned by BootSequence's onComplete (in render).
+   * Two effects own the settling exit: (a) flip to "ready" the instant
+   * `connection` is terminal; (b) a 3s safety timeout armed once on entering
+   * "settling" — NOT reset by interim connection changes — so a genuinely
+   * hung connect still releases the boot screen. */
+  useEffect(() => {
+    if (bootPhase !== "settling") return;
+    if (connection !== "reconnecting" && connection !== "connecting") setBootPhase("ready");
+  }, [bootPhase, connection]);
+
+  useEffect(() => {
+    if (bootPhase !== "settling") return;
+    const t = setTimeout(() => setBootPhase("ready"), 3000);
+    return () => clearTimeout(t);
+  }, [bootPhase]);
+
+  /* routeOnboarding — latched, runs exactly once per launch, the first time
+   * `connection` is terminal at/after bootPhase "ready". Posts ≤1 onboarding
+   * hint; hints carry an `onboarding` marker and are session-scoped (the
+   * events-persist effect filters them, so they never stack across launches). */
+  useEffect(() => {
+    if (bootPhase !== "ready" || onboardedRef.current) return;
+    if (connection === "reconnecting" || connection === "connecting") return; // not terminal yet
+    onboardedRef.current = true;
+    if (sim.active) return; // sim entry posts its own catalog — stay silent
+    const hasChatted = events.some((e) => e.kind === "user" || e.kind === "voice");
+    if (connection === "online") {
+      if (!hasChatted && !onboarding.seenHelpHint) {
+        addEvent({ kind: "system", tone: "info", onboarding: "help-hint",
+          text: "Connected. Type /help to learn what you can do." });
+        saveOnboarding({ seenHelpHint: true });
+      }
+      // hasChatted → returning user, straight to chat, no message.
+    } else if (!isFirstRunVisible(connection, events)) {
+      // Chat feed is the visible surface (returning user). FirstRun's helper
+      // text already carries this copy for the form case.
+      addEvent({ kind: "system", tone: "info", onboarding: "disconnected-hint",
+        text: "Not connected. Type /connect to connect to your local home stack, or /simulation to explore the app with mock data." });
+    }
+  }, [bootPhase, connection]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* Input focus — a separate latched effect. Focuses the chat input once, the
+   * moment the feed is the live surface at bootPhase "ready". Kept out of
+   * routeOnboarding because focus shouldn't wait for a *terminal* connection —
+   * a returning user whose connect hangs still has a visible feed. Gated on
+   * !isFirstRunVisible so it never strands focus behind the FirstRun form. */
+  useEffect(() => {
+    if (bootPhase !== "ready" || focusedRef.current) return;
+    if (isFirstRunVisible(connection, events)) return;
+    focusedRef.current = true;
+    setFocusToken((t) => t + 1);
+  }, [bootPhase, connection, events]);
 
   /* ── HA client lifecycle ──────────────────────────────────────────── */
   useEffect(() => {
@@ -2053,12 +3582,26 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         const j = await r.json();
         const data = j?.data || [];
         if (data.length > 0) {
-          setAvailableModels(data.map((m) => ({
+          const models = data.map((m) => ({
             name: m.id,
             ctx: m.max_model_len ? `${Math.round(m.max_model_len / 1024)}k` : "",
-          })));
+          }));
+          // Skip the model picker when there's nothing to decide: a single
+          // model on the box, or the model the user already picked on a prior
+          // connect is still available. Only a genuine multi-model choice with
+          // no prior pick drops into the picker.
+          const autoPick = models.length === 1
+            ? models[0].name
+            : (model && models.some((m) => m.name === model) ? model : null);
+          if (autoPick) {
+            setModel(autoPick);
+            setConnection("online");
+            addEvent({ kind: "system", text: `connected · model ${autoPick}`, tone: "ok" });
+            return;
+          }
+          setAvailableModels(models);
           setConnection("picking-model");
-          addEvent({ kind: "system", text: `${data.length} model${data.length === 1 ? "" : "s"} on the ai box`, tone: "ok" });
+          addEvent({ kind: "system", text: `${data.length} models on the ai box — choose one`, tone: "ok" });
           return;
         }
       } catch {
@@ -2067,7 +3610,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     }
     setConnection("online");
     addEvent({ kind: "system", text: `connected · home assistant ${haClientRef.current.haVersion || ""}`, tone: "ok" });
-  }, [addEvent, metricsBase, probeMetricsBase]);
+  }, [addEvent, metricsBase, probeMetricsBase, model]);
 
   const confirmModel = useCallback((name) => {
     if (name) setModel(name);
@@ -2076,22 +3619,74 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     if (name) addEvent({ kind: "system", text: `model · ${name}`, tone: "ok" });
   }, [addEvent]);
 
-  /* Auto-reconnect on launch if we have stored credentials */
+  /* Auto-reconnect on launch if we have stored credentials.
+   * Sim Mode: skip — sim scenarios provide their own connection state
+   * via the synthesis effect. */
   useEffect(() => {
+    if (sim.active) return;
     if (connection === "reconnecting" && endpoint && token) {
       connectTo(endpoint, token);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /* Sim Mode transitions — tear down on activate, reconnect on deactivate.
+   *
+   * ON ACTIVATE (sim → true):
+   *   Close any open HA WebSocket so real state_changed events stop
+   *   leaking into the mocked view. Voice WS is already blocked at
+   *   construction site; s2s ref stop is no-op if not active.
+   *
+   * ON DEACTIVATE (sim → false):
+   *   The user typed /simulation off. We need to actively re-open the
+   *   HA WS so live mode works again — useEffect polling resumes via
+   *   dependency-array reruns, but WebSockets need an explicit connect
+   *   call. If creds are present, reconnect; otherwise hint the user. */
+  const prevSimActiveRef = useRef(sim.active);
+  useEffect(() => {
+    const wasActive = prevSimActiveRef.current;
+    const isActive = sim.active;
+    prevSimActiveRef.current = isActive;
+    if (wasActive === isActive) return; // no-op on first render
+
+    if (isActive) {
+      // sim → ON: tear down real connections
+      try { haClientRef.current?.close?.(); } catch (e) { /* ignore */ }
+      try { s2sRunRef.current?.stop?.(); } catch (e) { /* ignore */ }
+      // streamKey bump is handled by the camera frame remount via sim prop
+    } else {
+      // sim → OFF: re-establish HA connection if we have creds.
+      // The polling useEffects already re-run because they depend on
+      // sim.active; only the WS needs an explicit reconnect.
+      if (endpoint && token) {
+        addEvent({ kind: "system", text: "exiting simulation — reconnecting…", tone: "info" });
+        connectTo(endpoint, token);
+      } else {
+        addEvent({
+          kind: "system",
+          text: "simulation off · type /connect <url> <token> to reconnect",
+          tone: "info",
+        });
+        // Reset connection state so the FirstRun panel shows up again
+        setConnection("offline");
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sim.active]);
+
   /* ── Metrics polling ──────────────────────────────────────────────── */
   useEffect(() => {
+    if (sim.active) return undefined; // Sim Mode: fixtures injected directly
     if (connection !== "online") return undefined;
     const base = metricsBase || metricsBaseFromEndpoint(endpoint);
     let cancelled = false;
     const tick = async () => {
       try {
-        const r = await tauriFetch(`${base}/metrics`);
+        // cache: "no-store" — the WebView2 HTTP stack can otherwise
+        // serve a cached body and the metrics would look frozen even
+        // when the sidecar is returning fresh samples. The bridge
+        // /healthz poll already does this; the metrics poll must too.
+        const r = await tauriFetch(`${base}/metrics`, { cache: "no-store" });
         const m = await r.json();
         if (cancelled) return;
         // Phase 1 bugfix: NVML reports 103 GB total on the user's RTX 6000
@@ -2118,6 +3713,11 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             cpu:     m.cpu_pct       ?? prev.cpu,
             ram:     m.ram_used_gb   ?? prev.ram,
             ramMax:  m.ram_total_gb  ?? prev.ramMax,
+            // F-19 (Addendum 27 P0): GPU temperature in °C from NVML via
+            // the sidecar /metrics endpoint. null when sidecar hasn't
+            // been patched OR NVML can't read temp (unsupported GPU).
+            // Consumed by the rail's temp pill — render only when non-null.
+            tempC:   typeof m.gpu_temp_c === "number" ? m.gpu_temp_c : prev.tempC,
           };
         });
         // Tray v3: push to rolling history rings (40 samples each).
@@ -2132,21 +3732,111 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           for (const k of keys) {
             const v = src[k];
             const arr = [...(h[k] || []), (typeof v === "number" ? v : null)];
-            next[k] = arr.slice(-40);
+            // v6: 200 samples × 750ms poll = ~2.5 min trend window for
+            // each metric. Memory cost: 6 metrics × 200 × 8 bytes ≈ 10 KB.
+            next[k] = arr.slice(-200);
           }
           return next;
         });
+        // Lab tab (Addendum 10): timestamped sample for time-aligned chart.
+        // Pushed to a rolling 600-cap ref so the lab chart can render
+        // resource lines aligned to per-turn windows. Capture happens
+        // regardless of active tab so the buffer fills in background.
+        const reportedMaxLab = m.vram_total_gb ?? 0;
+        const specMaxLab = [96, 192].find(
+          (s) => reportedMaxLab >= s && reportedMaxLab <= s + 8
+        ) ?? reportedMaxLab;
+        const tempCRaw = typeof m.gpu_temp_c === "number" ? m.gpu_temp_c : null;
+        const labSample = {
+          t: Date.now(),
+          gpuPct: (m.gpu_util_pct ?? 0) / 100,
+          vramPct: specMaxLab > 0 ? Math.min(1, (m.vram_used_gb ?? 0) / specMaxLab) : 0,
+          vramUsedGb: m.vram_used_gb ?? 0,
+          vramTotalGb: specMaxLab,
+          cpuPct: (m.cpu_pct ?? 0) / 100,
+          ramPct: (m.ram_total_gb ?? 0) > 0 ? Math.min(1, (m.ram_used_gb ?? 0) / m.ram_total_gb) : 0,
+          ramUsedGb: m.ram_used_gb ?? 0,
+          ramTotalGb: m.ram_total_gb ?? 0,
+          tempC: tempCRaw,
+          tempPct: tempCRaw != null ? Math.max(0, Math.min(1, tempCRaw / 100)) : null,
+          tps: m.tps,
+          ttftMs: m.ttft_ms,
+        };
+        // Lab tab feature-detect: home-metrics-lab.jsx reads
+        // window.__hav_metricsLatest.gpu_temp_c to decide whether to render
+        // the 4th (TEMP) resource line. Falls back to 3 rows (gpu/cpu/ram)
+        // when the sidecar hasn't been patched with NVML temperature.
+        if (typeof window !== "undefined") window.__hav_metricsLatest = m;
+        labSamplesRef.current.push(labSample);
+        if (labSamplesRef.current.length > 600) {
+          labSamplesRef.current = labSamplesRef.current.slice(-600);
+        }
+        // Addendum 32 Phase C fix (H3 — snapshot timing):
+        // turn.samples is the IMMUTABLE snapshot taken at turn-creation
+        // time. Samples arriving AFTER turn creation never got attached.
+        // /lab-dump confirmed: `live_in_window_count: 15`,
+        // `persisted_samples_count: 0` for fresh in-flight stub.
+        // Fix: attachSampleToRecentTurns (helpers.js) appends the new
+        // sample to any of the last 5 turns whose ±3s window contains
+        // the sample's t. Pure-function helper; tested in run-lab-tests.js.
+        try {
+          const H = window.HomeMetricsLabHelpers;
+          if (H && typeof H.attachSampleToRecentTurns === "function") {
+            H.attachSampleToRecentTurns(labTurnsRef.current, labSample);
+          }
+        } catch (e) { /* swallow — never break the poll on a helper miss */ }
+        // Trigger lab re-render only every 4 samples (~3s) to keep
+        // SVG repaints out of the hot path.
+        if (labSamplesRef.current.length % 4 === 0) {
+          setLabTick((t) => t + 1);
+        }
       } catch {
         // sidecar down — keep last-known values
       }
     };
     tick();
-    const t = setInterval(tick, 2000);
-    return () => { cancelled = true; clearInterval(t); };
-  }, [connection, endpoint, metricsBase]);
+    // Addendum 12 step 7: adaptive cadence. 250 ms during an active turn
+    // (last trace fired within 3 s OR voice.state !== "inactive") so the
+    // lab chart's per-stage anchors get real data; back to 750 ms when
+    // idle to keep idle cost the same. The interval-id is recomputed
+    // every second by the adapter timer below; when a new turn arrives
+    // the next tick downshifts within ~1 s. Pure-function tested in
+    // tools/run-lab-tests.js → "adaptive poll cadence" suite.
+    let intervalMs = 750;
+    let tHandle = setInterval(tick, intervalMs);
+    const adapter = setInterval(() => {
+      const H = window.HomeMetricsLabHelpers;
+      if (!H) return;
+      const latest = labTurnsRef.current[labTurnsRef.current.length - 1];
+      const lastTurnEndedAt = latest ? latest.endedAt : 0;
+      const nextMs = H.pickPollInterval({
+        nowMs: Date.now(),
+        lastTurnEndedAt: lastTurnEndedAt,
+        voiceState: (window.__hav_voiceState || "inactive"),
+      });
+      if (nextMs !== intervalMs) {
+        clearInterval(tHandle);
+        intervalMs = nextMs;
+        tHandle = setInterval(tick, intervalMs);
+      }
+    }, 1000);
+    return () => { cancelled = true; clearInterval(tHandle); clearInterval(adapter); };
+  }, [connection, endpoint, metricsBase, sim.active]);
 
   /* ── HA conversation: send text via assist_pipeline/run ────────────── */
   const sendToHA = useCallback(async (text) => {
+    // Simulation Mode: no real HA pipeline available. Echo the message
+    // back as a system note so the designer sees obvious feedback and
+    // suggest the story scenarios for scripted demos.
+    if (sim.active) {
+      addEvent({ kind: "user", text });
+      addEvent({
+        kind: "system",
+        text: "[sim] live HA pipeline is mocked off. Try `/sim action-success`, `/sim action-failed`, or `/sim movie-mode` to see a scripted demo turn.",
+        tone: "info",
+      });
+      return;
+    }
     if (!haClientRef.current || connection !== "online") {
       addEvent({ kind: "system", text: "not connected", tone: "warn" });
       return;
@@ -2159,13 +3849,188 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     const thinkingId = nextId();
     setEvents((prev) => [...prev, { id: thinkingId, kind: "thinking", time: fmtTime(), text: "calling assistant…" }]);
 
+    // Addendum 29 Change 2: in-flight stub for the trace bar. Pushes a
+    // placeholder LabTurn that the renderer shows as a pulsing band at
+    // the right edge. When the real trace arrives via SSE/poll, the
+    // grouping helper (Change 3) matches by user_text and merges into
+    // this stub — the inFlight flag is cleared in processTrace. If the
+    // request silently errors, evictStaleInFlight (60s sweep below)
+    // cleans it up.
+    const inFlightStub = {
+      id: `inflight-${Date.now()}-${(text || "").slice(0, 16)}`,
+      transcript: text,
+      assistant_text: "",
+      startedAt: Date.now(),
+      endedAt: Date.now(),
+      totalMs: 0,
+      stages: [],
+      samples: [],
+      sidecar_ids: [],
+      pending_tools: [],
+      inFlight: true,
+      cold: false, slow: false, crit: false,
+    };
+    // Addendum 32 Phase C follow-up: back-fill samples from the buffer
+    // that ALREADY landed in this stub's ±3s window. The poll's
+    // attachSampleToRecentTurns only catches FUTURE samples; pre-existing
+    // ones (typically 3-6 samples from the last few seconds before the
+    // user typed) would otherwise be lost. /lab-dump showed 30 samples
+    // in window but only 11 attached — this closes that gap.
+    {
+      const stubStart = inFlightStub.startedAt;
+      const stubEnd = inFlightStub.endedAt;
+      const bufSamples = labSamplesRef.current || [];
+      for (let i = 0; i < bufSamples.length; i++) {
+        const s = bufSamples[i];
+        if (typeof s.t !== "number") continue;
+        if (s.t < stubStart - 3000) continue;
+        if (s.t > stubEnd + 3000) continue;
+        inFlightStub.samples.push(s);
+      }
+      // Per-turn cap (same as the helper)
+      if (inFlightStub.samples.length > 50) {
+        inFlightStub.samples = inFlightStub.samples.slice(-50);
+      }
+    }
+    labTurnsRef.current.push(inFlightStub);
+    setLabTick((t) => t + 1);
+    if (typeof window !== "undefined") {
+      window.__INFLIGHT_LAST_STUB = inFlightStub;
+    }
+
     const t0 = performance.now();
+    // Per-turn state: which tools the LLM called this turn, and the id of
+    // the live streaming bubble (so intent-end can lock it). Both live in
+    // closure variables, not refs, because they reset every turn.
+    const turnToolCalls = [];
+    let streamingBubbleId = null;
+
     const onEvent = (haEvent) => {
       if (!haEvent || !haEvent.type) return;
       console.log("[ha event]", haEvent.type, haEvent.data);
+
+      // ── Streaming partials (Phase 0.5+ progressive reveal) ─────────────
+      // HA 2026.5.1's extended_openai_conversation emits chat_log_delta as
+      // separate events: one role marker (no content), then content-only
+      // deltas, then optionally a tool_calls delta. extractIntentProgress
+      // (home-ha.jsx:478) parses each shape and returns either {textDelta}
+      // or {toolCalls} — never both. Tool *arguments* arrive ~600ms in,
+      // before any answer text streams; tool *results* never appear in any
+      // event (see Phase A findings in the plan), which is why we fetch
+      // /reason/latest after intent-end for the perception card.
+      if (haEvent.type === "intent-progress") {
+        const prog = (typeof extractIntentProgress === "function")
+          ? extractIntentProgress(haEvent) : null;
+        if (!prog) return;
+
+        if (prog.toolCalls && prog.toolCalls.length) {
+          for (const tc of prog.toolCalls) {
+            turnToolCalls.push(tc);
+            // Small "looking…" beat so the user sees the LLM commit to a
+            // tool ~600ms in. describe_camera carries an explicit camera
+            // in args; look auto-routes (camera not in args).
+            const friendly = tc.name === "look" ? "looking"
+              : tc.name === "describe_camera" ? "looking quickly"
+              : tc.name === "look_zoom" ? "looking closer"
+              : tc.name;
+            const camHint = (tc.args && tc.args.camera) ? ` (${tc.args.camera})` : "";
+            addEvent({ kind: "system", tone: "info",
+                       text: `${friendly}${camHint}…` });
+          }
+          return;
+        }
+
+        if (prog.textDelta) {
+          setEvents((prev) => {
+            const last = prev[prev.length - 1];
+            if (last && last.kind === "home" && last.streaming && last.id === streamingBubbleId) {
+              // Append the delta. HA sends deltas (not accumulated text),
+              // unlike the s2s personaplex bridge which sends snapshots.
+              return [...prev.slice(0, -1),
+                      { ...last, text: (last.text || "") + prog.textDelta }];
+            }
+            // First content delta of the turn — replace the thinking stub.
+            const next = prev.filter((e) => e.id !== thinkingId);
+            const newId = nextId();
+            streamingBubbleId = newId;
+            streamingIds.current.add(newId);
+            return [...next, {
+              id: newId, kind: "home", time: fmtTime(),
+              text: prog.textDelta, streaming: true,
+            }];
+          });
+          return;
+        }
+      }
+
       if (haEvent.type === "intent-end") {
         const { convId } = extractIntentEnd(haEvent);
         if (convId) setConversationId(convId);
+        // Lock the streaming bubble (if one exists) so the trailing stop-
+        // button / visual cue settles.
+        if (streamingBubbleId) {
+          const lockedId = streamingBubbleId;
+          setEvents((prev) => prev.map((e) =>
+            e.id === lockedId ? { ...e, streaming: false } : e));
+          streamingIds.current.delete(lockedId);
+          streamingBubbleId = null;
+        }
+        // Surface a perception card per vision tool the LLM called this
+        // turn. Tool results are NEVER in HA events, so we hit the
+        // sidecar's ring-buffer endpoints (/reason/latest, /describe/latest)
+        // as a side-channel. Each tool gets a separate fetch — the LLM may
+        // call look only, describe_camera only, or both. The text format
+        // uses "<camera>: <answer>" so PerceptionContent's room-extractor
+        // (home-events.jsx:423) parses the room out and labels the card.
+        const visionTools = turnToolCalls.filter((t) =>
+          t.name === "look" || t.name === "look_zoom" || t.name === "describe_camera");
+        if (visionTools.length) {
+          try {
+            const base = metricsBase || metricsBaseFromEndpoint(endpoint);
+            if (base) {
+              const u = new URL(base);
+              const visionOrigin = u.protocol + "//" + u.hostname + ":8091";
+              const tauriFetch = window.tauriFetch || fetch;
+              const seen = new Set();
+              for (const tc of visionTools) {
+                if (seen.has(tc.name)) continue;   // dedupe within turn
+                seen.add(tc.name);
+                const isDescribe = tc.name === "describe_camera";
+                const latestPath = isDescribe ? "/describe/latest" : "/reason/latest";
+                tauriFetch(visionOrigin + latestPath, { cache: "no-store" })
+                  .then((r) => r.ok ? r.json() : null)
+                  .then((data) => {
+                    if (!data) return;
+                    let snapshotUrl = null;
+                    let cardText = "";
+                    const cam = (data.camera || "").replace(/[^a-z_]/gi, "_");
+                    if (isDescribe) {
+                      const desc = data.description || "(no description)";
+                      if (data.snapshot_url) {
+                        snapshotUrl = visionOrigin + data.snapshot_url + "?cb=" + Date.now();
+                      }
+                      cardText = `${cam}: ${desc}`;
+                    } else {
+                      if (data.annotated_url) {
+                        snapshotUrl = visionOrigin + data.annotated_url + "?cb=" + Date.now();
+                      }
+                      cardText = `${cam}: ${data.answer || "(grounded look)"}`;
+                    }
+                    addEvent({
+                      kind: "perception",
+                      text: cardText,
+                      snapshotUrl,
+                    });
+                  })
+                  .catch((err) => {
+                    console.error(`[perception] ${tc.name} fetch err`, err);
+                  });
+              }
+            }
+          } catch (e) {
+            console.error("[perception] outer", e);
+          }
+        }
         return;
       }
       if (haEvent.type === "error") {
@@ -2187,10 +4052,14 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     } catch (e) {
       addEvent({ kind: "system", text: e?.message || "pipeline failed", tone: "error" });
     } finally {
+      // Defensive: if streaming never started (thinking stub never replaced
+      // by a streaming bubble), the existing filter removes the stub. If it
+      // did start, the stub was already removed by the first-delta branch
+      // above; this filter is a no-op in that case.
       setEvents((prev) => prev.filter((e) => e.id !== thinkingId));
       if (activeRunRef.current?.id === run.id) activeRunRef.current = null;
     }
-  }, [connection, conversationId, addEvent]);
+  }, [connection, conversationId, addEvent, metricsBase, endpoint]);
 
   /* ── Stop / cancel an in-flight run ────────────────────────────────── */
   const stopStreaming = useCallback(() => {
@@ -2276,7 +4145,54 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       });
       throw e;
     }
-  }, [addEvent]);
+  }, [addEvent, sim.active]);
+
+  /* ── Inline control cards (light / media) ─────────────────────────────
+   * onControlAction is the thin HA executor the cards call to fire a
+   * service. STABLE useCallback (render-stability discipline — the cards
+   * key effects off it; an unstable ref would churn their debounce/reconcile
+   * timers, the class of bug that hung the boot sequence). `target` is the
+   * explicit HA target object the card built for THIS control — a group
+   * target for transport, a single-entity target for per-zone volume /
+   * Onkyo routing. In sim mode the card routes to SimControlStore itself
+   * and never calls this. */
+  const onControlAction = useCallback(async ({ domain, service, service_data, target }) => {
+    const client = haClientRef.current;
+    if (!client) throw new Error("HA not connected");
+    if (!target || (!target.entity_id && !target.area_id && !target.device_id)) {
+      throw new Error("no resolvable target");
+    }
+    await client.call({
+      type: "call_service",
+      domain, service,
+      service_data: service_data || {},
+      target,
+    });
+  }, []);
+
+  /* Drives time-based control-card expiry. Only ticks while a controllable
+   * card is in the feed; otherwise idle. (During an active conversation,
+   * events change anyway → re-render → expiry re-derived; the ticker only
+   * matters for idle stretches.) */
+  const [_lifecycleTick, setLifecycleTick] = useState(0);
+  useEffect(() => {
+    const hasControlCards = events.some((e) => e.kind === "action" && e.controllable);
+    if (!hasControlCards) return undefined;
+    const iv = setInterval(() => setLifecycleTick((t) => t + 1), 60000);
+    return () => clearInterval(iv);
+  }, [events]);
+
+  /* Per-event lifecycle map for control cards — memoized so its identity is
+   * stable between renders (render-stability discipline). */
+  const controlLifecycles = useMemo(
+    () => (window.deriveControlLifecycles ? window.deriveControlLifecycles(events) : new Map()),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [events, _lifecycleTick],
+  );
+
+  /* Expose the HA base URL so control cards can build album-art URLs from
+   * HA's relative (signed) entity_picture paths. */
+  useEffect(() => { window.__hav_haEndpoint = endpoint || ""; }, [endpoint]);
 
   /* ── Scripted demo player (for /demo) ──────────────────────────────── */
   const streamHomeLocal = useCallback((text, opts = {}) => {
@@ -2348,6 +4264,70 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         if (arg) { setToken(arg); addEvent({ kind: "system", text: "token updated", tone: "ok" }); }
         else addEvent({ kind: "system", text: "usage: /token <ha long-lived access token>", tone: "info" });
         return true;
+      case "stack-token":
+      case "stacktoken":
+        // Saves the STACK_TOKEN to localStorage so AiStackCard reads
+        // it on next render. See docs/RUNBOOK.md → "Workstation token
+        // storage" → DevTools quick path. Phase 4 Tauri-bootstrap
+        // will replace this with a 0600 config file.
+        if (arg) {
+          try {
+            localStorage.setItem("hg-stack-token-DEV", arg.trim());
+            addEvent({ kind: "system", text: "stack token saved · reload to pick up (Ctrl+R)", tone: "ok" });
+          } catch (e) {
+            addEvent({ kind: "system", text: `stack token save failed · ${e?.message || "localStorage error"}`, tone: "error" });
+          }
+        } else {
+          const existing = (typeof localStorage !== "undefined" && localStorage.getItem("hg-stack-token-DEV")) || "";
+          if (existing) {
+            addEvent({ kind: "system", text: `stack token · <set, ${existing.length} chars>`, tone: "info" });
+          } else {
+            addEvent({ kind: "system", text: "usage: /stack-token <STACK_TOKEN from /opt/home-ai-voice/.env>", tone: "info" });
+          }
+        }
+        return true;
+      case "mute": {
+        // /mute              -> set explicit boolean (manual mute)
+        // /mute 2h | 30m     -> set timer
+        // /mute movie        -> turn on input_boolean.homeai_movie (composite kicks in)
+        const a = arg.trim();
+        const client = haClientRef.current;
+        if (!client) { addEvent({ kind: "system", text: "not connected to HA", tone: "warn" }); return true; }
+        const dur = a.match(/^(\d+)\s*(h|hour|hours|m|min|minute|minutes)\b/i);
+        if (dur) {
+          const n = Number(dur[1]);
+          const mins = n * (/^h/i.test(dur[2]) ? 60 : 1);
+          const until = new Date(Date.now() + mins * 60000)
+            .toISOString().replace(/\.\d+Z$/, "");
+          client.callService("input_datetime", "set_datetime", {
+            entity_id: "input_datetime.jarvis_mute_until", datetime: until,
+          }).catch((e) => addEvent({ kind: "system", text: `mute timer set failed: ${e?.message}`, tone: "error" }));
+          addEvent({ kind: "system", text: `muted for ${mins} min · auto-resumes`, tone: "ok" });
+        } else if (/^movie/i.test(a)) {
+          client.callService("input_boolean", "turn_on", { entity_id: "input_boolean.homeai_movie" })
+            .catch((e) => addEvent({ kind: "system", text: `movie mode failed: ${e?.message}`, tone: "error" }));
+          addEvent({ kind: "system", text: "movie mode on · Jarvis quiet until movie ends", tone: "ok" });
+        } else {
+          client.callService("input_boolean", "turn_on", { entity_id: "input_boolean.jarvis_muted_explicit" })
+            .catch((e) => addEvent({ kind: "system", text: `mute failed: ${e?.message}`, tone: "error" }));
+          client.callService("input_text", "set_value", {
+            entity_id: "input_text.jarvis_mute_reason", value: "typed command",
+          }).catch(() => {});
+          addEvent({ kind: "system", text: "muted · say 'Hey Jarvis, wake up' or /unmute to resume", tone: "ok" });
+        }
+        return true;
+      }
+      case "unmute": {
+        const client = haClientRef.current;
+        if (!client) { addEvent({ kind: "system", text: "not connected to HA", tone: "warn" }); return true; }
+        client.callService("input_boolean", "turn_off", { entity_id: "input_boolean.jarvis_muted_explicit" })
+          .catch((e) => addEvent({ kind: "system", text: `unmute failed: ${e?.message}`, tone: "error" }));
+        client.callService("input_datetime", "set_datetime", {
+          entity_id: "input_datetime.jarvis_mute_until", datetime: "2000-01-01T00:00:00",
+        }).catch(() => {});
+        addEvent({ kind: "system", text: "unmuted · movie_mode + TV-active auto-signals still apply", tone: "ok" });
+        return true;
+      }
       case "model":
         if (arg) { setModel(arg); addEvent({ kind: "system", text: `model · ${arg}`, tone: "ok" }); }
         else addEvent({ kind: "system", text: "usage: /model <name>", tone: "info" });
@@ -2404,9 +4384,147 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         addEvent({ kind: "system", text: `s2s bridge · ${sub}`, tone: "ok" });
         return true;
       }
+      case "lab-dump": {
+        // Addendum 32 Phase A: evidence-gathering for the
+        // "resource lines flatten to synthetic baselines" bug.
+        // Emits a structured snapshot of labSamplesRef +
+        // labTurnsRef + last-anchor stats. User pastes the
+        // resulting chat-system event back so we can diagnose
+        // against the H1-H9 hypothesis table.
+        const samples = labSamplesRef.current || [];
+        const turns = labTurnsRef.current || [];
+        const anchorStats = (typeof window !== "undefined" && window.__hav_lastAnchorStats) || {};
+        const valueSummary = (() => {
+          if (samples.length === 0) return null;
+          const metrics = ["gpu", "cpu", "ram", "temp"];
+          const out = {};
+          for (const m of metrics) {
+            const key = `${m}Pct`;
+            const vals = samples.map((s) => s[key]).filter((v) => typeof v === "number" && !isNaN(v));
+            if (vals.length === 0) { out[m] = null; continue; }
+            let mn = vals[0], mx = vals[0], sum = 0;
+            for (let i = 0; i < vals.length; i++) {
+              if (vals[i] < mn) mn = vals[i];
+              if (vals[i] > mx) mx = vals[i];
+              sum += vals[i];
+            }
+            out[m] = {
+              min: +mn.toFixed(3),
+              max: +mx.toFixed(3),
+              mean: +(sum / vals.length).toFixed(3),
+              last: +vals[vals.length - 1].toFixed(3),
+              count: vals.length,
+            };
+          }
+          return out;
+        })();
+        // Density distribution across all turns
+        const sampleCounts = turns.map((t) => (t.samples || []).length).sort((a, b) => a - b);
+        const pct = (arr, p) => arr.length === 0 ? 0 : arr[Math.floor((arr.length - 1) * p)];
+        const recent = turns.slice(-5).map((t) => {
+          const stageTotalMs = (t.stages || []).reduce((acc, s) => acc + (s.ms || 0), 0);
+          const liveInWindow = samples.filter(
+            (s) => s.t >= (t.startedAt || 0) - 3000 && s.t <= (t.endedAt || 0) + 3000
+          ).length;
+          // Clock skew: first sample in turn vs turn startedAt
+          const inTurnSamples = (t.samples || []);
+          const firstInTurnT = inTurnSamples.length > 0 ? inTurnSamples[0].t : null;
+          const clockSkewMs = (firstInTurnT && t.startedAt) ? firstInTurnT - t.startedAt : null;
+          // Anchor stats per metric for this turn
+          const stats = {};
+          for (const m of ["gpu", "cpu", "ram", "temp"]) {
+            const k = `${t.id}_${m}`;
+            if (anchorStats[k]) stats[m] = anchorStats[k];
+          }
+          return {
+            id: (t.id || "").slice(0, 40),
+            inFlight: !!t.inFlight,
+            startedAt: t.startedAt,
+            endedAt: t.endedAt,
+            totalMs: t.totalMs,
+            stage_total_ms: stageTotalMs,
+            stage_total_eq_totalMs: stageTotalMs === t.totalMs,
+            persisted_samples_count: (t.samples || []).length,
+            live_in_window_count: liveInWindow,
+            clock_skew_first_sample_ms: clockSkewMs,
+            stage_labels: (t.stages || []).map((s) => s.label),
+            anchor_stats: stats,
+          };
+        });
+        const dump = {
+          now_ms: Date.now(),
+          render_tick: (typeof window !== "undefined" && window.__hav_renderTick) || null,
+          samples_total: samples.length,
+          samples_first_t: samples[0]?.t,
+          samples_last_t: samples.slice(-1)[0]?.t,
+          samples_age_seconds: samples.length > 0 ? Math.round((Date.now() - samples.slice(-1)[0].t) / 1000) : null,
+          samples_first_keys: samples[0] ? Object.keys(samples[0]) : [],
+          samples_value_summary: valueSummary,
+          turns_total: turns.length,
+          turn_density_distribution: {
+            min: sampleCounts.length > 0 ? sampleCounts[0] : 0,
+            p10: pct(sampleCounts, 0.1),
+            p50: pct(sampleCounts, 0.5),
+            p90: pct(sampleCounts, 0.9),
+            max: sampleCounts.length > 0 ? sampleCounts[sampleCounts.length - 1] : 0,
+            zero_count: sampleCounts.filter((c) => c === 0).length,
+          },
+          recent_turns: recent,
+        };
+        if (typeof window !== "undefined") {
+          window.__hav_lastDump = dump;
+          try { console.log("LAB-DUMP", dump); } catch {}
+        }
+        addEvent({
+          kind: "system",
+          text: "lab-dump:\n```json\n" + JSON.stringify(dump, null, 2) + "\n```",
+          tone: "info",
+        });
+        return true;
+      }
+      case "lab-dump-watch": {
+        // AR32-6: cadence dumps for timing-window bugs.
+        // /lab-dump-watch 5 → dump every 5s for 60s (12 dumps).
+        // /lab-dump-watch stop → cancel an active watch.
+        const sub = (parts[1] || "").trim().toLowerCase();
+        if (sub === "stop") {
+          if (window.__hav_labDumpWatchId) {
+            clearInterval(window.__hav_labDumpWatchId);
+            window.__hav_labDumpWatchId = null;
+            addEvent({ kind: "system", text: "lab-dump-watch · stopped", tone: "ok" });
+          } else {
+            addEvent({ kind: "system", text: "lab-dump-watch · not running", tone: "info" });
+          }
+          return true;
+        }
+        const interval = Math.max(1, parseInt(sub || "5", 10) || 5);
+        if (window.__hav_labDumpWatchId) {
+          clearInterval(window.__hav_labDumpWatchId);
+        }
+        let n = 0;
+        const maxDumps = 12;
+        const fire = () => handleCommand("/lab-dump");
+        fire();   // immediate first dump
+        window.__hav_labDumpWatchId = setInterval(() => {
+          n++;
+          if (n >= maxDumps) {
+            clearInterval(window.__hav_labDumpWatchId);
+            window.__hav_labDumpWatchId = null;
+            addEvent({ kind: "system", text: `lab-dump-watch · complete (${maxDumps} dumps)`, tone: "ok" });
+            return;
+          }
+          fire();
+        }, interval * 1000);
+        addEvent({
+          kind: "system",
+          text: `lab-dump-watch · cadence ${interval}s × ${maxDumps} dumps`,
+          tone: "ok",
+        });
+        return true;
+      }
       case "debug": {
         // Show/hide internal diag events ([parakeet], [direct],
-        // [kokoro], [camera], [error], [moshi]) in the feed.
+        // [kokoro], [camera], [error], [moshi], [route]) in the feed.
         //   /debug                → show current state
         //   /debug on | off       → set explicitly
         //   /debug toggle         → flip
@@ -2417,7 +4535,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         else if (v === "toggle" || v === "") next = !debugMode;
         setDebugMode(next);
         addEvent({ kind: "system",
-          text: `debug · ${next ? "on — showing diag events (parakeet/direct/kokoro/camera/error)" : "off — clean feed"}`,
+          text: `debug · ${next ? "on — showing diag events (parakeet/direct/kokoro/camera/error/routing)" : "off — clean feed"}`,
           tone: next ? "warn" : "ok" });
         return true;
       }
@@ -2465,6 +4583,13 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         stopStreaming();
         setEvents([]);
         setConversationId(null);
+        // /clear is a fresh start — re-show the /help hint, and reset the
+        // persisted flag so onboarding teaches again next launch too.
+        saveOnboarding({ seenHelpHint: false });
+        if (connection === "online") {
+          addEvent({ kind: "system", tone: "info", onboarding: "help-hint",
+            text: "Connected. Type /help to learn what you can do." });
+        }
         return true;
       case "demo":
         playScript();
@@ -2474,18 +4599,49 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         addEvent({ kind: "system", text: "home v0.1.0 · engineered-lighting/home · MIT", tone: "info" });
         return true;
       case "help": {
-        // Phase 1.5: vertical list with descriptions. Builds from
-        // SLASH_CMDS (which auto-complete already uses) so the help
-        // output stays in sync as commands are added/renamed.
-        const lines = SLASH_CMDS.map((c) => {
-          const sig = c.hint ? `${c.cmd} ${c.hint}` : c.cmd;
-          return `  ${sig}  —  ${c.desc}`;
-        });
+        // Categorized + interactive help. Builds from SLASH_CMDS
+        // (auto-complete uses the same source so help stays in sync).
+        // Emits a kind:"help" event carrying the structured payload
+        // (groups + commands) so HelpContent in home-events.jsx can
+        // render hover-brighten + click-to-fill-input UX. The old
+        // flat text rendering is no longer reachable from here.
+        const groups = SLASH_CMD_CATEGORIES.map((cat) => {
+          const cmds = SLASH_CMDS.filter((c) => c.category === cat.id);
+          return { ...cat, commands: cmds };
+        }).filter((g) => g.commands.length > 0);
+        // Uncategorized fallback — surfaces drift the moment a command
+        // is added without a category (instead of silently disappearing
+        // from /help).
+        const uncategorized = SLASH_CMDS.filter((c) => !c.category);
+        if (uncategorized.length > 0) {
+          groups.push({
+            id: "_uncategorized",
+            label: "uncategorized (add a category field!)",
+            desc: "",
+            commands: uncategorized,
+          });
+        }
+        // Sim mode: emit the legacy sim-help text first so the sim
+        // scenario catalog stays prominent in design-review sessions.
+        if (sim.active && window.SimulationCommand) {
+          const simHelp = window.SimulationCommand.formatSimHelp(sim.active, sim.scenario);
+          if (simHelp) addEvent({ kind: "system", text: simHelp, tone: "info" });
+        }
         addEvent({
-          kind: "system",
-          text: "commands:\n" + lines.join("\n"),
-          tone: "info",
+          kind: "help",
+          groups,
+          totalCount: SLASH_CMDS.length,
+          tip: "hover any command to highlight · click to paste into the input box · then hit Enter",
         });
+        return true;
+      }
+      case "simulation":
+      case "sim": {
+        if (window.SimulationCommand) {
+          window.SimulationCommand.handle(cmd, arg, { sim, addEvent });
+        } else {
+          addEvent({ kind: "system", text: "simulation module not loaded", tone: "warn" });
+        }
         return true;
       }
       // Master plan F.4: search past events for matching text. Uses the
@@ -2526,11 +4682,913 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         });
         return true;
       }
+      // Proactive-assistant coordinator — status, mode overrides, and the
+      // "test from HA without leaving the house" event injectors. The test
+      // injectors drive the REAL coordinator (→ real evaluateProactive →
+      // real Voice PE announce); they no-op in Simulation Mode.
+      case "proactive": {
+        const coord = proactiveCoord;
+        const parts = (arg || "").trim().split(/\s+/).filter(Boolean);
+        const sub = (parts[0] || "").toLowerCase();
+        if (!sub) {
+          const st = coord.getStatus();
+          const modes = Object.keys(st.modes).filter((k) => st.modes[k]);
+          addEvent({ kind: "system", tone: "info", text:
+            `proactive · phase: ${st.phase}${st.away ? " · away" : ""}\n` +
+            `modes: ${modes.length ? modes.join(", ") : "none"}\n` +
+            `greeted rooms: ${st.ledger.greetedRooms.length ? st.ledger.greetedRooms.join(", ") : "none"}\n` +
+            "usage:\n" +
+            "  /proactive <sleep|dnd|focus|movie> <on|off>\n" +
+            "  /proactive test <arrived|left|room|confirm> [name|room]\n" +
+            "  /proactive reset",
+          });
+          return true;
+        }
+        if (sub === "reset") {
+          coord.resetLedger();
+          addEvent({ kind: "system", text: "proactive: ledger cleared, coordinator reset to idle", tone: "ok" });
+          return true;
+        }
+        if (sub === "sleep" || sub === "dnd" || sub === "focus" || sub === "movie") {
+          const on = (parts[1] || "").toLowerCase() === "on";
+          coord.setMode(sub, on);
+          addEvent({ kind: "system", text: `proactive: ${sub} mode ${on ? "ON" : "off"}`, tone: "info" });
+          return true;
+        }
+        if (sub === "test") {
+          const kind = (parts[1] || "").toLowerCase();
+          const a = parts.slice(2).join(" ");
+          let evt = null;
+          // Default name is "Marcelo" everywhere so `/proactive test arrived`
+          // and `/proactive test confirm` (both with no arg) MATCH — the
+          // coordinator only confirms an arrival when the identity's
+          // display_name equals the arriving person's.
+          if (kind === "arrived")      evt = { type: "person_arrived_home", person: "person.test", display_name: a || "Marcelo", confidence: 1.0, test: true };
+          else if (kind === "left")    evt = { type: "person_left_home",    person: "person.test", display_name: a || "Marcelo", confidence: 1.0, test: true };
+          else if (kind === "room")    evt = { type: "room_entered",        room: a || "kitchen", confidence: 0.9, test: true };
+          else if (kind === "confirm") evt = { type: "identity_confirmed",  display_name: a || "Marcelo", room: "living_room", confidence: 0.97, test: true };
+          if (!evt) {
+            addEvent({ kind: "system", text: "usage: /proactive test <arrived|left|room|confirm> [name|room]", tone: "info" });
+            return true;
+          }
+          coord.ingestEvent(window.normalizeProactiveEvent(evt, "ha_ws"));
+          addEvent({ kind: "system", text: `proactive: injected test ${kind} event` + (sim.active ? " (no-op — Simulation Mode)" : ""), tone: "info" });
+          return true;
+        }
+        addEvent({ kind: "system", text: `unknown /proactive subcommand: ${sub}`, tone: "warn" });
+        return true;
+      }
+      // ── External reasoning fallback ─────────────────────────────────
+      case "ask": {
+        if (!arg) {
+          addEvent({ kind: "system", text: "usage: /ask <text> — force external/general provider", tone: "info" });
+          return true;
+        }
+        if (!(window.openaiProvider && window.openaiProvider.isConfigured())) {
+          addEvent({ kind: "system", text: "external reasoning is not configured — use /external set-key first", tone: "warn" });
+          return true;
+        }
+        dispatchExternal(arg);
+        return true;
+      }
+      case "local": {
+        if (!arg) {
+          addEvent({ kind: "system", text: "usage: /local <text> — force local home agent", tone: "info" });
+          return true;
+        }
+        addEvent({ kind: "user", text: arg });
+        sendToHA(arg);
+        return true;
+      }
+      case "route": {
+        if (!arg) {
+          addEvent({ kind: "system", text: "usage: /route <text> — classify without dispatching", tone: "info" });
+          return true;
+        }
+        const explanation = window.explainIntent ? window.explainIntent(arg) : "classifier unavailable";
+        addEvent({ kind: "system", text: `route: ${explanation}`, tone: "info" });
+        return true;
+      }
+      case "external": {
+        const [sub, ...subRest] = arg.split(/\s+/).filter(Boolean);
+        const subArg = subRest.join(" ");
+        if (!sub || sub === "status") {
+          const configured = !!(window.openaiProvider && window.openaiProvider.isConfigured());
+          const enabled = (() => {
+            try { return localStorage.getItem("hg-external-enabled") === "on"; }
+            catch { return false; }
+          })();
+          const stats = window.__EXTERNAL_STATS || [];
+          const recent = stats.slice(-1)[0];
+          const lines = [
+            `external · provider: ${window.openaiProvider?.name || "(none)"}`,
+            `  configured: ${configured ? "yes" : "no"} · auto-routing: ${enabled ? "on" : "off"}`,
+            `  calls tracked: ${stats.length}` + (recent ? ` · last: ${recent.ok ? "ok" : recent.error || "fail"} (${recent.latencyMs || "?"}ms)` : ""),
+          ];
+          addEvent({ kind: "system", text: lines.join("\n"), tone: configured ? "ok" : "warn" });
+          return true;
+        }
+        if (sub === "on") {
+          try { localStorage.setItem("hg-external-enabled", "on"); } catch {}
+          addEvent({ kind: "system", text: "external auto-routing: on", tone: "ok" });
+          return true;
+        }
+        if (sub === "off") {
+          try { localStorage.setItem("hg-external-enabled", "off"); } catch {}
+          addEvent({ kind: "system", text: "external auto-routing: off (use /ask to force)", tone: "info" });
+          return true;
+        }
+        if (sub === "set-key") {
+          setExternalKeyModalOpen(true);
+          return true;
+        }
+        addEvent({ kind: "system", text: `unknown /external subcommand: ${sub}`, tone: "warn" });
+        return true;
+      }
+      case "test": {
+        const [sub] = arg.split(/\s+/).filter(Boolean);
+        if (!sub) {
+          addEvent({ kind: "system", text: "usage: /test classifier | external-privacy | external-suite", tone: "info" });
+          return true;
+        }
+        if (sub === "classifier") {
+          if (!window.runClassifierTest) { addEvent({ kind: "system", text: "classifier test module not loaded", tone: "error" }); return true; }
+          const r = window.runClassifierTest();
+          addEvent({ kind: "system", text: `[classifier] ✓ ${r.passed} · ✗ ${r.failed}`, tone: r.failed === 0 ? "ok" : "error" });
+          r.results.filter((x) => !x.ok).slice(0, 6).forEach((x) => {
+            addEvent({ kind: "system", text: `  fail: "${x.input}" → got ${x.got}, expected ${x.expected}`, tone: "error" });
+          });
+          return true;
+        }
+        if (sub === "external-privacy") {
+          if (!window.runPrivacyTest) { addEvent({ kind: "system", text: "privacy test module not loaded", tone: "error" }); return true; }
+          window.runPrivacyTest().then((r) => {
+            addEvent({ kind: "system", text: `[privacy] ✓ ${r.passed} · ✗ ${r.failed}`, tone: r.failed === 0 ? "ok" : "error" });
+            r.results.forEach((x) => {
+              if (x.violations.length > 0) addEvent({ kind: "system", text: `  leak: "${x.input}" → ${x.violations.join(", ")}`, tone: "error" });
+              if (!x.shapeOk)              addEvent({ kind: "system", text: `  shape: "${x.input}" → messages array malformed`, tone: "error" });
+            });
+          });
+          return true;
+        }
+        if (sub === "external-suite") {
+          if (!window.runExternalSuite) { addEvent({ kind: "system", text: "test suite module not loaded", tone: "error" }); return true; }
+          window.runExternalSuite(addEvent);
+          return true;
+        }
+        addEvent({ kind: "system", text: `unknown /test subcommand: ${sub}`, tone: "warn" });
+        return true;
+      }
+      case "spatial": {
+        // Addendum 38 Phase 1 — open the light-footprint Map drawer.
+        setSpatialDrawerOpen(true);
+        return true;
+      }
+      case "look": {
+        // Phase 0.5 "Thinking with Visual Primitives" — open the /look
+        // drawer: ask the vision model a spatial question about a camera
+        // and render the boxes it reasons with. `/look <camera> <question>`
+        // pre-fills + auto-runs; bare `/look` opens an empty drawer.
+        const parsed = window.HomeLookParseArg
+          ? window.HomeLookParseArg(arg)
+          : { camera: null, question: "" };
+        setLookInitial({
+          camera: parsed.camera,
+          question: parsed.question,
+          nonce: Date.now(),
+        });
+        setLookDrawerOpen(true);
+        return true;
+      }
+      case "world-state":
+      case "world": {
+        // F-32 (Addendum 27): default to opening the world-state
+        // drawer for a navigable view. Flags fall back to the
+        // legacy raw-JSON dump for paste-back use cases.
+        //   /world-state              → open drawer
+        //   /world-state --raw        → dump full JSON inline
+        //   /world-state kitchen      → dump one room inline
+        //   /world-state --raw kitchen → same
+        const argTrimmed = arg.trim();
+        const wantsRaw = /(^|\s)--raw(\s|$)/.test(argTrimmed);
+        const argSansFlags = argTrimmed.replace(/--raw\b/g, "").trim();
+        if (!wantsRaw && !argSansFlags) {
+          // No room arg, no --raw → open the drawer with full view
+          setWorldStateInitialRoom(null);
+          setWorldStateDrawerOpen(true);
+          return true;
+        }
+        if (!wantsRaw && argSansFlags) {
+          // Room arg without --raw → open the drawer pre-filtered to
+          // that room. User can ×-clear the filter to widen.
+          setWorldStateInitialRoom(argSansFlags);
+          setWorldStateDrawerOpen(true);
+          return true;
+        }
+        // Fall through to legacy raw dump (--raw flag explicitly given).
+        const room = argSansFlags || null;
+        if (!endpoint || !token) {
+          addEvent({ kind: "system", text: "world-state · need /connect <url> <token> first", tone: "warn" });
+          return true;
+        }
+        (async () => {
+          try {
+            const base = endpoint.replace(/\/+$/, "");
+            const qs = room ? `?room=${encodeURIComponent(room)}` : "";
+            const url = `${base}/api/extended_openai_conversation/world_state${qs}`;
+            const r = await tauriFetch(url, {
+              headers: { Authorization: `Bearer ${token}` },
+              cache: "no-store",
+            });
+            if (!r.ok) {
+              addEvent({ kind: "system", text: `world-state · http ${r.status}`, tone: "error" });
+              return;
+            }
+            const data = await r.json();
+            if (data && data.enabled === false) {
+              addEvent({ kind: "system", text: `world-state · disabled (${data.reason || "off"})`, tone: "warn" });
+              return;
+            }
+            const label = room ? `world-state · ${room}` : "world-state · full snapshot";
+            addEvent({ kind: "system", text: `${label} (select-all + copy):`, tone: "info" });
+            // Pretty-printed JSON (paste readability > one-line compactness here).
+            addEvent({ kind: "system", text: JSON.stringify(data, null, 2) });
+          } catch (err) {
+            addEvent({ kind: "system", text: `world-state · fetch failed: ${err?.message || err}`, tone: "error" });
+          }
+        })();
+        return true;
+      }
+      case "recap": {
+        // M2 (Addendum 27): trigger the recap() tool via HA conversation
+        // API with a structured prompt. Default 6h; numeric arg overrides
+        // (e.g. /recap 24 = today, /recap 168 = past week).
+        let hours = 6;
+        const a = arg.trim();
+        if (a) {
+          const n = parseInt(a, 10);
+          if (Number.isFinite(n) && n >= 1 && n <= 168) {
+            hours = n;
+          } else {
+            addEvent({ kind: "system", text: `recap · '${a}' isn't a valid hours value (1-168); using default 6`, tone: "warn" });
+          }
+        }
+        if (!endpoint || !token) {
+          addEvent({ kind: "system", text: "recap · need /connect <url> <token> first", tone: "warn" });
+          return true;
+        }
+        addEvent({ kind: "system", text: `recap · gathering last ${hours}h…`, tone: "info" });
+        (async () => {
+          try {
+            const base = endpoint.replace(/\/+$/, "");
+            const url = `${base}/api/conversation/process`;
+            const r = await tauriFetch(url, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                text: `Summarize what happened in our home over the last ${hours} hours in 2-3 conversational sentences. Use the recap tool to gather the data — don't read raw fields aloud.`,
+                language: "en",
+                // 2026-05-18 fix: without agent_id, HA routes to its
+                // default agent (often the built-in intent matcher),
+                // which parsed "Use the recap tool..." as an area
+                // lookup → returned "Sorry, I am not aware of any
+                // area called Use". Explicit agent_id ensures the
+                // request reaches our LLM agent that knows the tool.
+                agent_id: "conversation.extended_openai_conversation",
+              }),
+              cache: "no-store",
+            });
+            if (!r.ok) {
+              addEvent({ kind: "system", text: `recap · http ${r.status}`, tone: "error" });
+              return;
+            }
+            const data = await r.json();
+            const speech = data?.response?.speech?.plain?.speech || "(no response)";
+            // Render the recap as a regular assistant bubble for natural feel
+            addEvent({ kind: "home", text: speech });
+          } catch (err) {
+            addEvent({ kind: "system", text: `recap · fetch failed: ${err?.message || err}`, tone: "error" });
+          }
+        })();
+        return true;
+      }
+      case "cameras":
+      case "cams": {
+        // Visual sweep: emit one perception event per configured
+        // camera with its thumbnail URL pointing at the M1 snapshot
+        // cache. PerceptionContent already handles snapshotUrl render
+        // + onError fallback to text, so a stale/404 thumbnail
+        // degrades cleanly to a text chip without spinning.
+        const cameras = window.HG_CAMERAS || [];
+        if (cameras.length === 0) {
+          addEvent({ kind: "system", text: "cameras · no cameras configured (window.HG_CAMERAS empty)", tone: "warn" });
+          return true;
+        }
+        // Derive vision-sidecar URL (same pattern as /describe-clip).
+        const baseM = metricsBase || (() => {
+          try { return metricsBaseFromEndpoint(endpoint); } catch { return ""; }
+        })();
+        let visionUrl = "";
+        try {
+          if (baseM) { const u = new URL(baseM); visionUrl = `${u.protocol}//${u.hostname}:8091`; }
+        } catch {}
+        const isSim = sim?.active;
+        if (!visionUrl && !isSim) {
+          addEvent({ kind: "system", text: "cameras · vision-sidecar URL not derivable — set /metrics first", tone: "warn" });
+          return true;
+        }
+        // In sim mode the fixture provides per-camera placeholder URLs
+        // (data URLs) so the UI exercises the perception render path
+        // without hitting the network.
+        const simFixture = isSim && typeof window.__SIM_CAMERAS_FIXTURE === "function"
+          ? window.__SIM_CAMERAS_FIXTURE()
+          : null;
+        addEvent({ kind: "system", text: `cameras · ${cameras.length} configured:`, tone: "info" });
+        for (const cam of cameras) {
+          let snapshotUrl;
+          if (simFixture && simFixture[cam.id]) {
+            snapshotUrl = simFixture[cam.id];
+          } else {
+            snapshotUrl = `${visionUrl}/snapshot/${cam.id}/latest.jpg`;
+          }
+          addEvent({
+            kind: "perception",
+            text: `${cam.name} · cached snapshot${isSim ? " (sim)" : ""}`,
+            snapshotUrl,
+          });
+        }
+        return true;
+      }
+      case "agent-tools":
+      case "tools": {
+        // List every LLM tool the agent can call, grouped by capability.
+        // Source of truth: ha-config/extended_openai_conversation/const.py
+        // (DEFAULT_CONF_FUNCTION_TOOLS). This list is maintained in
+        // parallel — when adding a tool to const.py, update this list too.
+        // The pairing is enforced by the developer adding both at once;
+        // there's no live-sync because the agent's prompt may override
+        // per-subentry anyway.
+        const TOOL_CATALOG = [
+          { group: "device", tools: [
+            ["execute_services", "fire one or more HA service calls (light, switch, media_player, lock, etc.) — supports area_id or entity_id targeting"],
+            ["get_attributes", "read current state + attributes of one entity"],
+            ["invoke_script", "run a user-defined HA script by entity_id with optional variables — F-9"],
+          ] },
+          { group: "discovery", tools: [
+            ["areas_in_home", "list every area with floor + sample entities"],
+            ["entities_in_area", "entities in one area, optionally filtered by domain"],
+            ["entities_with_label", "entities tagged with a label (HA 2024.8+)"],
+            ["entities_by_domain", "every entity of one domain (light, lock, etc.), optionally within an area"],
+            ["find_entity", "fuzzy search by name / alias / friendly name"],
+          ] },
+          { group: "presence + perception (world_state)", tools: [
+            ["get_all_rooms_state", "snapshot of every room — occupancy + identified persons"],
+            ["get_room_state", "one room — persons, perception summary, freshness"],
+            ["find_person", "locate a person across cameras + HA presence"],
+            ["who_is_in", "list persons currently in a specific room"],
+            ["refresh_perception", "force a fresh vision-sidecar caption (1-3s blocking)"],
+          ] },
+          { group: "vision (multi-frame + clips)", tools: [
+            ["describe_clip", "watch a short clip (N frames over Xs) and describe motion — F-3"],
+            ["find_clips", "Frigate semantic search via CLIP — '<query>' or by camera/label/face"],
+          ] },
+          { group: "history + recap", tools: [
+            ["get_history", "HA Recorder — state history for entities over a time window"],
+            ["recap", "composition tool — bundles find_clips + recorder + identity for 'what happened today'"],
+          ] },
+          { group: "advanced", tools: [
+            ["load_skill", "load a custom skill on demand"],
+            ["bash", "execute a shell command (gated; rare)"],
+          ] },
+        ];
+        // Render compact: one group header per group, one line per tool
+        // "<name> — <desc>" so the user can scan + paste back the whole
+        // list for inclusion in a prompt or doc.
+        const totalCount = TOOL_CATALOG.reduce((a, g) => a + g.tools.length, 0);
+        addEvent({ kind: "system", text: `agent-tools · ${totalCount} tools registered (see ha-config/extended_openai_conversation/const.py for live spec):`, tone: "info" });
+        for (const group of TOOL_CATALOG) {
+          addEvent({ kind: "system", text: `── ${group.group} (${group.tools.length}) ──` });
+          for (const [name, desc] of group.tools) {
+            addEvent({ kind: "system", text: `  ${name} — ${desc}` });
+          }
+        }
+        return true;
+      }
+      case "describe-clip":
+      case "clip": {
+        // F-3 (Addendum 27): direct invocation of vision-sidecar
+        // /describe_clip, bypassing HA's conversation API entirely.
+        // Faster than going through the LLM agent (~3-8s vs ~15s)
+        // and gives the user a quick way to test multi-frame motion
+        // queries from the chat surface. Result renders as a
+        // perception bubble with a thumbnail of the LAST frame from
+        // the M1 snapshot cache (/snapshot/<camera>/latest.jpg).
+        //
+        // Args: <camera> [frames] [interval_s]
+        //   /describe-clip kitchen           → defaults (4 frames, 1.0s)
+        //   /describe-clip driveway 6 1.5    → 6 frames over 7.5s
+        // Addendum 30B: tolerant parser via shared pure helper. Old positional
+        // split broke on two-word cameras ("living room" → frames="room").
+        // Walks tokens, accumulates non-numeric as camera name, normalizes to
+        // entity_id form (lowercased, underscored, strip "camera." prefix).
+        const parserFn = (window.HomeMetricsLabHelpers && window.HomeMetricsLabHelpers.parseDescribeClipArg) || null;
+        const parsed = parserFn ? parserFn(arg) : { error: "parser helper unavailable" };
+        if (parsed.error) {
+          if (/missing camera/i.test(parsed.error)) {
+            addEvent({ kind: "system", text: "describe-clip · usage: /describe-clip <camera> [frames] [interval_s]", tone: "warn" });
+          } else {
+            addEvent({ kind: "system", text: `describe-clip · ${parsed.error}`, tone: "warn" });
+          }
+          return true;
+        }
+        const camera = parsed.camera;
+        const frames = parsed.frames;
+        const interval_s = parsed.interval_s;
+        // Derive vision URL from metricsBase (same pattern as the
+        // visionHealth poll above).
+        const baseM = metricsBase || (() => {
+          try { return metricsBaseFromEndpoint(endpoint); } catch { return ""; }
+        })();
+        let visionUrl = "";
+        try {
+          if (baseM) {
+            const u = new URL(baseM);
+            visionUrl = `${u.protocol}//${u.hostname}:8091`;
+          }
+        } catch {}
+        // Sim mode: short-circuit with the canned fixture so the
+        // command is testable without a real vision-sidecar reachable.
+        const isSim = sim?.active;
+        if (!visionUrl && !isSim) {
+          addEvent({ kind: "system", text: "describe-clip · vision-sidecar URL not derivable — set /metrics first", tone: "warn" });
+          return true;
+        }
+        const framesEff = frames || 4;
+        const intervalEff = interval_s || 1.0;
+        addEvent({ kind: "system", text: `describe-clip · watching ${camera} (${framesEff} frames over ${(framesEff - 1) * intervalEff}s)…`, tone: "info" });
+        (async () => {
+          let body;
+          let snapshotUrl = null;
+          try {
+            if (isSim && typeof window.__SIM_DESCRIBE_CLIP_FIXTURE === "function") {
+              // Sim path: skip the network, return canned data
+              body = window.__SIM_DESCRIBE_CLIP_FIXTURE(camera, framesEff, intervalEff);
+            } else {
+              const payload = { camera, frames: framesEff, interval_s: intervalEff };
+              const r = await tauriFetch(`${visionUrl}/describe_clip`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+                cache: "no-store",
+              });
+              if (!r.ok) {
+                addEvent({ kind: "system", text: `describe-clip · http ${r.status}`, tone: "error" });
+                return;
+              }
+              body = await r.json();
+              // M1 snapshot URL — the sidecar caches the last frame
+              // from every /describe* call. Use the resolved entity_id
+              // if the sidecar echoed one, else fall back to the user-
+              // typed camera.
+              const cam = (body.entity_id || `camera.${camera.replace(/[\s]/g, "_")}`).replace(/^camera\./, "");
+              snapshotUrl = `${visionUrl}/snapshot/${cam}/latest.jpg`;
+            }
+            const description = (body.description || "").trim() || "(no description)";
+            const meta = [
+              body.frames_captured != null ? `${body.frames_captured} frames` : null,
+              body.span_s != null ? `${body.span_s}s span` : null,
+              body.latency_ms != null ? `${body.latency_ms}ms` : null,
+            ].filter(Boolean).join(" · ");
+            addEvent({
+              kind: "perception",
+              text: `${camera} — ${description}${meta ? `  (${meta})` : ""}`,
+              snapshotUrl,
+            });
+          } catch (err) {
+            addEvent({ kind: "system", text: `describe-clip · fetch failed: ${err?.message || err}`, tone: "error" });
+          }
+        })();
+        return true;
+      }
+      case "find-clips":
+      case "clips": {
+        // F-2-tier (Addendum 27): direct invocation of the Frigate
+        // find_clips tool, bypassing the LLM. Hits the integration
+        // endpoint that proxies to Frigate's /api/events?search=…
+        // Renders each clip as a system event with the thumbnail URL
+        // so the user can copy/paste back for analysis.
+        const query = arg.trim();
+        if (!query) {
+          addEvent({ kind: "system", text: "find-clips · usage: /find-clips <query> (e.g. 'package on porch')", tone: "warn" });
+          return true;
+        }
+        if (!endpoint || !token) {
+          addEvent({ kind: "system", text: "find-clips · need /connect <url> <token> first", tone: "warn" });
+          return true;
+        }
+        (async () => {
+          try {
+            // No dedicated REST view exists for this — instead invoke
+            // the HA conversation API with a structured prompt that
+            // calls the tool, OR hit Frigate directly via a proxy.
+            // Cleanest: have a tiny new endpoint OR call HA's
+            // /api/conversation/process with a wrapped query.
+            // For now: ask HA conversation to run find_clips. The
+            // agent recognizes the tool from const.py.
+            const base = endpoint.replace(/\/+$/, "");
+            const url = `${base}/api/conversation/process`;
+            const r = await tauriFetch(url, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                text: `Use find_clips to search for: ${query}. Return only the raw tool result.`,
+                language: "en",
+                // 2026-05-18: same agent_id fix as /recap. Without
+                // this, HA's built-in intent matcher catches the
+                // request and treats "Use" / "Run" / etc. as an
+                // area name lookup.
+                agent_id: "conversation.extended_openai_conversation",
+              }),
+              cache: "no-store",
+            });
+            if (!r.ok) {
+              addEvent({ kind: "system", text: `find-clips · http ${r.status}`, tone: "error" });
+              return;
+            }
+            const data = await r.json();
+            const speech = data?.response?.speech?.plain?.speech || "(no response)";
+            addEvent({ kind: "system", text: `find-clips · ${speech}`, tone: "info" });
+          } catch (err) {
+            addEvent({ kind: "system", text: `find-clips · fetch failed: ${err?.message || err}`, tone: "error" });
+          }
+        })();
+        return true;
+      }
+      case "why": {
+        // M5 (Addendum 27): open the explainability drawer for a
+        // specific conv_id. With no arg, opens for the most-recent
+        // bubble carrying a convId. With an arg, opens for that exact
+        // conv_id (no validation — drawer renders "no entries" if
+        // unknown).
+        const id = arg.trim();
+        if (id) {
+          setExplainConvId(id);
+          return true;
+        }
+        // No arg: walk the events list right-to-left for the most
+        // recent bubble with a convId.
+        const recent = [...events].reverse().find((e) => e.convId);
+        if (!recent) {
+          addEvent({ kind: "system", text: "why · no recent turns with conv_id (try after a voice/typed turn)", tone: "warn" });
+          return true;
+        }
+        setExplainConvId(recent.convId);
+        return true;
+      }
+      case "lights": {
+        // Open the Living Lights tuning drawer. One unified surface with
+        // 'right now' status, bias knobs (warmth + brightness), and
+        // cascade-priority sliders for the 15 promoted constants. The
+        // drawer reads + writes input_numbers directly via the WebSocket
+        // client — no LLM in the loop for everyday tweaks.
+        if (!haClientRef.current) {
+          addEvent({ kind: "system", text: "lights · not connected to HA (run /connect first)", tone: "warn" });
+          return true;
+        }
+        setLightsOpen(true);
+        return true;
+      }
+      case "why-light": {
+        // First-PR introspection: explain the last lighting decision for
+        // a zone. Pulls (a) the live classifier sensor, (b) recent manual
+        // overrides via the RecentOverridesView REST endpoint, (c) last
+        // few shadow-log transitions via the LightingDecisionsView REST
+        // endpoint. Composes a single chat-feed system entry.
+        //
+        // Graceful: if no recent overrides, still shows classifier state +
+        // shadow-log transitions ("no manual overrides in last 24h").
+        const LIGHT_ZONES = [
+          "sofa", "front_left", "front_door", "weights", "office",
+          "dining_left", "dining_right", "sink", "island_left", "island_right",
+        ];
+        const ZONE_CAMERA_MAP = {
+          dining_left: "dining_room", dining_right: "dining_room",
+          sink: "kitchen", island_left: "kitchen", island_right: "kitchen",
+          sofa: "living_room", front_left: "living_room", weights: "living_room",
+          office: "living_room", front_door: "living_room",
+        };
+        const zone = arg.trim().toLowerCase().replace(/\s+/g, "_");
+        if (!zone) {
+          addEvent({
+            kind: "system",
+            text: `why-light · pass a zone, e.g. /why-light office. Zones: ${LIGHT_ZONES.join(", ")}`,
+            tone: "info",
+          });
+          return true;
+        }
+        if (!LIGHT_ZONES.includes(zone)) {
+          addEvent({
+            kind: "system",
+            text: `why-light · unknown zone '${zone}'. Available: ${LIGHT_ZONES.join(", ")}`,
+            tone: "warn",
+          });
+          return true;
+        }
+        if (!endpoint || !token) {
+          addEvent({ kind: "system", text: "why-light · need /connect <url> <token> first", tone: "warn" });
+          return true;
+        }
+        (async () => {
+          const camera = ZONE_CAMERA_MAP[zone];
+          const sensorId = `sensor.${camera}_${zone}_lighting_state`;
+          const base = endpoint.replace(/\/+$/, "");
+          const headers = { Authorization: `Bearer ${token}` };
+          let classifier = null;
+          let overridesRes = null;
+          let decisionsRes = null;
+          let pendingRes = null;
+          try {
+            const r = await tauriFetch(`${base}/api/states/${sensorId}`, {
+              headers, cache: "no-store",
+            });
+            if (r.ok) classifier = await r.json();
+          } catch (_) { /* tolerate */ }
+          try {
+            const r = await tauriFetch(
+              `${base}/api/extended_openai_conversation/recent_overrides?zone=${encodeURIComponent(zone)}&hours=24`,
+              { headers, cache: "no-store" },
+            );
+            if (r.ok) overridesRes = await r.json();
+          } catch (_) { /* tolerate */ }
+          try {
+            const r = await tauriFetch(
+              `${base}/api/extended_openai_conversation/lighting_decisions?zone=${encodeURIComponent(zone)}&tail=10&hours=24`,
+              { headers, cache: "no-store" },
+            );
+            if (r.ok) decisionsRes = await r.json();
+          } catch (_) { /* tolerate */ }
+          // M2.3 — latest pending_preference for this zone (drilldown surface).
+          try {
+            const r = await tauriFetch(
+              `${base}/api/extended_openai_conversation/recent_pending_preferences?zone=${encodeURIComponent(zone)}&tail=1&hours=72`,
+              { headers, cache: "no-store" },
+            );
+            if (r.ok) pendingRes = await r.json();
+          } catch (_) { /* tolerate */ }
+
+          // Compose the chat-feed entry.
+          const friendlyZone = zone.replace(/_/g, " ");
+          const lines = [`**${friendlyZone}** — /why-light`];
+          if (classifier) {
+            const stateNow = classifier.state || "unknown";
+            const a = classifier.attributes || {};
+            const predBri = a.predicted_brightness_pct;
+            const dwellMs = a.dwell_ms;
+            const lastManualAt = a.last_manual_at;
+            lines.push(
+              `current state: ${stateNow}` +
+              (predBri != null ? ` (predicted ${predBri}%)` : "") +
+              (dwellMs != null ? ` · dwell ${dwellMs}ms` : "") +
+              (lastManualAt ? ` · last manual: ${lastManualAt}` : ""),
+            );
+          } else {
+            lines.push(`classifier sensor unavailable (${sensorId})`);
+          }
+          const overrides = (overridesRes && overridesRes.data) || [];
+          if (overrides.length > 0) {
+            lines.push(`last 24h: ${overrides.length} manual override${overrides.length === 1 ? "" : "s"} (showing last 3)`);
+            const recent = overrides.slice(-3);
+            for (const ov of recent) {
+              const ts = ov.ts || "?";
+              const ap = ov.actual_pct != null ? `${ov.actual_pct}%` : "?";
+              const pp = ov.predicted_pct != null ? `${ov.predicted_pct}%` : "?";
+              const shadow = ov.shadow_mode ? " (shadow)" : "";
+              const reason = ov.debug_match_reason && ov.debug_match_reason !== "none"
+                ? ` · ${ov.debug_match_reason}` : "";
+              lines.push(`  • ${ts} — actual ${ap} vs predicted ${pp}${shadow}${reason}`);
+            }
+          } else {
+            lines.push("no manual overrides in the last 24h");
+          }
+          // M2.3 — latest pending_preference for the zone. Concise: 1-3 lines.
+          // Surfaces provenance (natural vs forced trigger) and prediction
+          // mismatch warning when present. Full record stays in meta.whyLight.
+          const pending = (pendingRes && pendingRes.entries) || [];
+          const latestPending = pending.length > 0 ? pending[pending.length - 1] : null;
+          if (latestPending) {
+            const pts = latestPending.ts || "?";
+            const cap = (latestPending.captured_state && latestPending.captured_state.brightness_pct);
+            const prov = (latestPending.capture_provenance && latestPending.capture_provenance.capture_trigger) || "?";
+            const provTag = prov === "vacancy_settle" ? "natural" : (prov === "manual_automation_trigger" ? "manually triggered" : prov);
+            lines.push(`latest preference capture: ${pts} @ ${cap != null ? cap + "%" : "?"} (${provTag})`);
+            const consistency = latestPending.prediction_consistency || {};
+            const mismatch = consistency.prediction_mismatch_pct;
+            if (mismatch != null && Math.abs(mismatch) > 10) {
+              const primaryPct = consistency.primary_prediction_pct;
+              const wouldPct = consistency.would_have_done_brightness_pct;
+              lines.push(`  ⚠️ prediction mismatch ${mismatch}% — classifier predicted ${primaryPct}% but deviation cache had ${wouldPct}%`);
+            }
+            const occ = latestPending.occupancy || {};
+            if (occ.state != null && occ.age_s != null) {
+              const flickerParts = [];
+              if (occ.age_s < 10) flickerParts.push("⚠ unstable at capture");
+              if (occ.flicker_count_5min != null && occ.flicker_count_5min >= 3) flickerParts.push(`flicker x${occ.flicker_count_5min}/5min`);
+              const flickerNote = flickerParts.length ? " " + flickerParts.join(", ") : "";
+              lines.push(`  occupancy at capture: ${occ.state} for ${occ.age_s}s${flickerNote}`);
+            }
+            // M4: ONE debug-mode-only line surfacing dedupe + provenance metadata.
+            // Keeps normal output uncluttered; appears only when /debug is on.
+            if (typeof debugMode !== "undefined" && debugMode) {
+              const evid = latestPending.evidence_id || "<absent>";
+              const dkey = latestPending.dedupe_key || "<absent>";
+              const dwin = latestPending.dedupe_window_s != null ? latestPending.dedupe_window_s + "s" : "?";
+              const sup = latestPending.capture_suppressed_count != null ? latestPending.capture_suppressed_count : "?";
+              const relOv = latestPending.related_override_context_id || "<none>";
+              lines.push(`  [debug] evid=${evid} dedupe_key=${dkey} window=${dwin} suppressed_before_emit=${sup} related_override=${relOv}`);
+            }
+          } else {
+            lines.push("no pending preferences captured for this zone yet");
+          }
+          const decisions = (decisionsRes && decisionsRes.entries) || [];
+          if (decisions.length > 0) {
+            lines.push(`last classifier transitions (newest first, up to 5):`);
+            const recent = decisions.slice(-5).reverse();
+            for (const d of recent) {
+              const ts = d.ts || "?";
+              const from = d.from_state || "?";
+              const to = d.to_state || "?";
+              const bri = d.predicted && d.predicted.brightness_pct;
+              lines.push(`  • ${ts} ${from} → ${to}${bri != null ? ` @ ${bri}%` : ""}`);
+            }
+          } else {
+            lines.push("no shadow-log transitions in the last 24h");
+          }
+          addEvent({
+            kind: "system",
+            text: lines.join("\n"),
+            tone: "info",
+            meta: { whyLight: { zone, classifier, overrides, decisions, latestPending } },
+          });
+        })();
+        return true;
+      }
+      case "route-log":
+      case "routes": {
+        // Bulk-dump recent routing decisions from /config/external_routing.log
+        // as RAW JSONL system events — select-all + copy + paste back to me
+        // for offline analysis. Companion to /debug on (live one-liners).
+        //   /route-log        → last 20 entries
+        //   /route-log <N>    → last N (clamped 1..200 server-side)
+        const n = Math.max(1, Math.min(parseInt(arg, 10) || 20, 200));
+        if (!endpoint || !token) {
+          addEvent({ kind: "system", text: "route-log · need /connect <url> <token> first", tone: "warn" });
+          return true;
+        }
+        (async () => {
+          try {
+            const base = endpoint.replace(/\/+$/, "");
+            const url = `${base}/api/extended_openai_conversation/routing_log?tail=${n}`;
+            const r = await tauriFetch(url, {
+              headers: { Authorization: `Bearer ${token}` },
+              cache: "no-store",
+            });
+            if (!r.ok) {
+              addEvent({ kind: "system", text: `route-log · http ${r.status}`, tone: "error" });
+              return;
+            }
+            const data = await r.json();
+            const entries = Array.isArray(data?.entries) ? data.entries : [];
+            if (entries.length === 0) {
+              addEvent({ kind: "system", text: "route-log · no routing entries yet", tone: "info" });
+              return;
+            }
+            addEvent({ kind: "system", text: `route-log · ${entries.length} entries (raw JSONL — select-all + copy):`, tone: "info" });
+            for (const e of entries) {
+              // Raw single-line JSON, intentionally NOT pretty-printed
+              // so the pasted text is parseable JSONL (one entry per line).
+              addEvent({ kind: "system", text: JSON.stringify(e) });
+            }
+          } catch (err) {
+            addEvent({ kind: "system", text: `route-log · fetch failed: ${err?.message || err}`, tone: "error" });
+          }
+        })();
+        return true;
+      }
       default:
         addEvent({ kind: "system", text: `unknown command: /${cmd}`, tone: "warn" });
         return true;
     }
-  }, [addEvent, connectTo, endpoint, metricsBase, playScript, stopStreaming, token, s2sBase, s2sToken, s2sVoice, kokoroVoice, debugMode]);
+    // NOTE: `dispatchExternal` is intentionally NOT in this deps array.
+    // It's declared with `const` further down (after handleCommand) — a
+    // direct reference here would hit the TDZ at render-eval time. The
+    // function body resolves dispatchExternal via closure lookup AT
+    // CALL time, by which point it's defined. Its identity is stable
+    // (its own deps are [addEvent], itself stable), so omitting it
+    // doesn't cause a memoization correctness issue.
+  }, [addEvent, connectTo, endpoint, metricsBase, playScript, stopStreaming, token, s2sBase, s2sToken, s2sVoice, kokoroVoice, debugMode, connection, sendToHA, events]);
+
+  /* ── External Reasoning dispatch (see home-external.jsx) ─────────────
+   *
+   * Single entry point for any external-routed message. Responsibilities:
+   *   1. Cancel any in-flight external stream via the shared AbortController.
+   *   2. Echo the user's text as a "user" event (same as the local path).
+   *   3. Inject a "thinking" placeholder while waiting for first chunk.
+   *   4. Append an empty external event and stream chunks into it by id.
+   *   5. On done/error, finalize the streaming flag and surface state.
+   *
+   * Private home context is NEVER added here — the function passes only
+   * `text` to window.askExternal. The "no leakage by construction"
+   * invariant lives in this signature. */
+  const dispatchExternal = useCallback((text) => {
+    if (!text || !text.trim()) return;
+    // 1. Cancel any prior stream.
+    if (currentExternalCtrlRef.current) {
+      try { currentExternalCtrlRef.current.abort(); } catch {}
+      currentExternalCtrlRef.current = null;
+    }
+    // 2. User echo.
+    addEvent({ kind: "user", text });
+    // 3. Thinking placeholder.
+    const thinkingId = `e-thinking-${Date.now()}`;
+    setEvents((prev) => [
+      ...prev,
+      { id: thinkingId, time: fmtTime(), kind: "thinking", text: "asking external model…" },
+    ]);
+    // 4. External event (created empty; chunks fill it).
+    const externalId = `e-external-${Date.now()}`;
+    currentExternalEventIdRef.current = externalId;
+    setEvents((prev) => [
+      ...prev,
+      { id: externalId, time: fmtTime(), kind: "external", text: "", streaming: true },
+    ]);
+    // Helpers to mutate the in-flight event by id (avoids accidentally
+    // mutating events appended by other paths during the stream).
+    const appendDelta = (delta) => {
+      setEvents((prev) => prev.map((e) =>
+        e.id === externalId ? { ...e, text: applyAsrCorrection((e.text || "") + delta) } : e,
+      ));
+    };
+    const finalize = (extra) => {
+      const fixed = extra && typeof extra.text === "string"
+        ? { ...extra, text: applyAsrCorrection(extra.text) }
+        : extra;
+      setEvents((prev) => prev
+        .filter((e) => e.id !== thinkingId)
+        .map((e) => e.id === externalId ? { ...e, ...(fixed || {}), streaming: false } : e),
+      );
+    };
+    const replaceWithError = (msg, tone) => {
+      setEvents((prev) => prev
+        .filter((e) => e.id !== thinkingId && e.id !== externalId)
+        .concat([{ id: nextId(), time: fmtTime(), kind: "system", text: msg, tone: tone || "warn" }]),
+      );
+    };
+    // 5. Dispatch.
+    const ctrl = new AbortController();
+    currentExternalCtrlRef.current = ctrl;
+    if (!window.askExternal) {
+      replaceWithError("external module not loaded — rebuild required", "error");
+      return;
+    }
+    window.askExternal(
+      text,
+      {
+        onChunk: ({ delta }) => appendDelta(delta || ""),
+        onDone: (_res) => {
+          finalize({});
+          if (currentExternalCtrlRef.current === ctrl) currentExternalCtrlRef.current = null;
+        },
+        onError: (err) => {
+          const code = (err && err.code) || (err && err.message) || "unknown";
+          const friendly =
+            code === "not_configured" ? "external reasoning is not configured — use /external set-key" :
+            code === "auth_failed"    ? "external provider auth failed — rotate key with /external set-key" :
+            code === "rate_limited"   ? "external provider rate-limited — try again shortly" :
+            code === "unreachable"    ? "external provider unreachable — check connection or use /local" :
+            code === "aborted"        ? null /* user cancelled — silent */ :
+            code === "transient"      ? "external provider transient error" :
+                                         `external request failed (${code})`;
+          if (friendly === null) {
+            // Aborted: keep partial text but mark non-streaming with a hint.
+            setEvents((prev) => prev
+              .filter((e) => e.id !== thinkingId)
+              .map((e) => e.id === externalId ? { ...e, streaming: false, text: (e.text || "") + " (cancelled)" } : e),
+            );
+          } else {
+            replaceWithError(friendly, "error");
+          }
+          if (currentExternalCtrlRef.current === ctrl) currentExternalCtrlRef.current = null;
+        },
+      },
+      ctrl.signal,
+    ).catch(() => { /* onError above already handled */ });
+  }, [addEvent]);
 
   /* ── Free-form user input ─────────────────────────────────────────── */
   const sendInput = useCallback(() => {
@@ -2542,8 +5600,26 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       return;
     }
     setInput("");
-    sendToHA(text);
-  }, [input, handleCommand, sendToHA]);
+    // External Reasoning router: classify the text + dispatch externally
+    // ONLY if (a) classifier returned "external" AND (b) the user has
+    // enabled auto-routing AND (c) provider is configured. Otherwise
+    // the local home agent handles it via sendToHA (unchanged path).
+    let route = "local";
+    try {
+      const intent = window.classifyIntent ? window.classifyIntent(text) : "local";
+      const enabled = (() => {
+        try { return localStorage.getItem("hg-external-enabled") === "on"; }
+        catch { return false; }
+      })();
+      const configured = !!(window.openaiProvider && window.openaiProvider.isConfigured());
+      if (intent === "external" && enabled && configured) route = "external";
+    } catch {}
+    if (route === "external") {
+      dispatchExternal(text);
+    } else {
+      sendToHA(text);
+    }
+  }, [input, handleCommand, sendToHA, dispatchExternal]);
 
   /* ── Global keyboard shortcuts ─────────────────────────────────────── */
   useEffect(() => {
@@ -2640,7 +5716,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       if (!haEvent || !haEvent.type) return;
       console.log("[ha voice]", haEvent.type, haEvent.data);
       if (haEvent.type === "stt-end") {
-        const transcript = haEvent.data?.stt_output?.text || "";
+        const transcript = applyAsrCorrection(haEvent.data?.stt_output?.text || "");
         if (transcript) {
           setEvents((prev) => prev.map((e) =>
             e.id === voiceId ? { ...e, text: transcript } : e
@@ -2771,12 +5847,18 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     }
     setS2sMode(true);
     setVoice({ state: "listening" });
-    const voiceId = nextId();
+    const placeholderId = nextId();
     setEvents((prev) => [...prev, {
-      id: voiceId, kind: "voice", time: fmtTime(), text: "listening… (s2s)",
+      id: placeholderId, kind: "voice", time: fmtTime(), text: "listening… (s2s)",
     }]);
     const t0 = performance.now();
     let lastUserText = "";
+    // One s2s session can produce MANY utterances. The placeholder above
+    // gets claimed by the FIRST user transcript; every subsequent utterance
+    // appends a fresh voice bubble. Without this, the same id was reused
+    // for every transcript and each new utterance overwrote the last —
+    // so the chat appeared to "replace what I said with my next question".
+    let placeholderClaimed = false;
     const run = await window.startS2SRun({
       s2sBase: base,
       s2sToken: s2sToken || undefined,
@@ -2799,16 +5881,38 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         else if (state === "error") setVoice({ state: "error", message: message || "voice error" });
         else if (state === "idle" || state === "inactive") setVoice({ state: "inactive" });
       },
-      onTranscript: (role, text, partial) => {
-        if (!text) return;
+      onTranscript: (role, rawText, partial) => {
+        if (!rawText) return;
+        // Apply Tauri-side ASR correction at the s2s bridge transcript
+        // entry point so the same canonical text reaches the dedup
+        // helpers regardless of which source fires first (s2s bridge
+        // vs HA WS conversation.finished). Without this, the bridge's
+        // raw Parakeet output ("Marcella") and HA's corrected output
+        // ("Marcelo") render as two different bubbles for one utterance.
+        const text = applyAsrCorrection(rawText);
         if (role === "user") {
           // User-side partials still ignored: the Parakeet transcript
           // arrives all at once at end-of-utterance, no streaming.
           if (partial) return;
           lastUserText = text;
-          setEvents((prev) => prev.map((e) =>
-            e.id === voiceId ? { ...e, text } : e
-          ));
+          if (!placeholderClaimed) {
+            // First utterance — replace the "listening…" placeholder.
+            placeholderClaimed = true;
+            setEvents((prev) => prev.map((e) =>
+              e.id === placeholderId ? { ...e, text } : e
+            ));
+          } else {
+            // Subsequent utterance — append a fresh voice bubble so the
+            // previous transcript stays in the chat. Dedup against
+            // recent user bubbles to avoid double-render when both the
+            // bridge SSE and conversation.finished WS fire.
+            setEvents((prev) => {
+              if (findRecentUserIdx(prev, text, 8) !== -1) return prev;
+              return [...prev, {
+                id: nextId(), kind: "voice", time: fmtTime(), text,
+              }];
+            });
+          }
           return;
         }
         // Assistant transcript: stream partials so the UI updates as
@@ -2839,6 +5943,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             if (last && last.kind === "home" && last.streaming) {
               return [...prev.slice(0, -1), { ...last, text, streaming: false }];
             }
+            // Dedup against recent assistant bubbles: HA WS event and
+            // s2s bridge can both fire for the same turn.
+            if (findRecentAssistantIdx(prev, text, "home", 20) !== -1) return prev;
             return [...prev, {
               id: nextId(),
               kind: "home",
@@ -2936,6 +6043,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * user side (keeps instant feedback for typed turns) and add the rest. */
   const seenSsEvents = useRef(new Set());
   useEffect(() => {
+    if (sim.active) return undefined; // Sim Mode: no SSE subscription
     if (connection !== "online") return undefined;
     const base = metricsBase || metricsBaseFromEndpoint(endpoint);
     // Phase 1.5 one-time warning: if the saved metricsBase points at the
@@ -2981,6 +6089,10 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             confidence_band: i.confidence_band, ts: i.ts,
             first_seen_today: !!i.first_seen_today,
           });
+          // Frigate face-rec → the proactive coordinator. This is the
+          // PRIMARY stage-2 arrival-confirmation transport (it self-gates:
+          // only acted on while an arrival is pending).
+          proactiveCoord.observeIdentity(i);
         }
         return;
       }
@@ -3022,12 +6134,26 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         }
         return;
       }
+      // Proactive presence / room-entry events — the bridge SSE FALLBACK
+      // transport (the primary is the homeai_proactive HA-WS subscription
+      // the coordinator opens itself). Dispatch + early-return like the
+      // identity/presence/media branches above — these carry no chat text.
+      if (entry.source === "s2s:proactive" && entry.proactive) {
+        proactiveCoord.ingestEvent(
+          window.normalizeProactiveEvent(entry.proactive, "sse")
+        );
+        return;
+      }
       const dedup = entry.id || `${entry.ts}-${(entry.user || "").slice(0, 30)}`;
       if (seenSsEvents.current.has(dedup)) return;
       seenSsEvents.current.add(dedup);
       if (seenSsEvents.current.size > 200) {
         seenSsEvents.current = new Set(Array.from(seenSsEvents.current).slice(-100));
       }
+      // If a proactive follow-up window is open, this user turn is (probably)
+      // the reply — hand the text to the coordinator. It self-gates on phase,
+      // so this is a no-op unless a follow-up is actually being awaited.
+      if (entry.user) proactiveCoord.observeUserTurn(entry.user, { ts: entry.ts });
 
       // Flatten tool_calls into action cards. Extended OpenAI Conv's
       // `execute_services` wraps a list of HA service calls — split into one
@@ -3046,9 +6172,19 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             const dom = call.domain || "";
             const svc = call.service || "";
             const key = `${dom}.${svc}`;
-            if (!groups.has(key)) groups.set(key, { service: key, targets: new Set(), attrsList: [] });
+            if (!groups.has(key)) groups.set(key, {
+              service: key, targets: new Set(), attrsList: [],
+              // Per-kind target sets — kept SEPARATE so the control-card
+              // ActionContext knows entity vs area vs device (the flat
+              // `targets` set discards that). See plan Adversarial #2.
+              entityTargets: new Set(), areaTargets: new Set(), deviceTargets: new Set(),
+            });
             const g = groups.get(key);
             const sd = call.service_data || {};
+            const addAll = (val, set) => (Array.isArray(val) ? val : [val]).filter(Boolean).forEach((t) => set.add(t));
+            addAll(sd.entity_id, g.entityTargets);
+            addAll(sd.area_id, g.areaTargets);
+            addAll(sd.device_id, g.deviceTargets);
             const tgt = sd.entity_id || sd.area_id || sd.device_id;
             (Array.isArray(tgt) ? tgt : [tgt]).filter(Boolean).forEach((t) => g.targets.add(t));
             const attrs = { ...sd };
@@ -3064,13 +6200,25 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
               ? { ...g.attrsList[0] }
               : g.attrsList.reduce((acc, a) => { Object.entries(a).forEach(([k,v]) => acc[k] = v); return acc; }, {});
             if (targets.length > 1) mergedAttrs.targets = targets;
+            const id = nextId();
+            // Inline control-card context — derived from the resolved targets
+            // already in hand. window.buildActionContext lives in home-control.jsx.
+            const actionCtx = window.buildActionContext ? window.buildActionContext({
+              id, service: g.service,
+              entityTargets: Array.from(g.entityTargets),
+              areaTargets: Array.from(g.areaTargets),
+              deviceTargets: Array.from(g.deviceTargets),
+              attrs: mergedAttrs, status: "success",
+            }) : null;
             actionCards.push({
-              id: nextId(), kind: "action", time: fmtTime(),
+              id, kind: "action", time: fmtTime(),
               title: `${g.service}${targetStr ? " · " + targetStr : ""}`,
               service: g.service,
               target: targetStr,
               attrs: mergedAttrs,
               status: "success",
+              controllable: actionCtx ? actionCtx.controllable : false,
+              actionCtx,
             });
           }
         } else {
@@ -3083,22 +6231,20 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       }
 
       setEvents((prev) => {
-        // Look back ~8 events for a matching user/voice line.
-        let matchIdx = -1;
-        const lookbackStart = Math.max(0, prev.length - 8);
-        for (let i = prev.length - 1; i >= lookbackStart; i--) {
-          const e = prev[i];
-          if ((e.kind === "user" || e.kind === "voice") &&
-              (e.text || "").trim() === (entry.user || "").trim()) {
-            matchIdx = i; break;
-          }
-        }
+        // Apply Tauri-side ASR correction up front: dedup compares
+        // bubble text, so for symmetry against addEvent (which corrects
+        // on insert) we must correct here too — otherwise the same
+        // logical text shows as two bubbles when one source emits
+        // "Marcello" and the other "Marcelo".
+        const correctedUser = applyAsrCorrection(entry.user);
+        // Dedup user/voice bubble against the last ~8 events.
+        const userIdx = findRecentUserIdx(prev, correctedUser, 8);
         const newUserEvents = [];
-        if (matchIdx === -1 && entry.user) {
+        if (userIdx === -1 && correctedUser) {
           // No local user event → originated outside the Home app (Voice PE).
           newUserEvents.push({
             id: nextId(), kind: "voice", time: fmtTime(),
-            text: entry.user,
+            text: correctedUser,
           });
         }
         // Tag bridge-emitted diag events ([parakeet] heard, [direct]
@@ -3113,6 +6259,41 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         const diagChannel = isDiag
           ? entry.source.slice("s2s:diag:".length)
           : undefined;
+        // Parakeet-heard transcripts are the user's spoken question.
+        // The bridge sends them as DIAG events (small italic), but the
+        // user expects them rendered as a proper user bubble — same
+        // treatment as typed input. Detect "[parakeet] heard: ..." and
+        // emit an extra kind:"voice" event with the inner text. The diag
+        // line stays as-is for /debug on, but the voice bubble gives the
+        // user normal chat treatment for their own question.
+        //
+        // Bridge format is `f"[parakeet] heard: {text!r}"` so quotes vary
+        // (Python repr picks single/double to avoid escapes). Use a loose
+        // match + manual quote-stripping rather than a strict regex.
+        if (isDiag && diagChannel === "parakeet" && entry.assistant) {
+          const PREFIX = "[parakeet] heard:";
+          let heardText = "";
+          const raw = String(entry.assistant).trim();
+          if (raw.startsWith(PREFIX)) {
+            heardText = raw.slice(PREFIX.length).trim();
+            // Strip a single matched pair of surrounding ASCII or smart quotes.
+            const opens = ["'", '"', "‘", "“"];
+            const closes = ["'", '"', "’", "”"];
+            const oi = opens.indexOf(heardText[0]);
+            if (oi >= 0 && heardText[heardText.length - 1] === closes[oi]) {
+              heardText = heardText.slice(1, -1);
+            }
+          }
+          if (heardText) {
+            const correctedHeard = applyAsrCorrection(heardText);
+            if (findRecentUserIdx(prev, correctedHeard, 8) === -1) {
+              newUserEvents.push({
+                id: nextId(), kind: "voice", time: fmtTime(),
+                text: correctedHeard,
+              });
+            }
+          }
+        }
         // The "perception" channel is the assistant's silent observation
         // of what the camera sees (vision-sidecar / Frigate detection).
         // Surface it inline as its own kind so the UI can render it
@@ -3124,33 +6305,28 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         const cleanedText = isPerception
           ? entry.assistant.replace(/^\[perception\]\s*/, "")
           : entry.assistant;
+        // Same Tauri-side ASR correction: catches the SSE-feed path
+        // (raw vLLM completions that bypassed HA's output backstop).
+        const correctedAssistant = applyAsrCorrection(cleanedText);
         const assistantEvent = entry.assistant
           ? [{
               id: nextId(),
               kind: isPerception ? "perception" : (isDiag ? "diag" : "home"),
               channel: diagChannel,
               time: fmtTime(),
-              text: cleanedText,
+              text: correctedAssistant,
             }]
           : [];
         // Defensive dedupe (May 2026): assistant text occasionally arrives
         // from two sources within a few seconds (chat-tee SSE + WS
-        // transcript). The bridge-side fix removes the WS transcript for
-        // assistant role, but this guard catches any legacy/stale source
-        // we haven't tracked down. Scan back 20 events (action cards +
-        // perceptions can interleave between duplicates, so a tighter
-        // window misses).
+        // transcript / conversation.finished). Both sources are now
+        // wired up — the bridge-side fix removes the WS transcript for
+        // assistant role, and the new conv.finished subscriber uses the
+        // same lookup helper. Scan back 20 events (action cards +
+        // perceptions can interleave between duplicates).
         return [...prev, ...newUserEvents, ...actionCards, ...assistantEvent.filter((ev) => {
           if (ev.kind !== "home" && ev.kind !== "perception") return true;
-          const target = (ev.text || "").trim();
-          if (!target) return true;
-          const lookback = prev.slice(-20);
-          for (const e of lookback) {
-            if (e.kind === ev.kind && (e.text || "").trim() === target) {
-              return false;
-            }
-          }
-          return true;
+          return findRecentAssistantIdx(prev, ev.text, ev.kind, 20) === -1;
         })];
       });
     };
@@ -3172,16 +6348,31 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * — assumes bridge is at the same host as the sidecar on port 8094.
    */
   useEffect(() => {
+    if (sim.active) return undefined; // Sim Mode: no real health polls
     const base = metricsBase || metricsBaseFromEndpoint(endpoint);
     if (!base) return undefined;
     let cancelled = false;
 
     // Derive bridge URL: same host as sidecar, port 8094.
+    // Derive supervisor URL: same host as sidecar, port 8093 (AI Stack Control).
     let bridgeUrl = "";
+    let supervisorUrl = "";
     try {
       const u = new URL(base);
-      bridgeUrl = `${u.protocol}//${u.hostname}:8094`;
+      bridgeUrl     = `${u.protocol}//${u.hostname}:8094`;
+      supervisorUrl = `${u.protocol}//${u.hostname}:8093`;
     } catch {}
+
+    // STACK_TOKEN comes from one of (in priority order):
+    //   1. window.__STACK_TOKEN  (set by the Tauri stack_token() command at
+    //      app startup — Phase 4 hardening). MVP doesn't wire this yet.
+    //   2. localStorage "hg-stack-token-DEV" (developer-set via DevTools).
+    // Tokens are never hardcoded in this file. If neither is set, we skip
+    // the supervisor poll and AiStackCard renders a "not configured" stub.
+    const stackToken =
+      (typeof window !== "undefined" && window.__STACK_TOKEN) ||
+      (typeof localStorage !== "undefined" && localStorage.getItem("hg-stack-token-DEV")) ||
+      "";
 
     const poll = async () => {
       // Phase 1 bugfix: native fetch() is CORS-blocked from the Tauri
@@ -3212,12 +6403,52 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           console.warn("[health] bridge poll failed:", e?.message || e);
         }
       }
+      // Stack supervisor (port 8093) — runs OUTSIDE docker-compose as a
+      // systemd unit, so it stays reachable when the AI stack itself is
+      // down. /healthz needs no auth (used here as a liveness probe);
+      // /api/stack/status needs the bearer token. If no token is
+      // configured we still probe /healthz so the UI can show "supervisor
+      // is up, but token not configured" instead of "supervisor offline".
+      if (supervisorUrl) {
+        try {
+          const rh = await tauriFetch(`${supervisorUrl}/healthz`, { cache: "no-store" });
+          if (!cancelled) setAiStackOnline(rh.ok);
+          if (rh.ok && stackToken) {
+            try {
+              const rs = await tauriFetch(`${supervisorUrl}/api/stack/status`, {
+                cache: "no-store",
+                headers: { Authorization: `Bearer ${stackToken}` },
+              });
+              if (rs.ok) {
+                try { if (!cancelled) setAiStackState(await rs.json()); } catch {}
+              } else if (rs.status === 401) {
+                // bad token — leave aiStackState null so the card renders
+                // the "not configured" path; also clear to avoid showing
+                // stale state from a previous good token.
+                if (!cancelled) setAiStackState(null);
+                console.warn("[health] supervisor 401 — STACK_TOKEN bad?");
+              } else if (rs.status === 429) {
+                // rate-limited — back off; next 15s tick will retry.
+                console.warn("[health] supervisor 429 — auth rate-limited");
+              }
+            } catch (e) {
+              console.warn("[health] supervisor status fetch failed:", e?.message || e);
+            }
+          }
+        } catch (e) {
+          if (!cancelled) {
+            setAiStackOnline(false);
+            setAiStackState(null);
+          }
+          // Quiet — supervisor down is a normal degraded state, not a bug.
+        }
+      }
     };
 
     poll();  // immediate
     const id = setInterval(poll, 15000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [metricsBase, endpoint]);
+  }, [metricsBase, endpoint, sim.active]);
 
   /* ── Voice PE activity indicator (header + voice state) ──────────────
    *
@@ -3226,7 +6457,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * though we no longer render placeholder turns here. The actual turn
    * content arrives via the SSE feed above. */
   useEffect(() => {
+    if (sim.active) return undefined;
     if (connection !== "online" || !haClientRef.current) return undefined;
+    const VOICE_PE = (window.PROACTIVE_CONFIG && window.PROACTIVE_CONFIG.VOICE_PE_SATELLITE) || null;
     const unsub = haClientRef.current.subscribeEvents("state_changed", (ev) => {
       const d = ev?.data;
       if (!d?.entity_id?.startsWith?.("assist_satellite.")) return;
@@ -3234,7 +6467,292 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       if (newState !== d.old_state?.state) {
         console.log("[voicepe state]", d.old_state?.state, "→", newState);
       }
+      // Drive the proactive coordinator's speak → follow-up → idle lifecycle
+      // off the wall puck's REAL state transitions (it self-gates on phase,
+      // so normal Voice PE use is ignored).
+      if (VOICE_PE && d.entity_id === VOICE_PE && newState) {
+        proactiveCoord.observeSatelliteState(newState);
+      }
     });
+    return unsub;
+  }, [connection]);
+
+  /* ── Routing decisions → live [route] diag stream ────────────────────
+   *
+   * Subscribes to the extended_openai_conversation.routing_decision HA
+   * event (fired inside log_decision() AFTER redaction — so the payload
+   * here matches the JSONL line on disk exactly). Renders each as one
+   * compact diag line in the chat feed; the existing `/debug on` filter
+   * shows/hides them.
+   *
+   * `EXTERNAL_ROUTING_LOG_MODE=off` on the HAOS side disables both the
+   * file write AND the event fire, so this hook silently goes idle when
+   * logging is turned off — no client-side toggle needed.
+   *
+   * Field shape mirrors external_routing.log_decision():
+   *   ts, conv_id, src, text, text_len, intent, matched, key_present,
+   *   dispatched, ext_status, ext_latency_ms, ext_reply_chars,
+   *   ext_reply_snippet, local_reply_chars, local_reply_snippet
+   */
+  useEffect(() => {
+    if (sim.active) return undefined;
+    if (connection !== "online" || !haClientRef.current) return undefined;
+    const unsub = haClientRef.current.subscribeEvents(
+      "extended_openai_conversation.routing_decision",
+      (ev) => {
+        const d = ev?.data || {};
+        const src = (d.src || "?").padEnd(5);
+        // Show dispatched route, falling back to intent if the
+        // completion-side log line isn't in yet (decision-only writes
+        // omit `dispatched`).
+        const route = d.dispatched || d.intent || "?";
+        const matched = d.matched || "-";
+        const text = (d.text || "").replace(/\s+/g, " ").slice(0, 80);
+        let tail;
+        if (d.dispatched === "external") {
+          const lat = d.ext_latency_ms != null ? `${(d.ext_latency_ms / 1000).toFixed(1)}s` : "?";
+          const chars = d.ext_reply_chars != null ? `${d.ext_reply_chars}ch` : "?";
+          tail = `${d.ext_status || "?"} ${lat} ${chars}`;
+        } else if (d.dispatched === "external→fallback") {
+          tail = `fail:${d.ext_status || "?"}, local: "${(d.local_reply_snippet || "").slice(0, 60)}"`;
+        } else if (d.dispatched === "local") {
+          const snippet = (d.local_reply_snippet || "").slice(0, 80);
+          tail = snippet ? `local: "${snippet}"` : "local";
+        } else {
+          tail = "(pending)";
+        }
+        const text_part = text ? `"${text}"` : "(no text)";
+        const line = `[route] ${src} • ${route} • matched=${matched} • ${text_part} → ${tail}`;
+        addEvent({ kind: "diag", channel: "routing", text: line });
+      },
+    );
+    return unsub;
+  }, [connection]);
+
+  /* ── Living Lights override + articulation events → chat feed ────────
+   *
+   * Subscribes to `living_lights_override_detected` AND
+   * `living_lights_articulation` HA bus events via the dedicated
+   * home-lighting-events.jsx module. Two separate subscriptions; no
+   * routing through home-proactive.jsx.
+   *
+   * Override events render as a kind:"system" line (non-verbose by
+   * default; verbose under /debug on). Articulation events render as
+   * kind:"assistant" lines, capped at 200 chars by the module.
+   *
+   * R5/converged-plan First-PR observation layer.
+   */
+  useEffect(() => {
+    if (sim.active) return undefined;
+    if (connection !== "online" || !haClientRef.current) return undefined;
+    const lightingApi = (typeof window !== "undefined") && window.HomeLightingEvents;
+    if (!lightingApi || typeof lightingApi.subscribe !== "function") {
+      return undefined;
+    }
+    const unsub = lightingApi.subscribe(
+      haClientRef.current,
+      addEvent,
+      { debugMode: () => debugMode },
+    );
+    return () => { try { unsub?.(); } catch (_) { /* ignore */ } };
+  }, [connection, debugMode]);
+
+  /* ── M1 perception caption events → perception chip + thumbnail ──────
+   *
+   * Subscribes to extended_openai_conversation.perception_caption which
+   * fires from world_state.py's auto-trigger scheduler (and from manual
+   * refresh_perception) whenever a fresh vision-sidecar caption lands.
+   * Payload: {room, caption, source, snapshot_url?, ts, latency_ms,
+   * camera_entity_id}.
+   *
+   * Emits a kind:"perception" event so PerceptionContent (home-events.jsx)
+   * renders the compact chip with an optional thumbnail. We dedupe
+   * against any chip the bridge SSE may have already produced for the
+   * same room+caption text within the last 8 events — both sources
+   * happen to be wired simultaneously today.
+   */
+  useEffect(() => {
+    if (sim.active) return undefined;
+    if (connection !== "online" || !haClientRef.current) return undefined;
+    const unsub = haClientRef.current.subscribeEvents(
+      "extended_openai_conversation.perception_caption",
+      (ev) => {
+        const d = ev?.data || {};
+        const room = d.room || "";
+        const caption = applyAsrCorrection(d.caption || "");
+        if (!caption) return;
+        const text = room ? `${room}: ${caption}` : caption;
+        // 8-event lookback dedupe — matches the SSE handler's window.
+        // PerceptionContent renders the chip; snapshotUrl is consumed
+        // by the same component for thumbnail rendering when present.
+        setEvents((prev) => {
+          for (let i = prev.length - 1; i >= Math.max(0, prev.length - 8); i--) {
+            if (prev[i].kind === "perception" && prev[i].text === text) {
+              return prev;
+            }
+          }
+          return [...prev, {
+            id: nextId(),
+            kind: "perception",
+            channel: "perception",
+            time: fmtTime(),
+            text,
+            snapshotUrl: d.snapshot_url || null,
+            source: d.source || null,
+            latencyMs: d.latency_ms != null ? d.latency_ms : null,
+          }];
+        });
+      },
+    );
+    return unsub;
+  }, [connection]);
+
+  /* ── Jarvis mute (Addendum 9) — header pill subscription ───────────
+   *
+   * binary_sensor.jarvis_muted_effective_2 is a composite OR of:
+   *   • input_boolean.jarvis_muted_explicit  ("Hey Jarvis, stop" or /mute)
+   *   • input_datetime.jarvis_mute_until > now  (timer)
+   *   • input_boolean.homeai_movie  (movie mode)
+   *   • media_player.lg_tv active > 5min (auto-detect) — opt-out via
+   *     input_boolean.jarvis_auto_mute_tv
+   *
+   * Initial fetch via REST + live updates via state_changed subscription.
+   * Mirrors the routing_decision pattern from Addendum 1.
+   */
+  useEffect(() => {
+    if (sim.active) return undefined;
+    if (connection !== "online" || !haClientRef.current) return undefined;
+    const client = haClientRef.current;
+    let cancelled = false;
+    // Initial state fetch.
+    (async () => {
+      try {
+        const s = await client.callApi("GET", "states/binary_sensor.jarvis_muted_effective_2");
+        if (cancelled) return;
+        setMuteState({
+          muted: s?.state === "on",
+          reason: s?.attributes?.reason || "",
+          until: s?.attributes?.mute_until_iso || "",
+        });
+      } catch (e) {
+        // Helper not deployed yet — silently leave default (false).
+      }
+    })();
+    // Live updates.
+    const unsub = client.subscribeEvents("state_changed", (ev) => {
+      if (ev?.data?.entity_id !== "binary_sensor.jarvis_muted_effective_2") return;
+      const ns = ev.data.new_state;
+      setMuteState({
+        muted: ns?.state === "on",
+        reason: ns?.attributes?.reason || "",
+        until: ns?.attributes?.mute_until_iso || "",
+      });
+    });
+    return () => { cancelled = true; if (unsub) try { unsub(); } catch {} };
+  }, [connection]);
+
+  // Click handler for header pill — fires /unmute equivalent.
+  const handleUnmuteClick = useCallback(() => {
+    const client = haClientRef.current;
+    if (!client) return;
+    client.callService("input_boolean", "turn_off", { entity_id: "input_boolean.jarvis_muted_explicit" })
+      .catch(() => {});
+    client.callService("input_datetime", "set_datetime", {
+      entity_id: "input_datetime.jarvis_mute_until", datetime: "2000-01-01T00:00:00",
+    }).catch(() => {});
+    addEvent({ kind: "system", text: "unmuted via header pill click", tone: "ok" });
+  }, [addEvent]);
+
+  /* ── conversation.finished → fallback transcript renderer ────────────
+   *
+   * The metrics-sidecar SSE feed at /conversations/stream broadcasts
+   * vLLM completions only — so for HA-routed turns that DON'T touch
+   * vLLM (every external-route turn, since ask_external() calls OpenAI
+   * directly), neither the user-input bubble nor the assistant response
+   * has a rendering source. The [route] diag line lands but the actual
+   * transcript is invisible.
+   *
+   * HA's extended_openai_conversation integration fires
+   * `extended_openai_conversation.conversation.finished` on the success
+   * path of BOTH routes with a SLIM payload:
+   *   {conversation_id, agent_id, user_input_text, assistant_text, route}
+   *
+   * (The earlier shape included the full chat_log via messages[]; that
+   * routinely exceeded 32 KB on tool-using turns, exceeding HA's
+   * recorder + WS delivery limits and breaking transcript rendering.
+   * Slim payload fixes both — see plan Addendum 4 fix-up.)
+   *
+   * Dedup against bubbles the SSE feed may have already rendered for
+   * local turns. findRecentUserIdx / findRecentAssistantIdx are shared
+   * with the SSE handler — whichever source fires second sees the
+   * first source's bubbles and skips.
+   */
+  useEffect(() => {
+    if (sim.active) return undefined;
+    if (connection !== "online" || !haClientRef.current) return undefined;
+    const unsub = haClientRef.current.subscribeEvents(
+      "extended_openai_conversation.conversation.finished",
+      (ev) => {
+        const d = ev?.data || {};
+        // Slim shape (current): direct fields. Backward compat: also
+        // read the old messages[] shape if it shows up (a stale HA
+        // instance still has the old code).
+        let userText = d.user_input_text || "";
+        let assistantText = d.assistant_text || "";
+        if (!userText && Array.isArray(d.messages)) {
+          userText = d.user_input?.text
+            || d.messages.find((m) => m?.role === "user" && typeof m?.content === "string")?.content
+            || "";
+        }
+        if (!assistantText && Array.isArray(d.messages)) {
+          const lastAssistant = [...d.messages].reverse().find(
+            (m) => m?.role === "assistant"
+                && typeof m?.content === "string"
+                && m.content.trim()
+          );
+          assistantText = lastAssistant?.content || "";
+        }
+
+        // Apply Tauri-side ASR correction so this event source matches
+        // the SSE handler's corrected text — dedup needs both sides to
+        // be in the same canonical form. HA-side backstop already runs
+        // on assistant_text before the event fires, but this is the
+        // single line of defense for the user_input_text path AND a
+        // safety net if HA somehow misses.
+        const userTextC = applyAsrCorrection(userText);
+        const assistantTextC = applyAsrCorrection(assistantText);
+        // M5: capture conversation_id so the explainability drawer can
+        // filter the routing log by it later. WS event carries it
+        // directly per slim payload (see comment above).
+        const convId = d.conversation_id || null;
+        setEvents((prev) => {
+          const userIdx = findRecentUserIdx(prev, userTextC, 8);
+          const asstIdx = findRecentAssistantIdx(prev, assistantTextC, "home", 20);
+          const newUser = (userTextC && userIdx === -1)
+            ? [{ id: nextId(), kind: "voice", time: fmtTime(), text: userTextC, convId }]
+            : [];
+          const newAsst = (assistantTextC && asstIdx === -1)
+            ? [{ id: nextId(), kind: "home", time: fmtTime(), text: assistantTextC, convId }]
+            : [];
+          // If we found existing bubbles (dedup hit) and they're
+          // missing a convId, retroactively stamp them so the drawer
+          // works on either fire-order race.
+          let augmented = prev;
+          if (convId) {
+            if (userIdx !== -1 && !prev[userIdx]?.convId) {
+              augmented = augmented.map((e, i) => i === userIdx ? { ...e, convId } : e);
+            }
+            if (asstIdx !== -1 && !augmented[asstIdx]?.convId) {
+              augmented = augmented.map((e, i) => i === asstIdx ? { ...e, convId } : e);
+            }
+          }
+          if (newUser.length === 0 && newAsst.length === 0) {
+            return augmented === prev ? prev : augmented;
+          }
+          return [...augmented, ...newUser, ...newAsst];
+        });
+      },
+    );
     return unsub;
   }, [connection]);
 
@@ -3246,6 +6764,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * on app open, not just after the next transition. The bridge has its
    * own occupancy tracking for the LLM side; this hook is UI-only. */
   useEffect(() => {
+    if (sim.active) return undefined;
     if (connection !== "online" || !haClientRef.current) return undefined;
     const client = haClientRef.current;
     const cameraIds = (window.HG_CAMERAS || []).map((c) => c.id);
@@ -3304,6 +6823,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    *   - device_tracker.unifi_* (count home/not_home)
    */
   useEffect(() => {
+    if (sim.active) return undefined;
     if (connection !== "online" || !haClientRef.current) return undefined;
     const client = haClientRef.current;
     let cancelled = false;
@@ -3434,13 +6954,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * "host telemetry not enabled" empty-state row with a tooltip.
    */
   useEffect(() => {
+    if (sim.active) return undefined;
     if (connection !== "online" || !haClientRef.current) return undefined;
     const client = haClientRef.current;
     let cancelled = false;
 
     const cpuRe  = /^sensor\.(system_monitor_)?(processor_use|cpu_use)/;
-    const ramRe  = /^sensor\.(system_monitor_)?(memory_use_percent|ram_use)/;
-    const diskRe = /^sensor\.(system_monitor_)?disk_use_percent/;
+    // v6: widened to accept `memory_use` (raw MB) when `_percent` isn't
+    // exposed by the user's System Monitor config. Same for disk.
+    const ramRe  = /^sensor\.(system_monitor_)?(memory_use_percent|memory_use|ram_use)/;
+    const diskRe = /^sensor\.(system_monitor_)?(disk_use_percent|disk_use)$/;
     const bootRe = /^sensor\.last_boot$/;
 
     const fmtUptime = (isoTs) => {
@@ -3457,21 +6980,34 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       } catch { return null; }
     };
 
+    // v6: when the entity is a raw `_use` (MB), we capture it as ramMb
+    // (and convert from MB→GB at render). When it's a `_use_percent`,
+    // capture as ram (percent). The card prefers ram when present,
+    // falls back to displaying ramGb otherwise.
+    const isPercentRam = (eid) => /_percent$/.test(eid);
+    const isPercentDisk = (eid) => /_percent$/.test(eid);
+
     const rebuild = async () => {
       try {
         const states = await client.call({ type: "get_states" });
         if (cancelled) return;
-        let cpu = null, ram = null, disk = null, uptime = null;
+        let cpu = null, ram = null, ramGb = null, disk = null, diskGb = null, uptime = null;
         for (const s of states) {
           const eid = s.entity_id;
           const val = parseFloat(s.state);
           if (cpuRe.test(eid) && isFinite(val)) cpu = val;
-          else if (ramRe.test(eid) && isFinite(val)) ram = val;
-          else if (diskRe.test(eid) && isFinite(val)) disk = val;
+          else if (ramRe.test(eid) && isFinite(val)) {
+            if (isPercentRam(eid)) ram = val;
+            else ramGb = val / 1024; // MB → GB
+          }
+          else if (diskRe.test(eid) && isFinite(val)) {
+            if (isPercentDisk(eid)) disk = val;
+            else diskGb = val / 1024;
+          }
           else if (bootRe.test(eid)) uptime = fmtUptime(s.state);
         }
-        const any = (cpu != null) || (ram != null) || (disk != null) || uptime;
-        setHostMetrics(any ? { cpu, ram, disk, uptime } : null);
+        const any = (cpu != null) || (ram != null) || (ramGb != null) || (disk != null) || (diskGb != null) || uptime;
+        setHostMetrics(any ? { cpu, ram, ramGb, disk, diskGb, uptime } : null);
       } catch (e) {
         console.warn("[host] state load failed:", e?.message || e);
       }
@@ -3488,10 +7024,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       }
       const val = parseFloat(newState);
       setHostMetrics((prev) => {
-        const cur = prev || { cpu: null, ram: null, disk: null, uptime: null };
+        const cur = prev || { cpu: null, ram: null, ramGb: null, disk: null, diskGb: null, uptime: null };
         if (cpuRe.test(eid)) cur.cpu = isFinite(val) ? val : cur.cpu;
-        else if (ramRe.test(eid)) cur.ram = isFinite(val) ? val : cur.ram;
-        else if (diskRe.test(eid)) cur.disk = isFinite(val) ? val : cur.disk;
+        else if (ramRe.test(eid)) {
+          if (isPercentRam(eid)) cur.ram = isFinite(val) ? val : cur.ram;
+          else cur.ramGb = isFinite(val) ? val / 1024 : cur.ramGb;
+        }
+        else if (diskRe.test(eid)) {
+          if (isPercentDisk(eid)) cur.disk = isFinite(val) ? val : cur.disk;
+          else cur.diskGb = isFinite(val) ? val / 1024 : cur.diskGb;
+        }
         else if (bootRe.test(eid)) cur.uptime = fmtUptime(newState);
         return { ...cur };
       });
@@ -3500,8 +7042,95 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     return () => { cancelled = true; try { unsub(); } catch {} };
   }, [connection]);
 
+  /* ── Tray v4: Frigate stats from /config/packages/frigate_stats.yaml ─
+   *
+   * Subscribes to the sensor.frigate_* family:
+   *   sensor.frigate_stats          → uptime (s)
+   *   sensor.frigate_total_cpu      → aggregate CPU %
+   *   sensor.frigate_coral_inference → Coral TPU inference (ms)
+   *   sensor.frigate_<camera>_fps   → per-camera process FPS
+   *
+   * If the package isn't deployed, frigateMetrics stays null and the
+   * tray shows the "enable stats sensors" empty-state with deploy steps
+   * in the tooltip.
+   */
+  useEffect(() => {
+    if (sim.active) return undefined;
+    if (connection !== "online" || !haClientRef.current) return undefined;
+    const client = haClientRef.current;
+    let cancelled = false;
+
+    const statsRe = /^sensor\.frigate_stats$/;
+    const cpuRe = /^sensor\.frigate_total_cpu$/;
+    const coralRe = /^sensor\.frigate_coral_inference(_ms)?$/;
+    const fpsRe = /^sensor\.frigate_([a-z_]+)_fps$/;
+
+    const fmtUptime = (secs) => {
+      const s = parseFloat(secs);
+      if (!isFinite(s) || s <= 0) return null;
+      const d = Math.floor(s / 86400);
+      const h = Math.floor((s % 86400) / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      if (d > 0) return `${d}d ${h}h`;
+      if (h > 0) return `${h}h ${m}m`;
+      return `${m}m`;
+    };
+
+    const apply = (cur, eid, raw) => {
+      const val = parseFloat(raw);
+      const next = { ...cur };
+      if (statsRe.test(eid)) next.uptime = fmtUptime(raw);
+      else if (cpuRe.test(eid)) next.totalCpu = isFinite(val) ? val : next.totalCpu;
+      else if (coralRe.test(eid)) next.coralMs = isFinite(val) ? val : next.coralMs;
+      else {
+        const m = fpsRe.exec(eid);
+        if (m) {
+          if (!next.fps) next.fps = {};
+          next.fps = { ...next.fps, [m[1]]: isFinite(val) ? val : next.fps?.[m[1]] };
+        }
+      }
+      return next;
+    };
+
+    const rebuild = async () => {
+      try {
+        const states = await client.call({ type: "get_states" });
+        if (cancelled) return;
+        let acc = { totalCpu: null, coralMs: null, uptime: null, fps: {} };
+        let anyFrigate = false;
+        for (const s of states) {
+          const eid = s.entity_id;
+          if (!eid.startsWith("sensor.frigate_")) continue;
+          if (s.state === "unknown" || s.state === "unavailable") continue;
+          anyFrigate = true;
+          acc = apply(acc, eid, s.state);
+        }
+        const hasData = anyFrigate && (
+          acc.totalCpu != null || acc.coralMs != null || acc.uptime || Object.keys(acc.fps || {}).length > 0
+        );
+        setFrigateMetrics(hasData ? acc : null);
+      } catch (e) {
+        console.warn("[frigate] state load failed:", e?.message || e);
+      }
+    };
+    rebuild();
+
+    const unsub = client.subscribeEvents("state_changed", (ev) => {
+      const d = ev?.data;
+      const eid = d?.entity_id;
+      if (!eid || !eid.startsWith("sensor.frigate_")) return;
+      const newState = d.new_state?.state;
+      if (newState === "unknown" || newState === "unavailable") return;
+      if (!(statsRe.test(eid) || cpuRe.test(eid) || coralRe.test(eid) || fpsRe.test(eid))) return;
+      setFrigateMetrics((prev) => apply(prev || { totalCpu: null, coralMs: null, uptime: null, fps: {} }, eid, newState));
+    });
+
+    return () => { cancelled = true; try { unsub(); } catch {} };
+  }, [connection]);
+
   /* ── Tray v3: bridge /rooms endpoint poll (occupancy + visual age) ── */
   useEffect(() => {
+    if (sim.active) return undefined;
     const base = metricsBase || metricsBaseFromEndpoint(endpoint);
     if (!base) return undefined;
     let bridgeUrl = "";
@@ -3527,6 +7156,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
 
   /* ── Phase 2: vision-sidecar health (phash hit rate, cameras cached) ── */
   useEffect(() => {
+    if (sim.active) return undefined;
     const base = metricsBase || metricsBaseFromEndpoint(endpoint);
     if (!base) return undefined;
     let cancelled = false;
@@ -3567,7 +7197,154 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         connection={connection}
         sidecarOnline={sidecarOnline}
         bridgeOnline={bridgeOnline}
+        sim={sim}
+        muteState={muteState}
+        onUnmuteClick={handleUnmuteClick}
+        onOpenPeople={() => setPeopleOpen(true)}
+        onOpenIntelligence={() => setIntelligenceOpen(true)}
+        aiStackState={aiStackState}
+        metrics={metrics}
       />
+      {/* Addendum 14 / Slice 3 — people overlay. Opens from the header
+          button; closes via Escape or its own close button. NOT inside
+          the metrics drawer (per AR-13). */}
+      {window.HomePeopleOverlay && (
+        <window.HomePeopleOverlay
+          open={peopleOpen}
+          onClose={() => setPeopleOpen(false)}
+          endpoint={endpoint}
+          token={token}
+          sim={sim}
+        />
+      )}
+      {/* M5 (Addendum 27) — explainability drawer. Mounted alongside
+          people overlay so it can co-exist (people open + drawer open
+          for a tool-firing turn = both visible, drawer on the right). */}
+      {window.HomeIntelligenceOverlay && (
+        <window.HomeIntelligenceOverlay
+          open={intelligenceOpen}
+          onClose={() => setIntelligenceOpen(false)}
+          metricsBase={metricsBase}
+          endpoint={endpoint}
+        />
+      )}
+      {window.HomeExplainDrawer && (
+        <window.HomeExplainDrawer
+          open={explainConvId != null}
+          convId={explainConvId}
+          onClose={() => setExplainConvId(null)}
+          endpoint={endpoint}
+          token={token}
+          sim={sim}
+        />
+      )}
+      {window.HomeLightsDrawer && (
+        <window.HomeLightsDrawer
+          open={lightsOpen}
+          onClose={() => setLightsOpen(false)}
+          client={haClientRef.current}
+          sim={sim}
+          askClaude={(topic) => {
+            // Pre-fill the chat input with a structured prompt for the
+            // frozen-knob "Ask Claude" handoff. Topic identifies which
+            // frozen layer the user clicked.
+            const prompts = {
+              anticipator:
+                "I want to adjust the kinematic anticipator at addons/predictive-lighting/anticipate.py. Current constants:\n" +
+                "  SPEED_THRESHOLD = 0.025\n" +
+                "  HYSTERESIS_BUFFER_N = 5\n" +
+                "  HYSTERESIS_MAJORITY = 3\n" +
+                "  MIN_HOLD_S = 2.5\n" +
+                "  CHAIN_DEPTH = 2\n" +
+                "  ANTICIPATED_DECAY_S = 12\n\n" +
+                "Please walk me through what each does and propose a change.",
+              pilot_transitions:
+                "I want to adjust the pilot transition timings in tools/build-living-lights-actuators.py. Current:\n" +
+                "  RAMP_FAST_S = 2.0\n" +
+                "  RAMP_SLOW_S = 10.0\n" +
+                "  VACANT_TRANSITION_S = 6.0\n" +
+                "  AWAY_TRANSITION_S = 2.0\n" +
+                "  PASS_TRANSITION_S = 0.3\n" +
+                "  ANTICIPATED_TRANSITION_S = 1.5\n\n" +
+                "Please explain each and propose a change.",
+              adaptive_lighting:
+                "I want to adjust Adaptive Lighting in ha-config/packages/adaptive_lighting.yaml.\n" +
+                "Current: min_color_temp=2000, max_color_temp=4000, interval=90s.\n" +
+                "Please explain the trade-offs and propose a change. (HA restart required.)",
+            };
+            const text = prompts[topic] || `I want to adjust the ${topic} layer of Living Lights. Please walk me through it.`;
+            if (typeof setInput === "function") setInput(text);
+            else if (typeof setComposerText === "function") setComposerText(text);
+          }}
+        />
+      )}
+      {/* F-32 (Addendum 27) — world-state drawer. Same right-anchored
+          slot as the explain drawer; users typically open one OR the
+          other (both technically valid but the explain drawer wins
+          z-order if both happen to be open). */}
+      {window.HomeWorldStateDrawer && (
+        <window.HomeWorldStateDrawer
+          open={worldStateDrawerOpen}
+          onClose={() => setWorldStateDrawerOpen(false)}
+          endpoint={endpoint}
+          token={token}
+          sim={sim}
+          initialRoom={worldStateInitialRoom}
+        />
+      )}
+      {/* Addendum 38 Phase 1 — /spatial light-footprint drawer. Same
+          right-anchored slot as the world-state + explain drawers. */}
+      {window.HomeSpatialDrawer && (
+        <window.HomeSpatialDrawer
+          open={spatialDrawerOpen}
+          onClose={() => setSpatialDrawerOpen(false)}
+          endpoint={endpoint}
+          token={token}
+          sim={sim}
+        />
+      )}
+      {/* Phase 0.5 — /look "Thinking with Visual Primitives" drawer. Same
+          right-anchored slot; keyed on the command nonce so a repeated
+          /look remounts fresh and re-runs. */}
+      {window.HomeLookDrawer && (
+        <window.HomeLookDrawer
+          key={lookInitial.nonce}
+          open={lookDrawerOpen}
+          onClose={() => setLookDrawerOpen(false)}
+          metricsBase={metricsBase || metricsBaseFromEndpoint(endpoint)}
+          sim={sim}
+          initialCamera={lookInitial.camera}
+          initialQuestion={lookInitial.question}
+          onTranscript={(e) => {
+            // Bug-fix: /look Q&A is retained in the chat transcript.
+            if (!e) return;
+            if (e.type === "question") {
+              addEvent({ kind: "user", text: e.text });
+            } else if (e.type === "answer") {
+              addEvent({
+                kind: "perception",
+                text: `${e.camera} — ${e.answer || "(no answer)"}`,
+                snapshotUrl: e.annotatedUrl || null,
+              });
+            } else if (e.type === "error") {
+              addEvent({ kind: "system", tone: "error",
+                         text: `look · ${e.text}` });
+            }
+          }}
+        />
+      )}
+      {/* Boot sequence — one atomic conditional. While bootPhase !== "ready"
+          the whole middle of the app (WelcomeBanner → VoiceBanner) is replaced
+          by BootSequence; HomeHeader + InputRow stay mounted so the frame
+          doesn't jump. The → "ready" reveal uses hg-fade so it reads as the
+          boot logo settling into place. */}
+      {bootPhase !== "ready" ? (
+        <BootSequence
+          mode={bootPhase === "settling" ? "settling" : bootMode}
+          onComplete={handleBootComplete}
+        />
+      ) : (
+      <div className="hg-fade" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
       {/* F.3 revised: latency lives inside MetricsStrip now (expanded view)
           alongside GPU/VRAM. No separate floating panel. */}
       <WelcomeBanner
@@ -3583,6 +7360,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           identity={identity}
           media={media}
           wideMode={wideMode}
+          simCameraStates={sim.active ? (simCameraStates || window.SimDefaultCameraMap) : null}
+          simActive={sim.active}
         />
       )}
       <div
@@ -3592,11 +7371,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           flex: 1, overflowY: "auto",
           background: "var(--hg-bg-0)",
         }}>
-        {(connection !== "online" && connection !== "reconnecting" && events.length === 0)
-         || connection === "picking-model"
-         || connection === "auth_invalid"
-         || (connection === "offline" && events.length === 0)
-         || (connection === "disconnected" && events.length === 0) ? (
+        {isFirstRunVisible(connection, events) ? (
           <FirstRun
             connection={connection}
             endpoint={endpoint}
@@ -3618,7 +7393,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             ).map((g, i) => (
               <TurnBlock key={i} group={g} density={density}
                 onConfirmAction={confirmAction} onCancelAction={cancelAction}
-                onUndoAction={undoAction} />
+                onUndoAction={undoAction}
+                onControlAction={onControlAction} controlLifecycles={controlLifecycles}
+                onWhy={(cid) => setExplainConvId(cid)} />
             ))}
           </div>
         )}
@@ -3632,14 +7409,35 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         networkMetrics={networkMetrics}
         visionHealth={visionHealth}
         hostMetrics={hostMetrics}
+        frigateMetrics={frigateMetrics}
+        connection={connection}
+        sidecarOnline={sidecarOnline}
+        bridgeOnline={bridgeOnline}
+        aiStackOnline={aiStackOnline}
+        aiStackState={aiStackState}
         roomContext={roomContext}
         voice={voice}
         identity={identity}
         media={media}
         cameraLabels={cameraLabels}
         recentPerceptions={events.filter((e) => e.kind === "perception").slice(-5)}
+        traceSummary={traceSummary}
+        lastTrace={lastTrace}
+        setTraceSummary={setTraceSummary}
+        setLastTrace={setLastTrace}
+        onTracesFetched={handleTracesFetched}
+        onRoutingLogFetched={handleRoutingLogFetched}
+        proactive={proactive}
+        simActive={sim.active}
+        labTurnsRef={labTurnsRef}
+        labSamplesRef={labSamplesRef}
+        labTick={labTick}
+        token={token}
+        endpoint={endpoint}
       />
       <VoiceBanner voice={voice} onRetry={toggleMic} />
+      </div>
+      )}
       <InputRow
         value={input}
         onChange={setInput}
@@ -3648,7 +7446,20 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         onMicToggle={toggleMic}
         isStreaming={streamingIds.current.size > 0 || events.some(e => e.streaming)}
         onStop={stopStreaming}
+        focusToken={focusToken}
       />
+      {/* External Reasoning provider key-entry modal. position:fixed
+       * inside the component itself, so this can render anywhere. See
+       * home-external.jsx for the modal definition. */}
+      {externalKeyModalOpen && window.ExternalKeyModal && (
+        <window.ExternalKeyModal
+          onClose={(result) => {
+            setExternalKeyModalOpen(false);
+            if (result?.saved)   addEvent({ kind: "system", text: "external provider key saved · auto-routing enabled", tone: "ok" });
+            if (result?.cleared) addEvent({ kind: "system", text: "external provider key cleared", tone: "info" });
+          }}
+        />
+      )}
     </div>
   );
 }

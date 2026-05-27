@@ -158,6 +158,11 @@ input_boolean:
     icon: mdi:lightbulb-off
 
 input_text:
+  living_lights_bias_zone_scope:
+    name: "Living Lights — bias zone scope"
+    max: 32
+    initial: all
+    icon: mdi:target
   living_lights_override_text_dining_left:
     name: "dining_left presence override payload"
     max: 255
@@ -297,6 +302,157 @@ input_number:
     initial: 95
     unit_of_measurement: '%'
     icon: mdi:briefcase-eye
+    mode: slider
+  living_lights_warmth_bias_k:
+    name: "Living Lights — warmth bias (K, additive)"
+    min: -500
+    max: 500
+    step: 50
+    initial: 0
+    unit_of_measurement: 'K'
+    icon: mdi:thermometer-low
+    mode: slider
+  living_lights_brightness_bias_pp:
+    name: "Living Lights — brightness bias (pp, additive)"
+    min: -30
+    max: 30
+    step: 5
+    initial: 0
+    unit_of_measurement: 'pp'
+    icon: mdi:brightness-percent
+    mode: slider
+  living_lights_vacant_day_pct:
+    name: "Living Lights — vacant baseline (day) (%)"
+    min: 0
+    max: 100
+    step: 5
+    initial: 50
+    unit_of_measurement: '%'
+    icon: mdi:weather-sunny
+    mode: slider
+  living_lights_vacant_night_pct:
+    name: "Living Lights — vacant baseline (night) (%)"
+    min: 0
+    max: 100
+    step: 5
+    initial: 20
+    unit_of_measurement: '%'
+    icon: mdi:weather-night
+    mode: slider
+  living_lights_ramp_target_pct:
+    name: "Living Lights — present ramp target (%)"
+    min: 0
+    max: 100
+    step: 5
+    initial: 80
+    unit_of_measurement: '%'
+    icon: mdi:trending-up
+    mode: slider
+  living_lights_ramp_initial_pct:
+    name: "Living Lights — present ramp initial (%)"
+    min: 0
+    max: 100
+    step: 5
+    initial: 50
+    unit_of_measurement: '%'
+    icon: mdi:speedometer-slow
+    mode: slider
+  living_lights_asleep_cap_pct:
+    name: "Living Lights — asleep occupied ceiling (%)"
+    min: 0
+    max: 100
+    step: 5
+    initial: 30
+    unit_of_measurement: '%'
+    icon: mdi:sleep
+    mode: slider
+  living_lights_movie_dim_pct:
+    name: "Living Lights — TV-on dim target (%)"
+    min: 0
+    max: 100
+    step: 5
+    initial: 8
+    unit_of_measurement: '%'
+    icon: mdi:television
+    mode: slider
+  living_lights_gaming_dim_pct:
+    name: "Living Lights — gaming LR dim target (%)"
+    min: 0
+    max: 100
+    step: 1
+    initial: 3
+    unit_of_measurement: '%'
+    icon: mdi:gamepad-variant
+    mode: slider
+  living_lights_ct_overnight_k:
+    name: "Living Lights — color temp (overnight)"
+    min: 1800
+    max: 4500
+    step: 50
+    initial: 2000
+    unit_of_measurement: 'K'
+    icon: mdi:weather-night
+    mode: slider
+  living_lights_ct_morning_k:
+    name: "Living Lights — color temp (morning)"
+    min: 1800
+    max: 4500
+    step: 50
+    initial: 2200
+    unit_of_measurement: 'K'
+    icon: mdi:weather-sunset-up
+    mode: slider
+  living_lights_ct_midday_k:
+    name: "Living Lights — color temp (midday)"
+    min: 1800
+    max: 4500
+    step: 50
+    initial: 2700
+    unit_of_measurement: 'K'
+    icon: mdi:weather-sunny
+    mode: slider
+  living_lights_ct_afternoon_k:
+    name: "Living Lights — color temp (afternoon)"
+    min: 1800
+    max: 4500
+    step: 50
+    initial: 3000
+    unit_of_measurement: 'K'
+    icon: mdi:weather-partly-cloudy
+    mode: slider
+  living_lights_ct_evening_k:
+    name: "Living Lights — color temp (evening)"
+    min: 1800
+    max: 4500
+    step: 50
+    initial: 2500
+    unit_of_measurement: 'K'
+    icon: mdi:weather-sunset-down
+    mode: slider
+  living_lights_ct_late_evening_k:
+    name: "Living Lights — color temp (late evening)"
+    min: 1800
+    max: 4500
+    step: 50
+    initial: 2200
+    unit_of_measurement: 'K'
+    icon: mdi:weather-night-partly-cloudy
+    mode: slider
+  living_lights_tod_factor_morning_mult:
+    name: "Living Lights — morning brightness multiplier"
+    min: 0.5
+    max: 1.5
+    step: 0.05
+    initial: 1.0
+    icon: mdi:weather-sunset-up
+    mode: slider
+  living_lights_tod_factor_midday_mult:
+    name: "Living Lights — midday brightness multiplier"
+    min: 0.5
+    max: 1.5
+    step: 0.05
+    initial: 1.0
+    icon: mdi:weather-sunny
     mode: slider
 
 input_datetime:
@@ -458,6 +614,16 @@ template:
         event: start
       - platform: time_pattern
         minutes: "/1"
+      - platform: state
+        entity_id:
+          - input_number.living_lights_ct_overnight_k
+          - input_number.living_lights_ct_morning_k
+          - input_number.living_lights_ct_midday_k
+          - input_number.living_lights_ct_afternoon_k
+          - input_number.living_lights_ct_evening_k
+          - input_number.living_lights_ct_late_evening_k
+          - input_number.living_lights_tod_factor_morning_mult
+          - input_number.living_lights_tod_factor_midday_mult
     sensor:
       - name: "Living Lights Profile"
         unique_id: living_lights_profile
@@ -475,9 +641,14 @@ template:
         attributes:
           tod_factor: >
             {% set h = now().hour + now().minute/60 %}
+            {# Morning + midday multipliers (default 1.0 = use the
+               built-in curve). >1.0 brightens that bucket;
+               <1.0 dims. Other buckets keep formulas literal in v1. #}
+            {% set morning_mult = states('input_number.living_lights_tod_factor_morning_mult') | float(1.0) %}
+            {% set midday_mult = states('input_number.living_lights_tod_factor_midday_mult') | float(1.0) %}
             {% if h < 6 %}0.10
-            {% elif h < 9 %}{{ (0.30 + (h-6)/3 * 0.50) | round(2) }}
-            {% elif h < 13 %}{{ (0.80 + (h-9)/4 * 0.15) | round(2) }}
+            {% elif h < 9 %}{{ ((0.30 + (h-6)/3 * 0.50) * morning_mult) | round(2) }}
+            {% elif h < 13 %}{{ ((0.80 + (h-9)/4 * 0.15) * midday_mult) | round(2) }}
             {% elif h < 17 %}0.95
             {% elif h < 20 %}{{ (0.85 - (h-17)/3 * 0.35) | round(2) }}
             {% elif h < 22.5 %}{{ (0.50 - (h-20)/2.5 * 0.30) | round(2) }}
@@ -485,13 +656,22 @@ template:
             {% endif %}
           tod_color_warm: >
             {% set h = now().hour + now().minute/60 %}
-            {% if h < 6 %}2000
-            {% elif h < 9 %}2200
-            {% elif h < 13 %}2700
-            {% elif h < 17 %}3000
-            {% elif h < 20 %}2500
-            {% elif h < 22.5 %}2200
-            {% else %}2000
+            {# Per-bucket CT anchors — promoted from baked literals so the
+               user can drag a single bucket warmer/cooler without affecting
+               the others. Fallbacks match the original baked defaults. #}
+            {% set ct_overnight = states('input_number.living_lights_ct_overnight_k') | int(2000) %}
+            {% set ct_morning = states('input_number.living_lights_ct_morning_k') | int(2200) %}
+            {% set ct_midday = states('input_number.living_lights_ct_midday_k') | int(2700) %}
+            {% set ct_afternoon = states('input_number.living_lights_ct_afternoon_k') | int(3000) %}
+            {% set ct_evening = states('input_number.living_lights_ct_evening_k') | int(2500) %}
+            {% set ct_late_evening = states('input_number.living_lights_ct_late_evening_k') | int(2200) %}
+            {% if h < 6 %}{{ ct_overnight }}
+            {% elif h < 9 %}{{ ct_morning }}
+            {% elif h < 13 %}{{ ct_midday }}
+            {% elif h < 17 %}{{ ct_afternoon }}
+            {% elif h < 20 %}{{ ct_evening }}
+            {% elif h < 22.5 %}{{ ct_late_evening }}
+            {% else %}{{ ct_overnight }}
             {% endif %}
           tod_color_cool: >
             {% set h = now().hour + now().minute/60 %}
@@ -1063,6 +1243,20 @@ template:
           - binary_sensor.anticipated_kitchen
           - binary_sensor.anticipated_living_room
           - binary_sensor.anticipated_workshop
+          - input_number.living_lights_working_hours_floor_pct
+          - input_number.living_lights_working_hours_present_pct
+          - input_number.living_lights_warmth_bias_k
+          - input_number.living_lights_brightness_bias_pp
+          - input_number.living_lights_vacant_day_pct
+          - input_number.living_lights_vacant_night_pct
+          - input_number.living_lights_ramp_target_pct
+          - input_number.living_lights_ramp_initial_pct
+          - input_number.living_lights_asleep_cap_pct
+          - input_number.living_lights_movie_dim_pct
+          - input_number.living_lights_gaming_dim_pct
+          - input_text.living_lights_bias_zone_scope
+          - binary_sensor.living_lights_working_hours_active
+          - sensor.living_lights_profile
       - platform: time_pattern
         seconds: "/5"
     sensor:
@@ -1121,6 +1315,23 @@ template:
             {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
             {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
             {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
+            {# Promoted-constant reads — every literal that used to be baked
+               into the template is now an input_number with a fallback to
+               the original generator constant. Drag a slider, value
+               propagates within ~5 s. If the helper goes missing the
+               classifier degrades gracefully to the original value. #}
+            {% set vacant_day_pct = states('input_number.living_lights_vacant_day_pct') | int(50) %}
+            {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
+            {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
+            {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
+            {# House-wide bias knobs (additive, applied AFTER the cascade,
+               clamped at cap and at 0). Scope gated by input_text:
+               'all' = apply globally, slug name = only that zone. #}
+            {% set brightness_bias_pp = states('input_number.living_lights_brightness_bias_pp') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'dining_left'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.dining_room_dining_left_activity') %}
             {% set stable_obj = states.binary_sensor.dining_room_dining_left_person_occupancy_stable %}
@@ -1135,9 +1346,9 @@ template:
                (you got up briefly); otherwise no ToD cap on occupied — an
                occupied room is always usable. Overnight gentleness is the
                asleep state's job, not a blanket clock cap. #}
-            {% set cap = 30 if asleep else 100 %}
+            {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -1146,20 +1357,36 @@ template:
             {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
             {% set anti_obj = states.binary_sensor.anticipated_dining_room %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
+            {# Capture the cascade output to a string via {% set %}...{% endset %},
+               then add the additive brightness bias (scope-gated), then
+               clamp at [0, cap]. The | trim | int chain parses the captured
+               render back to an integer so arithmetic works. #}
+            {% set raw_bri %}
             {% if manual or away or has_override %}0
             {% elif night %}8
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% endset %}
+            {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
+            {{ [[0, final_bri] | max, cap] | min }}
           ramp_initial_pct: >
+            {% set ramp_initial_pct = states('input_number.living_lights_ramp_initial_pct') | int(50) %}
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
-            {{ [(50 * tf) | round(0) | int, cap] | min }}
+            {{ [(ramp_initial_pct * tf) | round(0) | int, cap] | min }}
           predicted_color_temp_kelvin: >
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set warm = state_attr('sensor.living_lights_profile', 'tod_color_warm') | int(2700) %}
-            {% if night %}2000{% else %}{{ warm }}{% endif %}
+            {# Warmth bias — additive on the cascade output, scope-gated,
+               clamped to AL min (2000) / max (4000) to keep Hue happy. #}
+            {% set warmth_bias_k = states('input_number.living_lights_warmth_bias_k') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'dining_left'] %}
+            {% set raw_ct = 2000 if night else warm %}
+            {% set final_ct = raw_ct + (warmth_bias_k if bias_active else 0) %}
+            {{ [[2000, final_ct] | max, 4000] | min }}
           dwell_ms: >
             {% set stable = states.binary_sensor.dining_room_dining_left_person_occupancy_stable %}
             {% if stable is not none and stable.state == 'on' %}
@@ -1224,6 +1451,23 @@ template:
             {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
             {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
             {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
+            {# Promoted-constant reads — every literal that used to be baked
+               into the template is now an input_number with a fallback to
+               the original generator constant. Drag a slider, value
+               propagates within ~5 s. If the helper goes missing the
+               classifier degrades gracefully to the original value. #}
+            {% set vacant_day_pct = states('input_number.living_lights_vacant_day_pct') | int(50) %}
+            {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
+            {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
+            {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
+            {# House-wide bias knobs (additive, applied AFTER the cascade,
+               clamped at cap and at 0). Scope gated by input_text:
+               'all' = apply globally, slug name = only that zone. #}
+            {% set brightness_bias_pp = states('input_number.living_lights_brightness_bias_pp') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'dining_right'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.dining_room_dining_right_activity') %}
             {% set stable_obj = states.binary_sensor.dining_room_dining_right_person_occupancy_stable %}
@@ -1238,9 +1482,9 @@ template:
                (you got up briefly); otherwise no ToD cap on occupied — an
                occupied room is always usable. Overnight gentleness is the
                asleep state's job, not a blanket clock cap. #}
-            {% set cap = 30 if asleep else 100 %}
+            {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -1249,20 +1493,36 @@ template:
             {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
             {% set anti_obj = states.binary_sensor.anticipated_dining_room %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
+            {# Capture the cascade output to a string via {% set %}...{% endset %},
+               then add the additive brightness bias (scope-gated), then
+               clamp at [0, cap]. The | trim | int chain parses the captured
+               render back to an integer so arithmetic works. #}
+            {% set raw_bri %}
             {% if manual or away or has_override %}0
             {% elif night %}8
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% endset %}
+            {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
+            {{ [[0, final_bri] | max, cap] | min }}
           ramp_initial_pct: >
+            {% set ramp_initial_pct = states('input_number.living_lights_ramp_initial_pct') | int(50) %}
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
-            {{ [(50 * tf) | round(0) | int, cap] | min }}
+            {{ [(ramp_initial_pct * tf) | round(0) | int, cap] | min }}
           predicted_color_temp_kelvin: >
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set warm = state_attr('sensor.living_lights_profile', 'tod_color_warm') | int(2700) %}
-            {% if night %}2000{% else %}{{ warm }}{% endif %}
+            {# Warmth bias — additive on the cascade output, scope-gated,
+               clamped to AL min (2000) / max (4000) to keep Hue happy. #}
+            {% set warmth_bias_k = states('input_number.living_lights_warmth_bias_k') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'dining_right'] %}
+            {% set raw_ct = 2000 if night else warm %}
+            {% set final_ct = raw_ct + (warmth_bias_k if bias_active else 0) %}
+            {{ [[2000, final_ct] | max, 4000] | min }}
           dwell_ms: >
             {% set stable = states.binary_sensor.dining_room_dining_right_person_occupancy_stable %}
             {% if stable is not none and stable.state == 'on' %}
@@ -1327,6 +1587,23 @@ template:
             {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
             {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
             {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
+            {# Promoted-constant reads — every literal that used to be baked
+               into the template is now an input_number with a fallback to
+               the original generator constant. Drag a slider, value
+               propagates within ~5 s. If the helper goes missing the
+               classifier degrades gracefully to the original value. #}
+            {% set vacant_day_pct = states('input_number.living_lights_vacant_day_pct') | int(50) %}
+            {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
+            {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
+            {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
+            {# House-wide bias knobs (additive, applied AFTER the cascade,
+               clamped at cap and at 0). Scope gated by input_text:
+               'all' = apply globally, slug name = only that zone. #}
+            {% set brightness_bias_pp = states('input_number.living_lights_brightness_bias_pp') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'sink'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.kitchen_sink_activity') %}
             {% set stable_obj = states.binary_sensor.kitchen_sink_person_occupancy_stable %}
@@ -1341,9 +1618,9 @@ template:
                (you got up briefly); otherwise no ToD cap on occupied — an
                occupied room is always usable. Overnight gentleness is the
                asleep state's job, not a blanket clock cap. #}
-            {% set cap = 30 if asleep else 100 %}
+            {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -1352,20 +1629,36 @@ template:
             {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
             {% set anti_obj = states.binary_sensor.anticipated_kitchen %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
+            {# Capture the cascade output to a string via {% set %}...{% endset %},
+               then add the additive brightness bias (scope-gated), then
+               clamp at [0, cap]. The | trim | int chain parses the captured
+               render back to an integer so arithmetic works. #}
+            {% set raw_bri %}
             {% if manual or away or has_override %}0
             {% elif night %}8
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% endset %}
+            {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
+            {{ [[0, final_bri] | max, cap] | min }}
           ramp_initial_pct: >
+            {% set ramp_initial_pct = states('input_number.living_lights_ramp_initial_pct') | int(50) %}
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
-            {{ [(50 * tf) | round(0) | int, cap] | min }}
+            {{ [(ramp_initial_pct * tf) | round(0) | int, cap] | min }}
           predicted_color_temp_kelvin: >
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set warm = state_attr('sensor.living_lights_profile', 'tod_color_warm') | int(2700) %}
-            {% if night %}2000{% else %}{{ warm }}{% endif %}
+            {# Warmth bias — additive on the cascade output, scope-gated,
+               clamped to AL min (2000) / max (4000) to keep Hue happy. #}
+            {% set warmth_bias_k = states('input_number.living_lights_warmth_bias_k') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'sink'] %}
+            {% set raw_ct = 2000 if night else warm %}
+            {% set final_ct = raw_ct + (warmth_bias_k if bias_active else 0) %}
+            {{ [[2000, final_ct] | max, 4000] | min }}
           dwell_ms: >
             {% set stable = states.binary_sensor.kitchen_sink_person_occupancy_stable %}
             {% if stable is not none and stable.state == 'on' %}
@@ -1430,6 +1723,23 @@ template:
             {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
             {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
             {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
+            {# Promoted-constant reads — every literal that used to be baked
+               into the template is now an input_number with a fallback to
+               the original generator constant. Drag a slider, value
+               propagates within ~5 s. If the helper goes missing the
+               classifier degrades gracefully to the original value. #}
+            {% set vacant_day_pct = states('input_number.living_lights_vacant_day_pct') | int(50) %}
+            {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
+            {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
+            {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
+            {# House-wide bias knobs (additive, applied AFTER the cascade,
+               clamped at cap and at 0). Scope gated by input_text:
+               'all' = apply globally, slug name = only that zone. #}
+            {% set brightness_bias_pp = states('input_number.living_lights_brightness_bias_pp') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'island_left'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.kitchen_island_left_activity') %}
             {% set stable_obj = states.binary_sensor.kitchen_island_left_person_occupancy_stable %}
@@ -1444,9 +1754,9 @@ template:
                (you got up briefly); otherwise no ToD cap on occupied — an
                occupied room is always usable. Overnight gentleness is the
                asleep state's job, not a blanket clock cap. #}
-            {% set cap = 30 if asleep else 100 %}
+            {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -1455,20 +1765,36 @@ template:
             {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
             {% set anti_obj = states.binary_sensor.anticipated_kitchen %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
+            {# Capture the cascade output to a string via {% set %}...{% endset %},
+               then add the additive brightness bias (scope-gated), then
+               clamp at [0, cap]. The | trim | int chain parses the captured
+               render back to an integer so arithmetic works. #}
+            {% set raw_bri %}
             {% if manual or away or has_override %}0
             {% elif night %}8
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% endset %}
+            {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
+            {{ [[0, final_bri] | max, cap] | min }}
           ramp_initial_pct: >
+            {% set ramp_initial_pct = states('input_number.living_lights_ramp_initial_pct') | int(50) %}
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
-            {{ [(50 * tf) | round(0) | int, cap] | min }}
+            {{ [(ramp_initial_pct * tf) | round(0) | int, cap] | min }}
           predicted_color_temp_kelvin: >
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set warm = state_attr('sensor.living_lights_profile', 'tod_color_warm') | int(2700) %}
-            {% if night %}2000{% else %}{{ warm }}{% endif %}
+            {# Warmth bias — additive on the cascade output, scope-gated,
+               clamped to AL min (2000) / max (4000) to keep Hue happy. #}
+            {% set warmth_bias_k = states('input_number.living_lights_warmth_bias_k') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'island_left'] %}
+            {% set raw_ct = 2000 if night else warm %}
+            {% set final_ct = raw_ct + (warmth_bias_k if bias_active else 0) %}
+            {{ [[2000, final_ct] | max, 4000] | min }}
           dwell_ms: >
             {% set stable = states.binary_sensor.kitchen_island_left_person_occupancy_stable %}
             {% if stable is not none and stable.state == 'on' %}
@@ -1533,6 +1859,23 @@ template:
             {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
             {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
             {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
+            {# Promoted-constant reads — every literal that used to be baked
+               into the template is now an input_number with a fallback to
+               the original generator constant. Drag a slider, value
+               propagates within ~5 s. If the helper goes missing the
+               classifier degrades gracefully to the original value. #}
+            {% set vacant_day_pct = states('input_number.living_lights_vacant_day_pct') | int(50) %}
+            {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
+            {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
+            {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
+            {# House-wide bias knobs (additive, applied AFTER the cascade,
+               clamped at cap and at 0). Scope gated by input_text:
+               'all' = apply globally, slug name = only that zone. #}
+            {% set brightness_bias_pp = states('input_number.living_lights_brightness_bias_pp') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'island_right'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.kitchen_island_right_activity') %}
             {% set stable_obj = states.binary_sensor.kitchen_island_right_person_occupancy_stable %}
@@ -1547,9 +1890,9 @@ template:
                (you got up briefly); otherwise no ToD cap on occupied — an
                occupied room is always usable. Overnight gentleness is the
                asleep state's job, not a blanket clock cap. #}
-            {% set cap = 30 if asleep else 100 %}
+            {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -1558,20 +1901,36 @@ template:
             {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
             {% set anti_obj = states.binary_sensor.anticipated_kitchen %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
+            {# Capture the cascade output to a string via {% set %}...{% endset %},
+               then add the additive brightness bias (scope-gated), then
+               clamp at [0, cap]. The | trim | int chain parses the captured
+               render back to an integer so arithmetic works. #}
+            {% set raw_bri %}
             {% if manual or away or has_override %}0
             {% elif night %}8
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% endset %}
+            {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
+            {{ [[0, final_bri] | max, cap] | min }}
           ramp_initial_pct: >
+            {% set ramp_initial_pct = states('input_number.living_lights_ramp_initial_pct') | int(50) %}
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
-            {{ [(50 * tf) | round(0) | int, cap] | min }}
+            {{ [(ramp_initial_pct * tf) | round(0) | int, cap] | min }}
           predicted_color_temp_kelvin: >
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set warm = state_attr('sensor.living_lights_profile', 'tod_color_warm') | int(2700) %}
-            {% if night %}2000{% else %}{{ warm }}{% endif %}
+            {# Warmth bias — additive on the cascade output, scope-gated,
+               clamped to AL min (2000) / max (4000) to keep Hue happy. #}
+            {% set warmth_bias_k = states('input_number.living_lights_warmth_bias_k') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'island_right'] %}
+            {% set raw_ct = 2000 if night else warm %}
+            {% set final_ct = raw_ct + (warmth_bias_k if bias_active else 0) %}
+            {{ [[2000, final_ct] | max, 4000] | min }}
           dwell_ms: >
             {% set stable = states.binary_sensor.kitchen_island_right_person_occupancy_stable %}
             {% if stable is not none and stable.state == 'on' %}
@@ -1636,6 +1995,23 @@ template:
             {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
             {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
             {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
+            {# Promoted-constant reads — every literal that used to be baked
+               into the template is now an input_number with a fallback to
+               the original generator constant. Drag a slider, value
+               propagates within ~5 s. If the helper goes missing the
+               classifier degrades gracefully to the original value. #}
+            {% set vacant_day_pct = states('input_number.living_lights_vacant_day_pct') | int(50) %}
+            {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
+            {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
+            {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
+            {# House-wide bias knobs (additive, applied AFTER the cascade,
+               clamped at cap and at 0). Scope gated by input_text:
+               'all' = apply globally, slug name = only that zone. #}
+            {% set brightness_bias_pp = states('input_number.living_lights_brightness_bias_pp') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'sofa'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.living_room_sofa_activity') %}
             {% set stable_obj = states.binary_sensor.living_room_sofa_person_occupancy_stable %}
@@ -1650,9 +2026,9 @@ template:
                (you got up briefly); otherwise no ToD cap on occupied — an
                occupied room is always usable. Overnight gentleness is the
                asleep state's job, not a blanket clock cap. #}
-            {% set cap = 30 if asleep else 100 %}
+            {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (3 if gaming_active else working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (gaming_dim_pct if gaming_active else working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -1661,21 +2037,37 @@ template:
             {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
             {% set anti_obj = states.binary_sensor.anticipated_living_room %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
+            {# Capture the cascade output to a string via {% set %}...{% endset %},
+               then add the additive brightness bias (scope-gated), then
+               clamp at [0, cap]. The | trim | int chain parses the captured
+               render back to an integer so arithmetic works. #}
+            {% set raw_bri %}
             {% if manual or away or has_override %}0
             {% elif night %}8
             {% elif tv_playing %}{{ floor }}
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if gaming_active %}3{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif tv_playing %}8{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if gaming_active %}{{ gaming_dim_pct }}{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif tv_playing %}{{ movie_dim_pct }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% endset %}
+            {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
+            {{ [[0, final_bri] | max, cap] | min }}
           ramp_initial_pct: >
+            {% set ramp_initial_pct = states('input_number.living_lights_ramp_initial_pct') | int(50) %}
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
-            {{ [(50 * tf) | round(0) | int, cap] | min }}
+            {{ [(ramp_initial_pct * tf) | round(0) | int, cap] | min }}
           predicted_color_temp_kelvin: >
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set warm = state_attr('sensor.living_lights_profile', 'tod_color_warm') | int(2700) %}
-            {% if night %}2000{% else %}{{ warm }}{% endif %}
+            {# Warmth bias — additive on the cascade output, scope-gated,
+               clamped to AL min (2000) / max (4000) to keep Hue happy. #}
+            {% set warmth_bias_k = states('input_number.living_lights_warmth_bias_k') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'sofa'] %}
+            {% set raw_ct = 2000 if night else warm %}
+            {% set final_ct = raw_ct + (warmth_bias_k if bias_active else 0) %}
+            {{ [[2000, final_ct] | max, 4000] | min }}
           dwell_ms: >
             {% set stable = states.binary_sensor.living_room_sofa_person_occupancy_stable %}
             {% if stable is not none and stable.state == 'on' %}
@@ -1740,6 +2132,23 @@ template:
             {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
             {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
             {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
+            {# Promoted-constant reads — every literal that used to be baked
+               into the template is now an input_number with a fallback to
+               the original generator constant. Drag a slider, value
+               propagates within ~5 s. If the helper goes missing the
+               classifier degrades gracefully to the original value. #}
+            {% set vacant_day_pct = states('input_number.living_lights_vacant_day_pct') | int(50) %}
+            {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
+            {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
+            {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
+            {# House-wide bias knobs (additive, applied AFTER the cascade,
+               clamped at cap and at 0). Scope gated by input_text:
+               'all' = apply globally, slug name = only that zone. #}
+            {% set brightness_bias_pp = states('input_number.living_lights_brightness_bias_pp') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'front_left'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.living_room_front_left_activity') %}
             {% set stable_obj = states.binary_sensor.living_room_front_left_person_occupancy_stable %}
@@ -1754,9 +2163,9 @@ template:
                (you got up briefly); otherwise no ToD cap on occupied — an
                occupied room is always usable. Overnight gentleness is the
                asleep state's job, not a blanket clock cap. #}
-            {% set cap = 30 if asleep else 100 %}
+            {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (3 if gaming_active else working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (gaming_dim_pct if gaming_active else working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -1765,21 +2174,37 @@ template:
             {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
             {% set anti_obj = states.binary_sensor.anticipated_living_room %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
+            {# Capture the cascade output to a string via {% set %}...{% endset %},
+               then add the additive brightness bias (scope-gated), then
+               clamp at [0, cap]. The | trim | int chain parses the captured
+               render back to an integer so arithmetic works. #}
+            {% set raw_bri %}
             {% if manual or away or has_override %}0
             {% elif night %}8
             {% elif tv_playing %}{{ floor }}
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if gaming_active %}3{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif tv_playing %}8{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if gaming_active %}{{ gaming_dim_pct }}{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif tv_playing %}{{ movie_dim_pct }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% endset %}
+            {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
+            {{ [[0, final_bri] | max, cap] | min }}
           ramp_initial_pct: >
+            {% set ramp_initial_pct = states('input_number.living_lights_ramp_initial_pct') | int(50) %}
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
-            {{ [(50 * tf) | round(0) | int, cap] | min }}
+            {{ [(ramp_initial_pct * tf) | round(0) | int, cap] | min }}
           predicted_color_temp_kelvin: >
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set warm = state_attr('sensor.living_lights_profile', 'tod_color_warm') | int(2700) %}
-            {% if night %}2000{% else %}{{ warm }}{% endif %}
+            {# Warmth bias — additive on the cascade output, scope-gated,
+               clamped to AL min (2000) / max (4000) to keep Hue happy. #}
+            {% set warmth_bias_k = states('input_number.living_lights_warmth_bias_k') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'front_left'] %}
+            {% set raw_ct = 2000 if night else warm %}
+            {% set final_ct = raw_ct + (warmth_bias_k if bias_active else 0) %}
+            {{ [[2000, final_ct] | max, 4000] | min }}
           dwell_ms: >
             {% set stable = states.binary_sensor.living_room_front_left_person_occupancy_stable %}
             {% if stable is not none and stable.state == 'on' %}
@@ -1844,6 +2269,23 @@ template:
             {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
             {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
             {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
+            {# Promoted-constant reads — every literal that used to be baked
+               into the template is now an input_number with a fallback to
+               the original generator constant. Drag a slider, value
+               propagates within ~5 s. If the helper goes missing the
+               classifier degrades gracefully to the original value. #}
+            {% set vacant_day_pct = states('input_number.living_lights_vacant_day_pct') | int(50) %}
+            {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
+            {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
+            {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
+            {# House-wide bias knobs (additive, applied AFTER the cascade,
+               clamped at cap and at 0). Scope gated by input_text:
+               'all' = apply globally, slug name = only that zone. #}
+            {% set brightness_bias_pp = states('input_number.living_lights_brightness_bias_pp') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'weights'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.living_room_weights_activity') %}
             {% set stable_obj = states.binary_sensor.living_room_weights_person_occupancy_stable %}
@@ -1858,9 +2300,9 @@ template:
                (you got up briefly); otherwise no ToD cap on occupied — an
                occupied room is always usable. Overnight gentleness is the
                asleep state's job, not a blanket clock cap. #}
-            {% set cap = 30 if asleep else 100 %}
+            {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (3 if gaming_active else working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (gaming_dim_pct if gaming_active else working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -1869,21 +2311,37 @@ template:
             {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
             {% set anti_obj = states.binary_sensor.anticipated_living_room %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
+            {# Capture the cascade output to a string via {% set %}...{% endset %},
+               then add the additive brightness bias (scope-gated), then
+               clamp at [0, cap]. The | trim | int chain parses the captured
+               render back to an integer so arithmetic works. #}
+            {% set raw_bri %}
             {% if manual or away or has_override %}0
             {% elif night %}8
             {% elif tv_playing %}{{ floor }}
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if gaming_active %}3{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif tv_playing %}8{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if gaming_active %}{{ gaming_dim_pct }}{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif tv_playing %}{{ movie_dim_pct }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% endset %}
+            {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
+            {{ [[0, final_bri] | max, cap] | min }}
           ramp_initial_pct: >
+            {% set ramp_initial_pct = states('input_number.living_lights_ramp_initial_pct') | int(50) %}
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
-            {{ [(50 * tf) | round(0) | int, cap] | min }}
+            {{ [(ramp_initial_pct * tf) | round(0) | int, cap] | min }}
           predicted_color_temp_kelvin: >
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set warm = state_attr('sensor.living_lights_profile', 'tod_color_warm') | int(2700) %}
-            {% if night %}2000{% else %}{{ warm }}{% endif %}
+            {# Warmth bias — additive on the cascade output, scope-gated,
+               clamped to AL min (2000) / max (4000) to keep Hue happy. #}
+            {% set warmth_bias_k = states('input_number.living_lights_warmth_bias_k') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'weights'] %}
+            {% set raw_ct = 2000 if night else warm %}
+            {% set final_ct = raw_ct + (warmth_bias_k if bias_active else 0) %}
+            {{ [[2000, final_ct] | max, 4000] | min }}
           dwell_ms: >
             {% set stable = states.binary_sensor.living_room_weights_person_occupancy_stable %}
             {% if stable is not none and stable.state == 'on' %}
@@ -1948,6 +2406,23 @@ template:
             {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
             {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
             {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
+            {# Promoted-constant reads — every literal that used to be baked
+               into the template is now an input_number with a fallback to
+               the original generator constant. Drag a slider, value
+               propagates within ~5 s. If the helper goes missing the
+               classifier degrades gracefully to the original value. #}
+            {% set vacant_day_pct = states('input_number.living_lights_vacant_day_pct') | int(50) %}
+            {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
+            {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
+            {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
+            {# House-wide bias knobs (additive, applied AFTER the cascade,
+               clamped at cap and at 0). Scope gated by input_text:
+               'all' = apply globally, slug name = only that zone. #}
+            {% set brightness_bias_pp = states('input_number.living_lights_brightness_bias_pp') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'office'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.living_room_office_activity') %}
             {% set stable_obj = states.binary_sensor.living_room_office_person_occupancy_stable %}
@@ -1962,9 +2437,9 @@ template:
                (you got up briefly); otherwise no ToD cap on occupied — an
                occupied room is always usable. Overnight gentleness is the
                asleep state's job, not a blanket clock cap. #}
-            {% set cap = 30 if asleep else 100 %}
+            {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (0 if gaming_active else working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (0 if gaming_active else working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -1973,21 +2448,37 @@ template:
             {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
             {% set anti_obj = states.binary_sensor.anticipated_living_room %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
+            {# Capture the cascade output to a string via {% set %}...{% endset %},
+               then add the additive brightness bias (scope-gated), then
+               clamp at [0, cap]. The | trim | int chain parses the captured
+               render back to an integer so arithmetic works. #}
+            {% set raw_bri %}
             {% if manual or away or has_override %}0
             {% elif night %}8
             {% elif tv_playing %}{{ floor }}
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if gaming_active %}0{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif tv_playing %}8{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if gaming_active %}0{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif tv_playing %}{{ movie_dim_pct }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% endset %}
+            {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
+            {{ [[0, final_bri] | max, cap] | min }}
           ramp_initial_pct: >
+            {% set ramp_initial_pct = states('input_number.living_lights_ramp_initial_pct') | int(50) %}
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
-            {{ [(50 * tf) | round(0) | int, cap] | min }}
+            {{ [(ramp_initial_pct * tf) | round(0) | int, cap] | min }}
           predicted_color_temp_kelvin: >
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set warm = state_attr('sensor.living_lights_profile', 'tod_color_warm') | int(2700) %}
-            {% if night %}2000{% else %}{{ warm }}{% endif %}
+            {# Warmth bias — additive on the cascade output, scope-gated,
+               clamped to AL min (2000) / max (4000) to keep Hue happy. #}
+            {% set warmth_bias_k = states('input_number.living_lights_warmth_bias_k') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'office'] %}
+            {% set raw_ct = 2000 if night else warm %}
+            {% set final_ct = raw_ct + (warmth_bias_k if bias_active else 0) %}
+            {{ [[2000, final_ct] | max, 4000] | min }}
           dwell_ms: >
             {% set stable = states.binary_sensor.living_room_office_person_occupancy_stable %}
             {% if stable is not none and stable.state == 'on' %}
@@ -2052,6 +2543,23 @@ template:
             {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
             {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
             {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
+            {# Promoted-constant reads — every literal that used to be baked
+               into the template is now an input_number with a fallback to
+               the original generator constant. Drag a slider, value
+               propagates within ~5 s. If the helper goes missing the
+               classifier degrades gracefully to the original value. #}
+            {% set vacant_day_pct = states('input_number.living_lights_vacant_day_pct') | int(50) %}
+            {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
+            {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
+            {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
+            {# House-wide bias knobs (additive, applied AFTER the cascade,
+               clamped at cap and at 0). Scope gated by input_text:
+               'all' = apply globally, slug name = only that zone. #}
+            {% set brightness_bias_pp = states('input_number.living_lights_brightness_bias_pp') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'front_door'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.living_room_front_door_activity') %}
             {% set stable_obj = states.binary_sensor.living_room_front_door_person_occupancy_stable %}
@@ -2066,9 +2574,9 @@ template:
                (you got up briefly); otherwise no ToD cap on occupied — an
                occupied room is always usable. Overnight gentleness is the
                asleep state's job, not a blanket clock cap. #}
-            {% set cap = 30 if asleep else 100 %}
+            {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (3 if gaming_active else working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (gaming_dim_pct if gaming_active else working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -2077,21 +2585,37 @@ template:
             {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
             {% set anti_obj = states.binary_sensor.anticipated_living_room %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
+            {# Capture the cascade output to a string via {% set %}...{% endset %},
+               then add the additive brightness bias (scope-gated), then
+               clamp at [0, cap]. The | trim | int chain parses the captured
+               render back to an integer so arithmetic works. #}
+            {% set raw_bri %}
             {% if manual or away or has_override %}0
             {% elif night %}8
             {% elif tv_playing %}{{ floor }}
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if gaming_active %}3{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif tv_playing %}8{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if gaming_active %}{{ gaming_dim_pct }}{% elif working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif tv_playing %}{{ movie_dim_pct }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% endset %}
+            {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
+            {{ [[0, final_bri] | max, cap] | min }}
           ramp_initial_pct: >
+            {% set ramp_initial_pct = states('input_number.living_lights_ramp_initial_pct') | int(50) %}
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
-            {{ [(50 * tf) | round(0) | int, cap] | min }}
+            {{ [(ramp_initial_pct * tf) | round(0) | int, cap] | min }}
           predicted_color_temp_kelvin: >
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set warm = state_attr('sensor.living_lights_profile', 'tod_color_warm') | int(2700) %}
-            {% if night %}2000{% else %}{{ warm }}{% endif %}
+            {# Warmth bias — additive on the cascade output, scope-gated,
+               clamped to AL min (2000) / max (4000) to keep Hue happy. #}
+            {% set warmth_bias_k = states('input_number.living_lights_warmth_bias_k') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'front_door'] %}
+            {% set raw_ct = 2000 if night else warm %}
+            {% set final_ct = raw_ct + (warmth_bias_k if bias_active else 0) %}
+            {{ [[2000, final_ct] | max, 4000] | min }}
           dwell_ms: >
             {% set stable = states.binary_sensor.living_room_front_door_person_occupancy_stable %}
             {% if stable is not none and stable.state == 'on' %}
@@ -2156,6 +2680,23 @@ template:
             {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
             {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
             {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
+            {# Promoted-constant reads — every literal that used to be baked
+               into the template is now an input_number with a fallback to
+               the original generator constant. Drag a slider, value
+               propagates within ~5 s. If the helper goes missing the
+               classifier degrades gracefully to the original value. #}
+            {% set vacant_day_pct = states('input_number.living_lights_vacant_day_pct') | int(50) %}
+            {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
+            {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
+            {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
+            {# House-wide bias knobs (additive, applied AFTER the cascade,
+               clamped at cap and at 0). Scope gated by input_text:
+               'all' = apply globally, slug name = only that zone. #}
+            {% set brightness_bias_pp = states('input_number.living_lights_brightness_bias_pp') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'whole_living_room'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.living_room_whole_living_room_activity') %}
             {% set stable_obj = states.binary_sensor.living_room_whole_living_room_person_occupancy_stable %}
@@ -2170,9 +2711,9 @@ template:
                (you got up briefly); otherwise no ToD cap on occupied — an
                occupied room is always usable. Overnight gentleness is the
                asleep state's job, not a blanket clock cap. #}
-            {% set cap = 30 if asleep else 100 %}
+            {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -2181,21 +2722,37 @@ template:
             {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
             {% set anti_obj = states.binary_sensor.anticipated_living_room %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
+            {# Capture the cascade output to a string via {% set %}...{% endset %},
+               then add the additive brightness bias (scope-gated), then
+               clamp at [0, cap]. The | trim | int chain parses the captured
+               render back to an integer so arithmetic works. #}
+            {% set raw_bri %}
             {% if manual or away or has_override %}0
             {% elif night %}8
             {% elif tv_playing %}{{ floor }}
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif tv_playing %}8{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif tv_playing %}{{ movie_dim_pct }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% endset %}
+            {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
+            {{ [[0, final_bri] | max, cap] | min }}
           ramp_initial_pct: >
+            {% set ramp_initial_pct = states('input_number.living_lights_ramp_initial_pct') | int(50) %}
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
-            {{ [(50 * tf) | round(0) | int, cap] | min }}
+            {{ [(ramp_initial_pct * tf) | round(0) | int, cap] | min }}
           predicted_color_temp_kelvin: >
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set warm = state_attr('sensor.living_lights_profile', 'tod_color_warm') | int(2700) %}
-            {% if night %}2000{% else %}{{ warm }}{% endif %}
+            {# Warmth bias — additive on the cascade output, scope-gated,
+               clamped to AL min (2000) / max (4000) to keep Hue happy. #}
+            {% set warmth_bias_k = states('input_number.living_lights_warmth_bias_k') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'whole_living_room'] %}
+            {% set raw_ct = 2000 if night else warm %}
+            {% set final_ct = raw_ct + (warmth_bias_k if bias_active else 0) %}
+            {{ [[2000, final_ct] | max, 4000] | min }}
           dwell_ms: >
             {% set stable = states.binary_sensor.living_room_whole_living_room_person_occupancy_stable %}
             {% if stable is not none and stable.state == 'on' %}
@@ -2260,6 +2817,23 @@ template:
             {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
             {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
             {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
+            {# Promoted-constant reads — every literal that used to be baked
+               into the template is now an input_number with a fallback to
+               the original generator constant. Drag a slider, value
+               propagates within ~5 s. If the helper goes missing the
+               classifier degrades gracefully to the original value. #}
+            {% set vacant_day_pct = states('input_number.living_lights_vacant_day_pct') | int(50) %}
+            {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
+            {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
+            {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
+            {# House-wide bias knobs (additive, applied AFTER the cascade,
+               clamped at cap and at 0). Scope gated by input_text:
+               'all' = apply globally, slug name = only that zone. #}
+            {% set brightness_bias_pp = states('input_number.living_lights_brightness_bias_pp') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'workshop_zone'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.workshop_workshop_zone_activity') %}
             {% set stable_obj = states.binary_sensor.workshop_workshop_zone_person_occupancy_stable %}
@@ -2274,9 +2848,9 @@ template:
                (you got up briefly); otherwise no ToD cap on occupied — an
                occupied room is always usable. Overnight gentleness is the
                asleep state's job, not a blanket clock cap. #}
-            {% set cap = 30 if asleep else 100 %}
+            {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -2285,20 +2859,36 @@ template:
             {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
             {% set anti_obj = states.binary_sensor.anticipated_workshop %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
+            {# Capture the cascade output to a string via {% set %}...{% endset %},
+               then add the additive brightness bias (scope-gated), then
+               clamp at [0, cap]. The | trim | int chain parses the captured
+               render back to an integer so arithmetic works. #}
+            {% set raw_bri %}
             {% if manual or away or has_override %}0
             {% elif night %}8
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% endset %}
+            {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
+            {{ [[0, final_bri] | max, cap] | min }}
           ramp_initial_pct: >
+            {% set ramp_initial_pct = states('input_number.living_lights_ramp_initial_pct') | int(50) %}
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
-            {{ [(50 * tf) | round(0) | int, cap] | min }}
+            {{ [(ramp_initial_pct * tf) | round(0) | int, cap] | min }}
           predicted_color_temp_kelvin: >
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set warm = state_attr('sensor.living_lights_profile', 'tod_color_warm') | int(2700) %}
-            {% if night %}2000{% else %}{{ warm }}{% endif %}
+            {# Warmth bias — additive on the cascade output, scope-gated,
+               clamped to AL min (2000) / max (4000) to keep Hue happy. #}
+            {% set warmth_bias_k = states('input_number.living_lights_warmth_bias_k') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'workshop_zone'] %}
+            {% set raw_ct = 2000 if night else warm %}
+            {% set final_ct = raw_ct + (warmth_bias_k if bias_active else 0) %}
+            {{ [[2000, final_ct] | max, 4000] | min }}
           dwell_ms: >
             {% set stable = states.binary_sensor.workshop_workshop_zone_person_occupancy_stable %}
             {% if stable is not none and stable.state == 'on' %}
@@ -2363,6 +2953,23 @@ template:
             {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
             {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
             {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
+            {# Promoted-constant reads — every literal that used to be baked
+               into the template is now an input_number with a fallback to
+               the original generator constant. Drag a slider, value
+               propagates within ~5 s. If the helper goes missing the
+               classifier degrades gracefully to the original value. #}
+            {% set vacant_day_pct = states('input_number.living_lights_vacant_day_pct') | int(50) %}
+            {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
+            {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
+            {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
+            {# House-wide bias knobs (additive, applied AFTER the cascade,
+               clamped at cap and at 0). Scope gated by input_text:
+               'all' = apply globally, slug name = only that zone. #}
+            {% set brightness_bias_pp = states('input_number.living_lights_brightness_bias_pp') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'e28'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.driveway_e28_activity') %}
             {% set stable_obj = states.binary_sensor.driveway_e28_person_occupancy_stable %}
@@ -2377,9 +2984,9 @@ template:
                (you got up briefly); otherwise no ToD cap on occupied — an
                occupied room is always usable. Overnight gentleness is the
                asleep state's job, not a blanket clock cap. #}
-            {% set cap = 30 if asleep else 100 %}
+            {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -2388,20 +2995,36 @@ template:
             {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
             {% set anti_obj = states.binary_sensor.anticipated_driveway %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
+            {# Capture the cascade output to a string via {% set %}...{% endset %},
+               then add the additive brightness bias (scope-gated), then
+               clamp at [0, cap]. The | trim | int chain parses the captured
+               render back to an integer so arithmetic works. #}
+            {% set raw_bri %}
             {% if manual or away or has_override %}0
             {% elif night %}8
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% endset %}
+            {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
+            {{ [[0, final_bri] | max, cap] | min }}
           ramp_initial_pct: >
+            {% set ramp_initial_pct = states('input_number.living_lights_ramp_initial_pct') | int(50) %}
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
-            {{ [(50 * tf) | round(0) | int, cap] | min }}
+            {{ [(ramp_initial_pct * tf) | round(0) | int, cap] | min }}
           predicted_color_temp_kelvin: >
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set warm = state_attr('sensor.living_lights_profile', 'tod_color_warm') | int(2700) %}
-            {% if night %}2000{% else %}{{ warm }}{% endif %}
+            {# Warmth bias — additive on the cascade output, scope-gated,
+               clamped to AL min (2000) / max (4000) to keep Hue happy. #}
+            {% set warmth_bias_k = states('input_number.living_lights_warmth_bias_k') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'e28'] %}
+            {% set raw_ct = 2000 if night else warm %}
+            {% set final_ct = raw_ct + (warmth_bias_k if bias_active else 0) %}
+            {{ [[2000, final_ct] | max, 4000] | min }}
           dwell_ms: >
             {% set stable = states.binary_sensor.driveway_e28_person_occupancy_stable %}
             {% if stable is not none and stable.state == 'on' %}
@@ -2466,6 +3089,23 @@ template:
             {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
             {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
             {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
+            {# Promoted-constant reads — every literal that used to be baked
+               into the template is now an input_number with a fallback to
+               the original generator constant. Drag a slider, value
+               propagates within ~5 s. If the helper goes missing the
+               classifier degrades gracefully to the original value. #}
+            {% set vacant_day_pct = states('input_number.living_lights_vacant_day_pct') | int(50) %}
+            {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
+            {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
+            {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
+            {# House-wide bias knobs (additive, applied AFTER the cascade,
+               clamped at cap and at 0). Scope gated by input_text:
+               'all' = apply globally, slug name = only that zone. #}
+            {% set brightness_bias_pp = states('input_number.living_lights_brightness_bias_pp') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'whole_dining_room'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.dining_room_whole_dining_room_activity') %}
             {% set stable_obj = states.binary_sensor.dining_room_whole_dining_room_person_occupancy_stable %}
@@ -2480,9 +3120,9 @@ template:
                (you got up briefly); otherwise no ToD cap on occupied — an
                occupied room is always usable. Overnight gentleness is the
                asleep state's job, not a blanket clock cap. #}
-            {% set cap = 30 if asleep else 100 %}
+            {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -2491,20 +3131,36 @@ template:
             {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
             {% set anti_obj = states.binary_sensor.anticipated_dining_room %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
+            {# Capture the cascade output to a string via {% set %}...{% endset %},
+               then add the additive brightness bias (scope-gated), then
+               clamp at [0, cap]. The | trim | int chain parses the captured
+               render back to an integer so arithmetic works. #}
+            {% set raw_bri %}
             {% if manual or away or has_override %}0
             {% elif night %}8
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% endset %}
+            {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
+            {{ [[0, final_bri] | max, cap] | min }}
           ramp_initial_pct: >
+            {% set ramp_initial_pct = states('input_number.living_lights_ramp_initial_pct') | int(50) %}
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
-            {{ [(50 * tf) | round(0) | int, cap] | min }}
+            {{ [(ramp_initial_pct * tf) | round(0) | int, cap] | min }}
           predicted_color_temp_kelvin: >
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set warm = state_attr('sensor.living_lights_profile', 'tod_color_warm') | int(2700) %}
-            {% if night %}2000{% else %}{{ warm }}{% endif %}
+            {# Warmth bias — additive on the cascade output, scope-gated,
+               clamped to AL min (2000) / max (4000) to keep Hue happy. #}
+            {% set warmth_bias_k = states('input_number.living_lights_warmth_bias_k') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'whole_dining_room'] %}
+            {% set raw_ct = 2000 if night else warm %}
+            {% set final_ct = raw_ct + (warmth_bias_k if bias_active else 0) %}
+            {{ [[2000, final_ct] | max, 4000] | min }}
           dwell_ms: >
             {% set stable = states.binary_sensor.dining_room_whole_dining_room_person_occupancy_stable %}
             {% if stable is not none and stable.state == 'on' %}
@@ -2569,6 +3225,23 @@ template:
             {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
             {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(80) %}
             {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(95) %}
+            {# Promoted-constant reads — every literal that used to be baked
+               into the template is now an input_number with a fallback to
+               the original generator constant. Drag a slider, value
+               propagates within ~5 s. If the helper goes missing the
+               classifier degrades gracefully to the original value. #}
+            {% set vacant_day_pct = states('input_number.living_lights_vacant_day_pct') | int(50) %}
+            {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(20) %}
+            {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(80) %}
+            {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(30) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(8) %}
+            {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(3) %}
+            {# House-wide bias knobs (additive, applied AFTER the cascade,
+               clamped at cap and at 0). Scope gated by input_text:
+               'all' = apply globally, slug name = only that zone. #}
+            {% set brightness_bias_pp = states('input_number.living_lights_brightness_bias_pp') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'whole_kitchen'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('sensor.kitchen_whole_kitchen_activity') %}
             {% set stable_obj = states.binary_sensor.kitchen_whole_kitchen_person_occupancy_stable %}
@@ -2583,9 +3256,9 @@ template:
                (you got up briefly); otherwise no ToD cap on occupied — an
                occupied room is always usable. Overnight gentleness is the
                asleep state's job, not a blanket clock cap. #}
-            {% set cap = 30 if asleep else 100 %}
+            {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else 8 if tv_playing else (working_hours_floor_pct if working_hours_active else 50 if profile in ['morning', 'midday', 'afternoon', 'evening'] else 20)) %}
+            {% set floor = 0 if asleep else (working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -2594,20 +3267,36 @@ template:
             {% set anti_tv = states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown'] %}
             {% set anti_obj = states.binary_sensor.anticipated_kitchen %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < 12)) %}
+            {# Capture the cascade output to a string via {% set %}...{% endset %},
+               then add the additive brightness bias (scope-gated), then
+               clamp at [0, cap]. The | trim | int chain parses the captured
+               render back to an integer so arithmetic works. #}
+            {% set raw_bri %}
             {% if manual or away or has_override %}0
             {% elif night %}8
             {% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [50, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [55, cap] | min] | max }}
-            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [80, cap] | min] | max }}{% endif %}{% endif %}
+            {% else %}{% if working_hours_active %}{{ [working_hours_present_pct, cap] | min }}{% elif belief and activity == 'cooking' %}{{ [100, cap] | min }}{% elif belief and activity == 'working_out' %}{{ [95, cap] | min }}{% elif belief and activity == 'working' %}{{ [85, cap] | min }}{% elif belief and activity == 'reading' %}{{ [80, cap] | min }}{% elif belief and activity == 'eating' %}{{ [70, cap] | min }}{% elif belief and activity == 'watching_tv' %}{{ [8, cap] | min }}{% elif belief and activity == 'napping' %}{{ [3, cap] | min }}{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}{% endif %}
+            {% endset %}
+            {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
+            {{ [[0, final_bri] | max, cap] | min }}
           ramp_initial_pct: >
+            {% set ramp_initial_pct = states('input_number.living_lights_ramp_initial_pct') | int(50) %}
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
-            {{ [(50 * tf) | round(0) | int, cap] | min }}
+            {{ [(ramp_initial_pct * tf) | round(0) | int, cap] | min }}
           predicted_color_temp_kelvin: >
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set warm = state_attr('sensor.living_lights_profile', 'tod_color_warm') | int(2700) %}
-            {% if night %}2000{% else %}{{ warm }}{% endif %}
+            {# Warmth bias — additive on the cascade output, scope-gated,
+               clamped to AL min (2000) / max (4000) to keep Hue happy. #}
+            {% set warmth_bias_k = states('input_number.living_lights_warmth_bias_k') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', 'whole_kitchen'] %}
+            {% set raw_ct = 2000 if night else warm %}
+            {% set final_ct = raw_ct + (warmth_bias_k if bias_active else 0) %}
+            {{ [[2000, final_ct] | max, 4000] | min }}
           dwell_ms: >
             {% set stable = states.binary_sensor.kitchen_whole_kitchen_person_occupancy_stable %}
             {% if stable is not none and stable.state == 'on' %}
@@ -3096,3 +3785,38 @@ automation:
       - action: input_boolean.turn_off
         target:
           entity_id: input_boolean.living_lights_woke_up_today
+  - alias: "Living Lights — bias-changed event (preference evidence)"
+    id: living_lights_bias_changed_event
+    mode: queued
+    max: 10
+    triggers:
+      - trigger: state
+        entity_id:
+          - input_number.living_lights_warmth_bias_k
+          - input_number.living_lights_brightness_bias_pp
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ trigger.from_state is not none
+             and trigger.from_state.state not in ['unknown', 'unavailable']
+             and trigger.from_state.state != trigger.to_state.state }}
+    actions:
+      - event: living_lights_bias_changed
+        event_data:
+          ts: "{{ now().isoformat() }}"
+          kind: >-
+            {% if 'warmth_bias_k' in trigger.entity_id %}warmth_bias
+            {% else %}brightness_bias{% endif %}
+          entity_id: "{{ trigger.entity_id }}"
+          zone_scope: "{{ states('input_text.living_lights_bias_zone_scope') }}"
+          prior_value: "{{ trigger.from_state.state | float(0) }}"
+          new_value: "{{ trigger.to_state.state | float(0) }}"
+          delta: "{{ (trigger.to_state.state | float(0)) - (trigger.from_state.state | float(0)) }}"
+          profile: "{{ states('sensor.living_lights_profile') }}"
+          tv_playing: "{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}"
+          gaming_active: "{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}"
+          working_hours_active: "{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}"
+          asleep: "{{ is_state('input_boolean.living_lights_asleep', 'on') }}"
+          night_safe: "{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}"
+          user_at_home: "{{ is_state('input_boolean.user_at_home', 'on') }}"
+          source_user_id: "{{ trigger.to_state.context.user_id | default(none, true) }}"

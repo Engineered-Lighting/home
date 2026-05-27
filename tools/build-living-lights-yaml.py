@@ -239,6 +239,16 @@ def emit_input_boolean() -> str:
 
 def emit_input_text() -> str:
     lines = ["input_text:"]
+    # Scope helper for the house-wide bias knobs (warmth_bias_k,
+    # brightness_bias_pp). Default 'all' = apply globally. Set to a
+    # zone slug (e.g., 'office') to scope the bias to that one zone.
+    # Classifier templates read this and gate the additive bias on
+    # `bias_scope in ['all', <slug>]`.
+    lines.append("  living_lights_bias_zone_scope:")
+    lines.append('    name: "Living Lights — bias zone scope"')
+    lines.append("    max: 32")
+    lines.append("    initial: all")
+    lines.append("    icon: mdi:target")
     for slug in ZONES:
         lines.append(f"  living_lights_override_text_{slug}:")
         lines.append(f'    name: "{slug} presence override payload"')
@@ -259,17 +269,30 @@ def emit_input_text() -> str:
 
 
 def emit_input_number() -> str:
-    """User-tunable thresholds for working-hours brightness, settable
-    live from the HA UI without regenerating YAML. Templates read these
-    via `states('input_number.living_lights_working_hours_*_pct')` with
-    a literal fallback that matches the initial value so a missing
-    helper degrades gracefully.
+    """User-tunable thresholds, settable live from the HA UI without
+    regenerating YAML. Templates read these via
+    `states('input_number.X') | int(<original_constant>)` so a missing
+    helper degrades gracefully to the original baked value.
 
-    `step: 5` so the UI slider clicks in 5% increments (fine enough to
-    matter, coarse enough to avoid fiddling).
+    `step: 5` (pct) / `50` (K) / `0.05` (multiplier) — fine enough to
+    matter, coarse enough to avoid fiddling.
+
+    Groups:
+    1. Working hours (shipped commit 584d53b) — floor + present pcts.
+    2. House-wide bias (this commit) — warmth_k + brightness_pp.
+       These are ADDITIVE on top of the cascade output, clamped to
+       AL min/max and per-bulb cap. Scope is gated by
+       `input_text.living_lights_bias_zone_scope` ('all' | <slug>).
+    3. Cascade defaults (this commit) — promotes 7 baked brightness
+       constants (VACANT_DAY, VACANT_NIGHT, RAMP_TARGET, RAMP_INITIAL,
+       ASLEEP_CAP, MOVIE_DIM, GAMING_DIM) so the user can tune them
+       live without a regen.
+    4. Time-of-day (this commit) — 6 color-temperature bucket anchors
+       and 2 brightness-factor multipliers for morning/midday.
     """
     lines = [
         "input_number:",
+        # ── Group 1: Working hours ───────────────────────────────
         "  living_lights_working_hours_floor_pct:",
         '    name: "Living Lights — working-hours vacant floor (%)"',
         "    min: 0",
@@ -287,6 +310,139 @@ def emit_input_number() -> str:
         f"    initial: {WORKING_HOURS_PRESENT_PCT_INITIAL}",
         "    unit_of_measurement: '%'",
         "    icon: mdi:briefcase-eye",
+        "    mode: slider",
+        # ── Group 2: House bias (additive, clamped) ──────────────
+        # Warmth bias — Kelvin offset applied to predicted_color_temp_kelvin.
+        # Clamped at AL min (2000) / max (4000). Negative = warmer (lower K).
+        "  living_lights_warmth_bias_k:",
+        '    name: "Living Lights — warmth bias (K, additive)"',
+        "    min: -500",
+        "    max: 500",
+        "    step: 50",
+        "    initial: 0",
+        "    unit_of_measurement: 'K'",
+        "    icon: mdi:thermometer-low",
+        "    mode: slider",
+        # Brightness bias — percentage-point offset applied to
+        # predicted_brightness_pct. Clamped at 0 / cap (asleep-gated).
+        "  living_lights_brightness_bias_pp:",
+        '    name: "Living Lights — brightness bias (pp, additive)"',
+        "    min: -30",
+        "    max: 30",
+        "    step: 5",
+        "    initial: 0",
+        "    unit_of_measurement: 'pp'",
+        "    icon: mdi:brightness-percent",
+        "    mode: slider",
+        # ── Group 3: Cascade defaults (promoted constants) ───────
+        "  living_lights_vacant_day_pct:",
+        '    name: "Living Lights — vacant baseline (day) (%)"',
+        "    min: 0", "    max: 100", "    step: 5",
+        f"    initial: {VACANT_DAY_PCT}",
+        "    unit_of_measurement: '%'",
+        "    icon: mdi:weather-sunny",
+        "    mode: slider",
+        "  living_lights_vacant_night_pct:",
+        '    name: "Living Lights — vacant baseline (night) (%)"',
+        "    min: 0", "    max: 100", "    step: 5",
+        f"    initial: {VACANT_NIGHT_PCT}",
+        "    unit_of_measurement: '%'",
+        "    icon: mdi:weather-night",
+        "    mode: slider",
+        "  living_lights_ramp_target_pct:",
+        '    name: "Living Lights — present ramp target (%)"',
+        "    min: 0", "    max: 100", "    step: 5",
+        f"    initial: {RAMP_TARGET_PCT}",
+        "    unit_of_measurement: '%'",
+        "    icon: mdi:trending-up",
+        "    mode: slider",
+        "  living_lights_ramp_initial_pct:",
+        '    name: "Living Lights — present ramp initial (%)"',
+        "    min: 0", "    max: 100", "    step: 5",
+        f"    initial: {RAMP_INITIAL_PCT}",
+        "    unit_of_measurement: '%'",
+        "    icon: mdi:speedometer-slow",
+        "    mode: slider",
+        "  living_lights_asleep_cap_pct:",
+        '    name: "Living Lights — asleep occupied ceiling (%)"',
+        "    min: 0", "    max: 100", "    step: 5",
+        f"    initial: {ASLEEP_CAP_PCT}",
+        "    unit_of_measurement: '%'",
+        "    icon: mdi:sleep",
+        "    mode: slider",
+        "  living_lights_movie_dim_pct:",
+        '    name: "Living Lights — TV-on dim target (%)"',
+        "    min: 0", "    max: 100", "    step: 5",
+        f"    initial: {MOVIE_DIM_PCT}",
+        "    unit_of_measurement: '%'",
+        "    icon: mdi:television",
+        "    mode: slider",
+        "  living_lights_gaming_dim_pct:",
+        '    name: "Living Lights — gaming LR dim target (%)"',
+        "    min: 0", "    max: 100", "    step: 1",
+        f"    initial: {GAMING_DIM_PCT}",
+        "    unit_of_measurement: '%'",
+        "    icon: mdi:gamepad-variant",
+        "    mode: slider",
+        # ── Group 4: Time-of-day (CT buckets + factor multipliers) ──
+        # Color temperature anchors per bucket. Drag a slider to make
+        # that bucket warmer (lower K) or cooler (higher K).
+        "  living_lights_ct_overnight_k:",
+        '    name: "Living Lights — color temp (overnight)"',
+        "    min: 1800", "    max: 4500", "    step: 50",
+        "    initial: 2000",
+        "    unit_of_measurement: 'K'",
+        "    icon: mdi:weather-night",
+        "    mode: slider",
+        "  living_lights_ct_morning_k:",
+        '    name: "Living Lights — color temp (morning)"',
+        "    min: 1800", "    max: 4500", "    step: 50",
+        "    initial: 2200",
+        "    unit_of_measurement: 'K'",
+        "    icon: mdi:weather-sunset-up",
+        "    mode: slider",
+        "  living_lights_ct_midday_k:",
+        '    name: "Living Lights — color temp (midday)"',
+        "    min: 1800", "    max: 4500", "    step: 50",
+        "    initial: 2700",
+        "    unit_of_measurement: 'K'",
+        "    icon: mdi:weather-sunny",
+        "    mode: slider",
+        "  living_lights_ct_afternoon_k:",
+        '    name: "Living Lights — color temp (afternoon)"',
+        "    min: 1800", "    max: 4500", "    step: 50",
+        "    initial: 3000",
+        "    unit_of_measurement: 'K'",
+        "    icon: mdi:weather-partly-cloudy",
+        "    mode: slider",
+        "  living_lights_ct_evening_k:",
+        '    name: "Living Lights — color temp (evening)"',
+        "    min: 1800", "    max: 4500", "    step: 50",
+        "    initial: 2500",
+        "    unit_of_measurement: 'K'",
+        "    icon: mdi:weather-sunset-down",
+        "    mode: slider",
+        "  living_lights_ct_late_evening_k:",
+        '    name: "Living Lights — color temp (late evening)"',
+        "    min: 1800", "    max: 4500", "    step: 50",
+        "    initial: 2200",
+        "    unit_of_measurement: 'K'",
+        "    icon: mdi:weather-night-partly-cloudy",
+        "    mode: slider",
+        # Brightness-factor multipliers. 1.0 = use the default ToD curve;
+        # 1.2 = morning targets 20% brighter; 0.8 = morning 20% dimmer.
+        # Range [0.5, 1.5] caps catastrophic mis-drags.
+        "  living_lights_tod_factor_morning_mult:",
+        '    name: "Living Lights — morning brightness multiplier"',
+        "    min: 0.5", "    max: 1.5", "    step: 0.05",
+        "    initial: 1.0",
+        "    icon: mdi:weather-sunset-up",
+        "    mode: slider",
+        "  living_lights_tod_factor_midday_mult:",
+        '    name: "Living Lights — midday brightness multiplier"',
+        "    min: 0.5", "    max: 1.5", "    step: 0.05",
+        "    initial: 1.0",
+        "    icon: mdi:weather-sunny",
         "    mode: slider",
     ]
     return "\n".join(lines) + "\n"
@@ -348,7 +504,9 @@ def _present_target(is_watch: bool,
         branches.append("{% if gaming_active %}0")
         opened = True
     elif is_gaming_dim:
-        branches.append("{% if gaming_active %}" + str(GAMING_DIM_PCT))
+        # gaming_dim_pct read from input_number with literal fallback (set
+        # in the classifier template's variables block).
+        branches.append("{% if gaming_active %}{{ gaming_dim_pct }}")
         opened = True
     # Working-hours is uniform across every zone — same target, same
     # input_number, same cap-clamp. Slots BETWEEN gaming and tv_playing
@@ -360,12 +518,13 @@ def _present_target(is_watch: bool,
                     + "{{ [working_hours_present_pct, cap] | min }}")
     opened = True
     if is_watch:
-        branches.append("{% elif tv_playing %}" + str(MOVIE_DIM_PCT))
+        branches.append("{% elif tv_playing %}{{ movie_dim_pct }}")
     for act, pct in ACTIVITY_PROFILES.items():
         branches.append("{% elif belief and activity == '" + act + "' %}"
                         + "{{ [" + str(pct) + ", cap] | min }}")
-    branches.append("{% else %}{{ [floor, [" + str(RAMP_TARGET_PCT)
-                    + ", cap] | min] | max }}{% endif %}")
+    # ramp_target_pct read from input_number with literal fallback in
+    # the variables block; cap-clamped + floor-anchored.
+    branches.append("{% else %}{{ [floor, [ramp_target_pct, cap] | min] | max }}{% endif %}")
     return "".join(branches)
 
 
@@ -427,6 +586,23 @@ _CLASSIFIER_SENSOR = r"""      - name: "@@CAM_TITLE@@ @@SLUG_TITLE@@ Lighting St
             {% set working_hours_active = is_state('binary_sensor.living_lights_working_hours_active', 'on') %}
             {% set working_hours_floor_pct = states('input_number.living_lights_working_hours_floor_pct') | int(@@WORKING_HOURS_FLOOR_INIT@@) %}
             {% set working_hours_present_pct = states('input_number.living_lights_working_hours_present_pct') | int(@@WORKING_HOURS_PRESENT_INIT@@) %}
+            {# Promoted-constant reads — every literal that used to be baked
+               into the template is now an input_number with a fallback to
+               the original generator constant. Drag a slider, value
+               propagates within ~5 s. If the helper goes missing the
+               classifier degrades gracefully to the original value. #}
+            {% set vacant_day_pct = states('input_number.living_lights_vacant_day_pct') | int(@@VACANT_DAY@@) %}
+            {% set vacant_night_pct = states('input_number.living_lights_vacant_night_pct') | int(@@VACANT_NIGHT@@) %}
+            {% set ramp_target_pct = states('input_number.living_lights_ramp_target_pct') | int(@@RAMP_TARGET@@) %}
+            {% set asleep_cap_pct = states('input_number.living_lights_asleep_cap_pct') | int(@@ASLEEP_CAP@@) %}
+            {% set movie_dim_pct = states('input_number.living_lights_movie_dim_pct') | int(@@MOVIE_DIM@@) %}
+            {% set gaming_dim_pct = states('input_number.living_lights_gaming_dim_pct') | int(@@GAMING_DIM@@) %}
+            {# House-wide bias knobs (additive, applied AFTER the cascade,
+               clamped at cap and at 0). Scope gated by input_text:
+               'all' = apply globally, slug name = only that zone. #}
+            {% set brightness_bias_pp = states('input_number.living_lights_brightness_bias_pp') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', '@@SLUG@@'] %}
             {% set belief = is_state('input_boolean.living_lights_actuate_from_belief_changes', 'on') %}
             {% set activity = states('@@ACTIVITY_ENTITY@@') %}
             {% set stable_obj = states.@@STABLE_ENTITY@@ %}
@@ -441,9 +617,9 @@ _CLASSIFIER_SENSOR = r"""      - name: "@@CAM_TITLE@@ @@SLUG_TITLE@@ Lighting St
                (you got up briefly); otherwise no ToD cap on occupied — an
                occupied room is always usable. Overnight gentleness is the
                asleep state's job, not a blanket clock cap. #}
-            {% set cap = @@ASLEEP_CAP@@ if asleep else 100 %}
+            {% set cap = asleep_cap_pct if asleep else 100 %}
             {% set profile = states('sensor.living_lights_profile') %}
-            {% set floor = 0 if asleep else (@@GAMING_FLOOR@@working_hours_floor_pct if working_hours_active else @@MOVIE_DIM@@ if tv_playing else (working_hours_floor_pct if working_hours_active else @@VACANT_DAY@@ if profile in ['morning', 'midday', 'afternoon', 'evening'] else @@VACANT_NIGHT@@)) %}
+            {% set floor = 0 if asleep else (@@GAMING_FLOOR@@working_hours_floor_pct if working_hours_active else movie_dim_pct if tv_playing else (working_hours_floor_pct if working_hours_active else vacant_day_pct if profile in ['morning', 'midday', 'afternoon', 'evening'] else vacant_night_pct)) %}
             {# Phase 4 anticipation — same gating as the state branch. Brightness
                is floored at the vacant baseline so anticipation NEVER dims a
                vacant zone (the actuator's raise-only branch adds a second
@@ -452,20 +628,36 @@ _CLASSIFIER_SENSOR = r"""      - name: "@@CAM_TITLE@@ @@SLUG_TITLE@@ Lighting St
             {% set anti_tv = states('@@MOVIE_MP@@') not in ['off', 'unavailable', 'unknown'] %}
             {% set anti_obj = states.binary_sensor.anticipated_@@CAM@@ %}
             {% set anti_on = (not anti_tv) and anti_obj is not none and (anti_obj.state == 'on' or (anti_obj.last_changed and (now() - anti_obj.last_changed).total_seconds() < @@ANTI_DECAY@@)) %}
+            {# Capture the cascade output to a string via {% set %}...{% endset %},
+               then add the additive brightness bias (scope-gated), then
+               clamp at [0, cap]. The | trim | int chain parses the captured
+               render back to an integer so arithmetic works. #}
+            {% set raw_bri %}
             {% if manual or away or has_override %}0
             {% elif night %}8
             @@WATCH_TV_BRANCH@@{% elif stable == 'off' and anti_kill and anti_on %}{{ [floor, [@@ANTICIPATED_PCT@@, cap] | min] | max }}
             {% elif stable == 'off' %}{{ floor }}
             {% elif dwell < 2000 and speed >= 1.0 %}{{ [floor, [@@PASS_PCT@@, cap] | min] | max }}
             {% else %}@@PRESENT_TARGET@@{% endif %}
+            {% endset %}
+            {% set final_bri = (raw_bri | trim | int(0)) + (brightness_bias_pp if bias_active else 0) %}
+            {{ [[0, final_bri] | max, cap] | min }}
           ramp_initial_pct: >
+            {% set ramp_initial_pct = states('input_number.living_lights_ramp_initial_pct') | int(@@RAMP_INITIAL@@) %}
             {% set tf = state_attr('sensor.living_lights_profile', 'tod_factor') | float(0.5) %}
             {% set cap = state_attr('sensor.living_lights_profile', 'max_brightness_pct') | int(100) %}
-            {{ [(@@RAMP_INITIAL@@ * tf) | round(0) | int, cap] | min }}
+            {{ [(ramp_initial_pct * tf) | round(0) | int, cap] | min }}
           predicted_color_temp_kelvin: >
             {% set night = is_state('binary_sensor.living_lights_is_night_safe', 'on') %}
             {% set warm = state_attr('sensor.living_lights_profile', 'tod_color_warm') | int(2700) %}
-            {% if night %}2000{% else %}{{ warm }}{% endif %}
+            {# Warmth bias — additive on the cascade output, scope-gated,
+               clamped to AL min (2000) / max (4000) to keep Hue happy. #}
+            {% set warmth_bias_k = states('input_number.living_lights_warmth_bias_k') | int(0) %}
+            {% set bias_scope = states('input_text.living_lights_bias_zone_scope') %}
+            {% set bias_active = bias_scope in ['all', '@@SLUG@@'] %}
+            {% set raw_ct = 2000 if night else warm %}
+            {% set final_ct = raw_ct + (warmth_bias_k if bias_active else 0) %}
+            {{ [[2000, final_ct] | max, 4000] | min }}
           dwell_ms: >
             {% set stable = states.@@STABLE_ENTITY@@ %}
             {% if stable is not none and stable.state == 'on' %}
@@ -480,12 +672,24 @@ def emit_template() -> str:
     # Time-of-day profile + night_safe + per-zone dwell + per-zone classifier
     parts = ["template:"]
 
-    # Profile sensor (time-driven only)
+    # Profile sensor (time-driven + state-triggered on the per-bucket
+    # CT input_numbers + ToD-factor multipliers so the Home app /lights
+    # slider drags propagate within ~1 s).
     parts.append("""  - trigger:
       - platform: homeassistant
         event: start
       - platform: time_pattern
         minutes: "/1"
+      - platform: state
+        entity_id:
+          - input_number.living_lights_ct_overnight_k
+          - input_number.living_lights_ct_morning_k
+          - input_number.living_lights_ct_midday_k
+          - input_number.living_lights_ct_afternoon_k
+          - input_number.living_lights_ct_evening_k
+          - input_number.living_lights_ct_late_evening_k
+          - input_number.living_lights_tod_factor_morning_mult
+          - input_number.living_lights_tod_factor_midday_mult
     sensor:
       - name: "Living Lights Profile"
         unique_id: living_lights_profile
@@ -503,9 +707,14 @@ def emit_template() -> str:
         attributes:
           tod_factor: >
             {% set h = now().hour + now().minute/60 %}
+            {# Morning + midday multipliers (default 1.0 = use the
+               built-in curve). >1.0 brightens that bucket;
+               <1.0 dims. Other buckets keep formulas literal in v1. #}
+            {% set morning_mult = states('input_number.living_lights_tod_factor_morning_mult') | float(1.0) %}
+            {% set midday_mult = states('input_number.living_lights_tod_factor_midday_mult') | float(1.0) %}
             {% if h < 6 %}0.10
-            {% elif h < 9 %}{{ (0.30 + (h-6)/3 * 0.50) | round(2) }}
-            {% elif h < 13 %}{{ (0.80 + (h-9)/4 * 0.15) | round(2) }}
+            {% elif h < 9 %}{{ ((0.30 + (h-6)/3 * 0.50) * morning_mult) | round(2) }}
+            {% elif h < 13 %}{{ ((0.80 + (h-9)/4 * 0.15) * midday_mult) | round(2) }}
             {% elif h < 17 %}0.95
             {% elif h < 20 %}{{ (0.85 - (h-17)/3 * 0.35) | round(2) }}
             {% elif h < 22.5 %}{{ (0.50 - (h-20)/2.5 * 0.30) | round(2) }}
@@ -513,13 +722,22 @@ def emit_template() -> str:
             {% endif %}
           tod_color_warm: >
             {% set h = now().hour + now().minute/60 %}
-            {% if h < 6 %}2000
-            {% elif h < 9 %}2200
-            {% elif h < 13 %}2700
-            {% elif h < 17 %}3000
-            {% elif h < 20 %}2500
-            {% elif h < 22.5 %}2200
-            {% else %}2000
+            {# Per-bucket CT anchors — promoted from baked literals so the
+               user can drag a single bucket warmer/cooler without affecting
+               the others. Fallbacks match the original baked defaults. #}
+            {% set ct_overnight = states('input_number.living_lights_ct_overnight_k') | int(2000) %}
+            {% set ct_morning = states('input_number.living_lights_ct_morning_k') | int(2200) %}
+            {% set ct_midday = states('input_number.living_lights_ct_midday_k') | int(2700) %}
+            {% set ct_afternoon = states('input_number.living_lights_ct_afternoon_k') | int(3000) %}
+            {% set ct_evening = states('input_number.living_lights_ct_evening_k') | int(2500) %}
+            {% set ct_late_evening = states('input_number.living_lights_ct_late_evening_k') | int(2200) %}
+            {% if h < 6 %}{{ ct_overnight }}
+            {% elif h < 9 %}{{ ct_morning }}
+            {% elif h < 13 %}{{ ct_midday }}
+            {% elif h < 17 %}{{ ct_afternoon }}
+            {% elif h < 20 %}{{ ct_evening }}
+            {% elif h < 22.5 %}{{ ct_late_evening }}
+            {% else %}{{ ct_overnight }}
             {% endif %}
           tod_color_cool: >
             {% set h = now().hour + now().minute/60 %}
@@ -692,6 +910,35 @@ def emit_template() -> str:
         "input_boolean.living_lights_anticipated_enabled")
     for room in sorted(set(meta["camera"] for meta in ZONES.values())):
         classifier_trigger_entities.append(f"binary_sensor.anticipated_{room}")
+    # User-tunable input_numbers (live-tunable knobs) — trigger the
+    # classifier so a slider drag in the Home app /lights drawer
+    # propagates within ~1 s rather than waiting for the 5-s time_pattern.
+    for inum in [
+        "living_lights_working_hours_floor_pct",
+        "living_lights_working_hours_present_pct",
+        "living_lights_warmth_bias_k",
+        "living_lights_brightness_bias_pp",
+        "living_lights_vacant_day_pct",
+        "living_lights_vacant_night_pct",
+        "living_lights_ramp_target_pct",
+        "living_lights_ramp_initial_pct",
+        "living_lights_asleep_cap_pct",
+        "living_lights_movie_dim_pct",
+        "living_lights_gaming_dim_pct",
+    ]:
+        classifier_trigger_entities.append(f"input_number.{inum}")
+    # Bias scope helper — flipping 'all' <-> '<slug>' should also
+    # immediately re-evaluate all classifiers (bias may apply or not).
+    classifier_trigger_entities.append("input_text.living_lights_bias_zone_scope")
+    # Working-hours composite binary_sensor — needed so a slider drag
+    # AND a state change of the underlying input_booleans both flow.
+    classifier_trigger_entities.append("binary_sensor.living_lights_working_hours_active")
+    # Living Lights Profile — classifiers read tod_factor / tod_color_warm
+    # from this sensor's attributes. Adding it as a state-trigger means
+    # CT-bucket + tod_factor multiplier slider drags propagate to every
+    # classifier within ~1 s (instead of waiting for the classifier's
+    # own /5-s time_pattern).
+    classifier_trigger_entities.append("sensor.living_lights_profile")
 
     classifier_block_triggers = """  - trigger:
       - platform: homeassistant
@@ -717,12 +964,14 @@ def emit_template() -> str:
             slug in GAMING_DIM_ZONES,
         )
         # Per-zone gaming-floor prefix injected into the floor cascade. Reads
-        # `0 if gaming_active else` (office) or `3 if gaming_active else`
+        # `0 if gaming_active else` (office) or `gaming_dim_pct if gaming_active else`
         # (LR watch zones); empty for all other zones (no gaming effect on
-        # kitchen / dining / driveway / workshop, etc.).
+        # kitchen / dining / driveway / workshop, etc.). The `gaming_dim_pct`
+        # variable is set in the template's variables block; live-tunable
+        # via input_number.living_lights_gaming_dim_pct.
         gaming_floor = (
             "0 if gaming_active else " if slug in GAMING_OFF_ZONES
-            else f"{GAMING_DIM_PCT} if gaming_active else " if slug in GAMING_DIM_ZONES
+            else "gaming_dim_pct if gaming_active else " if slug in GAMING_DIM_ZONES
             else ""
         )
         sensor_yaml = (_CLASSIFIER_SENSOR
@@ -738,6 +987,8 @@ def emit_template() -> str:
                        .replace("@@MOVIE_MP@@", MOVIE_MEDIA_PLAYER)
                        .replace("@@GAMING_SENSOR@@", GAMING_SENSOR)
                        .replace("@@GAMING_FLOOR@@", gaming_floor)
+                       .replace("@@GAMING_DIM@@", str(GAMING_DIM_PCT))
+                       .replace("@@RAMP_TARGET@@", str(RAMP_TARGET_PCT))
                        .replace("@@WORKING_HOURS_FLOOR_INIT@@",
                                 str(WORKING_HOURS_FLOOR_PCT_INITIAL))
                        .replace("@@WORKING_HOURS_PRESENT_INIT@@",
@@ -1070,6 +1321,51 @@ def emit_automations() -> str:
         "      - action: input_boolean.turn_off",
         "        target:",
         "          entity_id: input_boolean.living_lights_woke_up_today",
+        # ── House-wide bias-changed event (preference evidence) ──
+        # Fires whenever the user drags warmth_bias_k or brightness_bias_pp.
+        # The override-evidence aggregator (intelligence service) can
+        # consume these events to propose "user shifted morning warmth
+        # +200K seven times → consider raising the morning ToD bucket
+        # from 2200 → 2400 K". V1 just fires the event; aggregator-side
+        # consumption is deferred. Captures the active modifier stack
+        # at the moment of the drag so the proposal has context.
+        '  - alias: "Living Lights — bias-changed event (preference evidence)"',
+        "    id: living_lights_bias_changed_event",
+        "    mode: queued",
+        "    max: 10",
+        "    triggers:",
+        "      - trigger: state",
+        "        entity_id:",
+        "          - input_number.living_lights_warmth_bias_k",
+        "          - input_number.living_lights_brightness_bias_pp",
+        "    conditions:",
+        # Skip the initial state-restoration on HA startup so we don't
+        # flood the bus with synthetic 'change' events at boot.
+        "      - condition: template",
+        "        value_template: >-",
+        "          {{ trigger.from_state is not none",
+        "             and trigger.from_state.state not in ['unknown', 'unavailable']",
+        "             and trigger.from_state.state != trigger.to_state.state }}",
+        "    actions:",
+        "      - event: living_lights_bias_changed",
+        "        event_data:",
+        "          ts: \"{{ now().isoformat() }}\"",
+        "          kind: >-",
+        "            {% if 'warmth_bias_k' in trigger.entity_id %}warmth_bias",
+        "            {% else %}brightness_bias{% endif %}",
+        "          entity_id: \"{{ trigger.entity_id }}\"",
+        "          zone_scope: \"{{ states('input_text.living_lights_bias_zone_scope') }}\"",
+        "          prior_value: \"{{ trigger.from_state.state | float(0) }}\"",
+        "          new_value: \"{{ trigger.to_state.state | float(0) }}\"",
+        "          delta: \"{{ (trigger.to_state.state | float(0)) - (trigger.from_state.state | float(0)) }}\"",
+        "          profile: \"{{ states('sensor.living_lights_profile') }}\"",
+        "          tv_playing: \"{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}\"",
+        "          gaming_active: \"{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}\"",
+        "          working_hours_active: \"{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}\"",
+        "          asleep: \"{{ is_state('input_boolean.living_lights_asleep', 'on') }}\"",
+        "          night_safe: \"{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}\"",
+        "          user_at_home: \"{{ is_state('input_boolean.user_at_home', 'on') }}\"",
+        "          source_user_id: \"{{ trigger.to_state.context.user_id | default(none, true) }}\"",
     ]
     return "\n".join(lines) + "\n"
 

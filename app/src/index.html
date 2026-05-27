@@ -23,15 +23,63 @@
 </head>
 <body>
   <div id="root"></div>
-  <script type="text/babel" src="home-tauri.jsx"></script>
-  <script type="text/babel" src="home-ha.jsx"></script>
-  <script type="text/babel" src="home-icons.jsx"></script>
-  <script type="text/babel" src="home-events.jsx"></script>
-  <script type="text/babel" src="home-script.jsx"></script>
-  <script type="text/babel" src="home-vision.jsx"></script>
-  <script type="text/babel" src="home-s2s.jsx"></script>
-  <script type="text/babel" src="home-metrics.jsx"></script>
-  <script type="text/babel" src="home-app.jsx"></script>
-  <script type="text/babel" src="home-mount.jsx"></script>
+  <!-- Cache-busting loader. WebView2 disk-caches asset:// responses
+       aggressively; Ctrl+R only clears the memory cache. Without a
+       query-string cache-buster, JSX edits don't reach the running
+       app until the user manually wipes
+       %LOCALAPPDATA%\com.engineeredlighting.home\EBWebView\Default\Cache.
+       Appending ?cb=<launch-time> forces a fresh fetch every launch.
+       async=false preserves load order so dependent globals exist
+       when downstream files run. -->
+  <script>
+    (function () {
+      var cb = '?cb=' + Date.now();
+      var files = [
+        ['home-tauri.jsx', true],
+        ['home-ha.jsx', true],
+        ['home-icons.jsx', true],
+        ['home-events.jsx', true],
+        ['home-script.jsx', true],
+        ['home-vision.jsx', true],
+        ['home-s2s.jsx', true],
+        ['home-metrics.jsx', true],
+        ['home-control.jsx', true],
+        ['home-proactive.jsx', true],
+        ['home-sse-fetch.js', false],
+        ['home-stack-actions.jsx', true],
+        ['home-ai-stack.jsx', true],
+        ['home-capabilities.js', false],
+        ['home-metrics-lab-helpers.js', false],
+        ['home-metrics-lab.jsx', true],
+        ['home-people-helpers.js', false],
+        ['home-people.jsx', true],
+        ['home-explain-helpers.js', false],
+        ['home-explain.jsx', true],
+        ['home-worldstate-helpers.js', false],
+        ['home-worldstate.jsx', true],
+        ['home-spatial-helpers.js', false],
+        ['home-spatial.jsx', true],
+        ['home-look.jsx', true],
+        ['home-external.jsx', true],
+        ['home-lighting-events.jsx', true],
+        ['home-lights.jsx', true],
+        ['home-intelligence.jsx', true],
+        ['simulation-cameras.jsx', true],
+        ['simulation-controls.jsx', true],
+        ['simulation-timeline.jsx', true],
+        ['simulation-data.jsx', true],
+        ['simulation.jsx', true],
+        ['home-app.jsx', true],
+        ['home-mount.jsx', true],
+      ];
+      for (var i = 0; i < files.length; i++) {
+        var s = document.createElement('script');
+        if (files[i][1]) s.type = 'text/babel';
+        s.src = files[i][0] + cb;
+        s.async = false;
+        document.body.appendChild(s);
+      }
+    })();
+  </script>
 </body>
 </html>

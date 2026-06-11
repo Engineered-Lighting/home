@@ -75,7 +75,7 @@ void main() {
 
     float brightness = 0.25 + 0.75 * vDepthFactor;
     brightness *= 0.85 + 0.15 * vRandom;
-    brightness *= 0.62 + 0.38 * vIntensity;   // measured albedo, subtle
+    brightness *= 0.55 + 0.45 * vIntensity;   // photographic shading (fill now samples the atlas)
 
     gl_FragColor = vec4(uGlowColor * brightness, glow * uOpacity);
 }
@@ -100,7 +100,12 @@ export function createPointsMaterial() {
             uFadeFar:    { value: saved.uFadeFar ?? 30.0 },
             // 55 tuned visually against the real whole-home cloud (110 made
             // overview points read as blobs at ~23 m orbit radius)
-            uSizeRef:    { value: saved.uSizeRef ?? 55.0 },
+            // 170 = the EL site's 120 scaled from its 8-unit scene to this
+            // 13.6 m apartment at the matching relative camera distance —
+            // near-mid points hit the same 12 px clamp = the fat luminous
+            // dots of the website (55 rendered ~4.5 px dust at overview).
+            // Deliberately NOT honoring a saved override predating this fix.
+            uSizeRef:    { value: Math.max(saved.uSizeRef ?? 0, 170.0) },
             uJitterAmp:  { value: saved.uJitterAmp ?? 0.010 },
         },
         vertexShader,

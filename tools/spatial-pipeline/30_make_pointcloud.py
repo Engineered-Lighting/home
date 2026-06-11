@@ -56,10 +56,35 @@ if extra.is_file():
 lum = (0.2126 * rgb[:, 0] + 0.7152 * rgb[:, 1] + 0.0722 * rgb[:, 2])
 intensity = np.clip(255 * np.power(np.clip(lum * 1.15, 0, 1), 0.75), 12, 255)
 
-# mesh surface fill (uniform; voxel dedupe below prevents doubling dense areas)
-fill, _ = trimesh.sample.sample_surface(mesh, 1_200_000)
-fill = np.asarray(fill, dtype=np.float32)
-fill_int = np.full(len(fill), float(np.median(intensity)) * 0.85)
+# mesh surface fill with REAL shading: sample the texture atlas color at each
+# fill point. A flat constant intensity (the old 0.85*median) made 1.2M of the
+# cloud's points uniform gray — the single biggest divergence from the
+# engineered.lighting look, whose every point carries photographic light/shadow.
+try:
+    fill, fidx = trimesh.sample.sample_surface(mesh, 1_200_000)
+    fill = np.asarray(fill, dtype=np.float32)
+    # barycentric UV interpolation -> atlas lookup (trimesh's sample_color
+    # chokes on PBRMaterial, so do it by hand)
+    bary = trimesh.triangles.points_to_barycentric(mesh.triangles[fidx], fill)
+    uv_f = mesh.visual.uv[mesh.faces[fidx]]
+    uv = (uv_f * bary[:, :, None]).sum(axis=1)
+    mat = mesh.visual.material
+    pil = getattr(mat, "baseColorTexture", None) or getattr(mat, "image", None)
+    img = np.asarray(pil.convert("RGB"))
+    h, w = img.shape[:2]
+    px = np.clip((uv[:, 0] % 1.0) * (w - 1), 0, w - 1).astype(int)
+    py = np.clip(((1.0 - uv[:, 1]) % 1.0) * (h - 1), 0, h - 1).astype(int)
+    fc = img[py, px].astype(np.float32) / 255.0
+    flum = 0.2126 * fc[:, 0] + 0.7152 * fc[:, 1] + 0.0722 * fc[:, 2]
+    fill_int = np.clip(255 * np.power(np.clip(flum * 1.15, 0, 1), 0.75), 12, 255)
+    print(f"fill carries texture shading: int p10/p50/p90 = "
+          f"{np.percentile(fill_int, 10):.0f}/{np.percentile(fill_int, 50):.0f}/"
+          f"{np.percentile(fill_int, 90):.0f}")
+except Exception as e:
+    print(f"texture sampling unavailable ({type(e).__name__}: {e}) — flat fill fallback")
+    fill, _ = trimesh.sample.sample_surface(mesh, 1_200_000)
+    fill = np.asarray(fill, dtype=np.float32)
+    fill_int = np.full(len(fill), float(np.median(intensity)) * 0.85)
 
 pos = np.vstack([pos, fill])
 intensity = np.concatenate([intensity, fill_int])

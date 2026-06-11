@@ -227,9 +227,40 @@ export function createOverlay(apartmentRoot) {
     }
 
     let pulse = 0;
+
+    /* calibration correspondence markers: numbered bright spheres + floor
+       hairlines, managed here because the UI layer has no THREE access */
+    const calibGroup = new THREE.Group();
+    calibGroup.renderOrder = 40;
+    overlayRoot.add(calibGroup);
+    function setCalibMarkers(points) {
+        while (calibGroup.children.length) {
+            const c = calibGroup.children[0];
+            calibGroup.remove(c);
+            if (c.geometry) c.geometry.dispose();
+            if (c.material) c.material.dispose();
+        }
+        for (const p of points || []) {
+            const s = new THREE.Mesh(
+                new THREE.SphereGeometry(0.14, 14, 12),
+                new THREE.MeshBasicMaterial({ color: 0x22ff88, depthTest: false,
+                                              transparent: true, opacity: 0.95 }));
+            s.position.set(p[0], p[1], p[2]);
+            s.renderOrder = 41;
+            calibGroup.add(s);
+            const lg = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(p[0], p[1], 0),
+                new THREE.Vector3(p[0], p[1], p[2])]);
+            const ln = new THREE.Line(lg, new THREE.LineBasicMaterial(
+                { color: 0x22ff88, transparent: true, opacity: 0.55, depthTest: false }));
+            ln.renderOrder = 41;
+            calibGroup.add(ln);
+        }
+    }
+
     return {
         devicesGroup, camerasGroup, personGroup, zonesGroup,
-        markersById, zonesById,
+        markersById, zonesById, setCalibMarkers,
         setDevices, setDeviceState, setZones, setZonesVisible, setPerson,
         pickObjects() { return [...markersById.values()].map((m) => m.pick); },
         setHover(deviceId) {

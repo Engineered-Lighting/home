@@ -202,31 +202,12 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
     return () => host.removeEventListener("click", onPick, true);
   }, [open, phase]);
 
-  /* 3D confirmation markers for banked pairs (numbered green spheres) */
-  const calibMarkerMeshesRef = useRef([]);
-  const syncCalibMarkers = async (pairs) => {
+  /* 3D confirmation markers for banked pairs — rendered by the engine's
+     overlay (the Babel layer has no working dynamic import of three) */
+  const syncCalibMarkers = (pairs) => {
     const e = engineRef.current;
-    if (!e) return;
-    const THREE = await import("three");
-    for (const m of calibMarkerMeshesRef.current) e.apartmentRoot.remove(m);
-    calibMarkerMeshesRef.current = [];
-    for (const p of pairs) {
-      const mesh = new THREE.Mesh(
-        new THREE.SphereGeometry(0.14, 14, 12),
-        new THREE.MeshBasicMaterial({ color: 0x22ff88, depthTest: false,
-                                      transparent: true, opacity: 0.95 }));
-      mesh.position.set(p.xyz[0], p.xyz[1], p.xyz[2]);
-      mesh.renderOrder = 40;
-      e.apartmentRoot.add(mesh);
-      // vertical hairline to the floor so the marker reads at overview zoom
-      const lineGeo = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(p.xyz[0], p.xyz[1], 0),
-        new THREE.Vector3(p.xyz[0], p.xyz[1], p.xyz[2])]);
-      const line = new THREE.Line(lineGeo,
-        new THREE.LineBasicMaterial({ color: 0x22ff88, transparent: true, opacity: 0.5 }));
-      line.renderOrder = 40;
-      e.apartmentRoot.add(line);
-      calibMarkerMeshesRef.current.push(mesh, line);
+    if (e && e.overlay.setCalibMarkers) {
+      e.overlay.setCalibMarkers((pairs || []).map((p) => p.xyz));
     }
   };
 

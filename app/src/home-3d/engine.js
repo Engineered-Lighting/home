@@ -133,6 +133,11 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
         const orbitR = rig.currentRadius();
         pointsMaterial.uniforms.uFadeNear.value = orbitR * 0.30;
         pointsMaterial.uniforms.uFadeFar.value = orbitR * 1.55;
+        // wall-fade (P8): only at room zoom — the near wall melts away so the
+        // interior stays readable; off at overview (dollhouse reads whole)
+        if (pointsMaterial.uniforms.uWallNear) {
+            pointsMaterial.uniforms.uWallNear.value = orbitR < 9.0 ? orbitR * 0.75 : 0.0;
+        }
         modes.update(dt);
         overlay.update(dt);
         renderer.render(scene, camera);

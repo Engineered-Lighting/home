@@ -19,6 +19,7 @@ uniform float uTime;
 uniform float uPixelRatio;
 uniform float uBaseSize;
 uniform float uFadeNear;
+uniform float uWallNear;
 uniform float uFadeFar;
 uniform float uSizeRef;
 uniform float uJitterAmp;
@@ -43,6 +44,12 @@ void main() {
 
     float depth = -mvPosition.z;
     vDepthFactor = 1.0 - smoothstep(uFadeNear, uFadeFar, depth);
+    // wall-fade (P8): at room zoom the engine sets uWallNear > 0 and points
+    // between the camera and the room (depth < uWallNear) melt away so the
+    // near wall never blocks the interior
+    if (uWallNear > 0.0) {
+        vDepthFactor *= smoothstep(uWallNear * 0.35, uWallNear * 0.85, depth);
+    }
 
     float sizeAtten = uBaseSize * uPixelRatio * (uSizeRef / depth);
     gl_PointSize = clamp(sizeAtten * (0.3 + 0.7 * vDepthFactor), 0.5, 12.0);
@@ -89,6 +96,7 @@ export function createPointsMaterial() {
             // uFadeNear/uFadeFar are driven per-frame from the orbit radius
             // (engine.js); these are just pre-first-frame values.
             uFadeNear:   { value: saved.uFadeNear ?? 6.0 },
+            uWallNear:   { value: 0.0 },
             uFadeFar:    { value: saved.uFadeFar ?? 30.0 },
             // 55 tuned visually against the real whole-home cloud (110 made
             // overview points read as blobs at ~23 m orbit radius)

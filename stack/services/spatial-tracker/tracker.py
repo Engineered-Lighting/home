@@ -81,6 +81,9 @@ MERGE_DIST_M = 0.8         # cross-camera merge distance
 COAST_SIGMA_MAX = 1.5      # m; covariance saturation -> freeze prediction
 ACTIVE_AGE_S = 1.0         # <= this since last measurement -> "active"
 DEMOTE_AFTER_S = 5.0       # > this without measurement -> room-level
+ROOM_LINGER_S = 240.0      # room presence survives event end ("last seen in
+                           # <room>") — a seated person stops generating
+                           # Frigate events; vanishing instantly reads broken
 RETIRE_AFTER_S = 30.0      # > this without any signal -> retire
 REBIND_DIST_M = 1.0        # re-acquisition distance to a retired track
 REBIND_WINDOW_S = 30.0     # ... retired less than this long ago
@@ -794,7 +797,7 @@ class Tracker:
         for tid, tr in list(self.tracks.items()):
             age = now - tr.last_signal
             if tr.kind == "room":
-                if tr.ended or age > RETIRE_AFTER_S:
+                if age > ROOM_LINGER_S:
                     self.tracks.pop(tid, None)
                 continue
             if age > RETIRE_AFTER_S:

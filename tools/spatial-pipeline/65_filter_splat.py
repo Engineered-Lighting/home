@@ -1,10 +1,10 @@
-#!/usr/bin/env python3
-"""65_filter_splat.py — post-filter the baked apartment splat PLY.
+﻿#!/usr/bin/env python3
+"""65_filter_splat.py â€” post-filter the baked apartment splat PLY.
 
 Removes the user-circled photo-mode overflow:
 - keeps only splats inside the command-center room-union (same CORE_BOXES as
   30_make_pointcloud.py) + z in [-0.25, 2.05]
-- drops GIANT gaussians (exp(max scale) > 0.30 m) — the blurry halo beyond
+- drops GIANT gaussians (exp(max scale) > 0.30 m) â€” the blurry halo beyond
   the walls is made of huge low-detail blobs at scan boundaries
 
 Operates on binary_little_endian f4 PLYs written by SplatTransform.
@@ -17,7 +17,7 @@ from pipeline_util import APP_DATA
 
 CORE_BOXES = [
     {"x": (2.55, 7.35), "y": (0.40, 6.60)},
-    {"x": (7.35, 13.75), "y": (0.50, 6.35)},
+    {"x": (7.35, 15.30), "y": (0.50, 6.35)},
 ]
 SCALE_MAX_M = 0.30
 OPACITY_MIN = 0.30   # the fuzzy halo is low-alpha mist, not giant gaussians

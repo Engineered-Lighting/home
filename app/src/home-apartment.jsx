@@ -453,12 +453,18 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
           3D canvas while snapped; the HUD stays on top so cloud/photo/mesh
           render the SAME pose one toggle away */}
       {liveCam && liveOn && (
-        <div style={{ position: "absolute", inset: 0, background: "#000",
-                      display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ position: "absolute", inset: 0,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      pointerEvents: "none" }}>
+          {/* big-but-not-fullscreen: the feed hovers over the 3D view, which
+              holds the same pose behind it — true 1:1 alignment lands with
+              per-camera calibration (fov + principal point) */}
           <img
             src={`${(localStorage.getItem("apartment3d.frigateBase") || "http://192.168.0.125:5000")}/api/${liveCam.camera.frigate_name}`}
             alt={liveCam.name}
-            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+            style={{ width: "78%", aspectRatio: "16 / 9", objectFit: "cover",
+                     border: "1px solid rgba(160,190,230,0.35)",
+                     boxShadow: "0 8px 48px rgba(0,0,0,0.7)" }}
           />
           <div style={{ position: "absolute", top: 52, left: 18, fontFamily: APT_FONT_MONO,
                         fontSize: 9.5, letterSpacing: "0.12em", color: "var(--hg-ice)",

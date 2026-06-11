@@ -1,5 +1,5 @@
-#!/usr/bin/env python3
-"""27_make_display_mesh.py — dollhouse display mesh for the app's mesh mode.
+﻿#!/usr/bin/env python3
+"""27_make_display_mesh.py â€” dollhouse display mesh for the app's mesh mode.
 
 Takes the full textured apartment mesh and removes ceiling faces (centroid
 z > 2.03 m) so rooms read from the overview pose, plus crops to the same
@@ -18,7 +18,7 @@ from pipeline_util import APP_DATA, OUT
 
 CORE_BOXES = [
     {"x": (2.55, 7.35), "y": (0.40, 6.60)},
-    {"x": (7.35, 13.75), "y": (0.50, 6.35)},
+    {"x": (7.35, 15.30), "y": (0.50, 6.35)},
 ]
 CEILING_Z = 2.03
 

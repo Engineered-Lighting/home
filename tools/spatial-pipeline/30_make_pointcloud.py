@@ -1,5 +1,5 @@
-#!/usr/bin/env python3
-"""30_make_pointcloud.py — generate the white point cloud for the app.
+﻿#!/usr/bin/env python3
+"""30_make_pointcloud.py â€” generate the white point cloud for the app.
 
 Fork of EngineeredLightingWebsite/scripts/convert_scan.py with the plan's
 changes applied:
@@ -30,7 +30,7 @@ reg = load_registration()
 T_splat = np.array(reg["T_splat"])
 
 pos, rgb, alpha = read_3dgs_ply(RAW / "scan_splat.ply")
-keep = alpha > 0.35   # lower than the original 0.5 — keeps fill detail
+keep = alpha > 0.35   # lower than the original 0.5 â€” keeps fill detail
 pos, rgb = pos[keep], rgb[keep]
 print(f"splat means after alpha filter: {len(pos):,}")
 pos = apply_T(T_splat, pos).astype(np.float32)
@@ -78,7 +78,7 @@ m = mean_d < thresh
 pos, intensity = pos[m], intensity[m]
 print(f"after outlier removal: {len(pos):,}")
 
-# 1 cm voxel dedupe (random representative via pre-shuffle) — the 4090 ran
+# 1 cm voxel dedupe (random representative via pre-shuffle) â€” the 4090 ran
 # 2000 fps at 180k pts, so density is nowhere near the budget ceiling
 order = rng.permutation(len(pos))
 pos, intensity = pos[order], intensity[order]
@@ -88,12 +88,12 @@ pos, intensity = pos[first], intensity[first]
 print(f"after 6 mm voxel dedupe: {len(pos):,}")
 
 # crop to the command-center core (user-circled overflow removed): explicit
-# union of room boxes — kitchen+dining block and living-room block. Density/
+# union of room boxes â€” kitchen+dining block and living-room block. Density/
 # connected-component approaches fail here (doorways are sparse -> rooms
 # disconnect and "largest component" amputates real rooms; learned twice).
 CORE_BOXES = [
     {"x": (2.55, 7.35), "y": (0.40, 6.60)},   # kitchen + dining + hallway
-    {"x": (7.35, 13.75), "y": (0.50, 6.35)},  # living room
+    {"x": (7.35, 15.30), "y": (0.50, 6.35)},  # living room
 ]
 m = np.zeros(len(pos), bool)
 for b in CORE_BOXES:

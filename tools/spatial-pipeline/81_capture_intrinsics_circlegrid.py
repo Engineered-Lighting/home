@@ -44,6 +44,26 @@ def blob_detector():
     return cv2.SimpleBlobDetector_create(p)
 
 
+def fit_all_lattices(pts, max_boards=4, min_dots=14):
+    """Peel off up to max_boards lattices: fit, remove inliers, repeat.
+    Each scattered board becomes its own planar observation — 4 boards per
+    frame x a few rearrangements beats waving one board for a minute."""
+    out = []
+    remaining = pts
+    for _ in range(max_boards):
+        fit = fit_lattice(remaining)
+        if fit is None:
+            break
+        idx, inl = fit
+        if int(inl.sum()) < min_dots:
+            break
+        out.append((remaining[inl], idx[inl]))
+        remaining = remaining[~inl]
+        if len(remaining) < min_dots:
+            break
+    return out
+
+
 def fit_lattice(pts, iters=400, tol_frac=0.18):
     """RANSAC integer-lattice fit. Returns (idx Nx2 int, inlier mask) or None."""
     n = len(pts)
@@ -94,8 +114,10 @@ def main():
     pitch = args.pitch_mm / 1000.0
     obj_frames, img_frames = [], []
     img_size = None
-    last_mean = None
-    print(f"[{args.cam}] show a board; tilt/move it. Need {args.target} poses.")
+    seen_means = []
+    print(f"[{args.cam}] scatter the 4 boards in view (vary distance/tilt; "
+          f"put some near the frame edges). Rearrange when prompted. "
+          f"Need {args.target} board-views.")
     while len(obj_frames) < args.target:
         try:
             raw = urllib.request.urlopen(
@@ -107,19 +129,22 @@ def main():
         img_size = (img.shape[1], img.shape[0])
         kps = det.detect(img)
         pts = np.array([k.pt for k in kps], np.float32)
-        fit = fit_lattice(pts) if len(pts) else None
-        if fit:
-            idx, inl = fit
-            if int(inl.sum()) >= args.min_dots:
-                c = pts[inl]
-                if last_mean is None or np.linalg.norm(c.mean(0) - last_mean) > 30:
-                    obj = np.zeros((int(inl.sum()), 3), np.float32)
-                    obj[:, :2] = idx[inl] * pitch
-                    obj_frames.append(obj.tolist())
-                    img_frames.append(c.tolist())
-                    last_mean = c.mean(0)
-                    print(f"  captured {len(obj_frames)}/{args.target} "
-                          f"({int(inl.sum())} dots)")
+        boards = fit_all_lattices(pts, min_dots=args.min_dots) if len(pts) else []
+        new_here = 0
+        for c, idx in boards:
+            mean = c.mean(0)
+            if any(np.linalg.norm(mean - m) < 30 for m in seen_means):
+                continue  # same board, same spot as an earlier capture
+            obj = np.zeros((len(c), 3), np.float32)
+            obj[:, :2] = idx * pitch
+            obj_frames.append(obj.tolist())
+            img_frames.append(c.tolist())
+            seen_means.append(mean)
+            new_here += 1
+        if new_here:
+            print(f"  +{new_here} board view(s) -> {len(obj_frames)}/{args.target}")
+            if len(obj_frames) < args.target:
+                print("    ... REARRANGE the boards (new spots/tilts/distances)")
         time.sleep(0.4)
 
     body = json.dumps({"object_points": obj_frames, "image_points": img_frames,

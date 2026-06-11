@@ -57,7 +57,7 @@ lum = (0.2126 * rgb[:, 0] + 0.7152 * rgb[:, 1] + 0.0722 * rgb[:, 2])
 intensity = np.clip(255 * np.power(np.clip(lum * 1.15, 0, 1), 0.75), 12, 255)
 
 # mesh surface fill (uniform; voxel dedupe below prevents doubling dense areas)
-fill, _ = trimesh.sample.sample_surface(mesh, 800_000)
+fill, _ = trimesh.sample.sample_surface(mesh, 1_200_000)
 fill = np.asarray(fill, dtype=np.float32)
 fill_int = np.full(len(fill), float(np.median(intensity)) * 0.85)
 
@@ -82,31 +82,26 @@ print(f"after outlier removal: {len(pos):,}")
 # 2000 fps at 180k pts, so density is nowhere near the budget ceiling
 order = rng.permutation(len(pos))
 pos, intensity = pos[order], intensity[order]
-vox = np.floor(pos / 0.008).astype(np.int64)
+vox = np.floor(pos / 0.006).astype(np.int64)
 _, first = np.unique(vox, axis=0, return_index=True)
 pos, intensity = pos[first], intensity[first]
-print(f"after 8 mm voxel dedupe: {len(pos):,}")
+print(f"after 6 mm voxel dedupe: {len(pos):,}")
 
-# crop scan bleed: rasterize XY occupancy, morphological-open to sever the
-# thin necks into neighboring spaces, keep only the largest connected
-# component (the apartment), dilated so walls survive
-import cv2
-CELL = 0.12
-mn2 = pos[:, :2].min(0) - CELL
-size = np.ceil((pos[:, :2].max(0) - mn2) / CELL).astype(int) + 1
-grid = np.zeros((size[1], size[0]), np.uint8)
-ij = ((pos[:, :2] - mn2) / CELL).astype(int)
-grid[ij[:, 1], ij[:, 0]] = 255
-opened = cv2.morphologyEx(grid, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-n_lbl, labels = cv2.connectedComponents(opened)
-if n_lbl > 1:
-    largest = 1 + np.argmax([np.sum(labels == i) for i in range(1, n_lbl)])
-    keep_mask = (labels == largest).astype(np.uint8)
-    keep_mask = cv2.dilate(keep_mask, np.ones((5, 5), np.uint8))
-    m = keep_mask[ij[:, 1], ij[:, 0]] > 0
-    print(f"largest-component crop: {len(pos):,} -> {int(m.sum()):,} "
-          f"(removed {len(pos) - int(m.sum()):,} bleed points)")
-    pos, intensity = pos[m], intensity[m]
+# crop to the command-center core (user-circled overflow removed): explicit
+# union of room boxes — kitchen+dining block and living-room block. Density/
+# connected-component approaches fail here (doorways are sparse -> rooms
+# disconnect and "largest component" amputates real rooms; learned twice).
+CORE_BOXES = [
+    {"x": (2.55, 7.35), "y": (0.40, 6.60)},   # kitchen + dining + hallway
+    {"x": (7.35, 13.75), "y": (0.50, 6.35)},  # living room
+]
+m = np.zeros(len(pos), bool)
+for b in CORE_BOXES:
+    m |= ((pos[:, 0] >= b["x"][0]) & (pos[:, 0] <= b["x"][1]) &
+          (pos[:, 1] >= b["y"][0]) & (pos[:, 1] <= b["y"][1]))
+print(f"room-union crop: {len(pos):,} -> {int(m.sum()):,} "
+      f"(removed {len(pos) - int(m.sum()):,} overflow points)")
+pos, intensity = pos[m], intensity[m]
 
 # cap + jitter + shuffle (shuffle => progressive load materializes uniformly)
 if len(pos) > 2_500_000:

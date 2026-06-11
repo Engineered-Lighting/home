@@ -94,17 +94,33 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
         if (state.mesh) return state.mesh;
         const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
         let lastErr = null;
-        for (const url of candidates('collision.glb', null, { sim })) {
-            try {
-                const gltf = await new GLTFLoader().loadAsync(url);
-                const grp = gltf.scene;
-                grp.traverse((o) => {
-                    if (o.isMesh) o.material = new THREE.MeshNormalMaterial({ flatShading: true });
-                });
-                apartmentRoot.add(grp);
-                state.mesh = grp;
-                return grp;
-            } catch (e) { lastErr = e; }
+        // mesh.glb = the full textured Scaniverse export (1:1, 221k tris);
+        // collision.glb is the decimated picking proxy — fallback display only.
+        const sources = [
+            { name: 'mesh.glb', textured: true },
+            { name: 'collision.glb', textured: false },
+        ];
+        for (const src of sources) {
+            for (const url of candidates(src.name, null, { sim })) {
+                try {
+                    const gltf = await new GLTFLoader().loadAsync(url);
+                    const grp = gltf.scene;
+                    grp.traverse((o) => {
+                        if (!o.isMesh) return;
+                        // the scene is unlit (cloud needs no lights) — swap PBR
+                        // for basic textured so the photogrammetry atlas shows.
+                        // (ceiling removal is baked into mesh.glb by the
+                        // pipeline — material clippingPlanes render all-black
+                        // in this three/WebView2 combination, verified)
+                        o.material = src.textured && o.material && o.material.map
+                            ? new THREE.MeshBasicMaterial({ map: o.material.map, side: THREE.DoubleSide })
+                            : new THREE.MeshNormalMaterial({ flatShading: true });
+                    });
+                    apartmentRoot.add(grp);
+                    state.mesh = grp;
+                    return grp;
+                } catch (e) { lastErr = e; }
+            }
         }
         throw lastErr || new Error('no mesh asset reachable');
     }

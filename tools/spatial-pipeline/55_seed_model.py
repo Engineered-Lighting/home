@@ -52,13 +52,15 @@ LIGHTS = {
 }
 
 # ---- cameras: pose reasoned from snapshot<->floorplan matching ----
+# user feedback (annotated screenshot): all three cameras cluster around the
+# central hallway junction, fanning out into their rooms
 CAMERAS = [
-    # looks across coffee table + couch toward the front door wall
-    {"id": "living_room", "pos": [8.0, 5.8, 2.3], "look_at": [10.5, 1.5]},
-    # perched by the fridge, looking down the galley toward the hallway
-    {"id": "kitchen", "pos": [6.8, 5.5, 2.3], "look_at": [3.8, 5.6]},
-    # corner view across the oval table toward the window wall
-    {"id": "dining_room", "pos": [6.9, 4.0, 2.3], "look_at": [4.9, 1.4]},
+    # junction corner looking east across coffee table + couch
+    {"id": "living_room", "pos": [7.7, 5.4, 2.3], "look_at": [10.5, 2.2]},
+    # junction end of the galley, looking west down the counters
+    {"id": "kitchen", "pos": [7.0, 5.6, 2.3], "look_at": [3.8, 5.7]},
+    # junction south side, looking southwest across the oval table
+    {"id": "dining_room", "pos": [7.1, 4.4, 2.3], "look_at": [4.8, 1.5]},
 ]
 
 

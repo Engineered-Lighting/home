@@ -402,7 +402,11 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
             {inCamPose && liveCam && !simActive && window.HomeApartmentCalibrate && (
               <AptHudButton label="calibrate" active={!!calibCam} onClick={() => {
                 setLiveOn(false);
-                engineRef.current?.modes.setMode("mesh", { duration: 0 }).catch(() => {});
+                const e = engineRef.current;
+                e?.modes.setMode("mesh", { duration: 0 }).catch(() => {});
+                // snapped pose sits point-blank in the geometry — pull back to
+                // the overview so the room is visible and orbit/zoom unlock
+                e?.rig.returnToOverview();
                 setCalibCam(liveCam);
               }} />
             )}

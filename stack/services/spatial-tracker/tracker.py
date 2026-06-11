@@ -731,6 +731,14 @@ class Tracker:
         track.rooms.force(zone_id)
         if person:
             track.person = person
+            self._last_person = (person, now)
+        elif track.person is None:
+            # identity carryover: Frigate face rec only fires on a clear
+            # frontal view; in a single-occupant home a recognition within
+            # the last 10 min is a strong prior for unlabeled sightings
+            lp = getattr(self, "_last_person", None)
+            if lp and now - lp[1] < 600.0:
+                track.person = lp[0]
         track.frigate_ids.add(frigate_id)
         return track
 

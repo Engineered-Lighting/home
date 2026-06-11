@@ -487,7 +487,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
       {/* live camera feed — full-viewport MJPEG from Frigate, shown over the
           3D canvas while snapped; the HUD stays on top so cloud/photo/mesh
           render the SAME pose one toggle away */}
-      {liveCam && liveOn && (
+      {liveCam && liveOn && !calibCam && (
         <div style={{ position: "absolute", inset: 0,
                       display: "flex", alignItems: "center", justifyContent: "center",
                       pointerEvents: "none" }}>

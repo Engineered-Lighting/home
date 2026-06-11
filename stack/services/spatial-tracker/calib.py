@@ -327,12 +327,28 @@ def build_router(ctx):
         if len(objs) < 6:
             raise HTTPException(400, f"need >=6 views, got {len(objs)}")
         size = tuple(int(v) for v in image_size)
-        rms, K, dist, _, _ = cv2.calibrateCamera(
-            objs, imgs, size, None, None,
-            flags=cv2.CALIB_FIX_K3 if len(objs) < 15 else 0)
+        # wide lenses (these cams are ~110deg) need the rational model or at
+        # least full 5-param — FIX_K3 fit the board views (center-weighted)
+        # at 0.34px yet missed the frame edges by tens of px, which is where
+        # pose correspondences live. Try candidates, keep the best rms.
+        candidates = [("5param", 0)]
+        if len(objs) >= 10:
+            candidates.append(("rational", cv2.CALIB_RATIONAL_MODEL))
+        best = None
+        for name, flags in candidates:
+            try:
+                rms, K, dist, _, _ = cv2.calibrateCamera(
+                    objs, imgs, size, None, None, flags=flags)
+            except cv2.error:
+                continue
+            if best is None or rms < best[0]:
+                best = (rms, K, dist, name)
+        if best is None:
+            raise HTTPException(500, "calibration failed for all models")
+        rms, K, dist, model_name = best
         return {"rms_px": float(rms), "K": K.tolist(),
                 "dist": dist.ravel().tolist(), "image_size": list(size),
-                "views": len(objs)}
+                "views": len(objs), "model": model_name}
 
     @router.post("/{cam}/intrinsics/solve")
     async def intrinsics_solve(cam: str, body: Optional[dict] = None):

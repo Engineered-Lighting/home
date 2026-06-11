@@ -67,10 +67,10 @@ export function createRig(camera) {
     const rig = {
         state,
         goTo,
-        stepAzimuth(dir, dur = 450) { goTo({ az: state.az + dir, dur }); },
-        stepElevation(dir, dur = 450) { goTo({ el: state.el + dir, dur }); },
-        stepZoom(dir, dur = 350) { goTo({ zoom: state.zoom + dir, dur }); },
-        snapHome(dur = 500) { goTo({ ...HOME, dur }); },
+        stepAzimuth(dir, dur = 450) { if (!state.locked) goTo({ az: state.az + dir, dur }); },
+        stepElevation(dir, dur = 450) { if (!state.locked) goTo({ el: state.el + dir, dur }); },
+        stepZoom(dir, dur = 350) { if (!state.locked) goTo({ zoom: state.zoom + dir, dur }); },
+        snapHome(dur = 500) { if (!state.locked) goTo({ ...HOME, dur }); },
 
         /* Fit the apartment bounds (world space). Called once assets load.
          * 0.85 (not a "safe" 1.1+): the apartment is a flat slab, so the
@@ -152,6 +152,18 @@ export function createRig(camera) {
         isTweening() { return !!tween; },
         azimuthIndex() { return state.az; },
         currentRadius() { return cur.radius; },
+
+        /* Edit-mode pose: near-top-down north-up, outside the detent system.
+         * locked=true suspends drag/wheel input; exitPose() returns to the
+         * last detented pose. 85° (not 89.5+) keeps lookAt's up-vector sane. */
+        goEditPose(dur = 600) {
+            state.locked = true;
+            startTween(azRad(0), THREE.MathUtils.degToRad(85), state.fitDistance * 1.05, dur);
+        },
+        exitEditPose(dur = 600) {
+            state.locked = false;
+            goTo({ dur });
+        },
     };
     return rig;
 }

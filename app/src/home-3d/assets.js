@@ -50,3 +50,14 @@ export async function fetchManifest({ sim = false } = {}) {
 export function pointsCandidates({ sim = false } = {}) {
     return candidates('points.ply', 'points.sim.ply', { sim });
 }
+
+/* frame.json — the scan->apartment registration (T_mesh / T_splat, Z-up). */
+export async function fetchFrame({ sim = false } = {}) {
+    for (const url of candidates('frame.json', null, { sim })) {
+        try {
+            const r = await fetch(url);
+            if (r.ok) return await r.json();
+        } catch (e) { /* next */ }
+    }
+    return null;
+}

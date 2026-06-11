@@ -45,7 +45,10 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
     const pointsMaterial = pointcloudM.createPointsMaterial();
     const rig = rigM.createRig(camera);
     const modes = modesM.createModes({
-        apartmentRoot, pointsMaterial, sim, assetCandidates: assetsM.candidates,
+        apartmentRoot, pointsMaterial, sim, scene, renderer,
+        assetCandidates: assetsM.candidates,
+        fetchFrame: () => assetsM.fetchFrame({ sim }),
+        getPoints: () => points,
     });
     const overlay = markersM.createOverlay(apartmentRoot);
     const picking = pickingM.createPicking(camera, hostEl);

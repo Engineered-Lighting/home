@@ -50,6 +50,14 @@ _ROUTING_LOG_PATH = Path("/config/external_routing.log")
 # scaffolded by tools/init-spatial-model.py.
 _SPATIAL_MODEL_PATH = Path("/config/spatial_model.json")
 
+# 3D apartment spatial model (apartment_model v1) — the unified Z-up metric
+# document behind the Home app's /apartment screen: zones, devices, camera
+# calibrations, light influence polygons. Distinct from spatial_model (the
+# legacy per-camera light-footprint store) — the two coexist. Single-writer
+# (the app) with revision-based optimistic concurrency; the spatial-tracker
+# service polls GET.
+_APARTMENT_MODEL_PATH = Path("/config/apartment_model.json")
+
 # Phase 4A.24 — custom avatars per identity. Files live on disk; presence
 # is the boolean source of truth. Deleting the file reverts to initials.
 # Client (Tauri) does the crop + resize before POSTing; server just
@@ -980,6 +988,110 @@ class SpatialModelView(CORSHomeAssistantView):
                          status_code=200 if result.get("ok") else 400)
 
 
+class ApartmentModelView(CORSHomeAssistantView):
+    """GET  /api/extended_openai_conversation/apartment_model
+    POST /api/extended_openai_conversation/apartment_model
+
+    The 3D apartment spatial model (apartment_model v1, Z-up metric):
+    zones, devices, camera calibrations, light influence polygons. Backs the
+    Home app's /apartment screen. Coexists with the legacy spatial_model.
+
+    GET never 500s — absent file returns {"exists": false, "revision": 0}.
+
+    POST replaces the whole document with optimistic concurrency: the body's
+    `revision` must equal the stored revision; the server increments it on
+    write. A mismatch returns 409 with the stored document so the client can
+    rebase. Writes are atomic (temp + replace) and the previous version is
+    kept as a timestamped backup (last 10 retained).
+    """
+
+    url = "/api/extended_openai_conversation/apartment_model"
+    name = "api:extended_openai_conversation:apartment_model"
+    requires_auth = True
+
+    async def get(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+
+        def _read() -> dict:
+            if not _APARTMENT_MODEL_PATH.is_file():
+                return {"exists": False, "revision": 0, "schema_version": 1,
+                        "zones": [], "devices": []}
+            try:
+                model = json.loads(
+                    _APARTMENT_MODEL_PATH.read_text(encoding="utf-8"))
+            except (OSError, PermissionError, json.JSONDecodeError) as e:
+                _LOGGER.debug("apartment_model view: read failed: %s", e)
+                return {"exists": False, "revision": 0, "schema_version": 1,
+                        "zones": [], "devices": [],
+                        "reason": f"read failed: {e}"}
+            model["exists"] = True
+            return model
+
+        return self.json(await hass.async_add_executor_job(_read))
+
+    async def post(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            return self.json({"error": "invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return self.json({"error": "object body required"},
+                             status_code=400)
+        if body.get("schema_version") != 1:
+            return self.json({"error": "schema_version 1 required"},
+                             status_code=400)
+        if not isinstance(body.get("revision"), int):
+            return self.json({"error": "integer revision required"},
+                             status_code=400)
+        for key in ("zones", "devices"):
+            if not isinstance(body.get(key), list):
+                return self.json({"error": f"{key} array required"},
+                                 status_code=400)
+
+        def _write() -> tuple[dict, int]:
+            from datetime import datetime, timezone
+            stored_rev = 0
+            stored = None
+            if _APARTMENT_MODEL_PATH.is_file():
+                try:
+                    stored = json.loads(
+                        _APARTMENT_MODEL_PATH.read_text(encoding="utf-8"))
+                    stored_rev = int(stored.get("revision") or 0)
+                except (OSError, json.JSONDecodeError, ValueError) as e:
+                    return ({"error": f"stored model unreadable: {e}"}, 500)
+            if body["revision"] != stored_rev:
+                # stale client — hand back the stored doc to rebase onto
+                conflict = stored or {"revision": stored_rev}
+                conflict["conflict"] = True
+                return (conflict, 409)
+            body["revision"] = stored_rev + 1
+            body["updated_at"] = datetime.now(timezone.utc).isoformat()
+            body.pop("exists", None)
+            body.pop("conflict", None)
+            # timestamped backup of the outgoing version (keep last 10)
+            if stored is not None:
+                stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+                backup = _APARTMENT_MODEL_PATH.with_name(
+                    f"apartment_model.{stamp}.bak.json")
+                try:
+                    backup.write_text(json.dumps(stored), encoding="utf-8")
+                    baks = sorted(_APARTMENT_MODEL_PATH.parent.glob(
+                        "apartment_model.*.bak.json"))
+                    for old in baks[:-10]:
+                        old.unlink(missing_ok=True)
+                except OSError as e:  # backup failure never blocks the write
+                    _LOGGER.warning("apartment_model backup failed: %s", e)
+            tmp = _APARTMENT_MODEL_PATH.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(body, indent=2), encoding="utf-8")
+            tmp.replace(_APARTMENT_MODEL_PATH)
+            return ({"ok": True, "revision": body["revision"],
+                     "updated_at": body["updated_at"]}, 200)
+
+        result, status = await hass.async_add_executor_job(_write)
+        return self.json(result, status_code=status)
+
+
 class IdentityListView(CORSHomeAssistantView):
     """GET /api/extended_openai_conversation/identities
 
@@ -1565,6 +1677,10 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         hass.http.register_view(SpatialModelView())
     except Exception as e:  # noqa: BLE001 — never block setup on this
         _LOGGER.warning("Failed to register SpatialModelView: %s", e)
+    try:
+        hass.http.register_view(ApartmentModelView())
+    except Exception as e:  # noqa: BLE001 — never block setup on this
+        _LOGGER.warning("Failed to register ApartmentModelView: %s", e)
 
     # Identity store + Frigate sync (Addendum 14 / Slice 2). The store is
     # the durable record of identities + relationships + preferences; the

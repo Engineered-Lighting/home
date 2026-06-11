@@ -29,5 +29,22 @@ export function createPicking(camera, hostEl) {
             raycaster.setFromCamera(ndc, camera);
             return raycaster.intersectObjects(objects, true);
         },
+
+        /* Screen point -> apartment-frame floor coords [x, y] (Z-up, z=0).
+         * Ray ∩ world floor plane (y=0 after the root conversion), then into
+         * the root's object space. Returns null when the ray misses. */
+        floorPoint(apartmentRoot, clientX, clientY) {
+            const rect = hostEl.getBoundingClientRect();
+            const ndc = new THREE.Vector2(
+                ((clientX - rect.left) / rect.width) * 2 - 1,
+                -((clientY - rect.top) / rect.height) * 2 + 1,
+            );
+            raycaster.setFromCamera(ndc, camera);
+            const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+            const hit = new THREE.Vector3();
+            if (!raycaster.ray.intersectPlane(plane, hit)) return null;
+            const local = apartmentRoot.worldToLocal(hit.clone());
+            return [local.x, local.y];
+        },
     };
 }

@@ -90,12 +90,14 @@
 
         const mono = { fontFamily: "'Geist Mono', monospace", fontSize: 10, letterSpacing: "0.08em" };
         return React.createElement("div", {
-            // while a pixel is staged the wrapper lets clicks fall through to
-            // the 3D canvas for the matching scene pick
-            style: { position: "absolute", inset: 0, zIndex: 40,
-                     background: pendingPx ? "transparent" : "rgba(5,6,9,0.92)",
-                     pointerEvents: pendingPx ? "none" : "auto",
-                     display: "flex", flexDirection: "column", padding: 18, gap: 10, color: "var(--hg-ice, #cfe2ff)" },
+            // SIDE-BY-SIDE: snapshot panel docked left, the live 3D mesh stays
+            // visible and clickable on the right half (user feedback — the
+            // full-screen overlay hid the mesh during correspondence picking)
+            style: { position: "absolute", top: 0, left: 0, bottom: 0, width: "46%",
+                     zIndex: 40, background: "rgba(5,6,9,0.96)",
+                     borderRight: "1px solid #2a3242", overflowY: "auto",
+                     display: "flex", flexDirection: "column", padding: 14, gap: 10,
+                     color: "var(--hg-ice, #cfe2ff)" },
         },
             React.createElement("div", { style: { ...mono, fontSize: 11 } },
                 `calibrate · ${cam} — STEP 1 lens: scatter the dot boards in view, `
@@ -122,9 +124,12 @@
             React.createElement("img", {
                 ref: imgRef, onClick: clickImage,
                 src: `${trackerBase}/calib/${cam}/snapshot`,
-                style: { maxWidth: "62%", border: "1px solid #2a3242", cursor: "crosshair",
-                         opacity: pendingPx ? 0.45 : 1 },
+                style: { width: "100%", border: "1px solid #2a3242", cursor: "crosshair",
+                         opacity: pendingPx ? 0.55 : 1 },
             }),
+            pendingPx && React.createElement("div",
+                { style: { ...mono, color: "#ffd479" } },
+                "→ now click the SAME spot in the 3D view on the right"),
             result && React.createElement("div", { style: mono },
                 `solved · rms ${result.rms_px?.toFixed?.(2)} px · pos σ ${result.pos_sigma_m ?? "?"} m`),
             error && React.createElement("div", { style: { ...mono, color: "#ff8989" } }, error),

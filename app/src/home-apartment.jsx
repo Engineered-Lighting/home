@@ -59,6 +59,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
   const [calibCam, setCalibCam] = useState(null); // correspondence-capture overlay
   const calibPickRef = useRef(false);
   const calibApiRef = useRef(null);
+  const calibPointsRef = useRef(null);
   const [anchors, setAnchors] = useState({});        // id -> {x, y, visible}
   const statesRef = useRef({});                      // entity_id -> ha state
   const simActive = !!(sim && sim.active);
@@ -104,6 +105,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
           setPhase("ready");
         }
         engineRef.current = engine;
+        engine.pointsPromise.then((p) => { calibPointsRef.current = p; }).catch(() => {});
 
         const host = hostRef.current;
         const size = () => engine.setSize(host.clientWidth, host.clientHeight);
@@ -174,7 +176,14 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
       if (!e) return;
       const rc = e.picking.raycaster;
       rc.params.Points = { ...(rc.params.Points || {}), threshold: 0.04 };
-      const hits = (e.picking.pick([e.apartmentRoot], ev.clientX, ev.clientY) || [])
+      // raycast GEOMETRY only (points cloud + mesh) — picking apartmentRoot
+      // also hit marker glow sprites floating mid-air (pairs landed at
+      // z > ceiling, corrupting the solve)
+      const targets = [
+        calibPointsRef.current,
+        e.modes.getMesh && e.modes.getMesh(),
+      ].filter(Boolean);
+      const hits = (e.picking.pick(targets, ev.clientX, ev.clientY) || [])
         .filter((h) => h.point);
       let local = null;
       if (hits.length) {
@@ -203,12 +212,21 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
     calibMarkerMeshesRef.current = [];
     for (const p of pairs) {
       const mesh = new THREE.Mesh(
-        new THREE.SphereGeometry(0.06, 12, 10),
-        new THREE.MeshBasicMaterial({ color: 0x4ade80, depthTest: false }));
+        new THREE.SphereGeometry(0.14, 14, 12),
+        new THREE.MeshBasicMaterial({ color: 0x22ff88, depthTest: false,
+                                      transparent: true, opacity: 0.95 }));
       mesh.position.set(p.xyz[0], p.xyz[1], p.xyz[2]);
-      mesh.renderOrder = 30;
+      mesh.renderOrder = 40;
       e.apartmentRoot.add(mesh);
-      calibMarkerMeshesRef.current.push(mesh);
+      // vertical hairline to the floor so the marker reads at overview zoom
+      const lineGeo = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(p.xyz[0], p.xyz[1], 0),
+        new THREE.Vector3(p.xyz[0], p.xyz[1], p.xyz[2])]);
+      const line = new THREE.Line(lineGeo,
+        new THREE.LineBasicMaterial({ color: 0x22ff88, transparent: true, opacity: 0.5 }));
+      line.renderOrder = 40;
+      e.apartmentRoot.add(line);
+      calibMarkerMeshesRef.current.push(mesh, line);
     }
   };
 
@@ -554,6 +572,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
       {calibCam && window.HomeApartmentCalibrate && React.createElement(
         window.HomeApartmentCalibrate.Component, {
           cam: calibCam.camera.frigate_name,
+          savedLens: calibCam.camera?.intrinsics || null,
           trackerBase: localStorage.getItem("apartment3d.trackerBase") || "http://192.168.0.100:8098",
           onPickRequest: (active) => { calibPickRef.current = active; },
           onIntrinsics: (lens) => {

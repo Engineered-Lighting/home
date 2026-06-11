@@ -16,7 +16,7 @@
 (function () {
     const { useState, useRef, useEffect } = React;
 
-    function CalibrateOverlay({ cam, trackerBase, onPickRequest, onDone, onIntrinsics, onPairsChanged, registerApi }) {
+    function CalibrateOverlay({ cam, trackerBase, onPickRequest, onDone, onIntrinsics, onPairsChanged, registerApi, savedLens }) {
         const [pairs, setPairs] = useState([]);
         const [pendingPx, setPendingPx] = useState(null);
         const [busy, setBusy] = useState(false);
@@ -114,8 +114,10 @@
                     await (window.tauriFetch || fetch)(`${trackerBase}/calib/${cam}/capture/reset`, { method: "POST" });
                     setThumbs([]); setViews(0); setLens(null);
                 } }, "reset"),
-                lens && React.createElement("span", { style: mono },
-                    `lens solved · rms ${lens.rms_px.toFixed(2)} px · ${lens.views} views`)),
+                (lens || savedLens) && React.createElement("span", { style: { ...mono, color: "#4ade80" } },
+                    lens
+                        ? `lens solved · rms ${lens.rms_px.toFixed(2)} px · ${lens.views} views`
+                        : `lens ✓ saved (rms ${(savedLens.rms_px || 0).toFixed(2)} px)`)),
             thumbs.length > 0 && React.createElement("div",
                 { style: { display: "flex", gap: 4, overflowX: "auto" } },
                 thumbs.map((t, i) => React.createElement("img", {

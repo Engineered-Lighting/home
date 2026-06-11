@@ -162,6 +162,8 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
             } catch (e) { /* */ }
         },
 
+        getMesh() { return state.mesh; },
+
         debugInfo() {
             return {
                 splat: !!state.splat,

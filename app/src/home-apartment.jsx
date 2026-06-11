@@ -162,6 +162,56 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
     return () => { dead = true; };
   }, [open, endpoint, token, simActive]);
 
+  /* correspondence pick: NATIVE capture-phase listener — the rig's input
+     handlers stop propagation, so React synthetic events never fire on the
+     host (this is why Step 2 clicks "did nothing") */
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return undefined;
+    const onPick = (ev) => {
+      if (!calibPickRef.current || !calibApiRef.current) return;
+      const e = engineRef.current;
+      if (!e) return;
+      const rc = e.picking.raycaster;
+      rc.params.Points = { ...(rc.params.Points || {}), threshold: 0.04 };
+      const hits = (e.picking.pick([e.apartmentRoot], ev.clientX, ev.clientY) || [])
+        .filter((h) => h.point);
+      let local = null;
+      if (hits.length) {
+        local = e.apartmentRoot.worldToLocal(hits[0].point.clone());
+      } else {
+        const f = e.picking.floorPoint(e.apartmentRoot, ev.clientX, ev.clientY);
+        if (f) local = { x: f[0], y: f[1], z: 0 };
+      }
+      if (local) {
+        calibApiRef.current.acceptScenePoint([
+          +local.x.toFixed(3), +local.y.toFixed(3), +local.z.toFixed(3)]);
+        ev.stopPropagation();
+      }
+    };
+    host.addEventListener("click", onPick, true);
+    return () => host.removeEventListener("click", onPick, true);
+  }, [open, phase]);
+
+  /* 3D confirmation markers for banked pairs (numbered green spheres) */
+  const calibMarkerMeshesRef = useRef([]);
+  const syncCalibMarkers = async (pairs) => {
+    const e = engineRef.current;
+    if (!e) return;
+    const THREE = await import("three");
+    for (const m of calibMarkerMeshesRef.current) e.apartmentRoot.remove(m);
+    calibMarkerMeshesRef.current = [];
+    for (const p of pairs) {
+      const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(0.06, 12, 10),
+        new THREE.MeshBasicMaterial({ color: 0x4ade80, depthTest: false }));
+      mesh.position.set(p.xyz[0], p.xyz[1], p.xyz[2]);
+      mesh.renderOrder = 30;
+      e.apartmentRoot.add(mesh);
+      calibMarkerMeshesRef.current.push(mesh);
+    }
+  };
+
   /* model -> overlay sync */
   useEffect(() => {
     const engine = engineRef.current;
@@ -354,21 +404,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
       <div ref={hostRef} style={{ position: "absolute", top: 0, bottom: 0, right: 0,
                                   left: calibCam ? "46%" : 0,
                                   touchAction: "none", cursor: "grab" }}
-        onClickCapture={(ev) => {
-          // correspondence capture: while a snapshot pixel is staged, the next
-          // scene click raycasts the mesh and feeds the calibration overlay
-          if (!calibPickRef.current || !calibApiRef.current) return;
-          const e = engineRef.current;
-          if (!e) return;
-          const hits = e.picking.pick([e.apartmentRoot], ev.clientX, ev.clientY);
-          const hit = hits && hits.find((h) => h.point);
-          if (hit) {
-            const local = e.apartmentRoot.worldToLocal(hit.point.clone());
-            calibApiRef.current.acceptScenePoint([
-              +local.x.toFixed(3), +local.y.toFixed(3), +local.z.toFixed(3)]);
-            ev.stopPropagation();
-          }
-        }}>
+>
         <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%" }} />
       </div>
 
@@ -533,7 +569,11 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
               return next;
             });
           },
-          onDone: () => { calibPickRef.current = false; setCalibCam(null); },
+          onPairsChanged: (pairs) => { syncCalibMarkers(pairs); },
+          onDone: () => {
+            calibPickRef.current = false; setCalibCam(null);
+            syncCalibMarkers([]);
+          },
           registerApi: (api) => { calibApiRef.current = api; },
         })}
 

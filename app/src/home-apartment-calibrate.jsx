@@ -16,7 +16,7 @@
 (function () {
     const { useState, useRef, useEffect } = React;
 
-    function CalibrateOverlay({ cam, trackerBase, onPickRequest, onDone, onIntrinsics, registerApi }) {
+    function CalibrateOverlay({ cam, trackerBase, onPickRequest, onDone, onIntrinsics, onPairsChanged, registerApi }) {
         const [pairs, setPairs] = useState([]);
         const [pendingPx, setPendingPx] = useState(null);
         const [busy, setBusy] = useState(false);
@@ -64,6 +64,8 @@
         }, [registerApi]);
 
         useEffect(() => { onPickRequest(!!pendingPx); }, [!!pendingPx]);
+        useEffect(() => { onPairsChanged && onPairsChanged(pairs); }, [pairs]);
+        const [imgNat, setImgNat] = useState([1280, 720]);
 
         const clickImage = (e) => {
             const img = imgRef.current;
@@ -121,15 +123,50 @@
                     title: `${t.n} new view(s)`,
                     style: { height: 74, border: t.n ? "1px solid #4a8" : "1px solid #844" },
                 }))),
-            React.createElement("img", {
-                ref: imgRef, onClick: clickImage,
-                src: `${trackerBase}/calib/${cam}/snapshot`,
-                style: { width: "100%", border: "1px solid #2a3242", cursor: "crosshair",
-                         opacity: pendingPx ? 0.55 : 1 },
-            }),
+            React.createElement("div", { style: { position: "relative", width: "100%" } },
+                React.createElement("img", {
+                    ref: imgRef, onClick: clickImage,
+                    onLoad: () => imgRef.current && setImgNat(
+                        [imgRef.current.naturalWidth, imgRef.current.naturalHeight]),
+                    src: `${trackerBase}/calib/${cam}/snapshot`,
+                    style: { width: "100%", display: "block", border: "1px solid #2a3242",
+                             cursor: "crosshair", opacity: pendingPx ? 0.7 : 1 },
+                }),
+                pairs.map((p, i) => React.createElement("div", {
+                    key: i,
+                    style: { position: "absolute",
+                             left: `${(p.px[0] / imgNat[0]) * 100}%`,
+                             top: `${(p.px[1] / imgNat[1]) * 100}%`,
+                             transform: "translate(-50%, -50%)",
+                             width: 16, height: 16, borderRadius: 9,
+                             border: "2px solid #4ade80", color: "#4ade80",
+                             fontSize: 9, lineHeight: "12px", textAlign: "center",
+                             fontFamily: "'Geist Mono', monospace",
+                             background: "rgba(0,0,0,0.45)", pointerEvents: "none" },
+                }, String(i + 1))),
+                pendingPx && React.createElement("div", {
+                    style: { position: "absolute",
+                             left: `${(pendingPx[0] / imgNat[0]) * 100}%`,
+                             top: `${(pendingPx[1] / imgNat[1]) * 100}%`,
+                             transform: "translate(-50%, -50%)",
+                             width: 16, height: 16, borderRadius: 9,
+                             border: "2px solid #ffd479", pointerEvents: "none" },
+                })),
             pendingPx && React.createElement("div",
                 { style: { ...mono, color: "#ffd479" } },
                 "→ now click the SAME spot in the 3D view on the right"),
+            pairs.length > 0 && React.createElement("div",
+                { style: { display: "flex", flexDirection: "column", gap: 2 } },
+                pairs.map((p, i) => React.createElement("div",
+                    { key: i, style: { ...mono, display: "flex", gap: 8, alignItems: "center" } },
+                    React.createElement("span", { style: { color: "#4ade80", width: 16 } }, String(i + 1)),
+                    React.createElement("span", null,
+                        `px ${Math.round(p.px[0])},${Math.round(p.px[1])} ↔ ` +
+                        `xyz ${p.xyz.map((v) => v.toFixed(2)).join(", ")}`),
+                    React.createElement("button", {
+                        style: { ...mono, marginLeft: "auto" },
+                        onClick: () => setPairs((q) => q.filter((_, k) => k !== i)),
+                    }, "×")))),
             result && React.createElement("div", { style: mono },
                 `solved · rms ${result.rms_px?.toFixed?.(2)} px · pos σ ${result.pos_sigma_m ?? "?"} m`),
             error && React.createElement("div", { style: { ...mono, color: "#ff8989" } }, error),

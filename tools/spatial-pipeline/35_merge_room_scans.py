@@ -73,45 +73,62 @@ def register(sp: np.ndarray) -> tuple[np.ndarray, float]:
     F_mesh = np.fft.rfft2(occupancy(mesh_xy - mesh_c))
     body = sp_g[(sp_g[:, 2] > 0.05) & (sp_g[:, 2] < 2.0)]
     body_c = body[:, :2].mean(0)
-    best_s = None
+    # A single-room scan correlates AMBIGUOUSLY against the whole-home
+    # footprint (rooms resemble each other) — collect the top-K candidate
+    # poses across all yaws and let ICP from each decide by final residual.
+    cands = []
     for yaw_deg in range(0, 360, 2):
         a = np.deg2rad(yaw_deg)
         Ry = np.array([[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]])
         G = occupancy((body[:, :2] - body_c) @ Ry.T)
         corr = np.fft.irfft2(F_mesh * np.conj(np.fft.rfft2(G)), s=(PAD, PAD))
-        peak = float(corr.max())
-        if best_s is None or peak > best_s[0]:
-            iy, ix = np.unravel_index(int(corr.argmax()), corr.shape)
+        # top 2 peaks per yaw
+        flat = corr.ravel()
+        for k in np.argpartition(flat, -2)[-2:]:
+            iy, ix = divmod(int(k), PAD)
             dy = iy if iy < PAD // 2 else iy - PAD
             dx = ix if ix < PAD // 2 else ix - PAD
-            best_s = (peak, yaw_deg, dx * CELL, dy * CELL)
-    _, yaw_deg, tx, ty = best_s
-    a = np.deg2rad(yaw_deg)
-    Ryaw = np.array([[np.cos(a), -np.sin(a), 0], [np.sin(a), np.cos(a), 0], [0, 0, 1]])
-    T = np.eye(4)
-    T[:3, :3] = Ryaw @ Rg
-    T[:3, 3] = (Ryaw @ np.array([-body_c[0], -body_c[1], -floor_z]) +
-                np.array([tx + mesh_c[0], ty + mesh_c[1], 0.0]))
+            cands.append((float(flat[k]), yaw_deg, dx * CELL, dy * CELL))
+    cands.sort(reverse=True)
+    cands = cands[:8]
 
-    sample = sp[rng.choice(len(sp), 12_000, replace=False)]
-    cur = apply_T(T, sample)
-    for _ in range(40):
-        d, idx = surf_tree.query(cur, k=1)
-        keep = d < max(0.08, float(np.percentile(d, 60)))
-        src, dst = cur[keep], surf_pts[idx[keep]]
-        sc, dc = src.mean(0), dst.mean(0)
-        U, _, Vt = np.linalg.svd((src - sc).T @ (dst - dc))
-        Rk = Vt.T @ U.T
-        if np.linalg.det(Rk) < 0:
-            Vt[-1] *= -1
+    def icp_from(yaw_deg, tx, ty):
+        a = np.deg2rad(yaw_deg)
+        Ryaw = np.array([[np.cos(a), -np.sin(a), 0], [np.sin(a), np.cos(a), 0], [0, 0, 1]])
+        T = np.eye(4)
+        T[:3, :3] = Ryaw @ Rg
+        T[:3, 3] = (Ryaw @ np.array([-body_c[0], -body_c[1], -floor_z]) +
+                    np.array([tx + mesh_c[0], ty + mesh_c[1], 0.0]))
+        sample = sp[rng.choice(len(sp), 8_000, replace=False)]
+        cur = apply_T(T, sample)
+        for _ in range(40):
+            d, idx = surf_tree.query(cur, k=1)
+            keep = d < max(0.08, float(np.percentile(d, 60)))
+            src, dst = cur[keep], surf_pts[idx[keep]]
+            sc, dc = src.mean(0), dst.mean(0)
+            U, _, Vt = np.linalg.svd((src - sc).T @ (dst - dc))
             Rk = Vt.T @ U.T
-        tk = dc - Rk @ sc
-        cur = cur @ Rk.T + tk
-        Tk = np.eye(4); Tk[:3, :3] = Rk; Tk[:3, 3] = tk
-        T = Tk @ T
-        if np.linalg.norm(tk) < 5e-5:
+            if np.linalg.det(Rk) < 0:
+                Vt[-1] *= -1
+                Rk = Vt.T @ U.T
+            tk = dc - Rk @ sc
+            cur = cur @ Rk.T + tk
+            Tk = np.eye(4); Tk[:3, :3] = Rk; Tk[:3, 3] = tk
+            T = Tk @ T
+            if np.linalg.norm(tk) < 5e-5:
+                break
+        return T, residual(apply_T(T, sp))
+
+    best_T, best_res = None, np.inf
+    for peak, yaw_deg, tx, ty in cands:
+        T, res = icp_from(yaw_deg, tx, ty)
+        print(f"    candidate yaw={yaw_deg} shift=({tx:.1f},{ty:.1f}): "
+              f"ICP residual {res*100:.1f} cm")
+        if res < best_res:
+            best_T, best_res = T, res
+        if best_res < 0.04:
             break
-    return T, residual(apply_T(T, sp))
+    return best_T, best_res
 
 
 all_pos, all_rgb = [], []

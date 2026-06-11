@@ -100,12 +100,13 @@ export function createPointsMaterial() {
             uFadeFar:    { value: saved.uFadeFar ?? 30.0 },
             // 55 tuned visually against the real whole-home cloud (110 made
             // overview points read as blobs at ~23 m orbit radius)
-            // 170 = the EL site's 120 scaled from its 8-unit scene to this
-            // 13.6 m apartment at the matching relative camera distance —
-            // near-mid points hit the same 12 px clamp = the fat luminous
-            // dots of the website (55 rendered ~4.5 px dust at overview).
-            // Deliberately NOT honoring a saved override predating this fix.
-            uSizeRef:    { value: Math.max(saved.uSizeRef ?? 0, 170.0) },
+            // The LIVE engineered.lighting site renders a SPLAT (js/main.js,
+            // echopark2.splat) — its fine grain is mm-scale gaussians from
+            // ~14 units away, i.e. 1-3 px. The fat-dot theory (170, from the
+            // repo's UNUSED point-shader files) read as cauliflower — user
+            // verdict. 55 = the fine-grain match; the look's richness comes
+            // from per-point photographic shading, not size.
+            uSizeRef:    { value: saved.uSizeRef ?? 55.0 },
             uJitterAmp:  { value: saved.uJitterAmp ?? 0.010 },
         },
         vertexShader,

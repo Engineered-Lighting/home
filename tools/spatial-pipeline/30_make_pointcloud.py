@@ -117,9 +117,10 @@ print(f"after 6 mm voxel dedupe: {len(pos):,}")
 # connected-component approaches fail here (doorways are sparse -> rooms
 # disconnect and "largest component" amputates real rooms; learned twice).
 CORE_BOXES = [
-    {"x": (2.55, 7.35), "y": (0.40, 6.60)},    # kitchen + dining + hallway
-    {"x": (7.35, 15.30), "y": (0.50, 6.35)},   # living room + east alcove
-    {"x": (10.85, 14.40), "y": (6.35, 8.05)},  # OFFICE (northeast room)
+    {"x": (2.70, 6.85), "y": (0.40, 6.55)},    # kitchen + dining (west nub trimmed)
+    {"x": (6.85, 7.35), "y": (0.40, 6.15)},    # hallway strip (chimney blob cut)
+    {"x": (7.35, 14.45), "y": (0.50, 6.35)},   # living room + east alcove
+    {"x": (10.85, 14.05), "y": (6.35, 7.95)},  # OFFICE (northeast) - kept
 ]
 m = np.zeros(len(pos), bool)
 for b in CORE_BOXES:

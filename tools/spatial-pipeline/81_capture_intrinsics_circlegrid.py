@@ -84,7 +84,8 @@ def fit_lattice(pts, iters=400, tol_frac=0.18):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cam", required=True)
-    ap.add_argument("--pitch-mm", type=float, required=True)
+    ap.add_argument("--pitch-mm", type=float, default=35.0,
+                    help="caliper-measured 2026-06-11: 35.00 mm center-to-center")
     ap.add_argument("--target", type=int, default=40)
     ap.add_argument("--min-dots", type=int, default=20)
     args = ap.parse_args()

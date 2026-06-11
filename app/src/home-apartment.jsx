@@ -56,6 +56,9 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
   const [inCamPose, setInCamPose] = useState(false);
   const [liveCam, setLiveCam] = useState(null);   // camera device while snapped
   const [liveOn, setLiveOn] = useState(false);    // live feed vs 3D from the pose
+  const [calibCam, setCalibCam] = useState(null); // correspondence-capture overlay
+  const calibPickRef = useRef(false);
+  const calibApiRef = useRef(null);
   const [anchors, setAnchors] = useState({});        // id -> {x, y, visible}
   const statesRef = useRef({});                      // entity_id -> ha state
   const simActive = !!(sim && sim.active);
@@ -338,7 +341,22 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
                                   to { transform: translateY(0); opacity: 1; } }
       `}</style>
 
-      <div ref={hostRef} style={{ position: "absolute", inset: 0, touchAction: "none", cursor: "grab" }}>
+      <div ref={hostRef} style={{ position: "absolute", inset: 0, touchAction: "none", cursor: "grab" }}
+        onClickCapture={(ev) => {
+          // correspondence capture: while a snapshot pixel is staged, the next
+          // scene click raycasts the mesh and feeds the calibration overlay
+          if (!calibPickRef.current || !calibApiRef.current) return;
+          const e = engineRef.current;
+          if (!e) return;
+          const hits = e.picking.pick([e.apartmentRoot], ev.clientX, ev.clientY);
+          const hit = hits && hits.find((h) => h.point);
+          if (hit) {
+            const local = e.apartmentRoot.worldToLocal(hit.point.clone());
+            calibApiRef.current.acceptScenePoint([
+              +local.x.toFixed(3), +local.y.toFixed(3), +local.z.toFixed(3)]);
+            ev.stopPropagation();
+          }
+        }}>
         <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%" }} />
       </div>
 
@@ -367,8 +385,15 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
           <span style={{ marginLeft: "auto", display: "flex", gap: 6, pointerEvents: "auto" }}>
             {inCamPose && (
               <AptHudButton label="← back" onClick={() => {
-                setLiveCam(null); setLiveOn(false);
+                setLiveCam(null); setLiveOn(false); setCalibCam(null);
                 engineRef.current?.rig.returnToOverview();
+              }} />
+            )}
+            {inCamPose && liveCam && !simActive && window.HomeApartmentCalibrate && (
+              <AptHudButton label="calibrate" active={!!calibCam} onClick={() => {
+                setLiveOn(false);
+                engineRef.current?.modes.setMode("mesh", { duration: 0 }).catch(() => {});
+                setCalibCam(liveCam);
               }} />
             )}
             {!inCamPose && (
@@ -473,6 +498,15 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
           </div>
         </div>
       )}
+
+      {calibCam && window.HomeApartmentCalibrate && React.createElement(
+        window.HomeApartmentCalibrate.Component, {
+          cam: calibCam.camera.frigate_name,
+          trackerBase: localStorage.getItem("apartment3d.trackerBase") || "http://192.168.0.100:8098",
+          onPickRequest: (active) => { calibPickRef.current = active; },
+          onDone: () => { calibPickRef.current = false; setCalibCam(null); },
+          registerApi: (api) => { calibApiRef.current = api; },
+        })}
 
       {/* labels + cards layer */}
       {phase === "ready" && !editing && (

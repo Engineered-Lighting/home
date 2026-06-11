@@ -63,7 +63,11 @@
 
         const mono = { fontFamily: "'Geist Mono', monospace", fontSize: 10, letterSpacing: "0.08em" };
         return React.createElement("div", {
-            style: { position: "absolute", inset: 0, zIndex: 40, background: "rgba(5,6,9,0.92)",
+            // while a pixel is staged the wrapper lets clicks fall through to
+            // the 3D canvas for the matching scene pick
+            style: { position: "absolute", inset: 0, zIndex: 40,
+                     background: pendingPx ? "transparent" : "rgba(5,6,9,0.92)",
+                     pointerEvents: pendingPx ? "none" : "auto",
                      display: "flex", flexDirection: "column", padding: 18, gap: 10, color: "var(--hg-ice, #cfe2ff)" },
         },
             React.createElement("div", { style: { ...mono, fontSize: 11 } },

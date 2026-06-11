@@ -53,6 +53,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
   const [trackerStatus, setTrackerStatus] = useState("connecting");
   const [hoverId, setHoverId] = useState(null);
   const [cardId, setCardId] = useState(null);
+  const [inCamPose, setInCamPose] = useState(false);
   const [anchors, setAnchors] = useState({});        // id -> {x, y, visible}
   const statesRef = useRef({});                      // entity_id -> ha state
   const simActive = !!(sim && sim.active);
@@ -106,7 +107,10 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
         ro.observe(host);
         const detachInput = engine.attachInput(host);
         engine.setRunning(true);
-        const azTimer = setInterval(() => setAzIdx(engine.rig.azimuthIndex()), 200);
+        const azTimer = setInterval(() => {
+          setAzIdx(engine.rig.azimuthIndex());
+          setInCamPose(!!engine.rig.inCameraPose?.());
+        }, 200);
         detachRef.current = () => { ro.disconnect(); detachInput(); clearInterval(azTimer); };
       } catch (e) {
         if (!cancelled) { setError(String(e?.message || e)); setPhase("error"); }
@@ -254,6 +258,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
       const rig = engineRef.current?.rig;
       if (e.key === "Escape") {
         if (cardId) { setCardId(null); return; }
+        if (engineRef.current?.rig.inCameraPose?.()) { engineRef.current.rig.returnToOverview(); return; }
         if (editing) { setEditing(false); return; }
         onClose?.(); return;
       }
@@ -354,7 +359,12 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
             tracker · {trackerStatus}
           </span>
           <span style={{ marginLeft: "auto", display: "flex", gap: 6, pointerEvents: "auto" }}>
-            <AptHudButton label="edit" onClick={() => { setCardId(null); setEditing(true); }} />
+            {inCamPose && (
+              <AptHudButton label="← back" onClick={() => engineRef.current?.rig.returnToOverview()} />
+            )}
+            {!inCamPose && (
+              <AptHudButton label="edit" onClick={() => { setCardId(null); setEditing(true); }} />
+            )}
             <AptHudButton label="close · esc" onClick={onClose} />
           </span>
         </div>
@@ -435,6 +445,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
               screen={anchors[cardId] || { x: window.innerWidth / 2, y: 100 }}
               onClose={() => setCardId(null)}
               onService={callSvc}
+              onFlyTo={(dev) => engineRef.current?.flyToDevice(dev)}
               sim={simActive}
             />
           )}

@@ -61,7 +61,7 @@ function AptRoomChip({ track }) {
   );
 }
 
-function AptControlCard({ device, state, screen, onClose, onService, sim }) {
+function AptControlCard({ device, state, screen, onClose, onService, onFlyTo, sim }) {
   const [briDraft, setBriDraft] = useState(null);
   if (!device || !screen) return null;
   const attrs = state?.attributes || {};
@@ -163,9 +163,15 @@ function AptControlCard({ device, state, screen, onClose, onService, sim }) {
       )}
 
       {device.type === "camera" && (
-        <div style={{ marginTop: 8, fontFamily: CARD_FONT_MONO, fontSize: 9.5, color: "var(--hg-fg-4)" }}>
-          fly-to + live view land in P4
-        </div>
+        <>
+          <div style={row}>
+            {btn("fly to view", () => { onFlyTo && onFlyTo(device); onClose(); }, true)}
+          </div>
+          <div style={{ marginTop: 6, fontFamily: CARD_FONT_MONO, fontSize: 8.5, color: "var(--hg-fg-5)" }}>
+            {device.camera?.extrinsics ? "calibrated pose" : "not calibrated — approximate pose"}
+            {" · live feed needs go2rtc :1984 exposed"}
+          </div>
+        </>
       )}
     </div>
   );

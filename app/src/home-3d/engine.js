@@ -183,6 +183,39 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
         },
         attachInput(el) { return rigM.attachInput(el, rig); },
         refit() { fitNow(); },
+
+        /* Fly to a camera device's pose. Calibrated extrinsics (P4) when
+         * present; else the manual pose (device pos + yaw, slight downward
+         * pitch) — honest 'not calibrated' approximation. */
+        flyToDevice(device, { dur = 900 } = {}) {
+            apartmentRoot.updateMatrixWorld(true);
+            const pos = new THREE.Vector3(device.pos[0], device.pos[1], device.pos[2] ?? 1.6);
+            const worldPos = apartmentRoot.localToWorld(pos.clone());
+            let worldQuat, fov;
+            const ex = device.camera && device.camera.extrinsics;
+            if (ex && ex.q_wxyz) {
+                // OpenCV cam (+Z fwd, +Y down) -> three (-Z fwd, +Y up): R·diag(1,-1,-1)
+                const q = new THREE.Quaternion(ex.q_wxyz[1], ex.q_wxyz[2], ex.q_wxyz[3], ex.q_wxyz[0]);
+                const flip = new THREE.Quaternion().setFromRotationMatrix(
+                    new THREE.Matrix4().makeScale(1, -1, -1));
+                const rootQ = new THREE.Quaternion();
+                apartmentRoot.getWorldQuaternion(rootQ);
+                worldQuat = rootQ.multiply(q).multiply(flip);
+                const intr = device.camera.intrinsics;
+                fov = intr ? THREE.MathUtils.radToDeg(
+                    2 * Math.atan(intr.image_size[1] / (2 * intr.K[1][1]))) : 70;
+            } else {
+                // manual pose: look along yaw (apartment frame), pitched down 18°
+                const yaw = device.yaw_rad || 0;
+                const lookLocal = new THREE.Vector3(
+                    pos.x + Math.cos(yaw) * 2, pos.y + Math.sin(yaw) * 2, (pos.z ?? 1.6) - 0.65);
+                const lookWorld = apartmentRoot.localToWorld(lookLocal);
+                const m = new THREE.Matrix4().lookAt(worldPos, lookWorld, camera.up);
+                worldQuat = new THREE.Quaternion().setFromRotationMatrix(m);
+                fov = 70;
+            }
+            rig.flyToPose({ position: worldPos, quaternion: worldQuat, fov, dur });
+        },
         dispose() {
             engine.setRunning(false);
             renderer.dispose();

@@ -36,6 +36,9 @@ export function createRig(camera) {
 
     const cur = { az: azRad(HOME.az), el: elRad(HOME.el), radius: 18 };
     let tween = null;
+    let poseTween = null;   // absolute-pose flight (camera snap)
+    let heldPose = null;    // held camera pose after arrival
+    const BASE_FOV = camera.fov;
 
     function azRad(i) { return (i / AZ_STOPS) * Math.PI * 2; }
     function elRad(i) { return THREE.MathUtils.degToRad(ELEVATIONS[i]); }
@@ -115,6 +118,28 @@ export function createRig(camera) {
 
         /* per-frame ----------------------------------------------------------- */
         update(dt) {
+            // absolute-pose flight takes priority over the spherical rig
+            if (poseTween) {
+                const p = poseTween;
+                p.t += dt * 1000;
+                const k = easeInOutCubic(Math.min(1, p.t / p.dur));
+                camera.position.lerpVectors(p.fromPos, p.toPos, k);
+                camera.quaternion.slerpQuaternions(p.fromQuat, p.toQuat, k);
+                const fk = Math.max(0, (k - 0.6) / 0.4); // fov morphs in the last 40%
+                camera.fov = p.fromFov + (p.toFov - p.fromFov) * fk;
+                camera.updateProjectionMatrix();
+                if (p.t >= p.dur) {
+                    if (p.hold) heldPose = { pos: p.toPos, quat: p.toQuat, fov: p.toFov };
+                    else { state.locked = false; camera.fov = p.toFov; camera.updateProjectionMatrix(); }
+                    poseTween = null;
+                }
+                return;
+            }
+            if (heldPose) {
+                camera.position.copy(heldPose.pos);
+                camera.quaternion.copy(heldPose.quat);
+                return;
+            }
             if (tween) {
                 tween.t += dt * 1000;
                 const k = easeInOutCubic(Math.min(1, tween.t / tween.dur));
@@ -164,6 +189,39 @@ export function createRig(camera) {
             state.locked = false;
             goTo({ dur });
         },
+
+        /* Absolute-pose flight (P4 camera snap): tween to a world pose with
+         * the fov morphing in the FINAL 40% of the flight (lens-breathing
+         * arrival). The pose is HELD (orbit suspended) until
+         * returnToOverview() flies back and unlocks. */
+        flyToPose({ position, quaternion, fov, dur = 900 }) {
+            state.locked = true;
+            poseTween = {
+                t: 0, dur, hold: true,
+                fromPos: camera.position.clone(), fromQuat: camera.quaternion.clone(),
+                fromFov: camera.fov,
+                toPos: position.clone(), toQuat: quaternion.clone(),
+                toFov: fov || camera.fov,
+            };
+        },
+        returnToOverview(dur = 700) {
+            const t = state.target;
+            const az = azRad(state.az), el = elRad(state.el), r = zoomRadius(state.zoom);
+            const toPos = new THREE.Vector3(
+                t.x + r * Math.cos(el) * Math.sin(az),
+                t.y + r * Math.sin(el),
+                t.z + r * Math.cos(el) * Math.cos(az));
+            const m = new THREE.Matrix4().lookAt(toPos, t, camera.up);
+            poseTween = {
+                t: 0, dur, hold: false,
+                fromPos: camera.position.clone(), fromQuat: camera.quaternion.clone(),
+                fromFov: camera.fov,
+                toPos, toQuat: new THREE.Quaternion().setFromRotationMatrix(m),
+                toFov: BASE_FOV,
+            };
+            heldPose = null;
+        },
+        inCameraPose() { return !!(heldPose || (poseTween && poseTween.hold)); },
     };
     return rig;
 }

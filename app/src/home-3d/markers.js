@@ -82,6 +82,27 @@ export function createOverlay(apartmentRoot) {
         stem.scale.y = Math.max(0.001, h);
         stem.position.z = -h / 2;
         group.add(core, ghost, glow, pick, stem);
+
+        // camera devices: a small always-on frustum cone along yaw (40%),
+        // landmark + click affordance for the fly-to
+        if (device.type === 'camera') {
+            const L = 0.7, tan = 0.45, tanV = 0.3;
+            const corners = [
+                new THREE.Vector3(L, L * tan, -L * tanV), new THREE.Vector3(L, -L * tan, -L * tanV),
+                new THREE.Vector3(L, -L * tan, L * tanV), new THREE.Vector3(L, L * tan, L * tanV),
+            ];
+            const pts = [];
+            for (let i = 0; i < 4; i++) {
+                pts.push(new THREE.Vector3(0, 0, 0), corners[i]);
+                pts.push(corners[i], corners[(i + 1) % 4]);
+            }
+            const cone = new THREE.LineSegments(
+                new THREE.BufferGeometry().setFromPoints(pts),
+                new THREE.LineBasicMaterial({ color: TYPE_COLOR.camera, transparent: true, opacity: 0.4 }),
+            );
+            cone.rotation.z = device.yaw_rad || 0;
+            group.add(cone);
+        }
         return { group, core, ghost, glow, pick, device, state: null };
     }
 

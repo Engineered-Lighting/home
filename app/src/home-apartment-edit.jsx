@@ -314,6 +314,23 @@ function HomeApartmentEdit({ engine, model, onModel, registry, onSave, onExit, s
                 if (d) { d.pos[2] = +e.target.value; d.height_preset = "custom"; }
               }, { undoable: false })}
               style={{ width: "100%", marginTop: 8 }} />
+            {["camera", "tv", "speaker"].includes(selected.type) && (
+              <>
+                <div style={heading}>
+                  aim · {Math.round(((selected.yaw_rad || 0) * 180 / Math.PI + 360) % 360)}°
+                </div>
+                <input type="range" min="-180" max="180" step="2"
+                  value={Math.round((selected.yaw_rad || 0) * 180 / Math.PI)}
+                  onChange={(e) => mutate((m) => {
+                    const d = m.devices.find((x) => x.id === selectedId);
+                    if (d) d.yaw_rad = +e.target.value * Math.PI / 180;
+                  }, { undoable: false })}
+                  style={{ width: "100%", marginTop: 8 }} />
+                <div style={{ fontSize: 8.5, color: "var(--hg-fg-5)", marginTop: 2 }}>
+                  0° = east · 90° = north — the frustum cone follows live
+                </div>
+              </>
+            )}
             <div style={{ marginTop: 14 }}>
               <EdButton label="delete device" danger onClick={() => {
                 mutate((m) => { m.devices = m.devices.filter((x) => x.id !== selectedId); });

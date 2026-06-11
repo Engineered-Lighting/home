@@ -141,8 +141,18 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
     if (!open) return undefined;
     let dead = false;
     (async () => {
-      const m = await window.HomeApartmentData.getModel({ endpoint, token, sim: simActive });
-      if (!dead) setModel(m);
+      // retry until a true remote load lands — the first attempt can race
+      // tauriFetch readiness and fall back to a cached/seed copy, which the
+      // user reads as "my saves were overwritten"
+      for (let attempt = 0; attempt < 10 && !dead; attempt++) {
+        const m = await window.HomeApartmentData.getModel({ endpoint, token, sim: simActive });
+        if (dead) return;
+        setModel(m);
+        const fromRemote = typeof m.revision === "number" && !m.remote_cached
+          && !m.offline_draft && !m.seeded;
+        if (fromRemote || simActive || !token) break;
+        await new Promise((r) => setTimeout(r, 2500));
+      }
       const client = window.__hav_haClient;
       if (client && !simActive) {
         const reg = await window.HomeApartmentData.getRegistry(client);

@@ -69,12 +69,22 @@
               const seed = await fetchSeed();
               if (seed) return { ...model, zones: seed.zones, devices: seed.devices, seeded: true };
             }
+            // stash the last-good REMOTE doc — boot races (tauriFetch not
+            // ready yet) must fall back to THIS, never to the seed, or the
+            // user sees their edits "overwritten" until the next remote load
+            try { localStorage.setItem("apartment3d.remoteCache", JSON.stringify(model)); } catch (e) { /* */ }
             return model;
           }
         }
       } catch (e) { /* fall through */ }
     }
-    // offline fallback: last saved draft, else the generated seed
+    // offline fallback order: last-good remote copy, then draft, then seed.
+    // The remote cache outranks everything — a boot race must show the
+    // user's real saved layout, not the seed.
+    try {
+      const cached = JSON.parse(localStorage.getItem("apartment3d.remoteCache") || "null");
+      if (cached) return { ...cached, remote_cached: true };
+    } catch (e) { /* */ }
     try {
       const draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null");
       if (draft) return { ...draft, offline_draft: true };

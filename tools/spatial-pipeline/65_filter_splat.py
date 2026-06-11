@@ -16,9 +16,9 @@ import numpy as np
 from pipeline_util import APP_DATA
 
 CORE_BOXES = [
-    {"x": (0.00, 2.55), "y": (0.00, 2.60)},   # office (west end, desk+chair)
-    {"x": (2.55, 7.35), "y": (0.40, 6.60)},   # kitchen + dining + hallway
-    {"x": (7.35, 15.30), "y": (0.50, 6.35)},  # living room + east alcove
+    {"x": (2.55, 7.35), "y": (0.40, 6.60)},    # kitchen + dining + hallway
+    {"x": (7.35, 15.30), "y": (0.50, 6.35)},   # living room + east alcove
+    {"x": (10.85, 14.40), "y": (6.35, 8.05)},  # OFFICE (northeast room)
 ]
 SCALE_MAX_M = 0.30
 OPACITY_MIN = 0.30   # the fuzzy halo is low-alpha mist, not giant gaussians

@@ -514,6 +514,19 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
           cam: calibCam.camera.frigate_name,
           trackerBase: localStorage.getItem("apartment3d.trackerBase") || "http://192.168.0.100:8098",
           onPickRequest: (active) => { calibPickRef.current = active; },
+          onIntrinsics: (lens) => {
+            // persist solved intrinsics into the camera device (app = single writer)
+            setModel((m) => {
+              const next = { ...m, devices: (m.devices || []).map((d) =>
+                d.id === calibCam.id
+                  ? { ...d, camera: { ...(d.camera || {}), intrinsics: {
+                      K: lens.K, dist: lens.dist, image_size: lens.image_size,
+                      rms_px: lens.rms_px } } }
+                  : d) };
+              window.HomeApartmentData.saveModel(next, { endpoint, token, sim: simActive });
+              return next;
+            });
+          },
           onDone: () => { calibPickRef.current = false; setCalibCam(null); },
           registerApi: (api) => { calibApiRef.current = api; },
         })}

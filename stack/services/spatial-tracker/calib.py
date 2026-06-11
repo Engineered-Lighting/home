@@ -320,14 +320,79 @@ def build_router(ctx):
             raise HTTPException(e.status, str(e))
         return JSONResponse(result)
 
+    def _solve_generic(object_points, image_points, image_size) -> dict:
+        """cv2.calibrateCamera over per-view object/image point lists."""
+        objs = [np.asarray(o, np.float32) for o in object_points]
+        imgs = [np.asarray(i, np.float32) for i in image_points]
+        if len(objs) < 6:
+            raise HTTPException(400, f"need >=6 views, got {len(objs)}")
+        size = tuple(int(v) for v in image_size)
+        rms, K, dist, _, _ = cv2.calibrateCamera(
+            objs, imgs, size, None, None,
+            flags=cv2.CALIB_FIX_K3 if len(objs) < 15 else 0)
+        return {"rms_px": float(rms), "K": K.tolist(),
+                "dist": dist.ravel().tolist(), "image_size": list(size),
+                "views": len(objs)}
+
     @router.post("/{cam}/intrinsics/solve")
     async def intrinsics_solve(cam: str, body: Optional[dict] = None):
-        return JSONResponse(
-            status_code=501,
-            content={"detail": "ChArUco capture session not yet wired; use "
-                               "chessboard images via POST "
-                               f"/calib/{cam}/intrinsics/from_images"},
-        )
+        body = body or {}
+        if not body.get("object_points"):
+            raise HTTPException(400, "body must carry object_points/image_points/"
+                                     "image_size (or use /capture/snap + /capture/solve)")
+        return JSONResponse(_solve_generic(
+            body["object_points"], body["image_points"], body["image_size"]))
+
+    # ---- interactive intrinsics capture (driven from the app's calibrate UI) ----
+    _capture: dict = {}
+
+    @router.post("/{cam}/capture/snap")
+    async def capture_snap(cam: str):
+        import base64
+        try:
+            from detector_boards import detect_boards
+        except ImportError:
+            raise HTTPException(501, "detector_boards module not deployed")
+        data = await fetch_snapshot(cam)
+        img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_GRAYSCALE)
+        boards = detect_boards(img)
+        sess = _capture.setdefault(cam, {"views": [], "means": []})
+        vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        added = 0
+        for pts, idx in boards:
+            pts = np.asarray(pts, np.float32)
+            mean = pts.mean(axis=0)
+            dup = any(float(np.linalg.norm(mean - m)) < 30 for m in sess["means"])
+            color = (90, 90, 240) if dup else (90, 220, 90)
+            if not dup:
+                obj = np.zeros((len(pts), 3), np.float32)
+                obj[:, :2] = np.asarray(idx, np.float32) * 0.035
+                sess["views"].append({"obj": obj.tolist(), "img": pts.tolist()})
+                sess["means"].append(mean)
+                sess["size"] = [img.shape[1], img.shape[0]]
+                added += 1
+            for q in pts:
+                cv2.circle(vis, (int(q[0]), int(q[1])), 5, color, 2)
+        small = cv2.resize(vis, (560, int(560 * img.shape[0] / img.shape[1])))
+        ok, jpg = cv2.imencode(".jpg", small, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+        return {"boards_found": len(boards), "new_views": added,
+                "total_views": len(sess["views"]),
+                "thumb": "data:image/jpeg;base64,"
+                         + base64.b64encode(jpg.tobytes()).decode()}
+
+    @router.post("/{cam}/capture/reset")
+    async def capture_reset(cam: str):
+        _capture.pop(cam, None)
+        return {"ok": True}
+
+    @router.post("/{cam}/capture/solve")
+    async def capture_solve(cam: str):
+        sess = _capture.get(cam)
+        if not sess or not sess["views"]:
+            raise HTTPException(400, "no captured views — snap some first")
+        return JSONResponse(_solve_generic(
+            [v["obj"] for v in sess["views"]],
+            [v["img"] for v in sess["views"]], sess["size"]))
 
     @router.post("/{cam}/intrinsics/from_images")
     async def intrinsics_from_images(

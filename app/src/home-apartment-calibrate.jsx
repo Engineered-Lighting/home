@@ -16,13 +16,40 @@
 (function () {
     const { useState, useRef, useEffect } = React;
 
-    function CalibrateOverlay({ cam, trackerBase, onPickRequest, onDone, registerApi }) {
+    function CalibrateOverlay({ cam, trackerBase, onPickRequest, onDone, onIntrinsics, registerApi }) {
         const [pairs, setPairs] = useState([]);
         const [pendingPx, setPendingPx] = useState(null);
         const [busy, setBusy] = useState(false);
         const [result, setResult] = useState(null);
         const [error, setError] = useState(null);
+        const [thumbs, setThumbs] = useState([]);     // capture thumbnails
+        const [views, setViews] = useState(0);        // accepted board-views
+        const [lens, setLens] = useState(null);       // solved intrinsics
         const imgRef = useRef(null);
+
+        const snap = async () => {
+            setBusy(true); setError(null);
+            try {
+                const r = await fetch(`${trackerBase}/calib/${cam}/capture/snap`, { method: "POST" });
+                const j = await r.json();
+                if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
+                setThumbs((t) => [...t.slice(-7), { src: j.thumb, n: j.new_views }]);
+                setViews(j.total_views);
+            } catch (e) { setError(String(e.message || e)); }
+            setBusy(false);
+        };
+
+        const solveLens = async () => {
+            setBusy(true); setError(null);
+            try {
+                const r = await fetch(`${trackerBase}/calib/${cam}/capture/solve`, { method: "POST" });
+                const j = await r.json();
+                if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
+                setLens(j);
+                onIntrinsics && onIntrinsics(j);   // host persists into the model
+            } catch (e) { setError(String(e.message || e)); }
+            setBusy(false);
+        };
 
         useEffect(() => {
             registerApi({
@@ -71,9 +98,27 @@
                      display: "flex", flexDirection: "column", padding: 18, gap: 10, color: "var(--hg-ice, #cfe2ff)" },
         },
             React.createElement("div", { style: { ...mono, fontSize: 11 } },
-                `calibrate · ${cam} — click a recognizable point in the snapshot, then click the same `
-                + `spot in the 3D view behind this panel. ${pairs.length} pair(s); need ≥8.`
+                `calibrate · ${cam} — STEP 1 lens: scatter the dot boards in view, `
+                + `snap, rearrange, snap again (≥8 board-views, more is better), then solve lens. `
+                + `STEP 2 pose: click a point in the snapshot, then the same spot in 3D (≥8 pairs).`
                 + (pendingPx ? "  → now click the 3D point" : "")),
+            React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
+                React.createElement("button", { style: mono, disabled: busy, onClick: snap }, "snap boards"),
+                React.createElement("button", { style: mono, disabled: busy || views < 8, onClick: solveLens },
+                    `solve lens (${views} views)`),
+                React.createElement("button", { style: mono, disabled: busy, onClick: async () => {
+                    await fetch(`${trackerBase}/calib/${cam}/capture/reset`, { method: "POST" });
+                    setThumbs([]); setViews(0); setLens(null);
+                } }, "reset"),
+                lens && React.createElement("span", { style: mono },
+                    `lens solved · rms ${lens.rms_px.toFixed(2)} px · ${lens.views} views`)),
+            thumbs.length > 0 && React.createElement("div",
+                { style: { display: "flex", gap: 4, overflowX: "auto" } },
+                thumbs.map((t, i) => React.createElement("img", {
+                    key: i, src: t.src,
+                    title: `${t.n} new view(s)`,
+                    style: { height: 74, border: t.n ? "1px solid #4a8" : "1px solid #844" },
+                }))),
             React.createElement("img", {
                 ref: imgRef, onClick: clickImage,
                 src: `${trackerBase}/calib/${cam}/snapshot`,

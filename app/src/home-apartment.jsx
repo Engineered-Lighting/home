@@ -174,15 +174,11 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
       if (!calibPickRef.current || !calibApiRef.current) return;
       const e = engineRef.current;
       if (!e) return;
-      const rc = e.picking.raycaster;
-      rc.params.Points = { ...(rc.params.Points || {}), threshold: 0.04 };
-      // raycast GEOMETRY only (points cloud + mesh) — picking apartmentRoot
-      // also hit marker glow sprites floating mid-air (pairs landed at
-      // z > ceiling, corrupting the solve)
-      const targets = [
-        calibPointsRef.current,
-        e.modes.getMesh && e.modes.getMesh(),
-      ].filter(Boolean);
+      // MESH-ONLY raycast: true surface intersection. Point-cloud picking
+      // accepted any stray point within 4cm of the ray anywhere along it —
+      // corners "snapped" to wall-top fragments behind them (user-diagnosed:
+      // pairs floated once the camera rotated).
+      const targets = [e.modes.getMesh && e.modes.getMesh()].filter(Boolean);
       const hits = (e.picking.pick(targets, ev.clientX, ev.clientY) || [])
         .filter((h) => h.point);
       let local = null;

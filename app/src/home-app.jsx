@@ -2232,6 +2232,7 @@ const SLASH_CMDS = [
   { cmd: "/describe-clip", hint: "<camera> [frames] [interval_s]", desc: "watch a multi-frame clip from a camera and describe motion. e.g. /describe-clip kitchen, /describe-clip driveway 6 1.5", category: "vision" },
   { cmd: "/find-clips", hint: "<query>",    desc: "search Frigate clips via semantic-search CLIP (e.g. 'package on porch'). Returns recent matches with thumbnails.", category: "vision" },
   { cmd: "/spatial",    hint: "",           desc: "open the light-footprint map — Addendum 38 Phase 1 calibration review: which lights illuminate which space", category: "vision" },
+  { cmd: "/apartment",  hint: "",           desc: "open the 3d apartment — full-screen spatial command center (white point cloud of the real scan; photo/mesh modes + devices + the dot land in later phases). alias: /3d", category: "vision" },
   { cmd: "/look",       hint: "<camera> <question>", desc: "ask the vision model a spatial question about a camera — it reasons by 'pointing' (boxing what it sees), rendered as the paper's two-panel figure. e.g. /look kitchen what is on the counter", category: "vision" },
   // ── world + recap ─────────────────────────────────────────────
   { cmd: "/world-state",hint: "[<room>|--raw]", desc: "open world-state drawer. <room> pre-filters to one room (click × to clear). '--raw' dumps full JSON inline instead.", category: "world" },
@@ -2857,6 +2858,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   const [worldStateInitialRoom, setWorldStateInitialRoom] = useState(null);
   // Addendum 38 Phase 1 — /spatial light-footprint drawer open state.
   const [spatialDrawerOpen, setSpatialDrawerOpen] = useState(false);
+  // /apartment — full-screen 3D apartment takeover (home-apartment.jsx).
+  const [apartmentOpen, setApartmentOpen] = useState(false);
   // Phase 0.5 "Thinking with Visual Primitives" — /look drawer state.
   // lookInitial seeds the drawer from the command args; its `nonce`
   // re-keys the drawer so a repeated /look re-runs cleanly.
@@ -4859,6 +4862,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       case "spatial": {
         // Addendum 38 Phase 1 — open the light-footprint Map drawer.
         setSpatialDrawerOpen(true);
+        return true;
+      }
+      case "apartment":
+      case "3d": {
+        // Full-screen 3D apartment takeover (white point cloud, P0).
+        if (!window.HomeApartmentView) {
+          addEvent({ kind: "system", text: "apartment module not loaded", tone: "error" });
+          return true;
+        }
+        setApartmentOpen(true);
         return true;
       }
       case "look": {
@@ -7351,6 +7364,18 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         <window.HomeSpatialDrawer
           open={spatialDrawerOpen}
           onClose={() => setSpatialDrawerOpen(false)}
+          endpoint={endpoint}
+          token={token}
+          sim={sim}
+        />
+      )}
+      {/* /apartment — full-screen 3D spatial command center. Full-viewport
+          takeover (not the right-anchored drawer slot); engine stays warm
+          across open/close. */}
+      {window.HomeApartmentView && (
+        <window.HomeApartmentView
+          open={apartmentOpen}
+          onClose={() => setApartmentOpen(false)}
           endpoint={endpoint}
           token={token}
           sim={sim}

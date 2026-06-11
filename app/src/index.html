@@ -20,9 +20,36 @@
   <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin></script>
+  <!-- 3D apartment engine: real ESM (vendored three.js + Spark via importmap;
+       the Babel/window-global world stays untouched). The importmap MUST
+       precede the first module script. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./vendor/three-0.180.0/three.module.js",
+      "three/addons/": "./vendor/three-0.180.0/addons/",
+      "@sparkjsdev/spark": "./vendor/spark-2.1.0/spark.module.js"
+    }
+  }
+  </script>
+  <script>
+    /* ESM<->Babel bridge. Babel-side code awaits Home3D.ready (the engine
+       module namespace, or null on failure with Home3D.error set) and touches
+       NOTHING else on Home3D — that discipline keeps the split race-free. */
+    window.Home3D = { ready: new Promise(function (res) { window.__home3dResolve = res; }) };
+  </script>
 </head>
 <body>
   <div id="root"></div>
+  <!-- 3D engine bootstrap: dynamic import propagates the same cache-buster
+       the JSX loader uses (home-3d siblings re-import with it; vendor libs
+       are version-dirred and deliberately cacheable). -->
+  <script type="module">
+    const cb = '?cb=' + Date.now();
+    import('./home-3d/engine.js' + cb)
+      .then((m) => window.__home3dResolve(m))
+      .catch((e) => { console.error('[home-3d] engine load failed', e); window.Home3D.error = e; window.__home3dResolve(null); });
+  </script>
   <!-- Cache-busting loader. WebView2 disk-caches asset:// responses
        aggressively; Ctrl+R only clears the memory cache. Without a
        query-string cache-buster, JSX edits don't reach the running
@@ -69,6 +96,8 @@
         ['simulation-timeline.jsx', true],
         ['simulation-data.jsx', true],
         ['simulation.jsx', true],
+        ['home-apartment-data.js', false],
+        ['home-apartment.jsx', true],
         ['home-app.jsx', true],
         ['home-mount.jsx', true],
       ];

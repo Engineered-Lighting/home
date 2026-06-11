@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "files": {
+    "mesh.glb": {
+      "sha8": "0c14b686",
+      "bytes": 57042856
+    },
+    "collision.glb": {
+      "sha8": "320cd1d6",
+      "bytes": 1119460
+    },
+    "points.ply": {
+      "sha8": "4858c54b",
+      "bytes": 4963959,
+      "points": 381829
+    },
+    "points.sim.ply": {
+      "sha8": "04d51d04",
+      "bytes": 2340182,
+      "points": 180000
+    },
+    "floor.json": {
+      "sha8": "cc93bbf6",
+      "bytes": 4136
+    }
+  },
+  "generated_at": "2026-06-11T08:57:10.308567+00:00"
+}

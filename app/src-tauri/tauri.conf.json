@@ -25,7 +25,11 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["C:/Claude/home/app/data/apartment/**"]
+      }
     }
   },
   "bundle": {

@@ -17,8 +17,9 @@ import trimesh
 from pipeline_util import APP_DATA, OUT
 
 CORE_BOXES = [
-    {"x": (2.55, 7.35), "y": (0.40, 6.60)},
-    {"x": (7.35, 15.30), "y": (0.50, 6.35)},
+    {"x": (0.00, 2.55), "y": (0.00, 2.60)},   # office (west end, desk+chair)
+    {"x": (2.55, 7.35), "y": (0.40, 6.60)},   # kitchen + dining + hallway
+    {"x": (7.35, 15.30), "y": (0.50, 6.35)},  # living room + east alcove
 ]
 CEILING_Z = 2.03
 

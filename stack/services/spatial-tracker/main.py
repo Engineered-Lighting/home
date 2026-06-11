@@ -234,6 +234,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="spatial-tracker", version="0.1.0", lifespan=lifespan)
+# the Home app's webview calls the calib endpoints cross-origin; without CORS
+# headers every fetch() POST dies as "Failed to fetch"
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+app.add_middleware(CORSMiddleware, allow_origins=["*"],
+                   allow_methods=["*"], allow_headers=["*"])
 app.state.ctx = ctx
 app.include_router(calib.build_router(ctx))
 

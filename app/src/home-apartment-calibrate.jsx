@@ -30,7 +30,7 @@
         const snap = async () => {
             setBusy(true); setError(null);
             try {
-                const r = await fetch(`${trackerBase}/calib/${cam}/capture/snap`, { method: "POST" });
+                const r = await (window.tauriFetch || fetch)(`${trackerBase}/calib/${cam}/capture/snap`, { method: "POST" });
                 const j = await r.json();
                 if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
                 setThumbs((t) => [...t.slice(-7), { src: j.thumb, n: j.new_views }]);
@@ -42,7 +42,7 @@
         const solveLens = async () => {
             setBusy(true); setError(null);
             try {
-                const r = await fetch(`${trackerBase}/calib/${cam}/capture/solve`, { method: "POST" });
+                const r = await (window.tauriFetch || fetch)(`${trackerBase}/calib/${cam}/capture/solve`, { method: "POST" });
                 const j = await r.json();
                 if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
                 setLens(j);
@@ -77,7 +77,7 @@
             setBusy(true); setError(null);
             try {
                 const img = imgRef.current;
-                const r = await fetch(`${trackerBase}/calib/${cam}/extrinsics`, {
+                const r = await (window.tauriFetch || fetch)(`${trackerBase}/calib/${cam}/extrinsics`, {
                     method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ pairs, image_size: [img.naturalWidth, img.naturalHeight] }),
                 });
@@ -107,7 +107,7 @@
                 React.createElement("button", { style: mono, disabled: busy || views < 8, onClick: solveLens },
                     `solve lens (${views} views)`),
                 React.createElement("button", { style: mono, disabled: busy, onClick: async () => {
-                    await fetch(`${trackerBase}/calib/${cam}/capture/reset`, { method: "POST" });
+                    await (window.tauriFetch || fetch)(`${trackerBase}/calib/${cam}/capture/reset`, { method: "POST" });
                     setThumbs([]); setViews(0); setLens(null);
                 } }, "reset"),
                 lens && React.createElement("span", { style: mono },

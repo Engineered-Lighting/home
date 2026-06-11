@@ -45,7 +45,7 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
     const pointsMaterial = pointcloudM.createPointsMaterial();
     const rig = rigM.createRig(camera);
     const modes = modesM.createModes({
-        apartmentRoot, pointsMaterial, sim, scene, renderer,
+        apartmentRoot, pointsMaterial, sim, scene, renderer, camera,
         assetCandidates: assetsM.candidates,
         fetchFrame: () => assetsM.fetchFrame({ sim }),
         getPoints: () => points,
@@ -126,6 +126,7 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
 
         pointsMaterial.uniforms.uTime.value = now / 1000;
         rig.update(dt);
+        modes.tickSpark && modes.tickSpark(camera, now / 1000);
         // the EL depth-brightness window tracks the orbit radius so the
         // falloff aesthetic holds at every zoom detent (static 6/30 left the
         // overview pose entirely past the far fade — verified visually)
@@ -145,7 +146,13 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
             const sorted = [...frameTimes].sort((a, b) => a - b);
             const p95 = sorted[Math.floor(sorted.length * 0.95)] || 0;
             const fps = 1000 / Math.max(0.5, sorted[Math.floor(sorted.length * 0.5)] || 16.7);
-            emit('stats', { fps, p95, gpu: gpuName, points: pointTotal, pixelRatio: renderer.getPixelRatio() });
+            emit('stats', {
+                fps, p95, gpu: gpuName, points: pointTotal,
+                pixelRatio: renderer.getPixelRatio(),
+                calls: renderer.info.render.calls,
+                tris: renderer.info.render.triangles,
+                modeDebug: modes.debugInfo ? modes.debugInfo() : null,
+            });
             // degradation ladder: pixelRatio 2 -> 1.5 -> 1.25 -> 1
             if (p95 > 18 && frameTimes.length >= 60) {
                 badStreak++;

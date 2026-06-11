@@ -30,7 +30,7 @@ reg = load_registration()
 T_splat = np.array(reg["T_splat"])
 
 pos, rgb, alpha = read_3dgs_ply(RAW / "scan_splat.ply")
-keep = alpha > 0.5
+keep = alpha > 0.35   # lower than the original 0.5 — keeps fill detail
 pos, rgb = pos[keep], rgb[keep]
 print(f"splat means after alpha filter: {len(pos):,}")
 pos = apply_T(T_splat, pos).astype(np.float32)
@@ -43,12 +43,21 @@ m = near_d < 0.20
 pos, rgb = pos[m], rgb[m]
 print(f"after mesh-proximity filter (<20 cm): {len(pos):,}")
 
-# luminance -> intensity, slightly lifted so dark furniture still reads
+# merge per-room dense scans staged by 35_merge_room_scans.py
+extra = OUT.parent / "model" / "extra_points.npz"
+if extra.is_file():
+    z = np.load(extra)
+    pos = np.vstack([pos, z["pos"].astype(np.float32)])
+    rgb = np.vstack([rgb, z["rgb"].astype(np.float32)])
+    print(f"merged extra room scans: +{len(z['pos']):,} -> {len(pos):,}")
+
+# luminance -> intensity with real contrast (the flat 60..255 lift washed out
+# furniture/shadow separation vs the engineered.lighting look)
 lum = (0.2126 * rgb[:, 0] + 0.7152 * rgb[:, 1] + 0.0722 * rgb[:, 2])
-intensity = np.clip(60 + lum * 195, 0, 255)
+intensity = np.clip(255 * np.power(np.clip(lum * 1.15, 0, 1), 0.75), 12, 255)
 
 # mesh surface fill (uniform; voxel dedupe below prevents doubling dense areas)
-fill, _ = trimesh.sample.sample_surface(mesh, 400_000)
+fill, _ = trimesh.sample.sample_surface(mesh, 800_000)
 fill = np.asarray(fill, dtype=np.float32)
 fill_int = np.full(len(fill), float(np.median(intensity)) * 0.85)
 
@@ -69,17 +78,39 @@ m = mean_d < thresh
 pos, intensity = pos[m], intensity[m]
 print(f"after outlier removal: {len(pos):,}")
 
-# 2 cm voxel dedupe (random representative via pre-shuffle)
+# 1 cm voxel dedupe (random representative via pre-shuffle) — the 4090 ran
+# 2000 fps at 180k pts, so density is nowhere near the budget ceiling
 order = rng.permutation(len(pos))
 pos, intensity = pos[order], intensity[order]
-vox = np.floor(pos / 0.02).astype(np.int64)
+vox = np.floor(pos / 0.008).astype(np.int64)
 _, first = np.unique(vox, axis=0, return_index=True)
 pos, intensity = pos[first], intensity[first]
-print(f"after 2 cm voxel dedupe: {len(pos):,}")
+print(f"after 8 mm voxel dedupe: {len(pos):,}")
+
+# crop scan bleed: rasterize XY occupancy, morphological-open to sever the
+# thin necks into neighboring spaces, keep only the largest connected
+# component (the apartment), dilated so walls survive
+import cv2
+CELL = 0.12
+mn2 = pos[:, :2].min(0) - CELL
+size = np.ceil((pos[:, :2].max(0) - mn2) / CELL).astype(int) + 1
+grid = np.zeros((size[1], size[0]), np.uint8)
+ij = ((pos[:, :2] - mn2) / CELL).astype(int)
+grid[ij[:, 1], ij[:, 0]] = 255
+opened = cv2.morphologyEx(grid, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+n_lbl, labels = cv2.connectedComponents(opened)
+if n_lbl > 1:
+    largest = 1 + np.argmax([np.sum(labels == i) for i in range(1, n_lbl)])
+    keep_mask = (labels == largest).astype(np.uint8)
+    keep_mask = cv2.dilate(keep_mask, np.ones((5, 5), np.uint8))
+    m = keep_mask[ij[:, 1], ij[:, 0]] > 0
+    print(f"largest-component crop: {len(pos):,} -> {int(m.sum()):,} "
+          f"(removed {len(pos) - int(m.sum()):,} bleed points)")
+    pos, intensity = pos[m], intensity[m]
 
 # cap + jitter + shuffle (shuffle => progressive load materializes uniformly)
-if len(pos) > 1_200_000:
-    sel = rng.choice(len(pos), 1_200_000, replace=False)
+if len(pos) > 2_500_000:
+    sel = rng.choice(len(pos), 2_500_000, replace=False)
     pos, intensity = pos[sel], intensity[sel]
 pos = pos + rng.normal(0, 0.003, pos.shape).astype(np.float32)
 order = rng.permutation(len(pos))

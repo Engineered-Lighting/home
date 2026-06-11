@@ -54,6 +54,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
   const [hoverId, setHoverId] = useState(null);
   const [cardId, setCardId] = useState(null);
   const [inCamPose, setInCamPose] = useState(false);
+  const [liveCam, setLiveCam] = useState(null);   // camera device while snapped
+  const [liveOn, setLiveOn] = useState(false);    // live feed vs 3D from the pose
   const [anchors, setAnchors] = useState({});        // id -> {x, y, visible}
   const statesRef = useRef({});                      // entity_id -> ha state
   const simActive = !!(sim && sim.active);
@@ -258,7 +260,11 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
       const rig = engineRef.current?.rig;
       if (e.key === "Escape") {
         if (cardId) { setCardId(null); return; }
-        if (engineRef.current?.rig.inCameraPose?.()) { engineRef.current.rig.returnToOverview(); return; }
+        if (engineRef.current?.rig.inCameraPose?.()) {
+          setLiveCam(null); setLiveOn(false);
+          engineRef.current.rig.returnToOverview();
+          return;
+        }
         if (editing) { setEditing(false); return; }
         onClose?.(); return;
       }
@@ -360,7 +366,10 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
           </span>
           <span style={{ marginLeft: "auto", display: "flex", gap: 6, pointerEvents: "auto" }}>
             {inCamPose && (
-              <AptHudButton label="← back" onClick={() => engineRef.current?.rig.returnToOverview()} />
+              <AptHudButton label="← back" onClick={() => {
+                setLiveCam(null); setLiveOn(false);
+                engineRef.current?.rig.returnToOverview();
+              }} />
             )}
             {!inCamPose && (
               <AptHudButton label="edit" onClick={() => { setCardId(null); setEditing(true); }} />
@@ -402,13 +411,25 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
                         letterSpacing: "0.08em", lineHeight: 1.6, minWidth: 170 }}>
             {stats && (<>
               {Math.round(stats.fps)} fps · {(stats.points / 1000).toFixed(0)}k pts · dpr {stats.pixelRatio}
+              {stats.calls != null ? ` · ${stats.calls} dc` : ""}
+              {stats.tris ? ` · ${(stats.tris / 1e6).toFixed(1)}m tri` : ""}
               <br />{String(stats.gpu).slice(0, 48).toLowerCase()}
+              {mode === "splat" && stats.modeDebug && (
+                <><br />splat {stats.modeDebug.numSplats ? (stats.modeDebug.numSplats / 1000).toFixed(0) + "k" : "—"}
+                · vis {String(stats.modeDebug.splatVisible)} · sr {stats.modeDebug.srParent}</>
+              )}
             </>)}
           </div>
           <div style={{ margin: "0 auto", display: "flex", gap: 6, pointerEvents: "auto" }}>
-            <AptHudButton label="cloud" active={mode === "points"} onClick={() => pickMode("points")} />
-            <AptHudButton label="photo" active={mode === "splat"} onClick={() => pickMode("splat")} />
-            <AptHudButton label="mesh" active={mode === "mesh"} onClick={() => pickMode("mesh")} />
+            {liveCam && (
+              <AptHudButton label="live" active={liveOn} onClick={() => setLiveOn(true)} />
+            )}
+            <AptHudButton label="cloud" active={!liveOn && mode === "points"}
+              onClick={() => { setLiveOn(false); pickMode("points"); }} />
+            <AptHudButton label="photo" active={!liveOn && mode === "splat"}
+              onClick={() => { setLiveOn(false); pickMode("splat"); }} />
+            <AptHudButton label="mesh" active={!liveOn && mode === "mesh"}
+              onClick={() => { setLiveOn(false); pickMode("mesh"); }} />
           </div>
           <div style={{ textAlign: "right", pointerEvents: "auto" }}>
             <div style={{ display: "flex", gap: 5, justifyContent: "flex-end", marginBottom: 6 }}>
@@ -424,6 +445,25 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
                            letterSpacing: "0.1em" }}>
               drag · wheel zoom · ←→↑↓ · h home · dbl-click toggles lights
             </span>
+          </div>
+        </div>
+      )}
+
+      {/* live camera feed — full-viewport MJPEG from Frigate, shown over the
+          3D canvas while snapped; the HUD stays on top so cloud/photo/mesh
+          render the SAME pose one toggle away */}
+      {liveCam && liveOn && (
+        <div style={{ position: "absolute", inset: 0, background: "#000",
+                      display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <img
+            src={`${(localStorage.getItem("apartment3d.frigateBase") || "http://192.168.0.125:5000")}/api/${liveCam.camera.frigate_name}`}
+            alt={liveCam.name}
+            style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
+          />
+          <div style={{ position: "absolute", top: 52, left: 18, fontFamily: APT_FONT_MONO,
+                        fontSize: 9.5, letterSpacing: "0.12em", color: "var(--hg-ice)",
+                        background: "rgba(10,12,16,0.6)", padding: "4px 9px" }}>
+            live · {liveCam.name} · mjpeg
           </div>
         </div>
       )}
@@ -445,7 +485,15 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
               screen={anchors[cardId] || { x: window.innerWidth / 2, y: 100 }}
               onClose={() => setCardId(null)}
               onService={callSvc}
-              onFlyTo={(dev) => engineRef.current?.flyToDevice(dev)}
+              onFlyTo={(dev) => {
+                engineRef.current?.flyToDevice(dev);
+                // camera feed FIRST once the flight lands; 3D stays one toggle away
+                if (!simActive && dev.camera?.frigate_name) {
+                  setTimeout(() => { setLiveCam(dev); setLiveOn(true); }, 950);
+                } else {
+                  setLiveCam(dev); setLiveOn(false);
+                }
+              }}
               sim={simActive}
             />
           )}

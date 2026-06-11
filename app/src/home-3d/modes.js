@@ -13,7 +13,7 @@ import * as THREE from 'three';
 
 const easeInOutCubic = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
-export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidates, fetchFrame, getPoints, scene, renderer }) {
+export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidates, fetchFrame, getPoints, scene, renderer, camera }) {
     const candidates = assetCandidates;
     const state = { mode: 'points', fading: null, splat: null, mesh: null };
     const listeners = [];
@@ -29,6 +29,7 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
     async function applyRegistration(obj) {
         try {
             const frame = await fetchFrame();
+            if (frame && frame.splat_baked) return;   // transform baked into the .spz
             const T = frame && frame.T_splat;
             if (T) {
                 const m = new THREE.Matrix4();
@@ -57,11 +58,21 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
             const sr = new SparkRenderer({ renderer });
             sr.frustumCulled = false;
             sr.traverse((o) => { o.frustumCulled = false; });
-            scene.add(sr);
+            // Spark encodes splats relative to the SparkRenderer origin and its
+            // docs have it FOLLOW THE CAMERA for precision — parent it there
+            // (camera must be in the scene graph for its matrixWorld to flow).
+            if (camera) {
+                if (!camera.parent) scene.add(camera);
+                camera.add(sr);
+            } else {
+                scene.add(sr);
+            }
             state.sparkRenderer = sr;
         }
         let lastErr = null;
-        for (const url of candidates('apartment.spz', null, { sim })) {
+        const names = ['apartment.spz', 'apartment.ply']; // SplatTransform's spz flavor defeats Spark's decoder; ply always works
+        const urls = names.flatMap((n) => candidates(n, null, { sim }));
+        for (const url of urls) {
             try {
                 const splat = new SplatMesh({ url });
                 await splat.initialized;
@@ -125,6 +136,23 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
             }
             state.mode = next;
             listeners.forEach((cb) => cb(next, prev));
+        },
+
+        /* explicit Spark tick — belt and suspenders over its autoUpdate */
+        tickSpark(cam, time) {
+            if (!state.sparkRenderer || (!state.splat && !state.fading)) return;
+            try {
+                state.sparkRenderer.update({ scene, camera: cam, time });
+            } catch (e) { /* */ }
+        },
+
+        debugInfo() {
+            return {
+                splat: !!state.splat,
+                splatVisible: state.splat ? state.splat.visible : null,
+                numSplats: state.splat ? (state.splat.numSplats ?? null) : null,
+                srParent: state.sparkRenderer ? (state.sparkRenderer.parent?.type || 'none') : 'none',
+            };
         },
 
         update(dt) {

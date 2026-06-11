@@ -16,7 +16,11 @@ function tauriConvert(name) {
         const conv = window.__TAURI__?.core?.convertFileSrc;
         if (conv) return conv(`${DATA_DIR}/${name}`);
     } catch (e) { /* */ }
-    return null;
+    // This app ships WITHOUT withGlobalTauri (window.__TAURI__ is undefined in
+    // production), but the asset protocol is still registered via
+    // tauri.conf.json — its URL shape is deterministic, so build it by hand.
+    // In a plain browser this candidate just 404s and the chain falls through.
+    return `http://asset.localhost/${encodeURIComponent(`${DATA_DIR}/${name}`)}`;
 }
 
 function overrideBase() {
@@ -51,11 +55,11 @@ export function pointsCandidates({ sim = false } = {}) {
     return candidates('points.ply', 'points.sim.ply', { sim });
 }
 
-/* frame.json — the scan->apartment registration (T_mesh / T_splat, Z-up). */
+/* frame.json — the scan->apartment registration (T_splat poses the SplatMesh). */
 export async function fetchFrame({ sim = false } = {}) {
-    for (const url of candidates('frame.json', null, { sim })) {
+    for (const url of candidates('frame.json', 'frame.json', { sim })) {
         try {
-            const r = await fetch(url);
+            const r = await fetch(`${url}?cb=${Date.now()}`);
             if (r.ok) return await r.json();
         } catch (e) { /* next */ }
     }

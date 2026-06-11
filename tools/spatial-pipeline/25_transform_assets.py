@@ -163,6 +163,9 @@ save_registration(reg)
 import shutil
 shutil.copy(OUT / "apartment_mesh_debug.glb", APP_DATA / "mesh.glb")
 shutil.copy(OUT / "apartment_collision.glb", APP_DATA / "collision.glb")
+# the app reads T_splat from frame.json to pose the SplatMesh (its absence
+# leaves the splat in raw scan frame — engulfing the camera; learned the hard way)
+shutil.copy(MODEL / "registration.json", APP_DATA / "frame.json")
 update_manifest({
     "mesh.glb": {"sha8": sha8(APP_DATA / "mesh.glb"), "bytes": (APP_DATA / "mesh.glb").stat().st_size},
     "collision.glb": {"sha8": sha8(APP_DATA / "collision.glb"), "bytes": (APP_DATA / "collision.glb").stat().st_size},

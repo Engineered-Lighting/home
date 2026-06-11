@@ -25,6 +25,22 @@
     catch (e) { return DEFAULT_TRACKER; }
   }
 
+  /* seed-model.json — generated device/zone inventory (55_seed_model.py).
+   * Tries the data dir (asset protocol manual URL) then the bundled copy. */
+  async function fetchSeed() {
+    const urls = [
+      `http://asset.localhost/${encodeURIComponent("C:/Claude/home/app/data/apartment/seed-model.json")}`,
+      "assets/apartment/seed-model.json",
+    ];
+    for (const u of urls) {
+      try {
+        const r = await fetch(u);
+        if (r.ok) return await r.json();
+      } catch (e) { /* next */ }
+    }
+    return null;
+  }
+
   /* ---------------- model ---------------- */
 
   async function getModel({ endpoint, token, sim } = {}) {
@@ -45,15 +61,26 @@
         });
         if (r.ok) {
           const model = await r.json();
-          if (model && typeof model.revision === "number") return model;
+          if (model && typeof model.revision === "number") {
+            // Empty model -> merge the generated seed (real light/camera
+            // inventory at proposed positions). Saving in edit mode persists
+            // it for real; until then it's an in-memory overlay.
+            if (!(model.zones || []).length && !(model.devices || []).length) {
+              const seed = await fetchSeed();
+              if (seed) return { ...model, zones: seed.zones, devices: seed.devices, seeded: true };
+            }
+            return model;
+          }
         }
       } catch (e) { /* fall through */ }
     }
-    // offline fallback: last saved draft
+    // offline fallback: last saved draft, else the generated seed
     try {
       const draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null");
       if (draft) return { ...draft, offline_draft: true };
     } catch (e) { /* */ }
+    const seed = await fetchSeed();
+    if (seed) return { ...EMPTY_MODEL, zones: seed.zones, devices: seed.devices, seeded: true };
     return EMPTY_MODEL;
   }
 

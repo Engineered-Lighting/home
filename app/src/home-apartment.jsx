@@ -351,7 +351,9 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
                                   to { transform: translateY(0); opacity: 1; } }
       `}</style>
 
-      <div ref={hostRef} style={{ position: "absolute", inset: 0, touchAction: "none", cursor: "grab" }}
+      <div ref={hostRef} style={{ position: "absolute", top: 0, bottom: 0, right: 0,
+                                  left: calibCam ? "46%" : 0,
+                                  touchAction: "none", cursor: "grab" }}
         onClickCapture={(ev) => {
           // correspondence capture: while a snapshot pixel is staged, the next
           // scene click raycasts the mesh and feeds the calibration overlay

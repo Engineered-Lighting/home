@@ -627,7 +627,10 @@ class Tracker:
             return None
         if getattr(self, "_inner_cache_src", None) is not hull:
             self._inner_cache_src = hull
-            self._inner_cache = hull.buffer(-0.5)
+            # -0.5 undoes the measurement buffer; another -0.25 pins clamped
+            # dots visibly INSIDE the wall (on-the-line reads as outside from
+            # oblique dollhouse views)
+            self._inner_cache = hull.buffer(-0.75)
         return self._inner_cache
 
     def _in_walkable(self, pos) -> bool:

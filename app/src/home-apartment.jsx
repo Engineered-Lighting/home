@@ -106,6 +106,9 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
         }
         engineRef.current = engine;
         engine.pointsPromise.then((p) => { calibPointsRef.current = p; }).catch(() => {});
+        // keep the bottom toggle honest: calibrate/snap switch modes through
+        // the engine directly, so subscribe rather than trusting local state
+        engine.modes.onChange((next) => setMode(next));
 
         const host = hostRef.current;
         const size = () => engine.setSize(host.clientWidth, host.clientHeight);

@@ -194,8 +194,54 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
         ev.stopPropagation();
       }
     };
+    // drag-to-adjust: grab a green pair marker, slide it along the mesh
+    let dragIdx = -1;
+    const meshTargets = () => {
+      const e = engineRef.current;
+      return [e && e.modes.getMesh && e.modes.getMesh()].filter(Boolean);
+    };
+    const onDown = (ev) => {
+      const e = engineRef.current;
+      if (!e || !calibApiRef.current || !e.overlay.calibGroup) return;
+      const hits = e.picking.pick([e.overlay.calibGroup], ev.clientX, ev.clientY) || [];
+      const hit = hits.find((h) => h.object && h.object.geometry &&
+                                   h.object.geometry.type === "SphereGeometry");
+      if (!hit) return;
+      dragIdx = Math.floor(e.overlay.calibGroup.children.indexOf(hit.object) / 2);
+      ev.stopPropagation(); ev.preventDefault();
+    };
+    const onMove = (ev) => {
+      if (dragIdx < 0) return;
+      const e = engineRef.current;
+      const hits = (e.picking.pick(meshTargets(), ev.clientX, ev.clientY) || [])
+        .filter((h) => h.point);
+      if (hits.length) {
+        const l = e.apartmentRoot.worldToLocal(hits[0].point.clone());
+        e.overlay.moveCalibMarker(dragIdx, [l.x, l.y, l.z]);
+      }
+      ev.stopPropagation();
+    };
+    const onUp = (ev) => {
+      if (dragIdx < 0) return;
+      const e = engineRef.current;
+      const s = e.overlay.calibGroup.children[dragIdx * 2];
+      if (s && calibApiRef.current && calibApiRef.current.updatePair) {
+        calibApiRef.current.updatePair(dragIdx,
+          [+s.position.x.toFixed(3), +s.position.y.toFixed(3), +s.position.z.toFixed(3)]);
+      }
+      dragIdx = -1;
+      ev.stopPropagation();
+    };
     host.addEventListener("click", onPick, true);
-    return () => host.removeEventListener("click", onPick, true);
+    host.addEventListener("pointerdown", onDown, true);
+    host.addEventListener("pointermove", onMove, true);
+    host.addEventListener("pointerup", onUp, true);
+    return () => {
+      host.removeEventListener("click", onPick, true);
+      host.removeEventListener("pointerdown", onDown, true);
+      host.removeEventListener("pointermove", onMove, true);
+      host.removeEventListener("pointerup", onUp, true);
+    };
   }, [open, phase]);
 
   /* 3D confirmation markers for banked pairs — rendered by the engine's

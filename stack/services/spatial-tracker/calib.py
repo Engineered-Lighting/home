@@ -18,6 +18,7 @@ result into the apartment model and POSTs it back to HA.
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
 from pathlib import Path
@@ -331,21 +332,42 @@ def build_router(ctx):
         # least full 5-param — FIX_K3 fit the board views (center-weighted)
         # at 0.34px yet missed the frame edges by tens of px, which is where
         # pose correspondences live. Try candidates, keep the best rms.
-        candidates = [("5param", 0)]
-        if len(objs) >= 10:
-            candidates.append(("rational", cv2.CALIB_RATIONAL_MODEL))
-        best = None
-        for name, flags in candidates:
+        def stable(K, dist):
+            # overfit rational models EXPLODE under undistortPoints away from
+            # the board-view support (pose solve hit rms 1298px) — probe the
+            # frame corners/edges and demand bounded output
+            w, h = size
+            probes = np.array([[0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1],
+                               [w / 2, 0], [w / 2, h - 1], [0, h / 2],
+                               [w - 1, h / 2]], np.float64).reshape(-1, 1, 2)
+            try:
+                und = cv2.undistortPoints(probes, K, dist, P=K).reshape(-1, 2)
+            except cv2.error:
+                return False
+            lim = 2.5 * max(w, h)
+            return bool(np.all(np.isfinite(und)) and np.all(np.abs(und) < lim))
+
+        results = {}
+        for name, flags in [("5param", 0), ("rational", cv2.CALIB_RATIONAL_MODEL)]:
+            if name == "rational" and len(objs) < 10:
+                continue
             try:
                 rms, K, dist, _, _ = cv2.calibrateCamera(
                     objs, imgs, size, None, None, flags=flags)
             except cv2.error:
                 continue
-            if best is None or rms < best[0]:
-                best = (rms, K, dist, name)
-        if best is None:
-            raise HTTPException(500, "calibration failed for all models")
-        rms, K, dist, model_name = best
+            if stable(K, dist):
+                results[name] = (rms, K, dist)
+        if not results:
+            raise HTTPException(500, "no stable calibration model")
+        # prefer 5param; rational must be stable AND >30% better to win
+        if "5param" in results and (
+                "rational" not in results
+                or results["rational"][0] > 0.7 * results["5param"][0]):
+            model_name = "5param"
+        else:
+            model_name = "rational"
+        rms, K, dist = results[model_name]
         return {"rms_px": float(rms), "K": K.tolist(),
                 "dist": dist.ravel().tolist(), "image_size": list(size),
                 "views": len(objs), "model": model_name}
@@ -360,7 +382,25 @@ def build_router(ctx):
             body["object_points"], body["image_points"], body["image_size"]))
 
     # ---- interactive intrinsics capture (driven from the app's calibrate UI) ----
-    _capture: dict = {}
+    # persisted to /data so tracker restarts stop eating board sessions
+    import os
+    _CAP_PATH = "/data/capture_sessions.json"
+    try:
+        with open(_CAP_PATH) as f:
+            _capture: dict = {k: {"views": v["views"], "size": v.get("size"),
+                                  "means": [np.asarray(m) for m in v.get("means", [])]}
+                              for k, v in json.loads(f.read()).items()}
+    except Exception:
+        _capture = {}
+
+    def _save_capture():
+        try:
+            with open(_CAP_PATH, "w") as f:
+                json.dump({k: {"views": v["views"], "size": v.get("size"),
+                               "means": [list(map(float, m)) for m in v.get("means", [])]}
+                           for k, v in _capture.items()}, f)
+        except Exception as e:
+            log.warning("capture persist failed: %s", e)
 
     @router.post("/{cam}/capture/snap")
     async def capture_snap(cam: str):
@@ -389,6 +429,8 @@ def build_router(ctx):
                 added += 1
             for q in pts:
                 cv2.circle(vis, (int(q[0]), int(q[1])), 5, color, 2)
+        if added:
+            _save_capture()
         small = cv2.resize(vis, (560, int(560 * img.shape[0] / img.shape[1])))
         ok, jpg = cv2.imencode(".jpg", small, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
         return {"boards_found": len(boards), "new_views": added,
@@ -399,6 +441,7 @@ def build_router(ctx):
     @router.post("/{cam}/capture/reset")
     async def capture_reset(cam: str):
         _capture.pop(cam, None)
+        _save_capture()
         return {"ok": True}
 
     @router.post("/{cam}/capture/solve")

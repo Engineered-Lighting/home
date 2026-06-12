@@ -242,7 +242,7 @@ export function createOverlay(apartmentRoot) {
         }
         for (const p of points || []) {
             const s = new THREE.Mesh(
-                new THREE.SphereGeometry(0.14, 14, 12),
+                new THREE.SphereGeometry(0.045, 12, 10),
                 new THREE.MeshBasicMaterial({ color: 0x22ff88, depthTest: false,
                                               transparent: true, opacity: 0.95 }));
             s.position.set(p[0], p[1], p[2]);
@@ -258,9 +258,22 @@ export function createOverlay(apartmentRoot) {
         }
     }
 
+    function moveCalibMarker(i, xyz) {
+        const s = calibGroup.children[i * 2];
+        const ln = calibGroup.children[i * 2 + 1];
+        if (!s) return;
+        s.position.set(xyz[0], xyz[1], xyz[2]);
+        if (ln) {
+            const pos = ln.geometry.attributes.position;
+            pos.setXYZ(0, xyz[0], xyz[1], 0);
+            pos.setXYZ(1, xyz[0], xyz[1], xyz[2]);
+            pos.needsUpdate = true;
+        }
+    }
+
     return {
         devicesGroup, camerasGroup, personGroup, zonesGroup,
-        markersById, zonesById, setCalibMarkers,
+        markersById, zonesById, setCalibMarkers, calibGroup, moveCalibMarker,
         setDevices, setDeviceState, setZones, setZonesVisible, setPerson,
         pickObjects() { return [...markersById.values()].map((m) => m.pick); },
         setHover(deviceId) {

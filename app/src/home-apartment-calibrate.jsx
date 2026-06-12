@@ -60,6 +60,9 @@
                         return null;
                     });
                 },
+                updatePair: (i, xyz) => {
+                    setPairs((p) => p.map((q, k) => (k === i ? { ...q, xyz } : q)));
+                },
             });
         }, [registerApi]);
 
@@ -159,16 +162,23 @@
                 "→ now click the SAME spot in the 3D view on the right"),
             pairs.length > 0 && React.createElement("div",
                 { style: { display: "flex", flexDirection: "column", gap: 2 } },
-                pairs.map((p, i) => React.createElement("div",
-                    { key: i, style: { ...mono, display: "flex", gap: 8, alignItems: "center" } },
-                    React.createElement("span", { style: { color: "#4ade80", width: 16 } }, String(i + 1)),
-                    React.createElement("span", null,
-                        `px ${Math.round(p.px[0])},${Math.round(p.px[1])} ↔ ` +
-                        `xyz ${p.xyz.map((v) => v.toFixed(2)).join(", ")}`),
-                    React.createElement("button", {
-                        style: { ...mono, marginLeft: "auto" },
-                        onClick: () => setPairs((q) => q.filter((_, k) => k !== i)),
-                    }, "×")))),
+                pairs.map((p, i) => {
+                    const err = result && result.per_point_err_px && result.per_point_err_px[i];
+                    const bad = err != null && err > 2 * Math.max(1, result.rms_px * 0.75);
+                    return React.createElement("div",
+                        { key: i, style: { ...mono, display: "flex", gap: 8, alignItems: "center" } },
+                        React.createElement("span", { style: { color: "#4ade80", width: 16 } }, String(i + 1)),
+                        React.createElement("span", null,
+                            `px ${Math.round(p.px[0])},${Math.round(p.px[1])} ↔ ` +
+                            `xyz ${p.xyz.map((v) => v.toFixed(2)).join(", ")}`),
+                        err != null && React.createElement("span",
+                            { style: { color: bad ? "#ff7b7b" : "#9ad29a" } },
+                            `${err.toFixed(1)}px${bad ? " ← outlier" : ""}`),
+                        React.createElement("button", {
+                            style: { ...mono, marginLeft: "auto" },
+                            onClick: () => setPairs((q) => q.filter((_, k) => k !== i)),
+                        }, "×"));
+                })),
             result && React.createElement("div", { style: mono },
                 `solved · rms ${result.rms_px?.toFixed?.(2)} px · pos σ ${result.pos_sigma_m ?? "?"} m`),
             error && React.createElement("div", { style: { ...mono, color: "#ff8989" } }, error),

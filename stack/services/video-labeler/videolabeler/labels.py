@@ -34,6 +34,15 @@ from . import db, ontology
 MIN_SEGMENT_S = 0.2
 OVERLAP_EPS = 1e-6
 
+# person_slot grammar: null = the primary occupant; p2..p9 = additional
+# people disambiguated by the labeler; track:<id> reserved for the future
+# per-tracklet pipeline (plan M8). The CLIENT must send person_slot on every
+# activity/posture segment it submits — an omitted slot groups as primary
+# for the non-overlap check (slot inheritance across supersedes is resolved
+# at reconcile, after validation).
+import re as _re
+_PERSON_SLOT_RE = _re.compile(r"^(p[2-9]|track:[A-Za-z0-9_-]+)$")
+
 API_AXES = ("activity_primary", "posture", "quality", "custom")
 _API_TO_DB_AXIS = {
     "activity_primary": "activity",
@@ -270,6 +279,11 @@ def _normalize_segment(api_axis, db_axis, idx, raw, usable_slugs, errors):
         ps = raw["person_slot"]
         if ps is not None and not isinstance(ps, str):
             err("person_slot must be a string or null")
+        elif ps is not None and not _PERSON_SLOT_RE.match(ps):
+            err("person_slot must be null (primary), 'p2'..'p9', or a"
+                " 'track:<id>' ref")
+        elif ps is not None and db_axis not in ("activity", "posture"):
+            err("person_slot applies to activity/posture segments only")
         else:
             seg["person_slot"] = ps
     if "aux" in raw:
@@ -281,15 +295,26 @@ def _normalize_segment(api_axis, db_axis, idx, raw, usable_slugs, errors):
 
 
 def _check_overlap(api_axis, segs, errors):
-    """Per-lane non-overlap (touching boundaries are fine)."""
-    ordered = sorted(segs, key=lambda x: (x["start_s"], x["end_s"]))
-    for a, b in zip(ordered, ordered[1:]):
-        if b["start_s"] < a["end_s"] - OVERLAP_EPS:
-            errors.append({
-                "axis": api_axis, "id": b["id"] or "?",
-                "error": f"overlaps segment {a['id'] or '?'}"
-                         f" ({a['start_s']:.3f}-{a['end_s']:.3f} vs"
-                         f" {b['start_s']:.3f}-{b['end_s']:.3f})"})
+    """Non-overlap per (lane, person_slot) — touching boundaries are fine.
+
+    Multi-person scenes (a third of the v1 corpus): activity/posture
+    segments for DIFFERENT people legitimately coexist on the same time
+    range, keyed by person_slot (null/absent = the primary occupant; "p2",
+    "p3", ... or future track refs for others). Two segments only conflict
+    when they describe the SAME person."""
+    by_slot: dict = {}
+    for s in segs:
+        by_slot.setdefault(s.get("person_slot") or None, []).append(s)
+    for slot, group in by_slot.items():
+        ordered = sorted(group, key=lambda x: (x["start_s"], x["end_s"]))
+        for a, b in zip(ordered, ordered[1:]):
+            if b["start_s"] < a["end_s"] - OVERLAP_EPS:
+                who = f" (person {slot})" if slot else ""
+                errors.append({
+                    "axis": api_axis, "id": b["id"] or "?",
+                    "error": f"overlaps segment {a['id'] or '?'}{who}"
+                             f" ({a['start_s']:.3f}-{a['end_s']:.3f} vs"
+                             f" {b['start_s']:.3f}-{b['end_s']:.3f})"})
 
 
 def validate_axes(conn, axes) -> dict:

@@ -34,6 +34,16 @@
  * has suggestions, so M0/M1 visuals are untouched otherwise. The `selection`
  * prop now optionally carries kind: 'canonical' | 'suggestion'.
  *
+ * Multi-person (person_slot): when a lane holds segments in >1 slot
+ * ((seg.person_slot||null); activity/posture only in practice), the lane's
+ * block area divides into stacked sub-rows — primary (you) on top, then
+ * p2..p9 — and each non-primary block carries a small slot chip. Single-
+ * slot lanes render exactly as before. Drag/resize stay within the
+ * segment's own slot row both visually (slot keyed geometry) and logically
+ * (the pure ops clamp per slot); same-lane OTHER-slot boundaries join the
+ * snap candidates. Double-click creates in the sub-row under the cursor —
+ * onCreate(axis, t, slot) carries the slot (null = primary).
+ *
  * Playback stays out of React: the playhead node is handed out via
  * `playheadRef` and positioned with style.transform by the player (M0
  * pattern kept); `playheadTimeRef` mirrors the current time for snap /
@@ -78,7 +88,7 @@ function vlValueText(value) {
 /* lanes: [{axis, title, segments, multiValue, colorFor(value)}]
  * selection: {kind?: 'canonical'|'suggestion', axis, segId} | null
  * activeAxis: axis string · suggestions: {axis: [SEG]} | null (M3 ghosts)
- * onSeek(t) · onSelect(axis, segId|null) · onCreate(axis, t)
+ * onSeek(t) · onSelect(axis, segId|null) · onCreate(axis, t, slot|null)
  * onSelectSuggestion(axis, segId) — ghost click
  * onCommit(axis, nextSegments, undoEntry) — pointerup only
  * onZoom(dir, anchorT) — Ctrl+wheel / keyboard zoom request */
@@ -215,11 +225,18 @@ function VLTimeline({
     e.stopPropagation();
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) { /* */ }
     const live = liveRef.current;
-    // snap candidates frozen at drag start: other-lane boundaries + keyframes
-    // (the live playhead is appended per-move)
+    // snap candidates frozen at drag start: other-lane boundaries + the
+    // same lane's OTHER-slot boundaries (align "both watching tv") +
+    // keyframes (the live playhead is appended per-move)
+    const mySlot = (seg.person_slot || null);
     const cands = [];
     for (const ln of live.laneList) {
-      if (ln.axis === lane.axis) continue;
+      if (ln.axis === lane.axis) {
+        for (const s of ln.segments || []) {
+          if (((s.person_slot || null)) !== mySlot) cands.push(s.start_s, s.end_s);
+        }
+        continue;
+      }
       for (const s of ln.segments || []) cands.push(s.start_s, s.end_s);
     }
     for (const t of live.snapTimes) cands.push(t);
@@ -456,6 +473,15 @@ function VLTimeline({
               : (lane.segments || []);
             const sugs = (suggestions && suggestions[lane.axis]) || [];
             const hasSug = sugs.length > 0;
+            /* person-slot sub-rows: divide the block area when the lane
+               holds >1 slot (primary on top, p2.. below); single-slot
+               lanes keep the exact M0/M1 geometry */
+            const D0 = window.HomeVideoLabelerData;
+            const slotList = (D0 && D0.laneSlots) ? D0.laneSlots(segs) : [null];
+            const multiSlot = slotList.length > 1;
+            const areaTop = 5;
+            const areaH = hasSug ? VL_LANE_H - VL_SUG_H - 13 : VL_LANE_H - 11;
+            const subH = multiSlot ? areaH / slotList.length : areaH;
             return (
               <div
                 key={lane.axis}
@@ -472,7 +498,13 @@ function VLTimeline({
                   if (!(dur > 0) || !onCreate) return;
                   const rect = e.currentTarget.getBoundingClientRect();
                   const t = Math.max(0, Math.min(dur, (e.clientX - rect.left) / pps));
-                  onCreate(lane.axis, t);
+                  /* create in the sub-row under the cursor (null = primary) */
+                  let slot = null;
+                  if (multiSlot) {
+                    const idx = Math.floor((e.clientY - rect.top - areaTop) / subH);
+                    slot = slotList[Math.max(0, Math.min(slotList.length - 1, idx))] || null;
+                  }
+                  onCreate(lane.axis, t, slot);
                 }}
                 style={{
                   position: "absolute", left: 0, width: "100%",
@@ -496,6 +528,11 @@ function VLTimeline({
                   const dashed = st === "prelabel";
                   const w = Math.max(3, (seg.end_s - seg.start_s) * pps);
                   const showHandles = w > 18;
+                  const slot = (seg.person_slot || null);
+                  const slotIdx = multiSlot ? Math.max(0, slotList.indexOf(slot)) : 0;
+                  const slotChip = slot != null
+                    ? (String(slot).length > 6 ? String(slot).slice(0, 5) + "…" : String(slot))
+                    : null;
                   return (
                     <div
                       key={seg.id}
@@ -508,13 +545,14 @@ function VLTimeline({
                       onDoubleClick={(e) => e.stopPropagation()}
                       title={vlValueText(seg.value) + " · " + (st || "?")
                         + " · " + seg.start_s.toFixed(2) + "–" + seg.end_s.toFixed(2) + "s"
-                        + (seg.source ? " · " + seg.source : "")}
+                        + (seg.source ? " · " + seg.source : "")
+                        + ((multiSlot || slot) ? " · " + (slot || "you") : "")}
                       style={{
                         position: "absolute",
                         left: seg.start_s * pps,
                         width: w,
-                        top: 5,
-                        height: hasSug ? VL_LANE_H - VL_SUG_H - 13 : VL_LANE_H - 11,
+                        top: areaTop + slotIdx * subH,
+                        height: multiSlot ? Math.max(8, subH - 2) : areaH,
                         boxSizing: "border-box",
                         border: selected
                           ? "1px solid var(--hg-fg-0)"
@@ -527,7 +565,7 @@ function VLTimeline({
                         overflow: "hidden",
                         cursor: "grab", touchAction: "none",
                         zIndex: selected ? 3 : 2,
-                        fontFamily: VL_FONT_MONO, fontSize: 9.5,
+                        fontFamily: VL_FONT_MONO, fontSize: multiSlot ? 8.5 : 9.5,
                       }}
                     >
                       {showHandles && (
@@ -548,6 +586,16 @@ function VLTimeline({
                         textDecoration: ghosted ? "line-through" : "none",
                         pointerEvents: "none",
                       }}>
+                        {slotChip != null && (
+                          <span style={{
+                            display: "inline-block",
+                            border: "1px solid rgba(255,255,255,0.45)",
+                            padding: "0 3px", marginRight: 4,
+                            fontSize: 7.5, lineHeight: "10px",
+                            letterSpacing: "0.06em", verticalAlign: "middle",
+                            opacity: 0.95,
+                          }}>{slotChip}</span>
+                        )}
                         {st === "accepted" ? "✓ " : ""}{vlValueText(seg.value) || "—"}
                       </span>
                       {showHandles && (

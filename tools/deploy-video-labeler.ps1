@@ -36,8 +36,14 @@ docker run -d --name hav-video-labeler \
   -v /var/run/docker.sock:/var/run/docker.sock \
   --env-file /opt/home-ai-voice/.env \
   -e PORT=8099 -e DATA_DIR=/data \
+  -e VLM_MODEL=labeler-qwen2.5vl-32b \
+  -e VLM_KEEP_ALIVE=30m \
   video-labeler
 '@
+# VLM_MODEL: the context-capped derivative (num_ctx 16384). The base
+# qwen2.5vl:32b default-loads a 128k context -> 137GB, CPU spill, ~55x
+# slower inference. Recreate on a fresh box with:
+#   printf 'FROM qwen2.5vl:32b\nPARAMETER num_ctx 16384\n' | ollama create labeler-qwen2.5vl-32b -f -
 
 Write-Host "4/4 verifying"
 $ok = $false

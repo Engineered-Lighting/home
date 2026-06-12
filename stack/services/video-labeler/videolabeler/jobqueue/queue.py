@@ -82,8 +82,12 @@ def lease(conn, lane: str) -> Optional[sqlite3.Row]:
     two runner processes cannot double-lease)."""
     with db.tx(conn):
         row = conn.execute(
+            # rowid tiebreaker = true FIFO: created_at has millisecond
+            # resolution and ties between a job and one it chained in a fast
+            # run; random hex ids made the winner arbitrary (flaked the
+            # windows-rerun test by leasing the chained perceive job instead)
             "SELECT id FROM jobs WHERE state = 'queued' AND lane = ?"
-            " ORDER BY created_at, id LIMIT 1", (lane,)).fetchone()
+            " ORDER BY created_at, rowid LIMIT 1", (lane,)).fetchone()
         if row is None:
             return None
         now = db.iso_now()

@@ -40,7 +40,30 @@ NO_PERSON_CONF = 0.95
 CHUNK_ROWS = 200
 
 _EMPTY_SUMMARY = {"max_persons": 0, "median_bbox": None,
-                  "bbox_area_frac": None, "keypoint_visibility_summary": None}
+                  "bbox_area_frac": None, "keypoint_visibility_summary": None,
+                  "all_bboxes": []}
+
+
+def _rank_bboxes(frs, max_ranks: int = 4) -> list:
+    """Per-window person boxes by size rank: rank k holds the median bbox of
+    the k-th-largest person across frames that have >= k+1 persons. Returns
+    [{rank, median_bbox, n_frames}] (normalized xyxy)."""
+    out = []
+    for k in range(max_ranks):
+        ranked = []
+        for r in frs:
+            persons = sorted(r["persons"], key=lambda p: -p["area_frac"])
+            if len(persons) > k:
+                ranked.append(persons[k])
+        if not ranked:
+            break
+        out.append({
+            "rank": k,
+            "median_bbox": [round(_median([p["bbox"][i] for p in ranked]), 4)
+                            for i in range(4)],
+            "n_frames": len(ranked),
+        })
+    return out
 
 
 def enqueue_for_video(conn, video_id: str, then_prelabel: bool = False):
@@ -108,7 +131,14 @@ def aggregate_window_stats(records, windows) -> dict:
                            "n_detections": len(dominant)})
             summary = {"max_persons": max(len(r["persons"]) for r in frs),
                        "median_bbox": med_bbox, "bbox_area_frac": area,
-                       "keypoint_visibility_summary": kp_summary}
+                       "keypoint_visibility_summary": kp_summary,
+                       # ALL persons, rank k = k-th largest median area —
+                       # multi-person scenes are ~a third of the corpus; the
+                       # future per-track pipeline (person_slot binding +
+                       # per-person crops) needs every box, not just the
+                       # dominant one. Median per rank across the window's
+                       # frames keeps it compact and jitter-resistant.
+                       "all_bboxes": _rank_bboxes(frs)}
         else:
             summary = dict(_EMPTY_SUMMARY)
         out[wid] = {"person_presence": round(presence, 4),

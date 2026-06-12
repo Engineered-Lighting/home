@@ -167,7 +167,7 @@ def test_valid_json_inserts_suggestions_without_revision_bump(conn, cfg, mock_vl
     assert side["pass2"]["activity_primary"] == "cooking"
     assert side["pass2_raw"] and side["error"] is None
     assert side["checks"] == {"pose_geometry": 0.0, "motion": 0.0,
-                              "adjacent": 0.0}
+                              "adjacent": 0.0, "multi_person": 0.0}
 
 
 def test_malformed_then_valid_json_retries_with_error_appended(conn, cfg, mock_vlm):
@@ -222,7 +222,12 @@ def test_quality_flags_row_and_pose_forced_multiple_people(conn, cfg, mock_vlm):
     qrows = _suggestions(conn, vid, "quality")
     assert len(qrows) == 1
     assert json.loads(qrows[0]["value"]) == ["dark", "multiple_people"]
-    assert qrows[0]["confidence"] == pytest.approx(0.7)  # 1 - max(unc)
+    # >=2 persons fires the multi_person disagreement check: a single
+    # whole-scene label is structurally unreliable there, so confidence is
+    # capped — these windows must always rank for human review
+    assert qrows[0]["confidence"] == pytest.approx(0.5)
+    acts = _suggestions(conn, vid, "activity")
+    assert acts and acts[0]["confidence"] <= 0.5
 
 
 # ----------------------------------------------- disagreement + confidence

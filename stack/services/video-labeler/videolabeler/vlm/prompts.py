@@ -12,7 +12,10 @@ from __future__ import annotations
 from .. import ontology
 from . import schema
 
-PROMPT_VERSION = "v1"
+# v2 (2026-06-12): ACTIVE_SET grew (+reading/resting/conversation — the v1
+# enum forced confident idle_present mislabels on reading scenes) and the
+# multi_person disagreement check now caps confidence on >=2-person windows.
+PROMPT_VERSION = "v2"
 
 # filename heuristics -- home camera exports usually carry the room name
 ROOM_WORDS = (

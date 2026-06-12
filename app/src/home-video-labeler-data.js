@@ -13,6 +13,9 @@
  *   3. Frozen label taxonomies + colors, timecode formatting, and the
  *      pure segment math the M1 timeline editor builds on (clamp /
  *      non-overlap / split / merge / snap) — unit-testable, no DOM.
+ *      Multi-person: non-overlap is per-(lane, person_slot) — clamping
+ *      only sees neighbors with the same slot ((seg.person_slot||null));
+ *      slot-less lanes (quality/custom) form one group = M1 behavior.
  */
 (function () {
   "use strict";
@@ -448,13 +451,62 @@
 
   /* ---------------- pure segment math (M1 foundation) ----------------
    * Segments are {id, start_s, end_s, ...}. All functions are pure —
-   * inputs are never mutated; per-lane NON-OVERLAP is the invariant
-   * (adapted from the recovered gesture editor's normalize, hardened). */
+   * inputs are never mutated; NON-OVERLAP is the invariant, enforced
+   * per-(lane, person_slot): a segment only clamps/clips against
+   * neighbors with the SAME slot ((seg.person_slot||null)); segments of
+   * other slots are transparent to it. Slot-less lanes (quality/custom)
+   * collapse into a single group — exact M1 behavior preserved. */
 
-  /* Clamp into [0, duration], sort by start, then enforce non-overlap by
-     clipping each segment against the previously placed neighbor (left
-     wins). Segments shorter than minDur after clipping are dropped. */
-  function normalizeSegments(segs, duration, minDur) {
+  /* person slots — activity_primary/posture ONLY. null/absent = the
+     primary occupant ("you"); "p2".."p9" = other people; "track:<id>"
+     reserved (the UI never mints it, but a known slot is never
+     stripped — display + pass-through only). */
+  const VL_SLOT_AXES = Object.freeze({ activity_primary: true, posture: true });
+  const VL_EXTRA_SLOTS = Object.freeze(["p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9"]);
+
+  function slotOf(seg) { return (seg && seg.person_slot) || null; }
+
+  function slotLabel(slot) {
+    if (!slot) return "you";
+    const m = /^p([2-9])$/.exec(String(slot));
+    return m ? "person " + m[1] : String(slot);
+  }
+
+  /* ordered unique slots present in a lane (primary first, then p2..p9 /
+     track:* lexicographically) — drives the timeline's stacked sub-rows */
+  function laneSlots(segs) {
+    let hasNull = false;
+    const seen = {};
+    const rest = [];
+    for (const s of segs || []) {
+      const k = slotOf(s);
+      if (k === null) { hasNull = true; continue; }
+      if (!seen[k]) { seen[k] = true; rest.push(k); }
+    }
+    rest.sort();
+    return (hasNull || rest.length === 0) ? [null].concat(rest) : rest;
+  }
+
+  /* split a lane into the id-segment's slot group + the rest, run `fn`
+     over the group only, recombine sorted. Identity when id is absent. */
+  function vlWithSlotGroup(segs, id, fn) {
+    const arr = segs || [];
+    const target = arr.find((s) => s.id === id);
+    if (!target) return arr;
+    const slot = slotOf(target);
+    const group = [];
+    const others = [];
+    for (const s of arr) (slotOf(s) === slot ? group : others).push(s);
+    if (!others.length) return fn(group);
+    return others.concat(fn(group))
+      .sort((a, b) => (a.start_s - b.start_s) || (a.end_s - b.end_s));
+  }
+
+  /* single-slot-group normalize: clamp into [0, duration], sort by start,
+     then enforce non-overlap by clipping each segment against the
+     previously placed neighbor (left wins). Segments shorter than minDur
+     after clipping are dropped. */
+  function vlNormalizeGroup(segs, duration, minDur) {
     const dur = Math.max(0, Number(duration) || 0);
     const min = Math.max(1e-9, Number(minDur) || 0);
     const sorted = (segs || [])
@@ -473,6 +525,21 @@
     return out;
   }
 
+  /* per-slot normalize: each slot group is normalized independently —
+     cross-slot overlap is legal (two people, same time range). */
+  function normalizeSegments(segs, duration, minDur) {
+    const groups = [];
+    const byKey = {};
+    for (const s of segs || []) {
+      const k = slotOf(s) == null ? " " : String(slotOf(s));
+      if (!byKey[k]) { byKey[k] = []; groups.push(byKey[k]); }
+      byKey[k].push(s);
+    }
+    let out = [];
+    for (const g of groups) out = out.concat(vlNormalizeGroup(g, duration, minDur));
+    return out.sort((a, b) => (a.start_s - b.start_s) || (a.end_s - b.end_s));
+  }
+
   let vlIdCounter = 0;
   /* Local (unsaved) segment ids. The M1 PUT contract re-keys ids it does
      not own via id_map, recognizing the tmp_ prefix — so every locally
@@ -486,11 +553,15 @@
 
   /* Split the segment containing t into [start,t) + [t,end). The left
      half keeps the original identity; the right half gets a fresh local
-     id (value inherited). No-op — same array back — when t isn't
-     strictly inside any segment. */
-  function splitAt(segs, t) {
+     id (value + person_slot inherited). No-op — same array back — when t
+     isn't strictly inside any segment. opts.slot (null = primary) limits
+     the candidates to one slot group; omit for slot-agnostic M1 behavior. */
+  function splitAt(segs, t, opts) {
     const arr = segs || [];
-    const i = arr.findIndex((s) => t > s.start_s && t < s.end_s);
+    const hasSlot = !!(opts && opts.slot !== undefined);
+    const want = hasSlot ? (opts.slot || null) : undefined;
+    const i = arr.findIndex((s) =>
+      (!hasSlot || slotOf(s) === want) && t > s.start_s && t < s.end_s);
     if (i < 0) return arr;
     const s = arr[i];
     const left = Object.assign({}, s, { end_s: t });
@@ -498,79 +569,89 @@
     return arr.slice(0, i).concat([left, right], arr.slice(i + 1));
   }
 
-  /* Move segment `id` so it starts at newStart, clamped between its lane
-     neighbors and [0, duration]. Move never clips neighbors — it stops
-     against them (drag-move semantics). */
+  /* Move segment `id` so it starts at newStart, clamped between its
+     SAME-SLOT lane neighbors and [0, duration]. Move never clips
+     neighbors — it stops against them (drag-move semantics); other
+     slots' segments are transparent. */
   function moveSegment(segs, id, newStart, opts) {
-    const dur = Math.max(0, Number(opts && opts.duration) || 0);
-    const arr = (segs || []).slice().sort((a, b) => a.start_s - b.start_s);
-    const i = arr.findIndex((s) => s.id === id);
-    if (i < 0) return segs || [];
-    const s = arr[i];
-    const len = s.end_s - s.start_s;
-    const lo = i > 0 ? arr[i - 1].end_s : 0;
-    const hi = Math.max(lo, (i + 1 < arr.length ? arr[i + 1].start_s : dur) - len);
-    const ns = Math.max(lo, Math.min(hi, Number(newStart)));
-    if (!Number.isFinite(ns)) return arr;
-    const out = arr.slice();
-    out[i] = Object.assign({}, s, { start_s: ns, end_s: ns + len });
-    return out;
+    return vlWithSlotGroup(segs, id, (group) => {
+      const dur = Math.max(0, Number(opts && opts.duration) || 0);
+      const arr = group.slice().sort((a, b) => a.start_s - b.start_s);
+      const i = arr.findIndex((s) => s.id === id);
+      if (i < 0) return group;
+      const s = arr[i];
+      const len = s.end_s - s.start_s;
+      const lo = i > 0 ? arr[i - 1].end_s : 0;
+      const hi = Math.max(lo, (i + 1 < arr.length ? arr[i + 1].start_s : dur) - len);
+      const ns = Math.max(lo, Math.min(hi, Number(newStart)));
+      if (!Number.isFinite(ns)) return arr;
+      const out = arr.slice();
+      out[i] = Object.assign({}, s, { start_s: ns, end_s: ns + len });
+      return out;
+    });
   }
 
   /* Resize one edge ('start'|'end') of segment `id` to time t. With
-     clipNeighbors (default, drag-resize semantics) the adjacent neighbor
-     is clipped down to minDur and then the edge stops; without it the
-     edge simply stops at the neighbor. The segment itself always keeps
-     minDur. Returns a new sorted array; neighbors stay non-overlapping. */
+     clipNeighbors (default, drag-resize semantics) the adjacent SAME-SLOT
+     neighbor is clipped down to minDur and then the edge stops; without
+     it the edge simply stops at the neighbor. Other slots are
+     transparent. The segment itself always keeps minDur. Returns a new
+     sorted array; same-slot neighbors stay non-overlapping. */
   function resizeSegment(segs, id, edge, t, opts) {
-    const dur = Math.max(0, Number(opts && opts.duration) || 0);
-    const min = Math.max(1e-9, Number(opts && opts.minDur) || 0.2);
-    const clip = !(opts && opts.clipNeighbors === false);
-    const arr = (segs || []).slice().sort((a, b) => a.start_s - b.start_s);
-    const i = arr.findIndex((s) => s.id === id);
-    if (i < 0) return segs || [];
-    const s = arr[i];
-    let nt = Math.max(0, Math.min(dur, Number(t)));
-    if (!Number.isFinite(nt)) return arr;
-    const out = arr.slice();
-    if (edge === "start") {
-      nt = Math.min(nt, s.end_s - min);
-      const left = i > 0 ? arr[i - 1] : null;
-      if (left && nt < left.end_s) {
-        if (clip) {
-          nt = Math.max(nt, left.start_s + min);
-          if (nt < left.end_s) out[i - 1] = Object.assign({}, left, { end_s: nt });
-        } else {
-          nt = left.end_s;
+    return vlWithSlotGroup(segs, id, (group) => {
+      const dur = Math.max(0, Number(opts && opts.duration) || 0);
+      const min = Math.max(1e-9, Number(opts && opts.minDur) || 0.2);
+      const clip = !(opts && opts.clipNeighbors === false);
+      const arr = group.slice().sort((a, b) => a.start_s - b.start_s);
+      const i = arr.findIndex((s) => s.id === id);
+      if (i < 0) return group;
+      const s = arr[i];
+      let nt = Math.max(0, Math.min(dur, Number(t)));
+      if (!Number.isFinite(nt)) return arr;
+      const out = arr.slice();
+      if (edge === "start") {
+        nt = Math.min(nt, s.end_s - min);
+        const left = i > 0 ? arr[i - 1] : null;
+        if (left && nt < left.end_s) {
+          if (clip) {
+            nt = Math.max(nt, left.start_s + min);
+            if (nt < left.end_s) out[i - 1] = Object.assign({}, left, { end_s: nt });
+          } else {
+            nt = left.end_s;
+          }
         }
-      }
-      nt = Math.max(0, Math.min(nt, s.end_s - min));
-      out[i] = Object.assign({}, s, { start_s: nt });
-    } else {
-      nt = Math.max(nt, s.start_s + min);
-      const right = i + 1 < arr.length ? arr[i + 1] : null;
-      if (right && nt > right.start_s) {
-        if (clip) {
-          nt = Math.min(nt, right.end_s - min);
-          if (nt > right.start_s) out[i + 1] = Object.assign({}, right, { start_s: nt });
-        } else {
-          nt = right.start_s;
+        nt = Math.max(0, Math.min(nt, s.end_s - min));
+        out[i] = Object.assign({}, s, { start_s: nt });
+      } else {
+        nt = Math.max(nt, s.start_s + min);
+        const right = i + 1 < arr.length ? arr[i + 1] : null;
+        if (right && nt > right.start_s) {
+          if (clip) {
+            nt = Math.min(nt, right.end_s - min);
+            if (nt > right.start_s) out[i + 1] = Object.assign({}, right, { start_s: nt });
+          } else {
+            nt = right.start_s;
+          }
         }
+        nt = Math.min(dur, Math.max(nt, s.start_s + min));
+        out[i] = Object.assign({}, s, { end_s: nt });
       }
-      nt = Math.min(dur, Math.max(nt, s.start_s + min));
-      out[i] = Object.assign({}, s, { end_s: nt });
-    }
-    return out;
+      return out;
+    });
   }
 
   /* Clear [start, end) in a lane: overlapping segments are trimmed or
      split (the right part of a split gets a fresh temp id); remainders
      shorter than minDur are dropped. Used by the P/private flow before
-     inserting a covering quality segment. */
-  function carveRange(segs, start, end, minDur) {
+     inserting a covering quality segment. opts.slot (null = primary)
+     carves only that slot group — other slots pass through untouched. */
+  function carveRange(segs, start, end, minDur, opts) {
     const min = Math.max(1e-9, Number(minDur) || 0.2);
+    const hasSlot = !!(opts && opts.slot !== undefined);
+    const want = hasSlot ? (opts.slot || null) : undefined;
     const out = [];
     for (const s of segs || []) {
+      if (hasSlot && slotOf(s) !== want) { out.push(s); continue; }
       if (s.end_s <= start || s.start_s >= end) { out.push(s); continue; }
       const leftOk = start - s.start_s >= min;
       const rightOk = s.end_s - end >= min;
@@ -586,14 +667,19 @@
 
   /* Insert a fresh human segment around time t: prefDur (default 4s)
      clamped into the gap containing t — or the nearest gap when t sits
-     inside an existing segment. Returns {segments, id} or null when no
-     gap can host at least minDur. */
+     inside an existing segment. opts.slot (null = primary) places the
+     segment in that slot group: gaps are computed against SAME-SLOT
+     segments only, and the new segment carries person_slot = slot.
+     Returns {segments, id} or null when no gap can host minDur. */
   function createSegmentAt(segs, t, value, opts) {
     const dur = Math.max(0, Number(opts && opts.duration) || 0);
     const min = Math.max(1e-9, Number(opts && opts.minDur) || 0.2);
     const pref = Math.max(min, Number(opts && opts.prefDur) || 4);
+    const slot = (opts && opts.slot) || null;
     if (!(dur > 0)) return null;
-    const sorted = (segs || []).slice().sort((a, b) => a.start_s - b.start_s);
+    const all = (segs || []).slice();
+    const sorted = all.filter((s) => slotOf(s) === slot)
+      .sort((a, b) => a.start_s - b.start_s);
     const gaps = [];
     let cursor = 0;
     for (const s of sorted) {
@@ -618,20 +704,28 @@
     const seg = {
       id: id, start_s: start, end_s: end, value: value,
       review_state: "reviewed", source: "human",
-      confidence: null, aux: null, person_slot: null,
+      confidence: null, aux: null, person_slot: slot,
     };
-    return { segments: sorted.concat([seg]).sort((a, b) => a.start_s - b.start_s), id: id };
+    return { segments: all.concat([seg]).sort((a, b) => a.start_s - b.start_s), id: id };
   }
 
-  /* Merge the identified segment with its immediate right neighbor (in
-     start order). The merged segment spans both, keeping the left
-     segment's identity + value. No-op when id is missing or last. */
+  /* Merge the identified segment with its immediate SAME-SLOT right
+     neighbor (in start order); other slots' segments in between are
+     skipped (and may end up covered by the merged span — legal, they are
+     a different person). Keeps the left segment's identity + value.
+     No-op when id is missing or has no same-slot right neighbor. */
   function mergeAdjacent(segs, id) {
     const arr = (segs || []).slice().sort((a, b) => a.start_s - b.start_s);
     const i = arr.findIndex((s) => s.id === id);
-    if (i < 0 || i + 1 >= arr.length) return segs || [];
-    const merged = Object.assign({}, arr[i], { end_s: Math.max(arr[i].end_s, arr[i + 1].end_s) });
-    return arr.slice(0, i).concat([merged], arr.slice(i + 2));
+    if (i < 0) return segs || [];
+    const slot = slotOf(arr[i]);
+    let j = -1;
+    for (let k = i + 1; k < arr.length; k++) {
+      if (slotOf(arr[k]) === slot) { j = k; break; }
+    }
+    if (j < 0) return segs || [];
+    const merged = Object.assign({}, arr[i], { end_s: Math.max(arr[i].end_s, arr[j].end_s) });
+    return arr.slice(0, i).concat([merged], arr.slice(i + 1, j), arr.slice(j + 1));
   }
 
   /* Nearest snap candidate (plain seconds values) within tol of t, or
@@ -670,9 +764,11 @@
     VL_VALUE_COLORS, colorFor,
     // formatting
     fmtTimecode, fmtDuration,
-    // pure segment math (M1 editor)
+    // pure segment math (M1 editor; non-overlap per-(lane, person_slot))
     normalizeSegments, splitAt, mergeAdjacent, findSnap,
     moveSegment, resizeSegment, carveRange, createSegmentAt,
     newSegId, newTempId,
+    // person slots (multi-person; activity/posture only)
+    slotOf, slotLabel, laneSlots, VL_SLOT_AXES, VL_EXTRA_SLOTS,
   });
 })();

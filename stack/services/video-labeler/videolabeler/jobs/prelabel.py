@@ -123,12 +123,21 @@ def adjacency_check(activity, prev_activity) -> float:
     return ADJACENT_DISAGREEMENT
 
 
+def multi_person_check(pose_summary) -> float:
+    """1.0 when pose saw >= 2 people: the VLM emits ONE activity/posture
+    for the whole scene, which is structurally unreliable with multiple
+    occupants (user-caught: reading + a gaming friend -> 'idle_present' at
+    90%). Caps confidence so these windows always rank for human review."""
+    return 1.0 if (pose_summary or {}).get("max_persons", 0) >= 2 else 0.0
+
+
 def disagreement_checks(activity, posture, pose_summary, motion_energy,
                         prev_activity) -> dict:
     return {
         "pose_geometry": pose_geometry_check(posture, pose_summary),
         "motion": motion_check(activity, motion_energy),
         "adjacent": adjacency_check(activity, prev_activity),
+        "multi_person": multi_person_check(pose_summary),
     }
 
 

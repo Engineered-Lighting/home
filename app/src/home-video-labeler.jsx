@@ -32,6 +32,17 @@
  * segments locally (PUT enforces per-lane non-overlap) — a carve marks the
  * doc dirty so the next save reconciles the trimmed neighbors.
  *
+ * Multi-person (person_slot): activity/posture segments carry person_slot
+ * (null = the primary occupant "you"; "p2".."p9" = other people;
+ * "track:<id>" reserved — displayed, never minted, never stripped).
+ * Non-overlap is per-(lane, slot) end to end: the pure ops clamp per slot,
+ * the timeline stacks slot sub-rows, the inspector grows a person control
+ * ([you · p2 · p3 · +]), G toggles the selected segment you↔p2, and the
+ * suggestion inspector gains "accept +p2" (accept AND duplicate the
+ * graduated segment into p2 — two people doing the same thing). PUT
+ * payloads carry person_slot EXPLICITLY (null) on every activity/posture
+ * segment and never on quality/custom (the server 400s those).
+ *
  * Sim containment: the overlay renders an explicit "unavailable in
  * simulation mode" state BEFORE any media element exists — <video src>
  * and sprite background-images bypass tauriFetch's sim guard, so the
@@ -516,6 +527,30 @@ function vlIsSuggestionSel(sel) {
   return !!(sel && sel.kind === "suggestion");
 }
 
+/* person slots live on activity/posture segments ONLY (server 400s the
+   field on quality/custom) */
+function vlIsSlotAxis(axis) {
+  return axis === "activity_primary" || axis === "posture";
+}
+
+/* PUT payload shape: person_slot EXPLICIT (null = primary, never strip a
+   known slot) on every activity/posture segment; ABSENT on quality/custom */
+function vlPayloadAxes(axes) {
+  const out = {};
+  for (const ax of VL_AXIS_ORDER) {
+    out[ax] = ((axes && axes[ax]) || []).map((s) => {
+      if (vlIsSlotAxis(ax)) return { ...s, person_slot: s.person_slot || null };
+      if (s && s.person_slot !== undefined) {
+        const c = { ...s };
+        delete c.person_slot;
+        return c;
+      }
+      return s;
+    });
+  }
+  return out;
+}
+
 /* low-confidence threshold: disagreement caps server confidence at 0.5, so
    <0.6 nets both genuinely-unsure and disagreement-capped suggestions */
 const VL_LOW_CONF = 0.6;
@@ -643,34 +678,53 @@ function vlEditorReducer(state, a) {
       };
     }
     /* M3 — a reviewed suggestion graduated server-side; PROJECT it into the
-       canonical lane. items: [{axis, segment}] (segment = the server's
-       returned canonical row, axis key stripped); empty items just adopts
-       the bumped revision (reject path). PUT enforces per-lane non-overlap,
-       so overlapping canonical segments are carved around the graduate —
-       and ONLY a carve marks the doc dirty (the graduate itself is already
-       server state). Undo stacks are left alone: graduation is not a local
-       edit and must not be locally undoable. */
+       canonical lane. items: [{axis, segment, dupSlot?, dupId?}] (segment =
+       the server's returned canonical row, axis key stripped); empty items
+       just adopts the bumped revision (reject path). PUT enforces
+       per-(lane, person_slot) non-overlap, so canonical segments in the
+       graduate's OWN slot are carved around it (other slots are legal
+       overlaps) — and ONLY a carve marks the doc dirty (the graduate
+       itself is already server state). dupSlot ("accept +p2"): also clone
+       the graduate into that slot as a local tmp row (id = dupId) — a
+       LOCAL edit, so it marks the doc dirty and persists on the next save.
+       Undo stacks are left alone: graduation is not a local edit and must
+       not be locally undoable. */
     case "GRADUATE": {
       const D = window.HomeVideoLabelerData;
       const axes = { ...state.doc.axes };
-      let carved = false;
+      let localEdit = false;
       for (const it of a.items || []) {
         const seg = it.segment;
         if (!seg || !seg.id) continue;
-        const lane = (axes[it.axis] || []).filter((s) => s.id !== seg.id);
+        const slot = (seg.person_slot || null);
+        let lane = (axes[it.axis] || []).filter((s) => s.id !== seg.id);
         const overlaps = lane.some((s) =>
+          ((s.person_slot || null) === slot) &&
           s.start_s < seg.end_s - 1e-6 && s.end_s > seg.start_s + 1e-6);
-        let next = lane;
         if (overlaps) {
-          next = D.carveRange(lane, seg.start_s, seg.end_s, a.minDur || 0.2);
-          carved = true;
+          lane = D.carveRange(lane, seg.start_s, seg.end_s, a.minDur || 0.2, { slot });
+          localEdit = true;
         }
-        axes[it.axis] = next.concat([seg]).sort((x, y) => x.start_s - y.start_s);
+        lane = lane.concat([seg]);
+        if (it.dupSlot) {
+          const dupOverlap = lane.some((s) =>
+            ((s.person_slot || null) === it.dupSlot) &&
+            s.start_s < seg.end_s - 1e-6 && s.end_s > seg.start_s + 1e-6);
+          if (dupOverlap) {
+            lane = D.carveRange(lane, seg.start_s, seg.end_s, a.minDur || 0.2, { slot: it.dupSlot });
+          }
+          lane = lane.concat([{
+            ...seg, id: it.dupId || D.newTempId(), person_slot: it.dupSlot,
+            source: "human", review_state: "reviewed", confidence: null,
+          }]);
+          localEdit = true;
+        }
+        axes[it.axis] = lane.sort((x, y) => x.start_s - y.start_s);
       }
       return {
         ...state,
         doc: { axes },
-        rev: carved ? state.rev + 1 : state.rev,
+        rev: localEdit ? state.rev + 1 : state.rev,
         revision: a.revision != null ? a.revision : state.revision,
       };
     }
@@ -1158,11 +1212,21 @@ function VLInspector({
   suggestion, suggestionOps, suggSummary, bulk,
 }) {
   const D = window.HomeVideoLabelerData;
+  const [moreSlots, setMoreSlots] = useState(false);
   const seg = segment;
   const axis = selection && selection.axis;
   const valueList = seg
     ? (Array.isArray(seg.value) ? seg.value : [seg.value])
     : [];
+  /* person chips: you · p2 · p3 (+ expands to p9); the current slot is
+     always listed even when exotic (p5 while collapsed, track:*) */
+  const segSlot = seg ? (seg.person_slot || null) : null;
+  const slotChoices = (() => {
+    const base = [null].concat(
+      moreSlots ? D.VL_EXTRA_SLOTS : D.VL_EXTRA_SLOTS.slice(0, 2));
+    if (segSlot != null && base.indexOf(segSlot) < 0) base.push(segSlot);
+    return base;
+  })();
   const sugDisagree = suggestion ? D.suggestionDisagreement(suggestion) : null;
   const sugEvidence = suggestion ? D.suggestionEvidenceText(suggestion) : null;
   const sugConf = suggestion && typeof suggestion.confidence === "number"
@@ -1256,6 +1320,13 @@ function VLInspector({
               title="key A — graduate into the canonical lane"
               style={{ ...VL_BTN_SM, color: D.colorFor("accepted") }}
             >accept</button>
+            {(axis === "activity_primary" || axis === "posture") && (
+              <button
+                onClick={() => suggestionOps.acceptPlusP2()}
+                title="accept AND duplicate the graduated segment into person 2 — two people doing the same thing"
+                style={{ ...VL_BTN_SM, color: D.colorFor("accepted") }}
+              >accept +p2</button>
+            )}
             <button
               onClick={() => suggestionOps.review("reject")}
               title="key R — drop from review (the server keeps the record)"
@@ -1295,6 +1366,10 @@ function VLInspector({
               />
               {seg.source && <VLChip label={seg.source} tone="dim" />}
               {seg.confidence != null && <VLChip label={"conf " + Number(seg.confidence).toFixed(2)} tone="dim" />}
+              {segSlot != null && (
+                <VLChip label={D.slotLabel(segSlot)} tone="default"
+                  title={"person slot " + segSlot + " — not the primary occupant"} />
+              )}
               {vlIsTempId(seg.id) && <VLChip label="unsaved id" tone="warn" title={seg.id} />}
             </div>
 
@@ -1343,15 +1418,42 @@ function VLInspector({
               ))}
             </div>
 
+            {/* person — activity/posture only (slots are illegal elsewhere) */}
+            {(axis === "activity_primary" || axis === "posture") && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={{ ...VL_SECTION_TITLE, fontSize: 8 }}>person · G toggles you ↔ p2</span>
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
+                  {slotChoices.map((sl) => (
+                    <button
+                      key={String(sl)}
+                      onClick={() => ops.setSlot(sl)}
+                      title={sl == null
+                        ? "the primary occupant (you)"
+                        : "assign to " + D.slotLabel(sl)}
+                      style={{
+                        ...VL_BTN_SM, padding: "2px 8px", fontSize: 9,
+                        color: segSlot === sl ? "var(--hg-ice)" : "var(--hg-fg-4)",
+                        borderColor: segSlot === sl ? "var(--hg-ice)" : "var(--hg-border-soft)",
+                      }}
+                    >{sl == null ? "you" : sl}</button>
+                  ))}
+                  {!moreSlots && (
+                    <button
+                      onClick={() => setMoreSlots(true)}
+                      title="more slots (p4–p9)"
+                      style={{ ...VL_BTN_SM, padding: "2px 7px", fontSize: 9, color: "var(--hg-fg-5)" }}
+                    >+</button>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* aux — activity only */}
             {axis === "activity_primary" && (
               <VLAuxForm seg={seg} ontology={ontology || null} onPatch={(p) => ops.setAux(p)} />
             )}
 
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 9, color: "var(--hg-fg-5)" }}>
-                person slot · {seg.person_slot == null ? "—" : String(seg.person_slot)}
-              </span>
               <button
                 onClick={() => ops.deleteSelected()}
                 style={{ ...VL_BTN_SM, marginLeft: "auto", color: "var(--hg-crit)", borderColor: "var(--hg-border-soft)" }}
@@ -1414,7 +1516,7 @@ function VLInspector({
       </div>
 
       <div style={{ fontSize: 8.5, color: "var(--hg-fg-5)", letterSpacing: "0.08em", marginTop: "auto" }}>
-        ? shortcuts · E picker · S split · M merge · U next unreviewed
+        ? shortcuts · E picker · S split · M merge · G person · U next unreviewed
       </div>
     </div>
   );
@@ -1430,6 +1532,7 @@ const VL_CHEAT_ROWS = [
   [", / .", "nudge nearest boundary ∓/± 1 frame (shift ×10)"],
   ["del", "delete segment"], ["a / r / n / x", "accept / reject / needs review / exclude"],
   ["shift+a", "accept all suggestions overlapping selection"],
+  ["g", "toggle person you ↔ p2 (activity/posture)"],
   ["p", "toggle private_skip over selection"],
   ["u / shift+u", "next / prev unreviewed (falls back to suggestions)"],
   ["f · + / −", "fit · zoom (ctrl+wheel on timeline)"],
@@ -1742,8 +1845,10 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
     return act.length ? act[0].value : null;
   }, [canonicalInfo, customsFor]);
 
-  /* new segment: default 4s at t, clamped to neighbors, reviewed/human/tmp id */
-  const createAt = useCallback((axis, t, value) => {
+  /* new segment: default 4s at t, clamped to SAME-SLOT neighbors,
+     reviewed/human/tmp id. slot (null = primary/you) only applies on
+     activity/posture — quality/custom stay slot-less. */
+  const createAt = useCallback((axis, t, value, slot) => {
     const dur = durationOf();
     if (!(dur > 0)) { showToast("video metadata not loaded yet"); return; }
     let v = value != null ? value : defaultValueFor(axis);
@@ -1753,8 +1858,15 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
       return;
     }
     if (axis === "quality" && !Array.isArray(v)) v = [v];
-    const r = D.createSegmentAt(laneOf(axis), t, v, { duration: dur, minDur, prefDur: 4 });
-    if (!r) { showToast("no room for a segment there"); return; }
+    const useSlot = vlIsSlotAxis(axis) ? (slot || null) : null;
+    const r = D.createSegmentAt(laneOf(axis), t, v, {
+      duration: dur, minDur, prefDur: 4, slot: useSlot,
+    });
+    if (!r) {
+      showToast("no room for a segment there"
+        + (useSlot ? " (" + D.slotLabel(useSlot) + " row)" : ""));
+      return;
+    }
     commitLane(axis, r.segments);
     dispatch({ type: "SELECT", axis, segId: r.id });
   }, [durationOf, defaultValueFor, laneOf, minDur, commitLane, showToast]);
@@ -1779,35 +1891,56 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
     commitLane(axis, next);
   }, [createAt, commitLane, transport]);
 
-  /* S — split the active lane at the playhead; halves inherit; accepted → needs_review */
+  /* S — split the active lane at the playhead; halves inherit (value +
+     person_slot); accepted → needs_review. With stacked slots the
+     SELECTED segment wins when it contains t; otherwise the first
+     containing segment (its slot scopes the split). */
   const splitAtPlayhead = useCallback(() => {
     const axis = stateRef.current.activeAxis;
     const t = transport().getTime();
     const lane = laneOf(axis);
-    const orig = lane.find((x) => t > x.start_s && t < x.end_s);
+    const sel = selectedSeg();
+    let orig = (sel && stateRef.current.selection.axis === axis
+      && t > sel.start_s && t < sel.end_s) ? sel : null;
+    if (!orig) orig = lane.find((x) => t > x.start_s && t < x.end_s);
     if (!orig) { showToast("playhead is not inside a " + VL_AXIS_TITLES[axis] + " segment"); return; }
     if (t - orig.start_s < minDur || orig.end_s - t < minDur) {
       showToast("too close to a boundary (min " + minDur.toFixed(2) + "s)");
       return;
     }
-    let next = D.splitAt(lane, t);
+    const slot = orig.person_slot || null;
+    let next = D.splitAt(lane, t, { slot });
     if (next === lane) return;
+    const isRightHalf = (x) =>
+      (x.person_slot || null) === slot && x.start_s === t && x.end_s === orig.end_s;
     if (orig.review_state === "accepted") {
-      next = next.map((x) => (x.id === orig.id || (x.start_s === t && x.end_s === orig.end_s))
+      next = next.map((x) => (x.id === orig.id || isRightHalf(x))
         ? { ...x, review_state: "needs_review" } : x);
     }
     commitLane(axis, next);
-    const right = next.find((x) => x.start_s === t && x.end_s === orig.end_s);
+    const right = next.find(isRightHalf);
     if (right) dispatch({ type: "SELECT", axis, segId: right.id });
-  }, [transport, laneOf, minDur, commitLane, showToast]);
+  }, [transport, laneOf, selectedSeg, minDur, commitLane, showToast]);
 
-  /* M — merge selection with its right neighbor (prompt on value conflict) */
+  /* index of the next SAME-SLOT segment after i (start order); -1 = none */
+  const vlNextSameSlotIdx = (lane, i) => {
+    const slot = (lane[i].person_slot || null);
+    for (let k = i + 1; k < lane.length; k++) {
+      if ((lane[k].person_slot || null) === slot) return k;
+    }
+    return -1;
+  };
+
+  /* M — merge selection with its right SAME-SLOT neighbor (prompt on
+     value conflict); other slots' segments in between are skipped */
   const doMerge = useCallback((axis, leftId, keep) => {
     const lane = laneOf(axis).slice().sort((a, b) => a.start_s - b.start_s);
     const i = lane.findIndex((x) => x.id === leftId);
-    if (i < 0 || i + 1 >= lane.length) { setMergePrompt(null); return; }
+    if (i < 0) { setMergePrompt(null); return; }
+    const j = vlNextSameSlotIdx(lane, i);
+    if (j < 0) { setMergePrompt(null); return; }
     const left = lane[i];
-    const right = lane[i + 1];
+    const right = lane[j];
     const same = vlValuesEqual(left.value, right.value);
     const merged = {
       ...left,
@@ -1816,7 +1949,7 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
       aux: keep === "right" ? right.aux : left.aux,
       review_state: (same && left.review_state === right.review_state) ? left.review_state : "needs_review",
     };
-    commitLane(axis, lane.slice(0, i).concat([merged], lane.slice(i + 2)));
+    commitLane(axis, lane.slice(0, i).concat([merged], lane.slice(i + 1, j), lane.slice(j + 1)));
     dispatch({ type: "SELECT", axis, segId: merged.id });
     setMergePrompt(null);
   }, [laneOf, commitLane]);
@@ -1828,11 +1961,16 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
     const lane = laneOf(axis).slice().sort((a, b) => a.start_s - b.start_s);
     const i = lane.findIndex((x) => x.id === s.selection.segId);
     if (i < 0) return;
-    if (i + 1 >= lane.length) { showToast("no segment to the right"); return; }
-    if (vlValuesEqual(lane[i].value, lane[i + 1].value)) { doMerge(axis, lane[i].id, "left"); return; }
+    const j = vlNextSameSlotIdx(lane, i);
+    if (j < 0) {
+      const slot = lane[i].person_slot || null;
+      showToast("no segment to the right" + (slot ? " for " + D.slotLabel(slot) : ""));
+      return;
+    }
+    if (vlValuesEqual(lane[i].value, lane[j].value)) { doMerge(axis, lane[i].id, "left"); return; }
     setMergePrompt({
       axis, leftId: lane[i].id,
-      leftLabel: vlValueText(lane[i].value), rightLabel: vlValueText(lane[i + 1].value),
+      leftLabel: vlValueText(lane[i].value), rightLabel: vlValueText(lane[j].value),
     });
   }, [laneOf, doMerge, showToast]);
 
@@ -1903,7 +2041,10 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
      deliberately does NOT take the rejected row (it would overlap real
      labels and PUT enforces non-overlap); the next save retires it and the
      record survives as history + the calibration verdict already counted. */
-  const reviewSuggestion = useCallback(async (action) => {
+  /* dupSlot ("accept +p2"): accept AND clone the graduated segment into
+     that slot in one click — two people doing the same thing. The clone
+     is a local tmp row (dirty → persists on the next save). */
+  const reviewSuggestion = useCallback(async (action, dupSlot) => {
     const sel = stateRef.current.selection;
     if (!vlIsSuggestionSel(sel)) return;
     const seg = (suggestionsRef.current[sel.axis] || []).find((x) => x.id === sel.segId);
@@ -1924,13 +2065,20 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
       dispatch({ type: "GRADUATE", items: [], revision: r.data.revision });
       showToast("rejected · " + vlValueText(seg.value));
     } else {
+      const wantDup = !!(dupSlot && action === "accept" && vlIsSlotAxis(sel.axis));
       dispatch({
         type: "GRADUATE",
-        items: clean.id ? [{ axis: sel.axis, segment: clean }] : [],
+        items: clean.id ? [{
+          axis: sel.axis, segment: clean,
+          dupSlot: wantDup ? dupSlot : null,
+          dupId: wantDup ? D.newTempId() : null,
+        }] : [],
         revision: r.data.revision, minDur,
       });
       if (clean.id) dispatch({ type: "SELECT", kind: "canonical", axis: sel.axis, segId: clean.id });
-      showToast((VL_REVIEW_RESULT[action] || action).replace(/_/g, " ") + " · " + vlValueText(seg.value));
+      showToast((VL_REVIEW_RESULT[action] || action).replace(/_/g, " ")
+        + " · " + vlValueText(seg.value)
+        + (wantDup && clean.id ? " · +" + dupSlot : ""));
     }
   }, [video.id, minDur, removeSuggestionIds, showToast]);
 
@@ -2032,10 +2180,11 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
       showToast("private_skip removed");
     } else {
       const carved = D.carveRange(ql, sel.start_s, sel.end_s, minDur);
+      /* quality segments are slot-less — no person_slot field */
       const seg = {
         id: D.newTempId(), start_s: sel.start_s, end_s: sel.end_s,
         value: ["private_skip"], review_state: "reviewed", source: "human",
-        confidence: null, aux: null, person_slot: null,
+        confidence: null, aux: null,
       };
       commitLane("quality", carved.concat([seg]).sort((a, b) => a.start_s - b.start_s));
       showToast("range flagged private_skip");
@@ -2118,6 +2267,36 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
     commitLane(s.selection.axis, laneOf(s.selection.axis).map((x) => x.id === sel.id ? { ...x, aux } : x));
   }, [selectedSeg, laneOf, commitLane]);
 
+  /* person control / G — re-assign the selected activity/posture segment
+     to a slot. Validates locally against the TARGET slot's neighbors: an
+     overlap toasts and refuses (the time range never changes here). */
+  const setSlot = useCallback((slot) => {
+    const s = stateRef.current;
+    const sel = selectedSeg();
+    if (!sel) { showToast("no segment selected"); return; }
+    const axis = s.selection.axis;
+    if (!vlIsSlotAxis(axis)) { showToast("person slots apply to activity/posture segments only"); return; }
+    const next = slot || null;
+    if ((sel.person_slot || null) === next) return;
+    const lane = laneOf(axis);
+    const clash = lane.some((x) => x.id !== sel.id
+      && ((x.person_slot || null) === next)
+      && x.start_s < sel.end_s - 1e-6 && x.end_s > sel.start_s + 1e-6);
+    if (clash) {
+      showToast("overlaps a " + D.slotLabel(next) + " segment — move or trim it first");
+      return;
+    }
+    commitLane(axis, lane.map((x) => x.id === sel.id ? { ...x, person_slot: next } : x));
+    showToast("person · " + D.slotLabel(next));
+  }, [selectedSeg, laneOf, commitLane, showToast]);
+
+  /* G — the 90% case: flip the selected segment between you and p2 */
+  const toggleSlotG = useCallback(() => {
+    const sel = selectedSeg();
+    if (!sel) { showToast("select a segment — G toggles person you ↔ p2"); return; }
+    setSlot((sel.person_slot || null) === null ? "p2" : null);
+  }, [selectedSeg, setSlot, showToast]);
+
   /* ---------- save flow (pessimistic PUT + 409 banner) ---------- */
 
   const selectNextVideo = useCallback(() => {
@@ -2158,7 +2337,7 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
     savingRef.current = true;
     setSaving(true);
     const revAtStart = s.rev;
-    const r = await D.putLabels(video.id, { revision: s.revision, axes: s.doc.axes });
+    const r = await D.putLabels(video.id, { revision: s.revision, axes: vlPayloadAxes(s.doc.axes) });
     savingRef.current = false;
     setSaving(false);
     applySaveResult(r, revAtStart, thenNext);
@@ -2169,7 +2348,7 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
     savingRef.current = true;
     setSaving(true);
     const s = stateRef.current;
-    const r = await D.putLabels(video.id, { revision: conflict.revision, axes: s.doc.axes });
+    const r = await D.putLabels(video.id, { revision: conflict.revision, axes: vlPayloadAxes(s.doc.axes) });
     savingRef.current = false;
     setSaving(false);
     applySaveResult(r, s.rev, false);
@@ -2274,6 +2453,7 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
         if (vlIsSuggestionSel(stateRef.current.selection)) reviewSuggestion("exclude");
         else reviewSelected("exclude");
         return;
+      case "g": handled(); toggleSlotG(); return;
       case "p": handled(); togglePrivate(); return;
       case "u": handled(); jumpUnreviewed(e.shiftKey ? -1 : 1); return;
       case "f": handled(); tr.zoomFit(); return;
@@ -2323,7 +2503,7 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
     onPalettePick: (v) => applyValue(stateRef.current.activeAxis, v),
     onSelect: (axis, segId) => dispatch({ type: "SELECT", axis, segId }),
     onCommit: (axis, segments, undoEntry) => dispatch({ type: "SET_SEGMENTS", axis, segments, undoEntry }),
-    onCreate: (axis, t) => createAt(axis, t, null),
+    onCreate: (axis, t, slot) => createAt(axis, t, null, slot),
     onSelectSuggestion: (axis, segId) => dispatch({ type: "SELECT", kind: "suggestion", axis, segId }),
   }), [lanes, state.selection, state.activeAxis, minDur, palette, suggestions, applyValue, createAt]);
 
@@ -2334,9 +2514,10 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
     review: reviewSelected,
     deleteSelected,
     setAux,
+    setSlot,
     save: () => doSave(false),
     saveNext: () => doSave(true),
-  }), [setEdgeTo, reviewSelected, deleteSelected, setAux, doSave]);
+  }), [setEdgeTo, reviewSelected, deleteSelected, setAux, setSlot, doSave]);
 
   const selSeg = (state.selection && !vlIsSuggestionSel(state.selection))
     ? (state.doc.axes[state.selection.axis] || []).find((x) => x.id === state.selection.segId) || null
@@ -2383,6 +2564,7 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
 
   const suggestionOps = useMemo(() => ({
     review: reviewSuggestion,
+    acceptPlusP2: () => reviewSuggestion("accept", "p2"),
     acceptOverlapping,
     seek: (t) => transport().seekTo(t),
   }), [reviewSuggestion, acceptOverlapping, transport]);

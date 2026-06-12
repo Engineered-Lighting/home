@@ -302,3 +302,49 @@ def test_unknown_video_404(client):
     assert client.put("/api/video-labeler/videos/vid_nope/labels",
                       json={"revision": 0, "axes": {}}).status_code == 404
 
+
+
+# ---- person_slot: multi-person scenes ------------------------------------------
+
+def test_person_slot_allows_parallel_segments_per_person(client):
+    """Reading (primary) + gaming (p2) on the SAME time range — a third of
+    the v1 corpus has two people; same-slot overlap stays a 400."""
+    r = client.put(URL, json={"revision": 0, "axes": {
+        "activity_primary": [
+            _seg(0, 10, "reading", id="tmp_me"),
+            _seg(0, 10, "watching_tv", id="tmp_friend", person_slot="p2"),
+        ],
+        "posture": [
+            _seg(0, 10, "sitting_upright", id="tmp_mp"),
+            _seg(0, 10, "sitting_reclined", id="tmp_fp", person_slot="p2"),
+        ]}})
+    assert r.status_code == 200, r.json()
+    doc = client.get(URL).json()
+    acts = doc["axes"]["activity_primary"]
+    assert sorted((s["value"], s["person_slot"] or "primary") for s in acts) == [
+        ("reading", "primary"), ("watching_tv", "p2")]
+
+
+def test_person_slot_same_slot_overlap_still_rejected(client):
+    r = client.put(URL, json={"revision": 0, "axes": {
+        "activity_primary": [
+            _seg(0, 10, "reading", person_slot="p2"),
+            _seg(5, 12, "watching_tv", person_slot="p2"),
+        ]}})
+    assert r.status_code == 400
+    assert "overlaps" in str(r.json())
+
+
+def test_person_slot_validation(client):
+    # bad grammar
+    r = client.put(URL, json={"revision": 0, "axes": {
+        "activity_primary": [_seg(0, 5, "reading", person_slot="friend")]}})
+    assert r.status_code == 400
+    # not allowed on quality
+    r = client.put(URL, json={"revision": 0, "axes": {
+        "quality": [_seg(0, 5, ["clear"], person_slot="p2")]}})
+    assert r.status_code == 400
+    # track ref accepted (future per-tracklet pipeline)
+    r = client.put(URL, json={"revision": 0, "axes": {
+        "activity_primary": [_seg(0, 5, "reading", person_slot="track:abc-1")]}})
+    assert r.status_code == 200, r.json()

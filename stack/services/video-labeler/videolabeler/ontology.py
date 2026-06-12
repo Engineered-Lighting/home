@@ -95,9 +95,14 @@ ACTIVITY_PHASE = ("starting", "ongoing", "ending")
 # Seed ACTIVE SET: the M2 VLM constrained enum is ACTIVE_SET + a literal
 # "other" (which routes to the custom-label flow — "other" itself is NOT a
 # canonical value); classes activate at >= N human-reviewed examples.
+# reading/resting/conversation activated 2026-06-12: the corpus visibly
+# contains them and their absence forced the VLM into confident
+# idle_present mislabels (user-caught: reading on the couch -> idle 90%).
+# Order matters: the editor's 1-9/0 number-key palette takes the FIRST TEN —
+# keep the labels a reviewer actually reaches for on keys ("unknown" and the
+# rarer actives live in the E-picker).
 ACTIVE_SET = (
     "no_person",
-    "unknown",
     "walking",
     "cooking",
     "eating_drinking",
@@ -105,7 +110,11 @@ ACTIVE_SET = (
     "watching_tv",
     "working_computer",
     "phone_use",
+    "reading",
     "idle_present",
+    "unknown",
+    "resting",
+    "conversation",
 )
 
 # custom:<slug> — lowercase slug, 1..48 chars, [a-z0-9_-], no leading/trailing

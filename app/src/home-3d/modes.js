@@ -15,7 +15,8 @@ const easeInOutCubic = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2
 
 export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidates, fetchFrame, getPoints, scene, renderer, camera }) {
     const candidates = assetCandidates;
-    const state = { mode: 'points', fading: null, splat: null, mesh: null };
+    const state = { mode: 'points', fading: null, splat: null, mesh: null,
+                    meshNearCut: { value: 0.0 } };
     const listeners = [];
 
     // The EL cloud writes depth by design (self-occlusion). Once a fade ends
@@ -109,12 +110,26 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
                         if (!o.isMesh) return;
                         // the scene is unlit (cloud needs no lights) — swap PBR
                         // for basic textured so the photogrammetry atlas shows.
-                        // (ceiling removal is baked into mesh.glb by the
-                        // pipeline — material clippingPlanes render all-black
-                        // in this three/WebView2 combination, verified)
-                        o.material = src.textured && o.material && o.material.map
-                            ? new THREE.MeshBasicMaterial({ map: o.material.map, side: THREE.DoubleSide })
+                        // FrontSide = dollhouse cutaway: interior-scanned wall
+                        // faces point INTO rooms, so the wall nearest the
+                        // camera backfaces away and culls itself while the far
+                        // walls render. Plus a near-camera melt (uMeshNearCut,
+                        // driven per-frame from orbit radius) for anything the
+                        // culling can't catch.
+                        const mat = src.textured && o.material && o.material.map
+                            ? new THREE.MeshBasicMaterial({ map: o.material.map, side: THREE.FrontSide })
                             : new THREE.MeshNormalMaterial({ flatShading: true });
+                        mat.onBeforeCompile = (sh) => {
+                            sh.uniforms.uMeshNearCut = state.meshNearCut;
+                            sh.vertexShader = sh.vertexShader
+                                .replace('#include <common>', '#include <common>\nvarying float vViewZ;')
+                                .replace('#include <fog_vertex>', '#include <fog_vertex>\nvViewZ = -mvPosition.z;');
+                            sh.fragmentShader = sh.fragmentShader
+                                .replace('#include <common>', '#include <common>\nuniform float uMeshNearCut;\nvarying float vViewZ;')
+                                .replace('#include <dithering_fragment>',
+                                    '#include <dithering_fragment>\nif (uMeshNearCut > 0.0 && vViewZ < uMeshNearCut) discard;');
+                        };
+                        o.material = mat;
                     });
                     apartmentRoot.add(grp);
                     state.mesh = grp;
@@ -163,6 +178,7 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
         },
 
         getMesh() { return state.mesh; },
+        setMeshNearCut(v) { state.meshNearCut.value = v; },
 
         debugInfo() {
             return {

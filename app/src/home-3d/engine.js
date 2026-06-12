@@ -138,6 +138,9 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
         if (pointsMaterial.uniforms.uWallNear) {
             pointsMaterial.uniforms.uWallNear.value = orbitR < 9.0 ? orbitR * 0.75 : 0.0;
         }
+        if (modes.setMeshNearCut) {
+            modes.setMeshNearCut(orbitR < 9.0 ? orbitR * 0.55 : 0.0);
+        }
         modes.update(dt);
         overlay.update(dt);
         renderer.render(scene, camera);

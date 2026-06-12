@@ -20,7 +20,7 @@ CORE_BOXES = [
     {"x": (2.70, 6.85), "y": (0.40, 6.55)},    # kitchen + dining (west nub trimmed)
     {"x": (6.85, 7.35), "y": (0.40, 6.15)},    # hallway strip (chimney blob cut)
     {"x": (7.35, 14.45), "y": (0.50, 6.35)},   # living room + east alcove
-    {"x": (10.85, 14.05), "y": (6.35, 7.95)},  # OFFICE (northeast) - kept
+    {"x": (10.85, 13.95), "y": (6.35, 7.95)},  # OFFICE (northeast) - kept
 ]
 CEILING_Z = 2.03
 

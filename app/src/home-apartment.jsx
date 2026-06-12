@@ -566,7 +566,19 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
             });
           },
           onPairsChanged: (pairs) => { syncCalibMarkers(pairs); },
-          onDone: () => {
+          onDone: (result) => {
+            // persist the solved extrinsics into the camera device
+            if (result && (result.q || result.R || result.C)) {
+              setModel((m) => {
+                const next = { ...m, devices: (m.devices || []).map((d) =>
+                  d.id === calibCam.id
+                    ? { ...d, source: "calibrated",
+                        camera: { ...(d.camera || {}), extrinsics: result } }
+                    : d) };
+                window.HomeApartmentData.saveModel(next, { endpoint, token, sim: simActive });
+                return next;
+              });
+            }
             calibPickRef.current = false; setCalibCam(null);
             syncCalibMarkers([]);
           },

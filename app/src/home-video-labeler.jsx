@@ -5,19 +5,30 @@
  * restore-on-close (home-apartment.jsx pattern), video list + manual
  * import, proxy playback with custom transport + frame-rate timecode,
  * VLTimeline + VLThumbStrip wired to currentTime/seek, and a jobs tab.
- * The segment editor proper (lanes, drag, picker, save) is M1.
+ *
+ * M1 adds the segment editor (VLEditor): useReducer doc state mirroring
+ * the server shape (per-axis lanes activity_primary/posture/quality/custom;
+ * quality holds value ARRAYS), axis-scoped undo/redo (cap 50, pushed on
+ * pointerup-commit only), pessimistic PUT save with revision + 409
+ * reload/overwrite banner + tmp-id remap via id_map, debounced 1s draft
+ * autosave with id-validated restore banner, VLLabelPicker (autocomplete +
+ * number-key palette + inline custom-label create), VLInspector (value /
+ * frame-stepped bounds / review actions / aux form / custom-label
+ * manager), and the full keyboard map — every handler behind the
+ * input-focus guard. Degrades gracefully: getLabels 404 ⇒ empty doc rev 0,
+ * save disabled, "labels API not deployed" chip.
  *
  * Sim containment: the overlay renders an explicit "unavailable in
  * simulation mode" state BEFORE any media element exists — <video src>
  * and sprite background-images bypass tauriFetch's sim guard, so the
- *gate lives here AND in vlBase() (null base under __SIM_ACTIVE).
+ * gate lives here AND in vlBase() (null base under __SIM_ACTIVE).
  *
  * Global: HomeVideoLabelerOverlay. Service must be optional: every fetch
  * is no-throw ({ok,...}); the app boots and the overlay renders offline
  * chips with the box down.
  * ========================================================================= */
 
-const { useState, useEffect, useRef, useCallback, useMemo } = React;
+const { useState, useEffect, useRef, useCallback, useMemo, useReducer } = React;
 
 /* shared with home-video-labeler-timeline.jsx (same values; var-safe) */
 const VL_FONT_MONO = "'Geist Mono', ui-monospace, monospace";
@@ -94,20 +105,34 @@ function VLVideoRow({ video, selected, onClick }) {
  * requestVideoFrameCallback chain writes the timecode text + playhead
  * transform straight into the DOM, with a 4Hz interval as the fallback
  * (no rVFC / paused seeks).
+ *
+ * M1: takes an optional `editor` bundle from VLEditor — lanes, selection,
+ * commit/select/create callbacks, the number-key palette (rendered as a
+ * chip row above the timeline) and a transportRef it populates with the
+ * imperative API the overlay keyboard map drives (getTime/seek/stepFrame/
+ * zoom…). Zoom state lives here: pxPerSec = fit-to-width or a continuous
+ * zoom level in [fit … 240 px/s]; VLTimeline calls onZoom (Ctrl+wheel)
+ * and keeps the anchor stationary itself. Without `editor` the player
+ * behaves exactly like M0 (plain ruler + playhead).
  * ──────────────────────────────────────────────────────────────────── */
-function VLPlayer({ video }) {
+function VLPlayer({ video, editor }) {
   const D = window.HomeVideoLabelerData;
   const videoRef = useRef(null);
   const timecodeRef = useRef(null);
   const playheadRef = useRef(null);
+  const playheadTimeRef = useRef(0);
   const wrapRef = useRef(null);
   const pxPerSecRef = useRef(1);
+  const fitPpsRef = useRef(1);
+  const editorRef = useRef(editor);
+  editorRef.current = editor;
   const [playing, setPlaying] = useState(false);
   const [rate, setRate] = useState(1);
   const [manifest, setManifest] = useState(null);
   const [fitWidth, setFitWidth] = useState(0);
   const [metaDur, setMetaDur] = useState(0);
   const [mediaErr, setMediaErr] = useState(false);
+  const [zoomPps, setZoomPps] = useState(null); // null = fit-to-width
 
   const fps = (video && video.fps) || 30;
   const duration = (video && video.duration_s) || metaDur || 0;
@@ -123,7 +148,6 @@ function VLPlayer({ video }) {
     return () => { dead = true; };
   }, [video.id]);
 
-  /* M0 zoom = fit-to-width (zoom levels land in M1) */
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return undefined;
@@ -133,18 +157,28 @@ function VLPlayer({ video }) {
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  const pxPerSec = duration > 0 && fitWidth > 0 ? fitWidth / duration : 1;
+  /* the editor timeline reserves VL_SIDEBAR_W+1px for the lane sidebar */
+  const trackW = Math.max(80, fitWidth - (editor ? VL_SIDEBAR_W + 1 : 0));
+  const fitPps = duration > 0 && trackW > 0 ? trackW / duration : 1;
+  fitPpsRef.current = fitPps;
+  const pxPerSec = (editor && zoomPps != null)
+    ? Math.min(240, Math.max(fitPps, zoomPps))
+    : fitPps;
   pxPerSecRef.current = pxPerSec;
 
   const syncNow = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
     const t = v.currentTime || 0;
+    playheadTimeRef.current = t;
     if (timecodeRef.current) timecodeRef.current.textContent = D.fmtTimecode(t, fps);
     if (playheadRef.current) {
       playheadRef.current.style.transform = "translateX(" + (t * pxPerSecRef.current) + "px)";
     }
   }, [fps]);
+
+  /* reposition the playhead immediately on zoom (don't wait for the 4Hz tick) */
+  useEffect(() => { syncNow(); }, [pxPerSec, syncNow]);
 
   useEffect(() => {
     const v = videoRef.current;
@@ -197,6 +231,53 @@ function VLPlayer({ video }) {
     if (v) v.playbackRate = r;
     setRate(r);
   }, []);
+
+  /* frame step per the plan: currentTime = (n±1 + 0.5)/fps */
+  const stepFrame = useCallback((n) => {
+    const v = videoRef.current;
+    if (!v) return;
+    const idx = Math.round((v.currentTime || 0) * fps - 0.5) + n;
+    seekTo((idx + 0.5) / fps);
+  }, [fps, seekTo]);
+
+  /* continuous zoom: ×1.35 per step, clamped [fit … 240 px/s]; at/below
+     fit collapses back to null so window resizes keep fitting. */
+  const zoomBy = useCallback((dir) => {
+    setZoomPps((prev) => {
+      const cur = prev == null ? fitPpsRef.current : prev;
+      const next = cur * (dir > 0 ? 1.35 : 1 / 1.35);
+      if (next <= fitPpsRef.current * 1.001) return null;
+      return Math.min(240, next);
+    });
+  }, []);
+  const zoomFit = useCallback(() => setZoomPps(null), []);
+
+  /* imperative transport for the editor's keyboard map */
+  useEffect(() => {
+    const tr = editor && editor.transportRef;
+    if (!tr) return undefined;
+    tr.current = {
+      getTime: () => (videoRef.current && videoRef.current.currentTime) || 0,
+      getDuration: () => duration,
+      getFps: () => fps,
+      isPlaying: () => !!(videoRef.current && !videoRef.current.paused),
+      seekTo, skip, stepFrame, togglePlay, zoomBy, zoomFit,
+    };
+  });
+  useEffect(() => () => {
+    const ed = editorRef.current;
+    if (ed && ed.transportRef) ed.transportRef.current = null;
+  }, []);
+
+  /* sprite keyframe instants — snap candidates for the timeline */
+  const keyframeTimes = useMemo(() => {
+    if (!manifest || !(manifest.interval_s > 0) || !(manifest.count > 0)) return [];
+    const out = [];
+    for (let i = 0; i < manifest.count; i++) out.push(i * manifest.interval_s);
+    return out;
+  }, [manifest]);
+
+  const zoomed = editor && zoomPps != null;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minWidth: 0 }}>
@@ -258,6 +339,17 @@ function VLPlayer({ video }) {
             }}
           >{r}×</button>
         ))}
+        {editor && (
+          <span style={{ display: "inline-flex", gap: 4, marginLeft: 10 }}>
+            <button style={VL_BTN_SM} title="zoom out (-)" onClick={() => zoomBy(-1)}>−</button>
+            <button
+              style={{ ...VL_BTN_SM, color: zoomed ? "var(--hg-fg-3)" : "var(--hg-ice)" }}
+              title="fit to width (F)"
+              onClick={zoomFit}
+            >fit</button>
+            <button style={VL_BTN_SM} title="zoom in (+) · ctrl+wheel on the timeline" onClick={() => zoomBy(1)}>+</button>
+          </span>
+        )}
         <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "baseline", gap: 6 }}>
           <span ref={timecodeRef} style={{
             fontFamily: VL_FONT_MONO, fontSize: 11, color: "var(--hg-ice)",
@@ -270,20 +362,1534 @@ function VLPlayer({ video }) {
         </span>
       </div>
 
+      {/* number-key palette — first 10 ACTIVE values of the active axis */}
+      {editor && (
+        <div className="hg-scroll" style={{
+          display: "flex", alignItems: "center", gap: 4,
+          padding: "5px 12px", borderTop: "1px solid var(--hg-border-soft)",
+          overflowX: "auto", flex: "none",
+        }}>
+          <span style={{
+            fontFamily: VL_FONT_MONO, fontSize: 8.5, letterSpacing: "0.16em",
+            color: "var(--hg-fg-5)", textTransform: "lowercase", flex: "none",
+          }}>{editor.axisTitle} ·</span>
+          {(editor.palette || []).map((p) => (
+            <button
+              key={p.key + String(p.value)}
+              onClick={() => editor.onPalettePick && editor.onPalettePick(p.value)}
+              title={"apply " + p.label + " (key " + p.key + ")"}
+              style={{
+                ...VL_BTN_SM, padding: "2px 7px", fontSize: 9,
+                whiteSpace: "nowrap", flex: "none",
+                color: p.color, borderColor: "var(--hg-border-soft)",
+              }}
+            >
+              <span style={{ color: "var(--hg-fg-5)" }}>{p.key} </span>{p.label}
+            </button>
+          ))}
+          {(editor.palette || []).length === 0 && (
+            <span style={{
+              fontFamily: VL_FONT_MONO, fontSize: 9, color: "var(--hg-fg-5)",
+              letterSpacing: "0.08em",
+            }}>no values for this lane yet — press C to create a custom label</span>
+          )}
+        </div>
+      )}
+
       {/* timeline + filmstrip */}
       <div ref={wrapRef} style={{ flex: "none", minWidth: 0 }}>
         {window.VLTimeline && (
           <window.VLTimeline
             duration={duration}
+            fps={fps}
             playheadRef={playheadRef}
+            playheadTimeRef={playheadTimeRef}
             pxPerSec={pxPerSec}
             onSeek={seekTo}
+            lanes={editor ? editor.lanes : null}
+            selection={editor ? editor.selection : null}
+            activeAxis={editor ? editor.activeAxis : null}
+            snapTimes={keyframeTimes}
+            minDur={editor ? editor.minDur : 0.2}
+            following={playing}
+            onSelect={editor ? editor.onSelect : null}
+            onCommit={editor ? editor.onCommit : null}
+            onCreate={editor ? editor.onCreate : null}
+            onZoom={editor ? zoomBy : null}
           />
         )}
         {window.VLThumbStrip && (
           <window.VLThumbStrip video={video} manifest={manifest} onSeek={seekTo} />
         )}
       </div>
+    </div>
+  );
+}
+
+/* ═════════════════════════════════════════════════════════════════════
+ * M1 — segment editor state + components
+ * ════════════════════════════════════════════════════════════════════ */
+
+const VL_AXIS_ORDER = ["activity_primary", "posture", "quality", "custom"];
+const VL_AXIS_TITLES = {
+  activity_primary: "activity", posture: "posture",
+  quality: "quality", custom: "custom",
+};
+/* review action → resulting review_state (used for the local/tmp path) */
+const VL_REVIEW_RESULT = {
+  accept: "accepted", reject: "rejected",
+  needs_review: "needs_review", exclude: "excluded_from_export",
+};
+
+const VL_INPUT = {
+  background: "var(--hg-input-bg)", border: "1px solid var(--hg-border-soft)",
+  color: "var(--hg-fg-1)", padding: "4px 7px",
+  fontFamily: VL_FONT_MONO, fontSize: 10.5, width: "100%",
+  outline: "none", boxSizing: "border-box",
+};
+
+const VL_SECTION_TITLE = {
+  fontFamily: VL_FONT_MONO, fontSize: 8.5, letterSpacing: "0.22em",
+  color: "var(--hg-fg-4)", textTransform: "lowercase",
+};
+
+function vlEmptyAxes() {
+  return { activity_primary: [], posture: [], quality: [], custom: [] };
+}
+
+function vlNormalizeAxes(axes) {
+  const out = vlEmptyAxes();
+  for (const ax of VL_AXIS_ORDER) {
+    out[ax] = ((axes && axes[ax]) || []).slice().sort((a, b) => a.start_s - b.start_s);
+  }
+  return out;
+}
+
+function vlCountSegs(axes) {
+  let n = 0;
+  for (const ax of VL_AXIS_ORDER) n += ((axes && axes[ax]) || []).length;
+  return n;
+}
+
+function vlValuesEqual(a, b) {
+  if (Array.isArray(a) || Array.isArray(b)) {
+    const aa = (Array.isArray(a) ? a.slice() : [a]).sort();
+    const bb = (Array.isArray(b) ? b.slice() : [b]).sort();
+    return JSON.stringify(aa) === JSON.stringify(bb);
+  }
+  return a === b;
+}
+
+function vlIsTempId(id) {
+  return typeof id === "string" && (id.indexOf("tmp_") === 0 || id.indexOf("seg_local_") === 0);
+}
+
+function vlRemapList(list, idMap) {
+  return (list || []).map((s) => idMap[s.id] ? { ...s, id: idMap[s.id] } : s);
+}
+
+function vlRemapAxes(axes, idMap) {
+  const out = {};
+  for (const ax of VL_AXIS_ORDER) out[ax] = vlRemapList(axes && axes[ax], idMap);
+  return out;
+}
+
+function vlRemapStack(stack, idMap) {
+  return (stack || []).map((e) => ({
+    axis: e.axis, before: vlRemapList(e.before, idMap), after: vlRemapList(e.after, idMap),
+  }));
+}
+
+function vlEditorInit() {
+  return {
+    doc: { axes: vlEmptyAxes() },  // mirrors the server PUT/GET shape
+    revision: 0,                   // server revision the doc is based on
+    rev: 0,                        // local edit counter
+    savedRev: 0,                   // rev at last save — dirty = rev !== savedRev
+    selection: null,               // {axis, segId} | null
+    activeAxis: "activity_primary",
+    undo: [],                      // axis-scoped {axis, before, after}, cap 50
+    redo: [],
+  };
+}
+
+function vlEditorReducer(state, a) {
+  switch (a.type) {
+    case "LOAD_DOC":
+      return {
+        ...vlEditorInit(),
+        doc: { axes: vlNormalizeAxes(a.axes) },
+        revision: a.revision || 0,
+        activeAxis: state.activeAxis,
+      };
+    case "RESTORE_DRAFT":
+      return {
+        ...state,
+        doc: { axes: vlNormalizeAxes(a.axes) },
+        rev: state.rev + 1,
+        undo: [], redo: [], selection: null,
+      };
+    case "SET_SEGMENTS": {
+      const segments = (a.segments || []).slice().sort((x, y) => x.start_s - y.start_s);
+      const axes = { ...state.doc.axes, [a.axis]: segments };
+      let selection = state.selection;
+      if (selection && selection.axis === a.axis && !segments.some((s) => s.id === selection.segId)) {
+        selection = null;
+      }
+      return {
+        ...state,
+        doc: { axes },
+        rev: state.rev + 1,
+        undo: a.undoEntry ? state.undo.concat([a.undoEntry]).slice(-50) : state.undo,
+        redo: a.undoEntry ? [] : state.redo,
+        selection,
+      };
+    }
+    case "SELECT":
+      return {
+        ...state,
+        selection: a.segId ? { axis: a.axis, segId: a.segId } : null,
+        activeAxis: a.axis || state.activeAxis,
+      };
+    case "SET_ACTIVE_AXIS":
+      return { ...state, activeAxis: a.axis };
+    case "UNDO": {
+      const e = state.undo[state.undo.length - 1];
+      if (!e) return state;
+      const axes = { ...state.doc.axes, [e.axis]: e.before };
+      let selection = state.selection;
+      if (selection && selection.axis === e.axis && !e.before.some((s) => s.id === selection.segId)) selection = null;
+      return {
+        ...state, doc: { axes }, rev: state.rev + 1, selection,
+        undo: state.undo.slice(0, -1), redo: state.redo.concat([e]).slice(-50),
+      };
+    }
+    case "REDO": {
+      const e = state.redo[state.redo.length - 1];
+      if (!e) return state;
+      const axes = { ...state.doc.axes, [e.axis]: e.after };
+      let selection = state.selection;
+      if (selection && selection.axis === e.axis && !e.after.some((s) => s.id === selection.segId)) selection = null;
+      return {
+        ...state, doc: { axes }, rev: state.rev + 1, selection,
+        redo: state.redo.slice(0, -1), undo: state.undo.concat([e]).slice(-50),
+      };
+    }
+    /* server-applied review: patches the segment + adopts the bumped
+       revision WITHOUT touching rev/savedRev (it isn't a local edit) */
+    case "APPLY_REVIEW": {
+      const lane = (state.doc.axes[a.axis] || []).map((s) => s.id === a.segId ? { ...s, ...a.patch } : s);
+      return {
+        ...state,
+        doc: { axes: { ...state.doc.axes, [a.axis]: lane } },
+        revision: a.revision != null ? a.revision : state.revision,
+      };
+    }
+    /* savedRev = rev at PUT start: edits made while the save was in
+       flight stay dirty. id_map remaps tmp ids in doc + selection +
+       undo/redo stacks. */
+    case "MARK_SAVED": {
+      const idMap = a.idMap || {};
+      let selection = state.selection;
+      if (selection && idMap[selection.segId]) selection = { ...selection, segId: idMap[selection.segId] };
+      return {
+        ...state,
+        doc: { axes: vlRemapAxes(state.doc.axes, idMap) },
+        undo: vlRemapStack(state.undo, idMap),
+        redo: vlRemapStack(state.redo, idMap),
+        selection,
+        revision: a.revision,
+        savedRev: a.savedRev,
+      };
+    }
+    default:
+      return state;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ * VLTimeField — frame-stepped numeric time input; commits on blur/Enter
+ * so half-typed values never reach the doc.
+ * ──────────────────────────────────────────────────────────────────── */
+function VLTimeField({ label, value, fps, onCommit }) {
+  const [txt, setTxt] = useState(String(Math.round(value * 1000) / 1000));
+  useEffect(() => { setTxt(String(Math.round(value * 1000) / 1000)); }, [value]);
+  const commit = () => {
+    const n = Number(txt);
+    if (Number.isFinite(n) && Math.abs(n - value) > 1e-9) onCommit(n);
+    else setTxt(String(Math.round(value * 1000) / 1000));
+  };
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1, minWidth: 0 }}>
+      <span style={{ ...VL_SECTION_TITLE, fontSize: 8 }}>{label}</span>
+      <input
+        type="number"
+        step={1 / (fps || 30)}
+        min={0}
+        value={txt}
+        onChange={(e) => setTxt(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commit(); e.currentTarget.blur(); } }}
+        style={VL_INPUT}
+      />
+    </label>
+  );
+}
+
+/* text field that commits on blur/Enter (aux form, picker create) */
+function VLTextField({ label, value, placeholder, textarea, onCommit }) {
+  const [txt, setTxt] = useState(value || "");
+  useEffect(() => { setTxt(value || ""); }, [value]);
+  const commit = () => { if ((value || "") !== txt) onCommit(txt); };
+  const common = {
+    value: txt,
+    placeholder: placeholder || "",
+    onChange: (e) => setTxt(e.target.value),
+    onBlur: commit,
+    style: textarea ? { ...VL_INPUT, minHeight: 44, resize: "vertical" } : VL_INPUT,
+  };
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 0 }}>
+      <span style={{ ...VL_SECTION_TITLE, fontSize: 8 }}>{label}</span>
+      {textarea
+        ? <textarea {...common} />
+        : <input
+            type="text" {...common}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commit(); e.currentTarget.blur(); } }}
+          />}
+    </label>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ * VLLabelPicker — popover (E / value chip): autocomplete over the axis's
+ * ACTIVE canonical values + custom labels (inactive canonicals listed
+ * last, dimmed), with an inline create-custom-label form (C opens it
+ * directly; a "create …" row appears for unmatched queries). Escape is
+ * handled by the input itself — the overlay Escape guard skips inputs.
+ * ──────────────────────────────────────────────────────────────────── */
+function VLLabelPicker({ axisTitle, values, createMode, onApply, onCreateCustom, onClose }) {
+  const [q, setQ] = useState("");
+  const [hi, setHi] = useState(0);
+  const [creating, setCreating] = useState(!!createMode);
+  const [createName, setCreateName] = useState("");
+  const [createColor, setCreateColor] = useState("");
+  const [busy, setBusy] = useState(false);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    const t = setTimeout(() => { if (inputRef.current) inputRef.current.focus(); }, 30);
+    return () => clearTimeout(t);
+  }, [creating]);
+
+  const matches = useMemo(() => {
+    const qq = q.trim().toLowerCase();
+    const list = values || [];
+    if (!qq) return list.slice(0, 14);
+    return list
+      .filter((v) => v.label.toLowerCase().includes(qq) || String(v.value).toLowerCase().includes(qq))
+      .slice(0, 14);
+  }, [q, values]);
+
+  const showCreateRow = q.trim().length > 0 &&
+    !matches.some((v) => v.label.toLowerCase() === q.trim().toLowerCase());
+  const rowCount = matches.length + (showCreateRow ? 1 : 0);
+
+  useEffect(() => { setHi((h) => Math.max(0, Math.min(h, rowCount - 1))); }, [rowCount]);
+
+  const choose = (i) => {
+    if (i < matches.length) { onApply(matches[i].value); onClose(); return; }
+    setCreateName(q.trim());
+    setCreating(true);
+  };
+
+  const doCreate = async () => {
+    const name = createName.trim();
+    if (!name || busy) return;
+    setBusy(true);
+    const ok = await onCreateCustom(name, createColor.trim() || null);
+    setBusy(false);
+    if (ok) onClose();
+  };
+
+  return (
+    <div style={{
+      position: "absolute", left: "50%", top: 80, transform: "translateX(-50%)",
+      width: 320, zIndex: 12, background: "var(--hg-bg-1)",
+      border: "1px solid var(--hg-border)", boxShadow: "0 18px 50px rgba(0,0,0,0.5)",
+      padding: 10, fontFamily: VL_FONT_MONO,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 8 }}>
+        <span style={VL_SECTION_TITLE}>{creating ? "new custom label" : "label · " + axisTitle}</span>
+        <button onClick={onClose} style={{ ...VL_BTN_SM, marginLeft: "auto", padding: "1px 7px" }}>esc</button>
+      </div>
+      {!creating ? (
+        <>
+          <input
+            ref={inputRef}
+            type="text"
+            value={q}
+            placeholder="type to filter…"
+            onChange={(e) => { setQ(e.target.value); setHi(0); }}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onClose(); }
+              else if (e.key === "ArrowDown") { e.preventDefault(); setHi((h) => Math.min(rowCount - 1, h + 1)); }
+              else if (e.key === "ArrowUp") { e.preventDefault(); setHi((h) => Math.max(0, h - 1)); }
+              else if (e.key === "Enter") { e.preventDefault(); if (rowCount > 0) choose(hi); }
+            }}
+            style={{ ...VL_INPUT, marginBottom: 6 }}
+          />
+          <div className="hg-scroll" style={{ maxHeight: 240, overflowY: "auto" }}>
+            {matches.map((v, i) => (
+              <div
+                key={String(v.value)}
+                onMouseEnter={() => setHi(i)}
+                onClick={() => choose(i)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 7,
+                  padding: "5px 7px", cursor: "pointer", fontSize: 10.5,
+                  background: hi === i ? "var(--hg-bg-3)" : "transparent",
+                  color: v.inactive ? "var(--hg-fg-5)" : "var(--hg-fg-1)",
+                }}
+              >
+                <span style={{ width: 8, height: 8, background: v.color, flex: "none" }} />
+                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v.label}</span>
+                {v.isCustom && <VLChip label="custom" tone="dim" />}
+                {v.inactive && <VLChip label="inactive" tone="dim" />}
+              </div>
+            ))}
+            {showCreateRow && (
+              <div
+                onMouseEnter={() => setHi(matches.length)}
+                onClick={() => choose(matches.length)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 7,
+                  padding: "5px 7px", cursor: "pointer", fontSize: 10.5,
+                  background: hi === matches.length ? "var(--hg-bg-3)" : "transparent",
+                  color: "var(--hg-ice)",
+                }}
+              >+ create custom "{q.trim()}"</div>
+            )}
+            {rowCount === 0 && (
+              <div style={{ padding: "6px 7px", fontSize: 10, color: "var(--hg-fg-5)" }}>no matches</div>
+            )}
+          </div>
+        </>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+          <input
+            ref={inputRef}
+            type="text"
+            value={createName}
+            placeholder="label name"
+            onChange={(e) => setCreateName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onClose(); }
+              else if (e.key === "Enter") { e.preventDefault(); doCreate(); }
+            }}
+            style={VL_INPUT}
+          />
+          <input
+            type="text"
+            value={createColor}
+            placeholder="color (optional, e.g. hsl(200 50% 60%))"
+            onChange={(e) => setCreateColor(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); doCreate(); } }}
+            style={VL_INPUT}
+          />
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={doCreate} disabled={busy || !createName.trim()}
+              style={{ ...VL_BTN_SM, color: "var(--hg-ice)" }}>{busy ? "creating…" : "create + apply"}</button>
+            {!createMode && (
+              <button onClick={() => setCreating(false)} style={VL_BTN_SM}>back</button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ * VLCustomLabelManager — minimal manager inside the inspector: list with
+ * usage counts; per-label hide / merge-into / promote-to-canonical.
+ * (No rename — the M1 contract has no rename endpoint.)
+ * ──────────────────────────────────────────────────────────────────── */
+function VLCustomLabelManager({ ontology, refreshOntology, canonicalInfo, showToast }) {
+  const D = window.HomeVideoLabelerData;
+  const [expanded, setExpanded] = useState(null);
+  const [mergeInto, setMergeInto] = useState("");
+  const [promoteTo, setPromoteTo] = useState("");
+  const [busy, setBusy] = useState(false);
+  const customs = (ontology && ontology.custom) || [];
+
+  const act = async (call, what) => {
+    if (busy) return;
+    setBusy(true);
+    const r = await call();
+    setBusy(false);
+    if (r.ok) {
+      showToast("custom label " + what + " · ok");
+      setExpanded(null);
+      refreshOntology();
+    } else {
+      showToast(what + " failed · " + (r.error || "service unreachable"));
+    }
+  };
+
+  if (!customs.length) {
+    return (
+      <div style={{ fontSize: 9.5, color: "var(--hg-fg-5)", letterSpacing: "0.06em" }}>
+        none yet — press C (or type a new name in the picker) to create one
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column" }}>
+      {customs.map((c) => {
+        const open = expanded === c.slug;
+        const color = c.color || D.colorFor("custom:" + c.slug);
+        const mergeTargets = customs.filter((o) => o.slug !== c.slug && o.status === "active");
+        const canonAxis = (c.axis === "posture" || c.axis === "quality") ? c.axis : "activity_primary";
+        const info = canonicalInfo(canonAxis);
+        const promoteTargets = info.active.concat(info.rest);
+        return (
+          <div key={c.slug} style={{ borderBottom: "1px solid var(--hg-border-soft)" }}>
+            <div
+              onClick={() => { setExpanded(open ? null : c.slug); setMergeInto(""); setPromoteTo(""); }}
+              style={{
+                display: "flex", alignItems: "center", gap: 6,
+                padding: "5px 2px", cursor: "pointer", fontSize: 10,
+                color: c.status === "active" ? "var(--hg-fg-2)" : "var(--hg-fg-5)",
+              }}
+            >
+              <span style={{ width: 8, height: 8, background: color, flex: "none" }} />
+              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {c.name || c.slug}
+              </span>
+              <span style={{ fontSize: 8.5, color: "var(--hg-fg-5)" }}>{c.axis} · {c.usage_count ?? 0}×</span>
+              {c.status !== "active" && <VLChip label={c.status} tone="dim" />}
+            </div>
+            {open && c.status === "active" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 5, padding: "2px 2px 8px 14px" }}>
+                <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+                  <button style={VL_BTN_SM} disabled={busy}
+                    onClick={() => act(() => D.hideCustomLabel(c.slug), "hidden")}>hide</button>
+                </div>
+                {mergeTargets.length > 0 && (
+                  <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+                    <select value={mergeInto} onChange={(e) => setMergeInto(e.target.value)}
+                      style={{ ...VL_INPUT, width: "auto", flex: 1 }}>
+                      <option value="">merge into…</option>
+                      {mergeTargets.map((o) => <option key={o.slug} value={o.slug}>{o.name || o.slug}</option>)}
+                    </select>
+                    <button style={VL_BTN_SM} disabled={busy || !mergeInto}
+                      onClick={() => act(() => D.mergeCustomLabel(c.slug, mergeInto), "merged")}>merge</button>
+                  </div>
+                )}
+                <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+                  <select value={promoteTo} onChange={(e) => setPromoteTo(e.target.value)}
+                    style={{ ...VL_INPUT, width: "auto", flex: 1 }}>
+                    <option value="">promote to canonical…</option>
+                    {promoteTargets.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                  <button style={VL_BTN_SM} disabled={busy || !promoteTo}
+                    onClick={() => act(() => D.promoteCustomLabel(c.slug, promoteTo), "promoted")}>promote</button>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* aux metadata form — activity segments only */
+const VL_AUX_FIELDS = [
+  { key: "verb", type: "text" },
+  { key: "object_noun", type: "text" },
+  { key: "room_zone", type: "text" },
+  { key: "attention_target", type: "text" },
+  { key: "motion_intensity", type: "select", options: ["", "low", "moderate", "high"] },
+  { key: "activity_phase", type: "select", options: ["", "starting", "ongoing", "ending", "transition"] },
+];
+
+function VLAuxForm({ seg, ontology, onPatch }) {
+  /* prefer value lists the ontology's aux_axes declare for a key */
+  const defs = useMemo(() => {
+    const m = {};
+    for (const d of (ontology && ontology.aux_axes) || []) {
+      const k = d && (d.key || d.name || d.id || d.axis);
+      if (k && Array.isArray(d.values)) m[k] = d.values;
+    }
+    return m;
+  }, [ontology]);
+  const aux = (seg && seg.aux) || {};
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <span style={VL_SECTION_TITLE}>aux · activity metadata</span>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+        {VL_AUX_FIELDS.map((f) => {
+          const options = defs[f.key] || (f.type === "select" ? f.options : null);
+          const label = f.key.replace(/_/g, " ");
+          if (options) {
+            const opts = options[0] === "" ? options : [""].concat(options);
+            return (
+              <label key={f.key} style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 0 }}>
+                <span style={{ ...VL_SECTION_TITLE, fontSize: 8 }}>{label}</span>
+                <select
+                  value={aux[f.key] || ""}
+                  onChange={(e) => onPatch({ [f.key]: e.target.value || null })}
+                  style={VL_INPUT}
+                >
+                  {opts.map((o) => <option key={o} value={o}>{o === "" ? "—" : String(o).replace(/_/g, " ")}</option>)}
+                </select>
+              </label>
+            );
+          }
+          return (
+            <VLTextField
+              key={f.key}
+              label={label}
+              value={aux[f.key] || ""}
+              onCommit={(v) => onPatch({ [f.key]: v || null })}
+            />
+          );
+        })}
+      </div>
+      <VLTextField
+        label="notes"
+        textarea
+        value={aux.notes || ""}
+        onCommit={(v) => onPatch({ notes: v || null })}
+      />
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ * VLInspector — right rail (340px): save row, selected-segment editor
+ * (value chips, frame-stepped bounds, review actions, aux form), custom
+ * label manager.
+ * ──────────────────────────────────────────────────────────────────── */
+function VLInspector({
+  video, fps, ontology, labelsApi, dirty, saving, revision,
+  selection, segment, ops, canonicalInfo, refreshOntology, showToast,
+}) {
+  const D = window.HomeVideoLabelerData;
+  const seg = segment;
+  const axis = selection && selection.axis;
+  const valueList = seg
+    ? (Array.isArray(seg.value) ? seg.value : [seg.value])
+    : [];
+
+  return (
+    <div className="hg-scroll" style={{
+      width: 340, flex: "none", minHeight: 0, overflowY: "auto",
+      borderLeft: "1px solid var(--hg-border-soft)",
+      padding: "12px 14px", fontFamily: VL_FONT_MONO,
+      display: "flex", flexDirection: "column", gap: 14,
+    }}>
+      {/* save row */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <button
+            onClick={() => ops.save()}
+            disabled={saving || labelsApi.status !== "ok"}
+            style={{
+              ...VL_BTN_SM,
+              color: dirty && labelsApi.status === "ok" ? "var(--hg-ice)" : "var(--hg-fg-4)",
+            }}
+            title="Ctrl+S"
+          >{saving ? "saving…" : "save"}</button>
+          <button
+            onClick={() => ops.saveNext()}
+            disabled={saving || labelsApi.status !== "ok"}
+            style={VL_BTN_SM}
+            title="Ctrl+Enter — save, then open the next video"
+          >save · next</button>
+          <span style={{ marginLeft: "auto", display: "inline-flex", gap: 5 }}>
+            <VLChip label={dirty ? "unsaved" : "saved"} tone={dirty ? "warn" : "dim"} />
+            <VLChip label={"rev " + revision} tone="dim" />
+          </span>
+        </div>
+        {labelsApi.status !== "ok" && (
+          <VLChip
+            label={labelsApi.status === "loading" ? "loading labels…" : (labelsApi.reason || "labels unavailable")}
+            tone={labelsApi.status === "loading" ? "dim" : "warn"}
+            title="the editor still works — saving is disabled until the labels API responds"
+          />
+        )}
+        {ontology === false && (
+          <VLChip label="ontology offline · builtin taxonomy" tone="warn" />
+        )}
+      </div>
+
+      {/* selected segment */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <span style={VL_SECTION_TITLE}>selected segment</span>
+        {!seg ? (
+          <div style={{ fontSize: 10, color: "var(--hg-fg-5)", letterSpacing: "0.06em", lineHeight: 1.7 }}>
+            click a block — or double-click empty lane space to create one.
+            press ? for all shortcuts.
+          </div>
+        ) : (
+          <>
+            <div style={{ display: "flex", gap: 5, alignItems: "center", flexWrap: "wrap" }}>
+              <VLChip label={VL_AXIS_TITLES[axis] || axis} tone="default" />
+              <VLChip
+                label={seg.review_state || "?"}
+                tone={seg.review_state === "accepted" ? "live"
+                  : seg.review_state === "rejected" || seg.review_state === "excluded_from_export" ? "crit"
+                  : seg.review_state === "needs_review" || seg.review_state === "prelabel" ? "warn" : "default"}
+              />
+              {seg.source && <VLChip label={seg.source} tone="dim" />}
+              {seg.confidence != null && <VLChip label={"conf " + Number(seg.confidence).toFixed(2)} tone="dim" />}
+              {vlIsTempId(seg.id) && <VLChip label="unsaved id" tone="warn" title={seg.id} />}
+            </div>
+
+            {/* value chips → picker */}
+            <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+              {valueList.filter((v) => v != null).map((v) => (
+                <button
+                  key={String(v)}
+                  onClick={() => ops.openPicker(false)}
+                  title="change value (E)"
+                  style={{
+                    ...VL_BTN_SM,
+                    color: D.colorFor(Array.isArray(seg.value) ? v : v),
+                    borderColor: "var(--hg-border-soft)",
+                  }}
+                >{String(v).replace(/_/g, " ")}</button>
+              ))}
+              {valueList.filter((v) => v != null).length === 0 && (
+                <button onClick={() => ops.openPicker(false)} style={{ ...VL_BTN_SM, color: "var(--hg-warn)" }}>
+                  set value…
+                </button>
+              )}
+            </div>
+
+            {/* bounds */}
+            <div style={{ display: "flex", gap: 7, alignItems: "flex-end" }}>
+              <VLTimeField label="start s" value={seg.start_s} fps={fps} onCommit={(t) => ops.setStart(t)} />
+              <VLTimeField label="end s" value={seg.end_s} fps={fps} onCommit={(t) => ops.setEnd(t)} />
+              <div style={{ flex: "none", paddingBottom: 5, fontSize: 9.5, color: "var(--hg-fg-4)" }}>
+                {(seg.end_s - seg.start_s).toFixed(2)}s
+              </div>
+            </div>
+
+            {/* review actions */}
+            <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+              {[["accept", "A"], ["reject", "R"], ["needs_review", "N"], ["exclude", "X"]].map(([action, k]) => (
+                <button
+                  key={action}
+                  onClick={() => ops.review(action)}
+                  title={"key " + k}
+                  style={{
+                    ...VL_BTN_SM,
+                    color: D.colorFor(VL_REVIEW_RESULT[action]),
+                  }}
+                >{action.replace(/_/g, " ")}</button>
+              ))}
+            </div>
+
+            {/* aux — activity only */}
+            {axis === "activity_primary" && (
+              <VLAuxForm seg={seg} ontology={ontology || null} onPatch={(p) => ops.setAux(p)} />
+            )}
+
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 9, color: "var(--hg-fg-5)" }}>
+                person slot · {seg.person_slot == null ? "—" : String(seg.person_slot)}
+              </span>
+              <button
+                onClick={() => ops.deleteSelected()}
+                style={{ ...VL_BTN_SM, marginLeft: "auto", color: "var(--hg-crit)", borderColor: "var(--hg-border-soft)" }}
+                title="Del"
+              >delete</button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* custom labels */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <span style={VL_SECTION_TITLE}>custom labels</span>
+        <VLCustomLabelManager
+          ontology={ontology || null}
+          refreshOntology={refreshOntology}
+          canonicalInfo={canonicalInfo}
+          showToast={showToast}
+        />
+      </div>
+
+      <div style={{ fontSize: 8.5, color: "var(--hg-fg-5)", letterSpacing: "0.08em", marginTop: "auto" }}>
+        ? shortcuts · E picker · S split · M merge · U next unreviewed
+      </div>
+    </div>
+  );
+}
+
+/* keyboard cheat sheet — toggled with ? */
+const VL_CHEAT_ROWS = [
+  ["space", "play / pause"], ["← / →", "±1 frame (shift ±1s · ctrl ±10s)"],
+  ["↑ / ↓", "select prev / next segment"], ["tab", "cycle active lane"],
+  ["1-9 0", "palette — apply / create at playhead"], ["e", "label picker"],
+  ["c", "create custom label"], ["i / o", "set start / end to playhead"],
+  ["s", "split at playhead"], ["m", "merge with next"],
+  [", / .", "nudge nearest boundary ∓/± 1 frame (shift ×10)"],
+  ["del", "delete segment"], ["a / r / n / x", "accept / reject / needs review / exclude"],
+  ["p", "toggle private_skip over selection"], ["u / shift+u", "next / prev unreviewed"],
+  ["f · + / −", "fit · zoom (ctrl+wheel on timeline)"],
+  ["ctrl+z / y", "undo / redo"], ["ctrl+s", "save"], ["ctrl+enter", "save and next"],
+];
+
+function VLCheatSheet({ onClose }) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "absolute", right: 16, top: 16, zIndex: 12, width: 330,
+        background: "var(--hg-bg-1)", border: "1px solid var(--hg-border)",
+        boxShadow: "0 18px 50px rgba(0,0,0,0.5)", padding: "10px 12px",
+        fontFamily: VL_FONT_MONO, cursor: "pointer",
+      }}
+    >
+      <div style={{ ...VL_SECTION_TITLE, marginBottom: 8 }}>keyboard · click to close</div>
+      {VL_CHEAT_ROWS.map(([k, desc]) => (
+        <div key={k} style={{ display: "flex", gap: 10, fontSize: 9.5, padding: "2px 0" }}>
+          <span style={{ width: 92, flex: "none", color: "var(--hg-ice)" }}>{k}</span>
+          <span style={{ color: "var(--hg-fg-3)" }}>{desc}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* thin banner used for draft restore / 409 conflict / merge prompt */
+function VLBanner({ tone, children }) {
+  const color = tone === "warn" ? "var(--hg-warn)" : "var(--hg-ice)";
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+      padding: "7px 12px", flex: "none",
+      borderBottom: "1px solid var(--hg-border-soft)",
+      background: "color-mix(in oklab, " + color + " 6%, transparent)",
+      fontFamily: VL_FONT_MONO, fontSize: 10, color,
+      letterSpacing: "0.05em",
+    }}>{children}</div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ * VLEditor — the M1 labeling editor for one video (keyed by video.id):
+ * owns the doc reducer, load/draft/save flows, the keyboard map and the
+ * player+inspector layout. Mounted only on the label tab with a video
+ * selected and sim off.
+ * ──────────────────────────────────────────────────────────────────── */
+function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showToast, escInterceptRef }) {
+  const D = window.HomeVideoLabelerData;
+  const [state, dispatch] = useReducer(vlEditorReducer, undefined, vlEditorInit);
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const transportRef = useRef(null);
+  const savingRef = useRef(false);
+  const [labelsApi, setLabelsApi] = useState({ status: "loading", reason: null });
+  const labelsApiRef = useRef(labelsApi);
+  labelsApiRef.current = labelsApi;
+  const [draftBanner, setDraftBanner] = useState(null); // {axes, count, dropped, ts}
+  const [conflict, setConflict] = useState(null);       // {revision, axes}
+  const [saving, setSaving] = useState(false);
+  const [picker, setPicker] = useState(null);           // {axis, create}
+  const [mergePrompt, setMergePrompt] = useState(null); // {axis, leftId, leftLabel, rightLabel}
+  const [cheat, setCheat] = useState(false);
+
+  const fps = (video && video.fps) || 30;
+  const minDur = Math.max(0.2, 3 / fps); // plan: max(0.2s, 3/fps)
+  const dirty = state.rev !== state.savedRev;
+
+  const transport = useCallback(() => transportRef.current || {
+    getTime: () => 0,
+    getDuration: () => (video && video.duration_s) || 0,
+    getFps: () => fps,
+    isPlaying: () => false,
+    seekTo: () => {}, skip: () => {}, stepFrame: () => {},
+    togglePlay: () => {}, zoomBy: () => {}, zoomFit: () => {},
+  }, [video, fps]);
+
+  const durationOf = useCallback(() => {
+    const tr = transportRef.current;
+    return (tr && tr.getDuration()) || (video && video.duration_s) || 0;
+  }, [video]);
+
+  /* ---------- load labels + draft-restore offer ---------- */
+
+  useEffect(() => {
+    let dead = false;
+    (async () => {
+      const r = await D.getLabels(video.id);
+      if (dead) return;
+      if (r.ok && r.data) {
+        setLabelsApi({ status: "ok", reason: null });
+        const serverAxes = vlNormalizeAxes(r.data.axes);
+        const revision = r.data.revision || 0;
+        dispatch({ type: "LOAD_DOC", axes: serverAxes, revision });
+        const draft = D.loadDraft(video.id);
+        if (draft && draft.doc && draft.rev > 0) {
+          if ((draft.baseRevision || 0) === revision) {
+            const v = D.validateDraftDoc(draft.doc.axes, serverAxes);
+            const count = vlCountSegs(v.axes);
+            if (count > 0 || v.dropped > 0) {
+              setDraftBanner({ axes: v.axes, count, dropped: v.dropped, ts: draft.ts });
+            } else {
+              D.clearDraft(video.id);
+            }
+          } else {
+            D.clearDraft(video.id); // based on a different revision — stale
+          }
+        }
+      } else if (r.status === 404) {
+        /* backend M1 not deployed yet — empty doc rev 0, saving disabled */
+        setLabelsApi({ status: "missing", reason: "labels API not deployed" });
+        dispatch({ type: "LOAD_DOC", axes: vlEmptyAxes(), revision: 0 });
+        const draft = D.loadDraft(video.id);
+        if (draft && draft.doc && draft.rev > 0) {
+          setDraftBanner({ axes: vlNormalizeAxes(draft.doc.axes), count: vlCountSegs(draft.doc.axes), dropped: 0, ts: draft.ts });
+        }
+      } else {
+        setLabelsApi({ status: "offline", reason: r.error || "service unreachable" });
+        dispatch({ type: "LOAD_DOC", axes: vlEmptyAxes(), revision: 0 });
+      }
+    })();
+    return () => { dead = true; };
+  }, [video.id]);
+
+  /* ---------- draft autosave: debounced 1s while dirty + unmount flush */
+
+  useEffect(() => {
+    if (!dirty) return undefined;
+    const t = setTimeout(() => {
+      const s = stateRef.current;
+      D.saveDraft(video.id, { doc: { axes: s.doc.axes }, baseRevision: s.revision, rev: s.rev });
+    }, 1000);
+    return () => clearTimeout(t);
+  }, [state.rev, dirty, video.id]);
+
+  useEffect(() => () => {
+    const s = stateRef.current;
+    if (s.rev !== s.savedRev) {
+      D.saveDraft(video.id, { doc: { axes: s.doc.axes }, baseRevision: s.revision, rev: s.rev });
+    }
+  }, [video.id]);
+
+  /* ---------- ontology-driven value lists ---------- */
+
+  const canonicalInfo = useCallback((axis) => {
+    const axes = (ontology && ontology.axes) || null;
+    let values, active;
+    if (axis === "activity_primary") {
+      const ax = axes && axes.activity_primary;
+      values = (ax && ax.values) || D.VL_ACTIVITY;
+      active = (ax && ax.active) || values;
+    } else if (axis === "posture") {
+      const ax = axes && axes.posture;
+      values = (ax && ax.values) || D.VL_POSTURE;
+      active = (ax && ax.active) || values;
+    } else if (axis === "quality") {
+      const ax = axes && axes.quality_flags;
+      values = (ax && ax.values) || D.VL_QUALITY;
+      active = values; // quality has no active subset
+    } else {
+      values = []; active = [];
+    }
+    const mk = (v) => ({ value: v, label: String(v).replace(/_/g, " "), color: D.colorFor(v) });
+    const activeSet = {};
+    for (const v of active) activeSet[v] = true;
+    return { active: active.map(mk), rest: values.filter((v) => !activeSet[v]).map(mk) };
+  }, [ontology]);
+
+  const customsFor = useCallback((axis) => {
+    return ((ontology && ontology.custom) || [])
+      .filter((c) => c.status === "active" && (axis === "custom" || c.axis === axis))
+      .map((c) => ({
+        value: axis === "custom" ? c.slug : "custom:" + c.slug,
+        label: String(c.name || c.slug).replace(/_/g, " "),
+        color: c.color || D.colorFor("custom:" + c.slug),
+        isCustom: true,
+      }));
+  }, [ontology]);
+
+  const palette = useMemo(() => {
+    const axis = state.activeAxis;
+    const src = axis === "custom" ? customsFor("custom") : canonicalInfo(axis).active;
+    const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
+    return src.slice(0, 10).map((v, i) => ({ key: keys[i], value: v.value, label: v.label, color: v.color }));
+  }, [state.activeAxis, canonicalInfo, customsFor]);
+  const paletteRef = useRef(palette);
+  paletteRef.current = palette;
+
+  const customColors = useMemo(() => {
+    const m = {};
+    for (const c of (ontology && ontology.custom) || []) {
+      if (c.color) m[c.slug] = c.color;
+    }
+    return m;
+  }, [ontology]);
+
+  const lanes = useMemo(() => {
+    const axes = state.doc.axes;
+    return [
+      { axis: "activity_primary", title: "activity", multiValue: false, segments: axes.activity_primary, colorFor: (v) => D.colorFor(v) },
+      { axis: "posture", title: "posture", multiValue: false, segments: axes.posture, colorFor: (v) => D.colorFor(v) },
+      { axis: "quality", title: "quality", multiValue: true, segments: axes.quality, colorFor: (v) => D.colorFor(Array.isArray(v) && v.length ? v[0] : v) },
+      { axis: "custom", title: "custom", multiValue: false, segments: axes.custom, colorFor: (v) => customColors[v] || D.colorFor("custom:" + String(v)) },
+    ];
+  }, [state.doc, customColors]);
+
+  /* ---------- editing ops (all read state through stateRef) ---------- */
+
+  const laneOf = useCallback((axis) => stateRef.current.doc.axes[axis] || [], []);
+
+  const selectedSeg = useCallback(() => {
+    const s = stateRef.current;
+    if (!s.selection) return null;
+    return (s.doc.axes[s.selection.axis] || []).find((x) => x.id === s.selection.segId) || null;
+  }, []);
+
+  const commitLane = useCallback((axis, next) => {
+    const before = stateRef.current.doc.axes[axis] || [];
+    dispatch({ type: "SET_SEGMENTS", axis, segments: next, undoEntry: { axis, before, after: next } });
+  }, []);
+
+  const defaultValueFor = useCallback((axis) => {
+    if (axis === "custom") {
+      const cs = customsFor("custom");
+      return cs.length ? cs[0].value : null;
+    }
+    const act = canonicalInfo(axis).active;
+    return act.length ? act[0].value : null;
+  }, [canonicalInfo, customsFor]);
+
+  /* new segment: default 4s at t, clamped to neighbors, reviewed/human/tmp id */
+  const createAt = useCallback((axis, t, value) => {
+    const dur = durationOf();
+    if (!(dur > 0)) { showToast("video metadata not loaded yet"); return; }
+    let v = value != null ? value : defaultValueFor(axis);
+    if (v == null) {
+      if (axis === "custom") setPicker({ axis: "custom", create: true });
+      else showToast("no values available for this lane");
+      return;
+    }
+    if (axis === "quality" && !Array.isArray(v)) v = [v];
+    const r = D.createSegmentAt(laneOf(axis), t, v, { duration: dur, minDur, prefDur: 4 });
+    if (!r) { showToast("no room for a segment there"); return; }
+    commitLane(axis, r.segments);
+    dispatch({ type: "SELECT", axis, segId: r.id });
+  }, [durationOf, defaultValueFor, laneOf, minDur, commitLane, showToast]);
+
+  /* palette / picker apply: set value on the selection, toggle the flag
+     on quality lanes, or create at the playhead with nothing selected */
+  const applyValue = useCallback((axis, value) => {
+    const s = stateRef.current;
+    const lane = s.doc.axes[axis] || [];
+    const sel = (s.selection && s.selection.axis === axis)
+      ? lane.find((x) => x.id === s.selection.segId) : null;
+    if (!sel) { createAt(axis, transport().getTime(), value); return; }
+    let next;
+    if (axis === "quality") {
+      const vals = Array.isArray(sel.value) ? sel.value.slice() : (sel.value ? [sel.value] : []);
+      const i = vals.indexOf(value);
+      if (i >= 0) vals.splice(i, 1); else vals.push(value);
+      next = lane.map((x) => x.id === sel.id ? { ...x, value: vals, review_state: "reviewed" } : x);
+    } else {
+      next = lane.map((x) => x.id === sel.id ? { ...x, value, review_state: "reviewed" } : x);
+    }
+    commitLane(axis, next);
+  }, [createAt, commitLane, transport]);
+
+  /* S — split the active lane at the playhead; halves inherit; accepted → needs_review */
+  const splitAtPlayhead = useCallback(() => {
+    const axis = stateRef.current.activeAxis;
+    const t = transport().getTime();
+    const lane = laneOf(axis);
+    const orig = lane.find((x) => t > x.start_s && t < x.end_s);
+    if (!orig) { showToast("playhead is not inside a " + VL_AXIS_TITLES[axis] + " segment"); return; }
+    if (t - orig.start_s < minDur || orig.end_s - t < minDur) {
+      showToast("too close to a boundary (min " + minDur.toFixed(2) + "s)");
+      return;
+    }
+    let next = D.splitAt(lane, t);
+    if (next === lane) return;
+    if (orig.review_state === "accepted") {
+      next = next.map((x) => (x.id === orig.id || (x.start_s === t && x.end_s === orig.end_s))
+        ? { ...x, review_state: "needs_review" } : x);
+    }
+    commitLane(axis, next);
+    const right = next.find((x) => x.start_s === t && x.end_s === orig.end_s);
+    if (right) dispatch({ type: "SELECT", axis, segId: right.id });
+  }, [transport, laneOf, minDur, commitLane, showToast]);
+
+  /* M — merge selection with its right neighbor (prompt on value conflict) */
+  const doMerge = useCallback((axis, leftId, keep) => {
+    const lane = laneOf(axis).slice().sort((a, b) => a.start_s - b.start_s);
+    const i = lane.findIndex((x) => x.id === leftId);
+    if (i < 0 || i + 1 >= lane.length) { setMergePrompt(null); return; }
+    const left = lane[i];
+    const right = lane[i + 1];
+    const same = vlValuesEqual(left.value, right.value);
+    const merged = {
+      ...left,
+      end_s: Math.max(left.end_s, right.end_s),
+      value: keep === "right" ? right.value : left.value,
+      aux: keep === "right" ? right.aux : left.aux,
+      review_state: (same && left.review_state === right.review_state) ? left.review_state : "needs_review",
+    };
+    commitLane(axis, lane.slice(0, i).concat([merged], lane.slice(i + 2)));
+    dispatch({ type: "SELECT", axis, segId: merged.id });
+    setMergePrompt(null);
+  }, [laneOf, commitLane]);
+
+  const mergeSelected = useCallback(() => {
+    const s = stateRef.current;
+    if (!s.selection) { showToast("select a segment first — M merges it with the next"); return; }
+    const axis = s.selection.axis;
+    const lane = laneOf(axis).slice().sort((a, b) => a.start_s - b.start_s);
+    const i = lane.findIndex((x) => x.id === s.selection.segId);
+    if (i < 0) return;
+    if (i + 1 >= lane.length) { showToast("no segment to the right"); return; }
+    if (vlValuesEqual(lane[i].value, lane[i + 1].value)) { doMerge(axis, lane[i].id, "left"); return; }
+    setMergePrompt({
+      axis, leftId: lane[i].id,
+      leftLabel: vlValueText(lane[i].value), rightLabel: vlValueText(lane[i + 1].value),
+    });
+  }, [laneOf, doMerge, showToast]);
+
+  /* I/O + inspector bounds + ,/. nudge — all resize ops clip neighbors */
+  const setEdgeTo = useCallback((edge, t) => {
+    const s = stateRef.current;
+    const sel = selectedSeg();
+    if (!sel) { showToast("no segment selected"); return; }
+    const next = D.resizeSegment(laneOf(s.selection.axis), sel.id, edge, t, {
+      duration: durationOf(), minDur, clipNeighbors: true,
+    });
+    commitLane(s.selection.axis, next);
+  }, [selectedSeg, laneOf, durationOf, minDur, commitLane, showToast]);
+
+  const setEdgeToPlayhead = useCallback((edge) => {
+    setEdgeTo(edge, transport().getTime());
+  }, [setEdgeTo, transport]);
+
+  const nudgeBoundary = useCallback((frames) => {
+    const sel = selectedSeg();
+    if (!sel) { showToast("no segment selected"); return; }
+    const t = transport().getTime();
+    const edge = Math.abs(sel.start_s - t) <= Math.abs(sel.end_s - t) ? "start" : "end";
+    setEdgeTo(edge, (edge === "start" ? sel.start_s : sel.end_s) + frames / fps);
+  }, [selectedSeg, transport, setEdgeTo, fps, showToast]);
+
+  const deleteSelected = useCallback(() => {
+    const s = stateRef.current;
+    const sel = selectedSeg();
+    if (!sel) return;
+    commitLane(s.selection.axis, laneOf(s.selection.axis).filter((x) => x.id !== sel.id));
+    showToast("segment deleted");
+  }, [selectedSeg, laneOf, commitLane, showToast]);
+
+  /* A/R/N/X — POST review for server-known ids (updates doc + revision);
+     local-only state change for unsaved tmp segments */
+  const reviewSelected = useCallback(async (action) => {
+    const s = stateRef.current;
+    const sel = selectedSeg();
+    if (!sel) { showToast("no segment selected"); return; }
+    const axis = s.selection.axis;
+    const localState = VL_REVIEW_RESULT[action];
+    if (vlIsTempId(sel.id) || labelsApiRef.current.status !== "ok") {
+      commitLane(axis, laneOf(axis).map((x) => x.id === sel.id ? { ...x, review_state: localState } : x));
+      showToast(localState.replace(/_/g, " ") + " · local (syncs on save)");
+      return;
+    }
+    const r = await D.reviewSegment(video.id, sel.id, action);
+    if (r.ok && r.data) {
+      dispatch({
+        type: "APPLY_REVIEW", axis, segId: sel.id,
+        patch: { review_state: (r.data.segment && r.data.segment.review_state) || localState },
+        revision: r.data.revision,
+      });
+      showToast(localState.replace(/_/g, " "));
+    } else {
+      showToast("review failed · " + (r.error || "service unreachable"));
+    }
+  }, [selectedSeg, laneOf, commitLane, video.id, showToast]);
+
+  /* P — toggle quality 'private_skip' over the selection's time range */
+  const togglePrivate = useCallback(() => {
+    const sel = selectedSeg();
+    if (!sel) { showToast("select a segment — P flags its range private"); return; }
+    const ql = laneOf("quality");
+    const hasFlag = (x) => (Array.isArray(x.value) ? x.value : [x.value]).indexOf("private_skip") >= 0;
+    const overlapping = ql.filter((x) => x.start_s < sel.end_s && x.end_s > sel.start_s && hasFlag(x));
+    if (overlapping.length) {
+      const next = ql.map((x) => {
+        if (overlapping.indexOf(x) < 0) return x;
+        const vals = (Array.isArray(x.value) ? x.value : [x.value]).filter((v) => v !== "private_skip");
+        return vals.length ? { ...x, value: vals } : null;
+      }).filter(Boolean);
+      commitLane("quality", next);
+      showToast("private_skip removed");
+    } else {
+      const carved = D.carveRange(ql, sel.start_s, sel.end_s, minDur);
+      const seg = {
+        id: D.newTempId(), start_s: sel.start_s, end_s: sel.end_s,
+        value: ["private_skip"], review_state: "reviewed", source: "human",
+        confidence: null, aux: null, person_slot: null,
+      };
+      commitLane("quality", carved.concat([seg]).sort((a, b) => a.start_s - b.start_s));
+      showToast("range flagged private_skip");
+    }
+  }, [selectedSeg, laneOf, minDur, commitLane, showToast]);
+
+  /* U / shift+U — jump to the next/prev prelabel|needs_review segment */
+  const jumpUnreviewed = useCallback((dir) => {
+    const s = stateRef.current;
+    const cands = [];
+    for (const axis of VL_AXIS_ORDER) {
+      for (const seg of s.doc.axes[axis] || []) {
+        if (seg.review_state === "prelabel" || seg.review_state === "needs_review") cands.push({ axis, seg });
+      }
+    }
+    cands.sort((a, b) => a.seg.start_s - b.seg.start_s);
+    if (!cands.length) { showToast("nothing waiting for review"); return; }
+    const sel = selectedSeg();
+    const anchor = sel ? sel.start_s : transport().getTime();
+    const next = dir > 0
+      ? cands.find((c) => c.seg.start_s > anchor + 1e-6)
+      : cands.slice().reverse().find((c) => c.seg.start_s < anchor - 1e-6);
+    if (!next) { showToast(dir > 0 ? "no unreviewed segment after this" : "no unreviewed segment before this"); return; }
+    dispatch({ type: "SELECT", axis: next.axis, segId: next.seg.id });
+    transport().seekTo(next.seg.start_s);
+  }, [selectedSeg, transport, showToast]);
+
+  const selectAdjacent = useCallback((dir) => {
+    const s = stateRef.current;
+    const axis = s.activeAxis;
+    const lane = (s.doc.axes[axis] || []).slice().sort((a, b) => a.start_s - b.start_s);
+    if (!lane.length) return;
+    let next;
+    const idx = (s.selection && s.selection.axis === axis)
+      ? lane.findIndex((x) => x.id === s.selection.segId) : -1;
+    if (idx < 0) {
+      const t = transport().getTime();
+      next = dir > 0
+        ? (lane.find((x) => x.start_s >= t) || lane[lane.length - 1])
+        : (lane.slice().reverse().find((x) => x.start_s <= t) || lane[0]);
+    } else {
+      next = lane[Math.max(0, Math.min(lane.length - 1, idx + dir))];
+    }
+    if (next) dispatch({ type: "SELECT", axis, segId: next.id });
+  }, [transport]);
+
+  const cycleAxis = useCallback((dir) => {
+    const i = VL_AXIS_ORDER.indexOf(stateRef.current.activeAxis);
+    dispatch({ type: "SET_ACTIVE_AXIS", axis: VL_AXIS_ORDER[(i + dir + VL_AXIS_ORDER.length) % VL_AXIS_ORDER.length] });
+  }, []);
+
+  const setAux = useCallback((patch) => {
+    const s = stateRef.current;
+    const sel = selectedSeg();
+    if (!sel) return;
+    const aux = { ...(sel.aux || {}), ...patch };
+    commitLane(s.selection.axis, laneOf(s.selection.axis).map((x) => x.id === sel.id ? { ...x, aux } : x));
+  }, [selectedSeg, laneOf, commitLane]);
+
+  /* ---------- save flow (pessimistic PUT + 409 banner) ---------- */
+
+  const selectNextVideo = useCallback(() => {
+    const list = videos || [];
+    const i = list.findIndex((v) => v.id === video.id);
+    if (i >= 0 && i + 1 < list.length) onPickVideo(list[i + 1].id);
+    else showToast("last video in the list");
+  }, [videos, video.id, onPickVideo, showToast]);
+
+  const applySaveResult = useCallback((r, revAtStart, thenNext) => {
+    if (r.ok && r.data) {
+      dispatch({ type: "MARK_SAVED", revision: r.data.revision, idMap: r.data.id_map || {}, savedRev: revAtStart });
+      D.clearDraft(video.id);
+      setConflict(null);
+      showToast("saved · revision " + r.data.revision);
+      if (thenNext) selectNextVideo();
+    } else if (r.status === 409 && r.data) {
+      setConflict({ revision: r.data.revision, axes: r.data.axes || {} });
+    } else if (r.status === 400) {
+      showToast("save rejected · " + (r.error || "validation error"));
+    } else {
+      showToast("save failed · " + (r.error || "service unreachable"));
+    }
+  }, [video.id, showToast, selectNextVideo]);
+
+  const doSave = useCallback(async (thenNext) => {
+    const s = stateRef.current;
+    if (labelsApiRef.current.status !== "ok") {
+      showToast("saving disabled · " + (labelsApiRef.current.reason || "labels API unavailable"));
+      return;
+    }
+    if (savingRef.current) return;
+    if (s.rev === s.savedRev) {
+      if (thenNext) selectNextVideo();
+      else showToast("nothing to save");
+      return;
+    }
+    savingRef.current = true;
+    setSaving(true);
+    const revAtStart = s.rev;
+    const r = await D.putLabels(video.id, { revision: s.revision, axes: s.doc.axes });
+    savingRef.current = false;
+    setSaving(false);
+    applySaveResult(r, revAtStart, thenNext);
+  }, [video.id, showToast, selectNextVideo, applySaveResult]);
+
+  const overwriteConflict = useCallback(async () => {
+    if (!conflict || savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    const s = stateRef.current;
+    const r = await D.putLabels(video.id, { revision: conflict.revision, axes: s.doc.axes });
+    savingRef.current = false;
+    setSaving(false);
+    applySaveResult(r, s.rev, false);
+  }, [conflict, video.id, applySaveResult]);
+
+  const reloadFromConflict = useCallback(() => {
+    if (!conflict) return;
+    dispatch({ type: "LOAD_DOC", axes: vlNormalizeAxes(conflict.axes), revision: conflict.revision });
+    D.clearDraft(video.id);
+    setConflict(null);
+    showToast("reloaded server copy · revision " + conflict.revision);
+  }, [conflict, video.id, showToast]);
+
+  /* custom-label create (picker): POST → refresh ontology → apply */
+  const createCustomAndApply = useCallback(async (axis, name, color) => {
+    const payload = { axis, name };
+    if (color) payload.color = color;
+    const r = await D.createCustomLabel(payload);
+    if (!r.ok) {
+      showToast("create failed · " + (r.error || "custom labels API unavailable"));
+      return false;
+    }
+    const slug = (r.data && ((r.data.custom_label && r.data.custom_label.slug)
+        || r.data.slug || (r.data.label && r.data.label.slug)))
+      || name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+    refreshOntology();
+    applyValue(axis, axis === "custom" ? slug : "custom:" + slug);
+    showToast("custom label created · " + slug);
+    return true;
+  }, [applyValue, refreshOntology, showToast]);
+
+  /* ---------- keyboard map (input-focus guard FIRST, capture phase) --- */
+
+  const keyHandlerRef = useRef(null);
+  keyHandlerRef.current = (e) => {
+    const tr = transport();
+    const key = e.key;
+    const ctrl = e.ctrlKey || e.metaKey;
+    const handled = () => { e.preventDefault(); e.stopPropagation(); };
+    if (key === "Escape") return;            // overlay owns Escape (incl. picker close)
+    if (picker || mergePrompt) return;       // modal editor surfaces own the keyboard
+    if (ctrl) {
+      const k = key.length === 1 ? key.toLowerCase() : key;
+      if (k === "z") { handled(); dispatch({ type: e.shiftKey ? "REDO" : "UNDO" }); return; }
+      if (k === "y") { handled(); dispatch({ type: "REDO" }); return; }
+      if (k === "s") { handled(); doSave(false); return; }
+      if (key === "Enter") { handled(); doSave(true); return; }
+      if (key === "ArrowLeft") { handled(); tr.skip(-10); return; }
+      if (key === "ArrowRight") { handled(); tr.skip(10); return; }
+      return; // never claim other ctrl combos (Ctrl+K is the app's)
+    }
+    if (e.altKey) return;
+    switch (key) {
+      case " ": handled(); tr.togglePlay(); return;
+      case "ArrowLeft": handled(); if (e.shiftKey) tr.skip(-1); else tr.stepFrame(-1); return;
+      case "ArrowRight": handled(); if (e.shiftKey) tr.skip(1); else tr.stepFrame(1); return;
+      case "ArrowUp": handled(); selectAdjacent(-1); return;
+      case "ArrowDown": handled(); selectAdjacent(1); return;
+      case "Tab": handled(); cycleAxis(e.shiftKey ? -1 : 1); return;
+      default: break;
+    }
+    if (key.length === 1 && key >= "0" && key <= "9") {
+      handled();
+      const idx = key === "0" ? 9 : Number(key) - 1;
+      const p = paletteRef.current[idx];
+      if (p) applyValue(stateRef.current.activeAxis, p.value);
+      return;
+    }
+    const k = key.length === 1 ? key.toLowerCase() : key.toLowerCase();
+    switch (k) {
+      case "e": handled(); setPicker({ axis: stateRef.current.activeAxis, create: false }); return;
+      case "c": handled(); setPicker({ axis: stateRef.current.activeAxis, create: true }); return;
+      case "i": handled(); setEdgeToPlayhead("start"); return;
+      case "o": handled(); setEdgeToPlayhead("end"); return;
+      case "s": handled(); splitAtPlayhead(); return;
+      case "m": handled(); mergeSelected(); return;
+      case ",": handled(); nudgeBoundary(-1); return;
+      case "<": handled(); nudgeBoundary(-10); return;
+      case ".": handled(); nudgeBoundary(1); return;
+      case ">": handled(); nudgeBoundary(10); return;
+      case "delete": case "backspace": handled(); deleteSelected(); return;
+      case "a": handled(); reviewSelected("accept"); return;
+      case "r": handled(); reviewSelected("reject"); return;
+      case "n": handled(); reviewSelected("needs_review"); return;
+      case "x": handled(); reviewSelected("exclude"); return;
+      case "p": handled(); togglePrivate(); return;
+      case "u": handled(); jumpUnreviewed(e.shiftKey ? -1 : 1); return;
+      case "f": handled(); tr.zoomFit(); return;
+      case "+": case "=": handled(); tr.zoomBy(1); return;
+      case "-": case "_": handled(); tr.zoomBy(-1); return;
+      case "?": handled(); setCheat((c) => !c); return;
+      default: return;
+    }
+  };
+
+  useEffect(() => {
+    const onKey = (e) => {
+      /* input-focus guard FIRST — single-letter destructive keys must
+         never fire while typing in a field */
+      const t = e.target;
+      if (t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable)) return;
+      if (t && t.tagName === "BUTTON" && (e.key === " " || e.key === "Enter")) return;
+      if (keyHandlerRef.current) keyHandlerRef.current(e);
+    };
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => window.removeEventListener("keydown", onKey, { capture: true });
+  }, []);
+
+  /* the overlay's capture-phase Escape consults this before closing */
+  useEffect(() => {
+    if (!escInterceptRef) return undefined;
+    escInterceptRef.current = () => {
+      if (picker) { setPicker(null); return true; }
+      if (mergePrompt) { setMergePrompt(null); return true; }
+      if (cheat) { setCheat(false); return true; }
+      return false;
+    };
+    return () => { escInterceptRef.current = null; };
+  }, [escInterceptRef, picker, mergePrompt, cheat]);
+
+  /* ---------- wiring ---------- */
+
+  const editorProps = useMemo(() => ({
+    lanes,
+    selection: state.selection,
+    activeAxis: state.activeAxis,
+    axisTitle: VL_AXIS_TITLES[state.activeAxis],
+    minDur,
+    palette,
+    transportRef,
+    onPalettePick: (v) => applyValue(stateRef.current.activeAxis, v),
+    onSelect: (axis, segId) => dispatch({ type: "SELECT", axis, segId }),
+    onCommit: (axis, segments, undoEntry) => dispatch({ type: "SET_SEGMENTS", axis, segments, undoEntry }),
+    onCreate: (axis, t) => createAt(axis, t, null),
+  }), [lanes, state.selection, state.activeAxis, minDur, palette, applyValue, createAt]);
+
+  const ops = useMemo(() => ({
+    openPicker: (create) => setPicker({ axis: stateRef.current.activeAxis, create: !!create }),
+    setStart: (t) => setEdgeTo("start", t),
+    setEnd: (t) => setEdgeTo("end", t),
+    review: reviewSelected,
+    deleteSelected,
+    setAux,
+    save: () => doSave(false),
+    saveNext: () => doSave(true),
+  }), [setEdgeTo, reviewSelected, deleteSelected, setAux, doSave]);
+
+  const selSeg = state.selection
+    ? (state.doc.axes[state.selection.axis] || []).find((x) => x.id === state.selection.segId) || null
+    : null;
+
+  const pickerValues = useMemo(() => {
+    if (!picker) return [];
+    const customs = customsFor(picker.axis);
+    if (picker.axis === "custom") return customs;
+    const info = canonicalInfo(picker.axis);
+    return info.active.concat(customs, info.rest.map((v) => ({ ...v, inactive: true })));
+  }, [picker, canonicalInfo, customsFor]);
+
+  return (
+    <div style={{ flex: 1, minWidth: 0, display: "flex", minHeight: 0 }}>
+      {/* center column — banners + player + popovers */}
+      <div style={{
+        flex: 1, minWidth: 0, minHeight: 0,
+        display: "flex", flexDirection: "column", position: "relative",
+      }}>
+        {draftBanner && (
+          <VLBanner tone="ice">
+            <span>
+              unsaved draft from {new Date(draftBanner.ts || Date.now()).toLocaleString()}
+              {" · "}{draftBanner.count} segments
+              {draftBanner.dropped > 0 ? " (" + draftBanner.dropped + " dropped — ids no longer exist)" : ""}
+            </span>
+            <button style={VL_BTN_SM} onClick={() => {
+              dispatch({ type: "RESTORE_DRAFT", axes: draftBanner.axes });
+              setDraftBanner(null);
+            }}>restore {draftBanner.count} segments</button>
+            <button style={VL_BTN_SM} onClick={() => {
+              D.clearDraft(video.id);
+              setDraftBanner(null);
+            }}>discard</button>
+          </VLBanner>
+        )}
+        {conflict && (
+          <VLBanner tone="warn">
+            <span>save conflict — the server is at revision {conflict.revision} (yours: {state.revision})</span>
+            <button style={VL_BTN_SM} onClick={reloadFromConflict}>reload server copy</button>
+            <button style={{ ...VL_BTN_SM, color: "var(--hg-warn)" }} onClick={overwriteConflict}
+              disabled={saving}>overwrite</button>
+          </VLBanner>
+        )}
+        {mergePrompt && (
+          <VLBanner tone="warn">
+            <span>merge conflict — keep which value?</span>
+            <button style={VL_BTN_SM} onClick={() => doMerge(mergePrompt.axis, mergePrompt.leftId, "left")}>
+              left · {mergePrompt.leftLabel}
+            </button>
+            <button style={VL_BTN_SM} onClick={() => doMerge(mergePrompt.axis, mergePrompt.leftId, "right")}>
+              right · {mergePrompt.rightLabel}
+            </button>
+            <button style={VL_BTN_SM} onClick={() => setMergePrompt(null)}>cancel</button>
+          </VLBanner>
+        )}
+
+        <VLPlayer video={video} editor={editorProps} />
+
+        {picker && (
+          <VLLabelPicker
+            axisTitle={VL_AXIS_TITLES[picker.axis]}
+            values={pickerValues}
+            createMode={picker.create}
+            onApply={(v) => applyValue(picker.axis, v)}
+            onCreateCustom={(name, color) => createCustomAndApply(picker.axis, name, color)}
+            onClose={() => setPicker(null)}
+          />
+        )}
+        {cheat && <VLCheatSheet onClose={() => setCheat(false)} />}
+      </div>
+
+      {/* right rail — inspector */}
+      <VLInspector
+        video={video}
+        fps={fps}
+        ontology={ontology}
+        labelsApi={labelsApi}
+        dirty={dirty}
+        saving={saving}
+        revision={state.revision}
+        selection={state.selection}
+        segment={selSeg}
+        ops={ops}
+        canonicalInfo={canonicalInfo}
+        refreshOntology={refreshOntology}
+        showToast={showToast}
+      />
     </div>
   );
 }
@@ -439,8 +2045,12 @@ function HomeVideoLabelerOverlay({ open, onClose, sim }) {
   const [healthInfo, setHealthInfo] = useState(null); // null=unknown, false=down, object=live
   const [importing, setImporting] = useState(false);
   const [toast, setToast] = useState(null);
+  const [ontology, setOntology] = useState(null);     // null=loading, false=offline, object=loaded
   const wasMaximizedRef = useRef(null);
   const toastTimerRef = useRef(null);
+  /* VLEditor installs a callback here; the capture-phase Escape handler
+     consults it so picker/prompt/cheat-sheet close before the overlay */
+  const escInterceptRef = useRef(null);
 
   const showToast = useCallback((text) => {
     setToast(text);
@@ -478,6 +2088,16 @@ function HomeVideoLabelerOverlay({ open, onClose, sim }) {
     return () => clearInterval(iv);
   }, [open, simActive, refresh]);
 
+  /* ontology — once per open (custom-label mutations re-fetch via this) */
+  const refreshOntology = useCallback(async () => {
+    if (simActive) return;
+    const r = await D.getOntology();
+    setOntology(r.ok && r.data ? r.data : false);
+  }, [simActive]);
+  useEffect(() => {
+    if (open && !simActive) refreshOntology();
+  }, [open, simActive, refreshOntology]);
+
   /* maximize on open / restore on close — the 2-pane body is unusable at
      the default 820×900 (home-apartment.jsx precedent) */
   useEffect(() => {
@@ -506,7 +2126,8 @@ function HomeVideoLabelerOverlay({ open, onClose, sim }) {
   /* Escape: capture-phase + stopImmediatePropagation — the app's own
      window-level Escape handler mutates chat state (pending confirms) and
      must NOT see this press. Input-focus guard: never steal Escape from a
-     focused field. */
+     focused field. Editor surfaces (picker/merge prompt/cheat sheet) get
+     first claim via escInterceptRef. */
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (e) => {
@@ -515,6 +2136,7 @@ function HomeVideoLabelerOverlay({ open, onClose, sim }) {
       if (t && (/INPUT|TEXTAREA|SELECT/.test(t.tagName) || t.isContentEditable)) return;
       e.stopImmediatePropagation();
       e.preventDefault();
+      if (escInterceptRef.current && escInterceptRef.current()) return;
       onClose?.();
     };
     window.addEventListener("keydown", onKey, { capture: true });
@@ -679,18 +2301,25 @@ function HomeVideoLabelerOverlay({ open, onClose, sim }) {
             </div>
           </div>
 
-          {/* center — player */}
-          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-            {selected ? (
-              <VLPlayer key={selected.id} video={selected} />
-            ) : (
-              <div style={{
-                flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
-                fontFamily: VL_FONT_MONO, fontSize: 11, letterSpacing: "0.12em",
-                color: "var(--hg-fg-4)",
-              }}>select a video to review</div>
-            )}
-          </div>
+          {/* center + right rail — the M1 editor (player, lanes, inspector) */}
+          {selected ? (
+            <VLEditor
+              key={selected.id}
+              video={selected}
+              videos={videos || []}
+              ontology={ontology}
+              refreshOntology={refreshOntology}
+              onPickVideo={setSelectedId}
+              showToast={showToast}
+              escInterceptRef={escInterceptRef}
+            />
+          ) : (
+            <div style={{
+              flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
+              fontFamily: VL_FONT_MONO, fontSize: 11, letterSpacing: "0.12em",
+              color: "var(--hg-fg-4)",
+            }}>select a video to review</div>
+          )}
         </div>
       )}
 

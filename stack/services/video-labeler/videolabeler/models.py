@@ -91,3 +91,37 @@ class SpriteManifest(BaseModel):
 
 class ImportManualRequest(BaseModel):
     batch_name: Optional[str] = None
+
+
+# --- M1 labels surface. Segment dicts stay loosely typed here on purpose:
+# the rich per-axis validation (values, non-overlap, aux keys) lives in
+# videolabeler/labels.py so 400s can carry every problem in one round trip.
+
+class LabelsPutRequest(BaseModel):
+    revision: int
+    axes: dict[str, list[dict]] = {}
+
+
+class ReviewRequest(BaseModel):
+    action: str
+
+
+class CustomLabelCreate(BaseModel):
+    axis: str
+    name: str
+    description: Optional[str] = None
+    color: Optional[str] = None
+
+
+class CustomLabelPatch(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    color: Optional[str] = None
+
+
+class CustomLabelMerge(BaseModel):
+    into_slug: str
+
+
+class CustomLabelPromote(BaseModel):
+    canonical_value: str

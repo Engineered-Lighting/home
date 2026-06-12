@@ -1,28 +1,46 @@
 /* ============================================================================
- * home-video-labeler-timeline.jsx — VLTimeline + VLThumbStrip (M0 foundation)
+ * home-video-labeler-timeline.jsx — VLTimeline + VLThumbStrip
  *
- * M0 ships the structural pieces the M1 multi-lane editor lands on:
- *   - VLTimeline: time ruler (nice tick steps), click-to-seek, and a
- *     playhead line the player drives IMPERATIVELY — the node is handed
- *     out via `playheadRef` and positioned with style.transform at frame
- *     rate (requestVideoFrameCallback writes; React never re-renders for
- *     playback). Lane rows render as empty tracks when a `lanes` prop is
- *     given so M1's segment blocks slot in without restructuring.
- *   - VLThumbStrip: sprite-sheet filmstrip — fixed-height tiles cut from
- *     the sheet grid via background-position math; click seeks to the
- *     tile's window center.
+ * M0 shipped the structural pieces (nice-step ruler, click-to-seek, the
+ * imperatively-positioned playhead, sprite filmstrip). M1 turns VLTimeline
+ * into the real multi-lane segment editor:
+ *   - lane grid: 110px sidebar (lane title + active marker) next to a
+ *     scrollable track area; 4 lanes × 56px under the 30px ruler
+ *   - segment blocks with pointer-capture drag — move (clamped between
+ *     neighbors), resize-start / resize-end (clips the neighbor down to
+ *     min-duration, then stops). Live-local state during pointermove;
+ *     COMMIT + undo entry on pointerup only; suppressClick after a drag.
+ *     Mechanics adapted from the recovered gesture editor; per-lane
+ *     NON-OVERLAP enforced via the pure ops in home-video-labeler-data.js.
+ *   - snapping: other-lane boundaries + playhead + sprite keyframe
+ *     instants, tol 6/pxPerSec seconds, Alt disables, flash line on snap
+ *   - Ctrl+wheel zoom via element-level addEventListener('wheel',
+ *     {passive:false}) — window-level listeners are passive-by-default and
+ *     can't preventDefault Chromium's page zoom. onZoom(dir, anchorT) asks
+ *     the overlay to change pxPerSec; a layout effect here keeps anchorT
+ *     stationary (or the view center, for keyboard zoom).
+ *   - virtualization: only ticks/segments intersecting the visible range
+ *     render; scroll state is rAF-throttled; auto-follow keeps the playhead
+ *     in view while playing unless the user scrolled in the last 1.5s.
+ *
+ * Playback stays out of React: the playhead node is handed out via
+ * `playheadRef` and positioned with style.transform by the player (M0
+ * pattern kept); `playheadTimeRef` mirrors the current time for snap /
+ * follow logic without re-rendering.
  *
  * Globals: VLTimeline, VLThumbStrip (one Object.assign at the bottom).
  * All top-level identifiers VL_-prefixed (shared global scope).
  * ========================================================================= */
 
-const { useState, useEffect, useRef, useCallback, useMemo } = React;
+const { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect } = React;
 
 const VL_FONT_MONO = "'Geist Mono', ui-monospace, monospace";
 const VL_FONT_SANS = "'Geist', system-ui, sans-serif";
 
-const VL_RULER_H = 30;   // tick strip + labels
-const VL_LANE_H = 28;    // per-lane row height (M1 segment blocks)
+const VL_RULER_H = 30;     // tick strip + labels
+const VL_LANE_H = 56;      // per-lane row height (segment blocks)
+const VL_SIDEBAR_W = 110;  // lane title sidebar
+const VL_VIEW_PAD = 200;   // px rendered beyond the visible range
 
 /* Smallest "nice" step whose px spacing is ≥ ~80 at this zoom. */
 function vlTickStep(pxPerSec) {
@@ -39,13 +57,262 @@ function vlTickLabel(t, step) {
   return D ? D.fmtDuration(t) : String(Math.round(t));
 }
 
-function VLTimeline({ duration, playheadRef, pxPerSec, onSeek, lanes }) {
+/* Block caption: quality lanes carry value ARRAYS. */
+function vlValueText(value) {
+  if (Array.isArray(value)) return value.join(" + ").replace(/_/g, " ");
+  return String(value == null ? "" : value).replace(/_/g, " ");
+}
+
+/* lanes: [{axis, title, segments, multiValue, colorFor(value)}]
+ * selection: {axis, segId} | null · activeAxis: axis string
+ * onSeek(t) · onSelect(axis, segId|null) · onCreate(axis, t)
+ * onCommit(axis, nextSegments, undoEntry) — pointerup only
+ * onZoom(dir, anchorT) — Ctrl+wheel / keyboard zoom request */
+function VLTimeline({
+  duration, fps, lanes, selection, activeAxis,
+  playheadRef, playheadTimeRef, pxPerSec, snapTimes, minDur, following,
+  onSeek, onSelect, onCommit, onCreate, onZoom,
+}) {
   const scrollRef = useRef(null);
+  const dragRef = useRef(null);
+  const suppressClickRef = useRef(false);
+  const pendingZoomRef = useRef(null);
+  const lastUserScrollRef = useRef(0);
+  const lastAutoScrollRef = useRef(0);
+  const viewRafRef = useRef(0);
+  const dragSegsRef = useRef(null);
+  const [dragSegs, setDragSegs] = useState(null);   // {axis, segments} during a drag
+  const [snapFlash, setSnapFlash] = useState(null); // snapped time (s) | null
+  const [view, setView] = useState({ left: 0, width: 0 });
+
   const dur = Math.max(0, Number(duration) || 0);
   const pps = Math.max(0.01, Number(pxPerSec) || 1);
-  const width = Math.max(1, Math.ceil(dur * pps));
+  const minD = Math.max(0.01, Number(minDur) || 0.2);
   const laneList = lanes || [];
+  const width = Math.max(view.width || 1, Math.ceil(dur * pps) + 1);
   const height = VL_RULER_H + laneList.length * VL_LANE_H;
+
+  /* everything the once-registered drag/wheel handlers need, render-fresh */
+  const liveRef = useRef({});
+  liveRef.current = {
+    dur, pps, minD, laneList,
+    snapTimes: snapTimes || [],
+    playheadTimeRef, onSeek, onSelect, onCommit, onCreate, onZoom,
+  };
+
+  /* ---------------- scroll / view state (rAF-throttled) ---------------- */
+
+  const syncView = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setView((v) => (v.left === el.scrollLeft && v.width === el.clientWidth)
+      ? v : { left: el.scrollLeft, width: el.clientWidth });
+  }, []);
+
+  const handleScroll = useCallback(() => {
+    if (Date.now() - lastAutoScrollRef.current > 120) lastUserScrollRef.current = Date.now();
+    if (viewRafRef.current) return;
+    viewRafRef.current = requestAnimationFrame(() => {
+      viewRafRef.current = 0;
+      syncView();
+    });
+  }, [syncView]);
+
+  useEffect(() => {
+    syncView();
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return undefined;
+    const ro = new ResizeObserver(syncView);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [syncView]);
+
+  useEffect(() => () => {
+    if (viewRafRef.current) cancelAnimationFrame(viewRafRef.current);
+  }, []);
+
+  /* ---------------- Ctrl+wheel zoom (element-level, non-passive) ------- */
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return undefined;
+    const onWheel = (e) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault(); // suppress Chromium page zoom — needs passive:false
+      const live = liveRef.current;
+      if (!live.onZoom) return;
+      const rect = el.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const anchorT = (el.scrollLeft + x) / live.pps;
+      pendingZoomRef.current = { anchorT, anchorX: x };
+      live.onZoom(e.deltaY < 0 ? 1 : -1, anchorT);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  /* On pxPerSec change keep the zoom anchor (wheel) or the view center
+     (keyboard zoom) stationary. Layout effect: scrollLeft must be set
+     before paint or the view visibly jumps. */
+  const prevPpsRef = useRef(pps);
+  useLayoutEffect(() => {
+    const prev = prevPpsRef.current;
+    prevPpsRef.current = pps;
+    const el = scrollRef.current;
+    if (!el || prev === pps) return;
+    const pending = pendingZoomRef.current;
+    pendingZoomRef.current = null;
+    lastAutoScrollRef.current = Date.now();
+    if (pending) {
+      el.scrollLeft = Math.max(0, pending.anchorT * pps - pending.anchorX);
+    } else {
+      const centerT = (el.scrollLeft + el.clientWidth / 2) / prev;
+      el.scrollLeft = Math.max(0, centerT * pps - el.clientWidth / 2);
+    }
+    syncView();
+  }, [pps, syncView]);
+
+  /* ---------------- auto-follow the playhead while playing ------------- */
+
+  useEffect(() => {
+    if (!following) return undefined;
+    const iv = setInterval(() => {
+      const el = scrollRef.current;
+      const live = liveRef.current;
+      const tRef = live.playheadTimeRef;
+      if (!el || !tRef) return;
+      if (Date.now() - lastUserScrollRef.current < 1500) return; // user owns the view
+      const x = (tRef.current || 0) * live.pps;
+      if (x < el.scrollLeft + 40 || x > el.scrollLeft + el.clientWidth - 80) {
+        lastAutoScrollRef.current = Date.now();
+        el.scrollLeft = Math.max(0, x - el.clientWidth * 0.15);
+      }
+    }, 250);
+    return () => clearInterval(iv);
+  }, [following]);
+
+  /* ---------------- drag mechanics (pointer capture) ------------------- */
+
+  const beginDrag = useCallback((e, lane, seg, mode) => {
+    if (e.button !== 0) return;
+    const D = window.HomeVideoLabelerData;
+    if (!D || dragRef.current) return;
+    e.preventDefault();
+    e.stopPropagation();
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) { /* */ }
+    const live = liveRef.current;
+    // snap candidates frozen at drag start: other-lane boundaries + keyframes
+    // (the live playhead is appended per-move)
+    const cands = [];
+    for (const ln of live.laneList) {
+      if (ln.axis === lane.axis) continue;
+      for (const s of ln.segments || []) cands.push(s.start_s, s.end_s);
+    }
+    for (const t of live.snapTimes) cands.push(t);
+    dragRef.current = {
+      axis: lane.axis,
+      segId: seg.id,
+      mode, // 'move' | 'start' | 'end'
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      moved: false,
+      origStart: seg.start_s,
+      origEnd: seg.end_s,
+      segments: (lane.segments || []).map((s) => Object.assign({}, s)), // pre-drag snapshot
+      cands,
+      pps: live.pps,             // zoom frozen for the drag
+      snapTol: 6 / live.pps,     // px-constant tolerance in seconds
+    };
+    if (live.onSelect) live.onSelect(lane.axis, seg.id);
+  }, []);
+
+  useEffect(() => {
+    const onMove = (e) => {
+      const drag = dragRef.current;
+      const D = window.HomeVideoLabelerData;
+      if (!drag || !D || e.pointerId !== drag.pointerId) return;
+      const dx = e.clientX - drag.startX;
+      if (Math.abs(dx) > 3) drag.moved = true;
+      if (!drag.moved) return;
+      const live = liveRef.current;
+      const dt = dx / drag.pps;
+      let snapT = null;
+      let next;
+      const cands = e.altKey
+        ? null // Alt disables snapping
+        : drag.cands.concat([(live.playheadTimeRef && live.playheadTimeRef.current) || 0]);
+      if (drag.mode === "move") {
+        let target = drag.origStart + dt;
+        const len = drag.origEnd - drag.origStart;
+        if (cands) {
+          const s1 = D.findSnap(cands, target, drag.snapTol);
+          const s2 = D.findSnap(cands, target + len, drag.snapTol);
+          const d1 = s1 == null ? Infinity : Math.abs(s1 - target);
+          const d2 = s2 == null ? Infinity : Math.abs(s2 - (target + len));
+          if (s1 != null && d1 <= d2) { target = s1; snapT = s1; }
+          else if (s2 != null) { target = s2 - len; snapT = s2; }
+        }
+        next = D.moveSegment(drag.segments, drag.segId, target, { duration: live.dur });
+      } else {
+        const edge = drag.mode === "start" ? "start" : "end";
+        let target = (edge === "start" ? drag.origStart : drag.origEnd) + dt;
+        if (cands) {
+          const s = D.findSnap(cands, target, drag.snapTol);
+          if (s != null) { target = s; snapT = s; }
+        }
+        next = D.resizeSegment(drag.segments, drag.segId, edge, target, {
+          duration: live.dur, minDur: live.minD, clipNeighbors: true,
+        });
+      }
+      dragSegsRef.current = { axis: drag.axis, segments: next };
+      setDragSegs(dragSegsRef.current);
+      setSnapFlash(snapT);
+    };
+    const onUp = (e) => {
+      const drag = dragRef.current;
+      if (!drag || e.pointerId !== drag.pointerId) return;
+      dragRef.current = null;
+      setSnapFlash(null);
+      const cur = dragSegsRef.current;
+      dragSegsRef.current = null;
+      if (drag.moved) {
+        suppressClickRef.current = true;
+        window.setTimeout(() => { suppressClickRef.current = false; }, 0);
+        const live = liveRef.current;
+        if (cur && live.onCommit) {
+          live.onCommit(cur.axis, cur.segments, {
+            axis: cur.axis, before: drag.segments, after: cur.segments,
+          });
+        }
+      }
+      setDragSegs(null);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+  }, []);
+
+  /* ---------------- clicks (seek / select / create) -------------------- */
+
+  const timeFromContainer = useCallback((e) => {
+    const el = scrollRef.current;
+    if (!el) return 0;
+    const rect = el.getBoundingClientRect();
+    return Math.max(0, Math.min(dur, (e.clientX - rect.left + el.scrollLeft) / pps));
+  }, [dur, pps]);
+
+  /* container catches ruler + any space not claimed by a lane row */
+  const handleContainerClick = useCallback((e) => {
+    if (suppressClickRef.current || !(dur > 0)) return;
+    if (onSeek) onSeek(timeFromContainer(e));
+  }, [dur, onSeek, timeFromContainer]);
+
+  /* ---------------- render ---------------- */
 
   const ticks = useMemo(() => {
     const out = { step: 1, major: [], minor: [] };
@@ -64,79 +331,243 @@ function VLTimeline({ duration, playheadRef, pxPerSec, onSeek, lanes }) {
     return out;
   }, [dur, pps]);
 
-  const handleClick = useCallback((e) => {
-    const el = scrollRef.current;
-    if (!el || !onSeek || !(dur > 0)) return;
-    const rect = el.getBoundingClientRect();
-    const t = (e.clientX - rect.left + el.scrollLeft) / pps;
-    onSeek(Math.max(0, Math.min(dur, t)));
-  }, [pps, dur, onSeek]);
+  // visible time range (+pad) — everything outside is culled
+  const viewT0 = Math.max(0, (view.left - VL_VIEW_PAD) / pps);
+  const viewT1 = ((view.left + (view.width || 4000)) + VL_VIEW_PAD) / pps;
 
   return (
-    <div
-      ref={scrollRef}
-      className="hg-scroll"
-      onClick={handleClick}
-      style={{
-        position: "relative", overflowX: "auto", overflowY: "hidden",
-        borderTop: "1px solid var(--hg-border-soft)",
-        background: "var(--hg-bg-0)", cursor: "crosshair",
-        flex: "none",
-      }}
-    >
-      <div style={{ position: "relative", width, height }}>
-        {/* ruler */}
-        <div style={{
-          position: "absolute", left: 0, top: 0, width: "100%", height: VL_RULER_H,
-          borderBottom: "1px solid var(--hg-border-soft)",
-        }}>
-          {ticks.minor.map((t) => (
-            <span key={"m" + t.toFixed(3)} style={{
-              position: "absolute", left: t * pps, bottom: 0,
-              width: 1, height: 5, background: "var(--hg-fg-5)", opacity: 0.55,
-            }} />
-          ))}
-          {ticks.major.map((t) => (
-            <span key={"M" + t.toFixed(3)}>
-              <span style={{
-                position: "absolute", left: t * pps, bottom: 0,
-                width: 1, height: 9, background: "var(--hg-fg-4)",
-              }} />
-              <span style={{
-                position: "absolute", left: t * pps + 4, top: 4,
-                fontFamily: VL_FONT_MONO, fontSize: 8.5,
-                letterSpacing: "0.1em", color: "var(--hg-fg-4)",
-                whiteSpace: "nowrap",
-              }}>{vlTickLabel(t, ticks.step)}</span>
-            </span>
-          ))}
-        </div>
+    <div style={{
+      display: "flex", flex: "none", minWidth: 0,
+      borderTop: "1px solid var(--hg-border-soft)",
+      background: "var(--hg-bg-0)",
+    }}>
+      <style>{`
+        @keyframes vl-snap-flash {
+          0% { opacity: 1; }
+          100% { opacity: 0.55; }
+        }
+      `}</style>
 
-        {/* lane rows — empty tracks in M0; segment blocks land in M1 */}
-        {laneList.map((lane, i) => (
-          <div key={lane.id || i} style={{
-            position: "absolute", left: 0, width: "100%",
-            top: VL_RULER_H + i * VL_LANE_H, height: VL_LANE_H,
+      {/* lane sidebar — titles + active-axis marker */}
+      {laneList.length > 0 && (
+        <div style={{
+          width: VL_SIDEBAR_W, flex: "none",
+          borderRight: "1px solid var(--hg-border-soft)",
+        }}>
+          <div style={{
+            height: VL_RULER_H, borderBottom: "1px solid var(--hg-border-soft)",
+            display: "flex", alignItems: "center", paddingLeft: 10,
+            fontFamily: VL_FONT_MONO, fontSize: 8, letterSpacing: "0.22em",
+            color: "var(--hg-fg-5)", textTransform: "lowercase",
+          }}>lanes</div>
+          {laneList.map((lane) => {
+            const active = lane.axis === activeAxis;
+            return (
+              <div
+                key={lane.axis}
+                onClick={() => onSelect && onSelect(lane.axis, null)}
+                title={"activate " + (lane.title || lane.axis) + " lane (Tab cycles)"}
+                style={{
+                  height: VL_LANE_H, boxSizing: "border-box",
+                  borderBottom: "1px solid var(--hg-border-soft)",
+                  borderLeft: active ? "2px solid var(--hg-ice)" : "2px solid transparent",
+                  background: active ? "var(--hg-bg-1)" : "transparent",
+                  display: "flex", flexDirection: "column", justifyContent: "center",
+                  padding: "0 8px 0 10px", cursor: "pointer",
+                }}
+              >
+                <span style={{
+                  fontFamily: VL_FONT_MONO, fontSize: 9.5, letterSpacing: "0.16em",
+                  textTransform: "lowercase",
+                  color: active ? "var(--hg-fg-1)" : "var(--hg-fg-4)",
+                }}>{lane.title || lane.axis}</span>
+                <span style={{
+                  fontFamily: VL_FONT_MONO, fontSize: 8, color: "var(--hg-fg-5)",
+                  marginTop: 3, letterSpacing: "0.08em",
+                }}>
+                  {((dragSegs && dragSegs.axis === lane.axis ? dragSegs.segments : lane.segments) || []).length}
+                  {" seg"}{lane.multiValue ? " · multi" : ""}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* scrollable track area */}
+      <div
+        ref={scrollRef}
+        className="hg-scroll"
+        onScroll={handleScroll}
+        onClick={handleContainerClick}
+        style={{
+          position: "relative", overflowX: "auto", overflowY: "hidden",
+          flex: 1, minWidth: 0, cursor: "crosshair",
+        }}
+      >
+        <div style={{ position: "relative", width, height }}>
+          {/* ruler */}
+          <div style={{
+            position: "absolute", left: 0, top: 0, width: "100%", height: VL_RULER_H,
             borderBottom: "1px solid var(--hg-border-soft)",
           }}>
-            <span style={{
-              position: "absolute", left: 6, top: 7,
-              fontFamily: VL_FONT_MONO, fontSize: 8.5,
-              letterSpacing: "0.18em", textTransform: "lowercase",
-              color: "var(--hg-fg-5)", pointerEvents: "none",
-            }}>{lane.name || lane.id}</span>
+            {ticks.minor.map((t) => (t >= viewT0 && t <= viewT1) && (
+              <span key={"m" + t.toFixed(3)} style={{
+                position: "absolute", left: t * pps, bottom: 0,
+                width: 1, height: 5, background: "var(--hg-fg-5)", opacity: 0.55,
+              }} />
+            ))}
+            {ticks.major.map((t) => (t >= viewT0 && t <= viewT1) && (
+              <span key={"M" + t.toFixed(3)}>
+                <span style={{
+                  position: "absolute", left: t * pps, bottom: 0,
+                  width: 1, height: 9, background: "var(--hg-fg-4)",
+                }} />
+                <span style={{
+                  position: "absolute", left: t * pps + 4, top: 4,
+                  fontFamily: VL_FONT_MONO, fontSize: 8.5,
+                  letterSpacing: "0.1em", color: "var(--hg-fg-4)",
+                  whiteSpace: "nowrap",
+                }}>{vlTickLabel(t, ticks.step)}</span>
+              </span>
+            ))}
           </div>
-        ))}
 
-        {/* playhead — positioned imperatively by the player via transform */}
-        <div
-          ref={(node) => { if (playheadRef) playheadRef.current = node; }}
-          style={{
-            position: "absolute", left: 0, top: 0, bottom: 0, width: 1,
-            background: "var(--hg-ice)", boxShadow: "0 0 6px var(--hg-ice-glow)",
-            pointerEvents: "none", willChange: "transform",
-          }}
-        />
+          {/* lane rows + segment blocks */}
+          {laneList.map((lane, i) => {
+            const segs = (dragSegs && dragSegs.axis === lane.axis)
+              ? dragSegs.segments
+              : (lane.segments || []);
+            return (
+              <div
+                key={lane.axis}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (suppressClickRef.current || !(dur > 0)) return;
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const t = Math.max(0, Math.min(dur, (e.clientX - rect.left) / pps));
+                  if (onSelect) onSelect(lane.axis, null);
+                  if (onSeek) onSeek(t);
+                }}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  if (!(dur > 0) || !onCreate) return;
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const t = Math.max(0, Math.min(dur, (e.clientX - rect.left) / pps));
+                  onCreate(lane.axis, t);
+                }}
+                style={{
+                  position: "absolute", left: 0, width: "100%",
+                  top: VL_RULER_H + i * VL_LANE_H, height: VL_LANE_H,
+                  boxSizing: "border-box",
+                  borderBottom: "1px solid var(--hg-border-soft)",
+                  background: lane.axis === activeAxis
+                    ? "color-mix(in srgb, var(--hg-ice) 3%, transparent)"
+                    : "transparent",
+                }}
+              >
+                {segs.map((seg) => {
+                  if (seg.end_s < viewT0 || seg.start_s > viewT1) return null; // virtualized
+                  const color = lane.colorFor ? lane.colorFor(seg.value) : "hsl(0 0% 55%)";
+                  const selected = !!(selection && selection.axis === lane.axis && selection.segId === seg.id);
+                  const st = seg.review_state;
+                  const ghosted = st === "rejected";
+                  const excluded = st === "excluded_from_export";
+                  const dashed = st === "prelabel";
+                  const w = Math.max(3, (seg.end_s - seg.start_s) * pps);
+                  const showHandles = w > 18;
+                  return (
+                    <div
+                      key={seg.id}
+                      onPointerDown={(e) => beginDrag(e, lane, seg, "move")}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (suppressClickRef.current) return;
+                        if (onSelect) onSelect(lane.axis, seg.id);
+                      }}
+                      onDoubleClick={(e) => e.stopPropagation()}
+                      title={vlValueText(seg.value) + " · " + (st || "?")
+                        + " · " + seg.start_s.toFixed(2) + "–" + seg.end_s.toFixed(2) + "s"
+                        + (seg.source ? " · " + seg.source : "")}
+                      style={{
+                        position: "absolute",
+                        left: seg.start_s * pps,
+                        width: w,
+                        top: 5, height: VL_LANE_H - 11,
+                        boxSizing: "border-box",
+                        border: selected
+                          ? "1px solid var(--hg-fg-0)"
+                          : (dashed ? "1px dashed " + color : "1px solid " + color),
+                        boxShadow: selected ? "0 0 0 1px " + color : "none",
+                        background: "color-mix(in srgb, " + color + " 32%, rgba(0,0,0,0.6))",
+                        opacity: ghosted ? 0.35 : excluded ? 0.45 : 1,
+                        color: "var(--hg-fg-0)",
+                        display: "flex", alignItems: "stretch",
+                        overflow: "hidden",
+                        cursor: "grab", touchAction: "none",
+                        zIndex: selected ? 3 : 2,
+                        fontFamily: VL_FONT_MONO, fontSize: 9.5,
+                      }}
+                    >
+                      {showHandles && (
+                        <div
+                          onPointerDown={(e) => beginDrag(e, lane, seg, "start")}
+                          title="resize start"
+                          style={{
+                            flex: "none", width: 7, cursor: "ew-resize",
+                            borderRight: "1px solid rgba(255,255,255,0.14)",
+                            touchAction: "none",
+                          }}
+                        />
+                      )}
+                      <span style={{
+                        flex: 1, minWidth: 0, alignSelf: "center", padding: "0 5px",
+                        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                        letterSpacing: "0.06em",
+                        textDecoration: ghosted ? "line-through" : "none",
+                        pointerEvents: "none",
+                      }}>
+                        {st === "accepted" ? "✓ " : ""}{vlValueText(seg.value) || "—"}
+                      </span>
+                      {showHandles && (
+                        <div
+                          onPointerDown={(e) => beginDrag(e, lane, seg, "end")}
+                          title="resize end"
+                          style={{
+                            flex: "none", width: 7, cursor: "ew-resize",
+                            borderLeft: "1px solid rgba(255,255,255,0.14)",
+                            touchAction: "none",
+                          }}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+
+          {/* snap flash line (re-keyed per snap value to retrigger) */}
+          {snapFlash != null && (
+            <div key={"snap" + snapFlash.toFixed(4)} style={{
+              position: "absolute", left: snapFlash * pps - 0.5, top: 0, bottom: 0,
+              width: 1, background: "var(--hg-ice-bright)",
+              boxShadow: "0 0 8px var(--hg-ice-glow)",
+              pointerEvents: "none", zIndex: 5,
+              animation: "vl-snap-flash 260ms ease-out forwards",
+            }} />
+          )}
+
+          {/* playhead — positioned imperatively by the player via transform */}
+          <div
+            ref={(node) => { if (playheadRef) playheadRef.current = node; }}
+            style={{
+              position: "absolute", left: 0, top: 0, bottom: 0, width: 1,
+              background: "var(--hg-ice)", boxShadow: "0 0 6px var(--hg-ice-glow)",
+              pointerEvents: "none", willChange: "transform", zIndex: 6,
+            }}
+          />
+        </div>
       </div>
     </div>
   );

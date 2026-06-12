@@ -12,60 +12,62 @@ import re
 
 AXES = ("activity", "posture", "quality", "custom")
 
+# The value vocabulary below is the USER'S spec verbatim (plan §Label Schema) —
+# it must stay in lockstep with the frontend's frozen VL_* lists.
 ACTIVITY_PRIMARY = (
-    "no_person",
-    "walking",
-    "standing_idle",
-    "sitting_idle",
     "cooking",
-    "eating",
-    "drinking",
+    "food_prep",
+    "eating_drinking",
     "washing_dishes",
     "cleaning",
-    "working_computer",
+    "laundry",
+    "organizing",
     "reading",
     "watching_tv",
+    "working_computer",
     "phone_use",
-    "exercising",
-    "stretching",
-    "dressing",
-    "grooming",
+    "conversation",
+    "resting",
     "sleeping",
-    "lying_resting",
-    "playing_instrument",
-    "pet_interaction",
-    "door_transit",
-    "other",
+    "exercising",
+    "stretching_yoga",
+    "walking",
+    "entering_leaving",
+    "personal_care",
+    "pet_care",
+    "idle_present",
+    "no_person",
+    "unknown",
 )
 
 POSTURE = (
     "standing",
-    "sitting_chair",
-    "sitting_couch",
-    "sitting_floor",
-    "lying_back",
-    "lying_side",
-    "lying_front",
+    "walking",
+    "sitting_upright",
+    "sitting_reclined",
+    "lying_down",
+    "bending",
     "crouching",
     "kneeling",
-    "bending",
-    "walking",
-    "reaching_up",
-    "transitioning",
+    "reaching",
+    "leaning",
+    "exercising_dynamic",
+    "partially_visible",
+    "no_person",
     "unknown",
 )
 
 QUALITY_FLAGS = (
-    "no_person",
-    "multi_person",
-    "private",
-    "screen_sensitive",
-    "low_light",
-    "motion_blur",
+    "clear",
     "occluded",
-    "partial_view",
-    "camera_artifact",
-    "wrong_room",
+    "dark",
+    "blurry",
+    "backlit",
+    "partial_body",
+    "multiple_people",
+    "ambiguous",
+    "private_skip",
+    "screen_sensitive",
 )
 
 REVIEW_STATES = (
@@ -90,18 +92,20 @@ AUX_AXES = (
 MOTION_INTENSITY = ("none", "low", "medium", "high")
 ACTIVITY_PHASE = ("starting", "ongoing", "ending")
 
-# Seed ACTIVE SET: the VLM constrained-enum starts here ('other' routes to the
-# custom-label flow); classes activate at >= N human-reviewed examples.
+# Seed ACTIVE SET: the M2 VLM constrained enum is ACTIVE_SET + a literal
+# "other" (which routes to the custom-label flow — "other" itself is NOT a
+# canonical value); classes activate at >= N human-reviewed examples.
 ACTIVE_SET = (
     "no_person",
+    "unknown",
     "walking",
     "cooking",
-    "eating",
-    "cleaning",
-    "working_computer",
+    "eating_drinking",
+    "washing_dishes",
     "watching_tv",
+    "working_computer",
     "phone_use",
-    "other",
+    "idle_present",
 )
 
 # custom:<slug> — lowercase slug, 1..48 chars, [a-z0-9_-], no leading/trailing

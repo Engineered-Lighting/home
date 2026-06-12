@@ -78,6 +78,150 @@
   function cancelJob(id) { return vlApi("/api/video-labeler/jobs/" + vlEnc(id) + "/cancel", { method: "POST" }); }
   function retryJob(id) { return vlApi("/api/video-labeler/jobs/" + vlEnc(id) + "/retry", { method: "POST" }); }
 
+  /* ---------------- labels API (M1) ----------------
+   * Contract (backend M1, built in parallel — coded exactly against it):
+   *   GET  /labels/ontology               → {axes, aux_axes, review_states, custom}
+   *   GET  /videos/{id}/labels            → {revision, axes:{activity_primary,posture,quality,custom}}
+   *   PUT  /videos/{id}/labels            → 200 {revision, id_map?} | 409 {revision, axes} | 400 {detail}
+   *   POST /videos/{id}/segments/{sid}/review {action} → {revision, segment}
+   *   custom labels CRUD under /custom-labels (+/merge /hide /promote). */
+
+  const vlJsonInit = (method, payload) => ({
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload == null ? {} : payload),
+  });
+
+  /* Lane-axis (client) vs db-axis (server) naming: the labels doc speaks
+     activity_primary/quality while custom-label rows store activity/quality —
+     normalize at this boundary so every consumer sees lane names only. */
+  function vlServerAxis(axis) {
+    if (axis === "activity_primary") return "activity";
+    if (axis === "quality_flags") return "quality";
+    return axis;
+  }
+  function vlClientAxis(axis) {
+    return axis === "activity" ? "activity_primary" : axis;
+  }
+  async function getOntology() {
+    const r = await vlApi("/api/video-labeler/labels/ontology");
+    if (r.ok && r.data && Array.isArray(r.data.custom)) {
+      r.data.custom = r.data.custom.map((c) =>
+        Object.assign({}, c, { axis: vlClientAxis(c.axis) }));
+    }
+    return r;
+  }
+  function getLabels(videoId) {
+    return vlApi("/api/video-labeler/videos/" + vlEnc(videoId) + "/labels");
+  }
+  /* body = {revision, axes}; resolves {ok,status,data,error} — 409 carries
+     the server snapshot in data, 400 carries {detail}. */
+  function putLabels(videoId, body) {
+    return vlApi("/api/video-labeler/videos/" + vlEnc(videoId) + "/labels", vlJsonInit("PUT", body));
+  }
+  function reviewSegment(videoId, segId, action) {
+    return vlApi(
+      "/api/video-labeler/videos/" + vlEnc(videoId) + "/segments/" + vlEnc(segId) + "/review",
+      vlJsonInit("POST", { action: action })
+    );
+  }
+  function listCustomLabels(q, axis) {
+    const p = [];
+    if (q) p.push("q=" + vlEnc(q));
+    if (axis) p.push("axis=" + vlEnc(vlServerAxis(axis)));
+    return vlApi("/api/video-labeler/custom-labels" + (p.length ? "?" + p.join("&") : ""));
+  }
+  function createCustomLabel(payload) {
+    const body = Object.assign({}, payload, { axis: vlServerAxis(payload.axis) });
+    return vlApi("/api/video-labeler/custom-labels", vlJsonInit("POST", body));
+  }
+  function mergeCustomLabel(slug, into) {
+    return vlApi("/api/video-labeler/custom-labels/" + vlEnc(slug) + "/merge", vlJsonInit("POST", { into_slug: into }));
+  }
+  function hideCustomLabel(slug) {
+    return vlApi("/api/video-labeler/custom-labels/" + vlEnc(slug) + "/hide", vlJsonInit("POST", {}));
+  }
+  function promoteCustomLabel(slug, canonicalValue) {
+    return vlApi(
+      "/api/video-labeler/custom-labels/" + vlEnc(slug) + "/promote",
+      vlJsonInit("POST", { canonical_value: canonicalValue })
+    );
+  }
+
+  /* ---------------- draft persistence (localStorage) ----------------
+   * Key videoLabeler.draft.<id>; record = {doc, baseRevision, rev, ts}.
+   * localStorage is shared with hg-events/prefs, so drafts are pruned
+   * aggressively (>14 days old or beyond the 10 newest) and every touch
+   * is try/catch'd — a full or disabled store must never throw. */
+
+  const DRAFT_PREFIX = "videoLabeler.draft.";
+  const DRAFT_MAX_AGE_MS = 14 * 24 * 3600 * 1000;
+  const DRAFT_MAX_COUNT = 10;
+
+  function pruneDrafts(keepKey) {
+    try {
+      const now = Date.now();
+      const kept = [];
+      const drop = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || k.indexOf(DRAFT_PREFIX) !== 0) continue;
+        let ts = 0;
+        try { ts = (JSON.parse(localStorage.getItem(k)) || {}).ts || 0; } catch (e) { /* corrupt */ }
+        if (k !== keepKey && (!ts || now - ts > DRAFT_MAX_AGE_MS)) drop.push(k);
+        else kept.push({ k: k, ts: ts });
+      }
+      kept.sort((a, b) => b.ts - a.ts);
+      for (let j = DRAFT_MAX_COUNT; j < kept.length; j++) {
+        if (kept[j].k !== keepKey) drop.push(kept[j].k);
+      }
+      for (const k of drop) localStorage.removeItem(k);
+    } catch (e) { /* storage unavailable */ }
+  }
+
+  function saveDraft(videoId, draft) {
+    try {
+      const rec = Object.assign({ ts: Date.now() }, draft || {});
+      localStorage.setItem(DRAFT_PREFIX + videoId, JSON.stringify(rec));
+      pruneDrafts(DRAFT_PREFIX + videoId);
+    } catch (e) { /* quota/disabled — drafts are best-effort */ }
+  }
+
+  function loadDraft(videoId) {
+    try {
+      const raw = localStorage.getItem(DRAFT_PREFIX + videoId);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function clearDraft(videoId) {
+    try { localStorage.removeItem(DRAFT_PREFIX + videoId); } catch (e) { /* */ }
+  }
+
+  /* Validate a draft doc against the current server doc: segments whose
+     ids are neither local temps nor present server-side were superseded
+     by another session — drop them and report the count. */
+  function validateDraftDoc(draftAxes, serverAxes) {
+    const serverIds = {};
+    for (const ax in (serverAxes || {})) {
+      for (const s of (serverAxes[ax] || [])) serverIds[s.id] = true;
+    }
+    const axes = {};
+    let dropped = 0;
+    for (const ax in (draftAxes || {})) {
+      axes[ax] = (draftAxes[ax] || []).filter((s) => {
+        const id = s && s.id;
+        const ok = typeof id === "string" &&
+          (id.indexOf("tmp_") === 0 || id.indexOf("seg_local_") === 0 || serverIds[id] === true);
+        if (!ok) dropped += 1;
+        return ok;
+      });
+    }
+    return { axes: axes, dropped: dropped };
+  }
+
   /* ---------------- media URL builders (plain strings; null in sim) ---------------- */
 
   function streamUrl(id, opts) {
@@ -258,11 +402,15 @@
   }
 
   let vlIdCounter = 0;
-  /* Local (unsaved) segment ids — the server re-keys on save. */
-  function newSegId() {
+  /* Local (unsaved) segment ids. The M1 PUT contract re-keys ids it does
+     not own via id_map, recognizing the tmp_ prefix — so every locally
+     minted id MUST carry it. */
+  function newTempId() {
     vlIdCounter += 1;
-    return "seg_local_" + Date.now().toString(36) + "_" + vlIdCounter;
+    return "tmp_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8) + "_" + vlIdCounter;
   }
+  /* M0 alias kept for callers; same tmp_ contract since M1. */
+  function newSegId() { return newTempId(); }
 
   /* Split the segment containing t into [start,t) + [t,end). The left
      half keeps the original identity; the right half gets a fresh local
@@ -274,8 +422,133 @@
     if (i < 0) return arr;
     const s = arr[i];
     const left = Object.assign({}, s, { end_s: t });
-    const right = Object.assign({}, s, { id: newSegId(), start_s: t });
+    const right = Object.assign({}, s, { id: newTempId(), start_s: t });
     return arr.slice(0, i).concat([left, right], arr.slice(i + 1));
+  }
+
+  /* Move segment `id` so it starts at newStart, clamped between its lane
+     neighbors and [0, duration]. Move never clips neighbors — it stops
+     against them (drag-move semantics). */
+  function moveSegment(segs, id, newStart, opts) {
+    const dur = Math.max(0, Number(opts && opts.duration) || 0);
+    const arr = (segs || []).slice().sort((a, b) => a.start_s - b.start_s);
+    const i = arr.findIndex((s) => s.id === id);
+    if (i < 0) return segs || [];
+    const s = arr[i];
+    const len = s.end_s - s.start_s;
+    const lo = i > 0 ? arr[i - 1].end_s : 0;
+    const hi = Math.max(lo, (i + 1 < arr.length ? arr[i + 1].start_s : dur) - len);
+    const ns = Math.max(lo, Math.min(hi, Number(newStart)));
+    if (!Number.isFinite(ns)) return arr;
+    const out = arr.slice();
+    out[i] = Object.assign({}, s, { start_s: ns, end_s: ns + len });
+    return out;
+  }
+
+  /* Resize one edge ('start'|'end') of segment `id` to time t. With
+     clipNeighbors (default, drag-resize semantics) the adjacent neighbor
+     is clipped down to minDur and then the edge stops; without it the
+     edge simply stops at the neighbor. The segment itself always keeps
+     minDur. Returns a new sorted array; neighbors stay non-overlapping. */
+  function resizeSegment(segs, id, edge, t, opts) {
+    const dur = Math.max(0, Number(opts && opts.duration) || 0);
+    const min = Math.max(1e-9, Number(opts && opts.minDur) || 0.2);
+    const clip = !(opts && opts.clipNeighbors === false);
+    const arr = (segs || []).slice().sort((a, b) => a.start_s - b.start_s);
+    const i = arr.findIndex((s) => s.id === id);
+    if (i < 0) return segs || [];
+    const s = arr[i];
+    let nt = Math.max(0, Math.min(dur, Number(t)));
+    if (!Number.isFinite(nt)) return arr;
+    const out = arr.slice();
+    if (edge === "start") {
+      nt = Math.min(nt, s.end_s - min);
+      const left = i > 0 ? arr[i - 1] : null;
+      if (left && nt < left.end_s) {
+        if (clip) {
+          nt = Math.max(nt, left.start_s + min);
+          if (nt < left.end_s) out[i - 1] = Object.assign({}, left, { end_s: nt });
+        } else {
+          nt = left.end_s;
+        }
+      }
+      nt = Math.max(0, Math.min(nt, s.end_s - min));
+      out[i] = Object.assign({}, s, { start_s: nt });
+    } else {
+      nt = Math.max(nt, s.start_s + min);
+      const right = i + 1 < arr.length ? arr[i + 1] : null;
+      if (right && nt > right.start_s) {
+        if (clip) {
+          nt = Math.min(nt, right.end_s - min);
+          if (nt > right.start_s) out[i + 1] = Object.assign({}, right, { start_s: nt });
+        } else {
+          nt = right.start_s;
+        }
+      }
+      nt = Math.min(dur, Math.max(nt, s.start_s + min));
+      out[i] = Object.assign({}, s, { end_s: nt });
+    }
+    return out;
+  }
+
+  /* Clear [start, end) in a lane: overlapping segments are trimmed or
+     split (the right part of a split gets a fresh temp id); remainders
+     shorter than minDur are dropped. Used by the P/private flow before
+     inserting a covering quality segment. */
+  function carveRange(segs, start, end, minDur) {
+    const min = Math.max(1e-9, Number(minDur) || 0.2);
+    const out = [];
+    for (const s of segs || []) {
+      if (s.end_s <= start || s.start_s >= end) { out.push(s); continue; }
+      const leftOk = start - s.start_s >= min;
+      const rightOk = s.end_s - end >= min;
+      if (leftOk) out.push(Object.assign({}, s, { end_s: start }));
+      if (rightOk) {
+        out.push(leftOk
+          ? Object.assign({}, s, { id: newTempId(), start_s: end })
+          : Object.assign({}, s, { start_s: end }));
+      }
+    }
+    return out.sort((a, b) => a.start_s - b.start_s);
+  }
+
+  /* Insert a fresh human segment around time t: prefDur (default 4s)
+     clamped into the gap containing t — or the nearest gap when t sits
+     inside an existing segment. Returns {segments, id} or null when no
+     gap can host at least minDur. */
+  function createSegmentAt(segs, t, value, opts) {
+    const dur = Math.max(0, Number(opts && opts.duration) || 0);
+    const min = Math.max(1e-9, Number(opts && opts.minDur) || 0.2);
+    const pref = Math.max(min, Number(opts && opts.prefDur) || 4);
+    if (!(dur > 0)) return null;
+    const sorted = (segs || []).slice().sort((a, b) => a.start_s - b.start_s);
+    const gaps = [];
+    let cursor = 0;
+    for (const s of sorted) {
+      if (s.start_s - cursor >= min) gaps.push([cursor, s.start_s]);
+      cursor = Math.max(cursor, s.end_s);
+    }
+    if (dur - cursor >= min) gaps.push([cursor, dur]);
+    if (!gaps.length) return null;
+    const tt = Math.max(0, Math.min(dur, Number(t) || 0));
+    let gap = null;
+    let bestD = Infinity;
+    for (const g of gaps) {
+      if (tt >= g[0] && tt <= g[1]) { gap = g; break; }
+      const d = tt < g[0] ? g[0] - tt : tt - g[1];
+      if (d < bestD) { bestD = d; gap = g; }
+    }
+    const maxStart = Math.max(gap[0], gap[1] - pref);
+    const start = Math.max(gap[0], Math.min(tt, maxStart));
+    const end = Math.min(gap[1], start + pref);
+    if (end - start < min) return null;
+    const id = newTempId();
+    const seg = {
+      id: id, start_s: start, end_s: end, value: value,
+      review_state: "reviewed", source: "human",
+      confidence: null, aux: null, person_slot: null,
+    };
+    return { segments: sorted.concat([seg]).sort((a, b) => a.start_s - b.start_s), id: id };
   }
 
   /* Merge the identified segment with its immediate right neighbor (in
@@ -309,6 +582,12 @@
     // api client (no-throw, {ok,status,data,error})
     health, listVideos, getVideo, importManual, getSprite,
     listJobs, cancelJob, retryJob,
+    // labels API (M1)
+    getOntology, getLabels, putLabels, reviewSegment,
+    listCustomLabels, createCustomLabel, mergeCustomLabel,
+    hideCustomLabel, promoteCustomLabel,
+    // draft persistence (best-effort localStorage)
+    saveDraft, loadDraft, clearDraft, validateDraftDoc,
     // media url builders (plain strings; null under sim)
     streamUrl, spriteManifestUrl, spriteSheetUrl,
     // taxonomies + colors
@@ -316,7 +595,9 @@
     VL_VALUE_COLORS, colorFor,
     // formatting
     fmtTimecode, fmtDuration,
-    // pure segment math (M1 editor foundation)
-    normalizeSegments, splitAt, mergeAdjacent, findSnap, newSegId,
+    // pure segment math (M1 editor)
+    normalizeSegments, splitAt, mergeAdjacent, findSnap,
+    moveSegment, resizeSegment, carveRange, createSegmentAt,
+    newSegId, newTempId,
   });
 })();

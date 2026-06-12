@@ -1,9 +1,9 @@
-"""video-labeler FastAPI service (M0: ingest + media + jobs).
+"""video-labeler FastAPI service (M0 ingest + media + jobs; M1 labels).
 
 Wires together (and nothing more — the logic lives in the modules):
   * db migrations + startup stale-job recovery   (videolabeler/db.py, jobqueue/queue.py)
   * JobRunner: per-lane subprocess job execution  (jobqueue/runner.py, cpu=2 gpu=1)
-  * REST routers                                  (videolabeler/api/{videos,media,jobs}.py)
+  * REST routers      (videolabeler/api/{videos,media,jobs,labels,custom_labels}.py)
   * idle WAL checkpoint loop
 
 Endpoints:
@@ -14,6 +14,11 @@ Endpoints:
   GET  /api/video-labeler/videos/{id}/stream?original=0   (single-range 206)
   GET  /api/video-labeler/videos/{id}/sprite[/{n}]
   GET  /api/video-labeler/jobs?state=&type=  ·  POST /jobs/{id}/cancel|/retry
+  GET  /api/video-labeler/labels/ontology
+  GET/PUT /api/video-labeler/videos/{id}/labels   (revision concurrency, 409 snapshot)
+  POST /api/video-labeler/videos/{id}/segments/{segId}/review   {action}
+  GET/POST /api/video-labeler/custom-labels  ·  PATCH /custom-labels/{slug}
+       ·  POST /custom-labels/{slug}/hide|/merge|/promote
 
 ENV (defaults): DATA_DIR=/data PORT=8099 MIN_FREE_VRAM_GB=6 (unused in M0)
   INBOX_DIR={DATA_DIR}/inbox
@@ -31,7 +36,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from videolabeler import db as vldb
+from videolabeler.api import custom_labels as custom_labels_api
 from videolabeler.api import jobs as jobs_api
+from videolabeler.api import labels as labels_api
 from videolabeler.api import media as media_api
 from videolabeler.api import videos as videos_api
 from videolabeler.config import Config
@@ -119,6 +126,8 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"],
 app.include_router(videos_api.build_router(cfg))
 app.include_router(media_api.build_router(cfg))
 app.include_router(jobs_api.build_router(cfg))
+app.include_router(labels_api.build_router(cfg))
+app.include_router(custom_labels_api.build_router(cfg))
 
 
 @app.get("/healthz")

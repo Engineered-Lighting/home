@@ -105,12 +105,13 @@ class JobContext:
 
 def _handlers() -> dict:
     # imported lazily so a syntax error in one job module fails ITS jobs only
-    from . import import_manual, probe, proxy, sprite
+    from . import import_manual, probe, proxy, sprite, windows
     return {
         "import": import_manual.run,
         "probe": probe.run,
         "proxy": proxy.run,
         "sprite": sprite.run,
+        "windows": windows.run,
     }
 
 

@@ -1,5 +1,6 @@
 """probe job: ffprobe the original, persist stream facts, fan out proxy +
-sprite jobs (idempotency-keyed so re-probing never duplicates them)."""
+sprite + analysis-window jobs (idempotency-keyed so re-probing never
+duplicates them)."""
 from __future__ import annotations
 
 import logging
@@ -41,6 +42,9 @@ def run(job, ctx) -> None:
               idempotency_key=f"proxy:{vid}:480p")
     q.enqueue(conn, "sprite", {"video_id": vid}, lane="cpu",
               idempotency_key=f"sprite:{vid}")
-    ctx.heartbeat(progress=1.0, msg=f"probed {duration:.1f}s, fanned out proxy+sprite")
+    q.enqueue(conn, "windows", {"video_id": vid}, lane="cpu",
+              idempotency_key=f"windows:{vid}")
+    ctx.heartbeat(progress=1.0,
+                  msg=f"probed {duration:.1f}s, fanned out proxy+sprite+windows")
     log.info("probed %s: %.1fs %sx%s rot=%d", vid, duration,
              vstream.get("width"), vstream.get("height"), rotation)

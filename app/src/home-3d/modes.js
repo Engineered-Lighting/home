@@ -148,7 +148,13 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
 
     const modes = {
         get mode() { return state.mode; },
-        onChange(cb) { listeners.push(cb); },
+        onChange(cb) {
+            listeners.push(cb);
+            return () => {
+                const i = listeners.indexOf(cb);
+                if (i >= 0) listeners.splice(i, 1);
+            };
+        },
 
         async setMode(next, { duration = 600 } = {}) {
             if (next === state.mode) return;
@@ -161,6 +167,10 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
                 state.fading = { t: 0, duration, dir: next === 'splat' ? 1 : -1 };
                 visibleFor(next);
             } else {
+                // cancel any in-flight crossfade — orphaned, its per-frame
+                // writes would drag uOpacity back toward 0 AFTER this instant
+                // switch set it to 1 (invisible cloud in 'points' mode)
+                state.fading = null;
                 if (state.splat && 'opacity' in state.splat) state.splat.opacity = next === 'splat' ? 1 : 0;
                 pointsMaterial.uniforms.uOpacity.value = next === 'points' ? 1 : 0;
                 visibleFor(next);

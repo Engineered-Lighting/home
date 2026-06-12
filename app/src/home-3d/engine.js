@@ -65,6 +65,19 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
     const emitter = new EventTarget();
     const emit = (type, detail) => emitter.dispatchEvent(new CustomEvent(type, { detail }));
 
+    // Context-loss resilience: three r180 preventDefaults 'webglcontextlost'
+    // internally and rebuilds GL state on 'webglcontextrestored', but renders
+    // NOTHING in between and the loss is otherwise silent — surface both so
+    // the UI can tell the user instead of showing a dead black canvas.
+    canvas.addEventListener('webglcontextlost', () => {
+        console.warn('[home-3d] WebGL context LOST — engine canvas is blank until restored');
+        emit('contextlost', {});
+    });
+    canvas.addEventListener('webglcontextrestored', () => {
+        console.log('[home-3d] WebGL context restored');
+        emit('contextrestored', {});
+    });
+
     // ---- point cloud (progressive) ----
     let points = null;
     let pointTotal = 0;
@@ -190,7 +203,13 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
         scene, camera, renderer, rig, modes, overlay, picking, apartmentRoot,
         pointsMaterial, pointsPromise,
         gpu: gpuName,
-        on(type, cb_) { emitter.addEventListener(type, (e) => cb_(e.detail)); },
+        on(type, cb_) {
+            // returns an unsubscribe — the view remounts against the resident
+            // engine, so un-removable listeners pile up stale setState closures
+            const h = (e) => cb_(e.detail);
+            emitter.addEventListener(type, h);
+            return () => emitter.removeEventListener(type, h);
+        },
         setRunning(v) {
             if (v === running) return;
             running = v;

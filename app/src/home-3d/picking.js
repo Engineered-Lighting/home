@@ -7,13 +7,16 @@ import * as THREE from 'three';
 export function createPicking(camera, hostEl) {
     const raycaster = new THREE.Raycaster();
     const v = new THREE.Vector3();
+    let host = hostEl;   // re-homed on every view mount — the engine outlives
+                         // the React tree, so the boot-time host div goes stale
 
     return {
         raycaster,
+        setHost(el) { if (el) host = el; },
         /* world-space Vector3 -> {x, y, visible} in host-element pixels */
         projectToScreen(worldPos) {
             v.copy(worldPos).project(camera);
-            const w = hostEl.clientWidth, h = hostEl.clientHeight;
+            const w = host.clientWidth, h = host.clientHeight;
             return {
                 x: (v.x * 0.5 + 0.5) * w,
                 y: (-v.y * 0.5 + 0.5) * h,
@@ -21,7 +24,7 @@ export function createPicking(camera, hostEl) {
             };
         },
         pick(objects, clientX, clientY) {
-            const rect = hostEl.getBoundingClientRect();
+            const rect = host.getBoundingClientRect();
             const ndc = new THREE.Vector2(
                 ((clientX - rect.left) / rect.width) * 2 - 1,
                 -((clientY - rect.top) / rect.height) * 2 + 1,
@@ -34,7 +37,7 @@ export function createPicking(camera, hostEl) {
          * Ray ∩ world floor plane (y=0 after the root conversion), then into
          * the root's object space. Returns null when the ray misses. */
         floorPoint(apartmentRoot, clientX, clientY) {
-            const rect = hostEl.getBoundingClientRect();
+            const rect = host.getBoundingClientRect();
             const ndc = new THREE.Vector2(
                 ((clientX - rect.left) / rect.width) * 2 - 1,
                 -((clientY - rect.top) / rect.height) * 2 + 1,

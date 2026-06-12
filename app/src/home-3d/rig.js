@@ -222,6 +222,21 @@ export function createRig(camera) {
             heldPose = null;
         },
         inCameraPose() { return !!(heldPose || (poseTween && poseTween.hold)); },
+
+        /* Instant hard reset (view unmount / recovery): drop any held or
+         * in-flight pose and unlock input. The resident engine survives view
+         * closes — without this, closing while snapped (or mid-flight, or in
+         * the edit pose) leaves heldPose/locked frozen on the cached rig and
+         * the reopened view is a dead camera with all input gated off. The
+         * orbit branch recomputes position/lookAt from detent state on the
+         * next frame, so no pose snapshot is needed. */
+        resetPose() {
+            poseTween = null;
+            heldPose = null;
+            state.locked = false;
+            camera.fov = BASE_FOV;
+            camera.updateProjectionMatrix();
+        },
     };
     return rig;
 }

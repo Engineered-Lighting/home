@@ -104,6 +104,9 @@ function AptUndistortedFeed({ src, alt, intrinsics, style }) {
 
     const mkShader = (type, text) => {
       const s = gl.createShader(type);
+      if (!s) return null;   // lost context: createShader returns null and
+                             // shaderSource(null) would THROW (no boundary
+                             // above us — it would blank the whole app)
       gl.shaderSource(s, text);
       gl.compileShader(s);
       return gl.getShaderParameter(s, gl.COMPILE_STATUS) ? s : null;
@@ -118,6 +121,9 @@ function AptUndistortedFeed({ src, alt, intrinsics, style }) {
     }
     if (!prog || !gl.getProgramParameter(prog, gl.LINK_STATUS)) {
       setFallback(true);
+      // this effect returns no cleanup on this path — release the context
+      // here or the failed attempt still burns a context slot
+      try { gl.getExtension("WEBGL_lose_context")?.loseContext(); } catch (e) { /* */ }
       return undefined;
     }
     gl.useProgram(prog);
@@ -185,7 +191,14 @@ function AptUndistortedFeed({ src, alt, intrinsics, style }) {
       try {
         gl.deleteTexture(tex); gl.deleteBuffer(buf); gl.deleteProgram(prog);
         gl.deleteShader(vs); gl.deleteShader(fs);
+        // WebView2/Chromium caps live WebGL contexts (~16) and silently kills
+        // the OLDEST on overflow — which is the 3D engine's. Without this
+        // explicit release every feed open/close leaks one context slot until
+        // the engine canvas goes permanently black mid-session.
+        const lose = gl.getExtension("WEBGL_lose_context");
+        if (lose) lose.loseContext();
       } catch (e) { /* context already gone */ }
+      if (img) img.src = "";   // close the hidden MJPEG connection immediately
     };
   }, [wantWarp, src, intrinsics]);
 
@@ -207,10 +220,11 @@ function AptUndistortedFeed({ src, alt, intrinsics, style }) {
 
 function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
   const hostRef = useRef(null);
-  const canvasRef = useRef(null);
   const engineRef = useRef(null);
   const detachRef = useRef(null);
   const wasMaximizedRef = useRef(null);
+  const flyTimerRef = useRef(null);     // pending feed-reveal timeout
+  const preSnapModeRef = useRef(null);  // render mode to restore after a camera snap
   const [phase, setPhase] = useState("boot");
   const [error, setError] = useState(null);
   const [progress, setProgress] = useState({ loaded: 0, total: 0 });
@@ -251,50 +265,84 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
       try {
         try {
           const w = await window.getTauriWindow?.();
-          if (w) {
+          if (w && !cancelled) {
             wasMaximizedRef.current = await w.isMaximized?.();
-            if (!wasMaximizedRef.current) await w.maximize?.();
+            if (!wasMaximizedRef.current && !cancelled) await w.maximize?.();
           }
         } catch (e) { /* browser mode */ }
+        if (cancelled) return;
 
-        let engine = window.__APT_ENGINE;
-        if (!engine) {
-          setPhase("boot");
-          const mod = await window.Home3D.ready;
-          if (!mod) throw (window.Home3D.error || new Error("3d engine failed to load"));
-          if (cancelled) return;
-          engine = await mod.createEngine({
-            canvas: canvasRef.current, hostEl: hostRef.current, sim: simActive,
-          });
-          window.__APT_ENGINE = engine;
-          engine.on("progress", (p) => setProgress({ ...p }));
-          engine.on("stats", (s) => setStats(s));
-          setPhase("loading");
-          engine.pointsPromise.then(
-            () => !cancelled && setPhase("ready"),
-            (e) => { if (!cancelled) { setError(String(e?.message || e)); setPhase("error"); } },
-          );
-        } else {
-          setPhase("ready");
+        // The engine canvas is created ONCE and owned imperatively, not by
+        // React: the resident renderer is permanently bound to it, so every
+        // view OPEN must re-attach THIS node — a React-owned <canvas> would
+        // be torn down on close while the renderer stays bound to it (the
+        // black-screen-on-reopen bug).
+        let canvas = window.__APT_CANVAS;
+        if (!canvas) {
+          canvas = document.createElement("canvas");
+          canvas.style.cssText = "display:block;width:100%;height:100%;";
+          window.__APT_CANVAS = canvas;
         }
+        if (hostRef.current && canvas.parentElement !== hostRef.current) {
+          hostRef.current.appendChild(canvas);
+        }
+
+        // engine boot is deduped via a cached PROMISE — a fast close/reopen
+        // while assets stream must not run createEngine twice against the
+        // same resident canvas (two rAF loops fighting one GL context)
+        let enginePromise = window.__APT_ENGINE_PROMISE;
+        if (!enginePromise) {
+          setPhase("boot");
+          enginePromise = (async () => {
+            const mod = await window.Home3D.ready;
+            if (!mod) throw (window.Home3D.error || new Error("3d engine failed to load"));
+            return mod.createEngine({ canvas, hostEl: hostRef.current, sim: simActive });
+          })();
+          window.__APT_ENGINE_PROMISE = enginePromise;
+          enginePromise.catch(() => {
+            if (window.__APT_ENGINE_PROMISE === enginePromise) window.__APT_ENGINE_PROMISE = null;
+          });
+        }
+        const engine = await enginePromise;
+        window.__APT_ENGINE = engine;
+        if (cancelled) return;
         engineRef.current = engine;
+        setPhase("loading");
+        engine.pointsPromise.then(
+          () => !cancelled && setPhase("ready"),
+          (e) => { if (!cancelled) { setError(String(e?.message || e)); setPhase("error"); } },
+        );
         engine.pointsPromise.then((p) => { calibPointsRef.current = p; }).catch(() => {});
         // keep the bottom toggle honest: calibrate/snap switch modes through
-        // the engine directly, so subscribe rather than trusting local state
-        engine.modes.onChange((next) => setMode(next));
+        // the engine directly, so subscribe rather than trusting local state —
+        // and re-sync NOW: the close path restores the pre-snap mode AFTER
+        // these listeners were unsubscribed, so local `mode` can be stale
+        const unsubs = [
+          engine.on("progress", (p) => setProgress({ ...p })),
+          engine.on("stats", (s) => setStats(s)),
+          engine.on("contextlost", () => showToast("graphics context lost — recovering")),
+          engine.modes.onChange((next) => setMode(next)),
+        ];
+        setMode(engine.modes.mode);
+        engine.picking.setHost?.(hostRef.current);
 
+        // everything below is synchronous — detachRef is assigned before any
+        // call that could throw, so a failure can't strand live listeners
         const host = hostRef.current;
         const size = () => engine.setSize(host.clientWidth, host.clientHeight);
-        size();
         const ro = new ResizeObserver(size);
-        ro.observe(host);
         const detachInput = engine.attachInput(host);
-        engine.setRunning(true);
         const azTimer = setInterval(() => {
           setAzIdx(engine.rig.azimuthIndex());
           setInCamPose(!!engine.rig.inCameraPose?.());
         }, 200);
-        detachRef.current = () => { ro.disconnect(); detachInput(); clearInterval(azTimer); };
+        detachRef.current = () => {
+          ro.disconnect(); detachInput(); clearInterval(azTimer);
+          unsubs.forEach((u) => { try { u?.(); } catch (e) { /* */ } });
+        };
+        size();
+        ro.observe(host);
+        engine.setRunning(true);
       } catch (e) {
         if (!cancelled) { setError(String(e?.message || e)); setPhase("error"); }
       }
@@ -302,9 +350,27 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
 
     return () => {
       cancelled = true;
+      if (flyTimerRef.current) { clearTimeout(flyTimerRef.current); flyTimerRef.current = null; }
       detachRef.current?.();
       detachRef.current = null;
-      engineRef.current?.setRunning(false);
+      // this component instance PERSISTS across open/close (home-app renders
+      // it permanently; open=false just renders null) — clear per-session UI
+      // state here or a live feed / calibration overlay / control card
+      // resurrects the next time the view opens
+      setLiveCam(null); setLiveOn(false); setCalibCam(null); setCardId(null);
+      setEditing(false);
+      const eng = engineRef.current;
+      if (eng) {
+        // never leave the resident engine in a held/locked pose or with the
+        // cloud hidden — a reopen would look dead with no recovery affordance
+        eng.rig.resetPose?.();
+        if (preSnapModeRef.current != null) {
+          const back = preSnapModeRef.current;
+          preSnapModeRef.current = null;
+          if (eng.modes.mode !== back) eng.modes.setMode(back, { duration: 0 }).catch(() => {});
+        }
+        eng.setRunning(false);
+      }
       (async () => {
         try {
           const w = await window.getTauriWindow?.();
@@ -312,7 +378,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
         } catch (e) { /* */ }
       })();
     };
-  }, [open, simActive]);
+  }, [open, simActive, showToast]);
 
   /* ---------------- model + registry load ---------------- */
   useEffect(() => {
@@ -532,6 +598,22 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
     return () => clearInterval(timer);
   }, [open, phase, hoverId, cardId]);
 
+  /* leave the camera snap: shared by esc, the '← back' button, and the
+     resurrect-guard — closes the feed, cancels the pending feed timer,
+     restores the pre-snap render mode (the calibrated snap forced mesh;
+     without this the cloud stays hidden at uOpacity 0 — black screen),
+     then flies home */
+  const exitCameraPose = useCallback(() => {
+    if (flyTimerRef.current) { clearTimeout(flyTimerRef.current); flyTimerRef.current = null; }
+    setLiveCam(null); setLiveOn(false); setCalibCam(null);
+    const e = engineRef.current;
+    if (!e) return;
+    const back = preSnapModeRef.current;
+    preSnapModeRef.current = null;
+    if (back && e.modes.mode !== back) e.modes.setMode(back, { duration: 0 }).catch(() => {});
+    e.rig.returnToOverview();
+  }, []);
+
   /* keyboard */
   useEffect(() => {
     if (!open) return undefined;
@@ -541,8 +623,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
       if (e.key === "Escape") {
         if (cardId) { setCardId(null); return; }
         if (engineRef.current?.rig.inCameraPose?.()) {
-          setLiveCam(null); setLiveOn(false);
-          engineRef.current.rig.returnToOverview();
+          exitCameraPose();
           return;
         }
         if (editing) { setEditing(false); return; }
@@ -559,11 +640,17 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose, editing, cardId]);
+  }, [open, onClose, editing, cardId, exitCameraPose]);
 
   const pickMode = useCallback(async (m) => {
     const engine = engineRef.current;
-    if (!engine || m === mode) return;
+    if (!engine) return;
+    // explicit pick overrides any pending post-snap restore, and compares
+    // against the ENGINE's mode — local state resets to 'points' on remount
+    // while the resident engine keeps its real mode (the [cloud]-selected-
+    // but-invisible trap)
+    preSnapModeRef.current = null;
+    if (m === engine.modes.mode) { setMode(m); return; }
     try {
       await engine.modes.setMode(m);
       setMode(m);
@@ -571,7 +658,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
       showToast(m === "splat" ? "photo unavailable — check apartment.spz asset"
                               : "mesh unavailable — check collision.glb asset");
     }
-  }, [mode, showToast]);
+  }, [showToast]);
 
   const callSvc = useCallback(async (domain, service, data) => {
     const client = window.__hav_haClient;
@@ -618,12 +705,12 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
                                   to { transform: translateY(0); opacity: 1; } }
       `}</style>
 
+      {/* engine canvas is appended imperatively (persistent across mounts —
+          see the boot effect); React must never own or recreate it */}
       <div ref={hostRef} style={{ position: "absolute", top: 0, bottom: 0, right: 0,
                                   left: calibCam ? "46%" : 0,
                                   touchAction: "none", cursor: "grab" }}
->
-        <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%" }} />
-      </div>
+      />
 
       {/* top bar */}
       {!editing && (
@@ -649,15 +736,13 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
           </span>
           <span style={{ marginLeft: "auto", display: "flex", gap: 6, pointerEvents: "auto" }}>
             {inCamPose && (
-              <AptHudButton label="← back" onClick={() => {
-                setLiveCam(null); setLiveOn(false); setCalibCam(null);
-                engineRef.current?.rig.returnToOverview();
-              }} />
+              <AptHudButton label="← back" onClick={exitCameraPose} />
             )}
             {inCamPose && liveCam && !simActive && window.HomeApartmentCalibrate && (
               <AptHudButton label="calibrate" active={!!calibCam} onClick={() => {
                 setLiveOn(false);
                 const e = engineRef.current;
+                if (e && preSnapModeRef.current == null) preSnapModeRef.current = e.modes.mode;
                 e?.modes.setMode("mesh", { duration: 0 }).catch(() => {});
                 // snapped pose sits point-blank in the geometry — pull back to
                 // the overview so the room is visible and orbit/zoom unlock
@@ -756,6 +841,10 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
               cameras render through the WebGL undistorter; uncalibrated ones
               keep the raw <img> (AptUndistortedFeed falls back internally) */}
           <AptUndistortedFeed
+            key={liveCam.id}
+            // key forces a REMOUNT on camera switch: the cleanup deliberately
+            // loses the WebGL context (context-budget hygiene), so a reused
+            // canvas would come back with a dead context and no warp
             src={`${(localStorage.getItem("apartment3d.frigateBase") || "http://192.168.0.125:5000")}/api/${liveCam.camera.frigate_name}`}
             alt={liveCam.name}
             intrinsics={liveCam.camera?.intrinsics || null}
@@ -827,14 +916,28 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
               onClose={() => setCardId(null)}
               onService={callSvc}
               onFlyTo={(dev) => {
+                const eng = engineRef.current;
                 const calib = !!(dev.camera && dev.camera.extrinsics && dev.camera.intrinsics);
                 // calibrated snap: textured mesh background + fov widened so
-                // the centered feed (74vh) continues seamlessly into the mesh
-                if (calib) engineRef.current?.modes.setMode("mesh", { duration: 0 }).catch(() => {});
-                engineRef.current?.flyToDevice(dev, { fovScale: calib ? 1 / 0.74 : 1 });
+                // the centered feed (74vh) continues seamlessly into the mesh.
+                // Remember what the user was looking at — the exit path puts
+                // it back (a snap must never permanently hide the cloud).
+                if (calib && eng) {
+                  if (preSnapModeRef.current == null) preSnapModeRef.current = eng.modes.mode;
+                  eng.modes.setMode("mesh", { duration: 0 }).catch(() => {});
+                }
+                eng?.flyToDevice(dev, { fovScale: calib ? 1 / 0.74 : 1 });
                 // camera feed FIRST once the flight lands; 3D stays one toggle away
+                if (flyTimerRef.current) clearTimeout(flyTimerRef.current);
                 if (!simActive && dev.camera?.frigate_name) {
-                  setTimeout(() => { setLiveCam(dev); setLiveOn(true); }, 950);
+                  flyTimerRef.current = setTimeout(() => {
+                    flyTimerRef.current = null;
+                    // an esc during the flight already flew home — never
+                    // resurrect the feed over the overview pose
+                    if (engineRef.current?.rig.inCameraPose?.()) {
+                      setLiveCam(dev); setLiveOn(true);
+                    }
+                  }, 950);
                 } else {
                   setLiveCam(dev); setLiveOn(false);
                 }

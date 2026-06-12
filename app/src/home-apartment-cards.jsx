@@ -63,13 +63,17 @@ function AptRoomChip({ track }) {
 
 function AptControlCard({ device, state, screen, onClose, onService, onFlyTo, sim }) {
   const [briDraft, setBriDraft] = useState(null);
+  const [volDraft, setVolDraft] = useState(null);
   if (!device || !screen) return null;
   const attrs = state?.attributes || {};
   const isLight = device.type === "light" || device.ha_entity_id?.startsWith("light.");
   const isSwitch = device.ha_entity_id?.startsWith("switch.");
-  const isMedia = ["speaker", "tv", "amp"].includes(device.type);
+  const isMedia = ["speaker", "tv", "amp"].includes(device.type)
+    || device.ha_entity_id?.startsWith("media_player.");
   const on = state?.state === "on" || state?.state === "playing";
   const bri = briDraft ?? Math.round(((attrs.brightness ?? 0) / 255) * 100);
+  const vol = volDraft ?? Math.round((attrs.volume_level ?? 0) * 100);
+  const mediaOff = ["off", "standby", "unavailable", "unknown"].includes(state?.state);
 
   const x = Math.min(Math.max(screen.x + 18, 10), window.innerWidth - 280);
   const y = Math.min(Math.max(screen.y - 30, 56), window.innerHeight - 220);
@@ -143,14 +147,20 @@ function AptControlCard({ device, state, screen, onClose, onService, onFlyTo, si
             {btn(state?.state === "playing" ? "pause" : "play", () =>
               onService("media_player", "media_play_pause", { entity_id: device.ha_entity_id }), true)}
             {btn("next", () => onService("media_player", "media_next_track", { entity_id: device.ha_entity_id }))}
+            {btn(mediaOff ? "turn on" : "turn off", () =>
+              onService("media_player", mediaOff ? "turn_on" : "turn_off",
+                { entity_id: device.ha_entity_id }))}
           </div>
           <div style={row}>
             <span style={{ fontFamily: CARD_FONT_MONO, fontSize: 9, color: "var(--hg-fg-4)" }}>vol</span>
-            <input type="range" min="0" max="100"
-              defaultValue={Math.round((attrs.volume_level ?? 0.3) * 100)}
-              onMouseUp={(e) => onService("media_player", "volume_set",
-                { entity_id: device.ha_entity_id, volume_level: +e.target.value / 100 })}
+            <input type="range" min="0" max="100" value={vol}
+              onChange={(e) => setVolDraft(+e.target.value)}
+              onMouseUp={() => { onService("media_player", "volume_set",
+                { entity_id: device.ha_entity_id, volume_level: vol / 100 }); setVolDraft(null); }}
               style={{ flex: 1 }} />
+            <span style={{ fontFamily: CARD_FONT_MONO, fontSize: 9.5, color: "var(--hg-fg-2)", width: 30 }}>
+              {vol}%
+            </span>
           </div>
           {attrs.media_title && (
             <div style={{ marginTop: 8, fontFamily: CARD_FONT_MONO, fontSize: 9.5,

@@ -46,6 +46,39 @@ export function createOverlay(apartmentRoot) {
     const markersById = new Map();   // device id -> {group, core, ghost, glow, pick, device}
     const zonesById = new Map();     // zone id -> {line, mat, basePoints}
 
+    /* floor glow pools: one soft additive disc per ON light, created lazily.
+       Shared geometry + texture; per-disc material (color/opacity vary). */
+    const floorGlowGroup = new THREE.Group();
+    overlayRoot.add(floorGlowGroup);
+    const floorGlowGeo = new THREE.CircleGeometry(1.1, 48);  // XY plane, faces +Z (up)
+    const glowDiscsById = new Map();                         // device id -> Mesh
+
+    function getGlowDisc(m) {
+        let disc = glowDiscsById.get(m.device.id);
+        if (!disc) {
+            disc = new THREE.Mesh(floorGlowGeo, new THREE.MeshBasicMaterial({
+                map: glowTex, color: TYPE_COLOR.light.clone(),
+                transparent: true, opacity: 0.0,
+                blending: THREE.AdditiveBlending, depthWrite: false,
+            }));
+            disc.position.set(m.device.pos[0], m.device.pos[1], 0.02);
+            disc.renderOrder = 9;    // under the markers' x-ray pass
+            glowDiscsById.set(m.device.id, disc);
+            floorGlowGroup.add(disc);
+        }
+        return disc;
+    }
+
+    /* hover floor ring: single reusable pulsing ring under the hovered marker */
+    const hoverRing = new THREE.Mesh(
+        new THREE.RingGeometry(0.40, 0.45, 48),
+        new THREE.MeshBasicMaterial({ color: ICE, transparent: true, opacity: 0.0,
+                                      side: THREE.DoubleSide, depthWrite: false }),
+    );
+    hoverRing.renderOrder = 12;
+    hoverRing.visible = false;
+    overlayRoot.add(hoverRing);
+
     /* ---------------- devices ---------------- */
 
     function buildMarker(device) {
@@ -109,6 +142,12 @@ export function createOverlay(apartmentRoot) {
     function setDevices(devices) {
         for (const { group } of markersById.values()) devicesGroup.remove(group);
         markersById.clear();
+        for (const disc of glowDiscsById.values()) {
+            floorGlowGroup.remove(disc);
+            disc.material.dispose();   // geometry + texture are shared, keep them
+        }
+        glowDiscsById.clear();
+        hoverRing.visible = false;
         for (const d of devices || []) {
             if (!Array.isArray(d.pos)) continue;
             const m = buildMarker(d);
@@ -139,9 +178,17 @@ export function createOverlay(apartmentRoot) {
                 m.glow.material.color.copy(c);
                 m.glow.material.opacity = 0.25 + 0.55 * bri;
                 m.glow.scale.setScalar(0.5 + 0.9 * bri);
+                if (m.device.type === 'light') {
+                    const disc = getGlowDisc(m);
+                    disc.material.color.copy(c);
+                    disc.material.opacity = bri * 0.18;
+                    disc.visible = true;
+                }
             } else {
                 m.core.material.color.set(0x444a55);
                 m.glow.material.opacity = 0;
+                const disc = glowDiscsById.get(deviceId);
+                if (disc) { disc.visible = false; disc.material.opacity = 0; }
             }
         } else if (m.device.type === 'speaker' || m.device.type === 'tv' || m.device.type === 'amp') {
             m.userData_playing = st === 'playing';
@@ -277,10 +324,22 @@ export function createOverlay(apartmentRoot) {
         setDevices, setDeviceState, setZones, setZonesVisible, setPerson,
         pickObjects() { return [...markersById.values()].map((m) => m.pick); },
         setHover(deviceId) {
+            let hovered = null;
             for (const [id, m] of markersById) {
                 const hov = id === deviceId;
+                if (hov) hovered = m;
                 m.core.scale.setScalar(hov ? 1.45 : 1.0);
                 m.ghost.scale.setScalar(hov ? 1.45 : 1.0);
+            }
+            // pulsing floor ring under any hovered marker (incl. 'other'/proposals)
+            if (hovered) {
+                hoverRing.position.set(hovered.device.pos[0], hovered.device.pos[1], 0.03);
+                hoverRing.material.color.copy(
+                    TYPE_COLOR[hovered.device.type] || TYPE_COLOR.other);
+                hoverRing.scale.setScalar(1.0);
+                hoverRing.visible = true;
+            } else {
+                hoverRing.visible = false;
             }
         },
         update(dt) {
@@ -312,6 +371,12 @@ export function createOverlay(apartmentRoot) {
                     const k = 0.5 + 0.5 * Math.sin(pulse * 2 * Math.PI / 1.2);
                     m.glow.scale.setScalar(0.8 + 0.5 * k);
                 }
+            }
+            // hover floor ring pulse
+            if (hoverRing.visible) {
+                const k = 0.5 + 0.5 * Math.sin(pulse * 2 * Math.PI * 1.4);
+                hoverRing.material.opacity = 0.35 + 0.4 * k;
+                hoverRing.scale.setScalar(1.0 + 0.12 * k);
             }
         },
     };

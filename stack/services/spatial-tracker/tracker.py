@@ -25,7 +25,10 @@ STAGE B (precise, camera has intrinsics + extrinsics)
        ray ``X(s) = C + s*d`` hits the floor at ``s = -C_z / d_z``.
        Rejected when ``s <= 0`` (behind camera), ``|d_z| < 0.05`` (grazing,
        numerically explosive), or the hit lies outside the walkable polygon
-       buffered +0.5 m (skipped when floor.json is absent).
+       buffered +0.5 m (skipped when floor.json is absent).  Hits at most
+       0.5 m beyond that hull soft-clamp to the wall line with sigma x
+       sqrt(3) instead of being rejected — furniture against a wall (couch,
+       bed) pushes seat-plane projections just past it (``_gate_or_clamp``).
 
     Fallbacks:
       * cropped feet — bbox bottom within 2% of the frame bottom: intersect
@@ -155,6 +158,11 @@ ROOM_SWITCH_DWELL_S = 1.5
 ROOM_SWITCH_COUNT = 3
 AMBIGUOUS_HOLD_S = 2.0     # how long conf_reason stays multi_ambiguous
 PAYLOAD_LOG_SAMPLES = 3
+CLAMP_BEYOND_HULL_M = 0.5  # soft-clamp window beyond the +0.5 m hull: seat-
+                           # plane projections of a person on furniture against
+                           # a wall (couch, bed) overshoot just past it; snap
+                           # those to the wall line instead of starving the KF
+CLAMP_SIGMA_MULT = math.sqrt(3.0)  # clamped hits are direction-truncated
 
 # ---- high-rate sources (path_data + /ingest/detection) ----------------------
 PATH_MAX_AGE_S = 10.0      # path_data points older than this are ignored
@@ -722,6 +730,7 @@ class Tracker:
             return
 
         meas: Optional[Localization] = None
+        clamp: Optional[tuple[tuple[float, float], float]] = None
         dev = model.camera_device(camera)
         geom = self._geom_for(camera, dev)
         if geom is not None:
@@ -729,15 +738,18 @@ class Tracker:
             if box is not None:
                 meas = localize_detection(geom, box, score, stationary,
                                           plausible=self._in_walkable)
-            if meas is not None and not self._in_walkable(meas.pos):
-                log.debug("rejecting floor hit outside walkable hull: %s", meas.pos[:2])
-                meas = None
+            if meas is not None:
+                clamp = self._gate_or_clamp(meas.pos)
+                if clamp is None:
+                    log.debug("rejecting floor hit outside walkable hull: %s", meas.pos[:2])
+                    meas = None
 
         if meas is not None:
+            (cx, cy), smult = clamp
             self.ingest_position(
                 camera=camera, zone_id=zone_id,
-                pos_xy=(float(meas.pos[0]), float(meas.pos[1])),
-                sigma=meas.sigma_xy, score=score, stationary=stationary,
+                pos_xy=(cx, cy),
+                sigma=meas.sigma_xy * smult, score=score, stationary=stationary,
                 person=sub_label, frigate_id=frigate_id, now=now,
             )
         else:
@@ -777,6 +789,43 @@ class Tracker:
         if hull is None:
             return True
         return bool(hull.covers(Point(float(pos[0]), float(pos[1]))))
+
+    def _wall_line(self):
+        """Approximate true-wall polygon (hull minus its +0.5 m measurement
+        buffer), cached per hull object like ``_walkable_inner``."""
+        hull = self.walkable_provider()
+        if hull is None:
+            return None
+        if getattr(self, "_wall_cache_src", None) is not hull:
+            self._wall_cache_src = hull
+            self._wall_cache = hull.buffer(-0.5)
+        return self._wall_cache
+
+    def _gate_or_clamp(self, pos) -> Optional[tuple[tuple[float, float], float]]:
+        """Walkable gate with a near-wall soft clamp.
+
+        Returns ``((x, y), sigma_mult)`` or None (genuinely implausible).
+        Hits inside the +0.5 m hull pass through unchanged.  Hits at most
+        CLAMP_BEYOND_HULL_M beyond it snap to the nearest wall-line point
+        with inflated noise — a person seated on furniture pushed against a
+        wall projects just past that wall through the seat/hip plane, and
+        hard-rejecting every such measurement starves the filter into
+        room_only exactly while they sit still.  Anything farther out
+        (unmodeled rooms, TV ghosts) stays rejected.
+        """
+        hull = self.walkable_provider()
+        if hull is None:
+            return (float(pos[0]), float(pos[1])), 1.0
+        pt = Point(float(pos[0]), float(pos[1]))
+        if hull.covers(pt):
+            return (float(pos[0]), float(pos[1])), 1.0
+        if pt.distance(hull) > CLAMP_BEYOND_HULL_M:
+            return None
+        wall = self._wall_line()
+        target = hull if wall is None or wall.is_empty else wall
+        from shapely.ops import nearest_points as _np
+        q = _np(target, pt)[0]
+        return (float(q.x), float(q.y)), CLAMP_SIGMA_MULT
 
     # ---- path_data ingestion --------------------------------------------------
     def _consume_path_data(self, after: dict, camera: str, zone_id: str,
@@ -825,12 +874,16 @@ class Tracker:
         for ts, xn, yn in fresh:
             meas = localize_pixel(geom, xn * W, yn * H, score,
                                   from_detect=False, method="path")
-            if meas is None or not self._in_walkable(meas.pos):
+            if meas is None:
                 continue
+            clamp = self._gate_or_clamp(meas.pos)
+            if clamp is None:
+                continue
+            (cx, cy), smult = clamp
             self.ingest_position(
                 camera=camera, zone_id=zone_id,
-                pos_xy=(float(meas.pos[0]), float(meas.pos[1])),
-                sigma=meas.sigma_xy, score=score, stationary=stationary,
+                pos_xy=(cx, cy),
+                sigma=meas.sigma_xy * smult, score=score, stationary=stationary,
                 person=person, frigate_id=frigate_id, now=ts,
             )
 
@@ -855,9 +908,11 @@ class Tracker:
             like the seated/cropped fallbacks)
 
         A detection that cannot be localized precisely (no calibration,
-        off-frame pixel, ray miss, outside the walkable hull) still counts
-        as person evidence for the camera's room track.  Returns the touched
-        track, or None for unmapped cameras / invalid input.
+        off-frame pixel, ray miss, far outside the walkable hull) still
+        counts as person evidence for the camera's room track; hits at most
+        CLAMP_BEYOND_HULL_M beyond the hull soft-clamp to the wall line (see
+        ``_gate_or_clamp``).  Returns the touched track, or None for
+        unmapped cameras / invalid input.
         """
         if source not in EXTERNAL_SIGMA_MULT:
             log.warning("ingest_external: unknown source %r", source)
@@ -874,6 +929,7 @@ class Tracker:
         stream_id = f"stagec:{camera}"
         geom = self._geom_for(camera, model.camera_device(camera))
         meas: Optional[Localization] = None
+        clamp: Optional[tuple[tuple[float, float], float]] = None
         if geom is not None:
             W, H = geom.image_size
             if 0.0 <= u <= W and 0.0 <= v <= H:
@@ -881,14 +937,17 @@ class Tracker:
                 meas = localize_pixel(
                     geom, u, v, score, plane_z=plane_z, from_detect=False,
                     sigma_mult=EXTERNAL_SIGMA_MULT[source], method=source)
-            if meas is not None and not self._in_walkable(meas.pos):
-                log.debug("ingest_external: floor hit outside walkable hull")
-                meas = None
+            if meas is not None:
+                clamp = self._gate_or_clamp(meas.pos)
+                if clamp is None:
+                    log.debug("ingest_external: floor hit outside walkable hull")
+                    meas = None
         if meas is not None:
+            (cx, cy), smult = clamp
             return self.ingest_position(
                 camera=camera, zone_id=zone_id,
-                pos_xy=(float(meas.pos[0]), float(meas.pos[1])),
-                sigma=meas.sigma_xy, score=score, stationary=False,
+                pos_xy=(cx, cy),
+                sigma=meas.sigma_xy * smult, score=score, stationary=False,
                 person=person, frigate_id=stream_id, now=ts)
         return self._update_room_track(camera, zone_id, stream_id, person,
                                        score, False, ts)

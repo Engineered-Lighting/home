@@ -147,58 +147,69 @@ class CameraReader(threading.Thread):
         log.info("[%s] reader stopped", self.cam)
 
 
-def extract_measurement(res, cam: str, ts: float, fw: int, fh: int):
-    """Best person in one ultralytics pose result -> contract dict (or None)."""
+def extract_measurement(res, cam: str, ts: float, fw: int, fh: int,
+                        ignore=None):
+    """Best non-ignored person in one ultralytics pose result -> contract
+    dict (or None).  ``ignore`` is an optional list of [x1, y1, x2, y2]
+    boxes in CALIBRATION space; a candidate whose foot point lands inside
+    one is skipped (static false-positive regions, e.g. a dark shelf cubby
+    YOLO reads as a seated person 24/7) and the next-best candidate gets a
+    chance instead."""
     boxes = res.boxes
     if boxes is None or len(boxes) == 0:
         return None
     confs = boxes.conf.cpu().numpy()
-    i = int(confs.argmax())
-    score = float(confs[i])
-    if score < DET_CONF:
-        return None
-
-    u = v = None
-    source = "bbox-bottom"
     kpts = res.keypoints
-    kcf = None
-    if kpts is not None and kpts.conf is not None and len(kpts) > i:
-        kxy = kpts.xy[i].cpu().numpy()        # (17, 2)
-        kcf = kpts.conf[i].cpu().numpy()      # (17,)
-    if score < DET_CONF_SOLO:
-        # low-conf box: only keep it if a major lower-body joint vouches
-        if kcf is None or max(kcf[j] for j in (L_ANKLE, R_ANKLE, L_HIP, R_HIP)) < KPT_CORROBORATE:
-            return None
-    if kcf is not None:
-        ankles = [kxy[j] for j in (L_ANKLE, R_ANKLE) if kcf[j] > KPT_CONF]
-        if ankles:
-            u = sum(p[0] for p in ankles) / len(ankles)
-            v = sum(p[1] for p in ankles) / len(ankles)
-            source = "pose-ankles"
-        else:
-            hips = [kxy[j] for j in (L_HIP, R_HIP) if kcf[j] > KPT_CONF]
-            if hips:
-                u = sum(p[0] for p in hips) / len(hips)
-                v = sum(p[1] for p in hips) / len(hips)
-                source = "pose-hips"
-    if u is None:
-        x1, y1, x2, y2 = boxes.xyxy[i].cpu().numpy()
-        u, v = (float(x1) + float(x2)) / 2.0, float(y2)
+    for i in confs.argsort()[::-1]:
+        i = int(i)
+        score = float(confs[i])
+        if score < DET_CONF:
+            break  # sorted descending — nothing better follows
 
-    # rescale capture-resolution px -> 1280x720 calibration space
-    # (float() casts: keypoint coords are numpy float32, not JSON-serializable)
-    u = float(u) * (CAL_W / float(fw))
-    v = float(v) * (CAL_H / float(fh))
-    u = min(max(u, 0.0), CAL_W - 1.0)
-    v = min(max(v, 0.0), CAL_H - 1.0)
-    return {
-        "camera": cam,
-        "ts": ts,
-        "foot_px": [round(u, 2), round(v, 2)],
-        "score": round(score, 4),
-        "source": source,
-        "person": None,
-    }
+        u = v = None
+        source = "bbox-bottom"
+        kcf = None
+        if kpts is not None and kpts.conf is not None and len(kpts) > i:
+            kxy = kpts.xy[i].cpu().numpy()        # (17, 2)
+            kcf = kpts.conf[i].cpu().numpy()      # (17,)
+        if score < DET_CONF_SOLO:
+            # low-conf box: only keep it if a major lower-body joint vouches
+            if kcf is None or max(kcf[j] for j in (L_ANKLE, R_ANKLE, L_HIP, R_HIP)) < KPT_CORROBORATE:
+                continue
+        if kcf is not None:
+            ankles = [kxy[j] for j in (L_ANKLE, R_ANKLE) if kcf[j] > KPT_CONF]
+            if ankles:
+                u = sum(p[0] for p in ankles) / len(ankles)
+                v = sum(p[1] for p in ankles) / len(ankles)
+                source = "pose-ankles"
+            else:
+                hips = [kxy[j] for j in (L_HIP, R_HIP) if kcf[j] > KPT_CONF]
+                if hips:
+                    u = sum(p[0] for p in hips) / len(hips)
+                    v = sum(p[1] for p in hips) / len(hips)
+                    source = "pose-hips"
+        if u is None:
+            x1, y1, x2, y2 = boxes.xyxy[i].cpu().numpy()
+            u, v = (float(x1) + float(x2)) / 2.0, float(y2)
+
+        # rescale capture-resolution px -> 1280x720 calibration space
+        # (float() casts: keypoint coords are numpy float32, not JSON-serializable)
+        u = float(u) * (CAL_W / float(fw))
+        v = float(v) * (CAL_H / float(fh))
+        u = min(max(u, 0.0), CAL_W - 1.0)
+        v = min(max(v, 0.0), CAL_H - 1.0)
+        if ignore and any(bx1 <= u <= bx2 and by1 <= v <= by2
+                          for bx1, by1, bx2, by2 in ignore):
+            continue
+        return {
+            "camera": cam,
+            "ts": ts,
+            "foot_px": [round(u, 2), round(v, 2)],
+            "score": round(score, 4),
+            "source": source,
+            "person": None,
+        }
+    return None
 
 
 class Poster:
@@ -248,7 +259,10 @@ def main():
     with open(CAMS_JSON) as f:
         cfg = json.load(f)
     cams = cfg["cameras"]
-    log.info("stagec starting: cameras=%s -> %s", list(cams), TRACKER_URL)
+    # per-camera static false-positive regions, calibration-space px boxes
+    ignore_boxes = cfg.get("ignore_boxes") or {}
+    log.info("stagec starting: cameras=%s ignore_boxes=%s -> %s",
+             list(cams), {k: len(v) for k, v in ignore_boxes.items()}, TRACKER_URL)
 
     from ultralytics import YOLO  # deferred: slow import
     model = YOLO(MODEL_PATH if os.path.exists(MODEL_PATH) else "yolo11s-pose.pt")
@@ -291,7 +305,8 @@ def main():
             infer_ms_ema = dt if infer_ms_ema is None else 0.9 * infer_ms_ema + 0.1 * dt
             batch = []
             for res, (cam, ts, fw, fh) in zip(results, metas):
-                m = extract_measurement(res, cam, ts, fw, fh)
+                m = extract_measurement(res, cam, ts, fw, fh,
+                                        ignore=ignore_boxes.get(cam))
                 if m is not None:
                     batch.append(m)
                     det_counts[m["source"]] = det_counts.get(m["source"], 0) + 1

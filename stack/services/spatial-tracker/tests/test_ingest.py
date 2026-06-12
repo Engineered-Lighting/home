@@ -230,6 +230,66 @@ def test_ingest_external_offframe_pixel_falls_back_to_room_evidence():
     assert tr.id == "room:living_room:stagec:living_room"
 
 
+# ---- near-wall soft clamp (walkable gate) ---------------------------------------
+
+def make_walled(clock):
+    """Calibrated tracker with a walkable polygon whose south wall (y=1.5)
+    sits in front of the camera; hull carries the +0.5 m measurement buffer
+    exactly like ModelStore.walkable_hull."""
+    from shapely.geometry import Polygon
+    tracker, geom = make_calibrated(clock)
+    walk = Polygon([(1.0, 1.5), (6.0, 1.5), (6.0, 4.0), (1.0, 4.0)])
+    hull = walk.buffer(0.5)
+    tracker.walkable_provider = lambda: hull
+    return tracker, geom
+
+
+def test_gate_or_clamp_semantics():
+    clock = FakeClock(100.0)
+    tracker, _ = make_walled(clock)
+    # inside the hull -> pass-through, no sigma inflation
+    (x, y), mult = tracker._gate_or_clamp([2.5, 2.2, 0.0])
+    assert (x, y) == (2.5, 2.2) and mult == 1.0
+    # in the buffer zone (between wall y=1.5 and hull y=1.0) -> pass-through
+    (x, y), mult = tracker._gate_or_clamp([2.5, 1.2, 0.0])
+    assert (x, y) == (2.5, 1.2) and mult == 1.0
+    # <= 0.5 m beyond the hull -> snapped to the wall line, sigma x sqrt(3)
+    (x, y), mult = tracker._gate_or_clamp([2.5, 0.8, 0.0])
+    assert abs(x - 2.5) < 1e-6 and abs(y - 1.5) < 1e-6
+    assert math.isclose(mult, math.sqrt(3.0))
+    # > 0.5 m beyond the hull -> rejected
+    assert tracker._gate_or_clamp([2.5, 0.3, 0.0]) is None
+
+
+def test_ingest_external_near_wall_hit_clamps_instead_of_starving():
+    """A seated person on furniture against the wall projects just past it;
+    the measurement must keep feeding the KF (clamped to the wall line)
+    rather than demoting the track to room_only."""
+    clock = FakeClock(500.0)
+    tracker, geom = make_walled(clock)
+    px = geom.project([2.5, 0.8, 0.0])  # 0.2 m beyond the +0.5 m hull
+    tr = None
+    for _ in range(3):
+        tr = tracker.ingest_external(camera="living_room", ts=clock.t,
+                                     foot_px=[float(px[0]), float(px[1])],
+                                     score=0.9, source="pose-ankles")
+        clock.tick(0.1)
+        tracker.predict_step(clock.t)
+    assert tr is not None and tr.kind == "kf" and tr.confirmed
+    assert np.linalg.norm(tr.kf.pos() - np.array([2.5, 1.5])) < 0.05
+
+
+def test_ingest_external_far_outside_hull_stays_room_evidence():
+    clock = FakeClock(500.0)
+    tracker, geom = make_walled(clock)
+    px = geom.project([2.5, 0.3, 0.0])  # 0.7 m beyond the hull -> implausible
+    tr = tracker.ingest_external(camera="living_room", ts=clock.t,
+                                 foot_px=[float(px[0]), float(px[1])],
+                                 score=0.9, source="pose-ankles")
+    assert tr is not None and tr.kind == "room"
+    assert tr.id == "room:living_room:stagec:living_room"
+
+
 # ---- rate-aware measurement noise ----------------------------------------------
 
 def test_high_rate_burst_does_not_overtighten_covariance():

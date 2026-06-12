@@ -120,16 +120,19 @@ def extract_keyframes(path: str, rotation_deg: int, times: list,
     return out
 
 
-def square_person_crop(rgb, bbox_norm, margin: float = 1.8):
-    """Square crop around a normalized [x1,y1,x2,y2] person bbox with the
-    given margin on the bbox's long side, clamped to the frame. Returns the
-    cropped ndarray (None on a degenerate bbox)."""
-    h, w = rgb.shape[:2]
+def square_crop_box(w: int, h: int, bbox_norm, margin: float = 1.8):
+    """Pixel (left, top, right, bottom) of a square crop around a normalized
+    [x1,y1,x2,y2] person bbox with the given margin on the bbox's long side,
+    clamped to a w x h frame. None on a degenerate bbox. Pure int math --
+    the M4 embed job records this box in frames_json/cache keys BEFORE any
+    frame is decoded."""
     x1, y1, x2, y2 = bbox_norm
     bw, bh = (x2 - x1) * w, (y2 - y1) * h
     if bw <= 1 or bh <= 1:
         return None
-    side = max(bw, bh) * margin
+    # capping at the frame's short side keeps the box square even when the
+    # margined bbox outgrows the frame (clamping alone would skew it)
+    side = min(max(bw, bh) * margin, w, h)
     cx, cy = (x1 + x2) / 2 * w, (y1 + y2) / 2 * h
     half = side / 2
     left = int(max(0, min(cx - half, w - side)))
@@ -138,7 +141,70 @@ def square_person_crop(rgb, bbox_norm, margin: float = 1.8):
     bottom = int(min(h, top + side))
     if right - left < 2 or bottom - top < 2:
         return None
+    return (left, top, right, bottom)
+
+
+def square_person_crop(rgb, bbox_norm, margin: float = 1.8):
+    """Square crop around a normalized [x1,y1,x2,y2] person bbox with the
+    given margin on the bbox's long side, clamped to the frame. Returns the
+    cropped ndarray (None on a degenerate bbox)."""
+    h, w = rgb.shape[:2]
+    box = square_crop_box(w, h, bbox_norm, margin)
+    if box is None:
+        return None
+    left, top, right, bottom = box
     return rgb[top:bottom, left:right]
+
+
+def decode_frames_at_indices(path: str, rotation_deg: int, fps: float,
+                             indices: list) -> dict:
+    """Decode the frames at EXACT source frame indices (index ~ t * fps):
+    one seek to just before the earliest wanted frame, then a single forward
+    pass assigning each wanted index to the first frame reaching its
+    timestamp (half-frame tolerance). Indices past the decodable end repeat
+    the last decoded frame (official V-JEPA loaders pad clips the same way).
+    Returns {index: rotation-corrected rgb ndarray}; raises when nothing
+    decodes at all."""
+    import av
+    want = sorted(set(int(i) for i in indices))
+    if not want or fps <= 0:
+        raise ValueError("no frame indices / bad fps")
+    half = 0.5 / fps
+    out: dict = {}
+    last_rgb = None
+    with av.open(path) as container:
+        stream = container.streams.video[0]
+        stream.thread_type = "AUTO"
+        tb = stream.time_base
+        seek_t = max(0.0, want[0] / fps - 0.5)
+        container.seek(int(seek_t / tb), stream=stream)
+        pos = 0
+        tail = None  # last decoded frame, converted lazily for tail padding
+        for frame in container.decode(stream):
+            t = frame.time
+            if t is None:
+                continue
+            tail = frame
+            rgb = None
+            while pos < len(want) and want[pos] / fps <= t + half:
+                if rgb is None:
+                    rgb = rotate_frame(frame.to_ndarray(format="rgb24"),
+                                       rotation_deg)
+                out[want[pos]] = rgb
+                pos += 1
+            if rgb is not None:
+                last_rgb = rgb
+            if pos >= len(want):
+                break
+        if last_rgb is None and tail is not None:
+            last_rgb = rotate_frame(tail.to_ndarray(format="rgb24"),
+                                    rotation_deg)
+    if last_rgb is None:
+        raise RuntimeError(f"no decodable frames near index {want[0]} in {path}")
+    for ix in want:  # pad any unreached tail (stream ended early)
+        if ix not in out:
+            out[ix] = last_rgb
+    return out
 
 
 def save_jpeg(rgb, path: str, max_long_side: int, quality: int = 88) -> None:

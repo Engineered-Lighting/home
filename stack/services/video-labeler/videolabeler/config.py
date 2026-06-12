@@ -31,6 +31,16 @@ class Config:
         self.models_dir = os.path.join(self.data_dir, "models")
         self.keyframes_dir = os.path.join(self.data_dir, "keyframes")
         self.prelabels_dir = os.path.join(self.data_dir, "prelabels")
+        # M4 embeddings: V-JEPA backbone weights land ONCE in backbone_dir;
+        # fp16 .npy shards live under embeddings_dir/<model_id slug>/.
+        self.embeddings_dir = os.path.join(self.data_dir, "embeddings")
+        self.backbone_dir = os.path.join(self.models_dir, "backbone")
+        self.vjepa_model_name = env.get("VJEPA_MODEL_NAME",
+                                        "vjepa2_1_vit_base_384")
+        # explicit local checkpoint (no download, no fallback when set)
+        self.vjepa_weights_path = env.get("VJEPA_WEIGHTS_PATH", "")
+        # overrides the verified dl.fbaipublicfiles.com bucket url
+        self.vjepa_weights_url = env.get("VJEPA_WEIGHTS_URL", "")
         # M2 VLM client (OpenAI-compatible chat completions)
         self.vlm_base_url = env.get("VLM_BASE_URL", "http://127.0.0.1:11434/v1")
         self.vlm_model = env.get("VLM_MODEL", "qwen2.5vl:32b")
@@ -41,7 +51,8 @@ class Config:
     def ensure_dirs(self) -> None:
         for d in (self.data_dir, self.inbox_dir, self.originals_dir,
                   self.proxies_dir, self.thumbs_dir, self.models_dir,
-                  self.keyframes_dir, self.prelabels_dir):
+                  self.keyframes_dir, self.prelabels_dir,
+                  self.embeddings_dir, self.backbone_dir):
             os.makedirs(d, exist_ok=True)
 
     def resolve(self, rel_path: str) -> str:

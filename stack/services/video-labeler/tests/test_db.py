@@ -24,8 +24,12 @@ def test_migrations_idempotent(cfg):
     conn = db.connect(cfg.db_path)
     try:
         first = db.apply_migrations(conn)
-        assert first == ["0001_init.sql"]
+        assert first == ["0001_init.sql", "0002_embeddings_clip_idx.sql"]
         assert EXPECTED_TABLES <= _tables(conn)
+        # M4: per-clip embedding rows carry clip_idx behind a unique index
+        cols = {r["name"] for r in conn.execute(
+            "PRAGMA table_info(embeddings)")}
+        assert "clip_idx" in cols
         second = db.apply_migrations(conn)
         assert second == []
         assert EXPECTED_TABLES <= _tables(conn)

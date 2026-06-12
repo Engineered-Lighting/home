@@ -105,7 +105,8 @@ class JobContext:
 
 def _handlers() -> dict:
     # imported lazily so a syntax error in one job module fails ITS jobs only
-    from . import import_manual, perceive, prelabel, probe, proxy, sprite, windows
+    from . import (cluster, embed, import_manual, perceive, prelabel, probe,
+                   proxy, sprite, windows)
     return {
         "import": import_manual.run,
         "probe": probe.run,
@@ -114,6 +115,8 @@ def _handlers() -> dict:
         "windows": windows.run,
         "perceive": perceive.run,
         "prelabel": prelabel.run,
+        "embed": embed.run,
+        "cluster": cluster.run,
     }
 
 

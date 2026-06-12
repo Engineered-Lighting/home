@@ -66,19 +66,29 @@ def _rank_bboxes(frs, max_ranks: int = 4) -> list:
     return out
 
 
-def enqueue_for_video(conn, video_id: str, then_prelabel: bool = False):
+def enqueue_for_video(conn, video_id: str, then_prelabel: bool = False,
+                      then_embed: str | None = None):
     """Idempotent perceive enqueue (key perceive:<vid>). then_prelabel=True
     grafts the prelabel chain onto an existing job's payload (the worker
     re-reads its row at the tail, so even a RUNNING job picks it up);
-    terminal jobs are retried so POST /prelabel can heal a failed chain."""
+    then_embed=<variant> grafts an M4 embed chain the same way. Terminal
+    jobs are retried so POST /prelabel|/embed can heal a failed chain."""
     payload = {"video_id": video_id}
     if then_prelabel:
         payload["then_prelabel"] = True
+    if then_embed:
+        payload["then_embed"] = then_embed
     job = q.enqueue(conn, "perceive", payload, lane=states.LANE_CPU,
                     idempotency_key=f"perceive:{video_id}")
-    if then_prelabel and not q.payload(job).get("then_prelabel"):
-        merged = dict(q.payload(job))
+    merged = dict(q.payload(job))
+    changed = False
+    if then_prelabel and not merged.get("then_prelabel"):
         merged["then_prelabel"] = True
+        changed = True
+    if then_embed and merged.get("then_embed") != then_embed:
+        merged["then_embed"] = then_embed
+        changed = True
+    if changed:
         with db.tx(conn):
             conn.execute("UPDATE jobs SET payload_json = ? WHERE id = ?",
                          (json.dumps(merged), job["id"]))
@@ -323,10 +333,17 @@ def run(job, ctx) -> None:
     log.info("perceive %s: %d windows, %d empty, %d no_person span(s)",
              vid, len(wrows), n_empty, len(spans))
 
-    # chain: POST /prelabel grafts then_prelabel onto this job's payload --
-    # re-read our own row so a mid-run graft is honored too
+    # chain: POST /prelabel|/embed graft then_prelabel/then_embed onto this
+    # job's payload -- re-read our own row so a mid-run graft is honored too
     fresh = q.get_job(conn, ctx.job_id)
     if fresh is not None and q.payload(fresh).get("then_prelabel"):
         from . import prelabel
         pj = prelabel.enqueue_for_video(conn, cfg, vid)
         log.info("chained prelabel job %s for %s", pj["id"], vid)
+    if fresh is not None and q.payload(fresh).get("then_embed"):
+        from . import embed
+        variant = q.payload(fresh)["then_embed"]
+        ej = embed.enqueue_for_video(
+            conn, cfg, vid,
+            variant if isinstance(variant, str) else embed.DEFAULT_VARIANT)
+        log.info("chained embed job %s for %s", ej["id"], vid)

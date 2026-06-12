@@ -20,6 +20,13 @@ RUN pip install --no-cache-dir \
         torch==2.9.1 torchvision==0.24.1 \
     && pip install --no-cache-dir "ultralytics==8.3.*" "av>=14.4,<16"
 
+# M4 embeddings stack: scikit-learn backs the cluster job (PCA +
+# MiniBatchKMeans); timm/einops are the dependencies the facebookresearch/
+# vjepa2 hubconf declares (torch.hub refuses to load the repo without them).
+# The V-JEPA checkpoint is NOT baked in -- the embed job downloads it once
+# into {DATA_DIR}/models/backbone/ (see videolabeler/embeddings/backbone.py).
+RUN pip install --no-cache-dir "scikit-learn==1.*" timm einops
+
 COPY main.py ./
 COPY videolabeler ./videolabeler
 

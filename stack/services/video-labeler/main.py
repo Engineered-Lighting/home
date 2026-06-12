@@ -1,11 +1,11 @@
 """video-labeler FastAPI service (M0 ingest + media + jobs; M1 labels;
-M2 perception + VLM prelabel).
+M2 perception + VLM prelabel; M4 V-JEPA embeddings + clusters + neighbors).
 
 Wires together (and nothing more — the logic lives in the modules):
   * db migrations + startup stale-job recovery   (videolabeler/db.py, jobqueue/queue.py)
   * JobRunner: per-lane subprocess job execution  (jobqueue/runner.py, cpu=2 gpu=1)
   * REST routers (videolabeler/api/{videos,media,jobs,labels,custom_labels,
-                  prelabel}.py)
+                  prelabel,embeddings}.py)
   * idle WAL checkpoint loop
 
 Endpoints:
@@ -24,11 +24,16 @@ Endpoints:
   POST /api/video-labeler/prelabel   {video_ids?|all_pending}
   GET  /api/video-labeler/calibration?axis=
   GET  /api/video-labeler/videos/{id}/windows/{window_id}/keyframes[/{name}]
+  POST /api/video-labeler/embed      {video_ids?|all_pending, model?}
+  POST /api/video-labeler/cluster    {model?}
+  GET  /api/video-labeler/segments/{id}/neighbors?k=8
+  GET  /api/video-labeler/videos/{id}/window-signals
 
 ENV (defaults): DATA_DIR=/data PORT=8099 MIN_FREE_VRAM_GB=6 (unused in M0)
   INBOX_DIR={DATA_DIR}/inbox
   VLM_BASE_URL=http://127.0.0.1:11434/v1 VLM_MODEL=qwen2.5vl:32b VLM_API_KEY=
   VLM_TIMEOUT_S=180 VLM_KEEP_ALIVE=10m
+  VJEPA_MODEL_NAME=vjepa2_1_vit_base_384 VJEPA_WEIGHTS_PATH= VJEPA_WEIGHTS_URL=
 """
 from __future__ import annotations
 
@@ -45,6 +50,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from videolabeler import db as vldb
 from videolabeler import gpuexclusive
 from videolabeler.api import custom_labels as custom_labels_api
+from videolabeler.api import embeddings as embeddings_api
 from videolabeler.api import jobs as jobs_api
 from videolabeler.api import labels as labels_api
 from videolabeler.api import media as media_api
@@ -169,6 +175,7 @@ app.include_router(jobs_api.build_router(cfg))
 app.include_router(labels_api.build_router(cfg))
 app.include_router(custom_labels_api.build_router(cfg))
 app.include_router(prelabel_api.build_router(cfg))
+app.include_router(embeddings_api.build_router(cfg))
 
 
 @app.get("/healthz")

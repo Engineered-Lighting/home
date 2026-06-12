@@ -113,6 +113,19 @@ class PrelabelRequest(BaseModel):
     all_pending: bool = False
 
 
+# --- M4 embed/cluster triggers. model is a variant name
+# (personcrop_v1 | wholeframe_v1) or a full '<backbone>@<variant>' id.
+
+class EmbedRequest(BaseModel):
+    video_ids: Optional[list[str]] = None
+    all_pending: bool = False
+    model: Optional[str] = None
+
+
+class ClusterRequest(BaseModel):
+    model: Optional[str] = None
+
+
 class CustomLabelCreate(BaseModel):
     axis: str
     name: str

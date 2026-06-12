@@ -216,8 +216,11 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
             let worldQuat, fov;
             const ex = device.camera && device.camera.extrinsics;
             if (ex && ex.q_wxyz) {
-                // OpenCV cam (+Z fwd, +Y down) -> three (-Z fwd, +Y up): R·diag(1,-1,-1)
-                const q = new THREE.Quaternion(ex.q_wxyz[1], ex.q_wxyz[2], ex.q_wxyz[3], ex.q_wxyz[0]);
+                // q_wxyz is WORLD->CAMERA (OpenCV); a three camera needs
+                // CAMERA->WORLD = conjugate. Then OpenCV cam axes (+Z fwd,
+                // +Y down) -> three (-Z fwd, +Y up) via Rx(180) = diag(1,-1,-1).
+                const q = new THREE.Quaternion(
+                    ex.q_wxyz[1], ex.q_wxyz[2], ex.q_wxyz[3], ex.q_wxyz[0]).conjugate();
                 const flip = new THREE.Quaternion().setFromRotationMatrix(
                     new THREE.Matrix4().makeScale(1, -1, -1));
                 const rootQ = new THREE.Quaternion();

@@ -74,6 +74,7 @@ Data files (all optional):
 | `GET /healthz` | `{ok, mqtt_connected, ha_model_revision, tracks_active, uptime_s}` |
 | `GET /model` | current apartment model (read-through cache) |
 | `GET /tracks` | latest broadcast frame as REST |
+| `POST /ingest/detection` | Stage-C external measurements; one JSON object or a JSON list: `{camera, ts, foot_px:[u,v], score, source: "pose-ankles"\|"pose-hips"\|"bbox-bottom", person:null}`. `foot_px` is in the camera's **calibration** resolution space (1280×720). Same localize→KF path as a Frigate event under the synthetic stream id `stagec:<camera>`; un-localizable detections still count as room evidence. Returns `{ok, received, accepted}`. |
 | `WS /ws/tracks` | live frames at 10 Hz |
 | `WS /ws/tracks?replay=YYYYMMDD` | recorded day, real-time paced, looped |
 | `GET /replay/sessions` | list recording files |
@@ -110,6 +111,16 @@ Data files (all optional):
   ray-cast is implausible) fallbacks; per-track KF
   (σ_acc=1.5 m/s², R from `max(0.15, 0.04·range)·(0.5/score)`),
   3σ Mahalanobis gating, 3-hit confirmation, 0.8 m cross-camera merge.
+* **path_data trails**: Frigate events repeat the full 5–8 Hz history of
+  normalized bottom-center points; new points (per-event ts watermark, ≤10 s
+  old, ≤20 per message) are extra KF measurements with their own timestamps.
+* **Stage C ingest** (`POST /ingest/detection`): `pose-ankles` floor plane
+  σ×0.6, `bbox-bottom` floor plane σ×1.0, `pose-hips` ray ∩ z=0.55
+  hip-when-seated plane (0.45 m seat + ~0.10 m seat-to-hip) σ×√3.
+* **Rate-aware noise**: per-track EMA of the inter-measurement interval; R
+  scales linearly with the observed rate above 1 Hz (σ×√rate) so 5–15 Hz
+  streams contribute the same information per second as the 1 Hz tuning, and
+  the "active" window adapts to ~3 missed frames (floor 1 s, cap 2 s).
 * **Coast control**: covariance saturates at σ=1.5 m (prediction freezes);
   >5 s without a measurement → demoted to room-level (pos null, room kept);
   Frigate `stationary` → position held, covariance frozen; >30 s without any

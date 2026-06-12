@@ -42,6 +42,34 @@ STAGE B (precise, camera has intrinsics + extrinsics)
         (Flip SEATED_ASPECT_GT if your cameras show seated people as squat
         boxes instead.)
 
+High-rate measurement sources (same localize/update path as the bbox)
+======================================================================
+
+* Frigate ``path_data`` — every event message repeats the FULL trail of
+  normalized bottom-center points ``[[[x_n, y_n], ts], ...]`` sampled at
+  5-8 Hz.  NEW points (per-frigate-id ts watermark; points older than 10 s
+  dropped; max 20 per message) are scaled by the calibration ``image_size``,
+  ray-cast to the floor and fed to the KF in ts order with their own
+  timestamps.
+* external Stage-C detections (``ingest_external`` / POST /ingest/detection
+  in main.py) — a foot pixel in CALIBRATION resolution space under the
+  synthetic stream id ``stagec:<camera>`` (no Frigate event id exists).
+  ``pose-ankles`` -> floor plane, sigma x0.6 (ankle keypoints are precise);
+  ``bbox-bottom`` -> floor plane, sigma x1.0; ``pose-hips`` -> hip midpoint
+  of a seated/occluded person: ray ∩ z=0.55 m (HIP_SEATED_PLANE_Z = the
+  0.45 m seat plane + ~0.10 m seat-surface-to-hip-joint offset, coherent
+  with the seated heuristic), dropped to floor, sigma xsqrt(3) like the
+  other plane-height-uncertain fallbacks.  Detections that cannot be
+  localized (no calibration, ray miss, outside the walkable hull) still
+  count as person evidence for the camera's room track.
+
+Ordering approximation: the KF is now-based (one global 10 Hz predict loop;
+updates do not re-propagate the state to the measurement's ts).  Points are
+applied in ts order *within* a message, after that message's snapshot-box
+fix; ``last_meas``/``last_signal`` are kept monotonic and backlog points
+(dt below 1/RATE_MAX_HZ) are maximally rate-distrusted, so within-message
+skew is absorbed as measurement noise.
+
 Kalman filter
 =============
 Per-track constant-velocity KF, state [x, y, vx, vy], sigma_acc = 1.5 m/s^2
@@ -59,6 +87,21 @@ measurements with R = sigma_xy^2 * I where
   Frigate ``stationary=true`` -> hold position with frozen covariance;
   > 30 s without any signal -> retired, but a new detection within 1 m of a
   track retired < 30 s ago re-binds the retired id.
+
+Rate-aware noise (the sigma model above was tuned for ~1 Hz Frigate events;
+path_data and /ingest/detection deliver 5-15 Hz).  Per track, an EMA of the
+inter-measurement interval estimates the source rate:
+
+* R inflation: measurement variance R is scaled linearly with the observed
+  rate above RATE_NOMINAL_HZ (i.e. sigma x sqrt(rate)), so any stream
+  contributes the same information *per second* as the 1 Hz baseline — a
+  burst of near-simultaneous updates (which get almost no process noise Q
+  between them) cannot over-tighten the covariance.
+* "active" window: a track counts as active for ~ACTIVE_AGE_DT_MULT missed
+  frames at its observed rate, floored at ACTIVE_AGE_S and capped at
+  ACTIVE_AGE_MAX_S, instead of a fixed 1 s — so a 1 Hz source no longer
+  flickers active->coasting between consecutive measurements while a 10 Hz
+  source still demotes promptly.
 
 Room assignment uses point-in-polygon with hysteresis: switch only after
 1.5 s *or* 3 consecutive measurements inside the new polygon; a point on a
@@ -85,7 +128,10 @@ GATE_SIGMA = 3.0           # Mahalanobis association gate
 CONFIRM_HITS = 3           # hits before a candidate track is confirmed
 MERGE_DIST_M = 0.8         # cross-camera merge distance
 COAST_SIGMA_MAX = 1.5      # m; covariance saturation -> freeze prediction
-ACTIVE_AGE_S = 1.0         # <= this since last measurement -> "active"
+ACTIVE_AGE_S = 1.0         # floor of the "active" window (Track.active_window_s)
+ACTIVE_AGE_DT_MULT = 3.0   # active window ~= this many missed frames at the
+                           # observed measurement rate ...
+ACTIVE_AGE_MAX_S = 2.0     # ... but never longer than this
 DEMOTE_AFTER_S = 5.0       # > this without measurement -> room-level
 ROOM_LINGER_S = 240.0      # room presence survives event end ("last seen in
                            # <room>") — a seated person stops generating
@@ -100,12 +146,29 @@ CROPPED_SIGMA_MULT = math.sqrt(3.0)
 SEAT_PLANE_Z = 0.45        # seat plane for the seated heuristic
 SEATED_ASPECT_GT = 1.6     # h/w threshold (see module docstring)
 SEATED_SIGMA_MULT = math.sqrt(3.0)
+HIP_SEATED_PLANE_Z = 0.55  # seated-hip plane: SEAT_PLANE_Z + ~0.10 m seat-
+                           # surface-to-hip-joint offset (pose-hips ingest;
+                           # coherent with the 0.45 m seated heuristic)
 SIGMA_FLOOR = 0.15         # m
 SIGMA_RANGE_COEFF = 0.04   # m per meter of range
 ROOM_SWITCH_DWELL_S = 1.5
 ROOM_SWITCH_COUNT = 3
 AMBIGUOUS_HOLD_S = 2.0     # how long conf_reason stays multi_ambiguous
 PAYLOAD_LOG_SAMPLES = 3
+
+# ---- high-rate sources (path_data + /ingest/detection) ----------------------
+PATH_MAX_AGE_S = 10.0      # path_data points older than this are ignored
+PATH_MAX_POINTS = 20       # max path_data points consumed per message
+PATH_STATE_TTL_S = 600.0   # GC for per-frigate-id path watermarks
+RATE_NOMINAL_HZ = 1.0      # rate the sigma model was tuned at (Frigate ~1 Hz)
+RATE_MAX_HZ = 20.0         # cap for the per-track rate estimate
+RATE_MIN_DT_S = 1.0 / RATE_MAX_HZ  # dt clamp (also handles out-of-order ts)
+RATE_EMA_ALPHA = 0.3       # EMA weight of the newest inter-measurement dt
+EXTERNAL_SIGMA_MULT = {    # /ingest/detection per-source sigma scaling
+    "pose-ankles": 0.6,            # ankle keypoints are precise
+    "bbox-bottom": 1.0,            # plain Frigate-style foot point
+    "pose-hips": SEATED_SIGMA_MULT,  # plane-height uncertainty, like seated
+}
 
 
 # ---- geometry helpers -------------------------------------------------------
@@ -337,7 +400,8 @@ class Localization:
     def __init__(self, pos: np.ndarray, sigma_xy: float, method: str, range_m: float):
         self.pos = pos            # [x, y, 0.0] world floor point
         self.sigma_xy = sigma_xy  # measurement std-dev (m)
-        self.method = method      # "feet" | "cropped" | "seated"
+        self.method = method      # "feet" | "cropped" | "seated" | "path"
+                                  # | an /ingest/detection source name
         self.range_m = range_m
 
 
@@ -394,6 +458,31 @@ def localize_detection(geom: CameraGeometry,
     elif method == "seated":
         sigma *= SEATED_SIGMA_MULT
     return Localization(pos, sigma, method, range_m)
+
+
+def localize_pixel(geom: CameraGeometry, u: float, v: float, score: float,
+                   *, plane_z: float = 0.0, from_detect: bool = True,
+                   sigma_mult: float = 1.0, method: str = "feet"
+                   ) -> Optional[Localization]:
+    """Back-project a single pixel to a floor position.
+
+    Same ray/plane/sigma model as :func:`localize_detection` but for a bare
+    point (no bbox, so no cropped/seated heuristics): the ray through
+    ``(u, v)`` is intersected with the ``plane_z`` plane and the hit dropped
+    to the floor.  ``from_detect=False`` means (u, v) is already in
+    calibration ``image_size`` coordinates — the convention for both
+    ``path_data`` points (normalized * image_size) and /ingest/detection
+    foot pixels.
+    """
+    C, d = geom.pixel_to_ray(u, v, from_detect=from_detect)
+    X = geom.intersect_plane(d, z=plane_z)
+    if X is None:
+        return None
+    pos = np.array([X[0], X[1], 0.0])
+    range_m = float(np.linalg.norm(X - C))
+    score = min(max(float(score or 0.5), 0.05), 1.0)
+    sigma = max(SIGMA_FLOOR, SIGMA_RANGE_COEFF * range_m) * (0.5 / score)
+    return Localization(pos, sigma * sigma_mult, method, range_m)
 
 
 # ---- Kalman filter -----------------------------------------------------------
@@ -533,6 +622,21 @@ class Track:
         self.ambiguous_until = 0.0
         self.frigate_ids: set[str] = set()
         self.ended = False                # room tracks: Frigate "end" seen
+        self.meas_dt_ema: Optional[float] = None  # EMA inter-measurement dt (s)
+
+    def active_window_s(self) -> float:
+        """Measurement age below which the track reads "active".
+
+        Rate-aware: ~ACTIVE_AGE_DT_MULT missed frames at the observed
+        measurement rate, floored at ACTIVE_AGE_S (the legacy 1 Hz tuning)
+        and capped at ACTIVE_AGE_MAX_S — a 1 Hz Frigate source no longer
+        flickers to "coasting" right as the next measurement is due, while a
+        10 Hz source still demotes promptly when it drops out.
+        """
+        if self.meas_dt_ema is None:
+            return ACTIVE_AGE_S
+        return min(ACTIVE_AGE_MAX_S,
+                   max(ACTIVE_AGE_S, ACTIVE_AGE_DT_MULT * self.meas_dt_ema))
 
 
 class RetiredTrack:
@@ -570,6 +674,9 @@ class Tracker:
         self._geom_cache: dict[tuple, Optional[CameraGeometry]] = {}
         self._payloads_logged = 0
         self._last_predict: Optional[float] = None
+        # per-frigate-id path_data watermark: max point ts already consumed
+        # (every event message repeats the FULL trail)
+        self._path_consumed: dict[str, float] = {}
 
     # ---- event ingestion ---------------------------------------------------
     def process_event(self, payload: dict, now: Optional[float] = None) -> None:
@@ -637,6 +744,12 @@ class Tracker:
             self._update_room_track(camera, zone_id, frigate_id, sub_label,
                                     score, stationary, now)
 
+        # 5-8 Hz path_data trail: extra measurements beyond the snapshot box
+        # (see module docstring for the ts-ordering approximation).
+        if geom is not None:
+            self._consume_path_data(after, camera, zone_id, geom, frigate_id,
+                                    sub_label, score, stationary, now)
+
     def _geom_for(self, camera: str, dev: Optional[dict]) -> Optional[CameraGeometry]:
         model = self.model_provider()
         key = (camera, getattr(model, "revision", None))
@@ -665,6 +778,121 @@ class Tracker:
             return True
         return bool(hull.covers(Point(float(pos[0]), float(pos[1]))))
 
+    # ---- path_data ingestion --------------------------------------------------
+    def _consume_path_data(self, after: dict, camera: str, zone_id: str,
+                           geom: CameraGeometry, frigate_id: str,
+                           person: Optional[str], score: float,
+                           stationary: bool, now: float) -> None:
+        """Feed NEW ``after.path_data`` points as extra KF measurements.
+
+        Frigate repeats the FULL normalized bottom-center trail
+        ``[[[x_n, y_n], ts], ...]`` (5-8 Hz samples) in every event message,
+        so a per-frigate-id watermark (max ts ever seen) dedupes re-sends.
+        Points older than PATH_MAX_AGE_S are dropped, at most
+        PATH_MAX_POINTS (the newest) are consumed per message, and the
+        survivors are processed in ts order with their own timestamps
+        through the same localize -> walkable-gate -> ingest_position path
+        as the snapshot box.
+        """
+        raw = after.get("path_data")
+        if not isinstance(raw, (list, tuple)) or not raw:
+            return
+        watermark = self._path_consumed.get(frigate_id)
+        max_ts = watermark
+        fresh: list[tuple[float, float, float]] = []
+        for entry in raw:
+            try:
+                xn, yn = float(entry[0][0]), float(entry[0][1])
+                ts = float(entry[1])
+            except (TypeError, ValueError, IndexError, KeyError):
+                continue
+            if not (-0.001 <= xn <= 1.001 and -0.001 <= yn <= 1.001):
+                continue  # not a normalized point; defensively skip
+            if max_ts is None or ts > max_ts:
+                max_ts = ts
+            if watermark is not None and ts <= watermark:
+                continue  # already consumed (full history is re-sent)
+            if ts < now - PATH_MAX_AGE_S or ts > now + 1.0:
+                continue  # stale (or clock-skewed) point
+            fresh.append((ts, xn, yn))
+        if max_ts is not None:
+            self._path_consumed[frigate_id] = max_ts
+        if not fresh:
+            return
+        fresh.sort(key=lambda p: p[0])
+        fresh = fresh[-PATH_MAX_POINTS:]  # cap per message; keep the newest
+        W, H = geom.image_size  # normalized coords -> calibration pixels
+        for ts, xn, yn in fresh:
+            meas = localize_pixel(geom, xn * W, yn * H, score,
+                                  from_detect=False, method="path")
+            if meas is None or not self._in_walkable(meas.pos):
+                continue
+            self.ingest_position(
+                camera=camera, zone_id=zone_id,
+                pos_xy=(float(meas.pos[0]), float(meas.pos[1])),
+                sigma=meas.sigma_xy, score=score, stationary=stationary,
+                person=person, frigate_id=frigate_id, now=ts,
+            )
+
+    # ---- external (Stage C) ingestion ------------------------------------------
+    def ingest_external(self, camera: str, ts: float, foot_px, score: float,
+                        source: str, person: Optional[str] = None
+                        ) -> Optional[Track]:
+        """One POST /ingest/detection measurement (wire contract in main.py).
+
+        ``foot_px`` is [u, v] in the camera's CALIBRATION resolution space
+        (intrinsics ``image_size``; 1280x720 for the current cams), NOT
+        detect-res.  Reuses the Stage-B localize/update path under the
+        synthetic stream id ``stagec:<camera>`` (no Frigate event id
+        exists).  Per-source geometry/noise:
+
+          * ``pose-ankles`` — ankle midpoint: floor plane, sigma x0.6
+          * ``bbox-bottom`` — bbox bottom-center: floor plane, sigma x1.0
+          * ``pose-hips``   — hip midpoint of a seated/occluded person:
+            ray ∩ z=HIP_SEATED_PLANE_Z (0.55 m = 0.45 m seat plane + ~0.10 m
+            seat-to-hip-joint, coherent with the seated heuristic), dropped
+            to the floor, sigma xsqrt(3) (plane-height uncertainty, exactly
+            like the seated/cropped fallbacks)
+
+        A detection that cannot be localized precisely (no calibration,
+        off-frame pixel, ray miss, outside the walkable hull) still counts
+        as person evidence for the camera's room track.  Returns the touched
+        track, or None for unmapped cameras / invalid input.
+        """
+        if source not in EXTERNAL_SIGMA_MULT:
+            log.warning("ingest_external: unknown source %r", source)
+            return None
+        try:
+            ts = float(ts)
+            u, v = float(foot_px[0]), float(foot_px[1])
+        except (TypeError, ValueError, IndexError):
+            return None
+        model = self.model_provider()
+        zone_id = model.zone_for_camera(camera)
+        if zone_id is None:
+            return None  # unmapped camera — same policy as the MQTT path
+        stream_id = f"stagec:{camera}"
+        geom = self._geom_for(camera, model.camera_device(camera))
+        meas: Optional[Localization] = None
+        if geom is not None:
+            W, H = geom.image_size
+            if 0.0 <= u <= W and 0.0 <= v <= H:
+                plane_z = HIP_SEATED_PLANE_Z if source == "pose-hips" else 0.0
+                meas = localize_pixel(
+                    geom, u, v, score, plane_z=plane_z, from_detect=False,
+                    sigma_mult=EXTERNAL_SIGMA_MULT[source], method=source)
+            if meas is not None and not self._in_walkable(meas.pos):
+                log.debug("ingest_external: floor hit outside walkable hull")
+                meas = None
+        if meas is not None:
+            return self.ingest_position(
+                camera=camera, zone_id=zone_id,
+                pos_xy=(float(meas.pos[0]), float(meas.pos[1])),
+                sigma=meas.sigma_xy, score=score, stationary=False,
+                person=person, frigate_id=stream_id, now=ts)
+        return self._update_room_track(camera, zone_id, stream_id, person,
+                                       score, False, ts)
+
     # ---- precise measurements -----------------------------------------------
     def ingest_position(self, *, camera: str, zone_id: Optional[str],
                         pos_xy: tuple[float, float], sigma: float,
@@ -672,32 +900,41 @@ class Tracker:
                         person: Optional[str] = None,
                         frigate_id: Optional[str] = None,
                         now: Optional[float] = None) -> Track:
-        """Associate one world-frame (x, y) measurement (also used by tests)."""
+        """Associate one world-frame (x, y) measurement (also used by tests).
+
+        Measurement noise is rate-scaled per candidate track (see
+        ``_rate_scaled_sigma``) for both gating and the KF update, so 5-15 Hz
+        sources (path_data, /ingest/detection) cannot over-tighten the
+        covariance relative to the 1 Hz noise tuning.
+        """
         now = self.clock() if now is None else now
         z = np.array(pos_xy, dtype=np.float64)
 
-        gated: list[tuple[float, Track]] = []
+        gated: list[tuple[float, float, float, Track]] = []
         for tr in self.tracks.values():
             if tr.kind != "kf" or tr.kf is None:
                 continue
-            d = tr.kf.mahalanobis(z, sigma)
+            sig_eff, dt_ema = self._rate_scaled_sigma(tr, sigma, now)
+            d = tr.kf.mahalanobis(z, sig_eff)
             if d < GATE_SIGMA:
-                gated.append((d, tr))
+                gated.append((d, sig_eff, dt_ema, tr))
 
         if gated:
             gated.sort(key=lambda item: item[0])
-            track = gated[0][1]
+            _, sig_eff, dt_ema, track = gated[0]
             if len(gated) > 1:
                 track.ambiguous_until = now + AMBIGUOUS_HOLD_S
-            track.kf.update(z, sigma)
+            track.meas_dt_ema = dt_ema  # commit the rate estimate
+            track.kf.update(z, sig_eff)
         else:
             track = self._spawn_or_rebind(z, zone_id, camera, person, now)
 
         track.hits += 1
         if track.hits >= CONFIRM_HITS:
             track.confirmed = True
-        track.last_meas = now
-        track.last_signal = now
+        # monotonic: path_data points carry their own (older) timestamps
+        track.last_meas = max(track.last_meas, now)
+        track.last_signal = max(track.last_signal, now)
         track.stationary = stationary
         track.last_score = score
         track.source_cams.add(camera)
@@ -709,6 +946,32 @@ class Tracker:
             self.tracks.pop(f"room:{camera}:{frigate_id}", None)
         self._assign_room(track, z, zone_id, now)
         return track
+
+    def _rate_scaled_sigma(self, track: Track, sigma: float, now: float
+                           ) -> tuple[float, float]:
+        """(effective sigma, next inter-measurement dt EMA) for ``track``.
+
+        The sigma model (SIGMA_FLOOR / SIGMA_RANGE_COEFF) was tuned for ~1 Hz
+        Frigate events; path_data and /ingest/detection deliver 5-15 Hz.
+        Without correction, N same-second updates tighten the covariance ~Nx
+        (the 10 Hz predict loop adds almost no Q between them) and the filter
+        over-trusts bursts.  R (= sigma^2) is therefore scaled linearly with
+        the observed rate above RATE_NOMINAL_HZ — sigma x sqrt(rate ratio) —
+        which keeps the information contributed *per second* rate-independent.
+        Out-of-order / duplicate timestamps clamp to RATE_MIN_DT_S, i.e. they
+        read as max-rate and are maximally distrusted.  The EMA is only
+        committed by the caller once the measurement actually associates.
+        """
+        dt_obs = max(now - track.last_meas, RATE_MIN_DT_S)
+        if track.meas_dt_ema is None:
+            dt_ema = dt_obs
+        else:
+            dt_ema = (RATE_EMA_ALPHA * dt_obs
+                      + (1.0 - RATE_EMA_ALPHA) * track.meas_dt_ema)
+        rate_hz = min(RATE_MAX_HZ, 1.0 / max(dt_ema, RATE_MIN_DT_S))
+        if rate_hz > RATE_NOMINAL_HZ:
+            sigma = sigma * math.sqrt(rate_hz / RATE_NOMINAL_HZ)
+        return sigma, dt_ema
 
     def _spawn_or_rebind(self, z: np.ndarray, zone_id: Optional[str],
                          camera: str, person: Optional[str], now: float) -> Track:
@@ -783,6 +1046,7 @@ class Tracker:
         return track
 
     def _handle_end(self, camera: str, frigate_id: str, now: float) -> None:
+        self._path_consumed.pop(frigate_id, None)  # done with this trail
         room_tid = f"room:{camera}:{frigate_id}"
         track = self.tracks.get(room_tid)
         if track is not None:
@@ -856,6 +1120,11 @@ class Tracker:
                 self.tracks.pop(tid, None)
                 log.info("retired track %s (no signal for %.1f s)", tid, age)
         self._prune_retired(now)
+        if self._path_consumed:  # GC watermarks of long-gone Frigate objects
+            cutoff = now - PATH_STATE_TTL_S
+            for fid in [f for f, ts in self._path_consumed.items()
+                        if ts < cutoff]:
+                del self._path_consumed[fid]
 
     def _prune_retired(self, now: float) -> None:
         self.retired = [rt for rt in self.retired
@@ -881,7 +1150,7 @@ class Tracker:
         if tr.kind == "kf" and tr.kf is not None and tr.confirmed:
             if tr.stationary and meas_age <= RETIRE_AFTER_S:
                 state, conf, conf_reason = "stationary_held", 0.7, "good"
-            elif meas_age <= ACTIVE_AGE_S:
+            elif meas_age <= tr.active_window_s():
                 state = "active"
                 conf = min(0.95, 0.5 + 0.45 * tr.last_score)
                 conf_reason = "good"

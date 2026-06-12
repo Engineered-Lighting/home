@@ -14,6 +14,8 @@ Endpoints:
                   camera_drift, uptime_s}
   GET /model     current apartment model (read-through cache)
   GET /tracks    latest broadcast frame (REST snapshot)
+  POST /ingest/detection   Stage-C external measurements (single object or
+                  JSON list) -> Tracker.ingest_external
   GET /replay/sessions
   WS  /ws/tracks            live 10 Hz broadcast
   WS  /ws/tracks?replay=YYYYMMDD   recorded day, real-time paced, looped
@@ -32,9 +34,10 @@ import json
 import logging
 import os
 import time
-from typing import Optional
+from typing import Literal, Optional, Union
 
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel, Field
 
 import calib
 import replay as replay_mod
@@ -386,6 +389,48 @@ async def model():
 @app.get("/tracks")
 async def tracks():
     return ctx.latest_frame
+
+
+# ---- external (Stage C) detection ingestion ----------------------------------
+
+class ExternalDetection(BaseModel):
+    """One Stage-C measurement.  ``foot_px`` is [u, v] in the camera's
+    CALIBRATION resolution space (intrinsics image_size; 1280x720 for all
+    current cams) — NOT detect-res."""
+    camera: str
+    ts: float
+    foot_px: list[float] = Field(min_length=2, max_length=2)
+    score: float = Field(ge=0.0, le=1.0)
+    source: Literal["pose-ankles", "pose-hips", "bbox-bottom"]
+    person: Optional[str] = None
+
+
+@app.post("/ingest/detection")
+async def ingest_detection(
+        body: Union[ExternalDetection, list[ExternalDetection]]):
+    """Stage-C ingestion: a single JSON object, or a JSON list for batching.
+
+    Thin by design — parsing/validation here, semantics in
+    ``Tracker.ingest_external`` (same undistort -> ray -> floor/seat-plane ->
+    walkable-gate -> Kalman path as a Frigate event measurement, under the
+    synthetic per-camera stream id ``stagec:<camera>``).  ``accepted`` counts
+    detections that touched a track (precise fix OR room-level evidence);
+    unmapped cameras and internal errors are skipped, not 4xx/5xx — a live
+    pose pipeline should not crash-loop on one bad camera name.
+    """
+    items = body if isinstance(body, list) else [body]
+    accepted = 0
+    for det in items:
+        try:
+            track = ctx.tracker.ingest_external(
+                camera=det.camera, ts=det.ts, foot_px=det.foot_px,
+                score=det.score, source=det.source, person=det.person)
+        except Exception:
+            log.exception("ingest_external failed for camera %s", det.camera)
+            track = None
+        if track is not None:
+            accepted += 1
+    return {"ok": True, "received": len(items), "accepted": accepted}
 
 
 @app.get("/replay/sessions")

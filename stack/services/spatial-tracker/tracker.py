@@ -59,12 +59,14 @@ High-rate measurement sources (same localize/update path as the bbox)
   synthetic stream id ``stagec:<camera>`` (no Frigate event id exists).
   ``pose-ankles`` -> floor plane, sigma x0.6 (ankle keypoints are precise);
   ``bbox-bottom`` -> floor plane, sigma x1.0; ``pose-hips`` -> hip midpoint
-  of a seated/occluded person: ray ∩ z=0.55 m (HIP_SEATED_PLANE_Z = the
-  0.45 m seat plane + ~0.10 m seat-surface-to-hip-joint offset, coherent
-  with the seated heuristic), dropped to floor, sigma xsqrt(3) like the
-  other plane-height-uncertain fallbacks.  Detections that cannot be
-  localized (no calibration, ray miss, outside the walkable hull) still
-  count as person evidence for the camera's room track.
+  of a person whose ankles are occluded: ray ∩ z=HIP_PLANE_Z (0.90 m,
+  standing hips — the pose model can't tell seated from standing, and the
+  standing plane only ever UNDERSHOOTS a sitter toward visible floor while
+  a seated plane overshoots a stander past the walls), dropped to floor,
+  sigma xsqrt(3) like the other plane-height-uncertain fallbacks.
+  Detections that cannot be localized (no calibration, ray miss, outside
+  the walkable hull) still count as person evidence for the camera's room
+  track.
 
 Ordering approximation: the KF is now-based (one global 10 Hz predict loop;
 updates do not re-propagate the state to the measurement's ts).  Points are
@@ -149,9 +151,16 @@ CROPPED_SIGMA_MULT = math.sqrt(3.0)
 SEAT_PLANE_Z = 0.45        # seat plane for the seated heuristic
 SEATED_ASPECT_GT = 1.6     # h/w threshold (see module docstring)
 SEATED_SIGMA_MULT = math.sqrt(3.0)
-HIP_SEATED_PLANE_Z = 0.55  # seated-hip plane: SEAT_PLANE_Z + ~0.10 m seat-
-                           # surface-to-hip-joint offset (pose-hips ingest;
-                           # coherent with the 0.45 m seated heuristic)
+HIP_PLANE_Z = 0.90         # pose-hips intersection plane. Stage C can't tell
+                           # seated from standing; standing hips sit at ~0.95 m
+                           # and a seated plane (0.55) OVERSHOOTS a stander's
+                           # position ~1.7x along the ray — past the wall, into
+                           # unscanned void (the "dot outside the apartment"
+                           # incident). The standing plane merely UNDERSHOOTS a
+                           # sitter toward the camera onto visible floor —
+                           # always the benign direction. (= CROPPED_PLANE_Z)
+SEAT_SNAP_M = 2.0          # display pin prefers a known seat within this range
+SEAT_WORDS = ("couch", "sofa", "chair", "bed", "stool", "bench", "seat")
 SIGMA_FLOOR = 0.15         # m
 SIGMA_RANGE_COEFF = 0.04   # m per meter of range
 ROOM_SWITCH_DWELL_S = 1.5
@@ -778,11 +787,32 @@ class Tracker:
             return None
         if getattr(self, "_inner_cache_src", None) is not hull:
             self._inner_cache_src = hull
-            # -0.5 undoes the measurement buffer; another -0.25 pins clamped
-            # dots visibly INSIDE the wall (on-the-line reads as outside from
-            # oblique dollhouse views)
-            self._inner_cache = hull.buffer(-0.75)
+            # -0.5 undoes the measurement buffer; another -0.6 pins clamped
+            # dots well INSIDE the wall, onto floor the scan actually captured
+            # — the wall line itself is usually hidden behind furniture and
+            # the mesh has VOID there, so a wall-line dot reads as "outside
+            # the apartment" in the dollhouse views
+            self._inner_cache = hull.buffer(-1.1)
         return self._inner_cache
+
+    def _seat_positions(self) -> list[tuple[float, float]]:
+        """(x, y) of seat-type devices (couch/chair/bed proposals), cached per
+        model revision — display pins snap to these (people sit ON furniture,
+        and the scan has no floor under it)."""
+        model = self.model_provider()
+        rev = getattr(model, "revision", None)
+        if getattr(self, "_seat_cache_rev", "unset") != rev:
+            self._seat_cache_rev = rev
+            seats: list[tuple[float, float]] = []
+            for d in getattr(model, "devices", None) or []:
+                pos = d.get("pos")
+                if not pos or len(pos) < 2:
+                    continue
+                blob = f"{d.get('name') or ''} {d.get('id') or ''} {d.get('type') or ''}".lower()
+                if any(w in blob for w in SEAT_WORDS):
+                    seats.append((float(pos[0]), float(pos[1])))
+            self._seat_cache = seats
+        return self._seat_cache
 
     def _in_walkable(self, pos) -> bool:
         hull = self.walkable_provider()
@@ -901,11 +931,12 @@ class Tracker:
 
           * ``pose-ankles`` — ankle midpoint: floor plane, sigma x0.6
           * ``bbox-bottom`` — bbox bottom-center: floor plane, sigma x1.0
-          * ``pose-hips``   — hip midpoint of a seated/occluded person:
-            ray ∩ z=HIP_SEATED_PLANE_Z (0.55 m = 0.45 m seat plane + ~0.10 m
-            seat-to-hip-joint, coherent with the seated heuristic), dropped
-            to the floor, sigma xsqrt(3) (plane-height uncertainty, exactly
-            like the seated/cropped fallbacks)
+          * ``pose-hips``   — hip midpoint of an ankle-occluded person:
+            ray ∩ z=HIP_PLANE_Z (0.90 m standing hips; a seated person
+            undershoots toward the camera onto visible floor — the safe
+            error direction), dropped to the floor, sigma xsqrt(3)
+            (plane-height uncertainty, exactly like the seated/cropped
+            fallbacks)
 
         A detection that cannot be localized precisely (no calibration,
         off-frame pixel, ray miss, far outside the walkable hull) still
@@ -933,7 +964,7 @@ class Tracker:
         if geom is not None:
             W, H = geom.image_size
             if 0.0 <= u <= W and 0.0 <= v <= H:
-                plane_z = HIP_SEATED_PLANE_Z if source == "pose-hips" else 0.0
+                plane_z = HIP_PLANE_Z if source == "pose-hips" else 0.0
                 meas = localize_pixel(
                     geom, u, v, score, plane_z=plane_z, from_detect=False,
                     sigma_mult=EXTERNAL_SIGMA_MULT[source], method=source)
@@ -1238,9 +1269,21 @@ class Tracker:
                             state, conf, conf_reason = "room_only", 0.3, "room_only"
                             pos = vel = cov = None
                         else:
-                            # near-wall slop -> pin the dot to the wall line
-                            q = _np(inner, pt)[0]
-                            pos = [round(float(q.x), 3), round(float(q.y), 3), 0.0]
+                            # near-wall slop: a known seat near the estimate
+                            # beats the wall line — people end up against
+                            # walls because they're ON furniture there, and
+                            # the wall line itself is unscanned void
+                            seat = None
+                            best = SEAT_SNAP_M
+                            for sx, sy in self._seat_positions():
+                                ds = math.hypot(pos[0] - sx, pos[1] - sy)
+                                if ds < best:
+                                    best, seat = ds, (sx, sy)
+                            if seat is not None:
+                                pos = [round(seat[0], 3), round(seat[1], 3), 0.0]
+                            else:
+                                q = _np(inner, pt)[0]
+                                pos = [round(float(q.x), 3), round(float(q.y), 3), 0.0]
 
         return {
             "id": tr.id,

@@ -12,7 +12,7 @@ import pytest
 
 from conftest import FakeClock, make_model
 from test_raycast import IMAGE_SIZE, K, look_at_R
-from tracker import (EXTERNAL_SIGMA_MULT, HIP_SEATED_PLANE_Z, PATH_MAX_POINTS,
+from tracker import (EXTERNAL_SIGMA_MULT, HIP_PLANE_Z, PATH_MAX_POINTS,
                      CameraGeometry, R_to_quat_wxyz, Tracker, localize_pixel)
 
 CAM_C = [0.2, 2.0, 2.4]
@@ -162,18 +162,21 @@ def test_ingest_external_pose_ankles_tracks_precisely():
     assert t["room"] == "living_room"
 
 
-def test_ingest_external_pose_hips_uses_seated_hip_plane():
+def test_ingest_external_pose_hips_uses_standing_hip_plane():
     clock = FakeClock(500.0)
     tracker, geom = make_calibrated(clock)
     ground = np.array([2.0, 2.5])
-    hip = np.array([ground[0], ground[1], HIP_SEATED_PLANE_Z])
+    hip = np.array([ground[0], ground[1], HIP_PLANE_Z])
     px = geom.project(hip)  # what a pose model would report as hip midpoint
     tr = tracker.ingest_external(camera="living_room", ts=clock.t,
                                  foot_px=[float(px[0]), float(px[1])],
                                  score=0.9, source="pose-hips")
     assert tr is not None and tr.kind == "kf"
-    # ray ∩ z=0.55 hip plane, dropped to the floor -> exactly under the hips
+    # ray ∩ z=0.90 standing-hip plane, dropped to floor -> under the hips
     assert np.linalg.norm(tr.kf.pos() - ground) < 1e-6
+    # the plane must be the STANDING height: a seated plane overshoots a
+    # standing person past the walls into unscanned void (regression guard)
+    assert HIP_PLANE_Z >= 0.85
 
 
 def test_localize_pixel_source_sigma_multipliers():
@@ -277,6 +280,46 @@ def test_ingest_external_near_wall_hit_clamps_instead_of_starving():
         tracker.predict_step(clock.t)
     assert tr is not None and tr.kind == "kf" and tr.confirmed
     assert np.linalg.norm(tr.kf.pos() - np.array([2.5, 1.5])) < 0.05
+
+
+def test_display_pin_snaps_to_nearby_seat():
+    """A pinned dot near a known couch lands ON the couch, not on the wall
+    line — the wall behind furniture is unscanned void in every render mode,
+    so a wall-line dot reads as 'outside the apartment'."""
+    from shapely.geometry import Polygon
+    clock = FakeClock(700.0)
+    couch = {"id": "prop-couch-0", "type": "other", "name": "couch (auto)",
+             "ha_entity_id": None, "pos": [2.5, 2.0, 0.0], "room_id": "living_room"}
+    model = make_model(extra_devices=[couch])
+    walk = Polygon([(0.0, 1.5), (6.0, 1.5), (6.0, 4.0), (0.0, 4.0)])
+    tracker = Tracker(model_provider=lambda: model, clock=clock,
+                      walkable_provider=lambda: walk.buffer(0.5))
+    # confirmed KF track just outside the display-inner polygon, 0.9 m from
+    # the couch -> the pin must choose the couch over the wall line
+    for _ in range(3):
+        tracker.ingest_position(camera="living_room", zone_id="living_room",
+                                pos_xy=(2.5, 1.1), sigma=0.3, now=clock.t)
+        clock.tick(0.1)
+    snap = tracker.snapshot(clock.t)
+    t = [x for x in snap if x["pos"] is not None][0]
+    assert abs(t["pos"][0] - 2.5) < 1e-6 and abs(t["pos"][1] - 2.0) < 1e-6
+
+
+def test_display_pin_without_seat_stays_inside_walls():
+    from shapely.geometry import Polygon
+    clock = FakeClock(700.0)
+    model = make_model()   # no seat devices
+    walk = Polygon([(0.0, 1.5), (6.0, 1.5), (6.0, 4.0), (0.0, 4.0)])
+    tracker = Tracker(model_provider=lambda: model, clock=clock,
+                      walkable_provider=lambda: walk.buffer(0.5))
+    for _ in range(3):
+        tracker.ingest_position(camera="living_room", zone_id="living_room",
+                                pos_xy=(2.5, 1.1), sigma=0.3, now=clock.t)
+        clock.tick(0.1)
+    snap = tracker.snapshot(clock.t)
+    t = [x for x in snap if x["pos"] is not None][0]
+    # pinned onto the inner polygon (walls -0.6): never outside, never ON the wall
+    assert t["pos"][1] >= 2.1 - 1e-6
 
 
 def test_ingest_external_far_outside_hull_stays_room_evidence():

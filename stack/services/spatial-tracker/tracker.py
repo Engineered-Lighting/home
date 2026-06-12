@@ -31,10 +31,16 @@ STAGE B (precise, camera has intrinsics + extrinsics)
       * cropped feet — bbox bottom within 2% of the frame bottom: intersect
         the *bbox-center* ray with the z=0.9 m plane (hip height), then drop
         to the floor; measurement sigma multiplied by sqrt(3).
-      * seated — bbox aspect (h/w) > 1.6 AND Frigate ``stationary``:
-        intersect the bbox-center ray with the z=0.45 m seat plane, drop to
-        floor.  (Threshold per spec; flip SEATED_ASPECT_GT if your cameras
-        show seated people as squat boxes instead.)
+      * seated — bbox aspect (h/w) > 1.6 AND Frigate ``stationary`` AND the
+        bbox bottom is NOT at the frame edge, but the foot-point ray-cast is
+        implausible (no floor hit, or the hit fails the caller's
+        plausibility check, e.g. outside the walkable hull): the bbox bottom
+        is then likely a seat edge rather than feet — intersect the
+        bbox-center ray with the z=0.45 m seat plane, drop to floor;
+        measurement sigma multiplied by sqrt(3).  A stationary *standing*
+        person (tall bbox, plausible foot ray) keeps the foot-point fix.
+        (Flip SEATED_ASPECT_GT if your cameras show seated people as squat
+        boxes instead.)
 
 Kalman filter
 =============
@@ -93,6 +99,7 @@ CROPPED_PLANE_Z = 0.9      # hip-height plane for cropped-feet fallback
 CROPPED_SIGMA_MULT = math.sqrt(3.0)
 SEAT_PLANE_Z = 0.45        # seat plane for the seated heuristic
 SEATED_ASPECT_GT = 1.6     # h/w threshold (see module docstring)
+SEATED_SIGMA_MULT = math.sqrt(3.0)
 SIGMA_FLOOR = 0.15         # m
 SIGMA_RANGE_COEFF = 0.04   # m per meter of range
 ROOM_SWITCH_DWELL_S = 1.5
@@ -338,9 +345,16 @@ def localize_detection(geom: CameraGeometry,
                        box_xyxy: tuple[float, float, float, float],
                        score: float,
                        stationary: bool,
-                       frame_size: Optional[tuple[float, float]] = None
+                       frame_size: Optional[tuple[float, float]] = None,
+                       plausible: Optional[Callable[[np.ndarray], bool]] = None
                        ) -> Optional[Localization]:
-    """Back-project one bbox (detect-res pixels) to a floor position."""
+    """Back-project one bbox (detect-res pixels) to a floor position.
+
+    ``plausible`` (optional) is called with the candidate floor point
+    ``[x, y, 0]``; returning False marks the foot-point ray-cast implausible
+    (e.g. outside the walkable hull), which arms the seated fallback for
+    tall+stationary boxes whose bottom is not cropped by the frame edge.
+    """
     frame_w, frame_h = frame_size if frame_size else geom.detect_res
     x1, y1, x2, y2 = box_xyxy
     w, h = x2 - x1, y2 - y1
@@ -348,18 +362,27 @@ def localize_detection(geom: CameraGeometry,
         return None
     cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
     aspect = h / w
-    seated = stationary and aspect > SEATED_ASPECT_GT
     cropped = (frame_h - y2) <= CROPPED_BOTTOM_FRAC * frame_h
+    # seated fallback candidate: tall + static, bottom genuinely visible
+    seated_ok = stationary and aspect > SEATED_ASPECT_GT and not cropped
 
-    if seated:
-        u, v, plane_z, method = cx, cy, SEAT_PLANE_Z, "seated"
-    elif cropped:
+    if cropped:
         u, v, plane_z, method = cx, cy, CROPPED_PLANE_Z, "cropped"
     else:
         u, v, plane_z, method = cx, y2, 0.0, "feet"
 
     C, d = geom.pixel_to_ray(u, v, from_detect=True)
     X = geom.intersect_plane(d, z=plane_z)
+    if seated_ok and (
+            X is None
+            or (plausible is not None
+                and not plausible(np.array([X[0], X[1], 0.0])))):
+        # Foot ray-cast implausible for a tall, static, un-cropped box: the
+        # bbox bottom is likely a seat edge, not feet (a seated person's feet
+        # ray overshoots).  Use the bbox-center ray on the seat plane instead.
+        C, d = geom.pixel_to_ray(cx, cy, from_detect=True)
+        X = geom.intersect_plane(d, z=SEAT_PLANE_Z)
+        method = "seated"
     if X is None:
         return None
     pos = np.array([X[0], X[1], 0.0])  # drop to floor
@@ -368,6 +391,8 @@ def localize_detection(geom: CameraGeometry,
     sigma = max(SIGMA_FLOOR, SIGMA_RANGE_COEFF * range_m) * (0.5 / score)
     if method == "cropped":
         sigma *= CROPPED_SIGMA_MULT
+    elif method == "seated":
+        sigma *= SEATED_SIGMA_MULT
     return Localization(pos, sigma, method, range_m)
 
 
@@ -595,7 +620,8 @@ class Tracker:
         if geom is not None:
             box = normalize_box(after.get("box"), geom.detect_res[0], geom.detect_res[1])
             if box is not None:
-                meas = localize_detection(geom, box, score, stationary)
+                meas = localize_detection(geom, box, score, stationary,
+                                          plausible=self._in_walkable)
             if meas is not None and not self._in_walkable(meas.pos):
                 log.debug("rejecting floor hit outside walkable hull: %s", meas.pos[:2])
                 meas = None

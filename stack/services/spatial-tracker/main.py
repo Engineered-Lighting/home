@@ -7,9 +7,11 @@ Wires together (and nothing more — the logic lives in the modules):
   * ActivityEngine + HA websocket listener (rules.py)
   * Frame recorder / replay (replay.py)
   * Calibration endpoints (calib.py)
+  * Camera drift watch (6-hourly ORB match vs {DATA_DIR}/calib_ref/<cam>.jpg)
 
 Endpoints:
-  GET /healthz   {ok, mqtt_connected, ha_model_revision, tracks_active, uptime_s}
+  GET /healthz   {ok, mqtt_connected, ha_model_revision, tracks_active,
+                  camera_drift, uptime_s}
   GET /model     current apartment model (read-through cache)
   GET /tracks    latest broadcast frame (REST snapshot)
   GET /replay/sessions
@@ -48,6 +50,13 @@ log = logging.getLogger("spatial.main")
 
 BROADCAST_HZ = 10.0
 RAW_MQTT_LOG_SAMPLES = 3
+
+# ---- camera drift watch ------------------------------------------------------
+DRIFT_CHECK_INTERVAL_S = 6 * 3600.0  # every 6 h
+DRIFT_FIRST_DELAY_S = 60.0           # let the model poller populate first
+DRIFT_THRESHOLD_PX = 12.0            # median keypoint displacement alarm
+DRIFT_MIN_MATCHES = 10               # fewer ORB matches -> inconclusive
+DRIFT_REF_DIRNAME = "calib_ref"      # {DATA_DIR}/calib_ref/<cam>.jpg
 
 
 class Config:
@@ -90,6 +99,7 @@ class AppContext:
         self.started = time.time()
         self.mqtt_connected = False
         self.latest_frame: dict = {"type": "tracks", "ts": time.time(), "tracks": []}
+        self.camera_drift: dict[str, float] = {}  # cam -> median px (> threshold)
         self.hub = Hub()
         self._http_session = None
 
@@ -175,6 +185,118 @@ async def model_poll_loop(ctx: AppContext) -> None:
     await ctx.model_store.poll_forever(session)
 
 
+# ---- camera drift watch -------------------------------------------------------
+
+def _calibrated_cameras(model) -> list[str]:
+    """Frigate names of cameras with full intrinsics + extrinsics."""
+    cams: list[str] = []
+    for dev in getattr(model, "devices", []) or []:
+        cam = dev.get("camera") or {}
+        name = cam.get("frigate_name")
+        intr = cam.get("intrinsics") or {}
+        extr = cam.get("extrinsics") or {}
+        if (name and intr.get("K") and extr.get("q_wxyz")
+                and (extr.get("C") is not None or extr.get("t") is not None)):
+            cams.append(name)
+    return cams
+
+
+def _median_orb_displacement_px(ref_jpg: bytes, cur_jpg: bytes):
+    """Median pixel displacement of cross-checked ORB matches between two
+    JPEG frames; None when either frame is undecodable or matches are too
+    few to judge.  Pure CPU — call via asyncio.to_thread."""
+    import cv2
+    import numpy as np
+
+    ref = cv2.imdecode(np.frombuffer(ref_jpg, np.uint8), cv2.IMREAD_GRAYSCALE)
+    cur = cv2.imdecode(np.frombuffer(cur_jpg, np.uint8), cv2.IMREAD_GRAYSCALE)
+    if ref is None or cur is None:
+        return None
+    if ref.shape != cur.shape:  # substream/res change — compare apples to apples
+        cur = cv2.resize(cur, (ref.shape[1], ref.shape[0]))
+    orb = cv2.ORB_create(nfeatures=1000)
+    kp_ref, des_ref = orb.detectAndCompute(ref, None)
+    kp_cur, des_cur = orb.detectAndCompute(cur, None)
+    if des_ref is None or des_cur is None:
+        return None
+    matches = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True).match(des_ref, des_cur)
+    if len(matches) < DRIFT_MIN_MATCHES:
+        return None
+    src = np.float64([kp_ref[m.queryIdx].pt for m in matches])
+    dst = np.float64([kp_cur[m.trainIdx].pt for m in matches])
+    return float(np.median(np.linalg.norm(dst - src, axis=1)))
+
+
+async def drift_check_once(ctx: AppContext) -> None:
+    """One pass: fetch each calibrated camera's latest frame from Frigate and
+    compare against its stored reference (saved on first sight)."""
+    cams = _calibrated_cameras(ctx.model_store.get_model())
+    if not cams:
+        log.info("drift check: no calibrated cameras in model; skipping pass")
+        return
+    ref_dir = os.path.join(ctx.cfg.data_dir, DRIFT_REF_DIRNAME)
+    os.makedirs(ref_dir, exist_ok=True)
+    session = await ctx.http()
+    for cam in cams:
+        try:
+            url = f"{ctx.frigate_url}/api/{cam}/latest.jpg"
+            async with session.get(url, timeout=20) as resp:
+                if resp.status != 200:
+                    log.error("drift check: GET %s -> HTTP %d; skipping %s",
+                              url, resp.status, cam)
+                    continue
+                cur_jpg = await resp.read()
+            if not cur_jpg:
+                log.error("drift check: empty frame from %s; skipping", cam)
+                continue
+            ref_path = os.path.join(ref_dir, f"{cam}.jpg")
+            if not os.path.isfile(ref_path):
+                with open(ref_path, "wb") as f:
+                    f.write(cur_jpg)
+                log.info("drift check: saved reference frame for %s -> %s",
+                         cam, ref_path)
+                continue
+            with open(ref_path, "rb") as f:
+                ref_jpg = f.read()
+            px = await asyncio.to_thread(
+                _median_orb_displacement_px, ref_jpg, cur_jpg)
+            if px is None:
+                log.error("drift check: %s inconclusive (undecodable frame or "
+                          "< %d ORB matches)", cam, DRIFT_MIN_MATCHES)
+                continue
+            if px > DRIFT_THRESHOLD_PX:
+                ctx.camera_drift[cam] = round(px, 1)
+                log.error("CAMERA DRIFT suspected on %s: median ORB keypoint "
+                          "displacement %.1f px > %.0f px vs reference %s — "
+                          "extrinsics may be stale, consider re-calibrating",
+                          cam, px, DRIFT_THRESHOLD_PX, ref_path)
+            else:
+                if ctx.camera_drift.pop(cam, None) is not None:
+                    log.info("drift check: %s back under threshold", cam)
+                log.info("drift check: %s OK (median displacement %.1f px)",
+                         cam, px)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("drift check failed for camera %s (continuing)", cam)
+
+
+async def drift_watch_loop(ctx: AppContext) -> None:
+    """Every 6 h ORB-match each calibrated camera against its reference frame;
+    cameras whose median keypoint displacement exceeds DRIFT_THRESHOLD_PX are
+    surfaced via /healthz as ``camera_drift``.  Never raises."""
+    await asyncio.sleep(DRIFT_FIRST_DELAY_S)
+    while True:
+        try:
+            await drift_check_once(ctx)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("drift watch pass failed (retrying in %.0f h)",
+                          DRIFT_CHECK_INTERVAL_S / 3600.0)
+        await asyncio.sleep(DRIFT_CHECK_INTERVAL_S)
+
+
 async def broadcast_loop(ctx: AppContext) -> None:
     period = 1.0 / BROADCAST_HZ
     while True:
@@ -210,6 +332,7 @@ async def _startup() -> None:
             asyncio.create_task(mqtt_loop(ctx), name="mqtt"),
             asyncio.create_task(model_poll_loop(ctx), name="model-poll"),
             asyncio.create_task(ctx.ha_listener.run(), name="ha-ws"),
+            asyncio.create_task(drift_watch_loop(ctx), name="drift-watch"),
         ]
     else:
         log.info("REPLAY_MODE=1: MQTT and HA connections disabled")
@@ -250,6 +373,7 @@ async def healthz():
         "mqtt_connected": ctx.mqtt_connected,
         "ha_model_revision": ctx.model_store.get_model().revision,
         "tracks_active": ctx.tracker.active_count(),
+        "camera_drift": ctx.camera_drift,
         "uptime_s": round(time.time() - ctx.started, 1),
     }
 

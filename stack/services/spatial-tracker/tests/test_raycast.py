@@ -107,22 +107,37 @@ def test_backward_ray_rejected():
 
 def test_seated_heuristic_uses_seat_plane():
     geom = make_geom()
-    # tall bbox (h/w > 1.6) + stationary -> bbox-center ray ∩ z=0.45
+    # tall bbox (h/w > 1.6) + stationary, bottom NOT at the frame edge
     box = (600.0, 250.0, 680.0, 500.0)  # w=80, h=250, aspect 3.125
+
+    # plausible foot ray-cast -> NO seated fallback (stationary *standing*
+    # person keeps the foot-point fix)
+    loc_standing = localize_detection(geom, box, score=1.0, stationary=True)
+    assert loc_standing is not None
+    assert loc_standing.method == "feet"
+
+    # implausible foot hit (e.g. outside the walkable hull) -> seated:
+    # bbox-center ray ∩ z=0.45, dropped to floor, sigma * sqrt(3)
     cx, cy = 640.0, 375.0
     C, d = geom.pixel_to_ray(cx, cy)
     s = (0.45 - C[2]) / d[2]
     expected = C + s * d
-    loc = localize_detection(geom, box, score=1.0, stationary=True)
+    loc = localize_detection(geom, box, score=1.0, stationary=True,
+                             plausible=lambda p: False)
     assert loc is not None
     assert loc.method == "seated"
     assert loc.pos[2] == 0.0  # dropped to the floor
     assert math.isclose(loc.pos[0], expected[0], abs_tol=1e-9)
     assert math.isclose(loc.pos[1], expected[1], abs_tol=1e-9)
-    # same box while walking uses the foot point instead
-    loc2 = localize_detection(geom, box, score=1.0, stationary=False)
+    assert not np.allclose(loc.pos, loc_standing.pos)
+    base = max(0.15, 0.04 * loc.range_m) * 0.5
+    assert math.isclose(loc.sigma_xy, base * math.sqrt(3.0), rel_tol=1e-9)
+
+    # walking (not stationary) never arms the fallback: the feet measurement
+    # is still returned and the caller's walkable post-check rejects it
+    loc2 = localize_detection(geom, box, score=1.0, stationary=False,
+                              plausible=lambda p: False)
     assert loc2.method == "feet"
-    assert not np.allclose(loc.pos, loc2.pos)
 
 
 def test_cropped_feet_fallback_hip_plane_and_inflated_sigma():

@@ -105,8 +105,9 @@ Data files (all optional):
 * **Stage A** (always): camera→room mapping, room-level tracks keyed by
   Frigate object id.
 * **Stage B** (calibrated cameras): foot-point ray casting with
-  cropped-feet (z=0.9 plane, σ×√3) and seated (z=0.45 plane, when bbox
-  h/w > 1.6 and stationary) fallbacks; per-track KF
+  cropped-feet (z=0.9 plane, σ×√3) and seated (z=0.45 plane, σ×√3, when bbox
+  h/w > 1.6 and stationary and bottom not at the frame edge and the foot
+  ray-cast is implausible) fallbacks; per-track KF
   (σ_acc=1.5 m/s², R from `max(0.15, 0.04·range)·(0.5/score)`),
   3σ Mahalanobis gating, 3-hit confirmation, 0.8 m cross-camera merge.
 * **Coast control**: covariance saturates at σ=1.5 m (prediction freezes);
@@ -128,12 +129,13 @@ Data files (all optional):
 * Recording dedups **consecutive empty** frames by default
   (`RECORD_DEDUP_EMPTY=0` restores strict every-frame recording): 10 Hz of
   empty frames is ~860k lines/day of zero information.
-* Seated heuristic implemented literally as specified (`h/w > 1.6` AND
-  stationary). Note that tall/narrow boxes are also typical of *standing*
-  people, so a stationary standing person may be measured via the seat
-  plane; since `stationary` tracks hold position with frozen covariance the
-  practical impact is limited. If your cameras show seated people as squat
-  boxes, change `SEATED_ASPECT_GT` in tracker.py to an upper bound instead.
+* Seated heuristic is a *fallback*, not a primary path: `h/w > 1.6` AND
+  stationary AND bbox bottom not at the frame edge AND the foot-point
+  ray-cast implausible (no floor hit, or hit outside the walkable hull) →
+  bbox-center ray ∩ z=0.45 seat plane, σ×√3. A stationary *standing* person
+  (plausible foot ray) keeps the normal foot-point fix. If your cameras show
+  seated people as squat boxes, change `SEATED_ASPECT_GT` in tracker.py to
+  an upper bound instead.
 * Unconfirmed (≤2 hit) candidate tracks are broadcast as `room_only` rather
   than hidden, so stage-B rooms degrade gracefully to stage-A behavior
   during confirmation.

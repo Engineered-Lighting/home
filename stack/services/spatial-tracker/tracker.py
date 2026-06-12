@@ -619,6 +619,17 @@ class Tracker:
             self._geom_cache[key] = CameraGeometry.from_device(dev)
         return self._geom_cache[key]
 
+    def _walkable_inner(self):
+        """Un-buffered walls for DISPLAY clamping (the provider's hull carries
+        +0.5 m measurement slop; the published dot must stay inside walls)."""
+        hull = self.walkable_provider()
+        if hull is None:
+            return None
+        if getattr(self, "_inner_cache_src", None) is not hull:
+            self._inner_cache_src = hull
+            self._inner_cache = hull.buffer(-0.5)
+        return self._inner_cache
+
     def _in_walkable(self, pos) -> bool:
         hull = self.walkable_provider()
         if hull is None:
@@ -858,12 +869,21 @@ class Tracker:
                 pos = [round(float(p[0]), 3), round(float(p[1]), 3), 0.0]
                 vel = [round(float(v[0]), 3), round(float(v[1]), 3)]
                 cov = [[float(c) for c in row] for row in tr.kf.pos_cov()]
-                if not self._in_walkable(pos):
-                    # coasting predictions integrate velocity through walls —
-                    # never PUBLISH a position outside the walkable hull;
-                    # demote to honest room-level instead
-                    state, conf, conf_reason = "room_only", 0.3, "room_only"
-                    pos = vel = cov = None
+                inner = self._walkable_inner()
+                if inner is not None:
+                    from shapely.geometry import Point as _P
+                    from shapely.ops import nearest_points as _np
+                    pt = _P(pos[0], pos[1])
+                    if not inner.covers(pt):
+                        d = pt.distance(inner)
+                        if d > 1.0:
+                            # far outside (runaway coast) -> honest room-level
+                            state, conf, conf_reason = "room_only", 0.3, "room_only"
+                            pos = vel = cov = None
+                        else:
+                            # near-wall slop -> pin the dot to the wall line
+                            q = _np(inner, pt)[0]
+                            pos = [round(float(q.x), 3), round(float(q.y), 3), 0.0]
 
         return {
             "id": tr.id,

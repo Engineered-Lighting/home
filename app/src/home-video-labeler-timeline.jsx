@@ -23,6 +23,17 @@
  *     render; scroll state is rAF-throttled; auto-follow keeps the playhead
  *     in view while playing unless the user scrolled in the last 1.5s.
  *
+ * M3 adds the suggestion ghost sub-rows: an optional `suggestions` prop
+ * ({axis: [SEG]}) renders each axis's prelabels as a slim 16px strip at the
+ * bottom of its lane — dashed border + diagonal hatch in the value color,
+ * 55%-opacity caption, a 2px confidence bar (fg-4→ice ramp) and a warn '!'
+ * diamond when the seg carries disagreement. Ghosts are click-to-select only
+ * (onSelectSuggestion) — no drag. 4s-stride windows overlap by design; the
+ * ghosts simply stack at reduced opacity (deliberately NOT non-overlap
+ * clipped). Canonical blocks shrink to make room only when a lane actually
+ * has suggestions, so M0/M1 visuals are untouched otherwise. The `selection`
+ * prop now optionally carries kind: 'canonical' | 'suggestion'.
+ *
  * Playback stays out of React: the playhead node is handed out via
  * `playheadRef` and positioned with style.transform by the player (M0
  * pattern kept); `playheadTimeRef` mirrors the current time for snap /
@@ -41,6 +52,7 @@ const VL_RULER_H = 30;     // tick strip + labels
 const VL_LANE_H = 56;      // per-lane row height (segment blocks)
 const VL_SIDEBAR_W = 110;  // lane title sidebar
 const VL_VIEW_PAD = 200;   // px rendered beyond the visible range
+const VL_SUG_H = 16;       // suggestion ghost sub-row height (M3)
 
 /* Smallest "nice" step whose px spacing is ≥ ~80 at this zoom. */
 function vlTickStep(pxPerSec) {
@@ -64,14 +76,16 @@ function vlValueText(value) {
 }
 
 /* lanes: [{axis, title, segments, multiValue, colorFor(value)}]
- * selection: {axis, segId} | null · activeAxis: axis string
+ * selection: {kind?: 'canonical'|'suggestion', axis, segId} | null
+ * activeAxis: axis string · suggestions: {axis: [SEG]} | null (M3 ghosts)
  * onSeek(t) · onSelect(axis, segId|null) · onCreate(axis, t)
+ * onSelectSuggestion(axis, segId) — ghost click
  * onCommit(axis, nextSegments, undoEntry) — pointerup only
  * onZoom(dir, anchorT) — Ctrl+wheel / keyboard zoom request */
 function VLTimeline({
-  duration, fps, lanes, selection, activeAxis,
+  duration, fps, lanes, selection, activeAxis, suggestions,
   playheadRef, playheadTimeRef, pxPerSec, snapTimes, minDur, following,
-  onSeek, onSelect, onCommit, onCreate, onZoom,
+  onSeek, onSelect, onCommit, onCreate, onZoom, onSelectSuggestion,
 }) {
   const scrollRef = useRef(null);
   const dragRef = useRef(null);
@@ -387,6 +401,8 @@ function VLTimeline({
                 }}>
                   {((dragSegs && dragSegs.axis === lane.axis ? dragSegs.segments : lane.segments) || []).length}
                   {" seg"}{lane.multiValue ? " · multi" : ""}
+                  {((suggestions && suggestions[lane.axis]) || []).length > 0
+                    ? " · " + suggestions[lane.axis].length + " sug" : ""}
                 </span>
               </div>
             );
@@ -438,6 +454,8 @@ function VLTimeline({
             const segs = (dragSegs && dragSegs.axis === lane.axis)
               ? dragSegs.segments
               : (lane.segments || []);
+            const sugs = (suggestions && suggestions[lane.axis]) || [];
+            const hasSug = sugs.length > 0;
             return (
               <div
                 key={lane.axis}
@@ -469,7 +487,9 @@ function VLTimeline({
                 {segs.map((seg) => {
                   if (seg.end_s < viewT0 || seg.start_s > viewT1) return null; // virtualized
                   const color = lane.colorFor ? lane.colorFor(seg.value) : "hsl(0 0% 55%)";
-                  const selected = !!(selection && selection.axis === lane.axis && selection.segId === seg.id);
+                  const selected = !!(selection
+                    && (selection.kind == null || selection.kind === "canonical")
+                    && selection.axis === lane.axis && selection.segId === seg.id);
                   const st = seg.review_state;
                   const ghosted = st === "rejected";
                   const excluded = st === "excluded_from_export";
@@ -493,7 +513,8 @@ function VLTimeline({
                         position: "absolute",
                         left: seg.start_s * pps,
                         width: w,
-                        top: 5, height: VL_LANE_H - 11,
+                        top: 5,
+                        height: hasSug ? VL_LANE_H - VL_SUG_H - 13 : VL_LANE_H - 11,
                         boxSizing: "border-box",
                         border: selected
                           ? "1px solid var(--hg-fg-0)"
@@ -539,6 +560,82 @@ function VLTimeline({
                             touchAction: "none",
                           }}
                         />
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* suggestion ghost sub-row (M3) — prelabels, click-to-select
+                    only; 4s-stride overlaps stack at reduced opacity */}
+                {sugs.map((sg) => {
+                  if (sg.end_s < viewT0 || sg.start_s > viewT1) return null; // virtualized
+                  const D = window.HomeVideoLabelerData;
+                  const color = lane.colorFor ? lane.colorFor(sg.value) : "hsl(0 0% 55%)";
+                  const selectedS = !!(selection && selection.kind === "suggestion"
+                    && selection.axis === lane.axis && selection.segId === sg.id);
+                  const conf = typeof sg.confidence === "number"
+                    ? Math.max(0, Math.min(1, sg.confidence)) : null;
+                  const disagree = D && D.suggestionDisagreement(sg) != null;
+                  const w = Math.max(3, (sg.end_s - sg.start_s) * pps);
+                  const hatch = "color-mix(in srgb, " + color + " 26%, transparent)";
+                  return (
+                    <div
+                      key={"sug_" + sg.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (suppressClickRef.current) return;
+                        if (onSelectSuggestion) onSelectSuggestion(lane.axis, sg.id);
+                      }}
+                      onDoubleClick={(e) => e.stopPropagation()}
+                      title={"suggestion · " + vlValueText(sg.value)
+                        + (conf != null ? " · conf " + Math.round(conf * 100) + "%" : "")
+                        + (sg.source ? " · " + sg.source : "")
+                        + (disagree ? " · disagreement!" : "")
+                        + " · " + sg.start_s.toFixed(2) + "–" + sg.end_s.toFixed(2) + "s"}
+                      style={{
+                        position: "absolute",
+                        left: sg.start_s * pps,
+                        width: w,
+                        top: VL_LANE_H - VL_SUG_H - 4, height: VL_SUG_H,
+                        boxSizing: "border-box",
+                        border: selectedS ? "1px solid var(--hg-fg-0)" : "1px dashed " + color,
+                        boxShadow: selectedS ? "0 0 0 1px " + color : "none",
+                        background: "repeating-linear-gradient(45deg, " + hatch
+                          + " 0px, " + hatch + " 3px, transparent 3px, transparent 7px)",
+                        opacity: selectedS ? 1 : 0.8,
+                        cursor: "pointer",
+                        overflow: "hidden",
+                        zIndex: selectedS ? 3 : 1,
+                        fontFamily: VL_FONT_MONO, fontSize: 8,
+                      }}
+                    >
+                      <span style={{
+                        position: "absolute", left: 3, right: disagree ? 12 : 3, top: 1,
+                        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                        color: "var(--hg-fg-0)", opacity: 0.55,
+                        letterSpacing: "0.05em", pointerEvents: "none",
+                      }}>{vlValueText(sg.value) || "—"}</span>
+                      {conf != null && (
+                        <span style={{
+                          position: "absolute", left: 0, bottom: 0, height: 2,
+                          width: (conf * 100) + "%",
+                          background: "color-mix(in srgb, var(--hg-ice) "
+                            + Math.round(conf * 100) + "%, var(--hg-fg-4))",
+                          pointerEvents: "none",
+                        }} />
+                      )}
+                      {disagree && (
+                        <span style={{
+                          position: "absolute", right: 3, top: 3, width: 7, height: 7,
+                          background: "var(--hg-warn)", transform: "rotate(45deg)",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          pointerEvents: "none",
+                        }}>
+                          <span style={{
+                            transform: "rotate(-45deg)", fontSize: 6, lineHeight: 1,
+                            color: "#000", fontWeight: 700,
+                          }}>!</span>
+                        </span>
                       )}
                     </div>
                   );

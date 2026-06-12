@@ -18,6 +18,20 @@
  * input-focus guard. Degrades gracefully: getLabels 404 ⇒ empty doc rev 0,
  * save disabled, "labels API not deployed" chip.
  *
+ * M3 adds the review UX: suggestion ghost-lanes (GET /suggestions, the
+ * prelabel layer — loaded per selected video, 404 ⇒ quiet "not deployed"
+ * chip), a selection model extended with kind: 'canonical'|'suggestion',
+ * suggestion mode in the inspector (value/conf/source/evidence + accept/
+ * reject/needs-review, A/R/N/X keys; Shift+A accepts every suggestion
+ * overlapping the selection across all axes), the evidence keyframe strip
+ * (window id derived as aw_<video>_<start_ms> from the suggestion's
+ * geometry), left-rail queue filter chips over client-cached per-video
+ * suggestion stats, and the calibration-locked bulk-accept button.
+ * Accepting PROJECTS the suggestion into the canonical lane: the server
+ * graduates the row in place, and the client carves overlapping canonical
+ * segments locally (PUT enforces per-lane non-overlap) — a carve marks the
+ * doc dirty so the next save reconciles the trimmed neighbors.
+ *
  * Sim containment: the overlay renders an explicit "unavailable in
  * simulation mode" state BEFORE any media element exists — <video src>
  * and sprite background-images bypass tauriFetch's sim guard, so the
@@ -64,8 +78,10 @@ function VLChip({ label, tone, title }) {
 
 /* ─────────────────────────────────────────────────────────────────────
  * VLVideoRow — left-rail entry: filename, duration, status chips.
+ * `sug` (M3): client-cached suggestion stats {total, lowConf, disagreement}
+ * — only present once the video has been opened this session.
  * ──────────────────────────────────────────────────────────────────── */
-function VLVideoRow({ video, selected, onClick }) {
+function VLVideoRow({ video, selected, onClick, sug }) {
   const D = window.HomeVideoLabelerData;
   const st = video.import_status || "unknown";
   const stTone = st === "ready" ? "live" : (st === "failed" || st === "error") ? "crit" : "warn";
@@ -94,6 +110,16 @@ function VLVideoRow({ video, selected, onClick }) {
         <VLChip label={video.has_proxy ? "proxy" : "no proxy"} tone={video.has_proxy ? "live" : "dim"} />
         {video.has_sprite && <VLChip label="sprite" tone="default" />}
         {video.is_holdout && <VLChip label="holdout" tone="warn" title="blind holdout — excluded from review/training" />}
+        {sug && sug.total > 0 && (
+          <VLChip
+            label={sug.total + " sug"}
+            tone="warn"
+            title={sug.lowConf + " low-conf · " + sug.disagreement + " disagreement"}
+          />
+        )}
+        {sug && sug.disagreement > 0 && (
+          <VLChip label={"! " + sug.disagreement} tone="crit" title="suggestions with a disagreement cross-check fired" />
+        )}
       </div>
     </button>
   );
@@ -409,12 +435,14 @@ function VLPlayer({ video, editor }) {
             lanes={editor ? editor.lanes : null}
             selection={editor ? editor.selection : null}
             activeAxis={editor ? editor.activeAxis : null}
+            suggestions={editor ? editor.suggestions : null}
             snapTimes={keyframeTimes}
             minDur={editor ? editor.minDur : 0.2}
             following={playing}
             onSelect={editor ? editor.onSelect : null}
             onCommit={editor ? editor.onCommit : null}
             onCreate={editor ? editor.onCreate : null}
+            onSelectSuggestion={editor ? editor.onSelectSuggestion : null}
             onZoom={editor ? zoomBy : null}
           />
         )}
@@ -484,6 +512,30 @@ function vlIsTempId(id) {
   return typeof id === "string" && (id.indexOf("tmp_") === 0 || id.indexOf("seg_local_") === 0);
 }
 
+function vlIsSuggestionSel(sel) {
+  return !!(sel && sel.kind === "suggestion");
+}
+
+/* low-confidence threshold: disagreement caps server confidence at 0.5, so
+   <0.6 nets both genuinely-unsure and disagreement-capped suggestions */
+const VL_LOW_CONF = 0.6;
+
+/* per-video suggestion stats for the queue filter chips (client-side only) */
+function vlSuggStats(axes) {
+  const D = window.HomeVideoLabelerData;
+  let total = 0, lowConf = 0, disagreement = 0;
+  for (const ax of VL_AXIS_ORDER) {
+    for (const s of (axes && axes[ax]) || []) {
+      total += 1;
+      if (typeof s.confidence === "number" && s.confidence < VL_LOW_CONF) lowConf += 1;
+      if (D.suggestionDisagreement(s) != null) disagreement += 1;
+    }
+  }
+  return { total, lowConf, disagreement };
+}
+
+const VL_QUEUE_FILTERS = ["all", "unreviewed", "low-conf", "disagreement"];
+
 function vlRemapList(list, idMap) {
   return (list || []).map((s) => idMap[s.id] ? { ...s, id: idMap[s.id] } : s);
 }
@@ -506,7 +558,7 @@ function vlEditorInit() {
     revision: 0,                   // server revision the doc is based on
     rev: 0,                        // local edit counter
     savedRev: 0,                   // rev at last save — dirty = rev !== savedRev
-    selection: null,               // {axis, segId} | null
+    selection: null,               // {kind:'canonical'|'suggestion', axis, segId} | null
     activeAxis: "activity_primary",
     undo: [],                      // axis-scoped {axis, before, after}, cap 50
     redo: [],
@@ -533,7 +585,8 @@ function vlEditorReducer(state, a) {
       const segments = (a.segments || []).slice().sort((x, y) => x.start_s - y.start_s);
       const axes = { ...state.doc.axes, [a.axis]: segments };
       let selection = state.selection;
-      if (selection && selection.axis === a.axis && !segments.some((s) => s.id === selection.segId)) {
+      if (selection && selection.kind !== "suggestion"
+          && selection.axis === a.axis && !segments.some((s) => s.id === selection.segId)) {
         selection = null;
       }
       return {
@@ -548,7 +601,9 @@ function vlEditorReducer(state, a) {
     case "SELECT":
       return {
         ...state,
-        selection: a.segId ? { axis: a.axis, segId: a.segId } : null,
+        selection: a.segId
+          ? { kind: a.kind || "canonical", axis: a.axis, segId: a.segId }
+          : null,
         activeAxis: a.axis || state.activeAxis,
       };
     case "SET_ACTIVE_AXIS":
@@ -558,7 +613,8 @@ function vlEditorReducer(state, a) {
       if (!e) return state;
       const axes = { ...state.doc.axes, [e.axis]: e.before };
       let selection = state.selection;
-      if (selection && selection.axis === e.axis && !e.before.some((s) => s.id === selection.segId)) selection = null;
+      if (selection && selection.kind !== "suggestion"
+          && selection.axis === e.axis && !e.before.some((s) => s.id === selection.segId)) selection = null;
       return {
         ...state, doc: { axes }, rev: state.rev + 1, selection,
         undo: state.undo.slice(0, -1), redo: state.redo.concat([e]).slice(-50),
@@ -569,7 +625,8 @@ function vlEditorReducer(state, a) {
       if (!e) return state;
       const axes = { ...state.doc.axes, [e.axis]: e.after };
       let selection = state.selection;
-      if (selection && selection.axis === e.axis && !e.after.some((s) => s.id === selection.segId)) selection = null;
+      if (selection && selection.kind !== "suggestion"
+          && selection.axis === e.axis && !e.after.some((s) => s.id === selection.segId)) selection = null;
       return {
         ...state, doc: { axes }, rev: state.rev + 1, selection,
         redo: state.redo.slice(0, -1), undo: state.undo.concat([e]).slice(-50),
@@ -582,6 +639,38 @@ function vlEditorReducer(state, a) {
       return {
         ...state,
         doc: { axes: { ...state.doc.axes, [a.axis]: lane } },
+        revision: a.revision != null ? a.revision : state.revision,
+      };
+    }
+    /* M3 — a reviewed suggestion graduated server-side; PROJECT it into the
+       canonical lane. items: [{axis, segment}] (segment = the server's
+       returned canonical row, axis key stripped); empty items just adopts
+       the bumped revision (reject path). PUT enforces per-lane non-overlap,
+       so overlapping canonical segments are carved around the graduate —
+       and ONLY a carve marks the doc dirty (the graduate itself is already
+       server state). Undo stacks are left alone: graduation is not a local
+       edit and must not be locally undoable. */
+    case "GRADUATE": {
+      const D = window.HomeVideoLabelerData;
+      const axes = { ...state.doc.axes };
+      let carved = false;
+      for (const it of a.items || []) {
+        const seg = it.segment;
+        if (!seg || !seg.id) continue;
+        const lane = (axes[it.axis] || []).filter((s) => s.id !== seg.id);
+        const overlaps = lane.some((s) =>
+          s.start_s < seg.end_s - 1e-6 && s.end_s > seg.start_s + 1e-6);
+        let next = lane;
+        if (overlaps) {
+          next = D.carveRange(lane, seg.start_s, seg.end_s, a.minDur || 0.2);
+          carved = true;
+        }
+        axes[it.axis] = next.concat([seg]).sort((x, y) => x.start_s - y.start_s);
+      }
+      return {
+        ...state,
+        doc: { axes },
+        rev: carved ? state.rev + 1 : state.rev,
         revision: a.revision != null ? a.revision : state.revision,
       };
     }
@@ -970,13 +1059,103 @@ function VLAuxForm({ seg, ontology, onPatch }) {
 }
 
 /* ─────────────────────────────────────────────────────────────────────
+ * VLEvidenceStrip (M3) — the selected suggestion's source-window keyframes.
+ * The SEG carries no window linkage (seg_to_api drops evidence_json), but
+ * suggestions carry their analysis window's EXACT geometry, so the window
+ * id is derived: aw_<video>_<start_ms> (videolabeler/jobs/windows.py).
+ * Tolerates {keyframes:[...]} or a bare list; entries {t, frame, crop|null}
+ * with url/name fallbacks. Click a thumb → seek to its timestamp. Person
+ * zoom crops render beside their frame when listed.
+ * ──────────────────────────────────────────────────────────────────── */
+function VLEvidenceStrip({ video, suggestion, onSeek }) {
+  const D = window.HomeVideoLabelerData;
+  const windowId = D.windowIdFor(video.id, suggestion.start_s);
+  const [kf, setKf] = useState({ status: "loading", frames: [] });
+
+  useEffect(() => {
+    let dead = false;
+    setKf({ status: "loading", frames: [] });
+    (async () => {
+      const r = await D.getWindowKeyframes(video.id, windowId);
+      if (dead) return;
+      if (r.ok && r.data) {
+        const raw = Array.isArray(r.data) ? r.data : (r.data.keyframes || []);
+        const frames = raw.map((e) => ({
+          t: typeof e.t === "number" ? e.t : null,
+          frame: e.frame || e.url || e.name || null,
+          crop: typeof e.crop === "string" ? e.crop : null,
+        })).filter((e) => !!e.frame);
+        setKf({ status: frames.length ? "ok" : "empty", frames });
+      } else {
+        setKf({ status: r.status === 404 ? "missing" : "offline", frames: [] });
+      }
+    })();
+    return () => { dead = true; };
+  }, [video.id, windowId]);
+
+  if (kf.status !== "ok") {
+    return (
+      <div style={{ fontSize: 9, color: "var(--hg-fg-5)", letterSpacing: "0.08em", lineHeight: 1.6 }}>
+        {kf.status === "loading" ? "loading keyframes…"
+          : kf.status === "missing" ? "no keyframes for this window yet"
+          : kf.status === "empty" ? "keyframe list is empty"
+          : "keyframes unavailable · service unreachable"}
+      </div>
+    );
+  }
+
+  return (
+    <div className="hg-scroll" style={{ display: "flex", gap: 4, overflowX: "auto", paddingBottom: 2 }}>
+      {kf.frames.map((f, i) => {
+        const frameUrl = D.keyframeUrl(f.frame);
+        const cropUrl = f.crop ? D.keyframeUrl(f.crop) : null;
+        if (!frameUrl) return null;
+        const seek = () => { if (onSeek && f.t != null) onSeek(f.t); };
+        const imgStyle = {
+          height: 56, display: "block",
+          border: "1px solid var(--hg-border-soft)",
+          cursor: f.t != null ? "pointer" : "default",
+          background: "var(--hg-bg-2)",
+        };
+        return (
+          <span key={i} style={{ display: "inline-flex", gap: 2, flex: "none" }}>
+            <img
+              src={frameUrl}
+              alt={"keyframe " + (i + 1)}
+              title={f.t != null ? D.fmtDuration(f.t) + " — click to seek" : "keyframe"}
+              onClick={seek}
+              onError={(e) => { e.currentTarget.style.display = "none"; }}
+              style={imgStyle}
+            />
+            {cropUrl && (
+              <img
+                src={cropUrl}
+                alt={"person crop " + (i + 1)}
+                title={"person crop" + (f.t != null ? " · " + D.fmtDuration(f.t) : "")}
+                onClick={seek}
+                onError={(e) => { e.currentTarget.style.display = "none"; }}
+                style={{ ...imgStyle, width: 56, objectFit: "cover" }}
+              />
+            )}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
  * VLInspector — right rail (340px): save row, selected-segment editor
  * (value chips, frame-stepped bounds, review actions, aux form), custom
- * label manager.
+ * label manager. M3: suggestion mode (value/conf/source/evidence +
+ * accept/reject/needs-review + the keyframe evidence strip) replaces the
+ * segment editor while a SUGGESTION is selected, and a suggestions
+ * section with the calibration-locked bulk-accept button.
  * ──────────────────────────────────────────────────────────────────── */
 function VLInspector({
   video, fps, ontology, labelsApi, dirty, saving, revision,
   selection, segment, ops, canonicalInfo, refreshOntology, showToast,
+  suggestion, suggestionOps, suggSummary, bulk,
 }) {
   const D = window.HomeVideoLabelerData;
   const seg = segment;
@@ -984,6 +1163,10 @@ function VLInspector({
   const valueList = seg
     ? (Array.isArray(seg.value) ? seg.value : [seg.value])
     : [];
+  const sugDisagree = suggestion ? D.suggestionDisagreement(suggestion) : null;
+  const sugEvidence = suggestion ? D.suggestionEvidenceText(suggestion) : null;
+  const sugConf = suggestion && typeof suggestion.confidence === "number"
+    ? Math.max(0, Math.min(1, suggestion.confidence)) : null;
 
   return (
     <div className="hg-scroll" style={{
@@ -1027,7 +1210,72 @@ function VLInspector({
         )}
       </div>
 
-      {/* selected segment */}
+      {/* selected suggestion — review mode (M3) */}
+      {suggestion ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <span style={VL_SECTION_TITLE}>suggestion · review</span>
+          <div style={{ display: "flex", gap: 5, alignItems: "center", flexWrap: "wrap" }}>
+            <VLChip label={VL_AXIS_TITLES[axis] || axis} tone="default" />
+            <VLChip label="prelabel" tone="warn" />
+            {suggestion.source && <VLChip label={suggestion.source} tone="dim" />}
+            {sugConf != null && (
+              <VLChip
+                label={"conf " + Math.round(sugConf * 100) + "%"}
+                tone={sugConf < VL_LOW_CONF ? "warn" : "default"}
+              />
+            )}
+            {sugDisagree != null && (
+              <VLChip
+                label={"! disagree " + Number(sugDisagree).toFixed(2)}
+                tone="crit"
+                title="a cross-check (pose geometry / motion / adjacency) disputes this suggestion"
+              />
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+            <span style={{
+              fontSize: 12.5, letterSpacing: "0.06em",
+              color: D.colorFor(Array.isArray(suggestion.value) && suggestion.value.length
+                ? suggestion.value[0] : suggestion.value),
+            }}>{vlValueText(suggestion.value) || "—"}</span>
+            <span style={{ fontSize: 9.5, color: "var(--hg-fg-4)" }}>
+              {suggestion.start_s.toFixed(2)}–{suggestion.end_s.toFixed(2)}s
+              {" · "}{(suggestion.end_s - suggestion.start_s).toFixed(2)}s
+            </span>
+          </div>
+          {sugEvidence && (
+            <div style={{
+              fontSize: 9.5, color: "var(--hg-fg-3)", lineHeight: 1.6,
+              borderLeft: "2px solid var(--hg-border-soft)", paddingLeft: 8,
+              letterSpacing: "0.03em",
+            }}>{sugEvidence}</div>
+          )}
+          <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+            <button
+              onClick={() => suggestionOps.review("accept")}
+              title="key A — graduate into the canonical lane"
+              style={{ ...VL_BTN_SM, color: D.colorFor("accepted") }}
+            >accept</button>
+            <button
+              onClick={() => suggestionOps.review("reject")}
+              title="key R — drop from review (the server keeps the record)"
+              style={{ ...VL_BTN_SM, color: D.colorFor("rejected") }}
+            >reject</button>
+            <button
+              onClick={() => suggestionOps.review("needs_review")}
+              title="key N — keep on the timeline as needs review"
+              style={{ ...VL_BTN_SM, color: D.colorFor("needs_review") }}
+            >needs review</button>
+            <button
+              onClick={() => suggestionOps.acceptOverlapping()}
+              title="shift+A — accept every suggestion overlapping this time range, all axes"
+              style={VL_BTN_SM}
+            >⇧A all here</button>
+          </div>
+          <span style={{ ...VL_SECTION_TITLE, marginTop: 2 }}>evidence · window keyframes</span>
+          <VLEvidenceStrip video={video} suggestion={suggestion} onSeek={suggestionOps.seek} />
+        </div>
+      ) : (
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <span style={VL_SECTION_TITLE}>selected segment</span>
         {!seg ? (
@@ -1113,6 +1361,46 @@ function VLInspector({
           </>
         )}
       </div>
+      )}
+
+      {/* suggestions — counts + calibration-locked bulk accept (M3) */}
+      {suggSummary && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <span style={VL_SECTION_TITLE}>suggestions</span>
+          <div style={{ display: "flex", gap: 5, alignItems: "center", flexWrap: "wrap" }}>
+            {suggSummary.status === "loading" && <VLChip label="loading suggestions…" tone="dim" />}
+            {suggSummary.status === "missing" && (
+              <VLChip label="suggestions API not deployed" tone="dim"
+                title="GET /suggestions returned 404 — prelabels land after the backend deploy" />
+            )}
+            {suggSummary.status === "offline" && (
+              <VLChip label="suggestions unavailable" tone="warn" title={suggSummary.reason || "service unreachable"} />
+            )}
+            {suggSummary.status === "ok" && (suggSummary.total > 0 ? (
+              <span style={{ fontSize: 9.5, color: "var(--hg-fg-3)", letterSpacing: "0.06em" }}>
+                {suggSummary.total} pending · {suggSummary.lowConf} low-conf · {suggSummary.disagreement} disagree
+              </span>
+            ) : (
+              <span style={{ fontSize: 9.5, color: "var(--hg-fg-5)", letterSpacing: "0.06em" }}>
+                none pending — run prelabel on this video
+              </span>
+            ))}
+          </div>
+          {bulk && (
+            <span title={bulk.tip} style={{ alignSelf: "flex-start" }}>
+              <button
+                onClick={() => { if (bulk.ok) bulk.run(); }}
+                disabled={!bulk.ok}
+                style={{
+                  ...VL_BTN_SM,
+                  color: bulk.ok ? "var(--hg-ice)" : "var(--hg-fg-5)",
+                  cursor: bulk.ok ? "pointer" : "not-allowed",
+                }}
+              >bulk accept{bulk.ok ? "" : " · locked"}</button>
+            </span>
+          )}
+        </div>
+      )}
 
       {/* custom labels */}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1141,7 +1429,9 @@ const VL_CHEAT_ROWS = [
   ["s", "split at playhead"], ["m", "merge with next"],
   [", / .", "nudge nearest boundary ∓/± 1 frame (shift ×10)"],
   ["del", "delete segment"], ["a / r / n / x", "accept / reject / needs review / exclude"],
-  ["p", "toggle private_skip over selection"], ["u / shift+u", "next / prev unreviewed"],
+  ["shift+a", "accept all suggestions overlapping selection"],
+  ["p", "toggle private_skip over selection"],
+  ["u / shift+u", "next / prev unreviewed (falls back to suggestions)"],
   ["f · + / −", "fit · zoom (ctrl+wheel on timeline)"],
   ["ctrl+z / y", "undo / redo"], ["ctrl+s", "save"], ["ctrl+enter", "save and next"],
 ];
@@ -1189,7 +1479,7 @@ function VLBanner({ tone, children }) {
  * player+inspector layout. Mounted only on the label tab with a video
  * selected and sim off.
  * ──────────────────────────────────────────────────────────────────── */
-function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showToast, escInterceptRef }) {
+function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showToast, escInterceptRef, onSuggStats }) {
   const D = window.HomeVideoLabelerData;
   const [state, dispatch] = useReducer(vlEditorReducer, undefined, vlEditorInit);
   const stateRef = useRef(state);
@@ -1205,6 +1495,15 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
   const [picker, setPicker] = useState(null);           // {axis, create}
   const [mergePrompt, setMergePrompt] = useState(null); // {axis, leftId, leftLabel, rightLabel}
   const [cheat, setCheat] = useState(false);
+  /* ---- M3 review state ---- */
+  const [suggestions, setSuggestions] = useState(vlEmptyAxes()); // prelabel layer, per axis
+  const suggestionsRef = useRef(suggestions);
+  suggestionsRef.current = suggestions;
+  const [suggInfo, setSuggInfo] = useState({ status: "loading", reason: null }); // ok|missing|offline
+  const [calibration, setCalibration] = useState(null); // null=loading, false=unavailable, doc
+  const calibrationRef = useRef(calibration);
+  calibrationRef.current = calibration;
+  const bulkBusyRef = useRef(false); // serializes Shift+A / bulk-accept runs
 
   const fps = (video && video.fps) || 30;
   const minDur = Math.max(0.2, 3 / fps); // plan: max(0.2s, 3/fps)
@@ -1284,6 +1583,75 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
     }
   }, [video.id]);
 
+  /* ---------- M3: suggestions + calibration ---------- */
+
+  /* report fresh stats up to the overlay's per-video cache (queue filters) */
+  const publishSuggStats = useCallback((axes) => {
+    if (onSuggStats) onSuggStats(video.id, vlSuggStats(axes));
+  }, [video.id, onSuggStats]);
+
+  useEffect(() => {
+    let dead = false;
+    (async () => {
+      const r = await D.getSuggestions(video.id);
+      if (dead) return;
+      if (r.ok && r.data) {
+        const axes = vlNormalizeAxes(r.data.axes);
+        setSuggestions(axes);
+        suggestionsRef.current = axes;
+        setSuggInfo({ status: "ok", reason: null });
+        publishSuggStats(axes);
+      } else if (r.status === 404) {
+        /* suggestions API not deployed yet — empty ghosts, quiet chip */
+        setSuggInfo({ status: "missing", reason: "suggestions API not deployed" });
+      } else {
+        setSuggInfo({ status: "offline", reason: r.error || "service unreachable" });
+      }
+    })();
+    return () => { dead = true; };
+  }, [video.id, publishSuggStats]);
+
+  useEffect(() => {
+    let dead = false;
+    (async () => {
+      const r = await D.getCalibration();
+      if (!dead) setCalibration(r.ok && r.data ? r.data : false);
+    })();
+    return () => { dead = true; };
+  }, [video.id]);
+
+  /* dev/test hook: inject suggestion fixtures from the console without the
+     prelabel pipeline (window.__vlDev.injectSuggestions({axes})) */
+  useEffect(() => {
+    window.__vlDev = {
+      injectSuggestions: (axes) => {
+        const n = vlNormalizeAxes(axes);
+        setSuggestions(n);
+        suggestionsRef.current = n;
+        setSuggInfo({ status: "ok", reason: null });
+        publishSuggStats(n);
+      },
+    };
+    return () => { delete window.__vlDev; };
+  }, [publishSuggStats]);
+
+  /* drop reviewed suggestions from the layer (server keeps its rows);
+     clears a selection that pointed at one of them */
+  const removeSuggestionIds = useCallback((ids) => {
+    const idSet = {};
+    for (const id of ids) idSet[id] = true;
+    const cur = suggestionsRef.current;
+    const next = {};
+    for (const ax of VL_AXIS_ORDER) next[ax] = (cur[ax] || []).filter((s) => !idSet[s.id]);
+    suggestionsRef.current = next;
+    setSuggestions(next);
+    publishSuggStats(next);
+    const sel = stateRef.current.selection;
+    if (vlIsSuggestionSel(sel) && idSet[sel.segId]) {
+      dispatch({ type: "SELECT", axis: sel.axis, segId: null });
+    }
+  }, [publishSuggStats]);
+
   /* ---------- ontology-driven value lists ---------- */
 
   const canonicalInfo = useCallback((axis) => {
@@ -1352,9 +1720,11 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
 
   const laneOf = useCallback((axis) => stateRef.current.doc.axes[axis] || [], []);
 
+  /* canonical selection only — suggestion selections resolve to null here
+     so every M1 editing op safely no-ops on a selected suggestion */
   const selectedSeg = useCallback(() => {
     const s = stateRef.current;
-    if (!s.selection) return null;
+    if (!s.selection || vlIsSuggestionSel(s.selection)) return null;
     return (s.doc.axes[s.selection.axis] || []).find((x) => x.id === s.selection.segId) || null;
   }, []);
 
@@ -1523,6 +1893,128 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
     }
   }, [selectedSeg, laneOf, commitLane, video.id, showToast]);
 
+  /* ---------- M3: suggestion review (accept graduates into the lane) ---- */
+
+  /* A/R/N/X with a SUGGESTION selected. Suggestions are server rows only —
+     no local/tmp path — so the labels API must be reachable. accept /
+     needs_review / exclude graduate the row out of the prelabel layer
+     server-side: project the returned canonical segment into the doc and
+     adopt the bumped revision. reject only adopts the revision — the doc
+     deliberately does NOT take the rejected row (it would overlap real
+     labels and PUT enforces non-overlap); the next save retires it and the
+     record survives as history + the calibration verdict already counted. */
+  const reviewSuggestion = useCallback(async (action) => {
+    const sel = stateRef.current.selection;
+    if (!vlIsSuggestionSel(sel)) return;
+    const seg = (suggestionsRef.current[sel.axis] || []).find((x) => x.id === sel.segId);
+    if (!seg) return;
+    if (labelsApiRef.current.status !== "ok") {
+      showToast("review unavailable · " + (labelsApiRef.current.reason || "labels API offline"));
+      return;
+    }
+    const r = await D.reviewSegment(video.id, seg.id, action);
+    if (!(r.ok && r.data)) {
+      showToast("review failed · " + (r.error || "service unreachable"));
+      return;
+    }
+    removeSuggestionIds([seg.id]);
+    const clean = { ...(r.data.segment || {}) };
+    delete clean.axis; // server echoes the axis; the doc shape carries none
+    if (action === "reject") {
+      dispatch({ type: "GRADUATE", items: [], revision: r.data.revision });
+      showToast("rejected · " + vlValueText(seg.value));
+    } else {
+      dispatch({
+        type: "GRADUATE",
+        items: clean.id ? [{ axis: sel.axis, segment: clean }] : [],
+        revision: r.data.revision, minDur,
+      });
+      if (clean.id) dispatch({ type: "SELECT", kind: "canonical", axis: sel.axis, segId: clean.id });
+      showToast((VL_REVIEW_RESULT[action] || action).replace(/_/g, " ") + " · " + vlValueText(seg.value));
+    }
+  }, [video.id, minDur, removeSuggestionIds, showToast]);
+
+  /* sequential accepts over a target list — shared by Shift+A and the
+     (calibration-gated) bulk button; failures collect into ONE toast */
+  const acceptList = useCallback(async (targets) => {
+    if (bulkBusyRef.current || !targets.length) return;
+    if (labelsApiRef.current.status !== "ok") {
+      showToast("review unavailable · " + (labelsApiRef.current.reason || "labels API offline"));
+      return;
+    }
+    bulkBusyRef.current = true;
+    const okIds = [];
+    const okItems = [];
+    const failures = [];
+    let revision = null;
+    for (const t of targets) {
+      const r = await D.reviewSegment(video.id, t.seg.id, "accept");
+      if (r.ok && r.data) {
+        if (r.data.revision != null) revision = r.data.revision;
+        const clean = { ...(r.data.segment || {}) };
+        delete clean.axis;
+        if (clean.id) {
+          okItems.push({ axis: t.axis, segment: clean });
+          okIds.push(t.seg.id);
+        }
+      } else {
+        failures.push(vlValueText(t.seg.value) + " · " + (r.error || "error"));
+      }
+    }
+    bulkBusyRef.current = false;
+    if (okIds.length) {
+      removeSuggestionIds(okIds);
+      dispatch({ type: "GRADUATE", items: okItems, revision, minDur });
+    }
+    showToast(failures.length
+      ? ("accepted " + okIds.length + " · " + failures.length + " failed: "
+         + failures.slice(0, 3).join("; ") + (failures.length > 3 ? " +" + (failures.length - 3) + " more" : ""))
+      : ("accepted " + okIds.length + " suggestion" + (okIds.length === 1 ? "" : "s")));
+  }, [video.id, minDur, removeSuggestionIds, showToast]);
+
+  /* Shift+A — accept ALL suggestions overlapping the selected suggestion's
+     time range, across every axis */
+  const acceptOverlapping = useCallback(() => {
+    const sel = stateRef.current.selection;
+    if (!vlIsSuggestionSel(sel)) {
+      showToast("select a suggestion first — shift+A accepts everything overlapping it");
+      return;
+    }
+    const anchor = (suggestionsRef.current[sel.axis] || []).find((x) => x.id === sel.segId);
+    if (!anchor) return;
+    const targets = [];
+    for (const ax of VL_AXIS_ORDER) {
+      for (const seg of suggestionsRef.current[ax] || []) {
+        if (seg.start_s < anchor.end_s - 1e-6 && seg.end_s > anchor.start_s + 1e-6) {
+          targets.push({ axis: ax, seg });
+        }
+      }
+    }
+    acceptList(targets);
+  }, [acceptList, showToast]);
+
+  /* bulk accept — NEVER enabled unless the server's calibration doc says
+     bulk_ok for an axis; then accepts that axis's conf ≥ 0.8 suggestions */
+  const bulkAcceptCalibrated = useCallback(() => {
+    const cal = calibrationRef.current;
+    if (!cal || !cal.axes) return;
+    const targets = [];
+    for (const ax of VL_AXIS_ORDER) {
+      const c = cal.axes[ax];
+      if (!c || !c.bulk_ok) continue;
+      for (const seg of suggestionsRef.current[ax] || []) {
+        if (typeof seg.confidence === "number" && seg.confidence >= 0.8) {
+          targets.push({ axis: ax, seg });
+        }
+      }
+    }
+    if (!targets.length) {
+      showToast("no conf ≥ 0.8 suggestions on calibrated axes");
+      return;
+    }
+    acceptList(targets);
+  }, [acceptList, showToast]);
+
   /* P — toggle quality 'private_skip' over the selection's time range */
   const togglePrivate = useCallback(() => {
     const sel = selectedSeg();
@@ -1550,26 +2042,49 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
     }
   }, [selectedSeg, laneOf, minDur, commitLane, showToast]);
 
-  /* U / shift+U — jump to the next/prev prelabel|needs_review segment */
+  /* U / shift+U — jump to the next/prev canonical prelabel|needs_review
+     segment; when none exists past the anchor, fall through to the next
+     SUGGESTION (M3) so U walks the whole review queue */
   const jumpUnreviewed = useCallback((dir) => {
     const s = stateRef.current;
+    const pick = (cands, anchor) => dir > 0
+      ? cands.find((c) => c.seg.start_s > anchor + 1e-6)
+      : cands.slice().reverse().find((c) => c.seg.start_s < anchor - 1e-6);
     const cands = [];
     for (const axis of VL_AXIS_ORDER) {
       for (const seg of s.doc.axes[axis] || []) {
-        if (seg.review_state === "prelabel" || seg.review_state === "needs_review") cands.push({ axis, seg });
+        if (seg.review_state === "prelabel" || seg.review_state === "needs_review") {
+          cands.push({ kind: "canonical", axis, seg });
+        }
       }
     }
     cands.sort((a, b) => a.seg.start_s - b.seg.start_s);
-    if (!cands.length) { showToast("nothing waiting for review"); return; }
-    const sel = selectedSeg();
-    const anchor = sel ? sel.start_s : transport().getTime();
-    const next = dir > 0
-      ? cands.find((c) => c.seg.start_s > anchor + 1e-6)
-      : cands.slice().reverse().find((c) => c.seg.start_s < anchor - 1e-6);
-    if (!next) { showToast(dir > 0 ? "no unreviewed segment after this" : "no unreviewed segment before this"); return; }
-    dispatch({ type: "SELECT", axis: next.axis, segId: next.seg.id });
+    /* anchor: the selected segment OR suggestion's start; else the playhead */
+    let anchor = transport().getTime();
+    const sel = s.selection;
+    if (sel) {
+      const src = vlIsSuggestionSel(sel) ? suggestionsRef.current : s.doc.axes;
+      const seg = (src[sel.axis] || []).find((x) => x.id === sel.segId);
+      if (seg) anchor = seg.start_s;
+    }
+    let next = pick(cands, anchor);
+    if (!next) {
+      const sugs = [];
+      for (const axis of VL_AXIS_ORDER) {
+        for (const seg of suggestionsRef.current[axis] || []) {
+          sugs.push({ kind: "suggestion", axis, seg });
+        }
+      }
+      sugs.sort((a, b) => a.seg.start_s - b.seg.start_s);
+      next = pick(sugs, anchor);
+    }
+    if (!next) {
+      showToast(dir > 0 ? "nothing to review after this" : "nothing to review before this");
+      return;
+    }
+    dispatch({ type: "SELECT", kind: next.kind, axis: next.axis, segId: next.seg.id });
     transport().seekTo(next.seg.start_s);
-  }, [selectedSeg, transport, showToast]);
+  }, [transport, showToast]);
 
   const selectAdjacent = useCallback((dir) => {
     const s = stateRef.current;
@@ -1736,10 +2251,29 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
       case ".": handled(); nudgeBoundary(1); return;
       case ">": handled(); nudgeBoundary(10); return;
       case "delete": case "backspace": handled(); deleteSelected(); return;
-      case "a": handled(); reviewSelected("accept"); return;
-      case "r": handled(); reviewSelected("reject"); return;
-      case "n": handled(); reviewSelected("needs_review"); return;
-      case "x": handled(); reviewSelected("exclude"); return;
+      /* A/R/N/X route to the suggestion review flow when a SUGGESTION is
+         selected; Shift+A bulk-accepts everything overlapping it */
+      case "a":
+        handled();
+        if (vlIsSuggestionSel(stateRef.current.selection)) {
+          if (e.shiftKey) acceptOverlapping(); else reviewSuggestion("accept");
+        } else reviewSelected("accept");
+        return;
+      case "r":
+        handled();
+        if (vlIsSuggestionSel(stateRef.current.selection)) reviewSuggestion("reject");
+        else reviewSelected("reject");
+        return;
+      case "n":
+        handled();
+        if (vlIsSuggestionSel(stateRef.current.selection)) reviewSuggestion("needs_review");
+        else reviewSelected("needs_review");
+        return;
+      case "x":
+        handled();
+        if (vlIsSuggestionSel(stateRef.current.selection)) reviewSuggestion("exclude");
+        else reviewSelected("exclude");
+        return;
       case "p": handled(); togglePrivate(); return;
       case "u": handled(); jumpUnreviewed(e.shiftKey ? -1 : 1); return;
       case "f": handled(); tr.zoomFit(); return;
@@ -1784,12 +2318,14 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
     axisTitle: VL_AXIS_TITLES[state.activeAxis],
     minDur,
     palette,
+    suggestions,
     transportRef,
     onPalettePick: (v) => applyValue(stateRef.current.activeAxis, v),
     onSelect: (axis, segId) => dispatch({ type: "SELECT", axis, segId }),
     onCommit: (axis, segments, undoEntry) => dispatch({ type: "SET_SEGMENTS", axis, segments, undoEntry }),
     onCreate: (axis, t) => createAt(axis, t, null),
-  }), [lanes, state.selection, state.activeAxis, minDur, palette, applyValue, createAt]);
+    onSelectSuggestion: (axis, segId) => dispatch({ type: "SELECT", kind: "suggestion", axis, segId }),
+  }), [lanes, state.selection, state.activeAxis, minDur, palette, suggestions, applyValue, createAt]);
 
   const ops = useMemo(() => ({
     openPicker: (create) => setPicker({ axis: stateRef.current.activeAxis, create: !!create }),
@@ -1802,9 +2338,59 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
     saveNext: () => doSave(true),
   }), [setEdgeTo, reviewSelected, deleteSelected, setAux, doSave]);
 
-  const selSeg = state.selection
+  const selSeg = (state.selection && !vlIsSuggestionSel(state.selection))
     ? (state.doc.axes[state.selection.axis] || []).find((x) => x.id === state.selection.segId) || null
     : null;
+  const selSugg = vlIsSuggestionSel(state.selection)
+    ? (suggestions[state.selection.axis] || []).find((x) => x.id === state.selection.segId) || null
+    : null;
+
+  /* suggestions summary for the inspector section */
+  const suggSummary = useMemo(
+    () => ({ status: suggInfo.status, reason: suggInfo.reason, ...vlSuggStats(suggestions) }),
+    [suggInfo, suggestions]
+  );
+
+  /* bulk-accept gate: locked until the server's calibration doc clears an
+     axis (wilson lower bound ≥ wilson_min over the conf ≥ 0.8 verdicts).
+     The tooltip shows "n so far / n needed" per axis — n needed is the
+     MINIMUM verdict count that could clear the gate even at 100%
+     acceptance: wilson_lower(n,n) ≥ m  ⇔  n ≥ z²·m/(1−m). */
+  const bulkInfo = useMemo(() => {
+    if (calibration === null) return { ok: false, tip: "bulk accept locked — calibration loading…" };
+    if (!calibration || !calibration.axes) {
+      return { ok: false, tip: "bulk accept locked — calibration API unavailable" };
+    }
+    const m = typeof calibration.wilson_min === "number" ? calibration.wilson_min : 0.95;
+    const z = 1.96;
+    const need = Math.ceil((z * z) * m / (1 - m));
+    const parts = [];
+    let anyOk = false;
+    for (const ax of VL_AXIS_ORDER) {
+      const c = calibration.axes[ax];
+      if (!c) continue;
+      const td = c.top_deciles || {};
+      parts.push((VL_AXIS_TITLES[ax] || ax) + " " + (td.n || 0) + "/" + need
+        + (c.bulk_ok ? " ✓" : ""));
+      if (c.bulk_ok) anyOk = true;
+    }
+    return {
+      ok: anyOk,
+      tip: "unlocks per axis at wilson ≥ " + m + " over conf ≥ 0.8 human verdicts — "
+        + (parts.length ? parts.join(" · ") : "no calibration data yet"),
+    };
+  }, [calibration]);
+
+  const suggestionOps = useMemo(() => ({
+    review: reviewSuggestion,
+    acceptOverlapping,
+    seek: (t) => transport().seekTo(t),
+  }), [reviewSuggestion, acceptOverlapping, transport]);
+
+  const bulk = useMemo(
+    () => ({ ok: bulkInfo.ok, tip: bulkInfo.tip, run: bulkAcceptCalibrated }),
+    [bulkInfo, bulkAcceptCalibrated]
+  );
 
   const pickerValues = useMemo(() => {
     if (!picker) return [];
@@ -1889,6 +2475,10 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
         canonicalInfo={canonicalInfo}
         refreshOntology={refreshOntology}
         showToast={showToast}
+        suggestion={selSugg}
+        suggestionOps={suggestionOps}
+        suggSummary={suggSummary}
+        bulk={bulk}
       />
     </div>
   );
@@ -2046,6 +2636,10 @@ function HomeVideoLabelerOverlay({ open, onClose, sim }) {
   const [importing, setImporting] = useState(false);
   const [toast, setToast] = useState(null);
   const [ontology, setOntology] = useState(null);     // null=loading, false=offline, object=loaded
+  /* M3 queue filters: per-video suggestion stats are cached here as videos
+     get opened (the editor loads /suggestions for its own video only) */
+  const [queueFilter, setQueueFilter] = useState("all");
+  const [suggStats, setSuggStats] = useState({});     // {videoId: {total, lowConf, disagreement}}
   const wasMaximizedRef = useRef(null);
   const toastTimerRef = useRef(null);
   /* VLEditor installs a callback here; the capture-phase Escape handler
@@ -2156,11 +2750,37 @@ function HomeVideoLabelerOverlay({ open, onClose, sim }) {
     }
   }, [refresh, showToast]);
 
+  const onSuggStats = useCallback((videoId, stats) => {
+    setSuggStats((cur) => ({ ...cur, [videoId]: stats }));
+  }, []);
+
   if (!open) return null;
 
   const base = D.vlBase();
   const healthLive = !!(healthInfo && healthInfo !== false);
   const selected = (videos || []).find((v) => v.id === selectedId) || null;
+
+  /* queue filter: HONEST client-side triage over cached stats only —
+     matches sorted by the filter's metric (desc), then videos we have no
+     data for (never opened → never loaded /suggestions); cached videos
+     with a zero metric are filtered out (the selected one stays). */
+  const visibleVideos = (() => {
+    const list = videos || [];
+    if (queueFilter === "all") return list;
+    const metric = (st) => !st ? -1
+      : queueFilter === "unreviewed" ? st.total
+      : queueFilter === "low-conf" ? st.lowConf
+      : st.disagreement;
+    const matches = [];
+    const unknown = [];
+    for (const v of list) {
+      const st = suggStats[v.id];
+      if (!st) unknown.push(v);
+      else if (metric(st) > 0 || v.id === selectedId) matches.push(v);
+    }
+    matches.sort((a, b) => metric(suggStats[b.id]) - metric(suggStats[a.id]));
+    return matches.concat(unknown);
+  })();
 
   const tabBtn = (id) => (
     <button
@@ -2271,6 +2891,30 @@ function HomeVideoLabelerOverlay({ open, onClose, sim }) {
                 labeler · {healthInfo === null ? "…" : healthLive ? "live" : "offline"}
               </span>
             </div>
+            {/* queue filter chips (M3) — client-side triage over cached
+                suggestion stats; no server review-queue endpoint yet */}
+            <div style={{
+              display: "flex", gap: 4, padding: "7px 10px", flexWrap: "wrap",
+              borderBottom: "1px solid var(--hg-border-soft)", alignItems: "center",
+            }}>
+              {VL_QUEUE_FILTERS.map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setQueueFilter(f)}
+                  title={f === "all" ? "every video"
+                    : "videos with " + (f === "unreviewed" ? "pending suggestions"
+                      : f === "low-conf" ? "low-confidence suggestions" : "disagreement-flagged suggestions")
+                      + " — uses data loaded this session; unopened videos sort last"}
+                  style={{
+                    background: "transparent",
+                    border: "1px solid " + (queueFilter === f ? "var(--hg-ice)" : "var(--hg-border-soft)"),
+                    color: queueFilter === f ? "var(--hg-ice)" : "var(--hg-fg-4)",
+                    padding: "2px 7px", fontFamily: VL_FONT_MONO, fontSize: 8.5,
+                    letterSpacing: "0.1em", textTransform: "lowercase", cursor: "pointer",
+                  }}
+                >{f}</button>
+              ))}
+            </div>
             <div className="hg-scroll" style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
               {videosErr && (
                 <div style={{
@@ -2290,12 +2934,21 @@ function HomeVideoLabelerOverlay({ open, onClose, sim }) {
                   then import inbox.
                 </div>
               )}
-              {(videos || []).map((v) => (
+              {queueFilter !== "all" && (
+                <div style={{
+                  padding: "6px 12px", color: "var(--hg-fg-5)", fontSize: 8.5,
+                  letterSpacing: "0.08em", borderBottom: "1px solid var(--hg-border-soft)",
+                }}>
+                  sorted by loaded suggestion data — open a video to load its counts
+                </div>
+              )}
+              {visibleVideos.map((v) => (
                 <VLVideoRow
                   key={v.id}
                   video={v}
                   selected={v.id === selectedId}
                   onClick={() => setSelectedId(v.id)}
+                  sug={suggStats[v.id] || null}
                 />
               ))}
             </div>
@@ -2312,6 +2965,7 @@ function HomeVideoLabelerOverlay({ open, onClose, sim }) {
               onPickVideo={setSelectedId}
               showToast={showToast}
               escInterceptRef={escInterceptRef}
+              onSuggStats={onSuggStats}
             />
           ) : (
             <div style={{

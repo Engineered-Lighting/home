@@ -125,6 +125,67 @@
       vlJsonInit("POST", { action: action })
     );
   }
+
+  /* ---------------- suggestions + calibration (M3) ----------------
+   * Coded against videolabeler/api/labels.py + media.py + prelabel.py:
+   *   GET /videos/{id}/suggestions → {axes:{activity_primary|posture|
+   *       quality|custom:[SEG]}} — the prelabel layer; carries NO revision
+   *       (suggestions never bump it). Accepting goes through the review
+   *       endpoint, which graduates the row into the canonical lane.
+   *   GET /videos/{id}/windows/{wid}/keyframes → {video_id, window_id,
+   *       keyframes:[{t, frame, crop|null}]} — frame/crop are
+   *       service-relative file paths (sibling endpoint serves the JPEGs).
+   *   GET /calibration?axis= → {axes:{<axis>:{deciles, top_deciles:{n,
+   *       accepted, acceptance, wilson_lower}, bulk_ok}}, wilson_min}. */
+  function getSuggestions(videoId) {
+    return vlApi("/api/video-labeler/videos/" + vlEnc(videoId) + "/suggestions");
+  }
+  function getWindowKeyframes(videoId, windowId) {
+    return vlApi(
+      "/api/video-labeler/videos/" + vlEnc(videoId) + "/windows/" + vlEnc(windowId) + "/keyframes"
+    );
+  }
+  function getCalibration(axis) {
+    return vlApi("/api/video-labeler/calibration" + (axis ? "?axis=" + vlEnc(axis) : ""));
+  }
+
+  /* Analysis-window id convention (videolabeler/jobs/windows.py):
+     aw_<video>_<start_ms>. seg_to_api serializes no window linkage, but
+     suggestions carry their window's EXACT geometry — derive the id from
+     the suggestion's start_s to fetch the evidence keyframes. */
+  function windowIdFor(videoId, startS) {
+    return "aw_" + videoId + "_" + Math.round((Number(startS) || 0) * 1000);
+  }
+
+  /* SEG disagreement, tolerant: today's serializer drops evidence_json
+     entirely; if it ever surfaces, accept seg.evidence.disagreement or
+     seg.aux.disagreement. Absent/non-numeric → 0 (no badge). */
+  function suggestionDisagreement(seg) {
+    if (!seg) return 0;
+    let d = null;
+    if (seg.evidence && typeof seg.evidence === "object") d = seg.evidence.disagreement;
+    if ((d == null || typeof d !== "number") && seg.aux && typeof seg.aux === "object") {
+      d = seg.aux.disagreement;
+    }
+    return (typeof d === "number" && d > 0) ? d : null;
+  }
+
+  /* Human-readable evidence text for the inspector, tolerant of shape
+     variants (aux.notes, evidence as string, evidence.{evidence,notes,
+     other_hint}); null when nothing usable exists. */
+  function suggestionEvidenceText(seg) {
+    if (!seg) return null;
+    if (seg.aux && typeof seg.aux === "object" &&
+        typeof seg.aux.notes === "string" && seg.aux.notes) return seg.aux.notes;
+    const ev = seg.evidence;
+    if (typeof ev === "string" && ev) return ev;
+    if (ev && typeof ev === "object") {
+      if (typeof ev.evidence === "string" && ev.evidence) return ev.evidence;
+      if (typeof ev.notes === "string" && ev.notes) return ev.notes;
+      if (typeof ev.other_hint === "string" && ev.other_hint) return "hint: " + ev.other_hint;
+    }
+    return null;
+  }
   function listCustomLabels(q, axis) {
     const p = [];
     if (q) p.push("q=" + vlEnc(q));
@@ -235,6 +296,17 @@
     const base = vlBase();
     if (!base) return null;
     return base + "/api/video-labeler/videos/" + vlEnc(id) + "/sprite";
+  }
+
+  /* Keyframe refs come from the keyframes listing (entry.frame / entry.crop)
+     and are service-relative ("/api/video-labeler/videos/…/keyframes/
+     frame_0.jpg") or absolute. Null under sim (media bypasses tauriFetch). */
+  function keyframeUrl(ref) {
+    const base = vlBase();
+    if (!base || !ref) return null;
+    const r = String(ref);
+    if (/^https?:\/\//i.test(r)) return r;
+    return base + (r.charAt(0) === "/" ? "" : "/") + r;
   }
 
   /* Sheet refs come out of the manifest's sheets[] and may be absolute or
@@ -586,10 +658,13 @@
     getOntology, getLabels, putLabels, reviewSegment,
     listCustomLabels, createCustomLabel, mergeCustomLabel,
     hideCustomLabel, promoteCustomLabel,
+    // suggestions + calibration (M3)
+    getSuggestions, getWindowKeyframes, getCalibration,
+    windowIdFor, suggestionDisagreement, suggestionEvidenceText,
     // draft persistence (best-effort localStorage)
     saveDraft, loadDraft, clearDraft, validateDraftDoc,
     // media url builders (plain strings; null under sim)
-    streamUrl, spriteManifestUrl, spriteSheetUrl,
+    streamUrl, spriteManifestUrl, spriteSheetUrl, keyframeUrl,
     // taxonomies + colors
     VL_ACTIVITY, VL_POSTURE, VL_QUALITY, VL_REVIEW_STATES,
     VL_VALUE_COLORS, colorFor,

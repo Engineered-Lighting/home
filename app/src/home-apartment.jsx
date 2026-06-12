@@ -580,9 +580,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
           <img
             src={`${(localStorage.getItem("apartment3d.frigateBase") || "http://192.168.0.125:5000")}/api/${liveCam.camera.frigate_name}`}
             alt={liveCam.name}
-            style={{ width: "78%", aspectRatio: "16 / 9", objectFit: "cover",
-                     border: "1px solid rgba(160,190,230,0.35)",
-                     boxShadow: "0 8px 48px rgba(0,0,0,0.7)" }}
+            style={{ height: "74vh", aspectRatio: "16 / 9", objectFit: "cover",
+                     boxShadow: "0 0 60px 10px rgba(0,0,0,0.35)" }}
           />
           <div style={{ position: "absolute", top: 52, left: 18, fontFamily: APT_FONT_MONO,
                         fontSize: 9.5, letterSpacing: "0.12em", color: "var(--hg-ice)",
@@ -649,7 +648,11 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
               onClose={() => setCardId(null)}
               onService={callSvc}
               onFlyTo={(dev) => {
-                engineRef.current?.flyToDevice(dev);
+                const calib = !!(dev.camera && dev.camera.extrinsics && dev.camera.intrinsics);
+                // calibrated snap: textured mesh background + fov widened so
+                // the centered feed (74vh) continues seamlessly into the mesh
+                if (calib) engineRef.current?.modes.setMode("mesh", { duration: 0 }).catch(() => {});
+                engineRef.current?.flyToDevice(dev, { fovScale: calib ? 1 / 0.74 : 1 });
                 // camera feed FIRST once the flight lands; 3D stays one toggle away
                 if (!simActive && dev.camera?.frigate_name) {
                   setTimeout(() => { setLiveCam(dev); setLiveOn(true); }, 950);

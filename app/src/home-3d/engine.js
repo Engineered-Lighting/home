@@ -138,8 +138,15 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
         if (pointsMaterial.uniforms.uWallNear) {
             pointsMaterial.uniforms.uWallNear.value = orbitR < 9.0 ? orbitR * 0.75 : 0.0;
         }
+        const inCamPose = rig.inCameraPose && rig.inCameraPose();
         if (modes.setMeshNearCut) {
-            modes.setMeshNearCut(orbitR < 9.0 ? orbitR * 0.55 : 0.0);
+            // melt near geometry at room zoom, but NEVER while sitting at a
+            // camera's pose (the wall behind the camera must stay solid so the
+            // live feed blends into continuous mesh)
+            modes.setMeshNearCut(!inCamPose && orbitR < 9.0 ? orbitR * 0.55 : 0.0);
+        }
+        if (inCamPose && pointsMaterial.uniforms.uWallNear) {
+            pointsMaterial.uniforms.uWallNear.value = 0.0;
         }
         modes.update(dt);
         overlay.update(dt);
@@ -202,7 +209,7 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
         /* Fly to a camera device's pose. Calibrated extrinsics (P4) when
          * present; else the manual pose (device pos + yaw, slight downward
          * pitch) — honest 'not calibrated' approximation. */
-        flyToDevice(device, { dur = 900 } = {}) {
+        flyToDevice(device, { dur = 900, fovScale = 1 } = {}) {
             apartmentRoot.updateMatrixWorld(true);
             const pos = new THREE.Vector3(device.pos[0], device.pos[1], device.pos[2] ?? 1.6);
             const worldPos = apartmentRoot.localToWorld(pos.clone());
@@ -228,6 +235,13 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
                 const m = new THREE.Matrix4().lookAt(worldPos, lookWorld, camera.up);
                 worldQuat = new THREE.Quaternion().setFromRotationMatrix(m);
                 fov = 70;
+            }
+            if (fovScale !== 1) {
+                // widen so the central (1/fovScale) band of the viewport spans
+                // exactly the camera's true fov -> a centered live feed at that
+                // fraction continues seamlessly into the surrounding mesh
+                fov = THREE.MathUtils.radToDeg(
+                    2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(fov) / 2) * fovScale));
             }
             rig.flyToPose({ position: worldPos, quaternion: worldQuat, fov, dur });
         },

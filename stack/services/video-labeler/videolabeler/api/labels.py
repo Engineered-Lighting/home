@@ -68,6 +68,23 @@ def build_router(cfg) -> APIRouter:
             _video(conn, video_id)
             return labels.labels_doc(conn, video_id)
 
+    @router.get("/videos/{video_id}/suggestions")
+    def get_suggestions(video_id: str):
+        """The suggestion layer (review_state='prelabel', current rows) in
+        the labels-doc shape, MINUS the revision (suggestions never bump
+        it). Accepting one goes through the review endpoint, which
+        graduates it into the canonical lane."""
+        with db.open_db(cfg.db_path) as conn:
+            _video(conn, video_id)
+            axes: dict = {api: [] for api in labels.API_AXES}
+            rows = conn.execute(
+                "SELECT * FROM segments WHERE video_id = ? AND is_current = 1"
+                " AND review_state = 'prelabel' ORDER BY start_s, id",
+                (video_id,))
+            for r in rows:
+                axes[labels._DB_TO_API_AXIS[r["axis"]]].append(labels.seg_to_api(r))
+            return {"axes": axes}
+
     @router.put("/videos/{video_id}/labels")
     def put_labels(video_id: str, body: LabelsPutRequest):
         with db.open_db(cfg.db_path) as conn:

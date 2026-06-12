@@ -1,15 +1,24 @@
 FROM python:3.11-slim
 
-# ffmpeg/ffprobe back the probe/proxy/sprite jobs. No torch/ultralytics in M0 —
-# the image stays slim until the gpu-lane milestones land.
+# ffmpeg/ffprobe back the probe/proxy/sprite jobs; libgl1/libglib2.0-0 are
+# opencv runtime deps (ultralytics pulls opencv-python).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# M2 perception stack -- pinned HERE, not in requirements.txt, so the Windows
+# test venv never pulls torch (perception imports are lazy/guarded; the API
+# process never loads them). cu128 wheels match the RTX 6000 Blackwell host.
+# The image grows several GB at M2 -- accepted.
+RUN pip install --no-cache-dir \
+        --extra-index-url https://download.pytorch.org/whl/cu128 \
+        torch==2.9.1 torchvision==0.24.1 \
+    && pip install --no-cache-dir "ultralytics==8.3.*" "av>=14.4,<16"
 
 COPY main.py ./
 COPY videolabeler ./videolabeler

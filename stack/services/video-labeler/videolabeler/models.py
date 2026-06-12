@@ -106,6 +106,13 @@ class ReviewRequest(BaseModel):
     action: str
 
 
+# --- M2 prelabel trigger: explicit ids OR everything still pending.
+
+class PrelabelRequest(BaseModel):
+    video_ids: Optional[list[str]] = None
+    all_pending: bool = False
+
+
 class CustomLabelCreate(BaseModel):
     axis: str
     name: str

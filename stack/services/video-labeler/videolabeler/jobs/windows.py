@@ -83,3 +83,7 @@ def run(job, ctx) -> None:
                       msg=f"windows {i + len(chunk)}/{len(windows)}")
     log.info("analysis grid for %s: %d window(s), %d inserted (%d pre-existing)",
              vid, len(windows), inserted, len(windows) - inserted)
+    # M2 chain: perception fills person_presence/motion/pose for this grid
+    # (idempotency-keyed -- a windows re-run never duplicates it)
+    q.enqueue(conn, "perceive", {"video_id": vid}, lane="cpu",
+              idempotency_key=f"perceive:{vid}")

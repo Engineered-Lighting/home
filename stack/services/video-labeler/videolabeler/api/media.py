@@ -1,4 +1,5 @@
-"""Media endpoints: Range-capable stream + sprite manifest/sheets.
+"""Media endpoints: Range-capable stream + sprite manifest/sheets + the M2
+per-window keyframe evidence strip (list + file serve).
 
 The Range handler is HAND-ROLLED single-range bytes support — Starlette has
 no automatic Range on StreamingResponse, and <video> seeking dies without
@@ -11,6 +12,7 @@ import json
 import logging
 import mimetypes
 import os
+import re
 from typing import Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Request
@@ -141,6 +143,49 @@ def build_router(cfg) -> APIRouter:
             sheets=[f"/api/video-labeler/videos/{video_id}/sprite/{n}"
                     for n in range(int(meta.get("sheets", 0)))])
         return manifest.model_dump(mode="json")
+
+    # ------------------------------------------- M2 keyframe evidence strip
+
+    _KEYFRAME_FILE_RE = re.compile(r"^(frame|crop)_\d+\.jpg$")
+
+    def _window(conn, video_id: str, window_id: str) -> None:
+        """404 unless the window row exists for this video -- this is also
+        the path-traversal guard: only db-known ids reach the filesystem."""
+        _video(conn, video_id)
+        row = conn.execute(
+            "SELECT id FROM analysis_windows WHERE id = ? AND video_id = ?",
+            (window_id, video_id)).fetchone()
+        if row is None:
+            raise HTTPException(404, f"window {window_id} not found for {video_id}")
+
+    @router.get("/videos/{video_id}/windows/{window_id}/keyframes")
+    def keyframes_list(video_id: str, window_id: str):
+        with db.open_db(cfg.db_path) as conn:
+            _window(conn, video_id, window_id)
+        meta_path = os.path.join(cfg.keyframes_dir, video_id, window_id,
+                                 "meta.json")
+        if not os.path.isfile(meta_path):
+            raise HTTPException(404, "keyframes not extracted")
+        with open(meta_path, encoding="utf-8") as f:
+            meta = json.load(f)
+        base = (f"/api/video-labeler/videos/{video_id}/windows/{window_id}"
+                "/keyframes")
+        return {"video_id": video_id, "window_id": window_id,
+                "keyframes": [
+                    {"t": fr["t"], "frame": f"{base}/{fr['frame']}",
+                     "crop": f"{base}/{fr['crop']}" if fr.get("crop") else None}
+                    for fr in meta.get("frames", [])]}
+
+    @router.get("/videos/{video_id}/windows/{window_id}/keyframes/{name}")
+    def keyframe_file(video_id: str, window_id: str, name: str):
+        if not _KEYFRAME_FILE_RE.match(name):
+            raise HTTPException(404, "no such keyframe")
+        with db.open_db(cfg.db_path) as conn:
+            _window(conn, video_id, window_id)
+        path = os.path.join(cfg.keyframes_dir, video_id, window_id, name)
+        if not os.path.isfile(path):
+            raise HTTPException(404, "keyframe file missing")
+        return FileResponse(path, media_type="image/jpeg")
 
     @router.get("/videos/{video_id}/sprite/{n}")
     def sprite_sheet(video_id: str, n: str):

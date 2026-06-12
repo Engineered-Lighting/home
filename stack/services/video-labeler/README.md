@@ -21,10 +21,14 @@ videolabeler/
   migrations/0001_init.sql   full v1 schema
   ontology.py                canonical axes + ACTIVE_SET + custom:<slug> regex
   models.py                  pydantic API schemas
-  api/{videos,media,jobs}.py routers (per-request connections)
+  api/{videos,media,jobs,labels,custom_labels,prelabel}.py
+                             routers (per-request connections)
   jobqueue/{states,queue,runner}.py
-  jobs/{run,import_manual,probe,proxy,sprite}.py
+  jobs/{run,import_manual,probe,proxy,sprite,windows,perceive,prelabel}.py
   media/ffmpeg.py            ffmpeg/ffprobe wrappers + progress parsing
+  media/frames.py            PyAV decode helpers (ALL heavy imports lazy)
+  vlm/{client,prompts,schema}.py
+                             OpenAI-compatible VLM client + 2-pass prompts
 tests/                       pytest (ffmpeg-dependent tests skip without it)
 ```
 
@@ -36,6 +40,11 @@ tests/                       pytest (ffmpeg-dependent tests skip without it)
 | `PORT` | `8099` | uvicorn bind port |
 | `INBOX_DIR` | `{DATA_DIR}/inbox` | manual-import scan dir |
 | `MIN_FREE_VRAM_GB` | `6` | gpu-lane guardrail (reserved; unused in M0) |
+| `VLM_BASE_URL` | `http://127.0.0.1:11434/v1` | OpenAI-compatible chat endpoint (M2) |
+| `VLM_MODEL` | `qwen2.5vl:32b` | part of the prelabel idempotency key |
+| `VLM_API_KEY` | (empty) | bearer token when the server wants one |
+| `VLM_TIMEOUT_S` | `180` | per chat-completions call |
+| `VLM_KEEP_ALIVE` | `10m` | passed through to Ollama (keep_alive) only |
 | `LOG_LEVEL` | `INFO` | |
 
 ## Data layout (under DATA_DIR)
@@ -48,6 +57,10 @@ inbox/                     drop *.mp4/*.mkv/*.mov/*.webm (+ optional
 videos/originals/{vid}/    originals moved out of the inbox (id = vid_<sha256[:16]>)
 proxies/{vid}.mp4          rotation-normalized 480p h264 +faststart
 thumbs/{vid}/sheet_{n}.jpg sprite sheets (160x90 tiles, 10 cols, <=100/sheet)
+models/yolo11n-pose.pt     downloaded once by the perceive job (M2)
+keyframes/{vid}/{wid}/     frame_{k}.jpg (<=768px) + crop_{k}.jpg (<=512px)
+                           + meta.json -- VLM input AND the M3 evidence strip
+prelabels/{vid}/{wid}.json sidecar: raw pass-1/pass-2 text + disagreement
 ```
 
 ## API (M0 contract — frozen; the frontend builds against this)
@@ -68,6 +81,22 @@ thumbs/{vid}/sheet_{n}.jpg sprite sheets (160x90 tiles, 10 cols, <=100/sheet)
 - `GET /api/video-labeler/jobs?state=&type=` (newest first, limit 200),
   `GET /jobs/{id}`, `POST /jobs/{id}/cancel` (cooperative for running jobs),
   `POST /jobs/{id}/retry` (terminal jobs only; checkpoint preserved)
+
+M2 perception + prelabel:
+
+- probe -> windows -> **perceive** auto-chain fills person_presence /
+  motion_energy / pose_summary_json per analysis window; zero-person windows
+  get merged `no_person` rule suggestions (no VLM).
+- `POST /api/video-labeler/prelabel` `{video_ids?: [...] | all_pending: true}`
+  -> enqueues perceive (when pose summaries are missing, with the prelabel
+  job chained at its tail) or the gpu-lane prelabel job directly. Holdout
+  videos are always skipped. The prelabel job fails fast with
+  `insufficient_vram` below 22 GB free (the gpu-exclusive eviction module
+  orchestrates freeing -- this service never evicts anything itself).
+- `GET /api/video-labeler/videos/{id}/windows/{window_id}/keyframes` ->
+  `{keyframes: [{t, frame, crop}]}` urls (+ `/{name}` serves the JPEGs)
+- `GET /api/video-labeler/calibration?axis=` -> per-axis acceptance curves
+  + `bulk_ok` (axis-pooled Wilson lower bound >= 0.95 over deciles 8-9)
 
 Media endpoints are UNAUTHENTICATED by design (LAN-only) — that is what lets
 `<video>` elements hit stream URLs directly.

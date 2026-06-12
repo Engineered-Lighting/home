@@ -434,8 +434,11 @@ def save_labels(conn, video_id: str, revision: int, axes) -> tuple:
         current = get_revision(conn, video_id)
         if revision != current:
             raise RevisionConflict(current)
+        holdout = _is_holdout(conn, video_id)
         for db_axis, segs in parsed.items():
             _reconcile_axis(conn, video_id, db_axis, segs, now, id_map)
+            if not holdout:
+                _calibrate_put_overlap(conn, video_id, db_axis, segs, now)
         new_revision = bump_revision(conn, video_id, now)
     return new_revision, id_map
 
@@ -459,6 +462,16 @@ def review_segment(conn, video_id: str, segment_id: str, action: str) -> tuple:
             raise KeyError(segment_id)
         if not row["is_current"]:
             raise SegmentConflict(f"segment {segment_id} is superseded")
+        # M2 calibration: the FIRST human verdict on a fresh (never stamped)
+        # NON-HOLDOUT vlm suggestion is the calibration event. reviewed_by
+        # being set (by a prior review or a PUT-overlap stamp) means the row
+        # was already counted -- never double-count.
+        if (action in ("accept", "reject") and row["source"] == "vlm"
+                and row["review_state"] == "prelabel"
+                and row["reviewed_by"] is None
+                and not _is_holdout(conn, video_id)):
+            _bump_calibration(conn, row["axis"], row["value"],
+                              row["confidence"], action == "accept", now)
         conn.execute("UPDATE segments SET review_state = ?, reviewed_by = 'human',"
                      " reviewed_at = ?, updated_at = ? WHERE id = ?",
                      (state, now, now, segment_id))
@@ -470,21 +483,162 @@ def review_segment(conn, video_id: str, segment_id: str, action: str) -> tuple:
     return revision, seg
 
 
+# ----------------------------------------------------------------- calibration
+# calibration_stats accumulates HUMAN verdicts over vlm prelabels per
+# (db axis, value, confidence decile). Two event sources, each counted at
+# most once per suggestion row (guarded by reviewed_by IS NULL):
+#   * explicit accept/reject of a source='vlm' prelabel (review_segment)
+#   * a human PUT whose canonical segment overlaps an un-verdicted prelabel
+#     (value match -> accepted, mismatch -> rejected); the suggestion is
+#     stamped reviewed_by='put_overlap' but STAYS in the suggestion layer.
+# Holdout videos never feed calibration (red-team: leak path).
+
+BULK_TOP_DECILES = (8, 9)     # axis-pooled "top deciles" = confidence >= 0.8
+BULK_WILSON_MIN = 0.95
+WILSON_Z = 1.96               # 95% confidence
+
+
+def _is_holdout(conn, video_id: str) -> bool:
+    row = conn.execute("SELECT is_holdout FROM videos WHERE id = ?",
+                       (video_id,)).fetchone()
+    return bool(row["is_holdout"]) if row is not None else False
+
+
+def conf_decile(confidence) -> int:
+    """0..9 bucket; decile d covers [d/10, (d+1)/10), with 1.0 in decile 9."""
+    c = min(max(float(confidence), 0.0), 1.0)
+    return min(int(c * 10), 9)
+
+
+def wilson_lower(accepted: int, n: int, z: float = WILSON_Z) -> float:
+    """Wilson score interval lower bound for a binomial proportion:
+        lower = (p + z^2/(2n) - z*sqrt(p(1-p)/n + z^2/(4n^2))) / (1 + z^2/n)
+    with p = accepted/n. Returns 0.0 when n == 0 (no evidence -> no claim)."""
+    if n <= 0:
+        return 0.0
+    p = accepted / n
+    z2 = z * z
+    num = p + z2 / (2 * n) - z * ((p * (1 - p) / n + z2 / (4 * n * n)) ** 0.5)
+    return max(0.0, num / (1 + z2 / n))
+
+
+def _bump_calibration(conn, db_axis: str, value: str, confidence,
+                      accepted: bool, now: str) -> None:
+    """+1 one (axis, value, decile) cell. Call inside an open tx. Suggestions
+    without a confidence cannot be binned and are skipped."""
+    if confidence is None:
+        return
+    conn.execute(
+        "INSERT INTO calibration_stats (axis, value, conf_decile,"
+        " n_prelabeled, n_accepted, n_rejected, updated_at)"
+        " VALUES (?, ?, ?, 1, ?, ?, ?)"
+        " ON CONFLICT (axis, value, conf_decile) DO UPDATE SET"
+        " n_prelabeled = n_prelabeled + 1,"
+        " n_accepted = n_accepted + excluded.n_accepted,"
+        " n_rejected = n_rejected + excluded.n_rejected,"
+        " updated_at = excluded.updated_at",
+        (db_axis, value, conf_decile(confidence),
+         1 if accepted else 0, 0 if accepted else 1, now))
+
+
+def _calibrate_put_overlap(conn, video_id: str, db_axis: str, segs,
+                           now: str) -> None:
+    """A human PUT overlapping an un-verdicted vlm prelabel is an implicit
+    calibration verdict: same value -> accepted, different -> rejected.
+    Stamps the suggestion (reviewed_by='put_overlap', review_state kept
+    'prelabel') so repeat PUTs cannot double-count it. Call inside the
+    save_labels tx, after _reconcile_axis for the same axis."""
+    if not segs:
+        return
+    suggestions = conn.execute(
+        "SELECT * FROM segments WHERE video_id = ? AND axis = ?"
+        " AND is_current = 1 AND review_state = 'prelabel'"
+        " AND source = 'vlm' AND reviewed_by IS NULL",
+        (video_id, db_axis)).fetchall()
+    for sg in suggestions:
+        hit = None
+        for seg in segs:
+            if (seg["start_s"] < sg["end_s"] - OVERLAP_EPS
+                    and seg["end_s"] > sg["start_s"] + OVERLAP_EPS):
+                hit = seg
+                break
+        if hit is None:
+            continue
+        _bump_calibration(conn, db_axis, sg["value"], sg["confidence"],
+                          hit["value_enc"] == sg["value"], now)
+        conn.execute("UPDATE segments SET reviewed_by = 'put_overlap',"
+                     " reviewed_at = ?, updated_at = ? WHERE id = ?",
+                     (now, now, sg["id"]))
+
+
+def calibration_doc(conn, api_axis=None) -> dict:
+    """Per-axis acceptance curves + the bulk-accept gate.
+
+    bulk_ok requires the AXIS-POOLED top deciles (BULK_TOP_DECILES, i.e.
+    confidence >= 0.8) to clear wilson_lower(accepted, n) >= BULK_WILSON_MIN.
+    EXPECTED to stay false for the entire v1 corpus (plan: UI shows progress).
+    Raises ValueError on an unknown axis."""
+    if api_axis is not None:
+        db_axis = _API_TO_DB_AXIS.get(api_axis)
+        if db_axis is None:
+            raise ValueError(f"unknown axis: {api_axis}")
+        db_axes = [db_axis]
+    else:
+        db_axes = ["activity", "posture", "quality", "custom"]
+    out: dict = {}
+    for db_axis in db_axes:
+        rows = conn.execute(
+            "SELECT conf_decile, SUM(n_prelabeled) AS n_prelabeled,"
+            " SUM(n_accepted) AS n_accepted, SUM(n_rejected) AS n_rejected"
+            " FROM calibration_stats WHERE axis = ? GROUP BY conf_decile",
+            (db_axis,)).fetchall()
+        by_decile = {r["conf_decile"]: r for r in rows}
+        deciles = []
+        for d in range(10):
+            r = by_decile.get(d)
+            n_acc = r["n_accepted"] if r else 0
+            n_rej = r["n_rejected"] if r else 0
+            verdicts = n_acc + n_rej
+            deciles.append({
+                "decile": d,
+                "conf_lo": round(d / 10, 1), "conf_hi": round((d + 1) / 10, 1),
+                "n_prelabeled": r["n_prelabeled"] if r else 0,
+                "n_accepted": n_acc, "n_rejected": n_rej,
+                "acceptance": (n_acc / verdicts) if verdicts else None,
+            })
+        top_acc = sum(deciles[d]["n_accepted"] for d in BULK_TOP_DECILES)
+        top_n = top_acc + sum(deciles[d]["n_rejected"] for d in BULK_TOP_DECILES)
+        lower = wilson_lower(top_acc, top_n)
+        out[_DB_TO_API_AXIS[db_axis]] = {
+            "deciles": deciles,
+            "top_deciles": {"deciles": list(BULK_TOP_DECILES), "n": top_n,
+                            "accepted": top_acc,
+                            "acceptance": (top_acc / top_n) if top_n else None,
+                            "wilson_lower": round(lower, 6)},
+            "bulk_ok": top_n > 0 and lower >= BULK_WILSON_MIN,
+        }
+    return {"axes": out, "wilson_min": BULK_WILSON_MIN}
+
+
 # ---------------------------------------------------------- suggestion layer
 
-def insert_suggestion_segments(conn, video_id: str, axis: str, segs) -> list:
-    """M2 prelabel writer: insert source='vlm', review_state='prelabel'
-    suggestion rows for one axis (api or db axis name).
+def insert_suggestion_segments(conn, video_id: str, axis: str, segs,
+                               source: str = "vlm") -> list:
+    """M2 prelabel writer: insert review_state='prelabel' suggestion rows for
+    one axis (api or db axis name). source defaults to 'vlm'; the perceive
+    job's no_person auto-prelabels pass source='rule'.
 
     CRITICAL (red-team): this NEVER touches video_label_state.revision and
     never edits canonical rows, so a prelabel batch landing mid-edit cannot
     409 (or be deleted by) a concurrent human PUT. Suggestions carry the
     overlapping analysis-window geometry -- no non-overlap check here.
-    Raises ValueError on an unknown axis or invalid values; returns the new
-    segment ids."""
+    Raises ValueError on an unknown axis/source or invalid values; returns
+    the new segment ids."""
     db_axis = _API_TO_DB_AXIS.get(axis)
     if db_axis is None:
         raise ValueError(f"unknown axis: {axis}")
+    if source not in _SOURCES:
+        raise ValueError(f"unknown source: {source}")
     usable = _usable_custom_slugs(conn)
     problems: list = []
     rows: list = []
@@ -523,8 +677,8 @@ def insert_suggestion_segments(conn, video_id: str, axis: str, segs) -> list:
                 "INSERT INTO segments (id, video_id, axis, start_s, end_s,"
                 " value, review_state, source, confidence, aux_json,"
                 " person_slot, evidence_json, is_current, created_at, updated_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, 'prelabel', 'vlm', ?, ?, ?, ?, 1, ?, ?)",
-                (sid, video_id, db_axis, s, e, enc, conf, aux_json,
+                " VALUES (?, ?, ?, ?, ?, ?, 'prelabel', ?, ?, ?, ?, ?, 1, ?, ?)",
+                (sid, video_id, db_axis, s, e, enc, source, conf, aux_json,
                  person_slot, evidence_json, now, now))
             ids.append(sid)
     return ids

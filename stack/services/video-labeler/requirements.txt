@@ -4,5 +4,11 @@ pydantic==2.*
 # healthz gpu_free_gb only — tiny pure-python NVML binding; the code falls back
 # to null when no GPU/driver is present, so this is safe on CPU-only hosts.
 pynvml>=11.5
+# M2 VLM client (OpenAI-compatible chat completions; also what the starlette
+# TestClient rides on, so the Windows test venv installs this anyway).
+httpx==0.28.*
+# The M2 PERCEPTION stack (torch cu128 + ultralytics + av) is DELIBERATELY
+# NOT here -- it is pinned in the Dockerfile pip install so the Windows test
+# venv never pulls torch. All perception imports are lazy/guarded.
 # Dev/test extras are NOT listed here (keep the image slim):
 #   pip install pytest httpx   # see README "Tests"

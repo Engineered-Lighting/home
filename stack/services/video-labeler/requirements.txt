@@ -1,0 +1,8 @@
+fastapi==0.115.*
+uvicorn[standard]==0.32.*
+pydantic==2.*
+# healthz gpu_free_gb only — tiny pure-python NVML binding; the code falls back
+# to null when no GPU/driver is present, so this is safe on CPU-only hosts.
+pynvml>=11.5
+# Dev/test extras are NOT listed here (keep the image slim):
+#   pip install pytest httpx   # see README "Tests"

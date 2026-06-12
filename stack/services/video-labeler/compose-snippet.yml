@@ -1,0 +1,47 @@
+# NOT merged into stack/docker-compose.yml — the video-labeler runs STANDALONE
+# (deploy via tools/deploy-video-labeler.ps1). It needs --network host (to reach
+# native Ollama on 127.0.0.1:11434 in later milestones) and --gpus all, which
+# the compose stack's bridged homeai network does not provide.
+#
+# Reference run command (what the deploy script executes on hav-ubuntu):
+#
+#   docker run -d --name hav-video-labeler \
+#     --network host \
+#     --gpus all \
+#     --restart unless-stopped \
+#     -v /opt/home-ai-voice/video-labeler-data:/data \
+#     -v /var/run/docker.sock:/var/run/docker.sock \
+#     --env-file /opt/home-ai-voice/.env \
+#     -e PORT=8099 -e DATA_DIR=/data \
+#     video-labeler
+#
+# docker.sock is mounted for the M2+ GPU-eviction / deadman-restore machinery
+# (stop + compose-up of VRAM-holding containers); it is unused in M0.
+#
+# Equivalent compose shape, FOR REFERENCE ONLY if it is ever folded in:
+services:
+  video-labeler:
+    build: ./services/video-labeler
+    container_name: hav-video-labeler
+    restart: unless-stopped
+    network_mode: host        # binds PORT (default 8099) directly on the host
+    volumes:
+      - /opt/home-ai-voice/video-labeler-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - DATA_DIR=/data
+      - PORT=8099
+      - MIN_FREE_VRAM_GB=6
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8099/healthz', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

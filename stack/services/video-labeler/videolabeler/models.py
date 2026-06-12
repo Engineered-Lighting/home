@@ -1,0 +1,93 @@
+"""Pydantic request/response schemas (API contract is frozen — the frontend
+is built against these shapes; return them via model_dump(mode="json"))."""
+from __future__ import annotations
+
+from typing import Optional
+
+from pydantic import BaseModel
+
+
+def _row_kwargs(cls, row, **overrides):
+    keys = set(row.keys())
+    kw = {k: row[k] for k in cls.model_fields if k in keys}
+    kw.update(overrides)
+    return kw
+
+
+class Job(BaseModel):
+    id: str
+    type: str
+    state: str
+    lane: str
+    progress: float = 0.0
+    progress_msg: Optional[str] = None
+    error: Optional[str] = None
+    attempts: int = 0
+    created_at: Optional[str] = None
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+
+    @classmethod
+    def from_row(cls, row) -> "Job":
+        return cls(**_row_kwargs(cls, row))
+
+
+class Video(BaseModel):
+    id: str
+    filename: str
+    duration_s: Optional[float] = None
+    fps: Optional[float] = None
+    codec: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    rotation_deg: int = 0
+    size_bytes: Optional[int] = None
+    source_batch: Optional[str] = None
+    is_holdout: bool = False
+    import_status: str = "imported"
+    has_proxy: bool = False
+    has_sprite: bool = False
+    created_at: Optional[str] = None
+
+    @classmethod
+    def from_row(cls, row) -> "Video":
+        return cls(**_row_kwargs(
+            cls, row,
+            is_holdout=bool(row["is_holdout"]),
+            has_proxy=bool(row["has_proxy"]) if "has_proxy" in row.keys() else False,
+            has_sprite=bool(row["has_sprite"]) if "has_sprite" in row.keys() else False,
+        ))
+
+
+class VideoDetail(Video):
+    # local_path/proxy_path are DATA_DIR-relative (forward slashes)
+    local_path: Optional[str] = None
+    proxy_path: Optional[str] = None
+    checksum: Optional[str] = None
+    drive_file_id: Optional[str] = None
+    mime: Optional[str] = None
+    error: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    @classmethod
+    def from_row(cls, row, proxy_path: Optional[str] = None) -> "VideoDetail":
+        return cls(**_row_kwargs(
+            cls, row,
+            is_holdout=bool(row["is_holdout"]),
+            has_proxy=bool(row["has_proxy"]) if "has_proxy" in row.keys() else False,
+            has_sprite=bool(row["has_sprite"]) if "has_sprite" in row.keys() else False,
+            proxy_path=proxy_path,
+        ))
+
+
+class SpriteManifest(BaseModel):
+    tile_w: int
+    tile_h: int
+    cols: int
+    interval_s: float
+    count: int
+    sheets: list[str]  # URL paths, /api/video-labeler/videos/{id}/sprite/{n}
+
+
+class ImportManualRequest(BaseModel):
+    batch_name: Optional[str] = None

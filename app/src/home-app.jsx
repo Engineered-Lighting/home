@@ -48,7 +48,7 @@ function applyAsrCorrection(text) {
 }
 
 /* ── Header ──────────────────────────────────────────────────────────── */
-function HomeHeader({ theme, onToggleTheme, voice, connection, sidecarOnline, bridgeOnline, sim, muteState, onUnmuteClick, onOpenPeople, onOpenIntelligence, aiStackState, metrics }) {
+function HomeHeader({ theme, onToggleTheme, voice, connection, sidecarOnline, bridgeOnline, sim, muteState, onUnmuteClick, onOpenPeople, onOpenIntelligence, onOpenVideoLabeler, aiStackState, metrics }) {
   const isLive = voice.state !== "inactive" && voice.state !== "no-mic";
   // Phase B F0-08: surface sidecar/bridge offline as a warning pill.
   // sidecarOnline = false means SSE chat-tee is broken → assistant
@@ -77,9 +77,22 @@ function HomeHeader({ theme, onToggleTheme, voice, connection, sidecarOnline, br
     display: "inline-flex", alignItems: "center", justifyContent: "center",
     lineHeight: 0,
   };
+  const atlasIconColor = theme === "light"
+    ? "rgba(31, 79, 168, 0.86)"
+    : "rgba(238,248,255,0.78)";
+  const atlasIconBtn = {
+    ...iconBtn,
+    color: atlasIconColor,
+  };
   const hoverBright = (e) => { e.currentTarget.style.color = "var(--hg-fg-0)"; };
+  const hoverAtlas = (e) => {
+    e.currentTarget.style.color = "var(--hg-fg-0)";
+  };
   const hoverWarn   = (e) => { e.currentTarget.style.color = "var(--hg-warn)"; };
   const unhover     = (e) => { e.currentTarget.style.color = "var(--hg-fg-3)"; };
+  const unhoverAtlas = (e) => {
+    e.currentTarget.style.color = atlasIconColor;
+  };
   return (
     <div
       data-tauri-drag-region
@@ -260,19 +273,38 @@ function HomeHeader({ theme, onToggleTheme, voice, connection, sidecarOnline, br
             title="intelligence atlas"
             className="hg-focusable"
             onClick={onOpenIntelligence}
+            style={atlasIconBtn}
+            onMouseEnter={hoverAtlas} onMouseLeave={unhoverAtlas}
+          >
+            {window.IconNeuralNetwork
+              ? <window.IconNeuralNetwork size={17} />
+              : (
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M6.2 7.2 12 5.4l5.8 2.7M6.2 7.2l2.1 7.2M17.8 8.1l-2.1 6.8M8.3 14.4l7.4.5M12 5.4l3.7 9.5M12 5.4 8.3 14.4" stroke="currentColor" strokeWidth="1.05" strokeLinecap="round" opacity="0.44" />
+                  <circle cx="12" cy="5.4" r="2.05" fill="currentColor" />
+                  <circle cx="6.2" cy="7.2" r="1.45" fill="currentColor" opacity="0.68" />
+                  <circle cx="17.8" cy="8.1" r="1.45" fill="currentColor" opacity="0.68" />
+                  <circle cx="8.3" cy="14.4" r="1.65" fill="currentColor" opacity="0.8" />
+                  <circle cx="15.7" cy="14.9" r="1.65" fill="currentColor" opacity="0.8" />
+                </svg>
+              )}
+          </button>
+        )}
+        {onOpenVideoLabeler && (
+          <button
+            aria-label="Open video labeler"
+            title="video labeler — review and label footage"
+            className="hg-focusable"
+            onClick={onOpenVideoLabeler}
             style={iconBtn}
             onMouseEnter={hoverBright} onMouseLeave={unhover}
           >
-            {window.IconNeuralNetwork
-              ? <window.IconNeuralNetwork size={16} />
-              : (
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                  <circle cx="3.4" cy="4.2" r="1.35" stroke="currentColor" strokeWidth="1.1" />
-                  <circle cx="11.9" cy="3.7" r="1.35" stroke="currentColor" strokeWidth="1.1" />
-                  <circle cx="8" cy="11.8" r="1.35" stroke="currentColor" strokeWidth="1.1" />
-                  <path d="M4.6 4.6l6 5.8M10.9 4.8L8.6 10.4M4.4 5.1l2.7 5.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-                </svg>
-              )}
+            {/* Film-strip glyph — frame + sprocket rows. */}
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <rect x="1.2" y="2.6" width="11.6" height="8.8" rx="1" stroke="currentColor" strokeWidth="1.1" />
+              <path d="M4.4 2.6v8.8M9.6 2.6v8.8" stroke="currentColor" strokeWidth="1.1" />
+              <path d="M1.2 5.5h3.2M1.2 8.4h3.2M9.6 5.5h3.2M9.6 8.4h3.2" stroke="currentColor" strokeWidth="0.9" opacity="0.6" />
+            </svg>
           </button>
         )}
         <button
@@ -1068,9 +1100,12 @@ function MetricsStrip({
   const tabs = [
     { id: "ai",      label: "ai",    warn: _labWarn },
     { id: "infra",   label: "infra", warn: homeTone === "warn" || homeTone === "crit" },
-    { id: "intel",   label: "intel" },
     { id: "trace",   label: "trace" },
   ];
+
+  useEffect(() => {
+    if (activeTab === "intel") setActiveTab("ai");
+  }, [activeTab]);
 
   // Active room derived from identity. Falls back to last-active per
   // RoomContextStore if available.
@@ -1786,11 +1821,6 @@ function MetricsStrip({
             <div key={activeTab} style={{ animation: "hg-fade-up 160ms ease-out" }}>
               {activeTab === "ai"      && renderAi()}
               {activeTab === "infra"   && renderInfra()}
-              {activeTab === "intel"   && (
-                window.HomeIntelligenceTab
-                  ? <window.HomeIntelligenceTab metricsBase={metricsBase} endpoint={endpoint} />
-                  : <div style={{ color: "var(--hg-fg-4)", fontSize: 12 }}>intelligence module not loaded</div>
-              )}
               {activeTab === "trace"   && renderLab()}
             </div>
           </HmTrayBody>
@@ -2233,6 +2263,7 @@ const SLASH_CMDS = [
   { cmd: "/find-clips", hint: "<query>",    desc: "search Frigate clips via semantic-search CLIP (e.g. 'package on porch'). Returns recent matches with thumbnails.", category: "vision" },
   { cmd: "/spatial",    hint: "",           desc: "open the light-footprint map — Addendum 38 Phase 1 calibration review: which lights illuminate which space", category: "vision" },
   { cmd: "/apartment",  hint: "",           desc: "open the 3d apartment — full-screen spatial command center (white point cloud of the real scan; photo/mesh modes + devices + the dot land in later phases). alias: /3d", category: "vision" },
+  { cmd: "/labeler",    hint: "[base <url>]", desc: "open the video timeline labeler — review footage, edit segment labels. alias: /vl", category: "vision" },
   { cmd: "/look",       hint: "<camera> <question>", desc: "ask the vision model a spatial question about a camera — it reasons by 'pointing' (boxing what it sees), rendered as the paper's two-panel figure. e.g. /look kitchen what is on the counter", category: "vision" },
   // ── world + recap ─────────────────────────────────────────────
   { cmd: "/world-state",hint: "[<room>|--raw]", desc: "open world-state drawer. <room> pre-filters to one room (click × to clear). '--raw' dumps full JSON inline instead.", category: "world" },
@@ -2860,6 +2891,11 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   const [spatialDrawerOpen, setSpatialDrawerOpen] = useState(false);
   // /apartment — full-screen 3D apartment takeover (home-apartment.jsx).
   const [apartmentOpen, setApartmentOpen] = useState(false);
+  // /labeler — full-screen video timeline labeler (home-video-labeler.jsx).
+  // Mutually exclusive with the other full-screen surfaces (people /
+  // intelligence / apartment) — opening one closes the rest, which kills
+  // Escape-stacking and z-fights between fixed inset-0 overlays.
+  const [videoLabelerOpen, setVideoLabelerOpen] = useState(false);
   // Phase 0.5 "Thinking with Visual Primitives" — /look drawer state.
   // lookInitial seeds the drawer from the command args; its `nonce`
   // re-keys the drawer so a repeated /look re-runs cleanly.
@@ -3766,30 +3802,75 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         const specMaxLab = [96, 192].find(
           (s) => reportedMaxLab >= s && reportedMaxLab <= s + 8
         ) ?? reportedMaxLab;
-        const tempCRaw = typeof m.gpu_temp_c === "number" ? m.gpu_temp_c : null;
-        const labSample = {
-          t: Date.now(),
-          gpuPct: (m.gpu_util_pct ?? 0) / 100,
-          vramPct: specMaxLab > 0 ? Math.min(1, (m.vram_used_gb ?? 0) / specMaxLab) : 0,
-          vramUsedGb: m.vram_used_gb ?? 0,
-          vramTotalGb: specMaxLab,
-          cpuPct: (m.cpu_pct ?? 0) / 100,
-          ramPct: (m.ram_total_gb ?? 0) > 0 ? Math.min(1, (m.ram_used_gb ?? 0) / m.ram_total_gb) : 0,
-          ramUsedGb: m.ram_used_gb ?? 0,
-          ramTotalGb: m.ram_total_gb ?? 0,
-          tempC: tempCRaw,
-          tempPct: tempCRaw != null ? Math.max(0, Math.min(1, tempCRaw / 100)) : null,
-          tps: m.tps,
-          ttftMs: m.ttft_ms,
+        const buildLabSample = (row, clientNow) => {
+          const reportedMax = row?.vram_total_gb ?? reportedMaxLab;
+          const specMax = [96, 192].find(
+            (s) => reportedMax >= s && reportedMax <= s + 8
+          ) ?? reportedMax;
+          const tempCRaw = typeof row?.gpu_temp_c === "number"
+            ? row.gpu_temp_c
+            : (typeof m.gpu_temp_c === "number" ? m.gpu_temp_c : null);
+          const ramTotal = row?.ram_total_gb ?? m.ram_total_gb ?? 0;
+          const ramUsed = row?.ram_used_gb ?? m.ram_used_gb ?? 0;
+          const ageMs = typeof row?.age_ms === "number" ? row.age_ms : null;
+          return {
+            t: ageMs != null ? clientNow - ageMs : clientNow,
+            resourceSeq: row?.seq ?? null,
+            gpuPct: ((row?.gpu_util_pct ?? m.gpu_util_pct) ?? 0) / 100,
+            vramPct: specMax > 0 ? Math.min(1, ((row?.vram_used_gb ?? m.vram_used_gb) ?? 0) / specMax) : 0,
+            vramUsedGb: (row?.vram_used_gb ?? m.vram_used_gb) ?? 0,
+            vramTotalGb: specMax,
+            cpuPct: ((row?.cpu_pct ?? m.cpu_pct) ?? 0) / 100,
+            ramPct: ramTotal > 0 ? Math.min(1, ramUsed / ramTotal) : 0,
+            ramUsedGb: ramUsed,
+            ramTotalGb: ramTotal,
+            tempC: tempCRaw,
+            tempPct: tempCRaw != null ? Math.max(0, Math.min(1, tempCRaw / 100)) : null,
+            tps: m.tps,
+            ttftMs: m.ttft_ms,
+          };
         };
+        const clientNow = Date.now();
+        const highResRows = Array.isArray(m.resource_samples) ? m.resource_samples : [];
+        const labSamples = [];
+        if (highResRows.length > 0 && typeof window !== "undefined") {
+          const boot = m.resource_boot_id || "default";
+          const prior = window.__hav_resourceSampleSeqSeen;
+          if (!prior || prior.boot !== boot || !(prior.set instanceof Set)) {
+            window.__hav_resourceSampleSeqSeen = { boot, set: new Set(), order: [] };
+          }
+          const seen = window.__hav_resourceSampleSeqSeen;
+          for (const row of highResRows) {
+            if (row?.seq == null) continue;
+            const key = `${boot}:${row.seq}`;
+            if (seen.set.has(key)) continue;
+            seen.set.add(key);
+            seen.order.push(key);
+            labSamples.push(buildLabSample(row, clientNow));
+          }
+          while (seen.order.length > 1200) {
+            const old = seen.order.shift();
+            seen.set.delete(old);
+          }
+        } else {
+          labSamples.push(buildLabSample(null, clientNow));
+        }
         // Lab tab feature-detect: home-metrics-lab.jsx reads
         // window.__hav_metricsLatest.gpu_temp_c to decide whether to render
         // the 4th (TEMP) resource line. Falls back to 3 rows (gpu/cpu/ram)
         // when the sidecar hasn't been patched with NVML temperature.
         if (typeof window !== "undefined") window.__hav_metricsLatest = m;
-        labSamplesRef.current.push(labSample);
-        if (labSamplesRef.current.length > 600) {
-          labSamplesRef.current = labSamplesRef.current.slice(-600);
+        for (const labSample of labSamples) {
+          labSamplesRef.current.push(labSample);
+          try {
+            const H = window.HomeMetricsLabHelpers;
+            if (H && typeof H.attachSampleToRecentTurns === "function") {
+              H.attachSampleToRecentTurns(labTurnsRef.current, labSample);
+            }
+          } catch (e) { /* swallow - never break the poll on a helper miss */ }
+        }
+        if (labSamplesRef.current.length > 1800) {
+          labSamplesRef.current = labSamplesRef.current.slice(-1800);
         }
         // Addendum 32 Phase C fix (H3 — snapshot timing):
         // turn.samples is the IMMUTABLE snapshot taken at turn-creation
@@ -3799,15 +3880,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // Fix: attachSampleToRecentTurns (helpers.js) appends the new
         // sample to any of the last 5 turns whose ±3s window contains
         // the sample's t. Pure-function helper; tested in run-lab-tests.js.
-        try {
-          const H = window.HomeMetricsLabHelpers;
-          if (H && typeof H.attachSampleToRecentTurns === "function") {
-            H.attachSampleToRecentTurns(labTurnsRef.current, labSample);
-          }
-        } catch (e) { /* swallow — never break the poll on a helper miss */ }
         // Trigger lab re-render only every 4 samples (~3s) to keep
         // SVG repaints out of the hot path.
-        if (labSamplesRef.current.length % 4 === 0) {
+        if (labSamples.length > 0) {
           setLabTick((t) => t + 1);
         }
       } catch {
@@ -4871,7 +4946,34 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           addEvent({ kind: "system", text: "apartment module not loaded", tone: "error" });
           return true;
         }
+        setVideoLabelerOpen(false);
         setApartmentOpen(true);
+        return true;
+      }
+      case "labeler":
+      case "vl": {
+        // Video timeline labeler (M0). `/labeler base <url>` rewires the
+        // service base (localStorage videoLabeler.base); bare /labeler
+        // opens the full-screen overlay, closing the other takeovers.
+        const a = arg.trim();
+        if (/^base\s+\S/.test(a)) {
+          const url = a.replace(/^base\s+/, "").trim().replace(/\/+$/, "");
+          try {
+            localStorage.setItem("videoLabeler.base", url);
+            addEvent({ kind: "system", text: `labeler base → ${url}`, tone: "ok" });
+          } catch (e) {
+            addEvent({ kind: "system", text: `labeler base save failed · ${e?.message || "localStorage error"}`, tone: "error" });
+          }
+          return true;
+        }
+        if (!window.HomeVideoLabelerOverlay) {
+          addEvent({ kind: "system", text: "video labeler module not loaded", tone: "error" });
+          return true;
+        }
+        setPeopleOpen(false);
+        setIntelligenceOpen(false);
+        setApartmentOpen(false);
+        setVideoLabelerOpen(true);
         return true;
       }
       case "look": {
@@ -5380,7 +5482,6 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             );
             if (r.ok) activityRes = await r.json();
           } catch (_) { /* tolerate */ }
-
           // Compose the chat-feed entry.
           const friendlyZone = zone.replace(/_/g, " ");
           const lines = [`**${friendlyZone}** — /why-light`];
@@ -7267,8 +7368,15 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         sim={sim}
         muteState={muteState}
         onUnmuteClick={handleUnmuteClick}
-        onOpenPeople={() => setPeopleOpen(true)}
-        onOpenIntelligence={() => setIntelligenceOpen(true)}
+        onOpenPeople={() => { setVideoLabelerOpen(false); setPeopleOpen(true); }}
+        onOpenIntelligence={() => { setVideoLabelerOpen(false); setIntelligenceOpen(true); }}
+        onOpenVideoLabeler={() => {
+          // full-screen surfaces are mutually exclusive (see state decl)
+          setPeopleOpen(false);
+          setIntelligenceOpen(false);
+          setApartmentOpen(false);
+          setVideoLabelerOpen(true);
+        }}
         aiStackState={aiStackState}
         metrics={metrics}
       />
@@ -7293,6 +7401,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           onClose={() => setIntelligenceOpen(false)}
           metricsBase={metricsBase}
           endpoint={endpoint}
+        />
+      )}
+      {/* /labeler — full-screen video timeline labeler (M0 shell; see
+          home-video-labeler.jsx). Sim containment lives in the overlay +
+          its data layer (media URLs bypass tauriFetch). */}
+      {window.HomeVideoLabelerOverlay && (
+        <window.HomeVideoLabelerOverlay
+          open={videoLabelerOpen}
+          onClose={() => setVideoLabelerOpen(false)}
+          sim={sim}
         />
       )}
       {window.HomeExplainDrawer && (

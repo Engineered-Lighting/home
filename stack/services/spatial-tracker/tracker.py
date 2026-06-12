@@ -858,6 +858,12 @@ class Tracker:
                 pos = [round(float(p[0]), 3), round(float(p[1]), 3), 0.0]
                 vel = [round(float(v[0]), 3), round(float(v[1]), 3)]
                 cov = [[float(c) for c in row] for row in tr.kf.pos_cov()]
+                if not self._in_walkable(pos):
+                    # coasting predictions integrate velocity through walls —
+                    # never PUBLISH a position outside the walkable hull;
+                    # demote to honest room-level instead
+                    state, conf, conf_reason = "room_only", 0.3, "room_only"
+                    pos = vel = cov = None
 
         return {
             "id": tr.id,

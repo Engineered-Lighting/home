@@ -645,12 +645,13 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
   const pickMode = useCallback(async (m) => {
     const engine = engineRef.current;
     if (!engine) return;
-    // explicit pick overrides any pending post-snap restore, and compares
-    // against the ENGINE's mode — local state resets to 'points' on remount
-    // while the resident engine keeps its real mode (the [cloud]-selected-
-    // but-invisible trap)
+    // explicit pick overrides any pending post-snap restore
     preSnapModeRef.current = null;
-    if (m === engine.modes.mode) { setMode(m); return; }
+    // ALWAYS delegate to the engine — modes.setMode dedups same-mode (cheaply
+    // re-asserting visibility) and reconciles raced transitions by generation.
+    // The old `if (m === engine.modes.mode) return` short-circuit dropped a
+    // 'cloud' click made while a slow mesh load was still in flight (the
+    // engine's mode had not flipped yet), leaving the mesh on screen.
     try {
       await engine.modes.setMode(m);
       setMode(m);

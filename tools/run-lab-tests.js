@@ -954,6 +954,39 @@ process.stdout.write("\n[1mmakeHistoryPathWithAnchors[0m\n");
     typeof v === "number" && v >= 0 && v <= 1, { v });
 })();
 
+(function () {
+  // Regression: merged/tool-call turns can have real wall-clock gaps between
+  // stages, while totalMs is the sum of stage durations. The renderer must
+  // lay the line out by contiguous display duration inside the call slot,
+  // not by absolute wall-clock offsets, or anchors escape into future slots.
+  const turn = {
+    id: "gapped-merged-turn",
+    startedAt: 0,
+    endedAt: 1300,
+    totalMs: 500,
+    stages: [
+      { label: "prefill", ms: 100, startedAt: 0,    endedAt: 100  },
+      { label: "gen",     ms: 200, startedAt: 100,  endedAt: 300  },
+      { label: "prefill", ms: 50,  startedAt: 1100, endedAt: 1150 },
+      { label: "gen",     ms: 150, startedAt: 1150, endedAt: 1300 },
+    ],
+    samples: [{ t: 1200, gpuPct: 0.88, cpuPct: 0.30, ramPct: 0.25 }],
+  };
+  const r2 = H.makeHistoryPathWithAnchors([turn], "gpu", {
+    perCall: 280, callFrac: 0.82, svgW: 280, yBase: 0, rowH: 32,
+  });
+  const xs = r2.anchors.map((a) => a.x);
+  assert("gapped merged turn: no anchor escapes the call slot",
+    xs.every((x) => x >= 0 && x <= 280),
+    { min: Math.min(...xs), max: Math.max(...xs), xs: xs.slice(-8) });
+  assert("gapped merged turn: anchors remain time-monotonic",
+    xs.every((x, i) => i === 0 || x >= xs[i - 1]),
+    { xs });
+  assert("gapped merged turn: later wall-clock sample still marks anchors real",
+    r2.anchors.some((a) => a.kind === "real" && a.stage === "gen" && a.v >= 0.80),
+    r2.anchors.filter((a) => a.stage === "gen").slice(-8));
+})();
+
 /* ────────────────────────────────────────────────────────────────────────
  * Suite 13 — Addendum 16 F-2: trace backfill (bulk traces dedup)
  *

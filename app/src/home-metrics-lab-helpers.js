@@ -175,25 +175,31 @@
     const slotStart = layout.slotStart;
     const slotEnd = layout.slotEnd;
     const cw = slotEnd - slotStart;
-    const totalMs = (turn && turn.totalMs) || 1;
+    const totalMs = Math.max(1, (turn && turn.totalMs) || 0);
     const stages = (turn && turn.stages) || [];
     const samples = (turn && turn.samples) || [];
     const profile = STAGE_PROFILES[metricId] || {};
     const turnStartedAt = (turn && turn.startedAt) || 0;
     const turnId = (turn && turn.id) || "anon";
     const out = [];
-    let cumMs = 0;
+    let displayCursorMs = 0;
     for (let i = 0; i < stages.length; i++) {
       const stg = stages[i];
-      const stageMs = stg.ms || 0;
-      const stageStartMs = stg.startedAt != null
+      let stageMs = (typeof stg.ms === "number" && isFinite(stg.ms)) ? Math.max(0, stg.ms) : 0;
+      if (stageMs <= 0 && Number.isFinite(stg.startedAt) && Number.isFinite(stg.endedAt)) {
+        stageMs = Math.max(0, stg.endedAt - stg.startedAt);
+      }
+      const stageStartMs = Number.isFinite(stg.startedAt)
         ? (stg.startedAt - turnStartedAt)
-        : cumMs;
-      const stageEndMs = stg.endedAt != null
+        : displayCursorMs;
+      const stageEndMs = Number.isFinite(stg.endedAt)
         ? (stg.endedAt - turnStartedAt)
-        : (cumMs + stageMs);
-      cumMs = stageEndMs;
-      const stageSpan = Math.max(1, stageEndMs - stageStartMs);
+        : (stageStartMs + stageMs);
+      const wallStageSpan = Math.max(1, stageEndMs - stageStartMs);
+      const displayStartMs = displayCursorMs;
+      const displayEndMs = displayCursorMs + Math.max(1, stageMs);
+      displayCursorMs += stageMs;
+      const displaySpan = Math.max(1, displayEndMs - displayStartMs);
       // Density proportional to stage duration: longer stages get more
       // sub-anchors. Bounded [2, 12]. perStage acts as a multiplier.
       const density = Math.max(2, Math.min(12, perStageDefault));
@@ -211,8 +217,8 @@
       const rng = seededRng([turnId, metricId, stg.label]);
       for (let k = 0; k < density; k++) {
         // Sub-window: divide stage into `density` equal segments.
-        const subStartMs = stageStartMs + (k / density) * stageSpan;
-        const subEndMs   = stageStartMs + ((k + 1) / density) * stageSpan;
+        const subStartMs = stageStartMs + (k / density) * wallStageSpan;
+        const subEndMs   = stageStartMs + ((k + 1) / density) * wallStageSpan;
         // Find real samples in THIS sub-window
         const inSub = [];
         for (let j = 0; j < samples.length; j++) {
@@ -271,8 +277,8 @@
             kind = "synthetic";
           }
         }
-        const centerMs = (subStartMs + subEndMs) / 2;
-        const frac = totalMs > 0 ? centerMs / totalMs : 0.5;
+        const displayCenterMs = displayStartMs + ((k + 0.5) / density) * displaySpan;
+        const frac = Math.max(0, Math.min(1, displayCenterMs / totalMs));
         out.push({
           x: slotStart + frac * cw,
           v: Math.max(0, Math.min(1, v)),

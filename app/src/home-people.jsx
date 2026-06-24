@@ -1,0 +1,2696 @@
+﻿/* ============================================================================
+ * home-people.jsx — relationship & identity context UI (Addendum 14)
+ *
+ * Opens as a full-app overlay from a header button. NOT inside the metrics
+ * drawer (per AR-13: metrics drawer is for runtime health, not content).
+ * Voice replies continue to flow into the underlying chat feed; this
+ * overlay shows an "X new messages" pip near the close button when voice
+ * activity occurs while open (per AR2-11).
+ *
+ * Three view modes, switchable via top tab strip:
+ *   - graph: radial relationship visualization (Slice 5)
+ *   - list:  flat sortable table view (Slice 5+)
+ *   - queue: discovery queue of unenrolled/unnamed faces (Slice 4)
+ *
+ * Data flow: reads identities from HA REST at /api/extended_openai_conversation/identities
+ * (registered by the integration in Slice 2.5). Mutations POST/PATCH/DELETE
+ * to the same domain. All requests use the HA bearer token from prefs,
+ * same pattern as MetricsStrip's metricsBase calls.
+ *
+ * Disable knob: if the HA integration reports `enabled: false`, the
+ * overlay shows a clear "Identity store is disabled" state so the user
+ * knows the env flag is set, rather than silently empty.
+ * ============================================================================ */
+
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+const PEOPLE_FONT_MONO = "'Geist Mono', ui-monospace, monospace";
+const PEOPLE_FONT_SANS = "'Geist', system-ui, sans-serif";
+
+/* ─────────────────────────────────────────────────────────────────────
+ * Sub-component: HomePeopleOverlay
+ *
+ * Full-app slide-in overlay. Receives `open` + `onClose` from
+ * home-app.jsx + an endpoint/token pair for HA REST calls.
+ * ──────────────────────────────────────────────────────────────────── */
+function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, connection = null, sim }) {
+  const [view, setView] = useState("graph");   // graph | list | queue
+  const [identities, setIdentities] = useState(null);  // null=loading, []=empty
+  const [error, setError] = useState(null);
+  const [loadedAt, setLoadedAt] = useState(null);
+  const [selectedUuid, setSelectedUuid] = useState(null);
+  // F-4b: backend reports {ready:false, setup_error:"..."} when the
+  // SQLite open failed at integration setup. Different from `error`
+  // (which is a network-side failure) — `notReady` means HA is
+  // reachable but the identity_store didn't initialize.
+  const [notReady, setNotReady] = useState(null);
+  // Addendum 24: Frigate base URL (from /identities response) +
+  // /api/faces snapshot (fetched once per overlay open). Used by the
+  // gallery + hover thumbnails.
+  const [frigateUrl, setFrigateUrl] = useState(null);
+  const [facesByPerson, setFacesByPerson] = useState(null);
+  // Addendum 24 Phase 3: HEAD-pre-check map per identity uuid → boolean.
+  // AR24-9: SVG <image onError> can't distinguish 404 from network blip,
+  // so we pre-fetch presence once and render <image> only when truthy.
+  // Cache-bust string bumps on successful upload (AR24-8) so re-renders
+  // pull the new bytes through WebView2's cache.
+  const [avatarPresence, setAvatarPresence] = useState({});
+  const [avatarCacheBust, setAvatarCacheBust] = useState(null);
+  // Post-Phase-3 fix: SVG <image href="..."> and HTML <img src="...">
+  // cannot send `Authorization: Bearer <token>` headers. Our AvatarView
+  // requires auth → unauthenticated GETs return 401 → browser shows a
+  // broken-image placeholder. Fix: fetch the bytes WITH the auth header
+  // via tauriFetch, convert to a blob URL, store per-uuid, render the
+  // blob URL as the src/href. Revoke on unmount or when bytes change.
+  const [avatarBlobUrls, setAvatarBlobUrls] = useState({});
+  // Track in-flight fetches so we don't double-fire for the same
+  // (uuid, cacheBust) tuple. Keyed by `${uuid}:${cb}`.
+  const blobFetchInFlightRef = useRef({});
+  // Revoke ALL blob URLs when the overlay closes — prevents memory leak
+  // for users who open + close repeatedly.
+  useEffect(() => {
+    return () => {
+      Object.values(avatarBlobUrls).forEach((u) => {
+        if (u) try { URL.revokeObjectURL(u); } catch {}
+      });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Notifier function the detail panel calls after a successful upload
+  // or delete. `present` is the truth state we already know from the
+  // POST/DELETE result, so we set avatarPresence directly + bump the
+  // cache-buster. No probe needed — the server already told us. Also
+  // revoke any existing blob URL for this uuid so the next render
+  // triggers a re-fetch.
+  const refreshAvatars = useCallback((uuid, present) => {
+    setAvatarCacheBust(Date.now());
+    if (uuid) {
+      setAvatarPresence((prev) => ({ ...prev, [uuid]: !!present }));
+      setAvatarBlobUrls((prev) => {
+        if (prev[uuid]) {
+          try { URL.revokeObjectURL(prev[uuid]); } catch {}
+        }
+        const { [uuid]: _gone, ...rest } = prev;
+        return rest;
+      });
+    }
+  }, []);
+
+  // Escape-to-close — only attaches when open
+  useEffect(() => {
+    if (!open) return undefined;
+    function onKey(e) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  // Initial load + refresh on open. Sim mode short-circuits to fixture data.
+  const refresh = useCallback(async () => {
+    setError(null);
+    setNotReady(null);
+    if (sim?.active) {
+      // AR16-3 guard: sim mode never shows the ready:false banner — it
+      // would conflict with sim's own fixture data shape.
+      const simIdentities = (sim.snapshot?.people?.identities) || [];
+      setIdentities(simIdentities);
+      setLoadedAt(Date.now());
+      return;
+    }
+    if (!endpoint || !token) {
+      setError("HA endpoint or token not configured");
+      setIdentities([]);
+      return;
+    }
+    try {
+      const url = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/identities`;
+      const resp = await window.tauriFetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!resp.ok) {
+        setError(`HTTP ${resp.status} ${resp.statusText}`);
+        setIdentities([]);
+        return;
+      }
+      const payload = await resp.json();
+      if (payload.enabled === false) {
+        setError("Identity store disabled (EXTENDED_OPENAI_IDENTITY_STORE=off)");
+        setIdentities([]);
+        return;
+      }
+      // F-4b: backend reports {ready:false, setup_error} when the
+      // identity_store SQLite open failed. Surface explicitly so the
+      // user knows it's a setup problem, not "no identities yet".
+      if (payload.ready === false) {
+        setNotReady({
+          error: payload.setup_error || "identity_store initialization failed",
+        });
+        setIdentities([]);
+        return;
+      }
+      setIdentities(payload.identities || []);
+      setLoadedAt(Date.now());
+      // Addendum 24: capture the Frigate URL the integration reports.
+      // Fetch /api/faces THROUGH the HA-side FrigateProxyView so CORS
+      // works (Frigate's nginx doesn't send Access-Control-Allow-Origin
+      // headers; direct Tauri fetch is blocked). Image URLs themselves
+      // stay direct-to-Frigate because <img> tags don't trigger CORS.
+      if (payload.frigate_url) {
+        setFrigateUrl(payload.frigate_url);
+        const proxyUrl = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/frigate_proxy?path=api/faces`;
+        try {
+          const fresp = await window.tauriFetch(proxyUrl, {
+            headers: { Authorization: `Bearer ${token}` },
+            cache: "no-store",
+          });
+          if (fresp.ok) {
+            const fpayload = await fresp.json();
+            if (fpayload && typeof fpayload === "object") {
+              setFacesByPerson(fpayload);
+            }
+          }
+        } catch {
+          // Proxy unreachable — gallery shows empty state.
+        }
+      }
+    } catch (e) {
+      setError(`Network error: ${e.message || e}`);
+      setIdentities([]);
+    }
+    // NOTE: `sim?.snapshot` deliberately omitted — it's an object reference
+    // recreated on every parent render, so including it would make `refresh`
+    // unstable, which would re-trigger the WS subscriber effect below on
+    // every render → drawer flickers because the detail-panel useEffect
+    // also depends on `refresh`. The sim snapshot is read at call time from
+    // the closure, so removing it from deps is safe; we just don't auto-
+    // refresh when the snapshot mutates without sim.active toggling.
+  }, [endpoint, token, sim?.active]);
+
+  useEffect(() => {
+    if (open) refresh();
+  }, [open, refresh]);
+
+  // Phase 3 avatar pre-check (AR24-9). One HEAD per identity at load
+  // time + after every identity_mutation refresh. Sim mode skips —
+  // sim fixtures don't have avatar files on disk.
+  useEffect(() => {
+    if (!open) return;
+    if (sim?.active) return;
+    if (!identities || identities.length === 0) return;
+    if (!endpoint || !token) return;
+    let cancelled = false;
+    (async () => {
+      const next = {};
+      for (const i of identities) {
+        if (cancelled) return;
+        try {
+          const url = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/identity/${encodeURIComponent(i.uuid)}/avatar`;
+          const resp = await window.tauriFetch(url, {
+            method: "HEAD",
+            headers: { Authorization: `Bearer ${token}` },
+            cache: "no-store",
+          });
+          next[i.uuid] = resp.ok;
+        } catch {
+          next[i.uuid] = false;
+        }
+      }
+      if (!cancelled) setAvatarPresence(next);
+    })();
+    return () => { cancelled = true; };
+  }, [open, sim?.active, identities, endpoint, token]);
+
+  // Avatar blob fetcher — for every identity where avatarPresence is
+  // true AND we don't yet have a blob URL (or cacheBust changed), fetch
+  // the bytes with auth + create a blob URL. Stored per-uuid; revoked
+  // on cache-bust replacement or overlay unmount.
+  useEffect(() => {
+    if (!open) return;
+    if (sim?.active) return;
+    if (!endpoint || !token) return;
+    const ids = identities || [];
+    let cancelled = false;
+    // CRITICAL: avatarBlobUrls is INTENTIONALLY NOT in the dep list. If
+    // it were, every setAvatarBlobUrls call (one per identity fetched)
+    // would re-run this effect, run cleanup → cancelled=true → and the
+    // in-flight fetch for the NEXT identity (the one being awaited)
+    // would return early without setting its blob URL. The inflight ref
+    // would clear in finally, but no further state change would re-trigger
+    // the effect, so the last identity in iteration order (Marcelo, the
+    // 'me') would never get its blob URL. The closure captures
+    // avatarBlobUrls at effect-start; the inner `if (avatarBlobUrls[i.uuid])`
+    // check is correct for sequential iteration since we only move
+    // forward through identities and never re-visit. We rely on
+    // avatarPresence + avatarCacheBust to trigger re-runs (the legitimate
+    // signals that more fetching may be needed).
+    (async () => {
+      for (const i of ids) {
+        if (cancelled) return;
+        if (!avatarPresence[i.uuid]) continue;
+        const inflightKey = `${i.uuid}:${avatarCacheBust || "init"}`;
+        if (blobFetchInFlightRef.current[inflightKey]) continue;
+        if (avatarBlobUrls[i.uuid]) continue;
+        blobFetchInFlightRef.current[inflightKey] = true;
+        try {
+          const url = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/identity/${encodeURIComponent(i.uuid)}/avatar`;
+          const resp = await window.tauriFetch(url, {
+            headers: { Authorization: `Bearer ${token}` },
+            cache: "no-store",
+          });
+          if (cancelled) return;
+          if (!resp.ok) continue;
+          const blob = await resp.blob();
+          if (cancelled) return;
+          const blobUrl = URL.createObjectURL(blob);
+          setAvatarBlobUrls((prev) => {
+            if (prev[i.uuid]) {
+              try { URL.revokeObjectURL(prev[i.uuid]); } catch {}
+            }
+            return { ...prev, [i.uuid]: blobUrl };
+          });
+        } catch {
+          // Network failure — leave avatarBlobUrls untouched; next
+          // legitimate trigger (presence/cacheBust change) retries.
+        } finally {
+          delete blobFetchInFlightRef.current[inflightKey];
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, sim?.active, identities, endpoint, token, avatarPresence, avatarCacheBust]);
+
+  // F-5b: subscribe to the integration's `identity_mutation` HA bus
+  // event. Any create/update/delete on the HA side (made via curl, via
+  // the LLM, by the auto-seed, OR by another instance of this app)
+  // fires the event; we debounce-refresh in ~500 ms so the UI stays
+  // synced without thrashing on bulk operations.
+  // Pattern mirrors Addendum 1's routing-decision subscriber.
+  useEffect(() => {
+    if (!open || sim?.active) return undefined;
+    if (connection != null && connection !== "online") return undefined;
+    const eventClient = client || ((typeof window !== "undefined") && window.__hav_haClient);
+    if (!eventClient || typeof eventClient.subscribeEvents !== "function") return undefined;
+    let pending = null;
+    const scheduleRefresh = () => {
+      if (pending) clearTimeout(pending);
+      pending = setTimeout(() => { pending = null; refresh(); }, 500);
+    };
+    let unsub;
+    try {
+      unsub = eventClient.subscribeEvents(
+        "extended_openai_conversation.identity_mutation",
+        scheduleRefresh,
+      );
+    } catch (e) {
+      return undefined;
+    }
+    return () => {
+      if (pending) clearTimeout(pending);
+      try { unsub && unsub(); } catch {}
+    };
+  }, [open, sim?.active, connection, client, refresh]);
+
+  if (!open) return null;
+
+  const overlay = (
+    <div
+      style={{
+        position: "fixed", inset: 0,
+        background: "var(--hg-bg-0)",
+        zIndex: 1000,
+        display: "flex", flexDirection: "column",
+        fontFamily: PEOPLE_FONT_MONO,
+        animation: "people-fade-in 220ms cubic-bezier(0.16,1,0.3,1)",
+      }}
+      role="dialog"
+      aria-modal="true"
+      aria-label="People — relationships and identities"
+    >
+      {/* Header */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 12,
+        padding: "16px 24px 14px",
+        borderBottom: "1px solid var(--hg-border-soft)",
+      }}>
+        <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.05 }}>
+          <span style={{
+            fontFamily: PEOPLE_FONT_SANS, fontSize: 17, fontWeight: 500,
+            color: "var(--hg-fg-0)", letterSpacing: "-0.02em",
+          }}>people</span>
+          <span style={{
+            fontSize: 8.5, letterSpacing: "0.24em", fontWeight: 500,
+            color: "var(--hg-fg-4)", marginTop: 3,
+          }}>identities · relationships · preferences</span>
+        </div>
+        <span style={{ marginLeft: "auto", display: "inline-flex", gap: 8, alignItems: "center" }}>
+          <button
+            onClick={refresh}
+            title="Refresh"
+            className="hg-focusable"
+            style={{
+              background: "transparent", border: "1px solid var(--hg-border-soft)",
+              color: "var(--hg-fg-3)", padding: "4px 9px",
+              fontFamily: PEOPLE_FONT_MONO, fontSize: 10, letterSpacing: "0.12em",
+              cursor: "pointer", textTransform: "lowercase",
+            }}
+          >refresh</button>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="hg-focusable"
+            style={{
+              background: "transparent", border: "1px solid var(--hg-border-soft)",
+              color: "var(--hg-fg-2)", padding: "4px 11px",
+              fontFamily: PEOPLE_FONT_MONO, fontSize: 11, letterSpacing: "0.12em",
+              cursor: "pointer", textTransform: "lowercase",
+            }}
+          >close · esc</button>
+        </span>
+      </div>
+
+      {/* View tabs */}
+      <div style={{
+        display: "flex", gap: 0, padding: "0 24px",
+        borderBottom: "1px solid var(--hg-border-soft)",
+        fontFamily: PEOPLE_FONT_MONO,
+      }}>
+        {["graph", "list", "queue"].map((v) => (
+          <button
+            key={v}
+            onClick={() => setView(v)}
+            style={{
+              background: "transparent", border: "none",
+              padding: "10px 16px",
+              fontFamily: PEOPLE_FONT_MONO,
+              fontSize: 11,
+              letterSpacing: "0.16em",
+              textTransform: "lowercase",
+              color: view === v ? "var(--hg-fg-0)" : "var(--hg-fg-3)",
+              borderBottom: view === v ? "1px solid var(--hg-fg-0)" : "1px solid transparent",
+              cursor: "pointer",
+              marginBottom: "-1px",
+            }}
+          >{v}</button>
+        ))}
+        <span style={{ flex: 1 }} />
+        {loadedAt && (
+          <span style={{
+            display: "inline-flex", alignItems: "center",
+            fontSize: 9, letterSpacing: "0.18em", textTransform: "uppercase",
+            color: "var(--hg-fg-4)",
+          }}>
+            {identities ? `${identities.length} identities` : "loading"}
+          </span>
+        )}
+      </div>
+
+      {/* Body */}
+      <div className="hg-scroll" style={{
+        flex: 1, overflow: "auto", padding: "24px 32px",
+      }}>
+        {error && (
+          <div style={{
+            border: "1px solid var(--hg-warn)",
+            background: "color-mix(in oklab, var(--hg-warn) 6%, transparent)",
+            padding: "10px 14px",
+            color: "var(--hg-warn)",
+            fontSize: 11, letterSpacing: "0.04em",
+            marginBottom: 16,
+          }}>
+            <strong style={{ marginRight: 8 }}>error:</strong>{error}
+          </div>
+        )}
+        {notReady && (
+          <div style={{
+            border: "1px solid var(--hg-crit)",
+            background: "color-mix(in oklab, var(--hg-crit) 6%, transparent)",
+            padding: "10px 14px",
+            color: "var(--hg-crit)",
+            fontSize: 11, letterSpacing: "0.04em",
+            marginBottom: 16,
+          }}>
+            <strong style={{ marginRight: 8 }}>identity store not ready:</strong>
+            {notReady.error}
+            <div style={{
+              marginTop: 6, fontSize: 10, color: "var(--hg-fg-3)",
+              letterSpacing: 0,
+            }}>
+              Check Home Assistant logs: <code>ha core logs | grep identity_store</code>.
+              The integration loaded but the SQLite database did not open.
+            </div>
+          </div>
+        )}
+        {identities === null && !error && !notReady && (
+          <div style={{ color: "var(--hg-fg-3)", fontSize: 11 }}>loading identities…</div>
+        )}
+        {identities !== null && (
+          <>
+            {view === "graph" && (
+              <PeopleGraphView
+                identities={identities}
+                facesByPerson={facesByPerson}
+                frigateUrl={frigateUrl}
+                endpoint={endpoint}
+                avatarPresence={avatarPresence}
+                avatarBlobUrls={avatarBlobUrls}
+                onNodeClick={(id) => id && setSelectedUuid(id.uuid)}
+              />
+            )}
+            {view === "list" && (
+              <PeopleListView
+                identities={identities}
+                endpoint={endpoint}
+                avatarPresence={avatarPresence}
+                avatarBlobUrls={avatarBlobUrls}
+                onRowClick={(id) => setSelectedUuid(id.uuid)}
+              />
+            )}
+            {view === "queue" && (
+              <PeopleQueueView
+                identities={identities}
+                sim={sim}
+                endpoint={endpoint}
+                token={token}
+                avatarPresence={avatarPresence}
+                avatarBlobUrls={avatarBlobUrls}
+                onSaved={refresh}
+              />
+            )}
+          </>
+        )}
+      </div>
+
+      <style>{`
+        @keyframes people-fade-in {
+          from { opacity: 0; transform: translateY(8px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
+
+      {/* Detail panel — opens when a node/row is clicked */}
+      <PeopleDetailPanel
+        identityUuid={selectedUuid}
+        endpoint={endpoint}
+        token={token}
+        sim={sim}
+        facesByPerson={facesByPerson}
+        frigateUrl={frigateUrl}
+        avatarPresence={avatarPresence}
+        avatarBlobUrls={avatarBlobUrls}
+        onAvatarChanged={(uuid, present) => refreshAvatars(uuid, present)}
+        onClose={() => setSelectedUuid(null)}
+        onChanged={refresh}
+      />
+    </div>
+  );
+  return typeof document !== "undefined" && document.body
+    ? ReactDOM.createPortal(overlay, document.body)
+    : overlay;
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ * Sub-component: PeopleGraphView — radial relationship visualization
+ * ──────────────────────────────────────────────────────────────────── */
+function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl, endpoint, avatarPresence, avatarBlobUrls, onNodeClick }) {
+  const H = (typeof window !== "undefined" && window.HomePeopleHelpers) || null;
+
+  // Addendum 23: hover state. Tracks the uuid currently being
+  // pointed at; null when no hover. Mouse-leave is debounced ~50ms
+  // so rapid cross-traversal between adjacent cluster members
+  // (parents are only ~58px apart) doesn't flash the state off + on.
+  const [hoveredUuid, setHoveredUuid] = useState(null);
+  const leaveTimerRef = useRef(null);
+  const handleHoverEnter = useCallback((uuid, ev) => {
+    // AR23-9: skip hover state on non-mouse pointer types (touch
+    // would otherwise flash hover before navigating).
+    if (ev && ev.pointerType && ev.pointerType !== "mouse") return;
+    if (leaveTimerRef.current) {
+      clearTimeout(leaveTimerRef.current);
+      leaveTimerRef.current = null;
+    }
+    setHoveredUuid(uuid);
+  }, []);
+  const handleHoverLeave = useCallback(() => {
+    if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current);
+    leaveTimerRef.current = setTimeout(() => {
+      setHoveredUuid(null);
+      leaveTimerRef.current = null;
+    }, 50);
+  }, []);
+  // Clear pending timer on unmount to avoid setState on unmounted.
+  useEffect(() => () => {
+    if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current);
+  }, []);
+
+  // Empty state — no identities at all OR no in-graph identities
+  const graphable = (identities || []).filter((i) => {
+    if (!H) return false;
+    return H.ringForIdentity(i) !== null;
+  });
+
+  if (graphable.length === 0) {
+    const hasUnknown = (identities || []).some((i) => i.relationship_type === "unknown");
+    return (
+      <div style={{
+        textAlign: "center", padding: "60px 20px",
+        color: "var(--hg-fg-3)",
+      }}>
+        <div style={{
+          fontSize: 32, marginBottom: 12, color: "var(--hg-fg-5)",
+        }}>ï¼‹</div>
+        <div style={{
+          fontFamily: PEOPLE_FONT_MONO, fontSize: 11, letterSpacing: "0.16em",
+          textTransform: "uppercase", color: "var(--hg-fg-3)",
+          marginBottom: 8,
+        }}>
+          {hasUnknown ? "tag identities to populate the graph" : "tag your first face"}
+        </div>
+        <div style={{
+          fontSize: 12, color: "var(--hg-fg-4)", lineHeight: 1.6, maxWidth: 420,
+          margin: "0 auto",
+        }}>
+          {hasUnknown
+            ? "Open the queue tab and assign a relationship to bring a face into the web."
+            : "The system detects faces from your cameras and surfaces them in the queue tab."}
+        </div>
+      </div>
+    );
+  }
+
+  if (!H) {
+    return (
+      <div style={{ color: "var(--hg-fg-3)", fontSize: 11 }}>
+        helpers not loaded — check home-people-helpers.js
+      </div>
+    );
+  }
+
+  // Layout
+  const layout = H.buildRadialLayout(graphable);
+
+  // Edge geometry — we don't yet load explicit relationships in Slice 5;
+  // implicit edges (ring-1 → center) carry the visual story for MVP.
+  // Slice 6 will add real edges when the detail panel can manage them.
+  const edges = H.buildEdgeGeometry(layout, relationships || []);
+
+  // SVG sizing — content has natural radius up to 400; pad for avatars.
+  // Canvas is centered around origin (0,0).
+  const PAD = 80;  // half the largest avatar + buffer
+  const VIEW_HALF = 380 + PAD;
+  const VIEW_SIZE = VIEW_HALF * 2;
+
+  // Addendum 23: pre-compute the connected-uuid set + tooltip placement
+  // for the currently-hovered node. useMemo prevents recomputation
+  // when only the layout/edges shift without a hover change.
+  const connectedSet = useMemo(
+    () => (H && H.connectedUuidsForHovered)
+      ? H.connectedUuidsForHovered(layout, edges, hoveredUuid)
+      : new Set(),
+    [layout, edges, hoveredUuid, H],
+  );
+  // AR23-2: hovering the center node means "show me everyone connected
+  // to me" — DON'T dim anything; just highlight the center itself.
+  const hoveredNode = hoveredUuid
+    ? layout.find((n) => n.uuid === hoveredUuid)
+    : null;
+  const hoveringCenter = !!hoveredNode && hoveredNode.ring === 0;
+  // Addendum 24 Phase 2: tooltip height bumps when face thumbnails
+  // are available for the hovered identity. The placement helper
+  // needs the actual height to avoid clipping near viewport edges.
+  const hoveredFaceUrls = useMemo(() => {
+    if (!hoveredNode || !hoveredNode.identity) return { count: 0, urls: [] };
+    if (!H || !H.frigateFaceCropUrls) return { count: 0, urls: [] };
+    return H.frigateFaceCropUrls(facesByPerson, hoveredNode.identity, frigateUrl);
+  }, [hoveredNode, facesByPerson, frigateUrl, H]);
+  const TOOLTIP_BASE_H = 70;
+  const TOOLTIP_THUMB_H = 40;  // thumb row 32px + 8px pad
+  const tooltipH = TOOLTIP_BASE_H + (hoveredFaceUrls.count > 0 ? TOOLTIP_THUMB_H : 0);
+  const tooltipPos = useMemo(() => {
+    if (!hoveredNode || !H || !H.tooltipPlacement) return null;
+    return H.tooltipPlacement(hoveredNode, VIEW_HALF, layout, { tooltipH });
+  }, [hoveredNode, layout, VIEW_HALF, H, tooltipH]);
+
+  return (
+    <div style={{
+      display: "flex", justifyContent: "center",
+      padding: "20px 0",
+    }}>
+      <svg
+        width="100%"
+        height="auto"
+        viewBox={`${-VIEW_HALF} ${-VIEW_HALF} ${VIEW_SIZE} ${VIEW_SIZE}`}
+        style={{
+          maxHeight: "min(80vh, 800px)",
+          maxWidth: "min(80vw, 1000px)",
+          display: "block",
+        }}
+        aria-label="Relationship graph"
+      >
+        {/* Subtle ring guides — radial vignette per Addendum 14 visual polish */}
+        {[1, 2, 3].map((r) => (
+          <circle
+            key={`ring-${r}`}
+            cx={0} cy={0} r={H.radiusForRing(r)}
+            fill="none"
+            stroke="var(--hg-border-soft)"
+            strokeWidth={0.5}
+            opacity={0.4}
+          />
+        ))}
+
+        {/* Edges first, so nodes render above. Hover state (Addendum 23):
+            edges incident on hovered node stay full opacity + bump
+            stroke-width; other edges fade to 0.25. When hovering the
+            center, no fade (AR23-2). */}
+        {edges.map((e, idx) => {
+          const incident = hoveredUuid && (e.fromUuid === hoveredUuid || e.toUuid === hoveredUuid);
+          const dimmed = hoveredUuid && !incident && !hoveringCenter;
+          return (
+            <line
+              key={`edge-${idx}`}
+              x1={e.x1} y1={e.y1}
+              x2={e.x2} y2={e.y2}
+              stroke={e.style.stroke}
+              strokeWidth={incident ? (e.style.width + 0.8) : e.style.width}
+              strokeDasharray={e.style.dash || undefined}
+              opacity={dimmed ? 0.25 : 0.85}
+              style={{ transition: "opacity 180ms ease, stroke-width 180ms ease" }}
+              aria-label={e.relType
+                ? `${e.relType}${e.status === "ended" ? " (ended)" : ""}`
+                : "implicit relationship"}
+            />
+          );
+        })}
+
+        {/* Addendum 22 cluster arc labels — render a faint dashed arc
+            + a small text label slightly OUTSIDE each cluster's ring
+            so the grouping is visually explicit ("parents",
+            "siblings", "children", "in-laws"). Only renders when a
+            cluster has ≥ 2 members (single-member clusters are
+            visually self-evident). */}
+        {[1, 2, 3].flatMap((ring) => {
+          const clusters = H.clustersForRing ? H.clustersForRing(layout, ring) : {};
+          return Object.entries(clusters).flatMap(([name, members]) => {
+            if (members.length < 2) return [];
+            // Cluster bounds: midpoint between members' avg + outer
+            // radius (radius + size + label gap).
+            const ringRadius = H.radiusForRing(ring);
+            const labelRadius = ringRadius + (members[0].size / 2) + 22;
+            // Compute centroid angle of the cluster (average direction
+            // from origin to the members' midpoint).
+            let sumX = 0, sumY = 0;
+            for (const m of members) { sumX += m.x; sumY += m.y; }
+            const cx = sumX / members.length;
+            const cy = sumY / members.length;
+            const centroidAngle = Math.atan2(cy, cx);
+            const labelX = labelRadius * Math.cos(centroidAngle);
+            const labelY = labelRadius * Math.sin(centroidAngle);
+            // Arc endpoints flank the cluster's outermost members.
+            const angles = members.map((m) => Math.atan2(m.y, m.x));
+            const aMin = Math.min(...angles);
+            const aMax = Math.max(...angles);
+            const arcWidth = (members[0].size / 2) + 8;  // small pad
+            const arcR = ringRadius + arcWidth;
+            const a1 = aMin - 0.06;  // ~3.5° pad outside outer members
+            const a2 = aMax + 0.06;
+            const arcX1 = arcR * Math.cos(a1);
+            const arcY1 = arcR * Math.sin(a1);
+            const arcX2 = arcR * Math.cos(a2);
+            const arcY2 = arcR * Math.sin(a2);
+            // SVG arc path: M start A rx ry x-rotation large-arc sweep END
+            const largeArc = (a2 - a1) > Math.PI ? 1 : 0;
+            const sweep = 1;  // clockwise
+            const arcPath = `M ${arcX1.toFixed(1)} ${arcY1.toFixed(1)} `
+              + `A ${arcR.toFixed(1)} ${arcR.toFixed(1)} 0 ${largeArc} ${sweep} `
+              + `${arcX2.toFixed(1)} ${arcY2.toFixed(1)}`;
+            return [
+              <path
+                key={`cluster-arc-${ring}-${name}`}
+                d={arcPath}
+                fill="none"
+                stroke="var(--hg-fg-4)"
+                strokeWidth={0.6}
+                strokeDasharray="2,3"
+                opacity={0.55}
+              />,
+              <text
+                key={`cluster-label-${ring}-${name}`}
+                x={labelX} y={labelY + 3}
+                textAnchor="middle"
+                fontFamily={PEOPLE_FONT_MONO}
+                fontSize={9}
+                letterSpacing="0.14em"
+                fill="var(--hg-fg-3)"
+                style={{ textTransform: "uppercase" }}
+              >{name}</text>,
+            ];
+          });
+        })}
+
+        {/* Nodes */}
+        {layout.map((node) => {
+          if (node.overflow) {
+            return (
+              <g key={`overflow-r${node.ring}`}
+                 transform={`translate(${node.x}, ${node.y})`}
+                 style={{ cursor: "pointer" }}
+                 aria-label={`${node.overflowCount} more in ring ${node.ring}`}>
+                <circle r={node.size / 2}
+                        fill="var(--hg-bg-1)"
+                        stroke="var(--hg-border)" strokeWidth={1} strokeDasharray="3,2" />
+                <text x={0} y={4} textAnchor="middle"
+                      fontFamily={PEOPLE_FONT_MONO}
+                      fontSize={Math.max(9, node.size * 0.22)}
+                      fill="var(--hg-fg-3)">
+                  +{node.overflowCount}
+                </text>
+              </g>
+            );
+          }
+          const isCenter = node.ring === 0;
+          const id = node.identity;
+          const isSilent = id?.is_silent;
+          const isPrivate = id?.is_private;
+          const isArchived = id?.is_archived;
+          const initials = H.initialsFor(id?.display_name || "?");
+          // Addendum 23: hover state per-node.
+          const isHovered = hoveredUuid === node.uuid;
+          const isConnected = !!hoveredUuid && connectedSet.has(node.uuid);
+          const isDimmed = !!hoveredUuid && !isConnected && !hoveringCenter;
+          const baseOpacity = isArchived ? 0.45 : 1;
+          const groupOpacity = isDimmed ? 0.4 : baseOpacity;
+          // Scale up the hovered node by 1.10 (transform-origin = node
+          // center which is already (0,0) inside the <g>).
+          const scaleTransform = isHovered ? " scale(1.10)" : "";
+          // Stroke brightens on hover.
+          const strokeColor = isCenter
+            ? "var(--hg-ice)"
+            : (isHovered ? "var(--hg-fg-1)" : "var(--hg-fg-3)");
+          const strokeWidth = isHovered ? (isCenter ? 2.5 : 2) : (isCenter ? 1.5 : 1);
+          return (
+            <g key={node.uuid}
+               transform={`translate(${node.x}, ${node.y})${scaleTransform}`}
+               style={{
+                 cursor: "pointer",
+                 opacity: groupOpacity,
+                 transition: "transform 180ms ease, opacity 180ms ease",
+               }}
+               onClick={() => onNodeClick?.(id)}
+               onPointerEnter={(ev) => handleHoverEnter(node.uuid, ev.nativeEvent)}
+               onPointerLeave={handleHoverLeave}
+               aria-label={`${id?.display_name || "unknown"}, ${id?.relationship_type || "?"}`}>
+              <circle
+                r={node.size / 2}
+                fill="var(--hg-bg-1)"
+                stroke={strokeColor}
+                strokeWidth={strokeWidth}
+                style={{ transition: "stroke 180ms ease, stroke-width 180ms ease" }}
+              />
+              {/* Addendum 24 Phase 3: custom avatar wins when the parent
+                  has fetched + blob-URL-converted it (auth required to
+                  GET, but <image href> can't send headers — see the
+                  blob-fetcher useEffect in HomePeopleOverlay). Otherwise
+                  initials fallback. */}
+              {(() => {
+                const blobUrl = avatarBlobUrls && avatarBlobUrls[node.uuid];
+                if (!blobUrl) {
+                  return (
+                    <text
+                      x={0} y={Math.round(node.size * 0.13)}
+                      textAnchor="middle"
+                      fontFamily={PEOPLE_FONT_SANS}
+                      fontSize={Math.round(node.size * 0.36)}
+                      fontWeight={300}
+                      fill={isCenter ? "var(--hg-ice)" : "var(--hg-fg-1)"}
+                      opacity={isArchived ? 0.6 : 1}
+                    >{initials}</text>
+                  );
+                }
+                const clipId = `avatar-clip-${node.uuid}`;
+                return (
+                  <>
+                    <defs>
+                      <clipPath id={clipId}>
+                        <circle r={(node.size / 2) - 1} />
+                      </clipPath>
+                    </defs>
+                    <image
+                      href={blobUrl}
+                      x={-node.size / 2} y={-node.size / 2}
+                      width={node.size} height={node.size}
+                      clipPath={`url(#${clipId})`}
+                      preserveAspectRatio="xMidYMid slice"
+                      opacity={isArchived ? 0.6 : 1}
+                    />
+                  </>
+                );
+              })()}
+              {/* Privacy badge bottom-right (compact) */}
+              {(isPrivate || isSilent) && (
+                <circle
+                  cx={node.size * 0.32} cy={node.size * 0.32}
+                  r={5}
+                  fill="var(--hg-bg-0)"
+                  stroke={isPrivate ? "var(--hg-warn)" : "var(--hg-fg-3)"}
+                  strokeWidth={1}
+                />
+              )}
+              {/* Name label below the avatar. paint-order: stroke fill
+                  + bg-color stroke is the standard SVG trick for text
+                  that visually "masks out" edges passing under it —
+                  the thick bg-color stroke is rendered BELOW the fill,
+                  creating a clean halo that hides the edge stroke
+                  beneath the text. No bbox math needed. */}
+              <text
+                x={0} y={node.size / 2 + 14}
+                textAnchor="middle"
+                fontFamily={PEOPLE_FONT_MONO}
+                fontSize={Math.max(9, Math.round(node.size * 0.18))}
+                fill="var(--hg-fg-0)"
+                stroke="var(--hg-bg-0)"
+                strokeWidth={4}
+                strokeLinejoin="round"
+                paintOrder="stroke fill"
+                letterSpacing="0.04em"
+                opacity={isArchived ? 0.6 : 1}
+              >{id?.display_name || "?"}</text>
+              {/* Relationship label. For cluster members (mother /
+                  father / sister / ...), the cluster arc above already
+                  shows the GROUP (e.g., "PARENTS"); using the subrole
+                  here is both shorter (avoids "family immediate"
+                  collision with neighbor labels) AND more specific.
+                  Same paint-order halo as the name label so edges
+                  don't visibly cut through this text either. */}
+              {!isCenter && (() => {
+                const cluster = H.subroleCluster ? H.subroleCluster(id) : null;
+                const labelText = cluster && id?.relationship_subrole
+                  ? id.relationship_subrole.replace(/_/g, " ")
+                  : (id?.relationship_type || "").replace(/_/g, " ");
+                return (
+                  <text
+                    x={0} y={node.size / 2 + 26}
+                    textAnchor="middle"
+                    fontFamily={PEOPLE_FONT_MONO}
+                    fontSize={Math.max(7, Math.round(node.size * 0.14))}
+                    fill="var(--hg-fg-3)"
+                    stroke="var(--hg-bg-0)"
+                    strokeWidth={3}
+                    strokeLinejoin="round"
+                    paintOrder="stroke fill"
+                    letterSpacing="0.10em"
+                    textTransform="uppercase"
+                  >{labelText}</text>
+                );
+              })()}
+            </g>
+          );
+        })}
+
+        {/* Addendum 23: hover tooltip — small floating SVG box near
+            the hovered node. Position is viewport-aware (auto-flips
+            to avoid clipping + neighbor collision per tooltipPlacement).
+            pointer-events: none so it can't steal hover from the
+            underlying node. */}
+        {hoveredNode && tooltipPos && hoveredNode.identity && (() => {
+          const id = hoveredNode.identity;
+          const tw = 180;
+          const th = tooltipH;
+          const hasThumbs = hoveredFaceUrls.count > 0;
+          const lines = [];
+          const sub = id.relationship_subrole;
+          const relLine = sub
+            ? `${id.relationship_type || ""} · ${sub}`.replace(/_/g, " ")
+            : (id.relationship_type || "").replace(/_/g, " ");
+          if (relLine) lines.push(relLine);
+          const aliasCount = (id.aliases || []).length;
+          if (aliasCount > 0) lines.push(`${aliasCount} alias${aliasCount === 1 ? "" : "es"}`);
+          const flags = [];
+          if (id.is_private) flags.push("private");
+          if (id.is_silent)  flags.push("silent");
+          if (id.is_archived) flags.push("archived");
+          if (flags.length) lines.push(flags.join(" · "));
+          // "click to edit" bottom-right anchor when no thumbs;
+          // thumbs occupy the bottom row otherwise.
+          const editHintY = hasThumbs ? 60 : (th - 8);
+          // Thumb row: up to 4 32px thumbs, 6px gap, anchored bottom
+          const thumbSize = 32;
+          const thumbGap = 6;
+          const thumbY = th - thumbSize - 4;
+          const visibleThumbs = hoveredFaceUrls.urls.slice(0, 4);
+          return (
+            <g
+              transform={`translate(${tooltipPos.x}, ${tooltipPos.y})`}
+              style={{ pointerEvents: "none" }}
+              aria-hidden="true"
+            >
+              <rect
+                width={tw} height={th}
+                rx={4} ry={4}
+                fill="var(--hg-bg-1)"
+                stroke="var(--hg-border-soft)"
+                strokeWidth={1}
+                opacity={0.96}
+              />
+              <text
+                x={10} y={20}
+                fontFamily={PEOPLE_FONT_SANS}
+                fontSize={13}
+                fontWeight={500}
+                fill="var(--hg-fg-0)"
+              >{id.display_name || "?"}</text>
+              {lines.map((line, i) => (
+                <text
+                  key={`tt-line-${i}`}
+                  x={10} y={36 + i * 13}
+                  fontFamily={PEOPLE_FONT_MONO}
+                  fontSize={9}
+                  letterSpacing="0.06em"
+                  fill="var(--hg-fg-3)"
+                >{line.toUpperCase()}</text>
+              ))}
+              {/* Addendum 24 Phase 2: thumbnail row */}
+              {hasThumbs && visibleThumbs.map((u, i) => (
+                <image
+                  key={`tt-thumb-${i}`}
+                  href={u}
+                  x={10 + i * (thumbSize + thumbGap)} y={thumbY}
+                  width={thumbSize} height={thumbSize}
+                  preserveAspectRatio="xMidYMid slice"
+                />
+              ))}
+              <text
+                x={tw - 10} y={editHintY}
+                textAnchor="end"
+                fontFamily={PEOPLE_FONT_MONO}
+                fontSize={8}
+                letterSpacing="0.12em"
+                fill="var(--hg-fg-4)"
+              >click to edit</text>
+            </g>
+          );
+        })()}
+      </svg>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ * Sub-component: PeopleListView (Slice 3 sketch — sortable table later)
+ * ──────────────────────────────────────────────────────────────────── */
+function PeopleListView({ identities, endpoint, avatarPresence, avatarBlobUrls, onRowClick }) {
+  const H = (typeof window !== "undefined" && window.HomePeopleHelpers) || null;
+  if (!identities || identities.length === 0) {
+    return (
+      <div style={{ color: "var(--hg-fg-3)", fontSize: 11 }}>no identities yet</div>
+    );
+  }
+  return (
+    <table style={{
+      width: "100%", borderCollapse: "collapse",
+      fontFamily: PEOPLE_FONT_MONO, fontSize: 11,
+    }}>
+      <thead>
+        <tr style={{
+          textAlign: "left",
+          color: "var(--hg-fg-3)",
+          fontSize: 9, letterSpacing: "0.18em", textTransform: "uppercase",
+          borderBottom: "1px solid var(--hg-border-soft)",
+        }}>
+          <th style={{ padding: "8px 12px", width: 32 }}></th>
+          <th style={{ padding: "8px 12px" }}>name</th>
+          <th style={{ padding: "8px 12px" }}>relationship</th>
+          <th style={{ padding: "8px 12px" }}>aliases</th>
+          <th style={{ padding: "8px 12px" }}>flags</th>
+        </tr>
+      </thead>
+      <tbody>
+        {identities.map((i) => (
+          <tr key={i.uuid}
+              onClick={() => onRowClick?.(i)}
+              style={{
+                borderBottom: "1px solid var(--hg-border-soft)",
+                color: i.is_archived ? "var(--hg-fg-4)" : "var(--hg-fg-1)",
+                cursor: onRowClick ? "pointer" : "default",
+              }}
+              onMouseEnter={(e) => {
+                if (onRowClick) e.currentTarget.style.background = "var(--hg-bg-2)";
+              }}
+              onMouseLeave={(e) => {
+                if (onRowClick) e.currentTarget.style.background = "transparent";
+              }}>
+            <td style={{ padding: "8px 12px" }}>
+              <span style={{
+                display: "inline-block", width: 6, height: 6, borderRadius: "50%",
+                background: i.is_ignored ? "var(--hg-fg-5)"
+                          : i.is_private ? "var(--hg-warn)"
+                          : "var(--hg-ice)",
+                boxShadow: i.is_private || i.is_ignored ? "none" : "0 0 4px var(--hg-ice-glow)",
+              }} />
+            </td>
+            <td style={{ padding: "8px 12px", color: "var(--hg-fg-0)" }}>
+              {(() => {
+                // Addendum 24 Phase 3: small avatar before name when present;
+                // otherwise nothing (just the name). Initial-letter fallback
+                // in list view would visually crowd; the dot+name already
+                // identify the row. Uses parent-fetched blob URL so the
+                // auth header makes it to the GET.
+                const aUrl = avatarBlobUrls && avatarBlobUrls[i.uuid];
+                return (
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                    {aUrl && (
+                      <img src={aUrl} alt=""
+                        style={{
+                          width: 20, height: 20, borderRadius: "50%",
+                          objectFit: "cover",
+                          border: "1px solid var(--hg-border-soft)",
+                        }} />
+                    )}
+                    <span>{i.display_name}</span>
+                  </span>
+                );
+              })()}
+            </td>
+            <td style={{ padding: "8px 12px", color: "var(--hg-fg-3)" }}>
+              {i.relationship_type}{i.relationship_subrole ? ` · ${i.relationship_subrole}` : ""}
+            </td>
+            <td style={{ padding: "8px 12px", color: "var(--hg-fg-3)" }}>
+              {(i.aliases || [])
+                .filter((a) => a.kind === "nickname" || a.kind === "frigate_name")
+                .map((a) => a.alias).join(", ") || "—"}
+            </td>
+            <td style={{ padding: "8px 12px", color: "var(--hg-fg-3)" }}>
+              {[
+                i.is_private && "private",
+                i.is_silent && "silent",
+                i.is_ignored && "ignored",
+                i.is_archived && "archived",
+                i.do_not_track && "do-not-track",
+              ].filter(Boolean).join(" · ") || "—"}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ * Discovery queue — relationship types offered + handful of subroles
+ * ──────────────────────────────────────────────────────────────────── */
+
+// Mirror identity_store.RELATIONSHIP_TYPES but with display-friendly labels.
+// The system reserves 'me' for exactly one identity; we surface it as the
+// first option so first-run tag-yourself is one click away.
+const REL_TYPE_OPTIONS = [
+  { value: "me",                label: "me (only one)" },
+  { value: "partner",           label: "partner" },
+  { value: "family_immediate",  label: "family — immediate" },
+  { value: "family_extended",   label: "family — extended" },
+  { value: "roommate",          label: "roommate / co-resident" },
+  { value: "friend",            label: "friend" },
+  { value: "neighbor",          label: "neighbor" },
+  { value: "service",           label: "service worker" },
+  { value: "guest",             label: "guest (transient)" },
+  { value: "unknown",           label: "leave as unknown" },
+  { value: "do_not_identify",   label: "do not identify" },
+];
+
+/* ─────────────────────────────────────────────────────────────────────
+ * Sub-component: PeopleQueueCard — single unknown identity card with
+ * inline name + relationship editor. PATCHes the HA REST endpoint on
+ * save; on success, the parent refreshes the list and this card
+ * disappears (because the identity is no longer relationship_type=unknown).
+ * ──────────────────────────────────────────────────────────────────── */
+function PeopleQueueCard({ identity, endpoint, token, sim, avatarBlobUrls, onSaved }) {
+  const [name, setName] = useState(identity.display_name);
+  const [rel, setRel] = useState(identity.relationship_type);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  const frigateAlias = (identity.aliases || []).find((a) => a.kind === "frigate_name");
+  // Parent-fetched blob URL (handles auth). Null when no avatar set.
+  const avatarSrc = avatarBlobUrls && avatarBlobUrls[identity.uuid];
+
+  const dirty = name.trim() !== identity.display_name || rel !== identity.relationship_type;
+
+  async function save() {
+    setError(null);
+    if (!name.trim()) {
+      setError("name required");
+      return;
+    }
+    setSaving(true);
+    try {
+      if (sim?.active) {
+        // In sim mode, no PATCH — just fake the save so the UI updates.
+        await new Promise((r) => setTimeout(r, 250));
+        onSaved?.({ uuid: identity.uuid, display_name: name.trim(), relationship_type: rel });
+        return;
+      }
+      const url = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/identity/${identity.uuid}`;
+      const resp = await window.tauriFetch(url, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          display_name: name.trim(),
+          relationship_type: rel,
+          expected_version: identity.version,
+        }),
+      });
+      if (!resp.ok) {
+        const body = await resp.text().catch(() => "");
+        setError(`HTTP ${resp.status}: ${body.slice(0, 100)}`);
+        return;
+      }
+      const result = await resp.json();
+      if (result.error) {
+        setError(result.error);
+        return;
+      }
+      onSaved?.({ uuid: identity.uuid, display_name: name.trim(), relationship_type: rel });
+    } catch (e) {
+      setError(`network error: ${e.message || e}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div style={{
+      border: "1px solid var(--hg-border-soft)",
+      padding: 14,
+      display: "flex", flexDirection: "column", gap: 10,
+      background: "var(--hg-bg-1)",
+    }}>
+      {/* Detection metadata strip — Frigate enrollment + raw cluster name */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 8,
+        fontSize: 9, color: "var(--hg-fg-4)",
+        letterSpacing: "0.16em", textTransform: "uppercase",
+      }}>
+        {/* Addendum 24 Phase 3: avatar thumb if user uploaded one */}
+        {avatarSrc && (
+          <img src={avatarSrc} alt=""
+            style={{
+              width: 28, height: 28, borderRadius: "50%",
+              objectFit: "cover",
+              border: "1px solid var(--hg-border-soft)",
+            }} />
+        )}
+        {frigateAlias && (
+          <span title={`Frigate cluster: ${frigateAlias.alias}`}>
+            frigate · {frigateAlias.alias}
+          </span>
+        )}
+        {!frigateAlias && <span>no frigate enrollment</span>}
+        <span style={{ marginLeft: "auto" }}>v{identity.version}</span>
+      </div>
+
+      {/* Inline name editor */}
+      <input
+        type="text"
+        value={name}
+        disabled={saving}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="name"
+        className="hg-focusable"
+        style={{
+          background: "var(--hg-input-bg)",
+          border: "1px solid var(--hg-border-soft)",
+          padding: "7px 10px",
+          fontFamily: PEOPLE_FONT_SANS,
+          fontSize: 14, color: "var(--hg-fg-0)",
+          outline: "none",
+        }}
+      />
+
+      {/* Relationship picker */}
+      <select
+        value={rel}
+        disabled={saving}
+        onChange={(e) => setRel(e.target.value)}
+        className="hg-focusable"
+        style={{
+          background: "var(--hg-input-bg)",
+          border: "1px solid var(--hg-border-soft)",
+          padding: "7px 10px",
+          fontFamily: PEOPLE_FONT_MONO,
+          fontSize: 11, color: "var(--hg-fg-1)",
+          letterSpacing: "0.04em",
+          outline: "none",
+          cursor: saving ? "default" : "pointer",
+        }}
+      >
+        {REL_TYPE_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+
+      {error && (
+        <div style={{
+          color: "var(--hg-crit)", fontSize: 10,
+          padding: "4px 0",
+        }}>{error}</div>
+      )}
+
+      {/* Action row */}
+      <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
+        <button
+          onClick={save}
+          disabled={saving || !dirty}
+          className="hg-focusable"
+          style={{
+            flex: 1,
+            background: dirty ? "var(--hg-ice)" : "transparent",
+            border: `1px solid ${dirty ? "var(--hg-ice)" : "var(--hg-border-soft)"}`,
+            color: dirty ? "var(--hg-bg-0)" : "var(--hg-fg-4)",
+            padding: "6px 10px",
+            fontFamily: PEOPLE_FONT_MONO,
+            fontSize: 10, letterSpacing: "0.16em",
+            textTransform: "lowercase",
+            cursor: (saving || !dirty) ? "default" : "pointer",
+          }}
+        >
+          {saving ? "saving…" : "save"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ * Sub-component: PeopleQueueView
+ * ──────────────────────────────────────────────────────────────────── */
+function PeopleQueueView({ identities, sim, endpoint, token, avatarBlobUrls, onSaved }) {
+  // The queue is everyone tagged 'unknown' — the auto-seed default for
+  // Frigate-discovered faces. Once the user assigns a relationship type,
+  // the card drops out (next refresh removes it from this filter).
+  const unknowns = (identities || []).filter((i) => i.relationship_type === "unknown");
+  if (unknowns.length === 0) {
+    return (
+      <div style={{
+        textAlign: "center", padding: "60px 20px",
+        color: "var(--hg-fg-3)",
+      }}>
+        <div style={{
+          fontFamily: PEOPLE_FONT_MONO, fontSize: 11, letterSpacing: "0.16em",
+          textTransform: "uppercase", color: "var(--hg-fg-3)", marginBottom: 8,
+        }}>queue is empty</div>
+        <div style={{ fontSize: 12, color: "var(--hg-fg-4)", lineHeight: 1.6, maxWidth: 480, margin: "0 auto" }}>
+          All known faces have been tagged. New faces detected by Frigate will appear here
+          for you to name + relate.
+          {sim?.active && (
+            <span style={{ display: "block", marginTop: 8, color: "var(--hg-fg-4)" }}>
+              (sim mode active — no real Frigate detection)
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div style={{
+        fontSize: 9, letterSpacing: "0.18em", textTransform: "uppercase",
+        color: "var(--hg-fg-3)", marginBottom: 16,
+      }}>
+        {unknowns.length} unidentified — assign names + relationships
+      </div>
+      <div style={{
+        display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
+        gap: 14,
+      }}>
+        {unknowns.map((i) => (
+          <PeopleQueueCard
+            key={i.uuid}
+            identity={i}
+            endpoint={endpoint}
+            token={token}
+            sim={sim}
+            avatarBlobUrls={avatarBlobUrls}
+            onSaved={onSaved}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ * Sub-component: PeopleDetailPanel
+ *
+ * Right-side slide-in panel showing a single identity's full detail +
+ * inline editing. Opens when a node is clicked in the graph view OR
+ * a row is clicked in the list view. Closes via close button.
+ *
+ * Loads the full payload (identity + relationships + preferences) from
+ * GET /api/extended_openai_conversation/identity/{uuid} so we don't
+ * have to compose from the list endpoint's lighter projection.
+ * ──────────────────────────────────────────────────────────────────── */
+function PeopleDetailPanel({ identityUuid, endpoint, token, sim, facesByPerson, frigateUrl, avatarPresence, avatarBlobUrls, onAvatarChanged, onClose, onChanged }) {
+  const [payload, setPayload] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [dirty, setDirty] = useState(null);   // pending patch object, or null
+  const [saving, setSaving] = useState(false);
+  // Addendum 24 Phase 3: avatar crop modal toggle
+  const [showAvatarModal, setShowAvatarModal] = useState(false);
+  const H = (typeof window !== "undefined" && window.HomePeopleHelpers) || null;
+
+  // Load detail on mount / when uuid changes
+  useEffect(() => {
+    if (!identityUuid) {
+      setPayload(null);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setDirty(null);
+    (async () => {
+      try {
+        if (sim?.active) {
+          // Synthesize a minimal payload from the sim snapshot
+          const all = sim.snapshot?.people?.identities || [];
+          const found = all.find((i) => i.uuid === identityUuid);
+          setPayload(found ? {
+            identity: found,
+            relationships: [],
+            preferences: [],
+          } : null);
+          return;
+        }
+        const url = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/identity/${identityUuid}`;
+        const resp = await window.tauriFetch(url, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        });
+        if (!resp.ok) {
+          setError(`HTTP ${resp.status}`);
+          return;
+        }
+        const data = await resp.json();
+        setPayload(data);
+      } catch (e) {
+        setError(`network error: ${e.message || e}`);
+      } finally {
+        setLoading(false);
+      }
+    })();
+    // NOTE: `sim` deliberately omitted from deps — it's an object reference
+    // recreated on every parent render, which would cause this effect to
+    // fire on every render (re-fetch + setState storm = visible flicker).
+    // We use `sim?.active` instead (stable boolean); sim.snapshot is read
+    // at call time from the closure.
+  }, [identityUuid, endpoint, token, sim?.active]);
+
+  function patch(field, value) {
+    setDirty((prev) => ({ ...(prev || {}), [field]: value }));
+  }
+
+  async function save() {
+    if (!dirty || !payload) return;
+    setSaving(true);
+    setError(null);
+    try {
+      if (sim?.active) {
+        await new Promise((r) => setTimeout(r, 200));
+        onChanged?.();
+        setDirty(null);
+        return;
+      }
+      const url = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/identity/${identityUuid}`;
+      const resp = await window.tauriFetch(url, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ...dirty,
+          expected_version: payload.identity.version,
+        }),
+      });
+      if (!resp.ok) {
+        const t = await resp.text().catch(() => "");
+        setError(`HTTP ${resp.status}: ${t.slice(0, 120)}`);
+        return;
+      }
+      const result = await resp.json();
+      if (result.error) {
+        setError(result.error);
+        return;
+      }
+      setDirty(null);
+      onChanged?.();
+      // Re-fetch
+      const r2 = await window.tauriFetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (r2.ok) setPayload(await r2.json());
+    } catch (e) {
+      setError(`network error: ${e.message || e}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deletePerson() {
+    if (!payload) return;
+    if (!window.confirm(`Delete ${payload.identity.display_name}? This removes the identity, all preferences, and queues a delete to Frigate.`)) {
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      if (sim?.active) {
+        await new Promise((r) => setTimeout(r, 200));
+        onChanged?.();
+        onClose?.();
+        return;
+      }
+      const url = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/identity/${identityUuid}`;
+      const resp = await window.tauriFetch(url, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!resp.ok) {
+        const t = await resp.text().catch(() => "");
+        setError(`HTTP ${resp.status}: ${t.slice(0, 120)}`);
+        return;
+      }
+      onChanged?.();
+      onClose?.();
+    } catch (e) {
+      setError(`network error: ${e.message || e}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Closed state
+  if (!identityUuid) return null;
+
+  const ident = payload?.identity || null;
+  const merged = ident ? { ...ident, ...(dirty || {}) } : null;
+
+  const panel = (
+    <div
+      className="hg-scroll"
+      style={{
+        position: "fixed", top: 0, right: 0, bottom: 0,
+        width: 360,
+        background: "var(--hg-bg-1)",
+        borderLeft: "1px solid var(--hg-border)",
+        zIndex: 1100,
+        display: "flex", flexDirection: "column",
+        fontFamily: PEOPLE_FONT_MONO,
+        animation: "people-slide-in 220ms cubic-bezier(0.16,1,0.3,1)",
+        overflowY: "auto",
+        overflowX: "hidden",
+      }}
+      role="dialog" aria-modal="false"
+      aria-label="Identity detail"
+    >
+      {/* Header */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 12,
+        padding: "14px 18px",
+        borderBottom: "1px solid var(--hg-border-soft)",
+      }}>
+        <button
+          onClick={onClose}
+          className="hg-focusable"
+          aria-label="Close panel"
+          style={{
+            background: "transparent", border: "none",
+            color: "var(--hg-fg-3)", cursor: "pointer",
+            padding: 4, lineHeight: 0,
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+            <path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+          </svg>
+        </button>
+        <span style={{
+          fontSize: 9, letterSpacing: "0.18em", textTransform: "uppercase",
+          color: "var(--hg-fg-4)",
+        }}>identity</span>
+        {ident && (
+          <span style={{
+            marginLeft: "auto",
+            fontSize: 9, letterSpacing: "0.12em", color: "var(--hg-fg-4)",
+          }}>v{ident.version}</span>
+        )}
+      </div>
+
+      {loading && (
+        <div style={{ padding: 18, color: "var(--hg-fg-3)", fontSize: 11 }}>
+          loading…
+        </div>
+      )}
+
+      {error && (
+        <div style={{
+          margin: 14, padding: "8px 12px",
+          border: "1px solid var(--hg-crit)",
+          color: "var(--hg-crit)", fontSize: 10,
+        }}>{error}</div>
+      )}
+
+      {!loading && !ident && !error && (
+        <div style={{ padding: 18, color: "var(--hg-fg-3)", fontSize: 11 }}>
+          identity not found
+        </div>
+      )}
+
+      {merged && (
+        <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 16 }}>
+          {/* Addendum 24 Phase 3: avatar preview + edit button */}
+          <div style={{
+            display: "flex", alignItems: "center", gap: 14,
+          }}>
+            {(() => {
+              const aUrl = avatarBlobUrls && avatarBlobUrls[merged.uuid];
+              const initials = H && H.initialsFor
+                ? H.initialsFor(merged.display_name || "?")
+                : (merged.display_name || "?").charAt(0).toUpperCase();
+              return aUrl ? (
+                <img src={aUrl} alt=""
+                  style={{
+                    width: 56, height: 56, borderRadius: "50%",
+                    objectFit: "cover",
+                    border: "1px solid var(--hg-border-soft)",
+                  }} />
+              ) : (
+                <div style={{
+                  width: 56, height: 56, borderRadius: "50%",
+                  background: "var(--hg-bg-2)",
+                  border: "1px solid var(--hg-border-soft)",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontFamily: PEOPLE_FONT_SANS,
+                  fontSize: 20, color: "var(--hg-fg-1)",
+                  fontWeight: 300,
+                }}>{initials}</div>
+              );
+            })()}
+            <button
+              onClick={() => setShowAvatarModal(true)}
+              disabled={sim?.active}
+              className="hg-focusable"
+              title={sim?.active ? "avatar upload disabled in sim mode" : "edit avatar"}
+              style={{
+                background: "transparent",
+                border: "1px solid var(--hg-border-soft)",
+                color: sim?.active ? "var(--hg-fg-4)" : "var(--hg-fg-2)",
+                padding: "6px 10px",
+                fontFamily: PEOPLE_FONT_MONO,
+                fontSize: 10, letterSpacing: "0.16em",
+                textTransform: "lowercase",
+                cursor: sim?.active ? "default" : "pointer",
+              }}
+            >{(avatarBlobUrls && avatarBlobUrls[merged.uuid]) || (avatarPresence && avatarPresence[merged.uuid]) ? "change avatar" : "set avatar"}</button>
+          </div>
+
+          {/* Display name (editable) */}
+          <div>
+            <label style={{
+              display: "block", fontSize: 9, letterSpacing: "0.18em",
+              textTransform: "uppercase", color: "var(--hg-fg-3)",
+              marginBottom: 4,
+            }}>display name</label>
+            <input
+              type="text"
+              value={merged.display_name || ""}
+              onChange={(e) => patch("display_name", e.target.value)}
+              className="hg-focusable"
+              disabled={saving}
+              style={{
+                width: "100%",
+                background: "var(--hg-input-bg)",
+                border: "1px solid var(--hg-border-soft)",
+                padding: "7px 10px",
+                fontFamily: PEOPLE_FONT_SANS,
+                fontSize: 14, color: "var(--hg-fg-0)",
+                outline: "none",
+              }}
+            />
+          </div>
+
+          {/* Relationship type */}
+          <div>
+            <label style={{
+              display: "block", fontSize: 9, letterSpacing: "0.18em",
+              textTransform: "uppercase", color: "var(--hg-fg-3)",
+              marginBottom: 4,
+            }}>relationship</label>
+            <select
+              value={merged.relationship_type || "unknown"}
+              onChange={(e) => patch("relationship_type", e.target.value)}
+              className="hg-focusable"
+              disabled={saving}
+              style={{
+                width: "100%",
+                background: "var(--hg-input-bg)",
+                border: "1px solid var(--hg-border-soft)",
+                padding: "7px 10px",
+                fontFamily: PEOPLE_FONT_MONO,
+                fontSize: 11, color: "var(--hg-fg-1)",
+                letterSpacing: "0.04em",
+                outline: "none",
+                cursor: saving ? "default" : "pointer",
+              }}
+            >
+              {REL_TYPE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Subrole (free text — e.g. "sibling", "contractor") */}
+          <div>
+            <label style={{
+              display: "block", fontSize: 9, letterSpacing: "0.18em",
+              textTransform: "uppercase", color: "var(--hg-fg-3)",
+              marginBottom: 4,
+            }}>subrole (optional)</label>
+            <input
+              type="text"
+              value={merged.relationship_subrole || ""}
+              onChange={(e) => patch("relationship_subrole", e.target.value || null)}
+              placeholder="e.g. sibling, parent, contractor"
+              className="hg-focusable"
+              disabled={saving}
+              style={{
+                width: "100%",
+                background: "var(--hg-input-bg)",
+                border: "1px solid var(--hg-border-soft)",
+                padding: "6px 9px",
+                fontFamily: PEOPLE_FONT_MONO,
+                fontSize: 11, color: "var(--hg-fg-1)",
+                outline: "none",
+              }}
+            />
+          </div>
+
+          {/* Pronouns */}
+          <div>
+            <label style={{
+              display: "block", fontSize: 9, letterSpacing: "0.18em",
+              textTransform: "uppercase", color: "var(--hg-fg-3)",
+              marginBottom: 4,
+            }}>pronouns</label>
+            <input
+              type="text"
+              value={merged.pronouns || ""}
+              onChange={(e) => patch("pronouns", e.target.value || null)}
+              placeholder="they/them"
+              className="hg-focusable"
+              disabled={saving}
+              style={{
+                width: "100%",
+                background: "var(--hg-input-bg)",
+                border: "1px solid var(--hg-border-soft)",
+                padding: "6px 9px",
+                fontFamily: PEOPLE_FONT_MONO,
+                fontSize: 11, color: "var(--hg-fg-1)",
+                outline: "none",
+              }}
+            />
+          </div>
+
+          {/* Aliases (read-only display in Slice 6; add UI defers to polish) */}
+          {(ident.aliases || []).length > 0 && (
+            <div>
+              <label style={{
+                display: "block", fontSize: 9, letterSpacing: "0.18em",
+                textTransform: "uppercase", color: "var(--hg-fg-3)",
+                marginBottom: 4,
+              }}>aliases</label>
+              <div style={{
+                display: "flex", flexWrap: "wrap", gap: 6,
+              }}>
+                {(ident.aliases || []).map((a, idx) => (
+                  <span key={idx} style={{
+                    padding: "3px 8px",
+                    border: "1px solid var(--hg-border-soft)",
+                    fontSize: 10, color: "var(--hg-fg-2)",
+                    background: a.kind === "frigate_name" ? "var(--hg-bg-2)" : "transparent",
+                  }}>
+                    {a.alias}
+                    {a.kind === "frigate_name" && (
+                      <span style={{
+                        marginLeft: 5, fontSize: 8, letterSpacing: "0.12em",
+                        color: "var(--hg-fg-4)", textTransform: "uppercase",
+                      }}>frigate</span>
+                    )}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Notes */}
+          <div>
+            <label style={{
+              display: "block", fontSize: 9, letterSpacing: "0.18em",
+              textTransform: "uppercase", color: "var(--hg-fg-3)",
+              marginBottom: 4,
+            }}>notes (visible to the assistant)</label>
+            <textarea
+              value={merged.notes || ""}
+              onChange={(e) => patch("notes", e.target.value || null)}
+              disabled={saving}
+              rows={3}
+              className="hg-focusable"
+              style={{
+                width: "100%",
+                background: "var(--hg-input-bg)",
+                border: "1px solid var(--hg-border-soft)",
+                padding: "7px 10px",
+                fontFamily: PEOPLE_FONT_SANS,
+                fontSize: 12, color: "var(--hg-fg-1)",
+                outline: "none", resize: "vertical",
+              }}
+            />
+          </div>
+
+          {/* Privacy toggles */}
+          <div>
+            <label style={{
+              display: "block", fontSize: 9, letterSpacing: "0.18em",
+              textTransform: "uppercase", color: "var(--hg-fg-3)",
+              marginBottom: 8,
+            }}>privacy</label>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {[
+                { key: "is_private",   label: "private — no proactive announcements" },
+                { key: "is_silent",    label: "silent — never spoken or written in replies" },
+                { key: "is_ignored",   label: "ignored — drop all detections (US-1.33)" },
+                { key: "do_not_track", label: "do-not-track — exclude from aggregation" },
+                { key: "is_archived",  label: "archived — soft-delete, restorable" },
+              ].map((f) => (
+                <label key={f.key} style={{
+                  display: "flex", alignItems: "center", gap: 8,
+                  fontSize: 11, color: "var(--hg-fg-1)", cursor: "pointer",
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={!!merged[f.key]}
+                    onChange={(e) => patch(f.key, e.target.checked)}
+                    disabled={saving}
+                  />
+                  <span>{f.label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Relationships (read-only summary in Slice 6) */}
+          {payload.relationships && payload.relationships.length > 0 && (
+            <div>
+              <label style={{
+                display: "block", fontSize: 9, letterSpacing: "0.18em",
+                textTransform: "uppercase", color: "var(--hg-fg-3)",
+                marginBottom: 6,
+              }}>relationships ({payload.relationships.length})</label>
+              <ul style={{
+                margin: 0, padding: 0, listStyle: "none",
+                fontSize: 11, color: "var(--hg-fg-2)",
+              }}>
+                {payload.relationships.map((r) => (
+                  <li key={r.id} style={{
+                    padding: "4px 0",
+                    color: r.status === "ended" ? "var(--hg-fg-4)" : "var(--hg-fg-1)",
+                  }}>
+                    <span style={{ color: "var(--hg-fg-3)" }}>{r.rel_type}</span>
+                    {" → "}
+                    {r.to_display_name}
+                    {r.status === "ended" && (
+                      <span style={{ marginLeft: 6, fontSize: 9, color: "var(--hg-fg-4)" }}>(ended)</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Preferences — read existing + inline-add new */}
+          <PreferencesSection
+            identityUuid={identityUuid}
+            preferences={payload.preferences || []}
+            endpoint={endpoint}
+            token={token}
+            sim={sim}
+            onChanged={onChanged}
+          />
+
+          {/* Addendum 24: Frigate face captures gallery + lightbox */}
+          <FaceCapturesSection
+            identity={payload.identity}
+            facesByPerson={facesByPerson}
+            frigateUrl={frigateUrl}
+          />
+
+          {/* Save + delete row */}
+          <div style={{
+            display: "flex", gap: 8, marginTop: 6,
+            paddingTop: 14,
+            borderTop: "1px solid var(--hg-border-soft)",
+          }}>
+            <button
+              onClick={save}
+              disabled={!dirty || saving}
+              className="hg-focusable"
+              style={{
+                flex: 1,
+                background: dirty ? "var(--hg-ice)" : "transparent",
+                border: `1px solid ${dirty ? "var(--hg-ice)" : "var(--hg-border-soft)"}`,
+                color: dirty ? "var(--hg-bg-0)" : "var(--hg-fg-4)",
+                padding: "8px 10px",
+                fontFamily: PEOPLE_FONT_MONO, fontSize: 10,
+                letterSpacing: "0.16em", textTransform: "lowercase",
+                cursor: (!dirty || saving) ? "default" : "pointer",
+              }}
+            >{saving ? "saving…" : "save changes"}</button>
+            <button
+              onClick={deletePerson}
+              disabled={saving}
+              className="hg-focusable"
+              style={{
+                background: "transparent",
+                border: "1px solid var(--hg-crit)",
+                color: "var(--hg-crit)",
+                padding: "8px 12px",
+                fontFamily: PEOPLE_FONT_MONO, fontSize: 10,
+                letterSpacing: "0.16em", textTransform: "lowercase",
+                cursor: saving ? "default" : "pointer",
+              }}
+            >delete</button>
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        @keyframes people-slide-in {
+          from { transform: translateX(20px); opacity: 0; }
+          to { transform: translateX(0); opacity: 1; }
+        }
+      `}</style>
+
+      {/* Addendum 24 Phase 3: avatar crop modal — portal-mounted */}
+      {showAvatarModal && ident && (
+        <AvatarCropModal
+          identity={ident}
+          endpoint={endpoint}
+          token={token}
+          onClose={() => setShowAvatarModal(false)}
+          onUploaded={(uuid, present) => onAvatarChanged?.(uuid, present)}
+        />
+      )}
+    </div>
+  );
+  return typeof document !== "undefined" && document.body
+    ? ReactDOM.createPortal(panel, document.body)
+    : panel;
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ * Sub-component: FaceCapturesSection (Addendum 24 Phase 1b)
+ *
+ * Shows the full grid of Frigate face crops for this identity, with
+ * a click-to-lightbox preview. Data sourced from the parent's
+ * `facesByPerson` snapshot of GET /api/faces (fetched once per
+ * overlay open). Image bytes load directly from Frigate's
+ * /clips/faces/<frigate_name>/<file>.webp endpoint.
+ * ──────────────────────────────────────────────────────────────────── */
+
+/* ─────────────────────────────────────────────────────────────────────
+ * Sub-component: AvatarCropModal (Addendum 24 Phase 3)
+ *
+ * Lightweight canvas-based crop + resize for identity avatars. User
+ * picks an image file → modal shows it on a <canvas> with a square
+ * crop overlay → zoom slider + drag to reposition → "Save" computes
+ * the crop window, draws into a 256×256 canvas, converts to JPEG via
+ * toBlob, POSTs the bytes to AvatarView. Client-side resize means the
+ * server doesn't need PIL (AR24-5).
+ *
+ * a11y: role="dialog", aria-labels on slider + buttons, Escape closes,
+ * focus moves to "Save" on open. Arrow keys nudge the crop frame.
+ *
+ * Errors surface inline; modal stays open on failure so the user can
+ * retry.
+ * ──────────────────────────────────────────────────────────────────── */
+const AVATAR_OUTPUT_SIZE = 256;          // px (square output)
+const AVATAR_JPEG_QUALITY = 0.85;
+const AVATAR_VIEWPORT_PX = 320;          // size of the in-modal canvas
+const AVATAR_MAX_INPUT_BYTES = 12 * 1024 * 1024; // pre-resize input cap
+
+function AvatarCropModal({ identity, endpoint, token, onClose, onUploaded }) {
+  const fileRef = useRef(null);
+  const canvasRef = useRef(null);
+  const imgRef = useRef(null);
+  const saveBtnRef = useRef(null);
+  const [imgLoaded, setImgLoaded] = useState(false);
+  const [zoom, setZoom] = useState(1.0);    // 0.5 .. 3.0
+  const [offset, setOffset] = useState({ x: 0, y: 0 }); // image translation in viewport px
+  const [dragging, setDragging] = useState(null);  // {startX, startY, baseX, baseY}
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [hasImage, setHasImage] = useState(false);
+
+  // Esc closes
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === "Escape") { e.preventDefault(); onClose(); return; }
+      // Arrow keys nudge the crop (= shift the image opposite direction)
+      if (!hasImage) return;
+      const step = e.shiftKey ? 10 : 2;
+      if (e.key === "ArrowUp")    { setOffset((o) => ({ x: o.x, y: o.y + step })); e.preventDefault(); }
+      if (e.key === "ArrowDown")  { setOffset((o) => ({ x: o.x, y: o.y - step })); e.preventDefault(); }
+      if (e.key === "ArrowLeft")  { setOffset((o) => ({ x: o.x + step, y: o.y })); e.preventDefault(); }
+      if (e.key === "ArrowRight") { setOffset((o) => ({ x: o.x - step, y: o.y })); e.preventDefault(); }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose, hasImage]);
+
+  // Focus management — move focus to Save when image is ready.
+  useEffect(() => {
+    if (hasImage && saveBtnRef.current) saveBtnRef.current.focus();
+  }, [hasImage]);
+
+  // Render the canvas every time zoom or offset changes.
+  useEffect(() => {
+    if (!hasImage) return;
+    const canvas = canvasRef.current;
+    const img = imgRef.current;
+    if (!canvas || !img) return;
+    const ctx = canvas.getContext("2d");
+    canvas.width = AVATAR_VIEWPORT_PX;
+    canvas.height = AVATAR_VIEWPORT_PX;
+    ctx.fillStyle = "rgba(0,0,0,0.8)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // Compute the displayed image size for a given zoom — "fit cover" at
+    // zoom=1 (shortest side == viewport), then scale up by zoom.
+    const aspect = img.naturalWidth / img.naturalHeight;
+    let baseW, baseH;
+    if (aspect >= 1) {
+      baseH = AVATAR_VIEWPORT_PX;
+      baseW = AVATAR_VIEWPORT_PX * aspect;
+    } else {
+      baseW = AVATAR_VIEWPORT_PX;
+      baseH = AVATAR_VIEWPORT_PX / aspect;
+    }
+    const drawW = baseW * zoom;
+    const drawH = baseH * zoom;
+    // Center, then apply offset (offset = how much the image has shifted
+    // relative to canvas center).
+    const dx = (canvas.width - drawW) / 2 + offset.x;
+    const dy = (canvas.height - drawH) / 2 + offset.y;
+    ctx.drawImage(img, dx, dy, drawW, drawH);
+    // Crop frame overlay — center square (the output will be cropped to
+    // the full viewport, so the frame == viewport bounds; draw a thin
+    // border to show clipping plane).
+    ctx.strokeStyle = "rgba(255,255,255,0.85)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(0.5, 0.5, canvas.width - 1, canvas.height - 1);
+  }, [zoom, offset, hasImage]);
+
+  function pickFile() {
+    fileRef.current?.click();
+  }
+
+  function onFileChange(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setError(null);
+    if (file.size > AVATAR_MAX_INPUT_BYTES) {
+      setError(`file too large (${Math.round(file.size / 1024 / 1024)}MB; max 12MB)`);
+      return;
+    }
+    if (!/^image\//.test(file.type)) {
+      setError("not an image file");
+      return;
+    }
+    setImgLoaded(false);
+    setHasImage(false);
+    setZoom(1.0);
+    setOffset({ x: 0, y: 0 });
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const img = new Image();
+      img.onload = () => {
+        imgRef.current = img;
+        setImgLoaded(true);
+        setHasImage(true);
+      };
+      img.onerror = () => setError("failed to decode image");
+      img.src = ev.target.result;
+    };
+    reader.onerror = () => setError("failed to read file");
+    reader.readAsDataURL(file);
+  }
+
+  function onPointerDown(ev) {
+    if (!hasImage) return;
+    setDragging({
+      startX: ev.clientX, startY: ev.clientY,
+      baseX: offset.x, baseY: offset.y,
+    });
+  }
+  function onPointerMove(ev) {
+    if (!dragging) return;
+    const dx = ev.clientX - dragging.startX;
+    const dy = ev.clientY - dragging.startY;
+    setOffset({ x: dragging.baseX + dx, y: dragging.baseY + dy });
+  }
+  function onPointerUp() { setDragging(null); }
+
+  async function save() {
+    if (!hasImage) return;
+    setError(null);
+    setBusy(true);
+    try {
+      // Draw the viewport content into a 256×256 output canvas (the
+      // viewport IS the crop frame, so we just rescale).
+      const src = canvasRef.current;
+      const out = document.createElement("canvas");
+      out.width = AVATAR_OUTPUT_SIZE;
+      out.height = AVATAR_OUTPUT_SIZE;
+      const octx = out.getContext("2d");
+      octx.drawImage(src, 0, 0, AVATAR_OUTPUT_SIZE, AVATAR_OUTPUT_SIZE);
+      // Convert to JPEG blob (AR24-5: client-side resize)
+      const blob = await new Promise((resolve, reject) => {
+        out.toBlob(
+          (b) => b ? resolve(b) : reject(new Error("toBlob returned null")),
+          "image/jpeg",
+          AVATAR_JPEG_QUALITY,
+        );
+      });
+      // POST as raw body (AR24-6: simpler than multipart; AvatarView
+      // accepts both shapes).
+      const url = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/identity/${encodeURIComponent(identity.uuid)}/avatar`;
+      const resp = await window.tauriFetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "image/jpeg",
+        },
+        body: blob,
+      });
+      if (!resp.ok) {
+        const body = await resp.text().catch(() => "");
+        setError(`HTTP ${resp.status}: ${body.slice(0, 120)}`);
+        return;
+      }
+      const result = await resp.json().catch(() => ({}));
+      if (result.error) { setError(result.error); return; }
+      // present=true — POST succeeded, file is on disk now.
+      onUploaded?.(identity.uuid, true);
+      onClose();
+    } catch (e) {
+      setError(`upload failed: ${e.message || e}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteAvatar() {
+    setError(null);
+    setBusy(true);
+    try {
+      const url = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/identity/${encodeURIComponent(identity.uuid)}/avatar`;
+      const resp = await window.tauriFetch(url, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!resp.ok && resp.status !== 404) {
+        setError(`HTTP ${resp.status}`);
+        return;
+      }
+      // present=false — DELETE succeeded (or file was already gone).
+      onUploaded?.(identity.uuid, false);
+      onClose();
+    } catch (e) {
+      setError(`delete failed: ${e.message || e}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const modal = (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Avatar editor for ${identity.display_name}`}
+      style={{
+        position: "fixed", inset: 0,
+        background: "rgba(0,0,0,0.78)",
+        zIndex: 1100,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: 20,
+      }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div style={{
+        background: "var(--hg-bg-1)",
+        border: "1px solid var(--hg-border-soft)",
+        padding: 20,
+        maxWidth: 420,
+        display: "flex", flexDirection: "column", gap: 14,
+        fontFamily: PEOPLE_FONT_MONO,
+      }}>
+        <div style={{
+          display: "flex", justifyContent: "space-between", alignItems: "center",
+        }}>
+          <span style={{
+            fontSize: 10, letterSpacing: "0.18em", textTransform: "uppercase",
+            color: "var(--hg-fg-3)",
+          }}>edit avatar · {identity.display_name}</span>
+          <button
+            onClick={onClose}
+            aria-label="close avatar editor"
+            style={{
+              background: "transparent", border: "none",
+              color: "var(--hg-fg-3)", cursor: "pointer",
+              fontSize: 16, padding: 4,
+            }}
+          >✕</button>
+        </div>
+
+        {!hasImage && (
+          <div style={{
+            display: "flex", flexDirection: "column", gap: 12, alignItems: "center",
+            padding: 24, border: "1px dashed var(--hg-border-soft)",
+            color: "var(--hg-fg-3)", fontSize: 11,
+          }}>
+            <span>pick an image (JPEG / PNG / WebP, &lt; 12 MB)</span>
+            <button onClick={pickFile}
+              className="hg-focusable"
+              style={{
+                background: "var(--hg-ice)",
+                color: "var(--hg-bg-0)",
+                border: "1px solid var(--hg-ice)",
+                padding: "8px 16px",
+                fontFamily: PEOPLE_FONT_MONO,
+                fontSize: 11, letterSpacing: "0.18em",
+                textTransform: "lowercase",
+                cursor: "pointer",
+              }}
+            >choose file</button>
+            <input ref={fileRef} type="file" accept="image/*"
+              onChange={onFileChange}
+              style={{ display: "none" }}
+            />
+          </div>
+        )}
+
+        {hasImage && (
+          <>
+            <div style={{ display: "flex", justifyContent: "center" }}>
+              <canvas ref={canvasRef}
+                width={AVATAR_VIEWPORT_PX} height={AVATAR_VIEWPORT_PX}
+                style={{
+                  border: "1px solid var(--hg-border-soft)",
+                  cursor: dragging ? "grabbing" : "grab",
+                  touchAction: "none",
+                }}
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerUp}
+                onPointerLeave={onPointerUp}
+              />
+            </div>
+
+            <div style={{
+              display: "flex", alignItems: "center", gap: 10,
+              fontSize: 10, color: "var(--hg-fg-3)",
+              letterSpacing: "0.08em",
+            }}>
+              <span>zoom</span>
+              <input
+                type="range" min={0.5} max={3.0} step={0.05}
+                value={zoom}
+                onChange={(e) => setZoom(parseFloat(e.target.value))}
+                aria-label="zoom"
+                style={{ flex: 1 }}
+              />
+              <span style={{ width: 32, textAlign: "right" }}>
+                {zoom.toFixed(2)}×
+              </span>
+            </div>
+
+            <div style={{
+              fontSize: 9, color: "var(--hg-fg-4)", textAlign: "center",
+              letterSpacing: "0.08em",
+            }}>
+              drag to reposition · arrow keys to nudge · saves as 256×256 JPEG
+            </div>
+
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={pickFile} disabled={busy}
+                className="hg-focusable"
+                style={{
+                  flex: 1,
+                  background: "transparent",
+                  border: "1px solid var(--hg-border-soft)",
+                  color: "var(--hg-fg-2)",
+                  padding: "8px 12px",
+                  fontFamily: PEOPLE_FONT_MONO,
+                  fontSize: 10, letterSpacing: "0.16em",
+                  textTransform: "lowercase",
+                  cursor: busy ? "default" : "pointer",
+                }}
+              >change image</button>
+              <button onClick={deleteAvatar} disabled={busy}
+                className="hg-focusable"
+                style={{
+                  background: "transparent",
+                  border: "1px solid var(--hg-crit)",
+                  color: "var(--hg-crit)",
+                  padding: "8px 12px",
+                  fontFamily: PEOPLE_FONT_MONO,
+                  fontSize: 10, letterSpacing: "0.16em",
+                  textTransform: "lowercase",
+                  cursor: busy ? "default" : "pointer",
+                }}
+              >remove</button>
+              <button ref={saveBtnRef} onClick={save} disabled={busy}
+                className="hg-focusable"
+                style={{
+                  flex: 1,
+                  background: "var(--hg-ice)",
+                  color: "var(--hg-bg-0)",
+                  border: "1px solid var(--hg-ice)",
+                  padding: "8px 12px",
+                  fontFamily: PEOPLE_FONT_MONO,
+                  fontSize: 10, letterSpacing: "0.16em",
+                  textTransform: "lowercase",
+                  cursor: busy ? "default" : "pointer",
+                }}
+              >{busy ? "saving…" : "save"}</button>
+            </div>
+          </>
+        )}
+
+        {error && (
+          <div style={{
+            color: "var(--hg-crit)", fontSize: 10,
+            padding: "4px 0",
+          }}>{error}</div>
+        )}
+      </div>
+    </div>
+  );
+
+  return typeof document !== "undefined" && document.body
+    ? ReactDOM.createPortal(modal, document.body)
+    : modal;
+}
+
+function FaceCapturesSection({ identity, facesByPerson, frigateUrl }) {
+  const H = (typeof window !== "undefined" && window.HomePeopleHelpers) || null;
+  const [lightboxUrl, setLightboxUrl] = useState(null);
+  const result = useMemo(() => {
+    if (!H || !H.frigateFaceCropUrls) return { count: 0, urls: [] };
+    return H.frigateFaceCropUrls(facesByPerson, identity, frigateUrl);
+  }, [H, facesByPerson, identity, frigateUrl]);
+
+  // Esc closes lightbox
+  useEffect(() => {
+    if (!lightboxUrl) return undefined;
+    const onKey = (e) => { if (e.key === "Escape") setLightboxUrl(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightboxUrl]);
+
+  const MAX_VISIBLE = 24;
+  const visible = result.urls.slice(0, MAX_VISIBLE);
+  const overflow = Math.max(0, result.count - MAX_VISIBLE);
+
+  return (
+    <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid var(--hg-border-soft)" }}>
+      <label style={{
+        fontFamily: PEOPLE_FONT_MONO, fontSize: 10,
+        letterSpacing: "0.16em", textTransform: "lowercase",
+        color: "var(--hg-fg-3)",
+        display: "block", marginBottom: 8,
+      }}>face captures ({result.count})</label>
+
+      {result.count === 0 && (
+        <div style={{ fontSize: 11, color: "var(--hg-fg-4)", fontStyle: "italic" }}>
+          {!frigateUrl
+            ? "Frigate URL not available — connect or reload."
+            : !facesByPerson
+              ? "Frigate face library unreachable."
+              : "No face captures yet for this identity."}
+        </div>
+      )}
+
+      {result.count > 0 && (
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(4, 1fr)",
+          gap: 6,
+        }}>
+          {visible.map((u) => (
+            <button
+              key={u}
+              onClick={() => setLightboxUrl(u)}
+              className="hg-focusable"
+              style={{
+                padding: 0, border: "1px solid var(--hg-border-soft)",
+                background: "var(--hg-bg-0)", cursor: "pointer",
+                aspectRatio: "1 / 1", overflow: "hidden",
+                borderRadius: 3,
+                transition: "border-color 160ms ease",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--hg-fg-2)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--hg-border-soft)"; }}
+              aria-label="View face capture full size"
+            >
+              <img
+                src={u}
+                alt=""
+                loading="lazy"
+                style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+              />
+            </button>
+          ))}
+          {overflow > 0 && (
+            <div style={{
+              aspectRatio: "1 / 1", display: "flex",
+              alignItems: "center", justifyContent: "center",
+              border: "1px dashed var(--hg-border-soft)", borderRadius: 3,
+              fontFamily: PEOPLE_FONT_MONO, fontSize: 10,
+              color: "var(--hg-fg-3)",
+            }}>+{overflow}</div>
+          )}
+        </div>
+      )}
+
+      {/* Lightbox — fullscreen overlay; click anywhere or Esc to close */}
+      {lightboxUrl && ReactDOM.createPortal(
+        <div
+          onClick={() => setLightboxUrl(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Face capture preview"
+          style={{
+            position: "fixed", inset: 0,
+            background: "rgba(0,0,0,0.85)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            zIndex: 2000, cursor: "zoom-out",
+            animation: "people-fade-in 160ms ease-out",
+          }}
+        >
+          <img
+            src={lightboxUrl}
+            alt="Face capture"
+            style={{
+              maxWidth: "90vw", maxHeight: "90vh",
+              imageRendering: "auto",
+              boxShadow: "0 0 40px rgba(0,0,0,0.6)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────
+ * Sub-component: PreferencesSection
+ *
+ * Reads existing prefs from the parent payload; inline "+ add"
+ * affordance POSTs a new preference. Common keys are offered as
+ * shortcuts (light_temp_pref, music_genre, etc.) but the user can
+ * type any key freeform.
+ *
+ * Value parser: try JSON first (so numbers + objects work cleanly),
+ * fall back to raw string. Scope is optional JSON; empty = unscoped.
+ * Source defaults to 'manual' (per US-4.01-4.06).
+ * ──────────────────────────────────────────────────────────────────── */
+const COMMON_PREF_KEYS = [
+  "light_temp_pref",      // Kelvin number
+  "light_brightness_pref",// 0-100 number
+  "music_genre",          // string
+  "music_volume",         // 0-100 number
+  "tts_voice",            // string
+  "scene_default",        // string
+  "notes",                // string (freeform)
+];
+
+function PreferencesSection({ identityUuid, preferences, endpoint, token, sim, onChanged }) {
+  const [adding, setAdding] = useState(false);
+  const [newKey, setNewKey] = useState("");
+  const [newValue, setNewValue] = useState("");
+  const [newScope, setNewScope] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  function reset() {
+    setNewKey(""); setNewValue(""); setNewScope("");
+    setError(null); setAdding(false);
+  }
+
+  async function save() {
+    setError(null);
+    if (!newKey.trim()) { setError("key required"); return; }
+    if (!newValue) { setError("value required"); return; }
+    // Parse value as JSON first; fall back to raw string
+    let parsedValue;
+    try { parsedValue = JSON.parse(newValue); }
+    catch { parsedValue = newValue; }
+    let parsedScope = {};
+    if (newScope.trim()) {
+      try {
+        parsedScope = JSON.parse(newScope);
+        if (typeof parsedScope !== "object" || Array.isArray(parsedScope)) {
+          setError("scope must be a JSON object");
+          return;
+        }
+      } catch {
+        setError("scope must be valid JSON");
+        return;
+      }
+    }
+    setSaving(true);
+    try {
+      if (sim?.active) {
+        await new Promise((r) => setTimeout(r, 200));
+        onChanged?.(); reset();
+        return;
+      }
+      const url = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/identity/${identityUuid}/preferences`;
+      const resp = await window.tauriFetch(url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          key: newKey.trim(),
+          value: parsedValue,
+          scope: parsedScope,
+          source: "manual",
+        }),
+      });
+      if (!resp.ok) {
+        const t = await resp.text().catch(() => "");
+        setError(`HTTP ${resp.status}: ${t.slice(0, 100)}`);
+        return;
+      }
+      const result = await resp.json();
+      if (result.error) { setError(result.error); return; }
+      onChanged?.(); reset();
+    } catch (e) {
+      setError(`network error: ${e.message || e}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div>
+      <div style={{
+        display: "flex", alignItems: "baseline", marginBottom: 6,
+      }}>
+        <label style={{
+          fontSize: 9, letterSpacing: "0.18em",
+          textTransform: "uppercase", color: "var(--hg-fg-3)",
+        }}>preferences ({preferences.length})</label>
+        <span style={{ marginLeft: "auto" }}>
+          {!adding && (
+            <button
+              onClick={() => setAdding(true)}
+              className="hg-focusable"
+              style={{
+                background: "transparent", border: "1px solid var(--hg-border-soft)",
+                color: "var(--hg-fg-2)",
+                padding: "3px 8px",
+                fontFamily: PEOPLE_FONT_MONO, fontSize: 9,
+                letterSpacing: "0.16em", textTransform: "lowercase",
+                cursor: "pointer",
+              }}
+            >+ add</button>
+          )}
+        </span>
+      </div>
+
+      {preferences.length === 0 && !adding && (
+        <div style={{ color: "var(--hg-fg-4)", fontSize: 11 }}>none set</div>
+      )}
+
+      {preferences.length > 0 && (
+        <ul style={{ margin: 0, padding: 0, listStyle: "none",
+                     fontSize: 11, color: "var(--hg-fg-2)" }}>
+          {preferences.map((p) => (
+            <li key={p.id} style={{
+              padding: "5px 0",
+              borderBottom: "1px solid var(--hg-border-soft)",
+              display: "flex", alignItems: "baseline", gap: 8,
+            }}>
+              <span style={{ color: "var(--hg-fg-3)", flexShrink: 0 }}>{p.key}</span>
+              <span style={{ color: "var(--hg-fg-1)", flex: 1, wordBreak: "break-word" }}>
+                {typeof p.value === "object" ? JSON.stringify(p.value) : String(p.value)}
+              </span>
+              {p.source === "inferred" && (
+                <span style={{
+                  fontSize: 8, letterSpacing: "0.16em", color: "var(--hg-fg-4)",
+                  textTransform: "uppercase",
+                  title: p.confidence ? `confidence ${(p.confidence * 100).toFixed(0)}%` : null,
+                }}>inferred{p.confidence ? ` ${(p.confidence * 100).toFixed(0)}%` : ""}</span>
+              )}
+              {Object.keys(p.scope || {}).length > 0 && (
+                <span style={{
+                  fontSize: 8, color: "var(--hg-fg-4)",
+                  title: JSON.stringify(p.scope),
+                }}>scoped</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {adding && (
+        <div style={{
+          marginTop: 10, padding: 12,
+          background: "var(--hg-bg-2)",
+          border: "1px solid var(--hg-border-soft)",
+          display: "flex", flexDirection: "column", gap: 8,
+        }}>
+          {/* Key — with common-suggestions datalist for convenience */}
+          <div>
+            <label style={{
+              display: "block", fontSize: 9, letterSpacing: "0.16em",
+              textTransform: "uppercase", color: "var(--hg-fg-4)", marginBottom: 3,
+            }}>key</label>
+            <input
+              list="pref-key-suggestions"
+              type="text"
+              value={newKey}
+              onChange={(e) => setNewKey(e.target.value)}
+              disabled={saving}
+              placeholder="e.g. light_temp_pref"
+              className="hg-focusable"
+              style={{
+                width: "100%",
+                background: "var(--hg-input-bg)",
+                border: "1px solid var(--hg-border-soft)",
+                padding: "5px 8px",
+                fontFamily: PEOPLE_FONT_MONO, fontSize: 11,
+                color: "var(--hg-fg-1)", outline: "none",
+              }}
+            />
+            <datalist id="pref-key-suggestions">
+              {COMMON_PREF_KEYS.map((k) => <option key={k} value={k} />)}
+            </datalist>
+          </div>
+          {/* Value */}
+          <div>
+            <label style={{
+              display: "block", fontSize: 9, letterSpacing: "0.16em",
+              textTransform: "uppercase", color: "var(--hg-fg-4)", marginBottom: 3,
+            }}>value <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--hg-fg-5)" }}>(JSON or plain string)</span></label>
+            <input
+              type="text"
+              value={newValue}
+              onChange={(e) => setNewValue(e.target.value)}
+              disabled={saving}
+              placeholder='e.g. 2700 or "lofi"'
+              className="hg-focusable"
+              style={{
+                width: "100%",
+                background: "var(--hg-input-bg)",
+                border: "1px solid var(--hg-border-soft)",
+                padding: "5px 8px",
+                fontFamily: PEOPLE_FONT_MONO, fontSize: 11,
+                color: "var(--hg-fg-1)", outline: "none",
+              }}
+            />
+          </div>
+          {/* Scope (optional JSON) */}
+          <div>
+            <label style={{
+              display: "block", fontSize: 9, letterSpacing: "0.16em",
+              textTransform: "uppercase", color: "var(--hg-fg-4)", marginBottom: 3,
+            }}>scope <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--hg-fg-5)" }}>(optional JSON object)</span></label>
+            <input
+              type="text"
+              value={newScope}
+              onChange={(e) => setNewScope(e.target.value)}
+              disabled={saving}
+              placeholder='e.g. {"time_of_day":"evening"}'
+              className="hg-focusable"
+              style={{
+                width: "100%",
+                background: "var(--hg-input-bg)",
+                border: "1px solid var(--hg-border-soft)",
+                padding: "5px 8px",
+                fontFamily: PEOPLE_FONT_MONO, fontSize: 11,
+                color: "var(--hg-fg-1)", outline: "none",
+              }}
+            />
+          </div>
+          {error && (
+            <div style={{ color: "var(--hg-crit)", fontSize: 10 }}>{error}</div>
+          )}
+          <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+            <button onClick={save} disabled={saving} className="hg-focusable" style={{
+              flex: 1, background: "var(--hg-ice)",
+              border: "1px solid var(--hg-ice)",
+              color: "var(--hg-bg-0)",
+              padding: "6px 10px",
+              fontFamily: PEOPLE_FONT_MONO, fontSize: 10,
+              letterSpacing: "0.16em", textTransform: "lowercase",
+              cursor: saving ? "default" : "pointer",
+            }}>{saving ? "saving…" : "add"}</button>
+            <button onClick={reset} disabled={saving} className="hg-focusable" style={{
+              background: "transparent",
+              border: "1px solid var(--hg-border-soft)",
+              color: "var(--hg-fg-2)",
+              padding: "6px 10px",
+              fontFamily: PEOPLE_FONT_MONO, fontSize: 10,
+              letterSpacing: "0.16em", textTransform: "lowercase",
+              cursor: "pointer",
+            }}>cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Expose to window for home-app.jsx consumption
+window.HomePeopleOverlay = HomePeopleOverlay;

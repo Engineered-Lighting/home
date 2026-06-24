@@ -1,0 +1,62 @@
+# living_lights_shadow.yaml — Phase 1 (P-4) shadow-mode decision logger
+#
+# Logs every classifier state transition to /config/lighting_decisions.log
+# as JSONL. When `input_boolean.living_lights_shadow=on` (default), the
+# WOULD-HAVE actuation is logged but NOT executed. Phase 2+ actuators
+# read `living_lights_shadow=off` to switch from logging to actuating.
+#
+# Uses shell_command + base64 round-trip: JSON contains double-quotes
+# which break naive shell quoting. We base64-encode in Jinja, decode in
+# shell. Bulletproof against all special characters.
+#
+# Rollback: delete this file + reload shell_command + reload automations.
+
+shell_command:
+  living_lights_append_log: 'sh -c "echo {{ payload }} | base64 -d >> /config/lighting_decisions.log; echo >> /config/lighting_decisions.log"'
+
+automation:
+  - alias: "Living Lights — log decisions on classifier transition"
+    id: living_lights_log_decisions
+    description: >
+      Fires whenever any *_lighting_state sensor transitions. Writes
+      one JSONL line per transition. Shadow-mode safe.
+    mode: parallel
+    max: 30
+    triggers:
+      - trigger: state
+        entity_id:
+          - sensor.dining_room_dining_left_lighting_state
+          - sensor.dining_room_dining_right_lighting_state
+          - sensor.dining_room_whole_dining_room_lighting_state
+          - sensor.driveway_e28_lighting_state
+          - sensor.kitchen_island_left_lighting_state
+          - sensor.kitchen_island_right_lighting_state
+          - sensor.kitchen_sink_lighting_state
+          - sensor.kitchen_whole_kitchen_lighting_state
+          - sensor.living_room_front_door_lighting_state
+          - sensor.living_room_front_left_lighting_state
+          - sensor.living_room_office_lighting_state
+          - sensor.living_room_sofa_lighting_state
+          - sensor.living_room_weights_lighting_state
+          - sensor.living_room_whole_living_room_lighting_state
+          - sensor.workshop_workshop_zone_lighting_state
+    conditions: []
+    actions:
+      - variables:
+          entity_id: "{{ trigger.entity_id }}"
+          from_state: "{{ trigger.from_state.state if trigger.from_state else 'unknown' }}"
+          to_state: "{{ trigger.to_state.state if trigger.to_state else 'unknown' }}"
+          predicted_bri: "{{ state_attr(entity_id, 'predicted_brightness_pct') | int(0) }}"
+          predicted_ct: "{{ state_attr(entity_id, 'predicted_color_temp_kelvin') | int(0) }}"
+          dwell_ms: "{{ state_attr(entity_id, 'dwell_ms') | int(0) }}"
+          speed_mps: "{{ state_attr(entity_id, 'speed_mps') | float(0) }}"
+          last_manual_at: "{{ state_attr(entity_id, 'last_manual_at') }}"
+          tod_factor: "{{ state_attr('sensor.living_lights_profile', 'tod_factor') | float(0) }}"
+          tod_state: "{{ states('sensor.living_lights_profile') }}"
+          shadow_mode: "{{ is_state('input_boolean.living_lights_shadow', 'on') | lower }}"
+          master_enabled: "{{ is_state('input_boolean.living_lights_enabled', 'on') | lower }}"
+          json_payload: >-
+            {"ts":"{{ now().isoformat() }}","kind":"lighting_decision","entity_id":"{{ entity_id }}","from_state":"{{ from_state }}","to_state":"{{ to_state }}","predicted":{"brightness_pct":{{ predicted_bri }},"color_temp_kelvin":{{ predicted_ct }}},"inputs":{"dwell_ms":{{ dwell_ms }},"speed_mps":{{ speed_mps }},"tod_factor":{{ tod_factor }},"tod_state":"{{ tod_state }}","last_manual_at":"{{ last_manual_at }}"},"shadow_mode":{{ shadow_mode }},"master_enabled":{{ master_enabled }}}
+      - action: shell_command.living_lights_append_log
+        data:
+          payload: "{{ json_payload | base64_encode }}"

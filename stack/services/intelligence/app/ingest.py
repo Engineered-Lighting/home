@@ -490,6 +490,103 @@ def insert_lighting_decision(
     return decision_id
 
 
+def _state_payload(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _color_temp_kelvin(state: dict[str, Any]) -> float | None:
+    direct = float_or_none(state.get("color_temp_kelvin"))
+    if direct is not None:
+        return direct
+    mired = float_or_none(state.get("color_temp"))
+    if mired and mired > 0:
+        return round(1000000.0 / mired)
+    return None
+
+
+def insert_lighting_change_event(
+    conn: sqlite3.Connection,
+    payload: dict[str, Any],
+    raw_id: str,
+) -> str:
+    event_id = _nullable_text(payload.get("event_id")) or stable_hash(raw_id)[:24]
+    obj_id = f"lightchg:{event_id}"
+    from_state = _state_payload(payload.get("from"))
+    to_state = _state_payload(payload.get("to"))
+    ha_context = _dict_or_empty(payload.get("ha_context"))
+    context = _dict_or_empty(payload.get("context"))
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO lighting_change_events
+            (id, raw_event_id, event_id, ts, entity_id, light_entity, zone,
+             from_state, to_state, from_brightness_pct, to_brightness_pct,
+             from_color_temp_kelvin, to_color_temp_kelvin, command_id,
+             source_hint, source_confidence, trigger_attribute,
+             ha_context_json, context_json, payload_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            obj_id,
+            raw_id,
+            event_id,
+            payload.get("ts"),
+            first_present(payload.get("entity_id"), payload.get("light_entity")),
+            payload.get("light_entity"),
+            first_present(payload.get("zone"), context.get("zone")),
+            from_state.get("state"),
+            to_state.get("state"),
+            float_or_none(from_state.get("brightness_pct")),
+            float_or_none(to_state.get("brightness_pct")),
+            _color_temp_kelvin(from_state),
+            _color_temp_kelvin(to_state),
+            _nullable_text(payload.get("command_id")),
+            _nullable_text(payload.get("source_hint")),
+            _nullable_text(payload.get("source_confidence")),
+            _nullable_text(payload.get("trigger_attribute")),
+            canonical_json(ha_context),
+            canonical_json(context),
+            canonical_json(redact_payload(payload)),
+        ),
+    )
+    return obj_id
+
+
+def insert_lighting_command_event(
+    conn: sqlite3.Connection,
+    payload: dict[str, Any],
+    raw_id: str,
+) -> str:
+    command_id = _nullable_text(payload.get("command_id") or payload.get("event_id"))
+    obj_id = f"lightcmd:{command_id or stable_hash(raw_id)[:24]}"
+    requested = _state_payload(payload.get("requested"))
+    baseline = _state_payload(payload.get("baseline"))
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO lighting_command_events
+            (id, raw_event_id, command_id, ts, zone, entity_id, source,
+             source_text, requested_brightness_pct, requested_color_temp_kelvin,
+             baseline_json, requested_json, payload_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            obj_id,
+            raw_id,
+            command_id,
+            payload.get("ts"),
+            payload.get("zone"),
+            payload.get("entity_id"),
+            _nullable_text(payload.get("source")),
+            _nullable_text(payload.get("source_text")),
+            float_or_none(requested.get("brightness_pct")),
+            float_or_none(requested.get("color_temp_kelvin")),
+            canonical_json(baseline),
+            canonical_json(requested),
+            canonical_json(redact_payload(payload)),
+        ),
+    )
+    return obj_id
+
+
 def ingest_payload(
     conn: sqlite3.Connection,
     *,
@@ -517,6 +614,10 @@ def ingest_payload(
         obj_id = insert_preference_observation(conn, payload, raw_id)
     elif kind in ("lighting_decision", "gradient_decision"):
         obj_id = insert_lighting_decision(conn, payload, raw_id)
+    elif kind == "lighting_change_event":
+        obj_id = insert_lighting_change_event(conn, payload, raw_id)
+    elif kind == "lighting_command_event":
+        obj_id = insert_lighting_command_event(conn, payload, raw_id)
     else:
         obj_id = raw_id
     return {"raw_id": raw_id, "object_id": obj_id, "kind": kind or "unknown"}
@@ -581,9 +682,16 @@ def ingest_default_sources(conn: sqlite3.Connection) -> dict[str, Any]:
             str(cfg / "lighting_decisions.log"),
         )
     )
+    activity_path = Path(
+        os.environ.get(
+            "INTELLIGENCE_LIGHTING_ACTIVITY_JSONL",
+            str(cfg / "lighting_activity.jsonl"),
+        )
+    )
     runs = [
         ingest_jsonl_file(conn, preference_path, source="lighting_preferences_pending"),
         ingest_jsonl_file(conn, decisions_path, source="lighting_decisions"),
+        ingest_jsonl_file(conn, activity_path, source="lighting_activity"),
     ]
     return {
         "ok": all(r.get("errors", 0) == 0 for r in runs),

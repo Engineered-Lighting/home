@@ -18,6 +18,7 @@ from app.db import connect, init_db  # noqa: E402
 from app.evidence_sources import EvidencePullError, list_evidence_sources, pull_ha_evidence  # noqa: E402
 from app.episodes import build_preference_episodes  # noqa: E402
 from app.ingest import canonical_json, ingest_jsonl_file, ingest_payload  # noqa: E402
+from app.lighting_activity import list_recent_lighting_activity, rebuild_lighting_change_episodes  # noqa: E402
 from app.main import app  # noqa: E402
 from app.multimodal import build_prompt_contract  # noqa: E402
 
@@ -328,6 +329,7 @@ class EvidenceContractTests(unittest.TestCase):
                         + canonical_json(pending).encode("utf-8") + b"\n"
                     ),
                     "decisions": canonical_json(decision).encode("utf-8") + b"\n",
+                    "activity": b"",
                 }
 
             def get_json(self, path: str, params: dict | None = None) -> dict:
@@ -349,6 +351,13 @@ class EvidenceContractTests(unittest.TestCase):
                                 "mtime_iso": "2026-05-26T20:00:00+00:00",
                                 "fingerprint": "dev:decisions",
                                 "latest": {"ts": decision["ts"]},
+                            },
+                            "activity": {
+                                "exists": True,
+                                "size": len(self.files["activity"]),
+                                "mtime_iso": "2026-05-26T20:00:00+00:00",
+                                "fingerprint": "dev:activity",
+                                "latest": None,
                             },
                         },
                     }
@@ -425,6 +434,97 @@ class EvidenceContractTests(unittest.TestCase):
         for row in sources["sources"]:
             self.assertEqual(row["status"], "auth_failed")
             self.assertNotIn("super-secret-token", row["last_error"] or "")
+
+    def test_universal_lighting_activity_ingests_and_collapses_to_episode(self) -> None:
+        command_id = "cmd-1779900000-123456"
+        command = {
+            "schema_version": 1,
+            "kind": "lighting_command_event",
+            "raw_event_kind": "lighting_command_event",
+            "event_id": command_id,
+            "command_id": command_id,
+            "ts": "2026-05-27T08:00:00.000000-07:00",
+            "zone": "office",
+            "entity_id": "input_text.living_lights_override_text_office",
+            "source": "voice",
+            "source_text": "make the office brighter",
+            "requested": {"brightness_pct": 60, "color_temp_kelvin": 3000},
+            "baseline": {"brightness_pct": 20, "color_temp_kelvin": 2700},
+        }
+        ingest_payload(
+            self.conn,
+            source="fixture",
+            source_id="activity-command",
+            payload=command,
+            raw_text=canonical_json(command),
+            source_path="activity",
+            line_no=1,
+        )
+        steps = [
+            (0, 20, 35),
+            (1, 35, 50),
+            (2, 50, 60),
+        ]
+        for idx, before, after in steps:
+            change = {
+                "schema_version": 1,
+                "kind": "lighting_change_event",
+                "raw_event_kind": "lighting_change_event",
+                "event_id": f"lightchg-test-{idx}",
+                "ts": f"2026-05-27T08:00:0{idx}.000000-07:00",
+                "zone": "office",
+                "entity_id": "light.office",
+                "light_entity": "light.office",
+                "from": {
+                    "state": "on",
+                    "brightness_pct": before,
+                    "color_temp_kelvin": 2700,
+                },
+                "to": {
+                    "state": "on",
+                    "brightness_pct": after,
+                    "color_temp_kelvin": 3000,
+                },
+                "predicted": {"brightness_pct": 30, "color_temp_kelvin": 2700},
+                "command_id": command_id,
+                "source_hint": "home_app_ai",
+                "source_confidence": "high",
+                "ha_context": {"id": f"ctx-{idx}", "parent_id": None, "user_id": None},
+                "context": {"profile": "morning", "state": "present"},
+            }
+            ingest_payload(
+                self.conn,
+                source="fixture",
+                source_id=f"activity-change-{idx}",
+                payload=change,
+                raw_text=canonical_json(change),
+                source_path="activity",
+                line_no=idx + 2,
+            )
+
+        summary = rebuild_lighting_change_episodes(self.conn)
+        self.assertEqual(summary["raw_event_count"], 3)
+        self.assertEqual(summary["episode_count"], 1)
+        self.assertEqual(summary["events_collapsed"], 2)
+        self.conn.commit()
+
+        body = list_recent_lighting_activity(self.conn, zone="office", hours=24, include_raw=True)
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["summary"]["episode_count"], 1)
+        episode = body["episodes"][0]
+        self.assertEqual(episode["event_count"], 3)
+        self.assertEqual(episode["command_id"], command_id)
+        self.assertEqual(episode["source_class"], "home_app_ai")
+        self.assertEqual(episode["source_confidence"], "medium")
+        self.assertEqual(episode["interpretation"], "explicit_command")
+        self.assertEqual(episode["first_state"]["brightness_pct"], 20)
+        self.assertEqual(episode["last_state"]["brightness_pct"], 60)
+        self.assertEqual(len(episode["raw_events"]), 3)
+
+        client = TestClient(app)
+        response = client.get("/api/intelligence/lighting-activity?zone=office&hours=24&include_raw=true")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["episodes"][0]["last_state"]["brightness_pct"], 60)
 
     def test_ingest_recovers_concatenated_jsonl_objects(self) -> None:
         first = load_fixture("office_lighting_decision.json")
@@ -1454,6 +1554,148 @@ class EvidenceContractTests(unittest.TestCase):
         detail = client.get(f"/api/intelligence/observation-packets/{packet_id}")
         self.assertEqual(detail.status_code, 200)
         self.assertEqual(detail.json()["audits"][0]["action"], "label_looks_wrong")
+
+    def test_observation_packet_human_activity_corrections_are_append_only(self) -> None:
+        self.ingest_fixture("office_pending_preference.json")
+        self.conn.commit()
+        client = TestClient(app)
+        observation = self.conn.execute(
+            "SELECT id FROM preference_observations WHERE kind = 'pending_preference'"
+        ).fetchone()
+        capture = client.post(
+            "/api/intelligence/observation-packets/capture",
+            json={
+                "observation_id": observation["id"],
+                "capture_frames": False,
+                "trigger": "contract_test",
+            },
+        )
+        self.assertEqual(capture.status_code, 200)
+        packet_id = capture.json()["packet"]["id"]
+        labels = {
+            "schema_version": "home_observation_labels_v1",
+            "presence": {"label": "person_present", "confidence": 0.9, "evidence_frames": ["frame_2"]},
+            "primary_activity": {"label": "unknown", "confidence": 0.1, "evidence_frames": ["frame_2"]},
+            "secondary_activities": [],
+            "motion_phase": {"label": "still", "confidence": 0.7, "evidence_frames": ["frame_2"]},
+            "posture": {"label": "standing", "confidence": 0.7, "evidence_frames": ["frame_2"]},
+            "task_surface": {"label": "floor", "confidence": 0.7, "evidence_frames": ["frame_2"]},
+            "visual_focus": {"label": "uncertain", "confidence": 0.2, "evidence_frames": ["frame_2"]},
+            "screen_visual_state": {"label": "no_screen_visible", "confidence": 0.8, "evidence_frames": ["frame_2"]},
+            "room_lighting_visual": {"label": "bright", "confidence": 0.9, "evidence_frames": ["frame_2"]},
+            "image_quality": {"label": "clear", "confidence": 0.9, "evidence_frames": ["frame_2"]},
+            "privacy_sensitivity": {"label": "normal", "confidence": 0.9, "evidence_frames": ["frame_2"]},
+            "metadata_consistency": {"label": "consistent", "confidence": 0.8, "evidence_frames": ["frame_2"]},
+            "abstain_reason": None,
+            "contradictions": [],
+            "short_visible_summary": "A person is visible, but the activity is unclear.",
+        }
+        self.conn.execute(
+            """
+            INSERT INTO qwen_label_results
+              (id, packet_id, status, prompt_version, schema_version, model,
+               model_base_url, request_json, raw_output_text, labels_json,
+               validation_errors_json, latency_ms, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "ql-human-correction",
+                packet_id,
+                "valid",
+                "home_observation_labeler_v1",
+                "home_observation_labels_v1",
+                "qwen3-vl-30b",
+                "local",
+                "{}",
+                canonical_json(labels),
+                canonical_json(labels),
+                "[]",
+                12,
+                "2026-05-27T12:00:00+00:00",
+            ),
+        )
+        self.conn.commit()
+
+        detail = client.get(f"/api/intelligence/observation-packets/{packet_id}")
+        self.assertEqual(detail.status_code, 200)
+        self.assertTrue(detail.json()["packet"]["needs_review"]["primary_activity"])
+        self.assertIn("unknown activity", detail.json()["packet"]["needs_review"]["reasons"])
+
+        invalid = client.post(
+            f"/api/intelligence/observation-packets/{packet_id}/audits",
+            json={"action": "correct_primary_activity", "actor": "test", "body": {"label": "flying"}},
+        )
+        self.assertEqual(invalid.status_code, 400)
+
+        correction = client.post(
+            f"/api/intelligence/observation-packets/{packet_id}/audits",
+            json={
+                "action": "correct_primary_activity",
+                "actor": "test",
+                "body": {
+                    "axis": "primary_activity",
+                    "label": "reading",
+                    "confidence": 1.0,
+                    "source": "human",
+                    "previous_qwen_label": "unknown",
+                    "previous_qwen_confidence": 0.1,
+                },
+            },
+        )
+        self.assertEqual(correction.status_code, 200)
+        correction_id = correction.json()["audit"]["id"]
+        detail = client.get(f"/api/intelligence/observation-packets/{packet_id}")
+        self.assertEqual(detail.json()["packet"]["latest_labels"]["primary_activity"]["label"], "unknown")
+        self.assertEqual(detail.json()["packet"]["effective_labels"]["primary_activity"]["label"], "reading")
+        self.assertFalse(detail.json()["packet"]["needs_review"]["primary_activity"])
+        atlas = client.get("/api/intelligence/observation-packets/map")
+        self.assertEqual(atlas.json()["points"][0]["activity"], "reading")
+        self.assertTrue(atlas.json()["points"][0]["human_corrected"])
+
+        retract = client.post(
+            f"/api/intelligence/observation-packets/{packet_id}/audits",
+            json={
+                "action": "retract_label_audit",
+                "actor": "test",
+                "body": {"target_audit_id": correction_id},
+            },
+        )
+        self.assertEqual(retract.status_code, 200)
+        detail = client.get(f"/api/intelligence/observation-packets/{packet_id}")
+        self.assertEqual(detail.json()["packet"]["effective_labels"]["primary_activity"]["label"], "unknown")
+        self.assertTrue(detail.json()["packet"]["needs_review"]["primary_activity"])
+
+        confirmed = client.post(
+            f"/api/intelligence/observation-packets/{packet_id}/audits",
+            json={"action": "confirm_unknown_activity", "actor": "test", "body": {"axis": "primary_activity"}},
+        )
+        self.assertEqual(confirmed.status_code, 200)
+        detail = client.get(f"/api/intelligence/observation-packets/{packet_id}")
+        self.assertEqual(
+            detail.json()["packet"]["human_label_overrides"]["primary_activity"]["source"],
+            "human_confirmed_unknown",
+        )
+        self.assertFalse(detail.json()["packet"]["needs_review"]["primary_activity"])
+
+        bad_reason = client.post(
+            f"/api/intelligence/observation-packets/{packet_id}/audits",
+            json={"action": "not_labelable_activity", "actor": "test", "body": {"reason": "shrug"}},
+        )
+        self.assertEqual(bad_reason.status_code, 400)
+        not_labelable = client.post(
+            f"/api/intelligence/observation-packets/{packet_id}/audits",
+            json={"action": "not_labelable_activity", "actor": "test", "body": {"reason": "ambiguous"}},
+        )
+        self.assertEqual(not_labelable.status_code, 200)
+        detail = client.get(f"/api/intelligence/observation-packets/{packet_id}")
+        self.assertEqual(
+            detail.json()["packet"]["human_label_overrides"]["primary_activity"]["source"],
+            "human_not_labelable",
+        )
+        self.assertEqual(
+            detail.json()["packet"]["human_label_overrides"]["primary_activity"]["reason"],
+            "ambiguous",
+        )
 
     def test_qwen_label_schema_rejects_preference_like_lighting_labels(self) -> None:
         client = TestClient(app)

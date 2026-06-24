@@ -12,7 +12,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # devtools feature is enabled here so right-click → Inspect works on the
 # production .msi too. Trivial size overhead (~200 KB), worth it for debug.
-tauri = { version = "2", features = ["devtools"] }
+tauri = { version = "2", features = ["protocol-asset", "devtools"] }
 tauri-plugin-http = "2"
 tauri-plugin-shell = "2"
 # Single-instance plugin: prevents a second home.exe from creating a

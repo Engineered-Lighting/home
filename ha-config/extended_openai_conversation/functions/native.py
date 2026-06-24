@@ -28,6 +28,158 @@ from .base import Function
 _LOGGER = logging.getLogger(__name__)
 
 
+_LL_MANAGED_AREA_TO_ZONE = {
+    "kitchen": "kitchen",
+    "living_room": "living room",
+    "livingroom": "living room",
+    "dining_room": "dining room",
+    "diningroom": "dining room",
+}
+
+_LL_ENTITY_TO_ZONE = {
+    "light.dining_table_left": "dining_left",
+    "light.dining_table_right": "dining_right",
+    "light.sink": "sink",
+    "light.island_left": "island_left",
+    "light.island_right": "island_right",
+    "light.office": "office",
+    "light.front_left": "front_left",
+    "light.front_right": "front_door",
+}
+
+_LL_ENTITY_TO_AREA = {
+    "light.kitchen": "kitchen",
+    "light.kitchen_lights": "kitchen",
+    "light.dining_room": "dining room",
+    "light.dining_room_lights": "dining room",
+    "light.living_room_lights": "living room",
+}
+
+_LL_ZONE_TO_AREA = {
+    "dining_left": "dining room",
+    "dining_right": "dining room",
+    "sink": "kitchen",
+    "island_left": "kitchen",
+    "island_right": "kitchen",
+    "office": "living room",
+    "front_left": "living room",
+    "front_door": "living room",
+}
+
+_LL_LEVEL_KEYS = ("brightness_pct", "brightness", "color_temp_kelvin", "color_temp")
+
+
+def _listify_target(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [str(value).strip()]
+
+
+def _target_key(value: str) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _mired_to_kelvin(value: Any) -> int | None:
+    try:
+        mired = float(value)
+    except (TypeError, ValueError):
+        return None
+    if mired <= 0:
+        return None
+    return int(round(1000000 / mired))
+
+
+def _brightness_to_pct(value: Any) -> int | None:
+    try:
+        raw = float(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0, min(100, int(round(raw / 255 * 100))))
+
+
+def _living_lights_override_args(
+    domain: str,
+    service: str,
+    service_data: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Convert mistaken managed-room light.turn_on calls to a durable override.
+
+    The prompt tells the model to call set_presence_override for Living Lights
+    level/kelvin changes, but small local models sometimes emit execute_services
+    anyway. This guard is intentionally narrow: turn_off, non-managed lights,
+    and color modes the override tool cannot represent still pass through.
+    """
+    if domain != "light" or service != "turn_on":
+        return None
+    if not any(key in service_data for key in _LL_LEVEL_KEYS):
+        return None
+
+    zone: str | None = None
+    area_ids = _listify_target(service_data.get("area_id"))
+    area_zones = {
+        _LL_MANAGED_AREA_TO_ZONE[_target_key(area)]
+        for area in area_ids
+        if _target_key(area) in _LL_MANAGED_AREA_TO_ZONE
+    }
+    if len(area_zones) == 1:
+        zone = next(iter(area_zones))
+    elif len(area_zones) > 1:
+        return None
+
+    if zone is None:
+        entity_ids = [entity.lower() for entity in _listify_target(service_data.get("entity_id"))]
+        area_targets = {_LL_ENTITY_TO_AREA[entity] for entity in entity_ids if entity in _LL_ENTITY_TO_AREA}
+        zone_targets = {_LL_ENTITY_TO_ZONE[entity] for entity in entity_ids if entity in _LL_ENTITY_TO_ZONE}
+        if area_targets:
+            if len(area_targets) == 1 and not zone_targets:
+                zone = next(iter(area_targets))
+            else:
+                return None
+        elif zone_targets:
+            room_targets = {_LL_ZONE_TO_AREA[z] for z in zone_targets}
+            if len(zone_targets) == 1:
+                zone = next(iter(zone_targets))
+            elif len(room_targets) == 1:
+                zone = next(iter(room_targets))
+            else:
+                return None
+
+    if zone is None:
+        return None
+
+    out: dict[str, Any] = {
+        "zone": zone,
+        "source": "voice",
+        "source_text": "rerouted execute_services light.turn_on",
+    }
+    if "brightness_pct" in service_data:
+        out["brightness_pct"] = service_data.get("brightness_pct")
+    elif "brightness" in service_data:
+        pct = _brightness_to_pct(service_data.get("brightness"))
+        if pct is not None:
+            out["brightness_pct"] = pct
+    if "color_temp_kelvin" in service_data:
+        out["color_temp_kelvin"] = service_data.get("color_temp_kelvin")
+    elif "color_temp" in service_data:
+        kelvin = _mired_to_kelvin(service_data.get("color_temp"))
+        if kelvin is not None:
+            out["color_temp_kelvin"] = kelvin
+    return out
+
+
+def _living_lights_master_not_off(hass: HomeAssistant) -> bool:
+    try:
+        states = getattr(hass, "states", None)
+        state = states.get("input_boolean.living_lights_enabled") if states else None
+    except Exception:  # pragma: no cover - defensive around HA startup/tests
+        return True
+    return state is None or getattr(state, "state", None) == "on"
+
+
 def _media_entities_in_area(hass: HomeAssistant, area_key: str) -> list[str]:
     """Resolve `area_id` → list of media_player entity_ids in that area.
 
@@ -348,6 +500,61 @@ class NativeFunction(Function):
                 _LOGGER.debug("M6 log_decision (resolve) failed: %s", e)
 
         # ── House-wide ct convergence injector (CT plan) ──────────────
+        living_lights_args = (
+            _living_lights_override_args(domain, service, service_data)
+            if _living_lights_master_not_off(hass)
+            else None
+        )
+        if living_lights_args is not None:
+            t_override_start = time.monotonic()
+            from .living_lights import LivingLightsFunction
+            override_result = await LivingLightsFunction()._set_presence_override(
+                hass, living_lights_args,
+            )
+            latency_ms = int((time.monotonic() - t_override_start) * 1000)
+            if override_result.get("ok") is True:
+                return {
+                    "success": True,
+                    "ok": True,
+                    "latency_ms": latency_ms,
+                    "domain": "living_lights",
+                    "service": "set_presence_override",
+                    "rerouted_from": {
+                        "domain": domain,
+                        "service": service,
+                        "service_data": service_data,
+                    },
+                    "data": override_result.get("data"),
+                    "suggested_phrasing": override_result.get("suggested_phrasing"),
+                    "stakes": "low",
+                    "ack_hint": override_result.get("suggested_phrasing", "OK."),
+                }
+            error_obj = override_result.get("error")
+            return {
+                "success": False,
+                "ok": False,
+                "latency_ms": latency_ms,
+                "domain": "living_lights",
+                "service": "set_presence_override",
+                "rerouted_from": {
+                    "domain": domain,
+                    "service": service,
+                    "service_data": service_data,
+                },
+                "error": error_obj,
+                "error_kind": (
+                    error_obj.get("kind")
+                    if isinstance(error_obj, dict)
+                    else "living_lights_override_failed"
+                ),
+                "error_message": (
+                    error_obj.get("message")
+                    if isinstance(error_obj, dict)
+                    else str(error_obj or "Living Lights override failed")
+                ),
+                "suggested_phrasing": override_result.get("suggested_phrasing"),
+            }
+
         # If the LLM emits `light.turn_on` without ANY color-mode parameter
         # (color_temp_kelvin / color_temp / rgb_color / hs_color / xy_color),
         # inject color_temp_kelvin from AL's global target so the bulb's

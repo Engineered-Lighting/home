@@ -1,7 +1,7 @@
 """Frigate payload parsing: both bbox formats, full event flow, defensive
 handling of odd payloads."""
 from conftest import FakeClock, make_model
-from tracker import Tracker, normalize_box
+from tracker import ROOM_LINGER_S, Tracker, normalize_box
 
 W, H = 1280, 720
 
@@ -113,12 +113,19 @@ def test_non_person_and_unmapped_camera_ignored():
     assert tracker.snapshot(clock.t) == []
 
 
-def test_end_event_retires_room_track():
+def test_end_event_room_track_lingers_then_retires():
+    # "end" only marks the track; room presence lingers ROOM_LINGER_S
+    # ("last seen in <room>") before _retire_stale drops it.
     tracker, clock = make_tracker()
     tracker.process_event(event(etype="new"), now=clock.t)
     assert len(tracker.snapshot(clock.t)) == 1
     clock.tick(2.0)
     tracker.process_event(event(etype="end"), now=clock.t)
+    tracker.predict_step(clock.t)
+    snap = tracker.snapshot(clock.t)
+    assert len(snap) == 1
+    assert snap[0]["room"] == "living_room"
+    clock.tick(ROOM_LINGER_S + 1.0)
     tracker.predict_step(clock.t)
     assert tracker.snapshot(clock.t) == []
 

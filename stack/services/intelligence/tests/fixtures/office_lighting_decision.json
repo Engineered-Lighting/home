@@ -1,0 +1,20 @@
+{
+  "kind": "lighting_decision",
+  "ts": "2026-05-26T12:06:56.612000-07:00",
+  "entity_id": "sensor.living_room_office_lighting_state",
+  "from_state": "present",
+  "to_state": "present",
+  "predicted": {
+    "brightness_pct": 80,
+    "color_temp_kelvin": 2700
+  },
+  "inputs": {
+    "dwell_ms": 155800,
+    "speed_mps": 0.0,
+    "tod_factor": 1.0,
+    "tod_state": "midday",
+    "last_manual_at": "2026-05-26 12:02:49"
+  },
+  "shadow_mode": false,
+  "master_enabled": true
+}

@@ -3,12 +3,18 @@
 Voice/agent-facing tools for the presence-override layer:
 
   - set_presence_override(zone, deltas, source_text)
-      Apply an override to a zone's lighting until the user leaves +
-      grace period. Voice commands like "make the dining lights
-      brighter" route here. Writes JSON payload to
-      input_text.living_lights_override_text_<zone>; the classifier
-      sensor then transitions to `presence_override` state and the
-      Phase 2+ actuator script reads brightness/color from the payload.
+      Apply an explicit lighting override. `zone` may be a single zone
+      slug, a whole room ("living room", "kitchen"), or "all"/"my
+      lights" — the tool fans the override out across every actuating
+      zone in scope. Absolute spoken commands ("set my lights to 100%")
+      route here so they PERSIST, rather than to a bare light.turn_on
+      that the ambient engine immediately reverts. Writes a JSON payload
+      to input_text.living_lights_override_text_<zone> for each target;
+      the classifier transitions to `presence_override` (top of the
+      state machine, immune to the asleep cap/bypass) and the per-zone
+      pilot applies the payload brightness/color. The override-lifecycle
+      automation eases it back to automatic only after a minimum hold
+      AND the zone has been genuinely vacant for the grace window.
 
   - clear_presence_override(zone | "all")
       Clear an active override immediately. Voice "end the override" /
@@ -22,19 +28,27 @@ Per Addendum 33 AR33-7: brightness=0 from a voice override is clamped
 to 5% (lights-off must come from explicit `light.turn_off` calls, not
 overrides). source ∈ {voice, app}; "auto" / null is rejected.
 
-Per Addendum 33 AR33-2: when zone is currently vacant at override
-time, payload includes `remote: true` flag → auto-clear automation
-respects a longer max-lifetime instead of the 30s vacancy grace.
+Persistence (user-chosen "leave + grace, with a minimum hold"): the
+payload carries `hold_until` (now + MIN_HOLD_MINUTES) and
+`vacancy_grace_s`. The override-lifecycle automation
+(living_lights_override_lifecycle.yaml) clears an override only once
+BOTH (a) now > hold_until and (b) the zone has read continuously
+vacant for vacancy_grace_s. So an explicit command sticks for at least
+MIN_HOLD_MINUTES even if the cameras briefly lose a still occupant,
+then returns to automatic shortly after you actually leave. `remote`
+(zone vacant at set time) is retained for audit only.
 
-Per Addendum 33 AR33-3: `pinned: true` flag from the app's Pin button
-keeps the override active until explicitly cleared (no auto-clear).
+Per Addendum 33 AR33-3: `pinned: true` keeps the override active until
+explicitly cleared (the lifecycle automation skips pinned overrides).
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+import os
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
@@ -47,15 +61,72 @@ from .base import Function
 _LOGGER = logging.getLogger(__name__)
 
 # Zone slug → set of known synonyms (used to resolve "dining room",
-# "kitchen island left", etc to canonical slug).
-# Phase 0a starts with 5 zones; expand as more zones promote.
+# "kitchen island left", etc to canonical slug). Covers every
+# occupancy-managed light zone (the 10 LIGHT_TARGETS the pilots actuate).
 ZONE_SYNONYMS: dict[str, list[str]] = {
     "dining_left": ["dining left", "left dining", "dining_left"],
     "dining_right": ["dining right", "right dining", "dining_right"],
     "sink": ["sink", "kitchen sink"],
     "island_left": ["island left", "left island", "kitchen island left"],
     "island_right": ["island right", "right island", "kitchen island right"],
+    "sofa": ["sofa", "couch", "living room sofa", "lounge"],
+    "front_left": ["front left", "front left light", "front left lamp"],
+    "front_door": ["front door", "entry", "entryway", "entrance"],
+    "weights": ["weights", "gym", "workout", "weight bench", "home gym"],
+    "office": ["office", "desk", "study", "office light"],
 }
+
+# Zone slug → owning camera (room). Every actuating zone is covered.
+ZONE_TO_CAMERA: dict[str, str] = {
+    "dining_left": "dining_room",
+    "dining_right": "dining_room",
+    "sink": "kitchen",
+    "island_left": "kitchen",
+    "island_right": "kitchen",
+    "sofa": "living_room",
+    "front_left": "living_room",
+    "front_door": "living_room",
+    "weights": "living_room",
+    "office": "living_room",
+}
+
+# Room → the minimal set of zones whose lights together cover the whole
+# room (no overlap). "the living room lights" → sofa (front_left/front_right/
+# rear_left/rear_right) + office; redundant subset-zones are intentionally
+# excluded so two pilots don't fight over a shared light.
+ROOM_TO_ZONES: dict[str, list[str]] = {
+    "living_room": ["sofa", "office"],
+    "dining_room": ["dining_left", "dining_right"],
+    "kitchen": ["sink", "island_left", "island_right"],
+}
+
+ROOM_SYNONYMS: dict[str, list[str]] = {
+    "living_room": ["living room", "living_room", "lounge", "front room", "den"],
+    "dining_room": ["dining room", "dining_room", "dining", "dining area"],
+    "kitchen": ["kitchen"],
+}
+
+# "all" / "the house" / "my lights" → every managed zone, deduped to the
+# non-overlapping cover (so a house-wide command writes one override per
+# physical light, not several fighting writes).
+ALL_TARGET_ZONES: list[str] = (
+    ROOM_TO_ZONES["living_room"]
+    + ROOM_TO_ZONES["dining_room"]
+    + ROOM_TO_ZONES["kitchen"]
+)
+ALL_PHRASES = {
+    "all", "everything", "all lights", "all the lights", "the lights",
+    "my lights", "the house", "whole house", "everywhere", "house",
+}
+
+# Minimum time an explicit override is honored before the lifecycle
+# automation is allowed to ease it back to automatic — even if the
+# cameras briefly lose the (still) occupant. Matches the user-chosen
+# "leave + grace, but hold at least this long" persistence model.
+MIN_HOLD_MINUTES = 40
+# Seconds a zone must read continuously vacant (after min-hold elapses)
+# before the override eases back to automatic.
+VACANCY_GRACE_S = 300
 
 # Valid override sources. AR33-7: reject "auto"/null to prevent
 # agent-side hallucination from locking lights.
@@ -68,6 +139,10 @@ MAX_OVERRIDE_BRIGHTNESS_PCT = 100
 # Color-temp clamps roughly the Hue/most-bulbs range.
 MIN_OVERRIDE_KELVIN = 2000
 MAX_OVERRIDE_KELVIN = 6500
+LIGHTING_ACTIVITY_PATH = Path(os.environ.get(
+    "LIVING_LIGHTS_ACTIVITY_JSONL",
+    "/config/lighting_activity.jsonl",
+))
 
 
 def _resolve_zone(raw: str) -> str | None:
@@ -136,15 +211,58 @@ def _current_zone_state(hass: HomeAssistant, zone: str) -> dict[str, Any]:
 
 
 def _camera_for_zone(zone: str) -> str:
-    """Phase 0a zone → camera mapping. Expand as Phase 0c adds zones."""
-    cam_map = {
-        "dining_left": "dining_room",
-        "dining_right": "dining_room",
-        "sink": "kitchen",
-        "island_left": "kitchen",
-        "island_right": "kitchen",
-    }
-    return cam_map.get(zone, zone)
+    """Zone → owning camera (room). Falls back to the slug itself."""
+    return ZONE_TO_CAMERA.get(zone, zone)
+
+
+def _resolve_targets(raw: str) -> list[str] | None:
+    """Resolve a free-text target into a list of canonical zone slugs.
+
+    Accepts a single zone ("sink", "kitchen island left"), a whole room
+    ("the living room", "kitchen"), or a house-wide phrase ("all",
+    "my lights", "the house"). Returns the deduped list of actuating
+    zones, or None if nothing resolved.
+    """
+    if not raw:
+        return None
+    needle = raw.strip().lower().replace("_", " ")
+    if needle in ALL_PHRASES:
+        return list(ALL_TARGET_ZONES)
+    # Whole-room match (exact synonym) → that room's cover set.
+    for room, synonyms in ROOM_SYNONYMS.items():
+        if needle in (s.lower() for s in synonyms):
+            return list(ROOM_TO_ZONES[room])
+    # Single-zone resolution (reuses the synonym table).
+    zone = _resolve_zone(raw)
+    if zone is not None:
+        return [zone]
+    # Last resort: a room name embedded in a longer phrase
+    # ("turn the living room lights up") → that room's cover set.
+    for room, synonyms in ROOM_SYNONYMS.items():
+        if any(s.lower() in needle for s in synonyms):
+            return list(ROOM_TO_ZONES[room])
+    return None
+
+
+def _new_command_id(now: datetime | None = None) -> str:
+    dt = now or datetime.now(timezone.utc)
+    return f"cmd-{int(dt.timestamp())}-{dt.microsecond}"
+
+
+def _append_lighting_command_event(payload: dict[str, Any]) -> None:
+    """Best-effort append-only command ledger write.
+
+    This must never block or fail the actual lighting command. HA-side light
+    state events remain the source of truth for the resulting physical change;
+    this row gives Intelligence a high-confidence command anchor when present.
+    """
+    try:
+        if not LIGHTING_ACTIVITY_PATH.parent.exists():
+            return
+        with LIGHTING_ACTIVITY_PATH.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
+    except Exception as exc:  # pylint: disable=broad-except
+        _LOGGER.warning("living_lights: command ledger append failed: %s", exc)
 
 
 class LivingLightsFunction(Function):
@@ -282,55 +400,19 @@ class LivingLightsFunction(Function):
             "freshness": freshness,
         }
 
-    async def _set_presence_override(
-        self, hass: HomeAssistant, args: dict[str, Any]
+    def _build_override_payload(
+        self,
+        hass: HomeAssistant,
+        zone: str,
+        args: dict[str, Any],
+        source: str,
+        now: datetime,
+        command_id: str,
     ) -> dict[str, Any]:
-        # 1. Validate source (AR33-7)
-        source = (args.get("source") or "").strip().lower()
-        if source not in VALID_SOURCES:
-            return {
-                "ok": False,
-                "error": {
-                    "kind": "invalid_source",
-                    "message": f"source must be one of {sorted(VALID_SOURCES)}; "
-                               f"got '{source}'",
-                },
-            }
-
-        # 2. Resolve zone
-        zone_raw = args.get("zone", "")
-        zone = _resolve_zone(zone_raw)
-        if zone is None:
-            return {
-                "ok": False,
-                "error": {
-                    "kind": "unknown_zone",
-                    "message": f"zone '{zone_raw}' not recognized",
-                    "known_zones": sorted(ZONE_SYNONYMS.keys()),
-                },
-            }
-
-        # 3. Master + per-zone toggles
-        if not _master_enabled(hass):
-            return {
-                "ok": False,
-                "error": {
-                    "kind": "master_disabled",
-                    "message": "input_boolean.living_lights_enabled is OFF; "
-                               "override will not take effect",
-                },
-                "suggested_phrasing": "The living-lights system is off; nothing to override.",
-            }
-        if not _zone_enabled(hass, zone):
-            return {
-                "ok": False,
-                "error": {
-                    "kind": "zone_disabled",
-                    "message": f"input_boolean.living_lights_zone_{zone}_enabled is OFF",
-                },
-            }
-
-        # 4. Build payload from absolute OR delta inputs
+        """Resolve absolute/delta inputs against the zone's current
+        prediction into the override JSON payload, including the min-hold
+        lifecycle fields (`hold_until`, `vacancy_grace_s`) that the
+        override-lifecycle automation reads to decide when to ease back."""
         baseline = _current_zone_state(hass, zone)
         bri_abs = args.get("brightness_pct")
         bri_delta = args.get("brightness_delta_pct")
@@ -357,62 +439,173 @@ class LivingLightsFunction(Function):
         else:
             color_temp_kelvin = baseline["color_temp_kelvin"]
 
-        # 5. Remote-set flag (AR33-2): if zone is vacant now, override
-        #    has 4h max-lifetime instead of 30s vacancy grace
-        remote = not _zone_occupied(hass, zone)
-
-        # 6. Pin flag (AR33-3): persistent override; never auto-clears
         pinned = bool(args.get("pinned", False))
-
-        payload = {
+        # `remote` (zone vacant at command time) is now audit-only — the
+        # lifecycle automation owns expiry via hold_until + vacancy grace,
+        # so a remote set persists the same min-hold as an in-room one.
+        remote = not _zone_occupied(hass, zone)
+        hold_until = now + timedelta(minutes=MIN_HOLD_MINUTES)
+        return {
+            "command_id": command_id,
             "brightness_pct": brightness_pct,
             "color_temp_kelvin": color_temp_kelvin,
-            "started_at": datetime.now(timezone.utc).isoformat(),
+            "started_at": now.isoformat(),
+            "hold_until": hold_until.isoformat(),
+            "min_hold_min": MIN_HOLD_MINUTES,
+            "vacancy_grace_s": VACANCY_GRACE_S,
             "source": source,
             "prompt": (args.get("source_text") or "")[:160],
             "remote": remote,
             "pinned": pinned,
-            "expires_after_vacant_ms": 30000,  # default; Phase 4.A makes per-zone tunable
+            "baseline": baseline,
         }
 
-        # 7. Write to input_text helper
+    async def _write_zone_override(
+        self, hass: HomeAssistant, zone: str, payload: dict[str, Any],
+    ) -> None:
+        """Write the override payload + command-id helper for one zone and
+        append the command-ledger row. Raises if the override write itself
+        fails (the caller records the zone as skipped)."""
         entity_id = f"input_text.living_lights_override_text_{zone}"
+        await hass.services.async_call(
+            "input_text", "set_value",
+            {"entity_id": entity_id, "value": json.dumps(payload)},
+            blocking=True,
+        )
+        command_helper = f"input_text.living_lights_zone_{zone}_last_command_id"
         try:
             await hass.services.async_call(
                 "input_text", "set_value",
-                {"entity_id": entity_id, "value": json.dumps(payload)},
+                {"entity_id": command_helper, "value": payload["command_id"]},
                 blocking=True,
             )
-        except Exception as e:
-            _LOGGER.exception("living_lights: set_presence_override failed")
+        except Exception as exc:  # pylint: disable=broad-except
+            _LOGGER.warning(
+                "living_lights: command id helper write failed for %s: %s",
+                zone, exc,
+            )
+        _append_lighting_command_event({
+            "schema_version": 1,
+            "kind": "lighting_command_event",
+            "raw_event_kind": "lighting_command_event",
+            "event_id": payload["command_id"],
+            "command_id": payload["command_id"],
+            "ts": payload["started_at"],
+            "zone": zone,
+            "entity_id": entity_id,
+            "source": payload["source"],
+            "source_text": payload.get("prompt", ""),
+            "requested": {
+                "brightness_pct": payload["brightness_pct"],
+                "color_temp_kelvin": payload["color_temp_kelvin"],
+                "pinned": payload["pinned"],
+                "remote": payload["remote"],
+            },
+            "baseline": payload.get("baseline"),
+            "payload": payload,
+        })
+
+    async def _set_presence_override(
+        self, hass: HomeAssistant, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        # 1. Validate source (AR33-7)
+        source = (args.get("source") or "").strip().lower()
+        if source not in VALID_SOURCES:
             return {
                 "ok": False,
                 "error": {
-                    "kind": "service_call_failed",
-                    "message": str(e)[:200],
+                    "kind": "invalid_source",
+                    "message": f"source must be one of {sorted(VALID_SOURCES)}; "
+                               f"got '{source}'",
                 },
             }
 
-        # 8. Build suggested_phrasing
-        if pinned:
-            phrasing = (f"OK — {zone.replace('_', ' ')} pinned to "
-                        f"{brightness_pct}% at {color_temp_kelvin}K. "
-                        f"Stays put until you tell me to clear it.")
-        elif remote:
-            phrasing = (f"OK — set {zone.replace('_', ' ')} to "
-                        f"{brightness_pct}% at {color_temp_kelvin}K. "
-                        f"Will reset 4 hours from now if you don't come in.")
+        # 2. Resolve target(s): a single zone, a whole room, or "all".
+        zone_raw = args.get("zone", "")
+        targets = _resolve_targets(zone_raw)
+        if not targets:
+            return {
+                "ok": False,
+                "error": {
+                    "kind": "unknown_zone",
+                    "message": f"target '{zone_raw}' not recognized",
+                    "known_zones": sorted(ZONE_SYNONYMS.keys()),
+                    "known_rooms": sorted(ROOM_TO_ZONES.keys()),
+                },
+            }
+
+        # 3. Master toggle (per-zone toggles are checked per target below).
+        if not _master_enabled(hass):
+            return {
+                "ok": False,
+                "error": {
+                    "kind": "master_disabled",
+                    "message": "input_boolean.living_lights_enabled is OFF; "
+                               "override will not take effect",
+                },
+                "suggested_phrasing": "The living-lights system is off; nothing to override.",
+            }
+
+        # 4. Apply the override to each enabled target zone. A single
+        #    spoken "set my lights to 100%" fans out across the room.
+        now = datetime.now(timezone.utc)
+        command_id = _new_command_id(now)
+        applied: list[dict[str, Any]] = []
+        skipped: list[str] = []
+        for zone in targets:
+            if not _zone_enabled(hass, zone):
+                skipped.append(zone)
+                continue
+            payload = self._build_override_payload(
+                hass, zone, args, source, now, command_id,
+            )
+            try:
+                await self._write_zone_override(hass, zone, payload)
+            except Exception:  # pylint: disable=broad-except
+                _LOGGER.exception(
+                    "living_lights: override write failed for %s", zone,
+                )
+                skipped.append(zone)
+                continue
+            applied.append({"zone": zone, "payload": payload})
+
+        if not applied:
+            return {
+                "ok": False,
+                "error": {
+                    "kind": "no_zones_applied",
+                    "message": "every targeted zone is disabled or failed to write",
+                    "skipped": skipped,
+                },
+                "suggested_phrasing": (
+                    "Couldn't set those lights — that area is turned off in "
+                    "Living Lights right now."
+                ),
+            }
+
+        # 5. Suggested phrasing — singular vs fan-out.
+        first = applied[0]["payload"]
+        bri = first["brightness_pct"]
+        ct = first["color_temp_kelvin"]
+        if len(applied) == 1:
+            zlabel = applied[0]["zone"].replace("_", " ")
         else:
-            phrasing = (f"OK — {zone.replace('_', ' ')} to "
-                        f"{brightness_pct}% at {color_temp_kelvin}K. "
-                        f"Reverts when you leave.")
+            zlabel = f"{len(applied)} zones"
+        if first["pinned"]:
+            phrasing = (f"OK — {zlabel} pinned to {bri}% at {ct}K. "
+                        f"Stays put until you clear it.")
+        else:
+            phrasing = (f"OK — {zlabel} to {bri}% at {ct}K. "
+                        f"Holds at least {MIN_HOLD_MINUTES} min, then eases back "
+                        f"to automatic once you've left.")
 
         return {
             "ok": True,
             "data": {
-                "zone": zone,
-                "payload": payload,
-                "entity_id": entity_id,
+                "zones": [a["zone"] for a in applied],
+                "skipped": skipped,
+                "command_id": command_id,
+                "payload": first,
             },
             "suggested_phrasing": phrasing,
             "confidence_band": "high",

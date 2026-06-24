@@ -1,0 +1,51 @@
+[Unit]
+Description=HAV stack supervisor — HTTP control plane for the AI stack
+Documentation=file://__STACK_DIR__/runbook/RUNBOOK.md
+Wants=docker.service
+After=docker.service network-online.target
+Requires=network-online.target
+
+[Service]
+Type=simple
+User=hav-supervisor
+Group=docker
+# STACK_TOKEN, BIND_ADDR, EXPECTED_VLLM_MODEL come from <STACK_DIR>/.env.
+# install.sh templates __STACK_DIR__ to the parent of services/supervisor/.
+EnvironmentFile=__STACK_DIR__/.env
+Environment=PORT=8093
+Environment=STACK_SH=__STACK_DIR__/scripts/stack.sh
+Environment=AUDIT_LOG_PATH=/var/log/hav-supervisor.log
+WorkingDirectory=__STACK_DIR__/services/supervisor
+ExecStart=__STACK_DIR__/services/supervisor/venv/bin/uvicorn main:app --host ${BIND_ADDR} --port ${PORT} --no-access-log
+
+# Hardening (hygiene, NOT isolation — docker-group is root-equiv on this host;
+# the real protection is BIND_ADDR + STACK_TOKEN + rate limit + verb allowlist).
+#
+# ProtectHome is intentionally NOT enabled: docker compose v2 reads
+# ${HOME}/.docker/config.json for plugin-path discovery, and with
+# ProtectHome=true the supervisor sees /home as an empty tmpfs and
+# can't find its docker config — `docker compose up -d` then fails
+# with "unknown shorthand flag: 'd' in -d" because compose isn't
+# registered as a subcommand. Phase-2 bring-up burned by this once.
+#
+# Read+write paths: the audit log, plus the supervisor's HOME (so
+# docker can persist its config on first run). With ProtectSystem=
+# strict, /var is read-only by default; ReadWritePaths punches holes
+# back through.
+Restart=always
+RestartSec=3s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/log/hav-supervisor.log /home/hav-supervisor
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+# Journald captures stderr (app log). Audit lines go to AUDIT_LOG_PATH.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hav-supervisor
+
+[Install]
+WantedBy=multi-user.target

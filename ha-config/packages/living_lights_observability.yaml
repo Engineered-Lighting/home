@@ -35,7 +35,6 @@ input_boolean:
   living_lights_gaming_enabled:
     name: "Living Lights — gaming mode (Steam-driven)"
     icon: mdi:gamepad-variant
-    initial: false
   living_lights_working_hours_enabled:
     name: "Living Lights — working hours bright mode"
     icon: mdi:briefcase-clock
@@ -1035,6 +1034,7 @@ template:
           - binary_sensor.e28_person_occupancy
           - binary_sensor.whole_dining_room_person_occupancy
           - binary_sensor.whole_kitchen_person_occupancy
+          - binary_sensor.kitchen_person_occupancy
       - platform: time_pattern
         seconds: "/3"
     binary_sensor:
@@ -1044,9 +1044,8 @@ template:
         icon: mdi:account-check
         state: >
           {% set occ = states.binary_sensor.dining_left_person_occupancy %}
-          {% if occ is none %}off
-          {% elif occ.state == 'on' %}on
-          {% elif (now() - occ.last_changed).total_seconds() < 20 %}on
+          {% if occ is not none and occ.state == 'on' %}on
+          {% elif occ is not none and (now() - occ.last_changed).total_seconds() < 90 %}on
           {% else %}off{% endif %}
 
       - name: "Dining Room Dining Right Person Occupancy Stable"
@@ -1055,9 +1054,8 @@ template:
         icon: mdi:account-check
         state: >
           {% set occ = states.binary_sensor.dining_right_person_occupancy %}
-          {% if occ is none %}off
-          {% elif occ.state == 'on' %}on
-          {% elif (now() - occ.last_changed).total_seconds() < 20 %}on
+          {% if occ is not none and occ.state == 'on' %}on
+          {% elif occ is not none and (now() - occ.last_changed).total_seconds() < 90 %}on
           {% else %}off{% endif %}
 
       - name: "Kitchen Sink Person Occupancy Stable"
@@ -1066,9 +1064,11 @@ template:
         icon: mdi:account-check
         state: >
           {% set occ = states.binary_sensor.sink_person_occupancy %}
-          {% if occ is none %}off
-          {% elif occ.state == 'on' %}on
-          {% elif (now() - occ.last_changed).total_seconds() < 20 %}on
+          {% set fallback = states.binary_sensor.kitchen_person_occupancy %}
+          {% if occ is not none and occ.state == 'on' %}on
+          {% elif fallback is not none and fallback.state == 'on' %}on
+          {% elif fallback is not none and (now() - fallback.last_changed).total_seconds() < 90 %}on
+          {% elif occ is not none and (now() - occ.last_changed).total_seconds() < 90 %}on
           {% else %}off{% endif %}
 
       - name: "Kitchen Island Left Person Occupancy Stable"
@@ -1077,9 +1077,11 @@ template:
         icon: mdi:account-check
         state: >
           {% set occ = states.binary_sensor.island_left_person_occupancy %}
-          {% if occ is none %}off
-          {% elif occ.state == 'on' %}on
-          {% elif (now() - occ.last_changed).total_seconds() < 20 %}on
+          {% set fallback = states.binary_sensor.kitchen_person_occupancy %}
+          {% if occ is not none and occ.state == 'on' %}on
+          {% elif fallback is not none and fallback.state == 'on' %}on
+          {% elif fallback is not none and (now() - fallback.last_changed).total_seconds() < 90 %}on
+          {% elif occ is not none and (now() - occ.last_changed).total_seconds() < 90 %}on
           {% else %}off{% endif %}
 
       - name: "Kitchen Island Right Person Occupancy Stable"
@@ -1088,9 +1090,11 @@ template:
         icon: mdi:account-check
         state: >
           {% set occ = states.binary_sensor.island_right_person_occupancy %}
-          {% if occ is none %}off
-          {% elif occ.state == 'on' %}on
-          {% elif (now() - occ.last_changed).total_seconds() < 20 %}on
+          {% set fallback = states.binary_sensor.kitchen_person_occupancy %}
+          {% if occ is not none and occ.state == 'on' %}on
+          {% elif fallback is not none and fallback.state == 'on' %}on
+          {% elif fallback is not none and (now() - fallback.last_changed).total_seconds() < 90 %}on
+          {% elif occ is not none and (now() - occ.last_changed).total_seconds() < 90 %}on
           {% else %}off{% endif %}
 
       - name: "Living Room Sofa Person Occupancy Stable"
@@ -1099,9 +1103,8 @@ template:
         icon: mdi:account-check
         state: >
           {% set occ = states.binary_sensor.sofa_person_occupancy %}
-          {% if occ is none %}off
-          {% elif occ.state == 'on' %}on
-          {% elif (now() - occ.last_changed).total_seconds() < 20 %}on
+          {% if occ is not none and occ.state == 'on' %}on
+          {% elif occ is not none and (now() - occ.last_changed).total_seconds() < 90 %}on
           {% else %}off{% endif %}
 
       - name: "Living Room Front Left Person Occupancy Stable"
@@ -1110,9 +1113,8 @@ template:
         icon: mdi:account-check
         state: >
           {% set occ = states.binary_sensor.front_left_person_occupancy %}
-          {% if occ is none %}off
-          {% elif occ.state == 'on' %}on
-          {% elif (now() - occ.last_changed).total_seconds() < 20 %}on
+          {% if occ is not none and occ.state == 'on' %}on
+          {% elif occ is not none and (now() - occ.last_changed).total_seconds() < 90 %}on
           {% else %}off{% endif %}
 
       - name: "Living Room Weights Person Occupancy Stable"
@@ -1121,9 +1123,8 @@ template:
         icon: mdi:account-check
         state: >
           {% set occ = states.binary_sensor.weights_person_occupancy %}
-          {% if occ is none %}off
-          {% elif occ.state == 'on' %}on
-          {% elif (now() - occ.last_changed).total_seconds() < 20 %}on
+          {% if occ is not none and occ.state == 'on' %}on
+          {% elif occ is not none and (now() - occ.last_changed).total_seconds() < 90 %}on
           {% else %}off{% endif %}
 
       - name: "Living Room Office Person Occupancy Stable"
@@ -1132,9 +1133,8 @@ template:
         icon: mdi:account-check
         state: >
           {% set occ = states.binary_sensor.office_person_occupancy %}
-          {% if occ is none %}off
-          {% elif occ.state == 'on' %}on
-          {% elif (now() - occ.last_changed).total_seconds() < 20 %}on
+          {% if occ is not none and occ.state == 'on' %}on
+          {% elif occ is not none and (now() - occ.last_changed).total_seconds() < 90 %}on
           {% else %}off{% endif %}
 
       - name: "Living Room Front Door Person Occupancy Stable"
@@ -1143,9 +1143,8 @@ template:
         icon: mdi:account-check
         state: >
           {% set occ = states.binary_sensor.front_door_person_occupancy %}
-          {% if occ is none %}off
-          {% elif occ.state == 'on' %}on
-          {% elif (now() - occ.last_changed).total_seconds() < 20 %}on
+          {% if occ is not none and occ.state == 'on' %}on
+          {% elif occ is not none and (now() - occ.last_changed).total_seconds() < 90 %}on
           {% else %}off{% endif %}
 
       - name: "Living Room Whole Living Room Person Occupancy Stable"
@@ -1154,9 +1153,8 @@ template:
         icon: mdi:account-check
         state: >
           {% set occ = states.binary_sensor.whole_living_room_person_occupancy %}
-          {% if occ is none %}off
-          {% elif occ.state == 'on' %}on
-          {% elif (now() - occ.last_changed).total_seconds() < 20 %}on
+          {% if occ is not none and occ.state == 'on' %}on
+          {% elif occ is not none and (now() - occ.last_changed).total_seconds() < 90 %}on
           {% else %}off{% endif %}
 
       - name: "Workshop Workshop Zone Person Occupancy Stable"
@@ -1165,9 +1163,8 @@ template:
         icon: mdi:account-check
         state: >
           {% set occ = states.binary_sensor.workshop_zone_person_occupancy %}
-          {% if occ is none %}off
-          {% elif occ.state == 'on' %}on
-          {% elif (now() - occ.last_changed).total_seconds() < 20 %}on
+          {% if occ is not none and occ.state == 'on' %}on
+          {% elif occ is not none and (now() - occ.last_changed).total_seconds() < 90 %}on
           {% else %}off{% endif %}
 
       - name: "Driveway E28 Person Occupancy Stable"
@@ -1176,9 +1173,8 @@ template:
         icon: mdi:account-check
         state: >
           {% set occ = states.binary_sensor.e28_person_occupancy %}
-          {% if occ is none %}off
-          {% elif occ.state == 'on' %}on
-          {% elif (now() - occ.last_changed).total_seconds() < 20 %}on
+          {% if occ is not none and occ.state == 'on' %}on
+          {% elif occ is not none and (now() - occ.last_changed).total_seconds() < 90 %}on
           {% else %}off{% endif %}
 
       - name: "Dining Room Whole Dining Room Person Occupancy Stable"
@@ -1187,9 +1183,8 @@ template:
         icon: mdi:account-check
         state: >
           {% set occ = states.binary_sensor.whole_dining_room_person_occupancy %}
-          {% if occ is none %}off
-          {% elif occ.state == 'on' %}on
-          {% elif (now() - occ.last_changed).total_seconds() < 20 %}on
+          {% if occ is not none and occ.state == 'on' %}on
+          {% elif occ is not none and (now() - occ.last_changed).total_seconds() < 90 %}on
           {% else %}off{% endif %}
 
       - name: "Kitchen Whole Kitchen Person Occupancy Stable"
@@ -1198,9 +1193,11 @@ template:
         icon: mdi:account-check
         state: >
           {% set occ = states.binary_sensor.whole_kitchen_person_occupancy %}
-          {% if occ is none %}off
-          {% elif occ.state == 'on' %}on
-          {% elif (now() - occ.last_changed).total_seconds() < 20 %}on
+          {% set fallback = states.binary_sensor.kitchen_person_occupancy %}
+          {% if occ is not none and occ.state == 'on' %}on
+          {% elif fallback is not none and fallback.state == 'on' %}on
+          {% elif fallback is not none and (now() - fallback.last_changed).total_seconds() < 90 %}on
+          {% elif occ is not none and (now() - occ.last_changed).total_seconds() < 90 %}on
           {% else %}off{% endif %}
 
   - trigger:
@@ -3960,6 +3957,68 @@ automation:
         to: "off"
         for:
           minutes: 15
+      - trigger: state
+        entity_id: binary_sensor.living_room_motion
+        to: "off"
+        for:
+          minutes: 15
+      - trigger: state
+        entity_id: binary_sensor.kitchen_motion
+        to: "off"
+        for:
+          minutes: 15
+      - trigger: state
+        entity_id: binary_sensor.dining_room_motion
+        to: "off"
+        for:
+          minutes: 15
+      - trigger: state
+        entity_id: binary_sensor.workshop_motion
+        to: "off"
+        for:
+          minutes: 15
+      - trigger: state
+        entity_id: binary_sensor.living_room_person_occupancy
+        to: "off"
+        for:
+          minutes: 15
+      - trigger: state
+        entity_id: binary_sensor.kitchen_person_occupancy
+        to: "off"
+        for:
+          minutes: 15
+      - trigger: state
+        entity_id: binary_sensor.dining_room_person_occupancy
+        to: "off"
+        for:
+          minutes: 15
+      - trigger: state
+        entity_id: binary_sensor.workshop_person_occupancy
+        to: "off"
+        for:
+          minutes: 15
+      - trigger: state
+        entity_id: binary_sensor.whole_living_room_person_occupancy
+        to: "off"
+        for:
+          minutes: 15
+      - trigger: state
+        entity_id: binary_sensor.whole_kitchen_person_occupancy
+        to: "off"
+        for:
+          minutes: 15
+      - trigger: state
+        entity_id: binary_sensor.whole_dining_room_person_occupancy
+        to: "off"
+        for:
+          minutes: 15
+      - trigger: state
+        entity_id: binary_sensor.workshop_zone_person_occupancy
+        to: "off"
+        for:
+          minutes: 15
+      - trigger: time_pattern
+        minutes: "/5"
     conditions:
       - condition: state
         entity_id: input_boolean.living_lights_enabled
@@ -3973,6 +4032,35 @@ automation:
       - condition: state
         entity_id: input_boolean.living_lights_asleep
         state: "off"
+      - condition: state
+        entity_id: binary_sensor.living_lights_any_occupied
+        state: "off"
+      - condition: template
+        value_template: >-
+          {% set blockers = [
+              'binary_sensor.living_room_motion',
+              'binary_sensor.kitchen_motion',
+              'binary_sensor.dining_room_motion',
+              'binary_sensor.workshop_motion',
+              'binary_sensor.living_room_person_occupancy',
+              'binary_sensor.kitchen_person_occupancy',
+              'binary_sensor.dining_room_person_occupancy',
+              'binary_sensor.workshop_person_occupancy',
+              'binary_sensor.whole_living_room_person_occupancy',
+              'binary_sensor.whole_kitchen_person_occupancy',
+              'binary_sensor.whole_dining_room_person_occupancy',
+              'binary_sensor.workshop_zone_person_occupancy',
+          ] %}
+          {% set ns = namespace(active=false) %}
+          {% for entity_id in blockers %}
+            {% if is_state(entity_id, 'on') %}
+              {% set ns.active = true %}
+            {% endif %}
+          {% endfor %}
+          {{ not ns.active }}
+      - condition: template
+        value_template: >-
+          {{ (now() - states.input_boolean.living_lights_asleep.last_changed).total_seconds() > 2700 }}
     actions:
       - action: input_boolean.turn_on
         target:
@@ -4209,3 +4297,55 @@ automation:
           color_temp_kelvin: >
             {{ state_attr('sensor.living_room_office_lighting_state', 'predicted_color_temp_kelvin') | int(2700) }}
           transition: 3
+  - alias: "Living Lights — cooldown wipe on user_at_home transition"
+    id: living_lights_cooldown_wipe_on_user_at_home
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.user_at_home
+        to: "off"
+      - trigger: state
+        entity_id: input_boolean.user_at_home
+        to: "on"
+    actions:
+      - action: input_datetime.set_datetime
+        target:
+          entity_id:
+            - input_datetime.living_lights_zone_dining_left_last_manual_at
+            - input_datetime.living_lights_zone_dining_right_last_manual_at
+            - input_datetime.living_lights_zone_sink_last_manual_at
+            - input_datetime.living_lights_zone_island_left_last_manual_at
+            - input_datetime.living_lights_zone_island_right_last_manual_at
+            - input_datetime.living_lights_zone_sofa_last_manual_at
+            - input_datetime.living_lights_zone_front_left_last_manual_at
+            - input_datetime.living_lights_zone_weights_last_manual_at
+            - input_datetime.living_lights_zone_office_last_manual_at
+            - input_datetime.living_lights_zone_front_door_last_manual_at
+            - input_datetime.living_lights_zone_whole_living_room_last_manual_at
+            - input_datetime.living_lights_zone_workshop_zone_last_manual_at
+            - input_datetime.living_lights_zone_e28_last_manual_at
+            - input_datetime.living_lights_zone_whole_dining_room_last_manual_at
+            - input_datetime.living_lights_zone_whole_kitchen_last_manual_at
+        data:
+          datetime: "1970-01-01 00:00:00"
+      - delay: "00:00:35"
+      - action: input_datetime.set_datetime
+        target:
+          entity_id:
+            - input_datetime.living_lights_zone_dining_left_last_manual_at
+            - input_datetime.living_lights_zone_dining_right_last_manual_at
+            - input_datetime.living_lights_zone_sink_last_manual_at
+            - input_datetime.living_lights_zone_island_left_last_manual_at
+            - input_datetime.living_lights_zone_island_right_last_manual_at
+            - input_datetime.living_lights_zone_sofa_last_manual_at
+            - input_datetime.living_lights_zone_front_left_last_manual_at
+            - input_datetime.living_lights_zone_weights_last_manual_at
+            - input_datetime.living_lights_zone_office_last_manual_at
+            - input_datetime.living_lights_zone_front_door_last_manual_at
+            - input_datetime.living_lights_zone_whole_living_room_last_manual_at
+            - input_datetime.living_lights_zone_workshop_zone_last_manual_at
+            - input_datetime.living_lights_zone_e28_last_manual_at
+            - input_datetime.living_lights_zone_whole_dining_room_last_manual_at
+            - input_datetime.living_lights_zone_whole_kitchen_last_manual_at
+        data:
+          datetime: "1970-01-01 00:00:00"

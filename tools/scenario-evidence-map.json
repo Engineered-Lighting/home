@@ -1,0 +1,312 @@
+{
+  "schema_version": 1,
+  "source": "docs/SCENARIO-TESTS.md",
+  "status_definitions": {
+    "simulation_green": "Covered by local Simulation Mode tests without live HA/Frigate/device effects.",
+    "local_contract_green": "Core behavior is covered by local unit/mock/static tests; live end-to-end execution is still not claimed.",
+    "local_partial_green": "Some important local contracts are covered, but the scenario remains materially live/manual.",
+    "live_required": "No sufficient non-production local evidence yet; requires a live or non-production integration run."
+  },
+  "rules": [
+    {
+      "ids": ["DOC-S12"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-people-tests.js"],
+      "remaining": "Live visual overlay verification against a running app/HA identity store."
+    },
+    {
+      "ids": ["DOC-S13"],
+      "status": "local_partial_green",
+      "evidence": ["tools/run-people-tests.js", "ha-config/extended_openai_conversation/test_lifecycle.py"],
+      "remaining": "Live HA identity mutation PATCH plus browser-observed overlay refresh timing."
+    },
+    {
+      "range": ["DOC-S14", "DOC-S16"],
+      "status": "local_contract_green",
+      "evidence": ["ha-config/extended_openai_conversation/test_world_state.py", "tools/run-worldstate-tests.js"],
+      "remaining": "Voice/slash path against live HA conversation remains unrun."
+    },
+    {
+      "ids": ["DOC-S17"],
+      "status": "local_contract_green",
+      "evidence": ["ha-config/extended_openai_conversation/test_frigate_sync.py"],
+      "remaining": "Live Frigate face registry PUT and HA log verification."
+    },
+    {
+      "ids": ["DOC-S18"],
+      "status": "local_contract_green",
+      "evidence": ["ha-config/extended_openai_conversation/test_lifecycle.py"],
+      "remaining": "Live WebSocket event listener against HA bus."
+    },
+    {
+      "ids": ["DOC-S19"],
+      "status": "local_partial_green",
+      "evidence": ["tools/run-tauri-glue-tests.js", "tools/run-bootstrap-tests.js", "tools/check-jsx.js"],
+      "remaining": "Live Tauri launch, DevTools CORS preflight, and first-paint observation."
+    },
+    {
+      "ids": ["DOC-S20"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-lab-tests.js", "tools/run-metrics-tests.js"],
+      "remaining": "Live voice burst and metrics-sidecar history stream."
+    },
+    {
+      "ids": ["DOC-S21"],
+      "status": "local_contract_green",
+      "evidence": ["tools/test-jarvis-mute-contract.py"],
+      "remaining": "Live Voice PE, HA template sensor update timing, and TTS/audio cancellation still need a non-production/live run."
+    },
+    {
+      "ids": ["DOC-S22"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-external-tests.js", "ha-config/extended_openai_conversation/test_external_routing.py", "tools/run-slash-command-tests.js"],
+      "remaining": "Live external provider and voice GENERAL routing path."
+    },
+    {
+      "ids": ["DOC-S23"],
+      "status": "local_contract_green",
+      "evidence": ["ha-config/extended_openai_conversation/test_lifecycle.py"],
+      "remaining": "Live HA OPTIONS preflight for PATCH/DELETE still needs a non-production/live run to prove middleware/runtime configuration."
+    },
+    {
+      "ids": ["DOC-S24"],
+      "status": "local_contract_green",
+      "evidence": ["ha-config/extended_openai_conversation/test_native.py"],
+      "remaining": "Actual Sonos playback in the kitchen."
+    },
+    {
+      "ids": ["DOC-S25"],
+      "status": "local_contract_green",
+      "evidence": ["ha-config/extended_openai_conversation/test_lifecycle.py"],
+      "remaining": "Live HA restart log inspection."
+    },
+    {
+      "ids": ["DOC-S26", "DOC-S52"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-vision-tests.js", "tools/run-app-frigate-label-tests.js"],
+      "remaining": "Live camera frame loading through HA camera proxy."
+    },
+    {
+      "ids": ["DOC-S27"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-events-tests.js"],
+      "remaining": "Rendered browser/Tauri visual inspection."
+    },
+    {
+      "ids": ["DOC-S28"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-control-card-tests.js", "tools/run-ha-client-tests.js"],
+      "remaining": "Actual HA service call and physical light response."
+    },
+    {
+      "ids": ["DOC-S29"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-proactive-tests.js"],
+      "remaining": "Live HA test button, Voice PE response, and physical lights."
+    },
+    {
+      "ids": ["DOC-S30"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-ai-stack-card-tests.js", "tools/run-stack-actions-tests.js", "tools/test-supervisor-service-actions.py"],
+      "remaining": "Live supervisor token/status poll against the AI box."
+    },
+    {
+      "ids": ["DOC-S31"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-stack-actions-tests.js", "tools/test-supervisor-service-actions.py"],
+      "remaining": "Browser click timing and live supervisor POST observation."
+    },
+    {
+      "ids": ["DOC-S32"],
+      "status": "simulation_green",
+      "evidence": ["tools/run-lab-tests.js", "tools/run-simulation-scenario-tests.js"],
+      "remaining": "Optional screenshot/render review for every Lab scenario."
+    },
+    {
+      "ids": ["DOC-S33"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-s2s-tests.js", "tools/run-sse-fetch-tests.js"],
+      "remaining": "Live bridge SSE emission."
+    },
+    {
+      "ids": ["DOC-S34"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-sse-fetch-tests.js", "tools/test-run-production-qa.py"],
+      "remaining": "Live metrics-sidecar burst/flake reproduction."
+    },
+    {
+      "ids": ["DOC-S35"],
+      "status": "local_partial_green",
+      "evidence": ["ha-config/extended_openai_conversation/test_native.py", "ha-config/extended_openai_conversation/test_world_state.py", "tools/run-lab-tests.js"],
+      "remaining": "Composite live Sonos, voice, world-state, and Lab trace run."
+    },
+    {
+      "range": ["DOC-S36", "DOC-S43"],
+      "status": "local_contract_green",
+      "evidence": ["ha-config/extended_openai_conversation/test_native.py", "tools/run-control-card-tests.js", "tools/run-ha-client-tests.js", "tools/run-lights-drawer-tests.js"],
+      "remaining": "Live LLM dispatch and physical light/device response."
+    },
+    {
+      "range": ["DOC-S44", "DOC-S51"],
+      "status": "local_contract_green",
+      "evidence": ["ha-config/extended_openai_conversation/test_native.py", "tools/run-control-card-tests.js"],
+      "remaining": "Live Sonos/media-player devices and audible playback."
+    },
+    {
+      "range": ["DOC-S53", "DOC-S57"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-vision-tests.js", "tools/run-look-tests.js", "ha-config/extended_openai_conversation/test_world_state.py"],
+      "remaining": "Live camera/vision-sidecar descriptions and face/identity freshness."
+    },
+    {
+      "range": ["DOC-S58", "DOC-S62"],
+      "status": "local_partial_green",
+      "evidence": ["tools/test-workflow-scenarios.py"],
+      "remaining": "Local planning contracts cover intended checks/actions/failure guards; live/non-production agent scoring and real HA state changes are still required."
+    },
+    {
+      "range": ["DOC-S63", "DOC-S68"],
+      "status": "local_partial_green",
+      "evidence": ["tools/test-workflow-scenarios.py"],
+      "remaining": "Local planning contracts cover abstract-intent inference/fallback guards; live/non-production agent scoring and real HA state changes are still required."
+    },
+    {
+      "range": ["DOC-S69", "DOC-S74"],
+      "status": "local_partial_green",
+      "evidence": ["ha-config/extended_openai_conversation/test_world_state.py", "ha-config/extended_openai_conversation/test_friendly_error_speech.py", "tools/run-external-tests.js"],
+      "remaining": "Live model tone, phrasing, and tool-order behavior still need agent scoring."
+    },
+    {
+      "range": ["DOC-S75", "DOC-S78"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-metrics-tests.js", "tools/run-ai-stack-card-tests.js", "tools/run-lab-tests.js", "tools/run-tauri-glue-tests.js"],
+      "remaining": "Live telemetry polling and rendered drawer observation. Drawer open/tab persistence is now locally covered."
+    },
+    {
+      "ids": ["DOC-S79"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-events-tests.js", "tools/run-people-tests.js", "tools/run-simulation-command-tests.js", "tools/run-tauri-glue-tests.js", "tools/check-jsx.js"],
+      "remaining": "Rendered header-pill sweep in browser/Tauri. Sim-pill controls are now locally covered."
+    },
+    {
+      "ids": ["DOC-S80"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-slash-command-tests.js", "tools/check-jsx.js"],
+      "remaining": "Rendered InputRow sweep in browser/Tauri. Mic/send/stop/slash-menu bindings are now locally covered."
+    },
+    {
+      "ids": ["DOC-S81"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-control-card-tests.js", "tools/check-jsx.js"],
+      "remaining": "Rendered control-card sweep in browser/Tauri. Light quick chips, sliders, and dismiss wiring are now locally covered."
+    },
+    {
+      "ids": ["DOC-S82"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-vision-tests.js", "tools/check-jsx.js"],
+      "remaining": "Rendered Vision card sweep in browser/Tauri. Click-to-center, dwell selection, and hover refresh pause are now locally covered."
+    },
+    {
+      "ids": ["DOC-S83"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-people-tests.js", "tools/check-jsx.js"],
+      "remaining": "Rendered People overlay sweep in browser/Tauri. Refresh, close/Escape, graph/list/queue toggle, node/row detail selection, and close focus restoration are now locally covered."
+    },
+    {
+      "ids": ["DOC-S84"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-proactive-tests.js", "tools/check-jsx.js"],
+      "remaining": "Rendered proactive status-row sweep in browser/Tauri. Row open, one-shot acknowledge/dismiss actions, pending-state clearing, and diag emission are now locally covered."
+    },
+    {
+      "ids": ["DOC-S85"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-ai-stack-card-tests.js", "tools/run-stack-actions-tests.js", "tools/test-supervisor-service-actions.py", "tools/check-jsx.js"],
+      "remaining": "Rendered AI Stack card sweep in browser/Tauri plus live supervisor POST/task observation. The local contract now covers all nine S85 verbs, inline confirm labels, endpoint mapping, and no-task success handling for synchronous service/free-GPU calls."
+    },
+    {
+      "ids": ["DOC-S86"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-lab-tests.js", "tools/check-jsx.js"],
+      "remaining": "Rendered Lab diagnostics sweep in browser/Tauri. Toggle open/close, filter-to-log-pane wiring, per-service logs/stop/restart, pause-perception vision-sidecar stop routing, and all four confirm-gated globals are now locally covered."
+    },
+    {
+      "ids": ["DOC-S87"],
+      "status": "local_contract_green",
+      "evidence": ["tools/test-jarvis-mute-contract.py", "tools/check-jsx.js"],
+      "remaining": "Rendered header mute-pill sweep in browser/Tauri plus live HA composite sensor verification. Reason attributes and click behavior that preserves movie/TV auto-mute are now locally covered."
+    },
+    {
+      "ids": ["DOC-S88"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-bootstrap-tests.js", "tools/run-tauri-glue-tests.js", "tools/run-slash-command-tests.js", "tools/check-jsx.js"],
+      "remaining": "Rendered FirstRun browser/Tauri sweep plus non-production HA/model API connect observation. Endpoint/token submit, model picker, picker-preserving HA online events, persisted endpoint/token/model prefs, FirstRun unmount gate, and InputRow focus release are now locally covered."
+    },
+    {
+      "range": ["DOC-S89", "DOC-S91"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-ai-stack-card-tests.js", "tools/run-stack-actions-tests.js", "tools/test-supervisor-service-actions.py", "tools/check-jsx.js"],
+      "remaining": "Live stack start/restart/force-kill recovery on the AI box, including Docker StartedAt verification and rendered chip timing."
+    },
+    {
+      "ids": ["DOC-S92"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-lab-tests.js", "tools/run-stack-actions-tests.js", "tools/run-sse-fetch-tests.js", "tools/test-supervisor-service-actions.py", "tools/check-jsx.js"],
+      "remaining": "Rendered Lab diagnostics stream sweep in browser/Tauri plus live/non-production supervisor SSE observation. Lab service logs now locally cover authenticated stack SSE attach, current in-flight task URL fallback, bounded escaped line rendering, done/error results, one-shot fallback, and abort cleanup on pane close/unmount."
+    },
+    {
+      "range": ["DOC-S93", "DOC-S95"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-proactive-tests.js", "tools/run-tauri-glue-tests.js", "tools/check-jsx.js"],
+      "remaining": "Live HA notification event, Voice PE puck state, and rendered reload persistence. Local coverage now pins trigger-to-feed/speak flow, same-room cooldown after dismiss, cross-transport dedupe, pending notification localStorage restore, and ack/dismiss after restore."
+    },
+    {
+      "range": ["DOC-S96", "DOC-S99"],
+      "status": "local_contract_green",
+      "evidence": ["tools/run-external-tests.js", "ha-config/extended_openai_conversation/test_external_routing.py", "tools/check-jsx.js"],
+      "remaining": "Live external provider status, route-log, and fallback behavior with a real/non-production key. Local coverage now pins plain-prose/no-markdown prompts, external chat-row tagging, /ask active-provider dispatch, /external status last-call time/latency/token stats, voice GENERAL classification for Lincoln-style questions, and explicit provider failure surfacing."
+    },
+    {
+      "range": ["DOC-S100", "DOC-S104"],
+      "status": "simulation_green",
+      "evidence": ["tools/run-simulation-command-tests.js", "tools/run-simulation-control-tests.js", "tools/run-simulation-scenario-tests.js", "tools/run-simulation-camera-tests.js"],
+      "remaining": "Optional rendered review; no live service is required for the core Simulation Mode contract."
+    },
+    {
+      "ids": ["DOC-S105"],
+      "status": "local_partial_green",
+      "evidence": ["tools/run-ha-client-tests.js", "tools/run-capabilities-tests.js", "tools/run-recovery-scenarios-tests.js"],
+      "remaining": "Live HA outage/recovery timing. Local recovery contracts now pin visible offline state, disabled light writes, HA service-call rejection, and capability-row degradation."
+    },
+    {
+      "ids": ["DOC-S106"],
+      "status": "local_partial_green",
+      "evidence": ["tools/run-vision-tests.js", "tools/run-look-tests.js", "tools/run-capabilities-tests.js", "tools/run-recovery-scenarios-tests.js"],
+      "remaining": "Live vision-sidecar outage/recovery and assistant response. Local recovery contracts now pin vision-offline chip text, affected-tool/fallback copy, stale health clearing, explicit sidecar errors, and stream reconnect UI."
+    },
+    {
+      "ids": ["DOC-S107"],
+      "status": "local_partial_green",
+      "evidence": ["tools/run-simulation-scenario-tests.js", "tools/run-capabilities-tests.js", "tools/test-watch-frigate-occupancy.py", "tools/run-recovery-scenarios-tests.js"],
+      "remaining": "Live Frigate outage/recovery and world-state/assistant response. Local recovery contracts now pin stale-camera Frigate failure mapping, perception-offline capability copy, HA-presence fallback wording, and stale telemetry clearing."
+    },
+    {
+      "ids": ["DOC-S108"],
+      "status": "local_partial_green",
+      "evidence": ["ha-config/extended_openai_conversation/test_native.py", "tools/run-control-card-tests.js", "tools/run-recovery-scenarios-tests.js"],
+      "remaining": "Live Sonos unavailable-device behavior. Local recovery contracts now pin unavailable media detection, all-unavailable action downgrade, and explicit call-failure surfacing instead of silent no-ops."
+    },
+    {
+      "ids": ["DOC-S109"],
+      "status": "local_partial_green",
+      "evidence": ["tools/run-metrics-tests.js", "tools/run-ai-stack-card-tests.js", "tools/run-capabilities-tests.js", "tools/run-recovery-scenarios-tests.js"],
+      "remaining": "Live metrics-sidecar outage/recovery. Local recovery contracts now pin offline row mapping, no false user capability alarm, header warning copy, and stale model/resource metric clearing."
+    },
+    {
+      "ids": ["DOC-S110"],
+      "status": "local_partial_green",
+      "evidence": ["tools/run-s2s-tests.js", "tools/run-sse-fetch-tests.js", "tools/run-capabilities-tests.js", "tools/run-recovery-scenarios-tests.js"],
+      "remaining": "Live bridge outage/recovery and SSE reconnect. Local recovery contracts now pin bridge/voice offline capability mapping, typed-input fallback copy, stale bridge-health clearing, S2S chat error surfacing, and SSE error/close callbacks."
+    }
+  ]
+}

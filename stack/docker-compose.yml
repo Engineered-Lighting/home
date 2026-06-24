@@ -6,10 +6,8 @@
 
 services:
   # =========================================================
-  # LLM + vision: Qwen3-VL-30B-A3B-Instruct served via vLLM. MoE (3B
-  # active params per token), native multimodal, Hermes tool calls.
-  # Not exposed on the host — only the metrics-sidecar (which proxies
-  # + tees chat completions) can reach it via the docker network.
+  # LLM: Qwen3.6-27B-FP8 served via vLLM (OpenAI-compatible).
+  # Reachable at  http://${UBUNTU_IP}:8000/v1
   # =========================================================
   vllm:
     image: vllm/vllm-openai:latest
@@ -32,34 +30,45 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
     # List form avoids shell escaping for --default-chat-template-kwargs JSON.
     command:
-      # Unified vision + tool-call model. Qwen3-VL-30B-A3B is a MoE with
-      # only 3B active params per token (fast inference) but 30B total
-      # knowledge, native multimodal vision, and Qwen3-family tool-call
-      # behavior (qwen3_xml parser unchanged).
+      # Reverted to Qwen3-VL-30B-A3B-Instruct (May 2026): the 4B dense
+      # variant we tried in Phase 2.1 was too small to reliably extract
+      # tool intents from natural utterances ("turn off my lights
+      # everywhere" → chitchat instead of light_turn_off). The 30B MoE
+      # only activates 3B params per token so latency stays low while
+      # we get back the capability the 4B couldn't carry.
+      # served-model-name stays "qwen3-vl-30b" so the bridge's env var
+      # (VLLM_MODEL_NAME) doesn't need a rebuild for the swap-back.
       - --model
-      - Qwen/Qwen3-VL-30B-A3B-Instruct
+      - Qwen/Qwen3-VL-30B-A3B-Instruct-FP8
       - --served-model-name
       - qwen3-vl-30b
       - --max-model-len
-      - "16384"
-      # 0.75 = ~72 GB on the 96 GB GPU. The model weights are ~60 GB in
-      # BF16 — anything less than ~65 GB makes vLLM OOM after loading
-      # the model and trying to allocate KV cache. Leaves ~24 GB free
-      # for V-JEPA-2 + vision encoder buffers.
+      - "32768"
+      # 0.70 of 95 GB = ~66 GB. The 30B MoE FP8 weights are ~30 GB plus
+      # KV-cache. Moshi listener is sitting at ~24 GB (heavier than the
+      # ~15 GB we expected — 0.75 here collided with it at boot), so
+      # we leave a slightly larger sliver for it.
       - --gpu-memory-utilization
-      - "0.75"
+      - "0.70"
       - --max-num-seqs
       - "4"
+      - --max-num-batched-tokens
+      - "16384"
       - --enable-prefix-caching
+      - --enable-chunked-prefill
+      # NOTE: --kv-cache-dtype fp8 + --calculate-kv-scales together
+      # produced garbled output on first try (likely a calibration /
+      # vLLM 0.20 + Qwen3-VL-FP8 compatibility issue). Reverted to
+      # auto KV-cache. Model weights are still FP8 — main latency
+      # win retained, just no KV-cache fp8.
+      - --block-size
+      - "32"
       # Vision: cap multimodal items per request to bound encoder VRAM.
       - --limit-mm-per-prompt
       - '{"image": 4, "video": 0}'
       - --default-chat-template-kwargs
       - '{"enable_thinking": false}'
       - --enable-auto-tool-choice
-      # Qwen3-VL emits tool calls in Hermes format (JSON inside <tool_call>
-      # tags), unlike text-only Qwen3 which uses qwen3_xml. Switching parser
-      # accordingly — confirmed via direct vLLM probe.
       - --tool-call-parser
       - hermes
       - --port
@@ -171,8 +180,63 @@ services:
         max-file: "3"
 
   # =========================================================
-  # Wyoming bridge for TTS: exposes Chatterbox to HA Assist.
-  # Reachable at  tcp://${UBUNTU_IP}:10301
+  # Chatterbox-TTS-Server (devnen) for Blackwell.
+  # OpenAI-compatible /v1/audio/speech endpoint on port 8881. Used by the
+  # bridge for Home app voice mode when TTS_ENGINE=chatterbox. Kokoro stays
+  # running as fallback (TTS_FALLBACK=kokoro). Variant: chatterbox-turbo
+  # (350M, BF16, ~4.5 GB VRAM). MIT license.
+  # =========================================================
+  chatterbox-tts:
+    build:
+      context: ./services/chatterbox-tts
+      dockerfile: Dockerfile
+    image: home-ai-voice/chatterbox-tts:blackwell
+    container_name: hav-chatterbox-tts
+    restart: unless-stopped
+    ports:
+      # Host port 8881 → container 8000 (devnen's server.py default).
+      # Other hav-* services talk to chatterbox over the docker network
+      # using port 8000 directly; the host mapping is for browser/curl
+      # access from the Windows workstation.
+      - "${CHATTERBOX_PORT:-8881}:8000"
+    environment:
+      # BF16 inference for ~40% throughput on Blackwell.
+      TTS_BF16: "on"
+      # Default sampling — overridden per-request by the bridge.
+      CHATTERBOX_EXAGGERATION: ${CHATTERBOX_EXAGGERATION:-0.45}
+      CHATTERBOX_CFG_WEIGHT: ${CHATTERBOX_CFG_WEIGHT:-0.5}
+      CHATTERBOX_TEMPERATURE: ${CHATTERBOX_TEMPERATURE:-0.7}
+      CHATTERBOX_DEFAULT_VOICE: ${CHATTERBOX_DEFAULT_VOICE:-default}
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+      - ./services/chatterbox-tts/voices:/app/voices:ro
+      - ./services/chatterbox-tts/config.yaml:/app/config.yaml:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      # devnen exposes /v1/audio/voices (OpenAI-compat) for voice listing;
+      # /v1/models doesn't exist on this server. The endpoint is cheap
+      # enough to poll without affecting performance.
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/audio/voices').read()\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+    networks: [homeai]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   # =========================================================
   # Wyoming bridge for TTS: exposes Kokoro to HA Assist via Wyoming protocol.
   # Voice swap: edit TTS_VOICE in .env (am_michael, am_onyx, am_eric, etc.).
@@ -182,12 +246,24 @@ services:
   # parallel (up to 3 concurrent) and pushed to HA as Wyoming AudioChunk
   # events incrementally. First audio reaches Voice PE while later
   # sentences are still being generated.
+  # wyoming-kokoro: Wyoming-protocol → OpenAI-compatible TTS bridge,
+  # consumed by HA Voice PE.
+  #
+  # Phase 1.5 (May 2026): upstream swapped from kokoro-tts to
+  # chatterbox-tts so Voice PE uses the same voice as the home app's
+  # Chatterbox-Gianna voice mode. Container name kept as
+  # "wyoming-kokoro" to avoid forcing the user to re-pair the integration
+  # in HA. Service key + container name will be renamed in Phase 2.
+  #
+  # To roll back to Kokoro: set TTS_OPENAI_URL=http://kokoro-tts:8880/v1
+  # and TTS_VOICE=am_michael in .env, then docker compose up -d --force-
+  # recreate wyoming-kokoro + re-select the voice in HA pipeline UI.
   wyoming-kokoro:
     image: ghcr.io/roryeckel/wyoming_openai:latest
     container_name: hav-wyoming-kokoro
     restart: unless-stopped
     depends_on:
-      kokoro-tts:
+      chatterbox-tts:
         condition: service_healthy
     ports:
       - "${WYOMING_TTS_PORT:-10301}:10300"
@@ -195,11 +271,15 @@ services:
       WYOMING_URI: tcp://0.0.0.0:10300
       WYOMING_LOG_LEVEL: INFO
       WYOMING_LANGUAGES: ${WYOMING_LANG:-en}
-      TTS_OPENAI_URL: http://kokoro-tts:8880/v1
+      # Phase 1.5: chatterbox-tts is the canonical TTS now. Internal
+      # container port is 8000 (devnen's default); host port 8881.
+      TTS_OPENAI_URL: ${WYOMING_TTS_OPENAI_URL:-http://chatterbox-tts:8000/v1}
       TTS_BACKEND: OPENAI
-      TTS_MODELS: ${TTS_MODEL:-kokoro}
-      TTS_STREAMING_MODELS: ${TTS_MODEL:-kokoro}
-      TTS_VOICES: ${TTS_VOICE:-am_michael}
+      TTS_MODELS: ${TTS_MODEL:-chatterbox-turbo}
+      TTS_STREAMING_MODELS: ${TTS_MODEL:-chatterbox-turbo}
+      # devnen requires the .wav suffix. The Voice PE UI will show
+      # "Gianna.wav" as the selectable voice; cosmetic only.
+      TTS_VOICES: ${TTS_VOICE:-Gianna.wav}
       TTS_SPEED: "1.0"
     networks: [homeai]
     logging:
@@ -223,11 +303,18 @@ services:
     ports:
       - "${VISION_SIDECAR_PORT:-8091}:8091"
     environment:
-      HA_URL: ${HA_URL:-http://<ha-host>:8123}
+      HA_URL: ${HA_URL:-http://192.168.0.125:8123}
       HA_TOKEN: ${HA_TOKEN:?HA_TOKEN must be set in .env for vision sidecar}
       VLLM_URL: ${VLLM_URL:-http://vllm:8000}
       VISION_MODEL: ${VISION_MODEL:-qwen3-vl-30b}
       VISION_MAX_TOKENS: ${VISION_MAX_TOKENS:-200}
+      # Full-res camera frames for /reason_zoom (Phase 0.5). Without these,
+      # /reason_zoom falls back to HA camera_proxy's 720p detect sub-stream.
+      # CAMERA_RTSP_HOSTS maps camera slug -> IP, comma-separated.
+      CAMERA_RTSP_USER: ${CAMERA_RTSP_USER:-}
+      CAMERA_RTSP_PASS: ${CAMERA_RTSP_PASS:-}
+      CAMERA_RTSP_HOSTS: ${CAMERA_RTSP_HOSTS:-}
+      CAMERA_RTSP_STREAM: ${CAMERA_RTSP_STREAM:-stream1}
     depends_on:
       vllm:
         condition: service_healthy
@@ -261,10 +348,17 @@ services:
       # 8092: telemetry + conversation SSE stream for the Home desktop app
       - "${VLLM_PORT:-8000}:8092"
       - "${METRICS_SIDECAR_PORT:-8092}:8092"
+    volumes:
+      # Master plan Phase A2: persistent trace storage. The /trace endpoint
+      # appends per-turn TraceContext JSON to traces.ndjson here.
+      - ./services/metrics-sidecar/data:/app/data
     environment:
       VLLM_METRICS_URL: ${VLLM_METRICS_URL:-http://vllm:8000/metrics}
       VLLM_UPSTREAM_URL: ${VLLM_UPSTREAM_URL:-http://vllm:8000}
-      SCRAPE_INTERVAL_S: ${SCRAPE_INTERVAL_S:-2.0}
+      # 0.5s so ttft/tps/cpu roll in in real time — the home-app polls
+      # /metrics every 750ms; a 2.0s scrape made them a stale snapshot.
+      SCRAPE_INTERVAL_S: ${SCRAPE_INTERVAL_S:-0.5}
+      TRACES_DIR: /app/data
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: utility
     deploy:
@@ -282,6 +376,361 @@ services:
       start_period: 20s
     depends_on:
       - vllm
+    networks: [homeai]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # =========================================================
+  # Home Intelligence Core — read-only long-horizon memory and
+  # preference-candidate aggregation. It consumes HA-generated JSONL
+  # evidence and exposes a compact API for the Home desktop app.
+  # =========================================================
+  intelligence:
+    build:
+      context: ./services/intelligence
+    image: home-ai-voice/intelligence:local
+    container_name: hav-intelligence
+    restart: unless-stopped
+    ports:
+      - "${INTELLIGENCE_PORT:-8095}:8094"
+    volumes:
+      - ${INTELLIGENCE_DATA_HOST_DIR:-./intelligence-data}:/data
+      - ../ha-config:/config:ro
+    environment:
+      INTELLIGENCE_DATA_DIR: /data
+      INTELLIGENCE_HA_CONFIG_DIR: /config
+      INTELLIGENCE_SCHEDULER_ENABLED: ${INTELLIGENCE_SCHEDULER_ENABLED:-1}
+      INTELLIGENCE_EVIDENCE_PULL_INTERVAL_S: ${INTELLIGENCE_EVIDENCE_PULL_INTERVAL_S:-60}
+      INTELLIGENCE_INGEST_INTERVAL_S: ${INTELLIGENCE_INGEST_INTERVAL_S:-3600}
+      INTELLIGENCE_MEMORY_INTERVAL_S: ${INTELLIGENCE_MEMORY_INTERVAL_S:-86400}
+      INTELLIGENCE_HA_BASE_URL: ${INTELLIGENCE_HA_BASE_URL:-http://192.168.0.125:8123}
+      INTELLIGENCE_HA_TOKEN: ${INTELLIGENCE_HA_TOKEN:-}
+      INTELLIGENCE_VLLM_URL: ${INTELLIGENCE_VLLM_URL:-http://vllm:8000}
+      INTELLIGENCE_QWEN_MODEL: ${INTELLIGENCE_QWEN_MODEL:-qwen3-vl-30b}
+      INTELLIGENCE_MULTIMODAL_ENABLED: ${INTELLIGENCE_MULTIMODAL_ENABLED:-1}
+      INTELLIGENCE_MULTIMODAL_RING_ENABLED: ${INTELLIGENCE_MULTIMODAL_RING_ENABLED:-1}
+      INTELLIGENCE_MULTIMODAL_RING_INTERVAL_S: ${INTELLIGENCE_MULTIMODAL_RING_INTERVAL_S:-2}
+      INTELLIGENCE_MULTIMODAL_RING_RETENTION_S: ${INTELLIGENCE_MULTIMODAL_RING_RETENTION_S:-90}
+      INTELLIGENCE_MULTIMODAL_CAMERAS: ${INTELLIGENCE_MULTIMODAL_CAMERAS:-living_room}
+      INTELLIGENCE_MULTIMODAL_CAPTURE_FRAMES: ${INTELLIGENCE_MULTIMODAL_CAPTURE_FRAMES:-1}
+      INTELLIGENCE_MULTIMODAL_MAX_CAPTURES_PER_HOUR: ${INTELLIGENCE_MULTIMODAL_MAX_CAPTURES_PER_HOUR:-6}
+      INTELLIGENCE_MULTIMODAL_MAX_QWEN_JOBS_PER_HOUR: ${INTELLIGENCE_MULTIMODAL_MAX_QWEN_JOBS_PER_HOUR:-6}
+      INTELLIGENCE_MULTIMODAL_MIN_DISK_FREE_MB: ${INTELLIGENCE_MULTIMODAL_MIN_DISK_FREE_MB:-2048}
+      INTELLIGENCE_MULTIMODAL_CAPTURE_INTERVAL_S: ${INTELLIGENCE_MULTIMODAL_CAPTURE_INTERVAL_S:-60}
+      INTELLIGENCE_MULTIMODAL_PILOT_ENABLED: ${INTELLIGENCE_MULTIMODAL_PILOT_ENABLED:-1}
+      INTELLIGENCE_MULTIMODAL_PILOT_ZONES: ${INTELLIGENCE_MULTIMODAL_PILOT_ZONES:-office}
+      INTELLIGENCE_MULTIMODAL_PILOT_KINDS: ${INTELLIGENCE_MULTIMODAL_PILOT_KINDS:-pending_preference,override_event}
+      INTELLIGENCE_MULTIMODAL_PILOT_LOOKBACK_S: ${INTELLIGENCE_MULTIMODAL_PILOT_LOOKBACK_S:-180}
+      INTELLIGENCE_MULTIMODAL_PILOT_MAX_PACKETS_PER_RUN: ${INTELLIGENCE_MULTIMODAL_PILOT_MAX_PACKETS_PER_RUN:-2}
+      INTELLIGENCE_MULTIMODAL_PILOT_AUTO_LABEL: ${INTELLIGENCE_MULTIMODAL_PILOT_AUTO_LABEL:-1}
+      INTELLIGENCE_MULTIMODAL_PILOT_MIN_LABEL_FRAMES: ${INTELLIGENCE_MULTIMODAL_PILOT_MIN_LABEL_FRAMES:-2}
+      HA_TOKEN: ${HA_TOKEN:-}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8094/healthz').read()\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks: [homeai]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # =========================================================
+  # EXPERIMENTAL — full-duplex speech-to-speech sidecar.
+  # =========================================================
+  # Side-by-side experiment running Kyutai Moshi alongside the
+  # existing HA pipeline. NOT part of the default stack — start
+  # explicitly with:
+  #   docker compose --profile s2s up -d s2s-model personaplex-bridge
+  # Stop with:
+  #   docker compose --profile s2s down s2s-model personaplex-bridge
+  #
+  # Existing Wyoming/Parakeet/Kokoro/Qwen3-VL pipeline keeps running
+  # unchanged. The Home app's `/s2s` slash command toggles which
+  # backend the mic button targets per-conversation, so you can
+  # A/B test feel in the same window.
+  #
+  # VRAM budget on the 96 GB Blackwell: vLLM holds ~62 GB
+  # (gpu_memory_utilization=0.65 — dropped from 0.75 to leave room),
+  # Parakeet+Kokoro hold ~6 GB, Moshi BF16 needs ~18 GB. Total ~86,
+  # leaving ~10 for headroom.
+  s2s-model:
+    profiles: ["s2s"]
+    build:
+      context: ./services/s2s-model
+    image: home-ai-voice/s2s-model:local
+    container_name: hav-s2s-model
+    restart: unless-stopped
+    # NVIDIA's moshi.server (default): :8998 HTTPS, exposed on LAN for
+    # direct browser access. Custom PCM bridge mode (server.py) keeps
+    # to :9000 internal. Switch via MOSHI_SERVER_MODE=custom in .env.
+    ports:
+      - "${MOSHI_PORT:-8998}:8998"
+    expose:
+      - "9000"
+    environment:
+      # Voice/model selection. `kyutai/moshiko-pytorch-bf16` is the
+      # male voice; `kyutai/moshika-pytorch-bf16` is the female voice.
+      # Both ~7.7B params and download ~16 GB of weights on first run.
+      MOSHI_MODEL: ${MOSHI_MODEL:-kyutai/moshiko-pytorch-bf16}
+      MOSHI_DEVICE: ${MOSHI_DEVICE:-cuda}
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+      HF_HUB_ENABLE_HF_TRANSFER: "1"
+      # Lets the CUDA allocator extend segments to relieve fragmentation
+      # when sharing the GPU with vLLM. Without this, PersonaPlex OOM'd
+      # by 48 MiB during warmup despite only needing ~18 GB.
+      PYTORCH_CUDA_ALLOC_CONF: ${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
+      # Disable torch.compile / dynamo to force SDPA fallback on
+      # Blackwell (sm_120) where Triton kernels aren't fully ported.
+      # Per NVIDIA/personaplex issue #3 + HF discussion #14. Both env
+      # vars cover overlapping but distinct compile paths — set both
+      # as a safety net.
+      TORCHDYNAMO_DISABLE: "1"
+      NO_TORCH_COMPILE: "1"
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      PORT: "9000"
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    shm_size: "8gb"
+    networks: [homeai]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Bridge between the Home app's browser WebSocket and the upstream
+  # S2S model server. Adapter pattern — `echo` is a no-model loopback
+  # for testing plumbing, `moshi` proxies to s2s-model. Tees text
+  # turns into the chat-tee SSE feed so S2S conversations appear in
+  # the same Home log as HA-pipeline conversations.
+  # Phase 2.3: Moshi listener — vanilla Kyutai Moshi (NOT NVIDIA's
+  # PersonaPlex fork) as our streaming Interaction Model. Phase 2.0
+  # audition proved it boots on Blackwell sm_120 at ~14.7 GB VRAM with
+  # 26 ms median frame cadence. The bridge (Phase 2.4) connects to this
+  # service via WebSocket and routes user audio through it.
+  #
+  # Behind the `s2s` profile like the rest of the experimental stack;
+  # default `docker compose up -d` doesn't start it.
+  # moshi-listener: RETIRED May 2026.
+  #
+  # The base Moshi listener (Kyutai moshiko-pytorch-bf16) was loaded as
+  # part of the S2S audio experiments. After the TM-shaped pivot we ran
+  # Moshi with `MOSHI_AUDIO_MUTED=true` (text-injection only). Once we
+  # also reverted DirectDispatcher → HA-pipeline, Moshi had no remaining
+  # job — Kokoro handles all TTS, Parakeet handles all STT, the bridge
+  # talks to HA directly for intent dispatch. Removed to free 17 GB of
+  # VRAM for Chatterbox / Fish S2-Pro experiments.
+  #
+  # The bridge's MoshiListenerUpstream class is still in main.py and will
+  # log "Temporary failure in name resolution" retries while
+  # MOSHI_LISTENER_URL still resolves to the (now non-existent) moshi-listener
+  # service. Harmless log noise; bridge core paths (HA dispatch, Kokoro
+  # TTS, home app WS) don't depend on a live Moshi.
+  #
+  # To bring it back: uncomment this block, set S2S_BACKEND=moshi-listener
+  # on the bridge env (already default), `docker compose up -d moshi-listener`.
+  #
+  # moshi-listener:
+  #   profiles: ["s2s"]
+  #   build:
+  #     context: ./services/moshi-listener
+  #     dockerfile: Dockerfile.moshi-blackwell
+  #   image: home-ai-voice/moshi-listener:blackwell
+  #   container_name: hav-moshi-listener
+  #   restart: unless-stopped
+  #   expose:
+  #     - "8899"
+  #   environment:
+  #     MOSHI_MODEL: ${MOSHI_MODEL_LISTENER:-kyutai/moshiko-pytorch-bf16}
+  #     DEVICE: cuda:0
+  #     PORT: "8899"
+  #     HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+  #     HF_HUB_ENABLE_HF_TRANSFER: "1"
+  #     PYTORCH_CUDA_ALLOC_CONF: ${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
+  #     TORCHDYNAMO_DISABLE: "1"
+  #     NO_TORCH_COMPILE: "1"
+  #     MAX_EMIT_S: ${MOSHI_MAX_EMIT_S:-1.5}
+  #     MOSHI_CONTEXT_INJECTION_ENABLED: ${MOSHI_CONTEXT_INJECTION_ENABLED:-false}
+  #     INJECT_SPEAK_MAX_TOKENS: ${INJECT_SPEAK_MAX_TOKENS:-20}
+  #     INJECT_CONTEXT_MAX_TOKENS: ${INJECT_CONTEXT_MAX_TOKENS:-30}
+  #     INJECT_INTER_CHUNK_GAP_FRAMES: ${INJECT_INTER_CHUNK_GAP_FRAMES:-5}
+  #     NVIDIA_VISIBLE_DEVICES: all
+  #     NVIDIA_DRIVER_CAPABILITIES: compute,utility
+  #   volumes:
+  #     - hf_cache:/root/.cache/huggingface
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+  #   shm_size: "8gb"
+  #   networks: [homeai]
+  #   logging:
+  #     driver: json-file
+  #     options:
+  #       max-size: "10m"
+  #       max-file: "3"
+
+  personaplex-bridge:
+    profiles: ["s2s"]
+    build:
+      context: ./services/personaplex-bridge
+    image: home-ai-voice/personaplex-bridge:local
+    container_name: hav-personaplex-bridge
+    restart: unless-stopped
+    ports:
+      - "${S2S_BRIDGE_PORT:-8094}:8094"
+    environment:
+      # Backend selection.
+      #   `echo`           — no-model loopback for testing plumbing
+      #   `moshi-listener` — Phase 2.4: vanilla Kyutai Moshi via the
+      #                      moshi-listener service (default)
+      #   `moshi`/`personaplex`/`s2s` — Phase 1.5e legacy: NVIDIA
+      #                      PersonaPlex via moshi.server (retained
+      #                      for rollback)
+      S2S_BACKEND: ${S2S_BACKEND:-moshi-listener}
+      MOSHI_LISTENER_URL: ${MOSHI_LISTENER_URL:-ws://moshi-listener:8899/ws}
+      # moshi.server listens on TLS :8998/api/chat. Cert is self-signed;
+      # bridge skips verification by default (internal LAN traffic).
+      S2S_MODEL_URL: ${S2S_MODEL_URL:-wss://s2s-model:8998/api/chat}
+      S2S_MODEL_TLS_VERIFY: ${S2S_MODEL_TLS_VERIFY:-false}
+      CHATTEE_URL: ${CHATTEE_URL:-http://metrics-sidecar:8092/conversations/event}
+      # HA dispatch for tool calls (Phase 1+). Reuses HA_TOKEN already
+      # set in .env for the vision-sidecar; no new credentials needed.
+      HA_URL: ${HA_URL:-http://192.168.0.125:8123}
+      HA_TOKEN: ${HA_TOKEN:-}
+      # WS auth — generate via openssl rand -hex 32 and add BRIDGE_TOKEN
+      # to .env. Empty value disables auth (dev only).
+      BRIDGE_TOKEN: ${BRIDGE_TOKEN:-}
+      # Default voice for Phase 0 / first connection. Override per-session
+      # via Home app's `/s2s` slash command. NATM2 chosen in Phase 0 audition.
+      DEFAULT_VOICE: ${DEFAULT_VOICE:-NATM2.pt}
+      # Reverted to false (May 2026): DirectDispatcher path + 4B model
+      # was producing fake "[fired ...]" text without firing real tools,
+      # missing most natural commands, and bypassing HA's
+      # `execute_services` event so the home app's inline action cards
+      # disappeared. Back on HA's `assist_pipeline/run` → Extended OpenAI
+      # Conv → vLLM (30B-MoE). ~5 s latency but reliable. The 400ms win
+      # the original flag bought us isn't worth a model that misses
+      # half the commands.
+      DIRECT_DISPATCH: ${DIRECT_DISPATCH:-false}
+      VLLM_URL: ${BRIDGE_VLLM_URL:-http://vllm:8000}
+      VLLM_MODEL_NAME: ${BRIDGE_VLLM_MODEL:-qwen3-vl-30b}
+      # Phase 2.10: bridge-side entity aliases for "kitchen lights"
+      # style targets HA's area model can't express. Bind-mounted from
+      # ./services/personaplex-bridge/aliases.yaml below; SIGHUP the
+      # container to reload after edits (`docker kill -SIGHUP
+      # hav-personaplex-bridge`).
+      ALIASES_PATH: /app/aliases.yaml
+      # Frigate → VLLM room-context integration. Maps each room to its
+      # binary_sensor.*_person_occupancy entity + camera. Edit
+      # rooms.yaml on the host, SIGHUP the container to reload.
+      ROOMS_PATH: /app/rooms.yaml
+      # Stage 1 (TM-shaped): Kokoro TTS replaces Moshi as the audio
+      # source for confirmations + chitchat. Moshi stays loaded for
+      # EOU signaling but its audio output is suppressed at the bridge.
+      KOKORO_URL: ${BRIDGE_KOKORO_URL:-http://kokoro-tts:8880}
+      KOKORO_VOICE: ${BRIDGE_KOKORO_VOICE:-am_michael}
+      KOKORO_MODEL: ${BRIDGE_KOKORO_MODEL:-kokoro}
+      MOSHI_AUDIO_MUTED: ${MOSHI_AUDIO_MUTED:-true}
+      # TTS engine abstraction (May 2026). Production default is
+      # `chatterbox` after the v1 smoke (voice_scenarios.py: 11/13 PASS,
+      # latency p50=56ms p90=66ms — well under the 800ms/1500ms gates).
+      # On synth failure, the bridge automatically falls back to
+      # TTS_FALLBACK so voice mode degrades gracefully if Chatterbox is
+      # down. Set TTS_ENGINE=kokoro to revert.
+      TTS_ENGINE: ${TTS_ENGINE:-chatterbox}
+      TTS_FALLBACK: ${TTS_FALLBACK:-kokoro}
+      CHATTERBOX_URL: ${BRIDGE_CHATTERBOX_URL:-http://chatterbox-tts:8000}
+      # devnen ships Gianna.wav and Robert.wav as built-in reference voices
+      # in /app/reference_audio/. devnen's /v1/audio/speech expects the
+      # voice parameter to be a filename WITH the .wav extension —
+      # "Gianna" alone 404s. Picked Gianna for v1 baseline. Swap via .env
+      # BRIDGE_CHATTERBOX_VOICE or drop a new .wav in
+      # services/chatterbox-tts/voices/ and reference it as `myvoice.wav`.
+      CHATTERBOX_VOICE: ${BRIDGE_CHATTERBOX_VOICE:-Gianna.wav}
+      CHATTERBOX_MODEL: ${BRIDGE_CHATTERBOX_MODEL:-chatterbox-turbo}
+      CHATTERBOX_EXAGGERATION: ${BRIDGE_CHATTERBOX_EXAGGERATION:-0.45}
+      CHATTERBOX_CFG_WEIGHT: ${BRIDGE_CHATTERBOX_CFG_WEIGHT:-0.5}
+      CHATTERBOX_TEMPERATURE: ${BRIDGE_CHATTERBOX_TEMPERATURE:-0.7}
+      # Voice rewriter: small LLM pass over the assistant's text BEFORE
+      # TTS, converting things like "Turned off light.kitchen_lights" into
+      # "Done — kitchen lights are off." Adds ~200ms but dramatically
+      # improves naturalness of spoken confirmations. Skipped for inputs
+      # already ≤8 words with no markdown/JSON. Default OFF on first
+      # deploy — flip to 1 only after voice_scenarios.py confirms no
+      # tool-call regression.
+      VOICE_REWRITER: ${VOICE_REWRITER:-0}
+      # Override the dynamic system prompt for fast iteration without
+      # rebuild. Leave empty for the default (defines role, style, and
+      # injects the user's HA areas/entities).
+      SYSTEM_PROMPT_OVERRIDE: ${SYSTEM_PROMPT_OVERRIDE:-}
+      # Reverted to v1 (May 2026): under DIRECT_DISPATCH=false the
+      # actual prompting is owned by HA's Extended OpenAI Conv, so our
+      # custom v2 rule-heavy prompt was both fighting HA's prompt AND
+      # being undersized by the 4B model. v1 is the simpler skeleton
+      # prompt that's mostly bypassed in HA-pipeline mode; safe default.
+      SYSTEM_PROMPT_VARIANT: ${SYSTEM_PROMPT_VARIANT:-v1}
+      VLLM_TEMPERATURE: ${VLLM_TEMPERATURE:-0.3}
+      VLLM_MAX_TOKENS: ${VLLM_MAX_TOKENS:-80}
+      # M3a — close vLLM SSE stream as soon as tool_args JSON is
+      # parseable. Saves ~50-150ms per tool dispatch by skipping the
+      # `}</tool_call>` close + stop tokens. Off by default; flip to 1
+      # after M1 baseline TSV is collected so before/after is measurable.
+      VLLM_STREAM_SHORTCIRCUIT: ${VLLM_STREAM_SHORTCIRCUIT:-0}
+      # M3b — flush Kokoro at clause boundaries (`,` / ` — `) once
+      # the candidate chunk is ≥ KOKORO_FLUSH_MIN_WORDS words. Saves
+      # ~80-150ms on first-audio for long sentences, at the cost of
+      # slight prosody disruption mid-phrase. Off by default.
+      KOKORO_FLUSH_AT_CLAUSE: ${KOKORO_FLUSH_AT_CLAUSE:-0}
+      KOKORO_FLUSH_MIN_WORDS: ${KOKORO_FLUSH_MIN_WORDS:-8}
+      # M3c — exact-match short-greeting cache. Bypasses vLLM entirely
+      # for ~20 canned phrases ("hi", "thanks", "good morning", etc.).
+      # Predicted near-zero latency on ~15% of turns. Off by default.
+      GREETING_CACHE: ${GREETING_CACHE:-0}
+      # M5b — include current local time + part-of-day in the <context>
+      # block so the assistant can give time-appropriate greetings
+      # ("good evening" at 8pm) without the user announcing it. The
+      # rule says "reference only, don't announce unless asked." Off
+      # by default until vibe judge validates no over-announcement.
+      PROMPT_TIME_CONTEXT: ${PROMPT_TIME_CONTEXT:-0}
+      # Phase 1 identity (May 2026) — Frigate face-rec + HA person
+      # entity awareness. FACE_PERSON_MAP overrides the auto-mapping
+      # ("if exactly one person.* entity, all faces map to it"). Format
+      # is comma-separated "FaceLabel:person.entity_id" pairs.
+      # Example: FACE_PERSON_MAP=Marcelo:person.engineeredlighting,Sarah:person.sarah
+      FACE_PERSON_MAP: ${FACE_PERSON_MAP:-}
+      FACE_NAMING_CONFIDENCE: ${FACE_NAMING_CONFIDENCE:-0.85}
+      FACE_FRESHNESS_WINDOW_S: ${FACE_FRESHNESS_WINDOW_S:-60}
+      FACE_ABSENCE_S: ${FACE_ABSENCE_S:-1800}
+      BRIDGE_WARMUP_S: ${BRIDGE_WARMUP_S:-300}
+      USER_YIELD_SILENCE_MS: ${USER_YIELD_SILENCE_MS:-400}
+      PARAKEET_VAD_EOU_S: ${PARAKEET_VAD_EOU_S:-0.6}
+      ASR_CORRECTIONS: ${ASR_CORRECTIONS:-Marcello:Marcelo}
+      FACE_STATE_DIR: /app/data
+    volumes:
+      - ./services/personaplex-bridge/aliases.yaml:/app/aliases.yaml:ro
+      - ./services/personaplex-bridge/rooms.yaml:/app/rooms.yaml:ro
+      # Phase 1 identity: face_state.json + person_state.json persist
+      # across container restarts so we don't lose recency state.
+      - ./services/personaplex-bridge/data:/app/data
     networks: [homeai]
     logging:
       driver: json-file

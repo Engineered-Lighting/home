@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import sys
 import unittest
 
 
@@ -385,4 +386,9 @@ class TestContractFixture(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    suite = unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    failed = len(result.failures) + len(result.errors)
+    passed = result.testsRun - failed
+    print(f"\n{passed} pass . {failed} fail")
+    raise SystemExit(0 if result.wasSuccessful() else 1)

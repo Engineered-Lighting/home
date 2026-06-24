@@ -48,7 +48,12 @@ function applyAsrCorrection(text) {
 }
 
 /* ── Header ──────────────────────────────────────────────────────────── */
-function HomeHeader({ theme, onToggleTheme, voice, connection, sidecarOnline, bridgeOnline, sim, muteState, onUnmuteClick, onOpenPeople, onOpenIntelligence, onOpenVideoLabeler, aiStackState, metrics }) {
+function HomeHeader({
+  theme, onToggleTheme, voice, connection, sidecarOnline, bridgeOnline,
+  bridgeHealth, visionSidecarOnline, visionHealth, frigateMetrics, cameraLabels,
+  sim, muteState, onUnmuteClick, onOpenPeople, onOpenIntelligence,
+  onOpenVideoLabeler, onOpenSimulationControls, peopleButtonRef, aiStackState, metrics,
+}) {
   const isLive = voice.state !== "inactive" && voice.state !== "no-mic";
   // Phase B F0-08: surface sidecar/bridge offline as a warning pill.
   // sidecarOnline = false means SSE chat-tee is broken → assistant
@@ -156,7 +161,19 @@ function HomeHeader({ theme, onToggleTheme, voice, connection, sidecarOnline, br
           if (!window.buildStackList || !window.summarizeCapabilityHealth) return null;
           let summary;
           try {
-            const services = window.buildStackList(aiStackState, metrics);
+            let services = window.buildStackList(aiStackState, metrics);
+            if (window.deriveRuntimeServiceHealth) {
+              services = window.deriveRuntimeServiceHealth(services, {
+                connection,
+                sidecarOnline,
+                bridgeOnline,
+                bridgeHealth,
+                visionSidecarOnline,
+                visionHealth,
+                frigateMetrics,
+                cameraLabels,
+              });
+            }
             summary = window.summarizeCapabilityHealth(services);
           } catch { return null; }
           if (!summary) return null;           // all ok — hide
@@ -185,10 +202,12 @@ function HomeHeader({ theme, onToggleTheme, voice, connection, sidecarOnline, br
           );
         })()}
         {muteState?.muted && (
-          <span
+          <button
+            type="button"
             onClick={onUnmuteClick}
-            title={`Jarvis muted (${muteState.reason || "unknown"}) — click to unmute`}
+            title={`Jarvis muted (${muteState.reason || "active"}) — click to clear manual/timer mute`}
             style={{
+              all: "unset",
               display: "inline-flex", alignItems: "center", gap: 5,
               border: "1px solid var(--hg-fg-3)",
               color: "var(--hg-fg-2)",
@@ -205,12 +224,18 @@ function HomeHeader({ theme, onToggleTheme, voice, connection, sidecarOnline, br
               width: 6, height: 6, borderRadius: 999,
               background: "var(--hg-fg-2)",
             }} />
-            muted · {muteState.reason || "manual"}
-          </span>
+            muted · {muteState.reason || "active"}
+          </button>
         )}
         {/* Simulation Mode pill — unmissable amber chip so the designer
             (or anyone) instantly knows the data is mocked. */}
         {sim?.active && (
+          <button
+            type="button"
+            onClick={onOpenSimulationControls}
+            title="Simulation Mode - open controls"
+            style={{ all: "unset", cursor: "pointer" }}
+          >
           <span title="Simulation Mode — everything you see is mocked. Type /simulation off to exit." style={{
             display: "inline-flex", alignItems: "center", gap: 5,
             border: "1px solid var(--hg-warn)",
@@ -228,6 +253,7 @@ function HomeHeader({ theme, onToggleTheme, voice, connection, sidecarOnline, br
             }} />
             sim · {sim.scenario || "—"}
           </span>
+          </button>
         )}
         {/* Phase 1.5b: SEEN identity pill removed from header. The
             face-rec affordances live below now — name chip in the
@@ -251,6 +277,7 @@ function HomeHeader({ theme, onToggleTheme, voice, connection, sidecarOnline, br
         </span>
         {onOpenPeople && (
           <button
+            ref={peopleButtonRef}
             aria-label="Open people — relationships and identities"
             title="people · relationships and identities"
             className="hg-focusable"
@@ -341,6 +368,153 @@ function HomeHeader({ theme, onToggleTheme, voice, connection, sidecarOnline, br
           </>
         )}
       </span>
+    </div>
+  );
+}
+
+function SimulationControlsDialog({ open, sim, onClose }) {
+  const scenarios = useMemo(() => {
+    if (!open) return [];
+    try {
+      const rows = window.SimScenarios?.list?.() || [];
+      return rows
+        .map((s) => ({ id: String(s?.id || "").trim(), description: String(s?.description || "").trim() }))
+        .filter((s) => s.id);
+    } catch {
+      return [];
+    }
+  }, [open, sim?.scenario]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => { if (e.key === "Escape") onClose?.(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  if (!open || !sim?.active) return null;
+
+  const current = sim.scenario || "healthy";
+  const rows = scenarios.length ? scenarios : [{ id: current, description: "" }];
+  const hasCurrent = rows.some((s) => s.id === current);
+  const switchScenario = (id) => {
+    if (!id) return;
+    if (typeof sim.setScenario === "function") sim.setScenario(id);
+    else sim.activate?.(id);
+  };
+  const scenarioButton = (active) => ({
+    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+    width: "100%",
+    border: `1px solid ${active ? "var(--hg-warn)" : "var(--hg-border)"}`,
+    background: active ? "rgba(245, 158, 11, 0.12)" : "transparent",
+    color: active ? "var(--hg-warn)" : "var(--hg-fg-1)",
+    padding: "7px 8px",
+    borderRadius: 4,
+    fontFamily: "'Geist Mono', monospace",
+    fontSize: 10,
+    letterSpacing: 0,
+    cursor: "pointer",
+    textAlign: "left",
+  });
+  const actionButton = {
+    border: "1px solid var(--hg-border)",
+    background: "transparent",
+    color: "var(--hg-fg-1)",
+    padding: "6px 9px",
+    borderRadius: 4,
+    fontFamily: "'Geist Mono', monospace",
+    fontSize: 10,
+    letterSpacing: 0,
+    cursor: "pointer",
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Simulation controls"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose?.(); }}
+      style={{ position: "fixed", inset: 0, zIndex: 90, pointerEvents: "auto" }}
+    >
+      <div
+        className="hg-fade"
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{
+          position: "absolute",
+          top: 48,
+          right: 14,
+          width: "min(380px, calc(100vw - 28px))",
+          maxHeight: "min(620px, calc(100vh - 68px))",
+          display: "flex",
+          flexDirection: "column",
+          gap: 10,
+          overflow: "hidden",
+          background: "var(--hg-bg-1)",
+          border: "1px solid var(--hg-warn)",
+          borderRadius: 6,
+          boxShadow: "0 18px 50px rgba(0,0,0,0.45)",
+          padding: 12,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <div style={{
+            color: "var(--hg-warn)",
+            fontFamily: "'Geist Mono', monospace",
+            fontSize: 11,
+            letterSpacing: "0.12em",
+            textTransform: "uppercase",
+          }}>simulation</div>
+          <button
+            type="button"
+            aria-label="Close simulation controls"
+            onClick={onClose}
+            style={{ ...actionButton, padding: "4px 8px" }}
+          >x</button>
+        </div>
+
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: "1fr auto auto",
+          gap: 6,
+          alignItems: "center",
+        }}>
+          <select
+            aria-label="Simulation scenario"
+            value={hasCurrent ? current : ""}
+            onChange={(e) => switchScenario(e.target.value)}
+            style={{
+              minWidth: 0,
+              background: "var(--hg-bg-0)",
+              color: "var(--hg-fg-0)",
+              border: "1px solid var(--hg-border)",
+              borderRadius: 4,
+              padding: "6px 8px",
+              fontFamily: "'Geist Mono', monospace",
+              fontSize: 10,
+            }}
+          >
+            {!hasCurrent && <option value="">{current}</option>}
+            {rows.map((s) => <option key={s.id} value={s.id}>{s.id}</option>)}
+          </select>
+          <button type="button" onClick={() => sim.reset?.()} style={actionButton}>reset</button>
+          <button type="button" onClick={() => { sim.deactivate?.(); onClose?.(); }} style={actionButton}>exit</button>
+        </div>
+
+        <div className="hg-scroll" style={{ overflowY: "auto", display: "grid", gap: 6, paddingRight: 2 }}>
+          {rows.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => switchScenario(s.id)}
+              style={scenarioButton(s.id === current)}
+              title={s.description || s.id}
+            >
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.id}</span>
+              {s.id === current && <span aria-hidden="true">active</span>}
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -690,6 +864,80 @@ function _networkTone(networkMetrics) {
   return _toneFromPct(Math.max(...samples));
 }
 
+function _aiStackDepHealthItem(aiStackOnline, aiStackState, statusError = null) {
+  if (aiStackOnline === false) {
+    return { label: "ai stack", state: "unreachable", tone: "crit" };
+  }
+  if (aiStackOnline !== true) {
+    return { label: "ai stack", state: "unknown", tone: "idle" };
+  }
+  const overall = aiStackState?.overall;
+  if (!overall) {
+    if (statusError === "auth") {
+      return { label: "ai stack", state: "auth failed", tone: "crit" };
+    }
+    if (statusError === "rate_limited") {
+      return { label: "ai stack", state: "rate limited", tone: "warn" };
+    }
+    if (statusError) {
+      return { label: "ai stack", state: "status unavailable", tone: "warn" };
+    }
+    return { label: "ai stack", state: "no token", tone: "idle" };
+  }
+  const tone =
+    overall === "ready" ? "ok" :
+    overall === "warming" || overall === "partial" ||
+    overall === "starting" || overall === "stopping" ? "warn" :
+    overall === "offline" || overall === "down" || overall === "error" ? "crit" :
+    "idle";
+  return { label: "ai stack", state: overall, tone };
+}
+
+function _escapeRegexPart(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function _cameraOccupancyRegex(cameraIds = []) {
+  const ids = [...new Set((cameraIds || []).map((id) => String(id || "").trim()).filter(Boolean))];
+  if (!ids.length) return null;
+  return new RegExp(`^binary_sensor\\.(${ids.map(_escapeRegexPart).join("|")})_([a-z0-9_]+)_occupancy$`);
+}
+
+function _matchCameraOccupancyEntity(cameraIds, entityId) {
+  const re = _cameraOccupancyRegex(cameraIds);
+  const m = entityId && re ? String(entityId).match(re) : null;
+  if (!m) return null;
+  const label = m[2];
+  if (label === "all") return null;
+  const nice = label.replace(/_/g, " ").trim();
+  return nice ? { camera: m[1], label: nice } : null;
+}
+
+function cameraLabelsFromStates(cameraIds, states = []) {
+  const next = {};
+  for (const s of states || []) {
+    const match = _matchCameraOccupancyEntity(cameraIds, s?.entity_id);
+    if (!match || s.state !== "on") continue;
+    (next[match.camera] ||= new Set()).add(match.label);
+  }
+  return Object.fromEntries(
+    Object.entries(next).map(([k, v]) => [k, [...v].sort()])
+  );
+}
+
+function updateCameraLabelsFromEvent(cameraIds, prev = {}, ev) {
+  const d = ev?.data;
+  const match = _matchCameraOccupancyEntity(cameraIds, d?.entity_id);
+  if (!match) return prev;
+  const cur = new Set(prev?.[match.camera] || []);
+  if (d?.new_state?.state === "on") cur.add(match.label);
+  else cur.delete(match.label);
+  const next = { ...(prev || {}) };
+  if (cur.size) next[match.camera] = [...cur].sort();
+  else delete next[match.camera];
+  return next;
+}
+
 /* Tiny presentational footer for the External Reasoning provider —
  * shown under the AI Stack card in the AI tab when a key is configured.
  * Reads from window.__EXTERNAL_STATS (rolling 20-call buffer) so it
@@ -763,7 +1011,7 @@ function _ExternalProviderFooter() {
  */
 function MetricsStrip({
   metrics, metricsHistory, metricsBase,
-  bridgeHealth, networkMetrics, visionHealth, hostMetrics,
+  bridgeHealth, networkMetrics, visionSidecarOnline, visionHealth, hostMetrics,
   frigateMetrics,
   // Tray v5: connection-state signals threaded through so the AI tab's
   // dependency-health strip can render plain-language status for the
@@ -776,6 +1024,7 @@ function MetricsStrip({
   // doesn't duplicate the 15-s heartbeat. See home-ai-stack.jsx.
   aiStackOnline = null,
   aiStackState = null,
+  aiStackStatusError = null,
   roomContext,
   voice, identity, media,
   recentPerceptions = [],
@@ -801,6 +1050,7 @@ function MetricsStrip({
   // Proactive-assistant coordinator UI state (home-proactive.jsx) — a
   // single status row in the AI tab. { phase, away, reason, room, ... }
   proactive = null,
+  onProactiveAction = () => {},
   simActive = false,
   // Lab tab (Addendum 10) — buffer refs lifted from HomeApp + a tick
   // to trigger re-render on sample/turn append.
@@ -812,13 +1062,24 @@ function MetricsStrip({
   token = "",
   endpoint = "",
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const TRAY_EXPANDED_KEY = "hg-tray-expanded-v1";
+  const TRAY_TAB_KEY = "hg-tray-tab-v1";
+  const TRAY_VALID_TABS = new Set(["ai", "infra", "trace"]);
+  const [expanded, setExpanded] = useState(() => {
+    try { return window.localStorage.getItem(TRAY_EXPANDED_KEY) === "1"; }
+    catch { return false; }
+  });
   // Tray v5: `ai` is the most important tab — it answers "is the AI ready,
   // responsive, healthy" in 3 seconds. `now` was removed because once
   // perception/occupancy left the drawer, it duplicated `ai`'s dependency
   // strip. `home` was renamed `infra` because "home" clashes with the
   // app brand. Tab order: ai · infra · network.
-  const [activeTab, setActiveTab] = useState("ai");
+  const [activeTab, setActiveTab] = useState(() => {
+    try {
+      const stored = window.localStorage.getItem(TRAY_TAB_KEY);
+      return TRAY_VALID_TABS.has(stored) ? stored : "ai";
+    } catch { return "ai"; }
+  });
   const [diagOpen, setDiagOpen] = useState(false);
 
   // Drag-resizable tray body. Persisted to localStorage so it survives
@@ -860,6 +1121,13 @@ function MetricsStrip({
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
     try { window.localStorage.setItem(TRAY_HEIGHT_KEY, String(trayHeight)); } catch {}
   }, [trayHeight]);
+  useEffect(() => {
+    try { window.localStorage.setItem(TRAY_EXPANDED_KEY, expanded ? "1" : "0"); } catch {}
+  }, [expanded]);
+  useEffect(() => {
+    if (!TRAY_VALID_TABS.has(activeTab)) return;
+    try { window.localStorage.setItem(TRAY_TAB_KEY, activeTab); } catch {}
+  }, [activeTab]);
 
   // Shared adapter: /conversations/recent OR /conversations/stream entry
   // → trace with pre-built 2-stage breakdown (prefill / gen) derived
@@ -1111,6 +1379,32 @@ function MetricsStrip({
   // RoomContextStore if available.
   const activeRoom = identity?.camera || null;
   const activeRoomMedia = activeRoom ? media?.[activeRoom] : null;
+  const roomContextRows = (() => {
+    const rooms = roomContext && typeof roomContext.rooms === "object" ? roomContext.rooms : null;
+    if (!rooms) return [];
+    return Object.entries(rooms).map(([room, data]) => {
+      const d = data || {};
+      const personNames = Array.isArray(d.persons)
+        ? d.persons.map((p) => p?.identity?.name || p?.name || "").filter(Boolean)
+        : [];
+      const occupant = d.occupant || d.identity || d.person || personNames.join(", ");
+      const occupied = d.occupied === true || !!occupant;
+      const mediaLabel = typeof d.media === "string"
+        ? d.media
+        : (d.media?.title || d.media?.app_name || null);
+      return {
+        room,
+        occupant: occupant || (occupied ? "occupied" : ""),
+        ageS: d.age_s ?? d.age_seconds ?? d.perception_age_seconds ?? null,
+        media: mediaLabel,
+      };
+    }).sort((a, b) => {
+      const ao = !!a.occupant;
+      const bo = !!b.occupant;
+      if (ao !== bo) return ao ? -1 : 1;
+      return a.room.localeCompare(b.room);
+    });
+  })();
 
   /* ── Tab renderers ───────────────────────────────────────────────── */
 
@@ -1142,7 +1436,7 @@ function MetricsStrip({
     // Model — folded in from the old MODEL card. The state value is the
     // model name itself; tone reflects ready/warming/degraded/offline.
     let modelTone = "idle", modelState = "unknown";
-    if (metrics.model) {
+    if (hasLiveModelName(metrics.model)) {
       modelState = metrics.model;
       if (bridgeOnline === false) modelTone = "crit";
       else if (bridgeHealth?.ha_connected === false) modelTone = "warn";
@@ -1154,18 +1448,7 @@ function MetricsStrip({
     // Ubuntu AI box, as reported by the stack-supervisor on :8093.
     // Distinct from the "metrics-sidecar" chip below (which reports only
     // the chat-tee :8092 liveness) — this is the whole-stack rollup.
-    if (!aiStackOnline) items.push({ label: "ai stack", state: aiStackOnline === false ? "unreachable" : "unknown", tone: aiStackOnline === false ? "crit" : "idle" });
-    else if (aiStackState?.overall) {
-      const o = aiStackState.overall;
-      const tone =
-        o === "ready"                                        ? "ok"   :
-        o === "warming"  || o === "partial" ||
-        o === "starting" || o === "stopping"                 ? "warn" :
-        o === "offline"  || o === "error"                    ? "crit" :
-                                                                "idle";
-      items.push({ label: "ai stack", state: o, tone });
-    }
-    else items.push({ label: "ai stack", state: "no token", tone: "idle" });
+    items.push(_aiStackDepHealthItem(aiStackOnline, aiStackState, aiStackStatusError));
     // metrics-sidecar (was "ai box" — renamed so it no longer overlaps
     // with the new "ai stack" umbrella; this chip is just the :8092
     // /healthz reachability check).
@@ -1216,7 +1499,19 @@ function MetricsStrip({
       ? window.computeBaseline(labTurnsRef.current)
       : null;
     const _tier = window.deriveLabTier(metrics, aiStackState, lastTrace, _baseline);
-    const _services = window.buildStackList(aiStackState, metrics);
+    let _services = window.buildStackList(aiStackState, metrics);
+    if (window.deriveRuntimeServiceHealth) {
+      _services = window.deriveRuntimeServiceHealth(_services, {
+        connection,
+        sidecarOnline,
+        bridgeOnline,
+        bridgeHealth,
+        visionSidecarOnline,
+        visionHealth,
+        frigateMetrics,
+        cameraLabels,
+      });
+    }
     // Banner action dispatcher (e.g., 'stop ai models' on the pressured
     // banner) — delegates to HomeStackActions. Supervisor URL is the
     // metrics-sidecar host on port 8093.
@@ -1260,6 +1555,19 @@ function MetricsStrip({
     };
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {window.ProactiveStatusLine && (
+          <window.ProactiveStatusLine proactive={proactive} onAction={onProactiveAction} />
+        )}
+        {window.AiStackCard && (
+          <window.AiStackCard
+            aiStackOnline={aiStackOnline}
+            aiStackState={aiStackState}
+            aiStackStatusError={aiStackStatusError}
+            tokenConfigured={!!_stackToken}
+            supervisorUrl={_supervisorUrl}
+            stackToken={_stackToken}
+          />
+        )}
         <window.LabBanner banner={_tier.banner} onAction={_onBannerAction} />
         {window.LabStackPane
           ? <window.LabStackPane services={_services} metrics={metrics} />
@@ -1425,6 +1733,35 @@ function MetricsStrip({
                       color: `var(--hg-${c.tone === "warn" ? "warn" : "ice-bright"})`,
                       borderRadius: 2,
                     }}>{c.label}</span>
+                  ))}
+                </div>
+              )}
+              {window.HmRoomRow && roomContextRows.length > 0 && (
+                <div style={{
+                  gridColumn: "1 / -1",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 2,
+                  paddingTop: 8,
+                  marginTop: 4,
+                  borderTop: "1px solid var(--hg-border-soft)",
+                }}>
+                  <div style={{
+                    fontFamily: "'Geist Mono', monospace",
+                    fontSize: 9,
+                    letterSpacing: "0.14em",
+                    textTransform: "uppercase",
+                    color: "var(--hg-fg-5)",
+                    marginBottom: 2,
+                  }}>room context</div>
+                  {roomContextRows.slice(0, 8).map((r) => (
+                    <window.HmRoomRow
+                      key={r.room}
+                      room={r.room}
+                      occupant={r.occupant}
+                      ageS={r.ageS}
+                      media={r.media}
+                    />
                   ))}
                 </div>
               )}
@@ -2280,6 +2617,7 @@ const SLASH_CMDS = [
   { cmd: "/find",       hint: "<text>",     desc: "search past chat events for matching text", category: "debug" },
   { cmd: "/debug",    hint: "on|off",  desc: "show/hide internal diag events ([parakeet], [direct], etc.)", category: "debug" },
   { cmd: "/test",       hint: "classifier|external-privacy|external-suite", desc: "run built-in test suites and print a pass/fail summary", category: "debug" },
+  { cmd: "/route-log",  hint: "[tail]",     desc: "dump recent external-routing decisions as JSONL. alias: /routes", category: "debug" },
   { cmd: "/lab-dump",       hint: "",       desc: "dump labSamplesRef + labTurnsRef + anchor stats as JSON (Addendum 32 evidence-gathering for line-graph flatness bug)", category: "debug" },
   { cmd: "/lab-dump-watch", hint: "<sec>|stop", desc: "auto-dump every N seconds for 12 iterations (timing-window evidence)", category: "debug" },
   // ── modes + lifecycle ─────────────────────────────────────────
@@ -2690,6 +3028,21 @@ const DEFAULT_METRICS = {
   gpu: 0, vram: 0, vramMax: 0, cpu: 0, ram: 0, ramMax: 0,
 };
 
+const CLEARED_METRICS = { ...DEFAULT_METRICS, model: null };
+
+function emptyMetricsHistory() {
+  return { gpu: [], vram: [], cpu: [], ram: [], ttft: [], tps: [] };
+}
+
+function emptyNetworkMetrics() {
+  return { udm: null, switches: [], clientsOnline: 0, clientsKnown: 0 };
+}
+
+function hasLiveModelName(modelName) {
+  const s = typeof modelName === "string" ? modelName.trim() : "";
+  return !!s && s !== "\u2014" && s !== "\u00e2\u20ac\u201d";
+}
+
 // Phase 1.5: the AI box always serves the metrics-sidecar (port 8092)
 // and the personaplex-bridge (port 8094). They do NOT run on HAOS.
 // Earlier versions derived these from the HA endpoint hostname, which
@@ -2896,6 +3249,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   // intelligence / apartment) — opening one closes the rest, which kills
   // Escape-stacking and z-fights between fixed inset-0 overlays.
   const [videoLabelerOpen, setVideoLabelerOpen] = useState(false);
+  // S79: the active Simulation Mode header pill opens this local controls
+  // dialog for switching scenarios, resetting fixtures, or returning live.
+  const [simulationControlsOpen, setSimulationControlsOpen] = useState(false);
   // Phase 0.5 "Thinking with Visual Primitives" — /look drawer state.
   // lookInitial seeds the drawer from the command args; its `nonce`
   // re-keys the drawer so a repeated /look re-runs cleanly.
@@ -2910,6 +3266,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   // sidecar/bridge below. See home-ai-stack.jsx.
   const [aiStackOnline, setAiStackOnline] = useState(null);
   const [aiStackState, setAiStackState] = useState(null);
+  const [aiStackStatusError, setAiStackStatusError] = useState(null);
   // External Reasoning Fallback (see home-external.jsx + the plan at
   // ~/.claude/plans/keen-doodling-parasol.md): modal visibility for
   // `/external set-key`, and an AbortController ref shared across the
@@ -2926,13 +3283,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   // Master plan Phase 2: live network metrics (Unifi via HA WS).
   // Currently surfaces UDM Cloud Gateway + 2 USW Flex switches + count
   // of Unifi-attached device trackers in `home` state.
-  const [networkMetrics, setNetworkMetrics] = useState({
-    udm: null,           // {cpu, mem, uptime, state}
-    switches: [],        // [{name, cpu, mem, state, uptime}]
-    clientsOnline: 0,
-    clientsKnown: 0,
-  });
+  const [networkMetrics, setNetworkMetrics] = useState(emptyNetworkMetrics);
   // Vision-sidecar phash health.
+  const [visionSidecarOnline, setVisionSidecarOnline] = useState(null);
   const [visionHealth, setVisionHealth] = useState(null);
   // Tray v2: HAOS host system metrics from HA's System Monitor integration.
   // Populated by a state_changed subscription that filters across the
@@ -2976,12 +3329,10 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     return () => window.removeEventListener("resize", onResize);
   }, []);
   const [availableModels, setAvailableModels] = useState(null);
-  const [metrics, setMetrics] = useState(DEFAULT_METRICS);
+  const [metrics, setMetrics] = useState(CLEARED_METRICS);
   // Tray v3: rolling 40-sample history per metric for inline sparklines.
   // Pushed inside the same /metrics polling effect that updates `metrics`.
-  const [metricsHistory, setMetricsHistory] = useState({
-    gpu: [], vram: [], cpu: [], ram: [], ttft: [], tps: [],
-  });
+  const [metricsHistory, setMetricsHistory] = useState(emptyMetricsHistory);
   const [conversationId, setConversationId] = useState(initialConvId);
   // Live Frigate-derived detection labels per camera, e.g.
   //   { kitchen: ["person"], driveway: ["car", "person"] }
@@ -3356,9 +3707,15 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   // The coordinator hook (called below) drives this; sim scenarios drive
   // it directly via the sim setters. ONE useState — render-stability.
   //   { phase, reason, room, person, away, sightingLevel, sinceTs }
-  const [proactive, setProactive] = useState(
-    window.PROACTIVE_IDLE_STATE || { phase: "idle", away: false, reason: null, room: null, person: null, sightingLevel: "none", sinceTs: 0 }
-  );
+  const proactiveIdleState = window.PROACTIVE_IDLE_STATE || {
+    phase: "idle", away: false, reason: null, room: null, person: null,
+    sightingLevel: "none", sinceTs: 0,
+  };
+  const [proactive, setProactive] = useState(() => (
+    typeof window.loadProactivePending === "function"
+      ? window.loadProactivePending(proactiveIdleState)
+      : proactiveIdleState
+  ));
 
   // Simulation Mode hook (see simulation.jsx). Reads URL params /
   // localStorage on boot; provides activate/deactivate/setScenario.
@@ -3366,21 +3723,48 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   const sim = window.useSimulation({
     setMetrics, setMetricsHistory,
     setBridgeHealth, setHostMetrics, setFrigateMetrics,
-    setNetworkMetrics, setVisionHealth,
+    setNetworkMetrics, setRoomContext, setVisionHealth, setVisionSidecarOnline,
     setTraceSummary, setLastTrace,
     setIdentity, setMedia, setCameraLabels, setSimCameraStates,
     setConnection, setSidecarOnline, setBridgeOnline,
+    setAiStackOnline, setAiStackState,
     setVoice: setVoiceInternal, setEvents,
     // proactive deltas merge (a timeline step may patch just `phase`)
     setProactive: (val) => setProactive((prev) => ({ ...prev, ...val })),
   });
+  useEffect(() => {
+    if (!sim.active) setSimulationControlsOpen(false);
+  }, [sim.active]);
+  useEffect(() => {
+    if (sim.active) return;
+    if (typeof window.saveProactivePending === "function") {
+      window.saveProactivePending(proactive);
+    }
+  }, [sim.active, proactive]);
+  useEffect(() => {
+    if (sim.active || connection === "online") return;
+    setCameraLabels({});
+    setNetworkMetrics(emptyNetworkMetrics());
+    setHostMetrics(null);
+    setFrigateMetrics(null);
+    setRoomContext(null);
+  }, [connection, sim.active]);
 
   const feedRef = useRef(null);
   const timers = useRef([]);
   const rootRef = useRef(null);
+  const peopleButtonRef = useRef(null);
   const streamingIds = useRef(new Set());
   const haClientRef = useRef(null);
   const activeRunRef = useRef(null); // { id, cancel }
+  const closePeopleOverlay = useCallback(() => {
+    setPeopleOpen(false);
+    const focusPeopleButton = () => {
+      try { peopleButtonRef.current?.focus?.(); } catch {}
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(focusPeopleButton);
+    else setTimeout(focusPeopleButton, 0);
+  }, []);
 
   /* ── First-run boot sequence ──────────────────────────────────────────
    * bootPhase: "logo" → "settling" → "ready". The animated BootSequence
@@ -3484,6 +3868,15 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     connection, haClientRef, simActive: sim.active,
     debugMode, media, frigateOnline, addEvent, setProactiveState: setProactive,
   });
+  const handleProactiveStatusAction = useCallback((action) => {
+    if (action === "acknowledge" && typeof proactiveCoord.acknowledgePending === "function") {
+      proactiveCoord.acknowledgePending();
+      return;
+    }
+    if (typeof proactiveCoord.dismissPending === "function") {
+      proactiveCoord.dismissPending();
+    }
+  }, [proactiveCoord]);
 
   const finishStream = useCallback((id, patch = {}) => {
     streamingIds.current.delete(id);
@@ -3660,7 +4053,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           addEvent({ kind: "system", text: `${data.length} models on the ai box — choose one`, tone: "ok" });
           return;
         }
-      } catch {
+      } catch (e) {
         // CORS or unreachable — non-fatal; HA's agent has its own model binding.
       }
     }
@@ -3707,7 +4100,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
 
     if (isActive) {
       // sim → ON: tear down real connections
-      try { haClientRef.current?.close?.(); } catch (e) { /* ignore */ }
+      try { haClientRef.current?.disconnect?.(); } catch (e) { /* ignore */ }
       try { s2sRunRef.current?.stop?.(); } catch (e) { /* ignore */ }
       // streamKey bump is handled by the camera frame remount via sim prop
     } else {
@@ -3743,8 +4136,18 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // when the sidecar is returning fresh samples. The bridge
         // /healthz poll already does this; the metrics poll must too.
         const r = await tauriFetch(`${base}/metrics`, { cache: "no-store" });
+        if (!r.ok) {
+          if (!cancelled) {
+            setSidecarOnline(false);
+            setMetrics(CLEARED_METRICS);
+            setMetricsHistory(emptyMetricsHistory());
+            if (typeof window !== "undefined") window.__hav_metricsLatest = null;
+          }
+          return;
+        }
         const m = await r.json();
         if (cancelled) return;
+        setSidecarOnline(true);
         // Phase 1 bugfix: NVML reports 103 GB total on the user's RTX 6000
         // Blackwell (96 GB spec) — includes ECC/fabric overhead the driver
         // doesn't expose as user-allocatable. Clamp to the spec-sheet value
@@ -3754,26 +4157,27 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // If NVML reports 96..104, treat as 96. Same idea for 192..200.
         const KNOWN_VRAM_SPECS = [96, 192];
         setMetrics((prev) => {
-          const reportedMax = m.vram_total_gb ?? prev.vramMax;
-          const specMax = KNOWN_VRAM_SPECS.find(
+          const hasMetric = (key) => Object.prototype.hasOwnProperty.call(m, key);
+          const reportedMax = hasMetric("vram_total_gb") ? m.vram_total_gb : prev.vramMax;
+          const specMax = typeof reportedMax === "number" ? KNOWN_VRAM_SPECS.find(
             (s) => reportedMax >= s && reportedMax <= s + 8
-          ) ?? reportedMax;
+          ) ?? reportedMax : reportedMax;
           return {
             ...prev,
-            model:   m.model    || prev.model,
-            ttft:    m.ttft_ms ?? prev.ttft,
-            tps:     m.tps     ?? prev.tps,
-            gpu:     m.gpu_util_pct  ?? prev.gpu,
-            vram:    m.vram_used_gb  ?? prev.vram,
+            model:   hasMetric("model") ? (m.model || null) : prev.model,
+            ttft:    hasMetric("ttft_ms") ? m.ttft_ms : prev.ttft,
+            tps:     hasMetric("tps") ? m.tps : prev.tps,
+            gpu:     hasMetric("gpu_util_pct") ? m.gpu_util_pct : prev.gpu,
+            vram:    hasMetric("vram_used_gb") ? m.vram_used_gb : prev.vram,
             vramMax: specMax,
-            cpu:     m.cpu_pct       ?? prev.cpu,
-            ram:     m.ram_used_gb   ?? prev.ram,
-            ramMax:  m.ram_total_gb  ?? prev.ramMax,
+            cpu:     hasMetric("cpu_pct") ? m.cpu_pct : prev.cpu,
+            ram:     hasMetric("ram_used_gb") ? m.ram_used_gb : prev.ram,
+            ramMax:  hasMetric("ram_total_gb") ? m.ram_total_gb : prev.ramMax,
             // F-19 (Addendum 27 P0): GPU temperature in °C from NVML via
             // the sidecar /metrics endpoint. null when sidecar hasn't
             // been patched OR NVML can't read temp (unsupported GPU).
             // Consumed by the rail's temp pill — render only when non-null.
-            tempC:   typeof m.gpu_temp_c === "number" ? m.gpu_temp_c : prev.tempC,
+            tempC:   hasMetric("gpu_temp_c") ? m.gpu_temp_c : prev.tempC,
           };
         });
         // Tray v3: push to rolling history rings (40 samples each).
@@ -3885,8 +4289,13 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         if (labSamples.length > 0) {
           setLabTick((t) => t + 1);
         }
-      } catch {
-        // sidecar down — keep last-known values
+      } catch (e) {
+        if (!cancelled) {
+          setSidecarOnline(false);
+          setMetrics(CLEARED_METRICS);
+          setMetricsHistory(emptyMetricsHistory());
+          if (typeof window !== "undefined") window.__hav_metricsLatest = null;
+        }
       }
     };
     tick();
@@ -4134,8 +4543,18 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       }
     };
 
+    const pipelineText = muteState?.muted
+      ? `just this once, ${text}`
+      : text;
+    if (muteState?.muted) {
+      addEvent({
+        kind: "system",
+        text: "muted · running typed command once; voice stays quiet",
+        tone: "info",
+      });
+    }
     const run = haClientRef.current.runPipeline({
-      text,
+      text: pipelineText,
       conversationId,
       onEvent,
     });
@@ -4154,7 +4573,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       setEvents((prev) => prev.filter((e) => e.id !== thinkingId));
       if (activeRunRef.current?.id === run.id) activeRunRef.current = null;
     }
-  }, [connection, conversationId, addEvent, metricsBase, endpoint]);
+  }, [connection, conversationId, addEvent, metricsBase, endpoint, muteState?.muted]);
 
   /* ── Stop / cancel an in-flight run ────────────────────────────────── */
   const stopStreaming = useCallback(() => {
@@ -4581,7 +5000,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // AR32-6: cadence dumps for timing-window bugs.
         // /lab-dump-watch 5 → dump every 5s for 60s (12 dumps).
         // /lab-dump-watch stop → cancel an active watch.
-        const sub = (parts[1] || "").trim().toLowerCase();
+        const sub = (arg || "").trim().toLowerCase();
         if (sub === "stop") {
           if (window.__hav_labDumpWatchId) {
             clearInterval(window.__hav_labDumpWatchId);
@@ -4839,7 +5258,10 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           addEvent({ kind: "system", text: "usage: /ask <text> — force external/general provider", tone: "info" });
           return true;
         }
-        if (!(window.openaiProvider && window.openaiProvider.isConfigured())) {
+        const configured = window.isExternalConfigured
+          ? window.isExternalConfigured()
+          : !!(window.openaiProvider && window.openaiProvider.isConfigured());
+        if (!configured) {
           addEvent({ kind: "system", text: "external reasoning is not configured — use /external set-key first", tone: "warn" });
           return true;
         }
@@ -4868,19 +5290,29 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         const [sub, ...subRest] = arg.split(/\s+/).filter(Boolean);
         const subArg = subRest.join(" ");
         if (!sub || sub === "status") {
-          const configured = !!(window.openaiProvider && window.openaiProvider.isConfigured());
+          const provider = window.getExternalProvider ? window.getExternalProvider() : window.openaiProvider;
+          const configured = window.isExternalConfigured
+            ? window.isExternalConfigured(provider)
+            : !!(provider && provider.isConfigured && provider.isConfigured());
           const enabled = (() => {
             try { return localStorage.getItem("hg-external-enabled") === "on"; }
             catch { return false; }
           })();
           const stats = window.__EXTERNAL_STATS || [];
+          const text = window.formatExternalStatus
+            ? window.formatExternalStatus({ provider, configured, enabled, stats })
+            : [
+                `external Â· provider: ${provider?.name || "(none)"}`,
+                `  configured: ${configured ? "yes" : "no"} Â· auto-routing: ${enabled ? "on" : "off"}`,
+                `  calls tracked: ${stats.length}`,
+              ].join("\n");
           const recent = stats.slice(-1)[0];
           const lines = [
             `external · provider: ${window.openaiProvider?.name || "(none)"}`,
             `  configured: ${configured ? "yes" : "no"} · auto-routing: ${enabled ? "on" : "off"}`,
             `  calls tracked: ${stats.length}` + (recent ? ` · last: ${recent.ok ? "ok" : recent.error || "fail"} (${recent.latencyMs || "?"}ms)` : ""),
           ];
-          addEvent({ kind: "system", text: lines.join("\n"), tone: configured ? "ok" : "warn" });
+          addEvent({ kind: "system", text, tone: configured ? "ok" : "warn" });
           return true;
         }
         if (sub === "on") {
@@ -5190,6 +5622,14 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           { group: "history + recap", tools: [
             ["get_history", "HA Recorder — state history for entities over a time window"],
             ["recap", "composition tool — bundles find_clips + recorder + identity for 'what happened today'"],
+          ] },
+          { group: "living lights", tools: [
+            ["set_presence_override", "pin occupancy-managed lights to the user's requested brightness/color for a duration"],
+            ["clear_presence_override", "clear an active Living Lights override and return to occupancy automation"],
+            ["get_recent_overrides", "summarize recent manual/automation lighting adjustments for a zone"],
+          ] },
+          { group: "gesture training", tools: [
+            ["start_gesture_training_capture", "start a guided gesture-training capture in kitchen, dining room, or living room"],
           ] },
           { group: "advanced", tools: [
             ["load_skill", "load a custom skill on demand"],
@@ -5779,7 +6219,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         try { return localStorage.getItem("hg-external-enabled") === "on"; }
         catch { return false; }
       })();
-      const configured = !!(window.openaiProvider && window.openaiProvider.isConfigured());
+      const configured = window.isExternalConfigured
+        ? window.isExternalConfigured()
+        : !!(window.openaiProvider && window.openaiProvider.isConfigured());
       if (intent === "external" && enabled && configured) route = "external";
     } catch {}
     if (route === "external") {
@@ -6563,11 +7005,17 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           if (!cancelled) {
             setBridgeOnline(r2.ok);
             if (r2.ok) {
-              try { setBridgeHealth(await r2.json()); } catch {}
+              try { setBridgeHealth(await r2.json()); }
+              catch { setBridgeHealth(null); }
+            } else {
+              setBridgeHealth(null);
             }
           }
         } catch (e) {
-          if (!cancelled) setBridgeOnline(false);
+          if (!cancelled) {
+            setBridgeOnline(false);
+            setBridgeHealth(null);
+          }
           console.warn("[health] bridge poll failed:", e?.message || e);
         }
       }
@@ -6580,7 +7028,13 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       if (supervisorUrl) {
         try {
           const rh = await tauriFetch(`${supervisorUrl}/healthz`, { cache: "no-store" });
-          if (!cancelled) setAiStackOnline(rh.ok);
+          if (!cancelled) {
+            setAiStackOnline(rh.ok);
+            if (!rh.ok) {
+              setAiStackStatusError(null);
+              setAiStackState(null);
+            }
+          }
           if (rh.ok && stackToken) {
             try {
               const rs = await tauriFetch(`${supervisorUrl}/api/stack/status`, {
@@ -6588,24 +7042,55 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
                 headers: { Authorization: `Bearer ${stackToken}` },
               });
               if (rs.ok) {
-                try { if (!cancelled) setAiStackState(await rs.json()); } catch {}
+                try {
+                  const body = await rs.json();
+                  if (!cancelled) {
+                    setAiStackStatusError(null);
+                    setAiStackState(body);
+                  }
+                } catch (e) {
+                  if (!cancelled) {
+                    setAiStackStatusError("bad_json");
+                    setAiStackState(null);
+                  }
+                  console.warn("[health] supervisor status JSON failed:", e?.message || e);
+                }
               } else if (rs.status === 401) {
-                // bad token — leave aiStackState null so the card renders
-                // the "not configured" path; also clear to avoid showing
-                // stale state from a previous good token.
-                if (!cancelled) setAiStackState(null);
+                // Reachable supervisor, rejected token. Keep this distinct
+                // from offline so recovery UI can point at /stack-token.
+                if (!cancelled) {
+                  setAiStackStatusError("auth");
+                  setAiStackState(null);
+                }
                 console.warn("[health] supervisor 401 — STACK_TOKEN bad?");
               } else if (rs.status === 429) {
                 // rate-limited — back off; next 15s tick will retry.
+                if (!cancelled) {
+                  setAiStackStatusError("rate_limited");
+                  setAiStackState(null);
+                }
                 console.warn("[health] supervisor 429 — auth rate-limited");
+              } else {
+                if (!cancelled) {
+                  setAiStackStatusError(`http_${rs.status || "unknown"}`);
+                  setAiStackState(null);
+                }
               }
             } catch (e) {
+              if (!cancelled) {
+                setAiStackStatusError("fetch_failed");
+                setAiStackState(null);
+              }
               console.warn("[health] supervisor status fetch failed:", e?.message || e);
             }
+          } else if (rh.ok && !stackToken && !cancelled) {
+            setAiStackStatusError(null);
+            setAiStackState(null);
           }
         } catch (e) {
           if (!cancelled) {
             setAiStackOnline(false);
+            setAiStackStatusError(null);
             setAiStackState(null);
           }
           // Quiet — supervisor down is a normal degraded state, not a bug.
@@ -6937,40 +7422,15 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     const client = haClientRef.current;
     const cameraIds = (window.HG_CAMERAS || []).map((c) => c.id);
     if (cameraIds.length === 0) return undefined;
-    const re = new RegExp(`^binary_sensor\\.(${cameraIds.join("|")})_([a-z0-9_]+)_occupancy$`);
 
     let cancelled = false;
     client.call({ type: "get_states" }).then((states) => {
       if (cancelled) return;
-      const next = {};
-      for (const s of states) {
-        const m = s.entity_id.match(re);
-        if (!m) continue;
-        const [, cam, label] = m;
-        if (label === "all") continue;          // aggregate sensor, skip
-        if (s.state !== "on") continue;
-        (next[cam] ||= new Set()).add(label.replace(/_/g, " "));
-      }
-      setCameraLabels(Object.fromEntries(
-        Object.entries(next).map(([k, v]) => [k, [...v].sort()])
-      ));
+      setCameraLabels(cameraLabelsFromStates(cameraIds, states));
     }).catch(() => {});
 
     const unsub = client.subscribeEvents("state_changed", (ev) => {
-      const d = ev?.data;
-      if (!d?.entity_id) return;
-      const m = d.entity_id.match(re);
-      if (!m) return;
-      const [, cam, label] = m;
-      if (label === "all") return;
-      const nice = label.replace(/_/g, " ");
-      const isOn = d.new_state?.state === "on";
-      setCameraLabels((prev) => {
-        const cur = new Set(prev[cam] || []);
-        if (isOn) cur.add(nice);
-        else      cur.delete(nice);
-        return { ...prev, [cam]: [...cur].sort() };
-      });
+      setCameraLabels((prev) => updateCameraLabelsFromEvent(cameraIds, prev, ev));
     });
 
     return () => { cancelled = true; try { unsub(); } catch {} };
@@ -7051,6 +7511,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           clientsKnown,
         });
       } catch (e) {
+        if (!cancelled) setNetworkMetrics(emptyNetworkMetrics());
         console.warn("[network] initial state load failed:", e?.message || e);
       }
     };
@@ -7072,6 +7533,11 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       // For UDM / switch metric updates, patch in place
       const val = parseFloat(newState);
       if (isUdm(eid) || isSwitch(eid)) {
+        const numericMetric = eid.endsWith("_cpu_utilization") || eid.endsWith("_memory_utilization");
+        if (numericMetric && !isFinite(val)) {
+          rebuildFromStates();
+          return;
+        }
         setNetworkMetrics((prev) => {
           if (isUdm(eid)) {
             const udm = { ...(prev.udm || {}) };
@@ -7094,12 +7560,15 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           // If this is a new switch we haven't seen, append
           if (!switches.some((sw) => sw.name === name)) {
             switches.push({ name,
-              cpu: eid.endsWith("_cpu_utilization") ? val : null,
-              mem: eid.endsWith("_memory_utilization") ? val : null,
+              cpu: eid.endsWith("_cpu_utilization") && isFinite(val) ? val : null,
+              mem: eid.endsWith("_memory_utilization") && isFinite(val) ? val : null,
               state: eid.endsWith("_state") ? newState : null,
             });
           }
-          return { ...prev, switches };
+          return {
+            ...prev,
+            switches: switches.filter((sw) => sw.cpu != null || sw.mem != null || sw.state),
+          };
         });
       }
     });
@@ -7177,6 +7646,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         const any = (cpu != null) || (ram != null) || (ramGb != null) || (disk != null) || (diskGb != null) || uptime;
         setHostMetrics(any ? { cpu, ram, ramGb, disk, diskGb, uptime } : null);
       } catch (e) {
+        if (!cancelled) setHostMetrics(null);
         console.warn("[host] state load failed:", e?.message || e);
       }
     };
@@ -7193,17 +7663,19 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       const val = parseFloat(newState);
       setHostMetrics((prev) => {
         const cur = prev || { cpu: null, ram: null, ramGb: null, disk: null, diskGb: null, uptime: null };
-        if (cpuRe.test(eid)) cur.cpu = isFinite(val) ? val : cur.cpu;
+        if (cpuRe.test(eid)) cur.cpu = isFinite(val) ? val : null;
         else if (ramRe.test(eid)) {
-          if (isPercentRam(eid)) cur.ram = isFinite(val) ? val : cur.ram;
-          else cur.ramGb = isFinite(val) ? val / 1024 : cur.ramGb;
+          if (isPercentRam(eid)) cur.ram = isFinite(val) ? val : null;
+          else cur.ramGb = isFinite(val) ? val / 1024 : null;
         }
         else if (diskRe.test(eid)) {
-          if (isPercentDisk(eid)) cur.disk = isFinite(val) ? val : cur.disk;
-          else cur.diskGb = isFinite(val) ? val / 1024 : cur.diskGb;
+          if (isPercentDisk(eid)) cur.disk = isFinite(val) ? val : null;
+          else cur.diskGb = isFinite(val) ? val / 1024 : null;
         }
         else if (bootRe.test(eid)) cur.uptime = fmtUptime(newState);
-        return { ...cur };
+        const any = (cur.cpu != null) || (cur.ram != null) || (cur.ramGb != null)
+          || (cur.disk != null) || (cur.diskGb != null) || cur.uptime;
+        return any ? { ...cur } : null;
       });
     });
 
@@ -7278,6 +7750,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         );
         setFrigateMetrics(hasData ? acc : null);
       } catch (e) {
+        if (!cancelled) setFrigateMetrics(null);
         console.warn("[frigate] state load failed:", e?.message || e);
       }
     };
@@ -7288,7 +7761,10 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       const eid = d?.entity_id;
       if (!eid || !eid.startsWith("sensor.frigate_")) return;
       const newState = d.new_state?.state;
-      if (newState === "unknown" || newState === "unavailable") return;
+      if (newState === "unknown" || newState === "unavailable") {
+        rebuild();
+        return;
+      }
       if (!(statsRe.test(eid) || cpuRe.test(eid) || coralRe.test(eid) || fpsRe.test(eid))) return;
       setFrigateMetrics((prev) => apply(prev || { totalCpu: null, coralMs: null, uptime: null, fps: {} }, eid, newState));
     });
@@ -7311,10 +7787,15 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     const tick = async () => {
       try {
         const r = await tauriFetch(`${bridgeUrl}/rooms`, { cache: "no-store" });
-        if (cancelled || !r.ok) return;
-        setRoomContext(await r.json());
+        if (cancelled) return;
+        if (!r.ok) {
+          setRoomContext(null);
+          return;
+        }
+        try { setRoomContext(await r.json()); }
+        catch { setRoomContext(null); }
       } catch (e) {
-        // Bridge may be restarting — keep last-known
+        if (!cancelled) setRoomContext(null);
       }
     };
     tick();
@@ -7338,8 +7819,20 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       if (!visionUrl) return;
       try {
         const r = await tauriFetch(`${visionUrl}/healthz`, { cache: "no-store" });
-        if (!cancelled && r.ok) setVisionHealth(await r.json());
+        if (!cancelled) {
+          setVisionSidecarOnline(r.ok);
+          if (r.ok) {
+            try { setVisionHealth(await r.json()); }
+            catch { setVisionHealth(null); }
+          } else {
+            setVisionHealth(null);
+          }
+        }
       } catch (e) {
+        if (!cancelled) {
+          setVisionSidecarOnline(false);
+          setVisionHealth(null);
+        }
         console.warn("[vision] healthz poll failed:", e?.message || e);
       }
     };
@@ -7365,6 +7858,11 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         connection={connection}
         sidecarOnline={sidecarOnline}
         bridgeOnline={bridgeOnline}
+        bridgeHealth={bridgeHealth}
+        visionSidecarOnline={visionSidecarOnline}
+        visionHealth={visionHealth}
+        frigateMetrics={frigateMetrics}
+        cameraLabels={cameraLabels}
         sim={sim}
         muteState={muteState}
         onUnmuteClick={handleUnmuteClick}
@@ -7377,8 +7875,15 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           setApartmentOpen(false);
           setVideoLabelerOpen(true);
         }}
+        onOpenSimulationControls={() => setSimulationControlsOpen(true)}
+        peopleButtonRef={peopleButtonRef}
         aiStackState={aiStackState}
         metrics={metrics}
+      />
+      <SimulationControlsDialog
+        open={simulationControlsOpen}
+        sim={sim}
+        onClose={() => setSimulationControlsOpen(false)}
       />
       {/* Addendum 14 / Slice 3 — people overlay. Opens from the header
           button; closes via Escape or its own close button. NOT inside
@@ -7386,9 +7891,11 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       {window.HomePeopleOverlay && (
         <window.HomePeopleOverlay
           open={peopleOpen}
-          onClose={() => setPeopleOpen(false)}
+          onClose={closePeopleOverlay}
           endpoint={endpoint}
           token={token}
+          client={haClientRef.current}
+          connection={connection}
           sim={sim}
         />
       )}
@@ -7428,6 +7935,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           open={lightsOpen}
           onClose={() => setLightsOpen(false)}
           client={haClientRef.current}
+          connection={connection}
           sim={sim}
           askExternal={(payload) => {
             // Pre-fill the chat input with a structured `/ask`-prefixed
@@ -7603,6 +8111,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         metricsBase={metricsBase || metricsBaseFromEndpoint(endpoint)}
         bridgeHealth={bridgeHealth}
         networkMetrics={networkMetrics}
+        visionSidecarOnline={visionSidecarOnline}
         visionHealth={visionHealth}
         hostMetrics={hostMetrics}
         frigateMetrics={frigateMetrics}
@@ -7611,6 +8120,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         bridgeOnline={bridgeOnline}
         aiStackOnline={aiStackOnline}
         aiStackState={aiStackState}
+        aiStackStatusError={aiStackStatusError}
         roomContext={roomContext}
         voice={voice}
         identity={identity}
@@ -7624,6 +8134,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         onTracesFetched={handleTracesFetched}
         onRoutingLogFetched={handleRoutingLogFetched}
         proactive={proactive}
+        onProactiveAction={handleProactiveStatusAction}
         simActive={sim.active}
         labTurnsRef={labTurnsRef}
         labSamplesRef={labSamplesRef}

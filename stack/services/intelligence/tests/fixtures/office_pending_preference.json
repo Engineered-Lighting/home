@@ -1,0 +1,59 @@
+{
+  "capture_provenance": {
+    "capture_trigger": "vacancy_settle",
+    "trigger_entity_id": "binary_sensor.office_person_occupancy",
+    "trigger_for_s": 5,
+    "trigger_from": "on",
+    "trigger_to": "off"
+  },
+  "captured_state": {
+    "brightness_pct": 30,
+    "color_temp_kelvin": 4000
+  },
+  "capture_suppressed_count": 0,
+  "context": {
+    "any_occupied": true,
+    "asleep": false,
+    "dwell_s": 5,
+    "night_safe": false,
+    "profile": "midday",
+    "shadow_mode": false,
+    "source": "capture_on_vacant",
+    "state": "present",
+    "tv_playing": false,
+    "user_at_home": true
+  },
+  "dedupe_key": "office|midday|present|F|F|F|T",
+  "dedupe_window_s": 600,
+  "evidence_id": "pp-1779823314-087834",
+  "kind": "pending_preference",
+  "light_entity": "light.office",
+  "occupancy": {
+    "age_s": 5,
+    "entity_id": "binary_sensor.office_person_occupancy",
+    "flicker_count_5min": 1,
+    "last_changed": "2026-05-26T19:21:49.068177+00:00",
+    "state": "off"
+  },
+  "owning_zones": ["office"],
+  "prediction_consistency": {
+    "prediction_mismatch_pct": 0,
+    "primary_prediction_pct": 80,
+    "would_have_done_brightness_pct": 80
+  },
+  "predictions_by_zone": {
+    "office": {
+      "predicted_pct": 80,
+      "ramp_initial_pct": 46,
+      "state": "present"
+    }
+  },
+  "primary_zone": "office",
+  "related_override_context_id": "ovr-1779822169-431424",
+  "ts": "2026-05-26T12:21:54.087834-07:00",
+  "what_automation_would_have_done": {
+    "brightness_pct": 80,
+    "color_temp_kelvin": 2700
+  },
+  "zone": "office"
+}

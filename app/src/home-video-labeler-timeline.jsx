@@ -34,6 +34,11 @@
  * has suggestions, so M0/M1 visuals are untouched otherwise. The `selection`
  * prop now optionally carries kind: 'canonical' | 'suggestion'.
  *
+ * M4: suggestions decorated with `_outlier` (VLEditor matches their window
+ * geometry against /window-signals cluster outliers) carry a hollow
+ * var(--hg-crit) dot beside the disagreement diamond — the badge the M3
+ * spec reserved for cluster-outlier triage.
+ *
  * Multi-person (person_slot): when a lane holds segments in >1 slot
  * ((seg.person_slot||null); activity/posture only in practice), the lane's
  * block area divides into stacked sub-rows — primary (you) on top, then
@@ -624,6 +629,7 @@ function VLTimeline({
                   const conf = typeof sg.confidence === "number"
                     ? Math.max(0, Math.min(1, sg.confidence)) : null;
                   const disagree = D && D.suggestionDisagreement(sg) != null;
+                  const outlier = sg._outlier === true; // M4: cluster-outlier window
                   const w = Math.max(3, (sg.end_s - sg.start_s) * pps);
                   const hatch = "color-mix(in srgb, " + color + " 26%, transparent)";
                   return (
@@ -639,6 +645,7 @@ function VLTimeline({
                         + (conf != null ? " · conf " + Math.round(conf * 100) + "%" : "")
                         + (sg.source ? " · " + sg.source : "")
                         + (disagree ? " · disagreement!" : "")
+                        + (outlier ? " · cluster outlier" : "")
                         + " · " + sg.start_s.toFixed(2) + "–" + sg.end_s.toFixed(2) + "s"}
                       style={{
                         position: "absolute",
@@ -658,7 +665,8 @@ function VLTimeline({
                       }}
                     >
                       <span style={{
-                        position: "absolute", left: 3, right: disagree ? 12 : 3, top: 1,
+                        position: "absolute", left: 3, top: 1,
+                        right: (disagree && outlier) ? 23 : (disagree || outlier) ? 12 : 3,
                         whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
                         color: "var(--hg-fg-0)", opacity: 0.55,
                         letterSpacing: "0.05em", pointerEvents: "none",
@@ -684,6 +692,16 @@ function VLTimeline({
                             color: "#000", fontWeight: 700,
                           }}>!</span>
                         </span>
+                      )}
+                      {/* M4 — hollow dot: this suggestion's analysis window is
+                          a cluster outlier (sits beside the diamond) */}
+                      {outlier && (
+                        <span style={{
+                          position: "absolute", right: disagree ? 14 : 3, top: 3,
+                          width: 7, height: 7, boxSizing: "border-box",
+                          border: "1.5px solid var(--hg-crit)", borderRadius: "50%",
+                          background: "transparent", pointerEvents: "none",
+                        }} />
                       )}
                     </div>
                   );

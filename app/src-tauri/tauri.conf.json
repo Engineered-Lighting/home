@@ -11,8 +11,8 @@
       {
         "title": "Home",
         "label": "main",
-        "width": 420,
-        "height": 720,
+        "width": 820,
+        "height": 900,
         "minWidth": 360,
         "minHeight": 480,
         "resizable": true,

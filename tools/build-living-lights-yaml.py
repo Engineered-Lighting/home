@@ -126,8 +126,40 @@ PASS_PCT = 55              # `pass_through` quick path light
 # Asleep modifier.
 ASLEEP_IDLE_MINUTES = 15   # house quiet this long, overnight -> asleep
 ASLEEP_WAKE_MINUTES = 10   # sustained occupancy this long -> awake
+ASLEEP_REARM_MINUTES = 45  # after asleep is cleared, don't immediately re-latch
 ASLEEP_CAP_PCT = 30        # occupied-zone ceiling while asleep: navigable,
                            # not a 3 a.m. blast (vacant zones still go dark)
+STABLE_OCCUPANCY_HOLD_SECONDS = 90
+
+# Extra quiet blockers for the overnight asleep latch. The canonical latch
+# signal is still Living Lights Any Occupied, but these raw Frigate room-level
+# signals catch the case where the zone/person classifier flickers during a
+# walk path while the camera is clearly still seeing motion or a person.
+ASLEEP_QUIET_BLOCKERS = [
+    "binary_sensor.living_room_motion",
+    "binary_sensor.kitchen_motion",
+    "binary_sensor.dining_room_motion",
+    "binary_sensor.workshop_motion",
+    "binary_sensor.living_room_person_occupancy",
+    "binary_sensor.kitchen_person_occupancy",
+    "binary_sensor.dining_room_person_occupancy",
+    "binary_sensor.workshop_person_occupancy",
+    "binary_sensor.whole_living_room_person_occupancy",
+    "binary_sensor.whole_kitchen_person_occupancy",
+    "binary_sensor.whole_dining_room_person_occupancy",
+    "binary_sensor.workshop_zone_person_occupancy",
+]
+
+# Frigate sometimes keeps the camera-level person sensor alive while the
+# tighter kitchen zone polygons flicker or briefly miss a stationary person.
+# Use that person-only camera signal as a kitchen fallback. Avoid
+# kitchen_all_occupancy here: it includes objects such as cups/bottles.
+KITCHEN_PERSON_FALLBACK_ZONES = {
+    "sink",
+    "island_left",
+    "island_right",
+    "whole_kitchen",
+}
 
 # V-JEPA 2 activity layer — reserved seam (the plan's forward-compatible
 # section). Each activity maps to a ramp target (pct, pre-ToD-scale) that the
@@ -200,7 +232,10 @@ def emit_input_boolean() -> str:
              '  living_lights_gaming_enabled:',
              '    name: "Living Lights — gaming mode (Steam-driven)"',
              "    icon: mdi:gamepad-variant",
-             "    initial: false",
+             # NO `initial:` emitted — HA restores the last state across
+             # restarts so the user's gaming-mode choice persists. A forced
+             # `initial: false` silently disabled gaming mode on every HA
+             # restart/update (2026-05-30 regression).
              # Working-hours modifier — master toggle (default ON so the
              # behavior is live for the user's typical work week without
              # extra setup; flip OFF for vacation days / holidays).
@@ -902,13 +937,20 @@ def emit_template() -> str:
 
     # ─────────────────────────────────────────────────────────────────
     # STABLE OCCUPANCY binary_sensors per zone — absorbs Frigate flapping.
-    # ON when raw occupancy is ON OR was ON within the last 20 seconds.
-    # The classifier uses this for dwell instead of the raw sensor so
+    # ON when raw occupancy is ON OR was ON within the hold window.
+    # Kitchen zones also fall back to camera-level person occupancy because
+    # live traces showed tight polygons dropping while the camera still had a
+    # person track. The classifier uses this for dwell instead of the raw sensor so
     # rapid Frigate off-on cycles don't reset dwell.
     # ─────────────────────────────────────────────────────────────────
     stable_trigger_entities = []
     for slug in ZONES:
         stable_trigger_entities.append(_slug_to_entity_id(slug))
+    for slug in KITCHEN_PERSON_FALLBACK_ZONES:
+        if slug in ZONES:
+            fallback_entity = f"binary_sensor.{ZONES[slug]['camera']}_person_occupancy"
+            if fallback_entity not in stable_trigger_entities:
+                stable_trigger_entities.append(fallback_entity)
     stable_block_triggers = """  - trigger:
       - platform: homeassistant
         event: start
@@ -923,15 +965,21 @@ def emit_template() -> str:
         occ_entity = _slug_to_entity_id(slug)
         cam_title = cam.replace('_', ' ').title()
         slug_title = slug.replace('_', ' ').title()
+        fallback_line = ""
+        fallback_checks = ""
+        if slug in KITCHEN_PERSON_FALLBACK_ZONES and cam == "kitchen":
+            fallback_line = "\n          {% set fallback = states.binary_sensor.kitchen_person_occupancy %}"
+            fallback_checks = f"""
+          {{% elif fallback is not none and fallback.state == 'on' %}}on
+          {{% elif fallback is not none and (now() - fallback.last_changed).total_seconds() < {STABLE_OCCUPANCY_HOLD_SECONDS} %}}on"""
         stable_sensors_text.append(f"""      - name: "{cam_title} {slug_title} Person Occupancy Stable"
         unique_id: {cam}_{slug}_person_occupancy_stable
         device_class: occupancy
         icon: mdi:account-check
         state: >
-          {{% set occ = states.{occ_entity} %}}
-          {{% if occ is none %}}off
-          {{% elif occ.state == 'on' %}}on
-          {{% elif (now() - occ.last_changed).total_seconds() < 20 %}}on
+          {{% set occ = states.{occ_entity} %}}{fallback_line}
+          {{% if occ is not none and occ.state == 'on' %}}on{fallback_checks}
+          {{% elif occ is not none and (now() - occ.last_changed).total_seconds() < {STABLE_OCCUPANCY_HOLD_SECONDS} %}}on
           {{% else %}}off{{% endif %}}""")
     parts.append(stable_block_triggers + "\n" + "\n\n".join(stable_sensors_text))
 
@@ -1146,6 +1194,19 @@ def emit_automations() -> str:
     startup state-load (trigger templates initialize on `homeassistant`
     event during boot).
     """
+    asleep_quiet_trigger_lines: list[str] = []
+    for entity_id in ASLEEP_QUIET_BLOCKERS:
+        asleep_quiet_trigger_lines += [
+            "      - trigger: state",
+            f"        entity_id: {entity_id}",
+            '        to: "off"',
+            "        for:",
+            f"          minutes: {ASLEEP_IDLE_MINUTES}",
+        ]
+    asleep_quiet_blockers_jinja = "\n".join(
+        f"              '{entity_id}'," for entity_id in ASLEEP_QUIET_BLOCKERS
+    )
+
     lines = ["automation:"]
     # ── Asleep ON: house quiet ASLEEP_IDLE_MINUTES, overnight, user home ──
     lines += [
@@ -1158,6 +1219,9 @@ def emit_automations() -> str:
         '        to: "off"',
         "        for:",
         f"          minutes: {ASLEEP_IDLE_MINUTES}",
+        *asleep_quiet_trigger_lines,
+        "      - trigger: time_pattern",
+        '        minutes: "/5"',
         "    conditions:",
         "      - condition: state",
         "        entity_id: input_boolean.living_lights_enabled",
@@ -1171,6 +1235,25 @@ def emit_automations() -> str:
         "      - condition: state",
         "        entity_id: input_boolean.living_lights_asleep",
         '        state: "off"',
+        "      - condition: state",
+        "        entity_id: binary_sensor.living_lights_any_occupied",
+        '        state: "off"',
+        "      - condition: template",
+        "        value_template: >-",
+        "          {% set blockers = [",
+        asleep_quiet_blockers_jinja,
+        "          ] %}",
+        "          {% set ns = namespace(active=false) %}",
+        "          {% for entity_id in blockers %}",
+        "            {% if is_state(entity_id, 'on') %}",
+        "              {% set ns.active = true %}",
+        "            {% endif %}",
+        "          {% endfor %}",
+        "          {{ not ns.active }}",
+        "      - condition: template",
+        "        value_template: >-",
+        "          {{ (now() - states.input_boolean.living_lights_asleep.last_changed).total_seconds() > "
+        + str(ASLEEP_REARM_MINUTES * 60) + " }}",
         "    actions:",
         "      - action: input_boolean.turn_on",
         "        target:",
@@ -1482,6 +1565,69 @@ def emit_automations() -> str:
         "          color_temp_kelvin: >",
         "            {{ state_attr('sensor.living_room_office_lighting_state', 'predicted_color_temp_kelvin') | int(2700) }}",
         "          transition: 3",
+        # ── Session-boundary cooldown wipe on user_at_home transitions ──
+        # Treats leaving and returning as natural reset points for the
+        # per-zone manual-override cooldowns. Solves the specific failure
+        # mode where mid-ramp manual-detection mis-flags a system-driven
+        # brightness change as a "manual touch" and engages a 15-min
+        # cooldown that survives across the away cycle — then blocks the
+        # pilot from restoring lights on return ("came home to 6 of 8
+        # lights on" symptom). Wipes on BOTH directions so:
+        #   - on→off (leaving): away cascade starts clean, no stuck state
+        #     when you return.
+        #   - off→on (returning): even if step 1 missed (e.g., HA
+        #     restarted while you were out), arrival forces a clean slate.
+        # Doesn't fix mid-day false positives (a user touch + slider drag
+        # in the same 15-min window can still mis-flag). For that, the
+        # systemic fix is to make manual-detection context-aware about
+        # which `light.turn_on` calls are Living-Lights-driven vs.
+        # external (Hue app, wall switch) — separate work.
+        '  - alias: "Living Lights — cooldown wipe on user_at_home transition"',
+        "    id: living_lights_cooldown_wipe_on_user_at_home",
+        # `mode: restart` so if user_at_home rapidly toggles off→on→off
+        # (e.g., HomeKit jitter), the in-flight follow-up wipe restarts
+        # rather than queueing. Max single-fire run is ~35 s.
+        "    mode: restart",
+        "    triggers:",
+        "      - trigger: state",
+        "        entity_id: input_boolean.user_at_home",
+        '        to: "off"',
+        "      - trigger: state",
+        "        entity_id: input_boolean.user_at_home",
+        '        to: "on"',
+        "    actions:",
+        # Pass 1 — wipe immediately on the transition.
+        "      - action: input_datetime.set_datetime",
+        "        target:",
+        "          entity_id:",
+    ]
+    for slug in ZONES:
+        lines.append(
+            f"            - input_datetime.living_lights_zone_{slug}_last_manual_at"
+        )
+    lines += [
+        "        data:",
+        '          datetime: "1970-01-01 00:00:00"',
+        # Wait long enough for the away/return cascade to fully settle.
+        # Pilot transitions are 2-6 s; manual-detection samples at +3 s
+        # post-brightness-change. 35 s comfortably covers the longest
+        # cascading ramp + any chained per-zone effects.
+        '      - delay: "00:00:35"',
+        # Pass 2 — re-wipe to clear any cooldowns the cascade itself
+        # mid-ramp-sampled into existence during the 35-s settle window.
+        # This is the actual fix for the "sofa cooldown re-engages 5 s
+        # after the wipe" failure mode caught in the round-1 test.
+        "      - action: input_datetime.set_datetime",
+        "        target:",
+        "          entity_id:",
+    ]
+    for slug in ZONES:
+        lines.append(
+            f"            - input_datetime.living_lights_zone_{slug}_last_manual_at"
+        )
+    lines += [
+        "        data:",
+        '          datetime: "1970-01-01 00:00:00"',
     ]
     return "\n".join(lines) + "\n"
 

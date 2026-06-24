@@ -860,7 +860,7 @@ class LightingEvidenceStatusView(CORSHomeAssistantView):
 
 class LightingEvidenceExportView(CORSHomeAssistantView):
     """GET /api/extended_openai_conversation/lighting_evidence/export
-              ?source=preferences|decisions&offset=<byte>&max_bytes=<n>
+              ?source=preferences|decisions|activity&offset=<byte>&max_bytes=<n>
 
     Bounded raw JSONL export for Intelligence cursor pull. Returns only
     complete lines and never mutates the evidence files.

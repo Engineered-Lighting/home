@@ -42,6 +42,11 @@ function Surface({ children, tone = "default", pad = 14, style = {}, onClick }) 
         padding: pad,
         cursor: isInteractive ? "pointer" : "default",
         transition: "border-color 220ms, background 220ms",
+        // v6.2: fill grid cells so sibling cards align to the same
+        // height (e.g. HAOS HOST stretching to match FRIGATE).
+        display: "flex",
+        flexDirection: "column",
+        height: "100%",
         ...(isInteractive && {
           ":hover": { borderColor: "var(--hg-border)" },
         }),
@@ -123,7 +128,7 @@ function Card({ title, badge, meta, children, pad = 14 }) {
           )}
         </div>
       )}
-      <div>{children}</div>
+      <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>{children}</div>
       {meta && (
         <div style={{
           fontFamily: HM_FONT_MONO,
@@ -211,8 +216,21 @@ function _hasVariance(history, max = 100) {
   const lo = Math.min(...nums);
   const hi = Math.max(...nums);
   const range = hi - lo;
+  const scale = Number.isFinite(max) && max > 0 ? max : 100;
   // Variance >2% of max OR >2 absolute units (for ttft where max is huge)
-  return range > Math.max(2, max * 0.02);
+  return range > Math.max(2, scale * 0.02);
+}
+
+function _pipelineStageModel(stages = [], totalMs = 0) {
+  const safeStages = (Array.isArray(stages) ? stages : [])
+    .filter((s) => s && Number.isFinite(s.dur))
+    .map((s) => ({ ...s, dur: Math.max(0, s.dur) }));
+  const sumMs = safeStages.reduce((acc, s) => acc + s.dur, 0);
+  const finiteTotalMs = Number.isFinite(totalMs) && totalMs > 0 ? totalMs : 0;
+  const displayTotalMs = finiteTotalMs > 0 ? finiteTotalMs : sumMs;
+  const barTotalMs = Math.max(displayTotalMs, sumMs, 1);
+  const slowest = safeStages.reduce((acc, s) => (s.dur > acc.dur ? s : acc), safeStages[0] || null);
+  return { safeStages, displayTotalMs, barTotalMs, slowest };
 }
 
 /* ── MetricCard v2 ─────────────────────────────────────────────────────
@@ -370,6 +388,203 @@ function TimelineStrip({ stages = [], totalMs = 1 }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/* ── PipelineBar ───────────────────────────────────────────────────────
+ *
+ * Tray v5: a more substantial voice-turn breakdown.
+ * Renders:
+ *   - hero total ms ("1842 ms")
+ *   - 14px stacked proportional bar (STT / LLM / Synth / Audio)
+ *   - legend underneath with each stage's ms
+ *   - slowest stage highlighted in ice-bright; others rendered as a muted track
+ *   - one-line "slowest: <stage> · <ms> ms" callout
+ *
+ * Props: { stages: [{label, dur}], totalMs }
+ */
+function PipelineBar({ stages = [], totalMs = 0 }) {
+  const { safeStages, displayTotalMs, barTotalMs, slowest } = _pipelineStageModel(stages, totalMs);
+  if (!safeStages.length || displayTotalMs <= 0) {
+    return (
+      <div style={{
+        fontFamily: HM_FONT_MONO, fontSize: 10.5,
+        color: "var(--hg-fg-5)",
+      }}>no recent turn</div>
+    );
+  }
+  return (
+    <div>
+      {/* Hero total ms */}
+      <div style={{
+        display: "flex", alignItems: "baseline", gap: 5,
+        marginBottom: 8,
+      }}>
+        <span style={{
+          fontFamily: HM_FONT_SANS,
+          fontSize: 22, lineHeight: 1,
+          color: "var(--hg-fg-0)",
+          fontWeight: HM_WEIGHT_HERO,
+          fontFeatureSettings: '"tnum"',
+        }}>{Math.round(displayTotalMs)}</span>
+        <span style={{
+          fontFamily: HM_FONT_MONO,
+          fontSize: 10.5, color: "var(--hg-fg-4)",
+          fontWeight: HM_WEIGHT_LABEL,
+        }}>ms total</span>
+      </div>
+
+      {/* Stacked proportional bar */}
+      <div style={{
+        position: "relative",
+        height: 14,
+        background: "var(--hg-border-soft)",
+        borderRadius: 3,
+        marginBottom: 8,
+        overflow: "hidden",
+        display: "flex",
+      }}>
+        {safeStages.map((s) => {
+          const widthPct = Math.max(0, Math.min(100, (s.dur / barTotalMs) * 100));
+          const isSlowest = s === slowest;
+          return (
+            <div key={s.label} title={`${s.label} · ${Math.round(s.dur)} ms`} style={{
+              width: `${widthPct}%`,
+              background: isSlowest ? "var(--hg-ice-bright)" : "var(--hg-fg-2)",
+              opacity: s.dur > 0 ? (isSlowest ? 1 : 0.45) : 0,
+              transition: "width 400ms cubic-bezier(.4,0,.2,1)",
+              borderRight: widthPct > 0 ? "1px solid var(--hg-bg-0)" : "none",
+              boxSizing: "border-box",
+            }} />
+          );
+        })}
+      </div>
+
+      {/* Legend: one row per stage so SYNTH/AUDIO/LLM labels align with
+          their values and never collide with the bar segments above. */}
+      <div style={{
+        display: "flex", flexDirection: "column",
+        gap: 3,
+        fontFamily: HM_FONT_MONO,
+        fontSize: 11,
+      }}>
+        {safeStages.map((s) => {
+          const isSlowest = s === slowest;
+          return (
+            <div key={s.label} style={{
+              display: "grid",
+              gridTemplateColumns: "70px 1fr auto",
+              alignItems: "baseline",
+              gap: 10,
+              padding: "1px 0",
+            }}>
+              <span style={{
+                color: isSlowest ? "var(--hg-fg-2)" : "var(--hg-fg-4)",
+                textTransform: "uppercase",
+                letterSpacing: "0.14em",
+                fontSize: 9.5,
+                fontWeight: HM_WEIGHT_LABEL,
+              }}>{s.label}</span>
+              {/* per-stage micro bar to reinforce magnitude visually */}
+              <div style={{
+                height: 2,
+                background: "var(--hg-border-soft)",
+                position: "relative",
+                marginTop: 4,
+                borderRadius: 1,
+              }}>
+                <div style={{
+                  position: "absolute", inset: 0,
+                  width: `${Math.max(0, Math.min(100, (s.dur / barTotalMs) * 100))}%`,
+                  background: isSlowest ? "var(--hg-ice-bright)" : "var(--hg-fg-3)",
+                  opacity: s.dur > 0 ? 0.9 : 0,
+                  borderRadius: 1,
+                }} />
+              </div>
+              <span style={{
+                color: isSlowest ? "var(--hg-ice-bright)" : "var(--hg-fg-2)",
+                fontWeight: isSlowest ? HM_WEIGHT_HERO : HM_WEIGHT_LABEL,
+                fontFeatureSettings: '"tnum"',
+                fontSize: 11,
+                whiteSpace: "nowrap",
+              }}>{s.dur > 0 ? `${Math.round(s.dur)} ms` : "—"}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Slowest callout */}
+      {slowest.dur > 0 && (
+        <div style={{
+          marginTop: 8,
+          fontFamily: HM_FONT_MONO,
+          fontSize: 9.5,
+          color: "var(--hg-fg-4)",
+          letterSpacing: "0.04em",
+        }}>
+          slowest · <span style={{ color: "var(--hg-fg-2)" }}>{slowest.label} {Math.round(slowest.dur)} ms</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── DepHealthStrip ────────────────────────────────────────────────────
+ *
+ * Compact dependency-health row. Plain-language state labels — no
+ * meaningless dashes. Hover for a tooltip.
+ *
+ * Props: { items: [{label, state, tone, hint?}] }
+ *   tone: "ok" | "warn" | "crit" | "idle"
+ *   state: short plain-language label ("online", "warming", "unknown")
+ */
+function DepHealthStrip({ items = [] }) {
+  if (!items.length) return null;
+  // v6.3: condensed back to single-line items — each item renders as
+  // `● label state` on one row. Much tighter than the stacked v6 grid;
+  // fits all 6 items (model · ai box · haos · bridge · tts · frigate)
+  // on one row on typical screens, wraps gracefully when narrow.
+  // Visual weight is intentionally light — this is glance-only metadata.
+  return (
+    <div style={{
+      display: "flex",
+      flexWrap: "wrap",
+      gap: "4px 14px",
+      padding: "7px 12px",
+      background: "var(--hg-bg-1)",
+      border: "1px solid var(--hg-border-soft)",
+      borderRadius: 4,
+      fontFamily: HM_FONT_MONO,
+      fontSize: 9.5,
+      lineHeight: 1.4,
+    }}>
+      {items.map((s) => {
+        const valColor =
+          s.tone === "crit" ? "var(--hg-crit)" :
+          s.tone === "warn" ? "var(--hg-warn)" :
+          s.tone === "idle" ? "var(--hg-fg-5)" :
+          "var(--hg-fg-2)";
+        return (
+          <span key={s.label} title={s.hint || ""} style={{
+            display: "inline-flex", alignItems: "center", gap: 5,
+            minWidth: 0,
+            whiteSpace: "nowrap",
+          }}>
+            <HealthDot tone={s.tone || "idle"} size={4} />
+            <span style={{
+              color: "var(--hg-fg-5)",
+              fontWeight: HM_WEIGHT_LABEL,
+              letterSpacing: "0.08em",
+            }}>{s.label}</span>
+            <span style={{
+              color: valColor,
+              fontWeight: HM_WEIGHT_HERO,
+              fontFeatureSettings: '"tnum"',
+            }}>{s.state || "unknown"}</span>
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -788,43 +1003,92 @@ function MeterGroup({ label, children }) {
  * Threshold tone: if the LATEST value > threshold (pct of max), stroke
  * shifts to amber/crit. Same semantic as MeterRow.
  */
-function Sparkline({ data = [], width = 60, height = 12, max, warnAt = 70, critAt = 90 }) {
+function Sparkline({ data = [], width = 60, height = 12, max, warnAt = 70, critAt = 90, fluid = false }) {
   if (!Array.isArray(data) || data.length < 2) {
-    return <svg width={width} height={height} aria-hidden style={{ display: "block" }} />;
+    return <svg width={fluid ? "100%" : width} height={height} aria-hidden style={{ display: "block" }} />;
   }
   const numeric = data
     .map((v) => (typeof v === "number" && isFinite(v)) ? v : null)
     .filter((v) => v !== null);
   if (numeric.length < 2) {
-    return <svg width={width} height={height} aria-hidden style={{ display: "block" }} />;
+    return <svg width={fluid ? "100%" : width} height={height} aria-hidden style={{ display: "block" }} />;
   }
   const lo = 0;
   const hi = max != null ? max : Math.max(...numeric, 1);
   const range = Math.max(1e-3, hi - lo);
   const last = numeric[numeric.length - 1];
   const lastPct = max != null ? (last / max) * 100 : 50;
+
+  // Find peak (max value) + its index for the marker
+  let peakIdx = 0, peakVal = numeric[0];
+  for (let i = 1; i < numeric.length; i++) {
+    if (numeric[i] > peakVal) { peakVal = numeric[i]; peakIdx = i; }
+  }
+  const peakPct = max != null ? (peakVal / max) * 100 : 50;
+
   let stroke = "var(--hg-fg-2)";
-  if (lastPct > critAt) stroke = "var(--hg-crit)";
-  else if (lastPct > warnAt) stroke = "var(--hg-warn)";
+  let fill = "rgba(155, 164, 177, 0.16)"; // muted area fill matching fg-2
+  if (lastPct > critAt) {
+    stroke = "var(--hg-crit)";
+    fill = "rgba(225, 85, 83, 0.18)";
+  } else if (lastPct > warnAt) {
+    stroke = "var(--hg-warn)";
+    fill = "rgba(233, 196, 106, 0.18)";
+  }
   const n = numeric.length;
   const stepX = width / (n - 1);
+  // Polyline points for the trend line
   const pts = numeric.map((v, i) => {
     const x = i * stepX;
     const y = height - ((v - lo) / range) * (height - 2) - 1;
     return `${x.toFixed(2)},${y.toFixed(2)}`;
-  }).join(" ");
+  });
+  const ptsStr = pts.join(" ");
+  // Closed polygon for the filled area below the line
+  const areaPts = `0,${height} ${ptsStr} ${(width).toFixed(2)},${height}`;
+  // Peak marker position
+  const peakX = peakIdx * stepX;
+  const peakY = height - ((peakVal - lo) / range) * (height - 2) - 1;
+  // Reference lines at 50% + 100% of max (faint)
+  const midY = height - 0.5 * (height - 2) - 1;
   return (
-    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}
+    <svg width={fluid ? "100%" : width} height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
       aria-hidden style={{ display: "block", overflow: "visible" }}>
+      {/* Faint reference line at 50% */}
+      {max != null && (
+        <line x1="0" y1={midY} x2={width} y2={midY}
+          stroke="var(--hg-border-soft)" strokeWidth="0.5"
+          strokeDasharray="2 4"
+          vectorEffect="non-scaling-stroke" />
+      )}
+      {/* Filled area under the curve */}
+      <polygon
+        fill={fill}
+        stroke="none"
+        points={areaPts}
+        style={{ transition: "fill 300ms" }}
+      />
+      {/* Trend line */}
       <polyline
         fill="none"
         stroke={stroke}
-        strokeWidth="1"
+        strokeWidth="1.4"
         strokeLinejoin="round"
         strokeLinecap="round"
-        points={pts}
+        points={ptsStr}
+        vectorEffect="non-scaling-stroke"
         style={{ transition: "stroke 300ms" }}
       />
+      {/* Peak marker — only when peak is meaningfully high (>25% of max) */}
+      {max != null && peakPct > 25 && (
+        <circle cx={peakX} cy={peakY} r="1.6"
+          fill={peakPct > critAt ? "var(--hg-crit)"
+              : peakPct > warnAt ? "var(--hg-warn)"
+              : "var(--hg-fg-1)"}
+          vectorEffect="non-scaling-stroke" />
+      )}
     </svg>
   );
 }
@@ -1065,6 +1329,8 @@ Object.assign(window, {
   HmMetricCard: MetricCard,
   HmArc: Arc,
   HmTimelineStrip: TimelineStrip,
+  HmPipelineBar: PipelineBar,
+  HmDepHealthStrip: DepHealthStrip,
   HmRoomGrid: RoomGrid,
   // Carried from v3 — still useful for chips, modals, scroll wrapper
   HmTabs: Tabs,

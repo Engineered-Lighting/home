@@ -40,7 +40,7 @@ VLLM_UPSTREAM    = os.environ.get("VLLM_UPSTREAM_URL", "http://vllm:8000")
 SCRAPE_INTERVAL_S = float(os.environ.get("SCRAPE_INTERVAL_S", "2.0"))
 PROXY_TIMEOUT_S = float(os.environ.get("PROXY_TIMEOUT_S", "300.0"))
 
-app = FastAPI(title="Home sidecar", version="0.2.0")
+app = FastAPI(title="Home sidecar", version="0.3.0")  # bump for M0 schema additions
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -65,6 +65,140 @@ psutil.cpu_percent(interval=None)
 # tokens/second from the delta.
 _last_vllm: dict = {"ttft_ms": None, "tps": None, "model": None}
 _prev_sample: Optional[dict] = None
+
+# ── Rolling resource sampler (Addendum 29 follow-up: GPU spikes were
+# disappearing because nvmlDeviceGetUtilizationRates is a ~1s windowed
+# average, and a 200-500ms LLM call lands between samples returning 0.
+# Same shape for psutil.cpu_percent(interval=None) which returns 0 when
+# called twice in quick succession from different request handlers.
+#
+# Fix: a thread (NVML is C, doesn't play nicely with asyncio) polls
+# every 100ms and keeps a rolling 2s window. /metrics returns the MAX
+# over the window so brief spikes survive.  Same window for CPU. This
+# is the only correct way to characterize "is the GPU under load right
+# now?" when sampling is sparser than the bursts you're measuring. ──
+import threading
+
+_RESOURCE_SAMPLE_INTERVAL_S = 0.1     # 100ms — fine enough for any LLM burst
+_RESOURCE_WINDOW_S = 2.0              # rolling window: report MAX over last 2s
+_RESOURCE_BUF_MAX = int(_RESOURCE_WINDOW_S / _RESOURCE_SAMPLE_INTERVAL_S) + 4
+
+_resource_lock = threading.Lock()
+_resource_samples: list[dict] = []  # list of {t, gpu, cpu}
+_resource_seq = 0
+_resource_boot_id = f"{time.time():.6f}"
+
+
+def _resource_sampler_loop() -> None:
+    """Background thread: poll NVML + psutil every 100ms, keep last 2s.
+
+    cpu_max_core is the load on the BUSIEST core (not the system-wide
+    average). On a 32-core box, a single-threaded Python burst at 100%
+    shows as system_avg=3% but max_core=100%. Reporting only system_avg
+    hides single-threaded work — a vision-sidecar call appears flat
+    when really one core IS pegged. We track both and surface the
+    busiest-core metric to the line graph because that's the one that
+    answers "is anything actually busy right now?"."""
+    global _resource_seq
+    # First psutil call returns 0; warm both interfaces up.
+    psutil.cpu_percent(interval=None, percpu=False)
+    psutil.cpu_percent(interval=None, percpu=True)
+    time.sleep(_RESOURCE_SAMPLE_INTERVAL_S)
+    while True:
+        try:
+            util = pynvml.nvmlDeviceGetUtilizationRates(_gpu)
+            mem = pynvml.nvmlDeviceGetMemoryInfo(_gpu)
+            vm = psutil.virtual_memory()
+            try:
+                gpu_temp_c = int(
+                    pynvml.nvmlDeviceGetTemperature(_gpu, pynvml.NVML_TEMPERATURE_GPU)
+                )
+            except Exception:
+                gpu_temp_c = None
+            cpu_avg = psutil.cpu_percent(interval=None, percpu=False)
+            cpu_per_core = psutil.cpu_percent(interval=None, percpu=True) or [0.0]
+            cpu_max_core = max(cpu_per_core)
+            now = time.monotonic()
+            with _resource_lock:
+                _resource_seq += 1
+                _resource_samples.append({
+                    "seq": _resource_seq,
+                    "t": now,
+                    "gpu": int(util.gpu),
+                    "cpu_avg": float(cpu_avg),
+                    "cpu_max_core": float(cpu_max_core),
+                    "gpu_temp_c": gpu_temp_c,
+                    "vram_used_gb": round(mem.used / 1e9, 1),
+                    "vram_total_gb": round(mem.total / 1e9, 0),
+                    "ram_used_gb": round((vm.total - vm.available) / 1e9, 1),
+                    "ram_total_gb": round(vm.total / 1e9, 0),
+                })
+                # Trim anything older than window
+                cutoff = now - _RESOURCE_WINDOW_S
+                while _resource_samples and _resource_samples[0]["t"] < cutoff:
+                    _resource_samples.pop(0)
+                # Hard cap for safety
+                if len(_resource_samples) > _RESOURCE_BUF_MAX:
+                    del _resource_samples[: len(_resource_samples) - _RESOURCE_BUF_MAX]
+        except Exception as e:
+            log.debug("resource sample failed: %s", e)
+        time.sleep(_RESOURCE_SAMPLE_INTERVAL_S)
+
+
+def _rolling_resource_peak() -> tuple[int, int, int]:
+    """Return (gpu_max_pct, cpu_max_core_pct, cpu_avg_pct) over the rolling window.
+
+    Returns (0, 0, 0) if no samples yet."""
+    with _resource_lock:
+        if not _resource_samples:
+            return (0, 0, 0)
+        gpu_mx = 0
+        cpu_max_core_mx = 0.0
+        cpu_avg_mx = 0.0
+        for s in _resource_samples:
+            if s["gpu"] > gpu_mx:
+                gpu_mx = s["gpu"]
+            if s["cpu_max_core"] > cpu_max_core_mx:
+                cpu_max_core_mx = s["cpu_max_core"]
+            if s["cpu_avg"] > cpu_avg_mx:
+                cpu_avg_mx = s["cpu_avg"]
+        return (int(gpu_mx), int(round(cpu_max_core_mx)), int(round(cpu_avg_mx)))
+
+
+def _recent_resource_samples() -> list[dict]:
+    """Return raw sampler rows with relative age for client-side alignment.
+
+    /metrics keeps the old peak fields for status chips, but the trace tab
+    needs the raw 100ms rows to draw nuanced hardware lines. Use age_ms rather
+    than wall-clock server timestamps so the desktop app can place samples on
+    its own clock without requiring synchronized LAN clocks.
+    """
+    now = time.monotonic()
+    with _resource_lock:
+        rows = list(_resource_samples)
+    out = []
+    for s in rows:
+        out.append({
+            "seq": s.get("seq"),
+            "age_ms": int(max(0.0, now - float(s.get("t", now))) * 1000),
+            "gpu_util_pct": s.get("gpu", 0),
+            "cpu_pct": s.get("cpu_max_core", 0.0),
+            "cpu_avg_pct": s.get("cpu_avg", 0.0),
+            "gpu_temp_c": s.get("gpu_temp_c"),
+            "vram_used_gb": s.get("vram_used_gb"),
+            "vram_total_gb": s.get("vram_total_gb"),
+            "ram_used_gb": s.get("ram_used_gb"),
+            "ram_total_gb": s.get("ram_total_gb"),
+        })
+    return out
+
+
+# Start the sampler thread immediately at import time. daemon=True so
+# it dies cleanly when the process exits.
+_sampler_thread = threading.Thread(
+    target=_resource_sampler_loop, name="resource-sampler", daemon=True,
+)
+_sampler_thread.start()
 
 # Strip labels from a Prometheus metric line: `name{labels}` → `name`.
 _LABEL_RE = re.compile(r"\{[^}]*\}")
@@ -144,21 +278,47 @@ def healthz() -> dict:
 
 @app.get("/metrics")
 def metrics() -> dict:
-    util = pynvml.nvmlDeviceGetUtilizationRates(_gpu)
     mem = pynvml.nvmlDeviceGetMemoryInfo(_gpu)
     vm = psutil.virtual_memory()
+    # gpu_temp_c: previously injected by tools/sidecar-temp-patch.py at
+    # runtime (Addendum 25 follow-up). Folded into source M0 so deploys
+    # don't drop it. Try/except so a temp-read failure (driver hiccup)
+    # surfaces as null, not a 500.
+    try:
+        gpu_temp_c: int | None = int(
+            pynvml.nvmlDeviceGetTemperature(_gpu, pynvml.NVML_TEMPERATURE_GPU)
+        )
+    except Exception:
+        gpu_temp_c = None
+    # gpu_util_pct + cpu_pct: rolling 2s peak from background sampler
+    # thread. nvmlDeviceGetUtilizationRates is windowed-average ~1s,
+    # so sub-second LLM bursts get reported as 0 if called directly.
+    # The sampler thread polls at 100ms and we return the MAX —
+    # surfaces real load even on short calls.
+    #
+    # cpu_pct is now the MAX-PER-CORE peak, NOT the system average.
+    # On a 32-core box a single-threaded Python burst at 100% shows
+    # as system_avg=3% but max_core=100% — system_avg hid actual work.
+    # cpu_avg_pct preserved for callers that want the old metric.
+    gpu_util_pct, cpu_pct, cpu_avg_pct = _rolling_resource_peak()
     return {
         "ts": time.time(),
         "gpu_name": _gpu_name,
-        "gpu_util_pct": int(util.gpu),
+        "gpu_util_pct": gpu_util_pct,
+        "gpu_temp_c": gpu_temp_c,
         "vram_used_gb": round(mem.used / 1e9, 1),
         "vram_total_gb": round(mem.total / 1e9, 0),
-        "cpu_pct": int(psutil.cpu_percent(interval=None)),
+        "cpu_pct": cpu_pct,             # NOW: max-per-core peak
+        "cpu_avg_pct": cpu_avg_pct,     # system-wide average (was cpu_pct)
         "ram_used_gb": round((vm.total - vm.available) / 1e9, 1),
         "ram_total_gb": round(vm.total / 1e9, 0),
         "ttft_ms": _last_vllm["ttft_ms"],
         "tps": _last_vllm["tps"],
         "model": _last_vllm["model"],
+        "resource_boot_id": _resource_boot_id,
+        "resource_window_s": _RESOURCE_WINDOW_S,
+        "resource_sample_interval_s": _RESOURCE_SAMPLE_INTERVAL_S,
+        "resource_samples": _recent_resource_samples(),
     }
 
 
@@ -231,12 +391,24 @@ async def proxy_chat_completions(request: Request):
     headers = {k: v for k, v in request.headers.items()
                if k.lower() not in ("host", "content-length", "connection")}
 
+    # M0.1 — capture upstream-call latency. `t_request_started` is the
+    # wall-clock when the proxy started forwarding; `upstream_ms` is the
+    # measured upstream duration emitted on the broadcast so the lab tab
+    # + baseline script can slice latency per LLM call (including each
+    # agent-loop step). For non-stream this is end-to-end; for stream this
+    # is request-start → stream-finalized.
+    t_request_started = time.time()
+
     if not is_stream:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as c:
             r = await c.post(upstream, json=body, headers=headers)
         try:
             resp = r.json()
             msg = (resp.get("choices") or [{}])[0].get("message") or {}
+            # M0.2 — token counts from vLLM's `usage` block. Always present
+            # on non-stream OpenAI responses; safe-access in case some
+            # error path returns a body without it.
+            usage = resp.get("usage") or {}
             await _broadcast_completion({
                 "ts": time.time(),
                 "id": resp.get("id"),
@@ -245,6 +417,12 @@ async def proxy_chat_completions(request: Request):
                 "assistant": msg.get("content") or "",
                 "tool_calls": msg.get("tool_calls") or [],
                 "streamed": False,
+                # M0 instrumentation (additive — existing consumers ignore unknown keys)
+                "t_request_started": t_request_started,
+                "upstream_ms": int((time.time() - t_request_started) * 1000),
+                "prompt_tokens": usage.get("prompt_tokens"),
+                "completion_tokens": usage.get("completion_tokens"),
+                "total_tokens": usage.get("total_tokens"),
             })
             return JSONResponse(content=resp, status_code=r.status_code)
         except Exception as e:
@@ -258,6 +436,15 @@ async def proxy_chat_completions(request: Request):
         tool_calls: list = []
         model = body.get("model")
         completion_id = None
+        # M0.2 — vLLM emits a final chunk (when client sets stream_options=
+        # {"include_usage": true}) with a `usage` block. Capture it when
+        # present; otherwise leaves counts as None and downstream
+        # aggregator treats them as "no data" rather than zero.
+        usage: dict = {}
+        # M0.1 — capture upstream stream finish time and first-token time
+        # (TTFT measured by sidecar, complementing the vLLM prometheus
+        # scrape which is a 2s-rolling average).
+        t_first_token: Optional[float] = None
         try:
             async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as c:
                 async with c.stream("POST", upstream, json=body, headers=headers) as r:
@@ -276,11 +463,17 @@ async def proxy_chat_completions(request: Request):
                                     completion_id = obj["id"]
                                 if obj.get("model"):
                                     model = obj["model"]
+                                if obj.get("usage"):
+                                    usage = obj["usage"]
                                 for ch in obj.get("choices") or []:
                                     d = ch.get("delta") or {}
                                     if isinstance(d.get("content"), str):
+                                        if d["content"] and t_first_token is None:
+                                            t_first_token = time.time()
                                         full_content += d["content"]
                                     if d.get("tool_calls"):
+                                        if t_first_token is None:
+                                            t_first_token = time.time()
                                         _accumulate_tool_call_delta(tool_calls, d["tool_calls"])
                             except Exception:
                                 pass
@@ -300,14 +493,25 @@ async def proxy_chat_completions(request: Request):
                 fn["arguments_parsed"] = None
             tcc["function"] = fn
             finalised_tcs.append(tcc)
+        t_done = time.time()
         await _broadcast_completion({
-            "ts": time.time(),
+            "ts": t_done,
             "id": completion_id,
             "model": model,
             "user": user_msg,
             "assistant": full_content,
             "tool_calls": finalised_tcs,
             "streamed": True,
+            # M0 instrumentation
+            "t_request_started": t_request_started,
+            "upstream_ms": int((t_done - t_request_started) * 1000),
+            "ttft_observed_ms": (
+                int((t_first_token - t_request_started) * 1000)
+                if t_first_token else None
+            ),
+            "prompt_tokens": usage.get("prompt_tokens"),
+            "completion_tokens": usage.get("completion_tokens"),
+            "total_tokens": usage.get("total_tokens"),
         })
     return StreamingResponse(gen(), media_type="text/event-stream")
 

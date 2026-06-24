@@ -49,11 +49,14 @@ smoke_test() {
   echo "==> Smoke tests"
   local ok=1
 
-  # vLLM
-  if curl -fsS -m 5 http://localhost:8000/health >/dev/null 2>&1; then
-    c_green "  vllm /health: OK"
+  # vLLM — recent vllm-openai:latest builds return 404 for /health; use
+  # /v1/models instead, which is a stronger readiness signal anyway
+  # (returns 200 only after the model is loaded into VRAM, matching the
+  # supervisor's `warming -> ready` gate in services/supervisor/main.py).
+  if curl -fsS -m 5 http://localhost:8000/v1/models >/dev/null 2>&1; then
+    c_green "  vllm /v1/models: OK"
   else
-    c_red "  vllm /health: FAIL"; ok=0
+    c_red "  vllm /v1/models: FAIL"; ok=0
   fi
 
   # Kokoro

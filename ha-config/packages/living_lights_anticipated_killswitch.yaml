@@ -1,0 +1,19 @@
+# living_lights_anticipated_killswitch.yaml — Phase 4 master kill switch.
+#
+# Single toggle that gates the entire `anticipated` lighting behavior.
+# Default OFF — pilots ignore anticipation until the user flips this ON.
+# If anticipation ever feels wrong, ONE toggle disables it everywhere
+# without touching the rest of the Living Lights system.
+#
+# The generated classifier sensors check this; per-zone toggles like
+# input_boolean.living_lights_zone_<zone>_enabled remain the lower-level
+# kill for the entire zone.
+#
+# Rollback: remove this file + reload HA. The pilot template defaults
+# anticipation gating to OFF when the toggle is missing.
+
+input_boolean:
+  living_lights_anticipated_enabled:
+    name: "Living Lights — anticipated pre-warm"
+    icon: mdi:run-fast
+    initial: off

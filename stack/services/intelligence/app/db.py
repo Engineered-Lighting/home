@@ -178,6 +178,68 @@ def init_db(conn: sqlite3.Connection) -> None:
             payload_json TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS lighting_change_events (
+            id TEXT PRIMARY KEY,
+            raw_event_id TEXT NOT NULL REFERENCES raw_events(id),
+            event_id TEXT,
+            ts TEXT,
+            entity_id TEXT,
+            light_entity TEXT,
+            zone TEXT,
+            from_state TEXT,
+            to_state TEXT,
+            from_brightness_pct REAL,
+            to_brightness_pct REAL,
+            from_color_temp_kelvin REAL,
+            to_color_temp_kelvin REAL,
+            command_id TEXT,
+            source_hint TEXT,
+            source_confidence TEXT,
+            trigger_attribute TEXT,
+            ha_context_json TEXT NOT NULL DEFAULT '{}',
+            context_json TEXT NOT NULL DEFAULT '{}',
+            payload_json TEXT NOT NULL DEFAULT '{}'
+        );
+
+        CREATE TABLE IF NOT EXISTS lighting_command_events (
+            id TEXT PRIMARY KEY,
+            raw_event_id TEXT NOT NULL REFERENCES raw_events(id),
+            command_id TEXT,
+            ts TEXT,
+            zone TEXT,
+            entity_id TEXT,
+            source TEXT,
+            source_text TEXT,
+            requested_brightness_pct REAL,
+            requested_color_temp_kelvin REAL,
+            baseline_json TEXT NOT NULL DEFAULT '{}',
+            requested_json TEXT NOT NULL DEFAULT '{}',
+            payload_json TEXT NOT NULL DEFAULT '{}'
+        );
+
+        CREATE TABLE IF NOT EXISTS lighting_change_episodes (
+            id TEXT PRIMARY KEY,
+            zone TEXT,
+            entity_id TEXT,
+            light_entity TEXT,
+            start_ts TEXT,
+            end_ts TEXT,
+            duration_s REAL,
+            event_count INTEGER NOT NULL DEFAULT 0,
+            raw_event_ids_json TEXT NOT NULL DEFAULT '[]',
+            observed_path_json TEXT NOT NULL DEFAULT '[]',
+            first_state_json TEXT NOT NULL DEFAULT '{}',
+            last_state_json TEXT NOT NULL DEFAULT '{}',
+            representative_json TEXT NOT NULL DEFAULT '{}',
+            command_id TEXT,
+            source_class TEXT NOT NULL DEFAULT 'unknown_source',
+            source_hint TEXT,
+            source_confidence TEXT,
+            interpretation TEXT NOT NULL DEFAULT 'not_used_for_learning',
+            collapse_reason TEXT,
+            created_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS episodes (
             id TEXT PRIMARY KEY,
             start_ts TEXT,
@@ -446,6 +508,14 @@ def init_db(conn: sqlite3.Connection) -> None:
             ON preference_candidates(status);
         CREATE INDEX IF NOT EXISTS idx_lighting_decisions_zone_ts
             ON lighting_decisions(zone, ts);
+        CREATE INDEX IF NOT EXISTS idx_lighting_change_events_zone_ts
+            ON lighting_change_events(zone, ts);
+        CREATE INDEX IF NOT EXISTS idx_lighting_change_events_entity_ts
+            ON lighting_change_events(entity_id, ts);
+        CREATE INDEX IF NOT EXISTS idx_lighting_change_episodes_zone_ts
+            ON lighting_change_episodes(zone, end_ts);
+        CREATE INDEX IF NOT EXISTS idx_lighting_command_events_command
+            ON lighting_command_events(command_id);
         CREATE INDEX IF NOT EXISTS idx_proposals_status
             ON proposals(status);
         CREATE INDEX IF NOT EXISTS idx_proposals_candidate

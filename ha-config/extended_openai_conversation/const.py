@@ -261,6 +261,11 @@ Available tools:
 - `who_is_in(room)` — list persons in a specific room.
 - `refresh_perception(room)` — get a fresh visual snapshot (2-5s latency; use only when cached data is stale or the question demands fresh).
 
+For gesture-training requests ("start kitchen gesture training", "record gestures in
+the dining room"), call `start_gesture_training_capture`. Do not turn on lights,
+do not use Sonos/media players, and do not pretend the capture started unless the
+tool returns a job id.
+
 For multi-camera questions ("which room is Marcelo in?"), prefer `find_person(name)` over manually checking rooms.
 
 ### How to use tool results — MUST FOLLOW
@@ -366,6 +371,31 @@ remember the exact entity_id, RE-CALL `entities_in_area` or `find_entity`
 before invoking `execute_services`. Inventing an entity_id is the most
 common cause of "Unable to find entity ..." errors.
 
+### Persistent brightness / color in occupancy-managed rooms (CRITICAL)
+
+The living room, kitchen, and dining room run on the Living Lights
+ambient engine, which continuously re-evaluates each zone and will
+REVERT a plain `light.turn_on` brightness within seconds — it treats a
+bare service call as noise, not intent. So when the user explicitly asks
+to change the LEVEL or COLOR of lights in those rooms — "set my lights
+to 100%", "dim the kitchen to 30%", "make the living room warmer",
+"brighter" — call `set_presence_override`, NOT `execute_services`. That
+records a durable, presence-aware override the engine honors (it holds
+while you're in the room plus a grace window, and at minimum ~40 min).
+Pass:
+  - `zone`: a single zone slug, a whole room ("living room", "kitchen",
+    "dining room"), or "all" / "my lights" for the whole house. If the
+    user says "my/the lights" and you know which room they're in (from
+    the world-state tools), pass that room; otherwise pass "all".
+  - `brightness_pct` / `color_temp_kelvin` for absolute values, OR
+    `brightness_delta_pct` / `color_temp_delta_kelvin` for "brighter" /
+    "warmer".
+  - `source: "voice"` (or "app") and `source_text` = the user's phrasing.
+Use plain `execute_services` (`light.turn_on` / `light.turn_off`) only
+for: turning a managed light fully OFF, lights NOT on the ambient engine
+(outdoor light, workshop switch, floor-lamp switches), or one-shot
+effects. To undo an override, call `clear_presence_override`.
+
 ### Service-data parameters (CRITICAL — say only what you DID)
 
 When the user specifies a level/value, you MUST include the matching
@@ -374,7 +404,9 @@ field in `service_data` AND you must ONLY claim what you actually sent:
   - "set to / dim to / turn up to N%" → `brightness_pct: N` on
     `light.turn_on`. NO brightness_pct = light reverts to its prior
     level. NEVER say "set to 100%" unless `brightness_pct: 100` was in
-    your service_data.
+    your service_data. (In occupancy-managed rooms, route level/color
+    changes through `set_presence_override` instead — see the section
+    above — or the ambient engine reverts your `light.turn_on`.)
   - "warm / cool / neutral / daylight" → `color_temp_kelvin: K`
     (warm≈2200, neutral≈3500, cool≈5000, daylight≈5500).
   - "red / blue / [color]" → `rgb_color: [R, G, B]`.
@@ -1227,17 +1259,20 @@ DEFAULT_CONF_FUNCTION_TOOLS = [
         "function": {"type": "recap", "name": "recap"},
     },
     # ─── Living Lights presence overrides (Addendum 33 Phase 4.A) ───
-    # Voice commands like "make the dining lights brighter while I
-    # wash dishes" route here. Writes a JSON payload to
-    # input_text.living_lights_override_text_<zone> which the per-zone
-    # classifier sensor reads → transitions to `presence_override`
-    # state. The Phase 2+ actuator (not yet shipped) consumes the
-    # payload to actually change the lights. Today (Phase 0a) the
-    # state transition is observable but lights don't change.
+    # Explicit lighting commands ("set my lights to 100%", "make the
+    # dining lights brighter") route here. Writes a JSON payload to
+    # input_text.living_lights_override_text_<zone> for each target zone;
+    # the per-zone classifier transitions to `presence_override` (top of
+    # the state machine, immune to the asleep cap) and the per-zone pilot
+    # applies the payload's brightness/color. Covers all 10 occupancy-
+    # managed zones, plus whole-room and "all" fan-out.
     #
-    # Auto-clear: override clears 30s after the zone goes vacant (the
-    # automation that does this is also in living_lights_observability
-    # package). Pinned overrides stay until explicitly cleared.
+    # Lifecycle: the override-lifecycle automation
+    # (living_lights_override_lifecycle.yaml) eases an override back to
+    # automatic only after BOTH (a) hold_until (now + ~40 min) passes AND
+    # (b) the zone has read vacant for the grace window — so it survives a
+    # camera briefly losing a still occupant. Pinned overrides never
+    # auto-clear.
     #
     # AR33-7: brightness=0 is clamped to 5 (lights-off comes from
     # light.turn_off, never from overrides). source must be "voice",
@@ -1246,19 +1281,23 @@ DEFAULT_CONF_FUNCTION_TOOLS = [
         "spec": {
             "name": "set_presence_override",
             "description": (
-                "Apply a TEMPORARY lighting override to a specific "
-                "zone. Use when the user explicitly asks to change "
-                "lighting (e.g., 'make the dining lights brighter', "
-                "'warm up the kitchen', 'set sink to 90%'). The "
-                "override stays active until the user leaves the zone "
-                "(plus a 30s grace) OR they explicitly ask to clear "
-                "it. Pass `pinned: true` if the user says 'keep it "
-                "like this' or 'lock this in'. Use brightness_pct + "
-                "color_temp_kelvin for absolute values, or "
-                "brightness_delta_pct / color_temp_delta_kelvin for "
-                "relative ('brighter', 'warmer'). Zones: dining_left, "
-                "dining_right, sink, island_left, island_right "
-                "(more added in Phase 0c)."
+                "Apply a PERSISTENT lighting override to occupancy-"
+                "managed lights. Use this (NOT execute_services) whenever "
+                "the user explicitly asks to set the level/color of room "
+                "lights — 'set my lights to 100%', 'dim the kitchen to "
+                "30%', 'make the living room warmer', 'brighter' — because "
+                "a bare light.turn_on in these rooms is reverted by the "
+                "ambient engine within seconds. The override holds while "
+                "the user is in the area plus a grace window (minimum "
+                "~40 min) and then eases back to automatic; or clears when "
+                "they ask. Pass `pinned: true` for 'keep it like this' / "
+                "'lock this in'. Use brightness_pct / color_temp_kelvin "
+                "for absolute values, or brightness_delta_pct / "
+                "color_temp_delta_kelvin for relative. `zone` may be a "
+                "single zone (dining_left, dining_right, sink, "
+                "island_left, island_right, sofa, front_left, front_door, "
+                "weights, office), a whole room (living room / kitchen / "
+                "dining room), or 'all' / 'my lights' for the whole house."
             ),
             "parameters": {
                 "type": "object",
@@ -1266,10 +1305,11 @@ DEFAULT_CONF_FUNCTION_TOOLS = [
                     "zone": {
                         "type": "string",
                         "description": (
-                            "Canonical zone slug OR a human phrase "
-                            "the tool can resolve. Examples: "
-                            "'dining_left', 'dining right', 'sink', "
-                            "'kitchen island left', 'island_right'."
+                            "A zone slug, a whole room, or a house-wide "
+                            "phrase the tool resolves and fans out. "
+                            "Examples: 'sink', 'kitchen island left', "
+                            "'office', 'sofa'; 'living room', 'kitchen', "
+                            "'dining room'; 'all', 'my lights'."
                         ),
                     },
                     "brightness_pct": {
@@ -1418,6 +1458,34 @@ DEFAULT_CONF_FUNCTION_TOOLS = [
             },
         },
         "function": {"type": "living_lights", "name": "get_recent_overrides"},
+    },
+    {
+        "spec": {
+            "name": "start_gesture_training_capture",
+            "description": (
+                "Start a voice-guided gesture-training capture in the kitchen, "
+                "dining room, or living room. Use when Marcelo asks to record "
+                "gesture training or start gesture capture. This starts a "
+                "training recording only; it does not control lights or run "
+                "automations."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "room": {
+                        "type": "string",
+                        "description": "One of kitchen, dining room, or living room.",
+                    },
+                    "script_key": {
+                        "type": "string",
+                        "enum": ["segmented", "fluid"],
+                        "description": "Use segmented unless Marcelo explicitly asks for fluid capture.",
+                    },
+                },
+                "required": ["room"],
+            },
+        },
+        "function": {"type": "gesture_training", "name": "start_guided_capture"},
     },
 ]
 CONF_CONTEXT_THRESHOLD = "context_threshold"

@@ -32,6 +32,20 @@
  * segments locally (PUT enforces per-lane non-overlap) — a carve marks the
  * doc dirty so the next save reconciles the trimmed neighbors.
  *
+ * M4 adds the embed/cluster evidence surface: GET /window-signals once per
+ * video load (latest ready cluster run) marks suggestions whose analysis
+ * window is a cluster outlier — a display-only `_outlier` decoration that
+ * renders as the hollow crit dot on the timeline ghost, an "outlier" chip
+ * in the suggestion inspector, and feeds an 'outliers' left-rail queue
+ * filter through the published per-video stats. The inspector also grows a
+ * "similar reviewed windows" panel (VLNeighborsPanel): GET /segments/{id}/
+ * neighbors for the selected canonical segment OR suggestion (both are
+ * server segments rows; local tmp ids skip the fetch) — keyframe thumb,
+ * activity/posture labels, similarity % ((1−cosine_dist)·100), source
+ * video + timestamp; same-video neighbors click-to-seek, cross-video ones
+ * explain themselves in the tooltip. Both endpoints may 404 on older
+ * deploys — everything degrades to quiet empty lines / absent badges.
+ *
  * Multi-person (person_slot): activity/posture segments carry person_slot
  * (null = the primary occupant "you"; "p2".."p9" = other people;
  * "track:<id>" reserved — displayed, never minted, never stripped).
@@ -555,21 +569,24 @@ function vlPayloadAxes(axes) {
    <0.6 nets both genuinely-unsure and disagreement-capped suggestions */
 const VL_LOW_CONF = 0.6;
 
-/* per-video suggestion stats for the queue filter chips (client-side only) */
+/* per-video suggestion stats for the queue filter chips (client-side only).
+   outliers (M4) counts the _outlier decoration — only non-zero once the
+   axes passed in are the window-signals-decorated copies. */
 function vlSuggStats(axes) {
   const D = window.HomeVideoLabelerData;
-  let total = 0, lowConf = 0, disagreement = 0;
+  let total = 0, lowConf = 0, disagreement = 0, outliers = 0;
   for (const ax of VL_AXIS_ORDER) {
     for (const s of (axes && axes[ax]) || []) {
       total += 1;
       if (typeof s.confidence === "number" && s.confidence < VL_LOW_CONF) lowConf += 1;
       if (D.suggestionDisagreement(s) != null) disagreement += 1;
+      if (s._outlier === true) outliers += 1;
     }
   }
-  return { total, lowConf, disagreement };
+  return { total, lowConf, disagreement, outliers };
 }
 
-const VL_QUEUE_FILTERS = ["all", "unreviewed", "low-conf", "disagreement"];
+const VL_QUEUE_FILTERS = ["all", "unreviewed", "low-conf", "disagreement", "outliers"];
 
 function vlRemapList(list, idMap) {
   return (list || []).map((s) => idMap[s.id] ? { ...s, id: idMap[s.id] } : s);
@@ -1199,17 +1216,152 @@ function VLEvidenceStrip({ video, suggestion, onSeek }) {
 }
 
 /* ─────────────────────────────────────────────────────────────────────
+ * VLNeighborsPanel (M4) — embed-space evidence: the k nearest REVIEWED
+ * non-holdout windows for the selected canonical segment or suggestion
+ * (both are server segments rows; local tmp_ ids skip the fetch). Per
+ * neighbor: a small keyframe thumb (first crop|frame of the window's
+ * keyframe listing — fetched best-effort after the neighbor list, blank
+ * box otherwise), activity/posture labels, similarity %
+ * ((1−cosine_dist)·100 rounded) and the source video short-name +
+ * timestamp. Same-video neighbors click-to-seek to t_center; cross-video
+ * ones only explain themselves in the tooltip (no cross-video navigation
+ * this pass). 404 / offline / zero candidates / tmp ids all collapse to
+ * one quiet "no reviewed neighbors yet" line.
+ * ──────────────────────────────────────────────────────────────────── */
+function VLNeighborsPanel({ segId, videoId, videos, onSeek }) {
+  const D = window.HomeVideoLabelerData;
+  const [nb, setNb] = useState({ status: "loading", items: [] });
+  const [thumbs, setThumbs] = useState({}); // window_id → url | null
+
+  useEffect(() => {
+    let dead = false;
+    setNb({ status: "loading", items: [] });
+    setThumbs({});
+    if (!segId || vlIsTempId(segId)) {
+      setNb({ status: "empty", items: [] }); // unsaved local segment — no server row
+      return undefined;
+    }
+    (async () => {
+      const r = await D.getNeighbors(segId, 8);
+      if (dead) return;
+      const items = (r.ok && r.data && Array.isArray(r.data.neighbors)) ? r.data.neighbors : [];
+      if (!items.length) { setNb({ status: "empty", items: [] }); return; } // 404/offline/none → quiet
+      setNb({ status: "ok", items });
+      for (const n of items) {
+        (async () => {
+          const kr = await D.getWindowKeyframes(n.video_id, n.window_id);
+          if (dead) return;
+          let url = null;
+          if (kr.ok && kr.data) {
+            const raw = Array.isArray(kr.data) ? kr.data : (kr.data.keyframes || []);
+            const e = raw.find((x) => x && (x.crop || x.frame));
+            if (e) url = D.keyframeUrl(e.crop || e.frame);
+          }
+          setThumbs((cur) => ({ ...cur, [n.window_id]: url }));
+        })();
+      }
+    })();
+    return () => { dead = true; };
+  }, [segId]);
+
+  if (nb.status !== "ok") {
+    return (
+      <div style={{ fontSize: 9, color: "var(--hg-fg-5)", letterSpacing: "0.08em", lineHeight: 1.6 }}>
+        {nb.status === "loading" ? "finding similar windows…" : "no reviewed neighbors yet"}
+      </div>
+    );
+  }
+
+  const shortName = (vid) => {
+    const v = (videos || []).find((x) => x.id === vid);
+    const base = String((v && v.filename) || vid || "").replace(/\.[a-z0-9]+$/i, "");
+    return base.length > 18 ? base.slice(0, 17) + "…" : base;
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column" }}>
+      {nb.items.map((n) => {
+        const same = n.video_id === videoId;
+        const sim = Math.round((1 - (Number(n.distance) || 0)) * 100);
+        const url = thumbs[n.window_id] || null;
+        const act = n.labels && n.labels.activity;
+        const pos = n.labels && n.labels.posture;
+        return (
+          <div
+            key={n.window_id}
+            onClick={same && onSeek ? () => onSeek(n.t_center) : undefined}
+            title={same
+              ? "this video · click to seek to " + D.fmtDuration(n.t_center)
+              : shortName(n.video_id) + " @ " + D.fmtDuration(n.t_center)
+                + " — cross-video navigation not available yet"}
+            style={{
+              display: "flex", alignItems: "center", gap: 7,
+              padding: "4px 0", borderBottom: "1px solid var(--hg-border-soft)",
+              cursor: same ? "pointer" : "default",
+              opacity: same ? 1 : 0.85,
+            }}
+          >
+            <span style={{
+              width: 42, height: 30, flex: "none", display: "block",
+              background: "var(--hg-bg-2)", border: "1px solid var(--hg-border-soft)",
+              overflow: "hidden", boxSizing: "border-box",
+            }}>
+              {url && (
+                <img
+                  src={url}
+                  alt=""
+                  onError={(e) => { e.currentTarget.style.display = "none"; }}
+                  style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                />
+              )}
+            </span>
+            <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
+              <span style={{
+                fontSize: 9.5, letterSpacing: "0.05em", whiteSpace: "nowrap",
+                overflow: "hidden", textOverflow: "ellipsis",
+              }}>
+                <span style={{ color: act ? D.colorFor(act) : "var(--hg-fg-5)" }}>
+                  {act ? String(act).replace(/_/g, " ") : "—"}
+                </span>
+                <span style={{ color: "var(--hg-fg-5)" }}> · </span>
+                <span style={{ color: pos ? D.colorFor(pos) : "var(--hg-fg-5)" }}>
+                  {pos ? String(pos).replace(/_/g, " ") : "—"}
+                </span>
+              </span>
+              <span style={{
+                fontSize: 8.5, color: "var(--hg-fg-5)", letterSpacing: "0.06em",
+                whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+              }}>
+                {same ? "this video" : shortName(n.video_id)} · {D.fmtDuration(n.t_center)}
+              </span>
+            </span>
+            <span style={{
+              flex: "none", fontSize: 9.5, color: "var(--hg-ice)", letterSpacing: "0.06em",
+            }} title={"cosine distance " + Number(n.distance).toFixed(4)}>
+              {sim}%
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
  * VLInspector — right rail (340px): save row, selected-segment editor
  * (value chips, frame-stepped bounds, review actions, aux form), custom
  * label manager. M3: suggestion mode (value/conf/source/evidence +
  * accept/reject/needs-review + the keyframe evidence strip) replaces the
  * segment editor while a SUGGESTION is selected, and a suggestions
- * section with the calibration-locked bulk-accept button.
+ * section with the calibration-locked bulk-accept button. M4: a "similar
+ * reviewed windows" section (VLNeighborsPanel) under whichever of the two
+ * editors is active — `videos` resolves neighbor video short-names,
+ * `onSeek` drives same-video neighbor clicks.
  * ──────────────────────────────────────────────────────────────────── */
 function VLInspector({
-  video, fps, ontology, labelsApi, dirty, saving, revision,
+  video, videos, fps, ontology, labelsApi, dirty, saving, revision,
   selection, segment, ops, canonicalInfo, refreshOntology, showToast,
-  suggestion, suggestionOps, suggSummary, bulk,
+  suggestion, suggestionOps, suggSummary, bulk, onSeek,
 }) {
   const D = window.HomeVideoLabelerData;
   const [moreSlots, setMoreSlots] = useState(false);
@@ -1293,6 +1445,13 @@ function VLInspector({
                 label={"! disagree " + Number(sugDisagree).toFixed(2)}
                 tone="crit"
                 title="a cross-check (pose geometry / motion / adjacency) disputes this suggestion"
+              />
+            )}
+            {suggestion._outlier === true && (
+              <VLChip
+                label="outlier"
+                tone="crit"
+                title="cluster outlier — this suggestion's analysis window sits far from every embed-space cluster (worth a careful look)"
               />
             )}
           </div>
@@ -1463,6 +1622,22 @@ function VLInspector({
           </>
         )}
       </div>
+      )}
+
+      {/* similar reviewed windows (M4) — embed-space neighbors for the
+          selected canonical segment or suggestion; keyed by id so the
+          panel resets per selection */}
+      {(suggestion || seg) && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <span style={VL_SECTION_TITLE}>similar reviewed windows</span>
+          <VLNeighborsPanel
+            key={(suggestion || seg).id}
+            segId={(suggestion || seg).id}
+            videoId={video.id}
+            videos={videos}
+            onSeek={onSeek}
+          />
+        </div>
       )}
 
       {/* suggestions — counts + calibration-locked bulk accept (M3) */}
@@ -1722,6 +1897,53 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
     })();
     return () => { dead = true; };
   }, [video.id]);
+
+  /* ---------- M4: cluster signals (outlier triage) ---------- */
+
+  /* once per video load; 404 (older deploy) / offline / no ready cluster
+     run all degrade to false — every M4 outlier affordance stays absent */
+  const [windowSignals, setWindowSignals] = useState(null);
+  useEffect(() => {
+    let dead = false;
+    (async () => {
+      const r = await D.getWindowSignals(video.id);
+      if (!dead) setWindowSignals(r.ok && r.data ? r.data : false);
+    })();
+    return () => { dead = true; };
+  }, [video.id]);
+
+  /* outlier window ids from the latest ready cluster run */
+  const outlierWindowIds = useMemo(() => {
+    const set = {};
+    if (windowSignals && Array.isArray(windowSignals.windows)) {
+      for (const w of windowSignals.windows) {
+        if (w.is_outlier === true) set[w.window_id] = true;
+      }
+    }
+    return set;
+  }, [windowSignals]);
+
+  /* suggestions decorated with _outlier — DISPLAY-ONLY copies (timeline
+     ghosts + inspector); review flows keep reading the raw layer through
+     suggestionsRef by id. A suggestion matches through its window's
+     derived id (same aw_<video>_<start_ms> convention as the evidence
+     strip). Identity-stable when no outliers exist. */
+  const decoratedSuggestions = useMemo(() => {
+    if (Object.keys(outlierWindowIds).length === 0) return suggestions;
+    const out = {};
+    for (const ax of VL_AXIS_ORDER) {
+      out[ax] = (suggestions[ax] || []).map((s) =>
+        outlierWindowIds[D.windowIdFor(video.id, s.start_s)] ? { ...s, _outlier: true } : s);
+    }
+    return out;
+  }, [suggestions, outlierWindowIds, video.id]);
+
+  /* republish stats once the outlier decoration lands — adds the outliers
+     count the left-rail 'outliers' queue filter keys on (gated on a
+     successful suggestions load, matching the M3 publish semantics) */
+  useEffect(() => {
+    if (suggInfo.status === "ok") publishSuggStats(decoratedSuggestions);
+  }, [suggInfo.status, decoratedSuggestions, publishSuggStats]);
 
   /* dev/test hook: inject suggestion fixtures from the console without the
      prelabel pipeline (window.__vlDev.injectSuggestions({axes})) */
@@ -2498,14 +2720,14 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
     axisTitle: VL_AXIS_TITLES[state.activeAxis],
     minDur,
     palette,
-    suggestions,
+    suggestions: decoratedSuggestions, // M4: carries _outlier for the ghost badges
     transportRef,
     onPalettePick: (v) => applyValue(stateRef.current.activeAxis, v),
     onSelect: (axis, segId) => dispatch({ type: "SELECT", axis, segId }),
     onCommit: (axis, segments, undoEntry) => dispatch({ type: "SET_SEGMENTS", axis, segments, undoEntry }),
     onCreate: (axis, t, slot) => createAt(axis, t, null, slot),
     onSelectSuggestion: (axis, segId) => dispatch({ type: "SELECT", kind: "suggestion", axis, segId }),
-  }), [lanes, state.selection, state.activeAxis, minDur, palette, suggestions, applyValue, createAt]);
+  }), [lanes, state.selection, state.activeAxis, minDur, palette, decoratedSuggestions, applyValue, createAt]);
 
   const ops = useMemo(() => ({
     openPicker: (create) => setPicker({ axis: stateRef.current.activeAxis, create: !!create }),
@@ -2523,7 +2745,7 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
     ? (state.doc.axes[state.selection.axis] || []).find((x) => x.id === state.selection.segId) || null
     : null;
   const selSugg = vlIsSuggestionSel(state.selection)
-    ? (suggestions[state.selection.axis] || []).find((x) => x.id === state.selection.segId) || null
+    ? (decoratedSuggestions[state.selection.axis] || []).find((x) => x.id === state.selection.segId) || null
     : null;
 
   /* suggestions summary for the inspector section */
@@ -2645,6 +2867,7 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
       {/* right rail — inspector */}
       <VLInspector
         video={video}
+        videos={videos}
         fps={fps}
         ontology={ontology}
         labelsApi={labelsApi}
@@ -2661,6 +2884,7 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
         suggestionOps={suggestionOps}
         suggSummary={suggSummary}
         bulk={bulk}
+        onSeek={suggestionOps.seek}
       />
     </div>
   );
@@ -2952,6 +3176,7 @@ function HomeVideoLabelerOverlay({ open, onClose, sim }) {
     const metric = (st) => !st ? -1
       : queueFilter === "unreviewed" ? st.total
       : queueFilter === "low-conf" ? st.lowConf
+      : queueFilter === "outliers" ? (st.outliers || 0) // pre-M4 cached stats lack the field
       : st.disagreement;
     const matches = [];
     const unknown = [];
@@ -3085,7 +3310,9 @@ function HomeVideoLabelerOverlay({ open, onClose, sim }) {
                   onClick={() => setQueueFilter(f)}
                   title={f === "all" ? "every video"
                     : "videos with " + (f === "unreviewed" ? "pending suggestions"
-                      : f === "low-conf" ? "low-confidence suggestions" : "disagreement-flagged suggestions")
+                      : f === "low-conf" ? "low-confidence suggestions"
+                      : f === "outliers" ? "cluster-outlier suggestions"
+                      : "disagreement-flagged suggestions")
                       + " — uses data loaded this session; unopened videos sort last"}
                   style={{
                     background: "transparent",

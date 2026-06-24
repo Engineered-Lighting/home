@@ -1,0 +1,410 @@
+mqtt:
+  enabled: true
+  host: core-mosquitto
+  port: 1883
+  user: frigate
+  password: frigatepass
+
+# Use Intel iGPU (VAAPI) for decoding
+ffmpeg:
+  hwaccel_args: preset-vaapi
+
+# go2rtc restreaming — exposes RTSP streams for external consumers (Jetson world model)
+go2rtc:
+  streams:
+    living_room:
+      - rtsp://EngineeredLighting:IpanemaPosto10!@192.168.0.227:554/stream1
+    living_room_sub:
+      - rtsp://EngineeredLighting:IpanemaPosto10!@192.168.0.227:554/stream2
+    dining_room:
+      - rtsp://EngineeredLighting:IpanemaPosto10!@192.168.0.92:554/stream1
+    dining_room_sub:
+      - rtsp://EngineeredLighting:IpanemaPosto10!@192.168.0.92:554/stream2
+    workshop:
+      - rtsp://EngineeredLighting:IpanemaPosto10!@192.168.0.54:554/stream1
+    workshop_sub:
+      - rtsp://EngineeredLighting:IpanemaPosto10!@192.168.0.54:554/stream2
+    driveway:
+      - rtsp://EngineeredLighting:IpanemaPosto10!@192.168.0.68:554/stream1
+    driveway_sub:
+      - rtsp://EngineeredLighting:IpanemaPosto10!@192.168.0.68:554/stream2
+    kitchen:
+      - rtsp://EngineeredLighting:IpanemaPosto10!@192.168.0.64:554/stream1
+    kitchen_sub:
+      - rtsp://EngineeredLighting:IpanemaPosto10!@192.168.0.64:554/stream2
+
+detectors:
+  coral:
+    type: edgetpu
+    device: pci
+
+# ── Semantic search for rich querying of tracked objects ──
+semantic_search:
+  enabled: true
+  model_size: small
+
+# ── Audio detection — detect sounds for richer context ──
+audio:
+  enabled: true
+  listen:
+    - bark
+    - fire_alarm
+    - scream
+    - speech
+    - yell
+    - glass_breaking
+    - doorbell
+    - knock
+    - baby_crying
+    - alarm
+    - music
+  min_volume: 500
+
+# ── Face recognition — identify household members ──
+face_recognition:
+  enabled: true
+  model_size: large
+  device: GPU
+  detection_threshold: 0.7
+  recognition_threshold: 0.85
+  min_faces: 2
+
+
+# ── Global object tracking — expanded for smart home world model ──
+# Indoor cameras track household objects + people + pets
+# Outdoor cameras track vehicles + people + animals
+objects:
+  track:
+    - person
+    - dog
+    - cat
+    - car
+    - motorcycle
+    - bicycle
+    - bus
+    - backpack
+    - umbrella
+    - handbag
+    - suitcase
+    - bottle
+    - cup
+    - bowl
+    - chair
+    - couch
+    - dining table
+    - potted plant
+    - bed
+    - tv
+    - laptop
+    - cell phone
+    - remote
+    - book
+    - clock
+    - knife
+    - fork
+    - spoon
+    - microwave
+    - oven
+    - toaster
+    - refrigerator
+    - sink
+  filters:
+    person:
+      min_area: 2000
+      min_score: 0.60
+      threshold: 0.75
+    dog:
+      min_score: 0.5
+      threshold: 0.65
+    cat:
+      min_score: 0.5
+      threshold: 0.65
+    car:
+      min_score: 0.5
+      threshold: 0.7
+    bottle:
+      min_score: 0.4
+      threshold: 0.6
+    cup:
+      min_score: 0.4
+      threshold: 0.6
+    cell phone:
+      min_score: 0.4
+      threshold: 0.6
+    laptop:
+      min_score: 0.4
+      threshold: 0.6
+    chair:
+      min_score: 0.3
+      threshold: 0.5
+    couch:
+      min_score: 0.3
+      threshold: 0.5
+
+cameras:
+  living_room:
+    enabled: true
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/living_room
+          roles: [record, audio]
+        - path: rtsp://127.0.0.1:8554/living_room_sub
+          roles: [detect]
+    detect:
+      enabled: true
+      width: 960
+      height: 540
+      fps: 10
+
+    objects:
+      track:
+        - person
+        - dog
+        - cat
+        - bottle
+        - cup
+        - bowl
+        - chair
+        - couch
+        - potted plant
+        - tv
+        - laptop
+        - cell phone
+        - remote
+        - book
+        - clock
+        - backpack
+        - handbag
+        - suitcase
+      filters:
+        person:
+          min_area: 5000
+          min_score: 0.65
+          threshold: 0.75
+
+    zones:
+      Front_Door:
+        coordinates: 0.172,0.382,0.071,0.455,0.167,0.84,0.257,0.766
+        loitering_time: 0
+        inertia: 3
+        objects: person
+      office:
+        coordinates: 0,0.516,0.066,0.458,0.172,0.879,0.107,0.951
+        loitering_time: 0
+        inertia: 3
+        objects: person
+      sofa:
+        coordinates:
+          0.43,0.708,0.509,0.364,0.847,0.344,0.844,0.577,0.756,0.722,0.759,0.892,0.709,0.954
+        loitering_time: 0
+        inertia: 3
+        objects: person
+      weights:
+        coordinates: 0.185,0.417,0.328,0.287,0.422,0.675,0.272,0.818
+        loitering_time: 0
+        inertia: 3
+        objects: person
+      front_left:
+        coordinates: 0.034,1,0.219,0.709,0.35,0.622,0.739,1
+        loitering_time: 0
+        inertia: 3
+        objects: person
+      Whole_Living_Room:
+        coordinates: 0.001,0.001,0.002,0.997,0.999,1,0.998,0.004
+        loitering_time: 0
+        objects:
+          - person
+          - dog
+          - cat
+
+  dining_room:
+    enabled: true
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/dining_room
+          roles: [record, audio]
+        - path: rtsp://127.0.0.1:8554/dining_room_sub
+          roles: [detect]
+    detect:
+      enabled: true
+      width: 960
+      height: 540
+      fps: 10
+
+    objects:
+      track:
+        - person
+        - dog
+        - cat
+        - bottle
+        - cup
+        - bowl
+        - chair
+        - dining table
+        - potted plant
+        - laptop
+        - cell phone
+        - book
+        - clock
+        - backpack
+        - handbag
+      filters:
+        person:
+          min_area: 2000
+          min_score: 0.50
+          threshold: 0.60
+
+    zones:
+      Dining_Left:
+        coordinates: 0.002,0.054,0.002,0.993,0.455,1,0.468,0,0,0.007
+        loitering_time: 0
+        inertia: 3
+        objects: person
+      Dining_Right:
+        coordinates: 0.469,0.003,0.456,1,0.998,0.996,0.999,0
+        loitering_time: 0
+        inertia: 3
+        objects: person
+      whole_dining_room:
+        coordinates: 0.002,0.003,0.003,0.997,0.998,1,0.999,0.002
+        loitering_time: 0
+        objects:
+          - person
+          - dog
+          - cat
+
+  workshop:
+    enabled: true
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/workshop
+          roles: [record, audio]
+        - path: rtsp://127.0.0.1:8554/workshop_sub
+          roles: [detect]
+    detect:
+      enabled: true
+      width: 960
+      height: 540
+      fps: 10
+
+    objects:
+      track:
+        - person
+        - dog
+        - cat
+        - bicycle
+        - backpack
+        - umbrella
+        - handbag
+        - suitcase
+        - potted plant
+
+    zones:
+      workshop_zone:
+        coordinates: 0.123,1,0.07,0.042,0.445,0.136,0.407,0.995
+        loitering_time: 0
+        objects: person
+
+        inertia: 3
+  driveway:
+    enabled: true
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/driveway
+          roles: [record, audio]
+        - path: rtsp://127.0.0.1:8554/driveway_sub
+          roles: [detect]
+    detect:
+      enabled: true
+      width: 960
+      height: 540
+      fps: 10
+
+    objects:
+      track:
+        - person
+        - car
+        - motorcycle
+        - bicycle
+        - bus
+        - dog
+        - cat
+        - backpack
+        - umbrella
+        - handbag
+        - suitcase
+
+    zones:
+      e28:
+        coordinates: 0.842,1,0.695,0.449,0.307,0.478,0.006,0.505,0.004,0.993
+        inertia: 3
+        loitering_time: 0
+  kitchen:
+    enabled: true
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/kitchen
+          roles: [record, audio]
+        - path: rtsp://127.0.0.1:8554/kitchen_sub
+          roles: [detect]
+    detect:
+      enabled: true
+      width: 960
+      height: 540
+      fps: 10
+
+    objects:
+      track:
+        - person
+        - dog
+        - cat
+        - bottle
+        - cup
+        - bowl
+        - knife
+        - fork
+        - spoon
+        - dining table
+        - chair
+        - microwave
+        - oven
+        - toaster
+        - refrigerator
+        - sink
+        - cell phone
+        - clock
+
+    zones:
+      Island_Right:
+        coordinates: 0.137,0.001,0.151,0.595,0.453,0.581,0.439,0
+        loitering_time: 0
+        inertia: 1
+        objects: person
+      sink:
+        coordinates: 0.296,0,0.308,1,0.994,0.995,0.996,0.003
+        loitering_time: 0
+        inertia: 1
+        objects: person
+      island_left:
+        coordinates: 0,0.275,0.446,0.272,0.467,1,0.003,0.997
+        loitering_time: 0
+        inertia: 1
+        objects: person
+      whole_kitchen:
+        coordinates: 0.002,0.002,0.007,0.986,0.993,0.99,0.995,0.006
+        loitering_time: 0
+        objects:
+          - person
+          - dog
+          - cat
+
+record:
+  enabled: false
+
+snapshots:
+  enabled: true
+  bounding_box: true
+  crop: false
+  required_zones: []
+
+version: 0.17-0

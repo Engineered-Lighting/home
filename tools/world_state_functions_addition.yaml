@@ -1,0 +1,65 @@
+- spec:
+    name: get_all_rooms_state
+    description: "Compact overview of every room's occupancy and identified persons. Use for whole-home questions like 'who's home?' or 'what's going on?'. Returns {data, suggested_phrasing, confidence_band, freshness}. ALWAYS use suggested_phrasing as your reply; NEVER invent room or person names not in the data."
+    parameters:
+      type: object
+      properties: {}
+  function:
+    type: world_state
+    name: get_all_rooms_state
+- spec:
+    name: get_room_state
+    description: "Detailed state for one room: who is in it, Frigate labels, latest perception summary, freshness. Use for 'what do you see in the kitchen?' style. If data is null, say so — do NOT guess based on the room name."
+    parameters:
+      type: object
+      properties:
+        room:
+          type: string
+          description: "Room name like 'kitchen' or 'living_room'."
+      required:
+        - room
+  function:
+    type: world_state
+    name: get_room_state
+- spec:
+    name: find_person
+    description: "Locate a person across cameras + HA presence. Returns currently_seen, last_visual_room, last_visual_at, confidence, ha_location. Use for 'where is Marcelo?' or 'do you see me?' style. Accepts 'me' / 'I' / 'myself' as the primary user. If data is null (no record), you MUST tell the user you don't have a record of that person — NEVER fabricate a location."
+    parameters:
+      type: object
+      properties:
+        name:
+          type: string
+          description: "Person's name (case-insensitive). The primary user is spelled 'Marcelo' — one L, not 'Marcello'."
+      required:
+        - name
+  function:
+    type: world_state
+    name: find_person
+- spec:
+    name: who_is_in
+    description: "List identified persons + unknown_count in a specific room. Use for 'who's in the living room?' style. If identified is empty but unknown_count > 0, say 'someone' — NEVER guess a name."
+    parameters:
+      type: object
+      properties:
+        room:
+          type: string
+          description: "Room name like 'kitchen' or 'living_room'."
+      required:
+        - room
+  function:
+    type: world_state
+    name: who_is_in
+- spec:
+    name: refresh_perception
+    description: "Trigger a FRESH vision-sidecar visual snapshot for a room (2-5s latency). Use ONLY when cached perception is stale or insufficient. Capped at 2 calls per conversation."
+    parameters:
+      type: object
+      properties:
+        room:
+          type: string
+          description: "Room name to refresh perception for."
+      required:
+        - room
+  function:
+    type: world_state
+    name: refresh_perception

@@ -1,0 +1,69 @@
+# eval_anticipator_heartbeat.yaml — Phase 2 eval harness watchdog.
+#
+# The predictive-lighting addon publishes a JSON heartbeat to
+#   predictive-lighting/eval/heartbeat
+# every HEARTBEAT_INTERVAL_S (60s) inside the message loop (so the heartbeat
+# naturally stalls if the event flow itself wedges, not just on process death).
+#
+# This package wires that into an HA-side alarm: a SENSOR with expire_after
+# becomes `unavailable` if no message arrives within the deadline; an
+# AUTOMATION watches the sensor and fires a persistent_notification.
+#
+# If HA ITSELF is down, this watchdog is also down. A secondary out-of-band
+# check (e.g., from the user's workstation) is the future-work failsafe
+# mentioned in the plan's nice-to-haves.
+
+mqtt:
+  - sensor:
+      name: "Predictive-lighting eval heartbeat"
+      unique_id: predictive_lighting_eval_heartbeat
+      state_topic: predictive-lighting/eval/heartbeat
+      value_template: "{{ value_json.ts | float | timestamp_local }}"
+      json_attributes_topic: predictive-lighting/eval/heartbeat
+      # If no heartbeat arrives in 300 s, sensor goes `unavailable`. The
+      # addon publishes every 60 s, so 300 s is 5 missed heartbeats —
+      # gives plenty of margin for transient MQTT hiccups.
+      expire_after: 300
+      icon: mdi:heart-pulse
+
+automation:
+  - alias: "Eval anticipator heartbeat — stalled alert"
+    id: eval_anticipator_heartbeat_stalled
+    description: >
+      Fires a persistent_notification when the predictive-lighting eval
+      heartbeat stalls (no MQTT publish for >300 s). Indicates the eval
+      harness is no longer collecting data — Phase 2 reports from this
+      window will have a gap.
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: sensor.predictive_lighting_eval_heartbeat
+        to: "unavailable"
+        # Require the unavailable state to persist for 60 s before alerting,
+        # so a transient broker drop + reconnect within a minute is silent.
+        for: "00:01:00"
+    actions:
+      - action: persistent_notification.create
+        data:
+          notification_id: eval_anticipator_heartbeat_stalled
+          title: "Eval anticipator heartbeat stalled"
+          message: >-
+            The predictive-lighting addon's eval-heartbeat MQTT topic has
+            been silent for > 5 minutes. The Phase 2 eval harness is no
+            longer collecting data. Check the addon logs:
+            `ha addons logs local_predictive_lighting`.
+
+  - alias: "Eval anticipator heartbeat — recovered (clear alert)"
+    id: eval_anticipator_heartbeat_recovered
+    description: >
+      Clears the stalled-alert notification once heartbeats resume.
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: sensor.predictive_lighting_eval_heartbeat
+        from: "unavailable"
+        for: "00:00:30"
+    actions:
+      - action: persistent_notification.dismiss
+        data:
+          notification_id: eval_anticipator_heartbeat_stalled

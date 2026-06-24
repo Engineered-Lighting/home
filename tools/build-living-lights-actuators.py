@@ -180,11 +180,22 @@ automation:
       # occupancy state changes (vacant / present / pass_through / away ...)
       - trigger: state
         entity_id: @@SENSOR_ID@@
+      # Direct Frigate occupancy wakeups. These make presence response robust
+      # even if the derived classifier sensor's state trigger is delayed or
+      # swallowed during a burst of template updates.
+      - trigger: state
+        entity_id: @@STABLE_ENTITY@@
+      - trigger: state
+        entity_id: @@RAW_OCCUPANCY_ENTITY@@
       # target-brightness changes — the movie / asleep / time-of-day
       # modifiers move predicted_brightness_pct without changing the state.
       - trigger: state
         entity_id: @@SENSOR_ID@@
         attribute: predicted_brightness_pct
+      # asleep flips can change the effective target even when the classifier
+      # remains present/vacant, so wake the pilot immediately.
+      - trigger: state
+        entity_id: input_boolean.living_lights_asleep
       # cutover — apply the current target the instant shadow mode goes off.
       - trigger: state
         entity_id: input_boolean.living_lights_shadow
@@ -204,11 +215,28 @@ automation:
       - condition: state
         entity_id: input_boolean.living_lights_zone_@@SLUG@@_enabled
         state: "on"
+      # Trigger-template sensors can emit state_changed events where the
+      # classifier state and target brightness did not actually change. Do
+      # not re-issue actuator calls for that churn; the dedicated
+      # predicted_brightness_pct attribute trigger and the real state-change
+      # trigger still handle meaningful target changes.
+      - condition: template
+        value_template: >-
+          {% set eid = trigger.entity_id | default('', true) %}
+          {% set attr = trigger.attribute | default(none, true) %}
+          {% if eid == '@@SENSOR_ID@@'
+                and attr in [none, '', 'None']
+                and trigger.from_state is not none
+                and trigger.to_state is not none
+                and trigger.from_state.state == trigger.to_state.state %}
+            false
+          {% else %}true{% endif %}
       # Manual-touch cooldown gate (R5-aligned). Reads input_datetime directly
       # to avoid the 5-s classifier-attribute lag.
-      #   - cooldown applies ONLY to states {vacant, present, pass_through}.
+      #   - cooldown applies ONLY to states {vacant, present, pass_through, asleep}.
       #     Explicit/override states (away, presence_override, manual_override,
-      #     night_safe, anticipated) and asleep ALWAYS bypass.
+      #     night_safe, anticipated) bypass, but asleep does NOT. A manual
+      #     touch while the house thinks the user is asleep must still stick.
       #   - sentinel year < 2000 (e.g., 1970-01-01) means the vacancy-expire
       #     or voice-override-reset automation cleared the manual.
       #   - in-zone + non-expired manual → block (manual sticks while in zone).
@@ -216,8 +244,7 @@ automation:
       - condition: template
         value_template: >-
           {% set state = states('@@SENSOR_ID@@') %}
-          {% set asleep = is_state('input_boolean.living_lights_asleep', 'on') %}
-          {% if state not in ['vacant', 'present', 'pass_through'] or asleep %}true
+          {% if state not in ['vacant', 'present', 'pass_through', 'asleep'] %}true
           {% else %}
             {% set lm = states('input_datetime.living_lights_zone_@@SLUG@@_last_manual_at') %}
             {% if not lm or lm in ['unknown', 'unavailable', 'none', ''] %}true
@@ -239,6 +266,11 @@ automation:
             {% endif %}
           {% endif %}
     actions:
+      - if:
+          - condition: template
+            value_template: "{{ trigger.entity_id in ['@@STABLE_ENTITY@@', '@@RAW_OCCUPANCY_ENTITY@@'] }}"
+        then:
+          - delay: "00:00:00.25"
       - variables:
           # Read the classifier state directly — not trigger.to_state — so the
           # pilot is correct whichever trigger fired (state / attribute / shadow).
@@ -319,6 +351,36 @@ def _build_co_controllers_map() -> dict:
 CO_CONTROLLERS = _build_co_controllers_map()
 
 
+# Room/group entities that external controls commonly target (HomeKit/Siri,
+# Lutron keypads, or broad Home Assistant service calls). These entities are
+# not actuator targets themselves, but their state changes still express user
+# intent and must arm a manual hold before the per-zone pilots can revert them.
+AGGREGATE_LIGHT_CONTROLLERS = {
+    "light.kitchen": [
+        ("sink", "kitchen"),
+        ("island_left", "kitchen"),
+        ("island_right", "kitchen"),
+    ],
+    "light.kitchen_lights": [
+        ("sink", "kitchen"),
+        ("island_left", "kitchen"),
+        ("island_right", "kitchen"),
+    ],
+    "light.dining_room": [
+        ("dining_left", "dining_room"),
+        ("dining_right", "dining_room"),
+    ],
+    "light.dining_room_lights": [
+        ("dining_left", "dining_room"),
+        ("dining_right", "dining_room"),
+    ],
+    "light.living_room_lights": [
+        ("sofa", "living_room"),
+        ("office", "living_room"),
+    ],
+}
+
+
 def _per_entity_action_block(action, entity_ids, data_lines, indent) -> str:
     """A sequence of N per-entity action blocks (NOT one batched call with N
     entity_ids) — defence vs the Hue Bridge silent-drop bug."""
@@ -338,6 +400,35 @@ def _per_entity_action_block(action, entity_ids, data_lines, indent) -> str:
                 lines.append(f"{pad_data}{dl}")
         blocks.append("\n".join(lines))
     return "\n".join(blocks)
+
+
+def _manual_cooldown_gate_template(sensor_id, slug, stable_entity, indent) -> str:
+    """Jinja truth test used by actuators to decide whether automatic control
+    may run while a manual touch is still hot."""
+    ind = " " * indent
+    stable_expr = "states." + stable_entity
+    lines = [
+        ind + "{% set state = states('" + sensor_id + "') %}",
+        ind + "{% if state not in ['vacant', 'present', 'pass_through', 'asleep'] %}true",
+        ind + "{% else %}",
+        ind + "  {% set lm = states('input_datetime.living_lights_zone_" + slug + "_last_manual_at') %}",
+        ind + "  {% if not lm or lm in ['unknown', 'unavailable', 'none', ''] %}true",
+        ind + "  {% else %}",
+        ind + "    {% set manual_dt = as_datetime(lm | string) | as_local %}",
+        ind + "    {% if manual_dt.year < 2000 %}true",
+        ind + "    {% else %}",
+        ind + "      {% set stable_obj = " + stable_expr + " %}",
+        ind + "      {% if stable_obj is none %}true",
+        ind + "      {% elif stable_obj.state == 'on' %}false",
+        ind + "      {% else %}",
+        ind + "        {% set leave_time = stable_obj.last_changed %}",
+        ind + "        {{ (now() - ([manual_dt, leave_time] | max)).total_seconds() > 900 }}",
+        ind + "      {% endif %}",
+        ind + "    {% endif %}",
+        ind + "  {% endif %}",
+        ind + "{% endif %}",
+    ]
+    return "\n".join(lines)
 
 
 def _floor_or_off(eid, ct_line, indent) -> str:
@@ -404,7 +495,7 @@ def _vacant_block(light_targets, this_zone, co_map, ct_line, indent) -> str:
     return "\n".join(blocks)
 
 
-def _present_block(light_entity_ids, ct_line, indent) -> str:
+def _present_block(light_entity_ids, ct_line, indent, sensor_id, slug, stable_entity) -> str:
     """The confidence ramp: a conditional fast call (skipped when the zone
     is already bright — idempotent re-trigger), a delay, then the slow ramp
     to the target. `mode: restart` makes the whole thing interruptible.
@@ -433,6 +524,15 @@ def _present_block(light_entity_ids, ct_line, indent) -> str:
             indent + 4),
         i4 + "- delay:",
         i6 + "  seconds: " + str(RAMP_FAST_S),
+    ]
+    # A physical/Siri/Lutron change can arrive during the fast-ramp delay.
+    # Re-run the cooldown gate before the slow command so that new manual hold
+    # cancels the pending automatic correction instead of dimming the user back
+    # down two seconds later.
+    lines += [
+        i + "- condition: template",
+        i2 + "value_template: >-",
+        _manual_cooldown_gate_template(sensor_id, slug, stable_entity, indent + 4),
     ]
     # call 2 — slow confidence ramp to the target (branch top level, dash @ i)
     lines.append(_per_entity_action_block(
@@ -523,6 +623,7 @@ def emit_actuator(slug: str, targets: list) -> str:
     camera = ZONE_CAMERA[slug]
     sensor_id = f"sensor.{camera}_{slug}_lighting_state"
     stable_entity = f"binary_sensor.{camera}_{slug}_person_occupancy_stable"
+    raw_occupancy_entity = f"binary_sensor.{slug}_person_occupancy"
     # House-wide ct convergence data line. Pinned to THIS zone's classifier
     # so the pilot and gradient agree on sofa lights during movie mode
     # (gradient reads the same predicted_color_temp_kelvin). One template,
@@ -537,7 +638,7 @@ def emit_actuator(slug: str, targets: list) -> str:
         "light.turn_off", light_entity_ids,
         ["transition: " + str(AWAY_TRANSITION_S)], 18)
     override_actions = _override_block(slug, light_entity_ids, ct_line, 18)
-    present_actions = _present_block(light_entity_ids, ct_line, 18)
+    present_actions = _present_block(light_entity_ids, ct_line, 18, sensor_id, slug, stable_entity)
     pass_actions = _pass_block(light_entity_ids, ct_line, 18)
     anticipated_actions = _anticipated_block(light_entity_ids, ct_line, 18)
     default_actions = _per_entity_action_block(
@@ -550,6 +651,7 @@ def emit_actuator(slug: str, targets: list) -> str:
             .replace("@@SENSOR_ID@@", sensor_id)
             .replace("@@CAMERA@@", camera)
             .replace("@@STABLE_ENTITY@@", stable_entity)
+            .replace("@@RAW_OCCUPANCY_ENTITY@@", raw_occupancy_entity)
             .replace("@@TARGET_LIST@@", str(light_entity_ids))
             .replace("@@VACANT_ACTIONS@@", vacant_actions)
             .replace("@@AWAY_ACTIONS@@", away_actions)
@@ -705,6 +807,51 @@ def _emit_last_override_ctx_targets(owning_zones, indent=14):
     return "\n".join(lines)
 
 
+def _emit_last_command_targets(owning_zones, indent=14):
+    """YAML list of input_text entity_ids that carry the most recent
+    explicit lighting command id for every owning zone."""
+    ind = " " * indent
+    lines = []
+    for (slug, _camera) in owning_zones:
+        lines.append(ind + f"- input_text.living_lights_zone_{slug}_last_command_id")
+    return "\n".join(lines)
+
+
+def _emit_light_transition_dict_lines(indent=20):
+    """Jinja dict fragment for a raw HA light transition.
+
+    Stored on override_event so UI/debug surfaces can distinguish the actual
+    bulb transition from the system target.
+    """
+    ind = " " * indent
+    return "\n".join([
+        ind + "'light_transition': {",
+        ind + "  'trigger_attribute': trigger.attribute | default(none, true),",
+        ind + "  'from': {",
+        ind + "    'state': trigger.from_state.state | default(none, true),",
+        ind + "    'brightness': trigger.from_state.attributes.brightness | default(none, true),",
+        ind + "    'color_temp_kelvin': trigger.from_state.attributes.color_temp_kelvin | default(none, true),",
+        ind + "    'color_temp': trigger.from_state.attributes.color_temp | default(none, true),",
+        ind + "    'color_mode': trigger.from_state.attributes.color_mode | default(none, true),",
+        ind + "    'effect': trigger.from_state.attributes.effect | default(none, true)",
+        ind + "  },",
+        ind + "  'to': {",
+        ind + "    'state': trigger.to_state.state | default(none, true),",
+        ind + "    'brightness': trigger.to_state.attributes.brightness | default(none, true),",
+        ind + "    'color_temp_kelvin': trigger.to_state.attributes.color_temp_kelvin | default(none, true),",
+        ind + "    'color_temp': trigger.to_state.attributes.color_temp | default(none, true),",
+        ind + "    'color_mode': trigger.to_state.attributes.color_mode | default(none, true),",
+        ind + "    'effect': trigger.to_state.attributes.effect | default(none, true)",
+        ind + "  },",
+        ind + "  'ha_context': {",
+        ind + "    'id': trigger.to_state.context.id | default(none, true),",
+        ind + "    'parent_id': trigger.to_state.context.parent_id | default(none, true),",
+        ind + "    'user_id': trigger.to_state.context.user_id | default(none, true)",
+        ind + "  }",
+        ind + "},",
+    ])
+
+
 def _emit_jsonl_payload_block(light_entity, camera, owning_zones, indent=18):
     """Build the JSON payload that gets base64-encoded and appended to the
     preferences JSONL. Single tojson-piped Jinja expression so the whole
@@ -738,6 +885,7 @@ def _emit_jsonl_payload_block(light_entity, camera, owning_zones, indent=18):
         ind + "  'predictions_by_zone': {",
         *preds_dict_lines,
         ind + "  },",
+        _emit_light_transition_dict_lines(indent + 2),
         ind + "  'context': {",
         ind + f"    'state': pred_{primary_slug}_state,",
         ind + "    'profile': profile_state,",
@@ -756,6 +904,213 @@ def _emit_jsonl_payload_block(light_entity, camera, owning_zones, indent=18):
         ind + "} | tojson }}",
     ]
     return "\n".join(lines)
+
+
+def _emit_activity_jsonl_payload_block(light_entity, camera, owning_zones, indent=18):
+    """Build a raw lighting activity ledger event for every material tracked
+    light transition. This is metadata-only evidence; learning happens later
+    after Intelligence collapses raw changes into episodes."""
+    ind = " " * indent
+    primary_slug = owning_zones[0][0]
+    owning_list = "[" + ", ".join(f"'{s}'" for (s, _c) in owning_zones) + "]"
+    preds_dict_lines = []
+    for (slug, _camera) in owning_zones:
+        preds_dict_lines.append(
+            ind + f"    '{slug}': {{'state': pred_{slug}_state, "
+                  f"'predicted_pct': pred_{slug}_p | int(0), "
+                  f"'ramp_initial_pct': pred_{slug}_ri | int(0), "
+                  f"'predicted_color_temp_kelvin': pred_{slug}_ct | int(0)}},"
+        )
+    lines = [
+        ind + "{{ {",
+        ind + "  'schema_version': 1,",
+        ind + "  'kind': 'lighting_change_event',",
+        ind + "  'raw_event_kind': 'lighting_change_event',",
+        ind + "  'event_id': event_id,",
+        ind + "  'ts': now().isoformat(),",
+        ind + f"  'zone': '{primary_slug}',",
+        ind + f"  'entity_id': '{light_entity}',",
+        ind + f"  'light_entity': '{light_entity}',",
+        ind + f"  'camera': '{camera}',",
+        ind + f"  'owning_zones': {owning_list},",
+        ind + "  'trigger_attribute': trigger.attribute | default(none, true),",
+        ind + "  'from': {",
+        ind + "    'state': from_state_s,",
+        ind + "    'brightness': from_bri_raw if from_bri_raw not in ['', 'unknown', 'unavailable', 'none', 'None'] else none,",
+        ind + "    'brightness_pct': from_bri_pct | int(0) if from_bri_pct not in ['', 'unknown', 'unavailable', 'none', 'None'] else none,",
+        ind + "    'color_temp_kelvin': from_ct_kelvin | int(0) if from_ct_kelvin not in ['', 'unknown', 'unavailable', 'none', 'None'] else none,",
+        ind + "    'color_temp': from_ct_mired | int(0) if from_ct_mired not in ['', 'unknown', 'unavailable', 'none', 'None'] else none,",
+        ind + "    'color_mode': from_color_mode if from_color_mode not in ['', 'unknown', 'unavailable', 'none', 'None'] else none,",
+        ind + "    'effect': from_effect if from_effect not in ['', 'unknown', 'unavailable', 'none', 'None'] else none",
+        ind + "  },",
+        ind + "  'to': {",
+        ind + "    'state': to_state_s,",
+        ind + "    'brightness': to_bri_raw if to_bri_raw not in ['', 'unknown', 'unavailable', 'none', 'None'] else none,",
+        ind + "    'brightness_pct': to_bri_pct | int(0) if to_bri_pct not in ['', 'unknown', 'unavailable', 'none', 'None'] else none,",
+        ind + "    'color_temp_kelvin': to_ct_kelvin | int(0) if to_ct_kelvin not in ['', 'unknown', 'unavailable', 'none', 'None'] else none,",
+        ind + "    'color_temp': to_ct_mired | int(0) if to_ct_mired not in ['', 'unknown', 'unavailable', 'none', 'None'] else none,",
+        ind + "    'color_mode': to_color_mode if to_color_mode not in ['', 'unknown', 'unavailable', 'none', 'None'] else none,",
+        ind + "    'effect': to_effect if to_effect not in ['', 'unknown', 'unavailable', 'none', 'None'] else none",
+        ind + "  },",
+        ind + "  'predicted': {",
+        ind + f"    'brightness_pct': pred_{primary_slug}_p | int(0),",
+        ind + f"    'color_temp_kelvin': pred_{primary_slug}_ct | int(0)",
+        ind + "  },",
+        ind + "  'predictions_by_zone': {",
+        *preds_dict_lines,
+        ind + "  },",
+        ind + "  'context': {",
+        ind + f"    'state': pred_{primary_slug}_state,",
+        ind + "    'profile': profile_state,",
+        ind + "    'tv_playing': tv_playing,",
+        ind + "    'gaming_active': gaming_active,",
+        ind + "    'working_hours_active': working_hours_active,",
+        ind + "    'sonos_playing': sonos_playing,",
+        ind + "    'asleep': asleep_state,",
+        ind + "    'night_safe': night_safe_state,",
+        ind + "    'user_at_home': user_at_home_state,",
+        ind + "    'any_occupied': any_occupied_state,",
+        ind + "    'shadow_mode': shadow_mode",
+        ind + "  },",
+        ind + "  'ha_context': {",
+        ind + "    'id': trigger.to_state.context.id | default(none, true),",
+        ind + "    'parent_id': trigger.to_state.context.parent_id | default(none, true),",
+        ind + "    'user_id': trigger.to_state.context.user_id | default(none, true)",
+        ind + "  },",
+        ind + "  'source_hint': source_hint,",
+        ind + "  'source_confidence': source_confidence,",
+        ind + "  'source_hints': {",
+        ind + "    'has_user_id': trigger.to_state.context.user_id | default(none, true) not in [none, '', 'None'],",
+        ind + "    'has_parent_id': trigger.to_state.context.parent_id | default(none, true) not in [none, '', 'None'],",
+        ind + "    'trigger_attribute': trigger.attribute | default(none, true),",
+        ind + "    'command_id_age_s': command_id_age_s | int(999999)",
+        ind + "  },",
+        ind + "  'command_id': (linked_command_id | string | trim) if (linked_command_id | string | trim) not in ['', 'unknown', 'unavailable', 'none', 'None'] else none",
+        ind + "} | tojson }}",
+    ]
+    return "\n".join(lines)
+
+
+def _emit_activity_automation(light_entity, owning_zones, camera) -> str:
+    """One per-light universal activity-capture automation.
+
+    Captures all material state/brightness/temperature/mode transitions for
+    living-lights controlled leaf lights. It does not update manual cooldowns
+    or preference labels; it only appends raw metadata evidence.
+    """
+    primary_slug = owning_zones[0][0]
+    light_slug = light_entity.replace("light.", "")
+    per_zone_scalars = _emit_per_zone_scalar_vars(owning_zones, indent=10)
+    jsonl_block = _emit_activity_jsonl_payload_block(light_entity, camera, owning_zones, indent=20)
+    return f"""  - alias: "Living Lights â€” lighting activity ledger ({light_entity})"
+    id: living_lights_activity_{light_slug}
+    mode: queued
+    max: 40
+    triggers:
+      - trigger: state
+        entity_id: {light_entity}
+      - trigger: state
+        entity_id: {light_entity}
+        attribute: brightness
+      - trigger: state
+        entity_id: {light_entity}
+        attribute: color_temp_kelvin
+      - trigger: state
+        entity_id: {light_entity}
+        attribute: color_temp
+      - trigger: state
+        entity_id: {light_entity}
+        attribute: color_mode
+      - trigger: state
+        entity_id: {light_entity}
+        attribute: effect
+    actions:
+      - variables:
+          from_state_s: "{{{{ trigger.from_state.state | default(none, true) }}}}"
+          to_state_s: "{{{{ trigger.to_state.state | default(none, true) }}}}"
+          from_bri_raw: "{{{{ trigger.from_state.attributes.brightness | default(none, true) }}}}"
+          to_bri_raw: "{{{{ trigger.to_state.attributes.brightness | default(none, true) }}}}"
+          from_bri_pct: >-
+            {{% if from_state_s == 'off' %}}0
+            {{% elif from_bri_raw not in [none, '', 'unknown', 'unavailable', 'none', 'None'] %}}{{{{ ((from_bri_raw | float(0)) / 2.55) | round(0) | int }}}}
+            {{% else %}}{{{{ none }}}}{{% endif %}}
+          to_bri_pct: >-
+            {{% if to_state_s == 'off' %}}0
+            {{% elif to_bri_raw not in [none, '', 'unknown', 'unavailable', 'none', 'None'] %}}{{{{ ((to_bri_raw | float(0)) / 2.55) | round(0) | int }}}}
+            {{% else %}}{{{{ none }}}}{{% endif %}}
+          from_ct_mired: "{{{{ trigger.from_state.attributes.color_temp | default(none, true) }}}}"
+          to_ct_mired: "{{{{ trigger.to_state.attributes.color_temp | default(none, true) }}}}"
+          from_ct_kelvin: >-
+            {{% set k = trigger.from_state.attributes.color_temp_kelvin | default(none, true) %}}
+            {{% set m = trigger.from_state.attributes.color_temp | default(none, true) %}}
+            {{% if k not in [none, '', 'unknown', 'unavailable', 'none', 'None'] %}}{{{{ k | int(0) }}}}
+            {{% elif m not in [none, '', 'unknown', 'unavailable', 'none', 'None'] and (m | float(0)) > 0 %}}{{{{ (1000000 / (m | float(1))) | round(0) | int }}}}
+            {{% else %}}{{{{ none }}}}{{% endif %}}
+          to_ct_kelvin: >-
+            {{% set k = trigger.to_state.attributes.color_temp_kelvin | default(none, true) %}}
+            {{% set m = trigger.to_state.attributes.color_temp | default(none, true) %}}
+            {{% if k not in [none, '', 'unknown', 'unavailable', 'none', 'None'] %}}{{{{ k | int(0) }}}}
+            {{% elif m not in [none, '', 'unknown', 'unavailable', 'none', 'None'] and (m | float(0)) > 0 %}}{{{{ (1000000 / (m | float(1))) | round(0) | int }}}}
+            {{% else %}}{{{{ none }}}}{{% endif %}}
+          from_color_mode: "{{{{ trigger.from_state.attributes.color_mode | default(none, true) }}}}"
+          to_color_mode: "{{{{ trigger.to_state.attributes.color_mode | default(none, true) }}}}"
+          from_effect: "{{{{ trigger.from_state.attributes.effect | default(none, true) }}}}"
+          to_effect: "{{{{ trigger.to_state.attributes.effect | default(none, true) }}}}"
+          material_changed: >-
+            {{{{ from_state_s != to_state_s
+                or (from_bri_raw | string) != (to_bri_raw | string)
+                or (from_ct_kelvin | string) != (to_ct_kelvin | string)
+                or (from_ct_mired | string) != (to_ct_mired | string)
+                or (from_color_mode | string) != (to_color_mode | string)
+                or (from_effect | string) != (to_effect | string) }}}}
+          unknown_only_transition: >-
+            {{{{ from_state_s in ['unknown', 'unavailable', 'none', 'None', '']
+                and to_state_s in ['unknown', 'unavailable', 'none', 'None', ''] }}}}
+          event_id: "lightchg-{{{{ now().timestamp() | int }}}}-{{{{ now().microsecond }}}}"
+          command_id_raw: "{{{{ states('input_text.living_lights_zone_{primary_slug}_last_command_id') }}}}"
+          command_id_age_s: >-
+            {{% set parts = (command_id_raw | string).split('-') %}}
+            {{% if parts | length >= 2 and parts[0] == 'cmd' %}}
+              {{{{ (now().timestamp() | int) - (parts[1] | int(0)) }}}}
+            {{% else %}}999999{{% endif %}}
+          linked_command_id: >-
+            {{{{ command_id_raw if command_id_raw not in ['unknown', 'unavailable', 'none', 'None', ''] and (command_id_age_s | int(999999)) <= 120 else none }}}}
+          source_hint: >-
+            {{% set cid = linked_command_id | string | trim %}}
+            {{% if cid not in ['unknown', 'unavailable', 'none', 'None', ''] %}}home_app_ai
+            {{% elif trigger.to_state.context.parent_id | default(none, true) not in [none, '', 'None'] %}}automation_or_script
+            {{% elif trigger.to_state.context.user_id | default(none, true) not in [none, '', 'None'] %}}home_app_or_ha_user
+            {{% else %}}physical_or_bridge_or_unknown{{% endif %}}
+          source_confidence: >-
+            {{% set cid = linked_command_id | string | trim %}}
+            {{% if cid not in ['unknown', 'unavailable', 'none', 'None', ''] %}}high
+            {{% elif trigger.to_state.context.parent_id | default(none, true) not in [none, '', 'None'] %}}medium
+            {{% elif trigger.to_state.context.user_id | default(none, true) not in [none, '', 'None'] %}}low
+            {{% else %}}low{{% endif %}}
+{per_zone_scalars}
+          shadow_mode: "{{{{ is_state('input_boolean.living_lights_shadow', 'on') }}}}"
+          profile_state: "{{{{ states('sensor.living_lights_profile') }}}}"
+          tv_playing: "{{{{ states('media_player.lg_tv') in ['on', 'playing', 'paused', 'buffering'] }}}}"
+          sonos_playing: "{{{{ states('media_player.sonos') in ['on', 'playing', 'paused', 'buffering'] or states('media_player.living_room') in ['on', 'playing', 'paused', 'buffering'] }}}}"
+          gaming_active: "{{{{ is_state('input_boolean.living_lights_gaming_enabled', 'on') and state_attr('sensor.steam_steam_76561198136331341', 'game') not in [none, '', 'unavailable', 'unknown'] }}}}"
+          working_hours_active: "{{{{ is_state('binary_sensor.living_lights_working_hours_active', 'on') }}}}"
+          asleep_state: "{{{{ is_state('input_boolean.living_lights_asleep', 'on') }}}}"
+          night_safe_state: "{{{{ is_state('binary_sensor.living_lights_is_night_safe', 'on') }}}}"
+          user_at_home_state: "{{{{ is_state('input_boolean.user_at_home', 'on') }}}}"
+          any_occupied_state: "{{{{ is_state('binary_sensor.living_lights_any_occupied', 'on') }}}}"
+      - if:
+          - condition: template
+            value_template: "{{{{ material_changed == true or material_changed == 'true' }}}}"
+          - condition: template
+            value_template: "{{{{ unknown_only_transition != true and unknown_only_transition != 'true' }}}}"
+        then:
+          - variables:
+              json_payload: >-
+{jsonl_block}
+          - action: shell_command.living_lights_append_activity_log
+            data:
+              payload: "{{{{ json_payload | base64_encode }}}}"
+"""
 
 
 def _emit_detection_automation(light_entity, owning_zones, camera) -> str:
@@ -801,6 +1156,14 @@ def _emit_detection_automation(light_entity, owning_zones, camera) -> str:
       - trigger: state
         entity_id: {light_entity}
         attribute: brightness
+        for: "00:00:03"
+      - trigger: state
+        entity_id: {light_entity}
+        attribute: color_temp_kelvin
+        for: "00:00:03"
+      - trigger: state
+        entity_id: {light_entity}
+        attribute: color_temp
         for: "00:00:03"
     conditions:
       - condition: state
@@ -884,6 +1247,26 @@ def _emit_detection_automation(light_entity, owning_zones, camera) -> str:
               shadow_mode: "{{{{ shadow_mode }}}}"
               source_user_id: "{{{{ trigger.to_state.context.user_id | default(none, true) }}}}"
               debug_match_reason: "{{{{ match_reason }}}}"
+              light_transition:
+                trigger_attribute: "{{{{ trigger.attribute | default(none, true) }}}}"
+                from:
+                  state: "{{{{ trigger.from_state.state | default(none, true) }}}}"
+                  brightness: "{{{{ trigger.from_state.attributes.brightness | default(none, true) }}}}"
+                  color_temp_kelvin: "{{{{ trigger.from_state.attributes.color_temp_kelvin | default(none, true) }}}}"
+                  color_temp: "{{{{ trigger.from_state.attributes.color_temp | default(none, true) }}}}"
+                  color_mode: "{{{{ trigger.from_state.attributes.color_mode | default(none, true) }}}}"
+                  effect: "{{{{ trigger.from_state.attributes.effect | default(none, true) }}}}"
+                to:
+                  state: "{{{{ trigger.to_state.state | default(none, true) }}}}"
+                  brightness: "{{{{ trigger.to_state.attributes.brightness | default(none, true) }}}}"
+                  color_temp_kelvin: "{{{{ trigger.to_state.attributes.color_temp_kelvin | default(none, true) }}}}"
+                  color_temp: "{{{{ trigger.to_state.attributes.color_temp | default(none, true) }}}}"
+                  color_mode: "{{{{ trigger.to_state.attributes.color_mode | default(none, true) }}}}"
+                  effect: "{{{{ trigger.to_state.attributes.effect | default(none, true) }}}}"
+                ha_context:
+                  id: "{{{{ trigger.to_state.context.id | default(none, true) }}}}"
+                  parent_id: "{{{{ trigger.to_state.context.parent_id | default(none, true) }}}}"
+                  user_id: "{{{{ trigger.to_state.context.user_id | default(none, true) }}}}"
           - if:
               - condition: state
                 entity_id: input_boolean.living_lights_learning_enabled
@@ -895,6 +1278,72 @@ def _emit_detection_automation(light_entity, owning_zones, camera) -> str:
               - action: shell_command.living_lights_append_preference_log
                 data:
                   payload: "{{{{ json_payload | base64_encode }}}}"
+"""
+
+
+def _emit_fast_manual_arm_automation(light_entity, owning_zones, camera) -> str:
+    """Immediate per-light manual hold armer for external changes."""
+    light_slug = light_entity.replace("light.", "")
+    has_gradient = light_entity in SOFA_GRADIENT_KEYS and any(
+        s == "sofa" for (s, _c) in owning_zones
+    )
+    owning_list = "[" + ", ".join(f'"{s}"' for (s, _c) in owning_zones) + "]"
+    match_ok_block = _emit_match_ok_template(light_entity, owning_zones, has_gradient, indent=12)
+    last_manual_targets = _emit_last_manual_targets(owning_zones, indent=14)
+    last_override_ctx_targets = _emit_last_override_ctx_targets(owning_zones, indent=14)
+    return f"""  - alias: "Living Lights - fast manual hold arm ({light_entity})"
+    id: living_lights_fast_manual_arm_{light_slug}
+    mode: queued
+    max: 20
+    triggers:
+      - trigger: state
+        entity_id: {light_entity}
+      - trigger: state
+        entity_id: {light_entity}
+        attribute: brightness
+      - trigger: state
+        entity_id: {light_entity}
+        attribute: color_temp_kelvin
+      - trigger: state
+        entity_id: {light_entity}
+        attribute: color_temp
+    conditions:
+      - condition: state
+        entity_id: input_boolean.living_lights_enabled
+        state: "on"
+    actions:
+      - variables:
+          ctx_id: "hold-{{{{ now().timestamp() | int }}}}-{{{{ now().microsecond }}}}"
+          match_ok: >-
+{match_ok_block}
+      - if:
+          - condition: template
+            value_template: "{{{{ match_ok != true and match_ok != 'true' }}}}"
+        then:
+          - action: input_datetime.set_datetime
+            target:
+              entity_id:
+{last_manual_targets}
+            data:
+              datetime: "{{{{ now().strftime('%Y-%m-%d %H:%M:%S') }}}}"
+          - action: input_text.set_value
+            target:
+              entity_id:
+{last_override_ctx_targets}
+            data:
+              value: "{{{{ ctx_id }}}}"
+          - event: living_lights_manual_hold_armed
+            event_data:
+              context_id: "{{{{ ctx_id }}}}"
+              ts: "{{{{ now().isoformat() }}}}"
+              zone: "{owning_zones[0][0]}"
+              light_entity: "{light_entity}"
+              camera: "{camera}"
+              owning_zones: {owning_list}
+              trigger_attribute: "{{{{ trigger.attribute | default(none, true) }}}}"
+              source_user_id: "{{{{ trigger.to_state.context.user_id | default(none, true) }}}}"
+              source_parent_id: "{{{{ trigger.to_state.context.parent_id | default(none, true) }}}}"
+              debug_match_ok: "{{{{ match_ok }}}}"
 """
 
 
@@ -959,19 +1408,26 @@ def _emit_voice_override_reset_automation(slug) -> str:
 def emit_manual_detection() -> str:
     """Assemble the full living_lights_manual_detection.yaml package:
     - shell_command for appending to preference JSONL
+    - per-light + aggregate fast manual-hold arming automations
     - 10 per-light manual-touch detection automations
     - 10 per-zone vacancy-expire automations (sentinel write after 15 min vacant)
     - 10 per-zone voice-override sentinel-reset automations
     """
     header = """# living_lights_manual_detection.yaml — GENERATED by tools/build-living-lights-actuators.py
 #
-# Manual-touch detection + cooldown-expire + voice-override-reset.
+# Fast manual hold arming + settled manual-touch detection +
+# cooldown-expire + voice-override-reset.
 #
-# Detection fires `living_lights_override_detected` HA bus event whenever a
-# light's brightness diverges from any owning zone's prediction (with ramp-
-# window and sofa-gradient absorption). Event fires ALWAYS when
-# input_boolean.living_lights_enabled is on. JSONL preference capture is
-# additionally gated by input_boolean.living_lights_learning_enabled.
+# Fast arming stamps last_manual_at immediately for external light changes
+# whose actual state does not match the current Living Lights prediction.
+# This is what makes Lutron/HomeKit/Siri/physical touches stick before an
+# actuator can revert them, even when HA context metadata is parented.
+#
+# Settled detection still fires `living_lights_override_detected` HA bus event
+# after 3s whenever a light's brightness diverges from any owning zone's
+# prediction (with ramp-window and sofa-gradient absorption). Event fires
+# ALWAYS when input_boolean.living_lights_enabled is on. JSONL preference
+# capture is additionally gated by input_boolean.living_lights_learning_enabled.
 #
 # Vacancy-expire writes the 1970-01-01 sentinel to last_manual_at after the
 # zone has been vacant for 15 continuous minutes — the cooldown then treats
@@ -985,9 +1441,27 @@ def emit_manual_detection() -> str:
 
 shell_command:
   living_lights_append_preference_log: 'sh -c "echo {{ payload }} | base64 -d >> /config/lighting_preferences_pending.jsonl; echo >> /config/lighting_preferences_pending.jsonl"'
+  living_lights_append_activity_log: 'sh -c "echo {{ payload }} | base64 -d >> /config/lighting_activity.jsonl; echo >> /config/lighting_activity.jsonl"'
+
+input_text:
+@@COMMAND_HELPERS@@
 
 automation:
 """
+    # Per-light and aggregate immediate manual hold arming. This runs before
+    # the slower detector in the generated file so external controls win the
+    # race. Aggregate entities only arm a hold; preference logging remains on
+    # the leaf-light detectors where actual physical-light evidence is clean.
+    arm_blocks = []
+    for light_entity, owning_pairs in {
+        **AGGREGATE_LIGHT_CONTROLLERS,
+        **CO_CONTROLLERS,
+    }.items():
+        owning_zones = list(owning_pairs)
+        primary_camera = owning_zones[0][1]
+        arm_blocks.append(
+            _emit_fast_manual_arm_automation(light_entity, owning_zones, primary_camera)
+        )
     # Per-light detection
     detection_blocks = []
     for light_entity, owning_pairs in CO_CONTROLLERS.items():
@@ -995,6 +1469,16 @@ automation:
         primary_camera = owning_zones[0][1]
         detection_blocks.append(
             _emit_detection_automation(light_entity, owning_zones, primary_camera)
+        )
+    # Per-light universal activity ledger capture. This is intentionally
+    # separate from override detection: it never updates last_manual_at and
+    # does not create preference labels.
+    activity_blocks = []
+    for light_entity, owning_pairs in CO_CONTROLLERS.items():
+        owning_zones = list(owning_pairs)
+        primary_camera = owning_zones[0][1]
+        activity_blocks.append(
+            _emit_activity_automation(light_entity, owning_zones, primary_camera)
         )
     # Per-zone vacancy-expire (only zones that own at least one light)
     expire_blocks = []
@@ -1007,10 +1491,20 @@ automation:
             expire_blocks.append(_emit_vacancy_expire_automation(slug, camera))
     # Per-zone voice-override-reset
     voice_reset_blocks = []
-    for slug in seen_zones:
+    for slug in sorted(seen_zones):
         voice_reset_blocks.append(_emit_voice_override_reset_automation(slug))
 
-    return header + "\n".join(detection_blocks + expire_blocks + voice_reset_blocks)
+    command_helpers = []
+    for slug in sorted(seen_zones):
+        friendly = slug.replace("_", " ")
+        command_helpers.append(
+            f"""  living_lights_zone_{slug}_last_command_id:
+    name: "Living Lights {friendly} last command id"
+    max: 80"""
+        )
+    header = header.replace("@@COMMAND_HELPERS@@", "\n".join(command_helpers))
+
+    return header + "\n".join(arm_blocks + detection_blocks + activity_blocks + expire_blocks + voice_reset_blocks)
 
 
 def main() -> int:
@@ -1053,8 +1547,10 @@ def main() -> int:
         manual_outfile = pkg_dir / "living_lights_manual_detection.yaml"
         if args.apply:
             manual_outfile.write_text(manual_yaml, encoding="utf-8")
+            armer_count = len(CO_CONTROLLERS) + len(AGGREGATE_LIGHT_CONTROLLERS)
             print(f"WROTE {manual_outfile.name} "
-                  f"({len(CO_CONTROLLERS)} lights, "
+                  f"({armer_count} fast armers, "
+                  f"{len(CO_CONTROLLERS)} settled detectors, "
                   f"{len(manual_yaml)} bytes)")
         else:
             print(f"DRY-RUN {manual_outfile.name} ({len(manual_yaml)} bytes)")

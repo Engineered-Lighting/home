@@ -1,6 +1,7 @@
 # Rust / Tauri build artifacts
 target/
 **/target/
+**/target-*/
 src-tauri/gen/
 *.msi
 *.dmg
@@ -22,6 +23,8 @@ dist/
 *.bak
 *.bak.*
 *.swp
+tmp/
+.claude/worktrees/
 
 # OS noise
 .DS_Store
@@ -38,6 +41,11 @@ desktop.ini
 .venv/
 __pycache__/
 *.pyc
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+stack/services/*/data/
+stack/intelligence-data/
 
 # Tauri-generated platform projects we don't want committed
 src-tauri/gen/android/
@@ -45,6 +53,25 @@ src-tauri/gen/apple/
 
 # Source PNG for icons — generated via tools/make-icon.py, regen don't track
 app/src-tauri/icons/source.png
+
+# Generated diagnostics, probes, and local calibration artifacts
+.codex-home-dev.log
+gdebug-*
+app/_bootdebug/
+gesture-review-missed-wakes/
+gesture_label_review/
+gesture_motion_review/
+docs/gesture-*
+docs/hardened-gated-roadmap-*/
+tools/frigate-bench/option-*/
+tools/_tmp/
+tools/reports/
+tools/calibration-frames/
+tools/m3-workspace/
+tools/*.log
+tools/diagnose-report.md
+tools/measurement-history.csv
+ha-config/*.backup-*
 
 # 3D apartment runtime assets (served via Tauri asset protocol, NOT bundled)
 app/data/

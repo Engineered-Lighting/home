@@ -108,7 +108,10 @@
     if (!base) return null;
     let u;
     try { u = new URL(base); } catch { return null; }
-    const wsProto = u.protocol === "https:" ? "wss:" : "ws:";
+    let wsProto;
+    if (u.protocol === "https:" || u.protocol === "wss:") wsProto = "wss:";
+    else if (u.protocol === "http:" || u.protocol === "ws:") wsProto = "ws:";
+    else return null;
     const q = token ? `?token=${encodeURIComponent(token)}` : "";
     return `${wsProto}//${u.host}/s2s${q}`;
   }
@@ -130,6 +133,15 @@
     onPresence,
     onMedia,
   }) {
+    // Simulation Mode: voice WS is not opened. Sim scenarios animate
+    // voice.state synthetically (see simulation-data.jsx).
+    if (typeof window !== "undefined" && window.__SIM_ACTIVE === true) {
+      console.warn("[sim] startS2SRun blocked — Simulation Mode is active.");
+      if (typeof onError === "function") {
+        try { onError({ message: "Simulation Mode — voice mock only" }); } catch {}
+      }
+      return { stop: () => {}, setVoice: () => {}, analysers: null };
+    }
     const url = bridgeWsUrl(s2sBase, s2sToken);
     if (!url) {
       onError?.("invalid s2s base url");

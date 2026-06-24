@@ -24,6 +24,7 @@ from .experiments import (
     list_experiments,
 )
 from .ingest import canonical_json, utc_now
+from .lighting_activity import list_recent_lighting_activity, rebuild_lighting_change_episodes
 from .jobs import (
     execute_daily_memory,
     execute_evidence_pull,
@@ -237,6 +238,9 @@ def healthz() -> dict[str, Any]:
             "preference_observations",
             "preference_candidates",
             "lighting_decisions",
+            "lighting_change_events",
+            "lighting_command_events",
+            "lighting_change_episodes",
             "journals",
             "wiki_claims",
             "jobs",
@@ -331,6 +335,15 @@ def today() -> dict[str, Any]:
             "training_clip_manifests": conn.execute(
                 "SELECT COUNT(*) AS c FROM training_clip_manifests"
             ).fetchone()["c"],
+            "lighting_change_events": conn.execute(
+                "SELECT COUNT(*) AS c FROM lighting_change_events"
+            ).fetchone()["c"],
+            "lighting_command_events": conn.execute(
+                "SELECT COUNT(*) AS c FROM lighting_command_events"
+            ).fetchone()["c"],
+            "lighting_change_episodes": conn.execute(
+                "SELECT COUNT(*) AS c FROM lighting_change_episodes"
+            ).fetchone()["c"],
         }
         candidate_rows = conn.execute(
             """
@@ -380,6 +393,31 @@ def override_sessions(
             hours=hours,
             limit=limit,
             include_events=include_events,
+        )
+
+
+@app.post("/api/intelligence/lighting-activity/rebuild")
+def rebuild_lighting_activity() -> dict[str, Any]:
+    with db_conn() as conn:
+        init_db(conn)
+        return rebuild_lighting_change_episodes(conn)
+
+
+@app.get("/api/intelligence/lighting-activity")
+def lighting_activity(
+    zone: str | None = None,
+    hours: float = Query(24.0, ge=1.0, le=168.0),
+    limit: int = Query(80, ge=1, le=300),
+    include_raw: bool = False,
+) -> dict[str, Any]:
+    with db_conn() as conn:
+        init_db(conn)
+        return list_recent_lighting_activity(
+            conn,
+            zone=zone,
+            hours=hours,
+            limit=limit,
+            include_raw=include_raw,
         )
 
 

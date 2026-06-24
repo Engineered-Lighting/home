@@ -24,11 +24,22 @@ automation:
       # occupancy state changes (vacant / present / pass_through / away ...)
       - trigger: state
         entity_id: sensor.kitchen_island_right_lighting_state
+      # Direct Frigate occupancy wakeups. These make presence response robust
+      # even if the derived classifier sensor's state trigger is delayed or
+      # swallowed during a burst of template updates.
+      - trigger: state
+        entity_id: binary_sensor.kitchen_island_right_person_occupancy_stable
+      - trigger: state
+        entity_id: binary_sensor.island_right_person_occupancy
       # target-brightness changes — the movie / asleep / time-of-day
       # modifiers move predicted_brightness_pct without changing the state.
       - trigger: state
         entity_id: sensor.kitchen_island_right_lighting_state
         attribute: predicted_brightness_pct
+      # asleep flips can change the effective target even when the classifier
+      # remains present/vacant, so wake the pilot immediately.
+      - trigger: state
+        entity_id: input_boolean.living_lights_asleep
       # cutover — apply the current target the instant shadow mode goes off.
       - trigger: state
         entity_id: input_boolean.living_lights_shadow
@@ -48,11 +59,28 @@ automation:
       - condition: state
         entity_id: input_boolean.living_lights_zone_island_right_enabled
         state: "on"
+      # Trigger-template sensors can emit state_changed events where the
+      # classifier state and target brightness did not actually change. Do
+      # not re-issue actuator calls for that churn; the dedicated
+      # predicted_brightness_pct attribute trigger and the real state-change
+      # trigger still handle meaningful target changes.
+      - condition: template
+        value_template: >-
+          {% set eid = trigger.entity_id | default('', true) %}
+          {% set attr = trigger.attribute | default(none, true) %}
+          {% if eid == 'sensor.kitchen_island_right_lighting_state'
+                and attr in [none, '', 'None']
+                and trigger.from_state is not none
+                and trigger.to_state is not none
+                and trigger.from_state.state == trigger.to_state.state %}
+            false
+          {% else %}true{% endif %}
       # Manual-touch cooldown gate (R5-aligned). Reads input_datetime directly
       # to avoid the 5-s classifier-attribute lag.
-      #   - cooldown applies ONLY to states {vacant, present, pass_through}.
+      #   - cooldown applies ONLY to states {vacant, present, pass_through, asleep}.
       #     Explicit/override states (away, presence_override, manual_override,
-      #     night_safe, anticipated) and asleep ALWAYS bypass.
+      #     night_safe, anticipated) bypass, but asleep does NOT. A manual
+      #     touch while the house thinks the user is asleep must still stick.
       #   - sentinel year < 2000 (e.g., 1970-01-01) means the vacancy-expire
       #     or voice-override-reset automation cleared the manual.
       #   - in-zone + non-expired manual → block (manual sticks while in zone).
@@ -60,8 +88,7 @@ automation:
       - condition: template
         value_template: >-
           {% set state = states('sensor.kitchen_island_right_lighting_state') %}
-          {% set asleep = is_state('input_boolean.living_lights_asleep', 'on') %}
-          {% if state not in ['vacant', 'present', 'pass_through'] or asleep %}true
+          {% if state not in ['vacant', 'present', 'pass_through', 'asleep'] %}true
           {% else %}
             {% set lm = states('input_datetime.living_lights_zone_island_right_last_manual_at') %}
             {% if not lm or lm in ['unknown', 'unavailable', 'none', ''] %}true
@@ -83,6 +110,11 @@ automation:
             {% endif %}
           {% endif %}
     actions:
+      - if:
+          - condition: template
+            value_template: "{{ trigger.entity_id in ['binary_sensor.kitchen_island_right_person_occupancy_stable', 'binary_sensor.island_right_person_occupancy'] }}"
+        then:
+          - delay: "00:00:00.25"
       - variables:
           # Read the classifier state directly — not trigger.to_state — so the
           # pilot is correct whichever trigger fired (state / attribute / shadow).
@@ -164,6 +196,27 @@ automation:
                           transition: 2.0
                       - delay:
                           seconds: 2.0
+                  - condition: template
+                    value_template: >-
+                      {% set state = states('sensor.kitchen_island_right_lighting_state') %}
+                      {% if state not in ['vacant', 'present', 'pass_through', 'asleep'] %}true
+                      {% else %}
+                        {% set lm = states('input_datetime.living_lights_zone_island_right_last_manual_at') %}
+                        {% if not lm or lm in ['unknown', 'unavailable', 'none', ''] %}true
+                        {% else %}
+                          {% set manual_dt = as_datetime(lm | string) | as_local %}
+                          {% if manual_dt.year < 2000 %}true
+                          {% else %}
+                            {% set stable_obj = states.binary_sensor.kitchen_island_right_person_occupancy_stable %}
+                            {% if stable_obj is none %}true
+                            {% elif stable_obj.state == 'on' %}false
+                            {% else %}
+                              {% set leave_time = stable_obj.last_changed %}
+                              {{ (now() - ([manual_dt, leave_time] | max)).total_seconds() > 900 }}
+                            {% endif %}
+                          {% endif %}
+                        {% endif %}
+                      {% endif %}
                   - action: light.turn_on
                     target:
                       entity_id: light.island_right

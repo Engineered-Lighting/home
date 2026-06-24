@@ -1,0 +1,399 @@
+{
+  "_schema_version": 1,
+  "_addendum": 28,
+  "_description": "Per-feature validation matrix. Every feature gets Tier-1 (file marker) + at least one higher tier (unit/HTTP/integration).",
+  "features": [
+    {
+      "id": "M5",
+      "name": "Explainability drawer",
+      "tier1": {
+        "kind": "grep_count",
+        "file": "C:/Claude/home/app/src/home-explain.jsx",
+        "needles": ["HomeExplainDrawer", "ToolCallsSection"],
+        "min_per_needle": 1
+      },
+      "tier2": {
+        "kind": "node_run",
+        "cmd": "node tools/run-explain-tests.js",
+        "expect_exit": 0
+      }
+    },
+    {
+      "id": "M5+",
+      "name": "Tool timeline bar",
+      "tier1": {
+        "kind": "grep_count",
+        "file": "C:/Claude/home/app/src/home-explain.jsx",
+        "needles": ["computeToolTimeline", "ToolCallsSection"],
+        "min_per_needle": 1
+      },
+      "tier2": {
+        "kind": "node_run",
+        "cmd": "node tools/run-explain-tests.js",
+        "expect_exit": 0
+      }
+    },
+    {
+      "id": "F-19",
+      "name": "GPU temp pill",
+      "tier1": {
+        "kind": "grep_count",
+        "file": "C:/Claude/home/app/src/home-metrics-lab.jsx",
+        "needles": ["gpu_temp_c"],
+        "min_per_needle": 1
+      },
+      "tier2": {
+        "kind": "node_run",
+        "cmd": "node tools/run-lab-tests.js",
+        "expect_exit": 0
+      },
+      "tier3": {
+        "kind": "http_jq",
+        "url": "http://192.168.0.100:8092/metrics",
+        "method": "GET",
+        "jq": ".gpu_temp_c",
+        "assert": {"type": "int_range", "min": 20, "max": 95}
+      }
+    },
+    {
+      "id": "find_clips",
+      "name": "Frigate clip search tool",
+      "tier1": {
+        "kind": "grep_count",
+        "file": "C:/Claude/home/ha-config/extended_openai_conversation/functions/frigate.py",
+        "needles": ["_find_clips", "find_clips"],
+        "min_per_needle": 1
+      },
+      "tier2": {
+        "kind": "python_test",
+        "file": "ha-config/extended_openai_conversation/test_frigate_tool.py"
+      },
+      "tier3": {
+        "kind": "http_jq",
+        "url": "http://192.168.0.125:5000/api/events?has_clip=0&limit=1",
+        "method": "GET",
+        "assert": {"type": "http_ok"}
+      }
+    },
+    {
+      "id": "M2",
+      "name": "Recap tool",
+      "tier1": {
+        "kind": "grep_count",
+        "file": "C:/Claude/home/ha-config/extended_openai_conversation/functions/recap.py",
+        "needles": ["RecapFunction", "_recap"],
+        "min_per_needle": 1
+      },
+      "tier2": {
+        "kind": "python_test",
+        "file": "ha-config/extended_openai_conversation/test_recap.py"
+      }
+    },
+    {
+      "id": "F-32",
+      "name": "World-state drawer",
+      "tier1": {
+        "kind": "grep_count",
+        "file": "C:/Claude/home/app/src/home-worldstate.jsx",
+        "needles": ["HomeWorldStateDrawer"],
+        "min_per_needle": 1
+      },
+      "tier2": {
+        "kind": "node_run",
+        "cmd": "node tools/run-worldstate-tests.js",
+        "expect_exit": 0
+      }
+    },
+    {
+      "id": "F-15",
+      "name": "Stage attribution",
+      "tier1": {
+        "kind": "grep_count",
+        "file": "C:/Claude/home/app/src/home-metrics-lab-helpers.js",
+        "needles": ["computeStageBaselines", "computeStageDelta"],
+        "min_per_needle": 1
+      },
+      "tier2": {
+        "kind": "node_run",
+        "cmd": "node tools/run-lab-tests.js",
+        "expect_exit": 0
+      }
+    },
+    {
+      "id": "M6",
+      "name": "High-impact action confirmation",
+      "tier1": {
+        "kind": "grep_count",
+        "file": "C:/Claude/home/ha-config/extended_openai_conversation/const.py",
+        "needles": ["HIGH_IMPACT_DOMAINS", "lock", "alarm_control_panel", "garage_door"],
+        "min_per_needle": 1
+      },
+      "tier2": {
+        "kind": "python_test",
+        "file": "ha-config/extended_openai_conversation/test_native.py"
+      }
+    },
+    {
+      "id": "A-1",
+      "name": "Capability registry",
+      "tier1": {
+        "kind": "grep_count",
+        "file": "C:/Claude/home/app/src/home-capabilities.js",
+        "needles": ["CAPABILITY_REGISTRY", "summarizeCapabilityHealth", "deriveCapabilityHealth"],
+        "min_per_needle": 1
+      },
+      "tier2": {
+        "kind": "node_run",
+        "cmd": "node tools/run-capabilities-tests.js",
+        "expect_exit": 0
+      }
+    },
+    {
+      "id": "F-18",
+      "name": "Capability chip rendering",
+      "tier1": {
+        "kind": "grep_count",
+        "file": "C:/Claude/home/app/src/home-app.jsx",
+        "needles": ["summarizeCapabilityHealth"],
+        "min_per_needle": 1
+      },
+      "tier2": {
+        "kind": "node_run",
+        "cmd": "node tools/run-capabilities-tests.js",
+        "expect_exit": 0
+      }
+    },
+    {
+      "id": "F-3",
+      "name": "Multi-frame vision",
+      "tier1": {
+        "kind": "grep_count",
+        "file": "C:/Claude/home/stack/services/vision/app.py",
+        "needles": ["/describe_clip", "frames"],
+        "min_per_needle": 1
+      },
+      "tier2": {
+        "kind": "node_run",
+        "cmd": "node tools/run-vision-tests.js",
+        "expect_exit": 0
+      },
+      "tier3": {
+        "kind": "http_jq_post",
+        "url": "http://192.168.0.100:8091/describe_clip",
+        "body": {"camera": "camera.living_room", "frames": 2, "question": "test"},
+        "asserts": [
+          {"jq": ".frames_captured", "type": "int_min", "min": 2},
+          {"jq": ".description | length", "type": "int_min", "min": 10},
+          {"jq": ".latency_ms", "type": "int_max", "max": 30000},
+          {"jq": ".model", "type": "eq", "value": "qwen3-vl-30b"}
+        ]
+      }
+    },
+    {
+      "id": "F-7",
+      "name": "Stakes-matched ack",
+      "tier1": {
+        "kind": "grep_count",
+        "file": "C:/Claude/home/ha-config/extended_openai_conversation/functions/native.py",
+        "needles": ["_stakes_for", "_ack_hint", "STAKES_BY_DOMAIN"],
+        "min_per_needle": 1
+      },
+      "tier2": {
+        "kind": "python_test",
+        "file": "ha-config/extended_openai_conversation/test_native.py"
+      }
+    },
+    {
+      "id": "slash_describe_clip",
+      "name": "/describe-clip slash command",
+      "tier1": {
+        "kind": "grep_count",
+        "file": "C:/Claude/home/app/src/home-app.jsx",
+        "needles": ["describe-clip"],
+        "min_per_needle": 1
+      },
+      "tier2": {
+        "kind": "node_run",
+        "cmd": "node tools/run-slash-command-tests.js",
+        "expect_exit": 0
+      }
+    },
+    {
+      "id": "F-32+",
+      "name": "Auto-refresh countdown",
+      "tier1": {
+        "kind": "grep_count",
+        "file": "C:/Claude/home/app/src/home-worldstate.jsx",
+        "needles": ["refreshIntervalMs", "countdown"],
+        "min_per_needle": 1
+      },
+      "tier2": {
+        "kind": "node_run",
+        "cmd": "node tools/run-worldstate-tests.js",
+        "expect_exit": 0
+      }
+    },
+    {
+      "id": "A-5",
+      "name": "Per-room context helper",
+      "tier1": {
+        "kind": "grep_count",
+        "file": "C:/Claude/home/ha-config/extended_openai_conversation/template.py",
+        "needles": ["_current_room_context", "current_room_context"],
+        "min_per_needle": 1
+      },
+      "tier2": {
+        "kind": "python_test",
+        "file": "ha-config/extended_openai_conversation/test_template_helpers.py"
+      }
+    },
+    {
+      "id": "capability_tool_enrichment",
+      "name": "Capability tooltip lists affected tools",
+      "tier1": {
+        "kind": "grep_count_min",
+        "file": "C:/Claude/home/app/src/home-capabilities.js",
+        "needle": "affected_tools",
+        "min_count": 10
+      },
+      "tier2": {
+        "kind": "node_run",
+        "cmd": "node tools/run-capabilities-tests.js",
+        "expect_exit": 0
+      }
+    },
+    {
+      "id": "capability_fallback_hints",
+      "name": "Capability tooltip fallback hints",
+      "tier1": {
+        "kind": "grep_count_min",
+        "file": "C:/Claude/home/app/src/home-capabilities.js",
+        "needle": "fallback_hint",
+        "min_count": 5
+      },
+      "tier2": {
+        "kind": "node_run",
+        "cmd": "node tools/run-capabilities-tests.js",
+        "expect_exit": 0
+      }
+    },
+    {
+      "id": "slash_agent_tools",
+      "name": "/agent-tools slash command",
+      "tier1": {
+        "kind": "grep_count",
+        "file": "C:/Claude/home/app/src/home-app.jsx",
+        "needles": ["agent-tools"],
+        "min_per_needle": 1
+      },
+      "tier2": {
+        "kind": "node_run",
+        "cmd": "node tools/run-slash-command-tests.js",
+        "expect_exit": 0
+      }
+    },
+    {
+      "id": "worldstate_filter",
+      "name": "/world-state per-room filter",
+      "tier1": {
+        "kind": "grep_count_min",
+        "file": "C:/Claude/home/app/src/home-worldstate.jsx",
+        "needle": "initialRoom",
+        "min_count": 2
+      },
+      "tier2": {
+        "kind": "node_run",
+        "cmd": "node tools/run-slash-command-tests.js",
+        "expect_exit": 0
+      }
+    },
+    {
+      "id": "F-9",
+      "name": "invoke_script tool",
+      "tier1": {
+        "kind": "grep_count",
+        "file": "C:/Claude/home/ha-config/extended_openai_conversation/functions/native.py",
+        "needles": ["invoke_script", "def invoke_script"],
+        "min_per_needle": 1
+      },
+      "tier2": {
+        "kind": "python_test",
+        "file": "ha-config/extended_openai_conversation/test_native.py"
+      }
+    },
+    {
+      "id": "slash_cameras",
+      "name": "/cameras slash command",
+      "tier1": {
+        "kind": "grep_count",
+        "file": "C:/Claude/home/app/src/home-app.jsx",
+        "needles": ["cameras"],
+        "min_per_needle": 1
+      },
+      "tier2": {
+        "kind": "node_run",
+        "cmd": "node tools/run-slash-command-tests.js",
+        "expect_exit": 0
+      }
+    },
+    {
+      "id": "help_overhaul",
+      "name": "/help overhaul with categories",
+      "tier1": {
+        "kind": "grep_count",
+        "file": "C:/Claude/home/app/src/home-app.jsx",
+        "needles": ["SLASH_CMD_CATEGORIES", "hg-fill-input"],
+        "min_per_needle": 1
+      },
+      "tier2_render": {
+        "kind": "grep_count",
+        "file": "C:/Claude/home/app/src/home-events.jsx",
+        "needles": ["HelpContent", "HelpRow"],
+        "min_per_needle": 1
+      },
+      "tier2": {
+        "kind": "node_run",
+        "cmd": "node tools/run-slash-command-tests.js",
+        "expect_exit": 0
+      }
+    }
+  ],
+  "service_probes": [
+    {
+      "id": "vllm",
+      "url": "http://192.168.0.100:8000/v1/models",
+      "expect_http": 200
+    },
+    {
+      "id": "metrics_sidecar",
+      "url": "http://192.168.0.100:8092/healthz",
+      "expect_http": 200
+    },
+    {
+      "id": "vision_sidecar",
+      "url": "http://192.168.0.100:8091/healthz",
+      "expect_http": 200
+    },
+    {
+      "id": "ha_core",
+      "url": "http://homeassistant.local:8123/api/",
+      "expect_http": 401
+    },
+    {
+      "id": "frigate",
+      "url": "http://192.168.0.125:5000/api/version",
+      "expect_http": 200
+    }
+  ],
+  "routing_log_probe": {
+    "ssh_host": "root@homeassistant.local",
+    "ssh_port": 22222,
+    "path": "/config/external_routing.log",
+    "tail_count": 50,
+    "asserts": [
+      {"name": "no_http_502_in_tail", "kind": "no_http_502"},
+      {"name": "no_phantom_zones_in_tail", "kind": "no_phantom_zones",
+       "real_rooms": ["kitchen", "dining_room", "living_room", "workshop", "driveway", "office"]}
+    ]
+  }
+}

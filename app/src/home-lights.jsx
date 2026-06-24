@@ -180,8 +180,10 @@ function Slider({ label, value, min, max, step, unit, defaultValue, onChange, di
 // Range: min 1800 / max 4500 (matches AL clamp + the input_number).
 // Drag always sets a non-zero override; click the ↺ to return to 0.
 // ── HA service-call wrapper ────────────────────────────────────────────
-// The HAClient in home-ha.jsx exposes only a generic `call(payload)` method
-// that sends raw WebSocket messages. It does NOT have a `callService`
+// Prefer HAClient.callService when present, but keep a raw call_service
+// fallback so older mocks and local probes can still drive the drawer.
+// Older versions of HAClient exposed only a generic `call(payload)` method
+// that sends raw WebSocket messages. They did NOT have a `callService`
 // convenience method — calls like `client.callService("input_number",
 // "set_value", { ... })` throw "is not a function" silently from
 // promise-based catch handlers, which is exactly why our slider drags
@@ -191,15 +193,37 @@ function Slider({ label, value, min, max, step, unit, defaultValue, onChange, di
 //
 // Reference: https://developers.home-assistant.io/docs/api/websocket/#calling-a-service
 function haCallService(client, domain, service, data) {
-  if (!client || typeof client.call !== "function") {
-    return Promise.reject(new Error("HA client not ready (no .call method)"));
+  if (!client) {
+    return Promise.reject(new Error("Home Assistant client is not ready"));
   }
-  return client.call({
+  if (Object.prototype.hasOwnProperty.call(client, "ws") &&
+      (!client.ws || client.ws.readyState !== 1)) {
+    return Promise.reject(new Error("Home Assistant websocket is offline"));
+  }
+  if (typeof client.callService === "function") {
+    return client.callService(domain, service, data || {});
+  }
+  if (typeof client.call !== "function") {
+    return Promise.reject(new Error("Home Assistant client cannot call services"));
+  }
+  const target = {};
+  const serviceData = {};
+  for (const [key, value] of Object.entries(data || {})) {
+    if (value == null) continue;
+    if (key === "entity_id" || key === "area_id" || key === "device_id") {
+      target[key] = value;
+    } else {
+      serviceData[key] = value;
+    }
+  }
+  const payload = {
     type: "call_service",
     domain,
     service,
-    service_data: data || {},
-  });
+    service_data: serviceData,
+  };
+  if (Object.keys(target).length > 0) payload.target = target;
+  return client.call(payload);
 }
 window.haCallService = haCallService;
 
@@ -461,7 +485,7 @@ function FrozenCard({ title, subtitle, intro, knobs, fileLocation, whyFrozen, cu
 
 // ── Main drawer component ──────────────────────────────────────────────
 
-function HomeLightsDrawer({ open, onClose, client, sim, askExternal }) {
+function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askExternal }) {
   const [zone, setZone] = useState("office");
   const [states, setStates] = useState({});  // { entity_id: { state, attributes } }
   const [error, setError] = useState(null);
@@ -475,10 +499,16 @@ function HomeLightsDrawer({ open, onClose, client, sim, askExternal }) {
   const jumpToToD = useCallback(() => {
     todSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
+  const haOnline = !!client && (connection == null || connection === "online");
+  const offlineWriteMessage = "Home Assistant is reconnecting; light controls are disabled until it is online.";
 
   // Fetch + subscribe on open
   useEffect(() => {
-    if (!open || !client) return undefined;
+    if (!open || !haOnline) return undefined;
+    if (connection != null && connection !== "online") {
+      setError(offlineWriteMessage);
+      return undefined;
+    }
     let active = true;
     const fetch = async () => {
       try {
@@ -505,6 +535,12 @@ function HomeLightsDrawer({ open, onClose, client, sim, askExternal }) {
       "binary_sensor.living_lights_",
       "sensor.living_lights_profile",
     ];
+    const ownedEntityIds = new Set([
+      "input_boolean.homeai_sleep",
+      "media_player.lg_tv",
+      "sensor.steam_steam_76561198136331341",
+      "switch.home_adaptive_lighting_home",
+    ]);
     try {
       // Signature is subscribeEvents(eventType, onEvent) — eventType FIRST,
       // callback SECOND. Inverting the arguments here is what caused the
@@ -516,7 +552,7 @@ function HomeLightsDrawer({ open, onClose, client, sim, askExternal }) {
         if (!ev) return;
         const eid = ev.data?.entity_id;
         if (!eid) return;
-        const owned = ownedPrefixes.some(p => eid.startsWith(p));
+        const owned = ownedEntityIds.has(eid) || ownedPrefixes.some(p => eid.startsWith(p));
         // Always update classifier sensors too (for the active zone's status card).
         const isClassifier = eid.startsWith("sensor.") && eid.endsWith("_lighting_state");
         if (!owned && !isClassifier) return;
@@ -535,7 +571,7 @@ function HomeLightsDrawer({ open, onClose, client, sim, askExternal }) {
       clearInterval(poll);
       if (subRef.current) { try { subRef.current(); } catch (_) {} subRef.current = null; }
     };
-  }, [open, client]);
+  }, [open, client, connection]);
 
   // Esc to close
   useEffect(() => {
@@ -574,7 +610,7 @@ function HomeLightsDrawer({ open, onClose, client, sim, askExternal }) {
     sweep();                              // immediately on open
     const t = setInterval(sweep, 4000);   // and every 4 s while open
     return () => clearInterval(t);
-  }, [open, client]);
+  }, [open, client, haOnline]);
 
   // Compute the winning-modifier description. MUST be called before any
   // conditional early return (rules of hooks). Cheap; runs every render.
@@ -607,14 +643,14 @@ function HomeLightsDrawer({ open, onClose, client, sim, askExternal }) {
     `input_datetime.living_lights_zone_${z.slug}_last_manual_at`
   );
   const clearAllCooldowns = () => {
-    if (!client) return;
+    if (!haOnline) { setError(offlineWriteMessage); return; }
     haCallService(client, "input_datetime", "set_datetime", {
       entity_id: COOLDOWN_ENTITIES,
       datetime: "1970-01-01 00:00:00",
     }).catch((e) => setError(`clear cooldowns: ${e?.message || e}`));
   };
   const setNum = (entity_id, value) => {
-    if (!client) return;
+    if (!haOnline) { setError(offlineWriteMessage); return; }
     haCallService(client, "input_number", "set_value", { entity_id, value })
       .catch((e) => setError(`set ${entity_id}=${value}: ${e?.message || e}`));
     // Clear cooldowns so the pilot can actually drive the lights to the
@@ -649,7 +685,7 @@ function HomeLightsDrawer({ open, onClose, client, sim, askExternal }) {
     "light.sink", "light.island_left", "light.island_right",
   ];
   const pushCTToAllLights = (ct) => {
-    if (!client) return;
+    if (!haOnline) { setError(offlineWriteMessage); return; }
     if (!Number.isFinite(ct) || ct < 1800 || ct > 4500) return;
     try {
       const p = haCallService(client, "light", "turn_on", {
@@ -671,7 +707,7 @@ function HomeLightsDrawer({ open, onClose, client, sim, askExternal }) {
   // slider value, so per-modifier overrides + warmth bias + clamps all
   // resolve correctly.
   const setCTAndPush = (entity_id, value) => {
-    if (!client) return;
+    if (!haOnline) { setError(offlineWriteMessage); return; }
     haCallService(client, "input_number", "set_value", { entity_id, value })
       .catch((e) => setError(`set ${entity_id}=${value}: ${e?.message || e}`));
     clearAllCooldowns();
@@ -688,13 +724,13 @@ function HomeLightsDrawer({ open, onClose, client, sim, askExternal }) {
     }, 700);
   };
   const toggleBool = (entity_id) => {
-    if (!client) return;
+    if (!haOnline) { setError(offlineWriteMessage); return; }
     const cur = getState(states, entity_id) === "on";
     haCallService(client, "input_boolean", cur ? "turn_off" : "turn_on", { entity_id })
       .catch((e) => setError(`toggle ${entity_id}: ${e?.message || e}`));
   };
   const setText = (entity_id, value) => {
-    if (!client) return;
+    if (!haOnline) { setError(offlineWriteMessage); return; }
     haCallService(client, "input_text", "set_value", { entity_id, value })
       .catch((e) => setError(`set ${entity_id}=${value}: ${e?.message || e}`));
   };
@@ -817,26 +853,29 @@ function HomeLightsDrawer({ open, onClose, client, sim, askExternal }) {
               quick adjustments
             </span>
             <div style={{ display: "flex", gap: 4 }}>
-              <button onClick={() => setText("input_text.living_lights_bias_zone_scope", "all")}
+              <button disabled={!haOnline} onClick={() => setText("input_text.living_lights_bias_zone_scope", "all")}
                 style={{ background: scopeIsAll ? "var(--hg-accent, #3aa6ff)" : "var(--hg-bg-2)",
                          color: scopeIsAll ? "white" : "var(--hg-fg-1)",
                          border: "1px solid " + (scopeIsAll ? "transparent" : "var(--hg-border)"),
-                         borderRadius: 4, padding: "2px 8px",
-                         fontFamily: FONT_MONO, fontSize: 10, cursor: "pointer" }}>
+                          borderRadius: 4, padding: "2px 8px",
+                          fontFamily: FONT_MONO, fontSize: 10, cursor: haOnline ? "pointer" : "not-allowed",
+                          opacity: haOnline ? 1 : 0.45 }}>
                 all zones
               </button>
-              <button onClick={() => setText("input_text.living_lights_bias_zone_scope", zone)}
+              <button disabled={!haOnline} onClick={() => setText("input_text.living_lights_bias_zone_scope", zone)}
                 style={{ background: scopeIsThisZone ? "var(--hg-accent, #3aa6ff)" : "var(--hg-bg-2)",
                          color: scopeIsThisZone ? "white" : "var(--hg-fg-1)",
                          border: "1px solid " + (scopeIsThisZone ? "transparent" : "var(--hg-border)"),
-                         borderRadius: 4, padding: "2px 8px",
-                         fontFamily: FONT_MONO, fontSize: 10, cursor: "pointer" }}>
+                          borderRadius: 4, padding: "2px 8px",
+                          fontFamily: FONT_MONO, fontSize: 10, cursor: haOnline ? "pointer" : "not-allowed",
+                          opacity: haOnline ? 1 : 0.45 }}>
                 {zone} only
               </button>
             </div>
           </div>
           <Slider label="Warmth bias" unit=" K" min={-500} max={500} step={50} defaultValue={0}
                   value={n("input_number.living_lights_warmth_bias_k", 0)}
+                  disabled={!haOnline}
                   onChange={(v) => setCTAndPush("input_number.living_lights_warmth_bias_k", v)}
                   hint={(scopeIsAll || scopeIsThisZone) ?
                         `effective ${predCT ?? "—"} K (clamped at ${HA_MIN_CT}–${HA_MAX_CT})` :
@@ -844,6 +883,7 @@ function HomeLightsDrawer({ open, onClose, client, sim, askExternal }) {
                   fmt={(v) => (v >= 0 ? `+${v} K` : `${v} K`)} />
           <Slider label="Brightness bias" unit=" pp" min={-30} max={30} step={5} defaultValue={0}
                   value={n("input_number.living_lights_brightness_bias_pp", 0)}
+                  disabled={!haOnline}
                   onChange={(v) => setNum("input_number.living_lights_brightness_bias_pp", v)}
                   hint={(scopeIsAll || scopeIsThisZone) ?
                         `effective ${predBri ?? "—"}% (clamped at 0–cap)` :
@@ -863,12 +903,15 @@ function HomeLightsDrawer({ open, onClose, client, sim, askExternal }) {
           winning={b("input_boolean.living_lights_asleep") === "on"}>
           <ToggleRow label="Auto-asleep latch" state={b("input_boolean.living_lights_asleep")}
                      onToggle={() => toggleBool("input_boolean.living_lights_asleep")}
+                     disabled={!haOnline}
                      hint="Set by 15-min quiet overnight; cleared by sustained presence." />
           <ToggleRow label="Night-safe mode (homeai_sleep)" state={b("input_boolean.homeai_sleep")}
                      onToggle={() => toggleBool("input_boolean.homeai_sleep")}
+                     disabled={!haOnline}
                      hint="Caps brightness at 8% house-wide." />
           <Slider label="Occupied ceiling while asleep" unit="%" min={0} max={100} step={5} defaultValue={30}
                   value={n("input_number.living_lights_asleep_cap_pct", 30)}
+                  disabled={!haOnline}
                   onChange={(v) => setNum("input_number.living_lights_asleep_cap_pct", v)}
                   hint="Maximum brightness in occupied zones while asleep." />
           <CTInheritanceNote onJumpToToD={jumpToToD} />
@@ -882,9 +925,11 @@ function HomeLightsDrawer({ open, onClose, client, sim, askExternal }) {
                    getAttr(states, "sensor.steam_steam_76561198136331341", "game")}>
           <ToggleRow label="Master toggle" state={b("input_boolean.living_lights_gaming_enabled")}
                      onToggle={() => toggleBool("input_boolean.living_lights_gaming_enabled")}
+                     disabled={!haOnline}
                      hint="Off = gaming detection ignored (suppresses dim during work)." />
           <Slider label="LR dim target (gaming)" unit="%" min={0} max={100} step={1} defaultValue={3}
                   value={n("input_number.living_lights_gaming_dim_pct", 3)}
+                  disabled={!haOnline}
                   onChange={(v) => setNum("input_number.living_lights_gaming_dim_pct", v)}
                   hint="Sofa, front_left, weights, front_door dim to this when gaming." />
           <CTInheritanceNote onJumpToToD={jumpToToD} />
@@ -897,16 +942,20 @@ function HomeLightsDrawer({ open, onClose, client, sim, askExternal }) {
           winning={b("binary_sensor.living_lights_working_hours_active") === "on"}>
           <ToggleRow label="Master toggle" state={b("input_boolean.living_lights_working_hours_enabled")}
                      onToggle={() => toggleBool("input_boolean.living_lights_working_hours_enabled")}
+                     disabled={!haOnline}
                      hint="Off for vacation days. Default on." />
           <ToggleRow label="Woke up today (latch)" state={b("input_boolean.living_lights_woke_up_today")}
                      onToggle={() => toggleBool("input_boolean.living_lights_woke_up_today")}
+                     disabled={!haOnline}
                      hint="Auto-set by sustained presence 05-12; reset 04:00 + on sustained asleep." />
           <Slider label="Vacant floor" unit="%" min={0} max={100} step={5} defaultValue={80}
                   value={n("input_number.living_lights_working_hours_floor_pct", 80)}
+                  disabled={!haOnline}
                   onChange={(v) => setNum("input_number.living_lights_working_hours_floor_pct", v)}
                   hint="When Frigate misses you at the desk, this is the floor everywhere." />
           <Slider label="Present target" unit="%" min={0} max={100} step={5} defaultValue={95}
                   value={n("input_number.living_lights_working_hours_present_pct", 95)}
+                  disabled={!haOnline}
                   onChange={(v) => setNum("input_number.living_lights_working_hours_present_pct", v)}
                   hint="When Frigate sees you, this is the ramp destination (cap-clamped)." />
           <CTInheritanceNote onJumpToToD={jumpToToD} />
@@ -919,6 +968,7 @@ function HomeLightsDrawer({ open, onClose, client, sim, askExternal }) {
           winning={["on", "playing", "paused", "buffering"].includes(b("media_player.lg_tv") || "")}>
           <Slider label="TV-on dim target" unit="%" min={0} max={100} step={1} defaultValue={8}
                   value={n("input_number.living_lights_movie_dim_pct", 8)}
+                  disabled={!haOnline}
                   onChange={(v) => setNum("input_number.living_lights_movie_dim_pct", v)}
                   hint="Sofa + LR zones dim to this while the LG TV is on (working_hours wins)." />
           <CTInheritanceNote onJumpToToD={jumpToToD} />
@@ -934,30 +984,38 @@ function HomeLightsDrawer({ open, onClose, client, sim, askExternal }) {
           <div style={{ padding: "4px 16px 6px", fontFamily: FONT_MONO, fontSize: 10, color: "var(--hg-fg-2)", textTransform: "uppercase", letterSpacing: 0.5 }}>color temperature by bucket</div>
           <Slider label="Overnight (22:30–06:00)" unit=" K" min={1800} max={4500} step={50} defaultValue={2000}
                   value={n("input_number.living_lights_ct_overnight_k", 2000)}
+                  disabled={!haOnline}
                   onChange={(v) => setCTAndPush("input_number.living_lights_ct_overnight_k", v)} />
           <Slider label="Morning (06:00–09:00)" unit=" K" min={1800} max={4500} step={50} defaultValue={2200}
                   value={n("input_number.living_lights_ct_morning_k", 2200)}
+                  disabled={!haOnline}
                   onChange={(v) => setCTAndPush("input_number.living_lights_ct_morning_k", v)} />
           <Slider label="Midday (09:00–13:00)" unit=" K" min={1800} max={4500} step={50} defaultValue={2700}
                   value={n("input_number.living_lights_ct_midday_k", 2700)}
+                  disabled={!haOnline}
                   onChange={(v) => setCTAndPush("input_number.living_lights_ct_midday_k", v)} />
           <Slider label="Afternoon (13:00–17:00)" unit=" K" min={1800} max={4500} step={50} defaultValue={3000}
                   value={n("input_number.living_lights_ct_afternoon_k", 3000)}
+                  disabled={!haOnline}
                   onChange={(v) => setCTAndPush("input_number.living_lights_ct_afternoon_k", v)} />
           <Slider label="Evening (17:00–20:00)" unit=" K" min={1800} max={4500} step={50} defaultValue={2500}
                   value={n("input_number.living_lights_ct_evening_k", 2500)}
+                  disabled={!haOnline}
                   onChange={(v) => setCTAndPush("input_number.living_lights_ct_evening_k", v)} />
           <Slider label="Late evening (20:00–22:30)" unit=" K" min={1800} max={4500} step={50} defaultValue={2200}
                   value={n("input_number.living_lights_ct_late_evening_k", 2200)}
+                  disabled={!haOnline}
                   onChange={(v) => setCTAndPush("input_number.living_lights_ct_late_evening_k", v)} />
           <div style={{ padding: "4px 16px 6px", fontFamily: FONT_MONO, fontSize: 10, color: "var(--hg-fg-2)", textTransform: "uppercase", letterSpacing: 0.5 }}>brightness factor multipliers</div>
           <Slider label="Morning multiplier" min={0.5} max={1.5} step={0.05} defaultValue={1.0}
                   value={n("input_number.living_lights_tod_factor_morning_mult", 1.0)}
+                  disabled={!haOnline}
                   onChange={(v) => setNum("input_number.living_lights_tod_factor_morning_mult", v)}
                   fmt={(v) => `×${Number(v).toFixed(2)}`}
                   hint=">1.0 = brighter morning, <1.0 = dimmer." />
           <Slider label="Midday multiplier" min={0.5} max={1.5} step={0.05} defaultValue={1.0}
                   value={n("input_number.living_lights_tod_factor_midday_mult", 1.0)}
+                  disabled={!haOnline}
                   onChange={(v) => setNum("input_number.living_lights_tod_factor_midday_mult", v)}
                   fmt={(v) => `×${Number(v).toFixed(2)}`} />
         </CascadeCard>
@@ -968,18 +1026,22 @@ function HomeLightsDrawer({ open, onClose, client, sim, askExternal }) {
           intro="When none of the modifiers above are active (no working-hours boost, no TV, no gaming, no asleep), the cascade falls back to these baselines. Vacant brightness is the floor for empty rooms; present brightness is the target the confidence ramp climbs to when Frigate sees you.">
           <Slider label="Vacant baseline (day)" unit="%" min={0} max={100} step={5} defaultValue={50}
                   value={n("input_number.living_lights_vacant_day_pct", 50)}
+                  disabled={!haOnline}
                   onChange={(v) => setNum("input_number.living_lights_vacant_day_pct", v)}
                   hint="Brightness in empty zones during morning–evening." />
           <Slider label="Vacant baseline (night)" unit="%" min={0} max={100} step={5} defaultValue={20}
                   value={n("input_number.living_lights_vacant_night_pct", 20)}
+                  disabled={!haOnline}
                   onChange={(v) => setNum("input_number.living_lights_vacant_night_pct", v)}
                   hint="Brightness in empty zones late evening + overnight." />
           <Slider label="Present ramp target" unit="%" min={0} max={100} step={5} defaultValue={80}
                   value={n("input_number.living_lights_ramp_target_pct", 80)}
+                  disabled={!haOnline}
                   onChange={(v) => setNum("input_number.living_lights_ramp_target_pct", v)}
                   hint="Default destination when no modifier overrides." />
           <Slider label="Present ramp initial" unit="%" min={0} max={100} step={5} defaultValue={50}
                   value={n("input_number.living_lights_ramp_initial_pct", 50)}
+                  disabled={!haOnline}
                   onChange={(v) => setNum("input_number.living_lights_ramp_initial_pct", v)}
                   hint="Fast-reaction step before the slow ramp." />
         </CascadeCard>
@@ -1057,14 +1119,15 @@ function HomeLightsDrawer({ open, onClose, client, sim, askExternal }) {
                     display: "flex", justifyContent: "space-between", alignItems: "center",
                     background: "var(--hg-bg-0)", gap: 8 }}>
         <div style={{ display: "flex", gap: 6 }}>
-        <button onClick={clearAllCooldowns}
+        <button disabled={!haOnline} onClick={clearAllCooldowns}
           title="Clear the 15-min manual-override cooldown on every zone so pilots can fire immediately"
           style={{ background: "transparent", border: "1px solid var(--hg-border)", borderRadius: 4,
                    color: "var(--hg-fg-1)", padding: "5px 10px",
-                   fontFamily: FONT_MONO, fontSize: 11, cursor: "pointer" }}>
+                   fontFamily: FONT_MONO, fontSize: 11, cursor: haOnline ? "pointer" : "not-allowed",
+                   opacity: haOnline ? 1 : 0.45 }}>
           ✕ clear cooldowns
         </button>
-        <button onClick={() => {
+        <button disabled={!haOnline} onClick={() => {
           // Reset all promoted constants + bias knobs to defaults
           const resets = [
             ["input_number.living_lights_working_hours_floor_pct", 80],
@@ -1100,7 +1163,8 @@ function HomeLightsDrawer({ open, onClose, client, sim, askExternal }) {
         }}
           style={{ background: "transparent", border: "1px solid var(--hg-border)", borderRadius: 4,
                    color: "var(--hg-fg-1)", padding: "5px 10px",
-                   fontFamily: FONT_MONO, fontSize: 11, cursor: "pointer" }}>
+                   fontFamily: FONT_MONO, fontSize: 11, cursor: haOnline ? "pointer" : "not-allowed",
+                   opacity: haOnline ? 1 : 0.45 }}>
           ↺ reset all to defaults
         </button>
         </div>

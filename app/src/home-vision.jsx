@@ -36,6 +36,12 @@ const HG_CAMERAS = [
   { id: "driveway",    entity: "camera.driveway",    name: "driveway"    },
 ];
 
+/* Periodic MJPEG remount cadence. Each tile re-handshakes its stream
+ * every 2 min to shed silently-dead connections; the per-camera
+ * refreshPhaseMs offset spreads the 5 remounts across the window so
+ * they never spike the socket pool all at once. */
+const VISION_REFRESH_MS = 2 * 60 * 1000;
+
 function _haBaseFromWs(haUrl) {
   if (!haUrl) return "";
   try {
@@ -53,7 +59,7 @@ function _haBaseFromWs(haUrl) {
  * over a single connection — the browser renders each one as it
  * arrives, so we don't have to poll. Re-sign every ~50 min before
  * the default 60-min HA signature expiry. */
-function useCameraSignedStream({ entity, haUrl, paused = false, stagger = 0 }) {
+function useCameraSignedStream({ entity, haUrl, paused = false, stagger = 0, refreshPhaseMs = 0 }) {
   const [signed, setSigned] = React.useState(null);
   const [err, setErr] = React.useState(null);
   // Phase 1.5d / Phase B post-deploy fix: bump on stream-death so
@@ -117,19 +123,26 @@ function useCameraSignedStream({ entity, haUrl, paused = false, stagger = 0 }) {
     } else {
       sign();
     }
-    // Periodic remount: every 2 minutes (down from 5). Even if the
-    // existing connection is healthy, the cost is one frame's worth
-    // of black, which is invisible in normal viewing.
-    refreshTimer = setInterval(() => {
-      setStreamKey((k) => k + 1);
-    }, 2 * 60 * 1000);
+    // Periodic remount: every 2 minutes. Even if the existing
+    // connection is healthy, the cost is one frame's worth of black,
+    // which is invisible in normal viewing. Phase-shifted per camera
+    // (refreshPhaseMs) so all 5 tiles never re-handshake in the same
+    // instant — a simultaneous 5-tile remount briefly wants ~10 sockets
+    // against WebView2's 6-per-origin HTTP/1.1 pool, and the losers
+    // come back black.
+    let phaseTimer = setTimeout(() => {
+      refreshTimer = setInterval(() => {
+        setStreamKey((k) => k + 1);
+      }, VISION_REFRESH_MS);
+    }, refreshPhaseMs);
     return () => {
       cancelled = true;
       if (resignTimer) clearTimeout(resignTimer);
       if (refreshTimer) clearInterval(refreshTimer);
       if (staggerTimer) clearTimeout(staggerTimer);
+      if (phaseTimer) clearTimeout(phaseTimer);
     };
-  }, [entity, haUrl, paused, stagger]);
+  }, [entity, haUrl, paused, stagger, refreshPhaseMs]);
   // Phase B post-deploy: proactive remount on visibility/focus return.
   // This is what catches "black tiles after 5+ min idle" — when the
   // user looks back at the app, any streams that quietly died during
@@ -168,13 +181,72 @@ function useCameraSignedStream({ entity, haUrl, paused = false, stagger = 0 }) {
  * on top of the frame and obscure it. (Earlier design pass with
  * bounding-box overlays was dropped after a real-image test showed
  * low legibility.) */
-function HomeVisionFrame({ camera, haUrl, paused, wide = false, stagger = 0 }) {
-  const { src, err, streamKey, reload } = useCameraSignedStream({
+function HomeVisionFrame({ camera, haUrl, paused, wide = false, stagger = 0, refreshPhaseMs = 0, simulationSrc = null, simulationState = null }) {
+  // Simulation Mode: skip the live MJPEG resolver entirely. The hook
+  // is still called to keep React happy across renders, but its src
+  // is overridden below by the simulation placeholder.
+  const live = useCameraSignedStream({
     entity: camera.entity,
     haUrl,
-    paused,
+    paused: paused || !!simulationSrc,
     stagger,
+    refreshPhaseMs,
   });
+  const src = simulationSrc || live.src;
+  const err = simulationSrc ? null : live.err;
+  const streamKey = simulationSrc ? `sim-${camera.id}` : live.streamKey;
+
+  // ── Black-tile recovery ────────────────────────────────────────────
+  // An MJPEG <img> that never receives its first frame fires NEITHER
+  // onLoad NOR onError — it just sits black. (Causes: WebView2's
+  // 6-per-origin socket pool briefly exhausted by a remount spike, a
+  // Frigate/RTSP hiccup, HA dropping an idle stream.) A watchdog +
+  // backed-off retry funnels every recovery path through one place: a
+  // transient black tile heals in ~10s instead of waiting up to 2 min
+  // for the periodic remount, and a genuinely-dead camera retries on a
+  // gentle backoff instead of a tight onError loop.
+  const failRef = React.useRef(0);
+  const watchdogRef = React.useRef(null);
+  const reloadTimerRef = React.useRef(null);
+  const [frameLive, setFrameLive] = React.useState(false);
+
+  const scheduleReload = React.useCallback((reason) => {
+    if (simulationSrc) return;
+    if (reloadTimerRef.current) return;            // a remount is already queued
+    if (watchdogRef.current) { clearTimeout(watchdogRef.current); watchdogRef.current = null; }
+    const n = failRef.current;
+    failRef.current = n + 1;
+    const delay = Math.min(n, 5) * 4000;           // 0 · 4s · 8s … 20s cap
+    console.warn(`[vision] ${camera.name}: ${reason} — remount in ${delay}ms (fail ${n + 1})`);
+    reloadTimerRef.current = setTimeout(() => {
+      reloadTimerRef.current = null;
+      live.reload();
+    }, delay);
+  }, [simulationSrc, camera.name, live.reload]);
+
+  // Watchdog: (re)armed on every stream (re)mount. If onLoad hasn't
+  // fired within the window, the connection is hung — kick a backed-off
+  // remount. The window widens with the failure count so a slow camera
+  // gets an increasingly generous shot at delivering frame 1, and an
+  // offline one is retried gently rather than hammered.
+  React.useEffect(() => {
+    if (!src || simulationSrc) return undefined;
+    setFrameLive(false);   // this <img> instance hasn't delivered a frame yet
+    const dur = 10000 + Math.min(failRef.current, 5) * 6000;   // 10s … 40s
+    watchdogRef.current = setTimeout(() => {
+      watchdogRef.current = null;
+      scheduleReload("no first frame");
+    }, dur);
+    return () => {
+      if (watchdogRef.current) { clearTimeout(watchdogRef.current); watchdogRef.current = null; }
+    };
+  }, [streamKey, src, simulationSrc, scheduleReload]);
+
+  // Clear pending timers on unmount.
+  React.useEffect(() => () => {
+    if (watchdogRef.current) clearTimeout(watchdogRef.current);
+    if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
+  }, []);
   // Cap the vision frame so it never eats the chat at wide window
   // sizes. 16:9 frame at 100% width grows linearly with window width
   // — at 2000px wide that's 1125px tall, pushing the chat off-screen.
@@ -202,17 +274,21 @@ function HomeVisionFrame({ camera, haUrl, paused, wide = false, stagger = 0 }) {
       }}>
         {src ? (
           <img
-            // Phase 1.5d: streamKey is bumped every 5 min AND on
-            // onError, forcing a fresh MJPEG handshake. HA's
-            // camera_proxy_stream sometimes goes silent without
-            // firing an event — the periodic remount catches that
-            // case. The onError remount catches outright failures.
+            // streamKey is bumped on the periodic phase-shifted remount,
+            // on the no-first-frame watchdog, and on onError — each
+            // forces a fresh MJPEG handshake. onLoad disarms the
+            // watchdog and clears the failure backoff.
             key={streamKey}
             src={src}
             alt={camera.name}
+            onLoad={() => {
+              if (watchdogRef.current) { clearTimeout(watchdogRef.current); watchdogRef.current = null; }
+              failRef.current = 0;
+              setFrameLive(true);
+            }}
             onError={() => {
-              console.warn("[vision] img onError for", camera.name, "— reloading");
-              if (typeof reload === "function") reload();
+              setFrameLive(false);
+              scheduleReload("img onError");
             }}
             style={{
               width: "100%", height: "100%",
@@ -233,6 +309,27 @@ function HomeVisionFrame({ camera, haUrl, paused, wide = false, stagger = 0 }) {
             {err ? `error · ${err}` : "loading…"}
           </div>
         )}
+        {/* Black-tile recovery overlay — a live MJPEG <img> that has a
+            src but hasn't delivered a frame yet is indistinguishable
+            from a broken tile. Surface a quiet status over it instead
+            of an unexplained black box; it clears on the first frame. */}
+        {src && !simulationSrc && !frameLive && (
+          <div style={{
+            position: "absolute", inset: 0,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontFamily: "'Geist Mono', monospace",
+            fontSize: 9, letterSpacing: "0.18em", textTransform: "uppercase",
+            color: "var(--hg-fg-5)",
+            background: "#020203",
+            pointerEvents: "none",
+          }}>
+            {failRef.current >= 2 ? "reconnecting…" : "loading…"}
+          </div>
+        )}
+        {/* Sim Mode: no on-frame overlays. Real app has none. The
+            amber SIM · <scenario> pill in the header is the sole
+            mocked-data signal — the camera frames are visually 1:1
+            with the live app. */}
       </div>
     </div>
   );
@@ -249,9 +346,15 @@ function HomeVisionCard({
   identity = null,
   media = {},
   wideMode = false,
+  /* Sim Mode: per-room camera state map (online-empty / offline / etc).
+   * When non-null, HomeVisionFrame gets `simulationSrc` from the SVG
+   * generator and bypasses MJPEG entirely. */
+  simCameraStates = null,
+  simActive = false,
 }) {
   const [open, setOpen] = React.useState(defaultOpen);
   const [idx, setIdx] = React.useState(defaultIdx);
+  const [hoverPausedCameraId, setHoverPausedCameraId] = React.useState(null);
   // Phase 1.5g: once the carousel has ever been opened, stay mounted
   // forever — collapse just CSS-hides the subtree so the underlying
   // MJPEG TCP connections persist across collapse/reopen cycles.
@@ -278,6 +381,17 @@ function HomeVisionCard({
     }
     prevOpenRef.current = open;
   }, [open]);
+  // Sim Mode transition: when sim toggles on OR off, bump openCount so
+  // all camera frames remount fresh. Without this, switching from sim
+  // to live (or vice versa) leaves stale src URLs and the cameras look
+  // frozen until the next 5-min auto-refresh.
+  const prevSimRef = React.useRef(simActive);
+  React.useEffect(() => {
+    if (prevSimRef.current !== simActive) {
+      prevSimRef.current = simActive;
+      setOpenCount((c) => c + 1);
+    }
+  }, [simActive]);
   const active = cameras[idx];
   const occupied = cameras.filter((c) => (labels[c.id] || []).length > 0).length;
   const anyOccupied = occupied > 0;
@@ -501,6 +615,8 @@ function HomeVisionCard({
                 <div
                   key={c.id}
                   ref={(el) => (tileRefs.current[i] = el)}
+                  onMouseEnter={() => setHoverPausedCameraId(c.id)}
+                  onMouseLeave={() => setHoverPausedCameraId((cameraId) => (cameraId === c.id ? null : cameraId))}
                   onClick={wideMode ? () => {
                     lastClickAt.current = Date.now();
                     setIdx(i);
@@ -517,8 +633,13 @@ function HomeVisionCard({
                     width: "min(38vw, 560px)",
                     scrollSnapAlign: "center",
                     cursor: "pointer",
-                    transform: isActive ? "scale(1.05)" : "scale(0.96)",
-                    transition: "transform 220ms ease, box-shadow 220ms ease",
+                    // Scale removed — the 1.05/0.96 swing eats asymmetrically
+                    // into the flex gap, producing ~11px gaps next to the
+                    // active tile and ~36px gaps between inactives (3x
+                    // uneven spacing). Active is now indicated purely by
+                    // box-shadow + opacity, preserving uniform layout.
+                    opacity: isActive ? 1 : 0.82,
+                    transition: "opacity 220ms ease, box-shadow 220ms ease",
                     boxShadow: isActive ? "0 0 18px var(--hg-ice-glow)" : "none",
                     borderRadius: 4,
                     overflow: "hidden",
@@ -541,20 +662,33 @@ function HomeVisionCard({
                     camera={c}
                     haUrl={haUrl}
                     token={token}
-                    paused={false}
+                    paused={hoverPausedCameraId === c.id}
                     wide={wideMode}
                     stagger={i * 200}
+                    refreshPhaseMs={i * Math.round(VISION_REFRESH_MS / cameras.length)}
+                    simulationSrc={
+                      simCameraStates && window.SimCameraSrcFor
+                        ? window.SimCameraSrcFor(c.id, simCameraStates)
+                        : null
+                    }
+                    simulationState={simCameraStates ? (simCameraStates[c.id] || "online-empty") : null}
                   />
                   {/* Wide-mode tile name overlay — only shown in carousel layout. */}
                   {wideMode && (
                     <div style={{
+                      // Taller scrim area + multi-stop gradient so the
+                      // dark-at-bottom fade is gradual instead of a
+                      // sharp 14px band. Text sits at the bottom-left.
                       position: "absolute", left: 0, right: 0, bottom: 0,
-                      padding: "3px 8px",
+                      height: 72,
+                      display: "flex",
+                      alignItems: "flex-end",
+                      padding: "0 10px 6px",
                       fontFamily: "'Geist Mono', monospace",
                       fontSize: 8, letterSpacing: "0.16em",
                       textTransform: "lowercase",
-                      color: isActive ? "var(--hg-ice-bright)" : "var(--hg-fg-3)",
-                      background: "linear-gradient(transparent, rgba(0,0,0,0.7))",
+                      color: isActive ? "var(--hg-ice-bright)" : "rgba(255,255,255,0.78)",
+                      background: "linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.18) 55%, rgba(0,0,0,0.55) 100%)",
                       pointerEvents: "none",
                     }}>
                       {c.name}

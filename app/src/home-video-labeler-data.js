@@ -152,6 +152,26 @@
     return vlApi("/api/video-labeler/calibration" + (axis ? "?axis=" + vlEnc(axis) : ""));
   }
 
+  /* ---------------- neighbors + cluster signals (M4) ----------------
+   * Coded against videolabeler/api/embeddings.py:
+   *   GET /segments/{sid}/neighbors?k= → {segment_id, model_id, k,
+   *       query_windows, neighbors:[{window_id, video_id, start_s, end_s,
+   *       t_center, distance, labels:{activity, posture}, keyframes}],
+   *       note?} — nearest REVIEWED non-holdout windows by cosine
+   *       distance over person-crop embeddings. distance ∈ [0, 2].
+   *   GET /videos/{id}/window-signals → {video_id, model_id,
+   *       cluster_run_id, windows:[{window_id, start_s, end_s, cluster_id,
+   *       cluster_dist, is_outlier}]} from the LATEST ready cluster run
+   *       (is_outlier null when the window isn't in any run).
+   * Both 404 on older deploys — callers degrade silently. */
+  function getNeighbors(segmentId, k) {
+    return vlApi("/api/video-labeler/segments/" + vlEnc(segmentId) + "/neighbors"
+      + (k ? "?k=" + vlEnc(k) : ""));
+  }
+  function getWindowSignals(videoId) {
+    return vlApi("/api/video-labeler/videos/" + vlEnc(videoId) + "/window-signals");
+  }
+
   /* Analysis-window id convention (videolabeler/jobs/windows.py):
      aw_<video>_<start_ms>. seg_to_api serializes no window linkage, but
      suggestions carry their window's EXACT geometry — derive the id from
@@ -755,6 +775,8 @@
     // suggestions + calibration (M3)
     getSuggestions, getWindowKeyframes, getCalibration,
     windowIdFor, suggestionDisagreement, suggestionEvidenceText,
+    // neighbors + cluster signals (M4)
+    getNeighbors, getWindowSignals,
     // draft persistence (best-effort localStorage)
     saveDraft, loadDraft, clearDraft, validateDraftDoc,
     // media url builders (plain strings; null under sim)

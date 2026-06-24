@@ -403,9 +403,19 @@ function SystemContent({ text, tone }) {
  * not speech." */
 /* Tray v4: compact perception chip — replaces italic prose log.
  * Format: [glyph] room — short summary           age
- * Expandable on click to show full text. */
-function PerceptionContent({ text }) {
+ * Expandable on click to show full text.
+ *
+ * M1 (Addendum 27): when the event payload includes a snapshotUrl
+ * (auto-trigger from vision-sidecar's snapshot cache), render a small
+ * thumbnail to the left of the room label. Click on the thumbnail or
+ * the text expands the chip — thumbnail grows to a larger preview,
+ * text shows full caption. snapshotUrl is omitted for bridge-sourced
+ * perception lines (those came from a separate code path with no
+ * cached frame); the chip falls back to the text-only layout.
+ */
+function PerceptionContent({ text, snapshotUrl }) {
   const [expanded, setExpanded] = React.useState(false);
+  const [imgFailed, setImgFailed] = React.useState(false);
   // Parse the text — bridge emits "perceived ROOM: SUMMARY" or just SUMMARY.
   // Try to extract a room name from the first colon-prefixed token.
   let room = null;
@@ -416,22 +426,47 @@ function PerceptionContent({ text }) {
     summary = m[2];
   }
   const short = expanded ? summary : (summary.length > 90 ? summary.slice(0, 88) + "…" : summary);
+  const hasThumb = Boolean(snapshotUrl) && !imgFailed;
+  const clickable = summary.length > 90 || hasThumb;
+  // Layout: thumbnail (when present) | room label | summary | (right slot)
+  const cols = hasThumb
+    ? (expanded ? "minmax(180px, 280px) minmax(60px, 100px) 1fr auto"
+                : "minmax(40px, 56px) minmax(60px, 100px) 1fr auto")
+    : (room ? "minmax(60px, 100px) 1fr auto"
+            : "auto 1fr auto");
+  const thumbSize = expanded ? 200 : 40;
   return (
     <div
-      onClick={() => summary.length > 90 && setExpanded((v) => !v)}
+      onClick={() => clickable && setExpanded((v) => !v)}
       style={{
         ...T_SYNTAX,
         display: "grid",
-        gridTemplateColumns: room ? "minmax(80px, 120px) 1fr auto" : "auto 1fr auto",
+        gridTemplateColumns: cols,
         columnGap: 10,
-        alignItems: "baseline",
-        cursor: summary.length > 90 ? "pointer" : "default",
+        alignItems: hasThumb ? "center" : "baseline",
+        cursor: clickable ? "pointer" : "default",
         color: "var(--hg-fg-3)",
         fontSize: 11,
         lineHeight: 1.5,
         paddingTop: 2, paddingBottom: 2,
       }}
     >
+      {hasThumb && (
+        <img
+          src={snapshotUrl}
+          alt={room ? `${room} snapshot` : "perception snapshot"}
+          loading="lazy"
+          onError={() => setImgFailed(true)}
+          style={{
+            width: thumbSize,
+            height: thumbSize * 0.6,
+            objectFit: "cover",
+            borderRadius: 3,
+            border: "1px solid var(--hg-border)",
+            display: "block",
+          }}
+        />
+      )}
       <span style={{
         ...HG_FAINT,
         fontWeight: 400,
@@ -449,26 +484,283 @@ function PerceptionContent({ text }) {
   );
 }
 
+/* The coordinator's own initiative — a proactive greeting/room-prompt, an
+ * away-mode flip, a return-home scene, a follow-up echo. Compact, mono,
+ * dimmed — its own channel, visually adjacent to PerceptionContent: ambient,
+ * not a real spoken turn answering a user request. (home-proactive.jsx
+ * emits these via addEvent({ kind:"proactive", text }).) */
+function ProactiveContent({ text }) {
+  return (
+    <div style={{
+      ...T_SYNTAX,
+      display: "flex", alignItems: "baseline", gap: 8,
+      fontSize: 11, lineHeight: 1.5,
+      paddingTop: 2, paddingBottom: 2,
+    }}>
+      <span style={{ color: "var(--hg-ice)", fontSize: 9, transform: "translateY(-1px)" }}>◆</span>
+      <span style={{ ...HG_FAINT, letterSpacing: "0.06em", color: "var(--hg-fg-4)" }}>proactive</span>
+      <span style={{ color: "var(--hg-fg-2)", fontFamily: HG_SANS, fontSize: 12, flex: 1 }}>{text}</span>
+    </div>
+  );
+}
+
+/* Internal diagnostic channel — bridge telemetry ([parakeet], [kokoro],
+ * [direct], …) and the proactive coordinator's [proactive] lines. Hidden
+ * from the feed entirely unless `/debug on` (HomeApp filters kind:"diag"
+ * out otherwise). Faint, small, mono — pure debug texture. */
+function DiagContent({ text, channel }) {
+  return (
+    <div style={{
+      ...T_SYNTAX,
+      fontSize: 10.5,
+      lineHeight: 1.5,
+      color: "var(--hg-fg-4)",
+      fontStyle: "italic",
+      wordBreak: "break-word",
+      opacity: 0.85,
+    }}>
+      {text}
+    </div>
+  );
+}
+
+/* External Reasoning Fallback: answers from a non-local provider
+ * (OpenAI for MVP) carry a subtle 'external' tag so the user can
+ * always see where an answer came from. Same prose typography as
+ * HomeContent — feels seamless — but the small uppercase tag and ice
+ * color mark it as not-from-the-home-agent. Streaming caret while
+ * chunks arrive. See home-external.jsx + the routing plan. */
+function ExternalContent({ text, streaming }) {
+  return (
+    <div style={{
+      ...T_PROSE, ...HG_FG_BRIGHT,
+      display: "flex", alignItems: "baseline", gap: 8,
+    }}>
+      <span style={{
+        ...HG_FAINT,
+        fontSize: 9,
+        letterSpacing: "0.08em",
+        textTransform: "uppercase",
+        color: "var(--hg-ice)",
+        flexShrink: 0,
+      }}>external</span>
+      <span style={{ flex: 1 }}>
+        {text}
+        {streaming && <span className="hg-caret" />}
+      </span>
+    </div>
+  );
+}
+
+/* ── HelpContent — categorized clickable command list ──────────────── */
+//
+// Renders the /help payload as grouped sections. Each row hover-
+// brightens; click dispatches a window CustomEvent("hg-fill-input")
+// with the full command signature so HomeApp can fill + focus the
+// input. The user just clicks → hits Enter.
+//
+// Hint line at the bottom tells the user about the click-to-fill UX
+// (one-time; no animation that'd nag them after they learn it).
+function HelpContent({ groups = [], totalCount = 0, tip = "" }) {
+  const ROW_BASE = "var(--hg-fg-2)";
+  const ROW_HOVER = "var(--hg-fg-0)";
+  const dispatchFill = (cmd) => {
+    // Send the full signature (cmd + hint placeholder) so the user
+    // sees what's expected — but the signature with <hint> placeholder
+    // doesn't actually execute until they replace + hit enter.
+    try {
+      window.dispatchEvent(new CustomEvent("hg-fill-input", { detail: cmd }));
+    } catch {
+      // ignore — older browsers may not support CustomEvent constructor
+    }
+  };
+  return (
+    <div style={{ ...T_PROSE, color: "var(--hg-fg-2)" }}>
+      <div style={{
+        ...T_META,
+        marginBottom: 10,
+        color: "var(--hg-fg-3)",
+        textTransform: "lowercase",
+        letterSpacing: "0.08em",
+        fontSize: 10.5,
+      }}>
+        {totalCount > 0 ? `${totalCount} commands` : "commands"}
+        {tip && (
+          <span style={{ color: "var(--hg-fg-4)", marginLeft: 8 }}>
+            · {tip}
+          </span>
+        )}
+      </div>
+      {groups.map((group) => (
+        <div key={group.id} style={{ marginBottom: 14 }}>
+          <div style={{
+            ...T_META,
+            color: "var(--hg-fg-3)",
+            fontSize: 9.5,
+            letterSpacing: "0.18em",
+            textTransform: "uppercase",
+            marginBottom: 5,
+            paddingBottom: 3,
+            borderBottom: "1px solid var(--hg-border-soft)",
+          }}>
+            <span>{group.label}</span>
+            {group.desc && (
+              <span style={{
+                color: "var(--hg-fg-4)",
+                marginLeft: 8,
+                letterSpacing: "0.04em",
+                textTransform: "none",
+                fontSize: 9.5,
+              }}>· {group.desc}</span>
+            )}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+            {(group.commands || []).map((c) => {
+              // Build the signature shown in the row. The hint goes
+              // into the input ONLY if it's not a placeholder pattern
+              // (<x>, [x], etc.) — for those, fill with just the cmd
+              // so the user can either tab-complete or type the arg.
+              const looksLikePlaceholder = c.hint && /^[<\[]|[>\]]$/.test(c.hint.trim());
+              const fillValue = looksLikePlaceholder ? c.cmd : (c.cmd + (c.hint ? " " + c.hint : ""));
+              const displaySig = c.hint ? `${c.cmd} ${c.hint}` : c.cmd;
+              return (
+                <HelpRow
+                  key={c.cmd}
+                  sig={displaySig}
+                  desc={c.desc}
+                  onClick={() => dispatchFill(fillValue)}
+                  baseColor={ROW_BASE}
+                  hoverColor={ROW_HOVER}
+                />
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function HelpRow({ sig, desc, onClick, baseColor, hoverColor }) {
+  const [hovered, setHovered] = React.useState(false);
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick && onClick();
+        }
+      }}
+      title="click to paste this command into the input box"
+      style={{
+        ...T_SYNTAX,
+        display: "grid",
+        gridTemplateColumns: "minmax(0, 28ch) minmax(0, 1fr)",
+        gap: 14,
+        padding: "3px 6px",
+        color: hovered ? hoverColor : baseColor,
+        background: hovered ? "color-mix(in oklab, var(--hg-fg-1) 6%, transparent)" : "transparent",
+        cursor: "pointer",
+        borderRadius: 2,
+        transition: "color 100ms, background 100ms",
+        fontSize: 11.5,
+      }}
+    >
+      <span style={{
+        color: hovered ? "var(--hg-fg-0)" : "var(--hg-fg-1)",
+        fontFamily: HG_MONO,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      }}>{sig}</span>
+      <span style={{
+        color: hovered ? "var(--hg-fg-1)" : "var(--hg-fg-3)",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      }}>— {desc}</span>
+    </div>
+  );
+}
+
 /* ── Event dispatch ──────────────────────────────────────────────────── */
-function EventContent({ e, onConfirm, onCancel, onUndo }) {
-  switch (e.kind) {
-    case "user":       return <UserContent text={e.text} />;
-    case "voice":      return <VoiceContent text={e.text} />;
-    case "thinking":   return <ThinkingContent text={e.text} />;
-    case "tool":       return <ToolContent name={e.name} args={e.args} status={e.status} latency={e.latency} />;
-    case "action":     return <ActionContent id={e.id} title={e.title} service={e.service} target={e.target} attrs={e.attrs} status={e.status} latency={e.latency} reason={e.reason} traceId={e.traceId} onConfirm={onConfirm} onCancel={onCancel} onUndo={onUndo} />;
-    case "home":       return <HomeContent text={e.text} streaming={e.streaming} />;
-    case "perception": return <PerceptionContent text={e.text} />;
-    case "system":     return <SystemContent text={e.text} tone={e.tone} />;
-    default: return null;
-  }
+function EventContent({ e, onConfirm, onCancel, onUndo, onControlAction, lifecycle, onWhy }) {
+  // M5 (Addendum 27): wrap clickable bubble kinds with a thin <button>
+  // that opens the explainability drawer. Only home / external / action
+  // qualify, ONLY when (a) the event carries a convId AND (b) the
+  // parent supplied an onWhy handler (parent gates on debugMode).
+  // Control-card actions (e.controllable) keep their own click handlers
+  // — interactive sliders take precedence over "open drawer."
+  const inner = (() => {
+    switch (e.kind) {
+      case "user":       return <UserContent text={e.text} />;
+      case "voice":      return <VoiceContent text={e.text} />;
+      case "thinking":   return <ThinkingContent text={e.text} />;
+      case "tool":       return <ToolContent name={e.name} args={e.args} status={e.status} latency={e.latency} />;
+      case "action":
+        if (e.controllable && e.actionCtx) {
+          if (e.actionCtx.domain === "light" && window.LightControlCard) {
+            return <window.LightControlCard ctx={e.actionCtx} lifecycle={lifecycle || "active"} onControlAction={onControlAction} />;
+          }
+          if (e.actionCtx.domain === "media_player" && window.MediaControlCard) {
+            return <window.MediaControlCard ctx={e.actionCtx} lifecycle={lifecycle || "active"} onControlAction={onControlAction} />;
+          }
+        }
+        return <ActionContent id={e.id} title={e.title} service={e.service} target={e.target} attrs={e.attrs} status={e.status} latency={e.latency} reason={e.reason} traceId={e.traceId} onConfirm={onConfirm} onCancel={onCancel} onUndo={onUndo} />;
+      case "home":       return <HomeContent text={e.text} streaming={e.streaming} />;
+      case "external":   return <ExternalContent text={e.text} streaming={e.streaming} />;
+      case "perception": return <PerceptionContent text={e.text} snapshotUrl={e.snapshotUrl} />;
+      case "proactive":  return <ProactiveContent text={e.text} />;
+      case "diag":       return <DiagContent text={e.text} channel={e.channel} />;
+      case "system":     return <SystemContent text={e.text} tone={e.tone} />;
+      case "help":       return <HelpContent groups={e.groups} totalCount={e.totalCount} tip={e.tip} />;
+      default: return null;
+    }
+  })();
+
+  // Gate: only debug-mode-eligible kinds; controllable action cards
+  // already own their click area (slider drag) so SKIP them.
+  const isWhyEligible = onWhy && e.convId &&
+    (e.kind === "home" || e.kind === "external" ||
+     (e.kind === "action" && !(e.controllable && e.actionCtx)));
+
+  if (!isWhyEligible) return inner;
+
+  return (
+    <div
+      onClick={(ev) => {
+        // Don't hijack text-selection. If the user is selecting text
+        // within the bubble, the click came at the end of a drag with
+        // an active selection — let it through.
+        const sel = window.getSelection && window.getSelection();
+        if (sel && sel.toString().length > 0) return;
+        ev.stopPropagation();
+        onWhy(e.convId, e);
+      }}
+      title="click to see why · routing + tool calls + timing"
+      style={{ cursor: "pointer" }}
+      className="hg-why-clickable"
+    >
+      {inner}
+    </div>
+  );
 }
 
 /* ── Grouping ────────────────────────────────────────────────────────── */
 function speakerOf(e) {
   if (e.kind === "user" || e.kind === "voice") return "you";
   if (e.kind === "system") return "system";
+  if (e.kind === "help") return "system";    // help groups under system
   if (e.kind === "perception") return "perception";
+  // proactive lines group under the assistant ("home") — they ARE the
+  // assistant taking initiative. (The default already returns "home";
+  // this is explicit for intent.)
+  if (e.kind === "proactive") return "home";
   return "home";
 }
 
@@ -488,14 +780,18 @@ function groupEventsBySpeaker(events) {
 }
 
 /* ── Turn block ──────────────────────────────────────────────────────── */
-function TurnBlock({ group, density, onConfirmAction, onCancelAction, onUndoAction }) {
+function TurnBlock({ group, density, onConfirmAction, onCancelAction, onUndoAction, onControlAction, controlLifecycles, onWhy }) {
   const tone = group.speaker === "system" ? "system" : group.speaker;
   return (
     <div className="hg-fade">
       <TurnHeader speaker={group.speaker} time={group.time} tone={tone} />
       <TurnBody density={density}>
         {group.events.map((e) => (
-          <EventContent key={e.id} e={e} onConfirm={onConfirmAction} onCancel={onCancelAction} onUndo={onUndoAction} />
+          <EventContent key={e.id} e={e}
+            onConfirm={onConfirmAction} onCancel={onCancelAction} onUndo={onUndoAction}
+            onControlAction={onControlAction}
+            lifecycle={controlLifecycles ? controlLifecycles.get(e.id) : undefined}
+            onWhy={onWhy} />
         ))}
       </TurnBody>
     </div>
@@ -507,6 +803,7 @@ Object.assign(window, {
   TurnHeader, TurnBody, TurnBlock,
   EventContent, StatusText,
   UserContent, VoiceContent, ThinkingContent, ToolContent,
-  ActionContent, HomeContent, SystemContent,
+  ActionContent, HomeContent, SystemContent, PerceptionContent, ProactiveContent, DiagContent,
+  HelpContent, HelpRow,
   groupEventsBySpeaker, speakerOf,
 });

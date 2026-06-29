@@ -204,7 +204,7 @@ function HomeHeader({
             display: "inline-flex", alignItems: "center", gap: 5,
             border: "1px solid var(--hg-warn)",
             color: "var(--hg-warn)",
-            padding: "2px 7px",
+            padding: mobile ? "7px 9px" : "2px 7px",
             borderRadius: 2,
             fontFamily: "'Geist Mono', monospace",
             fontSize: 9,
@@ -214,6 +214,8 @@ function HomeHeader({
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
+            boxSizing: "border-box",
+            minHeight: mobile ? 32 : "auto",
           }}>
             <span style={{
               width: 6, height: 6, borderRadius: 999,
@@ -315,9 +317,10 @@ function HomeHeader({
         {serviceProfile && onOpenRemoteProfile && (
           <button
             type="button"
+            aria-label="Remote profile"
             onClick={onOpenRemoteProfile}
             title={`Connection profile: ${serviceProfile.label}`}
-            className="hg-focusable"
+            className="hg-focusable hg-mobile-touch"
             style={{
               all: "unset",
               display: "inline-flex",
@@ -350,8 +353,16 @@ function HomeHeader({
           <button
             type="button"
             onClick={onOpenSimulationControls}
+            aria-label="Open simulation controls"
             title="Simulation Mode - open controls"
-            style={{ all: "unset", cursor: "pointer" }}
+            className="hg-focusable hg-mobile-touch"
+            style={{
+              all: "unset",
+              display: "inline-flex",
+              alignItems: "center",
+              cursor: "pointer",
+              minHeight: mobile ? 34 : "auto",
+            }}
           >
           <span title="Simulation Mode — everything you see is mocked. Type /simulation off to exit." style={{
             display: "inline-flex", alignItems: "center", gap: 5,
@@ -3050,7 +3061,9 @@ function FirstRun({
               }}
             />
             <button type="submit" disabled={isConnecting || !url || !tok} className="hg-focusable" style={{
-              background: "transparent", border: "none", padding: 0,
+              background: "transparent", border: "none", padding: "7px 8px",
+              minHeight: compact ? 34 : 32,
+              boxSizing: "border-box",
               cursor: (isConnecting || !url || !tok) ? "default" : "pointer",
               color: (isConnecting || !url || !tok) ? "var(--hg-fg-4)" : "var(--hg-fg-1)",
               fontFamily: "'Geist Mono', monospace", fontSize: 9.5,

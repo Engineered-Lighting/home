@@ -1,0 +1,27 @@
+name: deploy home web
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: home-web-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy to ubuntu ai box
+    runs-on: [self-hosted, linux, x64, home-web]
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy home web gateway
+        env:
+          HOME_WEB_REPO: /home/marcelo-lima/code/home
+          HOME_WEB_BRANCH: main
+          HOME_WEB_SERVICE: home-web-gateway
+        run: tools/deploy-home-web.sh

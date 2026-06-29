@@ -36,6 +36,16 @@ git pull --ff-only
 sudo systemctl restart home-web-gateway
 ```
 
+Or use the GitHub Actions manual workflow:
+
+1. Open the `Engineered-Lighting/home` repo on GitHub.
+2. Go to **Actions**.
+3. Choose **deploy home web**.
+4. Click **Run workflow** on `main`.
+
+That workflow runs on the Ubuntu AI box self-hosted runner and performs the same
+pull/check/restart through `tools/deploy-home-web.sh`.
+
 The gateway still binds to `127.0.0.1:5181`; Tailscale Serve is the private
 tailnet-facing listener.
 

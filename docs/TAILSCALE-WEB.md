@@ -10,11 +10,36 @@ instead of exposing the raw HA, AI, camera, or supervisor ports.
 - `app/src/home-web-runtime.js` runs before `home-app.jsx` in a normal browser.
 - Browser mode defaults service bases to `/proxy/...`.
 - Tauri desktop behavior keeps the existing LAN defaults.
-- Tailscale Serve publishes the local gateway privately to tailnet devices.
+- The Ubuntu AI box is the preferred host for the web gateway because it is
+  next to the RTX/model/backend services.
+- Tailscale Serve publishes the gateway privately to tailnet devices.
 - Tailscale Funnel, router port forwarding, and public DNS are intentionally out
   of scope for v1.
 
-## Run locally
+## Run on the Ubuntu AI box
+
+The travel setup should run from `engineeredlightingserver1`, not the Windows
+desktop:
+
+```bash
+cd ~/code/home
+npm run web:check
+tools/install-home-web-gateway-linux.sh
+sudo systemctl status home-web-gateway --no-pager
+```
+
+To update the hosted version later:
+
+```bash
+cd ~/code/home
+git pull --ff-only
+sudo systemctl restart home-web-gateway
+```
+
+The gateway still binds to `127.0.0.1:5181`; Tailscale Serve is the private
+tailnet-facing listener.
+
+## Run manually on Windows
 
 ```powershell
 cd C:\Claude\home
@@ -53,7 +78,9 @@ Open `/auth` on the tailnet URL to sign in, sign out, or change the password.
 Password changes are written as a salted PBKDF2 hash to the local auth file
 below, and that file takes precedence over the initial environment variable:
 
-- Default auth file: `%APPDATA%\EngineeredLightingHome\web-auth.json`
+- Windows default auth file: `%APPDATA%\EngineeredLightingHome\web-auth.json`
+- Linux default auth file: `$XDG_CONFIG_HOME/EngineeredLightingHome/web-auth.json`
+  or `~/.config/EngineeredLightingHome/web-auth.json`
 - Override path: `HOME_WEB_AUTH_FILE`
 
 Bearer tokens used by Home Assistant and the stack supervisor still pass
@@ -76,7 +103,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Claude\home\tools\sta
 
 With the gateway running:
 
-```powershell
+```bash
 tailscale serve --bg --tls-terminated-tcp=443 127.0.0.1:5181
 tailscale serve status
 ```
@@ -84,7 +111,7 @@ tailscale serve status
 Use the HTTPS tailnet URL shown by Tailscale from another device that is signed
 into your tailnet. To turn it off:
 
-```powershell
+```bash
 tailscale serve --tls-terminated-tcp=443 off
 ```
 
@@ -98,18 +125,18 @@ Reference: https://tailscale.com/docs/reference/tailscale-cli/serve
 
 Override these only if your local addresses change:
 
-```powershell
-$env:HOME_WEB_HA_TARGET="http://192.168.0.125:8123"
-$env:HOME_WEB_METRICS_TARGET="http://192.168.0.100:8092"
-$env:HOME_WEB_VLLM_TARGET="http://192.168.0.100:8000"
-$env:HOME_WEB_VISION_TARGET="http://192.168.0.100:8091"
-$env:HOME_WEB_INTELLIGENCE_TARGET="http://192.168.0.100:8095"
-$env:HOME_WEB_SUPERVISOR_TARGET="http://192.168.0.100:8093"
-$env:HOME_WEB_S2S_TARGET="http://192.168.0.100:8094"
-$env:HOME_WEB_TRACKER_TARGET="http://192.168.0.100:8098"
-$env:HOME_WEB_VIDEO_LABELER_TARGET="http://192.168.0.100:8099"
-$env:HOME_WEB_FRIGATE_TARGET="http://192.168.0.125:5000"
-$env:HOME_WEB_APARTMENT_ASSETS_DIR="C:\Claude\home\app\data\apartment"
+```bash
+export HOME_WEB_HA_TARGET="http://192.168.0.125:8123"
+export HOME_WEB_METRICS_TARGET="http://192.168.0.100:8092"
+export HOME_WEB_VLLM_TARGET="http://192.168.0.100:8000"
+export HOME_WEB_VISION_TARGET="http://192.168.0.100:8091"
+export HOME_WEB_INTELLIGENCE_TARGET="http://192.168.0.100:8095"
+export HOME_WEB_SUPERVISOR_TARGET="http://192.168.0.100:8093"
+export HOME_WEB_S2S_TARGET="http://192.168.0.100:8094"
+export HOME_WEB_TRACKER_TARGET="http://192.168.0.100:8098"
+export HOME_WEB_VIDEO_LABELER_TARGET="http://192.168.0.100:8099"
+export HOME_WEB_FRIGATE_TARGET="http://192.168.0.125:5000"
+export HOME_WEB_APARTMENT_ASSETS_DIR="$HOME/code/home/app/data/apartment"
 ```
 
 ## Proxy policy

@@ -55,6 +55,24 @@ cookie for the web app, and strips Basic auth before proxying requests upstream.
 Bearer tokens used by Home Assistant and the stack supervisor still pass
 through.
 
+To persist the credential for the startup launcher without committing it:
+
+```powershell
+[Environment]::SetEnvironmentVariable("HOME_WEB_BASIC_AUTH", "marcelo:<generated-password>", "User")
+```
+
+## Start on Windows login
+
+No-admin setup uses the current user's Startup folder. The launcher runs
+`tools/start-home-web-gateway.ps1`, which starts `web-gateway/server.mjs` and
+reads `HOME_WEB_BASIC_AUTH` from the user's Windows environment.
+
+To test the same starter manually:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Claude\home\tools\start-home-web-gateway.ps1
+```
+
 ## Tailscale Serve
 
 With the gateway running:

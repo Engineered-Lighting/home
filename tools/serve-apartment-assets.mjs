@@ -5,8 +5,9 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..", "app", "data", "apartment");
-const host = "127.0.0.1";
+const host = process.env.HOME_APARTMENT_ASSET_HOST || "127.0.0.1";
 const port = Number(process.env.HOME_APARTMENT_ASSET_PORT || 5190);
+const allowOrigin = process.env.HOME_APARTMENT_ASSET_ORIGIN || "*";
 
 const types = {
   ".json": "application/json; charset=utf-8",
@@ -18,7 +19,7 @@ const types = {
 
 function sendHeaders(res, status, headers = {}) {
   res.writeHead(status, {
-    "Access-Control-Allow-Origin": "http://127.0.0.1:5180",
+    "Access-Control-Allow-Origin": allowOrigin,
     "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
     "Access-Control-Allow-Headers": "Range, Content-Type",
     "Cross-Origin-Resource-Policy": "cross-origin",
@@ -43,6 +44,24 @@ const server = http.createServer(async (req, res) => {
   if (req.method !== "GET" && req.method !== "HEAD") {
     sendHeaders(res, 405, { Allow: "GET, HEAD, OPTIONS" });
     res.end("method not allowed");
+    return;
+  }
+
+  const pathname = (req.url || "/").split("?")[0] || "/";
+  if (pathname === "/healthz") {
+    const body = JSON.stringify({
+      ok: true,
+      service: "home-apartment-assets",
+      root,
+      ts: new Date().toISOString(),
+    });
+    sendHeaders(res, 200, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Content-Length": Buffer.byteLength(body),
+      "Cache-Control": "no-store",
+    });
+    if (req.method === "HEAD") res.end();
+    else res.end(body);
     return;
   }
 

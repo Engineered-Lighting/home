@@ -12,12 +12,18 @@
 
   function intelligenceBaseFrom(metricsBase, endpoint) {
     try {
-      const saved = localStorage.getItem("hg-intelligence-base");
-      if (saved) return saved.replace(/\/+$/, "");
-    } catch {}
+      const resolved = window.HomeServices?.get?.("intelligence");
+      if (resolved) return String(resolved).replace(/\/+$/, "");
+    } catch (e) { /* */ }
     if (typeof window !== "undefined" && window.HG_DEFAULT_INTELLIGENCE_BASE) {
       return window.HG_DEFAULT_INTELLIGENCE_BASE.replace(/\/+$/, "");
     }
+    try {
+      if (!window.HomeServices) {
+        const saved = localStorage.getItem("hg-intelligence-base");
+        if (saved) return saved.replace(/\/+$/, "");
+      }
+    } catch {}
     const source = metricsBase;
     if (!source) return DEFAULT_INTELLIGENCE_BASE;
     try {

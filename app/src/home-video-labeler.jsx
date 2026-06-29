@@ -3034,6 +3034,7 @@ function VLJobsPanel({ showToast }) {
 function HomeVideoLabelerOverlay({ open, onClose, sim, spatialMode = false }) {
   const D = window.HomeVideoLabelerData;
   const simActive = !!(sim && sim.active);
+  const [serviceEpoch, setServiceEpoch] = useState(0);
   const [tab, setTab] = useState("label");      // label | jobs
   const [videos, setVideos] = useState(null);   // null=loading, []=empty
   const [videosErr, setVideosErr] = useState(null);
@@ -3057,6 +3058,11 @@ function HomeVideoLabelerOverlay({ open, onClose, sim, spatialMode = false }) {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     toastTimerRef.current = setTimeout(() => setToast(null), 2800);
   }, []);
+  useEffect(() => {
+    const bump = () => setServiceEpoch((n) => n + 1);
+    window.addEventListener("home-services-change", bump);
+    return () => window.removeEventListener("home-services-change", bump);
+  }, []);
   useEffect(() => () => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
   }, []);
@@ -3074,7 +3080,7 @@ function HomeVideoLabelerOverlay({ open, onClose, sim, spatialMode = false }) {
       setVideos([]);
       setVideosErr(lv.error);
     }
-  }, [simActive]);
+  }, [simActive, serviceEpoch]);
 
   /* load on open + keep the health chip honest (20s repoll) */
   useEffect(() => {
@@ -3380,7 +3386,7 @@ function HomeVideoLabelerOverlay({ open, onClose, sim, spatialMode = false }) {
           {/* center + right rail — the M1 editor (player, lanes, inspector) */}
           {selected ? (
             <VLEditor
-              key={selected.id}
+              key={`${selected.id}-${serviceEpoch}`}
               video={selected}
               videos={videos || []}
               ontology={ontology}

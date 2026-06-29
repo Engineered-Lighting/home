@@ -13,6 +13,7 @@
     "web:dev": "node web-gateway/server.mjs",
     "web:start": "node web-gateway/server.mjs",
     "web:check": "node web-gateway/server.mjs --check",
+    "test:services": "node tools/run-home-services-tests.js",
     "dev:home2": "npm --workspace apps/home-2 run dev",
     "build:home2": "npm --workspace apps/home-2 run build",
     "test:home2": "npm --workspace apps/home-2 run test"

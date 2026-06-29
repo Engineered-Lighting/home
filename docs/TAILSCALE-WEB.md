@@ -9,7 +9,8 @@ instead of exposing the raw HA, AI, camera, or supervisor ports.
 - `web-gateway/server.mjs` serves `app/src`.
 - `app/src/home-web-runtime.js` runs before `home-app.jsx` in a normal browser.
 - Browser mode defaults service bases to `/proxy/...`.
-- Tauri desktop behavior keeps the existing LAN defaults.
+- Tauri desktop remote access is handled separately through direct LAN/Tailscale
+  service profiles. See [TAURI-REMOTE.md](TAURI-REMOTE.md).
 - The Ubuntu AI box is the preferred host for the web gateway because it is
   next to the RTX/model/backend services.
 - Tailscale Serve publishes the gateway privately to tailnet devices.
@@ -66,6 +67,11 @@ Required for the full web experience:
 The deploy workflow runs `tools/check-home-web-assets.sh` before restarting the
 gateway so missing ignored assets fail loudly instead of leaving the UI with
 unavailable 3D modes.
+
+For the installed Tauri app, Apartment scan/mesh assets are served by the
+separate `home-apartment-assets` systemd service on the Ubuntu AI box. That
+keeps the desktop installer small and lets a traveling laptop load the same
+runtime data over Tailscale.
 
 ## Run manually on Windows
 

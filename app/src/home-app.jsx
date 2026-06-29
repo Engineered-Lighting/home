@@ -53,6 +53,7 @@ function HomeHeader({
   bridgeHealth, visionSidecarOnline, visionHealth, frigateMetrics, cameraLabels,
   sim, muteState, onUnmuteClick, onOpenPeople, onOpenIntelligence,
   onOpenVideoLabeler, onOpenSimulationControls, peopleButtonRef, aiStackState, metrics,
+  serviceProfile, onOpenRemoteProfile,
 }) {
   const isLive = voice.state !== "inactive" && voice.state !== "no-mic";
   // Phase B F0-08: surface sidecar/bridge offline as a warning pill.
@@ -225,6 +226,37 @@ function HomeHeader({
               background: "var(--hg-fg-2)",
             }} />
             muted · {muteState.reason || "active"}
+          </button>
+        )}
+        {serviceProfile && onOpenRemoteProfile && (
+          <button
+            type="button"
+            onClick={onOpenRemoteProfile}
+            title={`Connection profile: ${serviceProfile.label}`}
+            className="hg-focusable"
+            style={{
+              all: "unset",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
+              border: "1px solid var(--hg-border)",
+              color: "var(--hg-fg-3)",
+              padding: "2px 7px",
+              borderRadius: 2,
+              fontFamily: "'Geist Mono', monospace",
+              fontSize: 9,
+              letterSpacing: "0.12em",
+              textTransform: "uppercase",
+              cursor: "pointer",
+            }}
+          >
+            <span style={{
+              width: 6,
+              height: 6,
+              borderRadius: 999,
+              background: serviceProfile.id === "tailscale" ? "var(--hg-ice)" : "var(--hg-fg-4)",
+            }} />
+            {serviceProfile.shortLabel}
           </button>
         )}
         {/* Simulation Mode pill — unmissable amber chip so the designer
@@ -2294,8 +2326,345 @@ function Num({ v, suffix }) {
   return <span style={{ color: "var(--hg-fg-1)" }}>{v}{suffix || ""}</span>;
 }
 
+function ServiceProfileInline({
+  profile,
+  onProfileChange,
+  onOpenRemotePanel,
+  onRemoteCheck,
+  probeResults,
+  running = false,
+  compact = false,
+}) {
+  if (!window.HomeServices) return null;
+  const profiles = window.HomeServices.profiles();
+  const active = profile || window.HomeServices.getProfile();
+  const results = Array.isArray(probeResults) ? probeResults : [];
+  const failures = results.filter((r) => !r.ok).length;
+  const summary = results.length
+    ? `${results.length - failures}/${results.length} reachable`
+    : "not checked";
+  const btnBase = {
+    border: "1px solid var(--hg-border)",
+    background: "transparent",
+    borderRadius: 4,
+    padding: compact ? "5px 8px" : "6px 10px",
+    cursor: "pointer",
+    fontFamily: "'Geist Mono', monospace",
+    fontSize: compact ? 9 : 10,
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+  };
+  return (
+    <div style={{
+      marginBottom: compact ? 18 : 24,
+      borderTop: "1px solid var(--hg-border-soft)",
+      borderBottom: "1px solid var(--hg-border-soft)",
+      padding: compact ? "12px 0" : "14px 0",
+      display: "flex",
+      flexDirection: "column",
+      gap: 10,
+    }}>
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 10,
+        fontFamily: "'Geist Mono', monospace",
+        fontSize: compact ? 9.5 : 10.5,
+        color: "var(--hg-fg-4)",
+        letterSpacing: "0.12em",
+        textTransform: "uppercase",
+      }}>
+        <span>connection profile</span>
+        <span style={{ color: failures ? "var(--hg-warn)" : "var(--hg-fg-3)" }}>
+          {running ? "checking" : summary}
+        </span>
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {profiles.map((p) => {
+          const selected = active.id === p.id;
+          return (
+            <button
+              key={p.id}
+              type="button"
+              className="hg-focusable"
+              onClick={() => onProfileChange?.(p.id)}
+              style={{
+                ...btnBase,
+                borderColor: selected ? "var(--hg-ice)" : "var(--hg-border)",
+                background: selected ? "rgba(138,190,255,0.08)" : "transparent",
+                color: selected ? "var(--hg-fg-0)" : "var(--hg-fg-3)",
+              }}
+            >
+              {p.shortLabel}
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          className="hg-focusable"
+          onClick={() => onRemoteCheck?.()}
+          disabled={running}
+          style={{ ...btnBase, marginLeft: "auto", color: running ? "var(--hg-fg-5)" : "var(--hg-fg-2)", cursor: running ? "default" : "pointer" }}
+        >
+          test
+        </button>
+        <button
+          type="button"
+          className="hg-focusable"
+          onClick={() => onOpenRemotePanel?.()}
+          style={{ ...btnBase, color: "var(--hg-fg-2)" }}
+        >
+          details
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function RemoteProfileDialog({
+  open,
+  profile,
+  probeResults,
+  running,
+  onClose,
+  onProfileChange,
+  onRemoteCheck,
+  onDebugBundle,
+}) {
+  const [customValues, setCustomValues] = useState({});
+  useEffect(() => {
+    if (!open || !window.HomeServices) return;
+    setCustomValues(window.HomeServices.getAll());
+  }, [open, profile?.id]);
+  if (!open || !window.HomeServices) return null;
+  const profiles = window.HomeServices.profiles();
+  const active = profile || window.HomeServices.getProfile();
+  const services = window.HomeServices.services;
+  const meta = window.HomeServices.meta;
+  const urls = window.HomeServices.getAll();
+  const resultsByService = new Map((probeResults || []).map((r) => [r.service, r]));
+  const build = window.HomeServices.buildInfo();
+  const saveCustom = () => {
+    try {
+      window.HomeServices.setCustomServices(customValues);
+      onProfileChange?.("custom");
+    } catch (e) {
+      console.warn("[services] custom save failed", e);
+    }
+  };
+  const actionBtn = {
+    border: "1px solid var(--hg-border)",
+    background: "transparent",
+    color: "var(--hg-fg-2)",
+    borderRadius: 4,
+    padding: "7px 10px",
+    cursor: "pointer",
+    fontFamily: "'Geist Mono', monospace",
+    fontSize: 10,
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+  };
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Remote profile"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 120,
+        background: "rgba(0,0,0,0.54)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 18,
+      }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose?.(); }}
+    >
+      <div style={{
+        width: "min(760px, 96vw)",
+        maxHeight: "min(760px, 92vh)",
+        overflow: "hidden",
+        display: "flex",
+        flexDirection: "column",
+        background: "var(--hg-bg-0)",
+        border: "1px solid var(--hg-border)",
+        borderRadius: 7,
+        boxShadow: "0 22px 80px rgba(0,0,0,0.48)",
+      }}>
+        <div style={{
+          padding: "18px 20px 14px",
+          borderBottom: "1px solid var(--hg-border-soft)",
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 14,
+        }}>
+          <div style={{ flex: 1 }}>
+            <div style={{
+              fontFamily: "'Geist', system-ui, sans-serif",
+              fontSize: 19,
+              fontWeight: 500,
+              color: "var(--hg-fg-0)",
+              marginBottom: 4,
+            }}>Remote access</div>
+            <div style={{
+              fontFamily: "'Geist Mono', monospace",
+              fontSize: 10,
+              color: "var(--hg-fg-4)",
+              letterSpacing: "0.08em",
+            }}>
+              {active.label} - v{build.version} - {build.commit}
+            </div>
+          </div>
+          <button type="button" onClick={onClose} className="hg-focusable" style={{
+            background: "transparent",
+            border: "none",
+            color: "var(--hg-fg-3)",
+            cursor: "pointer",
+            fontFamily: "'Geist Mono', monospace",
+            fontSize: 18,
+            lineHeight: 1,
+          }}>x</button>
+        </div>
+
+        <div style={{
+          padding: "14px 20px",
+          borderBottom: "1px solid var(--hg-border-soft)",
+          display: "flex",
+          gap: 8,
+          alignItems: "center",
+          flexWrap: "wrap",
+        }}>
+          {profiles.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              className="hg-focusable"
+              onClick={() => onProfileChange?.(p.id)}
+              style={{
+                ...actionBtn,
+                borderColor: active.id === p.id ? "var(--hg-ice)" : "var(--hg-border)",
+                background: active.id === p.id ? "rgba(138,190,255,0.08)" : "transparent",
+                color: active.id === p.id ? "var(--hg-fg-0)" : "var(--hg-fg-3)",
+              }}
+            >
+              {p.label}
+            </button>
+          ))}
+          <button type="button" className="hg-focusable" onClick={() => onRemoteCheck?.()} disabled={running} style={{
+            ...actionBtn,
+            marginLeft: "auto",
+            color: running ? "var(--hg-fg-5)" : "var(--hg-fg-2)",
+            cursor: running ? "default" : "pointer",
+          }}>{running ? "checking" : "test all"}</button>
+          <button type="button" className="hg-focusable" onClick={() => onDebugBundle?.()} style={actionBtn}>copy debug</button>
+        </div>
+
+        <div className="hg-scroll" style={{ overflowY: "auto", padding: "8px 20px 18px" }}>
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "128px minmax(260px, 1fr) 82px",
+            columnGap: 10,
+            rowGap: 1,
+            fontFamily: "'Geist Mono', monospace",
+            fontSize: 10,
+          }}>
+            {services.map((service) => {
+              const result = resultsByService.get(service);
+              const ok = result?.ok;
+              const statusText = result
+                ? ok ? `${result.ms}ms` : (result.error || `HTTP ${result.status || "?"}`)
+                : "not checked";
+              return (
+                <React.Fragment key={service}>
+                  <div style={{
+                    padding: "9px 0",
+                    color: "var(--hg-fg-3)",
+                    borderBottom: "1px solid var(--hg-border-soft)",
+                  }}>{meta[service]?.label || service}</div>
+                  <div style={{
+                    padding: "7px 0",
+                    borderBottom: "1px solid var(--hg-border-soft)",
+                    minWidth: 0,
+                  }}>
+                    {active.id === "custom" ? (
+                      <input
+                        value={customValues[service] || ""}
+                        onChange={(e) => setCustomValues((cur) => ({ ...cur, [service]: e.target.value }))}
+                        style={{
+                          width: "100%",
+                          boxSizing: "border-box",
+                          background: "transparent",
+                          border: "1px solid var(--hg-border-soft)",
+                          borderRadius: 4,
+                          color: "var(--hg-fg-1)",
+                          padding: "5px 7px",
+                          fontFamily: "'Geist Mono', monospace",
+                          fontSize: 10,
+                        }}
+                      />
+                    ) : (
+                      <span style={{
+                        display: "block",
+                        color: "var(--hg-fg-1)",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}>{urls[service]}</span>
+                    )}
+                  </div>
+                  <div style={{
+                    padding: "9px 0",
+                    textAlign: "right",
+                    color: result ? (ok ? "var(--hg-ice-bright)" : "var(--hg-warn)") : "var(--hg-fg-5)",
+                    borderBottom: "1px solid var(--hg-border-soft)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}>{statusText}</div>
+                </React.Fragment>
+              );
+            })}
+          </div>
+          {active.id === "custom" && (
+            <button type="button" className="hg-focusable" onClick={saveCustom} style={{
+              marginTop: 14,
+              border: "1px solid var(--hg-ice)",
+              background: "rgba(138,190,255,0.08)",
+              color: "var(--hg-fg-0)",
+              borderRadius: 4,
+              padding: "8px 11px",
+              cursor: "pointer",
+              fontFamily: "'Geist Mono', monospace",
+              fontSize: 10,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+            }}>save custom profile</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── First-run connection prompt ─────────────────────────────────────── */
-function FirstRun({ connection, endpoint, token, onConnect, availableModels, onPickModel, onSimulation = null, compact = false }) {
+function FirstRun({
+  connection,
+  endpoint,
+  token,
+  onConnect,
+  availableModels,
+  onPickModel,
+  onSimulation = null,
+  compact = false,
+  serviceProfile = null,
+  onProfileChange = null,
+  onOpenRemotePanel = null,
+  onRemoteCheck = null,
+  serviceProbeResults = null,
+  serviceProbeRunning = false,
+}) {
   const [url, setUrl] = useState(endpoint || webDefaultBase("HG_DEFAULT_HA_BASE") || "http://192.168.0.125:8123");
   // Start the token field empty when the last connection failed — a rejected
   // token shouldn't be pre-filled, or the user just retries the dead token.
@@ -2306,6 +2675,11 @@ function FirstRun({ connection, endpoint, token, onConnect, availableModels, onP
   const isOffline      = connection === "offline";
   const isAuthInvalid  = connection === "auth_invalid";
   const isPicking      = connection === "picking-model";
+
+  useEffect(() => {
+    const next = endpoint || webDefaultBase("HG_DEFAULT_HA_BASE") || "http://192.168.0.125:8123";
+    setUrl(next);
+  }, [endpoint, serviceProfile?.id]);
 
   if (isPicking) {
     return (
@@ -2394,6 +2768,15 @@ function FirstRun({ connection, endpoint, token, onConnect, availableModels, onP
       <div style={{ fontFamily: "'Geist', system-ui, sans-serif", fontSize: compact ? 12.5 : 13.5, color: "var(--hg-fg-3)", lineHeight: 1.55, marginBottom: compact ? 22 : 28 }}>
         {subhead}
       </div>
+      <ServiceProfileInline
+        profile={serviceProfile}
+        onProfileChange={onProfileChange}
+        onOpenRemotePanel={onOpenRemotePanel}
+        onRemoteCheck={onRemoteCheck}
+        probeResults={serviceProbeResults}
+        running={serviceProbeRunning}
+        compact={compact}
+      />
       <form onSubmit={(e) => { e.preventDefault(); onConnect(url, tok); }} style={{ display: "flex", flexDirection: "column", gap: 18 }}>
         <div>
           <label style={{ fontFamily: "'Geist Mono', monospace", fontSize: 9.5, letterSpacing: "0.18em", color: "var(--hg-fg-4)" }}>home assistant url</label>
@@ -2744,6 +3127,8 @@ const SLASH_CMDS = [
   { cmd: "/stack-token", hint: "<token>", desc: "save STACK_TOKEN for AI stack supervisor (from /opt/home-ai-voice/.env)", category: "connection" },
   { cmd: "/metrics",  hint: "<url>",   desc: "set the metrics-sidecar base url", category: "connection" },
   { cmd: "/s2s",      hint: "<url> | token <hex> | voice <name>", desc: "configure s2s bridge — url, token, or per-session voice override", category: "connection" },
+  { cmd: "/profile",  hint: "status|lan|tailscale|custom", desc: "switch or inspect the active service profile", category: "connection" },
+  { cmd: "/remote",   hint: "check", desc: "test every configured Home service endpoint", category: "connection" },
   // ── ask the agent ─────────────────────────────────────────────
   { cmd: "/ask",        hint: "<text>",     desc: "force external/general provider for this question (bypasses classifier)", category: "agent" },
   { cmd: "/local",      hint: "<text>",     desc: "force local home agent for this question (bypasses classifier)", category: "agent" },
@@ -2773,7 +3158,7 @@ const SLASH_CMDS = [
   { cmd: "/voices",   hint: "",        desc: "list popular voice names", category: "voice" },
   // ── debug + observability ─────────────────────────────────────
   { cmd: "/find",       hint: "<text>",     desc: "search past chat events for matching text", category: "debug" },
-  { cmd: "/debug",    hint: "on|off",  desc: "show/hide internal diag events ([parakeet], [direct], etc.)", category: "debug" },
+  { cmd: "/debug",    hint: "on|off|bundle",  desc: "show/hide diag events or export profile diagnostics", category: "debug" },
   { cmd: "/test",       hint: "classifier|external-privacy|external-suite", desc: "run built-in test suites and print a pass/fail summary", category: "debug" },
   { cmd: "/route-log",  hint: "[tail]",     desc: "dump recent external-routing decisions as JSONL. alias: /routes", category: "debug" },
   { cmd: "/lab-dump",       hint: "",       desc: "dump labSamplesRef + labTurnsRef + anchor stats as JSON (Addendum 32 evidence-gathering for line-graph flatness bug)", category: "debug" },
@@ -3239,17 +3624,44 @@ function hasLiveModelName(modelName) {
 // and silently broke voice mode + identity UX. Default to the AI-box
 // LAN IP; /metrics <url> and /s2s <url> still override per-install.
 function metricsBaseFromEndpoint(_endpoint) {
+  if (typeof window !== "undefined" && window.HomeServices) {
+    const configured = window.HomeServices.get("metrics");
+    if (configured) return configured;
+  }
   if (typeof window !== "undefined" && window.HG_DEFAULT_METRICS_BASE) {
     return window.HG_DEFAULT_METRICS_BASE;
   }
   return "http://192.168.0.100:8092";
 }
 
+const HOME_SERVICE_BY_RUNTIME_KEY = {
+  HG_DEFAULT_HA_BASE: "ha",
+  HG_DEFAULT_METRICS_BASE: "metrics",
+  HG_DEFAULT_VLLM_BASE: "vllm",
+  HG_DEFAULT_VISION_BASE: "vision",
+  HG_DEFAULT_INTELLIGENCE_BASE: "intelligence",
+  HG_DEFAULT_SUPERVISOR_BASE: "supervisor",
+  HG_DEFAULT_S2S_BASE: "s2s",
+  HG_DEFAULT_TRACKER_BASE: "tracker",
+  HG_DEFAULT_VIDEO_LABELER_BASE: "videoLabeler",
+  HG_DEFAULT_FRIGATE_BASE: "frigate",
+  HG_DEFAULT_APARTMENT_ASSET_BASE: "apartmentAssets",
+};
+
 function webDefaultBase(key) {
+  const service = HOME_SERVICE_BY_RUNTIME_KEY[key];
+  if (typeof window !== "undefined" && window.HomeServices && service) {
+    const configured = window.HomeServices.get(service);
+    if (configured) return String(configured).replace(/\/+$/, "");
+  }
   if (typeof window !== "undefined" && window[key]) {
     return String(window[key]).replace(/\/+$/, "");
   }
   return "";
+}
+
+function normalizeServiceUrlForCompare(value) {
+  return String(value || "").trim().replace(/\/+$/, "").toLowerCase();
 }
 
 function siblingServiceBase(metricsBase, endpoint, key, port, fallback) {
@@ -3265,17 +3677,18 @@ function siblingServiceBase(metricsBase, endpoint, key, port, fallback) {
 }
 
 function intelligenceBaseFromEndpoint(metricsBase, _endpoint) {
+  const configured = webDefaultBase("HG_DEFAULT_INTELLIGENCE_BASE");
+  if (configured) return configured;
   try {
     const saved = localStorage.getItem("hg-intelligence-base");
-    if (saved) return saved.replace(/\/+$/, "");
+    if (saved && !window.HomeServices) return saved.replace(/\/+$/, "");
   } catch {}
   return siblingServiceBase(metricsBase, _endpoint, "HG_DEFAULT_INTELLIGENCE_BASE", 8095, "http://192.168.0.100:8095");
 }
 
 function s2sBaseFromEndpoint(_endpoint) {
-  if (typeof window !== "undefined" && window.HG_DEFAULT_S2S_BASE) {
-    return window.HG_DEFAULT_S2S_BASE;
-  }
+  const configured = webDefaultBase("HG_DEFAULT_S2S_BASE");
+  if (configured) return configured;
   return "http://192.168.0.100:8094";
 }
 
@@ -3411,6 +3824,12 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   const [s2sVoice, setS2sVoice] = useState(initialPrefs.s2sVoice || "");
   const [kokoroVoice, setKokoroVoice] = useState(initialPrefs.kokoroVoice || "");
   const [debugMode, setDebugMode] = useState(!!initialPrefs.debugMode);
+  const [serviceProfile, setServiceProfile] = useState(() => (
+    window.HomeServices ? window.HomeServices.getProfile() : null
+  ));
+  const [remotePanelOpen, setRemotePanelOpen] = useState(false);
+  const [serviceProbeResults, setServiceProbeResults] = useState(null);
+  const [serviceProbeRunning, setServiceProbeRunning] = useState(false);
   // Phase 1.5: `s2sMode` is transient session state, not persisted. The
   // VOICE pill + VoiceModeButton are retired; mic-tap is the single
   // entry point. Boots with s2sMode=false; flipped to true while a
@@ -4011,6 +4430,21 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   const onboardedRef = useRef(false);
   const focusedRef = useRef(false);
 
+  useEffect(() => {
+    if (!window.HomeServices) return undefined;
+    return window.HomeServices.onChange(({ profile }) => {
+      setServiceProfile(profile);
+      if (!window.HG_WEB_MODE) {
+        const ha = window.HomeServices.get("ha");
+        const metrics = window.HomeServices.get("metrics");
+        const s2s = window.HomeServices.get("s2s");
+        if (ha) setEndpoint(ha);
+        if (metrics) setMetricsBase(metrics);
+        if (s2s) setS2sBase(s2s);
+      }
+    });
+  }, []);
+
   // hg-fill-input listener — any component (currently HelpContent) can
   // dispatch a CustomEvent("hg-fill-input", {detail: "<command>"}) to
   // populate the chat input + focus it. Avoids prop-drilling setInput
@@ -4188,9 +4622,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * one that returns /healthz. Helps when the AI box is on a different
    * host than HA (the typical case). */
   const probeMetricsBase = useCallback(async (haUrl) => {
-    const webMetricsBase = webDefaultBase("HG_DEFAULT_METRICS_BASE");
+    const webMetricsBase = window.HG_WEB_MODE ? webDefaultBase("HG_DEFAULT_METRICS_BASE") : "";
     if (webMetricsBase) return webMetricsBase;
     const candidates = [];
+    try {
+      if (window.HomeServices) {
+        const resolved = window.HomeServices.get("metrics");
+        if (resolved) candidates.push(resolved);
+        for (const c of window.HomeServices.candidates("metrics") || []) candidates.push(c);
+      }
+    } catch {}
     try {
       const u = new URL(haUrl.replace(/^ws/, "http"));
       // 1. Same host as HA (works for single-box setups).
@@ -4204,7 +4645,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     } catch {
       candidates.push("http://localhost:8092");
     }
-    for (const cand of candidates) {
+    for (const cand of Array.from(new Set(candidates.filter(Boolean)))) {
       try {
         const r = await tauriFetch(`${cand}/healthz`);
         if (r.ok) {
@@ -4217,8 +4658,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   }, []);
 
   /* ── Connect (HA WS auth + sidecar discovery) ────────── */
-  const connectTo = useCallback(async (haUrl, accessToken) => {
+  const connectTo = useCallback(async (haUrl, accessToken, options = {}) => {
     if (!haUrl || !accessToken) return;
+    if (!options.profileManaged && window.HomeServices && !window.HG_WEB_MODE) {
+      try {
+        const currentHa = window.HomeServices.get("ha");
+        if (currentHa && normalizeServiceUrlForCompare(haUrl) !== normalizeServiceUrlForCompare(currentHa)) {
+          window.HomeServices.setOverride("ha", haUrl);
+        }
+      } catch {}
+    }
     setEndpoint(haUrl);
     setToken(accessToken);
     setAvailableModels(null);
@@ -4303,6 +4752,81 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     setAvailableModels(null);
     if (name) addEvent({ kind: "system", text: `model · ${name}`, tone: "ok" });
   }, [addEvent]);
+
+  const syncServiceStateFromResolver = useCallback(() => {
+    if (!window.HomeServices) return;
+    const ha = window.HomeServices.get("ha");
+    const metrics = window.HomeServices.get("metrics");
+    const s2s = window.HomeServices.get("s2s");
+    if (ha) setEndpoint(ha);
+    if (metrics) setMetricsBase(metrics);
+    if (s2s) setS2sBase(s2s);
+    setServiceProfile(window.HomeServices.getProfile());
+  }, []);
+
+  const applyServiceProfile = useCallback((profileId) => {
+    if (!window.HomeServices) return;
+    const profile = window.HomeServices.setProfile(profileId);
+    const nextEndpoint = window.HomeServices.get("ha");
+    const nextMetrics = window.HomeServices.get("metrics");
+    const nextS2s = window.HomeServices.get("s2s");
+    try { haClientRef.current?.disconnect?.(); } catch (e) { /* best effort */ }
+    try { s2sRunRef.current?.stop?.(); } catch (e) { /* best effort */ }
+    setServiceProfile(profile);
+    if (nextEndpoint) setEndpoint(nextEndpoint);
+    if (nextMetrics) setMetricsBase(nextMetrics);
+    if (nextS2s) setS2sBase(nextS2s);
+    addEvent({ kind: "system", text: `profile · ${profile.label}`, tone: "info" });
+    if (token && nextEndpoint) {
+      setConnection("reconnecting");
+      setTimeout(() => connectTo(nextEndpoint, token, { profileManaged: true }), 0);
+    } else {
+      setConnection("offline");
+    }
+  }, [addEvent, connectTo, token]);
+
+  const runRemoteCheck = useCallback(async (announce = true) => {
+    if (!window.HomeServices) return [];
+    setServiceProbeRunning(true);
+    try {
+      const results = await window.HomeServices.probeAll();
+      setServiceProbeResults(results);
+      const ok = results.filter((r) => r.ok).length;
+      const bad = results.length - ok;
+      if (announce) {
+        addEvent({
+          kind: "system",
+          text: bad ? `remote check · ${ok}/${results.length} reachable · ${bad} failing` : `remote check · ${ok}/${results.length} reachable`,
+          tone: bad ? "warn" : "ok",
+        });
+      }
+      syncServiceStateFromResolver();
+      return results;
+    } catch (e) {
+      if (announce) addEvent({ kind: "system", text: `remote check failed · ${e?.message || e}`, tone: "error" });
+      return [];
+    } finally {
+      setServiceProbeRunning(false);
+    }
+  }, [addEvent, syncServiceStateFromResolver]);
+
+  const copyDebugBundle = useCallback(async () => {
+    if (!window.HomeServices) return;
+    const bundle = window.HomeServices.debugBundle({
+      connection,
+      endpoint,
+      metricsBase,
+      s2sBase,
+      lastProbe: serviceProbeResults,
+    });
+    const text = JSON.stringify(bundle, null, 2);
+    try {
+      await navigator.clipboard?.writeText?.(text);
+      addEvent({ kind: "system", text: "debug bundle copied to clipboard", tone: "ok" });
+    } catch (e) {
+      addEvent({ kind: "system", text: `debug bundle:\n${text.slice(0, 1800)}`, tone: "info" });
+    }
+  }, [addEvent, connection, endpoint, metricsBase, s2sBase, serviceProbeResults]);
 
   /* Auto-reconnect on launch if we have stored credentials.
    * Sim Mode: skip — sim scenarios provide their own connection state
@@ -5085,9 +5609,58 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         else addEvent({ kind: "system", text: "usage: /model <name>", tone: "info" });
         return true;
       case "metrics":
-        if (arg) { setMetricsBase(arg); addEvent({ kind: "system", text: `metrics base · ${arg}`, tone: "ok" }); }
+        if (arg) {
+          try { window.HomeServices?.setOverride?.("metrics", arg); } catch {}
+          syncServiceStateFromResolver();
+          setMetricsBase(arg);
+          addEvent({ kind: "system", text: `metrics base · ${arg}`, tone: "ok" });
+        }
         else addEvent({ kind: "system", text: `metrics base · ${metricsBase || metricsBaseFromEndpoint(endpoint)}`, tone: "info" });
         return true;
+      case "profile": {
+        const sub = arg.trim().toLowerCase();
+        if (!window.HomeServices) {
+          addEvent({ kind: "system", text: "service profiles are not available in this runtime", tone: "warn" });
+          return true;
+        }
+        if (!sub || sub === "status") {
+          const profile = window.HomeServices.getProfile();
+          const services = window.HomeServices.getAll();
+          const lines = [
+            `profile · ${profile.label}`,
+            `  ha: ${services.ha}`,
+            `  metrics: ${services.metrics}`,
+            `  s2s: ${services.s2s}`,
+            `  frigate: ${services.frigate}`,
+          ];
+          addEvent({ kind: "system", text: lines.join("\n"), tone: "info" });
+          return true;
+        }
+        if (sub === "lan" || sub === "home-lan") {
+          applyServiceProfile("home-lan");
+          return true;
+        }
+        if (sub === "tailscale" || sub === "tail" || sub === "remote") {
+          applyServiceProfile("tailscale");
+          return true;
+        }
+        if (sub === "custom") {
+          applyServiceProfile("custom");
+          setRemotePanelOpen(true);
+          return true;
+        }
+        addEvent({ kind: "system", text: "usage: /profile status|lan|tailscale|custom", tone: "info" });
+        return true;
+      }
+      case "remote": {
+        const sub = arg.trim().toLowerCase();
+        if (!sub || sub === "check" || sub === "status") {
+          runRemoteCheck(true);
+        } else {
+          addEvent({ kind: "system", text: "usage: /remote check", tone: "info" });
+        }
+        return true;
+      }
       case "s2s": {
         // Configure the s2s bridge URL/token/voice. The voice-mode
         // on/off toggle moved to a dedicated Voice button in the
@@ -5132,6 +5705,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           return true;
         }
         // Anything else → treat as a URL.
+        try { window.HomeServices?.setOverride?.("s2s", sub); } catch {}
+        syncServiceStateFromResolver();
         setS2sBase(sub);
         addEvent({ kind: "system", text: `s2s bridge · ${sub}`, tone: "ok" });
         return true;
@@ -5281,6 +5856,10 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         //   /debug on | off       → set explicitly
         //   /debug toggle         → flip
         const v = (arg || "").trim().toLowerCase();
+        if (v === "bundle") {
+          copyDebugBundle();
+          return true;
+        }
         let next = debugMode;
         if (v === "on" || v === "true" || v === "1") next = true;
         else if (v === "off" || v === "false" || v === "0") next = false;
@@ -5641,13 +6220,15 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       case "labeler":
       case "vl": {
         // Video timeline labeler (M0). `/labeler base <url>` rewires the
-        // service base (localStorage videoLabeler.base); bare /labeler
+        // service base; bare /labeler
         // opens the full-screen overlay, closing the other takeovers.
         const a = arg.trim();
         if (/^base\s+\S/.test(a)) {
           const url = a.replace(/^base\s+/, "").trim().replace(/\/+$/, "");
           try {
-            localStorage.setItem("videoLabeler.base", url);
+            if (window.HomeServices) window.HomeServices.setOverride("videoLabeler", url);
+            else localStorage.setItem("videoLabeler.base", url);
+            syncServiceStateFromResolver();
             addEvent({ kind: "system", text: `labeler base → ${url}`, tone: "ok" });
           } catch (e) {
             addEvent({ kind: "system", text: `labeler base save failed · ${e?.message || "localStorage error"}`, tone: "error" });
@@ -6346,7 +6927,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     // CALL time, by which point it's defined. Its identity is stable
     // (its own deps are [addEvent], itself stable), so omitting it
     // doesn't cause a memoization correctness issue.
-  }, [addEvent, connectTo, endpoint, metricsBase, playScript, stopStreaming, token, s2sBase, s2sToken, s2sVoice, kokoroVoice, debugMode, connection, sendToHA, events, spatialLayout]);
+  }, [addEvent, applyServiceProfile, connectTo, copyDebugBundle, debugMode, endpoint, events, kokoroVoice, metricsBase, playScript, runRemoteCheck, s2sBase, s2sToken, s2sVoice, sendToHA, spatialLayout, stopStreaming, syncServiceStateFromResolver, token]);
 
   /* ── External Reasoning dispatch (see home-external.jsx) ─────────────
    *
@@ -8293,11 +8874,23 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         peopleButtonRef={peopleButtonRef}
         aiStackState={aiStackState}
         metrics={metrics}
+        serviceProfile={serviceProfile}
+        onOpenRemoteProfile={() => setRemotePanelOpen(true)}
       />
       <SimulationControlsDialog
         open={simulationControlsOpen}
         sim={sim}
         onClose={() => setSimulationControlsOpen(false)}
+      />
+      <RemoteProfileDialog
+        open={remotePanelOpen}
+        profile={serviceProfile}
+        probeResults={serviceProbeResults}
+        running={serviceProbeRunning}
+        onClose={() => setRemotePanelOpen(false)}
+        onProfileChange={applyServiceProfile}
+        onRemoteCheck={() => runRemoteCheck(true)}
+        onDebugBundle={copyDebugBundle}
       />
       {/* Addendum 14 / Slice 3 — people overlay. Opens from the header
           button; closes via Escape or its own close button. NOT inside
@@ -8507,7 +9100,13 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
               sim.activate?.("healthy");
               addEvent({ kind: "system", text: "[sim] simulation mode activated - healthy", tone: "info" });
             }}
-          compact={isSpatialWide}
+            compact={isSpatialWide}
+            serviceProfile={serviceProfile}
+            onProfileChange={applyServiceProfile}
+            onOpenRemotePanel={() => setRemotePanelOpen(true)}
+            onRemoteCheck={() => runRemoteCheck(true)}
+            serviceProbeResults={serviceProbeResults}
+            serviceProbeRunning={serviceProbeRunning}
           />
         ) : (
           <div style={{

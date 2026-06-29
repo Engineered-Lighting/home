@@ -87,10 +87,18 @@ const sourceFiles = fs.readdirSync(SRC_DIR)
     !name.endsWith(".test.js") &&
     name !== "babel-config.js")
   .sort();
-const missingSourceFiles = sourceFiles.filter((name) => !positions.has(name));
-assert("every top-level app/src JS/JSX file is in the boot chain",
+const staticScripts = Array.from(indexSource.matchAll(/<script\s+src=["']\.\/([^"']+)["']/g))
+  .map((match) => match[1]);
+const missingSourceFiles = sourceFiles.filter((name) => !positions.has(name) && !staticScripts.includes(name));
+assert("every top-level app/src JS/JSX file is in the boot chain or static pre-runtime",
   missingSourceFiles.length === 0,
   missingSourceFiles);
+assert("web runtime and service resolver load before ordered boot chain",
+  staticScripts.includes("home-web-runtime.js") &&
+    staticScripts.includes("home-services.js") &&
+    indexSource.indexOf("./home-web-runtime.js") < indexSource.indexOf("./home-services.js") &&
+    indexSource.indexOf("./home-services.js") < indexSource.indexOf("var files ="),
+  staticScripts);
 assert("all JSX boot entries run through Babel",
   entries.filter((entry) => entry.name.endsWith(".jsx")).every((entry) => entry.babel),
   entries.filter((entry) => entry.name.endsWith(".jsx") && !entry.babel));
@@ -212,10 +220,10 @@ const renderGateBlock = sliceBetween(appSource, "{isFirstRunVisible(connection, 
 const spatialRailRenderBlock = sliceBetween(appSource, "<SpatialModeRail", "{spatialOpsDockOpen && (");
 const inputRowBlock = sliceBetween(appSource, "function InputRow", "/* VoiceModeButton");
 assert("FirstRun accepts S88 connection props",
-  /function FirstRun\(\{\s*connection,\s*endpoint,\s*token,\s*onConnect,\s*availableModels,\s*onPickModel,\s*onSimulation\s*=\s*null,\s*compact\s*=\s*false\s*\}\)/.test(firstRunBlock),
-  firstRunBlock.slice(0, 240));
+  /function FirstRun\(\{[\s\S]*connection,[\s\S]*endpoint,[\s\S]*token,[\s\S]*onConnect,[\s\S]*availableModels,[\s\S]*onPickModel,[\s\S]*onSimulation\s*=\s*null,[\s\S]*compact\s*=\s*false,[\s\S]*serviceProfile\s*=\s*null,[\s\S]*serviceProbeRunning\s*=\s*false,[\s\S]*\}\)/.test(firstRunBlock),
+  firstRunBlock.slice(0, 520));
 assert("FirstRun seeds endpoint and token fields from persisted props",
-  /useState\(endpoint \|\| "http:\/\/192\.168\.0\.125:8123"\)/.test(firstRunBlock) &&
+  /useState\(endpoint \|\| webDefaultBase\("HG_DEFAULT_HA_BASE"\) \|\| "http:\/\/192\.168\.0\.125:8123"\)/.test(firstRunBlock) &&
     /connection === "offline" \|\| connection === "auth_invalid"[\s\S]*\? "" : \(token \|\| ""\)/.test(firstRunBlock),
   firstRunBlock.slice(0, 700));
 assert("FirstRun submit prevents default and calls onConnect with typed url and token",
@@ -255,8 +263,10 @@ assert("connectTo persists typed endpoint/token before attempting HA connect",
     /haClientRef\.current\.connect\(haUrl, accessToken\)/.test(connectBlock),
   connectBlock.slice(0, 900));
 assert("connectTo discovers vLLM models from the AI host and maps id plus context",
-  /const aiHost = new URL\(mBase\)\.hostname/.test(connectBlock) &&
-    /tauriFetch\(`http:\/\/\$\{aiHost\}:8000\/v1\/models`\)/.test(connectBlock) &&
+  /let vllmBase = webDefaultBase\("HG_DEFAULT_VLLM_BASE"\)/.test(connectBlock) &&
+    /const aiHost = new URL\(mBase\)\.hostname/.test(connectBlock) &&
+    /vllmBase = `http:\/\/\$\{aiHost\}:8000`/.test(connectBlock) &&
+    /tauriFetch\(`\$\{vllmBase\}\/v1\/models`\)/.test(connectBlock) &&
     /name:\s*m\.id/.test(connectBlock) &&
     /ctx:\s*m\.max_model_len/.test(connectBlock),
   connectBlock.slice(1600, 3100));

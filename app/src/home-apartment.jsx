@@ -16,15 +16,28 @@ const { useState, useEffect, useRef, useCallback } = React;
 const APT_FONT_MONO = '"Geist Mono", "JetBrains Mono", monospace';
 const APT_FONT_SANS = '"Geist", "Inter", sans-serif';
 
+const APT_SERVICE_BY_RUNTIME_KEY = {
+  HG_DEFAULT_FRIGATE_BASE: "frigate",
+  HG_DEFAULT_TRACKER_BASE: "tracker",
+  HG_DEFAULT_APARTMENT_ASSET_BASE: "apartmentAssets",
+};
+
 function aptServiceBase(storageKey, runtimeKey, fallback) {
+  try {
+    const service = APT_SERVICE_BY_RUNTIME_KEY[runtimeKey];
+    const resolved = service && window.HomeServices?.get?.(service);
+    if (resolved) return String(resolved).replace(/\/+$/, "");
+  } catch (e) { /* */ }
   try {
     if (window.HG_WEB_MODE && window[runtimeKey]) {
       return String(window[runtimeKey]).replace(/\/+$/, "");
     }
   } catch (e) { /* */ }
   try {
-    const saved = localStorage.getItem(storageKey);
-    if (saved) return saved.replace(/\/+$/, "");
+    if (!window.HomeServices) {
+      const saved = localStorage.getItem(storageKey);
+      if (saved) return saved.replace(/\/+$/, "");
+    }
   } catch (e) { /* */ }
   try {
     if (window[runtimeKey]) return String(window[runtimeKey]).replace(/\/+$/, "");
@@ -267,6 +280,13 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const [hostSize, setHostSize] = useState({ width: 0, height: 0 });
   const statesRef = useRef({});                      // entity_id -> ha state
   const simActive = !!(sim && sim.active);
+  const [serviceEpoch, setServiceEpoch] = useState(0);
+
+  useEffect(() => {
+    const bump = () => setServiceEpoch((n) => n + 1);
+    window.addEventListener("home-services-change", bump);
+    return () => window.removeEventListener("home-services-change", bump);
+  }, []);
 
   const showToast = useCallback((text) => {
     setToast(text);
@@ -575,7 +595,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         engineRef.current?.overlay.setPerson(t);
       },
     });
-  }, [open, phase, simActive]);
+  }, [open, phase, simActive, serviceEpoch]);
 
   /* hover + click picking (view mode only) */
   useEffect(() => {
@@ -891,7 +911,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
               cameras render through the WebGL undistorter; uncalibrated ones
               keep the raw <img> (AptUndistortedFeed falls back internally) */}
           <AptUndistortedFeed
-            key={liveCam.id}
+            key={`${liveCam.id}-${serviceEpoch}`}
             // key forces a REMOUNT on camera switch: the cleanup deliberately
             // loses the WebGL context (context-budget hygiene), so a reused
             // canvas would come back with a dead context and no warp
@@ -911,6 +931,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
 
       {calibCam && window.HomeApartmentCalibrate && React.createElement(
         window.HomeApartmentCalibrate.Component, {
+          key: `${calibCam.id}-${serviceEpoch}`,
           cam: calibCam.camera.frigate_name,
           savedLens: calibCam.camera?.intrinsics || null,
           trackerBase: aptServiceBase("apartment3d.trackerBase", "HG_DEFAULT_TRACKER_BASE", "http://192.168.0.100:8098"),

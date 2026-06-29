@@ -516,7 +516,7 @@ Cameras from `home-vision.jsx` HG_CAMERAS:
 - **Area:** vision sidecar `/describe` via `refresh_perception`
 - **Preconditions:** Kitchen empty; one visible object (e.g. fruit bowl).
 - **Steps:** 1. Voice: *"what do you see in the kitchen?"*.
-- **Expected:** Assistant calls `get_room_state("kitchen")` then optionally `refresh_perception`; mentions the object; says no one is present.
+- **Expected:** Assistant calls `refresh_perception("kitchen")` or `describe_camera("kitchen")` before answering; it may use `get_room_state("kitchen")` as fallback/context, but must not answer from cached occupancy or motion sensors alone. Mentions the object; says no one is present.
 - **Verify:** chat feed + tool log; `/world-state kitchen` shows fresh perception.
 - **Risk:** Stale perception reused; hallucinated person.
 

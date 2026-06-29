@@ -131,6 +131,7 @@ function completionValue(cmd, commands) {
     "tools": "agent-tools",
     "version": "about",
     "routes": "route-log",
+    "spatial-home": "apartment",
   };
   const unexpectedHidden = [...handlerSet].filter((name) => !visibleNames.has(name) && !hiddenAliases[name]);
   assert("hidden handler aliases are explicitly allowlisted", unexpectedHidden.length === 0, unexpectedHidden);

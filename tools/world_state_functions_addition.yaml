@@ -9,7 +9,7 @@
     name: get_all_rooms_state
 - spec:
     name: get_room_state
-    description: "Detailed state for one room: who is in it, Frigate labels, latest perception summary, freshness. Use for 'what do you see in the kitchen?' style. If data is null, say so — do NOT guess based on the room name."
+    description: "Detailed cached state for one room: who is in it, Frigate labels, latest cached perception summary, freshness. Use for cached occupancy/presence questions like 'is anyone outside?' or as fallback after refresh_perception errors. Do NOT use as the only tool for direct camera-view questions like 'what do you see in the driveway camera?' or 'look at the kitchen'; those require refresh_perception first. If data is null, say so — do NOT guess based on the room name."
     parameters:
       type: object
       properties:
@@ -51,7 +51,7 @@
     name: who_is_in
 - spec:
     name: refresh_perception
-    description: "Trigger a FRESH vision-sidecar visual snapshot for a room (2-5s latency). Use ONLY when cached perception is stale or insufficient. Capped at 2 calls per conversation."
+    description: "Trigger a FRESH vision-sidecar visual snapshot for a room (2-5s latency). Use FIRST for direct visual/camera questions such as 'what do you see in the driveway camera?', 'what is happening in the kitchen?', 'what's happening outside?', 'look at the driveway', or any question that says now/right now. Capped at 2 calls per conversation."
     parameters:
       type: object
       properties:

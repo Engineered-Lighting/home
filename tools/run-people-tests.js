@@ -672,7 +672,7 @@ process.stdout.write("\n[1mcustom avatar URL builder (Addendum 24 Phase 3)[0m\n"
 process.stdout.write("\n[1midentity_mutation overlay refresh contract (DOC-S13)[0m\n");
 (() => {
   assert("HomePeopleOverlay accepts explicit HA client + connection props",
-    /function HomePeopleOverlay\(\{\s*open,\s*onClose,\s*endpoint,\s*token,\s*client\s*=\s*null,\s*connection\s*=\s*null,\s*sim\s*\}\)/.test(peopleSource));
+    /function HomePeopleOverlay\(\{\s*open,\s*onClose,\s*endpoint,\s*token,\s*client\s*=\s*null,\s*connection\s*=\s*null,\s*sim,\s*spatialMode\s*=\s*false\s*\}\)/.test(peopleSource));
   assert("HomeApp passes HA client into People overlay",
     /<window\.HomePeopleOverlay[\s\S]*client=\{haClientRef\.current\}/.test(appSource));
   assert("HomeApp passes HA connection state into People overlay",

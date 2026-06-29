@@ -61,7 +61,7 @@ function AptRoomChip({ track }) {
   );
 }
 
-function AptControlCard({ device, state, screen, onClose, onService, onFlyTo, sim }) {
+function AptControlCard({ device, state, screen, bounds, onClose, onService, onFlyTo, sim }) {
   const [briDraft, setBriDraft] = useState(null);
   const [volDraft, setVolDraft] = useState(null);
   if (!device || !screen) return null;
@@ -75,8 +75,10 @@ function AptControlCard({ device, state, screen, onClose, onService, onFlyTo, si
   const vol = volDraft ?? Math.round((attrs.volume_level ?? 0) * 100);
   const mediaOff = ["off", "standby", "unavailable", "unknown"].includes(state?.state);
 
-  const x = Math.min(Math.max(screen.x + 18, 10), window.innerWidth - 280);
-  const y = Math.min(Math.max(screen.y - 30, 56), window.innerHeight - 220);
+  const maxWidth = bounds?.width || window.innerWidth;
+  const maxHeight = bounds?.height || window.innerHeight;
+  const x = Math.min(Math.max(screen.x + 18, 10), Math.max(10, maxWidth - 280));
+  const y = Math.min(Math.max(screen.y - 30, 56), Math.max(56, maxHeight - 220));
 
   const row = { display: "flex", alignItems: "center", gap: 8, marginTop: 8 };
   const btn = (label, onClick, primary) => (

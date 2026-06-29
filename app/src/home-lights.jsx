@@ -485,7 +485,7 @@ function FrozenCard({ title, subtitle, intro, knobs, fileLocation, whyFrozen, cu
 
 // ── Main drawer component ──────────────────────────────────────────────
 
-function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askExternal }) {
+function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askExternal, spatialMode = false }) {
   const [zone, setZone] = useState("office");
   const [states, setStates] = useState({});  // { entity_id: { state, attributes } }
   const [error, setError] = useState(null);
@@ -787,14 +787,33 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
   // ── Render ──────────────────────────────────────────────────────────
   return (
     <div role="dialog" aria-modal="true" aria-label="Living Lights tuning"
+      data-theme={spatialMode ? "dark" : undefined}
       style={{
-        position: "fixed", top: 0, right: 0, bottom: 0,
-        width: "min(520px, 100vw)",
-        background: "var(--hg-bg-0)",
-        borderLeft: "1px solid var(--hg-border)",
+        position: "fixed",
+        ...(spatialMode
+          ? {
+              top: 84,
+              right: "calc(clamp(352px, 19vw, 388px) + 18px)",
+              bottom: 46,
+              width: "min(392px, calc(100vw - clamp(352px, 19vw, 388px) - 118px))",
+              border: "1px solid rgba(184,216,255,0.075)",
+              borderRadius: 7,
+              background: "rgba(5,7,11,0.86)",
+              backdropFilter: "blur(16px)",
+              boxShadow: "0 18px 56px rgba(0,0,0,0.36)",
+            }
+          : {
+              top: 0,
+              right: 0,
+              bottom: 0,
+              width: "min(520px, 100vw)",
+              background: "var(--hg-bg-0)",
+              borderLeft: "1px solid var(--hg-border)",
+              boxShadow: "-2px 0 16px rgba(0,0,0,0.18)",
+            }),
         zIndex: 1100,
         display: "flex", flexDirection: "column",
-        boxShadow: "-2px 0 16px rgba(0,0,0,0.18)",
+        overflow: "hidden",
       }}>
       {/* Header */}
       <div style={{ padding: "12px 18px", borderBottom: "1px solid var(--hg-border-soft)",

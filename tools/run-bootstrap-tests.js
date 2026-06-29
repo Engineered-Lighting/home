@@ -209,9 +209,10 @@ const confirmModelBlock = sliceBetween(appSource, "const confirmModel = useCallb
 const reconnectBlock = sliceBetween(appSource, "/* Auto-reconnect on launch", "/* Sim Mode transitions");
 const focusBlock = sliceBetween(appSource, "/* Input focus", "/* \u2500\u2500 HA client lifecycle");
 const renderGateBlock = sliceBetween(appSource, "{isFirstRunVisible(connection, events) ? (", "<MetricsStrip");
+const spatialRailRenderBlock = sliceBetween(appSource, "<SpatialModeRail", "{spatialOpsDockOpen && (");
 const inputRowBlock = sliceBetween(appSource, "function InputRow", "/* VoiceModeButton");
 assert("FirstRun accepts S88 connection props",
-  /function FirstRun\(\{\s*connection,\s*endpoint,\s*token,\s*onConnect,\s*availableModels,\s*onPickModel\s*\}\)/.test(firstRunBlock),
+  /function FirstRun\(\{\s*connection,\s*endpoint,\s*token,\s*onConnect,\s*availableModels,\s*onPickModel,\s*onSimulation\s*=\s*null,\s*compact\s*=\s*false\s*\}\)/.test(firstRunBlock),
   firstRunBlock.slice(0, 240));
 assert("FirstRun seeds endpoint and token fields from persisted props",
   /useState\(endpoint \|\| "http:\/\/192\.168\.0\.125:8123"\)/.test(firstRunBlock) &&
@@ -233,14 +234,18 @@ assert("FirstRun empty model-list fallback can continue without a model name",
   /onClick=\{\(\) => onPickModel\(""\)\}/.test(firstRunBlock),
   firstRunBlock.slice(1800, 3200));
 assert("FirstRun visibility gate keeps picker and auth errors on the form surface",
-  /connection === "picking-model"/.test(firstRunGateBlock) &&
-    /connection === "auth_invalid"/.test(firstRunGateBlock) &&
-    /connection === "offline"\s*&& events\.length === 0/.test(firstRunGateBlock) &&
-    /connection === "disconnected"\s*&& events\.length === 0/.test(firstRunGateBlock),
+  /return connection !== "online" && connection !== "reconnecting";/.test(firstRunGateBlock),
   firstRunGateBlock);
 assert("HomeApp render gate mounts FirstRun with live connect and picker props",
-  /<FirstRun[\s\S]*connection=\{connection\}[\s\S]*endpoint=\{endpoint\}[\s\S]*token=\{token\}[\s\S]*onConnect=\{connectTo\}[\s\S]*availableModels=\{availableModels\}[\s\S]*onPickModel=\{confirmModel\}/.test(renderGateBlock),
+  /<FirstRun[\s\S]*connection=\{connection\}[\s\S]*endpoint=\{endpoint\}[\s\S]*token=\{token\}[\s\S]*onConnect=\{connectTo\}[\s\S]*availableModels=\{availableModels\}[\s\S]*onPickModel=\{confirmModel\}[\s\S]*onSimulation=\{\(\) => \{/.test(renderGateBlock),
   renderGateBlock.slice(0, 900));
+assert("Spatial ops rail clears tool surfaces before toggling the ops dock",
+  /onOps=\{\(\) => \{[\s\S]*closeSpatialToolSurfaces\(\);[\s\S]*setSpatialOpsDockOpen\(\(open\) => !open\);[\s\S]*\}\}/.test(spatialRailRenderBlock),
+  spatialRailRenderBlock);
+assert("stored events do not make an uncredentialed launch look online",
+  /const hasStoredHaCredentials = !!\(initialPrefs\.endpoint && initialPrefs\.token\);[\s\S]*const \[connection, setConnection\] = useState\(\s*hasStoredHaCredentials \? "reconnecting" : "disconnected"\s*\);/.test(appSource) &&
+    !/initialEvents \? "online"/.test(appSource),
+  appSource.slice(appSource.indexOf("const hasStoredHaCredentials") - 300, appSource.indexOf("const hasStoredHaCredentials") + 500));
 assert("prefs persistence includes endpoint token and selected model",
   /savePrefs\(\{\s*endpoint,\s*token,\s*model,/.test(prefsBlock) &&
     /\[endpoint,\s*token,\s*model,/.test(prefsBlock),

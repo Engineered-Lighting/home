@@ -13,10 +13,13 @@ const CONTROL = fs.readFileSync(path.join(REPO, "app", "src", "home-control.jsx"
 const VISION = fs.readFileSync(path.join(REPO, "app", "src", "home-vision.jsx"), "utf8");
 const S2S = fs.readFileSync(path.join(REPO, "app", "src", "home-s2s.jsx"), "utf8");
 const SSE = fs.readFileSync(path.join(REPO, "app", "src", "home-sse-fetch.js"), "utf8");
+const CONST = fs.readFileSync(path.join(REPO, "ha-config", "extended_openai_conversation", "const.py"), "utf8");
 const WORLD_STATE = fs.readFileSync(path.join(REPO, "ha-config", "extended_openai_conversation", "functions", "world_state.py"), "utf8");
 const FRIGATE_TOOL = fs.readFileSync(path.join(REPO, "ha-config", "extended_openai_conversation", "functions", "frigate.py"), "utf8");
 const SCENARIOS = fs.readFileSync(path.join(REPO, "docs", "SCENARIO-TESTS.md"), "utf8");
 const EVIDENCE = fs.readFileSync(path.join(REPO, "tools", "scenario-evidence-map.json"), "utf8");
+const WORLD_STATE_PROMPT = fs.readFileSync(path.join(REPO, "tools", "world_state_prompt_addition.md"), "utf8");
+const WORLD_STATE_FUNCTIONS = fs.readFileSync(path.join(REPO, "tools", "world_state_functions_addition.yaml"), "utf8");
 
 let passes = 0;
 let fails = 0;
@@ -90,6 +93,30 @@ assert("vision tooltip preserves fallback", visionSummary.tooltip_text.includes(
 assert("HomeApp vision health poll clears stale health on non-ok and fetch failure", /setVisionSidecarOnline\(r\.ok\)[\s\S]*setVisionHealth\(null\)[\s\S]*setVisionSidecarOnline\(false\)[\s\S]*setVisionHealth\(null\)/.test(APP));
 assert("world_state refresh_perception returns explicit vision-sidecar errors", WORLD_STATE.includes("vision-sidecar timeout") && WORLD_STATE.includes("vision-sidecar unreachable"));
 assert("vision card retries dead streams with visible reconnecting overlay", VISION.includes("scheduleReload") && VISION.includes("reconnecting"));
+
+process.stdout.write("\nvision_direct_camera_question_contract_test\n");
+assert("default prompt forces fresh perception for direct camera-view questions",
+  CONST.includes("Direct visual/camera questions:") &&
+  CONST.includes('"what do you see"') &&
+  CONST.includes("MUST call") &&
+  CONST.includes("`refresh_perception(room)` before answering") &&
+  CONST.includes("NEVER answer a direct camera-view question from motion sensors"));
+assert("get_room_state tool description rejects cached-only camera answers",
+  CONST.includes("Do NOT use as ") &&
+  CONST.includes("the only tool for direct camera-view questions") &&
+  CONST.includes("Those require refresh_perception first"));
+assert("refresh_perception tool description names direct driveway-camera questions",
+  CONST.includes("Use FIRST for direct visual/camera questions") &&
+  CONST.includes("what do you see in the driveway camera"));
+assert("helper prompt/function snippets preserve fresh-vision contract",
+  WORLD_STATE_PROMPT.includes("Direct visual/camera questions:") &&
+  WORLD_STATE_PROMPT.includes("Those are not seeing") &&
+  WORLD_STATE_FUNCTIONS.includes("Do NOT use as the only tool for direct camera-view questions") &&
+  WORLD_STATE_FUNCTIONS.includes("Use FIRST for direct visual/camera questions"));
+assert("Home app treats refresh_perception as a vision tool in the chat feed",
+  APP.includes('tc.name === "refresh_perception"') &&
+  APP.includes('tc.args.camera || tc.args.room') &&
+  APP.includes('tc.name === "describe_camera" || tc.name === "refresh_perception"'));
 
 process.stdout.write("\nDOC-S107_frigate_down_contract_test\n");
 const frigateRows = H.deriveRuntimeServiceHealth(svcs(), {

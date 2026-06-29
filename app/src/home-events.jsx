@@ -380,6 +380,13 @@ function SyntaxLine({ label, labelStyle, head, tail = [], status }) {
 
 function SystemContent({ text, tone }) {
   const isErr = tone === "error";
+  const [expanded, setExpanded] = React.useState(false);
+  const raw = String(text || "");
+  const lines = raw.split(/\r?\n/);
+  const isLong = raw.length > 520 || lines.length > 6;
+  const visibleText = !isLong || expanded
+    ? raw
+    : `${lines.slice(0, 3).join("\n")}${lines.length > 3 ? "\n..." : raw.length > 260 ? "..." : ""}`;
   // Phase 1.5: `whiteSpace: pre-line` lets multi-line system events
   // (notably the new /help vertical list) render with line breaks
   // intact. wordBreak softens long lines at narrow viewports.
@@ -389,8 +396,34 @@ function SystemContent({ text, tone }) {
       fontStyle: "italic",
       whiteSpace: "pre-line",
       wordBreak: "break-word",
+      padding: isLong ? "8px 10px" : 0,
+      border: isLong ? "1px solid var(--hg-border-soft)" : "none",
+      borderRadius: isLong ? 6 : 0,
+      background: isLong ? "rgba(255,255,255,0.018)" : "transparent",
     }}>
-      <span style={HG_FAINT}>system  </span>{text}
+      <span style={HG_FAINT}>system  </span>{visibleText}
+      {isLong && (
+        <button
+          type="button"
+          className="hg-focusable"
+          onClick={() => setExpanded((open) => !open)}
+          style={{
+            display: "inline-flex",
+            marginTop: 8,
+            background: "transparent",
+            border: "1px solid var(--hg-border-soft)",
+            color: "var(--hg-fg-3)",
+            cursor: "pointer",
+            fontFamily: HG_MONO,
+            fontSize: 9,
+            letterSpacing: "0.14em",
+            padding: "3px 7px",
+            textTransform: "uppercase",
+          }}
+        >
+          {expanded ? "collapse log" : `show ${lines.length} lines`}
+        </button>
+      )}
     </div>
   );
 }
@@ -575,7 +608,13 @@ function HelpContent({ groups = [], totalCount = 0, tip = "" }) {
     }
   };
   return (
-    <div style={{ ...T_PROSE, color: "var(--hg-fg-2)" }}>
+    <div className="hg-scroll" style={{
+      ...T_PROSE,
+      color: "var(--hg-fg-2)",
+      maxHeight: "42vh",
+      overflowY: "auto",
+      paddingRight: 4,
+    }}>
       <div style={{
         ...T_META,
         marginBottom: 10,

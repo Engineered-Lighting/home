@@ -27,12 +27,23 @@ function overrideBase() {
     try { return localStorage.getItem('apartment3d.assetsBase') || null; } catch (e) { return null; }
 }
 
+function browserDevBase() {
+    try {
+        const loc = window.location;
+        const loopback = loc && (loc.hostname === '127.0.0.1' || loc.hostname === 'localhost' || loc.hostname === '::1');
+        if (loopback && (loc.port === '5180' || loc.port === '5173')) return 'http://127.0.0.1:5190';
+    } catch (e) { /* */ }
+    return null;
+}
+
 /* Ordered candidate URLs for an asset; `simName` is the bundled fallback. */
 export function candidates(name, simName, { sim = false } = {}) {
     const list = [];
     if (!sim) {
         const base = overrideBase();
         if (base) list.push(`${base.replace(/\/+$/, '')}/${name}`);
+        const devBase = browserDevBase();
+        if (devBase) list.push(`${devBase}/${name}`);
         const t = tauriConvert(name);
         if (t) list.push(t);
     }

@@ -30,6 +30,30 @@
   --hg-app-shadow: 0 0 0 1px var(--hg-border), 0 30px 80px rgba(0, 0, 0, 0.6);
 }
 
+[data-theme="dark"] {
+  --hg-bg-0: #000000;
+  --hg-bg-1: #0A0A0A;
+  --hg-bg-2: #111111;
+  --hg-bg-3: #161616;
+  --hg-fg-0: #FFFFFF;
+  --hg-fg-1: #EDEDED;
+  --hg-fg-2: #A1A1A1;
+  --hg-fg-3: #8F8F8F;
+  --hg-fg-4: #666666;
+  --hg-fg-5: #404040;
+  --hg-border-soft: rgba(255, 255, 255, 0.06);
+  --hg-border: rgba(255, 255, 255, 0.10);
+  --hg-border-strong: rgba(255, 255, 255, 0.18);
+  --hg-ice: #B8D8FF;
+  --hg-ice-bright: #DDEAFF;
+  --hg-ice-glow: rgba(184, 216, 255, 0.32);
+  --hg-blue: #4D9CFF;
+  --hg-warn: #FFB224;
+  --hg-crit: #E15553;
+  --hg-input-bg: rgba(255, 255, 255, 0.025);
+  --hg-app-shadow: 0 0 0 1px var(--hg-border), 0 30px 80px rgba(0, 0, 0, 0.6);
+}
+
 [data-theme="light"] {
   /* "Paper terminal" — warm off-white parchment, ink-black text.
      Restrained. Still terminal-esque. The accent shifts from ice to

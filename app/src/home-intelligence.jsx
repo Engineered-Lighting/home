@@ -2563,7 +2563,7 @@
     );
   }
 
-  function HomeIntelligenceOverlay({ open, onClose, metricsBase, endpoint }) {
+  function HomeIntelligenceOverlay({ open, onClose, metricsBase, endpoint, spatialMode = false }) {
     const base = useMemo(() => intelligenceBaseFrom(metricsBase, endpoint), [metricsBase, endpoint]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
@@ -2962,7 +2962,25 @@
     }[globalPanel] || null;
 
     const overlay = (
-      <div className="intel-atlas" role="dialog" aria-modal="true" aria-label="Intelligence Atlas">
+      <div
+        className={`intel-atlas${spatialMode ? " spatial" : ""}`}
+        data-theme={spatialMode ? "dark" : undefined}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Intelligence Atlas"
+        style={spatialMode ? {
+          inset: "auto",
+          left: 82,
+          right: "calc(clamp(352px, 19vw, 388px) + 18px)",
+          top: 82,
+          bottom: 46,
+          border: "1px solid rgba(184,216,255,0.075)",
+          borderRadius: 7,
+          background: "rgba(5,7,11,0.86)",
+          backdropFilter: "blur(16px)",
+          boxShadow: "0 18px 56px rgba(0,0,0,0.36)",
+        } : undefined}
+      >
         <div className="intel-atlas-top">
           <div className="intel-atlas-title">
             <div className="intel-atlas-title-row">
@@ -4176,6 +4194,18 @@
             color: var(--hg-fg-0);
             font-family: 'Geist', system-ui, sans-serif;
             animation: intel-atlas-fade-in 220ms cubic-bezier(0.16, 1, 0.3, 1);
+          }
+          .intel-atlas.spatial {
+            overflow: hidden;
+          }
+          .intel-atlas.spatial .intel-atlas-top {
+            border-radius: 8px 8px 0 0;
+          }
+          .intel-atlas.spatial .intel-atlas-expanded-card,
+          .intel-atlas.spatial .intel-atlas-global-panel,
+          .intel-atlas.spatial .intel-atlas-guide,
+          .intel-atlas.spatial .intel-atlas-lightbox-card {
+            max-height: calc(100% - 48px);
           }
           .intel-atlas::before {
             content: "";
@@ -5798,6 +5828,25 @@
           }
           [data-theme="light"] .intel-atlas-lightbox-card img {
             background: #1a1812;
+          }
+          .intel-atlas.spatial,
+          [data-theme="light"] .intel-atlas.spatial {
+            background: rgba(3,5,8,0.96);
+            color: #fff;
+          }
+          .intel-atlas.spatial::before,
+          [data-theme="light"] .intel-atlas.spatial::before {
+            background:
+              linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px),
+              linear-gradient(0deg, rgba(255,255,255,0.018) 1px, transparent 1px);
+            opacity: 0.45;
+          }
+          .intel-atlas.spatial .intel-atlas-top,
+          [data-theme="light"] .intel-atlas.spatial .intel-atlas-top {
+            background:
+              linear-gradient(to bottom, rgba(0,0,0,0.98) 0%, rgba(0,0,0,0.94) 72%, rgba(0,0,0,0.72) 100%);
+            border-bottom-color: rgba(255,255,255,0.06);
+            box-shadow: 0 18px 50px rgba(0,0,0,0.5);
           }
           @media (max-width: 760px) {
             .intel-atlas-top {

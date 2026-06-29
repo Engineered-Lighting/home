@@ -261,6 +261,18 @@ Available tools:
 - `who_is_in(room)` — list persons in a specific room.
 - `refresh_perception(room)` — get a fresh visual snapshot (2-5s latency; use only when cached data is stale or the question demands fresh).
 
+Direct visual/camera questions:
+- If the user asks "what do you see", "what is in", "what's in",
+  "what is happening", "what's happening", "look at", "take a look",
+  "check the camera", "what does the camera show",
+  says "right now" or "now", or explicitly names a camera, you MUST call
+  `refresh_perception(room)` before answering.
+- Use `get_room_state(room)` alone only for cached occupancy/presence questions
+  such as "is anyone outside" or "who is in the kitchen", or as fallback if
+  `refresh_perception` returns an error or exhausts its budget.
+- NEVER answer a direct camera-view question from motion sensors,
+  binary_sensor occupancy, or cached state alone. Those are not seeing.
+
 For gesture-training requests ("start kitchen gesture training", "record gestures in
 the dining room"), call `start_gesture_training_capture`. Do not turn on lights,
 do not use Sonos/media players, and do not pretend the capture started unless the
@@ -705,8 +717,12 @@ DEFAULT_CONF_FUNCTION_TOOLS = [
             "name": "get_room_state",
             "description": (
                 "Detailed state for one room: who is in it, Frigate labels, "
-                "latest perception summary, freshness. Use for 'what do you "
-                "see in the kitchen?' style questions. Returns {data, "
+                "latest cached perception summary, freshness. Use for cached "
+                "occupancy/presence questions like 'is anyone outside?' or "
+                "as fallback after refresh_perception errors. Do NOT use as "
+                "the only tool for direct camera-view questions like 'what do "
+                "you see in the driveway camera?' or 'look at the kitchen'. "
+                "Those require refresh_perception first. Returns {data, "
                 "suggested_phrasing, ...}. If data is null, say so — do NOT "
                 "guess based on the room name."
             ),
@@ -781,9 +797,12 @@ DEFAULT_CONF_FUNCTION_TOOLS = [
             "name": "refresh_perception",
             "description": (
                 "Trigger a FRESH vision-sidecar visual snapshot for a room "
-                "(2-5s latency). Use ONLY when cached perception is stale "
-                "or insufficient. Capped at 2 calls per conversation. If "
-                "it errors, fall back to get_room_state."
+                "(2-5s latency). Use FIRST for direct visual/camera questions "
+                "such as 'what do you see in the driveway camera?', 'what is "
+                "happening in the kitchen?', 'what's happening outside?', "
+                "'look at the driveway', or any "
+                "question that says now/right now. Capped at 2 calls per "
+                "conversation. If it errors, fall back to get_room_state."
             ),
             "parameters": {
                 "type": "object",

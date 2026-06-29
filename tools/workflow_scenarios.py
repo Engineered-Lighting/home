@@ -496,20 +496,17 @@ PHASE_1_SCENARIOS: list[WorkflowScenario] = [
                 why="must call find_person('Marcelo') for the location question",
             ),
             # Description tool — the agent has multiple valid choices:
-            # get_room_state, describe_camera, refresh_perception. Any
-            # one that returns office-relevant content satisfies.
+            # describe_camera or refresh_perception satisfy the visual part.
+            # Cached get_room_state alone is not enough.
             AnyOf(
                 options=[
-                    ToolAssertion(name="get_room_state",
-                                  args_predicate=get_room_state_room("office"),
-                                  why="get_room_state('office')"),
                     ToolAssertion(name="describe_camera",
                                   why="describe_camera (camera.office or similar)"),
                     ToolAssertion(name="refresh_perception",
                                   args_predicate=refresh_perception_office,
                                   why="refresh_perception('office')"),
                 ],
-                why="must gather office description (get_room_state OR describe_camera OR refresh_perception)",
+                why="must gather fresh office description (describe_camera OR refresh_perception)",
             ),
         ],
         forbidden_tools=[
@@ -553,8 +550,8 @@ PHASE_1_SCENARIOS: list[WorkflowScenario] = [
         required_tools=[
             # "Take a fresh look" maps semantically to refresh_perception
             # but the agent may equivalently use describe_camera (which
-            # is the same camera pipeline, just without a forced refresh)
-            # or get_room_state. Accept any of the three.
+            # is the same camera pipeline, just without a forced refresh).
+            # Cached get_room_state alone is not enough.
             AnyOf(
                 options=[
                     ToolAssertion(name="refresh_perception",
@@ -562,11 +559,8 @@ PHASE_1_SCENARIOS: list[WorkflowScenario] = [
                                   why="refresh_perception('office')"),
                     ToolAssertion(name="describe_camera",
                                   why="describe_camera (current snapshot)"),
-                    ToolAssertion(name="get_room_state",
-                                  args_predicate=get_room_state_room("office"),
-                                  why="get_room_state('office')"),
                 ],
-                why="must gather fresh visual of office (refresh_perception OR describe_camera OR get_room_state)",
+                why="must gather fresh visual of office (refresh_perception OR describe_camera)",
             ),
         ],
         forbidden_tools=[
@@ -719,16 +713,13 @@ PHASE_2_SCENARIOS: list[WorkflowScenario] = [
             ),
             AnyOf(
                 options=[
-                    ToolAssertion(name="get_room_state",
-                                  args_predicate=get_room_state_room("office"),
-                                  why="get_room_state('office')"),
                     ToolAssertion(name="describe_camera",
                                   why="describe_camera"),
                     ToolAssertion(name="refresh_perception",
                                   args_predicate=refresh_perception_office,
                                   why="refresh_perception('office')"),
                 ],
-                why="must gather office description (get_room_state OR describe_camera OR refresh_perception)",
+                why="must gather fresh office description (describe_camera OR refresh_perception)",
             ),
         ],
         forbidden_tools=[

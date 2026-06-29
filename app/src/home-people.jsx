@@ -33,7 +33,7 @@ const PEOPLE_FONT_SANS = "'Geist', system-ui, sans-serif";
  * Full-app slide-in overlay. Receives `open` + `onClose` from
  * home-app.jsx + an endpoint/token pair for HA REST calls.
  * ──────────────────────────────────────────────────────────────────── */
-function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, connection = null, sim }) {
+function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, connection = null, sim, spatialMode = false }) {
   const [view, setView] = useState("graph");   // graph | list | queue
   const [identities, setIdentities] = useState(null);  // null=loading, []=empty
   const [error, setError] = useState(null);
@@ -320,13 +320,27 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
 
   const overlay = (
     <div
+      data-theme={spatialMode ? "dark" : undefined}
       style={{
-        position: "fixed", inset: 0,
-        background: "var(--hg-bg-0)",
+        position: "fixed",
+        ...(spatialMode
+          ? {
+              left: 82,
+              right: "calc(clamp(352px, 19vw, 388px) + 18px)",
+              top: 82,
+              bottom: 46,
+              border: "1px solid rgba(184,216,255,0.075)",
+              borderRadius: 7,
+              background: "rgba(5,7,11,0.86)",
+              backdropFilter: "blur(16px)",
+              boxShadow: "0 18px 56px rgba(0,0,0,0.36)",
+            }
+          : { inset: 0, background: "var(--hg-bg-0)" }),
         zIndex: 1000,
         display: "flex", flexDirection: "column",
         fontFamily: PEOPLE_FONT_MONO,
         animation: "people-fade-in 220ms cubic-bezier(0.16,1,0.3,1)",
+        overflow: "hidden",
       }}
       role="dialog"
       aria-modal="true"
@@ -335,16 +349,16 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
       {/* Header */}
       <div style={{
         display: "flex", alignItems: "center", gap: 12,
-        padding: "16px 24px 14px",
+        padding: spatialMode ? "12px 18px 11px" : "16px 24px 14px",
         borderBottom: "1px solid var(--hg-border-soft)",
       }}>
         <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.05 }}>
           <span style={{
-            fontFamily: PEOPLE_FONT_SANS, fontSize: 17, fontWeight: 500,
+            fontFamily: PEOPLE_FONT_SANS, fontSize: spatialMode ? 15 : 17, fontWeight: 500,
             color: "var(--hg-fg-0)", letterSpacing: "-0.02em",
           }}>people</span>
           <span style={{
-            fontSize: 8.5, letterSpacing: "0.24em", fontWeight: 500,
+            fontSize: spatialMode ? 8 : 8.5, letterSpacing: "0.24em", fontWeight: 500,
             color: "var(--hg-fg-4)", marginTop: 3,
           }}>identities · relationships · preferences</span>
         </div>
@@ -904,8 +918,7 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
                     strokeLinejoin="round"
                     paintOrder="stroke fill"
                     letterSpacing="0.10em"
-                    textTransform="uppercase"
-                  >{labelText}</text>
+                  >{labelText.toUpperCase()}</text>
                 );
               })()}
             </g>

@@ -218,7 +218,7 @@ function AptUndistortedFeed({ src, alt, intrinsics, style }) {
   );
 }
 
-function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
+function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = false }) {
   const hostRef = useRef(null);
   const engineRef = useRef(null);
   const detachRef = useRef(null);
@@ -248,6 +248,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
   const calibApiRef = useRef(null);
   const calibPointsRef = useRef(null);
   const [anchors, setAnchors] = useState({});        // id -> {x, y, visible}
+  const [hostSize, setHostSize] = useState({ width: 0, height: 0 });
   const statesRef = useRef({});                      // entity_id -> ha state
   const simActive = !!(sim && sim.active);
 
@@ -255,6 +256,23 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
     setToast(text);
     setTimeout(() => setToast(null), 2800);
   }, []);
+
+  useEffect(() => {
+    if (!embedded) return undefined;
+    const api = {
+      exitEdit: () => setEditing(false),
+      closeCards: () => {
+        setCardId(null);
+        setHoverId(null);
+      },
+    };
+    window.__HOME_APARTMENT_EMBEDDED_API = api;
+    return () => {
+      if (window.__HOME_APARTMENT_EMBEDDED_API === api) {
+        delete window.__HOME_APARTMENT_EMBEDDED_API;
+      }
+    };
+  }, [embedded]);
 
   /* ---------------- engine boot ---------------- */
   useEffect(() => {
@@ -265,7 +283,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
       try {
         try {
           const w = await window.getTauriWindow?.();
-          if (w && !cancelled) {
+          if (w && !embedded && !cancelled) {
             wasMaximizedRef.current = await w.isMaximized?.();
             if (!wasMaximizedRef.current && !cancelled) await w.maximize?.();
           }
@@ -329,7 +347,14 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
         // everything below is synchronous — detachRef is assigned before any
         // call that could throw, so a failure can't strand live listeners
         const host = hostRef.current;
-        const size = () => engine.setSize(host.clientWidth, host.clientHeight);
+        const size = () => {
+          const width = host.clientWidth || window.innerWidth || 1;
+          const height = host.clientHeight || window.innerHeight || 1;
+          engine.setSize(width, height);
+          setHostSize((prev) => (
+            prev.width === width && prev.height === height ? prev : { width, height }
+          ));
+        };
         const ro = new ResizeObserver(size);
         const detachInput = engine.attachInput(host);
         const azTimer = setInterval(() => {
@@ -371,14 +396,16 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
         }
         eng.setRunning(false);
       }
-      (async () => {
-        try {
-          const w = await window.getTauriWindow?.();
-          if (w && wasMaximizedRef.current === false) await w.unmaximize?.();
-        } catch (e) { /* */ }
-      })();
+      if (!embedded) {
+        (async () => {
+          try {
+            const w = await window.getTauriWindow?.();
+            if (w && wasMaximizedRef.current === false) await w.unmaximize?.();
+          } catch (e) { /* */ }
+        })();
+      }
     };
-  }, [open, simActive, showToast]);
+  }, [open, simActive, showToast, embedded]);
 
   /* ---------------- model + registry load ---------------- */
   useEffect(() => {
@@ -627,6 +654,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
           return;
         }
         if (editing) { setEditing(false); return; }
+        if (embedded) return;
         onClose?.(); return;
       }
       if (!rig) return;
@@ -640,7 +668,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose, editing, cardId, exitCameraPose]);
+  }, [open, onClose, editing, cardId, exitCameraPose, embedded]);
 
   const pickMode = useCallback(async (m) => {
     const engine = engineRef.current;
@@ -693,9 +721,14 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
 
   return (
     <div
-      role="dialog" aria-modal="true" aria-label="3d apartment"
+      role={embedded ? "region" : "dialog"}
+      aria-modal={embedded ? undefined : true}
+      aria-label="3d apartment"
       style={{
-        position: "fixed", inset: 0, zIndex: 1000, background: "#000",
+        position: embedded ? "absolute" : "fixed",
+        inset: 0,
+        zIndex: embedded ? 0 : 1000,
+        background: "#000",
         display: "flex", flexDirection: "column", overflow: "hidden",
         animation: "apt-fade-in 260ms ease-out",
       }}
@@ -754,7 +787,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
             {!inCamPose && (
               <AptHudButton label="edit" onClick={() => { setCardId(null); setEditing(true); }} />
             )}
-            <AptHudButton label="close · esc" onClick={onClose} />
+            {!embedded && <AptHudButton label="close · esc" onClick={onClose} />}
           </span>
         </div>
       )}
@@ -913,7 +946,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim }) {
             <window.AptControlCard
               device={cardDevice}
               state={statesRef.current[cardDevice.ha_entity_id]}
-              screen={anchors[cardId] || { x: window.innerWidth / 2, y: 100 }}
+              screen={anchors[cardId] || { x: (hostSize.width || window.innerWidth) / 2, y: 100 }}
+              bounds={hostSize}
               onClose={() => setCardId(null)}
               onService={callSvc}
               onFlyTo={(dev) => {

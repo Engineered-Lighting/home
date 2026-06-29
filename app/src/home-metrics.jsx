@@ -1100,13 +1100,13 @@ function Sparkline({ data = [], width = 60, height = 12, max, warnAt = 70, critA
  * 1px underline in fg-0; others sit at fg-4. Optional `extra` slot on
  * the right (for ⚙ diagnostics icon).
  */
-function Tabs({ value, onChange, tabs = [], extra = null }) {
+function Tabs({ value, onChange, tabs = [], extra = null, compact = false }) {
   return (
     <div style={{
       display: "flex", alignItems: "center", gap: 2,
       borderBottom: "1px solid var(--hg-border-soft)",
-      padding: "6px 10px",
-      minHeight: 38,
+      padding: compact ? "5px 8px" : "6px 10px",
+      minHeight: compact ? 34 : 38,
     }}>
       {tabs.map((t) => {
         const active = t.id === value;
@@ -1119,10 +1119,10 @@ function Tabs({ value, onChange, tabs = [], extra = null }) {
               background: active ? "var(--hg-bg-2)" : "transparent",
               border: "1px solid",
               borderColor: active ? "var(--hg-border)" : "transparent",
-              padding: "5px 11px",
+              padding: compact ? "4px 9px" : "5px 11px",
               cursor: "pointer",
               fontFamily: HM_FONT_MONO,
-              fontSize: 10.5,
+              fontSize: compact ? 10 : 10.5,
               letterSpacing: "0.10em",
               textTransform: "lowercase",
               color: active ? "var(--hg-fg-0)" : "var(--hg-fg-4)",
@@ -1153,13 +1153,13 @@ function Tabs({ value, onChange, tabs = [], extra = null }) {
  * would push past the viewport and chat input becomes unreachable
  * (the v2 bug the user reported).
  */
-function TrayBody({ maxHeight = 280, children }) {
+function TrayBody({ maxHeight = 280, children, compact = false }) {
   return (
     <div className="hg-scroll" style={{
       maxHeight,
       overflowY: "auto",
       overflowX: "hidden",
-      padding: "14px 16px 16px",
+      padding: compact ? "10px 12px 12px" : "14px 16px 16px",
     }}>
       {children}
     </div>

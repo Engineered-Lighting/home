@@ -3031,7 +3031,7 @@ function VLJobsPanel({ showToast }) {
  * /labeler · /vl; closes via Escape (capture-phase, stops the app's own
  * window Escape handler) or the close button.
  * ──────────────────────────────────────────────────────────────────── */
-function HomeVideoLabelerOverlay({ open, onClose, sim }) {
+function HomeVideoLabelerOverlay({ open, onClose, sim, spatialMode = false }) {
   const D = window.HomeVideoLabelerData;
   const simActive = !!(sim && sim.active);
   const [tab, setTab] = useState("label");      // label | jobs
@@ -3101,7 +3101,7 @@ function HomeVideoLabelerOverlay({ open, onClose, sim }) {
   /* maximize on open / restore on close — the 2-pane body is unusable at
      the default 820×900 (home-apartment.jsx precedent) */
   useEffect(() => {
-    if (!open) return undefined;
+    if (!open || spatialMode) return undefined;
     let cancelled = false;
     (async () => {
       try {
@@ -3121,7 +3121,7 @@ function HomeVideoLabelerOverlay({ open, onClose, sim }) {
         } catch (e) { /* */ }
       })();
     };
-  }, [open]);
+  }, [open, spatialMode]);
 
   /* Escape: capture-phase + stopImmediatePropagation — the app's own
      window-level Escape handler mutates chat state (pending confirms) and
@@ -3205,13 +3205,27 @@ function HomeVideoLabelerOverlay({ open, onClose, sim }) {
 
   const overlay = (
     <div
+      data-theme={spatialMode ? "dark" : undefined}
       style={{
-        position: "fixed", inset: 0,
-        background: "var(--hg-bg-0)",
+        position: "fixed",
+        ...(spatialMode
+          ? {
+              left: 82,
+              right: "calc(clamp(352px, 19vw, 388px) + 18px)",
+              top: 82,
+              bottom: 46,
+              border: "1px solid rgba(184,216,255,0.075)",
+              borderRadius: 7,
+              background: "rgba(5,7,11,0.86)",
+              backdropFilter: "blur(16px)",
+              boxShadow: "0 18px 56px rgba(0,0,0,0.36)",
+            }
+          : { inset: 0, background: "var(--hg-bg-0)" }),
         zIndex: 2100,
         display: "flex", flexDirection: "column",
         fontFamily: VL_FONT_MONO,
         animation: "vl-fade-in 220ms cubic-bezier(0.16,1,0.3,1)",
+        overflow: "hidden",
       }}
       role="dialog"
       aria-modal="true"
@@ -3220,16 +3234,16 @@ function HomeVideoLabelerOverlay({ open, onClose, sim }) {
       {/* Header */}
       <div style={{
         display: "flex", alignItems: "center", gap: 12,
-        padding: "16px 24px 14px",
+        padding: spatialMode ? "12px 18px 11px" : "16px 24px 14px",
         borderBottom: "1px solid var(--hg-border-soft)",
       }}>
         <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.05 }}>
           <span style={{
-            fontFamily: VL_FONT_SANS, fontSize: 17, fontWeight: 500,
+            fontFamily: VL_FONT_SANS, fontSize: spatialMode ? 15 : 17, fontWeight: 500,
             color: "var(--hg-fg-0)", letterSpacing: "-0.02em",
           }}>video labeler</span>
           <span style={{
-            fontSize: 8.5, letterSpacing: "0.24em", fontWeight: 500,
+            fontSize: spatialMode ? 8 : 8.5, letterSpacing: "0.24em", fontWeight: 500,
             color: "var(--hg-fg-4)", marginTop: 3,
           }}>timeline segment labeler</span>
         </div>
@@ -3273,7 +3287,7 @@ function HomeVideoLabelerOverlay({ open, onClose, sim }) {
         <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
           {/* left rail — video list */}
           <div style={{
-            width: 300, flex: "none", display: "flex", flexDirection: "column",
+            width: spatialMode ? 260 : 300, flex: "none", display: "flex", flexDirection: "column",
             borderRight: "1px solid var(--hg-border-soft)", minHeight: 0,
           }}>
             <div style={{

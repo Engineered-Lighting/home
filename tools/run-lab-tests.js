@@ -1339,9 +1339,11 @@ process.stdout.write("\n[1mtray-height persistence + clamp[0m\n");
   assert("stored trace tab restored", loadTab("trace") === "trace");
   assert("legacy/invalid drawer tab falls back to ai", loadTab("intel") === "ai");
   assert("HomeApp declares persisted drawer expanded key",
-    APP_SRC.includes('const TRAY_EXPANDED_KEY = "hg-tray-expanded-v1";'));
+    APP_SRC.includes('"hg-tray-expanded-v1"') &&
+    APP_SRC.includes('"hg-spatial-tray-expanded-v1"'));
   assert("HomeApp declares persisted drawer tab key",
-    APP_SRC.includes('const TRAY_TAB_KEY = "hg-tray-tab-v1";'));
+    APP_SRC.includes('"hg-tray-tab-v1"') &&
+    APP_SRC.includes('"hg-spatial-tray-tab-v1"'));
   assert("HomeApp restores persisted drawer open state",
     /useState\(\(\) => \{[\s\S]*localStorage\.getItem\(TRAY_EXPANDED_KEY\) === "1"/.test(APP_SRC));
   assert("HomeApp restores only valid persisted tray tabs",

@@ -334,13 +334,15 @@ function HomeHeader({
             </svg>
           </button>
         )}
-        <button
-          aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-          className="hg-focusable"
-          onClick={onToggleTheme}
-          style={iconBtn}
-          onMouseEnter={hoverBright} onMouseLeave={unhover}
-        >{theme === "dark" ? <IconSun size={14} /> : <IconMoon size={14} />}</button>
+        {onToggleTheme && (
+          <button
+            aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            className="hg-focusable"
+            onClick={onToggleTheme}
+            style={iconBtn}
+            onMouseEnter={hoverBright} onMouseLeave={unhover}
+          >{theme === "dark" ? <IconSun size={14} /> : <IconMoon size={14} />}</button>
+        )}
         {IS_TAURI && (
           <>
             <button
@@ -369,6 +371,123 @@ function HomeHeader({
         )}
       </span>
     </div>
+  );
+}
+
+const SPATIAL_CHAT_RAIL_WIDTH = "clamp(352px, 19vw, 388px)";
+
+function SpatialModeRail({
+  active,
+  theme,
+  opsVisible,
+  onHome,
+  onCameras,
+  onPeople,
+  onIntelligence,
+  onLights,
+  onOps,
+  onToggleTheme,
+}) {
+  const items = [
+    { id: "home", label: "home", title: "Spatial home", onClick: onHome, tone: "var(--hg-ice)" },
+    { id: "cameras", label: "cams", title: "Camera review", onClick: onCameras, tone: "var(--hg-ice-bright)" },
+    { id: "people", label: "people", title: "People tracking", onClick: onPeople, tone: "var(--hg-ice)" },
+    { id: "intel", label: "atlas", title: "Intelligence Atlas", onClick: onIntelligence, tone: "var(--hg-ice)" },
+    { id: "lights", label: "lights", title: "Lighting lab", onClick: onLights, tone: "var(--hg-warn)" },
+    { id: "ops", label: "ops", title: opsVisible ? "Hide operational tray" : "Show operational tray", onClick: onOps, tone: "var(--hg-fg-2)" },
+  ];
+  const activeId = active || "home";
+  const railBg = "rgba(2,4,7,0.34)";
+  const railBorder = "rgba(184,216,255,0.065)";
+  const itemBg = "rgba(255,255,255,0.018)";
+  return (
+    <nav
+      aria-label="Spatial workspace"
+      style={{
+        position: "absolute",
+        left: 16,
+        top: 96,
+        bottom: 96,
+        width: 50,
+        zIndex: 4,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "stretch",
+        gap: 4,
+        padding: 4,
+        border: `1px solid ${railBorder}`,
+        borderRadius: 7,
+        background: railBg,
+        backdropFilter: "blur(18px)",
+        boxShadow: "0 18px 52px rgba(0,0,0,0.30)",
+      }}
+    >
+      {items.map((item) => {
+        const isActive = item.id === activeId;
+        return (
+          <button
+            key={item.id}
+            type="button"
+            className="hg-focusable"
+            title={item.title}
+            aria-pressed={isActive}
+            onClick={item.onClick}
+            style={{
+              width: "100%",
+              height: 37,
+              border: `1px solid ${isActive ? item.tone : "transparent"}`,
+              borderRadius: 5,
+              background: isActive ? "rgba(138,190,255,0.09)" : itemBg,
+              color: isActive ? "var(--hg-fg-0)" : "var(--hg-fg-3)",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 4,
+              cursor: "pointer",
+              fontFamily: "'Geist Mono', monospace",
+              fontSize: 7.5,
+              lineHeight: 1,
+              letterSpacing: "0.04em",
+              textTransform: "lowercase",
+              userSelect: "none",
+            }}
+          >
+            <span style={{
+              width: 5,
+              height: 5,
+              borderRadius: 999,
+              background: isActive ? item.tone : "var(--hg-fg-4)",
+              boxShadow: isActive ? `0 0 12px ${item.tone}` : "none",
+              opacity: isActive ? 1 : 0.56,
+            }} />
+            <span>{item.label}</span>
+          </button>
+        );
+      })}
+      <div style={{ flex: 1 }} />
+      <button
+        type="button"
+        aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+        className="hg-focusable"
+        title={theme === "dark" ? "Light mode" : "Dark mode"}
+        onClick={onToggleTheme}
+        style={{
+          width: "100%",
+          height: 34,
+          border: "1px solid transparent",
+          borderRadius: 6,
+          background: itemBg,
+          color: "var(--hg-fg-2)",
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          cursor: "pointer",
+        }}
+      >
+        {theme === "dark" ? <IconSun size={14} /> : <IconMoon size={14} />}
+      </button>
+    </nav>
   );
 }
 
@@ -1061,11 +1180,13 @@ function MetricsStrip({
   // AND routing-log poll (Addendum 17, external-turn visibility).
   token = "",
   endpoint = "",
+  dockMode = false,
 }) {
-  const TRAY_EXPANDED_KEY = "hg-tray-expanded-v1";
-  const TRAY_TAB_KEY = "hg-tray-tab-v1";
+  const TRAY_EXPANDED_KEY = dockMode ? "hg-spatial-tray-expanded-v1" : "hg-tray-expanded-v1";
+  const TRAY_TAB_KEY = dockMode ? "hg-spatial-tray-tab-v1" : "hg-tray-tab-v1";
   const TRAY_VALID_TABS = new Set(["ai", "infra", "trace"]);
   const [expanded, setExpanded] = useState(() => {
+    if (dockMode) return false;
     try { return window.localStorage.getItem(TRAY_EXPANDED_KEY) === "1"; }
     catch { return false; }
   });
@@ -1084,15 +1205,15 @@ function MetricsStrip({
 
   // Drag-resizable tray body. Persisted to localStorage so it survives
   // reloads. Initial value reads from storage; clamped at use site.
-  const TRAY_HEIGHT_KEY = "hg-tray-height-v1";
-  const TRAY_MIN_HEIGHT = 160;
+  const TRAY_HEIGHT_KEY = dockMode ? "hg-spatial-tray-height-v1" : "hg-tray-height-v1";
+  const TRAY_MIN_HEIGHT = dockMode ? 118 : 160;
   const TRAY_MAX_HEIGHT_VH = 0.85; // 85% of viewport
   const [trayHeight, setTrayHeight] = useState(() => {
     try {
       const v = parseInt(window.localStorage.getItem(TRAY_HEIGHT_KEY) || "", 10);
       if (Number.isFinite(v) && v >= TRAY_MIN_HEIGHT) return v;
     } catch {}
-    return 340;
+    return dockMode ? 138 : 340;
   });
   const trayDragStateRef = useRef(null);
   const onTrayHandlePointerDown = useCallback((e) => {
@@ -1938,8 +2059,8 @@ function MetricsStrip({
 
   return (
     <div style={{
-      borderTop: "1px solid var(--hg-border-soft)",
-      background: "var(--hg-bg-0)",
+      borderTop: dockMode ? "0" : "1px solid var(--hg-border-soft)",
+      background: dockMode ? "transparent" : "var(--hg-bg-0)",
       fontFeatureSettings: '"tnum"',
     }}>
       {/* DRAG HANDLE — only visible when tray expanded. Sits on the
@@ -1983,17 +2104,17 @@ function MetricsStrip({
         className="hg-focusable"
         style={{
           width: "100%",
-          padding: "8px 14px",
+          padding: dockMode ? "7px 12px" : "8px 14px",
           background: "transparent",
           border: "none",
           textAlign: "left",
           cursor: "pointer",
-          display: "flex", alignItems: "center", gap: 14,
+          display: "flex", alignItems: "center", gap: dockMode ? 10 : 14,
           fontFamily: "'Geist Mono', monospace",
           fontSize: 10.5,
           color: "var(--hg-fg-3)",
           userSelect: "none",
-          minHeight: 34,
+          minHeight: dockMode ? 32 : 34,
         }}
       >
         {/* AI status group — v6.2: during transient voice states (listening,
@@ -2058,7 +2179,7 @@ function MetricsStrip({
               · vram % — memory pressure
               · gpu %  — only when actively spiking (>5%)
             All three feed into the chevron for a glanceable status row. */}
-        <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 14 }}>
+        <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: dockMode ? 10 : 14 }}>
           {lastTrace?.t_done > 0 && (() => {
             const ms = Math.round(lastTrace.t_done);
             const sec = (ms / 1000).toFixed(ms >= 10000 ? 0 : 1);
@@ -2136,6 +2257,7 @@ function MetricsStrip({
             value={activeTab}
             onChange={setActiveTab}
             tabs={tabs}
+            compact={dockMode}
             extra={
               <button
                 onClick={() => setDiagOpen(true)}
@@ -2151,10 +2273,10 @@ function MetricsStrip({
                   borderRadius: 4,
                   transition: "border-color 200ms, color 200ms",
                 }}
-              >diag</button>
+              >diagnostics</button>
             }
           />
-          <HmTrayBody maxHeight={trayHeight}>
+          <HmTrayBody maxHeight={dockMode ? Math.min(trayHeight, 124) : trayHeight} compact={dockMode}>
             <div key={activeTab} style={{ animation: "hg-fade-up 160ms ease-out" }}>
               {activeTab === "ai"      && renderAi()}
               {activeTab === "infra"   && renderInfra()}
@@ -2185,7 +2307,7 @@ function Num({ v, suffix }) {
 }
 
 /* ── First-run connection prompt ─────────────────────────────────────── */
-function FirstRun({ connection, endpoint, token, onConnect, availableModels, onPickModel }) {
+function FirstRun({ connection, endpoint, token, onConnect, availableModels, onPickModel, onSimulation = null, compact = false }) {
   const [url, setUrl] = useState(endpoint || "http://192.168.0.125:8123");
   // Start the token field empty when the last connection failed — a rejected
   // token shouldn't be pre-filled, or the user just retries the dead token.
@@ -2200,8 +2322,9 @@ function FirstRun({ connection, endpoint, token, onConnect, availableModels, onP
   if (isPicking) {
     return (
       <div style={{
-        minHeight: "100%", display: "flex", flexDirection: "column", justifyContent: "center",
-        padding: "48px 28px 56px",
+        minHeight: "100%", display: "flex", flexDirection: "column",
+        justifyContent: compact ? "flex-start" : "center",
+        padding: compact ? "24px 22px 36px" : "48px 28px 56px",
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 28 }}>
           <StatusDot tone="live" size={5} />
@@ -2209,10 +2332,10 @@ function FirstRun({ connection, endpoint, token, onConnect, availableModels, onP
             connected · {endpoint}
           </span>
         </div>
-        <div style={{ fontFamily: "'Geist', system-ui, sans-serif", fontSize: 22, fontWeight: 500, color: "var(--hg-fg-0)", letterSpacing: "-0.02em", lineHeight: 1.2, marginBottom: 6 }}>
+        <div style={{ fontFamily: "'Geist', system-ui, sans-serif", fontSize: compact ? 18 : 22, fontWeight: 500, color: "var(--hg-fg-0)", letterSpacing: "-0.02em", lineHeight: 1.2, marginBottom: 6 }}>
           Choose a model.
         </div>
-        <div style={{ fontFamily: "'Geist', system-ui, sans-serif", fontSize: 13.5, color: "var(--hg-fg-3)", lineHeight: 1.55, marginBottom: 24 }}>
+        <div style={{ fontFamily: "'Geist', system-ui, sans-serif", fontSize: compact ? 12.5 : 13.5, color: "var(--hg-fg-3)", lineHeight: 1.55, marginBottom: 24 }}>
           {availableModels?.length ? `${availableModels.length} model${availableModels.length === 1 ? "" : "s"} found on your AI box.`
             : "no model list available — your home assistant will pick the configured agent's model"}
         </div>
@@ -2252,20 +2375,35 @@ function FirstRun({ connection, endpoint, token, onConnect, availableModels, onP
                     "connect to your home";
   const subhead =
     isAuthInvalid ? "double-check the long-lived access token, then try again" :
-    isOffline     ? "check the home assistant url + that the supervisor is running" :
-                    "point home at your home assistant, with a long-lived access token";
+    isOffline     ? "check the url and token. in browser mode, also make sure home assistant allows this local origin" :
+                    "use a home assistant long-lived access token. desktop mode can use the same token without browser cors";
 
   const borderTone = (isOffline || isAuthInvalid) ? "var(--hg-warn)" : "var(--hg-border)";
 
   return (
     <div style={{
-      minHeight: "100%", display: "flex", flexDirection: "column", justifyContent: "center",
-      padding: "48px 28px 56px",
+      minHeight: "100%", display: "flex", flexDirection: "column",
+      justifyContent: compact ? "flex-start" : "center",
+      padding: compact ? "24px 22px 34px" : "48px 28px 56px",
     }}>
-      <div style={{ fontFamily: "'Geist', system-ui, sans-serif", fontSize: 22, fontWeight: 500, color: "var(--hg-fg-0)", letterSpacing: "-0.02em", lineHeight: 1.2, marginBottom: 6 }}>
+      {compact && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8,
+          marginBottom: 18,
+          fontFamily: "'Geist Mono', monospace",
+          fontSize: 9.5,
+          letterSpacing: "0.16em",
+          color: "var(--hg-fg-4)",
+          textTransform: "uppercase",
+        }}>
+          <StatusDot tone={(isOffline || isAuthInvalid) ? "warn" : "idle"} size={5} />
+          setup
+        </div>
+      )}
+      <div style={{ fontFamily: "'Geist', system-ui, sans-serif", fontSize: compact ? 18 : 22, fontWeight: 500, color: "var(--hg-fg-0)", letterSpacing: "-0.02em", lineHeight: 1.2, marginBottom: 6 }}>
         {headline}
       </div>
-      <div style={{ fontFamily: "'Geist', system-ui, sans-serif", fontSize: 13.5, color: "var(--hg-fg-3)", lineHeight: 1.55, marginBottom: 28 }}>
+      <div style={{ fontFamily: "'Geist', system-ui, sans-serif", fontSize: compact ? 12.5 : 13.5, color: "var(--hg-fg-3)", lineHeight: 1.55, marginBottom: compact ? 22 : 28 }}>
         {subhead}
       </div>
       <form onSubmit={(e) => { e.preventDefault(); onConnect(url, tok); }} style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -2289,7 +2427,7 @@ function FirstRun({ connection, endpoint, token, onConnect, availableModels, onP
           <div style={{ display: "flex", alignItems: "center", gap: 8, borderBottom: `1px solid ${borderTone}`, paddingBottom: 6, marginTop: 6 }}>
             <input
               value={tok} onChange={(e) => setTok(e.target.value)}
-              placeholder="eyJ…"
+              placeholder="paste token"
               type="password"
               autoCapitalize="off" autoCorrect="off" spellCheck={false}
               style={{
@@ -2308,9 +2446,44 @@ function FirstRun({ connection, endpoint, token, onConnect, availableModels, onP
           </div>
         </div>
       </form>
-      <div style={{ marginTop: 36, fontFamily: "'Geist Mono', monospace", fontSize: 11, color: "var(--hg-fg-4)", lineHeight: 1.7 }}>
-        get a token at <span style={{ color: "var(--hg-fg-2)" }}>profile → security → long-lived access tokens</span><br/>
-        type <span style={{ color: "var(--hg-fg-2)" }}>/help</span> for commands · <span style={{ color: "var(--hg-fg-2)" }}>/simulation</span> to explore with mock data
+      <div style={{
+        marginTop: compact ? 20 : 28,
+        paddingTop: compact ? 14 : 16,
+        borderTop: "1px solid var(--hg-border-soft)",
+        display: "flex",
+        flexDirection: "column",
+        gap: compact ? 7 : 9,
+        fontFamily: "'Geist Mono', monospace",
+        fontSize: compact ? 9.5 : 10.5,
+        color: "var(--hg-fg-4)",
+        lineHeight: 1.55,
+      }}>
+        <div><span style={{ color: "var(--hg-fg-2)" }}>token</span> profile / security / long-lived access tokens</div>
+        <div><span style={{ color: "var(--hg-fg-2)" }}>browser</span> allow http://127.0.0.1:5180 in HA cors if requests fail</div>
+        <div><span style={{ color: "var(--hg-fg-2)" }}>desktop</span> tauri avoids browser cors and keeps the token in app storage</div>
+        {onSimulation && (
+          <button
+            type="button"
+            onClick={onSimulation}
+            className="hg-focusable"
+            style={{
+              alignSelf: "flex-start",
+              marginTop: 3,
+              background: "transparent",
+              border: "1px solid var(--hg-border)",
+              borderRadius: 4,
+              color: "var(--hg-fg-2)",
+              cursor: "pointer",
+              fontFamily: "'Geist Mono', monospace",
+              fontSize: compact ? 9.5 : 10.5,
+              letterSpacing: "0.12em",
+              padding: "6px 9px",
+              textTransform: "uppercase",
+            }}
+          >
+            try simulation
+          </button>
+        )}
       </div>
     </div>
   );
@@ -2341,11 +2514,7 @@ const BOOT_ART = [
  * surface — extracted verbatim from HomeApp's render gate so the gate,
  * routeOnboarding, and the boot focus effect can never disagree. */
 function isFirstRunVisible(connection, events) {
-  return (connection !== "online" && connection !== "reconnecting" && events.length === 0)
-    || connection === "picking-model"
-    || connection === "auth_invalid"
-    || (connection === "offline"      && events.length === 0)
-    || (connection === "disconnected" && events.length === 0);
+  return connection !== "online" && connection !== "reconnecting";
 }
 
 function BootBanner({ metrics }) {
@@ -2595,6 +2764,7 @@ const SLASH_CMDS = [
   { cmd: "/agent-tools", hint: "",            desc: "list every LLM tool the agent can call (grouped by capability)", category: "agent" },
   { cmd: "/model",    hint: "<name>",  desc: "switch active model", category: "agent" },
   // ── vision + cameras ──────────────────────────────────────────
+  { cmd: "/home2",      hint: "on|off",     desc: "toggle the Home 2 spatial layout: real apartment primary, chat docked on the right", category: "vision" },
   { cmd: "/cameras",    hint: "",            desc: "show a thumbnail snapshot of every configured camera (from the M1 cache or live)", category: "vision" },
   { cmd: "/describe-clip", hint: "<camera> [frames] [interval_s]", desc: "watch a multi-frame clip from a camera and describe motion. e.g. /describe-clip kitchen, /describe-clip driveway 6 1.5", category: "vision" },
   { cmd: "/find-clips", hint: "<query>",    desc: "search Frigate clips via semantic-search CLIP (e.g. 'package on porch'). Returns recent matches with thumbnails.", category: "vision" },
@@ -2644,6 +2814,7 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
   const firstTok = value.split(/\s+/)[0];
   const matches = isSlash ? SLASH_CMDS.filter((c) => c.cmd.startsWith(firstTok)) : [];
   const showMenu = isSlash && matches.length > 0 && !value.includes(" ");
+  const spatialMode = !!(typeof window !== "undefined" && window.__HOME_SPATIAL_MODE);
   useEffect(() => { if (sel >= matches.length) setSel(0); }, [matches.length, sel]);
 
   const complete = (cmd) => {
@@ -2667,31 +2838,60 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
     <div style={{ position: "relative" }}>
       {showMenu && (
         <div style={{
-          position: "absolute", bottom: "100%", left: 14, right: 14,
-          background: "var(--hg-bg-1)", border: "1px solid var(--hg-border)",
-          marginBottom: 6, padding: "4px 0",
-          fontFamily: "'Geist Mono', monospace", fontSize: 12,
-          boxShadow: "0 8px 24px -8px rgba(0,0,0,0.45)",
+          position: "absolute", bottom: "100%", left: spatialMode ? 10 : 12, right: spatialMode ? 10 : 12,
+          maxHeight: spatialMode ? "min(260px, 34vh)" : "min(420px, 46vh)",
+          overflowY: "auto",
+          background: spatialMode ? "rgba(5,7,11,0.94)" : "rgba(8,10,14,0.96)",
+          border: "1px solid var(--hg-border)",
+          borderRadius: spatialMode ? 7 : 8,
+          marginBottom: spatialMode ? 7 : 8,
+          padding: spatialMode ? "4px 0" : "6px 0",
+          fontFamily: "'Geist Mono', monospace", fontSize: spatialMode ? 11 : 12,
+          boxShadow: spatialMode ? "0 14px 34px rgba(0,0,0,0.42)" : "0 18px 48px rgba(0,0,0,0.44)",
+          backdropFilter: spatialMode ? "blur(14px)" : "blur(18px)",
+          zIndex: 20,
         }}>
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: spatialMode ? "4px 10px 6px" : "4px 12px 8px",
+            color: "var(--hg-fg-4)",
+            fontSize: 9,
+            letterSpacing: "0.14em",
+            textTransform: "uppercase",
+          }}>
+            <span>commands</span>
+            <span>{matches.length}</span>
+          </div>
           {matches.map((m, i) => (
             <div key={m.cmd}
               onMouseEnter={() => setSel(i)}
               onMouseDown={(e) => { e.preventDefault(); complete(m.cmd); }}
               style={{
                 display: "flex", alignItems: "baseline", gap: 10,
-                padding: "6px 12px",
-                background: i === sel ? "var(--hg-bg-2)" : "transparent",
+                padding: spatialMode ? "6px 10px" : "7px 12px",
+                background: i === sel ? "rgba(184,216,255,0.08)" : "transparent",
                 cursor: "pointer",
               }}>
-              <span style={{ color: i === sel ? "var(--hg-fg-0)" : "var(--hg-fg-1)", minWidth: 78 }}>{m.cmd}</span>
+              <span style={{ color: i === sel ? "var(--hg-fg-0)" : "var(--hg-fg-1)", minWidth: spatialMode ? 74 : 88 }}>{m.cmd}</span>
               {m.hint && <span style={{ color: "var(--hg-fg-4)" }}>{m.hint}</span>}
-              <span style={{ color: "var(--hg-fg-3)", marginLeft: "auto", fontFamily: "'Geist', system-ui, sans-serif", fontSize: 11.5 }}>{m.desc}</span>
+              <span style={{
+                color: "var(--hg-fg-3)",
+                marginLeft: "auto",
+                fontFamily: "'Geist', system-ui, sans-serif",
+                fontSize: spatialMode ? 10.5 : 11.5,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                maxWidth: spatialMode ? 150 : "none",
+              }}>{m.desc}</span>
             </div>
           ))}
         </div>
       )}
       <div style={{
-        padding: "10px 14px 12px",
+          padding: spatialMode ? "9px 12px 11px" : "10px 12px 12px",
         borderTop: "1px solid var(--hg-border)",
         background: "var(--hg-bg-0)",
         display: "flex", alignItems: "center", gap: 10,
@@ -2700,6 +2900,7 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
           <input
             ref={inputRef}
             className="hg-focusable"
+            aria-label="Command input"
             placeholder={isSlash ? "" : "type or /command"}
             value={value}
             onChange={(e) => onChange(e.target.value)}
@@ -3191,9 +3392,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   useEffect(() => {
     if (typeof window !== "undefined") window.__hav_voiceState = voice.state;
   }, [voice.state]);
+  const hasStoredHaCredentials = !!(initialPrefs.endpoint && initialPrefs.token);
   const [connection, setConnection] = useState(
-    initialEvents ? "online"
-    : (initialPrefs.endpoint && initialPrefs.token ? "reconnecting" : "disconnected")
+    hasStoredHaCredentials ? "reconnecting" : "disconnected"
   );
   const [endpoint, setEndpoint] = useState(initialPrefs.endpoint);
   const [token, setToken] = useState(initialPrefs.token);
@@ -3267,6 +3468,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   const [aiStackOnline, setAiStackOnline] = useState(null);
   const [aiStackState, setAiStackState] = useState(null);
   const [aiStackStatusError, setAiStackStatusError] = useState(null);
+  const aiStackHealthWarnRef = useRef("");
   // External Reasoning Fallback (see home-external.jsx + the plan at
   // ~/.claude/plans/keen-doodling-parasol.md): modal visibility for
   // `/external set-key`, and an AbortController ref shared across the
@@ -3327,6 +3529,28 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     const onResize = () => setWideMode(window.innerWidth >= 700);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const [spatialLayout, setSpatialLayout] = useState(() => {
+    try {
+      if (typeof window === "undefined") return false;
+      const params = new URLSearchParams(window.location.search || "");
+      const raw = String(params.get("layout") || params.get("view") || params.get("home2") || "").toLowerCase();
+      if (["spatial", "home2", "2"].includes(raw)) return true;
+      if (["classic", "chat", "off", "1"].includes(raw)) return false;
+      if (params.has("spatial2") || params.has("spatial-home") || params.get("home2") === "") return true;
+      return window.localStorage?.getItem("hg-layout-v2") === "spatial";
+    } catch (e) { return false; }
+  });
+  const [spatialOpsDockOpen, setSpatialOpsDockOpen] = useState(true);
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.__hav_setSpatialLayout = (next) => setSpatialLayout(!!next);
+    }
+    return () => {
+      if (typeof window !== "undefined" && window.__hav_setSpatialLayout) {
+        delete window.__hav_setSpatialLayout;
+      }
+    };
   }, []);
   const [availableModels, setAvailableModels] = useState(null);
   const [metrics, setMetrics] = useState(CLEARED_METRICS);
@@ -4435,9 +4659,11 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             // in args; look auto-routes (camera not in args).
             const friendly = tc.name === "look" ? "looking"
               : tc.name === "describe_camera" ? "looking quickly"
+              : tc.name === "refresh_perception" ? "looking freshly"
               : tc.name === "look_zoom" ? "looking closer"
               : tc.name;
-            const camHint = (tc.args && tc.args.camera) ? ` (${tc.args.camera})` : "";
+            const camHint = (tc.args && (tc.args.camera || tc.args.room))
+              ? ` (${tc.args.camera || tc.args.room})` : "";
             addEvent({ kind: "system", tone: "info",
                        text: `${friendly}${camHint}…` });
           }
@@ -4483,11 +4709,12 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // turn. Tool results are NEVER in HA events, so we hit the
         // sidecar's ring-buffer endpoints (/reason/latest, /describe/latest)
         // as a side-channel. Each tool gets a separate fetch — the LLM may
-        // call look only, describe_camera only, or both. The text format
+        // call look only, describe_camera/refresh_perception only, or both. The text format
         // uses "<camera>: <answer>" so PerceptionContent's room-extractor
         // (home-events.jsx:423) parses the room out and labels the card.
         const visionTools = turnToolCalls.filter((t) =>
-          t.name === "look" || t.name === "look_zoom" || t.name === "describe_camera");
+          t.name === "look" || t.name === "look_zoom" ||
+          t.name === "describe_camera" || t.name === "refresh_perception");
         if (visionTools.length) {
           try {
             const base = metricsBase || metricsBaseFromEndpoint(endpoint);
@@ -4499,7 +4726,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
               for (const tc of visionTools) {
                 if (seen.has(tc.name)) continue;   // dedupe within turn
                 seen.add(tc.name);
-                const isDescribe = tc.name === "describe_camera";
+                const isDescribe = tc.name === "describe_camera" || tc.name === "refresh_perception";
                 const latestPath = isDescribe ? "/describe/latest" : "/reason/latest";
                 tauriFetch(visionOrigin + latestPath, { cache: "no-store" })
                   .then((r) => r.ok ? r.json() : null)
@@ -5371,11 +5598,29 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         setSpatialDrawerOpen(true);
         return true;
       }
+      case "home2":
+      case "spatial-home": {
+        const next = !/^off|classic|chat|0|false$/i.test(arg.trim());
+        setSpatialLayout(next);
+        try { localStorage.setItem("hg-layout-v2", next ? "spatial" : "classic"); } catch (e) { /* ignore */ }
+        addEvent({
+          kind: "system",
+          text: next
+            ? "home 2 spatial layout on - apartment is primary, chat is docked right"
+            : "home 2 spatial layout off - classic chat layout restored",
+          tone: "ok",
+        });
+        return true;
+      }
       case "apartment":
       case "3d": {
         // Full-screen 3D apartment takeover (white point cloud, P0).
         if (!window.HomeApartmentView) {
           addEvent({ kind: "system", text: "apartment module not loaded", tone: "error" });
+          return true;
+        }
+        if (spatialLayout) {
+          addEvent({ kind: "system", text: "apartment is already primary in Home 2 layout", tone: "info" });
           return true;
         }
         setVideoLabelerOpen(false);
@@ -6099,7 +6344,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     // CALL time, by which point it's defined. Its identity is stable
     // (its own deps are [addEvent], itself stable), so omitting it
     // doesn't cause a memoization correctness issue.
-  }, [addEvent, connectTo, endpoint, metricsBase, playScript, stopStreaming, token, s2sBase, s2sToken, s2sVoice, kokoroVoice, debugMode, connection, sendToHA, events]);
+  }, [addEvent, connectTo, endpoint, metricsBase, playScript, stopStreaming, token, s2sBase, s2sToken, s2sVoice, kokoroVoice, debugMode, connection, sendToHA, events, spatialLayout]);
 
   /* ── External Reasoning dispatch (see home-external.jsx) ─────────────
    *
@@ -7025,6 +7270,15 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       // /api/stack/status needs the bearer token. If no token is
       // configured we still probe /healthz so the UI can show "supervisor
       // is up, but token not configured" instead of "supervisor offline".
+      const warnSupervisorHealth = (key, message, detail) => {
+        if (aiStackHealthWarnRef.current === key) return;
+        aiStackHealthWarnRef.current = key;
+        if (detail != null) console.warn(message, detail);
+        else console.warn(message);
+      };
+      const clearSupervisorHealthWarn = () => {
+        aiStackHealthWarnRef.current = "";
+      };
       if (supervisorUrl) {
         try {
           const rh = await tauriFetch(`${supervisorUrl}/healthz`, { cache: "no-store" });
@@ -7047,13 +7301,14 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
                   if (!cancelled) {
                     setAiStackStatusError(null);
                     setAiStackState(body);
+                    clearSupervisorHealthWarn();
                   }
                 } catch (e) {
                   if (!cancelled) {
                     setAiStackStatusError("bad_json");
                     setAiStackState(null);
                   }
-                  console.warn("[health] supervisor status JSON failed:", e?.message || e);
+                  warnSupervisorHealth("bad_json", "[health] supervisor status JSON failed:", e?.message || e);
                 }
               } else if (rs.status === 401) {
                 // Reachable supervisor, rejected token. Keep this distinct
@@ -7062,30 +7317,32 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
                   setAiStackStatusError("auth");
                   setAiStackState(null);
                 }
-                console.warn("[health] supervisor 401 — STACK_TOKEN bad?");
+                warnSupervisorHealth("auth", "[health] supervisor 401 - STACK_TOKEN rejected");
               } else if (rs.status === 429) {
                 // rate-limited — back off; next 15s tick will retry.
                 if (!cancelled) {
                   setAiStackStatusError("rate_limited");
                   setAiStackState(null);
                 }
-                console.warn("[health] supervisor 429 — auth rate-limited");
+                warnSupervisorHealth("rate_limited", "[health] supervisor 429 - auth rate-limited");
               } else {
                 if (!cancelled) {
                   setAiStackStatusError(`http_${rs.status || "unknown"}`);
                   setAiStackState(null);
                 }
+                warnSupervisorHealth(`http_${rs.status || "unknown"}`, `[health] supervisor status HTTP ${rs.status || "unknown"}`);
               }
             } catch (e) {
               if (!cancelled) {
                 setAiStackStatusError("fetch_failed");
                 setAiStackState(null);
               }
-              console.warn("[health] supervisor status fetch failed:", e?.message || e);
+              warnSupervisorHealth("fetch_failed", "[health] supervisor status fetch failed:", e?.message || e);
             }
           } else if (rh.ok && !stackToken && !cancelled) {
             setAiStackStatusError(null);
             setAiStackState(null);
+            clearSupervisorHealthWarn();
           }
         } catch (e) {
           if (!cancelled) {
@@ -7841,19 +8098,188 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     return () => { cancelled = true; clearInterval(id); };
   }, [metricsBase, endpoint]);
 
+  const isSpatialWide = spatialLayout && wideMode;
+  const spatialRailWidth = wideMode ? SPATIAL_CHAT_RAIL_WIDTH : "100%";
+  const spatialStageRight = wideMode ? spatialRailWidth : 0;
+  if (typeof window !== "undefined") window.__HOME_SPATIAL_MODE = isSpatialWide;
+  const appColumnStyle = spatialLayout ? {
+    position: "relative",
+    zIndex: 5,
+    marginLeft: "auto",
+    width: spatialRailWidth,
+    maxWidth: "100vw",
+    height: "100%",
+    minHeight: 0,
+    display: "flex",
+    flexDirection: "column",
+    borderLeft: wideMode ? "1px solid rgba(184,216,255,0.055)" : "none",
+    background: theme === "dark" ? "rgba(4,5,8,0.76)" : "rgba(245,246,248,0.88)",
+    backdropFilter: "blur(18px)",
+    boxShadow: wideMode ? "-12px 0 46px rgba(0,0,0,0.28)" : "none",
+  } : {
+    width: "100%",
+    height: "100%",
+    minHeight: 0,
+    display: "flex",
+    flexDirection: "column",
+  };
+  const spatialActiveSurface =
+    videoLabelerOpen ? "cameras" :
+    peopleOpen ? "people" :
+    intelligenceOpen ? "intel" :
+    lightsOpen ? "lights" : "home";
+  const cleanEmbeddedApartmentState = () => {
+    try {
+      window.__HOME_APARTMENT_EMBEDDED_API?.exitEdit?.();
+      window.__HOME_APARTMENT_EMBEDDED_API?.closeCards?.();
+    } catch (e) { /* best-effort spatial cleanup */ }
+  };
+  const closeSpatialToolSurfaces = () => {
+    cleanEmbeddedApartmentState();
+    setPeopleOpen(false);
+    setIntelligenceOpen(false);
+    setVideoLabelerOpen(false);
+    setLightsOpen(false);
+    setWorldStateDrawerOpen(false);
+    setSpatialDrawerOpen(false);
+    setLookDrawerOpen(false);
+    setExplainConvId(null);
+  };
+  const metricsStrip = (
+    <MetricsStrip
+      metrics={metrics}
+      metricsHistory={metricsHistory}
+      style={metricsStyle}
+      metricsBase={metricsBase || metricsBaseFromEndpoint(endpoint)}
+      bridgeHealth={bridgeHealth}
+      networkMetrics={networkMetrics}
+      visionSidecarOnline={visionSidecarOnline}
+      visionHealth={visionHealth}
+      hostMetrics={hostMetrics}
+      frigateMetrics={frigateMetrics}
+      connection={connection}
+      sidecarOnline={sidecarOnline}
+      bridgeOnline={bridgeOnline}
+      aiStackOnline={aiStackOnline}
+      aiStackState={aiStackState}
+      aiStackStatusError={aiStackStatusError}
+      roomContext={roomContext}
+      voice={voice}
+      identity={identity}
+      media={media}
+      cameraLabels={cameraLabels}
+      recentPerceptions={events.filter((e) => e.kind === "perception").slice(-5)}
+      traceSummary={traceSummary}
+      lastTrace={lastTrace}
+      setTraceSummary={setTraceSummary}
+      setLastTrace={setLastTrace}
+      onTracesFetched={handleTracesFetched}
+      onRoutingLogFetched={handleRoutingLogFetched}
+      proactive={proactive}
+      onProactiveAction={handleProactiveStatusAction}
+      simActive={sim.active}
+      labTurnsRef={labTurnsRef}
+      labSamplesRef={labSamplesRef}
+      labTick={labTick}
+      token={token}
+      endpoint={endpoint}
+      dockMode={isSpatialWide}
+    />
+  );
+
   return (
     <div ref={rootRef} data-theme={theme} style={{
       "--hg-row-py": density === "condensed" ? `${8}px` : `${14}px`,
+      position: "relative",
       display: "flex", flexDirection: "column",
       width: "100%", height: "100%",
-      background: "var(--hg-bg-0)",
+      background: spatialLayout ? "#000" : "var(--hg-bg-0)",
       color: "var(--hg-fg-0)",
       fontFamily: "'Geist', system-ui, sans-serif",
       overflow: "hidden",
     }}>
+      {isSpatialWide && window.HomeApartmentView && (
+        <div data-theme="dark" style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          bottom: 0,
+          right: spatialStageRight,
+          zIndex: 0,
+          minWidth: 0,
+          overflow: "hidden",
+          background: "#000",
+        }}>
+          <window.HomeApartmentView
+            open={true}
+            embedded={true}
+            onClose={() => {}}
+            endpoint={endpoint}
+            token={token}
+            sim={sim}
+          />
+          <SpatialModeRail
+            active={spatialActiveSurface}
+            theme={theme}
+            opsVisible={spatialOpsDockOpen}
+            onHome={() => {
+              closeSpatialToolSurfaces();
+              setSpatialOpsDockOpen(true);
+            }}
+            onCameras={() => {
+              closeSpatialToolSurfaces();
+              setSpatialOpsDockOpen(false);
+              setVideoLabelerOpen(true);
+            }}
+            onPeople={() => {
+              closeSpatialToolSurfaces();
+              setSpatialOpsDockOpen(false);
+              setPeopleOpen(true);
+            }}
+            onIntelligence={() => {
+              closeSpatialToolSurfaces();
+              setSpatialOpsDockOpen(false);
+              setIntelligenceOpen(true);
+            }}
+            onLights={() => {
+              closeSpatialToolSurfaces();
+              setSpatialOpsDockOpen(false);
+              setLightsOpen(true);
+            }}
+            onOps={() => {
+              closeSpatialToolSurfaces();
+              setSpatialOpsDockOpen((open) => !open);
+            }}
+            onToggleTheme={() => setTheme((t) => t === "dark" ? "light" : "dark")}
+          />
+          {spatialOpsDockOpen && (
+            <div
+              className="hg-fade"
+              style={{
+                position: "absolute",
+                left: 82,
+                right: "auto",
+                bottom: 50,
+                width: "min(620px, calc(100% - 118px))",
+                zIndex: 4,
+                maxHeight: "min(245px, 26vh)",
+                overflow: "hidden",
+                border: "1px solid rgba(184,216,255,0.08)",
+                borderRadius: 6,
+                background: "rgba(3,5,8,0.58)",
+                backdropFilter: "blur(12px)",
+                boxShadow: "0 14px 44px rgba(0,0,0,0.30)",
+              }}
+            >
+              {metricsStrip}
+            </div>
+          )}
+        </div>
+      )}
+      <div style={appColumnStyle}>
       <HomeHeader
         theme={theme}
-        onToggleTheme={() => setTheme((t) => t === "dark" ? "light" : "dark")}
+        onToggleTheme={isSpatialWide ? null : () => setTheme((t) => t === "dark" ? "light" : "dark")}
         voice={voice}
         connection={connection}
         sidecarOnline={sidecarOnline}
@@ -7866,9 +8292,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         sim={sim}
         muteState={muteState}
         onUnmuteClick={handleUnmuteClick}
-        onOpenPeople={() => { setVideoLabelerOpen(false); setPeopleOpen(true); }}
-        onOpenIntelligence={() => { setVideoLabelerOpen(false); setIntelligenceOpen(true); }}
-        onOpenVideoLabeler={() => {
+        onOpenPeople={isSpatialWide ? null : () => { setVideoLabelerOpen(false); setPeopleOpen(true); }}
+        onOpenIntelligence={isSpatialWide ? null : () => { setVideoLabelerOpen(false); setIntelligenceOpen(true); }}
+        onOpenVideoLabeler={isSpatialWide ? null : () => {
           // full-screen surfaces are mutually exclusive (see state decl)
           setPeopleOpen(false);
           setIntelligenceOpen(false);
@@ -7897,6 +8323,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           client={haClientRef.current}
           connection={connection}
           sim={sim}
+          spatialMode={isSpatialWide}
         />
       )}
       {/* M5 (Addendum 27) — explainability drawer. Mounted alongside
@@ -7908,6 +8335,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           onClose={() => setIntelligenceOpen(false)}
           metricsBase={metricsBase}
           endpoint={endpoint}
+          spatialMode={isSpatialWide}
         />
       )}
       {/* /labeler — full-screen video timeline labeler (M0 shell; see
@@ -7918,6 +8346,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           open={videoLabelerOpen}
           onClose={() => setVideoLabelerOpen(false)}
           sim={sim}
+          spatialMode={isSpatialWide}
         />
       )}
       {window.HomeExplainDrawer && (
@@ -7937,6 +8366,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           client={haClientRef.current}
           connection={connection}
           sim={sim}
+          spatialMode={isSpatialWide}
           askExternal={(payload) => {
             // Pre-fill the chat input with a structured `/ask`-prefixed
             // message containing full layer context + the user's intent.
@@ -7998,7 +8428,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       {/* /apartment — full-screen 3D spatial command center. Full-viewport
           takeover (not the right-anchored drawer slot); engine stays warm
           across open/close. */}
-      {window.HomeApartmentView && (
+      {window.HomeApartmentView && !spatialLayout && (
         <window.HomeApartmentView
           open={apartmentOpen}
           onClose={() => setApartmentOpen(false)}
@@ -8063,7 +8493,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           labels={cameraLabels}
           identity={identity}
           media={media}
-          wideMode={wideMode}
+          wideMode={wideMode && !isSpatialWide}
+          spatialMode={isSpatialWide}
+          suppressOpen={isSpatialWide && input.startsWith("/")}
           simCameraStates={sim.active ? (simCameraStates || window.SimDefaultCameraMap) : null}
           simActive={sim.active}
         />
@@ -8083,19 +8515,24 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             onConnect={connectTo}
             availableModels={availableModels}
             onPickModel={confirmModel}
+            onSimulation={() => {
+              sim.activate?.("healthy");
+              addEvent({ kind: "system", text: "[sim] simulation mode activated - healthy", tone: "info" });
+            }}
+          compact={isSpatialWide}
           />
         ) : (
           <div style={{
             // Phase 1.5 item 7: chat widens with the window past 700px,
             // capped at 1200px so very wide displays still feel readable.
-            maxWidth: wideMode ? "min(1200px, 95vw)" : 640,
+            maxWidth: isSpatialWide ? "100%" : wideMode ? "min(1200px, 95vw)" : 640,
             margin: "0 auto",
           }}>
-            <BootBanner metrics={metrics} />
+            {!isSpatialWide && <BootBanner metrics={metrics} />}
             {groupEventsBySpeaker(
               debugMode ? events : events.filter((e) => e.kind !== "diag")
             ).map((g, i) => (
-              <TurnBlock key={i} group={g} density={density}
+              <TurnBlock key={i} group={g} density={isSpatialWide ? "compact" : density}
                 onConfirmAction={confirmAction} onCancelAction={cancelAction}
                 onUndoAction={undoAction}
                 onControlAction={onControlAction} controlLifecycles={controlLifecycles}
@@ -8104,44 +8541,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           </div>
         )}
       </div>
-      <MetricsStrip
-        metrics={metrics}
-        metricsHistory={metricsHistory}
-        style={metricsStyle}
-        metricsBase={metricsBase || metricsBaseFromEndpoint(endpoint)}
-        bridgeHealth={bridgeHealth}
-        networkMetrics={networkMetrics}
-        visionSidecarOnline={visionSidecarOnline}
-        visionHealth={visionHealth}
-        hostMetrics={hostMetrics}
-        frigateMetrics={frigateMetrics}
-        connection={connection}
-        sidecarOnline={sidecarOnline}
-        bridgeOnline={bridgeOnline}
-        aiStackOnline={aiStackOnline}
-        aiStackState={aiStackState}
-        aiStackStatusError={aiStackStatusError}
-        roomContext={roomContext}
-        voice={voice}
-        identity={identity}
-        media={media}
-        cameraLabels={cameraLabels}
-        recentPerceptions={events.filter((e) => e.kind === "perception").slice(-5)}
-        traceSummary={traceSummary}
-        lastTrace={lastTrace}
-        setTraceSummary={setTraceSummary}
-        setLastTrace={setLastTrace}
-        onTracesFetched={handleTracesFetched}
-        onRoutingLogFetched={handleRoutingLogFetched}
-        proactive={proactive}
-        onProactiveAction={handleProactiveStatusAction}
-        simActive={sim.active}
-        labTurnsRef={labTurnsRef}
-        labSamplesRef={labSamplesRef}
-        labTick={labTick}
-        token={token}
-        endpoint={endpoint}
-      />
+      {!isSpatialWide && metricsStrip}
       <VoiceBanner voice={voice} onRetry={toggleMic} />
       </div>
       )}
@@ -8167,6 +8567,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           }}
         />
       )}
+      </div>
     </div>
   );
 }

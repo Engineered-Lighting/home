@@ -98,9 +98,10 @@ agent_scenarios:
     name: "bound-room context (in here)"
     prompt: "what's going on in here"
     bound_room: kitchen
+    requires_service: vision_sidecar
     expect:
       speech_min_chars: 5
-      tool_call_must_include_any: [describe_camera, get_room_state]
+      tool_call_must_include_any: [refresh_perception, describe_camera]
 
   - id: U5
     name: "vision describe (extreme detail)"

@@ -346,6 +346,8 @@ function HomeVisionCard({
   identity = null,
   media = {},
   wideMode = false,
+  spatialMode = false,
+  suppressOpen = false,
   /* Sim Mode: per-room camera state map (online-empty / offline / etc).
    * When non-null, HomeVisionFrame gets `simulationSrc` from the SVG
    * generator and bypasses MJPEG entirely. */
@@ -362,6 +364,9 @@ function HomeVisionCard({
   // origin) gets saturated by 5 zombie close-wait connections + 5
   // new tile mounts on reopen — black tiles, no recovery.
   const [hasEverOpened, setHasEverOpened] = React.useState(defaultOpen);
+  React.useEffect(() => {
+    if (suppressOpen && open) setOpen(false);
+  }, [suppressOpen, open]);
   React.useEffect(() => {
     if (open) setHasEverOpened(true);
   }, [open]);
@@ -487,7 +492,7 @@ function HomeVisionCard({
         style={{
           width: "100%",
           display: "flex", alignItems: "center", gap: 10,
-          padding: "9px 16px",
+          padding: spatialMode ? "8px 14px" : "9px 16px",
           background: "transparent",
           border: "none",
           cursor: "pointer",
@@ -503,13 +508,13 @@ function HomeVisionCard({
         }}/>
         <span style={{
           fontFamily: "'Geist Mono', monospace",
-          fontSize: 10, letterSpacing: "0.16em",
+          fontSize: spatialMode ? 9.5 : 10, letterSpacing: "0.16em",
           textTransform: "lowercase",
           color: "var(--hg-fg-2)", fontWeight: 500,
         }}>vision</span>
         <span style={{
           fontFamily: "'Geist Mono', monospace",
-          fontSize: 9, color: "var(--hg-fg-4)", letterSpacing: "0.14em",
+          fontSize: spatialMode ? 8.5 : 9, color: "var(--hg-fg-4)", letterSpacing: "0.14em",
         }}>
           {open ? active.name : `${cameras.length} cameras · ${anyOccupied ? `${occupied} occupied` : "all clear"}`}
         </span>
@@ -563,10 +568,10 @@ function HomeVisionCard({
                     onClick={() => setIdx(i)}
                     style={{
                       flex: "0 0 auto",
-                      padding: "8px 10px 7px",
+                      padding: spatialMode ? "7px 8px 6px" : "8px 10px 7px",
                       position: "relative",
                       fontFamily: "'Geist Mono', monospace",
-                      fontSize: 9, letterSpacing: "0.14em",
+                      fontSize: spatialMode ? 8.5 : 9, letterSpacing: "0.14em",
                       textTransform: "lowercase",
                       color: on ? "var(--hg-fg-0)" : "var(--hg-fg-4)",
                       cursor: "pointer",
@@ -715,9 +720,9 @@ function HomeVisionCard({
               <div style={{
                 display: "flex", alignItems: "center", gap: 8,
                 flexWrap: "wrap",
-                padding: "7px 14px",
+                padding: spatialMode ? "6px 12px" : "7px 14px",
                 fontFamily: "'Geist Mono', monospace",
-                fontSize: 9, letterSpacing: "0.14em",
+                fontSize: spatialMode ? 8.5 : 9, letterSpacing: "0.14em",
                 textTransform: "lowercase",
                 color: "var(--hg-fg-4)",
                 background: "var(--hg-bg-0)",
@@ -771,9 +776,9 @@ function HomeVisionCard({
             return (
               <div style={{
                 display: "flex", alignItems: "center", gap: 6,
-                padding: "5px 14px 7px",
+                padding: spatialMode ? "5px 12px 6px" : "5px 14px 7px",
                 fontFamily: "'Geist Mono', monospace",
-                fontSize: 9, letterSpacing: "0.14em",
+                fontSize: spatialMode ? 8.5 : 9, letterSpacing: "0.14em",
                 textTransform: "lowercase",
                 color: isPlaying ? "var(--hg-ice-bright)" : "var(--hg-fg-3)",
                 background: "var(--hg-bg-0)",

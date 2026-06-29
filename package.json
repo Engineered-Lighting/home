@@ -1,11 +1,18 @@
 {
   "name": "home",
   "version": "0.1.0",
-  "description": "Local AI home coordinator — Tauri+React desktop client for Home Assistant. This package.json exists ONLY to provide a cross-platform npm dev server for the in-app Simulation Mode (see SIMULATION_MODE.md). The real production build is Tauri (cargo tauri build from app/src-tauri).",
+  "description": "Local AI home coordinator. The existing Home desktop app lives in app/; experimental sibling apps live under apps/.",
   "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
   "scripts": {
     "dev": "serve app/src -p 5180 --no-clipboard --no-port-switching",
-    "dev:simulation": "serve app/src -p 5180 --no-clipboard --no-port-switching"
+    "dev:assets": "node tools/serve-apartment-assets.mjs",
+    "dev:simulation": "serve app/src -p 5180 --no-clipboard --no-port-switching",
+    "dev:home2": "npm --workspace apps/home-2 run dev",
+    "build:home2": "npm --workspace apps/home-2 run build",
+    "test:home2": "npm --workspace apps/home-2 run test"
   },
   "devDependencies": {
     "serve": "^14.2.4"

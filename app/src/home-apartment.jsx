@@ -22,6 +22,36 @@ const APT_SERVICE_BY_RUNTIME_KEY = {
   HG_DEFAULT_APARTMENT_ASSET_BASE: "apartmentAssets",
 };
 
+function readAptViewport() {
+  if (typeof window === "undefined") return { width: 1024, height: 768, mobile: false, phone: false };
+  const vv = window.visualViewport;
+  const width = Math.round(vv?.width || window.innerWidth || 1024);
+  const height = Math.round(vv?.height || window.innerHeight || 768);
+  return { width, height, mobile: width < 700, phone: width < 480 };
+}
+
+function useAptViewport() {
+  const [viewport, setViewport] = useState(readAptViewport);
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    let raf = 0;
+    const update = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => setViewport(readAptViewport()));
+    };
+    window.addEventListener("resize", update);
+    window.visualViewport?.addEventListener("resize", update);
+    window.visualViewport?.addEventListener("scroll", update);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", update);
+      window.visualViewport?.removeEventListener("resize", update);
+      window.visualViewport?.removeEventListener("scroll", update);
+    };
+  }, []);
+  return viewport;
+}
+
 function aptServiceBase(storageKey, runtimeKey, fallback) {
   try {
     const service = APT_SERVICE_BY_RUNTIME_KEY[runtimeKey];
@@ -45,7 +75,7 @@ function aptServiceBase(storageKey, runtimeKey, fallback) {
   return fallback;
 }
 
-function AptHudButton({ label, onClick, active, disabled, title }) {
+function AptHudButton({ label, onClick, active, disabled, title, mobile = readAptViewport().mobile }) {
   return (
     <button
       onClick={onClick} disabled={disabled} title={title} className="hg-focusable"
@@ -53,7 +83,9 @@ function AptHudButton({ label, onClick, active, disabled, title }) {
         background: active ? "var(--hg-ice)" : "rgba(10,12,16,0.55)",
         border: "1px solid " + (active ? "var(--hg-ice)" : "var(--hg-border-soft)"),
         color: active ? "#0b0d11" : (disabled ? "var(--hg-fg-5)" : "var(--hg-fg-1)"),
-        padding: "5px 12px", fontFamily: APT_FONT_MONO, fontSize: 10.5,
+        minHeight: mobile ? 40 : "auto",
+        minWidth: mobile ? 44 : "auto",
+        padding: mobile ? "8px 11px" : "5px 12px", fontFamily: APT_FONT_MONO, fontSize: mobile ? 10 : 10.5,
         letterSpacing: "0.1em", textTransform: "lowercase",
         cursor: disabled ? "default" : "pointer", backdropFilter: "blur(6px)",
       }}
@@ -248,6 +280,8 @@ function AptUndistortedFeed({ src, alt, intrinsics, style }) {
 }
 
 function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = false }) {
+  const viewport = useAptViewport();
+  const mobile = viewport.mobile;
   const hostRef = useRef(null);
   const engineRef = useRef(null);
   const detachRef = useRef(null);
@@ -259,6 +293,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const [progress, setProgress] = useState({ loaded: 0, total: 0 });
   const [stats, setStats] = useState(null);
   const [mode, setMode] = useState("points");
+  const [modeLoading, setModeLoading] = useState(null);
+  const [modeError, setModeError] = useState(null);
   const [toast, setToast] = useState(null);
   const [azIdx, setAzIdx] = useState(1);
   const [editing, setEditing] = useState(false);
@@ -716,12 +752,22 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     // The old `if (m === engine.modes.mode) return` short-circuit dropped a
     // 'cloud' click made while a slow mesh load was still in flight (the
     // engine's mode had not flipped yet), leaving the mesh on screen.
+    setModeLoading(m);
+    setModeError(null);
     try {
       await engine.modes.setMode(m);
       setMode(m);
     } catch (e) {
+      const assetHint = m === "splat" ? "check apartment.spz" : "check mesh.glb / collision.glb";
+      setModeError({
+        mode: m,
+        message: m === "splat" ? "photo unavailable" : "mesh unavailable",
+        detail: `${e?.message || String(e || "asset load failed")} - ${assetHint}`,
+      });
       showToast(m === "splat" ? "photo unavailable — check apartment.spz asset"
                               : "mesh unavailable — check collision.glb asset");
+    } finally {
+      setModeLoading(null);
     }
   }, [showToast]);
 
@@ -749,11 +795,79 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     }
   }, [model, endpoint, token, simActive, showToast]);
 
+  const flyToDeviceView = useCallback((dev) => {
+    if (!dev) return false;
+    const eng = engineRef.current;
+    const calib = !!(dev.camera && dev.camera.extrinsics && dev.camera.intrinsics);
+    // Calibrated desktop snaps use the textured mesh behind the live feed.
+    // Mobile keeps the full canvas width so the video is not cropped by the
+    // 46/54 calibration split.
+    if (calib && eng) {
+      if (preSnapModeRef.current == null) preSnapModeRef.current = eng.modes.mode;
+      eng.modes.setMode("mesh", { duration: 0 }).catch(() => {});
+    }
+    eng?.flyToDevice(dev, { fovScale: calib && !mobile ? 1 / 0.74 : 1 });
+    if (flyTimerRef.current) clearTimeout(flyTimerRef.current);
+    if (!simActive && dev.camera?.frigate_name) {
+      flyTimerRef.current = setTimeout(() => {
+        flyTimerRef.current = null;
+        if (engineRef.current?.rig.inCameraPose?.()) {
+          setLiveCam(dev); setLiveOn(true);
+        }
+      }, 950);
+    } else {
+      setLiveCam(dev); setLiveOn(false);
+    }
+    return true;
+  }, [mobile, simActive]);
+
+  useEffect(() => {
+    if (!open || typeof window === "undefined") return undefined;
+    const api = {
+      snapshot: () => ({
+        phase,
+        mode,
+        liveOn,
+        liveCam: liveCam?.id || null,
+        mobile,
+        viewport,
+        devices: (model.devices || []).length,
+      }),
+      setMode: pickMode,
+      flyFirstCamera: () => {
+        const dev = (model.devices || []).find((d) => d.type === "camera" || d.camera?.frigate_name);
+        return dev ? flyToDeviceView(dev) : false;
+      },
+    };
+    window.__havApartmentDebug = api;
+    return () => {
+      if (window.__havApartmentDebug === api) delete window.__havApartmentDebug;
+    };
+  }, [open, phase, mode, liveOn, liveCam, mobile, viewport, model.devices, pickMode, flyToDeviceView]);
+
   if (!open) return null;
 
   const pct = progress.total ? Math.floor((progress.loaded / progress.total) * 100) : 0;
   const cardDevice = (model.devices || []).find((d) => d.id === cardId) || null;
   const hoverDevice = (model.devices || []).find((d) => d.id === hoverId) || null;
+  const topPad = mobile ? "calc(10px + env(safe-area-inset-top, 0px)) 12px 8px" : "12px 18px";
+  const bottomPad = mobile ? "10px 10px calc(12px + env(safe-area-inset-bottom, 0px))" : "14px 18px";
+  const liveFeedStyle = mobile
+    ? {
+        width: "calc(100vw - 20px)",
+        maxWidth: "100vw",
+        maxHeight: "calc(100dvh - 150px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px))",
+        aspectRatio: "16 / 9",
+        objectFit: "contain",
+        background: "#000",
+        boxShadow: "0 0 42px 6px rgba(0,0,0,0.35)",
+      }
+    : {
+        height: "74vh",
+        aspectRatio: "16 / 9",
+        objectFit: "cover",
+        boxShadow: "0 0 60px 10px rgba(0,0,0,0.35)",
+      };
 
   return (
     <div
@@ -766,6 +880,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         zIndex: embedded ? 0 : 1000,
         background: "#000",
         display: "flex", flexDirection: "column", overflow: "hidden",
+        minHeight: mobile ? "100dvh" : 0,
         animation: "apt-fade-in 260ms ease-out",
       }}
     >
@@ -778,7 +893,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
       {/* engine canvas is appended imperatively (persistent across mounts —
           see the boot effect); React must never own or recreate it */}
       <div ref={hostRef} style={{ position: "absolute", top: 0, bottom: 0, right: 0,
-                                  left: calibCam ? "46%" : 0,
+                                  left: calibCam && !mobile ? "46%" : 0,
                                   touchAction: "none", cursor: "grab" }}
       />
 
@@ -786,7 +901,12 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
       {!editing && (
         <div style={{
           position: "absolute", top: 0, left: 0, right: 0, display: "flex",
-          alignItems: "center", gap: 10, padding: "12px 18px", pointerEvents: "none",
+          alignItems: mobile ? "flex-start" : "center",
+          gap: mobile ? 7 : 10,
+          padding: topPad,
+          pointerEvents: "none",
+          flexWrap: mobile ? "wrap" : "nowrap",
+          zIndex: 5,
         }}>
           <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.05 }}>
             <span style={{ fontFamily: APT_FONT_SANS, fontSize: 15, fontWeight: 500,
@@ -801,10 +921,18 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
           )}
           <span style={{ fontFamily: APT_FONT_MONO, fontSize: 8.5, letterSpacing: "0.1em",
                          color: trackerStatus === "live" ? "var(--hg-ice)" : "var(--hg-fg-5)",
-                         marginLeft: 8 }}>
+                         marginLeft: mobile ? 0 : 8 }}>
             tracker · {trackerStatus}
           </span>
-          <span style={{ marginLeft: "auto", display: "flex", gap: 6, pointerEvents: "auto" }}>
+          <span style={{
+            marginLeft: "auto",
+            display: "flex",
+            gap: 6,
+            pointerEvents: "auto",
+            flexWrap: mobile ? "wrap" : "nowrap",
+            justifyContent: "flex-end",
+            maxWidth: mobile ? "100%" : "none",
+          }}>
             {inCamPose && (
               <AptHudButton label="← back" onClick={exitCameraPose} />
             )}
@@ -818,10 +946,10 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
                 // the overview so the room is visible and orbit/zoom unlock
                 e?.rig.returnToOverview();
                 setCalibCam(liveCam);
-              }} />
+              }} mobile={mobile} />
             )}
             {!inCamPose && (
-              <AptHudButton label="edit" onClick={() => { setCardId(null); setEditing(true); }} />
+              <AptHudButton label="edit" onClick={() => { setCardId(null); setEditing(true); }} mobile={mobile} />
             )}
             {!embedded && <AptHudButton label="close · esc" onClick={onClose} />}
           </span>
@@ -854,10 +982,16 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
       {!editing && (
         <div style={{
           position: "absolute", left: 0, right: 0, bottom: 0, display: "flex",
-          alignItems: "flex-end", padding: "14px 18px", pointerEvents: "none", gap: 12,
+          alignItems: mobile ? "stretch" : "flex-end",
+          padding: bottomPad,
+          pointerEvents: "none",
+          gap: mobile ? 8 : 12,
+          flexDirection: mobile ? "column" : "row",
+          zIndex: 5,
         }}>
           <div style={{ fontFamily: APT_FONT_MONO, fontSize: 9, color: "var(--hg-fg-5)",
-                        letterSpacing: "0.08em", lineHeight: 1.6, minWidth: 170 }}>
+                        letterSpacing: "0.08em", lineHeight: 1.6, minWidth: mobile ? 0 : 170,
+                        display: mobile ? "none" : "block" }}>
             {stats && (<>
               {Math.round(stats.fps)} fps · {(stats.points / 1000).toFixed(0)}k pts · dpr {stats.pixelRatio}
               {stats.calls != null ? ` · ${stats.calls} dc` : ""}
@@ -869,18 +1003,43 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
               )}
             </>)}
           </div>
-          <div style={{ margin: "0 auto", display: "flex", gap: 6, pointerEvents: "auto" }}>
+          <div style={{
+            margin: mobile ? "0" : "0 auto",
+            display: "flex",
+            gap: 6,
+            pointerEvents: "auto",
+            justifyContent: mobile ? "center" : "flex-start",
+            flexWrap: "wrap",
+            width: mobile ? "100%" : "auto",
+          }}>
             {liveCam && (
               <AptHudButton label="live" active={liveOn} onClick={() => setLiveOn(true)} />
             )}
             <AptHudButton label="cloud" active={!liveOn && mode === "points"}
-              onClick={() => { setLiveOn(false); pickMode("points"); }} />
+              onClick={() => { setLiveOn(false); pickMode("points"); }} disabled={modeLoading === "points"} />
             <AptHudButton label="photo" active={!liveOn && mode === "splat"}
-              onClick={() => { setLiveOn(false); pickMode("splat"); }} />
+              onClick={() => { setLiveOn(false); pickMode("splat"); }} disabled={modeLoading === "splat"} title={modeError?.mode === "splat" ? modeError.detail : ""} />
             <AptHudButton label="mesh" active={!liveOn && mode === "mesh"}
-              onClick={() => { setLiveOn(false); pickMode("mesh"); }} />
+              onClick={() => { setLiveOn(false); pickMode("mesh"); }} disabled={modeLoading === "mesh"} title={modeError?.mode === "mesh" ? modeError.detail : ""} />
           </div>
-          <div style={{ textAlign: "right", pointerEvents: "auto" }}>
+          {(modeLoading || modeError) && (
+            <div style={{
+              pointerEvents: "none",
+              alignSelf: mobile ? "center" : "flex-end",
+              maxWidth: mobile ? "calc(100vw - 24px)" : 260,
+              fontFamily: APT_FONT_MONO,
+              fontSize: mobile ? 9 : 9.5,
+              letterSpacing: "0.08em",
+              color: modeError ? "var(--hg-warn)" : "var(--hg-fg-3)",
+              background: "rgba(10,12,16,0.72)",
+              border: "1px solid var(--hg-border-soft)",
+              padding: "6px 9px",
+              textAlign: mobile ? "center" : "left",
+            }}>
+              {modeLoading ? `loading ${modeLoading === "splat" ? "photo" : modeLoading}` : modeError.message}
+            </div>
+          )}
+          <div style={{ textAlign: "right", pointerEvents: "auto", display: mobile ? "none" : "block" }}>
             <div style={{ display: "flex", gap: 5, justifyContent: "flex-end", marginBottom: 6 }}>
               {Array.from({ length: 8 }).map((_, i) => (
                 <button key={i} className="hg-focusable"
@@ -904,6 +1063,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
       {liveCam && liveOn && !calibCam && (
         <div style={{ position: "absolute", inset: 0,
                       display: "flex", alignItems: "center", justifyContent: "center",
+                      padding: mobile ? "calc(58px + env(safe-area-inset-top, 0px)) 10px calc(82px + env(safe-area-inset-bottom, 0px))" : 0,
                       pointerEvents: "none" }}>
           {/* big-but-not-fullscreen: the feed hovers over the 3D view, which
               holds the same pose behind it — true 1:1 alignment lands with
@@ -918,10 +1078,9 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
             src={`${aptServiceBase("apartment3d.frigateBase", "HG_DEFAULT_FRIGATE_BASE", "http://192.168.0.125:5000")}/api/${liveCam.camera.frigate_name}`}
             alt={liveCam.name}
             intrinsics={liveCam.camera?.intrinsics || null}
-            style={{ height: "74vh", aspectRatio: "16 / 9", objectFit: "cover",
-                     boxShadow: "0 0 60px 10px rgba(0,0,0,0.35)" }}
+            style={liveFeedStyle}
           />
-          <div style={{ position: "absolute", top: 52, left: 18, fontFamily: APT_FONT_MONO,
+          <div style={{ position: "absolute", top: mobile ? "calc(54px + env(safe-area-inset-top, 0px))" : 52, left: mobile ? 12 : 18, fontFamily: APT_FONT_MONO,
                         fontSize: 9.5, letterSpacing: "0.12em", color: "var(--hg-ice)",
                         background: "rgba(10,12,16,0.6)", padding: "4px 9px" }}>
             live · {liveCam.name} · mjpeg
@@ -987,33 +1146,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
               bounds={hostSize}
               onClose={() => setCardId(null)}
               onService={callSvc}
-              onFlyTo={(dev) => {
-                const eng = engineRef.current;
-                const calib = !!(dev.camera && dev.camera.extrinsics && dev.camera.intrinsics);
-                // calibrated snap: textured mesh background + fov widened so
-                // the centered feed (74vh) continues seamlessly into the mesh.
-                // Remember what the user was looking at — the exit path puts
-                // it back (a snap must never permanently hide the cloud).
-                if (calib && eng) {
-                  if (preSnapModeRef.current == null) preSnapModeRef.current = eng.modes.mode;
-                  eng.modes.setMode("mesh", { duration: 0 }).catch(() => {});
-                }
-                eng?.flyToDevice(dev, { fovScale: calib ? 1 / 0.74 : 1 });
-                // camera feed FIRST once the flight lands; 3D stays one toggle away
-                if (flyTimerRef.current) clearTimeout(flyTimerRef.current);
-                if (!simActive && dev.camera?.frigate_name) {
-                  flyTimerRef.current = setTimeout(() => {
-                    flyTimerRef.current = null;
-                    // an esc during the flight already flew home — never
-                    // resurrect the feed over the overview pose
-                    if (engineRef.current?.rig.inCameraPose?.()) {
-                      setLiveCam(dev); setLiveOn(true);
-                    }
-                  }, 950);
-                } else {
-                  setLiveCam(dev); setLiveOn(false);
-                }
-              }}
+              onFlyTo={flyToDeviceView}
               sim={simActive}
             />
           )}

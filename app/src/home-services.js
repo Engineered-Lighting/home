@@ -95,6 +95,97 @@
     },
   };
 
+  const HOSTS = {
+    windows: { label: "Windows dev machine", order: 10 },
+    "ubuntu-ai": { label: "Ubuntu AI box", order: 20 },
+    "home-assistant": { label: "Home Assistant", order: 30 },
+    "browser-gateway": { label: "Browser gateway", order: 40 },
+  };
+
+  const TRAVEL_META = {
+    ha: {
+      host: "home-assistant",
+      role: "core",
+      travelSeverity: "blocker",
+      recoveryHint: "Check HAOS, Tailscale on the Home Assistant machine, the HA token, and the HA API.",
+      diagnosticCommand: "curl -i http://homeassistant:8123/api/",
+    },
+    frigate: {
+      host: "home-assistant",
+      role: "media",
+      travelSeverity: "degraded",
+      recoveryHint: "Check the Frigate add-on/container and that port 5000 is reachable over Tailscale.",
+      diagnosticCommand: "curl -i http://homeassistant:5000/api/stats",
+    },
+    metrics: {
+      host: "ubuntu-ai",
+      role: "core",
+      travelSeverity: "degraded",
+      recoveryHint: "Check the metrics sidecar and the Ubuntu AI box Tailscale path.",
+      diagnosticCommand: "curl -i http://engineeredlightingserver1:8092/healthz",
+    },
+    vllm: {
+      host: "ubuntu-ai",
+      role: "ai",
+      travelSeverity: "degraded",
+      recoveryHint: "Check the vLLM container/service, GPU health, and model load state on the Ubuntu AI box.",
+      diagnosticCommand: "curl -i http://engineeredlightingserver1:8000/v1/models",
+    },
+    vision: {
+      host: "ubuntu-ai",
+      role: "ai",
+      travelSeverity: "degraded",
+      recoveryHint: "Check the vision sidecar on the Ubuntu AI box.",
+      diagnosticCommand: "curl -i http://engineeredlightingserver1:8091/healthz",
+    },
+    intelligence: {
+      host: "ubuntu-ai",
+      role: "ai",
+      travelSeverity: "degraded",
+      recoveryHint: "Check the intelligence service on the Ubuntu AI box.",
+      diagnosticCommand: "curl -i http://engineeredlightingserver1:8095/healthz",
+    },
+    supervisor: {
+      host: "ubuntu-ai",
+      role: "stack-control",
+      travelSeverity: "degraded",
+      recoveryHint: "Check BIND_ADDR, STACK_TOKEN, and the hav-stack-supervisor systemd unit.",
+      diagnosticCommand: "sudo systemctl status hav-stack-supervisor --no-pager",
+    },
+    s2s: {
+      host: "ubuntu-ai",
+      role: "ai",
+      travelSeverity: "degraded",
+      recoveryHint: "Check the S2S bridge service and WebSocket reachability on the Ubuntu AI box.",
+      diagnosticCommand: "curl -i http://engineeredlightingserver1:8094/healthz",
+    },
+    tracker: {
+      host: "ubuntu-ai",
+      role: "media",
+      travelSeverity: "degraded",
+      recoveryHint: "Check the spatial tracker service and tracker WebSocket port on the Ubuntu AI box.",
+      diagnosticCommand: "curl -i http://engineeredlightingserver1:8098/healthz",
+    },
+    videoLabeler: {
+      host: "ubuntu-ai",
+      role: "media",
+      travelSeverity: "degraded",
+      recoveryHint: "Check the video labeler service and media mount on the Ubuntu AI box.",
+      diagnosticCommand: "curl -i http://engineeredlightingserver1:8099/healthz",
+    },
+    apartmentAssets: {
+      host: "ubuntu-ai",
+      role: "assets",
+      travelSeverity: "degraded",
+      recoveryHint: "Check home-apartment-assets and that app/data/apartment contains the scan and mesh files.",
+      diagnosticCommand: "curl -i http://engineeredlightingserver1:5190/healthz",
+    },
+  };
+
+  for (const [service, travel] of Object.entries(TRAVEL_META)) {
+    if (META[service]) Object.assign(META[service], travel);
+  }
+
   const WEB_DEFAULTS = {
     ha: "/proxy/ha",
     frigate: "/proxy/frigate",
@@ -238,6 +329,9 @@
       custom: cleanServiceMap(state.custom),
       selected: state.selected && typeof state.selected === "object" ? state.selected : {},
       errors: Array.isArray(state.errors) ? state.errors.slice(-ERROR_LIMIT) : [],
+      lastProbeAt: typeof state.lastProbeAt === "string" ? state.lastProbeAt : "",
+      lastProbeProfile: typeof state.lastProbeProfile === "string" ? state.lastProbeProfile : "",
+      lastProbe: Array.isArray(state.lastProbe) ? state.lastProbe : [],
     };
   }
 
@@ -440,12 +534,382 @@
     }));
   }
 
+  function sanitizeProbeResult(result) {
+    if (!result || typeof result !== "object") return null;
+    return {
+      service: result.service || "",
+      label: result.label || META[result.service]?.label || result.service || "",
+      profile: result.profile || "",
+      url: result.url || "",
+      ok: !!result.ok,
+      status: typeof result.status === "number" ? result.status : 0,
+      ms: typeof result.ms === "number" ? result.ms : 0,
+      error: result.error || "",
+      checkedAt: result.checkedAt || "",
+      attempts: Array.isArray(result.attempts)
+        ? result.attempts.map((attempt) => ({
+            url: attempt.url || "",
+            ok: !!attempt.ok,
+            status: typeof attempt.status === "number" ? attempt.status : 0,
+            ms: typeof attempt.ms === "number" ? attempt.ms : 0,
+            error: attempt.error || "",
+          }))
+        : [],
+    };
+  }
+
+  function serviceResultMap(results) {
+    const map = new Map();
+    for (const result of Array.isArray(results) ? results : []) {
+      if (result?.service) map.set(result.service, result);
+    }
+    return map;
+  }
+
+  function emptyHostRollups(includeBrowserGateway = false) {
+    const keys = ["windows", "ubuntu-ai", "home-assistant"];
+    if (includeBrowserGateway) keys.push("browser-gateway");
+    const out = {};
+    for (const key of keys) {
+      out[key] = {
+        id: key,
+        label: HOSTS[key]?.label || key,
+        status: key === "windows" ? "unknown" : "unknown",
+        total: 0,
+        ok: 0,
+        failed: 0,
+        blockers: 0,
+        degraded: 0,
+        optional: 0,
+        unknown: 0,
+        services: [],
+      };
+    }
+    if (includeBrowserGateway) {
+      out["browser-gateway"].status = "ready";
+      out["browser-gateway"].total = 1;
+      out["browser-gateway"].ok = 1;
+      out["browser-gateway"].services.push({
+        service: "webGateway",
+        label: "Web gateway",
+        ok: true,
+        status: "ready",
+        url: "/healthz",
+      });
+    }
+    return out;
+  }
+
+  function severityCountsKey(severity) {
+    if (severity === "blocker") return "blockers";
+    if (severity === "optional") return "optional";
+    return "degraded";
+  }
+
+  function hostStatusFromCounts(host) {
+    if (!host || host.total === 0) return "unknown";
+    if ((host.ok + host.failed) < host.total) return "unknown";
+    if (host.blockers > 0) return "blocked";
+    if (host.degraded > 0 || host.optional > 0) return "degraded";
+    return "ready";
+  }
+
+  function risk(severity, service, title, detail, command) {
+    return {
+      severity,
+      service: service || "",
+      title,
+      detail,
+      command: command || "",
+    };
+  }
+
+  function buildTravelReadiness(probeResults) {
+    const state = readState();
+    const profile = getProfile(state);
+    const savedProbeMatchesProfile = state.lastProbeProfile === profile.id;
+    const explicitProbeProfile = Array.isArray(probeResults) && probeResults.length ? probeResults[0]?.profile : "";
+    const explicitProbeMatchesProfile = !explicitProbeProfile || explicitProbeProfile === profile.id;
+    const source = Array.isArray(probeResults) && probeResults.length && explicitProbeMatchesProfile
+      ? probeResults
+      : (savedProbeMatchesProfile ? state.lastProbe : []);
+    const results = (Array.isArray(source) ? source : [])
+      .map(sanitizeProbeResult)
+      .filter(Boolean);
+    const byService = serviceResultMap(results);
+    const checkedAt = results.length
+      ? (results.find((r) => r.checkedAt)?.checkedAt || state.lastProbeAt || "")
+      : "";
+    const hosts = emptyHostRollups(isWebMode());
+    const services = [];
+    const failures = [];
+    const risks = [];
+    const counts = {
+      total: SERVICE_KEYS.length,
+      checked: results.length,
+      reachable: 0,
+      failed: 0,
+      blockers: 0,
+      degraded: 0,
+      optional: 0,
+      unknown: 0,
+    };
+
+    if (!results.length) {
+      risks.push(risk(
+        "unknown",
+        "",
+        "No recent travel check",
+        "Run /travel check before relying on this app away from home.",
+        "/travel check",
+      ));
+    }
+
+    for (const service of SERVICE_KEYS) {
+      const meta = META[service] || {};
+      const result = byService.get(service);
+      const hostKey = meta.host || "ubuntu-ai";
+      const host = hosts[hostKey] || (hosts[hostKey] = {
+        id: hostKey,
+        label: HOSTS[hostKey]?.label || hostKey,
+        status: "unknown",
+        total: 0,
+        ok: 0,
+        failed: 0,
+        blockers: 0,
+        degraded: 0,
+        optional: 0,
+        unknown: 0,
+        services: [],
+      });
+      const severity = meta.travelSeverity || "degraded";
+      const item = {
+        service,
+        label: meta.label || service,
+        host: hostKey,
+        hostLabel: HOSTS[hostKey]?.label || hostKey,
+        role: meta.role || "optional",
+        severity,
+        url: result?.url || resolveWithState(state, service),
+        ok: !!result?.ok,
+        status: result ? (result.ok ? "ready" : severity) : "unknown",
+        httpStatus: result?.status || 0,
+        ms: result?.ms || 0,
+        error: result?.error || "",
+        recoveryHint: meta.recoveryHint || "",
+        diagnosticCommand: meta.diagnosticCommand || "",
+        attempts: result?.attempts || [],
+      };
+      services.push(item);
+      host.total += 1;
+      host.services.push(item);
+      if (!result) {
+        counts.unknown += 1;
+        host.unknown += 1;
+        continue;
+      }
+      if (result.ok) {
+        counts.reachable += 1;
+        host.ok += 1;
+      } else {
+        counts.failed += 1;
+        host.failed += 1;
+        counts[severityCountsKey(severity)] += 1;
+        host[severityCountsKey(severity)] += 1;
+        failures.push(item);
+      }
+    }
+
+    for (const host of Object.values(hosts)) {
+      host.status = hostStatusFromCounts(host);
+    }
+
+    const ubuntu = hosts["ubuntu-ai"];
+    const ubuntuChecked = (ubuntu?.services || []).filter((item) => item.status !== "unknown");
+    const allUbuntuDown = ubuntuChecked.length > 0 && ubuntuChecked.length === ubuntu.services.length && ubuntuChecked.every((item) => !item.ok);
+    if (allUbuntuDown) {
+      risks.push(risk(
+        "blocker",
+        "",
+        "Ubuntu AI box unreachable",
+        "Every Ubuntu-owned service failed. Check power, Tailscale, SSH, and the machine itself before traveling.",
+        "ssh hav-ubuntu 'tailscale status && systemctl --no-pager --failed'",
+      ));
+      if (ubuntu) {
+        ubuntu.status = "blocked";
+        ubuntu.blockers += 1;
+      }
+    }
+
+    const supervisor = services.find((item) => item.service === "supervisor");
+    if (supervisor && supervisor.status !== "unknown" && !supervisor.ok) {
+      risks.push(risk(
+        "degraded",
+        "supervisor",
+        "Remote stack control unavailable",
+        "Supervisor is down or unreachable. Check BIND_ADDR, STACK_TOKEN, and hav-stack-supervisor before relying on stack controls.",
+        supervisor.diagnosticCommand,
+      ));
+    }
+
+    const apartmentAssets = services.find((item) => item.service === "apartmentAssets");
+    if (apartmentAssets && apartmentAssets.status !== "unknown" && !apartmentAssets.ok) {
+      risks.push(risk(
+        "degraded",
+        "apartmentAssets",
+        "Apartment scan and mesh assets unavailable",
+        "The 3D scan/mesh views need the Ubuntu asset service and app/data/apartment runtime files.",
+        apartmentAssets.diagnosticCommand,
+      ));
+    }
+
+    if (profile.id === "tailscale") {
+      for (const item of services) {
+        if (!item.ok) continue;
+        const candidates = candidatesForProfile("tailscale", item.service, state);
+        if (candidates.length > 1 && item.url && candidates[0] && item.url !== candidates[0]) {
+          risks.push(risk(
+            "degraded",
+            item.service,
+            `${item.label} is using a fallback URL`,
+            `MagicDNS primary ${candidates[0]} did not win; selected ${item.url}. Keep the fallback IP handy for travel.`,
+            "",
+          ));
+        }
+      }
+    }
+
+    let status = "ready";
+    if (!results.length) status = "unknown";
+    else if (counts.blockers > 0 || allUbuntuDown) status = "blocked";
+    else if (counts.degraded > 0 || risks.some((r) => r.severity === "degraded")) status = "degraded";
+
+    return {
+      generatedAt: new Date().toISOString(),
+      checkedAt,
+      status,
+      profile,
+      counts,
+      hosts,
+      services,
+      failures,
+      risks,
+    };
+  }
+
+  function formatReadiness(readiness = buildTravelReadiness()) {
+    const r = readiness || buildTravelReadiness();
+    const lines = [
+      `travel readiness: ${String(r.status || "unknown").toUpperCase()}`,
+      `profile: ${r.profile?.label || "unknown"}`,
+      `last check: ${r.checkedAt || "not checked"}`,
+      `reachable: ${r.counts?.reachable || 0}/${r.counts?.total || 0}`,
+      `blockers: ${r.counts?.blockers || 0}  degraded: ${r.counts?.degraded || 0}  optional: ${r.counts?.optional || 0}`,
+    ];
+    for (const host of Object.values(r.hosts || {}).sort((a, b) => (HOSTS[a.id]?.order || 99) - (HOSTS[b.id]?.order || 99))) {
+      lines.push(`${host.label}: ${host.status} (${host.ok}/${host.total})`);
+    }
+    const failures = r.failures || [];
+    if (failures.length) {
+      lines.push("failures:");
+      for (const item of failures) {
+        const reason = item.error || (item.httpStatus ? `HTTP ${item.httpStatus}` : "unreachable");
+        lines.push(`- ${item.label}: ${reason}`);
+        if (item.recoveryHint) lines.push(`  ${item.recoveryHint}`);
+        if (item.diagnosticCommand) lines.push(`  ${item.diagnosticCommand}`);
+      }
+    }
+    const risks = r.risks || [];
+    if (risks.length) {
+      lines.push("risks:");
+      for (const item of risks) lines.push(`- ${item.title}: ${item.detail}`);
+    }
+    return lines.join("\n");
+  }
+
+  function recoveryCommands(readiness = buildTravelReadiness()) {
+    const commands = [
+      {
+        title: "Windows travel machine",
+        commands: [
+          "tailscale status",
+          "ping engineeredlightingserver1",
+          "ping homeassistant",
+          "ssh hav-ubuntu 'cd ~/code/home && tools/travel-readiness.sh'",
+        ],
+      },
+      {
+        title: "Ubuntu AI box",
+        commands: [
+          "tailscale status",
+          "cd ~/code/home && tools/travel-readiness.sh",
+          "sudo systemctl status home-web-gateway home-apartment-assets hav-stack-supervisor --no-pager",
+          "journalctl -u home-web-gateway -n 80 --no-pager",
+          "journalctl -u home-apartment-assets -n 80 --no-pager",
+          "journalctl -u hav-stack-supervisor -n 80 --no-pager",
+        ],
+      },
+      {
+        title: "Home Assistant",
+        commands: [
+          "curl -i http://homeassistant:8123/api/",
+          "curl -i http://homeassistant:5000/api/stats",
+        ],
+      },
+      {
+        title: "Web deploy rollback",
+        commands: [
+          "cd ~/code/home",
+          "git log --oneline -5",
+          "git reset --hard <previous_good_sha>",
+          "sudo systemctl restart home-web-gateway",
+        ],
+      },
+    ];
+    const failed = new Set((readiness.failures || []).map((item) => item.service));
+    if (failed.has("apartmentAssets")) {
+      commands.push({
+        title: "Apartment assets",
+        commands: [
+          "cd ~/code/home",
+          "tools/check-home-web-assets.sh",
+          "sudo systemctl restart home-apartment-assets",
+          "curl -i http://engineeredlightingserver1:5190/healthz",
+        ],
+      });
+    }
+    if (failed.has("supervisor")) {
+      commands.push({
+        title: "Stack supervisor",
+        commands: [
+          "grep -E '^(BIND_ADDR|STACK_TOKEN)=' /opt/home-ai-voice/.env",
+          "sudo systemctl restart hav-stack-supervisor",
+          "curl -i http://engineeredlightingserver1:8093/healthz",
+        ],
+      });
+    }
+    return commands;
+  }
+
+  function formatRecoveryCommands(readiness = buildTravelReadiness()) {
+    return recoveryCommands(readiness).map((group) => {
+      const body = (group.commands || []).map((cmd) => `  ${cmd}`).join("\n");
+      return `${group.title}\n${body}`;
+    }).join("\n\n");
+  }
+
+  function formatServiceUrls() {
+    const services = resolvedServices();
+    return SERVICE_KEYS.map((service) => `${META[service]?.label || service}: ${services[service] || ""}`).join("\n");
+  }
+
   async function probeAll() {
     const state = readState();
     const profile = getProfile(state);
     const results = [];
     const nextSelected = { ...(state.selected || {}) };
     if (!nextSelected[state.profile]) nextSelected[state.profile] = {};
+    const checkedAt = new Date().toISOString();
 
     for (const service of SERVICE_KEYS) {
       const list = candidatesForProfile(state.profile, service, state);
@@ -479,10 +943,14 @@
         ms: resolved.ms,
         error: resolved.error || "",
         attempts,
+        checkedAt,
       });
     }
 
     state.selected = nextSelected;
+    state.lastProbeAt = checkedAt;
+    state.lastProbeProfile = profile.id;
+    state.lastProbe = results.map(sanitizeProbeResult).filter(Boolean);
     const failures = results.filter((r) => !r.ok);
     if (failures.length) {
       state.errors = [
@@ -523,11 +991,18 @@
   }
 
   function debugBundle(extra = {}) {
+    const readiness = buildTravelReadiness(extra.lastProbe);
+    const state = readState();
     return {
       generatedAt: new Date().toISOString(),
       build: buildInfo(),
       profile: getProfile(),
       services: resolvedServices(),
+      selectedCandidates: state.selected || {},
+      lastProbeAt: state.lastProbeAt || "",
+      lastProbeProfile: state.lastProbeProfile || "",
+      readiness,
+      recoveryCommands: recoveryCommands(readiness),
       recentErrors: recentErrors(),
       extra,
     };
@@ -546,6 +1021,11 @@
     getAll: () => resolvedServices(),
     probeAll,
     probeUrl,
+    buildTravelReadiness,
+    formatReadiness,
+    recoveryCommands,
+    formatRecoveryCommands,
+    formatServiceUrls,
     toWsBase,
     recentErrors,
     onChange,
@@ -559,6 +1039,7 @@
     WEB_DEFAULTS: clone(WEB_DEFAULTS),
     LAN_DEFAULTS: clone(LAN_DEFAULTS),
     TAILSCALE_CANDIDATES: clone(TAILSCALE_CANDIDATES),
+    HOSTS: clone(HOSTS),
   };
   refreshGlobals();
 })();

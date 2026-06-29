@@ -25,6 +25,15 @@ const AUTH_FILE = path.resolve(
 );
 const AUTH_COOKIE = "home_web_auth";
 const PASSWORD_MIN_LENGTH = 12;
+const PACKAGE_JSON = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
+  } catch {
+    return {};
+  }
+})();
+const BUILD_VERSION = process.env.HOME_BUILD_VERSION || PACKAGE_JSON.version || "0.1.0";
+const BUILD_COMMIT = process.env.HOME_BUILD_COMMIT || process.env.GITHUB_SHA || "local";
 
 const MIME = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -124,6 +133,37 @@ const routes = [
     ws: false,
   },
 ];
+
+function routeSummary() {
+  return routes.map(({ prefix, env, target, ws }) => {
+    let host = target;
+    try {
+      const parsed = new URL(target);
+      host = `${parsed.protocol}//${parsed.host}`;
+    } catch {
+      host = target;
+    }
+    return { prefix, env, target: host, ws: !!ws };
+  });
+}
+
+function gatewayHealth() {
+  return {
+    ok: true,
+    service: "home-web-gateway",
+    version: BUILD_VERSION,
+    commit: BUILD_COMMIT,
+    host: HOST,
+    port: PORT,
+    auth: {
+      enabled: authState.enabled,
+      source: authState.source,
+    },
+    apartmentAssetsDir: APARTMENT_ASSETS_DIR,
+    routes: routeSummary(),
+    ts: new Date().toISOString(),
+  };
+}
 
 function parseCookies(header) {
   const out = {};
@@ -662,7 +702,7 @@ function serveStatic(req, res) {
   const parsed = new URL(req.url, "http://home.local");
   if (parsed.pathname === "/healthz") {
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ ok: true, service: "home-web-gateway" }));
+    res.end(JSON.stringify(gatewayHealth()));
     return;
   }
 
@@ -761,6 +801,9 @@ function proxyUpgrade(req, socket, head, route) {
 
 function checkConfig() {
   const summary = {
+    service: "home-web-gateway",
+    version: BUILD_VERSION,
+    commit: BUILD_COMMIT,
     host: HOST,
     port: PORT,
     appDir: APP_DIR,
@@ -768,7 +811,7 @@ function checkConfig() {
     authEnabled: authState.enabled,
     authSource: authState.source,
     authFile: AUTH_FILE,
-    routes: routes.map(({ prefix, env, target, ws }) => ({ prefix, env, target, ws })),
+    routes: routeSummary(),
   };
   console.log(JSON.stringify(summary, null, 2));
 }

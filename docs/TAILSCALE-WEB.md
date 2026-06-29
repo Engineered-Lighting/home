@@ -47,6 +47,11 @@ Or use the GitHub Actions manual workflow:
 That workflow runs on the Ubuntu AI box self-hosted runner and performs the same
 pull/check/restart through `tools/deploy-home-web.sh`.
 
+`tools/deploy-home-web.sh` now records the previously running commit and rolls
+back automatically if checks or the service restart fail. See
+[TRAVEL-READINESS.md](TRAVEL-READINESS.md) for rollback commands, runner safety,
+and the pre-travel freeze checklist.
+
 The gateway still binds to `127.0.0.1:5181`; Tailscale Serve is the private
 tailnet-facing listener.
 
@@ -217,3 +222,7 @@ Manual checks from a browser, then from a second Tailscale-connected device:
   bearer token.
 - Raw local service ports are not exposed by router forwarding, public DNS, or
   Tailscale Funnel.
+
+For the full travel pre-flight, run `tools/travel-readiness.sh` on the Ubuntu
+AI box, `tools/travel-readiness.ps1` on Windows, and `/travel check` in the
+Tauri app.

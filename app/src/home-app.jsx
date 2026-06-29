@@ -2426,11 +2426,14 @@ function RemoteProfileDialog({
   open,
   profile,
   probeResults,
+  readiness,
   running,
   onClose,
   onProfileChange,
   onRemoteCheck,
   onDebugBundle,
+  onCopyRecovery,
+  onCopyServiceUrls,
 }) {
   const [customValues, setCustomValues] = useState({});
   useEffect(() => {
@@ -2445,6 +2448,18 @@ function RemoteProfileDialog({
   const urls = window.HomeServices.getAll();
   const resultsByService = new Map((probeResults || []).map((r) => [r.service, r]));
   const build = window.HomeServices.buildInfo();
+  const travel = readiness?.profile?.id === active.id
+    ? readiness
+    : window.HomeServices.buildTravelReadiness(probeResults);
+  const hostEntries = Object.values(travel.hosts || {})
+    .filter((host) => host.total > 0)
+    .sort((a, b) => {
+      const order = { windows: 10, "ubuntu-ai": 20, "home-assistant": 30, "browser-gateway": 40 };
+      return (order[a.id] || 99) - (order[b.id] || 99);
+    });
+  const statusColor = travel.status === "blocked" ? "var(--hg-crit)"
+    : travel.status === "ready" ? "var(--hg-ice-bright)"
+    : travel.status === "unknown" ? "var(--hg-fg-4)" : "var(--hg-warn)";
   const saveCustom = () => {
     try {
       window.HomeServices.setCustomServices(customValues);
@@ -2507,14 +2522,14 @@ function RemoteProfileDialog({
               fontWeight: 500,
               color: "var(--hg-fg-0)",
               marginBottom: 4,
-            }}>Remote access</div>
+            }}>Remote access / Travel readiness</div>
             <div style={{
               fontFamily: "'Geist Mono', monospace",
               fontSize: 10,
               color: "var(--hg-fg-4)",
               letterSpacing: "0.08em",
             }}>
-              {active.label} - v{build.version} - {build.commit}
+              {active.label} - v{build.version} - {build.commit} - travel {travel.status}
             </div>
           </div>
           <button type="button" onClick={onClose} className="hg-focusable" style={{
@@ -2559,74 +2574,152 @@ function RemoteProfileDialog({
             cursor: running ? "default" : "pointer",
           }}>{running ? "checking" : "test all"}</button>
           <button type="button" className="hg-focusable" onClick={() => onDebugBundle?.()} style={actionBtn}>copy debug</button>
+          <button type="button" className="hg-focusable" onClick={() => onCopyRecovery?.()} style={actionBtn}>copy recovery</button>
+          <button type="button" className="hg-focusable" onClick={() => onCopyServiceUrls?.()} style={actionBtn}>copy urls</button>
         </div>
 
-        <div className="hg-scroll" style={{ overflowY: "auto", padding: "8px 20px 18px" }}>
+        <div className="hg-scroll" style={{ overflowY: "auto", padding: "12px 20px 18px" }}>
           <div style={{
+            border: `1px solid ${statusColor}`,
+            background: travel.status === "ready" ? "rgba(138,190,255,0.06)" : "rgba(255,184,77,0.05)",
+            borderRadius: 6,
+            padding: "10px 12px",
+            marginBottom: 14,
             display: "grid",
-            gridTemplateColumns: "128px minmax(260px, 1fr) 82px",
-            columnGap: 10,
-            rowGap: 1,
+            gridTemplateColumns: "minmax(120px, 1fr) minmax(120px, 1fr) minmax(120px, 1fr)",
+            gap: 10,
             fontFamily: "'Geist Mono', monospace",
             fontSize: 10,
+            color: "var(--hg-fg-3)",
           }}>
-            {services.map((service) => {
-              const result = resultsByService.get(service);
-              const ok = result?.ok;
-              const statusText = result
-                ? ok ? `${result.ms}ms` : (result.error || `HTTP ${result.status || "?"}`)
-                : "not checked";
-              return (
-                <React.Fragment key={service}>
-                  <div style={{
-                    padding: "9px 0",
-                    color: "var(--hg-fg-3)",
-                    borderBottom: "1px solid var(--hg-border-soft)",
-                  }}>{meta[service]?.label || service}</div>
-                  <div style={{
-                    padding: "7px 0",
-                    borderBottom: "1px solid var(--hg-border-soft)",
-                    minWidth: 0,
-                  }}>
-                    {active.id === "custom" ? (
-                      <input
-                        value={customValues[service] || ""}
-                        onChange={(e) => setCustomValues((cur) => ({ ...cur, [service]: e.target.value }))}
-                        style={{
-                          width: "100%",
-                          boxSizing: "border-box",
-                          background: "transparent",
-                          border: "1px solid var(--hg-border-soft)",
-                          borderRadius: 4,
-                          color: "var(--hg-fg-1)",
-                          padding: "5px 7px",
-                          fontFamily: "'Geist Mono', monospace",
-                          fontSize: 10,
-                        }}
-                      />
-                    ) : (
-                      <span style={{
-                        display: "block",
-                        color: "var(--hg-fg-1)",
+            <div><span style={{ color: statusColor, textTransform: "uppercase" }}>{travel.status}</span></div>
+            <div>{travel.counts.reachable}/{travel.counts.total} reachable</div>
+            <div>{travel.checkedAt || "not checked"}</div>
+          </div>
+
+          {hostEntries.map((host) => (
+            <div key={host.id} style={{ marginBottom: 16 }}>
+              <div style={{
+                display: "flex",
+                alignItems: "baseline",
+                justifyContent: "space-between",
+                gap: 12,
+                marginBottom: 6,
+                fontFamily: "'Geist Mono', monospace",
+                fontSize: 10,
+                letterSpacing: "0.12em",
+                textTransform: "uppercase",
+                color: "var(--hg-fg-4)",
+              }}>
+                <span>{host.label}</span>
+                <span style={{
+                  color: host.status === "blocked" ? "var(--hg-crit)"
+                    : host.status === "ready" ? "var(--hg-ice-bright)"
+                    : host.status === "unknown" ? "var(--hg-fg-5)" : "var(--hg-warn)",
+                }}>{host.status} - {host.ok}/{host.total}</span>
+              </div>
+              <div style={{
+                display: "grid",
+                gridTemplateColumns: "128px minmax(260px, 1fr) 92px",
+                columnGap: 10,
+                rowGap: 1,
+                fontFamily: "'Geist Mono', monospace",
+                fontSize: 10,
+              }}>
+                {(host.services || []).map((item) => {
+                  const service = item.service;
+                  const result = resultsByService.get(service);
+                  const ok = result?.ok || item.ok;
+                  const statusText = result
+                    ? ok ? `${result.ms}ms` : (result.error || `HTTP ${result.status || "?"}`)
+                    : (item.status === "ready" ? "ready" : "not checked");
+                  const failed = result && !ok;
+                  return (
+                    <React.Fragment key={`${host.id}-${service}`}>
+                      <div style={{
+                        padding: "9px 0",
+                        color: "var(--hg-fg-3)",
+                        borderBottom: "1px solid var(--hg-border-soft)",
+                      }}>{meta[service]?.label || item.label || service}</div>
+                      <div style={{
+                        padding: "7px 0",
+                        borderBottom: "1px solid var(--hg-border-soft)",
+                        minWidth: 0,
+                      }}>
+                        {active.id === "custom" && services.includes(service) ? (
+                          <input
+                            value={customValues[service] || ""}
+                            onChange={(e) => setCustomValues((cur) => ({ ...cur, [service]: e.target.value }))}
+                            style={{
+                              width: "100%",
+                              boxSizing: "border-box",
+                              background: "transparent",
+                              border: "1px solid var(--hg-border-soft)",
+                              borderRadius: 4,
+                              color: "var(--hg-fg-1)",
+                              padding: "5px 7px",
+                              fontFamily: "'Geist Mono', monospace",
+                              fontSize: 10,
+                            }}
+                          />
+                        ) : (
+                          <span style={{
+                            display: "block",
+                            color: "var(--hg-fg-1)",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}>{urls[service] || item.url}</span>
+                        )}
+                        {failed && (
+                          <div style={{
+                            marginTop: 5,
+                            color: "var(--hg-fg-4)",
+                            whiteSpace: "normal",
+                            lineHeight: 1.4,
+                          }}>
+                            {item.recoveryHint}
+                            {item.diagnosticCommand && (
+                              <div style={{ color: "var(--hg-fg-5)", marginTop: 3 }}>{item.diagnosticCommand}</div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      <div style={{
+                        padding: "9px 0",
+                        textAlign: "right",
+                        color: result ? (ok ? "var(--hg-ice-bright)" : "var(--hg-warn)") : "var(--hg-fg-5)",
+                        borderBottom: "1px solid var(--hg-border-soft)",
                         overflow: "hidden",
                         textOverflow: "ellipsis",
                         whiteSpace: "nowrap",
-                      }}>{urls[service]}</span>
-                    )}
-                  </div>
-                  <div style={{
-                    padding: "9px 0",
-                    textAlign: "right",
-                    color: result ? (ok ? "var(--hg-ice-bright)" : "var(--hg-warn)") : "var(--hg-fg-5)",
-                    borderBottom: "1px solid var(--hg-border-soft)",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}>{statusText}</div>
-                </React.Fragment>
-              );
-            })}
-          </div>
+                      }}>{statusText}</div>
+                    </React.Fragment>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+
+          {(travel.risks || []).length > 0 && (
+            <div style={{
+              borderTop: "1px solid var(--hg-border-soft)",
+              paddingTop: 10,
+              marginTop: 2,
+              fontFamily: "'Geist Mono', monospace",
+              fontSize: 10,
+              color: "var(--hg-fg-4)",
+              lineHeight: 1.45,
+            }}>
+              {(travel.risks || []).map((item, idx) => (
+                <div key={`${item.title}-${idx}`} style={{ marginBottom: 6 }}>
+                  <span style={{ color: item.severity === "blocker" ? "var(--hg-crit)" : "var(--hg-warn)" }}>{item.title}</span>
+                  <span> - {item.detail}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
           {active.id === "custom" && (
             <button type="button" className="hg-focusable" onClick={saveCustom} style={{
               marginTop: 14,
@@ -3129,6 +3222,7 @@ const SLASH_CMDS = [
   { cmd: "/s2s",      hint: "<url> | token <hex> | voice <name>", desc: "configure s2s bridge — url, token, or per-session voice override", category: "connection" },
   { cmd: "/profile",  hint: "status|lan|tailscale|custom", desc: "switch or inspect the active service profile", category: "connection" },
   { cmd: "/remote",   hint: "check", desc: "test every configured Home service endpoint", category: "connection" },
+  { cmd: "/travel",   hint: "check|status|recovery|bundle", desc: "check travel readiness and copy recovery/debug details", category: "connection" },
   // ── ask the agent ─────────────────────────────────────────────
   { cmd: "/ask",        hint: "<text>",     desc: "force external/general provider for this question (bypasses classifier)", category: "agent" },
   { cmd: "/local",      hint: "<text>",     desc: "force local home agent for this question (bypasses classifier)", category: "agent" },
@@ -3830,6 +3924,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   const [remotePanelOpen, setRemotePanelOpen] = useState(false);
   const [serviceProbeResults, setServiceProbeResults] = useState(null);
   const [serviceProbeRunning, setServiceProbeRunning] = useState(false);
+  const [serviceReadiness, setServiceReadiness] = useState(() => (
+    window.HomeServices ? window.HomeServices.buildTravelReadiness() : null
+  ));
   // Phase 1.5: `s2sMode` is transient session state, not persisted. The
   // VOICE pill + VoiceModeButton are retired; mic-tap is the single
   // entry point. Boots with s2sMode=false; flipped to true while a
@@ -4791,6 +4888,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     try {
       const results = await window.HomeServices.probeAll();
       setServiceProbeResults(results);
+      const readiness = window.HomeServices.buildTravelReadiness(results);
+      setServiceReadiness(readiness);
       const ok = results.filter((r) => r.ok).length;
       const bad = results.length - ok;
       if (announce) {
@@ -4827,6 +4926,69 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       addEvent({ kind: "system", text: `debug bundle:\n${text.slice(0, 1800)}`, tone: "info" });
     }
   }, [addEvent, connection, endpoint, metricsBase, s2sBase, serviceProbeResults]);
+
+  const currentTravelReadiness = useCallback(() => {
+    if (!window.HomeServices) return null;
+    return window.HomeServices.buildTravelReadiness(serviceProbeResults);
+  }, [serviceProbeResults]);
+
+  const announceTravelReadiness = useCallback((readiness) => {
+    if (!window.HomeServices || !readiness) return;
+    const tone = readiness.status === "blocked" ? "error"
+      : readiness.status === "ready" ? "ok"
+      : readiness.status === "unknown" ? "info" : "warn";
+    addEvent({ kind: "system", text: window.HomeServices.formatReadiness(readiness), tone });
+  }, [addEvent]);
+
+  const runTravelCheck = useCallback(async () => {
+    if (!window.HomeServices) return null;
+    const results = await runRemoteCheck(false);
+    const readiness = window.HomeServices.buildTravelReadiness(results);
+    setServiceReadiness(readiness);
+    announceTravelReadiness(readiness);
+    return readiness;
+  }, [announceTravelReadiness, runRemoteCheck]);
+
+  const copyTravelBundle = useCallback(async () => {
+    if (!window.HomeServices) return;
+    const bundle = window.HomeServices.debugBundle({
+      connection,
+      endpoint,
+      metricsBase,
+      s2sBase,
+      lastProbe: serviceProbeResults,
+    });
+    const text = JSON.stringify(bundle, null, 2);
+    try {
+      await navigator.clipboard?.writeText?.(text);
+      addEvent({ kind: "system", text: "travel debug bundle copied to clipboard", tone: "ok" });
+    } catch (e) {
+      addEvent({ kind: "system", text: `travel debug bundle:\n${text.slice(0, 1800)}`, tone: "info" });
+    }
+  }, [addEvent, connection, endpoint, metricsBase, s2sBase, serviceProbeResults]);
+
+  const copyRecoveryCommands = useCallback(async () => {
+    if (!window.HomeServices) return;
+    const readiness = currentTravelReadiness();
+    const text = window.HomeServices.formatRecoveryCommands(readiness);
+    try {
+      await navigator.clipboard?.writeText?.(text);
+      addEvent({ kind: "system", text: "travel recovery commands copied", tone: "ok" });
+    } catch (e) {
+      addEvent({ kind: "system", text: `travel recovery:\n${text.slice(0, 1800)}`, tone: "info" });
+    }
+  }, [addEvent, currentTravelReadiness]);
+
+  const copyServiceUrls = useCallback(async () => {
+    if (!window.HomeServices) return;
+    const text = window.HomeServices.formatServiceUrls();
+    try {
+      await navigator.clipboard?.writeText?.(text);
+      addEvent({ kind: "system", text: "service URL table copied", tone: "ok" });
+    } catch (e) {
+      addEvent({ kind: "system", text: `service URLs:\n${text}`, tone: "info" });
+    }
+  }, [addEvent]);
 
   /* Auto-reconnect on launch if we have stored credentials.
    * Sim Mode: skip — sim scenarios provide their own connection state
@@ -5659,6 +5821,33 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         } else {
           addEvent({ kind: "system", text: "usage: /remote check", tone: "info" });
         }
+        return true;
+      }
+      case "travel": {
+        const sub = arg.trim().toLowerCase();
+        if (!window.HomeServices) {
+          addEvent({ kind: "system", text: "travel readiness is not available in this runtime", tone: "warn" });
+          return true;
+        }
+        if (!sub || sub === "check") {
+          runTravelCheck();
+          return true;
+        }
+        if (sub === "status") {
+          const readiness = currentTravelReadiness();
+          setServiceReadiness(readiness);
+          announceTravelReadiness(readiness);
+          return true;
+        }
+        if (sub === "recovery") {
+          copyRecoveryCommands();
+          return true;
+        }
+        if (sub === "bundle" || sub === "debug") {
+          copyTravelBundle();
+          return true;
+        }
+        addEvent({ kind: "system", text: "usage: /travel check|status|recovery|bundle", tone: "info" });
         return true;
       }
       case "s2s": {
@@ -6927,7 +7116,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     // CALL time, by which point it's defined. Its identity is stable
     // (its own deps are [addEvent], itself stable), so omitting it
     // doesn't cause a memoization correctness issue.
-  }, [addEvent, applyServiceProfile, connectTo, copyDebugBundle, debugMode, endpoint, events, kokoroVoice, metricsBase, playScript, runRemoteCheck, s2sBase, s2sToken, s2sVoice, sendToHA, spatialLayout, stopStreaming, syncServiceStateFromResolver, token]);
+  }, [addEvent, announceTravelReadiness, applyServiceProfile, connectTo, copyDebugBundle, copyRecoveryCommands, copyTravelBundle, currentTravelReadiness, debugMode, endpoint, events, kokoroVoice, metricsBase, playScript, runRemoteCheck, runTravelCheck, s2sBase, s2sToken, s2sVoice, sendToHA, spatialLayout, stopStreaming, syncServiceStateFromResolver, token]);
 
   /* ── External Reasoning dispatch (see home-external.jsx) ─────────────
    *
@@ -8886,11 +9075,14 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         open={remotePanelOpen}
         profile={serviceProfile}
         probeResults={serviceProbeResults}
+        readiness={serviceReadiness}
         running={serviceProbeRunning}
         onClose={() => setRemotePanelOpen(false)}
         onProfileChange={applyServiceProfile}
         onRemoteCheck={() => runRemoteCheck(true)}
         onDebugBundle={copyDebugBundle}
+        onCopyRecovery={copyRecoveryCommands}
+        onCopyServiceUrls={copyServiceUrls}
       />
       {/* Addendum 14 / Slice 3 — people overlay. Opens from the header
           button; closes via Escape or its own close button. NOT inside

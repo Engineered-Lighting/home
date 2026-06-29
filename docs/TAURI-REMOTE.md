@@ -33,11 +33,16 @@ Useful commands:
 /profile custom
 /remote check
 /debug bundle
+/travel check
+/travel recovery
 ```
 
 `/remote check` probes every service and stores the first healthy Tailscale
 candidate for the active profile. `/debug bundle` copies profile, version,
 service URLs, probe results, and recent connection errors for remote debugging.
+`/travel check` adds the travel-readiness rollup and recovery hints. See
+[TRAVEL-READINESS.md](TRAVEL-READINESS.md) for the full pre-flight and recovery
+runbook.
 
 ## Tailscale service defaults
 

@@ -17,6 +17,52 @@ const types = {
   ".las": "application/octet-stream",
 };
 
+const assetGroups = [
+  { key: "points", required: true, files: ["points.ply"] },
+  { key: "scan", required: true, files: ["apartment.spz", "apartment.ply"] },
+  { key: "mesh", required: true, files: ["mesh.glb", "collision.glb"] },
+  { key: "manifest", required: true, files: ["manifest.json"] },
+  { key: "frame", required: true, files: ["frame.json"] },
+  { key: "floor", required: true, files: ["floor.json"] },
+  { key: "seedModel", required: true, files: ["seed-model.json"] },
+];
+
+async function fileInfo(file) {
+  try {
+    const stat = await fs.stat(path.join(root, file));
+    return {
+      file,
+      present: stat.isFile(),
+      size: stat.isFile() ? stat.size : 0,
+    };
+  } catch {
+    return { file, present: false, size: 0 };
+  }
+}
+
+async function assetHealth() {
+  const groups = {};
+  let assetsReady = true;
+  for (const group of assetGroups) {
+    const files = await Promise.all(group.files.map(fileInfo));
+    const present = files.some((item) => item.present);
+    groups[group.key] = {
+      required: group.required,
+      present,
+      files,
+    };
+    if (group.required && !present) assetsReady = false;
+  }
+  return {
+    ok: true,
+    service: "home-apartment-assets",
+    root,
+    assetsReady,
+    assets: groups,
+    ts: new Date().toISOString(),
+  };
+}
+
 function sendHeaders(res, status, headers = {}) {
   res.writeHead(status, {
     "Access-Control-Allow-Origin": allowOrigin,
@@ -49,12 +95,7 @@ const server = http.createServer(async (req, res) => {
 
   const pathname = (req.url || "/").split("?")[0] || "/";
   if (pathname === "/healthz") {
-    const body = JSON.stringify({
-      ok: true,
-      service: "home-apartment-assets",
-      root,
-      ts: new Date().toISOString(),
-    });
+    const body = JSON.stringify(await assetHealth());
     sendHeaders(res, 200, {
       "Content-Type": "application/json; charset=utf-8",
       "Content-Length": Buffer.byteLength(body),

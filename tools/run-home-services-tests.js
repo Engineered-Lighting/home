@@ -145,6 +145,65 @@ async function main() {
   assert("probeAll selects the first healthy Tailscale fallback", probe.window.HomeServices.get("metrics") === "http://engineeredlightingserver1.taild52a15.ts.net:8092", metrics);
   assert("probeAll persisted selected URL into runtime globals", probe.window.HG_DEFAULT_METRICS_BASE === "http://engineeredlightingserver1.taild52a15.ts.net:8092");
 
+  process.stdout.write("\nhome_services_travel_readiness_test\n");
+  const healthy = loadModule();
+  healthy.window.HomeServices.setProfile("tailscale");
+  const healthyResults = await healthy.window.HomeServices.probeAll();
+  const healthyReadiness = healthy.window.HomeServices.buildTravelReadiness(healthyResults);
+  assert("all healthy services are travel ready", healthyReadiness.status === "ready", healthyReadiness);
+
+  const noProbe = loadModule();
+  noProbe.window.HomeServices.setProfile("tailscale");
+  const noProbeReadiness = noProbe.window.HomeServices.buildTravelReadiness();
+  assert("no probe reports unknown travel readiness", noProbeReadiness.status === "unknown", noProbeReadiness);
+  assert("no probe includes actionable risk", noProbeReadiness.risks.some((r) => /No recent travel check/.test(r.title)), noProbeReadiness.risks);
+
+  const supervisorDown = loadModule({
+    fetch: async (url) => {
+      if (String(url).includes(":8093/")) return { ok: false, status: 0, json: async () => ({}), text: async () => "" };
+      return { ok: true, status: 200, json: async () => ({ ok: true }), text: async () => "ok" };
+    },
+  });
+  supervisorDown.window.HomeServices.setProfile("tailscale");
+  const supervisorReadiness = supervisorDown.window.HomeServices.buildTravelReadiness(await supervisorDown.window.HomeServices.probeAll());
+  assert("supervisor-only failure is degraded, not blocked", supervisorReadiness.status === "degraded", supervisorReadiness);
+  assert("supervisor failure adds stack-control risk", supervisorReadiness.risks.some((r) => r.service === "supervisor"), supervisorReadiness.risks);
+
+  const haDown = loadModule({
+    fetch: async (url) => {
+      if (String(url).includes(":8123/")) return { ok: false, status: 0, json: async () => ({}), text: async () => "" };
+      return { ok: true, status: 200, json: async () => ({ ok: true }), text: async () => "ok" };
+    },
+  });
+  haDown.window.HomeServices.setProfile("tailscale");
+  const haReadiness = haDown.window.HomeServices.buildTravelReadiness(await haDown.window.HomeServices.probeAll());
+  assert("HA failure blocks travel readiness", haReadiness.status === "blocked", haReadiness);
+
+  const ubuntuDown = loadModule({
+    fetch: async (url) => {
+      const s = String(url);
+      if (s.includes("engineeredlightingserver1") || s.includes("100.87.94.18")) {
+        return { ok: false, status: 0, json: async () => ({}), text: async () => "" };
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true }), text: async () => "ok" };
+    },
+  });
+  ubuntuDown.window.HomeServices.setProfile("tailscale");
+  const ubuntuReadiness = ubuntuDown.window.HomeServices.buildTravelReadiness(await ubuntuDown.window.HomeServices.probeAll());
+  assert("all Ubuntu services down blocks travel readiness", ubuntuReadiness.status === "blocked", ubuntuReadiness);
+  assert("all Ubuntu services down adds machine-level risk", ubuntuReadiness.risks.some((r) => /Ubuntu AI box/.test(r.title)), ubuntuReadiness.risks);
+
+  const assetsDown = loadModule({
+    fetch: async (url) => {
+      if (String(url).includes(":5190/")) return { ok: false, status: 404, json: async () => ({}), text: async () => "" };
+      return { ok: true, status: 200, json: async () => ({ ok: true }), text: async () => "ok" };
+    },
+  });
+  assetsDown.window.HomeServices.setProfile("tailscale");
+  const assetsReadiness = assetsDown.window.HomeServices.buildTravelReadiness(await assetsDown.window.HomeServices.probeAll());
+  assert("Apartment assets failure is degraded", assetsReadiness.status === "degraded", assetsReadiness);
+  assert("Apartment assets failure adds asset risk", assetsReadiness.risks.some((r) => r.service === "apartmentAssets"), assetsReadiness.risks);
+
   process.stdout.write(`\n${passes} passed, ${fails} failed\n`);
   if (fails) {
     process.stdout.write(JSON.stringify(failures, null, 2) + "\n");

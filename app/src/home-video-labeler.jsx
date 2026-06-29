@@ -3195,12 +3195,16 @@ function HomeVideoLabelerOverlay({ open, onClose, sim, spatialMode = false }) {
     return matches.concat(unknown);
   })();
 
+  const mobile = !spatialMode && typeof window !== "undefined"
+    && Math.round(window.visualViewport?.width || window.innerWidth || 1024) < 700;
+
   const tabBtn = (id) => (
     <button
       key={id}
       onClick={() => setTab(id)}
       style={{
-        background: "transparent", border: "none", padding: "6px 12px",
+        background: "transparent", border: "none", padding: mobile ? "9px 11px" : "6px 12px",
+        minHeight: mobile ? 40 : "auto",
         fontFamily: VL_FONT_MONO, fontSize: 11, letterSpacing: "0.16em",
         textTransform: "lowercase", cursor: "pointer",
         color: tab === id ? "var(--hg-fg-0)" : "var(--hg-fg-3)",
@@ -3240,12 +3244,21 @@ function HomeVideoLabelerOverlay({ open, onClose, sim, spatialMode = false }) {
       {/* Header */}
       <div style={{
         display: "flex", alignItems: "center", gap: 12,
-        padding: spatialMode ? "12px 18px 11px" : "16px 24px 14px",
+        flexWrap: mobile ? "wrap" : "nowrap",
+        padding: mobile
+          ? "calc(10px + env(safe-area-inset-top, 0px)) 12px 10px"
+          : spatialMode ? "12px 18px 11px" : "16px 24px 14px",
         borderBottom: "1px solid var(--hg-border-soft)",
       }}>
-        <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.05 }}>
+        <div style={{
+          display: "flex",
+          flexDirection: "column",
+          lineHeight: 1.05,
+          minWidth: mobile ? 118 : "auto",
+          flex: mobile ? "1 1 118px" : "0 0 auto",
+        }}>
           <span style={{
-            fontFamily: VL_FONT_SANS, fontSize: spatialMode ? 15 : 17, fontWeight: 500,
+            fontFamily: VL_FONT_SANS, fontSize: mobile ? 18 : spatialMode ? 15 : 17, fontWeight: 500,
             color: "var(--hg-fg-0)", letterSpacing: "-0.02em",
           }}>video labeler</span>
           <span style={{
@@ -3257,18 +3270,31 @@ function HomeVideoLabelerOverlay({ open, onClose, sim, spatialMode = false }) {
           <span style={{
             fontFamily: VL_FONT_MONO, fontSize: 9, letterSpacing: "0.12em",
             color: "var(--hg-warn)", border: "1px solid var(--hg-border-soft)",
-            padding: "3px 8px", marginLeft: 6,
+            padding: "3px 8px", marginLeft: mobile ? 0 : 6,
           }}>sim</span>
         )}
-        <span style={{ display: "inline-flex", marginLeft: 14 }}>
+        <span style={{
+          display: "inline-flex",
+          marginLeft: mobile ? 0 : 14,
+          flex: mobile ? "1 1 auto" : "0 0 auto",
+          justifyContent: mobile ? "flex-end" : "flex-start",
+        }}>
           {tabBtn("label")}
           {tabBtn("jobs")}
         </span>
-        <span style={{ marginLeft: "auto", display: "inline-flex", gap: 8, alignItems: "center" }}>
+        <span style={{
+          marginLeft: mobile ? 0 : "auto",
+          display: "inline-flex",
+          gap: 8,
+          alignItems: "center",
+          justifyContent: "flex-end",
+          flexWrap: "wrap",
+          flex: mobile ? "1 1 100%" : "0 0 auto",
+        }}>
           <button onClick={refresh} title="Refresh" className="hg-focusable"
-            style={{ ...VL_BTN, fontSize: 10, color: "var(--hg-fg-3)", padding: "4px 9px" }}>refresh</button>
+            style={{ ...VL_BTN, fontSize: 10, color: "var(--hg-fg-3)", padding: mobile ? "8px 10px" : "4px 9px", minHeight: mobile ? 40 : "auto" }}>refresh</button>
           <button onClick={onClose} aria-label="Close" className="hg-focusable"
-            style={VL_BTN}>close · esc</button>
+            style={{ ...VL_BTN, padding: mobile ? "8px 10px" : VL_BTN.padding, minHeight: mobile ? 40 : "auto" }}>close · esc</button>
         </span>
       </div>
 
@@ -3278,6 +3304,8 @@ function HomeVideoLabelerOverlay({ open, onClose, sim, spatialMode = false }) {
         <div style={{
           flex: 1, display: "flex", flexDirection: "column",
           alignItems: "center", justifyContent: "center", gap: 10,
+          padding: mobile ? "20px 24px" : 0,
+          textAlign: "center",
         }}>
           <span style={{
             fontFamily: VL_FONT_SANS, fontSize: 13, color: "var(--hg-fg-2)",
@@ -3285,6 +3313,8 @@ function HomeVideoLabelerOverlay({ open, onClose, sim, spatialMode = false }) {
           <span style={{
             fontFamily: VL_FONT_MONO, fontSize: 10, letterSpacing: "0.1em",
             color: "var(--hg-fg-4)",
+            maxWidth: mobile ? "calc(100vw - 48px)" : "none",
+            overflowWrap: "anywhere",
           }}>media streams bypass the sim guard — exit with /simulation off to review footage</span>
         </div>
       ) : tab === "jobs" ? (

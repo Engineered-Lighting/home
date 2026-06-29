@@ -214,6 +214,34 @@ npm run test:home2
 npm run build:home2
 ```
 
+For phone-sized browser changes, also run the mobile screenshot matrix before
+deploying:
+
+```powershell
+npm run web:mobile-audit:matrix
+```
+
+For actual screenshots, run against either the local dev server or the private
+Tailscale Serve URL. The audit uses Playwright when installed and otherwise
+falls back to installed Chrome through the Chrome debugging protocol:
+
+```powershell
+npm run web:mobile-audit -- --url https://<your-tailnet-serve-url>/
+```
+
+Optional Playwright setup:
+
+```powershell
+npm install --save-dev playwright
+npx playwright install chromium
+```
+
+The audit captures phone, large-phone, and narrow-tablet mobile viewports for
+the first-run path, mobile header actions, slash-command surfaces,
+travel/profile diagnostics, cameras, drawers, and Apartment `cloud`, `photo`,
+`mesh`, and fly-to-camera views. The generated screenshots and report stay
+under `tools/reports/`, which is ignored by git.
+
 Manual checks from a browser, then from a second Tailscale-connected device:
 
 - The app loads at the Tailscale Serve URL.

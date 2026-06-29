@@ -47,14 +47,52 @@ function applyAsrCorrection(text) {
   return text.replace(ASR_RE, (m) => ASR_ALIASES[m.toLowerCase()] || m);
 }
 
+function readViewportProfile() {
+  if (typeof window === "undefined") {
+    return { width: 1024, height: 768, mobile: false, phone: false };
+  }
+  const vv = window.visualViewport;
+  const width = Math.round(vv?.width || window.innerWidth || 1024);
+  const height = Math.round(vv?.height || window.innerHeight || 768);
+  return {
+    width,
+    height,
+    mobile: width < 700,
+    phone: width < 480,
+  };
+}
+
+function useViewportProfile() {
+  const [viewport, setViewport] = useState(readViewportProfile);
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    let raf = 0;
+    const update = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => setViewport(readViewportProfile()));
+    };
+    window.addEventListener("resize", update);
+    window.visualViewport?.addEventListener("resize", update);
+    window.visualViewport?.addEventListener("scroll", update);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", update);
+      window.visualViewport?.removeEventListener("resize", update);
+      window.visualViewport?.removeEventListener("scroll", update);
+    };
+  }, []);
+  return viewport;
+}
+
 /* ── Header ──────────────────────────────────────────────────────────── */
 function HomeHeader({
   theme, onToggleTheme, voice, connection, sidecarOnline, bridgeOnline,
   bridgeHealth, visionSidecarOnline, visionHealth, frigateMetrics, cameraLabels,
   sim, muteState, onUnmuteClick, onOpenPeople, onOpenIntelligence,
   onOpenVideoLabeler, onOpenSimulationControls, peopleButtonRef, aiStackState, metrics,
-  serviceProfile, onOpenRemoteProfile,
+  serviceProfile, onOpenRemoteProfile, mobile = false,
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
   const isLive = voice.state !== "inactive" && voice.state !== "no-mic";
   // Phase B F0-08: surface sidecar/bridge offline as a warning pill.
   // sidecarOnline = false means SSE chat-tee is broken → assistant
@@ -99,31 +137,65 @@ function HomeHeader({
   const unhoverAtlas = (e) => {
     e.currentTarget.style.color = atlasIconColor;
   };
+  const chipMax = mobile ? "min(210px, calc(100vw - 148px))" : "none";
+  const mobileMenuItem = {
+    all: "unset",
+    minHeight: 42,
+    padding: "0 12px",
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    color: "var(--hg-fg-1)",
+    borderBottom: "1px solid var(--hg-border-soft)",
+    cursor: "pointer",
+    fontFamily: "'Geist Mono', monospace",
+    fontSize: 10.5,
+    letterSpacing: "0.09em",
+    textTransform: "uppercase",
+  };
+  const mobileMenuAction = (fn) => {
+    setMenuOpen(false);
+    fn?.();
+  };
   return (
     <div
       data-tauri-drag-region
       style={{
-        display: "flex", alignItems: "baseline", gap: 12,
-        padding: "16px 20px 14px",
+        display: "flex", alignItems: mobile ? "center" : "baseline", gap: mobile ? 8 : 12,
+        padding: mobile
+          ? "calc(10px + env(safe-area-inset-top, 0px)) 12px 9px"
+          : "16px 20px 14px",
         borderBottom: "1px solid var(--hg-border-soft)",
         background: "var(--hg-bg-0)",
         fontFamily: "'Geist Mono', ui-monospace, monospace",
         userSelect: "none",
+        flexWrap: mobile ? "wrap" : "nowrap",
+        minWidth: 0,
       }}
     >
-      <div data-tauri-drag-region style={{ display: "flex", flexDirection: "column", lineHeight: 1.05, pointerEvents: "none" }}>
+      <div data-tauri-drag-region style={{ display: "flex", flexDirection: "column", lineHeight: 1.05, pointerEvents: "none", minWidth: mobile ? 82 : "auto" }}>
         <span style={{
           fontFamily: "'Geist', system-ui, sans-serif",
-          fontSize: 17, fontWeight: 500, color: "var(--hg-fg-0)",
+          fontSize: mobile ? 16 : 17, fontWeight: 500, color: "var(--hg-fg-0)",
           letterSpacing: "-0.02em",
         }}>home</span>
-        <span style={{
+        {!mobile && <span style={{
           fontFamily: "'Geist Mono', monospace",
           fontSize: 8.5, letterSpacing: "0.24em",
           fontWeight: 500, color: "var(--hg-fg-4)", marginTop: 3,
-        }}>engineered lighting</span>
+        }}>engineered lighting</span>}
       </div>
-      <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 10, fontSize: 11.5 }}>
+      <span style={{
+        marginLeft: "auto",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "flex-end",
+        gap: mobile ? 7 : 10,
+        fontSize: 11.5,
+        minWidth: 0,
+        flex: mobile ? "1 1 calc(100% - 96px)" : "0 1 auto",
+        flexWrap: mobile ? "wrap" : "nowrap",
+      }}>
         {/* Phase B F0-08: backend liveness warning pill. Only renders
             when HA itself is online but a downstream service (sidecar
             chat-tee OR bridge for voice) is unreachable. */}
@@ -138,6 +210,10 @@ function HomeHeader({
             fontSize: 9,
             letterSpacing: "0.12em",
             textTransform: "uppercase",
+            maxWidth: chipMax,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
           }}>
             <span style={{
               width: 6, height: 6, borderRadius: 999,
@@ -192,6 +268,10 @@ function HomeHeader({
               letterSpacing: "0.12em",
               textTransform: "uppercase",
               cursor: "help",
+              maxWidth: chipMax,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
             }}>
               <span style={{
                 width: 6, height: 6, borderRadius: 999,
@@ -219,6 +299,10 @@ function HomeHeader({
               letterSpacing: "0.12em",
               textTransform: "uppercase",
               cursor: "pointer",
+              maxWidth: chipMax,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
             }}
           >
             <span style={{
@@ -248,6 +332,7 @@ function HomeHeader({
               letterSpacing: "0.12em",
               textTransform: "uppercase",
               cursor: "pointer",
+              minHeight: mobile ? 34 : "auto",
             }}
           >
             <span style={{
@@ -278,6 +363,10 @@ function HomeHeader({
             fontSize: 9,
             letterSpacing: "0.12em",
             textTransform: "uppercase",
+            maxWidth: chipMax,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
           }}>
             <span style={{
               width: 6, height: 6, borderRadius: 999,
@@ -307,7 +396,53 @@ function HomeHeader({
             }}>{statusText}</span>
           )}
         </span>
-        {onOpenPeople && (
+        {mobile && (
+          <span style={{ position: "relative", display: "inline-flex" }}>
+            <button
+              type="button"
+              aria-label="Open mobile actions"
+              className="hg-focusable hg-mobile-touch"
+              onClick={() => setMenuOpen((open) => !open)}
+              style={{
+                ...iconBtn,
+                width: 34,
+                height: 34,
+                border: "1px solid var(--hg-border)",
+                borderRadius: 6,
+                background: "rgba(255,255,255,0.025)",
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M3 4.5h10M3 8h10M3 11.5h10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              </svg>
+            </button>
+            {menuOpen && (
+              <div
+                role="menu"
+                style={{
+                  position: "absolute",
+                  top: "calc(100% + 7px)",
+                  right: 0,
+                  zIndex: 80,
+                  width: "min(230px, calc(100vw - 24px))",
+                  maxHeight: "min(360px, calc(100dvh - 96px))",
+                  overflowY: "auto",
+                  background: "var(--hg-bg-1)",
+                  border: "1px solid var(--hg-border)",
+                  borderRadius: 7,
+                  boxShadow: "0 18px 52px rgba(0,0,0,0.48)",
+                }}
+              >
+                {onOpenPeople && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenPeople)}>people</button>}
+                {onOpenIntelligence && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenIntelligence)}>intelligence</button>}
+                {onOpenVideoLabeler && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenVideoLabeler)}>video labeler</button>}
+                {onToggleTheme && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onToggleTheme)}>{theme === "dark" ? "light mode" : "dark mode"}</button>}
+                {sim?.active && onOpenSimulationControls && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenSimulationControls)}>simulation</button>}
+              </div>
+            )}
+          </span>
+        )}
+        {!mobile && onOpenPeople && (
           <button
             ref={peopleButtonRef}
             aria-label="Open people — relationships and identities"
@@ -326,7 +461,7 @@ function HomeHeader({
             </svg>
           </button>
         )}
-        {onOpenIntelligence && (
+        {!mobile && onOpenIntelligence && (
           <button
             aria-label="Open intelligence atlas"
             title="intelligence atlas"
@@ -349,7 +484,7 @@ function HomeHeader({
               )}
           </button>
         )}
-        {onOpenVideoLabeler && (
+        {!mobile && onOpenVideoLabeler && (
           <button
             aria-label="Open video labeler"
             title="video labeler — review and label footage"
@@ -366,7 +501,7 @@ function HomeHeader({
             </svg>
           </button>
         )}
-        {onToggleTheme && (
+        {!mobile && onToggleTheme && (
           <button
             aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
             className="hg-focusable"
@@ -2348,11 +2483,13 @@ function ServiceProfileInline({
     background: "transparent",
     borderRadius: 4,
     padding: compact ? "5px 8px" : "6px 10px",
+    minHeight: compact ? 40 : "auto",
     cursor: "pointer",
     fontFamily: "'Geist Mono', monospace",
     fontSize: compact ? 9 : 10,
     letterSpacing: "0.08em",
     textTransform: "uppercase",
+    flex: compact ? "1 1 96px" : "0 0 auto",
   };
   return (
     <div style={{
@@ -2405,7 +2542,7 @@ function ServiceProfileInline({
           className="hg-focusable"
           onClick={() => onRemoteCheck?.()}
           disabled={running}
-          style={{ ...btnBase, marginLeft: "auto", color: running ? "var(--hg-fg-5)" : "var(--hg-fg-2)", cursor: running ? "default" : "pointer" }}
+          style={{ ...btnBase, marginLeft: compact ? 0 : "auto", color: running ? "var(--hg-fg-5)" : "var(--hg-fg-2)", cursor: running ? "default" : "pointer" }}
         >
           test
         </button>
@@ -2434,6 +2571,7 @@ function RemoteProfileDialog({
   onDebugBundle,
   onCopyRecovery,
   onCopyServiceUrls,
+  mobile = false,
 }) {
   const [customValues, setCustomValues] = useState({});
   useEffect(() => {
@@ -2473,12 +2611,13 @@ function RemoteProfileDialog({
     background: "transparent",
     color: "var(--hg-fg-2)",
     borderRadius: 4,
-    padding: "7px 10px",
+    padding: mobile ? "10px 11px" : "7px 10px",
     cursor: "pointer",
     fontFamily: "'Geist Mono', monospace",
     fontSize: 10,
     letterSpacing: "0.08em",
     textTransform: "uppercase",
+    minHeight: mobile ? 42 : "auto",
   };
   return (
     <div
@@ -2493,23 +2632,26 @@ function RemoteProfileDialog({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        padding: 18,
+        padding: mobile ? 0 : 18,
       }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose?.(); }}
     >
       <div style={{
-        width: "min(760px, 96vw)",
-        maxHeight: "min(760px, 92vh)",
+        width: mobile ? "100vw" : "min(760px, 96vw)",
+        height: mobile ? "100dvh" : "auto",
+        maxHeight: mobile ? "100dvh" : "min(760px, 92vh)",
         overflow: "hidden",
         display: "flex",
         flexDirection: "column",
         background: "var(--hg-bg-0)",
         border: "1px solid var(--hg-border)",
-        borderRadius: 7,
+        borderRadius: mobile ? 0 : 7,
         boxShadow: "0 22px 80px rgba(0,0,0,0.48)",
       }}>
         <div style={{
-          padding: "18px 20px 14px",
+          padding: mobile
+            ? "calc(14px + env(safe-area-inset-top, 0px)) 14px 12px"
+            : "18px 20px 14px",
           borderBottom: "1px solid var(--hg-border-soft)",
           display: "flex",
           alignItems: "flex-start",
@@ -2518,7 +2660,7 @@ function RemoteProfileDialog({
           <div style={{ flex: 1 }}>
             <div style={{
               fontFamily: "'Geist', system-ui, sans-serif",
-              fontSize: 19,
+              fontSize: mobile ? 17 : 19,
               fontWeight: 500,
               color: "var(--hg-fg-0)",
               marginBottom: 4,
@@ -2539,12 +2681,14 @@ function RemoteProfileDialog({
             cursor: "pointer",
             fontFamily: "'Geist Mono', monospace",
             fontSize: 18,
+            minWidth: mobile ? 44 : "auto",
+            minHeight: mobile ? 44 : "auto",
             lineHeight: 1,
           }}>x</button>
         </div>
 
         <div style={{
-          padding: "14px 20px",
+          padding: mobile ? "11px 14px" : "14px 20px",
           borderBottom: "1px solid var(--hg-border-soft)",
           display: "flex",
           gap: 8,
@@ -2562,6 +2706,7 @@ function RemoteProfileDialog({
                 borderColor: active.id === p.id ? "var(--hg-ice)" : "var(--hg-border)",
                 background: active.id === p.id ? "rgba(138,190,255,0.08)" : "transparent",
                 color: active.id === p.id ? "var(--hg-fg-0)" : "var(--hg-fg-3)",
+                flex: mobile ? "1 1 132px" : "0 0 auto",
               }}
             >
               {p.label}
@@ -2569,16 +2714,20 @@ function RemoteProfileDialog({
           ))}
           <button type="button" className="hg-focusable" onClick={() => onRemoteCheck?.()} disabled={running} style={{
             ...actionBtn,
-            marginLeft: "auto",
+            marginLeft: mobile ? 0 : "auto",
+            flex: mobile ? "1 1 126px" : "0 0 auto",
             color: running ? "var(--hg-fg-5)" : "var(--hg-fg-2)",
             cursor: running ? "default" : "pointer",
           }}>{running ? "checking" : "test all"}</button>
-          <button type="button" className="hg-focusable" onClick={() => onDebugBundle?.()} style={actionBtn}>copy debug</button>
-          <button type="button" className="hg-focusable" onClick={() => onCopyRecovery?.()} style={actionBtn}>copy recovery</button>
-          <button type="button" className="hg-focusable" onClick={() => onCopyServiceUrls?.()} style={actionBtn}>copy urls</button>
+          <button type="button" className="hg-focusable" onClick={() => onDebugBundle?.()} style={{ ...actionBtn, flex: mobile ? "1 1 126px" : "0 0 auto" }}>copy debug</button>
+          <button type="button" className="hg-focusable" onClick={() => onCopyRecovery?.()} style={{ ...actionBtn, flex: mobile ? "1 1 126px" : "0 0 auto" }}>copy recovery</button>
+          <button type="button" className="hg-focusable" onClick={() => onCopyServiceUrls?.()} style={{ ...actionBtn, flex: mobile ? "1 1 126px" : "0 0 auto" }}>copy urls</button>
         </div>
 
-        <div className="hg-scroll" style={{ overflowY: "auto", padding: "12px 20px 18px" }}>
+        <div className="hg-scroll hg-mobile-scroll" style={{
+          overflowY: "auto",
+          padding: mobile ? "12px 14px calc(20px + env(safe-area-inset-bottom, 0px))" : "12px 20px 18px",
+        }}>
           <div style={{
             border: `1px solid ${statusColor}`,
             background: travel.status === "ready" ? "rgba(138,190,255,0.06)" : "rgba(255,184,77,0.05)",
@@ -2586,7 +2735,7 @@ function RemoteProfileDialog({
             padding: "10px 12px",
             marginBottom: 14,
             display: "grid",
-            gridTemplateColumns: "minmax(120px, 1fr) minmax(120px, 1fr) minmax(120px, 1fr)",
+            gridTemplateColumns: mobile ? "1fr" : "minmax(120px, 1fr) minmax(120px, 1fr) minmax(120px, 1fr)",
             gap: 10,
             fontFamily: "'Geist Mono', monospace",
             fontSize: 10,
@@ -2620,9 +2769,9 @@ function RemoteProfileDialog({
               </div>
               <div style={{
                 display: "grid",
-                gridTemplateColumns: "128px minmax(260px, 1fr) 92px",
+                gridTemplateColumns: mobile ? "minmax(0, 1fr)" : "128px minmax(260px, 1fr) 92px",
                 columnGap: 10,
-                rowGap: 1,
+                rowGap: mobile ? 5 : 1,
                 fontFamily: "'Geist Mono', monospace",
                 fontSize: 10,
               }}>
@@ -2637,12 +2786,12 @@ function RemoteProfileDialog({
                   return (
                     <React.Fragment key={`${host.id}-${service}`}>
                       <div style={{
-                        padding: "9px 0",
+                        padding: mobile ? "10px 0 0" : "9px 0",
                         color: "var(--hg-fg-3)",
-                        borderBottom: "1px solid var(--hg-border-soft)",
+                        borderBottom: mobile ? "none" : "1px solid var(--hg-border-soft)",
                       }}>{meta[service]?.label || item.label || service}</div>
                       <div style={{
-                        padding: "7px 0",
+                        padding: mobile ? "2px 0 0" : "7px 0",
                         borderBottom: "1px solid var(--hg-border-soft)",
                         minWidth: 0,
                       }}>
@@ -2659,7 +2808,7 @@ function RemoteProfileDialog({
                               color: "var(--hg-fg-1)",
                               padding: "5px 7px",
                               fontFamily: "'Geist Mono', monospace",
-                              fontSize: 10,
+                              fontSize: mobile ? 16 : 10,
                             }}
                           />
                         ) : (
@@ -2686,8 +2835,8 @@ function RemoteProfileDialog({
                         )}
                       </div>
                       <div style={{
-                        padding: "9px 0",
-                        textAlign: "right",
+                        padding: mobile ? "0 0 10px" : "9px 0",
+                        textAlign: mobile ? "left" : "right",
                         color: result ? (ok ? "var(--hg-ice-bright)" : "var(--hg-warn)") : "var(--hg-fg-5)",
                         borderBottom: "1px solid var(--hg-border-soft)",
                         overflow: "hidden",
@@ -2941,7 +3090,8 @@ function FirstRun({
               fontFamily: "'Geist Mono', monospace",
               fontSize: compact ? 9.5 : 10.5,
               letterSpacing: "0.12em",
-              padding: "6px 9px",
+              padding: compact ? "9px 10px" : "6px 9px",
+              minHeight: compact ? 40 : "auto",
               textTransform: "uppercase",
             }}
           >
@@ -3268,7 +3418,7 @@ const SLASH_CMDS = [
   { cmd: "/help",       hint: "",           desc: "list commands grouped by category (click any entry to fill the input)", category: "meta" },
 ];
 
-function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, onStop, focusToken }) {
+function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, onStop, focusToken, mobile = false }) {
   const inputRef = useRef(null);
   const [sel, setSel] = useState(0);
   // HomeApp bumps `focusToken` to pull focus here (e.g. when the chat feed
@@ -3302,21 +3452,22 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
   };
 
   return (
-    <div style={{ position: "relative" }}>
+    <div style={{ position: "relative", flexShrink: 0 }}>
       {showMenu && (
         <div style={{
-          position: "absolute", bottom: "100%", left: spatialMode ? 10 : 12, right: spatialMode ? 10 : 12,
-          maxHeight: spatialMode ? "min(260px, 34vh)" : "min(420px, 46vh)",
+          position: "absolute", bottom: "100%", left: mobile ? 8 : spatialMode ? 10 : 12, right: mobile ? 8 : spatialMode ? 10 : 12,
+          maxHeight: mobile ? "min(320px, 44dvh)" : spatialMode ? "min(260px, 34vh)" : "min(420px, 46vh)",
           overflowY: "auto",
           background: spatialMode ? "rgba(5,7,11,0.94)" : "rgba(8,10,14,0.96)",
           border: "1px solid var(--hg-border)",
           borderRadius: spatialMode ? 7 : 8,
           marginBottom: spatialMode ? 7 : 8,
           padding: spatialMode ? "4px 0" : "6px 0",
-          fontFamily: "'Geist Mono', monospace", fontSize: spatialMode ? 11 : 12,
+          fontFamily: "'Geist Mono', monospace", fontSize: mobile ? 12.5 : spatialMode ? 11 : 12,
           boxShadow: spatialMode ? "0 14px 34px rgba(0,0,0,0.42)" : "0 18px 48px rgba(0,0,0,0.44)",
           backdropFilter: spatialMode ? "blur(14px)" : "blur(18px)",
           zIndex: 20,
+          WebkitOverflowScrolling: "touch",
         }}>
           <div style={{
             display: "flex",
@@ -3337,7 +3488,8 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
               onMouseDown={(e) => { e.preventDefault(); complete(m.cmd); }}
               style={{
                 display: "flex", alignItems: "baseline", gap: 10,
-                padding: spatialMode ? "6px 10px" : "7px 12px",
+                minHeight: mobile ? 44 : "auto",
+                padding: mobile ? "9px 11px" : spatialMode ? "6px 10px" : "7px 12px",
                 background: i === sel ? "rgba(184,216,255,0.08)" : "transparent",
                 cursor: "pointer",
               }}>
@@ -3358,10 +3510,13 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
         </div>
       )}
       <div style={{
-          padding: spatialMode ? "9px 12px 11px" : "10px 12px 12px",
+          padding: mobile
+            ? "9px 10px calc(10px + env(safe-area-inset-bottom, 0px))"
+            : spatialMode ? "9px 12px 11px" : "10px 12px 12px",
         borderTop: "1px solid var(--hg-border)",
         background: "var(--hg-bg-0)",
         display: "flex", alignItems: "center", gap: 10,
+        minHeight: mobile ? 58 : "auto",
       }}>
         <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 8 }}>
           <input
@@ -3374,7 +3529,7 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
             onKeyDown={handleKey}
             style={{
               fontFamily: isSlash ? "'Geist Mono', monospace" : "'Geist', system-ui, sans-serif",
-              fontSize: isSlash ? 13 : 14,
+              fontSize: mobile ? 16 : isSlash ? 13 : 14,
               flex: 1, background: "transparent", border: "none", outline: "none",
               color: "var(--hg-fg-0)",
               caretColor: "var(--hg-fg-0)",
@@ -3387,11 +3542,12 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
               onClick={onStop}
               style={{
                 background: "transparent", border: "1px solid var(--hg-border)",
-                padding: "3px 8px", cursor: "pointer",
+                padding: mobile ? "8px 10px" : "3px 8px", cursor: "pointer",
                 color: "var(--hg-fg-2)",
                 display: "inline-flex", alignItems: "center", gap: 6,
                 fontFamily: "'Geist Mono', ui-monospace, monospace",
-                fontSize: 9.5, letterSpacing: "0.16em", textTransform: "uppercase",
+                fontSize: mobile ? 10 : 9.5, letterSpacing: "0.16em", textTransform: "uppercase",
+                minHeight: mobile ? 40 : "auto",
               }}
               onMouseEnter={(e) => e.currentTarget.style.color = "var(--hg-fg-0)"}
               onMouseLeave={(e) => e.currentTarget.style.color = "var(--hg-fg-2)"}
@@ -3405,11 +3561,13 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
               className="hg-focusable"
               onClick={onSend}
               style={{
-                background: "transparent", border: "none", padding: 0,
+                background: "transparent", border: mobile ? "1px solid var(--hg-border)" : "none", padding: mobile ? "8px 10px" : 0,
                 color: "var(--hg-fg-2)", cursor: "pointer",
                 display: "inline-flex", alignItems: "center", gap: 4,
                 fontFamily: "'Geist Mono', ui-monospace, monospace",
-                fontSize: 9.5, letterSpacing: "0.16em", textTransform: "uppercase",
+                fontSize: mobile ? 10 : 9.5, letterSpacing: "0.16em", textTransform: "uppercase",
+                minHeight: mobile ? 40 : "auto",
+                borderRadius: mobile ? 6 : 0,
               }}
               onMouseEnter={(e) => e.currentTarget.style.color = "var(--hg-fg-0)"}
               onMouseLeave={(e) => e.currentTarget.style.color = "var(--hg-fg-2)"}
@@ -3423,13 +3581,14 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
         {(voice.state === "listening" || voice.state === "speaking") && (
           <span style={{
             fontFamily: "'Geist Mono', ui-monospace, monospace",
-            fontSize: 9.5,
+            fontSize: mobile ? 9 : 9.5,
             letterSpacing: "0.12em",
             color: "var(--hg-fg-4)",
             whiteSpace: "nowrap",
+            display: mobile ? "none" : "inline",
           }}>tap mic to end</span>
         )}
-        <MicButton state={voice.state} onClick={onMicToggle} />
+        <MicButton state={voice.state} onClick={onMicToggle} mobile={mobile} />
       </div>
     </div>
   );
@@ -3441,7 +3600,7 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
  * again to end it. Bridge default voice is Chatterbox-Gianna; swap
  * voices per-session with /voice <name>. */
 
-function MicButton({ state, onClick }) {
+function MicButton({ state, onClick, mobile = false }) {
   const isOff = state === "inactive";
   const isErr = state === "no-mic";
   const isListening = state === "listening";
@@ -3470,7 +3629,7 @@ function MicButton({ state, onClick }) {
       className="hg-focusable"
       onClick={onClick}
       style={{
-        width: 36, height: 36,
+        width: mobile ? 44 : 36, height: mobile ? 44 : 36,
         background: bg,
         border: `1px solid ${isErr ? "var(--hg-warn)" : (isListening || isSpeaking) ? "transparent" : "var(--hg-border)"}`,
         color: fg,
@@ -3867,6 +4026,8 @@ function findRecentAssistantIdx(prev, text, kind = "home", lookback = 20, window
 }
 
 function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voiceOverride, themeOverride, autoplay = true }) {
+  const viewport = useViewportProfile();
+  const mobile = viewport.mobile;
   const initialPrefs = useMemo(() => loadPrefs({
     endpoint: webDefaultBase("HG_DEFAULT_HA_BASE"),
     token: "",
@@ -3905,6 +4066,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   useEffect(() => {
     if (typeof window !== "undefined") window.__hav_voiceState = voice.state;
   }, [voice.state]);
+  useEffect(() => {
+    if (typeof window !== "undefined") window.__hav_viewport = viewport;
+  }, [viewport]);
   const hasStoredHaCredentials = !!(initialPrefs.endpoint && initialPrefs.token);
   const [connection, setConnection] = useState(
     hasStoredHaCredentials ? "reconnecting" : "disconnected"
@@ -4004,6 +4168,31 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   // (rather than always mutating the last appended event, which
   // breaks if anything else appends mid-stream).
   const currentExternalEventIdRef = useRef(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const api = {
+      closeOverlays: () => {
+        setRemotePanelOpen(false);
+        setPeopleOpen(false);
+        setIntelligenceOpen(false);
+        setExplainConvId(null);
+        setWorldStateDrawerOpen(false);
+        setLightsOpen(false);
+        setSpatialDrawerOpen(false);
+        setApartmentOpen(false);
+        setVideoLabelerOpen(false);
+        setSimulationControlsOpen(false);
+        setLookDrawerOpen(false);
+        setExternalKeyModalOpen(false);
+        return true;
+      },
+    };
+    window.__havUiDebug = api;
+    return () => {
+      if (window.__havUiDebug === api) delete window.__havUiDebug;
+    };
+  }, []);
   // Master plan Phase 2: live network metrics (Unifi via HA WS).
   // Currently surfaces UDM Cloud Gateway + 2 USW Flex switches + count
   // of Unifi-attached device trackers in `home` state.
@@ -4917,6 +5106,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       metricsBase,
       s2sBase,
       lastProbe: serviceProbeResults,
+      viewport,
+      webMode: !!window.HG_WEB_MODE,
+      userAgent: navigator.userAgent,
     });
     const text = JSON.stringify(bundle, null, 2);
     try {
@@ -4925,7 +5117,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     } catch (e) {
       addEvent({ kind: "system", text: `debug bundle:\n${text.slice(0, 1800)}`, tone: "info" });
     }
-  }, [addEvent, connection, endpoint, metricsBase, s2sBase, serviceProbeResults]);
+  }, [addEvent, connection, endpoint, metricsBase, s2sBase, serviceProbeResults, viewport]);
 
   const currentTravelReadiness = useCallback(() => {
     if (!window.HomeServices) return null;
@@ -4957,6 +5149,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       metricsBase,
       s2sBase,
       lastProbe: serviceProbeResults,
+      viewport,
+      webMode: !!window.HG_WEB_MODE,
+      userAgent: navigator.userAgent,
     });
     const text = JSON.stringify(bundle, null, 2);
     try {
@@ -4965,7 +5160,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     } catch (e) {
       addEvent({ kind: "system", text: `travel debug bundle:\n${text.slice(0, 1800)}`, tone: "info" });
     }
-  }, [addEvent, connection, endpoint, metricsBase, s2sBase, serviceProbeResults]);
+  }, [addEvent, connection, endpoint, metricsBase, s2sBase, serviceProbeResults, viewport]);
 
   const copyRecoveryCommands = useCallback(async () => {
     if (!window.HomeServices) return;
@@ -8950,11 +9145,14 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       "--hg-row-py": density === "condensed" ? `${8}px` : `${14}px`,
       position: "relative",
       display: "flex", flexDirection: "column",
-      width: "100%", height: "100%",
+      width: "100%",
+      height: "100%",
+      minHeight: mobile ? "100dvh" : 0,
       background: spatialLayout ? "#000" : "var(--hg-bg-0)",
       color: "var(--hg-fg-0)",
       fontFamily: "'Geist', system-ui, sans-serif",
       overflow: "hidden",
+      paddingBottom: 0,
     }}>
       {isSpatialWide && window.HomeApartmentView && (
         <div data-theme="dark" style={{
@@ -9065,6 +9263,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         metrics={metrics}
         serviceProfile={serviceProfile}
         onOpenRemoteProfile={() => setRemotePanelOpen(true)}
+        mobile={mobile}
       />
       <SimulationControlsDialog
         open={simulationControlsOpen}
@@ -9083,6 +9282,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         onDebugBundle={copyDebugBundle}
         onCopyRecovery={copyRecoveryCommands}
         onCopyServiceUrls={copyServiceUrls}
+        mobile={mobile}
       />
       {/* Addendum 14 / Slice 3 — people overlay. Opens from the header
           button; closes via Escape or its own close button. NOT inside
@@ -9292,7 +9492,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
               sim.activate?.("healthy");
               addEvent({ kind: "system", text: "[sim] simulation mode activated - healthy", tone: "info" });
             }}
-            compact={isSpatialWide}
+            compact={isSpatialWide || mobile}
             serviceProfile={serviceProfile}
             onProfileChange={applyServiceProfile}
             onOpenRemotePanel={() => setRemotePanelOpen(true)}
@@ -9333,6 +9533,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         isStreaming={streamingIds.current.size > 0 || events.some(e => e.streaming)}
         onStop={stopStreaming}
         focusToken={focusToken}
+        mobile={mobile}
       />
       {/* External Reasoning provider key-entry modal. position:fixed
        * inside the component itself, so this can render anywhere. See

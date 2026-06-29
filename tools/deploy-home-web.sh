@@ -27,6 +27,7 @@ fi
 git fetch origin "${branch}"
 git pull --ff-only origin "${branch}"
 npm run web:check
+tools/check-home-web-assets.sh
 
 sudo "${systemctl_bin}" restart "${service}"
 sleep 1

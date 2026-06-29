@@ -49,6 +49,24 @@ pull/check/restart through `tools/deploy-home-web.sh`.
 The gateway still binds to `127.0.0.1:5181`; Tailscale Serve is the private
 tailnet-facing listener.
 
+### Apartment 3D assets
+
+The real Apartment `cloud`, `scan`, and `mesh` views use large files under
+`app/data/apartment`. That directory is intentionally gitignored, so a fresh
+server checkout only has the small sim fallback unless the data directory is
+copied onto the host.
+
+Required for the full web experience:
+
+- `points.ply` for the full cloud view
+- `apartment.ply` or `apartment.spz` for the scan/splat view
+- `mesh.glb` or `collision.glb` for the mesh view
+- `frame.json`, `floor.json`, `manifest.json`, and `seed-model.json`
+
+The deploy workflow runs `tools/check-home-web-assets.sh` before restarting the
+gateway so missing ignored assets fail loudly instead of leaving the UI with
+unavailable 3D modes.
+
 ## Run manually on Windows
 
 ```powershell

@@ -19,6 +19,10 @@ const HG_HA_RUN_TIMEOUT_MS = 120_000;
 function haUrlToWs(baseUrl) {
   if (!baseUrl) return "";
   let u = baseUrl.trim().replace(/\/+$/, "");
+  if (u.startsWith("/")) {
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${proto}//${window.location.host}${u}/api/websocket`;
+  }
   if (u.startsWith("https://"))      u = "wss://"  + u.slice("https://".length);
   else if (u.startsWith("http://"))  u = "ws://"   + u.slice("http://".length);
   else if (!u.startsWith("ws"))      u = "ws://"   + u;

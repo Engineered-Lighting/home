@@ -14,6 +14,22 @@
   const DRAFT_KEY = "apartment3d.modelDraft";
   const DEFAULT_TRACKER = "ws://192.168.0.100:8098";
 
+  function defaultTrackerBase() {
+    return (window.HG_WEB_MODE && window.HG_DEFAULT_TRACKER_BASE) || DEFAULT_TRACKER;
+  }
+
+  function toWsBase(base) {
+    const clean = String(base || "").replace(/\/+$/, "");
+    if (!clean) return "";
+    if (clean.startsWith("/")) {
+      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      return `${proto}//${window.location.host}${clean}`;
+    }
+    if (clean.startsWith("http://")) return "ws://" + clean.slice("http://".length);
+    if (clean.startsWith("https://")) return "wss://" + clean.slice("https://".length);
+    return clean;
+  }
+
   const EMPTY_MODEL = {
     schema_version: 1, revision: 0, exists: false,
     meta: { frame: "z_up_metric_floor0" },
@@ -21,17 +37,20 @@
   };
 
   function trackerBase() {
-    try { return localStorage.getItem(TRACKER_KEY) || DEFAULT_TRACKER; }
-    catch (e) { return DEFAULT_TRACKER; }
+    try { return localStorage.getItem(TRACKER_KEY) || defaultTrackerBase(); }
+    catch (e) { return defaultTrackerBase(); }
   }
 
   /* seed-model.json — generated device/zone inventory (55_seed_model.py).
    * Tries the data dir (asset protocol manual URL) then the bundled copy. */
   async function fetchSeed() {
-    const urls = [
-      `http://asset.localhost/${encodeURIComponent("C:/Claude/home/app/data/apartment/seed-model.json")}`,
-      "assets/apartment/seed-model.json",
-    ];
+    const urls = [];
+    if (window.HG_WEB_MODE && window.HG_DEFAULT_APARTMENT_ASSET_BASE) {
+      urls.push(`${String(window.HG_DEFAULT_APARTMENT_ASSET_BASE).replace(/\/+$/, "")}/seed-model.json`);
+    } else {
+      urls.push(`http://asset.localhost/${encodeURIComponent("C:/Claude/home/app/data/apartment/seed-model.json")}`);
+    }
+    urls.push("assets/apartment/seed-model.json");
     for (const u of urls) {
       try {
         const r = await fetch(u);
@@ -210,7 +229,7 @@
     if (sim) { onStatus && onStatus("sim-empty"); return () => {}; }
 
     let ws = null, closed = false, backoff = 1000;
-    const url = `${trackerBase()}/ws/tracks${replay ? `?replay=${replay}` : ""}`;
+    const url = `${toWsBase(trackerBase())}/ws/tracks${replay ? `?replay=${replay}` : ""}`;
     const connect = () => {
       if (closed) return;
       try { ws = new WebSocket(url); } catch (e) { retry(); return; }

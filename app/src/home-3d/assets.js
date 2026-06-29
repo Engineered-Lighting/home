@@ -29,6 +29,9 @@ function overrideBase() {
 
 function browserDevBase() {
     try {
+        if (window.HG_WEB_MODE && window.HG_DEFAULT_APARTMENT_ASSET_BASE) {
+            return String(window.HG_DEFAULT_APARTMENT_ASSET_BASE).replace(/\/+$/, '');
+        }
         const loc = window.location;
         const loopback = loc && (loc.hostname === '127.0.0.1' || loc.hostname === 'localhost' || loc.hostname === '::1');
         if (loopback && (loc.port === '5180' || loc.port === '5173')) return 'http://127.0.0.1:5190';
@@ -44,8 +47,10 @@ export function candidates(name, simName, { sim = false } = {}) {
         if (base) list.push(`${base.replace(/\/+$/, '')}/${name}`);
         const devBase = browserDevBase();
         if (devBase) list.push(`${devBase}/${name}`);
-        const t = tauriConvert(name);
-        if (t) list.push(t);
+        if (!window.HG_WEB_MODE) {
+            const t = tauriConvert(name);
+            if (t) list.push(t);
+        }
     }
     if (simName) list.push(`assets/apartment/${simName}`);
     return list;

@@ -34,14 +34,14 @@ function assert(name, cond, detail) {
   }
 }
 
-function loadHelpers(cameras) {
+function loadHelpers(cameras, extraWindow) {
   const start = source.indexOf("const { useState");
   const end = source.indexOf("/* A plain text segment", start);
   if (start < 0 || end < 0) throw new Error("home-look helper block not found");
   const script = source.slice(start, end)
     + "\nObject.assign(window, { LK_CAMERAS, lkParseArg, lkVisionUrl });";
   const sandbox = {
-    window: cameras ? { HG_CAMERAS: cameras } : {},
+    window: { ...(cameras ? { HG_CAMERAS: cameras } : {}), ...(extraWindow || {}) },
     React: {
       useState() {},
       useEffect() {},
@@ -85,6 +85,8 @@ function loadHelpers(cameras) {
   process.stdout.write("\nlook_vision_url_test\n");
   assert("http metrics base maps to sidecar port", api.lkVisionUrl("http://192.168.0.100:8092") === "http://192.168.0.100:8091", api.lkVisionUrl("http://192.168.0.100:8092"));
   assert("https metrics base maps to https sidecar port", api.lkVisionUrl("https://ai-box.local:8092/path") === "https://ai-box.local:8091", api.lkVisionUrl("https://ai-box.local:8092/path"));
+  const webLook = loadHelpers(null, { HG_DEFAULT_VISION_BASE: "/proxy/vision" });
+  assert("web runtime vision default wins over metrics derivation", webLook.lkVisionUrl("http://192.168.0.100:8092") === "/proxy/vision", webLook.lkVisionUrl("http://192.168.0.100:8092"));
   assert("invalid metrics base returns empty string", api.lkVisionUrl("not a url") === "", api.lkVisionUrl("not a url"));
   assert("empty metrics base returns empty string", api.lkVisionUrl("") === "", api.lkVisionUrl(""));
 

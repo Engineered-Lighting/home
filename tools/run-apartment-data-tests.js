@@ -70,6 +70,10 @@ function loadModule(opts) {
   const window = {
     __SIM_APARTMENT_MODEL_FIXTURE: opts.simModelFixture,
     __SIM_APARTMENT_TRACKS: opts.simTracks,
+    HG_WEB_MODE: !!opts.webMode,
+    HG_DEFAULT_TRACKER_BASE: opts.defaultTrackerBase,
+    HG_DEFAULT_APARTMENT_ASSET_BASE: opts.defaultApartmentAssetBase,
+    location: opts.location || { protocol: "http:", host: "localhost:5181" },
     tauriFetch: opts.tauriFetch || (opts.withTauriFetch ? async (url, init) => {
       tauriCalls.push({ url, init });
       return okJson({ schema_version: 1, revision: 9, zones: [{ id: "remote" }], devices: [] });
@@ -308,6 +312,13 @@ async function main() {
   const wsDefault = loadModule();
   wsDefault.D.openTracks({ onTracks: () => {} });
   assert("openTracks uses default tracker base when unset", wsDefault.sockets[0].url === "ws://192.168.0.100:8098/ws/tracks", wsDefault.sockets[0].url);
+  const wsWeb = loadModule({
+    webMode: true,
+    defaultTrackerBase: "/proxy/tracker",
+    location: { protocol: "https:", host: "home.tailnet.ts.net" },
+  });
+  wsWeb.D.openTracks({ onTracks: () => {} });
+  assert("openTracks maps web tracker default to same-origin wss", wsWeb.sockets[0].url === "wss://home.tailnet.ts.net/proxy/tracker/ws/tracks", wsWeb.sockets[0].url);
 
   if (fails) {
     console.log("\nFailures:");

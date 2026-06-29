@@ -32,6 +32,15 @@ const SP_VW = 1280, SP_VH = 720;                 // SVG viewBox units
 const SP_LIVING_LIGHTS = "input_boolean.living_lights_enabled";
 const SP_VERTEX_HIT = 0.022;                     // vertex grab radius, norm
 
+function spFrigateBase(model) {
+  try {
+    if (window.HG_DEFAULT_FRIGATE_BASE) {
+      return String(window.HG_DEFAULT_FRIGATE_BASE).replace(/\/+$/, "");
+    }
+  } catch (e) { /* */ }
+  return (model && model.frigate_url) || SP_FRIGATE_DEFAULT;
+}
+
 function _spClamp01(n) {
   return Math.max(0, Math.min(1, Number(n) || 0));
 }
@@ -713,7 +722,7 @@ function HomeSpatialDrawer({ open, onClose, endpoint, token, sim }) {
     (cameras.indexOf("living_room") >= 0 ? "living_room" : cameras[0]) || null;
   const camMeta = (camKey && model && model.cameras)
     ? model.cameras[camKey] : null;
-  const frigateUrl = (model && model.frigate_url) || SP_FRIGATE_DEFAULT;
+  const frigateUrl = spFrigateBase(model);
   const drawnCount = lightIds.reduce(function (acc, id) {
     return acc + (spDrawnStatus(lights[id]).key === "drawn" ? 1 : 0);
   }, 0);

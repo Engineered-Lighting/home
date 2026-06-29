@@ -56,6 +56,7 @@ app/src-tauri/icons/source.png
 
 # Generated diagnostics, probes, and local calibration artifacts
 .codex-home-dev.log
+design-audits/
 gdebug-*
 app/_bootdebug/
 gesture-review-missed-wakes/

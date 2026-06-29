@@ -44,6 +44,7 @@ const VISION_REFRESH_MS = 2 * 60 * 1000;
 
 function _haBaseFromWs(haUrl) {
   if (!haUrl) return "";
+  if (String(haUrl).startsWith("/")) return String(haUrl).replace(/\/+$/, "");
   try {
     const u = new URL(haUrl.replace(/^ws/, "http"));
     return `${u.protocol}//${u.host}`;

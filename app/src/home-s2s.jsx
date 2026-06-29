@@ -106,8 +106,14 @@
    * auth (Phase 1+ — bridge rejects unauthenticated WS when token set). */
   function bridgeWsUrl(base, token) {
     if (!base) return null;
+    const clean = String(base).replace(/\/+$/, "");
+    if (clean.startsWith("/")) {
+      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const q = token ? `?token=${encodeURIComponent(token)}` : "";
+      return `${proto}//${window.location.host}${clean}/s2s${q}`;
+    }
     let u;
-    try { u = new URL(base); } catch { return null; }
+    try { u = new URL(clean); } catch { return null; }
     let wsProto;
     if (u.protocol === "https:" || u.protocol === "wss:") wsProto = "wss:";
     else if (u.protocol === "http:" || u.protocol === "ws:") wsProto = "ws:";

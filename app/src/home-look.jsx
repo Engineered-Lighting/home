@@ -76,6 +76,11 @@ function lkParseArg(arg) {
 /* metricsBase (…:8092 on the AI box) → vision-sidecar base (…:8091). */
 function lkVisionUrl(metricsBase) {
   try {
+    if (window.HG_DEFAULT_VISION_BASE) {
+      return String(window.HG_DEFAULT_VISION_BASE).replace(/\/+$/, "");
+    }
+  } catch (_) {}
+  try {
     if (metricsBase) {
       const u = new URL(metricsBase);
       return u.protocol + "//" + u.hostname + ":8091";

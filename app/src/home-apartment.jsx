@@ -16,6 +16,22 @@ const { useState, useEffect, useRef, useCallback } = React;
 const APT_FONT_MONO = '"Geist Mono", "JetBrains Mono", monospace';
 const APT_FONT_SANS = '"Geist", "Inter", sans-serif';
 
+function aptServiceBase(storageKey, runtimeKey, fallback) {
+  try {
+    if (window.HG_WEB_MODE && window[runtimeKey]) {
+      return String(window[runtimeKey]).replace(/\/+$/, "");
+    }
+  } catch (e) { /* */ }
+  try {
+    const saved = localStorage.getItem(storageKey);
+    if (saved) return saved.replace(/\/+$/, "");
+  } catch (e) { /* */ }
+  try {
+    if (window[runtimeKey]) return String(window[runtimeKey]).replace(/\/+$/, "");
+  } catch (e) { /* */ }
+  return fallback;
+}
+
 function AptHudButton({ label, onClick, active, disabled, title }) {
   return (
     <button
@@ -879,7 +895,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
             // key forces a REMOUNT on camera switch: the cleanup deliberately
             // loses the WebGL context (context-budget hygiene), so a reused
             // canvas would come back with a dead context and no warp
-            src={`${(localStorage.getItem("apartment3d.frigateBase") || "http://192.168.0.125:5000")}/api/${liveCam.camera.frigate_name}`}
+            src={`${aptServiceBase("apartment3d.frigateBase", "HG_DEFAULT_FRIGATE_BASE", "http://192.168.0.125:5000")}/api/${liveCam.camera.frigate_name}`}
             alt={liveCam.name}
             intrinsics={liveCam.camera?.intrinsics || null}
             style={{ height: "74vh", aspectRatio: "16 / 9", objectFit: "cover",
@@ -897,7 +913,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         window.HomeApartmentCalibrate.Component, {
           cam: calibCam.camera.frigate_name,
           savedLens: calibCam.camera?.intrinsics || null,
-          trackerBase: localStorage.getItem("apartment3d.trackerBase") || "http://192.168.0.100:8098",
+          trackerBase: aptServiceBase("apartment3d.trackerBase", "HG_DEFAULT_TRACKER_BASE", "http://192.168.0.100:8098"),
           onPickRequest: (active) => { calibPickRef.current = active; },
           onIntrinsics: (lens) => {
             // persist solved intrinsics into the camera device (app = single writer)

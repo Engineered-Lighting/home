@@ -23,6 +23,10 @@
   const BASE_KEY = "videoLabeler.base";
   const DEFAULT_BASE = "http://192.168.0.100:8099";
 
+  function defaultBase() {
+    return (typeof window !== "undefined" && window.HG_DEFAULT_VIDEO_LABELER_BASE) || DEFAULT_BASE;
+  }
+
   /* Service base URL. Returns null while Simulation Mode is active:
      media URLs bypass tauriFetch's sim guard, so a null base is what
      actually keeps the sim hermetic. */
@@ -30,9 +34,9 @@
     if (typeof window !== "undefined" && window.__SIM_ACTIVE === true) return null;
     try {
       const v = localStorage.getItem(BASE_KEY);
-      return (v || DEFAULT_BASE).replace(/\/+$/, "");
+      return (v || defaultBase()).replace(/\/+$/, "");
     } catch (e) {
-      return DEFAULT_BASE;
+      return defaultBase();
     }
   }
 

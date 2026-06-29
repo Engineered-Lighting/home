@@ -149,6 +149,7 @@ function makeModule(opts) {
     __SIM_ACTIVE: !!opts.sim,
     AudioContext,
     webkitAudioContext: AudioContext,
+    location: opts.location || { protocol: "http:", host: "localhost:5181" },
     setTimeout: (fn) => { fn(); return 1; },
   };
   const sandbox = {
@@ -188,6 +189,8 @@ async function main() {
   assert("ws base stays ws", base.window.bridgeWsUrl("ws://box.local:8092", "") === "ws://box.local:8092/s2s");
   assert("wss base stays wss", base.window.bridgeWsUrl("wss://box.local/old", "") === "wss://box.local/s2s");
   assert("token is URL encoded", base.window.bridgeWsUrl("http://box.local", "a b+c") === "ws://box.local/s2s?token=a%20b%2Bc");
+  const webBase = makeModule({ location: { protocol: "https:", host: "home.tailnet.ts.net" } });
+  assert("relative base maps to same-origin wss /s2s", webBase.window.bridgeWsUrl("/proxy/bridge", "tok") === "wss://home.tailnet.ts.net/proxy/bridge/s2s?token=tok", webBase.window.bridgeWsUrl("/proxy/bridge", "tok"));
   assert("unsupported protocol returns null", base.window.bridgeWsUrl("ftp://box.local", "") === null);
   assert("invalid base returns null", base.window.bridgeWsUrl("not a url", "") === null);
   assert("empty base returns null", base.window.bridgeWsUrl("", "") === null);

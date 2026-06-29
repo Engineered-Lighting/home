@@ -1638,13 +1638,7 @@ function MetricsStrip({
     // metrics-sidecar host on port 8093.
     const _supervisorUrl = (() => {
       const base = metricsBase || metricsBaseFromEndpoint(endpoint);
-      try {
-        if (base) {
-          const u = new URL(base);
-          return `${u.protocol}//${u.hostname}:8093`;
-        }
-      } catch {}
-      return null;
+      return supervisorBaseFromEndpoint(base, endpoint);
     })();
     const _stackToken =
       (typeof window !== "undefined" && window.__STACK_TOKEN) ||
@@ -1907,13 +1901,7 @@ function MetricsStrip({
     }
     const _supervisorUrl = (() => {
       const base = metricsBase || metricsBaseFromEndpoint(endpoint);
-      try {
-        if (base) {
-          const u = new URL(base);
-          return `${u.protocol}//${u.hostname}:8093`;
-        }
-      } catch {}
-      return null;
+      return supervisorBaseFromEndpoint(base, endpoint);
     })();
     const _stackToken =
       (typeof window !== "undefined" && window.__STACK_TOKEN) ||
@@ -2308,7 +2296,7 @@ function Num({ v, suffix }) {
 
 /* ── First-run connection prompt ─────────────────────────────────────── */
 function FirstRun({ connection, endpoint, token, onConnect, availableModels, onPickModel, onSimulation = null, compact = false }) {
-  const [url, setUrl] = useState(endpoint || "http://192.168.0.125:8123");
+  const [url, setUrl] = useState(endpoint || webDefaultBase("HG_DEFAULT_HA_BASE") || "http://192.168.0.125:8123");
   // Start the token field empty when the last connection failed — a rejected
   // token shouldn't be pre-filled, or the user just retries the dead token.
   const [tok, setTok] = useState(
@@ -3257,21 +3245,31 @@ function metricsBaseFromEndpoint(_endpoint) {
   return "http://192.168.0.100:8092";
 }
 
+function webDefaultBase(key) {
+  if (typeof window !== "undefined" && window[key]) {
+    return String(window[key]).replace(/\/+$/, "");
+  }
+  return "";
+}
+
+function siblingServiceBase(metricsBase, endpoint, key, port, fallback) {
+  const configured = webDefaultBase(key);
+  if (configured) return configured;
+  const source = metricsBase || metricsBaseFromEndpoint(endpoint);
+  try {
+    const u = new URL(source);
+    return `${u.protocol}//${u.hostname}:${port}`;
+  } catch {
+    return fallback;
+  }
+}
+
 function intelligenceBaseFromEndpoint(metricsBase, _endpoint) {
   try {
     const saved = localStorage.getItem("hg-intelligence-base");
     if (saved) return saved.replace(/\/+$/, "");
   } catch {}
-  if (typeof window !== "undefined" && window.HG_DEFAULT_INTELLIGENCE_BASE) {
-    return window.HG_DEFAULT_INTELLIGENCE_BASE.replace(/\/+$/, "");
-  }
-  const source = metricsBase || metricsBaseFromEndpoint(_endpoint);
-  try {
-    const u = new URL(source);
-    return `${u.protocol}//${u.hostname}:8095`;
-  } catch {
-    return "http://192.168.0.100:8095";
-  }
+  return siblingServiceBase(metricsBase, _endpoint, "HG_DEFAULT_INTELLIGENCE_BASE", 8095, "http://192.168.0.100:8095");
 }
 
 function s2sBaseFromEndpoint(_endpoint) {
@@ -3279,6 +3277,14 @@ function s2sBaseFromEndpoint(_endpoint) {
     return window.HG_DEFAULT_S2S_BASE;
   }
   return "http://192.168.0.100:8094";
+}
+
+function visionBaseFromEndpoint(metricsBase, endpoint) {
+  return siblingServiceBase(metricsBase, endpoint, "HG_DEFAULT_VISION_BASE", 8091, "http://192.168.0.100:8091");
+}
+
+function supervisorBaseFromEndpoint(metricsBase, endpoint) {
+  return siblingServiceBase(metricsBase, endpoint, "HG_DEFAULT_SUPERVISOR_BASE", 8093, "http://192.168.0.100:8093");
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -3355,17 +3361,17 @@ function findRecentAssistantIdx(prev, text, kind = "home", lookback = 20, window
 
 function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voiceOverride, themeOverride, autoplay = true }) {
   const initialPrefs = useMemo(() => loadPrefs({
-    endpoint: "",
+    endpoint: webDefaultBase("HG_DEFAULT_HA_BASE"),
     token: "",
     model: "",
     theme: "dark",
-    metricsBase: "",
+    metricsBase: webDefaultBase("HG_DEFAULT_METRICS_BASE"),
     // S2S experiment — full-duplex speech-to-speech via the
     // personaplex-bridge sidecar. Off by default; toggled per-window
     // with `/s2s on|off`. Existing HA voice pipeline keeps working
     // regardless of this flag.
     s2sMode: false,
-    s2sBase: "",
+    s2sBase: webDefaultBase("HG_DEFAULT_S2S_BASE"),
     s2sToken: "",       // BRIDGE_TOKEN — set via /s2s token <hex>
     s2sVoice: "",       // default voice prompt; empty = bridge default (NATM2.pt)
     kokoroVoice: "",    // Kokoro TTS voice — set via /voice <name>; empty = bridge default (am_eric)
@@ -4182,6 +4188,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * one that returns /healthz. Helps when the AI box is on a different
    * host than HA (the typical case). */
   const probeMetricsBase = useCallback(async (haUrl) => {
+    const webMetricsBase = webDefaultBase("HG_DEFAULT_METRICS_BASE");
+    if (webMetricsBase) return webMetricsBase;
     const candidates = [];
     try {
       const u = new URL(haUrl.replace(/^ws/, "http"));
@@ -4250,8 +4258,12 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     // Auxiliary: discover the vLLM model name + ctx for the picker. Optional.
     if (mBase) {
       try {
-        const aiHost = new URL(mBase).hostname;
-        const r = await tauriFetch(`http://${aiHost}:8000/v1/models`);
+        let vllmBase = webDefaultBase("HG_DEFAULT_VLLM_BASE");
+        if (!vllmBase) {
+          const aiHost = new URL(mBase).hostname;
+          vllmBase = `http://${aiHost}:8000`;
+        }
+        const r = await tauriFetch(`${vllmBase}/v1/models`);
         const j = await r.json();
         const data = j?.data || [];
         if (data.length > 0) {
@@ -4719,8 +4731,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           try {
             const base = metricsBase || metricsBaseFromEndpoint(endpoint);
             if (base) {
-              const u = new URL(base);
-              const visionOrigin = u.protocol + "//" + u.hostname + ":8091";
+              const visionOrigin = visionBaseFromEndpoint(base, endpoint);
               const tauriFetch = window.tauriFetch || fetch;
               const seen = new Set();
               for (const tc of visionTools) {
@@ -5800,10 +5811,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         const baseM = metricsBase || (() => {
           try { return metricsBaseFromEndpoint(endpoint); } catch { return ""; }
         })();
-        let visionUrl = "";
-        try {
-          if (baseM) { const u = new URL(baseM); visionUrl = `${u.protocol}//${u.hostname}:8091`; }
-        } catch {}
+        const visionUrl = visionBaseFromEndpoint(baseM, endpoint);
         const isSim = sim?.active;
         if (!visionUrl && !isSim) {
           addEvent({ kind: "system", text: "cameras · vision-sidecar URL not derivable — set /metrics first", tone: "warn" });
@@ -5929,13 +5937,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         const baseM = metricsBase || (() => {
           try { return metricsBaseFromEndpoint(endpoint); } catch { return ""; }
         })();
-        let visionUrl = "";
-        try {
-          if (baseM) {
-            const u = new URL(baseM);
-            visionUrl = `${u.protocol}//${u.hostname}:8091`;
-          }
-        } catch {}
+        const visionUrl = visionBaseFromEndpoint(baseM, endpoint);
         // Sim mode: short-circuit with the canned fixture so the
         // command is testable without a real vision-sidecar reachable.
         const isSim = sim?.active;
@@ -7210,13 +7212,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
 
     // Derive bridge URL: same host as sidecar, port 8094.
     // Derive supervisor URL: same host as sidecar, port 8093 (AI Stack Control).
-    let bridgeUrl = "";
-    let supervisorUrl = "";
-    try {
-      const u = new URL(base);
-      bridgeUrl     = `${u.protocol}//${u.hostname}:8094`;
-      supervisorUrl = `${u.protocol}//${u.hostname}:8093`;
-    } catch {}
+    const bridgeUrl = s2sBaseFromEndpoint(endpoint);
+    const supervisorUrl = supervisorBaseFromEndpoint(base, endpoint);
 
     // STACK_TOKEN comes from one of (in priority order):
     //   1. window.__STACK_TOKEN  (set by the Tauri stack_token() command at
@@ -8034,11 +8031,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     if (sim.active) return undefined;
     const base = metricsBase || metricsBaseFromEndpoint(endpoint);
     if (!base) return undefined;
-    let bridgeUrl = "";
-    try {
-      const u = new URL(base);
-      bridgeUrl = `${u.protocol}//${u.hostname}:8094`;
-    } catch {}
+    const bridgeUrl = s2sBaseFromEndpoint(endpoint);
     if (!bridgeUrl) return undefined;
     let cancelled = false;
     const tick = async () => {
@@ -8066,12 +8059,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     const base = metricsBase || metricsBaseFromEndpoint(endpoint);
     if (!base) return undefined;
     let cancelled = false;
-    // Derive vision URL from sidecar host (sidecar on :8092, vision on :8091)
-    let visionUrl = "";
-    try {
-      const u = new URL(base);
-      visionUrl = `${u.protocol}//${u.hostname}:8091`;
-    } catch {}
+    const visionUrl = visionBaseFromEndpoint(base, endpoint);
     const tick = async () => {
       if (!visionUrl) return;
       try {

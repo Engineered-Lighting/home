@@ -10,6 +10,9 @@
     "dev": "serve app/src -p 5180 --no-clipboard --no-port-switching",
     "dev:assets": "node tools/serve-apartment-assets.mjs",
     "dev:simulation": "serve app/src -p 5180 --no-clipboard --no-port-switching",
+    "web:dev": "node web-gateway/server.mjs",
+    "web:start": "node web-gateway/server.mjs",
+    "web:check": "node web-gateway/server.mjs --check",
     "dev:home2": "npm --workspace apps/home-2 run dev",
     "build:home2": "npm --workspace apps/home-2 run build",
     "test:home2": "npm --workspace apps/home-2 run test"

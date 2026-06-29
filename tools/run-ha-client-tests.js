@@ -129,6 +129,12 @@ function driveAuthOk(socket, version = "2026.6.0") {
     "haUrlToWs maps https to wss and avoids duplicate suffix",
     api.haUrlToWs("https://ha.example/api/websocket") === "wss://ha.example/api/websocket",
   );
+  const webApi = loadModule({ window: { location: { protocol: "https:", host: "home.tailnet.ts.net" } } });
+  assert(
+    "haUrlToWs maps relative web gateway base to same-origin wss",
+    webApi.haUrlToWs("/proxy/ha") === "wss://home.tailnet.ts.net/proxy/ha/api/websocket",
+    webApi.haUrlToWs("/proxy/ha"),
+  );
 
   process.stdout.write("\ncall_service_payload_test\n");
   const payload = api.buildCallServicePayload("input_boolean", "turn_on", {

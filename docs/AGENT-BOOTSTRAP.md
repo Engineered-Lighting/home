@@ -32,6 +32,8 @@ Doc routing:
 - Tauri desktop remote access -> `docs/TAURI-REMOTE.md`
 - Browser/Tailscale web gateway -> `docs/TAILSCALE-WEB.md`
 - Travel readiness / recovery -> `docs/TRAVEL-READINESS.md`
+- Multi-month departure checklist -> `docs/TRAVEL-DEPARTURE-CHECKLIST.md`
+- Emergency command runbook -> `docs/TRAVEL-EMERGENCY-RUNBOOK.md`
 - Stack supervisor / AI stack ops -> `docs/RUNBOOK.md`
 - Architecture details -> `docs/ARCHITECTURE.md`
 
@@ -110,9 +112,12 @@ Deploy workflow:
 - Prefer rollback to a previous known-good commit over ad hoc live edits on Ubuntu.
 
 Travel readiness:
+- Primary travel workstation: Razer Blade.
+- Before multi-month travel, read `docs/TRAVEL-DEPARTURE-CHECKLIST.md`.
 - Windows:
   ```powershell
   cd C:\Claude\home
+  .\tools\pre-departure-check.ps1
   .\tools\travel-readiness.ps1
   ```
 - Ubuntu:
@@ -126,6 +131,7 @@ Travel readiness:
   /travel check
   ```
 - Treat blocker failures as must-fix before travel. Degraded failures are acceptable only if I explicitly accept losing that feature.
+- The final proof test should run from the Razer Blade on a phone hotspot, not from the home LAN.
 
 Recovery path:
 - Use SSH, systemd, GitHub Actions, and logs.

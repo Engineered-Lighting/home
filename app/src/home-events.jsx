@@ -417,7 +417,10 @@ function SystemContent({ text, tone }) {
             fontFamily: HG_MONO,
             fontSize: 9,
             letterSpacing: "0.14em",
-            padding: "3px 7px",
+            padding: "7px 10px",
+            minHeight: 32,
+            alignItems: "center",
+            boxSizing: "border-box",
             textTransform: "uppercase",
           }}
         >

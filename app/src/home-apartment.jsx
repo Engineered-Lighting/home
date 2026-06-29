@@ -828,7 +828,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         phase,
         mode,
         liveOn,
-        liveCam: liveCam?.id || null,
+        liveCam: liveCam?.id || liveCam?.name || null,
         mobile,
         viewport,
         devices: (model.devices || []).length,

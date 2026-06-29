@@ -40,16 +40,71 @@ const FEATURE_MATRIX = [
   ["09-help", "/help output", "Help/category output is readable without horizontal clipping."],
   ["10-profile-status", "/profile status output", "Active service profile is visible for travel debugging."],
   ["11-travel-status", "/travel status output", "Travel readiness status is visible and copyable."],
-  ["12-cameras", "/cameras output", "Camera snapshots/results fit the mobile feed."],
-  ["13-world-state", "World-state drawer", "Room/state drawer can be opened and dismissed."],
-  ["14-lights", "Living Lights drawer", "Lighting controls are usable at phone width."],
-  ["15-spatial", "Spatial map drawer", "Map drawer opens without trapping or clipping the input."],
-  ["16-look", "Look drawer", "Vision prompt drawer opens and fits the viewport."],
-  ["17-apartment-cloud", "Apartment cloud mode", "3D Apartment opens with HUD controls reachable."],
-  ["18-apartment-photo", "Apartment photo mode", "Photo/splat mode either renders or shows a clear asset error."],
-  ["19-apartment-mesh", "Apartment mesh mode", "Mesh mode either renders or shows a clear asset error."],
-  ["20-apartment-fly-camera", "Apartment fly-to-camera/live view", "Camera fly-to keeps the feed contained instead of cropped on mobile."],
+  ["12-remote-dialog", "Remote access / Travel readiness", "Profile selector, test-all, copy buttons, and readiness summary fit on mobile."],
+  ["13-cameras", "/cameras output", "Camera snapshots/results fit the mobile feed."],
+  ["14-world-state", "World-state drawer", "Room/state drawer can be opened and dismissed."],
+  ["15-lights", "Living Lights drawer", "Lighting controls are usable at phone width."],
+  ["16-spatial", "Spatial map drawer", "Map drawer opens without trapping or clipping the input."],
+  ["17-look", "Look drawer", "Vision prompt drawer opens and fits the viewport."],
+  ["18-apartment-cloud", "Apartment cloud mode", "3D Apartment opens with HUD controls reachable."],
+  ["19-apartment-photo", "Apartment photo mode", "Photo/splat mode either renders or shows a clear asset error."],
+  ["20-apartment-mesh", "Apartment mesh mode", "Mesh mode either renders or shows a clear asset error."],
+  ["21-apartment-fly-camera", "Apartment fly-to-camera/live view", "Camera fly-to keeps the feed contained instead of cropped on mobile."],
 ];
+
+const BUTTON_PROBE_MATRIX = [
+  ["b01-home-layout", "Home", "Visible controls stay inside the mobile viewport with usable hit targets."],
+  ["b02-simulation-entry", "First-run", "Try Simulation enters a non-secret UI state."],
+  ["b03-mobile-menu", "Header", "Mobile actions opens and exposes its action buttons."],
+  ["b04-people-close", "People", "People opens from the mobile menu and close dismisses it."],
+  ["b05-intelligence-close", "Intelligence", "Intelligence opens from the mobile menu and close dismisses it."],
+  ["b06-video-labeler-tabs", "Video labeler", "Video labeler opens, label/jobs tabs respond, refresh is clickable, and close dismisses it."],
+  ["b07-simulation-controls", "Simulation", "Simulation controls open, reset is clickable, and close dismisses it."],
+  ["b08-remote-dialog", "Remote", "Remote access dialog opens, profile buttons respond, test-all starts, and close dismisses it."],
+  ["b09-slash-command", "Input", "Slash command input accepts and executes a command from mobile."],
+  ["b10-drawer-closes", "Drawers", "World, lights, spatial, and look drawers expose a working close control."],
+  ["b11-apartment-mode-buttons", "Apartment", "Cloud/photo/mesh HUD buttons respond without leaving a blank view."],
+  ["b12-apartment-camera-buttons", "Apartment", "Fly-to-camera controls are visually captured and the audit resets cleanly afterward."],
+];
+
+const VISUAL_HEALTH_EXPRESSION = `(() => {
+  const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+  const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+  const doc = document.documentElement;
+  const body = document.body;
+  const issues = [];
+  const controls = [];
+  const labelFor = (el) => {
+    const aria = el.getAttribute("aria-label") || el.getAttribute("title") || "";
+    const text = String(el.textContent || "").replace(/\\s+/g, " ").trim();
+    return (aria || text || el.tagName || "control").slice(0, 64);
+  };
+  const isVisible = (el, rect, style) => {
+    if (!rect || rect.width < 1 || rect.height < 1) return false;
+    if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) return false;
+    if (rect.bottom < 0 || rect.top > vh || rect.right < 0 || rect.left > vw) return false;
+    return true;
+  };
+  const selectors = "button,[role='button'],[role='menuitem'],input,select,textarea,a[href]";
+  for (const el of Array.from(document.querySelectorAll(selectors))) {
+    const rect = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+    if (!isVisible(el, rect, style)) continue;
+    const label = labelFor(el);
+    controls.push({ label, x: Math.round(rect.left), y: Math.round(rect.top), w: Math.round(rect.width), h: Math.round(rect.height) });
+    if (rect.left < -1 || rect.right > vw + 1) {
+      issues.push(label + ": horizontally clipped (" + Math.round(rect.left) + ".." + Math.round(rect.right) + " of " + vw + ")");
+    }
+    const isTapTarget = el.tagName === "BUTTON" || el.getAttribute("role") === "button" || el.getAttribute("role") === "menuitem";
+    if (isTapTarget && (rect.width < 24 || rect.height < 24)) {
+      issues.push(label + ": small tap target " + Math.round(rect.width) + "x" + Math.round(rect.height));
+    }
+  }
+  const scrollWidth = Math.max(doc?.scrollWidth || 0, body?.scrollWidth || 0);
+  const overflow = Math.max(0, scrollWidth - vw);
+  if (overflow > 3) issues.push("document horizontal overflow " + Math.round(overflow) + "px");
+  return { ok: issues.length === 0, viewport: { width: vw, height: vh }, visibleControls: controls.length, issues: issues.slice(0, 24), sampleControls: controls.slice(0, 24) };
+})()`;
 
 function timestamp() {
   const d = new Date();
@@ -189,6 +244,12 @@ async function writeMatrixReport(outDir, extras = {}) {
     "| --- | --- | --- |",
     ...FEATURE_MATRIX.map(([id, title, expected]) => `| ${id} | ${title} | ${expected} |`),
     "",
+    "## Button / Tap Probe Matrix",
+    "",
+    "| ID | Surface | Expected |",
+    "| --- | --- | --- |",
+    ...BUTTON_PROBE_MATRIX.map(([id, title, expected]) => `| ${id} | ${title} | ${expected} |`),
+    "",
   ];
   if (extras.results?.length) {
     lines.push("## Results", "");
@@ -198,6 +259,18 @@ async function writeMatrixReport(outDir, extras = {}) {
       for (const item of result.items) {
         const rel = item.path ? path.relative(outDir, item.path).replace(/\\/g, "/") : "";
         lines.push(`- ${item.ok ? "PASS" : "FAIL"} ${item.id}: ${item.detail || ""}${rel ? ` (${rel})` : ""}`);
+      }
+      lines.push("");
+    }
+  }
+  if (extras.results?.some((result) => result.buttonItems?.length)) {
+    lines.push("## Button Probe Results", "");
+    for (const result of extras.results) {
+      if (!result.buttonItems?.length) continue;
+      lines.push(`### ${result.viewport}`);
+      lines.push("");
+      for (const item of result.buttonItems) {
+        lines.push(`- ${item.ok ? "PASS" : "FAIL"} ${item.id}: ${item.detail || ""}`);
       }
       lines.push("");
     }
@@ -213,6 +286,7 @@ async function writeMatrixReport(outDir, extras = {}) {
     JSON.stringify({
       generatedAt: new Date().toISOString(),
       features: FEATURE_MATRIX.map(([id, title, expected]) => ({ id, title, expected })),
+      buttonProbes: BUTTON_PROBE_MATRIX.map(([id, title, expected]) => ({ id, title, expected })),
       ...extras,
     }, null, 2),
     "utf8",
@@ -269,6 +343,46 @@ async function runCommand(page, command, waitMs = 1000) {
   await page.waitForTimeout(waitMs);
 }
 
+function visualHealthDetail(health) {
+  if (!health) return "no visual health payload";
+  if (health.ok) return `${health.visibleControls || 0} visible controls fit ${health.viewport?.width || "?"}x${health.viewport?.height || "?"}`;
+  return (health.issues || []).join("; ");
+}
+
+async function visualHealth(page) {
+  return page.evaluate(VISUAL_HEALTH_EXPRESSION);
+}
+
+async function recordButtonProbe(buttonItems, id, detail, fn) {
+  try {
+    const result = await fn();
+    buttonItems.push({ id, ok: true, detail: result || detail });
+  } catch (err) {
+    buttonItems.push({ id, ok: false, detail: `${detail}: ${err?.message || err}` });
+  }
+}
+
+async function ensureVisualHealth(page, context) {
+  const health = await visualHealth(page);
+  if (!health.ok) throw new Error(`${context}: ${visualHealthDetail(health)}`);
+  return visualHealthDetail(health);
+}
+
+async function clickButtonByName(page, name, timeout = 1800) {
+  const locator = page.getByRole("button", { name }).first();
+  if (!(await maybeClick(locator, timeout))) throw new Error(`button not clickable: ${name}`);
+  await page.waitForTimeout(350);
+}
+
+async function expectVisibleText(page, pattern, timeout = 1800) {
+  const locator = page.getByText(pattern).first();
+  try {
+    await locator.waitFor({ state: "visible", timeout });
+  } catch {
+    throw new Error(`text not visible: ${pattern}`);
+  }
+}
+
 async function enterSimulation(page) {
   const firstRunButton = page.getByRole("button", { name: /try simulation/i });
   if (await maybeClick(firstRunButton, 2500)) {
@@ -288,10 +402,128 @@ async function openMobileMenu(page) {
 }
 
 async function clickMobileMenuItem(page, label) {
-  await openMobileMenu(page);
-  const clicked = await maybeClick(page.getByRole("menuitem", { name: new RegExp(`^${label}$`, "i") }), 1800);
+  const item = page.getByRole("menuitem", { name: new RegExp(`^${label}$`, "i") }).first();
+  let clicked = await maybeClick(item, 500);
+  if (!clicked) {
+    await openMobileMenu(page);
+    clicked = await maybeClick(item, 1800);
+  }
   await page.waitForTimeout(1100);
   return clicked;
+}
+
+async function runButtonProbes(page, buttonItems) {
+  await recordButtonProbe(buttonItems, "b12-apartment-camera-buttons", "Apartment back and close buttons respond", async () => {
+    await page.waitForFunction(() => !!window.__havApartmentDebug, null, { timeout: 5000 });
+    const detail = await ensureVisualHealth(page, "apartment fly-camera controls");
+    await closeOverlays(page);
+    return `${detail}; fly-camera screenshot captured as 21-apartment-fly-camera.png`;
+  });
+
+  await closeOverlays(page);
+
+  await recordButtonProbe(buttonItems, "b01-home-layout", "Home controls fit viewport", async () => {
+    return ensureVisualHealth(page, "home");
+  });
+
+  await recordButtonProbe(buttonItems, "b02-simulation-entry", "Try Simulation / simulation command responds", async () => {
+    const ok = await enterSimulation(page);
+    if (!ok) throw new Error("simulation entry did not respond");
+    return ensureVisualHealth(page, "simulation home");
+  });
+
+  await recordButtonProbe(buttonItems, "b03-mobile-menu", "Mobile actions menu opens", async () => {
+    const ok = await openMobileMenu(page);
+    if (!ok) throw new Error("mobile actions button missing");
+    await expectVisibleText(page, /^people$/i);
+    await expectVisibleText(page, /^intelligence$/i);
+    await expectVisibleText(page, /^video labeler$/i);
+    const detail = await ensureVisualHealth(page, "mobile menu");
+    await closeOverlays(page);
+    return detail;
+  });
+
+  await recordButtonProbe(buttonItems, "b04-people-close", "People opens and close dismisses", async () => {
+    const opened = await clickMobileMenuItem(page, "people");
+    if (!opened) throw new Error("people menu item did not click");
+    await expectVisibleText(page, /people/i);
+    await clickButtonByName(page, /close/i);
+    return ensureVisualHealth(page, "people closed");
+  });
+
+  await recordButtonProbe(buttonItems, "b05-intelligence-close", "Intelligence opens and close dismisses", async () => {
+    const opened = await clickMobileMenuItem(page, "intelligence");
+    if (!opened) throw new Error("intelligence menu item did not click");
+    await expectVisibleText(page, /intelligence/i);
+    await clickButtonByName(page, /close/i);
+    return ensureVisualHealth(page, "intelligence closed");
+  });
+
+  await recordButtonProbe(buttonItems, "b06-video-labeler-tabs", "Video labeler tabs, refresh, and close respond", async () => {
+    const opened = await clickMobileMenuItem(page, "video labeler");
+    if (!opened) throw new Error("video labeler menu item did not click");
+    await expectVisibleText(page, /video labeler/i);
+    await clickButtonByName(page, /^jobs$/i);
+    await clickButtonByName(page, /^label$/i);
+    const refreshed = await maybeClick(page.getByRole("button", { name: /^refresh$/i }).first(), 900);
+    await clickButtonByName(page, /close/i);
+    const detail = await ensureVisualHealth(page, "video labeler closed");
+    return refreshed ? detail : `${detail}; refresh absent in simulation state`;
+  });
+
+  await recordButtonProbe(buttonItems, "b07-simulation-controls", "Simulation controls reset and close respond", async () => {
+    const opened = await clickMobileMenuItem(page, "simulation");
+    if (!opened) throw new Error("simulation menu item did not click");
+    await expectVisibleText(page, /^simulation$/i);
+    await clickButtonByName(page, /^reset$/i);
+    await clickButtonByName(page, /close simulation controls|^x$/i);
+    return ensureVisualHealth(page, "simulation controls closed");
+  });
+
+  await recordButtonProbe(buttonItems, "b09-slash-command", "Slash command input executes", async () => {
+    await closeOverlays(page);
+    await runCommand(page, "/profile status", 900);
+    await expectVisibleText(page, /profile/i);
+    return ensureVisualHealth(page, "profile command");
+  });
+
+  await recordButtonProbe(buttonItems, "b10-drawer-closes", "World/lights/spatial/look drawers close from mobile", async () => {
+    for (const command of ["/world-state", "/lights", "/spatial", "/look kitchen what is on the counter"]) {
+      await closeOverlays(page);
+      await runCommand(page, command, 900);
+      await clickButtonByName(page, /close/i, 2500);
+      await page.waitForTimeout(250);
+    }
+    return ensureVisualHealth(page, "drawers closed");
+  });
+
+  await recordButtonProbe(buttonItems, "b11-apartment-mode-buttons", "Apartment cloud/photo/mesh HUD buttons respond", async () => {
+    await closeOverlays(page);
+    await runCommand(page, "/apartment", 3200);
+    await page.waitForFunction(() => !!window.__havApartmentDebug, null, { timeout: 12000 });
+    await clickButtonByName(page, /^cloud$/i);
+    await clickButtonByName(page, /^photo$/i, 2600);
+    await clickButtonByName(page, /^mesh$/i, 2600);
+    const detail = await ensureVisualHealth(page, "apartment mode controls");
+    await clickButtonByName(page, /close/i);
+    await page.waitForFunction(() => !window.__havApartmentDebug, null, { timeout: 5000 });
+    return detail;
+  });
+
+  await recordButtonProbe(buttonItems, "b08-remote-dialog", "Remote dialog profile buttons, test all, and close respond", async () => {
+    await closeOverlays(page);
+    const remote = page.locator('button[aria-label="Remote profile"]').first();
+    if (!(await maybeClick(remote, 1800))) throw new Error("remote profile button missing");
+    await expectVisibleText(page, /Remote access \/ Travel readiness/i);
+    await clickButtonByName(page, /Home LAN/i);
+    await clickButtonByName(page, /Remote via Tailscale/i);
+    await clickButtonByName(page, /^Custom$/i);
+    await clickButtonByName(page, /Home LAN/i);
+    await clickButtonByName(page, /test all/i, 2500);
+    await page.waitForTimeout(500);
+    await clickButtonByName(page, /^x$|close/i);
+    return ensureVisualHealth(page, "remote dialog closed");
+  });
 }
 
 async function runViewportAudit(browser, appUrl, viewport, outRoot, errors) {
@@ -310,6 +542,7 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors) {
   const outDir = path.join(outRoot, viewport.name);
   await fs.mkdir(outDir, { recursive: true });
   const items = [];
+  const buttonItems = [];
   const capture = async (id, detail = "") => {
     try {
       const file = await screenshot(page, outDir, id);
@@ -366,11 +599,6 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors) {
       ["09-help", "/help", 800],
       ["10-profile-status", "/profile status", 800],
       ["11-travel-status", "/travel status", 900],
-      ["12-cameras", "/cameras", 1800],
-      ["13-world-state", "/world-state", 1000],
-      ["14-lights", "/lights", 1000],
-      ["15-spatial", "/spatial", 1000],
-      ["16-look", "/look kitchen what is on the counter", 1000],
     ]) {
       await closeOverlays(page);
       await step(id, command, async () => {
@@ -379,31 +607,54 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors) {
     }
 
     await closeOverlays(page);
-    await step("17-apartment-cloud", "/apartment cloud mode", async () => {
+    await step("12-remote-dialog", "Remote access / Travel readiness", async () => {
+      const remote = page.locator('button[aria-label="Remote profile"]').first();
+      if (!(await maybeClick(remote, 1800))) throw new Error("remote profile button missing");
+      await expectVisibleText(page, /Remote access \/ Travel readiness/i);
+      await page.waitForTimeout(600);
+    });
+
+    for (const [id, command, waitMs] of [
+      ["13-cameras", "/cameras", 1800],
+      ["14-world-state", "/world-state", 1000],
+      ["15-lights", "/lights", 1000],
+      ["16-spatial", "/spatial", 1000],
+      ["17-look", "/look kitchen what is on the counter", 1000],
+    ]) {
+      await closeOverlays(page);
+      await step(id, command, async () => {
+        await runCommand(page, command, waitMs);
+      });
+    }
+
+    await closeOverlays(page);
+    await step("18-apartment-cloud", "/apartment cloud mode", async () => {
       await runCommand(page, "/apartment", 3600);
       await page.waitForFunction(() => !!window.__havApartmentDebug, null, { timeout: 12000 }).catch(() => {});
     });
 
-    await step("18-apartment-photo", "Apartment photo/splat mode", async () => {
+    await step("19-apartment-photo", "Apartment photo/splat mode", async () => {
       await page.evaluate(() => window.__havApartmentDebug?.setMode?.("splat"));
       await page.waitForTimeout(2600);
     });
 
-    await step("19-apartment-mesh", "Apartment mesh mode", async () => {
+    await step("20-apartment-mesh", "Apartment mesh mode", async () => {
       await page.evaluate(() => window.__havApartmentDebug?.setMode?.("mesh"));
       await page.waitForTimeout(2600);
     });
 
-    await step("20-apartment-fly-camera", "Apartment fly-to-camera/live view", async () => {
+    await step("21-apartment-fly-camera", "Apartment fly-to-camera/live view", async () => {
       const ok = await page.evaluate(() => window.__havApartmentDebug?.flyFirstCamera?.());
       if (!ok) throw new Error("no camera device available for fly-to test");
       await page.waitForTimeout(1600);
     });
+
+    await runButtonProbes(page, buttonItems);
   } finally {
     await context.close();
   }
 
-  return { viewport: viewport.name, items };
+  return { viewport: viewport.name, items, buttonItems };
 }
 
 function chromeCandidates() {
@@ -596,17 +847,46 @@ async function cdpScreenshot(client, outDir, id) {
 
 const DOM_HELPERS = `
 (() => {
+  const norm = (value) => String(value || "").replace(/\\s+/g, " ").trim();
   const byText = (selector, text) => {
-    const needle = String(text || "").trim().toLowerCase();
+    const needle = norm(text).toLowerCase();
     return Array.from(document.querySelectorAll(selector)).find((el) =>
-      String(el.textContent || "").trim().toLowerCase() === needle
+      norm(el.textContent).toLowerCase() === needle
     );
+  };
+  const byTextMatch = (selector, pattern) => {
+    const re = new RegExp(pattern, "i");
+    return Array.from(document.querySelectorAll(selector)).find((el) => {
+      const label = [
+        el.getAttribute("aria-label"),
+        el.getAttribute("title"),
+        el.getAttribute("value"),
+        el.textContent,
+      ].map(norm).filter(Boolean).join(" ");
+      return re.test(label);
+    });
   };
   const clickButton = (text) => {
     const el = byText("button", text);
     if (!el) return false;
     el.click();
     return true;
+  };
+  const clickButtonMatch = (pattern) => {
+    const el = byTextMatch("button,[role='button'],[role='menuitem']", pattern);
+    if (!el) return false;
+    el.click();
+    return true;
+  };
+  const clickSelector = (selector) => {
+    const el = document.querySelector(selector);
+    if (!el) return false;
+    el.click();
+    return true;
+  };
+  const existsTextMatch = (pattern) => {
+    const re = new RegExp(pattern, "i");
+    return Array.from(document.querySelectorAll("body *")).some((el) => re.test(norm(el.textContent)));
   };
   const clickMenuItem = async (text) => {
     let el = byText('[role="menuitem"], button', text);
@@ -667,7 +947,7 @@ const DOM_HELPERS = `
     dispatch("keyup", document);
     return true;
   };
-  return { clickButton, clickMenuItem, command, escape };
+  return { clickButton, clickButtonMatch, clickSelector, existsTextMatch, clickMenuItem, command, escape };
 })()
 `;
 
@@ -690,10 +970,170 @@ async function cdpRunCommand(client, command, waitMs = 1000) {
   await cdpDelay(waitMs);
 }
 
+async function cdpVisualHealth(client) {
+  return cdpEval(client, VISUAL_HEALTH_EXPRESSION, true);
+}
+
+async function cdpEnsureVisualHealth(client, context) {
+  const health = await cdpVisualHealth(client);
+  if (!health.ok) throw new Error(`${context}: ${visualHealthDetail(health)}`);
+  return visualHealthDetail(health);
+}
+
+async function cdpRecordButtonProbe(buttonItems, id, detail, fn) {
+  try {
+    const result = await fn();
+    buttonItems.push({ id, ok: true, detail: result || detail });
+  } catch (err) {
+    buttonItems.push({ id, ok: false, detail: `${detail}: ${err?.message || err}` });
+  }
+}
+
+async function cdpClickButton(client, pattern, waitMs = 350) {
+  const ok = await cdpAction(client, `(h) => h.clickButtonMatch(${JSON.stringify(pattern)})`);
+  if (!ok) throw new Error(`button not clickable: /${pattern}/i`);
+  await cdpDelay(waitMs);
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function cdpClickMobileMenuItem(client, label, waitMs = 900) {
+  const pattern = `^${escapeRegExp(label)}$`;
+  let clicked = await cdpAction(client, `(h) => h.clickButtonMatch(${JSON.stringify(pattern)})`);
+  if (!clicked) {
+    const opened = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Open mobile actions"]')`);
+    if (!opened) throw new Error("mobile actions button missing");
+    await cdpDelay(180);
+    clicked = await cdpAction(client, `(h) => h.clickButtonMatch(${JSON.stringify(pattern)})`);
+  }
+  if (!clicked) throw new Error(`menu item not clickable: ${label}`);
+  await cdpDelay(waitMs);
+}
+
+async function cdpExpectText(client, pattern) {
+  const ok = await cdpAction(client, `(h) => h.existsTextMatch(${JSON.stringify(pattern)})`);
+  if (!ok) throw new Error(`text not visible: /${pattern}/i`);
+}
+
+async function cdpRunButtonProbes(client, buttonItems) {
+  await cdpRecordButtonProbe(buttonItems, "b12-apartment-camera-buttons", "Apartment back and close buttons respond", async () => {
+    await cdpWaitFor(client, "!!window.__havApartmentDebug", 5000);
+    const detail = await cdpEnsureVisualHealth(client, "apartment fly-camera controls");
+    await cdpCloseOverlays(client);
+    return `${detail}; fly-camera screenshot captured as 21-apartment-fly-camera.png`;
+  });
+
+  await cdpCloseOverlays(client);
+
+  await cdpRecordButtonProbe(buttonItems, "b01-home-layout", "Home controls fit viewport", async () => {
+    return cdpEnsureVisualHealth(client, "home");
+  });
+
+  await cdpRecordButtonProbe(buttonItems, "b02-simulation-entry", "Try Simulation / simulation command responds", async () => {
+    const ok = await cdpAction(client, "(h) => h.clickButton('try simulation') || h.command('/simulation healthy')");
+    if (!ok) throw new Error("simulation entry did not respond");
+    await cdpDelay(1600);
+    return cdpEnsureVisualHealth(client, "simulation home");
+  });
+
+  await cdpRecordButtonProbe(buttonItems, "b03-mobile-menu", "Mobile actions menu opens", async () => {
+    const ok = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Open mobile actions"]')`);
+    if (!ok) throw new Error("mobile actions button missing");
+    await cdpDelay(350);
+    await cdpExpectText(client, "^people$");
+    await cdpExpectText(client, "^intelligence$");
+    await cdpExpectText(client, "^video labeler$");
+    const detail = await cdpEnsureVisualHealth(client, "mobile menu");
+    await cdpCloseOverlays(client);
+    return detail;
+  });
+
+  await cdpRecordButtonProbe(buttonItems, "b04-people-close", "People opens and close dismisses", async () => {
+    await cdpClickMobileMenuItem(client, "people", 800);
+    await cdpExpectText(client, "people");
+    await cdpClickButton(client, "close", 450);
+    return cdpEnsureVisualHealth(client, "people closed");
+  });
+
+  await cdpRecordButtonProbe(buttonItems, "b05-intelligence-close", "Intelligence opens and close dismisses", async () => {
+    await cdpClickMobileMenuItem(client, "intelligence", 900);
+    await cdpExpectText(client, "intelligence");
+    await cdpClickButton(client, "close", 450);
+    return cdpEnsureVisualHealth(client, "intelligence closed");
+  });
+
+  await cdpRecordButtonProbe(buttonItems, "b06-video-labeler-tabs", "Video labeler tabs, refresh, and close respond", async () => {
+    await cdpClickMobileMenuItem(client, "video labeler", 900);
+    await cdpExpectText(client, "video labeler");
+    await cdpClickButton(client, "^jobs$");
+    await cdpClickButton(client, "^label$");
+    const refreshed = await cdpAction(client, `(h) => h.clickButtonMatch("^refresh$")`);
+    if (refreshed) await cdpDelay(350);
+    await cdpClickButton(client, "close");
+    const detail = await cdpEnsureVisualHealth(client, "video labeler closed");
+    return refreshed ? detail : `${detail}; refresh absent in simulation state`;
+  });
+
+  await cdpRecordButtonProbe(buttonItems, "b07-simulation-controls", "Simulation controls reset and close respond", async () => {
+    await cdpClickMobileMenuItem(client, "simulation", 650);
+    await cdpExpectText(client, "^simulation$");
+    await cdpClickButton(client, "^reset$");
+    await cdpClickButton(client, "close simulation controls|^x$");
+    return cdpEnsureVisualHealth(client, "simulation controls closed");
+  });
+
+  await cdpRecordButtonProbe(buttonItems, "b09-slash-command", "Slash command input executes", async () => {
+    await cdpCloseOverlays(client);
+    await cdpRunCommand(client, "/profile status", 900);
+    await cdpExpectText(client, "profile");
+    return cdpEnsureVisualHealth(client, "profile command");
+  });
+
+  await cdpRecordButtonProbe(buttonItems, "b10-drawer-closes", "World/lights/spatial/look drawers close from mobile", async () => {
+    for (const command of ["/world-state", "/lights", "/spatial", "/look kitchen what is on the counter"]) {
+      await cdpCloseOverlays(client);
+      await cdpRunCommand(client, command, 900);
+      await cdpClickButton(client, "close", 450);
+    }
+    return cdpEnsureVisualHealth(client, "drawers closed");
+  });
+
+  await cdpRecordButtonProbe(buttonItems, "b11-apartment-mode-buttons", "Apartment cloud/photo/mesh HUD buttons respond", async () => {
+    await cdpCloseOverlays(client);
+    await cdpRunCommand(client, "/apartment", 3200);
+    await cdpWaitFor(client, "!!window.__havApartmentDebug", 12000);
+    await cdpClickButton(client, "^cloud$");
+    await cdpClickButton(client, "^photo$", 2600);
+    await cdpClickButton(client, "^mesh$", 2600);
+    const detail = await cdpEnsureVisualHealth(client, "apartment mode controls");
+    await cdpClickButton(client, "close", 600);
+    await cdpWaitFor(client, "!window.__havApartmentDebug", 5000);
+    return detail;
+  });
+
+  await cdpRecordButtonProbe(buttonItems, "b08-remote-dialog", "Remote dialog profile buttons, test all, and close respond", async () => {
+    await cdpCloseOverlays(client);
+    const ok = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Remote profile"]')`);
+    if (!ok) throw new Error("remote profile button missing");
+    await cdpDelay(450);
+    await cdpExpectText(client, "Remote access / Travel readiness");
+    await cdpClickButton(client, "Home LAN");
+    await cdpClickButton(client, "Remote via Tailscale");
+    await cdpClickButton(client, "^Custom$");
+    await cdpClickButton(client, "Home LAN");
+    await cdpClickButton(client, "test all", 700);
+    await cdpClickButton(client, "^x$|close");
+    return cdpEnsureVisualHealth(client, "remote dialog closed");
+  });
+}
+
 async function runViewportAuditCdp(appUrl, viewport, outRoot, errors) {
   const outDir = path.join(outRoot, viewport.name);
   await fs.mkdir(outDir, { recursive: true });
   const items = [];
+  const buttonItems = [];
   const chrome = await launchChromeForCdp(viewport);
   let client = null;
 
@@ -769,11 +1209,6 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors) {
       ["09-help", "/help", 900],
       ["10-profile-status", "/profile status", 900],
       ["11-travel-status", "/travel status", 900],
-      ["12-cameras", "/cameras", 1900],
-      ["13-world-state", "/world-state", 1100],
-      ["14-lights", "/lights", 1100],
-      ["15-spatial", "/spatial", 1100],
-      ["16-look", "/look kitchen what is on the counter", 1100],
     ]) {
       await cdpCloseOverlays(client);
       await step(id, command, async () => {
@@ -782,26 +1217,49 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors) {
     }
 
     await cdpCloseOverlays(client);
-    await step("17-apartment-cloud", "/apartment cloud mode", async () => {
+    await step("12-remote-dialog", "Remote access / Travel readiness", async () => {
+      const ok = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Remote profile"]')`);
+      if (!ok) throw new Error("remote profile button missing");
+      await cdpExpectText(client, "Remote access / Travel readiness");
+      await cdpDelay(600);
+    });
+
+    for (const [id, command, waitMs] of [
+      ["13-cameras", "/cameras", 1900],
+      ["14-world-state", "/world-state", 1100],
+      ["15-lights", "/lights", 1100],
+      ["16-spatial", "/spatial", 1100],
+      ["17-look", "/look kitchen what is on the counter", 1100],
+    ]) {
+      await cdpCloseOverlays(client);
+      await step(id, command, async () => {
+        await cdpRunCommand(client, command, waitMs);
+      });
+    }
+
+    await cdpCloseOverlays(client);
+    await step("18-apartment-cloud", "/apartment cloud mode", async () => {
       await cdpRunCommand(client, "/apartment", 3600);
       await cdpWaitFor(client, "!!window.__havApartmentDebug", 15000);
     });
 
-    await step("18-apartment-photo", "Apartment photo/splat mode", async () => {
+    await step("19-apartment-photo", "Apartment photo/splat mode", async () => {
       await cdpEval(client, "window.__havApartmentDebug && window.__havApartmentDebug.setMode('splat')", true);
       await cdpDelay(2600);
     });
 
-    await step("19-apartment-mesh", "Apartment mesh mode", async () => {
+    await step("20-apartment-mesh", "Apartment mesh mode", async () => {
       await cdpEval(client, "window.__havApartmentDebug && window.__havApartmentDebug.setMode('mesh')", true);
       await cdpDelay(2600);
     });
 
-    await step("20-apartment-fly-camera", "Apartment fly-to-camera/live view", async () => {
+    await step("21-apartment-fly-camera", "Apartment fly-to-camera/live view", async () => {
       const ok = await cdpEval(client, "window.__havApartmentDebug && window.__havApartmentDebug.flyFirstCamera()", true);
       if (!ok) throw new Error("no camera device available for fly-to test");
       await cdpDelay(1600);
     });
+
+    await cdpRunButtonProbes(client, buttonItems);
   } catch (err) {
     errors.push(`${viewport.name}: ${err?.message || err}`);
     if (chrome.stderr()) errors.push(`${viewport.name}: chrome stderr: ${chrome.stderr().slice(-1000)}`);
@@ -810,7 +1268,7 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors) {
     await chrome.close();
   }
 
-  return { viewport: viewport.name, items };
+  return { viewport: viewport.name, items, buttonItems };
 }
 
 async function main() {
@@ -855,14 +1313,17 @@ async function main() {
       }
     }
 
-    const failures = results.flatMap((r) => r.items).filter((i) => !i.ok);
+    const featureFailures = results.flatMap((r) => r.items).filter((i) => !i.ok);
+    const buttonFailures = results.flatMap((r) => r.buttonItems || []).filter((i) => !i.ok);
+    const failures = [...featureFailures, ...buttonFailures];
     await writeMatrixReport(args.out, {
-      status: `Screenshots captured from ${appUrl} with ${engine}. ${failures.length ? `${failures.length} feature(s) failed.` : "All scripted captures completed."}`,
+      status: `Screenshots captured from ${appUrl} with ${engine}. ${failures.length ? `${featureFailures.length} feature(s), ${buttonFailures.length} button probe(s) failed.` : "All scripted captures and button probes completed."}`,
       results,
       errors,
     });
     console.log(`mobile screenshots written to ${args.out}`);
-    console.log(`${results.flatMap((r) => r.items).length - failures.length} pass, ${failures.length} fail`);
+    const totalChecks = results.reduce((sum, r) => sum + r.items.length + (r.buttonItems?.length || 0), 0);
+    console.log(`${totalChecks - failures.length} pass, ${failures.length} fail`);
     if (failures.length) process.exitCode = 1;
   } finally {
     await closeServer(staticServer);

@@ -136,13 +136,15 @@ Settings → Voice Assistants → Add → pair your Voice PE via Bluetooth.
    info → Run anyway`.
 3. Run through the installer. Default install location is fine.
 4. Launch **Home** from the Start menu.
-5. On FirstRun, paste:
-   - **Home Assistant URL** — `http://<ha-host>:8123`. For Tailscale:
-     `http://<tailscale-hostname>:8123` (works identically once both
-     ends are on the tailnet).
-   - **Long-Lived Access Token** — what you generated in step 3d.
-6. Click **Connect ↵**.
-7. The app will auto-discover the model on your AI box and prompt you
+5. On FirstRun, choose a connection profile:
+   - **lan** — use the local `192.168.0.x` defaults while at home.
+   - **tail** — use direct Tailscale/MagicDNS service URLs while traveling.
+   - **custom** — edit per-service URLs.
+6. Paste the **Long-Lived Access Token** from step 3d.
+7. Click **Connect ↵**.
+8. For travel setup details, remote diagnostics, and Apartment scan/mesh asset
+   serving, see [TAURI-REMOTE.md](TAURI-REMOTE.md).
+9. The app will auto-discover the model on your AI box and prompt you
    to pick one (informational only — HA's agent already has its model
    binding).
 

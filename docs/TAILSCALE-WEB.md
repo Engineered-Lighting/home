@@ -9,7 +9,8 @@ instead of exposing the raw HA, AI, camera, or supervisor ports.
 - `web-gateway/server.mjs` serves `app/src`.
 - `app/src/home-web-runtime.js` runs before `home-app.jsx` in a normal browser.
 - Browser mode defaults service bases to `/proxy/...`.
-- Tauri desktop behavior keeps the existing LAN defaults.
+- Tauri desktop remote access is handled separately through direct LAN/Tailscale
+  service profiles. See [TAURI-REMOTE.md](TAURI-REMOTE.md).
 - The Ubuntu AI box is the preferred host for the web gateway because it is
   next to the RTX/model/backend services.
 - Tailscale Serve publishes the gateway privately to tailnet devices.
@@ -46,6 +47,11 @@ Or use the GitHub Actions manual workflow:
 That workflow runs on the Ubuntu AI box self-hosted runner and performs the same
 pull/check/restart through `tools/deploy-home-web.sh`.
 
+`tools/deploy-home-web.sh` now records the previously running commit and rolls
+back automatically if checks or the service restart fail. See
+[TRAVEL-READINESS.md](TRAVEL-READINESS.md) for rollback commands, runner safety,
+and the pre-travel freeze checklist.
+
 The gateway still binds to `127.0.0.1:5181`; Tailscale Serve is the private
 tailnet-facing listener.
 
@@ -70,6 +76,11 @@ unavailable 3D modes.
 This check is for the Ubuntu-hosted web gateway only. Desktop/Tauri releases do
 not bundle `app/data/apartment`; desktop scan/mesh assets remain local runtime
 data on the machine running the app.
+
+For the installed Tauri app, Apartment scan/mesh assets are served by the
+separate `home-apartment-assets` systemd service on the Ubuntu AI box. That
+keeps the desktop installer small and lets a traveling laptop load the same
+runtime data over Tailscale.
 
 ## Run manually on Windows
 
@@ -163,7 +174,7 @@ export HOME_WEB_METRICS_TARGET="http://192.168.0.100:8092"
 export HOME_WEB_VLLM_TARGET="http://192.168.0.100:8000"
 export HOME_WEB_VISION_TARGET="http://192.168.0.100:8091"
 export HOME_WEB_INTELLIGENCE_TARGET="http://192.168.0.100:8095"
-export HOME_WEB_SUPERVISOR_TARGET="http://192.168.0.100:8093"
+export HOME_WEB_SUPERVISOR_TARGET="http://engineeredlightingserver1.taild52a15.ts.net:8093"
 export HOME_WEB_S2S_TARGET="http://192.168.0.100:8094"
 export HOME_WEB_TRACKER_TARGET="http://192.168.0.100:8098"
 export HOME_WEB_VIDEO_LABELER_TARGET="http://192.168.0.100:8099"
@@ -215,3 +226,7 @@ Manual checks from a browser, then from a second Tailscale-connected device:
   bearer token.
 - Raw local service ports are not exposed by router forwarding, public DNS, or
   Tailscale Funnel.
+
+For the full travel pre-flight, run `tools/travel-readiness.sh` on the Ubuntu
+AI box, `tools/travel-readiness.ps1` on Windows, and `/travel check` in the
+Tauri app.

@@ -34,6 +34,10 @@ const SP_VERTEX_HIT = 0.022;                     // vertex grab radius, norm
 
 function spFrigateBase(model) {
   try {
+    const resolved = window.HomeServices?.get?.("frigate");
+    if (resolved) return String(resolved).replace(/\/+$/, "");
+  } catch (e) { /* */ }
+  try {
     if (window.HG_DEFAULT_FRIGATE_BASE) {
       return String(window.HG_DEFAULT_FRIGATE_BASE).replace(/\/+$/, "");
     }

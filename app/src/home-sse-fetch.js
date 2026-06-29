@@ -31,16 +31,18 @@
  */
 function streamSse(url, headers, callbacks) {
   const ctrl = new AbortController();
-  const { onLine, onEvent, onError, onClose } = callbacks || {};
+  const { onLine, onEvent, onError, onOpen, onClose } = callbacks || {};
 
   (async () => {
     let closed = false;
     try {
-      const r = await fetch(url, { headers, signal: ctrl.signal, cache: "no-store" });
+      const fetcher = (typeof window !== "undefined" && window.tauriFetch) || fetch;
+      const r = await fetcher(url, { headers, signal: ctrl.signal, cache: "no-store" });
       if (!r.ok || !r.body) {
         if (onError) onError(new Error(`http ${r.status}`));
         return;
       }
+      if (onOpen) onOpen();
       const reader = r.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";

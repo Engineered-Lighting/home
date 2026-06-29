@@ -60,7 +60,7 @@ through.
 With the gateway running:
 
 ```powershell
-tailscale serve --bg http://127.0.0.1:5181
+tailscale serve --bg --tls-terminated-tcp=443 127.0.0.1:5181
 tailscale serve status
 ```
 
@@ -68,8 +68,12 @@ Use the HTTPS tailnet URL shown by Tailscale from another device that is signed
 into your tailnet. To turn it off:
 
 ```powershell
-tailscale serve reset
+tailscale serve --tls-terminated-tcp=443 off
 ```
+
+Use `--tls-terminated-tcp` rather than the default HTTPS web proxy mode. The
+Home app needs HA, tracker, and S2S WebSocket upgrades, and this mode preserves
+those upgrades while still giving browsers the Tailscale HTTPS URL.
 
 Reference: https://tailscale.com/docs/reference/tailscale-cli/serve
 

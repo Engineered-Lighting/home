@@ -1,0 +1,58 @@
+name: prepare desktop release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "SemVer version without the v prefix, for example 0.1.1"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Prepare release branch
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION#v}"
+          BRANCH="release/v${VERSION}"
+          git switch -c "$BRANCH"
+          node tools/release/prepare-desktop-release.mjs "$VERSION"
+          git add package.json app/src-tauri/tauri.conf.json app/src-tauri/Cargo.toml app/src-tauri/Cargo.lock CHANGELOG.md changes
+          git commit -m "Prepare desktop release v${VERSION}"
+          git push -u origin "$BRANCH"
+          cat > /tmp/release-pr-body.md <<BODY
+          ## Summary
+          - Updates desktop version files to v${VERSION}
+          - Compiles change-note fragments into CHANGELOG.md
+          - Archives consumed fragments under changes/archive/v${VERSION}
+
+          ## Checks
+          - [x] Release preparation workflow completed
+          - [x] Release validation should pass before tagging
+          - [x] Apartment 3D assets remain external local data and are not bundled
+          BODY
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "Prepare desktop release v${VERSION}" \
+            --body-file /tmp/release-pr-body.md

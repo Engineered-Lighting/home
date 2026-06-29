@@ -182,11 +182,36 @@ function ToolContent({ name, args = {}, status = "success", latency }) {
   );
 }
 
-function ActionContent({ id, title, service, target, attrs = {}, status = "pending", latency, reason, onConfirm, onCancel }) {
+// Master plan F.1: inverse-service mapping for the undo button.
+// Returns null if the service has no clean inverse (e.g. media_play
+// can't be cleanly undone — was it idle or paused before?).
+const INVERSE_SERVICE = {
+  "light.turn_on": "light.turn_off",
+  "light.turn_off": "light.turn_on",
+  "switch.turn_on": "switch.turn_off",
+  "switch.turn_off": "switch.turn_on",
+  "fan.turn_on": "fan.turn_off",
+  "fan.turn_off": "fan.turn_on",
+  "cover.open_cover": "cover.close_cover",
+  "cover.close_cover": "cover.open_cover",
+  "media_player.media_play": "media_player.media_pause",
+  "media_player.media_pause": "media_player.media_play",
+  "media_player.turn_on": "media_player.turn_off",
+  "media_player.turn_off": "media_player.turn_on",
+};
+
+function ActionContent({ id, title, service, target, attrs = {}, status = "pending", latency, reason, onConfirm, onCancel, onUndo, traceId }) {
   const needsConfirm = status === "pending-confirm";
   const isErr = status === "error";
-  const [open, setOpen] = React.useState(needsConfirm);
+  // Phase B F0-07: auto-open error cards so the user sees the failure
+  // reason immediately, not buried behind a click. Same for pending-confirm
+  // (already auto-opened before this change).
+  const [open, setOpen] = React.useState(needsConfirm || isErr);
   const caret = open ? "▾" : "▸";
+  // F.1 + F.2: undo + why state
+  const [undoFiring, setUndoFiring] = React.useState(false);
+  const [undoDone, setUndoDone] = React.useState(false);
+  const canUndo = onUndo && status === "success" && service in INVERSE_SERVICE && !undoDone;
 
   // Build the key/value rows shown when expanded.
   // Order is intentional: service first (what was called), target second
@@ -202,31 +227,79 @@ function ActionContent({ id, title, service, target, attrs = {}, status = "pendi
 
   return (
     <div>
-      {/* Header row — caret + label always, summary + status only when open */}
+      {/* Header row — always shows caret + label + title + status. Undo
+          button (when applicable) sits inline to the right of status so
+          it's discoverable without expanding. */}
       <div
-        onClick={() => setOpen(o => !o)}
         style={{
           ...T_SYNTAX,
           display: "grid",
-          // 5ch was too narrow — the word "action" itself is ~6ch in
-          // Geist Mono, so when open and a title follows, the two ran
-          // together visually. 8ch reserves real breathing room.
-          gridTemplateColumns: open ? "1.4ch 8ch minmax(0,1fr) auto" : "1.4ch auto",
+          gridTemplateColumns: canUndo
+            ? "1.4ch 8ch minmax(0,1fr) auto auto"
+            : "1.4ch 8ch minmax(0,1fr) auto",
           columnGap: 8,
           alignItems: "baseline",
-          cursor: "pointer",
           userSelect: "none",
         }}
       >
-        <span style={{ color: "var(--hg-fg-4)" }}>{caret}</span>
-        <span style={isErr ? HG_WARN : HG_DIM}>action</span>
-        {open && (
-          <>
-            <span style={isErr ? HG_WARN : HG_FG}>{title || ""}</span>
-            <span style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-              <StatusText status={status} latency={latency} />
-            </span>
-          </>
+        <span
+          onClick={() => setOpen(o => !o)}
+          style={{ color: "var(--hg-fg-4)", cursor: "pointer" }}
+        >{caret}</span>
+        <span
+          onClick={() => setOpen(o => !o)}
+          style={{ ...(isErr ? HG_WARN : HG_DIM), cursor: "pointer" }}
+        >action</span>
+        <span
+          onClick={() => setOpen(o => !o)}
+          style={{ ...(isErr ? HG_WARN : HG_FG), cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+        >{title || service || ""}</span>
+        <span
+          onClick={() => setOpen(o => !o)}
+          style={{ textAlign: "right", whiteSpace: "nowrap", cursor: "pointer" }}
+        >
+          <StatusText status={status} latency={latency} />
+        </span>
+        {/* F.1 (revised): inline undo button in the header — visible
+            without requiring expansion. */}
+        {canUndo && (
+          <button
+            disabled={undoFiring}
+            onClick={async (ev) => {
+              ev.stopPropagation();
+              if (undoFiring) return;
+              setUndoFiring(true);
+              try {
+                const inverse = INVERSE_SERVICE[service];
+                await onUndo({ id, originalService: service, inverseService: inverse, target, attrs });
+                setUndoDone(true);
+              } catch (e) {
+                console.warn("[action-undo] failed", e);
+              } finally {
+                setUndoFiring(false);
+              }
+            }}
+            className="hg-focusable"
+            style={{
+              background: "transparent",
+              border: "1px solid var(--hg-border)",
+              color: undoFiring ? "var(--hg-fg-4)" : "var(--hg-fg-2)",
+              padding: "1px 7px",
+              cursor: undoFiring ? "default" : "pointer",
+              fontFamily: HG_MONO,
+              fontSize: 9,
+              letterSpacing: "0.12em",
+              textTransform: "uppercase",
+              lineHeight: 1.3,
+              marginLeft: 8,
+            }}
+            title={`Fire ${INVERSE_SERVICE[service]} on the same target`}
+          >{undoFiring ? "…" : "undo"}</button>
+        )}
+        {undoDone && (
+          <span style={{ ...HG_FAINT, fontSize: 9, marginLeft: 8 }}>
+            ↺
+          </span>
         )}
       </div>
 
@@ -258,6 +331,13 @@ function ActionContent({ id, title, service, target, attrs = {}, status = "pendi
                 color: "var(--hg-fg-2)", padding: "4px 10px", cursor: "pointer",
                 fontFamily: HG_MONO, fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase",
               }}>cancel esc</button>
+            </div>
+          )}
+          {/* F.1: undo button moved to header row above; show only the
+              "reverted" confirmation here when it applies. */}
+          {undoDone && (
+            <div style={{ marginTop: 10, fontSize: 10, color: "var(--hg-fg-3)", fontFamily: HG_MONO }}>
+              ↺ reverted — fired {INVERSE_SERVICE[service]}
             </div>
           )}
         </div>
@@ -300,31 +380,426 @@ function SyntaxLine({ label, labelStyle, head, tail = [], status }) {
 
 function SystemContent({ text, tone }) {
   const isErr = tone === "error";
+  const [expanded, setExpanded] = React.useState(false);
+  const raw = String(text || "");
+  const lines = raw.split(/\r?\n/);
+  const isLong = raw.length > 520 || lines.length > 6;
+  const visibleText = !isLong || expanded
+    ? raw
+    : `${lines.slice(0, 3).join("\n")}${lines.length > 3 ? "\n..." : raw.length > 260 ? "..." : ""}`;
+  // Phase 1.5: `whiteSpace: pre-line` lets multi-line system events
+  // (notably the new /help vertical list) render with line breaks
+  // intact. wordBreak softens long lines at narrow viewports.
   return (
-    <div style={{ ...T_SYNTAX, ...(isErr ? HG_WARN : HG_DIM), fontStyle: "italic" }}>
-      <span style={HG_FAINT}>system  </span>{text}
+    <div style={{
+      ...T_SYNTAX, ...(isErr ? HG_WARN : HG_DIM),
+      fontStyle: "italic",
+      whiteSpace: "pre-line",
+      wordBreak: "break-word",
+      padding: isLong ? "8px 10px" : 0,
+      border: isLong ? "1px solid var(--hg-border-soft)" : "none",
+      borderRadius: isLong ? 6 : 0,
+      background: isLong ? "rgba(255,255,255,0.018)" : "transparent",
+    }}>
+      <span style={HG_FAINT}>system  </span>{visibleText}
+      {isLong && (
+        <button
+          type="button"
+          className="hg-focusable"
+          onClick={() => setExpanded((open) => !open)}
+          style={{
+            display: "inline-flex",
+            marginTop: 8,
+            background: "transparent",
+            border: "1px solid var(--hg-border-soft)",
+            color: "var(--hg-fg-3)",
+            cursor: "pointer",
+            fontFamily: HG_MONO,
+            fontSize: 9,
+            letterSpacing: "0.14em",
+            padding: "3px 7px",
+            textTransform: "uppercase",
+          }}
+        >
+          {expanded ? "collapse log" : `show ${lines.length} lines`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* The assistant's silent observation channel — vision-sidecar
+ * descriptions triggered by Frigate person detection. Rendered in
+ * italic, lower weight, with a faint "perceived" label so it's
+ * visually distinct from anything the assistant SPOKE. The user
+ * asked for a different font weight to signal "this is perception,
+ * not speech." */
+/* Tray v4: compact perception chip — replaces italic prose log.
+ * Format: [glyph] room — short summary           age
+ * Expandable on click to show full text.
+ *
+ * M1 (Addendum 27): when the event payload includes a snapshotUrl
+ * (auto-trigger from vision-sidecar's snapshot cache), render a small
+ * thumbnail to the left of the room label. Click on the thumbnail or
+ * the text expands the chip — thumbnail grows to a larger preview,
+ * text shows full caption. snapshotUrl is omitted for bridge-sourced
+ * perception lines (those came from a separate code path with no
+ * cached frame); the chip falls back to the text-only layout.
+ */
+function PerceptionContent({ text, snapshotUrl }) {
+  const [expanded, setExpanded] = React.useState(false);
+  const [imgFailed, setImgFailed] = React.useState(false);
+  // Parse the text — bridge emits "perceived ROOM: SUMMARY" or just SUMMARY.
+  // Try to extract a room name from the first colon-prefixed token.
+  let room = null;
+  let summary = text || "";
+  const m = /^([a-z_]+)\s*:\s*(.+)$/i.exec(summary.trim());
+  if (m) {
+    room = m[1].replace(/_/g, " ");
+    summary = m[2];
+  }
+  const short = expanded ? summary : (summary.length > 90 ? summary.slice(0, 88) + "…" : summary);
+  const hasThumb = Boolean(snapshotUrl) && !imgFailed;
+  const clickable = summary.length > 90 || hasThumb;
+  // Layout: thumbnail (when present) | room label | summary | (right slot)
+  const cols = hasThumb
+    ? (expanded ? "minmax(180px, 280px) minmax(60px, 100px) 1fr auto"
+                : "minmax(40px, 56px) minmax(60px, 100px) 1fr auto")
+    : (room ? "minmax(60px, 100px) 1fr auto"
+            : "auto 1fr auto");
+  const thumbSize = expanded ? 200 : 40;
+  return (
+    <div
+      onClick={() => clickable && setExpanded((v) => !v)}
+      style={{
+        ...T_SYNTAX,
+        display: "grid",
+        gridTemplateColumns: cols,
+        columnGap: 10,
+        alignItems: hasThumb ? "center" : "baseline",
+        cursor: clickable ? "pointer" : "default",
+        color: "var(--hg-fg-3)",
+        fontSize: 11,
+        lineHeight: 1.5,
+        paddingTop: 2, paddingBottom: 2,
+      }}
+    >
+      {hasThumb && (
+        <img
+          src={snapshotUrl}
+          alt={room ? `${room} snapshot` : "perception snapshot"}
+          loading="lazy"
+          onError={() => setImgFailed(true)}
+          style={{
+            width: thumbSize,
+            height: thumbSize * 0.6,
+            objectFit: "cover",
+            borderRadius: 3,
+            border: "1px solid var(--hg-border)",
+            display: "block",
+          }}
+        />
+      )}
+      <span style={{
+        ...HG_FAINT,
+        fontWeight: 400,
+        letterSpacing: "0.06em",
+        color: "var(--hg-fg-4)",
+      }}>{room ? room : "perceived"}</span>
+      <span style={{
+        color: "var(--hg-fg-2)",
+        fontFamily: "'Geist', system-ui, sans-serif",
+        fontSize: 12,
+        fontWeight: 400,
+      }}>{short}</span>
+      <span />
+    </div>
+  );
+}
+
+/* The coordinator's own initiative — a proactive greeting/room-prompt, an
+ * away-mode flip, a return-home scene, a follow-up echo. Compact, mono,
+ * dimmed — its own channel, visually adjacent to PerceptionContent: ambient,
+ * not a real spoken turn answering a user request. (home-proactive.jsx
+ * emits these via addEvent({ kind:"proactive", text }).) */
+function ProactiveContent({ text }) {
+  return (
+    <div style={{
+      ...T_SYNTAX,
+      display: "flex", alignItems: "baseline", gap: 8,
+      fontSize: 11, lineHeight: 1.5,
+      paddingTop: 2, paddingBottom: 2,
+    }}>
+      <span style={{ color: "var(--hg-ice)", fontSize: 9, transform: "translateY(-1px)" }}>◆</span>
+      <span style={{ ...HG_FAINT, letterSpacing: "0.06em", color: "var(--hg-fg-4)" }}>proactive</span>
+      <span style={{ color: "var(--hg-fg-2)", fontFamily: HG_SANS, fontSize: 12, flex: 1 }}>{text}</span>
+    </div>
+  );
+}
+
+/* Internal diagnostic channel — bridge telemetry ([parakeet], [kokoro],
+ * [direct], …) and the proactive coordinator's [proactive] lines. Hidden
+ * from the feed entirely unless `/debug on` (HomeApp filters kind:"diag"
+ * out otherwise). Faint, small, mono — pure debug texture. */
+function DiagContent({ text, channel }) {
+  return (
+    <div style={{
+      ...T_SYNTAX,
+      fontSize: 10.5,
+      lineHeight: 1.5,
+      color: "var(--hg-fg-4)",
+      fontStyle: "italic",
+      wordBreak: "break-word",
+      opacity: 0.85,
+    }}>
+      {text}
+    </div>
+  );
+}
+
+/* External Reasoning Fallback: answers from a non-local provider
+ * (OpenAI for MVP) carry a subtle 'external' tag so the user can
+ * always see where an answer came from. Same prose typography as
+ * HomeContent — feels seamless — but the small uppercase tag and ice
+ * color mark it as not-from-the-home-agent. Streaming caret while
+ * chunks arrive. See home-external.jsx + the routing plan. */
+function ExternalContent({ text, streaming }) {
+  return (
+    <div style={{
+      ...T_PROSE, ...HG_FG_BRIGHT,
+      display: "flex", alignItems: "baseline", gap: 8,
+    }}>
+      <span style={{
+        ...HG_FAINT,
+        fontSize: 9,
+        letterSpacing: "0.08em",
+        textTransform: "uppercase",
+        color: "var(--hg-ice)",
+        flexShrink: 0,
+      }}>external</span>
+      <span style={{ flex: 1 }}>
+        {text}
+        {streaming && <span className="hg-caret" />}
+      </span>
+    </div>
+  );
+}
+
+/* ── HelpContent — categorized clickable command list ──────────────── */
+//
+// Renders the /help payload as grouped sections. Each row hover-
+// brightens; click dispatches a window CustomEvent("hg-fill-input")
+// with the full command signature so HomeApp can fill + focus the
+// input. The user just clicks → hits Enter.
+//
+// Hint line at the bottom tells the user about the click-to-fill UX
+// (one-time; no animation that'd nag them after they learn it).
+function HelpContent({ groups = [], totalCount = 0, tip = "" }) {
+  const ROW_BASE = "var(--hg-fg-2)";
+  const ROW_HOVER = "var(--hg-fg-0)";
+  const dispatchFill = (cmd) => {
+    // Send the full signature (cmd + hint placeholder) so the user
+    // sees what's expected — but the signature with <hint> placeholder
+    // doesn't actually execute until they replace + hit enter.
+    try {
+      window.dispatchEvent(new CustomEvent("hg-fill-input", { detail: cmd }));
+    } catch {
+      // ignore — older browsers may not support CustomEvent constructor
+    }
+  };
+  return (
+    <div className="hg-scroll" style={{
+      ...T_PROSE,
+      color: "var(--hg-fg-2)",
+      maxHeight: "42vh",
+      overflowY: "auto",
+      paddingRight: 4,
+    }}>
+      <div style={{
+        ...T_META,
+        marginBottom: 10,
+        color: "var(--hg-fg-3)",
+        textTransform: "lowercase",
+        letterSpacing: "0.08em",
+        fontSize: 10.5,
+      }}>
+        {totalCount > 0 ? `${totalCount} commands` : "commands"}
+        {tip && (
+          <span style={{ color: "var(--hg-fg-4)", marginLeft: 8 }}>
+            · {tip}
+          </span>
+        )}
+      </div>
+      {groups.map((group) => (
+        <div key={group.id} style={{ marginBottom: 14 }}>
+          <div style={{
+            ...T_META,
+            color: "var(--hg-fg-3)",
+            fontSize: 9.5,
+            letterSpacing: "0.18em",
+            textTransform: "uppercase",
+            marginBottom: 5,
+            paddingBottom: 3,
+            borderBottom: "1px solid var(--hg-border-soft)",
+          }}>
+            <span>{group.label}</span>
+            {group.desc && (
+              <span style={{
+                color: "var(--hg-fg-4)",
+                marginLeft: 8,
+                letterSpacing: "0.04em",
+                textTransform: "none",
+                fontSize: 9.5,
+              }}>· {group.desc}</span>
+            )}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+            {(group.commands || []).map((c) => {
+              // Build the signature shown in the row. The hint goes
+              // into the input ONLY if it's not a placeholder pattern
+              // (<x>, [x], etc.) — for those, fill with just the cmd
+              // so the user can either tab-complete or type the arg.
+              const looksLikePlaceholder = c.hint && /^[<\[]|[>\]]$/.test(c.hint.trim());
+              const fillValue = looksLikePlaceholder ? c.cmd : (c.cmd + (c.hint ? " " + c.hint : ""));
+              const displaySig = c.hint ? `${c.cmd} ${c.hint}` : c.cmd;
+              return (
+                <HelpRow
+                  key={c.cmd}
+                  sig={displaySig}
+                  desc={c.desc}
+                  onClick={() => dispatchFill(fillValue)}
+                  baseColor={ROW_BASE}
+                  hoverColor={ROW_HOVER}
+                />
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function HelpRow({ sig, desc, onClick, baseColor, hoverColor }) {
+  const [hovered, setHovered] = React.useState(false);
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick && onClick();
+        }
+      }}
+      title="click to paste this command into the input box"
+      style={{
+        ...T_SYNTAX,
+        display: "grid",
+        gridTemplateColumns: "minmax(0, 28ch) minmax(0, 1fr)",
+        gap: 14,
+        padding: "3px 6px",
+        color: hovered ? hoverColor : baseColor,
+        background: hovered ? "color-mix(in oklab, var(--hg-fg-1) 6%, transparent)" : "transparent",
+        cursor: "pointer",
+        borderRadius: 2,
+        transition: "color 100ms, background 100ms",
+        fontSize: 11.5,
+      }}
+    >
+      <span style={{
+        color: hovered ? "var(--hg-fg-0)" : "var(--hg-fg-1)",
+        fontFamily: HG_MONO,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      }}>{sig}</span>
+      <span style={{
+        color: hovered ? "var(--hg-fg-1)" : "var(--hg-fg-3)",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      }}>— {desc}</span>
     </div>
   );
 }
 
 /* ── Event dispatch ──────────────────────────────────────────────────── */
-function EventContent({ e, onConfirm, onCancel }) {
-  switch (e.kind) {
-    case "user":     return <UserContent text={e.text} />;
-    case "voice":    return <VoiceContent text={e.text} />;
-    case "thinking": return <ThinkingContent text={e.text} />;
-    case "tool":     return <ToolContent name={e.name} args={e.args} status={e.status} latency={e.latency} />;
-    case "action":   return <ActionContent id={e.id} title={e.title} service={e.service} target={e.target} attrs={e.attrs} status={e.status} latency={e.latency} reason={e.reason} onConfirm={onConfirm} onCancel={onCancel} />;
-    case "home":     return <HomeContent text={e.text} streaming={e.streaming} />;
-    case "system":   return <SystemContent text={e.text} tone={e.tone} />;
-    default: return null;
-  }
+function EventContent({ e, onConfirm, onCancel, onUndo, onControlAction, lifecycle, onWhy }) {
+  // M5 (Addendum 27): wrap clickable bubble kinds with a thin <button>
+  // that opens the explainability drawer. Only home / external / action
+  // qualify, ONLY when (a) the event carries a convId AND (b) the
+  // parent supplied an onWhy handler (parent gates on debugMode).
+  // Control-card actions (e.controllable) keep their own click handlers
+  // — interactive sliders take precedence over "open drawer."
+  const inner = (() => {
+    switch (e.kind) {
+      case "user":       return <UserContent text={e.text} />;
+      case "voice":      return <VoiceContent text={e.text} />;
+      case "thinking":   return <ThinkingContent text={e.text} />;
+      case "tool":       return <ToolContent name={e.name} args={e.args} status={e.status} latency={e.latency} />;
+      case "action":
+        if (e.controllable && e.actionCtx) {
+          if (e.actionCtx.domain === "light" && window.LightControlCard) {
+            return <window.LightControlCard ctx={e.actionCtx} lifecycle={lifecycle || "active"} onControlAction={onControlAction} />;
+          }
+          if (e.actionCtx.domain === "media_player" && window.MediaControlCard) {
+            return <window.MediaControlCard ctx={e.actionCtx} lifecycle={lifecycle || "active"} onControlAction={onControlAction} />;
+          }
+        }
+        return <ActionContent id={e.id} title={e.title} service={e.service} target={e.target} attrs={e.attrs} status={e.status} latency={e.latency} reason={e.reason} traceId={e.traceId} onConfirm={onConfirm} onCancel={onCancel} onUndo={onUndo} />;
+      case "home":       return <HomeContent text={e.text} streaming={e.streaming} />;
+      case "external":   return <ExternalContent text={e.text} streaming={e.streaming} />;
+      case "perception": return <PerceptionContent text={e.text} snapshotUrl={e.snapshotUrl} />;
+      case "proactive":  return <ProactiveContent text={e.text} />;
+      case "diag":       return <DiagContent text={e.text} channel={e.channel} />;
+      case "system":     return <SystemContent text={e.text} tone={e.tone} />;
+      case "help":       return <HelpContent groups={e.groups} totalCount={e.totalCount} tip={e.tip} />;
+      default: return null;
+    }
+  })();
+
+  // Gate: only debug-mode-eligible kinds; controllable action cards
+  // already own their click area (slider drag) so SKIP them.
+  const isWhyEligible = onWhy && e.convId &&
+    (e.kind === "home" || e.kind === "external" ||
+     (e.kind === "action" && !(e.controllable && e.actionCtx)));
+
+  if (!isWhyEligible) return inner;
+
+  return (
+    <div
+      onClick={(ev) => {
+        // Don't hijack text-selection. If the user is selecting text
+        // within the bubble, the click came at the end of a drag with
+        // an active selection — let it through.
+        const sel = window.getSelection && window.getSelection();
+        if (sel && sel.toString().length > 0) return;
+        ev.stopPropagation();
+        onWhy(e.convId, e);
+      }}
+      title="click to see why · routing + tool calls + timing"
+      style={{ cursor: "pointer" }}
+      className="hg-why-clickable"
+    >
+      {inner}
+    </div>
+  );
 }
 
 /* ── Grouping ────────────────────────────────────────────────────────── */
 function speakerOf(e) {
   if (e.kind === "user" || e.kind === "voice") return "you";
   if (e.kind === "system") return "system";
+  if (e.kind === "help") return "system";    // help groups under system
+  if (e.kind === "perception") return "perception";
+  // proactive lines group under the assistant ("home") — they ARE the
+  // assistant taking initiative. (The default already returns "home";
+  // this is explicit for intent.)
+  if (e.kind === "proactive") return "home";
   return "home";
 }
 
@@ -344,14 +819,18 @@ function groupEventsBySpeaker(events) {
 }
 
 /* ── Turn block ──────────────────────────────────────────────────────── */
-function TurnBlock({ group, density, onConfirmAction, onCancelAction }) {
+function TurnBlock({ group, density, onConfirmAction, onCancelAction, onUndoAction, onControlAction, controlLifecycles, onWhy }) {
   const tone = group.speaker === "system" ? "system" : group.speaker;
   return (
     <div className="hg-fade">
       <TurnHeader speaker={group.speaker} time={group.time} tone={tone} />
       <TurnBody density={density}>
         {group.events.map((e) => (
-          <EventContent key={e.id} e={e} onConfirm={onConfirmAction} onCancel={onCancelAction} />
+          <EventContent key={e.id} e={e}
+            onConfirm={onConfirmAction} onCancel={onCancelAction} onUndo={onUndoAction}
+            onControlAction={onControlAction}
+            lifecycle={controlLifecycles ? controlLifecycles.get(e.id) : undefined}
+            onWhy={onWhy} />
         ))}
       </TurnBody>
     </div>
@@ -363,6 +842,7 @@ Object.assign(window, {
   TurnHeader, TurnBody, TurnBlock,
   EventContent, StatusText,
   UserContent, VoiceContent, ThinkingContent, ToolContent,
-  ActionContent, HomeContent, SystemContent,
+  ActionContent, HomeContent, SystemContent, PerceptionContent, ProactiveContent, DiagContent,
+  HelpContent, HelpRow,
   groupEventsBySpeaker, speakerOf,
 });

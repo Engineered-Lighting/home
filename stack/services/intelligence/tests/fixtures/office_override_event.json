@@ -1,0 +1,38 @@
+{
+  "camera": "living_room",
+  "context": {
+    "anticipated_room": null,
+    "any_occupied": true,
+    "asleep": false,
+    "night_safe": false,
+    "profile": "midday",
+    "shadow_mode": false,
+    "source_user_id": "<redacted>",
+    "state": "vacant",
+    "tv_playing": false,
+    "user_at_home": true
+  },
+  "context_id": "ovr-1779822169-431424",
+  "debug_match_reason": "none",
+  "delta_pct": -20,
+  "kind": "override_event",
+  "light_entity": "light.office",
+  "observed": {
+    "brightness_pct": 30,
+    "light_state": "on"
+  },
+  "owning_zones": ["office"],
+  "predicted": {
+    "brightness_pct": 50,
+    "color_temp_kelvin": 2700
+  },
+  "predictions_by_zone": {
+    "office": {
+      "predicted_pct": 50,
+      "ramp_initial_pct": 46,
+      "state": "vacant"
+    }
+  },
+  "ts": "2026-05-26T12:02:49.433417-07:00",
+  "zone": "office"
+}

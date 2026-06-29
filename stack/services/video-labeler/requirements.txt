@@ -1,0 +1,16 @@
+fastapi==0.115.*
+uvicorn[standard]==0.32.*
+pydantic==2.*
+# healthz gpu_free_gb only — tiny pure-python NVML binding; the code falls back
+# to null when no GPU/driver is present, so this is safe on CPU-only hosts.
+pynvml>=11.5
+# M2 VLM client (OpenAI-compatible chat completions; also what the starlette
+# TestClient rides on, so the Windows test venv installs this anyway).
+httpx==0.28.*
+# The M2 PERCEPTION stack (torch cu128 + ultralytics + av) and the M4
+# EMBEDDINGS stack (scikit-learn + timm + einops for torch.hub vjepa2) are
+# DELIBERATELY NOT here -- they are pinned in the Dockerfile pip install so
+# the Windows test venv never pulls torch. All heavy imports are lazy/guarded;
+# the fp16 .npy shard store is stdlib-only on purpose.
+# Dev/test extras are NOT listed here (keep the image slim):
+#   pip install pytest httpx   # see README "Tests"

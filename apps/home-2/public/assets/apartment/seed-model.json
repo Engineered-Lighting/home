@@ -1,0 +1,367 @@
+{
+ "schema_version": 1,
+ "seeded": true,
+ "zones": [
+  {
+   "id": "living_room",
+   "name": "living room",
+   "color": "#b8d8ff",
+   "floor_polygon": [
+    [
+     7.4,
+     0.6
+    ],
+    [
+     13.6,
+     0.6
+    ],
+    [
+     13.6,
+     6.2
+    ],
+    [
+     7.4,
+     6.2
+    ]
+   ],
+   "ceiling_height_m": 2.5,
+   "frigate_camera": "living_room",
+   "source": "seed"
+  },
+  {
+   "id": "kitchen",
+   "name": "kitchen",
+   "color": "#a8ffd8",
+   "floor_polygon": [
+    [
+     3.0,
+     2.6
+    ],
+    [
+     7.4,
+     2.6
+    ],
+    [
+     7.4,
+     6.5
+    ],
+    [
+     3.0,
+     6.5
+    ]
+   ],
+   "ceiling_height_m": 2.4,
+   "frigate_camera": "kitchen",
+   "source": "seed"
+  },
+  {
+   "id": "dining_room",
+   "name": "dining room",
+   "color": "#ffe2a8",
+   "floor_polygon": [
+    [
+     3.0,
+     0.6
+    ],
+    [
+     7.4,
+     0.6
+    ],
+    [
+     7.4,
+     2.6
+    ],
+    [
+     3.0,
+     2.6
+    ]
+   ],
+   "ceiling_height_m": 2.4,
+   "frigate_camera": "dining_room",
+   "source": "seed"
+  }
+ ],
+ "devices": [
+  {
+   "id": "dev-light_dining_table_left",
+   "type": "light",
+   "name": "dining table left",
+   "ha_entity_id": "light.dining_table_left",
+   "pos": [
+    4.5,
+    1.5,
+    2.3
+   ],
+   "yaw_rad": 0,
+   "height_preset": "ceiling",
+   "room_id": "dining_room",
+   "controllable": true,
+   "confidence": 0.5,
+   "source": "proposed"
+  },
+  {
+   "id": "dev-light_dining_table_right",
+   "type": "light",
+   "name": "dining table right",
+   "ha_entity_id": "light.dining_table_right",
+   "pos": [
+    5.5,
+    1.5,
+    2.3
+   ],
+   "yaw_rad": 0,
+   "height_preset": "ceiling",
+   "room_id": "dining_room",
+   "controllable": true,
+   "confidence": 0.5,
+   "source": "proposed"
+  },
+  {
+   "id": "dev-light_island_left",
+   "type": "light",
+   "name": "island left",
+   "ha_entity_id": "light.island_left",
+   "pos": [
+    4.2,
+    3.6,
+    2.3
+   ],
+   "yaw_rad": 0,
+   "height_preset": "ceiling",
+   "room_id": "kitchen",
+   "controllable": true,
+   "confidence": 0.5,
+   "source": "proposed"
+  },
+  {
+   "id": "dev-light_island_right",
+   "type": "light",
+   "name": "island right",
+   "ha_entity_id": "light.island_right",
+   "pos": [
+    5.2,
+    3.6,
+    2.3
+   ],
+   "yaw_rad": 0,
+   "height_preset": "ceiling",
+   "room_id": "kitchen",
+   "controllable": true,
+   "confidence": 0.5,
+   "source": "proposed"
+  },
+  {
+   "id": "dev-light_sink",
+   "type": "light",
+   "name": "sink",
+   "ha_entity_id": "light.sink",
+   "pos": [
+    5.0,
+    6.0,
+    2.3
+   ],
+   "yaw_rad": 0,
+   "height_preset": "ceiling",
+   "room_id": "kitchen",
+   "controllable": true,
+   "confidence": 0.5,
+   "source": "proposed"
+  },
+  {
+   "id": "dev-light_front_left",
+   "type": "light",
+   "name": "front left",
+   "ha_entity_id": "light.front_left",
+   "pos": [
+    8.6,
+    5.0,
+    2.4
+   ],
+   "yaw_rad": 0,
+   "height_preset": "ceiling",
+   "room_id": "living_room",
+   "controllable": true,
+   "confidence": 0.5,
+   "source": "proposed"
+  },
+  {
+   "id": "dev-light_front_right",
+   "type": "light",
+   "name": "front right",
+   "ha_entity_id": "light.front_right",
+   "pos": [
+    8.6,
+    1.8,
+    2.4
+   ],
+   "yaw_rad": 0,
+   "height_preset": "ceiling",
+   "room_id": "living_room",
+   "controllable": true,
+   "confidence": 0.5,
+   "source": "proposed"
+  },
+  {
+   "id": "dev-light_rear_left",
+   "type": "light",
+   "name": "rear left",
+   "ha_entity_id": "light.rear_left",
+   "pos": [
+    12.4,
+    5.0,
+    2.4
+   ],
+   "yaw_rad": 0,
+   "height_preset": "ceiling",
+   "room_id": "living_room",
+   "controllable": true,
+   "confidence": 0.5,
+   "source": "proposed"
+  },
+  {
+   "id": "dev-light_rear_right",
+   "type": "light",
+   "name": "rear right",
+   "ha_entity_id": "light.rear_right",
+   "pos": [
+    12.4,
+    1.8,
+    2.4
+   ],
+   "yaw_rad": 0,
+   "height_preset": "ceiling",
+   "room_id": "living_room",
+   "controllable": true,
+   "confidence": 0.5,
+   "source": "proposed"
+  },
+  {
+   "id": "dev-light_office",
+   "type": "light",
+   "name": "office",
+   "ha_entity_id": "light.office",
+   "pos": [
+    10.5,
+    5.6,
+    2.4
+   ],
+   "yaw_rad": 0,
+   "height_preset": "ceiling",
+   "room_id": "living_room",
+   "controllable": true,
+   "confidence": 0.5,
+   "source": "proposed"
+  },
+  {
+   "id": "dev-switch_ambient_light_left_mss110_main_channel",
+   "type": "light",
+   "name": "ambient light left",
+   "ha_entity_id": "switch.ambient_light_left_mss110_main_channel",
+   "pos": [
+    9.0,
+    1.4,
+    0.8
+   ],
+   "yaw_rad": 0,
+   "height_preset": "custom",
+   "room_id": "living_room",
+   "controllable": true,
+   "confidence": 0.5,
+   "source": "proposed"
+  },
+  {
+   "id": "dev-switch_ambient_light_right_mss110_main_channel",
+   "type": "light",
+   "name": "ambient light right",
+   "ha_entity_id": "switch.ambient_light_right_mss110_main_channel",
+   "pos": [
+    12.8,
+    1.4,
+    0.8
+   ],
+   "yaw_rad": 0,
+   "height_preset": "custom",
+   "room_id": "living_room",
+   "controllable": true,
+   "confidence": 0.5,
+   "source": "proposed"
+  },
+  {
+   "id": "dev-switch_smart_plug_mini_mss110_main_channel",
+   "type": "light",
+   "name": "smart plug mini",
+   "ha_entity_id": "switch.smart_plug_mini_mss110_main_channel",
+   "pos": [
+    13.1,
+    3.2,
+    0.8
+   ],
+   "yaw_rad": 0,
+   "height_preset": "custom",
+   "room_id": "living_room",
+   "controllable": true,
+   "confidence": 0.5,
+   "source": "proposed"
+  },
+  {
+   "id": "dev-camera_living_room",
+   "type": "camera",
+   "name": "living room cam",
+   "ha_entity_id": "camera.living_room",
+   "pos": [
+    7.7,
+    5.4,
+    2.3
+   ],
+   "yaw_rad": -0.85,
+   "height_preset": "wall",
+   "room_id": "living_room",
+   "controllable": false,
+   "confidence": 0.5,
+   "source": "proposed",
+   "camera": {
+    "frigate_name": "living_room"
+   }
+  },
+  {
+   "id": "dev-camera_kitchen",
+   "type": "camera",
+   "name": "kitchen cam",
+   "ha_entity_id": "camera.kitchen",
+   "pos": [
+    7.0,
+    5.6,
+    2.3
+   ],
+   "yaw_rad": 3.11,
+   "height_preset": "wall",
+   "room_id": "kitchen",
+   "controllable": false,
+   "confidence": 0.5,
+   "source": "proposed",
+   "camera": {
+    "frigate_name": "kitchen"
+   }
+  },
+  {
+   "id": "dev-camera_dining_room",
+   "type": "camera",
+   "name": "dining room cam",
+   "ha_entity_id": "camera.dining_room",
+   "pos": [
+    7.1,
+    4.4,
+    2.3
+   ],
+   "yaw_rad": -2.24,
+   "height_preset": "wall",
+   "room_id": "dining_room",
+   "controllable": false,
+   "confidence": 0.5,
+   "source": "proposed",
+   "camera": {
+    "frigate_name": "dining_room"
+   }
+  }
+ ]
+}

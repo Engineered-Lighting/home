@@ -1,0 +1,72 @@
+# Jarvis mute system — Addendum 9 in plan keen-doodling-parasol.md
+# Composite mute state; all enforcement layers read binary_sensor.jarvis_muted_effective_2.
+
+input_boolean:
+  jarvis_muted_explicit:
+    name: "Jarvis muted (manual)"
+    icon: mdi:robot-off
+  jarvis_auto_mute_tv:
+    name: "Auto-mute Jarvis when TV is active"
+    icon: mdi:television
+    initial: true
+
+input_datetime:
+  jarvis_mute_until:
+    name: "Jarvis muted until"
+    has_date: true
+    has_time: true
+    icon: mdi:timer-sand
+
+input_text:
+  jarvis_mute_reason:
+    name: "Jarvis mute reason"
+    max: 64
+    icon: mdi:information-outline
+
+# Simplest possible passive template binary_sensor. Re-evaluates when
+# any referenced entity changes state. For the now()-based branches
+# (timer expiry, TV grace) the automation below pings update_entity
+# every minute as a safety net.
+template:
+  - binary_sensor:
+      - name: "Jarvis muted effective"
+        unique_id: jarvis_muted_effective_v2
+        icon: mdi:robot
+        state: "{{ is_state('input_boolean.jarvis_muted_explicit', 'on') or is_state('input_boolean.homeai_movie', 'on') or (states('input_datetime.jarvis_mute_until') not in ['unknown', 'unavailable', 'none', ''] and (as_timestamp(states('input_datetime.jarvis_mute_until')) or 0) > as_timestamp(now())) or (is_state('input_boolean.jarvis_auto_mute_tv', 'on') and states.media_player.lg_tv is not none and states.media_player.lg_tv.state in ['on','playing','paused','buffering'] and (now() - states.media_player.lg_tv.last_changed).total_seconds() > 300) }}"
+        attributes:
+          reason: >-
+            {% set timer_active = states('input_datetime.jarvis_mute_until') not in ['unknown', 'unavailable', 'none', ''] and (as_timestamp(states('input_datetime.jarvis_mute_until')) or 0) > as_timestamp(now()) %}
+            {% set tv_active = is_state('input_boolean.jarvis_auto_mute_tv', 'on') and states.media_player.lg_tv is not none and states.media_player.lg_tv.state in ['on','playing','paused','buffering'] and (now() - states.media_player.lg_tv.last_changed).total_seconds() > 300 %}
+            {% if is_state('input_boolean.homeai_movie', 'on') %}movie
+            {% elif tv_active %}tv
+            {% elif timer_active %}timer
+            {% elif is_state('input_boolean.jarvis_muted_explicit', 'on') %}
+              {% set manual_reason = states('input_text.jarvis_mute_reason') %}
+              {{ manual_reason if manual_reason not in ['unknown', 'unavailable', 'none', ''] else 'manual' }}
+            {% else %}{% endif %}
+          mute_until_iso: >-
+            {% set timer_active = states('input_datetime.jarvis_mute_until') not in ['unknown', 'unavailable', 'none', ''] and (as_timestamp(states('input_datetime.jarvis_mute_until')) or 0) > as_timestamp(now()) %}
+            {{ states('input_datetime.jarvis_mute_until') if timer_active else '' }}
+
+automation:
+  - alias: "Jarvis: clear movie_mode after 6h idle"
+    id: jarvis_clear_movie_mode_6h
+    trigger:
+      - platform: state
+        entity_id: input_boolean.homeai_movie
+        to: "on"
+        for: "06:00:00"
+    action:
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.homeai_movie
+
+  - alias: "Jarvis: refresh muted-effective every minute"
+    id: jarvis_refresh_muted_effective_1m
+    trigger:
+      - platform: time_pattern
+        minutes: "/1"
+    action:
+      - service: homeassistant.update_entity
+        target:
+          entity_id: binary_sensor.jarvis_muted_effective_2

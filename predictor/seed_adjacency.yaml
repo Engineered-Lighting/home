@@ -1,0 +1,38 @@
+# seed_adjacency.yaml — warm-start zone-adjacency graph for the anticipatory
+# Markov predictor (Addendum 37 §6).
+#
+# *** BEST-GUESS LAYOUT — please correct to match the real house. ***
+#
+# Each zone lists the zones a person can walk to DIRECTLY. This is used only
+# as a gentle Dirichlet prior: a listed edge gets a real pseudocount, every
+# other edge a tiny epsilon. So a wrong edge here only slightly slows
+# learning that transition from real data — it is never fatal, and it washes
+# out within a handful of real observations.
+#
+# Links are made symmetric by the loader — listing A under B (or B under A)
+# is enough. __exit__ (leaving via a camera blind spot) is always reachable
+# and need not be listed.
+
+adjacency:
+  # ── living_room camera ──
+  front_door:        [office, sofa, front_left, whole_living_room, e28]
+  office:            [sofa, weights, front_left, whole_living_room]
+  sofa:              [office, weights, front_left, whole_living_room]
+  weights:           [office, sofa, whole_living_room]
+  front_left:        [front_door, office, sofa, whole_living_room]
+  whole_living_room: [front_door, office, sofa, weights, front_left,
+                      whole_dining_room]
+  # ── dining_room camera ──
+  dining_left:       [dining_right, whole_dining_room]
+  dining_right:      [dining_left, whole_dining_room]
+  whole_dining_room: [dining_left, dining_right, whole_living_room,
+                      whole_kitchen]
+  # ── kitchen camera ──
+  sink:              [island_left, island_right, whole_kitchen]
+  island_left:       [sink, island_right, whole_kitchen]
+  island_right:      [sink, island_left, whole_kitchen]
+  whole_kitchen:     [sink, island_left, island_right, whole_dining_room,
+                      workshop_zone]
+  # ── workshop / driveway ──
+  workshop_zone:     [whole_kitchen]
+  e28:               [front_door]

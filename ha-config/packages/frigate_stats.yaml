@@ -1,0 +1,100 @@
+# Frigate stats — modern template form (auto-tracks attribute changes).
+# Drop into /config/packages/. Restart or reload templates.
+
+sensor:
+  - platform: rest
+    name: frigate_stats
+    resource: http://192.168.0.125:5000/api/stats
+    method: GET
+    scan_interval: 30
+    value_template: "{{ value_json.service.uptime | default(0) }}"
+    unit_of_measurement: "s"
+    json_attributes:
+      - service
+      - cpu_usages
+      - detectors
+      - cameras
+      - gpu_usages
+
+template:
+  - sensor:
+      - name: "Frigate Total CPU"
+        unique_id: frigate_total_cpu
+        unit_of_measurement: "%"
+        state: >
+          {# default({}, true) — the `true` second arg makes Jinja default
+             on None (not just Undefined). state_attr returns None when the
+             sensor is briefly unavailable (e.g. Frigate restart, REST 504),
+             and `for x in None` raises TypeError. #}
+          {% set cpu_data = state_attr('sensor.frigate_stats', 'cpu_usages') | default({}, true) %}
+          {% set total = namespace(val=0) %}
+          {% for proc in cpu_data %}
+            {% set total.val = total.val + (cpu_data[proc].cpu | float(0)) %}
+          {% endfor %}
+          {{ total.val | round(1) }}
+
+      - name: "Frigate Coral Inference"
+        unique_id: frigate_coral_inference_ms
+        unit_of_measurement: "ms"
+        state: >
+          {# Same None-vs-Undefined fix as Total CPU above. d.keys() crashes
+             when d is None. #}
+          {% set d = state_attr('sensor.frigate_stats', 'detectors') | default({}, true) %}
+          {% set first = (d.keys() | list)[0] if d.keys() | list | length > 0 else None %}
+          {{ d[first].inference_speed | float(0) | round(1) if first else 0 }}
+
+      - name: "Frigate living_room FPS"
+        unique_id: frigate_living_room_fps
+        unit_of_measurement: "fps"
+        state: >
+          {{ state_attr('sensor.frigate_stats', 'cameras').living_room.camera_fps | default(0) | round(1)
+             if state_attr('sensor.frigate_stats', 'cameras') else 0 }}
+
+      - name: "Frigate kitchen FPS"
+        unique_id: frigate_kitchen_fps
+        unit_of_measurement: "fps"
+        state: >
+          {{ state_attr('sensor.frigate_stats', 'cameras').kitchen.camera_fps | default(0) | round(1)
+             if state_attr('sensor.frigate_stats', 'cameras') else 0 }}
+
+      - name: "Frigate dining_room FPS"
+        unique_id: frigate_dining_room_fps
+        unit_of_measurement: "fps"
+        state: >
+          {{ state_attr('sensor.frigate_stats', 'cameras').dining_room.camera_fps | default(0) | round(1)
+             if state_attr('sensor.frigate_stats', 'cameras') else 0 }}
+
+      - name: "Frigate workshop FPS"
+        unique_id: frigate_workshop_fps
+        unit_of_measurement: "fps"
+        state: >
+          {{ state_attr('sensor.frigate_stats', 'cameras').workshop.camera_fps | default(0) | round(1)
+             if state_attr('sensor.frigate_stats', 'cameras') else 0 }}
+
+      - name: "Frigate driveway FPS"
+        unique_id: frigate_driveway_fps
+        unit_of_measurement: "fps"
+        state: >
+          {{ state_attr('sensor.frigate_stats', 'cameras').driveway.camera_fps | default(0) | round(1)
+             if state_attr('sensor.frigate_stats', 'cameras') else 0 }}
+
+# MR.1 — recorder noise suppression.
+#
+# sensor.frigate_stats publishes cpu_usages as a ~19 KB attribute (~25-30
+# Frigate processes × per-process detail). Recorder caps attribute size at
+# 16384 bytes and logs:
+#   "State attributes for sensor.frigate_stats exceed maximum size of 16384
+#    bytes. This can cause database performance issues; Attributes will not
+#    be stored"
+# every poll cycle (~18 warnings/hour). The warning is INFORMATIONAL — live
+# state attribute access via state_attr() still works fine (that path reads
+# from the in-memory state machine, not the recorder DB). The only thing
+# that doesn't persist is historical graphing of cpu_usages, which we don't
+# rely on (the derived "Frigate Total CPU" template sensor computes its own
+# value live).
+#
+# Suppress just the db_schema warnings; ERROR-level messages still surface.
+
+logger:
+  logs:
+    homeassistant.components.recorder.db_schema: error

@@ -20,16 +20,263 @@
   <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin></script>
+  <!-- 3D apartment engine: real ESM (vendored three.js + Spark via importmap;
+       the Babel/window-global world stays untouched). The importmap MUST
+       precede the first module script. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./vendor/three-0.180.0/three.module.js",
+      "three/addons/": "./vendor/three-0.180.0/addons/",
+      "@sparkjsdev/spark": "./vendor/spark-2.1.0/spark.module.js"
+    }
+  }
+  </script>
+  <script>
+    /* ESM<->Babel bridge. Babel-side code awaits Home3D.ready (the engine
+       module namespace, or null on failure with Home3D.error set) and touches
+       NOTHING else on Home3D — that discipline keeps the split race-free. */
+    window.Home3D = { ready: new Promise(function (res) { window.__home3dResolve = res; }) };
+  </script>
+  <script src="./home-web-runtime.js"></script>
 </head>
 <body>
   <div id="root"></div>
-  <script type="text/babel" src="home-tauri.jsx"></script>
-  <script type="text/babel" src="home-ha.jsx"></script>
-  <script type="text/babel" src="home-icons.jsx"></script>
-  <script type="text/babel" src="home-events.jsx"></script>
-  <script type="text/babel" src="home-script.jsx"></script>
-  <script type="text/babel" src="home-vision.jsx"></script>
-  <script type="text/babel" src="home-app.jsx"></script>
-  <script type="text/babel" src="home-mount.jsx"></script>
+  <!-- 3D engine bootstrap: dynamic import propagates the same cache-buster
+       the JSX loader uses (home-3d siblings re-import with it; vendor libs
+       are version-dirred and deliberately cacheable). -->
+  <script type="module">
+    const cb = '?cb=' + Date.now();
+    import('./home-3d/engine.js' + cb)
+      .then((m) => window.__home3dResolve(m))
+      .catch((e) => { console.error('[home-3d] engine load failed', e); window.Home3D.error = e; window.__home3dResolve(null); });
+  </script>
+  <!-- Boot loader. Explicit sequential fetch -> Babel.transform -> execute,
+       replacing Babel-standalone's automatic <script type="text/babel">
+       runner. Two reasons, both observed intermittent boot failures:
+
+       1. Babel's runner treats XHR status 0 (connection reset/refused/
+          aborted/hung — common under dev-reload cycling) as a SUCCESSFUL
+          load of empty content: the file silently executes as nothing and
+          the chain continues with zero console output. When the dropped
+          file was home-mount.jsx the app simply never mounted. Here a
+          status-0/empty/timeout fetch is a hard failure: retried 3x, then
+          surfaced in a visible overlay.
+       2. The old loader ran plain .js files through the browser's script
+          pipeline but .jsx through Babel's post-DOMContentLoaded XHR
+          pipeline — with NO ordering between the two. Under connection
+          pressure the mount could beat e.g. home-apartment-data.js,
+          crashing the first render. Here everything executes in one
+          strictly-ordered chain, so the files[] order below is the real
+          dependency order.
+
+       Cache-busting (?cb=<launch-time>) is unchanged: WebView2 disk-caches
+       asset:// responses aggressively and Ctrl+R only clears the memory
+       cache; without it, JSX edits don't reach the running app until
+       %LOCALAPPDATA%\com.engineeredlighting.home\EBWebView\Default\Cache
+       is wiped manually.
+
+       Babel options below mirror @babel/standalone's script-tag defaults
+       exactly (presets react+env, the 3 legacy plugins, inline source
+       maps), so the executed code is identical to what the old runner
+       produced. -->
+  <script>
+    (function () {
+      var cb = '?cb=' + Date.now();
+      var files = [
+        ['home-tauri.jsx', true],
+        ['home-ha.jsx', true],
+        ['home-icons.jsx', true],
+        ['home-events.jsx', true],
+        ['home-script.jsx', true],
+        ['home-vision.jsx', true],
+        ['home-s2s.jsx', true],
+        ['home-metrics.jsx', true],
+        ['home-control.jsx', true],
+        ['home-proactive.jsx', true],
+        ['home-sse-fetch.js', false],
+        ['home-stack-actions.jsx', true],
+        ['home-ai-stack.jsx', true],
+        ['home-capabilities.js', false],
+        ['home-metrics-lab-helpers.js', false],
+        ['home-metrics-lab.jsx', true],
+        ['home-people-helpers.js', false],
+        ['home-people.jsx', true],
+        ['home-explain-helpers.js', false],
+        ['home-explain.jsx', true],
+        ['home-worldstate-helpers.js', false],
+        ['home-worldstate.jsx', true],
+        ['home-spatial-helpers.js', false],
+        ['home-spatial.jsx', true],
+        ['home-look.jsx', true],
+        ['home-external.jsx', true],
+        ['home-lighting-events.jsx', true],
+        ['home-lights.jsx', true],
+        ['home-intelligence.jsx', true],
+        ['simulation-cameras.jsx', true],
+        ['simulation-controls.jsx', true],
+        ['simulation-timeline.jsx', true],
+        ['simulation-data.jsx', true],
+        ['simulation.jsx', true],
+        ['home-apartment-data.js', false],
+        ['home-apartment-sim.js', false],
+        ['home-apartment-cards.jsx', true],
+        ['home-apartment-calibrate.jsx', true],
+        ['home-apartment-edit.jsx', true],
+        ['home-apartment.jsx', true],
+        ['home-video-labeler-data.js', false],
+        ['home-video-labeler-timeline.jsx', true],
+        ['home-video-labeler.jsx', true],
+        ['home-app.jsx', true],
+        ['home-mount.jsx', true],
+      ];
+
+      var BABEL_PLUGINS = [
+        'transform-class-properties',
+        'transform-object-rest-spread',
+        'transform-flow-strip-types',
+      ];
+
+      var boot = window.__bootState = {
+        loaded: 0, total: files.length, current: null, failed: null, done: false,
+      };
+
+      function overlay(title, detail) {
+        var msg = '[boot] ' + title + (detail ? '\n' + detail : '');
+        console.error(msg);
+        var el = document.getElementById('hg-boot-overlay');
+        if (!el) {
+          el = document.createElement('div');
+          el.id = 'hg-boot-overlay';
+          el.style.cssText =
+            'position:fixed;top:0;left:0;right:0;z-index:99999;' +
+            'background:#3b0d0d;color:#ffd7d7;font:12px/1.5 Consolas,monospace;' +
+            'padding:10px 14px;border-bottom:1px solid #a33;' +
+            'white-space:pre-wrap;max-height:45vh;overflow:auto;';
+          (document.body || document.documentElement).appendChild(el);
+        }
+        el.textContent = msg;
+      }
+
+      /* Success = HTTP 200, or status 0 WITH content (file:// and custom
+         schemes report status 0 on success). Status 0 with an empty body is
+         the reset/refused/aborted signature and must fail — this is exactly
+         the case Babel's own loader gets wrong. */
+      function fetchText(url, timeoutMs) {
+        return new Promise(function (resolve, reject) {
+          var xhr = new XMLHttpRequest();
+          xhr.open('GET', url, true);
+          if ('overrideMimeType' in xhr) xhr.overrideMimeType('text/plain');
+          xhr.timeout = timeoutMs;
+          xhr.onreadystatechange = function () {
+            if (xhr.readyState !== 4) return;
+            if (xhr.status === 200 || (xhr.status === 0 && xhr.responseText.length > 0)) {
+              resolve(xhr.responseText);
+            } else {
+              reject(new Error('HTTP status ' + xhr.status + ', ' +
+                (xhr.responseText ? xhr.responseText.length : 0) + ' bytes'));
+            }
+          };
+          xhr.ontimeout = function () { reject(new Error('timeout after ' + timeoutMs + 'ms')); };
+          xhr.onerror = function () { reject(new Error('network error (status 0)')); };
+          xhr.send(null);
+        });
+      }
+
+      function fetchWithRetry(url, attempts) {
+        return fetchText(url, 20000).catch(function (err) {
+          if (attempts <= 1) throw err;
+          console.warn('[boot] retrying ' + url + ' — ' + err.message);
+          return new Promise(function (r) { setTimeout(r, 300); }).then(function () {
+            return fetchWithRetry(url, attempts - 1);
+          });
+        });
+      }
+
+      function execute(name, code) {
+        var s = document.createElement('script');
+        s.text = code + '\n//# sourceURL=' + name;
+        document.head.appendChild(s);
+      }
+
+      function step(i) {
+        if (i >= files.length) {
+          boot.done = true;
+          boot.current = null;
+          return;
+        }
+        var name = files[i][0];
+        var isBabel = files[i][1];
+        boot.current = name;
+        fetchWithRetry(name + cb, 3).then(function (text) {
+          var code = text;
+          if (isBabel) {
+            try {
+              code = Babel.transform(text, {
+                filename: name,
+                presets: ['react', 'env'],
+                plugins: BABEL_PLUGINS,
+                sourceMaps: 'inline',
+                sourceFileName: name,
+              }).code;
+            } catch (err) {
+              boot.failed = name;
+              overlay('Babel transform failed in ' + name +
+                ' — boot chain stopped (downstream files depend on it)',
+                String((err && err.message) || err));
+              return;
+            }
+          }
+          execute(name, code);
+          boot.loaded++;
+          step(i + 1);
+        }).catch(function (err) {
+          boot.failed = name;
+          overlay('Failed to load ' + name + ' after 3 attempts — boot chain stopped',
+            String((err && err.message) || err));
+        });
+      }
+      step(0);
+
+      /* Mount watchdog. Lives HERE, not in home-mount.jsx: the failure mode
+         it guards against is home-mount.jsx itself never executing, in which
+         case any watchdog defined there would not exist either. */
+      var mountRetries = 0;
+      var lastLoaded = -1;
+      var lastProgressAt = Date.now();
+      function watchdog() {
+        var root = document.getElementById('root');
+        if (root && root.children.length > 0) return; /* mounted — done */
+        if (boot.failed) return; /* overlay already explains it */
+        if (!boot.done) {
+          if (boot.loaded !== lastLoaded) {
+            lastLoaded = boot.loaded;
+            lastProgressAt = Date.now();
+          } else if (Date.now() - lastProgressAt > 90000) {
+            overlay('Boot chain stalled at ' + boot.current,
+              boot.loaded + '/' + boot.total + ' files executed');
+            return;
+          }
+          setTimeout(watchdog, 2000);
+          return;
+        }
+        if (typeof window.__homeMount === 'function' && mountRetries < 3) {
+          mountRetries++;
+          console.warn('[boot] #root empty after boot chain — retrying mount (' +
+            mountRetries + '/3)');
+          try { window.__homeMount(); } catch (e) { console.error('[boot] mount retry threw', e); }
+          setTimeout(watchdog, 2000);
+          return;
+        }
+        overlay('Boot chain completed but the app did not mount',
+          'files: ' + boot.loaded + '/' + boot.total +
+          ' · typeof HomeApp: ' + typeof window.HomeApp +
+          ' · typeof __homeMount: ' + typeof window.__homeMount +
+          ' · mount retries: ' + mountRetries +
+          '\nIf a component crashed during render, the error is in the console above.');
+      }
+      setTimeout(watchdog, 2000);
+    })();
+  </script>
 </body>
 </html>

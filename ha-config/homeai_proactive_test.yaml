@@ -1,0 +1,235 @@
+# homeai_proactive_test.yaml — TEST HARNESS for the proactive smart-home
+# experience. Drop this into /config/packages/ ALONGSIDE
+# homeai_proactive.yaml to validate the whole feature WITHOUT physically
+# leaving and returning home. Remove it once you're satisfied.
+#
+# HOW IT WORKS
+#   Each input_button below, when pressed (from any HA dashboard / your
+#   phone / Developer Tools), fires the `homeai_proactive` event(s) the
+#   production automations fire — same shape, same transport, same
+#   coordinator path. The one difference: test events carry `test: true`
+#   in event_data, which tells the coordinator to bypass the long
+#   time-based cooldowns (welcome-home 30 min, global 90 s, per-room,
+#   cross-transport dedupe) so the harness is freely repeatable. The rest
+#   runs for real — the two-stage arrival gate, mode/quiet-hours
+#   suppression, the Voice PE start_conversation call, the follow-up
+#   window. This exercises the full chain:
+#   HA event → app HA-WS subscription → coordinator → real Voice PE puck.
+#
+#   (To also exercise the bridge SSE fallback path + the real `for:`
+#   debounce, use Developer Tools → States to set person.marcelo
+#   home <-> not_home directly — the real automations AND the bridge's
+#   on_person_state_changed both fire off that.)
+#
+# See docs/RUNBOOK.md → "Validation without leaving home".
+
+input_button:
+  homeai_test_arrival:
+    name: "TEST — arrival (full two-stage)"
+    icon: mdi:home-import-outline
+  homeai_test_arrival_unconfirmed:
+    name: "TEST — arrival, never confirmed"
+    icon: mdi:home-alert-outline
+  homeai_test_left_home:
+    name: "TEST — left home"
+    icon: mdi:home-export-outline
+  homeai_test_room_entry:
+    name: "TEST — room entry"
+    icon: mdi:door-open
+  homeai_test_face_confirm:
+    name: "TEST — bare face-confirm (should be ignored)"
+    icon: mdi:face-recognition
+  homeai_test_run_all:
+    name: "TEST — run full scenario suite"
+    icon: mdi:play-box-multiple
+
+input_select:
+  homeai_test_room:
+    name: "TEST — room for room-entry test"
+    options:
+      - kitchen
+      - living_room
+      - office
+    initial: kitchen
+    icon: mdi:floor-plan
+
+input_text:
+  homeai_test_name:
+    name: "TEST — name for arrival/confirm tests"
+    initial: Marcelo
+    max: 40
+
+automation:
+  # Full happy-path two-stage arrival in ~3 seconds: GPS arrival event,
+  # then (after the app enters arrival_pending_confirmation) the Frigate
+  # face-rec confirm. You should hear the Voice PE puck speak.
+  - id: homeai_test_arrival_run
+    alias: "HomeAI TEST — arrival (full two-stage)"
+    mode: restart
+    trigger:
+      - platform: state
+        entity_id: input_button.homeai_test_arrival
+    action:
+      - event: homeai_proactive
+        event_data:
+          type: person_arrived_home
+          person: person.test
+          display_name: "{{ states('input_text.homeai_test_name') }}"
+          confidence: 1.0
+          raw_source: device_tracker
+          test: true
+      - delay: "00:00:03"
+      - event: homeai_proactive
+        event_data:
+          type: identity_confirmed
+          display_name: "{{ states('input_text.homeai_test_name') }}"
+          room: living_room
+          confidence: 0.97
+          raw_source: frigate
+          test: true
+
+  # Stage 1 only — no face-rec confirm ever follows. Watch the app's
+  # ProactiveStatusLine show "arrival pending — awaiting camera…", then
+  # the window time out into the soft fallback (no spoken name).
+  # (For a quick test, temporarily lower arrivalConfirmWindowMs in
+  #  home-proactive.jsx, or just wait out the 5-minute window.)
+  - id: homeai_test_arrival_unconfirmed_run
+    alias: "HomeAI TEST — arrival, never confirmed"
+    mode: restart
+    trigger:
+      - platform: state
+        entity_id: input_button.homeai_test_arrival_unconfirmed
+    action:
+      - event: homeai_proactive
+        event_data:
+          type: person_arrived_home
+          person: person.test
+          display_name: "{{ states('input_text.homeai_test_name') }}"
+          confidence: 1.0
+          raw_source: device_tracker
+          test: true
+
+  # Left home — fires the event AND actually runs the production
+  # lights-off action, so you see the real effect. The app flips to
+  # "away mode".
+  - id: homeai_test_left_home_run
+    alias: "HomeAI TEST — left home"
+    mode: restart
+    trigger:
+      - platform: state
+        entity_id: input_button.homeai_test_left_home
+    action:
+      # same indoor set as homeai_proactive.yaml's homeai_left_home
+      - service: light.turn_off
+        target:
+          entity_id:
+            - light.living_room_lights
+            - light.office
+            - light.sink
+            - light.sink_light
+            - light.sink_light_2
+            - light.island_left
+            - light.island_right
+            - light.kitchen_floodlight_timed
+            - light.dining_light
+            - light.dining_light_2
+            - light.dining_room_floodlight_timed
+            - light.dining_table_left
+            - light.dining_table_right
+            - light.ambient_light_left_mss110_main_channel
+            - light.ambient_light_right_mss110_main_channel
+      - event: homeai_proactive
+        event_data:
+          type: person_left_home
+          person: person.test
+          display_name: "{{ states('input_text.homeai_test_name') }}"
+          confidence: 1.0
+          raw_source: device_tracker
+          test: true
+
+  # Room entry — fires room_entered for the room picked in
+  # input_select.homeai_test_room. Carries test:true, so it bypasses the
+  # time-based cooldowns and is freely repeatable. (The per-room cooldown
+  # + multi-room suppression logic is validated in Simulation Mode —
+  # /sim room-entry-cooldown and /sim room-entry-suppressed.)
+  - id: homeai_test_room_entry_run
+    alias: "HomeAI TEST — room entry"
+    mode: restart
+    trigger:
+      - platform: state
+        entity_id: input_button.homeai_test_room_entry
+    action:
+      - event: homeai_proactive
+        event_data:
+          type: room_entered
+          room: "{{ states('input_select.homeai_test_room') }}"
+          confidence: 0.9
+          raw_source: frigate
+          test: true
+
+  # Bare identity_confirmed with NO pending arrival — proves the
+  # coordinator correctly IGNORES face-rec as a standalone trigger
+  # (it's corroboration-only). Nothing should happen / be spoken.
+  - id: homeai_test_face_confirm_run
+    alias: "HomeAI TEST — bare face-confirm (should be ignored)"
+    mode: restart
+    trigger:
+      - platform: state
+        entity_id: input_button.homeai_test_face_confirm
+    action:
+      - event: homeai_proactive
+        event_data:
+          type: identity_confirmed
+          display_name: "{{ states('input_text.homeai_test_name') }}"
+          room: living_room
+          confidence: 0.97
+          raw_source: frigate
+          test: true
+
+  # One-tap full-suite runner. Presses the individual test buttons in
+  # sequence with generous delays so you can watch each scenario play
+  # out on the puck + in the app feed. Story arc: leave (lights off,
+  # away) -> return (two-stage -> spoken welcome + return-home scene) ->
+  # walk into a room (room prompt) -> a stray face-rec (correctly
+  # ignored). Ends with lights on + the app idle. The 5-minute
+  # arrival-unconfirmed timeout test is intentionally NOT included here
+  # — run input_button.homeai_test_arrival_unconfirmed on its own.
+  - id: homeai_test_run_all_run
+    alias: "HomeAI TEST — run full scenario suite"
+    mode: restart
+    trigger:
+      - platform: state
+        entity_id: input_button.homeai_test_run_all
+    action:
+      - service: script.turn_on
+        target:
+          entity_id: script.homeai_run_all_tests
+
+script:
+  homeai_run_all_tests:
+    alias: "HomeAI TEST — run full scenario suite"
+    mode: restart
+    sequence:
+      # 1. Leave — lights off, app flips to away mode.
+      - service: input_button.press
+        target:
+          entity_id: input_button.homeai_test_left_home
+      - delay: "00:00:06"
+      # 2. Return — full two-stage arrival. The arrival automation has
+      #    its own internal 3 s gap (stage 1 -> face confirm), then the
+      #    coordinator speaks the welcome + fires script.homeai_return_home
+      #    + opens the ~12 s follow-up window. Wait it all out.
+      - service: input_button.press
+        target:
+          entity_id: input_button.homeai_test_arrival
+      - delay: "00:00:25"
+      # 3. Room entry — short room prompt + its own follow-up window.
+      - service: input_button.press
+        target:
+          entity_id: input_button.homeai_test_room_entry
+      - delay: "00:00:20"
+      # 4. Bare face-confirm — coordinator should silently ignore it
+      #    (no pending arrival). Nothing spoken; a /debug diag line only.
+      - service: input_button.press
+        target:
+          entity_id: input_button.homeai_test_face_confirm

@@ -1,0 +1,148 @@
+# living_lights_override_lifecycle.yaml — HAND-WRITTEN (not generated).
+#
+# Owns the lifecycle of explicit presence-overrides written by the
+# set_presence_override tool (functions/living_lights.py) and by the
+# good-morning energize automation. The override payload carries:
+#   - hold_until        : ISO ts; earliest time the override may auto-clear
+#   - vacancy_grace_s   : seconds the zone must read continuously vacant
+#                         (after hold_until) before easing back
+#   - pinned            : if true, never auto-clear
+#
+# Why this file exists: previously there was NO deployed auto-clear, and
+# explicit spoken commands never wrote an override at all (they used a
+# bare light.turn_on the ambient engine reverted within seconds). The
+# robust model is: an explicit command STICKS for at least MIN_HOLD even
+# if the cameras briefly lose a still occupant, then eases back to
+# automatic shortly after the user actually leaves.
+#
+# Also hardens the `asleep` state (a stuck-on asleep both dims everything
+# to the 30% cap AND bypasses the pilot manual-cooldown) and adds a
+# wake-up latch path so working/morning context is robust.
+#
+# Rollback: delete this file + reload automations (overrides then persist
+# until explicitly cleared; nothing else regresses).
+
+input_boolean:
+  living_lights_morning_greeting_enabled:
+    name: "Living Lights — morning greeting enabled"
+    initial: true
+    icon: mdi:weather-sunset-up
+  living_lights_morning_energize_enabled:
+    name: "Living Lights — morning energize enabled"
+    initial: true
+    icon: mdi:white-balance-sunny
+
+automation:
+  # ── Override lifecycle: ease an override back to automatic only once
+  #    BOTH (a) min-hold has elapsed AND (b) the zone has read vacant for
+  #    the grace window. Pinned overrides are skipped. ────────────────────
+  - alias: "Living Lights — override lifecycle (min-hold + ease-back)"
+    id: living_lights_override_lifecycle
+    mode: single
+    triggers:
+      - trigger: time_pattern
+        minutes: "/1"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.living_lights_enabled
+        state: "on"
+    actions:
+      - variables:
+          to_clear: >-
+            {% set zmap = {
+              'dining_left':'dining_room','dining_right':'dining_room',
+              'sink':'kitchen','island_left':'kitchen','island_right':'kitchen',
+              'sofa':'living_room','office':'living_room','front_left':'living_room',
+              'front_door':'living_room','weights':'living_room'} %}
+            {% set ns = namespace(out=[]) %}
+            {% for z, cam in zmap.items() %}
+              {% set txt = states('input_text.living_lights_override_text_' ~ z) %}
+              {% if txt and txt[0] == '{' %}
+                {% set obj = txt | from_json %}
+                {% if not obj.get('pinned', false) %}
+                  {% set hu = obj.get('hold_until') %}
+                  {% set hud = as_datetime(hu) if hu else none %}
+                  {% set past_hold = (hud is none) or (now() > hud) %}
+                  {% set grace = obj.get('vacancy_grace_s', 300) | int(300) %}
+                  {% set sid = 'binary_sensor.' ~ cam ~ '_' ~ z ~ '_person_occupancy_stable' %}
+                  {% set st = states[sid] %}
+                  {% set vacant_long = (st is not none) and st.state == 'off'
+                       and (now() - st.last_changed).total_seconds() > grace %}
+                  {% set no_sensor = st is none %}
+                  {% if past_hold and (vacant_long or no_sensor) %}
+                    {% set ns.out = ns.out + [z] %}
+                  {% endif %}
+                {% endif %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.out }}
+      - condition: template
+        value_template: "{{ to_clear | length > 0 }}"
+      - repeat:
+          for_each: "{{ to_clear }}"
+          sequence:
+            - action: input_text.set_value
+              target:
+                entity_id: "input_text.living_lights_override_text_{{ repeat.item }}"
+              data:
+                value: ""
+            - action: logbook.log
+              data:
+                name: "Living Lights override"
+                message: >-
+                  eased {{ repeat.item }} back to automatic
+                  (min-hold elapsed and zone vacant past grace)
+                entity_id: "input_text.living_lights_override_text_{{ repeat.item }}"
+
+  # ── Asleep failsafe: a stuck-on asleep dims everything to 30% AND
+  #    bypasses the manual cooldown, so explicit commands stop sticking.
+  #    Force it off after 12h continuous as a stuck-state guard. ──────────
+  - alias: "Living Lights — asleep failsafe (never stuck > 12h)"
+    id: living_lights_asleep_failsafe
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.living_lights_asleep
+        to: "on"
+        for:
+          hours: 12
+    actions:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.living_lights_asleep
+      - action: logbook.log
+        data:
+          name: "Living Lights asleep"
+          message: "asleep failsafe — forced OFF after 12h continuous (stuck-state guard)"
+          entity_id: input_boolean.living_lights_asleep
+
+  # ── Wake-up latch (adaptive): waking in the morning (asleep on→off
+  #    during the morning window) counts as "Marcelo woke up" even if the
+  #    presence-2min latch missed it. Complements the generated latch and
+  #    drives the good-morning greeting. ──────────────────────────────────
+  - alias: "Living Lights — woke up (asleep cleared in the morning)"
+    id: living_lights_woke_up_on_wake
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.living_lights_asleep
+        from: "on"
+        to: "off"
+    conditions:
+      - condition: template
+        value_template: "{{ 4.5 <= (now().hour + now().minute / 60) < 11.0 }}"
+      - condition: state
+        entity_id: input_boolean.living_lights_woke_up_today
+        state: "off"
+      - condition: state
+        entity_id: input_boolean.user_at_home
+        state: "on"
+    actions:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.living_lights_woke_up_today
+      - action: logbook.log
+        data:
+          name: "Living Lights morning"
+          message: "woke_up_today latched (asleep cleared during the morning window)"
+          entity_id: input_boolean.living_lights_woke_up_today

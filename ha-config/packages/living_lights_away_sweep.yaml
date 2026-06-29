@@ -1,0 +1,57 @@
+# living_lights_away_sweep.yaml — non-pilot sweep on user_at_home → off.
+#
+# The per-zone pilot actuators (living_lights_pilot_*.yaml) handle every
+# light entity in LIGHT_TARGETS via their `away` state action. The ambient
+# package (living_lights_ambient.yaml) handles the 2 ambient mss110
+# switches. THIS package catches the remaining household lights/switches
+# that aren't in either bucket but the user expects to turn off when
+# leaving (per directive: "ALL my lights should turn off when I leave").
+#
+# Coverage:
+#   - switch.living_room_lamps  — floor lamps wired through an Aqara/relay
+#   - switch.workshop_lights    — Aqara wall switch for workshop fixtures
+#   - light.outdoor_light       — outdoor / driveway light
+#
+# Gated on the same master toggles as the rest of Living Lights so the
+# whole layer can be paused with one flip:
+#   input_boolean.living_lights_enabled = on
+#   input_boolean.living_lights_shadow  = off
+#
+# Mode: single — debounces against rapid user_at_home toggles. The
+# trigger is a sharp on→off edge, not a periodic re-check, so single is
+# the right discipline.
+#
+# Rollback: delete this file + reload automations.
+
+automation:
+  - alias: "Living Lights — away sweep (non-pilot)"
+    id: living_lights_away_sweep
+    description: >
+      When user_at_home flips off, turn off household lights/switches NOT
+      managed by the per-zone pilots or the ambient package. Specifically:
+      living-room floor lamps, workshop wall switch, outdoor light.
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.user_at_home
+        from: "on"
+        to: "off"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.living_lights_enabled
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.living_lights_shadow
+        state: "off"
+    actions:
+      - action: switch.turn_off
+        target:
+          entity_id:
+            - switch.living_room_lamps
+            - switch.workshop_lights
+      - action: light.turn_off
+        target:
+          entity_id:
+            - light.outdoor_light
+        data:
+          transition: 2.0

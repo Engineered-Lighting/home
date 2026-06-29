@@ -1,0 +1,119 @@
+# living_lights_belief_engine.yaml — Phase 4.C (P-9) belief-engine scaffold
+#
+# Forward-compatible perception event normalizer. Subscribes to:
+#   - homeai_proactive HA bus events (existing channel)
+#   - frigate person occupancy state_changed
+#   - audio binary_sensor state_changed (50 sensors)
+#
+# Normalizes each to canonical PerceptionEvent JSONL written to
+# /config/perception_events.jsonl. Reserved HA bus events for downstream
+# consumers (V-JEPA2-aware tooling).
+#
+# DEFAULT-OFF — gated by input_boolean.living_lights_evidence_engine_enabled.
+# When OFF, raw events still log but belief updates are no-op.
+# When ON + V-JEPA2 publishes real labels, belief updates activate.
+#
+# Per AR33-31 belief engine writes go through atomic JSONL append (single
+# writer). Stage 5 significance threshold gates actuation.
+#
+# Per AR33-38 events live in extended_openai_conversation.living_lights.*
+# namespace (no collisions).
+
+shell_command:
+  living_lights_append_perception: 'sh -c "echo {{ payload }} | base64 -d >> /config/perception_events.jsonl; echo >> /config/perception_events.jsonl"'
+  living_lights_rotate_perception_log: 'sh -c "test -f /config/perception_events.jsonl && (cp /config/perception_events.jsonl /config/perception_events.$(date +%Y%m%d).jsonl && : > /config/perception_events.jsonl) || true; find /config -name perception_events.\\*.jsonl -mtime +30 -delete 2>/dev/null || true"'
+
+automation:
+  # ───── homeai_proactive bridge → perception_event ─────
+  - alias: "Living Lights — homeai_proactive → perception_event"
+    id: living_lights_perception_from_homeai_proactive
+    description: >
+      Bridges existing homeai_proactive bus events to the canonical
+      PerceptionEvent envelope. Fires regardless of evidence_engine
+      enabled (we always log; only belief updates gate on toggle).
+    mode: parallel
+    max: 50
+    triggers:
+      - trigger: event
+        event_type: homeai_proactive
+    actions:
+      - variables:
+          ev_type: "{{ trigger.event.data.type | default('unknown') }}"
+          ev_room: "{{ trigger.event.data.room | default('') }}"
+          ev_person: "{{ trigger.event.data.person | default(trigger.event.data.display_name) | default('') }}"
+          ev_conf: "{{ trigger.event.data.confidence | default(0.9) }}"
+          ev_source: "{{ trigger.event.data.raw_source | default('homeai_proactive') }}"
+          ts: "{{ now().isoformat() }}"
+          ev_id: "ev-{{ now().timestamp() | int }}-{{ now().microsecond }}-hp"
+          kind: >-
+            {% if 'arriv' in ev_type %}presence
+            {% elif 'identity' in ev_type %}identity
+            {% elif 'room_enter' in ev_type %}presence
+            {% elif 'left' in ev_type %}presence
+            {% else %}system
+            {% endif %}
+          json_payload: >-
+            {"event_id":"{{ ev_id }}","schema_version":1,"ts":"{{ ts }}","ts_recv":"{{ ts }}","source":"homeai_proactive","kind":"{{ kind | trim }}","room":"{{ ev_room }}","person":"{{ ev_person }}","evidence":{"label":"{{ ev_type }}","confidence":{{ ev_conf }},"raw":{"original_type":"{{ ev_type }}","raw_source":"{{ ev_source }}"}},"ttl_s":60}
+      - action: shell_command.living_lights_append_perception
+        data:
+          payload: "{{ (json_payload | string) | base64_encode }}"
+      - event: extended_openai_conversation_living_lights_perception_event
+        event_data:
+          event_id: "{{ ev_id }}"
+          source: homeai_proactive
+          kind: "{{ kind | trim }}"
+          room: "{{ ev_room }}"
+          person: "{{ ev_person }}"
+          confidence: "{{ ev_conf }}"
+
+  # ───── Frigate audio binary_sensor → perception_event (audio kind) ─────
+  - alias: "Living Lights — frigate audio → perception_event"
+    id: living_lights_perception_from_audio
+    description: >
+      Captures audio detection events from the 50 audio binary_sensors
+      Frigate publishes. Maps to PerceptionEvent kind=audio.
+    mode: parallel
+    max: 50
+    triggers:
+      - trigger: state
+        entity_id:
+          - binary_sensor.kitchen_speech_sound
+          - binary_sensor.living_room_speech_sound
+          - binary_sensor.living_room_music_sound
+          - binary_sensor.living_room_tv_sound
+          - binary_sensor.driveway_doorbell_sound
+          - binary_sensor.driveway_knock_sound
+          - binary_sensor.dining_room_speech_sound
+          - binary_sensor.workshop_speech_sound
+          - binary_sensor.kitchen_music_sound
+          - binary_sensor.driveway_speech_sound
+        from: "off"
+        to: "on"
+    actions:
+      - variables:
+          ev_entity: "{{ trigger.entity_id }}"
+          ev_camera: "{{ ev_entity.split('.')[1].rsplit('_', 2)[0] }}"
+          ev_label: "{{ ev_entity.split('.')[1].rsplit('_', 2)[1] }}"
+          ts: "{{ now().isoformat() }}"
+          ev_id: "ev-{{ now().timestamp() | int }}-{{ now().microsecond }}-audio"
+          json_payload: >-
+            {"event_id":"{{ ev_id }}","schema_version":1,"ts":"{{ ts }}","ts_recv":"{{ ts }}","source":"frigate_audio","kind":"audio","camera":"camera.{{ ev_camera }}","evidence":{"label":"{{ ev_label }}","confidence":0.6,"raw":{"entity_id":"{{ ev_entity }}"}},"ttl_s":30}
+      - action: shell_command.living_lights_append_perception
+        data:
+          payload: "{{ (json_payload | string) | base64_encode }}"
+
+  # ───── Daily retention purge (03:00 + on startup if last >26h) ─────
+  - alias: "Living Lights — perception event log rotation"
+    id: living_lights_perception_log_rotation
+    description: >
+      Rotates /config/perception_events.jsonl daily. Retention policy
+      per AR33-26: 30 days max.
+    mode: single
+    triggers:
+      - trigger: time
+        at: "03:00:00"
+      - trigger: homeassistant
+        event: start
+    actions:
+      - action: shell_command.living_lights_rotate_perception_log
+        data: {}

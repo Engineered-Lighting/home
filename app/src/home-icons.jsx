@@ -101,6 +101,8 @@ function StatusDot({ tone = "live", size = 6 }) {
     success: "var(--hg-fg-0)",
     pending: "var(--hg-ice)",
     error: "var(--hg-warn)",
+    warn: "var(--hg-warn)",
+    crit: "var(--hg-crit)",
     idle: "var(--hg-fg-3)",
   };
   const isPulse = tone === "live" || tone === "pending";
@@ -119,7 +121,93 @@ function StatusDot({ tone = "live", size = 6 }) {
   );
 }
 
+/* ── Control-card icons (lights + media) ─────────────────────────────── */
+function IconBulb({ size = 14, stroke = "currentColor" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={stroke} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 18h6" />
+      <path d="M10 21h4" />
+      <path d="M12 3a6 6 0 0 0-3.6 10.8c.5.4.9.9 1 1.6l.1.6h5l.1-.6c.1-.7.5-1.2 1-1.6A6 6 0 0 0 12 3z" />
+    </svg>
+  );
+}
+
+function IconPlay({ size = 14, fill = "currentColor" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill={fill}>
+      <path d="M8 5v14l11-7z" />
+    </svg>
+  );
+}
+
+function IconPause({ size = 14, fill = "currentColor" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill={fill}>
+      <rect x="6" y="5" width="4" height="14" rx="1" />
+      <rect x="14" y="5" width="4" height="14" rx="1" />
+    </svg>
+  );
+}
+
+function IconSkipNext({ size = 14, fill = "currentColor" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill={fill}>
+      <path d="M6 5v14l9-7z" />
+      <rect x="16" y="5" width="2.5" height="14" rx="1" />
+    </svg>
+  );
+}
+
+function IconSkipPrev({ size = 14, fill = "currentColor" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill={fill}>
+      <rect x="5.5" y="5" width="2.5" height="14" rx="1" />
+      <path d="M18 5v14l-9-7z" />
+    </svg>
+  );
+}
+
+function IconVolume({ size = 14, stroke = "currentColor" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={stroke} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 9v6h4l5 4V5L8 9H4z" />
+      <path d="M16.5 8.5a5 5 0 0 1 0 7" />
+    </svg>
+  );
+}
+
+function IconSpeaker({ size = 14, stroke = "currentColor" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={stroke} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="6" y="3" width="12" height="18" rx="2" />
+      <circle cx="12" cy="14" r="3.5" />
+    </svg>
+  );
+}
+
+function IconNeuralNetwork({ size = 16, stroke = "currentColor" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M6.2 7.2 12 5.4l5.8 2.7M6.2 7.2l2.1 7.2M17.8 8.1l-2.1 6.8M8.3 14.4l7.4.5M12 5.4l3.7 9.5M12 5.4 8.3 14.4"
+        stroke={stroke}
+        strokeWidth="1.05"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity="0.44"
+      />
+      <circle cx="12" cy="5.4" r="2.05" fill={stroke} opacity="0.95" />
+      <circle cx="6.2" cy="7.2" r="1.45" fill={stroke} opacity="0.68" />
+      <circle cx="17.8" cy="8.1" r="1.45" fill={stroke} opacity="0.68" />
+      <circle cx="8.3" cy="14.4" r="1.65" fill={stroke} opacity="0.8" />
+      <circle cx="15.7" cy="14.9" r="1.65" fill={stroke} opacity="0.8" />
+    </svg>
+  );
+}
+
 Object.assign(window, {
   IconMic, IconSend, IconSun, IconMoon, IconStop, IconLogo,
   IconWaveStatic, IconWaveLive, StatusDot,
+  IconBulb, IconPlay, IconPause, IconSkipNext, IconSkipPrev, IconVolume, IconSpeaker,
+  IconNeuralNetwork,
 });

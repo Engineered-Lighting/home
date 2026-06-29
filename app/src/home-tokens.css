@@ -25,6 +25,31 @@
   --hg-ice-glow: rgba(184, 216, 255, 0.32);
   --hg-blue: #4D9CFF;
   --hg-warn: #FFB224;
+  --hg-crit: #E15553;          /* used sparingly — genuine error/critical only */
+  --hg-input-bg: rgba(255, 255, 255, 0.025);
+  --hg-app-shadow: 0 0 0 1px var(--hg-border), 0 30px 80px rgba(0, 0, 0, 0.6);
+}
+
+[data-theme="dark"] {
+  --hg-bg-0: #000000;
+  --hg-bg-1: #0A0A0A;
+  --hg-bg-2: #111111;
+  --hg-bg-3: #161616;
+  --hg-fg-0: #FFFFFF;
+  --hg-fg-1: #EDEDED;
+  --hg-fg-2: #A1A1A1;
+  --hg-fg-3: #8F8F8F;
+  --hg-fg-4: #666666;
+  --hg-fg-5: #404040;
+  --hg-border-soft: rgba(255, 255, 255, 0.06);
+  --hg-border: rgba(255, 255, 255, 0.10);
+  --hg-border-strong: rgba(255, 255, 255, 0.18);
+  --hg-ice: #B8D8FF;
+  --hg-ice-bright: #DDEAFF;
+  --hg-ice-glow: rgba(184, 216, 255, 0.32);
+  --hg-blue: #4D9CFF;
+  --hg-warn: #FFB224;
+  --hg-crit: #E15553;
   --hg-input-bg: rgba(255, 255, 255, 0.025);
   --hg-app-shadow: 0 0 0 1px var(--hg-border), 0 30px 80px rgba(0, 0, 0, 0.6);
 }
@@ -51,6 +76,7 @@
   --hg-ice-glow: rgba(31, 79, 168, 0.16);
   --hg-blue: #1F4FA8;
   --hg-warn: #B96A1D;
+  --hg-crit: #B33A37;          /* used sparingly — genuine error/critical only */
   --hg-input-bg: rgba(26, 24, 18, 0.04);
   --hg-app-shadow: 0 0 0 1px var(--hg-border), 0 24px 60px rgba(60, 50, 30, 0.18);
 }
@@ -95,14 +121,17 @@ html, body {
   font-weight: 500;
 }
 
-/* Scrollbar — almost invisible, terminal style */
-.hg-scroll::-webkit-scrollbar { width: 6px; }
+/* Scrollbar — almost invisible, terminal style. Same shape for
+ * vertical (width) and horizontal (height) so .hg-scroll works in
+ * either axis without a separate class. */
+.hg-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
 .hg-scroll::-webkit-scrollbar-track { background: transparent; }
 .hg-scroll::-webkit-scrollbar-thumb {
   background: var(--hg-border-soft);
   border-radius: 0;
 }
 .hg-scroll::-webkit-scrollbar-thumb:hover { background: var(--hg-border); }
+.hg-scroll::-webkit-scrollbar-corner { background: transparent; }
 
 /* Blinking caret for streaming responses */
 @keyframes hg-caret-blink {
@@ -157,3 +186,51 @@ html, body {
   outline: 1px solid var(--hg-blue);
   outline-offset: 1px;
 }
+
+/* ── Inline control-card sliders (home-control.jsx) ──────────────────── */
+.hg-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 3px;
+  background: var(--hg-border);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+  margin: 5px 0;
+}
+.hg-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--hg-ice-bright);
+  border: 1px solid var(--hg-bg-0);
+  box-shadow: 0 0 6px var(--hg-ice-glow);
+  transition: transform 120ms ease;
+}
+.hg-slider::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--hg-ice-bright);
+  border: 1px solid var(--hg-bg-0);
+  box-shadow: 0 0 6px var(--hg-ice-glow);
+}
+.hg-slider:active::-webkit-slider-thumb { transform: scale(1.18); }
+.hg-slider:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 2px var(--hg-blue); }
+.hg-slider:disabled { opacity: 0.4; cursor: default; }
+.hg-slider:disabled::-webkit-slider-thumb { background: var(--hg-fg-4); box-shadow: none; }
+.hg-slider:disabled::-moz-range-thumb { background: var(--hg-fg-4); box-shadow: none; }
+/* Color-temp track: warm → neutral → cool. The one justified literal-hex
+   spot — these encode physical light temperature, not theme color, and the
+   token set has no 2-stop gradient primitive. */
+.hg-slider--temp {
+  background: linear-gradient(90deg, #FFB66B 0%, #FFFFFF 55%, #BCD4FF 100%);
+}
+[data-theme="light"] .hg-slider--temp {
+  background: linear-gradient(90deg, #D98A3C 0%, #E7E0CF 55%, #7FA0CF 100%);
+}
+/* Applying — thumb pulses while a commit is in flight. */
+.hg-slider--applying::-webkit-slider-thumb { animation: hg-pulse-dot 1.1s ease-in-out infinite; }

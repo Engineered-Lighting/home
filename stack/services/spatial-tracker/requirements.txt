@@ -1,0 +1,10 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+aiomqtt>=2.0
+numpy>=1.26
+shapely>=2.0
+opencv-python-headless>=4.8
+aiohttp>=3.9
+websockets>=12
+# Required by FastAPI for multipart form parsing (calib intrinsics/from_images endpoint).
+python-multipart>=0.0.9

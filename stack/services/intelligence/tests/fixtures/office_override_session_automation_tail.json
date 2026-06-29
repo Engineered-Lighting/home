@@ -1,0 +1,62 @@
+{
+  "actual_pct": 0,
+  "anticipated_room": null,
+  "any_occupied": false,
+  "asleep": false,
+  "automation_tail_detected": true,
+  "camera": "living_room",
+  "context_id": "ovr-burst-9",
+  "debug_match_reason": "none",
+  "delta_pct": -20,
+  "evidence_source": "jsonl",
+  "intent_confidence": "high",
+  "learning_value_pct": 58,
+  "learning_value_source": "user_landed",
+  "light_entity": "light.office",
+  "light_state": "off",
+  "night_safe": false,
+  "owning_zones": [
+    "office"
+  ],
+  "predicted_pct": 20,
+  "predictions_by_zone": {
+    "office": {
+      "predicted_pct": 20,
+      "ramp_initial_pct": 14,
+      "state": "vacant"
+    }
+  },
+  "profile": "late_evening",
+  "session_collapsed": true,
+  "session_event_count": 12,
+  "session_final_actual_pct": 0,
+  "session_first_context_id": "ovr-burst-0",
+  "session_first_ts": "2026-05-26T21:23:00.494233-07:00",
+  "session_last_context_id": "ovr-burst-9",
+  "session_last_ts": "2026-05-26T21:23:03.865169-07:00",
+  "session_observed_path": [
+    35,
+    58,
+    58,
+    58,
+    58,
+    58,
+    58,
+    58,
+    58,
+    58,
+    0,
+    0
+  ],
+  "session_tail_path": [
+    0,
+    0
+  ],
+  "session_user_landed_pct": 58,
+  "shadow_mode": false,
+  "state": "vacant",
+  "ts": "2026-05-26T21:23:03.865169-07:00",
+  "tv_playing": false,
+  "user_at_home": true,
+  "zone": "office"
+}

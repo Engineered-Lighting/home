@@ -1,0 +1,356 @@
+# homeai_proactive.yaml — Home Assistant package for the proactive
+# smart-home experience (see docs/RUNBOOK.md and SIMULATION_MODE.md).
+#
+# WHAT THIS DOES
+#   Home Assistant detects the low-level events and does the reliable,
+#   unconditional physical actions. The Home app's coordinator
+#   (home-proactive.jsx) owns all conversational policy — whether to
+#   speak, the two-stage arrival confirmation, the follow-up window,
+#   suppression/cooldowns. This file is the "HA side".
+#
+# INSTALL
+#   1. Ensure your configuration.yaml has the packages include:
+#        homeassistant:
+#          packages: !include_dir_named packages
+#   2. Drop this file into /config/packages/homeai_proactive.yaml
+#   3. Developer Tools → YAML → Check Configuration, then Reload.
+#
+# Entity IDs below were resolved from this repo's own config:
+# personaplex-bridge/rooms.yaml + aliases.yaml + the HA state snapshot.
+# If your HA entities change, update them here (and re-check after a
+# Frigate / HA upgrade — face-sensor slugs can churn across versions).
+#
+# The custom event `homeai_proactive` is what the Home app subscribes to
+# over its existing HA WebSocket. Event_data shape (matches the app's
+# normalizeProactiveEvent):
+#   { type, person, display_name, room, confidence, raw_source }
+
+# ─────────────────────────────────────────────────────────────────────
+# Mode helpers — the coordinator reads these for suppression context.
+# (v1: the app also exposes /proactive sleep|dnd|focus|movie on|off as a
+#  local override; wiring these entities in is the "real source" tier.)
+# ─────────────────────────────────────────────────────────────────────
+input_boolean:
+  homeai_sleep:
+    name: HomeAI — Sleep mode
+    icon: mdi:sleep
+  homeai_dnd:
+    name: HomeAI — Do not disturb
+    icon: mdi:bell-off
+  homeai_movie:
+    name: HomeAI — Movie mode
+    icon: mdi:movie-open
+  # ───────────────────────────────────────────────────────────────────
+  # user_at_home — HomeKit-bridged presence placeholder.
+  # SINGLE-WRITER CONTRACT: only Apple Home (via the HomeKit Bridge
+  # round-trip) writes this entity. Do NOT toggle it manually, do NOT
+  # point any other HA automation at it. External writes desync it
+  # from reality and the next Apple "arrive"/"leave" trigger will be
+  # a no-op (same state → no state change → no HA trigger fires),
+  # silently breaking the welcome flow.
+  # ───────────────────────────────────────────────────────────────────
+  user_at_home:
+    name: HomeAI — User at home (HomeKit-bridged)
+    icon: mdi:home-account
+    initial: on        # matches reality at create time; persistent state takes over after
+
+input_select:
+  homeai_house_mode:
+    name: HomeAI — House mode
+    options:
+      - normal
+      - focus
+      - away
+    initial: normal
+    icon: mdi:home-account
+
+# ─────────────────────────────────────────────────────────────────────
+# Automations
+# ─────────────────────────────────────────────────────────────────────
+automation:
+  # ── Leaving home ───────────────────────────────────────────────────
+  # SAFETY action — runs unconditionally. `for:` debounces a GPS flap so
+  # a momentary not_home blip doesn't kill the lights. Turns off the
+  # INDOOR lights only (outdoor stays — security; Voice PE LED ring stays).
+  - id: homeai_left_home
+    alias: "HomeAI — left home"
+    mode: single
+    trigger:
+      # Existing GPS-based path — kept as fallback for now. Per plan Step 5:
+      # drop after HomeKit-bridged path has been live + clean for ~1 week.
+      - platform: state
+        entity_id:
+          - person.engineeredlighting
+        to: "not_home"
+        for: "00:02:00"
+      # NEW HomeKit-bridged path (primary). Apple Home's "leaves home"
+      # automation writes input_boolean.user_at_home → off; we fire
+      # immediately. No `for:` — Apple debounces inside their own system.
+      - platform: state
+        entity_id: input_boolean.user_at_home
+        to: "off"
+    # ───────────────────────────────────────────────────────────────────
+    # Co-resident guard — single-shot, fire-and-forget.
+    #
+    # Apple's "When I leave" only sees MY iPhone, so without this guard,
+    # leaving while a co-resident (girlfriend, guest) is still inside
+    # would kill the lights & pause music on them. Snapshot check at
+    # trigger time: every INDOOR room's Frigate person_occupancy must
+    # currently be `off`. If any camera sees someone right now, the
+    # whole automation aborts — no lights off, no Sonos pause, no
+    # `away` event fired. (Driveway is outdoor → excluded.)
+    #
+    # No `for:` lookback and no pre-action delay because:
+    #   • Frigate person_occupancy is event-based, not sticky — it goes
+    #     `off` the moment a person leaves the camera frame.
+    #   • Apple's geofence trigger only fires after you've physically
+    #     crossed the ~100m radius, so by the time HA sees the toggle,
+    #     you're long past any indoor camera view. The "current" state
+    #     reflects reality.
+    #
+    # Failure modes:
+    #   • Co-resident in a camera-blind room (bathroom, bedroom): this
+    #     guard misses them. Acceptable because future occupancy-based
+    #     automations will bring lights back on the moment they walk
+    #     into a covered room. The "left home" event is just the
+    #     transition; occupancy owns the steady state.
+    #   • Frigate down → sensors `unavailable` → `state: "off"` doesn't
+    #     match → condition fails → safe-abort. Correct: if we can't
+    #     tell, don't kill the lights.
+    # ───────────────────────────────────────────────────────────────────
+    condition:
+      - condition: state
+        entity_id: binary_sensor.kitchen_person_occupancy
+        state: "off"
+      - condition: state
+        entity_id: binary_sensor.living_room_person_occupancy
+        state: "off"
+      - condition: state
+        entity_id: binary_sensor.office_person_occupancy
+        state: "off"
+      - condition: state
+        entity_id: binary_sensor.dining_room_person_occupancy
+        state: "off"
+      - condition: state
+        entity_id: binary_sensor.workshop_person_occupancy
+        state: "off"
+    action:
+      # 1. indoor lights off — the reliable, unconditional part
+      - service: light.turn_off
+        target:
+          entity_id:
+            - light.living_room_lights
+            - light.office
+            - light.sink
+            - light.sink_light
+            - light.sink_light_2
+            - light.island_left
+            - light.island_right
+            - light.kitchen_floodlight_timed
+            - light.dining_light
+            - light.dining_light_2
+            - light.dining_room_floodlight_timed
+            - light.dining_table_left
+            - light.dining_table_right
+            - light.ambient_light_left_mss110_main_channel
+            - light.ambient_light_right_mss110_main_channel
+      # 2. pause Sonos music (Apple TV / PS5 / Onkyo left alone)
+      - service: media_player.media_pause
+        target:
+          entity_id:
+            - media_player.living_room
+            - media_player.kitchen_stereo
+        continue_on_error: true
+      # 3. tell the Home app coordinator (UI "away mode" + policy reset).
+      #    display_name MUST be the Frigate face label so the app can
+      #    match it against identity events ("Marcelo", not the HA
+      #    person friendly_name "EngineeredLighting").
+      - event: homeai_proactive
+        event_data:
+          type: person_left_home
+          person: "{{ trigger.entity_id }}"
+          display_name: "Marcelo"
+          confidence: 1.0
+          raw_source: device_tracker
+
+  # ── Arriving home — STAGE 1 only ───────────────────────────────────
+  # Does NOT speak and does NOT turn lights on. It only ARMS the app's
+  # arrival_pending_confirmation window. The spoken welcome waits for
+  # stage 2 (Frigate face-rec). `for: 30s` debounces a GPS flap.
+  - id: homeai_arrived_home
+    alias: "HomeAI — arrived home (stage 1)"
+    mode: single
+    trigger:
+      # Existing GPS-based path — fallback.
+      - platform: state
+        entity_id:
+          - person.engineeredlighting
+        to: "home"
+        for: "00:00:30"
+      # NEW HomeKit-bridged path (primary).
+      - platform: state
+        entity_id: input_boolean.user_at_home
+        to: "on"
+    action:
+      - event: homeai_proactive
+        event_data:
+          type: person_arrived_home
+          person: "{{ trigger.entity_id }}"
+          display_name: "Marcelo"
+          confidence: 1.0
+          raw_source: device_tracker
+
+  # ── Return-home lights — RELIABILITY BACKSTOP ──────────────────────
+  # The app coordinator fires script.homeai_return_home immediately on
+  # Frigate-confirm. This backstop fires it anyway after a short delay
+  # so the lights still come on if the app is closed or Frigate is down.
+  # The script is idempotent — double-firing is harmless.
+  - id: homeai_return_home_backstop
+    alias: "HomeAI — return-home lights (backstop)"
+    mode: single
+    trigger:
+      # Existing GPS-based path — fallback.
+      - platform: state
+        entity_id:
+          - person.engineeredlighting
+        to: "home"
+        for: "00:01:30"
+      # NEW HomeKit-bridged path. Same `for:` to preserve backstop semantics
+      # (only fire after 90s of sustained "home" — avoids triggering on a
+      # quick in-and-out).
+      - platform: state
+        entity_id: input_boolean.user_at_home
+        to: "on"
+        for: "00:01:30"
+    action:
+      - service: script.turn_on
+        target:
+          entity_id: script.homeai_return_home
+
+  # ── Face confirmed — STAGE 2 (best-effort secondary transport) ─────
+  # The PRIMARY stage-2 transport is the bridge's s2s:identity SSE
+  # (proper face-state tracking). This automation is a secondary path.
+  # Note: a Frigate face sensor won't re-trigger if it already shows the
+  # same name — the SSE path covers that case.
+  - id: homeai_face_confirmed
+    alias: "HomeAI — face confirmed (stage 2)"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id:
+          - sensor.living_room_last_recognized_face
+    condition:
+      - condition: template
+        value_template: >-
+          {{ trigger.to_state.state not in ['unknown', 'unavailable', 'none', ''] }}
+    action:
+      - event: homeai_proactive
+        event_data:
+          type: identity_confirmed
+          display_name: "{{ trigger.to_state.state }}"
+          room: living_room
+          # `or` (not `default`) — Jinja's default() does NOT replace None,
+          # only undefined; the score/confidence attrs are often None.
+          confidence: >-
+            {{ (state_attr(trigger.entity_id, 'score')
+                or state_attr(trigger.entity_id, 'confidence')
+                or 0.9) | float }}
+          raw_source: frigate
+
+  # ── Room entry ─────────────────────────────────────────────────────
+  # One automation, templated over every INDOOR room's Frigate
+  # person-occupancy sensor. (driveway is outdoor — it sees non-residents,
+  # so it's excluded from proactive room prompts.) `for: 5s` is just
+  # anti-flicker; the app coordinator owns the real cooldowns +
+  # multi-room suppression.
+  - id: homeai_room_entered
+    alias: "HomeAI — room entered"
+    mode: parallel
+    max: 10
+    trigger:
+      - platform: state
+        entity_id:
+          - binary_sensor.kitchen_person_occupancy
+          - binary_sensor.living_room_person_occupancy
+          - binary_sensor.office_person_occupancy
+          - binary_sensor.dining_room_person_occupancy
+          - binary_sensor.workshop_person_occupancy
+        to: "on"
+        for: "00:00:05"
+    action:
+      - event: homeai_proactive
+        event_data:
+          type: room_entered
+          # derive the room from the sensor id: binary_sensor.<room>_person_occupancy
+          room: >-
+            {{ trigger.entity_id
+               | replace('binary_sensor.', '')
+               | replace('_person_occupancy', '') }}
+          confidence: 0.9
+          raw_source: frigate
+
+# ─────────────────────────────────────────────────────────────────────
+# Return-home lighting script — time-of-day aware, faded.
+# The day/evening/night curve lives HERE so tuning it never touches the
+# Home app build. Idempotent (the coordinator + the backstop may both
+# call it — applying the same scene twice is harmless).
+#
+# (This home has no bedroom light in HA, so the "night exclusion" is
+#  naturally satisfied — the night scene is just a minimal warm subset.)
+# ─────────────────────────────────────────────────────────────────────
+script:
+  homeai_return_home:
+    alias: "HomeAI — return-home scene"
+    mode: restart
+    sequence:
+      - choose:
+          # NIGHT (after 22:00 or before 06:00) — low + very warm,
+          # just the living room + ambient strips.
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {{ now().hour >= 22 or now().hour < 6 }}
+            sequence:
+              - service: light.turn_on
+                target:
+                  entity_id:
+                    - light.living_room_lights
+                    - light.ambient_light_left_mss110_main_channel
+                    - light.ambient_light_right_mss110_main_channel
+                data:
+                  brightness_pct: 15
+                  color_temp_kelvin: 2200
+                  transition: 4
+          # EVENING (18:00–22:00) — warm, mid brightness.
+          - conditions:
+              - condition: template
+                value_template: "{{ now().hour >= 18 }}"
+            sequence:
+              - service: light.turn_on
+                target:
+                  entity_id:
+                    - light.living_room_lights
+                    - light.island_left
+                    - light.island_right
+                    - light.office
+                    - light.ambient_light_left_mss110_main_channel
+                    - light.ambient_light_right_mss110_main_channel
+                data:
+                  brightness_pct: 55
+                  color_temp_kelvin: 2700
+                  transition: 3
+        # DAY (06:00–18:00) — bright, neutral.
+        default:
+          - service: light.turn_on
+            target:
+              entity_id:
+                - light.living_room_lights
+                - light.island_left
+                - light.island_right
+                - light.office
+                - light.dining_table_left
+                - light.dining_table_right
+            data:
+              brightness_pct: 90
+              color_temp_kelvin: 4000
+              transition: 3

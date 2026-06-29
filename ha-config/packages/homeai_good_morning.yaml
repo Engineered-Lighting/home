@@ -1,0 +1,103 @@
+# homeai_good_morning.yaml — HAND-WRITTEN (not generated).
+#
+# Adaptive morning wake-up: when the system infers "Marcelo just woke up"
+# (input_boolean.living_lights_woke_up_today latches OFF→ON — set by the
+# presence-2min morning latch, the HA-restart catch-up, the 05:00/08:00
+# resume, or the asleep-cleared-in-morning path in
+# living_lights_override_lifecycle.yaml), greet him and energize the main
+# living areas — independent of the rigid 08:00 working-hours clock.
+#
+# Both halves are individually killable:
+#   input_boolean.living_lights_morning_greeting_enabled
+#   input_boolean.living_lights_morning_energize_enabled
+#
+# Energize reuses the presence-override path (writes override_text), so
+# the brightness is held by the override-lifecycle automation and eases
+# back to automatic after the min-hold + vacancy grace — it does not fight
+# the ambient engine.
+#
+# NOTE: verify the Voice PE satellite entity_id below matches this
+# install (Settings → Devices → Voice PE → assist_satellite entity). If it
+# differs, the announce step no-ops (continue_on_error) but the event +
+# energize still fire.
+#
+# Rollback: delete this file + reload automations.
+
+automation:
+  - alias: "HomeAI — good morning (greeting + energize)"
+    id: homeai_good_morning
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.living_lights_woke_up_today
+        from: "off"
+        to: "on"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.user_at_home
+        state: "on"
+      # Only greet in a plausible morning window (no "good morning" if the
+      # latch is armed by an afternoon HA restart).
+      - condition: template
+        value_template: "{{ 4.5 <= (now().hour + now().minute / 60) < 11.5 }}"
+    actions:
+      # 1) Energize the main morning areas (living room + kitchen) so
+      #    Marcelo wakes into a bright, awake home. Held by the override
+      #    lifecycle (min-hold ~40 min, then eases back as he moves on).
+      - if:
+          - condition: state
+            entity_id: input_boolean.living_lights_morning_energize_enabled
+            state: "on"
+          - condition: state
+            entity_id: input_boolean.living_lights_enabled
+            state: "on"
+        then:
+          - repeat:
+              for_each:
+                - sofa
+                - office
+                - sink
+                - island_left
+                - island_right
+              sequence:
+                - action: input_text.set_value
+                  target:
+                    entity_id: "input_text.living_lights_override_text_{{ repeat.item }}"
+                  data:
+                    value: >-
+                      {{ {
+                        'command_id': 'morning-' ~ (now().timestamp() | int),
+                        'brightness_pct': 90,
+                        'color_temp_kelvin': 3000,
+                        'started_at': now().isoformat(),
+                        'hold_until': as_datetime(now().timestamp() + 2400).isoformat(),
+                        'min_hold_min': 40,
+                        'vacancy_grace_s': 300,
+                        'source': 'auto',
+                        'prompt': 'good morning energize',
+                        'remote': true,
+                        'pinned': false
+                      } | to_json }}
+      # 2) Speak the greeting on the Voice PE puck (best-effort).
+      - if:
+          - condition: state
+            entity_id: input_boolean.living_lights_morning_greeting_enabled
+            state: "on"
+        then:
+          - action: assist_satellite.announce
+            continue_on_error: true
+            target:
+              entity_id: assist_satellite.home_assistant_voice_0a92e0_assist_satellite
+            data:
+              message: "Good morning, Marcelo."
+      # 3) Fire a feed event (Home app / other consumers can react) + log.
+      - event: homeai_good_morning
+        event_data:
+          ts: "{{ now().isoformat() }}"
+          energized: "{{ is_state('input_boolean.living_lights_morning_energize_enabled', 'on') }}"
+          greeted: "{{ is_state('input_boolean.living_lights_morning_greeting_enabled', 'on') }}"
+      - action: logbook.log
+        data:
+          name: "HomeAI"
+          message: "Good morning — greeted Marcelo and energized the main living areas."
+          entity_id: input_boolean.living_lights_woke_up_today

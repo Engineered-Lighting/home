@@ -1,0 +1,20 @@
+name: Predictive Lighting
+version: "0.4.1"
+slug: predictive_lighting
+description: >-
+  Kinematic room anticipator + zone-transition logger. For each Frigate
+  person event, derives velocity from path_data, ray-casts against the
+  hand-drawn room polygons in /config/spatial_model.json, and emits per-
+  room `anticipated` binary_sensor booleans the Living Lights system
+  pre-warms on. The legacy transition logger continues writing
+  /share/predictive-lighting/transitions.jsonl as ground-truth for
+  anticipator validation.
+arch:
+  - amd64
+startup: services
+boot: auto
+init: true
+services:
+  - mqtt:need
+map:
+  - share:rw

@@ -1,0 +1,57 @@
+# adaptive_lighting.yaml — Adaptive Lighting "Home" profile (Layer 1).
+#
+# Owns COLOR TEMPERATURE for every Living-Lights-managed light, on one
+# circadian curve: fully warm 2000 K at night, ramping to a neutral
+# 4000 K at midday (warm-leaning). Fixes "why are some lights warmer
+# than others" — every light now follows one curve, all day.
+#
+# Configures the already-installed Adaptive Lighting integration (HACS,
+# v1.30.1). AL only recolors lights that are already ON; it never
+# switches lights on/off — so it rides cleanly on top of the Living
+# Lights pilots (which own brightness + on/off).
+#
+# AR-1: take_over_control + detect_non_ha_changes are false so AL keeps
+# recoloring a light after Living Lights writes its brightness. With
+# take_over_control on, AL would treat that brightness write as a manual
+# takeover and stop adapting the light's colour. Trade-off: AL also
+# reverts a manual *colour* change within one ~90 s cycle — intended
+# ("one curve, all day"); manual *brightness* is untouched.
+#
+# AR-K: the `lights` list below must cover every light any Living Lights
+# pilot controls (LIGHT_TARGETS in tools/build-living-lights-actuators.py)
+# — otherwise an uncovered light keeps drifting in colour.
+#
+# Post-deploy one-time action: turn switch.adaptive_lighting_adapt_brightness_home
+# OFF — Living Lights owns brightness. AL switch states are restored
+# across restarts, so this is done once.
+#
+# Rollback: turn switch.adaptive_lighting_home off, or delete this file
+# + restart HA.
+
+adaptive_lighting:
+  - name: home
+    lights:
+      # The 10 Living-Lights zone lights (= LIGHT_TARGETS) ...
+      - light.front_left
+      - light.front_right
+      - light.rear_left
+      - light.rear_right
+      - light.office
+      - light.sink
+      - light.island_left
+      - light.island_right
+      - light.dining_table_left
+      - light.dining_table_right
+      # ... + the outdoor light (colour only — not occupancy-managed).
+      - light.outdoor_light
+    # Colour-temperature curve.
+    min_color_temp: 2000        # night — 100% warm
+    max_color_temp: 4000        # midday peak — neutral white, warm-leaning
+    prefer_rgb_color: false     # use color_temp, not an RGB approximation
+    # AR-1 — never yield colour adaptation to a non-AL change.
+    take_over_control: false
+    detect_non_ha_changes: false
+    # Smoothness.
+    transition: 45              # seconds per adaptation step
+    initial_transition: 1       # seconds, when a light turns on
+    interval: 90                # seconds between adaptation passes

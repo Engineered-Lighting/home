@@ -1,0 +1,53 @@
+# living_lights_ambient.yaml — Layer 2d ambient L/R switches.
+#
+# The two ambient smart switches stay ON day and night, and turn OFF only
+# during a movie, while away, or while the house is asleep. They are on/off
+# only (no brightness) — so they are NOT part of the confidence ramp; they
+# moved here out of the sofa pilot.
+#
+# Gated like the pilots: inert until living_lights_enabled = on AND
+# living_lights_shadow = off.
+#
+# Rollback: delete this file + reload automations.
+
+automation:
+  - alias: "Living Lights — ambient switches"
+    id: living_lights_ambient
+    description: >
+      Ambient left/right switches: on day + night, off only during a
+      movie, while away, or while asleep.
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id:
+          - media_player.lg_tv
+          - input_boolean.user_at_home
+          - input_boolean.living_lights_asleep
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: state
+        entity_id: input_boolean.living_lights_enabled
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.living_lights_shadow
+        state: "off"
+    actions:
+      - if:
+          - condition: template
+            value_template: >-
+              {{ states('media_player.lg_tv') not in ['off', 'unavailable', 'unknown']
+                 or is_state('input_boolean.user_at_home', 'off')
+                 or is_state('input_boolean.living_lights_asleep', 'on') }}
+        then:
+          - action: switch.turn_off
+            target:
+              entity_id:
+                - switch.ambient_light_left_mss110_main_channel
+                - switch.ambient_light_right_mss110_main_channel
+        else:
+          - action: switch.turn_on
+            target:
+              entity_id:
+                - switch.ambient_light_left_mss110_main_channel
+                - switch.ambient_light_right_mss110_main_channel

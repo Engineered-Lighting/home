@@ -1,0 +1,293 @@
+#!/usr/bin/env node
+/* Pure local tests for app/src/index.html bootstrap and mount contracts. */
+"use strict";
+
+const fs = require("fs");
+const path = require("path");
+
+const REPO = path.resolve(__dirname, "..");
+const SRC_DIR = path.join(REPO, "app", "src");
+const INDEX = path.join(SRC_DIR, "index.html");
+const MOUNT = path.join(SRC_DIR, "home-mount.jsx");
+const HOME_APP = path.join(SRC_DIR, "home-app.jsx");
+const AUDIT = path.join(REPO, "tools", "qa-registry-audit.py");
+
+const indexSource = fs.readFileSync(INDEX, "utf8");
+const mountSource = fs.readFileSync(MOUNT, "utf8");
+const appSource = fs.readFileSync(HOME_APP, "utf8");
+const auditSource = fs.readFileSync(AUDIT, "utf8");
+
+let passes = 0;
+let fails = 0;
+const failures = [];
+
+function assert(name, cond, detail) {
+  if (cond) {
+    passes++;
+    process.stdout.write("  PASS  " + name + "\n");
+  } else {
+    fails++;
+    failures.push({ name, detail });
+    process.stdout.write("  FAIL  " + name);
+    if (detail !== undefined) {
+      const dumped = typeof detail === "string" ? detail : JSON.stringify(detail, null, 2);
+      process.stdout.write("\n        " + dumped.replace(/\n/g, "\n        "));
+    }
+    process.stdout.write("\n");
+  }
+}
+
+function bootEntries() {
+  const match = indexSource.match(/var\s+files\s*=\s*\[([\s\S]*?)\];/);
+  assert("boot loader file array exists", Boolean(match));
+  if (!match) return [];
+  const entries = [];
+  const re = /\[\s*['"]([^'"]+)['"]\s*,\s*(true|false)\s*\]/g;
+  let item;
+  while ((item = re.exec(match[1]))) {
+    entries.push({ name: item[1], babel: item[2] === "true" });
+  }
+  return entries;
+}
+
+function unique(values) {
+  return Array.from(new Set(values));
+}
+
+const entries = bootEntries();
+const names = entries.map((entry) => entry.name);
+const positions = new Map(names.map((name, index) => [name, index]));
+
+function before(left, right, label) {
+  assert(label || `${left} loads before ${right}`,
+    positions.has(left) && positions.has(right) && positions.get(left) < positions.get(right),
+    { left: positions.get(left), right: positions.get(right) });
+}
+
+function present(name) {
+  assert(`${name} is in boot chain`, positions.has(name));
+}
+
+function sliceBetween(source, startNeedle, endNeedle) {
+  const start = source.indexOf(startNeedle);
+  if (start < 0) return "";
+  const end = endNeedle ? source.indexOf(endNeedle, start + startNeedle.length) : -1;
+  return end >= 0 ? source.slice(start, end) : source.slice(start);
+}
+
+process.stdout.write("\nbootstrap_inventory_contract_test\n");
+assert("boot chain has the expected module scale", entries.length >= 40, entries.length);
+assert("boot chain has no duplicate files", unique(names).length === names.length,
+  names.filter((name, index) => names.indexOf(name) !== index));
+assert("every boot-chain file exists", entries.every((entry) => fs.existsSync(path.join(SRC_DIR, entry.name))),
+  entries.filter((entry) => !fs.existsSync(path.join(SRC_DIR, entry.name))).map((entry) => entry.name));
+
+const sourceFiles = fs.readdirSync(SRC_DIR)
+  .filter((name) => (name.endsWith(".jsx") || name.endsWith(".js")) &&
+    !name.endsWith(".test.js") &&
+    name !== "babel-config.js")
+  .sort();
+const missingSourceFiles = sourceFiles.filter((name) => !positions.has(name));
+assert("every top-level app/src JS/JSX file is in the boot chain",
+  missingSourceFiles.length === 0,
+  missingSourceFiles);
+assert("all JSX boot entries run through Babel",
+  entries.filter((entry) => entry.name.endsWith(".jsx")).every((entry) => entry.babel),
+  entries.filter((entry) => entry.name.endsWith(".jsx") && !entry.babel));
+assert("plain JS boot entries bypass Babel",
+  entries.filter((entry) => entry.name.endsWith(".js")).every((entry) => !entry.babel),
+  entries.filter((entry) => entry.name.endsWith(".js") && entry.babel));
+
+process.stdout.write("\nbootstrap_loader_failure_contract_test\n");
+assert("loader uses launch-time cache buster",
+  indexSource.includes("cb=' + Date.now()") || indexSource.includes('cb=" + Date.now()'));
+assert("no static text/babel script tags remain",
+  !/<script\s+type=["']text\/babel["']\s+src=/.test(indexSource));
+assert("ordered loader fetches each file with three attempts",
+  indexSource.includes("fetchWithRetry(name + cb, 3)"));
+assert("status 0 empty loads are rejected",
+  indexSource.includes("xhr.status === 0 && xhr.responseText.length > 0"));
+assert("XHR timeout becomes a hard boot failure",
+  indexSource.includes("xhr.ontimeout = function () { reject(new Error('timeout after '"));
+assert("network error becomes a hard boot failure",
+  indexSource.includes("xhr.onerror = function () { reject(new Error('network error (status 0)')); }"));
+assert("Babel transform failures stop the boot chain",
+  indexSource.includes("Babel transform failed in") && indexSource.includes("boot.failed = name"));
+assert("files execute before the chain advances",
+  /execute\(name,\s*code\);\s*boot\.loaded\+\+;\s*step\(i \+ 1\);/.test(indexSource));
+assert("visible overlay is used for loader failures",
+  indexSource.includes("function overlay(title, detail)") &&
+    indexSource.includes("Failed to load ") &&
+    indexSource.includes("boot chain stopped"));
+
+process.stdout.write("\nbootstrap_order_contract_test\n");
+[
+  "home-tauri.jsx",
+  "home-ha.jsx",
+  "home-icons.jsx",
+  "home-events.jsx",
+  "home-metrics.jsx",
+  "home-sse-fetch.js",
+  "home-stack-actions.jsx",
+  "home-ai-stack.jsx",
+  "home-capabilities.js",
+  "home-metrics-lab.jsx",
+  "home-lights.jsx",
+  "simulation.jsx",
+  "home-apartment.jsx",
+  "home-video-labeler.jsx",
+  "home-app.jsx",
+  "home-mount.jsx",
+].forEach(present);
+
+before("home-metrics.jsx", "home-ai-stack.jsx", "metrics surface loads before AI stack card uses it");
+before("home-sse-fetch.js", "home-ai-stack.jsx", "SSE fetch helper loads before AI stack streams");
+before("home-stack-actions.jsx", "home-ai-stack.jsx", "stack actions load before AI stack UI");
+before("home-stack-actions.jsx", "home-metrics-lab.jsx", "stack actions load before Lab stack controls");
+before("home-capabilities.js", "home-app.jsx", "capability registry loads before HomeApp");
+before("home-metrics-lab-helpers.js", "home-metrics-lab.jsx");
+before("home-people-helpers.js", "home-people.jsx");
+before("home-explain-helpers.js", "home-explain.jsx");
+before("home-worldstate-helpers.js", "home-worldstate.jsx");
+before("home-spatial-helpers.js", "home-spatial.jsx");
+before("home-lighting-events.jsx", "home-lights.jsx");
+before("home-lights.jsx", "home-app.jsx");
+before("home-intelligence.jsx", "home-app.jsx");
+before("simulation-cameras.jsx", "simulation.jsx");
+before("simulation-controls.jsx", "simulation.jsx");
+before("simulation-timeline.jsx", "simulation.jsx");
+before("simulation-data.jsx", "simulation.jsx");
+before("simulation.jsx", "home-app.jsx");
+before("home-apartment-data.js", "home-apartment.jsx");
+before("home-apartment-sim.js", "home-apartment.jsx");
+before("home-apartment-cards.jsx", "home-apartment.jsx");
+before("home-apartment-calibrate.jsx", "home-apartment.jsx");
+before("home-apartment-edit.jsx", "home-apartment.jsx");
+before("home-video-labeler-data.js", "home-video-labeler.jsx");
+before("home-video-labeler-timeline.jsx", "home-video-labeler.jsx");
+before("home-app.jsx", "home-mount.jsx", "HomeApp loads before mount");
+assert("home-mount.jsx is the final boot file", names[names.length - 1] === "home-mount.jsx",
+  names.slice(-5));
+
+process.stdout.write("\nbootstrap_mount_watchdog_contract_test\n");
+assert("watchdog lives in index.html",
+  indexSource.includes("function watchdog()") && indexSource.includes("Mount watchdog"));
+assert("watchdog waits for boot completion before mount retry",
+  indexSource.includes("if (!boot.done)") && indexSource.includes("typeof window.__homeMount === 'function'"));
+assert("watchdog retries mount exactly three times",
+  indexSource.includes("mountRetries < 3") && indexSource.includes("mount retries: "));
+assert("watchdog reports HomeApp and mount function types",
+  indexSource.includes("typeof HomeApp: ") && indexSource.includes("typeof __homeMount: "));
+assert("home-mount exposes retryable mount function",
+  mountSource.includes("window.__homeMount = function ()"));
+assert("home-mount no-ops when root is already populated",
+  mountSource.includes("if (el.children.length > 0) return true"));
+assert("home-mount creates a reusable React root",
+  mountSource.includes("window.__homeRoot") && mountSource.includes("ReactDOM.createRoot(el)"));
+assert("home-mount renders HomeApp",
+  mountSource.includes("window.__homeRoot.render(<HomeApp />)"));
+assert("home-mount invokes initial mount immediately",
+  /window\.__homeMount\(\);\s*$/.test(mountSource.trim()));
+
+process.stdout.write("\nregistry_boot_inventory_contract_test\n");
+assert("registry audit extracts the boot-loader file array",
+  auditSource.includes("extract_boot_loader_scripts") &&
+    auditSource.includes("var\\s+files\\s*=\\s*\\[") &&
+    auditSource.includes("dict.fromkeys"));
+assert("registry frontend inventory includes static and boot-loader scripts",
+  auditSource.includes("static_scripts") &&
+    auditSource.includes("boot_scripts") &&
+    auditSource.includes("static_scripts + boot_scripts"));
+
+process.stdout.write("\nfirst_run_s88_connect_contract_test\n");
+const firstRunBlock = sliceBetween(appSource, "function FirstRun", "/* Boot wordmark");
+const firstRunGateBlock = sliceBetween(appSource, "function isFirstRunVisible", "function BootBanner");
+const prefsBlock = sliceBetween(appSource, "/* Persist prefs whenever they change", "/* Persist events on change");
+const haLifecycleBlock = sliceBetween(appSource, "/* \u2500\u2500 HA client lifecycle", "/* Probe for the sidecar");
+const connectBlock = sliceBetween(appSource, "const connectTo = useCallback", "const confirmModel = useCallback");
+const confirmModelBlock = sliceBetween(appSource, "const confirmModel = useCallback", "/* Auto-reconnect on launch");
+const reconnectBlock = sliceBetween(appSource, "/* Auto-reconnect on launch", "/* Sim Mode transitions");
+const focusBlock = sliceBetween(appSource, "/* Input focus", "/* \u2500\u2500 HA client lifecycle");
+const renderGateBlock = sliceBetween(appSource, "{isFirstRunVisible(connection, events) ? (", "<MetricsStrip");
+const spatialRailRenderBlock = sliceBetween(appSource, "<SpatialModeRail", "{spatialOpsDockOpen && (");
+const inputRowBlock = sliceBetween(appSource, "function InputRow", "/* VoiceModeButton");
+assert("FirstRun accepts S88 connection props",
+  /function FirstRun\(\{\s*connection,\s*endpoint,\s*token,\s*onConnect,\s*availableModels,\s*onPickModel,\s*onSimulation\s*=\s*null,\s*compact\s*=\s*false\s*\}\)/.test(firstRunBlock),
+  firstRunBlock.slice(0, 240));
+assert("FirstRun seeds endpoint and token fields from persisted props",
+  /useState\(endpoint \|\| "http:\/\/192\.168\.0\.125:8123"\)/.test(firstRunBlock) &&
+    /connection === "offline" \|\| connection === "auth_invalid"[\s\S]*\? "" : \(token \|\| ""\)/.test(firstRunBlock),
+  firstRunBlock.slice(0, 700));
+assert("FirstRun submit prevents default and calls onConnect with typed url and token",
+  /<form onSubmit=\{\(e\) => \{ e\.preventDefault\(\); onConnect\(url, tok\); \}\}/.test(firstRunBlock),
+  firstRunBlock.slice(2500, 3900));
+assert("FirstRun Connect button is disabled while connecting or missing credentials",
+  /type="submit" disabled=\{isConnecting \|\| !url \|\| !tok\}/.test(firstRunBlock),
+  firstRunBlock.slice(3600, 5100));
+assert("FirstRun model picker renders every discovered model and selects by name",
+  /availableModels\.map\(\(m\) => \(/.test(firstRunBlock) &&
+    /onClick=\{\(\) => onPickModel\(m\.name\)\}/.test(firstRunBlock) &&
+    /\{m\.name\}/.test(firstRunBlock) &&
+    /\{m\.ctx\}/.test(firstRunBlock),
+  firstRunBlock.slice(900, 2600));
+assert("FirstRun empty model-list fallback can continue without a model name",
+  /onClick=\{\(\) => onPickModel\(""\)\}/.test(firstRunBlock),
+  firstRunBlock.slice(1800, 3200));
+assert("FirstRun visibility gate keeps picker and auth errors on the form surface",
+  /return connection !== "online" && connection !== "reconnecting";/.test(firstRunGateBlock),
+  firstRunGateBlock);
+assert("HomeApp render gate mounts FirstRun with live connect and picker props",
+  /<FirstRun[\s\S]*connection=\{connection\}[\s\S]*endpoint=\{endpoint\}[\s\S]*token=\{token\}[\s\S]*onConnect=\{connectTo\}[\s\S]*availableModels=\{availableModels\}[\s\S]*onPickModel=\{confirmModel\}[\s\S]*onSimulation=\{\(\) => \{/.test(renderGateBlock),
+  renderGateBlock.slice(0, 900));
+assert("Spatial ops rail clears tool surfaces before toggling the ops dock",
+  /onOps=\{\(\) => \{[\s\S]*closeSpatialToolSurfaces\(\);[\s\S]*setSpatialOpsDockOpen\(\(open\) => !open\);[\s\S]*\}\}/.test(spatialRailRenderBlock),
+  spatialRailRenderBlock);
+assert("stored events do not make an uncredentialed launch look online",
+  /const hasStoredHaCredentials = !!\(initialPrefs\.endpoint && initialPrefs\.token\);[\s\S]*const \[connection, setConnection\] = useState\(\s*hasStoredHaCredentials \? "reconnecting" : "disconnected"\s*\);/.test(appSource) &&
+    !/initialEvents \? "online"/.test(appSource),
+  appSource.slice(appSource.indexOf("const hasStoredHaCredentials") - 300, appSource.indexOf("const hasStoredHaCredentials") + 500));
+assert("prefs persistence includes endpoint token and selected model",
+  /savePrefs\(\{\s*endpoint,\s*token,\s*model,/.test(prefsBlock) &&
+    /\[endpoint,\s*token,\s*model,/.test(prefsBlock),
+  prefsBlock);
+assert("connectTo persists typed endpoint/token before attempting HA connect",
+  /setEndpoint\(haUrl\);[\s\S]*setToken\(accessToken\);[\s\S]*setAvailableModels\(null\);[\s\S]*setConnection\("connecting"\);/.test(connectBlock) &&
+    /haClientRef\.current\.connect\(haUrl, accessToken\)/.test(connectBlock),
+  connectBlock.slice(0, 900));
+assert("connectTo discovers vLLM models from the AI host and maps id plus context",
+  /const aiHost = new URL\(mBase\)\.hostname/.test(connectBlock) &&
+    /tauriFetch\(`http:\/\/\$\{aiHost\}:8000\/v1\/models`\)/.test(connectBlock) &&
+    /name:\s*m\.id/.test(connectBlock) &&
+    /ctx:\s*m\.max_model_len/.test(connectBlock),
+  connectBlock.slice(1600, 3100));
+assert("connectTo auto-selects a single model or the previously saved model",
+  /const autoPick = models\.length === 1[\s\S]*\? models\[0\]\.name[\s\S]*model && models\.some\(\(m\) => m\.name === model\) \? model : null/.test(connectBlock) &&
+    /if \(autoPick\) \{[\s\S]*setModel\(autoPick\);[\s\S]*setConnection\("online"\)/.test(connectBlock),
+  connectBlock.slice(2500, 4100));
+assert("connectTo enters model-picking mode for a genuine multi-model choice",
+  /setAvailableModels\(models\);[\s\S]*setConnection\("picking-model"\);[\s\S]*choose one/.test(connectBlock),
+  connectBlock.slice(3300, 4700));
+assert("HA online event cannot collapse an active model picker",
+  /state === "online"[\s\S]*setConnection\(\(c\) => c === "picking-model" \? c : "online"\)/.test(haLifecycleBlock),
+  haLifecycleBlock.slice(0, 900));
+assert("confirmModel stores the chosen model, clears picker data, and releases chat",
+  /if \(name\) setModel\(name\);[\s\S]*setConnection\("online"\);[\s\S]*setAvailableModels\(null\);/.test(confirmModelBlock),
+  confirmModelBlock);
+assert("credentialed launch reconnects through the same connectTo path",
+  /connection === "reconnecting" && endpoint && token[\s\S]*connectTo\(endpoint, token\)/.test(reconnectBlock),
+  reconnectBlock);
+assert("boot focus release waits until FirstRun is no longer visible",
+  /if \(isFirstRunVisible\(connection, events\)\) return;[\s\S]*setFocusToken\(\(t\) => t \+ 1\)/.test(focusBlock),
+  focusBlock);
+assert("InputRow mount still ignores the initial zero focus token",
+  /useEffect\(\(\) => \{ if \(focusToken\) inputRef\.current\?\.focus\(\); \}, \[focusToken\]\)/.test(inputRowBlock),
+  inputRowBlock.slice(0, 700));
+
+process.stdout.write("\n");
+process.stdout.write(`${passes} pass . ${fails} fail\n`);
+if (failures.length) {
+  for (const failure of failures) {
+    process.stdout.write(`  FAIL: ${failure.name}\n`);
+  }
+  process.exit(1);
+}

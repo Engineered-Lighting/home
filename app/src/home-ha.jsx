@@ -19,6 +19,10 @@ const HG_HA_RUN_TIMEOUT_MS = 120_000;
 function haUrlToWs(baseUrl) {
   if (!baseUrl) return "";
   let u = baseUrl.trim().replace(/\/+$/, "");
+  if (u.startsWith("/")) {
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${proto}//${window.location.host}${u}/api/websocket`;
+  }
   if (u.startsWith("https://"))      u = "wss://"  + u.slice("https://".length);
   else if (u.startsWith("http://"))  u = "ws://"   + u.slice("http://".length);
   else if (!u.startsWith("ws"))      u = "ws://"   + u;
@@ -36,6 +40,25 @@ function makeEmitter() {
   };
 }
 
+function buildCallServicePayload(domain, service, data = {}) {
+  const targetKeys = new Set(["entity_id", "area_id", "device_id"]);
+  const target = {};
+  const serviceData = {};
+  for (const [key, value] of Object.entries(data || {})) {
+    if (value == null) continue;
+    if (targetKeys.has(key)) target[key] = value;
+    else serviceData[key] = value;
+  }
+  const payload = {
+    type: "call_service",
+    domain,
+    service,
+    service_data: serviceData,
+  };
+  if (Object.keys(target).length > 0) payload.target = target;
+  return payload;
+}
+
 class HAClient {
   constructor() {
     this.ws = null;
@@ -47,6 +70,10 @@ class HAClient {
     this._runs = new Map();     // wsMsgId → { onEvent, onResult, t0 }
     this._connectionEmitter = makeEmitter();
     this._keepaliveTimer = null;
+    this._reconnectTimer = null;
+    this._reconnectAttempt = 0;
+    this._manualDisconnect = false;
+    this._suppressReconnect = false;
   }
 
   /* Public: subscribe to "connection state" changes. */
@@ -56,6 +83,25 @@ class HAClient {
    * a network error. Multiple concurrent connect() calls share the
    * same promise. */
   connect(url, token) {
+    // Simulation Mode: refuse to open the HA WS. Sim scenarios set the
+    // connection state synthetically. Return an already-rejected promise
+    // so callers see "offline" cleanly without throwing.
+    if (typeof window !== "undefined" && window.__SIM_ACTIVE === true) {
+      console.warn("[sim] HAClient.connect blocked — Simulation Mode is active.");
+      return Promise.reject(new Error("blocked-by-simulation-mode"));
+    }
+    this._manualDisconnect = false;
+    this._suppressReconnect = false;
+    this._clearReconnect();
+    // If a previous socket is dead or dying (closed/closing after an
+    // auth_invalid or a network drop), tear it down before reconnecting.
+    // Otherwise the stale rejected _authPromise gets replayed forever and
+    // a retry with a fresh token never reaches HA.
+    if (this.ws && this.ws.readyState !== WebSocket.OPEN && this.ws.readyState !== WebSocket.CONNECTING) {
+      try { this.ws.close(); } catch {}
+      this.ws = null;
+      this._authPromise = null;
+    }
     if (this.ws && this._authPromise) return this._authPromise;
     this.url = url;
     this.token = token;
@@ -74,7 +120,11 @@ class HAClient {
       this.ws = ws;
       ws.onopen = () => { /* auth flow runs on first message */ };
       ws.onclose = (e) => {
-        this._connectionEmitter.emit({ state: "offline", code: e.code, reason: e.reason || "" });
+        const closedCurrentSocket = this.ws === ws;
+        if (!closedCurrentSocket) return;
+        if (!this._manualDisconnect && !this._suppressReconnect) {
+          this._connectionEmitter.emit({ state: "offline", code: e.code, reason: e.reason || "" });
+        }
         if (!resolved) reject(new Error(`ws closed (${e.code})`));
         this._stopKeepalive();
         for (const [, run] of this._runs) {
@@ -82,6 +132,13 @@ class HAClient {
           catch {}
         }
         this._runs.clear();
+        // Drop references to the dead socket so the next connect() builds a
+        // fresh one instead of replaying this socket's settled _authPromise.
+        this.ws = null;
+        this._authPromise = null;
+        if (!this._manualDisconnect && !this._suppressReconnect && this.url && this.token) {
+          this._scheduleReconnect();
+        }
       };
       ws.onerror = (e) => {
         if (!resolved) {
@@ -99,6 +156,7 @@ class HAClient {
         }
         if (msg.type === "auth_ok") {
           this.haVersion = msg.ha_version || this.haVersion;
+          this._reconnectAttempt = 0;
           this._connectionEmitter.emit({ state: "online", haVersion: this.haVersion });
           this._startKeepalive();
           resolved = true;
@@ -106,6 +164,7 @@ class HAClient {
           return;
         }
         if (msg.type === "auth_invalid") {
+          this._suppressReconnect = true;
           this._connectionEmitter.emit({ state: "auth_invalid", message: msg.message });
           resolved = true;
           reject(new Error(msg.message || "auth invalid"));
@@ -149,11 +208,34 @@ class HAClient {
   }
 
   disconnect() {
+    this._manualDisconnect = true;
+    this._clearReconnect();
     this._stopKeepalive();
     try { this.ws?.close(); } catch {}
     this.ws = null;
     this._authPromise = null;
     this._runs.clear();
+  }
+
+  _clearReconnect() {
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
+  }
+
+  _scheduleReconnect() {
+    if (this._reconnectTimer) return;
+    const delay = Math.min(30_000, 1_000 * (2 ** Math.min(this._reconnectAttempt, 5)));
+    this._reconnectAttempt += 1;
+    this._connectionEmitter.emit({ state: "connecting", url: haUrlToWs(this.url), reconnect: true });
+    this._reconnectTimer = setTimeout(() => {
+      this._reconnectTimer = null;
+      if (this._manualDisconnect || this._suppressReconnect || !this.url || !this.token) return;
+      this.connect(this.url, this.token).catch(() => {
+        if (!this._manualDisconnect && !this._suppressReconnect) this._scheduleReconnect();
+      });
+    }, delay);
   }
 
   /* HA's WS connection drops silently if idle on some routers. Send a
@@ -380,6 +462,10 @@ class HAClient {
       catch (e) { this._runs.delete(id); reject(e); }
     });
   }
+
+  callService(domain, service, data = {}) {
+    return this.call(buildCallServicePayload(domain, service, data));
+  }
 }
 
 /* ── Pipeline event → UI event mapping ──────────────────────────────────
@@ -455,20 +541,39 @@ function extractIntentEnd(haEvent) {
   return { speech, convId, toolCalls, actions };
 }
 
-/* Extract a streaming chunk from an intent-progress event, if any. */
+/* Extract a streaming chunk from an intent-progress event, if any.
+ *
+ * Empirical shape (HA 2026.5.1 + extended_openai_conversation, probe-pipeline-verbose.ps1
+ * transcript 2026-05-22): role and content arrive in SEPARATE events. The role event is a
+ * marker like { chat_log_delta: { role: "assistant" } } with no content; subsequent deltas
+ * are { chat_log_delta: { content: "D" } } / { content: "ishes" } / ... with no role. Tool
+ * calls arrive as their own event: { chat_log_delta: { tool_calls: [{ tool_name, tool_args,
+ * id, external }] } }. So we cannot gate text-deltas on role; just take any string content.
+ */
 function extractIntentProgress(haEvent) {
   const d = haEvent?.data || {};
-  // HA emits chat_log_delta with { role, content, tool_calls? }. Only the
-  // assistant role's content goes to the streaming home event.
   const delta = d.chat_log_delta;
-  if (delta && delta.role === "assistant" && typeof delta.content === "string") {
-    return { textDelta: delta.content };
+  if (delta) {
+    if (typeof delta.content === "string" && delta.content.length > 0) {
+      return { textDelta: delta.content, toolCalls: null };
+    }
+    if (Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0) {
+      return {
+        textDelta: null,
+        toolCalls: delta.tool_calls.map((tc) => ({
+          name: tc.tool_name || tc.name || "tool",
+          args: tc.tool_args || tc.arguments || {},
+          id: tc.id || null,
+        })),
+      };
+    }
   }
-  // Some versions emit raw token deltas
-  if (typeof d.delta === "string") return { textDelta: d.delta };
+  // Some integrations emit a raw token delta on `data.delta`.
+  if (typeof d.delta === "string") return { textDelta: d.delta, toolCalls: null };
   return null;
 }
 
 Object.assign(window, {
-  HAClient, haUrlToWs, extractIntentEnd, extractIntentProgress,
+  HAClient, haUrlToWs, buildCallServicePayload,
+  extractIntentEnd, extractIntentProgress,
 });

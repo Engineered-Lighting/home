@@ -1,0 +1,11 @@
+# spatial-pipeline — runs on Python 3.12+ (3.14 OK; deliberately NO open3d,
+# its wheels lag new Python releases; numpy/scipy/trimesh cover everything we do)
+numpy>=2.0
+scipy>=1.13
+trimesh>=4.4
+fast-simplification>=0.1.9
+plyfile>=1.0
+opencv-python-headless>=4.10
+shapely>=2.0
+pillow>=10.0
+pygltflib>=1.16

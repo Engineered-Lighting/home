@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "generated_by": "Codex RC hardening loop",
+  "updated": "2026-06-23",
+  "status_semantics": {
+    "documented_blocker": "Blocks full RC readiness until an external condition or explicit approval exists.",
+    "documented_risk": "Does not block local-scope validation, but remains a known quality gap."
+  },
+  "blockers": [
+    {
+      "id": "RCB-001",
+      "kind": "blocker",
+      "title": "Live/device validation is intentionally out of scope for the local pass",
+      "status": "documented_blocker",
+      "blocks_rc": true,
+      "scope": ["home_assistant", "frigate", "voice", "lights", "media", "ai_stack"],
+      "impact": "The local suite cannot prove real HA service calls, physical light response, Frigate live events, voice bridge audio, media playback, or supervisor recovery against production devices.",
+      "evidence": [
+        "docs/qa/home-app-rc-readiness.md",
+        "tools/qa-features.yaml",
+        "tools/scenario-evidence-map.json"
+      ],
+      "readiness_anchor": "Live/device scenarios are not verified in this pass by design.",
+      "unblock": "Provide an isolated non-production HA/Frigate/device environment, or explicitly approve a controlled live validation run against the real home stack."
+    },
+    {
+      "id": "RCB-002",
+      "kind": "blocker",
+      "title": "Local-partial scenarios still need live/non-production scoring",
+      "status": "documented_blocker",
+      "blocks_rc": true,
+      "scope": ["local_partial_scenarios", "planner", "outage_recovery", "voice_agent"],
+      "scenario_ids": [
+        "DOC-S13",
+        "DOC-S19",
+        "DOC-S35",
+        "DOC-S58",
+        "DOC-S59",
+        "DOC-S60",
+        "DOC-S61",
+        "DOC-S62",
+        "DOC-S63",
+        "DOC-S64",
+        "DOC-S65",
+        "DOC-S66",
+        "DOC-S67",
+        "DOC-S68",
+        "DOC-S69",
+        "DOC-S70",
+        "DOC-S71",
+        "DOC-S72",
+        "DOC-S73",
+        "DOC-S74",
+        "DOC-S105",
+        "DOC-S106",
+        "DOC-S107",
+        "DOC-S108",
+        "DOC-S109",
+        "DOC-S110"
+      ],
+      "impact": "The scenario evidence map proves local contracts for these stories but does not claim end-to-end agent behavior, HA state changes, or live recovery timing.",
+      "evidence": [
+        "docs/qa/home-app-rc-readiness.md",
+        "docs/qa/home-app-feature-audit.json",
+        "tools/scenario-evidence-map.json"
+      ],
+      "readiness_anchor": "Local-partial scenarios still require live/non-production validation",
+      "unblock": "Run the local-partial scenario set in a non-production/live environment and attach agent transcripts, HA state diffs, and timing evidence, or replace each remaining live dependency with stronger simulation-backed proof."
+    },
+    {
+      "id": "RCR-003",
+      "kind": "risk",
+      "title": "Windows MSI bundle built; real install smoke still deferred",
+      "status": "documented_risk",
+      "blocks_rc": false,
+      "scope": ["desktop_bundle", "installer"],
+      "impact": "The full Tauri bundle build now succeeds in an isolated target directory and the MSI passes administrative extraction, proving the package can lay down files without touching the locked default release executable. A real OS-level install plus first-launch smoke is still deferred to avoid modifying this workstation during the local-only pass.",
+      "evidence": [
+        "docs/qa/home-app-rc-readiness.md",
+        "app/src-tauri/tauri.conf.json"
+      ],
+      "readiness_anchor": "Windows MSI bundle build and administrative extraction passed in an isolated target directory",
+      "unblock": "For a tagged release, install the MSI on a clean worker or VM, launch the installed app once, capture first-paint evidence, and archive the installer artifact."
+    },
+    {
+      "id": "RCB-004",
+      "kind": "blocker",
+      "title": "Frigate person detection/fade-on still needs live diagnosis",
+      "status": "documented_blocker",
+      "blocks_rc": true,
+      "scope": ["frigate", "living_lights", "fade_on", "occupancy"],
+      "impact": "Local generator tests now prove the Frigate-to-actuator fade-on flow, but watcher evidence showed live Frigate emitted non-person labels and no person-zone events while the user expected occupancy.",
+      "evidence": [
+        "docs/qa/home-app-rc-readiness.md",
+        "tools/reports/frigate-occupancy-watch-living_room-2026-06-23-084610.md",
+        "tools/reports/kitchen-lighting-watch-2026-06-23-073656.md",
+        "tools/test_living_lights_frigate_occupancy_path.py",
+        "tools/test-watch-frigate-occupancy.py"
+      ],
+      "readiness_anchor": "Existing local watcher reports from 2026-06-23 show Frigate/HA delivered no person-zone events",
+      "unblock": "Run the read-only Frigate/HA watcher during a deliberate non-production or approved live walk test, then inspect camera view, detector labels, Frigate filters/zones, HA mirror sensors, classifier state, and final actuator calls."
+    },
+    {
+      "id": "RCR-005",
+      "kind": "risk",
+      "title": "Rust coverage is currently limited to the thin Tauri shell",
+      "status": "documented_risk",
+      "blocks_rc": false,
+      "scope": ["rust", "tauri"],
+      "impact": "The Rust suite now covers bootstrap, manifest, capability, asset-scope, and plugin-order contracts. Future non-trivial Tauri commands or state logic would still need command-level Rust tests.",
+      "evidence": [
+        "docs/qa/home-app-rc-readiness.md",
+        "app/src-tauri/src/main.rs",
+        "app/src-tauri/Cargo.toml",
+        "tools/run-test-coverage.py"
+      ],
+      "readiness_anchor": "Rust unit coverage is currently limited to Tauri shell/bootstrap contracts",
+      "unblock": "Add command-level Rust unit tests whenever the Tauri shell gains non-trivial commands, persisted state, or device-affecting Rust logic."
+    }
+  ]
+}

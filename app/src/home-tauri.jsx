@@ -23,8 +23,29 @@ function getTauriWindow() {
 
 /* Wrapper around fetch that uses Tauri's HTTP plugin in Tauri (bypassing
  * webview CORS), falling back to the browser fetch. The plugin lives at
- * window.__TAURI__.http.fetch in Tauri 2.x. */
+ * window.__TAURI__.http.fetch in Tauri 2.x.
+ *
+ * Simulation Mode guard: when `window.__SIM_ACTIVE === true`, return a
+ * safe `{ok:false}` response without making the network call. This is
+ * a defense-in-depth backstop — the primary guards are at the useEffect
+ * level (real-service pollers early-return). A first warning per host
+ * is logged so leaks are visible during development. */
+const _simWarnedHosts = new Set();
 async function tauriFetch(url, init) {
+  if (typeof window !== "undefined" && window.__SIM_ACTIVE === true) {
+    try {
+      const u = new URL(url);
+      if (!_simWarnedHosts.has(u.host)) {
+        _simWarnedHosts.add(u.host);
+        console.warn(`[sim] tauriFetch blocked request to ${u.host} — Simulation Mode is active.`);
+      }
+    } catch (e) { /* ignore url parse */ }
+    return {
+      ok: false, status: 0, statusText: "blocked-by-simulation-mode",
+      json: async () => ({}),
+      text: async () => "",
+    };
+  }
   if (IS_TAURI && _tauri.http?.fetch) {
     return _tauri.http.fetch(url, init);
   }
@@ -38,8 +59,25 @@ const PREFS_KEY = "hg-prefs";
 function loadPrefs(defaults = {}) {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
-    if (!raw) return { ...defaults };
-    return { ...defaults, ...JSON.parse(raw) };
+    const prefs = raw ? { ...defaults, ...JSON.parse(raw) } : { ...defaults };
+    if (typeof window !== "undefined" && window.HG_WEB_MODE) {
+      const isDefaultLan = (value, port) => {
+        if (!value) return true;
+        try {
+          const u = new URL(String(value).replace(/^ws/, "http"));
+          return (
+            (u.hostname === "192.168.0.100" || u.hostname === "192.168.0.125" || u.hostname === "localhost" || u.hostname === "127.0.0.1") &&
+            (!port || u.port === String(port))
+          );
+        } catch {
+          return false;
+        }
+      };
+      if (window.HG_DEFAULT_HA_BASE && isDefaultLan(prefs.endpoint, 8123)) prefs.endpoint = window.HG_DEFAULT_HA_BASE;
+      if (window.HG_DEFAULT_METRICS_BASE && isDefaultLan(prefs.metricsBase, 8092)) prefs.metricsBase = window.HG_DEFAULT_METRICS_BASE;
+      if (window.HG_DEFAULT_S2S_BASE && isDefaultLan(prefs.s2sBase, 8094)) prefs.s2sBase = window.HG_DEFAULT_S2S_BASE;
+    }
+    return prefs;
   } catch {
     return { ...defaults };
   }
@@ -88,6 +126,28 @@ function saveConversationId(id) {
   } catch {}
 }
 
+/* localStorage-backed onboarding flags — its own tiny blob (savePrefs writes a
+ * fixed key set, so onboarding state can't live there). saveOnboarding is a
+ * merge-patch: it reads the current blob, applies the patch, writes back. */
+const ONBOARDING_KEY = "hg-onboarding";
+
+function loadOnboarding(defaults = {}) {
+  try {
+    const raw = localStorage.getItem(ONBOARDING_KEY);
+    if (!raw) return { ...defaults };
+    return { ...defaults, ...JSON.parse(raw) };
+  } catch {
+    return { ...defaults };
+  }
+}
+
+function saveOnboarding(patch) {
+  try {
+    const cur = loadOnboarding();
+    localStorage.setItem(ONBOARDING_KEY, JSON.stringify({ ...cur, ...patch }));
+  } catch {}
+}
+
 /* Window controls — no-op when not running in Tauri. */
 async function winClose()    { (await getTauriWindow())?.close?.(); }
 async function winMinimize() { (await getTauriWindow())?.minimize?.(); }
@@ -106,5 +166,6 @@ Object.assign(window, {
   loadPrefs, savePrefs,
   loadEvents, saveEvents,
   loadConversationId, saveConversationId,
+  loadOnboarding, saveOnboarding,
   winClose, winMinimize, winMaximize,
 });

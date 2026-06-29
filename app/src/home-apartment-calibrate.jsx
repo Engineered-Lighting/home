@@ -1,0 +1,192 @@
+/* home-apartment-calibrate.jsx — extrinsics correspondence capture (P4 §4.2).
+ *
+ * Overlay for edit mode: shows the camera's Frigate snapshot; the user
+ * alternates clicking a pixel on the snapshot and the matching 3D point in
+ * the scene (picked against the collision mesh by the host view, which calls
+ * api.acceptScenePoint(xyz)). At >=8 pairs, "solve" POSTs
+ *   {pairs:[{px:[u,v], xyz:[x,y,z]}...], image_size:[w,h]}
+ * to <trackerBase>/calib/<cam>/extrinsics and reports RMS / per-point error.
+ *
+ * Contract with home-apartment.jsx:
+ *   window.HomeApartmentCalibrate.open({ cam, trackerBase, onPickRequest, onDone })
+ *     - onPickRequest(active): host enables 3D click-picking; for each pick it
+ *       calls the returned api.acceptScenePoint([x,y,z]) (apartment frame).
+ *     - onDone(result|null): solved extrinsics (server response) or cancel.
+ */
+(function () {
+    const { useState, useRef, useEffect } = React;
+
+    function CalibrateOverlay({ cam, trackerBase, onPickRequest, onDone, onIntrinsics, onPairsChanged, registerApi, savedLens }) {
+        const [pairs, setPairs] = useState([]);
+        const [pendingPx, setPendingPx] = useState(null);
+        const [busy, setBusy] = useState(false);
+        const [result, setResult] = useState(null);
+        const [error, setError] = useState(null);
+        const [thumbs, setThumbs] = useState([]);     // capture thumbnails
+        const [views, setViews] = useState(0);        // accepted board-views
+        const [lens, setLens] = useState(null);       // solved intrinsics
+        const imgRef = useRef(null);
+
+        const snap = async () => {
+            setBusy(true); setError(null);
+            try {
+                const r = await (window.tauriFetch || fetch)(`${trackerBase}/calib/${cam}/capture/snap`, { method: "POST" });
+                const j = await r.json();
+                if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
+                setThumbs((t) => [...t.slice(-7), { src: j.thumb, n: j.new_views }]);
+                setViews(j.total_views);
+            } catch (e) { setError(String(e.message || e)); }
+            setBusy(false);
+        };
+
+        const solveLens = async () => {
+            setBusy(true); setError(null);
+            try {
+                const r = await (window.tauriFetch || fetch)(`${trackerBase}/calib/${cam}/capture/solve`, { method: "POST" });
+                const j = await r.json();
+                if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
+                setLens(j);
+                onIntrinsics && onIntrinsics(j);   // host persists into the model
+            } catch (e) { setError(String(e.message || e)); }
+            setBusy(false);
+        };
+
+        useEffect(() => {
+            registerApi({
+                acceptScenePoint: (xyz) => {
+                    setPendingPx((px) => {
+                        if (!px) return px;            // ignore picks with no pixel staged
+                        setPairs((p) => [...p, { px, xyz }]);
+                        return null;
+                    });
+                },
+                updatePair: (i, xyz) => {
+                    setPairs((p) => p.map((q, k) => (k === i ? { ...q, xyz } : q)));
+                },
+            });
+        }, [registerApi]);
+
+        useEffect(() => { onPickRequest(!!pendingPx); }, [!!pendingPx]);
+        useEffect(() => { onPairsChanged && onPairsChanged(pairs); }, [pairs]);
+        const [imgNat, setImgNat] = useState([1280, 720]);
+
+        const clickImage = (e) => {
+            const img = imgRef.current;
+            const r = img.getBoundingClientRect();
+            const u = ((e.clientX - r.left) / r.width) * img.naturalWidth;
+            const v = ((e.clientY - r.top) / r.height) * img.naturalHeight;
+            setPendingPx([Math.round(u), Math.round(v)]);
+        };
+
+        const solve = async () => {
+            setBusy(true); setError(null);
+            try {
+                const img = imgRef.current;
+                const r = await (window.tauriFetch || fetch)(`${trackerBase}/calib/${cam}/extrinsics`, {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ pairs, image_size: [img.naturalWidth, img.naturalHeight] }),
+                });
+                const j = await r.json();
+                if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
+                setResult(j);
+            } catch (e) { setError(String(e.message || e)); }
+            setBusy(false);
+        };
+
+        const mono = { fontFamily: "'Geist Mono', monospace", fontSize: 10, letterSpacing: "0.08em" };
+        return React.createElement("div", {
+            // SIDE-BY-SIDE: snapshot panel docked left, the live 3D mesh stays
+            // visible and clickable on the right half (user feedback — the
+            // full-screen overlay hid the mesh during correspondence picking)
+            style: { position: "absolute", top: 0, left: 0, bottom: 0, width: "46%",
+                     zIndex: 40, background: "rgba(5,6,9,0.96)",
+                     borderRight: "1px solid #2a3242", overflowY: "auto",
+                     display: "flex", flexDirection: "column", padding: 14, gap: 10,
+                     color: "var(--hg-ice, #cfe2ff)" },
+        },
+            React.createElement("div", { style: { ...mono, fontSize: 11 } },
+                `calibrate · ${cam} — STEP 1 lens: scatter the dot boards in view, `
+                + `snap, rearrange, snap again (≥8 board-views, more is better), then solve lens. `
+                + `STEP 2 pose: click a point in the snapshot, then the same spot in 3D (≥8 pairs).`
+                + (pendingPx ? "  → now click the 3D point" : "")),
+            React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center" } },
+                React.createElement("button", { style: mono, disabled: busy, onClick: snap }, "snap boards"),
+                React.createElement("button", { style: mono, disabled: busy || views < 8, onClick: solveLens },
+                    `solve lens (${views} views)`),
+                React.createElement("button", { style: mono, disabled: busy, onClick: async () => {
+                    await (window.tauriFetch || fetch)(`${trackerBase}/calib/${cam}/capture/reset`, { method: "POST" });
+                    setThumbs([]); setViews(0); setLens(null);
+                } }, "reset"),
+                (lens || savedLens) && React.createElement("span", { style: { ...mono, color: "#4ade80" } },
+                    lens
+                        ? `lens solved · rms ${lens.rms_px.toFixed(2)} px · ${lens.views} views`
+                        : `lens ✓ saved (rms ${(savedLens.rms_px || 0).toFixed(2)} px)`)),
+            thumbs.length > 0 && React.createElement("div",
+                { style: { display: "flex", gap: 4, overflowX: "auto" } },
+                thumbs.map((t, i) => React.createElement("img", {
+                    key: i, src: t.src,
+                    title: `${t.n} new view(s)`,
+                    style: { height: 74, border: t.n ? "1px solid #4a8" : "1px solid #844" },
+                }))),
+            React.createElement("div", { style: { position: "relative", width: "100%" } },
+                React.createElement("img", {
+                    ref: imgRef, onClick: clickImage,
+                    onLoad: () => imgRef.current && setImgNat(
+                        [imgRef.current.naturalWidth, imgRef.current.naturalHeight]),
+                    src: `${trackerBase}/calib/${cam}/snapshot`,
+                    style: { width: "100%", display: "block", border: "1px solid #2a3242",
+                             cursor: "crosshair", opacity: pendingPx ? 0.7 : 1 },
+                }),
+                pairs.map((p, i) => React.createElement("div", {
+                    key: i,
+                    style: { position: "absolute",
+                             left: `${(p.px[0] / imgNat[0]) * 100}%`,
+                             top: `${(p.px[1] / imgNat[1]) * 100}%`,
+                             transform: "translate(-50%, -50%)",
+                             width: 16, height: 16, borderRadius: 9,
+                             border: "2px solid #4ade80", color: "#4ade80",
+                             fontSize: 9, lineHeight: "12px", textAlign: "center",
+                             fontFamily: "'Geist Mono', monospace",
+                             background: "rgba(0,0,0,0.45)", pointerEvents: "none" },
+                }, String(i + 1))),
+                pendingPx && React.createElement("div", {
+                    style: { position: "absolute",
+                             left: `${(pendingPx[0] / imgNat[0]) * 100}%`,
+                             top: `${(pendingPx[1] / imgNat[1]) * 100}%`,
+                             transform: "translate(-50%, -50%)",
+                             width: 16, height: 16, borderRadius: 9,
+                             border: "2px solid #ffd479", pointerEvents: "none" },
+                })),
+            pendingPx && React.createElement("div",
+                { style: { ...mono, color: "#ffd479" } },
+                "→ now click the SAME spot in the 3D view on the right"),
+            pairs.length > 0 && React.createElement("div",
+                { style: { display: "flex", flexDirection: "column", gap: 2 } },
+                pairs.map((p, i) => {
+                    const err = result && result.per_point_err_px && result.per_point_err_px[i];
+                    const bad = err != null && err > 2 * Math.max(1, result.rms_px * 0.75);
+                    return React.createElement("div",
+                        { key: i, style: { ...mono, display: "flex", gap: 8, alignItems: "center" } },
+                        React.createElement("span", { style: { color: "#4ade80", width: 16 } }, String(i + 1)),
+                        React.createElement("span", null,
+                            `px ${Math.round(p.px[0])},${Math.round(p.px[1])} ↔ ` +
+                            `xyz ${p.xyz.map((v) => v.toFixed(2)).join(", ")}`),
+                        err != null && React.createElement("span",
+                            { style: { color: bad ? "#ff7b7b" : "#9ad29a" } },
+                            `${err.toFixed(1)}px${bad ? " ← outlier" : ""}`),
+                        React.createElement("button", {
+                            style: { ...mono, marginLeft: "auto" },
+                            onClick: () => setPairs((q) => q.filter((_, k) => k !== i)),
+                        }, "×"));
+                })),
+            result && React.createElement("div", { style: mono },
+                `solved · rms ${result.rms_px?.toFixed?.(2)} px · pos σ ${result.pos_sigma_m ?? "?"} m`),
+            error && React.createElement("div", { style: { ...mono, color: "#ff8989" } }, error),
+            React.createElement("div", { style: { display: "flex", gap: 8 } },
+                React.createElement("button", { style: mono, disabled: pairs.length < 8 || busy, onClick: solve }, "solve"),
+                React.createElement("button", { style: mono, onClick: () => setPairs((p) => p.slice(0, -1)) }, "undo pair"),
+                React.createElement("button", { style: mono, onClick: () => onDone(result) }, result ? "accept · close" : "cancel")));
+    }
+
+    window.HomeApartmentCalibrate = { Component: CalibrateOverlay };
+})();

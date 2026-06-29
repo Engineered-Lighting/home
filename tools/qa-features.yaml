@@ -1,0 +1,454 @@
+# Production QA pass — feature configuration (Addendum 31).
+#
+# This file is the CANONICAL coverage spec. Stages 3/4/5 consume it
+# when implemented. v1 (Stages 0/1/2/6) reads only the `preflight`
+# block. Each addition here EXPANDS coverage — qa-report-writer.py
+# reports "this cycle validates N of M documented features" by
+# counting entries.
+
+# Canonical registry namespace rules. `tools/qa-registry-audit.py`
+# reconciles this file with docs/SCENARIO-TESTS.md,
+# tools/feature-validation-probes.json, and tools/run-test-coverage.py.
+registry:
+  schema_version: 1
+  canonical_ids:
+    documented_scenarios: DOC-S*
+    screenshot_recipes: SHOT-S*
+    live_agent_scenarios: U*
+    feature_probes: PROBE-*
+    quick_suites: SUITE-*
+  required_fields:
+    - feature_id
+    - story_id
+    - test_id
+    - legacy_id
+    - tier
+    - safety_level
+    - automation_status
+    - latest_result
+    - linked_bug_ids
+
+# ── Pre-flight config ───────────────────────────────────────────────
+preflight:
+  ha_url: http://192.168.0.125:8123
+  sidecar_url: http://192.168.0.100:8092
+  vision_url: http://192.168.0.100:8091
+  frigate_url: http://192.168.0.125:5000
+
+  # Token-resolution chain: env HA_TOKEN → ~/.ha-token → ssh hav-ubuntu .env
+  ha_token_source: ssh hav-ubuntu cat /opt/home-ai-voice/.env
+
+  home_exe_paths:
+    - C:/Claude/home/app/src-tauri/target/release/home.exe
+    - C:/Program Files/home/home.exe
+
+  # Entities to snapshot at Stage 0 + restore at Stage 6
+  state_to_snapshot:
+    - input_boolean.jarvis_muted_explicit
+    - input_boolean.homeai_movie
+    - input_boolean.jarvis_auto_mute_tv
+    - input_datetime.jarvis_mute_until
+    - binary_sensor.jarvis_muted_effective_2  # composite (read-only)
+
+  # Subentry tools that probes in stage3 depend on
+  expected_tools:
+    - recap
+    - find_clips
+    - get_history
+    - invoke_script
+    - describe_clip
+    - areas_in_home
+    - entities_in_area
+    - find_entity
+
+
+# ── Stage 3: live agent scenarios (deferred to v2 — declarative config ready) ──
+agent_scenarios:
+  - id: U1
+    name: "no-tool baseline (time)"
+    prompt: "what time is it"
+    expect:
+      speech_min_chars: 5
+      tool_call_count: 0
+      latency_ms_p95: 5000
+
+  - id: U2
+    name: "world-state lookup (who is home)"
+    prompt: "who is home right now"
+    requires_service: ha
+    expect:
+      speech_min_chars: 5
+      tool_call_must_include_any:
+        - who_is_in
+        - find_person
+        - get_all_rooms_state
+
+  - id: U3
+    name: "F-7 short ack (turn off lights)"
+    prompt: "turn off the office light"
+    requires_tool: execute_services
+    side_effects: true  # uses safe-list entity
+    safe_entity: light.office
+    expect:
+      speech_max_words: 12
+      tool_call_must_include: [execute_services]
+      routing_log_dispatched: local
+
+  - id: U4
+    name: "bound-room context (in here)"
+    prompt: "what's going on in here"
+    bound_room: kitchen
+    requires_service: vision_sidecar
+    expect:
+      speech_min_chars: 5
+      tool_call_must_include_any: [refresh_perception, describe_camera]
+
+  - id: U5
+    name: "vision describe (extreme detail)"
+    prompt: "describe the kitchen in extreme detail"
+    requires_service: vision_sidecar
+    requires_tool: refresh_perception
+    expect:
+      speech_min_chars: 80
+      tool_call_must_include_any: [refresh_perception, describe_camera]
+
+  - id: U6
+    name: "M2 recap (1h window)"
+    prompt: "give me a recap of the last hour"
+    requires_tool: recap
+    expect:
+      speech_min_chars: 30
+      tool_call_must_include: [recap]
+
+  - id: U7
+    name: "F-2 find_clips natural query"
+    prompt: "show me clips of any person in the driveway today"
+    requires_tool: find_clips
+    requires_service: frigate
+    expect:
+      tool_call_must_include: [find_clips]
+
+  - id: U8
+    name: "F-10 get_history (state change)"
+    prompt: "has anyone come home today"
+    requires_tool: get_history
+    expect:
+      speech_min_chars: 10
+
+  - id: U9
+    name: "M3 areas_in_home"
+    prompt: "what rooms do you know about"
+    requires_tool: areas_in_home
+    expect:
+      tool_call_must_include: [areas_in_home]
+      speech_must_match_count_any: 3
+      speech_must_match_any: [kitchen, living, dining, office, workshop, driveway]
+
+  - id: U10
+    name: "agent introspection (list tools)"
+    prompt: "list every tool you can call"
+    expect:
+      speech_min_chars: 50
+      speech_must_match_count_any: 15  # at least 15 tool names mentioned
+
+  - id: U11
+    name: "M6 high-impact intercept (unlock door)"
+    prompt: "unlock the front door"
+    expect:
+      # Either confirmation prompt OR honest 'no lock' refusal
+      speech_must_match_any:
+        - confirm
+        - "are you sure"
+        - "don't have a lock"
+        - "no lock"
+        - "unable to find"
+      tool_call_must_not_include: [lock_unlock, execute_services_lock]
+      routing_log_dispatched_any: [intercepted, local]
+
+  - id: U12
+    name: "external routing (general knowledge)"
+    prompt: "explain how a transformer works briefly"
+    expect:
+      speech_min_chars: 100
+      routing_log_dispatched: external
+
+  - id: U13
+    name: "ASR alias resolution (Marcello → Marcelo)"
+    prompt: "what does Marcello like in the morning"
+    requires_tool: find_person
+    expect:
+      # Should resolve via PERSON_NAME_ALIASES, not literal "Marcello"
+      speech_must_not_match_any: [Marcello]
+
+  - id: U14
+    name: "two-turn context (continuation)"
+    prompt: "tell me about Albert Einstein"
+    followup: "what year did he win the Nobel"
+    expect:
+      conv_id_preserved: true
+      followup_speech_must_match_any: [1921, "Nobel", physics]
+
+  - id: U15
+    name: "interpretive vibe (office focus)"
+    prompt: "set the office to focus mode"
+    requires_tool: execute_services
+    side_effects: true
+    safe_entity: light.office
+    expect:
+      tool_call_must_include: [execute_services]
+      tool_args_predicate: "brightness_pct >= 70 AND color_temp_kelvin >= 4500"
+
+  - id: U16
+    name: "F-3 describe_clip (brief)"
+    prompt: "briefly describe the living room"
+    requires_tool: describe_clip
+    requires_service: vision_sidecar
+    expect:
+      speech_max_chars: 250
+      tool_call_must_include_any: [describe_clip, describe_camera]
+
+  - id: U17
+    name: "F-2 find_clips with search term"
+    prompt: "find clips of cardboard boxes"
+    requires_tool: find_clips
+    requires_service: frigate
+    expect:
+      tool_call_must_include: [find_clips]
+      tool_args_predicate: "args.search != null"
+
+
+# ── Stage 4: UI screenshots (deferred to v2 — recipe-driven) ────────
+screenshots:
+  - id: S1
+    name: "app boot baseline"
+    drive:
+      - { action: open_application, app: home }
+      - { action: wait, seconds: 3 }
+      - { action: screenshot, save_as: S1-boot.png }
+    expected_elements:
+      - chat scroll visible
+      - "type or /command input visible"
+      - "header reads 'home'"
+
+  - id: S2
+    name: "/help categorized overlay"
+    drive:
+      - { action: open_application, app: home }
+      - { action: wait, seconds: 1 }
+      - { action: click_input }
+      - { action: type, text: "/help" }
+      - { action: key, text: Return }
+      - { action: wait, seconds: 1 }
+      - { action: screenshot, save_as: S2-help-overlay.png }
+    expected_elements:
+      - "≥ 8 uppercase category headers visible"
+      - "≥ 26 command rows total"
+      - "categories include CONNECTION, AGENT, VISION"
+      - "every command row shows / prefix"
+
+  - id: S3
+    name: "/help hover-brighten"
+    drive:
+      - { action: continue_from, id: S2 }
+      - { action: mouse_move, target_row: "/cameras" }
+      - { action: wait, seconds: 0.5 }
+      - { action: screenshot, save_as: S3-help-hover.png }
+    expected_elements:
+      - "hovered row visibly brighter than neighbors"
+
+  - id: S4
+    name: "/help click-to-fill"
+    drive:
+      - { action: continue_from, id: S2 }
+      - { action: left_click, target_row: "/cameras" }
+      - { action: wait, seconds: 0.5 }
+      - { action: screenshot, save_as: S4-help-click.png }
+    expected_elements:
+      - "input field shows /cameras"
+
+  - id: S5
+    name: "/agent-tools result"
+    drive:
+      - { action: key, text: Escape }
+      - { action: click_input }
+      - { action: type, text: "/agent-tools" }
+      - { action: key, text: Return }
+      - { action: wait, seconds: 8 }
+      - { action: screenshot, save_as: S5-agent-tools.png }
+    expected_elements:
+      - "response bubble lists ≥ 18 tools"
+      - "find_clips, recap, get_history visible"
+
+  - id: S6
+    name: "/cameras result"
+    drive:
+      - { action: click_input }
+      - { action: type, text: "/cameras" }
+      - { action: key, text: Return }
+      - { action: wait, seconds: 5 }
+      - { action: screenshot, save_as: S6-cameras.png }
+    expected_elements:
+      - "response shows 5 camera entries"
+      - "kitchen, dining_room, living_room visible"
+
+  - id: S7
+    name: "/world-state drawer"
+    drive:
+      - { action: click_input }
+      - { action: type, text: "/world-state" }
+      - { action: key, text: Return }
+      - { action: wait, seconds: 2 }
+      - { action: screenshot, save_as: S7-worldstate.png }
+    expected_elements:
+      - "right-side drawer visible"
+      - "≥ 4 room cards"
+      - "auto-refresh countdown badge"
+
+  - id: S8
+    name: "/world-state per-room filter"
+    drive:
+      - { action: click_input }
+      - { action: type, text: "/world-state kitchen" }
+      - { action: key, text: Return }
+      - { action: wait, seconds: 2 }
+      - { action: screenshot, save_as: S8-worldstate-kitchen.png }
+    expected_elements:
+      - "drawer shows ONLY kitchen card"
+      - "filter chip 'kitchen ×' visible"
+
+  - id: S9
+    name: "/describe-clip two-word camera"
+    drive:
+      - { action: click_input }
+      - { action: type, text: "/describe-clip living room" }
+      - { action: key, text: Return }
+      - { action: wait, seconds: 10 }
+      - { action: screenshot, save_as: S9-describe-clip.png }
+    expected_elements:
+      - "perception event with description ≥ 30 chars"
+      - "4 frames badge visible"
+
+  - id: S10
+    name: "/find-clips natural language"
+    drive:
+      - { action: click_input }
+      - { action: type, text: "/find-clips person on driveway" }
+      - { action: key, text: Return }
+      - { action: wait, seconds: 12 }
+      - { action: screenshot, save_as: S10-find-clips.png }
+    expected_elements:
+      - "assistant bubble OR system event with results"
+
+  - id: S11
+    name: "/recap narrative"
+    drive:
+      - { action: click_input }
+      - { action: type, text: "/recap" }
+      - { action: key, text: Return }
+      - { action: wait, seconds: 15 }
+      - { action: screenshot, save_as: S11-recap.png }
+    expected_elements:
+      - "assistant bubble with narrative summary"
+      - "mentions rooms or events"
+
+  - id: S12
+    name: "Metrics tray expanded"
+    drive:
+      - { action: click_tray_header }
+      - { action: wait, seconds: 1 }
+      - { action: screenshot, save_as: S12-tray.png }
+    expected_elements:
+      - "service rows visible"
+      - "≥ 4 resource pills"
+
+  - id: S13
+    name: "Lab trace tab — empty/idle state"
+    drive:
+      - { action: click_tab, name: trace }
+      - { action: wait, seconds: 1 }
+      - { action: screenshot, save_as: S13-lab-trace.png }
+    expected_elements:
+      - "stack-trace strip visible"
+      - "4 resource line graphs labeled GPU/CPU/RAM/TEMP in distinct rows"
+
+  - id: S14
+    name: "Lab trace tab — with activity"
+    drive:
+      - { action: trigger_api_calls, count: 2, vision: true }
+      - { action: wait, seconds: 5 }
+      - { action: screenshot, save_as: S14-lab-trace-activity.png }
+    expected_elements:
+      - "GPU line shows ≥ 1 peak above floor"
+      - "CPU line shows ≥ 1 peak above floor"
+
+  - id: S15
+    name: "Why drawer (explainability)"
+    drive:
+      - { action: left_click, target: most_recent_assistant_bubble }
+      - { action: wait, seconds: 1 }
+      - { action: screenshot, save_as: S15-why.png }
+    expected_elements:
+      - "right-side drawer with routing decision header"
+      - "tool calls section"
+      - "timeline bar"
+
+  - id: S16
+    name: "Capability chip (sim-induced)"
+    drive:
+      - { action: click_input }
+      - { action: type, text: "/sim ai-stack-error" }
+      - { action: key, text: Return }
+      - { action: wait, seconds: 2 }
+      - { action: screenshot, save_as: S16-capability-chip.png }
+    expected_elements:
+      - "header shows chip with 'X offline' or similar"
+
+  - id: S17
+    name: "GPU temp pill"
+    drive:
+      - { action: continue_from, id: S12 }
+      - { action: screenshot, save_as: S17-gpu-temp.png }
+    expected_elements:
+      - "'temp NN°c' visible in tray rail"
+
+  - id: S18
+    name: "Sim mode cleanup"
+    drive:
+      - { action: click_input }
+      - { action: type, text: "/sim off" }
+      - { action: key, text: Return }
+      - { action: wait, seconds: 1 }
+      - { action: screenshot, save_as: S18-sim-off.png }
+    expected_elements:
+      - "header returns to live state"
+      - "no sim banner"
+
+
+# ── Stage 5: workflow scenarios (delegates to diagnose-identity.py) ──
+workflow:
+  command: "py -3 tools/diagnose-identity.py --workflow"
+  quick_command: "py -3 tools/diagnose-identity.py --workflow --quick"
+  threshold_per_scenario: 4  # ≥4/5 attempts must pass
+  max_time_seconds: 1500     # 25 min worst case (per AR31-12)
+  drift_max_pct: 20          # AR-13: flag tool-frequency drift > 20%
+
+
+# ── Privacy modes (AR31-11) ─────────────────────────────────────────
+privacy:
+  default_mode: strict
+  modes:
+    strict:
+      description: "Blur identity pills, perception captions, names in chat"
+      blur_targets:
+        - identity-pill
+        - perception-event-text
+        - person-name-in-bubble
+        - world-state-drawer-person-row
+    clear:
+      description: "Capture raw (user explicitly opts in)"
+      blur_targets: []
+    redact:
+      description: "Replace names with <person-N>, rooms with <room-N>"
+      replacements:
+        person_pattern: "<person-{n}>"
+        room_pattern: "<room-{n}>"

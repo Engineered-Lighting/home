@@ -15,9 +15,13 @@ const HOST = process.env.HOME_WEB_HOST || "127.0.0.1";
 const PORT = Number(process.env.HOME_WEB_PORT || 5181);
 const APARTMENT_ASSETS_DIR = path.resolve(process.env.HOME_WEB_APARTMENT_ASSETS_DIR || path.join(ROOT, "app", "data", "apartment"));
 const LEGACY_BASIC_AUTH = (process.env.HOME_WEB_BASIC_AUTH || "").trim();
+const defaultAuthRoot =
+  process.env.APPDATA ||
+  process.env.LOCALAPPDATA ||
+  process.env.XDG_CONFIG_HOME ||
+  (process.env.HOME ? path.join(process.env.HOME, ".config") : ROOT);
 const AUTH_FILE = path.resolve(
-  process.env.HOME_WEB_AUTH_FILE ||
-  path.join(process.env.APPDATA || process.env.LOCALAPPDATA || ROOT, "EngineeredLightingHome", "web-auth.json"),
+  process.env.HOME_WEB_AUTH_FILE || path.join(defaultAuthRoot, "EngineeredLightingHome", "web-auth.json"),
 );
 const AUTH_COOKIE = "home_web_auth";
 const PASSWORD_MIN_LENGTH = 12;

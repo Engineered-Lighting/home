@@ -13,11 +13,21 @@ concurrency:
 jobs:
   deploy:
     name: deploy to ubuntu ai box
+    # Deploy-only self-hosted runner. Keep this workflow manual and trusted:
+    # do not run arbitrary PR code on the Ubuntu AI box.
     runs-on: [self-hosted, linux, x64, home-web]
     timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Require trusted main ref
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
+            echo "Refusing to deploy from ${GITHUB_REF}. Run this workflow from main."
+            exit 1
+          fi
 
       - name: Deploy home web gateway
         env:

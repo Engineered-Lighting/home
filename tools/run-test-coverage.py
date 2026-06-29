@@ -76,6 +76,7 @@ SUITES: list[Suite] = [
     # ── Pure-function Node tests ──
     _node_test("tools/run-lab-tests.js", desc="lab helpers (anchors, palette, persistence)"),
     _node_test("tools/run-bootstrap-tests.js", desc="Home app bootstrap loader and mount-order contracts"),
+    _node_test("tools/run-home-services-tests.js", desc="Home service resolver profiles, fallbacks, and probes"),
     _node_test("tools/qa-browser-smoke.js", desc="Stage 4 autonomous UI shell smoke (self-hosted app shell + Atlas entry points)"),
     _node_test("tools/run-people-tests.js", desc="people helpers (radial layout, edges)"),
     _node_test("tools/run-events-tests.js", desc="chat feed event helpers (speaker grouping, exports, action undo inverse map)"),

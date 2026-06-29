@@ -24,6 +24,10 @@
   const DEFAULT_BASE = "http://192.168.0.100:8099";
 
   function defaultBase() {
+    try {
+      const resolved = window.HomeServices?.get?.("videoLabeler");
+      if (resolved) return String(resolved).replace(/\/+$/, "");
+    } catch (e) { /* */ }
     return (typeof window !== "undefined" && window.HG_DEFAULT_VIDEO_LABELER_BASE) || DEFAULT_BASE;
   }
 
@@ -33,7 +37,11 @@
   function vlBase() {
     if (typeof window !== "undefined" && window.__SIM_ACTIVE === true) return null;
     try {
-      const v = localStorage.getItem(BASE_KEY);
+      const resolved = window.HomeServices?.get?.("videoLabeler");
+      if (resolved) return String(resolved).replace(/\/+$/, "");
+    } catch (e) { /* */ }
+    try {
+      const v = window.HomeServices ? "" : localStorage.getItem(BASE_KEY);
       return (v || defaultBase()).replace(/\/+$/, "");
     } catch (e) {
       return defaultBase();

@@ -60,6 +60,15 @@ function loadPrefs(defaults = {}) {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
     const prefs = raw ? { ...defaults, ...JSON.parse(raw) } : { ...defaults };
+    if (typeof window !== "undefined" && window.HomeServices && !window.HG_WEB_MODE) {
+      const services = window.HomeServices;
+      const endpoint = services.get("ha");
+      const metricsBase = services.get("metrics");
+      const s2sBase = services.get("s2s");
+      if (endpoint) prefs.endpoint = endpoint;
+      if (metricsBase) prefs.metricsBase = metricsBase;
+      if (s2sBase) prefs.s2sBase = s2sBase;
+    }
     if (typeof window !== "undefined" && window.HG_WEB_MODE) {
       const isDefaultLan = (value, port) => {
         if (!value) return true;

@@ -24,7 +24,14 @@ function tauriConvert(name) {
 }
 
 function overrideBase() {
-    try { return localStorage.getItem('apartment3d.assetsBase') || null; } catch (e) { return null; }
+    try {
+        const resolved = window.HomeServices?.get?.('apartmentAssets');
+        if (resolved) return String(resolved).replace(/\/+$/, '');
+    } catch (e) { /* */ }
+    try {
+        if (!window.HomeServices) return localStorage.getItem('apartment3d.assetsBase') || null;
+    } catch (e) { /* */ }
+    return null;
 }
 
 function browserDevBase() {
@@ -35,6 +42,7 @@ function browserDevBase() {
         const loc = window.location;
         const loopback = loc && (loc.hostname === '127.0.0.1' || loc.hostname === 'localhost' || loc.hostname === '::1');
         if (loopback && (loc.port === '5180' || loc.port === '5173')) return 'http://127.0.0.1:5190';
+        if (!window.IS_TAURI && !window.__TAURI__) return 'assets/apartment';
     } catch (e) { /* */ }
     return null;
 }

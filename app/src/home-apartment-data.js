@@ -15,6 +15,10 @@
   const DEFAULT_TRACKER = "ws://192.168.0.100:8098";
 
   function defaultTrackerBase() {
+    try {
+      const resolved = window.HomeServices?.get?.("tracker");
+      if (resolved) return resolved;
+    } catch (e) { /* */ }
     return (window.HG_WEB_MODE && window.HG_DEFAULT_TRACKER_BASE) || DEFAULT_TRACKER;
   }
 
@@ -37,6 +41,10 @@
   };
 
   function trackerBase() {
+    try {
+      const resolved = window.HomeServices?.get?.("tracker");
+      if (resolved) return resolved;
+    } catch (e) { /* */ }
     try { return localStorage.getItem(TRACKER_KEY) || defaultTrackerBase(); }
     catch (e) { return defaultTrackerBase(); }
   }
@@ -45,15 +53,22 @@
    * Tries the data dir (asset protocol manual URL) then the bundled copy. */
   async function fetchSeed() {
     const urls = [];
+    try {
+      const resolved = window.HomeServices?.get?.("apartmentAssets");
+      if (resolved) urls.push(`${String(resolved).replace(/\/+$/, "")}/seed-model.json`);
+    } catch (e) { /* */ }
     if (window.HG_WEB_MODE && window.HG_DEFAULT_APARTMENT_ASSET_BASE) {
       urls.push(`${String(window.HG_DEFAULT_APARTMENT_ASSET_BASE).replace(/\/+$/, "")}/seed-model.json`);
-    } else {
+    } else if (window.IS_TAURI || window.__TAURI__) {
       urls.push(`http://asset.localhost/${encodeURIComponent("C:/Claude/home/app/data/apartment/seed-model.json")}`);
+    } else {
+      urls.push("assets/apartment/seed-model.json");
     }
     urls.push("assets/apartment/seed-model.json");
     for (const u of urls) {
       try {
-        const r = await fetch(u);
+        const fetcher = ((window.IS_TAURI || window.__TAURI__) && window.tauriFetch) || fetch;
+        const r = await fetcher(u, { cache: "no-store" });
         if (r.ok) return await r.json();
       } catch (e) { /* next */ }
     }

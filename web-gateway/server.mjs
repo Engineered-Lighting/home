@@ -14,8 +14,13 @@ const FALLBACK_APARTMENT_DIR = path.join(APP_DIR, "assets", "apartment");
 const HOST = process.env.HOME_WEB_HOST || "127.0.0.1";
 const PORT = Number(process.env.HOME_WEB_PORT || 5181);
 const APARTMENT_ASSETS_DIR = path.resolve(process.env.HOME_WEB_APARTMENT_ASSETS_DIR || path.join(ROOT, "app", "data", "apartment"));
-const BASIC_AUTH = (process.env.HOME_WEB_BASIC_AUTH || "").trim();
-const AUTH_REALM = process.env.HOME_WEB_AUTH_REALM || "Home";
+const LEGACY_BASIC_AUTH = (process.env.HOME_WEB_BASIC_AUTH || "").trim();
+const AUTH_FILE = path.resolve(
+  process.env.HOME_WEB_AUTH_FILE ||
+  path.join(process.env.APPDATA || process.env.LOCALAPPDATA || ROOT, "EngineeredLightingHome", "web-auth.json"),
+);
+const AUTH_COOKIE = "home_web_auth";
+const PASSWORD_MIN_LENGTH = 12;
 
 const MIME = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -116,13 +121,6 @@ const routes = [
   },
 ];
 
-function authCookieValue() {
-  if (!BASIC_AUTH) return "";
-  return crypto.createHash("sha256").update(`home-web:${BASIC_AUTH}`).digest("base64url");
-}
-
-const AUTH_COOKIE_VALUE = authCookieValue();
-
 function parseCookies(header) {
   const out = {};
   for (const part of String(header || "").split(";")) {
@@ -133,10 +131,93 @@ function parseCookies(header) {
   return out;
 }
 
+function timingSafeStringEqual(a, b) {
+  const got = Buffer.from(String(a || ""));
+  const expected = Buffer.from(String(b || ""));
+  return got.length === expected.length && crypto.timingSafeEqual(got, expected);
+}
+
+function parseBasicPair(value) {
+  const raw = String(value || "");
+  const idx = raw.indexOf(":");
+  if (idx <= 0) return null;
+  const username = raw.slice(0, idx).trim();
+  const password = raw.slice(idx + 1);
+  if (!username || !password) return null;
+  return { username, password };
+}
+
+function hashPassword(password, salt = crypto.randomBytes(18).toString("base64url"), iterations = 210000) {
+  const hash = crypto.pbkdf2Sync(String(password), salt, iterations, 32, "sha256").toString("base64url");
+  return { kdf: "pbkdf2-sha256", iterations, salt, hash };
+}
+
+function loadAuthState() {
+  try {
+    if (fs.existsSync(AUTH_FILE)) {
+      const data = JSON.parse(fs.readFileSync(AUTH_FILE, "utf8"));
+      if (data?.username && data?.password?.salt && data?.password?.hash) {
+        return {
+          enabled: true,
+          source: "file",
+          username: String(data.username),
+          password: data.password,
+        };
+      }
+    }
+  } catch (err) {
+    console.warn(`[auth] ignoring unreadable auth file ${AUTH_FILE}: ${err.message}`);
+  }
+  const legacy = parseBasicPair(LEGACY_BASIC_AUTH);
+  if (legacy) {
+    return { enabled: true, source: "env", ...legacy };
+  }
+  return { enabled: false, source: "disabled", username: "" };
+}
+
+let authState = loadAuthState();
+
+function verifyCredentials(username, password) {
+  if (!authState.enabled) return true;
+  if (!timingSafeStringEqual(username, authState.username)) return false;
+  if (authState.source === "env") return timingSafeStringEqual(password, authState.password);
+  const p = authState.password;
+  const candidate = hashPassword(password, p.salt, p.iterations || 210000).hash;
+  return timingSafeStringEqual(candidate, p.hash);
+}
+
+function authCookieValue() {
+  if (!authState.enabled) return "";
+  const fingerprint = authState.source === "env"
+    ? `${authState.username}:${authState.password}`
+    : `${authState.username}:${authState.password.salt}:${authState.password.hash}`;
+  return crypto.createHash("sha256").update(`home-web-session:v2:${fingerprint}`).digest("base64url");
+}
+
+function setAuthCookie(res) {
+  res.setHeader("Set-Cookie", `${AUTH_COOKIE}=${encodeURIComponent(authCookieValue())}; HttpOnly; SameSite=Lax; Path=/`);
+}
+
+function clearAuthCookie(res) {
+  res.setHeader("Set-Cookie", `${AUTH_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
+}
+
+function writePassword(username, password) {
+  const record = {
+    version: 1,
+    username,
+    password: hashPassword(password),
+    updatedAt: new Date().toISOString(),
+  };
+  fs.mkdirSync(path.dirname(AUTH_FILE), { recursive: true });
+  fs.writeFileSync(AUTH_FILE, JSON.stringify(record, null, 2), { encoding: "utf8", mode: 0o600 });
+  authState = loadAuthState();
+}
+
 function hasValidAuth(req) {
-  if (!BASIC_AUTH) return { ok: true, setCookie: false };
+  if (!authState.enabled) return { ok: true, setCookie: false };
   const cookies = parseCookies(req.headers.cookie);
-  if (cookies.home_web_auth === AUTH_COOKIE_VALUE) return { ok: true, setCookie: false };
+  if (cookies[AUTH_COOKIE] === authCookieValue()) return { ok: true, setCookie: false };
 
   const auth = String(req.headers.authorization || "");
   if (!auth.startsWith("Basic ")) return { ok: false, setCookie: false };
@@ -146,28 +227,374 @@ function hasValidAuth(req) {
   } catch {
     return { ok: false, setCookie: false };
   }
-  const got = Buffer.from(decoded);
-  const expected = Buffer.from(BASIC_AUTH);
-  const ok = got.length === expected.length && crypto.timingSafeEqual(got, expected);
+  const pair = parseBasicPair(decoded);
+  const ok = !!pair && verifyCredentials(pair.username, pair.password);
   return { ok, setCookie: ok };
 }
 
 function requireAuth(req, res) {
   const auth = hasValidAuth(req);
   if (auth.ok) {
-    if (auth.setCookie && res) {
-      res.setHeader("Set-Cookie", `home_web_auth=${encodeURIComponent(AUTH_COOKIE_VALUE)}; HttpOnly; SameSite=Lax; Path=/`);
-    }
+    if (auth.setCookie && res) setAuthCookie(res);
     return true;
   }
   if (res) {
-    res.writeHead(401, {
-      "WWW-Authenticate": `Basic realm="${AUTH_REALM}", charset="UTF-8"`,
-      "Content-Type": "text/plain; charset=utf-8",
-    });
-    res.end("authentication required");
+    sendUnauthorized(req, res);
   }
   return false;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function sendJson(res, status, body, headers = {}) {
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+    ...headers,
+  });
+  res.end(JSON.stringify(body));
+}
+
+function wantsHtml(req) {
+  return String(req.headers.accept || "").includes("text/html");
+}
+
+function sendUnauthorized(req, res) {
+  const parsed = new URL(req.url, "http://home.local");
+  const pageRequest = req.method === "GET" && !parsed.pathname.startsWith("/proxy/") && parsed.pathname !== "/healthz";
+  if (pageRequest || (req.method === "GET" && wantsHtml(req))) {
+    sendAuthPage(req, res, { mode: "login", status: 401 });
+    return;
+  }
+  sendJson(res, 401, { ok: false, error: "authentication_required" });
+}
+
+function readRequestJson(req, maxBytes = 64 * 1024) {
+  return new Promise((resolve, reject) => {
+    let raw = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {
+      raw += chunk;
+      if (raw.length > maxBytes) {
+        reject(new Error("request body too large"));
+        req.destroy();
+      }
+    });
+    req.on("end", () => {
+      if (!raw.trim()) {
+        resolve({});
+        return;
+      }
+      try {
+        if (String(req.headers["content-type"] || "").includes("application/x-www-form-urlencoded")) {
+          resolve(Object.fromEntries(new URLSearchParams(raw)));
+        } else {
+          resolve(JSON.parse(raw));
+        }
+      } catch {
+        reject(new Error("invalid request body"));
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+function sendAuthPage(req, res, { mode = "login", status = 200 } = {}) {
+  const authed = hasValidAuth(req).ok;
+  const activeMode = authed && mode !== "login" ? "account" : "login";
+  const username = authState.username || "marcelo";
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Home Access</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #050607;
+      --panel: #101215;
+      --panel-2: #15191e;
+      --line: #2a3037;
+      --text: #f4f7fb;
+      --muted: #89919b;
+      --accent: #d59622;
+      --danger: #f06a61;
+    }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; margin: 0; }
+    body {
+      display: grid;
+      place-items: center;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+    }
+    main {
+      width: min(430px, calc(100vw - 36px));
+      border: 1px solid var(--line);
+      background: var(--panel);
+      padding: 28px;
+    }
+    .brand { margin-bottom: 28px; }
+    .brand h1 { margin: 0; font-size: 24px; font-weight: 650; letter-spacing: 0; }
+    .brand p {
+      margin: 3px 0 0;
+      color: var(--muted);
+      font: 10px/1.4 "Geist Mono", "SFMono-Regular", Consolas, monospace;
+      letter-spacing: .22em;
+      text-transform: lowercase;
+    }
+    .tabs { display: flex; gap: 8px; margin-bottom: 20px; }
+    .tab {
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      color: var(--muted);
+      padding: 8px 11px;
+      font: 11px/1 "Geist Mono", "SFMono-Regular", Consolas, monospace;
+      letter-spacing: .12em;
+      text-transform: lowercase;
+    }
+    .tab.active { color: #0d0f12; border-color: var(--accent); background: var(--accent); }
+    label {
+      display: block;
+      margin: 15px 0 6px;
+      color: var(--muted);
+      font: 10px/1 "Geist Mono", "SFMono-Regular", Consolas, monospace;
+      letter-spacing: .18em;
+      text-transform: lowercase;
+    }
+    input {
+      width: 100%;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      border-radius: 0;
+      background: transparent;
+      color: var(--text);
+      padding: 10px 0;
+      outline: none;
+      font: inherit;
+    }
+    input:focus { border-color: var(--accent); }
+    button {
+      width: 100%;
+      margin-top: 22px;
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: #0d0f12;
+      padding: 11px 14px;
+      cursor: pointer;
+      font: 11px/1 "Geist Mono", "SFMono-Regular", Consolas, monospace;
+      letter-spacing: .14em;
+      text-transform: lowercase;
+    }
+    button.secondary {
+      border-color: var(--line);
+      background: transparent;
+      color: var(--muted);
+    }
+    .msg { min-height: 20px; margin-top: 14px; color: var(--muted); font-size: 12px; }
+    .msg.error { color: var(--danger); }
+    .row { display: flex; gap: 10px; }
+    .row button { flex: 1; }
+    .hidden { display: none; }
+    a { color: var(--accent); text-decoration: none; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand">
+      <h1>home</h1>
+      <p>engineered lighting</p>
+    </div>
+
+    <section id="loginPanel" class="${activeMode === "login" ? "" : "hidden"}">
+      <div class="tabs"><div class="tab active">sign in</div></div>
+      <form id="loginForm">
+        <label for="username">username</label>
+        <input id="username" name="username" autocomplete="username" value="${escapeHtml(username)}" required />
+        <label for="password">password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required autofocus />
+        <button type="submit">enter home</button>
+      </form>
+      <div id="loginMsg" class="msg"></div>
+    </section>
+
+    <section id="accountPanel" class="${activeMode === "account" ? "" : "hidden"}">
+      <div class="tabs"><div class="tab active">account</div></div>
+      <form id="changeForm">
+        <label>username</label>
+        <input value="${escapeHtml(username)}" disabled />
+        <label for="currentPassword">current password</label>
+        <input id="currentPassword" name="currentPassword" type="password" autocomplete="current-password" required />
+        <label for="newPassword">new password</label>
+        <input id="newPassword" name="newPassword" type="password" autocomplete="new-password" minlength="${PASSWORD_MIN_LENGTH}" required />
+        <label for="confirmPassword">confirm password</label>
+        <input id="confirmPassword" name="confirmPassword" type="password" autocomplete="new-password" minlength="${PASSWORD_MIN_LENGTH}" required />
+        <button type="submit">change password</button>
+      </form>
+      <div class="row">
+        <button id="openHome" class="secondary" type="button">open home</button>
+        <button id="logout" class="secondary" type="button">sign out</button>
+      </div>
+      <div id="changeMsg" class="msg"></div>
+    </section>
+  </main>
+  <script>
+    const loginForm = document.getElementById("loginForm");
+    const changeForm = document.getElementById("changeForm");
+    const loginMsg = document.getElementById("loginMsg");
+    const changeMsg = document.getElementById("changeMsg");
+
+    function setMsg(el, text, error) {
+      el.textContent = text || "";
+      el.className = "msg" + (error ? " error" : "");
+    }
+
+    async function postJson(url, body) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body || {}),
+      });
+      let data = {};
+      try { data = await res.json(); } catch {}
+      if (!res.ok || data.ok === false) throw new Error(data.error || "request failed");
+      return data;
+    }
+
+    loginForm?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      setMsg(loginMsg, "checking...", false);
+      try {
+        await postJson("/auth/login", {
+          username: loginForm.username.value,
+          password: loginForm.password.value,
+        });
+        location.href = "/";
+      } catch (err) {
+        setMsg(loginMsg, "that username or password did not work", true);
+      }
+    });
+
+    changeForm?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const next = changeForm.newPassword.value;
+      if (next !== changeForm.confirmPassword.value) {
+        setMsg(changeMsg, "new passwords do not match", true);
+        return;
+      }
+      setMsg(changeMsg, "saving...", false);
+      try {
+        await postJson("/auth/change-password", {
+          currentPassword: changeForm.currentPassword.value,
+          newPassword: next,
+        });
+        changeForm.reset();
+        setMsg(changeMsg, "password updated", false);
+      } catch (err) {
+        setMsg(changeMsg, err.message === "password_too_short" ? "use at least ${PASSWORD_MIN_LENGTH} characters" : "could not change password", true);
+      }
+    });
+
+    document.getElementById("openHome")?.addEventListener("click", () => { location.href = "/"; });
+    document.getElementById("logout")?.addEventListener("click", async () => {
+      await postJson("/auth/logout", {});
+      location.href = "/auth";
+    });
+  </script>
+</body>
+</html>`;
+  res.writeHead(status, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store",
+  });
+  res.end(html);
+}
+
+async function handleAuthRoute(req, res, parsed) {
+  if (parsed.pathname === "/auth" || parsed.pathname === "/auth/") {
+    sendAuthPage(req, res, { mode: hasValidAuth(req).ok ? "account" : "login" });
+    return;
+  }
+
+  if (parsed.pathname === "/auth/status" && req.method === "GET") {
+    sendJson(res, 200, {
+      ok: true,
+      authEnabled: authState.enabled,
+      authenticated: hasValidAuth(req).ok,
+      username: authState.username || null,
+    });
+    return;
+  }
+
+  if (parsed.pathname === "/auth/login" && req.method === "POST") {
+    if (!authState.enabled) {
+      setAuthCookie(res);
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+    let body;
+    try {
+      body = await readRequestJson(req);
+    } catch {
+      sendJson(res, 400, { ok: false, error: "invalid_request" });
+      return;
+    }
+    if (!verifyCredentials(body.username, body.password)) {
+      sendJson(res, 401, { ok: false, error: "invalid_credentials" });
+      return;
+    }
+    setAuthCookie(res);
+    sendJson(res, 200, { ok: true, username: authState.username });
+    return;
+  }
+
+  if (parsed.pathname === "/auth/logout" && req.method === "POST") {
+    clearAuthCookie(res);
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (parsed.pathname === "/auth/change-password" && req.method === "POST") {
+    if (!hasValidAuth(req).ok) {
+      sendJson(res, 401, { ok: false, error: "authentication_required" });
+      return;
+    }
+    let body;
+    try {
+      body = await readRequestJson(req);
+    } catch {
+      sendJson(res, 400, { ok: false, error: "invalid_request" });
+      return;
+    }
+    const next = String(body.newPassword || "");
+    if (next.length < PASSWORD_MIN_LENGTH) {
+      sendJson(res, 400, { ok: false, error: "password_too_short" });
+      return;
+    }
+    if (!verifyCredentials(authState.username, body.currentPassword)) {
+      sendJson(res, 401, { ok: false, error: "invalid_current_password" });
+      return;
+    }
+    try {
+      writePassword(authState.username, next);
+    } catch (err) {
+      sendJson(res, 500, { ok: false, error: "password_write_failed", detail: err.message });
+      return;
+    }
+    setAuthCookie(res);
+    sendJson(res, 200, { ok: true, username: authState.username });
+    return;
+  }
+
+  sendJson(res, 404, { ok: false, error: "not_found" });
 }
 
 function cleanHeaders(reqHeaders, target) {
@@ -334,7 +761,9 @@ function checkConfig() {
     port: PORT,
     appDir: APP_DIR,
     apartmentAssetsDir: APARTMENT_ASSETS_DIR,
-    basicAuthEnabled: !!BASIC_AUTH,
+    authEnabled: authState.enabled,
+    authSource: authState.source,
+    authFile: AUTH_FILE,
     routes: routes.map(({ prefix, env, target, ws }) => ({ prefix, env, target, ws })),
   };
   console.log(JSON.stringify(summary, null, 2));
@@ -345,9 +774,14 @@ if (process.argv.includes("--check")) {
   process.exit(0);
 }
 
-const server = http.createServer((req, res) => {
-  if (!requireAuth(req, res)) return;
+const server = http.createServer(async (req, res) => {
   const parsed = new URL(req.url, "http://home.local");
+  if (parsed.pathname === "/auth" || parsed.pathname.startsWith("/auth/")) {
+    await handleAuthRoute(req, res, parsed);
+    return;
+  }
+
+  if (!requireAuth(req, res)) return;
   const route = findRoute(parsed.pathname);
   if (route) proxyHttp(req, res, route);
   else serveStatic(req, res);
@@ -355,7 +789,7 @@ const server = http.createServer((req, res) => {
 
 server.on("upgrade", (req, socket, head) => {
   if (!hasValidAuth(req).ok) {
-    socket.write(`HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm="${AUTH_REALM}", charset="UTF-8"\r\n\r\n`);
+    socket.write(`HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nauthentication required`);
     socket.destroy();
     return;
   }

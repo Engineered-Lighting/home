@@ -6,7 +6,19 @@ DNS, router forwarding, or Tailscale Funnel for the Home stack.
 
 ## Before leaving
 
+For a multi-month trip, start with
+[TRAVEL-DEPARTURE-CHECKLIST.md](TRAVEL-DEPARTURE-CHECKLIST.md). The primary
+travel workstation is the Razer Blade, and the final proof test should run from
+that machine on a phone hotspot, not from the home LAN.
+
 From the Windows travel machine:
+
+```powershell
+cd C:\Claude\home
+.\tools\pre-departure-check.ps1
+```
+
+Then run the service readiness check:
 
 ```powershell
 cd C:\Claude\home
@@ -43,6 +55,10 @@ Keep these handy in case MagicDNS is unreliable on hotel Wi-Fi or another VPN:
 
 Use SSH/systemd/GitHub Actions for recovery. The Home app diagnoses and copies
 commands, but it does not execute shell commands on your home machines.
+
+For the short emergency command list, save
+[TRAVEL-EMERGENCY-RUNBOOK.md](TRAVEL-EMERGENCY-RUNBOOK.md) somewhere reachable
+from the Razer Blade and phone.
 
 Useful first checks:
 

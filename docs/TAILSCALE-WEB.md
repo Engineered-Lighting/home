@@ -32,10 +32,10 @@ $env:HOME_WEB_PORT="5181"
 npm run web:start
 ```
 
-## Optional basic auth
+## Native login
 
-Tailscale is the real access boundary. Basic auth is optional and is useful as a
-small second lock if a browser session is left open.
+Tailscale is the real access boundary. The gateway also has a small first-party
+login screen so a browser left open is not enough by itself.
 
 Generate one username/password pair:
 
@@ -43,23 +43,22 @@ Generate one username/password pair:
 node -e "const c=require('node:crypto'); console.log('marcelo:'+c.randomBytes(18).toString('base64url'))"
 ```
 
-Then start the gateway with the generated value:
-
-```powershell
-$env:HOME_WEB_BASIC_AUTH="marcelo:<generated-password>"
-npm run web:start
-```
-
-The gateway accepts the initial `Basic` authorization header, sets an HttpOnly
-cookie for the web app, and strips Basic auth before proxying requests upstream.
-Bearer tokens used by Home Assistant and the stack supervisor still pass
-through.
-
-To persist the credential for the startup launcher without committing it:
+Seed the first login with the generated value:
 
 ```powershell
 [Environment]::SetEnvironmentVariable("HOME_WEB_BASIC_AUTH", "marcelo:<generated-password>", "User")
 ```
+
+Open `/auth` on the tailnet URL to sign in, sign out, or change the password.
+Password changes are written as a salted PBKDF2 hash to the local auth file
+below, and that file takes precedence over the initial environment variable:
+
+- Default auth file: `%APPDATA%\EngineeredLightingHome\web-auth.json`
+- Override path: `HOME_WEB_AUTH_FILE`
+
+Bearer tokens used by Home Assistant and the stack supervisor still pass
+through. The gateway strips its own cookies and Basic auth before proxying
+requests upstream.
 
 ## Start on Windows login
 

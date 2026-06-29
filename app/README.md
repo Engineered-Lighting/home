@@ -55,6 +55,28 @@ cargo tauri build        # produces target/release/bundle/msi/Home_x.y.z_x64_en-
 `cargo tauri build` triggers WiX to bundle the `.msi`. First run
 downloads ~30 MB of WiX binaries. Subsequent builds reuse them.
 
+## Release workflow
+
+Desktop releases are prepared through GitHub Actions:
+
+1. Run **prepare desktop release** with a SemVer version such as `0.1.1`.
+2. Review and merge the generated release PR.
+3. Run **tag desktop release** for the same version from `main`.
+4. The tag push triggers the Tauri installer build and creates a draft GitHub
+   Release with notes from `CHANGELOG.md`.
+
+Every user-facing or deploy-relevant change should include a
+`changes/unreleased/*.md` fragment. Release preparation compiles those fragments
+into `CHANGELOG.md` and archives them.
+
+### Apartment 3D assets
+
+The desktop installer does not bundle `app/data/apartment` in v1. Those files
+are local runtime data, not release artifacts. Apartment cloud/scan/mesh views
+need the relevant `points.ply`, `apartment.ply` or `apartment.spz`, `mesh.glb`
+or `collision.glb`, and metadata files provisioned on the machine running the
+desktop app.
+
 ## Regenerate icons
 
 ```bash

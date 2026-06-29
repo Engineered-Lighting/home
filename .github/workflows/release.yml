@@ -4,7 +4,6 @@ on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:
 
 permissions:
   # action-gh-release needs to write assets to releases. Org default is
@@ -53,6 +52,9 @@ jobs:
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2.0" --locked
 
+      - name: Extract release notes
+        run: node tools/release/extract-release-notes.mjs "${{ github.ref_name }}" > release-notes.md
+
       - name: Build (Windows)
         if: matrix.name == 'windows'
         working-directory: app/src-tauri
@@ -67,7 +69,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           draft: true
+          tag_name: ${{ github.ref_name }}
           files: ${{ matrix.bundle_glob }}
-          generate_release_notes: true
+          body_path: release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

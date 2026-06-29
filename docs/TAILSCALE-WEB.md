@@ -67,6 +67,10 @@ The deploy workflow runs `tools/check-home-web-assets.sh` before restarting the
 gateway so missing ignored assets fail loudly instead of leaving the UI with
 unavailable 3D modes.
 
+This check is for the Ubuntu-hosted web gateway only. Desktop/Tauri releases do
+not bundle `app/data/apartment`; desktop scan/mesh assets remain local runtime
+data on the machine running the app.
+
 ## Run manually on Windows
 
 ```powershell

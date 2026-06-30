@@ -86,12 +86,24 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
             state.sparkRenderer = sr;
         }
         let lastErr = null;
-        const names = ['apartment.spz', 'apartment.ply']; // SplatTransform's spz flavor defeats Spark's decoder; ply always works
+        const mobile = (() => {
+            try { return (window.visualViewport?.width || window.innerWidth || 1024) < 700; }
+            catch (e) { return false; }
+        })();
+        const names = mobile
+            ? ['apartment.mobile.ply', 'apartment.spz', 'apartment.ply']
+            : ['apartment.spz', 'apartment.ply']; // SplatTransform's spz flavor defeats Spark's decoder; ply always works
         const urls = names.flatMap((n) => candidates(n, null, { sim }));
         for (const url of urls) {
             try {
                 const splat = new SplatMesh({ url });
-                await splat.initialized;
+                await Promise.race([
+                    splat.initialized,
+                    new Promise((_, reject) => setTimeout(
+                        () => reject(new Error(`splat load timeout for ${url}`)),
+                        mobile ? 45000 : 90000,
+                    )),
+                ]);
                 await applyRegistration(splat);
                 splat.renderOrder = 0;
                 // Spark's objects have no geometry bounds — three.js frustum-

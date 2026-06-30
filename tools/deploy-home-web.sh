@@ -67,6 +67,13 @@ if ! npm run web:check; then
   exit 1
 fi
 
+if command -v python3 >/dev/null 2>&1 && [[ -f "${repo_dir}/app/data/apartment/apartment.ply" ]]; then
+  if ! python3 tools/make-apartment-mobile-splat.py --quiet; then
+    rollback "mobile apartment photo asset generation failed"
+    exit 1
+  fi
+fi
+
 if ! tools/check-home-web-assets.sh; then
   rollback "apartment asset check failed"
   exit 1

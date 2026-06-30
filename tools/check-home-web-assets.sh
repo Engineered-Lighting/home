@@ -34,6 +34,11 @@ if [[ -f "${assets_dir}/apartment.spz" ]]; then
 else
   require_file "apartment.ply" 1000000
 fi
+if [[ -f "${assets_dir}/apartment.mobile.ply" ]]; then
+  require_file "apartment.mobile.ply" 1000000
+else
+  printf 'warn %-16s missing; mobile photo mode will fall back to the full scan\n' "apartment.mobile.ply"
+fi
 
 if [[ -f "${assets_dir}/mesh.glb" ]]; then
   require_file "mesh.glb" 1000000

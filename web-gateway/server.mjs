@@ -165,7 +165,7 @@ const routes = [
   {
     prefix: "/proxy/supervisor",
     env: "HOME_WEB_SUPERVISOR_TARGET",
-    target: envTarget("HOME_WEB_SUPERVISOR_TARGET", "http://engineeredlightingserver1.taild52a15.ts.net:8093"),
+    target: envTarget("HOME_WEB_SUPERVISOR_TARGET", "http://home-app.taild52a15.ts.net:8093"),
     allow: rx(/^\/(healthz|api\/(stack|services)\/)/),
     ws: false,
   },

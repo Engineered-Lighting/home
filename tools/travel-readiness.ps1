@@ -4,9 +4,9 @@ param(
 
 $ErrorActionPreference = "Continue"
 
-$AiHost = if ($env:HOME_TRAVEL_AI_HOST) { $env:HOME_TRAVEL_AI_HOST } else { "engineeredlightingserver1" }
+$AiHost = if ($env:HOME_TRAVEL_AI_HOST) { $env:HOME_TRAVEL_AI_HOST } else { "home-app" }
 $HaHost = if ($env:HOME_TRAVEL_HA_HOST) { $env:HOME_TRAVEL_HA_HOST } else { "homeassistant" }
-$WebUrl = if ($env:HOME_TRAVEL_WEB_URL) { $env:HOME_TRAVEL_WEB_URL } else { "https://engineeredlightingserver1.taild52a15.ts.net/healthz" }
+$WebUrl = if ($env:HOME_TRAVEL_WEB_URL) { $env:HOME_TRAVEL_WEB_URL } else { "https://home-app.taild52a15.ts.net/healthz" }
 
 $script:Checks = @()
 

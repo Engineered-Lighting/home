@@ -20,7 +20,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO = path.resolve(__dirname, "..");
 
-const DEFAULT_URL = process.env.HOME_APARTMENT_CAMERA_AUDIT_URL || "https://engineeredlightingserver1.taild52a15.ts.net/";
+const DEFAULT_URL = process.env.HOME_APARTMENT_CAMERA_AUDIT_URL || "https://home-app.taild52a15.ts.net/";
 const DEFAULT_VIEWPORT = { width: 390, height: 844 };
 
 function usage() {

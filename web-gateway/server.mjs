@@ -54,6 +54,8 @@ const STATIC_VERSIONED_CACHE = "private, max-age=31536000, immutable";
 const STATIC_REVALIDATE_CACHE = "private, no-cache";
 const APARTMENT_HEAVY_CACHE = "private, max-age=604800, stale-while-revalidate=86400";
 const APARTMENT_METADATA_CACHE = "private, no-cache";
+const STACK_TOKEN_PROXY_MARKER = "__home_web_gateway_stack_token__";
+const DEFAULT_STACK_TOKEN_FILE = "/opt/home-ai-voice/.env";
 
 const MIME = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -77,6 +79,48 @@ const MIME = new Map([
 function envTarget(name, fallback) {
   return (process.env[name] || fallback).replace(/\/+$/, "");
 }
+
+function parseEnvValue(value) {
+  let text = String(value || "").trim();
+  if (
+    (text.startsWith('"') && text.endsWith('"')) ||
+    (text.startsWith("'") && text.endsWith("'"))
+  ) {
+    text = text.slice(1, -1);
+  }
+  return text.trim();
+}
+
+function readStackTokenFile(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return "";
+  try {
+    const raw = fs.readFileSync(filePath, "utf8");
+    for (const line of raw.split(/\r?\n/)) {
+      const match = line.match(/^\s*STACK_TOKEN\s*=\s*(.*?)\s*$/);
+      if (match) return parseEnvValue(match[1]);
+    }
+  } catch {
+    return "";
+  }
+  return "";
+}
+
+function loadStackTokenProxy() {
+  const direct = parseEnvValue(process.env.HOME_WEB_STACK_TOKEN || process.env.STACK_TOKEN || "");
+  if (direct) {
+    return {
+      enabled: true,
+      source: process.env.HOME_WEB_STACK_TOKEN ? "HOME_WEB_STACK_TOKEN" : "STACK_TOKEN",
+      token: direct,
+    };
+  }
+  const token = readStackTokenFile(process.env.HOME_WEB_STACK_TOKEN_FILE || DEFAULT_STACK_TOKEN_FILE);
+  return token
+    ? { enabled: true, source: "file", token }
+    : { enabled: false, source: "none", token: "" };
+}
+
+const stackTokenProxy = loadStackTokenProxy();
 
 function rx(pattern) {
   return (suffix) => pattern.test(suffix.split("?")[0]);
@@ -181,6 +225,10 @@ function gatewayHealth() {
       enabled: authState.enabled,
       source: authState.source,
       required: AUTH_REQUIRED,
+    },
+    stackTokenProxy: {
+      enabled: stackTokenProxy.enabled,
+      source: stackTokenProxy.source,
     },
     apartmentAssetsDir: APARTMENT_ASSETS_DIR,
     routes: routeSummary(),
@@ -677,6 +725,23 @@ function cleanHeaders(reqHeaders, target) {
   return headers;
 }
 
+function isSupervisorStackApi(route, suffix) {
+  if (route.prefix !== "/proxy/supervisor") return false;
+  const parsed = new URL(suffix, "http://home.local");
+  return /^\/api\/(stack|services)\//.test(parsed.pathname);
+}
+
+function proxyHeaders(reqHeaders, route, suffix) {
+  const headers = cleanHeaders(reqHeaders, route.target);
+  if (route.prefix === "/proxy/supervisor") {
+    delete headers.authorization;
+    if (isSupervisorStackApi(route, suffix) && stackTokenProxy.enabled) {
+      headers.authorization = `Bearer ${stackTokenProxy.token}`;
+    }
+  }
+  return headers;
+}
+
 function findRoute(urlPath) {
   return routes.find((route) => urlPath === route.prefix || urlPath.startsWith(route.prefix + "/"));
 }
@@ -772,7 +837,10 @@ function sendIndex(req, res, filePath) {
       res.end("not found");
       return;
     }
-    const runtime = `<script>window.__HOME_BUILD_VERSION=${jsString(BUILD_VERSION)};window.__HOME_BUILD_COMMIT=${jsString(BUILD_COMMIT)};window.__HOME_ASSET_VERSION=${jsString(BUILD_ASSET_VERSION)};</script>`;
+    const stackProxyRuntime = stackTokenProxy.enabled
+      ? `window.__HOME_WEB_STACK_TOKEN_PROXY=true;window.__STACK_TOKEN=${jsString(STACK_TOKEN_PROXY_MARKER)};`
+      : "window.__HOME_WEB_STACK_TOKEN_PROXY=false;";
+    const runtime = `<script>window.__HOME_BUILD_VERSION=${jsString(BUILD_VERSION)};window.__HOME_BUILD_COMMIT=${jsString(BUILD_COMMIT)};window.__HOME_ASSET_VERSION=${jsString(BUILD_ASSET_VERSION)};${stackProxyRuntime}</script>`;
     const body = html.includes("</head>") ? html.replace("</head>", `${runtime}\n</head>`) : `${runtime}\n${html}`;
     const etag = `"index-${Buffer.byteLength(body).toString(16)}-${BUILD_ASSET_VERSION}"`;
     res.writeHead(200, {
@@ -859,7 +927,7 @@ function proxyHttp(req, res, route) {
   const client = targetUrl.protocol === "https:" ? https : http;
   const upstream = client.request(targetUrl, {
     method: req.method,
-    headers: cleanHeaders(req.headers, route.target),
+    headers: proxyHeaders(req.headers, route, suffix),
   }, (upstreamRes) => {
     const headers = { ...upstreamRes.headers };
     delete headers["content-security-policy"];
@@ -895,7 +963,7 @@ function proxyUpgrade(req, socket, head, route) {
   }
 
   const upstream = net.connect(targetUrl.port || 80, targetUrl.hostname, () => {
-    const headers = cleanHeaders(req.headers, route.target);
+    const headers = proxyHeaders(req.headers, route, suffix);
     let request = `${req.method} ${targetUrl.pathname}${targetUrl.search} HTTP/${req.httpVersion}\r\n`;
     for (const [key, value] of Object.entries(headers)) {
       if (Array.isArray(value)) {
@@ -929,6 +997,8 @@ function checkConfig() {
     authSource: authState.source,
     authRequired: AUTH_REQUIRED,
     authFile: AUTH_FILE,
+    stackTokenProxyEnabled: stackTokenProxy.enabled,
+    stackTokenProxySource: stackTokenProxy.source,
     routes: routeSummary(),
   };
   console.log(JSON.stringify(summary, null, 2));

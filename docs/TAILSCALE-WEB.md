@@ -132,9 +132,9 @@ below, and that file takes precedence over the initial environment variable:
 
 An existing auth file is ignored while `HOME_WEB_AUTH_REQUIRED` is unset or `0`.
 
-Bearer tokens used by Home Assistant and the stack supervisor still pass
-through. The gateway strips its own cookies and Basic auth before proxying
-requests upstream.
+Home Assistant bearer tokens still pass through. Stack supervisor bearer auth is
+handled server-side by the gateway for browser web access. The gateway strips
+its own cookies and Basic auth before proxying requests upstream.
 
 ## Start on Windows login
 
@@ -182,12 +182,28 @@ export HOME_WEB_VLLM_TARGET="http://192.168.0.100:8000"
 export HOME_WEB_VISION_TARGET="http://192.168.0.100:8091"
 export HOME_WEB_INTELLIGENCE_TARGET="http://192.168.0.100:8095"
 export HOME_WEB_SUPERVISOR_TARGET="http://engineeredlightingserver1.taild52a15.ts.net:8093"
+export HOME_WEB_STACK_TOKEN_FILE="/opt/home-ai-voice/.env"
 export HOME_WEB_S2S_TARGET="http://192.168.0.100:8094"
 export HOME_WEB_TRACKER_TARGET="http://192.168.0.100:8098"
 export HOME_WEB_VIDEO_LABELER_TARGET="http://192.168.0.100:8099"
 export HOME_WEB_FRIGATE_TARGET="http://192.168.0.125:5000"
 export HOME_WEB_APARTMENT_ASSETS_DIR="$HOME/code/home/app/data/apartment"
 ```
+
+## Stack supervisor auth
+
+The browser/Tailscale web app does not need to store `STACK_TOKEN` in browser
+localStorage. The Ubuntu web gateway reads `STACK_TOKEN` server-side from
+`HOME_WEB_STACK_TOKEN`, `STACK_TOKEN`, or `HOME_WEB_STACK_TOKEN_FILE` (default:
+`/opt/home-ai-voice/.env`) and injects it only when proxying
+`/proxy/supervisor/api/stack/...` or `/proxy/supervisor/api/services/...`.
+
+The gateway strips any browser-supplied `Authorization` header before forwarding
+supervisor requests, so the real token stays on Ubuntu. `/proxy/supervisor/healthz`
+remains unauthenticated and receives no bearer token.
+
+Gateway `/healthz` reports only `stackTokenProxy.enabled` and `source`; it never
+returns the token value.
 
 ## Proxy policy
 
@@ -274,8 +290,8 @@ Manual checks from a browser, then from a second Tailscale-connected device:
 - Metrics update.
 - Vision and camera panels load through same-origin proxy paths.
 - Tracker WebSocket connects.
-- Stack status reads, and mutating stack actions still require the supervisor
-  bearer token.
+- Stack status reads, and mutating stack actions work through the gateway's
+  server-side supervisor token proxy.
 - Raw local service ports are not exposed by router forwarding, public DNS, or
   Tailscale Funnel.
 

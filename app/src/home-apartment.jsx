@@ -125,6 +125,17 @@ function aptCameraAlignment(dev) {
   };
 }
 
+function aptSnapshotSrc(src) {
+  const clean = String(src || "").replace(/\/+$/, "");
+  if (!clean || /\/latest\.jpg(?:[?#]|$)/.test(clean)) return clean;
+  return `${clean}/latest.jpg`;
+}
+
+function aptCacheBust(url, value) {
+  if (!url) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}_=${encodeURIComponent(value)}`;
+}
+
 function AptHudButton({ label, onClick, active, disabled, title, mobile = readAptViewport().mobile }) {
   return (
     <button
@@ -186,12 +197,15 @@ function AptZoomButton({ label, title, onClick, disabled, mobile = readAptViewpo
    (no THREE — that stays inside home-3d). Falls back to the plain <img>
    when there are no intrinsics, no WebGL, shader trouble, or the stream is
    CORS-blocked (crossOrigin load error). */
-function AptUndistortedFeed({ src, alt, intrinsics, style, onStatus }) {
+function AptUndistortedFeed({ src, snapshotSrc, snapshotIntervalMs = 0, alt, intrinsics, style, onStatus }) {
   const canvasRef = useRef(null);
   const imgRef = useRef(null);
   const [fallback, setFallback] = useState(false);
   const [warpedReady, setWarpedReady] = useState(false);
+  const [frameSrc, setFrameSrc] = useState(src);
   const warpedReadyRef = useRef(false);
+  const rawSeenRef = useRef(false);
+  const useSnapshots = !!(snapshotSrc && snapshotIntervalMs > 0);
 
   const K = intrinsics && intrinsics.K;
   const dist = (intrinsics && intrinsics.dist) || [];
@@ -201,8 +215,15 @@ function AptUndistortedFeed({ src, alt, intrinsics, style, onStatus }) {
     setFallback(false);
     setWarpedReady(false);
     warpedReadyRef.current = false;
+    rawSeenRef.current = false;
     onStatus?.("connecting");
-  }, [src, onStatus]);
+    const base = useSnapshots ? snapshotSrc : src;
+    const publish = () => setFrameSrc(useSnapshots ? aptCacheBust(base, Date.now()) : base);
+    publish();
+    if (!useSnapshots) return undefined;
+    const timer = setInterval(publish, Math.max(350, snapshotIntervalMs));
+    return () => clearInterval(timer);
+  }, [src, snapshotSrc, snapshotIntervalMs, useSnapshots, onStatus]);
 
   useEffect(() => {
     if (!wantWarp) return undefined;
@@ -316,6 +337,10 @@ function AptUndistortedFeed({ src, alt, intrinsics, style, onStatus }) {
       raf = requestAnimationFrame(draw);
       const w = img.naturalWidth, h = img.naturalHeight;
       if (!(w > 0) || !(h > 0)) return;
+      if (!rawSeenRef.current) {
+        rawSeenRef.current = true;
+        onStatus?.(useSnapshots ? "frame" : "raw");
+      }
       if (w !== lastW || h !== lastH) {
         lastW = w; lastH = h;
         canvas.width = w; canvas.height = h;
@@ -357,12 +382,12 @@ function AptUndistortedFeed({ src, alt, intrinsics, style, onStatus }) {
       } catch (e) { /* context already gone */ }
       if (img) img.src = "";   // close the hidden MJPEG connection immediately
     };
-  }, [wantWarp, src, intrinsics, onStatus]);
+  }, [wantWarp, src, snapshotSrc, intrinsics, useSnapshots, onStatus]);
 
   if (!wantWarp) {
-    return <img src={src} alt={alt} onLoad={() => onStatus?.("raw")} onError={() => onStatus?.("error")} style={style} />;
+    return <img src={frameSrc} alt={alt} onLoad={() => onStatus?.(useSnapshots ? "frame" : "raw")} onError={() => onStatus?.("error")} style={style} />;
   }
-  const fit = style?.objectFit || "contain";
+  const fit = style?.objectFit || "fill";
   const frameStyle = { ...style, position: "relative", overflow: "hidden" };
   const fillStyle = {
     position: "absolute",
@@ -374,8 +399,8 @@ function AptUndistortedFeed({ src, alt, intrinsics, style, onStatus }) {
   return (
     <div style={frameStyle}>
       <img
-        ref={imgRef} src={src} alt="" aria-hidden="true" crossOrigin="anonymous"
-        onLoad={() => onStatus?.("raw")}
+        ref={imgRef} src={frameSrc} alt="" aria-hidden="true" crossOrigin="anonymous"
+        onLoad={() => onStatus?.(useSnapshots ? "frame" : "raw")}
         onError={() => { onStatus?.("error"); setFallback(true); }}
         style={{ ...fillStyle, opacity: warpedReady ? 0 : 1, pointerEvents: "none" }}
       />
@@ -1086,10 +1111,10 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         height: "100%",
         maxWidth: "none",
         maxHeight: "none",
-        objectFit: "contain",
+        objectFit: "fill",
         background: "#000",
         boxShadow: "none",
-        opacity: 0.88,
+        opacity: 1,
       }
     : mobile
     ? {
@@ -1097,10 +1122,10 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         height: "100dvh",
         maxWidth: "none",
         maxHeight: "none",
-        objectFit: "contain",
+        objectFit: "fill",
         background: "#000",
         boxShadow: "none",
-        opacity: 0.88,
+        opacity: 1,
       }
     : {
         width: "min(92vw, calc(74vh * 16 / 9))",
@@ -1109,8 +1134,13 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         objectFit: "cover",
         boxShadow: "0 0 60px 10px rgba(0,0,0,0.35)",
       };
+  const liveFeedSettled = ["idle", "raw", "frame", "warped"].includes(liveFeedStatus);
   const showCameraAlignmentBadge = cameraSnap && liveCam && cameraAlignment
-    && (!cameraAlignment.exact || !["idle", "raw", "warped"].includes(liveFeedStatus));
+    && (!cameraAlignment.exact || !liveFeedSettled);
+  const liveFeedBase = liveCam?.camera?.frigate_name
+    ? `${aptServiceBase("apartment3d.frigateBase", "HG_DEFAULT_FRIGATE_BASE", "http://192.168.0.125:5000")}/api/${liveCam.camera.frigate_name}`
+    : "";
+  const liveSnapshotSrc = mobile && liveFeedBase ? aptSnapshotSrc(liveFeedBase) : "";
 
   return (
     <div
@@ -1359,7 +1389,9 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
             // key forces a REMOUNT on camera switch: the cleanup deliberately
             // loses the WebGL context (context-budget hygiene), so a reused
             // canvas would come back with a dead context and no warp
-            src={`${aptServiceBase("apartment3d.frigateBase", "HG_DEFAULT_FRIGATE_BASE", "http://192.168.0.125:5000")}/api/${liveCam.camera.frigate_name}`}
+            src={liveFeedBase}
+            snapshotSrc={liveSnapshotSrc}
+            snapshotIntervalMs={mobile ? 650 : 0}
             alt={liveCam.name}
             intrinsics={liveCam.camera?.intrinsics || null}
             style={liveFeedStyle}
@@ -1390,7 +1422,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
           maxWidth: mobileCameraFrame ? Math.max(120, mobileCameraFrame.width - 20) : mobile ? "calc(100vw - 24px)" : 360,
         }}>
           {cameraAlignment?.detail || liveFeedStatus}
-          {!["idle", "raw", "warped"].includes(liveFeedStatus) ? ` · ${liveFeedStatus}` : ""}
+          {!liveFeedSettled ? ` · ${liveFeedStatus}` : ""}
         </div>
       )}
 

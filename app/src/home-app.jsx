@@ -5622,6 +5622,15 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     // closure variables, not refs, because they reset every turn.
     const turnToolCalls = [];
     let streamingBubbleId = null;
+    const finalizeStreamingBubble = () => {
+      const id = streamingBubbleId;
+      if (!id) return false;
+      streamingBubbleId = null;
+      streamingIds.current.delete(id);
+      setEvents((prev) => prev.map((e) =>
+        e.id === id ? { ...e, streaming: false } : e));
+      return true;
+    };
 
     const onEvent = (haEvent) => {
       if (!haEvent || !haEvent.type) return;
@@ -5688,13 +5697,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         if (convId) setConversationId(convId);
         // Lock the streaming bubble (if one exists) so the trailing stop-
         // button / visual cue settles.
-        if (streamingBubbleId) {
-          const lockedId = streamingBubbleId;
-          setEvents((prev) => prev.map((e) =>
-            e.id === lockedId ? { ...e, streaming: false } : e));
-          streamingIds.current.delete(lockedId);
-          streamingBubbleId = null;
-        }
+        finalizeStreamingBubble();
         // Surface a perception card per vision tool the LLM called this
         // turn. Tool results are NEVER in HA events, so we hit the
         // sidecar's ring-buffer endpoints (/reason/latest, /describe/latest)
@@ -5784,9 +5787,18 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     } finally {
       // Defensive: if streaming never started (thinking stub never replaced
       // by a streaming bubble), the existing filter removes the stub. If it
-      // did start, the stub was already removed by the first-delta branch
-      // above; this filter is a no-op in that case.
-      setEvents((prev) => prev.filter((e) => e.id !== thinkingId));
+      // did start but HA never emitted intent-end, settle that bubble too so
+      // the STOP affordance never remains wedged after run.done resolves.
+      const pendingStreamingId = streamingBubbleId;
+      if (pendingStreamingId) {
+        streamingBubbleId = null;
+        streamingIds.current.delete(pendingStreamingId);
+      }
+      setEvents((prev) => prev
+        .filter((e) => e.id !== thinkingId)
+        .map((e) => pendingStreamingId && e.id === pendingStreamingId
+          ? { ...e, streaming: false }
+          : e));
       if (activeRunRef.current?.id === run.id) activeRunRef.current = null;
     }
   }, [connection, conversationId, addEvent, metricsBase, endpoint, muteState?.muted]);
@@ -9717,7 +9729,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         onSend={sendInput}
         voice={voice}
         onMicToggle={toggleMic}
-        isStreaming={streamingIds.current.size > 0 || events.some(e => e.streaming)}
+        isStreaming={events.some((e) => e.streaming)}
         onStop={stopStreaming}
         focusToken={focusToken}
         mobile={mobile}

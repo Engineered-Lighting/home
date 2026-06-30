@@ -100,10 +100,13 @@ $env:HOME_WEB_PORT="5181"
 npm run web:start
 ```
 
-## Native login
+## Gateway auth
 
-Tailscale is the real access boundary. The gateway also has a small first-party
-login screen so a browser left open is not enough by itself.
+Tailscale is the real access boundary. By default, the gateway does not show a
+second login screen; a Tailscale-connected browser goes straight to the app.
+
+If you ever want the extra gateway password again, opt in with
+`HOME_WEB_AUTH_REQUIRED=1`.
 
 Generate one username/password pair:
 
@@ -114,6 +117,7 @@ node -e "const c=require('node:crypto'); console.log('marcelo:'+c.randomBytes(18
 Seed the first login with the generated value:
 
 ```powershell
+[Environment]::SetEnvironmentVariable("HOME_WEB_AUTH_REQUIRED", "1", "User")
 [Environment]::SetEnvironmentVariable("HOME_WEB_BASIC_AUTH", "marcelo:<generated-password>", "User")
 ```
 
@@ -126,6 +130,8 @@ below, and that file takes precedence over the initial environment variable:
   or `~/.config/EngineeredLightingHome/web-auth.json`
 - Override path: `HOME_WEB_AUTH_FILE`
 
+An existing auth file is ignored while `HOME_WEB_AUTH_REQUIRED` is unset or `0`.
+
 Bearer tokens used by Home Assistant and the stack supervisor still pass
 through. The gateway strips its own cookies and Basic auth before proxying
 requests upstream.
@@ -134,7 +140,8 @@ requests upstream.
 
 No-admin setup uses the current user's Startup folder. The launcher runs
 `tools/start-home-web-gateway.ps1`, which starts `web-gateway/server.mjs` and
-reads `HOME_WEB_BASIC_AUTH` from the user's Windows environment.
+passes through `HOME_WEB_BASIC_AUTH` from the user's Windows environment. That
+password is ignored unless `HOME_WEB_AUTH_REQUIRED=1` is also set.
 
 To test the same starter manually:
 

@@ -12,8 +12,9 @@ ssh hav-ubuntu 'sudo systemctl status home-web-gateway home-apartment-assets hav
 ssh hav-ubuntu 'df -h && docker system df'
 ```
 
-`/healthz` returning `401` from the web gateway is expected when gateway auth is
-enabled. It means the gateway is reachable.
+`/healthz` normally returns `200` from the web gateway. If optional gateway auth
+is enabled with `HOME_WEB_AUTH_REQUIRED=1`, `401` is also expected and means the
+gateway is reachable.
 
 ## Logs
 

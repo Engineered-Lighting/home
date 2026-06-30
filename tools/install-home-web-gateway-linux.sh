@@ -38,6 +38,7 @@ sudo install -d -o "${install_user}" -g "${install_group}" "$(dirname -- "${auth
   printf 'WorkingDirectory=%s\n' "${repo_root}"
   printf 'Environment=HOME_WEB_HOST=%s\n' "${HOME_WEB_HOST:-127.0.0.1}"
   printf 'Environment=HOME_WEB_PORT=%s\n' "${HOME_WEB_PORT:-5181}"
+  printf 'Environment=HOME_WEB_AUTH_REQUIRED=%s\n' "${HOME_WEB_AUTH_REQUIRED:-0}"
   printf 'Environment=HOME_WEB_AUTH_FILE=%s\n' "${auth_file}"
   printf 'Environment=HOME_WEB_HA_TARGET=%s\n' "${HOME_WEB_HA_TARGET:-http://192.168.0.125:8123}"
   printf 'Environment=HOME_WEB_METRICS_TARGET=%s\n' "${HOME_WEB_METRICS_TARGET:-http://192.168.0.100:8092}"

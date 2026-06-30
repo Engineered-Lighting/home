@@ -17,9 +17,9 @@
     /* Re-allow text selection in the conversation feed + inputs. */
     .hg-scroll, .hg-scroll *, input, textarea { user-select: text; -webkit-user-select: text; }
   </style>
-  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin></script>
-  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin></script>
-  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin></script>
+  <script src="./vendor/react-18.3.1/react.production.min.js"></script>
+  <script src="./vendor/react-18.3.1/react-dom.production.min.js"></script>
+  <script src="./vendor/babel-7.29.0/babel.min.js"></script>
   <!-- 3D apartment engine: real ESM (vendored three.js + Spark via importmap;
        the Babel/window-global world stays untouched). The importmap MUST
        precede the first module script. -->
@@ -84,6 +84,7 @@
   <script>
     (function () {
       var cb = '?cb=' + Date.now();
+      var PREFETCH_WINDOW = 6;
       var files = [
         ['home-tauri.jsx', true],
         ['home-ha.jsx', true],
@@ -141,7 +142,9 @@
 
       var boot = window.__bootState = {
         loaded: 0, total: files.length, current: null, failed: null, done: false,
+        prefetchWindow: PREFETCH_WINDOW,
       };
+      var fetches = [];
 
       function overlay(title, detail) {
         var msg = '[boot] ' + title + (detail ? '\n' + detail : '');
@@ -210,6 +213,32 @@
         });
       }
 
+      function primeFetch(index) {
+        if (index < 0 || index >= files.length) return null;
+        if (!fetches[index]) {
+          var name = files[index][0];
+          fetches[index] = fetchWithRetry(name + cb, 3).then(function (text) {
+            return { ok: true, text: text };
+          }, function (err) {
+            return { ok: false, err: err };
+          });
+        }
+        return fetches[index];
+      }
+
+      function primeWindow(start) {
+        var end = Math.min(files.length, start + PREFETCH_WINDOW);
+        for (var j = start; j < end; j++) primeFetch(j);
+      }
+
+      function fetchBootText(index) {
+        primeWindow(index);
+        return primeFetch(index).then(function (result) {
+          if (!result.ok) throw result.err;
+          return result.text;
+        });
+      }
+
       function execute(name, code) {
         var s = document.createElement('script');
         s.text = code + '\n//# sourceURL=' + name;
@@ -225,7 +254,7 @@
         var name = files[i][0];
         var isBabel = files[i][1];
         boot.current = name;
-        fetchWithRetry(name + cb, 3).then(function (text) {
+        fetchBootText(i).then(function (text) {
           var code = text;
           if (isBabel) {
             try {
@@ -246,6 +275,7 @@
           }
           execute(name, code);
           boot.loaded++;
+          primeWindow(i + 1);
           step(i + 1);
         }).catch(function (err) {
           boot.failed = name;
@@ -253,6 +283,7 @@
             String((err && err.message) || err));
         });
       }
+      primeWindow(0);
       step(0);
 
       /* Mount watchdog. Lives HERE, not in home-mount.jsx: the failure mode

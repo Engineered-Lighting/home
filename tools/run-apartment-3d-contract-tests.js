@@ -57,6 +57,9 @@ assert("warped camera frame appears only after first draw", APT.includes("setWar
 assert("camera alignment helper distinguishes estimated vs calibrated", APT.includes("function aptCameraAlignment") && APT.includes("camera - estimated pose"));
 assert("camera snap requires exact alignment metadata", APT.includes("const calib = alignment.exact"));
 assert("camera debug snapshot exposes alignment status", APT.includes("cameraAlignment: liveCam ? aptCameraAlignment(liveCam) : null"));
+assert("mobile live feed uses snapshot refresh fallback", APT.includes("function aptSnapshotSrc") && APT.includes("snapshotIntervalMs={mobile ? 650 : 0}"));
+assert("snapshot refresh keeps the calibrated frame cache-busted", APT.includes("function aptCacheBust") && APT.includes('onStatus?.(useSnapshots ? "frame" : "raw")'));
+assert("camera feed maps pixels into the shared projection frame", APT.includes('objectFit: "fill"') && APT.includes('const liveFeedSettled = ["idle", "raw", "frame", "warped"].includes(liveFeedStatus);'));
 
 process.stdout.write("\napartment_calibrated_projection_contract_test\n");
 assert("engine reads solved camera center C", ENGINE.includes("const calibratedCenter = Array.isArray(ex?.C)") && ENGINE.includes("new THREE.Vector3(+ex.C[0], +ex.C[1], +ex.C[2])"));

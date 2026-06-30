@@ -757,6 +757,10 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const pickMode = useCallback(async (m) => {
     const engine = engineRef.current;
     if (!engine) return;
+    if ((liveCam || engine.rig.inCameraPose?.()) && !calibCam) {
+      showToast("camera view is locked to mesh - tap back to change modes");
+      return;
+    }
     // explicit pick overrides any pending post-snap restore
     preSnapModeRef.current = null;
     // ALWAYS delegate to the engine — modes.setMode dedups same-mode (cheaply
@@ -782,7 +786,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
       setModeLoading(null);
       refitMobileOverview(m === "points" ? 360 : 520);
     }
-  }, [showToast, refitMobileOverview]);
+  }, [showToast, refitMobileOverview, liveCam, calibCam]);
 
   const callSvc = useCallback(async (domain, service, data) => {
     const client = window.__hav_haClient;
@@ -812,12 +816,11 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     if (!dev) return false;
     const eng = engineRef.current;
     const calib = !!(dev.camera && dev.camera.extrinsics && dev.camera.intrinsics);
-    // Calibrated desktop snaps use the textured mesh behind the live feed.
-    // Mobile keeps the full canvas width so the video is not cropped by the
-    // 46/54 calibration split.
-    if (calib && eng) {
+    // Camera snaps always use the textured mesh behind the live feed. Switching
+    // to cloud/photo while snapped breaks the pose/readability on phones.
+    if (eng) {
       if (preSnapModeRef.current == null) preSnapModeRef.current = eng.modes.mode;
-      eng.modes.setMode("mesh", { duration: 0 }).catch(() => {});
+      eng.modes.setMode("mesh", { duration: 0 }).then(() => setMode("mesh")).catch(() => {});
     }
     eng?.flyToDevice(dev, { fovScale: calib && !mobile ? 1 / 0.74 : 1 });
     if (flyTimerRef.current) clearTimeout(flyTimerRef.current);
@@ -865,17 +868,21 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const pct = progress.total ? Math.floor((progress.loaded / progress.total) * 100) : 0;
   const cardDevice = (model.devices || []).find((d) => d.id === cardId) || null;
   const hoverDevice = (model.devices || []).find((d) => d.id === hoverId) || null;
+  const cameraTop = inCamPose || !!liveCam;
+  const cameraSnap = cameraTop && !calibCam;
+  const mobileCameraSnap = mobile && cameraSnap;
   const topPad = mobile ? "calc(10px + env(safe-area-inset-top, 0px)) 12px 8px" : "12px 18px";
   const bottomPad = mobile ? "10px 10px calc(12px + env(safe-area-inset-bottom, 0px))" : "14px 18px";
   const liveFeedStyle = mobile
     ? {
-        width: "calc(100vw - 20px)",
-        maxWidth: "100vw",
-        maxHeight: "calc(100dvh - 150px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px))",
-        aspectRatio: "16 / 9",
-        objectFit: "contain",
+        width: "100vw",
+        height: "100dvh",
+        maxWidth: "none",
+        maxHeight: "none",
+        objectFit: "cover",
         background: "#000",
-        boxShadow: "0 0 42px 6px rgba(0,0,0,0.35)",
+        boxShadow: "none",
+        opacity: 0.88,
       }
     : {
         height: "74vh",
@@ -916,11 +923,12 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
       {!editing && (
         <div style={{
           position: "absolute", top: 0, left: 0, right: 0, display: "flex",
-          alignItems: mobile ? "flex-start" : "center",
-          gap: mobile ? 7 : 10,
+          flexDirection: mobileCameraSnap ? "column" : "row",
+          alignItems: mobileCameraSnap ? "stretch" : mobile ? "flex-start" : "center",
+          gap: mobileCameraSnap ? 8 : mobile ? 7 : 10,
           padding: topPad,
           pointerEvents: "none",
-          flexWrap: mobile ? "wrap" : "nowrap",
+          flexWrap: mobileCameraSnap ? "nowrap" : mobile ? "wrap" : "nowrap",
           zIndex: 5,
         }}>
           <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.05 }}>
@@ -929,29 +937,38 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
             <span style={{ fontFamily: APT_FONT_MONO, fontSize: 8.5, letterSpacing: "0.24em",
                            color: "var(--hg-fg-4)", marginTop: 3 }}>spatial command center</span>
           </div>
-          {simActive && (
+          {mobileCameraSnap && (
+            <span style={{ fontFamily: APT_FONT_MONO, fontSize: 8.5, letterSpacing: "0.1em",
+                           color: "var(--hg-ice)", lineHeight: 1.35,
+                           marginLeft: 0, maxWidth: "100%" }}>
+              camera - mesh locked
+            </span>
+          )}
+          {simActive && !mobileCameraSnap && (
             <span style={{ fontFamily: APT_FONT_MONO, fontSize: 9, letterSpacing: "0.12em",
                            color: "var(--hg-warn)", border: "1px solid var(--hg-border-soft)",
                            padding: "3px 8px", marginLeft: 6 }}>sim</span>
           )}
           <span style={{ fontFamily: APT_FONT_MONO, fontSize: 8.5, letterSpacing: "0.1em",
                          color: trackerStatus === "live" ? "var(--hg-ice)" : "var(--hg-fg-5)",
-                         marginLeft: mobile ? 0 : 8 }}>
+                         marginLeft: mobileCameraSnap ? 0 : mobile ? 0 : 8,
+                         display: mobileCameraSnap ? "none" : "inline" }}>
             tracker · {trackerStatus}
           </span>
           <span style={{
-            marginLeft: "auto",
+            marginLeft: mobileCameraSnap ? 0 : "auto",
             display: "flex",
             gap: 6,
             pointerEvents: "auto",
-            flexWrap: mobile ? "wrap" : "nowrap",
-            justifyContent: "flex-end",
+            flexWrap: mobileCameraSnap ? "nowrap" : mobile ? "wrap" : "nowrap",
+            justifyContent: mobileCameraSnap ? "space-between" : "flex-end",
             maxWidth: mobile ? "100%" : "none",
+            width: mobileCameraSnap ? "100%" : "auto",
           }}>
-            {inCamPose && (
-              <AptHudButton label="← back" onClick={exitCameraPose} />
+            {cameraTop && (
+              <AptHudButton label="← back" onClick={exitCameraPose} mobile={mobile} />
             )}
-            {inCamPose && liveCam && !simActive && window.HomeApartmentCalibrate && (
+            {cameraTop && liveCam && !mobile && !simActive && window.HomeApartmentCalibrate && (
               <AptHudButton label="calibrate" active={!!calibCam} onClick={() => {
                 setLiveOn(false);
                 const e = engineRef.current;
@@ -963,10 +980,10 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
                 setCalibCam(liveCam);
               }} mobile={mobile} />
             )}
-            {!inCamPose && (
+            {!cameraTop && (
               <AptHudButton label="edit" onClick={() => { setCardId(null); setEditing(true); }} mobile={mobile} />
             )}
-            {!embedded && <AptHudButton label="close · esc" onClick={onClose} />}
+            {!embedded && <AptHudButton label={mobileCameraSnap ? "close" : "close · esc"} onClick={onClose} mobile={mobile} />}
           </span>
         </div>
       )}
@@ -994,7 +1011,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
       )}
 
       {/* bottom HUD (view mode) */}
-      {!editing && (
+      {!editing && !cameraSnap && (
         <div style={{
           position: "absolute", left: 0, right: 0, bottom: 0, display: "flex",
           alignItems: mobile ? "stretch" : "flex-end",
@@ -1073,14 +1090,13 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
       )}
 
       {/* live camera feed — full-viewport MJPEG from Frigate, shown over the
-          3D canvas while snapped; the HUD stays on top so cloud/photo/mesh
-          render the SAME pose one toggle away */}
+          3D canvas while snapped; mode switching returns after backing out */}
       {liveCam && liveOn && !calibCam && (
         <div style={{ position: "absolute", inset: 0,
                       display: "flex", alignItems: "center", justifyContent: "center",
-                      padding: mobile ? "calc(58px + env(safe-area-inset-top, 0px)) 10px calc(82px + env(safe-area-inset-bottom, 0px))" : 0,
+                      padding: 0,
                       pointerEvents: "none" }}>
-          {/* big-but-not-fullscreen: the feed hovers over the 3D view, which
+          {/* full-viewport on mobile so video and WebGL share the same frame;
               holds the same pose behind it — true 1:1 alignment lands with
               per-camera calibration (fov + principal point). Calibrated
               cameras render through the WebGL undistorter; uncalibrated ones
@@ -1097,7 +1113,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
           />
           <div style={{ position: "absolute", top: mobile ? "calc(54px + env(safe-area-inset-top, 0px))" : 52, left: mobile ? 12 : 18, fontFamily: APT_FONT_MONO,
                         fontSize: 9.5, letterSpacing: "0.12em", color: "var(--hg-ice)",
-                        background: "rgba(10,12,16,0.6)", padding: "4px 9px" }}>
+                        background: "rgba(10,12,16,0.6)", padding: "4px 9px",
+                        display: mobile ? "none" : "block" }}>
             live · {liveCam.name} · mjpeg
           </div>
         </div>

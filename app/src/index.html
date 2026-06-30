@@ -167,20 +167,35 @@
       function fetchText(url, timeoutMs) {
         return new Promise(function (resolve, reject) {
           var xhr = new XMLHttpRequest();
+          var settled = false;
+          var manualTimer = setTimeout(function () {
+            if (settled) return;
+            settled = true;
+            try { xhr.abort(); } catch (_) {}
+            reject(new Error('manual timeout after ' + timeoutMs + 'ms'));
+          }, timeoutMs);
+          function finish(fn, value) {
+            if (settled) return;
+            settled = true;
+            clearTimeout(manualTimer);
+            fn(value);
+          }
           xhr.open('GET', url, true);
+          xhr.withCredentials = true;
           if ('overrideMimeType' in xhr) xhr.overrideMimeType('text/plain');
           xhr.timeout = timeoutMs;
           xhr.onreadystatechange = function () {
             if (xhr.readyState !== 4) return;
             if (xhr.status === 200 || (xhr.status === 0 && xhr.responseText.length > 0)) {
-              resolve(xhr.responseText);
+              finish(resolve, xhr.responseText);
             } else {
-              reject(new Error('HTTP status ' + xhr.status + ', ' +
+              finish(reject, new Error('HTTP status ' + xhr.status + ', ' +
                 (xhr.responseText ? xhr.responseText.length : 0) + ' bytes'));
             }
           };
-          xhr.ontimeout = function () { reject(new Error('timeout after ' + timeoutMs + 'ms')); };
-          xhr.onerror = function () { reject(new Error('network error (status 0)')); };
+          xhr.ontimeout = function () { finish(reject, new Error('timeout after ' + timeoutMs + 'ms')); };
+          xhr.onerror = function () { finish(reject, new Error('network error (status 0)')); };
+          xhr.onabort = function () { finish(reject, new Error('request aborted')); };
           xhr.send(null);
         });
       }

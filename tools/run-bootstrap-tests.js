@@ -116,9 +116,15 @@ assert("ordered loader fetches each file with three attempts",
 assert("status 0 empty loads are rejected",
   indexSource.includes("xhr.status === 0 && xhr.responseText.length > 0"));
 assert("XHR timeout becomes a hard boot failure",
-  indexSource.includes("xhr.ontimeout = function () { reject(new Error('timeout after '"));
+  indexSource.includes("xhr.ontimeout = function () { finish(reject, new Error('timeout after '"));
 assert("network error becomes a hard boot failure",
-  indexSource.includes("xhr.onerror = function () { reject(new Error('network error (status 0)')); }"));
+  indexSource.includes("xhr.onerror = function () { finish(reject, new Error('network error (status 0)')); }"));
+assert("manual boot-file timeout aborts stuck browser requests",
+  indexSource.includes("manual timeout after ") &&
+    indexSource.includes("try { xhr.abort(); } catch (_) {}") &&
+    indexSource.includes("xhr.onabort = function () { finish(reject, new Error('request aborted')); }"));
+assert("boot-file XHRs preserve gateway auth cookies",
+  indexSource.includes("xhr.withCredentials = true"));
 assert("Babel transform failures stop the boot chain",
   indexSource.includes("Babel transform failed in") && indexSource.includes("boot.failed = name"));
 assert("files execute before the chain advances",

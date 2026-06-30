@@ -65,10 +65,10 @@ Invoke-Check "tailscale online" "blocker" "tailscale" @("status")
 
 try {
     $tailnet = tailscale status 2>&1 | Out-String
-    $ubuntuOk = $tailnet -match "\bengineeredlightingserver1\b" -and $tailnet -notmatch "engineeredlightingserver1\s+.*offline"
+    $ubuntuOk = $tailnet -match "\bhome-app\b" -and $tailnet -notmatch "home-app\s+.*offline"
     $haOk = $tailnet -match "\bhomeassistant\b" -and $tailnet -notmatch "homeassistant\s+.*offline"
     $razerSeen = $isExpectedTravelHost -or ($tailnet -match "\b$([Regex]::Escape($ExpectedTravelHost))\b" -and $tailnet -notmatch "$([Regex]::Escape($ExpectedTravelHost))\s+.*offline")
-    Add-Check "tailnet Ubuntu AI box" "blocker" $ubuntuOk "engineeredlightingserver1 should be active" "tailscale status"
+    Add-Check "tailnet Ubuntu AI box" "blocker" $ubuntuOk "home-app should be active" "tailscale status"
     Add-Check "tailnet Home Assistant" "blocker" $haOk "homeassistant should be active" "tailscale status"
     Add-Check "tailnet Razer Blade peer" "degraded" $razerSeen "$ExpectedTravelHost should be active or this should be run directly on it" "tailscale status"
 } catch {

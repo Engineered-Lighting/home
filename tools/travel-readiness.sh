@@ -2,7 +2,7 @@
 set -u
 
 repo_dir="${HOME_WEB_REPO:-${HOME}/code/home}"
-ai_host="${HOME_TRAVEL_AI_HOST:-engineeredlightingserver1.taild52a15.ts.net}"
+ai_host="${HOME_TRAVEL_AI_HOST:-home-app.taild52a15.ts.net}"
 ha_host="${HOME_TRAVEL_HA_HOST:-homeassistant}"
 gateway_url="${HOME_TRAVEL_GATEWAY_URL:-http://127.0.0.1:5181/healthz}"
 json_only=0

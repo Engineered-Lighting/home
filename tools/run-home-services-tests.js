@@ -108,7 +108,7 @@ async function main() {
   assert("Tailscale HA short MagicDNS is first", haCandidates[0] === "http://homeassistant:8123", haCandidates);
   assert("Tailscale HA full tailnet DNS is available", haCandidates.includes("http://homeassistant.taild52a15.ts.net:8123"), haCandidates);
   assert("Tailscale HA observed 100.x fallback is available", haCandidates.includes("http://100.116.3.41:8123"), haCandidates);
-  assert("runtime globals move with profile", tail.window.HG_DEFAULT_VLLM_BASE === "http://engineeredlightingserver1:8000");
+  assert("runtime globals move with profile", tail.window.HG_DEFAULT_VLLM_BASE === "http://home-app:8000");
 
   process.stdout.write("\nhome_services_custom_and_legacy_test\n");
   const legacy = loadModule({
@@ -131,7 +131,7 @@ async function main() {
   const probe = loadModule({
     fetch: async (url) => {
       probeCalls.push(url);
-      if (String(url).includes("engineeredlightingserver1:8092/healthz")) {
+      if (String(url).includes("home-app:8092/healthz")) {
         return { ok: false, status: 502, json: async () => ({}), text: async () => "" };
       }
       return { ok: true, status: 200, json: async () => ({ ok: true }), text: async () => "ok" };
@@ -142,8 +142,8 @@ async function main() {
   const metrics = results.find((r) => r.service === "metrics");
   assert("probeAll tests every service", results.length === probe.window.HomeServices.services.length, results.length);
   assert("probeAll records failed and successful attempts", metrics.attempts.length === 2 && metrics.ok, metrics);
-  assert("probeAll selects the first healthy Tailscale fallback", probe.window.HomeServices.get("metrics") === "http://engineeredlightingserver1.taild52a15.ts.net:8092", metrics);
-  assert("probeAll persisted selected URL into runtime globals", probe.window.HG_DEFAULT_METRICS_BASE === "http://engineeredlightingserver1.taild52a15.ts.net:8092");
+  assert("probeAll selects the first healthy Tailscale fallback", probe.window.HomeServices.get("metrics") === "http://home-app.taild52a15.ts.net:8092", metrics);
+  assert("probeAll persisted selected URL into runtime globals", probe.window.HG_DEFAULT_METRICS_BASE === "http://home-app.taild52a15.ts.net:8092");
 
   process.stdout.write("\nhome_services_travel_readiness_test\n");
   const healthy = loadModule();
@@ -182,7 +182,7 @@ async function main() {
   const ubuntuDown = loadModule({
     fetch: async (url) => {
       const s = String(url);
-      if (s.includes("engineeredlightingserver1") || s.includes("100.87.94.18")) {
+      if (s.includes("home-app") || s.includes("100.87.94.18")) {
         return { ok: false, status: 0, json: async () => ({}), text: async () => "" };
       }
       return { ok: true, status: 200, json: async () => ({ ok: true }), text: async () => "ok" };

@@ -52,7 +52,7 @@ The desktop app tries these Tailscale candidates in order:
 | --- | --- | --- |
 | Home Assistant | `http://homeassistant:8123` | `http://homeassistant.taild52a15.ts.net:8123`, `http://100.116.3.41:8123` |
 | Frigate | `http://homeassistant:5000` | `http://homeassistant.taild52a15.ts.net:5000`, `http://100.116.3.41:5000` |
-| AI box services | `http://engineeredlightingserver1:<port>` | `http://engineeredlightingserver1.taild52a15.ts.net:<port>`, `http://100.87.94.18:<port>` |
+| AI box services | `http://home-app:<port>` | `http://home-app.taild52a15.ts.net:<port>`, `http://100.87.94.18:<port>` |
 
 AI box ports:
 
@@ -89,7 +89,7 @@ Install as a systemd service:
 cd ~/code/home
 tools/install-home-apartment-assets-linux.sh
 sudo systemctl status home-apartment-assets --no-pager
-curl http://engineeredlightingserver1:5190/healthz
+curl http://home-app:5190/healthz
 ```
 
 Keep access tailnet-only with host firewall/Tailscale ACLs where practical.

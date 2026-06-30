@@ -48,7 +48,7 @@ Keep these handy in case MagicDNS is unreliable on hotel Wi-Fi or another VPN:
 
 | Host | MagicDNS | Full tailnet DNS | Observed Tailscale IP |
 | --- | --- | --- | --- |
-| Ubuntu AI box | `engineeredlightingserver1` | `engineeredlightingserver1.taild52a15.ts.net` | `100.87.94.18` |
+| Ubuntu AI box | `home-app` | `home-app.taild52a15.ts.net` | `100.87.94.18` |
 | Home Assistant | `homeassistant` | `homeassistant.taild52a15.ts.net` | `100.116.3.41` |
 
 ## Recovery path

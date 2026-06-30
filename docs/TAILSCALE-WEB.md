@@ -19,7 +19,7 @@ instead of exposing the raw HA, AI, camera, or supervisor ports.
 
 ## Run on the Ubuntu AI box
 
-The travel setup should run from `engineeredlightingserver1`, not the Windows
+The travel setup should run from `home-app`, not the Windows
 desktop:
 
 ```bash
@@ -183,7 +183,7 @@ export HOME_WEB_METRICS_TARGET="http://192.168.0.100:8092"
 export HOME_WEB_VLLM_TARGET="http://192.168.0.100:8000"
 export HOME_WEB_VISION_TARGET="http://192.168.0.100:8091"
 export HOME_WEB_INTELLIGENCE_TARGET="http://192.168.0.100:8095"
-export HOME_WEB_SUPERVISOR_TARGET="http://engineeredlightingserver1.taild52a15.ts.net:8093"
+export HOME_WEB_SUPERVISOR_TARGET="http://home-app.taild52a15.ts.net:8093"
 export HOME_WEB_STACK_TOKEN_FILE="/opt/home-ai-voice/.env"
 export HOME_WEB_S2S_TARGET="http://192.168.0.100:8094"
 export HOME_WEB_TRACKER_TARGET="http://192.168.0.100:8098"

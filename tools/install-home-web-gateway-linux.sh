@@ -45,7 +45,7 @@ sudo install -d -o "${install_user}" -g "${install_group}" "$(dirname -- "${auth
   printf 'Environment=HOME_WEB_VLLM_TARGET=%s\n' "${HOME_WEB_VLLM_TARGET:-http://192.168.0.100:8000}"
   printf 'Environment=HOME_WEB_VISION_TARGET=%s\n' "${HOME_WEB_VISION_TARGET:-http://192.168.0.100:8091}"
   printf 'Environment=HOME_WEB_INTELLIGENCE_TARGET=%s\n' "${HOME_WEB_INTELLIGENCE_TARGET:-http://192.168.0.100:8095}"
-  printf 'Environment=HOME_WEB_SUPERVISOR_TARGET=%s\n' "${HOME_WEB_SUPERVISOR_TARGET:-http://engineeredlightingserver1.taild52a15.ts.net:8093}"
+  printf 'Environment=HOME_WEB_SUPERVISOR_TARGET=%s\n' "${HOME_WEB_SUPERVISOR_TARGET:-http://home-app.taild52a15.ts.net:8093}"
   printf 'Environment=HOME_WEB_STACK_TOKEN_FILE=%s\n' "${HOME_WEB_STACK_TOKEN_FILE:-/opt/home-ai-voice/.env}"
   printf 'Environment=HOME_WEB_S2S_TARGET=%s\n' "${HOME_WEB_S2S_TARGET:-http://192.168.0.100:8094}"
   printf 'Environment=HOME_WEB_TRACKER_TARGET=%s\n' "${HOME_WEB_TRACKER_TARGET:-http://192.168.0.100:8098}"

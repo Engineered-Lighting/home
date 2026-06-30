@@ -39,7 +39,7 @@ Doc routing:
 
 System architecture:
 - Windows machine/laptop: my development workstation for Codex/Claude, local edits, Tauri testing, GitHub, SSH, and remote debugging.
-- Ubuntu AI box: `engineeredlightingserver1`, full tailnet DNS `engineeredlightingserver1.taild52a15.ts.net`, observed Tailscale IP `100.87.94.18`, LAN `192.168.0.100`.
+- Ubuntu AI box: `home-app`, full tailnet DNS `home-app.taild52a15.ts.net`, observed Tailscale IP `100.87.94.18`, LAN `192.168.0.100`.
   - Hosts RTX 6000 Blackwell local AI/model stack.
   - Hosts browser web gateway.
   - Hosts Apartment 3D runtime assets.

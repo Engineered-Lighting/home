@@ -742,6 +742,18 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose, editing, cardId, exitCameraPose, embedded]);
 
+  const refitMobileOverview = useCallback((dur = 520) => {
+    const engine = engineRef.current;
+    if (!engine || !readAptViewport().mobile) return;
+    const wasCameraPose = !!engine.rig.inCameraPose?.();
+    if (engine.rig.inCameraPose?.()) {
+      if (flyTimerRef.current) { clearTimeout(flyTimerRef.current); flyTimerRef.current = null; }
+      setLiveCam(null); setLiveOn(false); setCalibCam(null);
+      engine.rig.resetPose?.();
+    }
+    engine.refit?.({ dur: wasCameraPose ? 0 : dur });
+  }, []);
+
   const pickMode = useCallback(async (m) => {
     const engine = engineRef.current;
     if (!engine) return;
@@ -768,8 +780,9 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
                               : "mesh unavailable — check collision.glb asset");
     } finally {
       setModeLoading(null);
+      refitMobileOverview(m === "points" ? 360 : 520);
     }
-  }, [showToast]);
+  }, [showToast, refitMobileOverview]);
 
   const callSvc = useCallback(async (domain, service, data) => {
     const client = window.__hav_haClient;
@@ -832,7 +845,9 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         mobile,
         viewport,
         devices: (model.devices || []).length,
+        fit: engineRef.current?.debugFit?.() || null,
       }),
+      apartmentFit: () => engineRef.current?.debugFit?.() || null,
       setMode: pickMode,
       flyFirstCamera: () => {
         const dev = (model.devices || []).find((d) => d.type === "camera" || d.camera?.frigate_name);

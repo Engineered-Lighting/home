@@ -46,9 +46,9 @@ const FEATURE_MATRIX = [
   ["15-lights", "Living Lights drawer", "Lighting controls are usable at phone width."],
   ["16-spatial", "Spatial map drawer", "Map drawer opens without trapping or clipping the input."],
   ["17-look", "Look drawer", "Vision prompt drawer opens and fits the viewport."],
-  ["18-apartment-cloud", "Apartment cloud mode", "3D Apartment opens with HUD controls reachable."],
-  ["19-apartment-photo", "Apartment photo mode", "Photo/splat mode either renders or shows a clear asset error."],
-  ["20-apartment-mesh", "Apartment mesh mode", "Mesh mode either renders or shows a clear asset error."],
+  ["18-apartment-cloud", "Apartment cloud mode", "3D Apartment opens with the full apartment visible inside the mobile safe viewport."],
+  ["19-apartment-photo", "Apartment photo mode", "Photo/splat mode keeps the full apartment visible, or falls back with a clear asset error."],
+  ["20-apartment-mesh", "Apartment mesh mode", "Mesh mode keeps the full apartment visible, or falls back with a clear asset error."],
   ["21-apartment-fly-camera", "Apartment fly-to-camera/live view", "Camera fly-to keeps the feed contained instead of cropped on mobile."],
 ];
 
@@ -349,6 +349,16 @@ function visualHealthDetail(health) {
   return (health.issues || []).join("; ");
 }
 
+function apartmentFitDetail(fit) {
+  if (!fit) return "no apartment fit payload";
+  const b = fit.bounds || {};
+  const s = fit.safe || {};
+  const v = fit.viewport || {};
+  const bounds = `${b.minX},${b.minY}..${b.maxX},${b.maxY}`;
+  const safe = `${s.left},${s.top}..${s.right},${s.bottom}`;
+  return `apartment bounds ${bounds} inside safe ${safe} (${v.width || "?"}x${v.height || "?"})`;
+}
+
 async function visualHealth(page) {
   return page.evaluate(VISUAL_HEALTH_EXPRESSION);
 }
@@ -366,6 +376,13 @@ async function ensureVisualHealth(page, context) {
   const health = await visualHealth(page);
   if (!health.ok) throw new Error(`${context}: ${visualHealthDetail(health)}`);
   return visualHealthDetail(health);
+}
+
+async function ensureApartmentFit(page, context) {
+  await page.waitForFunction(() => !!window.__havApartmentDebug?.apartmentFit?.(), null, { timeout: 6000 });
+  const fit = await page.evaluate(() => window.__havApartmentDebug?.apartmentFit?.());
+  if (!fit?.ok) throw new Error(`${context}: ${apartmentFitDetail(fit)}`);
+  return apartmentFitDetail(fit);
 }
 
 async function clickButtonByName(page, name, timeout = 1800) {
@@ -504,10 +521,11 @@ async function runButtonProbes(page, buttonItems) {
     await clickButtonByName(page, /^cloud$/i);
     await clickButtonByName(page, /^photo$/i, 2600);
     await clickButtonByName(page, /^mesh$/i, 2600);
+    const fit = await ensureApartmentFit(page, "apartment mode fit");
     const detail = await ensureVisualHealth(page, "apartment mode controls");
     await clickButtonByName(page, /close/i);
     await page.waitForFunction(() => !window.__havApartmentDebug, null, { timeout: 5000 });
-    return detail;
+    return `${detail}; ${fit}`;
   });
 
   await recordButtonProbe(buttonItems, "b08-remote-dialog", "Remote dialog profile buttons, test all, and close respond", async () => {
@@ -553,8 +571,8 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors) {
   };
   const step = async (id, detail, fn) => {
     try {
-      await fn();
-      await capture(id, detail);
+      const result = await fn();
+      await capture(id, result || detail);
     } catch (err) {
       items.push({ id, ok: false, detail: `${detail}: ${err?.message || err}` });
     }
@@ -630,17 +648,20 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors) {
     await closeOverlays(page);
     await step("18-apartment-cloud", "/apartment cloud mode", async () => {
       await runCommand(page, "/apartment", 3600);
-      await page.waitForFunction(() => !!window.__havApartmentDebug, null, { timeout: 12000 }).catch(() => {});
+      await page.waitForFunction(() => !!window.__havApartmentDebug, null, { timeout: 12000 });
+      return ensureApartmentFit(page, "apartment cloud fit");
     });
 
     await step("19-apartment-photo", "Apartment photo/splat mode", async () => {
       await page.evaluate(() => window.__havApartmentDebug?.setMode?.("splat"));
       await page.waitForTimeout(2600);
+      return ensureApartmentFit(page, "apartment photo fit");
     });
 
     await step("20-apartment-mesh", "Apartment mesh mode", async () => {
       await page.evaluate(() => window.__havApartmentDebug?.setMode?.("mesh"));
       await page.waitForTimeout(2600);
+      return ensureApartmentFit(page, "apartment mesh fit");
     });
 
     await step("21-apartment-fly-camera", "Apartment fly-to-camera/live view", async () => {
@@ -980,6 +1001,13 @@ async function cdpEnsureVisualHealth(client, context) {
   return visualHealthDetail(health);
 }
 
+async function cdpEnsureApartmentFit(client, context) {
+  await cdpWaitFor(client, "!!window.__havApartmentDebug?.apartmentFit?.()", 6000);
+  const fit = await cdpEval(client, "window.__havApartmentDebug?.apartmentFit?.()", true);
+  if (!fit?.ok) throw new Error(`${context}: ${apartmentFitDetail(fit)}`);
+  return apartmentFitDetail(fit);
+}
+
 async function cdpRecordButtonProbe(buttonItems, id, detail, fn) {
   try {
     const result = await fn();
@@ -1107,10 +1135,11 @@ async function cdpRunButtonProbes(client, buttonItems) {
     await cdpClickButton(client, "^cloud$");
     await cdpClickButton(client, "^photo$", 2600);
     await cdpClickButton(client, "^mesh$", 2600);
+    const fit = await cdpEnsureApartmentFit(client, "apartment mode fit");
     const detail = await cdpEnsureVisualHealth(client, "apartment mode controls");
     await cdpClickButton(client, "close", 600);
     await cdpWaitFor(client, "!window.__havApartmentDebug", 5000);
-    return detail;
+    return `${detail}; ${fit}`;
   });
 
   await cdpRecordButtonProbe(buttonItems, "b08-remote-dialog", "Remote dialog profile buttons, test all, and close respond", async () => {
@@ -1147,8 +1176,8 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors) {
   };
   const step = async (id, detail, fn) => {
     try {
-      await fn();
-      await capture(id, detail);
+      const result = await fn();
+      await capture(id, result || detail);
     } catch (err) {
       items.push({ id, ok: false, detail: `${detail}: ${err?.message || err}` });
     }
@@ -1241,16 +1270,19 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors) {
     await step("18-apartment-cloud", "/apartment cloud mode", async () => {
       await cdpRunCommand(client, "/apartment", 3600);
       await cdpWaitFor(client, "!!window.__havApartmentDebug", 15000);
+      return cdpEnsureApartmentFit(client, "apartment cloud fit");
     });
 
     await step("19-apartment-photo", "Apartment photo/splat mode", async () => {
       await cdpEval(client, "window.__havApartmentDebug && window.__havApartmentDebug.setMode('splat')", true);
       await cdpDelay(2600);
+      return cdpEnsureApartmentFit(client, "apartment photo fit");
     });
 
     await step("20-apartment-mesh", "Apartment mesh mode", async () => {
       await cdpEval(client, "window.__havApartmentDebug && window.__havApartmentDebug.setMode('mesh')", true);
       await cdpDelay(2600);
+      return cdpEnsureApartmentFit(client, "apartment mesh fit");
     });
 
     await step("21-apartment-fly-camera", "Apartment fly-to-camera/live view", async () => {

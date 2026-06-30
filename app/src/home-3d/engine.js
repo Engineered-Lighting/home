@@ -82,13 +82,68 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
     let points = null;
     let pointTotal = 0;
     let fitted = false;
+    let lastFitBox = null;
 
-    function fitNow() {
+    function fitNow(options = {}) {
         if (!points) return;
         points.geometry.computeBoundingBox();
         const box = points.geometry.boundingBox.clone();
         box.applyMatrix4(apartmentRoot.matrixWorld);
-        rig.fitBounds(box);
+        lastFitBox = box.clone();
+        rig.fitBounds(box, options);
+    }
+
+    function projectedFitBounds() {
+        if (!lastFitBox) return null;
+        const canvasWidth = renderer.domElement.clientWidth || renderer.domElement.width || 1;
+        const canvasHeight = renderer.domElement.clientHeight || renderer.domElement.height || 1;
+        const corners = [
+            new THREE.Vector3(lastFitBox.min.x, lastFitBox.min.y, lastFitBox.min.z),
+            new THREE.Vector3(lastFitBox.min.x, lastFitBox.min.y, lastFitBox.max.z),
+            new THREE.Vector3(lastFitBox.min.x, lastFitBox.max.y, lastFitBox.min.z),
+            new THREE.Vector3(lastFitBox.min.x, lastFitBox.max.y, lastFitBox.max.z),
+            new THREE.Vector3(lastFitBox.max.x, lastFitBox.min.y, lastFitBox.min.z),
+            new THREE.Vector3(lastFitBox.max.x, lastFitBox.min.y, lastFitBox.max.z),
+            new THREE.Vector3(lastFitBox.max.x, lastFitBox.max.y, lastFitBox.min.z),
+            new THREE.Vector3(lastFitBox.max.x, lastFitBox.max.y, lastFitBox.max.z),
+        ];
+        camera.updateMatrixWorld(true);
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        let outOfDepth = false;
+        for (const corner of corners) {
+            const p = corner.clone().project(camera);
+            if (p.z < -1 || p.z > 1) outOfDepth = true;
+            const x = (p.x * 0.5 + 0.5) * canvasWidth;
+            const y = (-p.y * 0.5 + 0.5) * canvasHeight;
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x);
+            maxY = Math.max(maxY, y);
+        }
+        const portrait = camera.aspect < 0.78;
+        const safe = portrait
+            ? {
+                left: 8,
+                right: canvasWidth - 8,
+                top: Math.min(176, Math.round(canvasHeight * 0.22)),
+                bottom: canvasHeight - Math.min(130, Math.round(canvasHeight * 0.16)),
+            }
+            : { left: 4, right: canvasWidth - 4, top: 4, bottom: canvasHeight - 4 };
+        return {
+            viewport: { width: canvasWidth, height: canvasHeight, aspect: camera.aspect },
+            bounds: {
+                minX: Math.round(minX),
+                minY: Math.round(minY),
+                maxX: Math.round(maxX),
+                maxY: Math.round(maxY),
+                width: Math.round(maxX - minX),
+                height: Math.round(maxY - minY),
+            },
+            safe,
+            outOfDepth,
+            ok: !outOfDepth && minX >= safe.left && maxX <= safe.right
+                && minY >= safe.top && maxY <= safe.bottom,
+        };
     }
 
     async function loadPoints() {
@@ -221,9 +276,11 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
             camera.aspect = w / Math.max(1, h);
             camera.updateProjectionMatrix();
             pointsMaterial.uniforms.uPixelRatio.value = renderer.getPixelRatio();
+            if (points && !rig.inCameraPose?.()) fitNow({ dur: 0 });
         },
         attachInput(el) { return rigM.attachInput(el, rig); },
-        refit() { fitNow(); },
+        refit(options = {}) { fitNow(options); },
+        debugFit() { return projectedFitBounds(); },
 
         /* Fly to a camera device's pose. Calibrated extrinsics (P4) when
          * present; else the manual pose (device pos + yaw, slight downward

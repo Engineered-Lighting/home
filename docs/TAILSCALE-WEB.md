@@ -246,11 +246,12 @@ header actions, slash-command surfaces, travel/profile diagnostics, cameras,
 drawers, and Apartment `cloud`, `photo`, `mesh`, mode switching, fly-to-camera,
 and back-to-overview behavior. The local audit server also serves
 `app/data/apartment` at `/assets/apartment`, so mesh mode must render the real
-runtime mesh instead of passing with the mesh-unavailable fallback. The desktop
-audit captures `820x900` and `1280x900` viewports and checks that desktop
-controls do not collapse into the mobile menu. Reports include coarse timing
-summaries for boot and Apartment surfaces. Generated screenshots and reports
-stay under `tools/reports/`, which is ignored by git.
+runtime mesh and photo mode must render the real scan/splat asset instead of
+passing with unavailable fallbacks. The desktop audit captures `820x900` and
+`1280x900` viewports and checks that desktop controls do not collapse into the
+mobile menu. Reports include coarse timing summaries for boot and Apartment
+surfaces. Generated screenshots and reports stay under `tools/reports/`, which
+is ignored by git.
 
 Chrome-based automation does not fully prove iPhone Safari behavior. Before
 travel or after mobile Apartment changes, open the Tailscale URL on iPhone

@@ -1497,8 +1497,9 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
           {/* full-viewport on mobile so video and WebGL share the same frame;
               holds the same pose behind it — true 1:1 alignment lands with
               per-camera calibration (fov + principal point). Calibrated
-              cameras render through the WebGL undistorter; uncalibrated ones
-              keep the raw <img> (AptUndistortedFeed falls back internally) */}
+              Desktop calibrated cameras render through the WebGL undistorter.
+              Mobile Safari/iOS can paint partial gray frames from that canvas
+              path, so phone-sized viewports use the raw snapshot feed. */}
           <AptUndistortedFeed
             key={`${liveCam.id}-${serviceEpoch}`}
             // key forces a REMOUNT on camera switch: the cleanup deliberately
@@ -1508,7 +1509,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
             snapshotSrc={liveSnapshotSrc}
             snapshotIntervalMs={mobile ? 1400 : 0}
             alt={liveCam.name}
-            intrinsics={liveCam.camera?.intrinsics || null}
+            intrinsics={mobile ? null : liveCam.camera?.intrinsics || null}
             style={liveFeedStyle}
             onStatus={setLiveFeedStatus}
           />

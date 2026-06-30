@@ -377,11 +377,14 @@ const FEED_PROBE = `(() => {
   );
   const status = String(snap.liveFeedStatus || "");
   const badStatus = status === "connecting" || status === "retrying" || status === "error";
+  const mobile = !!snap.mobile;
   return {
-    ok: !!snap.liveCam && !!snap.liveOn && !badStatus && !!(loadedVisibleImg || (loadedHiddenImg && visibleCanvas)),
+    ok: !!snap.liveCam && !!snap.liveOn && !badStatus &&
+      (mobile ? !!loadedVisibleImg && !visibleCanvas : !!(loadedVisibleImg || (loadedHiddenImg && visibleCanvas))),
     snap,
     imgs,
     canvases,
+    mobileRawRequired: mobile,
     badStatus,
     loadedVisibleImg: !!loadedVisibleImg,
     loadedHiddenImg: !!loadedHiddenImg,

@@ -129,7 +129,7 @@ async function main() {
   const D = base.D;
   assert("HomeApartmentData exported", D && typeof D === "object");
   assert("model helpers exported", typeof D.getModel === "function" && typeof D.saveModel === "function");
-  assert("HA helpers exported", typeof D.getRegistry === "function" && typeof D.bindStates === "function" && typeof D.callService === "function");
+  assert("HA helpers exported", typeof D.getRegistry === "function" && typeof D.readStates === "function" && typeof D.bindStates === "function" && typeof D.callService === "function");
   assert("tracker helper exported", typeof D.openTracks === "function");
   assert("EMPTY_MODEL has stable shape", D.EMPTY_MODEL.schema_version === 1 && D.EMPTY_MODEL.revision === 0 && Array.isArray(D.EMPTY_MODEL.devices));
 
@@ -161,6 +161,9 @@ async function main() {
       "apartment3d.remoteCache": JSON.stringify({ schema_version: 1, revision: 11, zones: [{ id: "cached" }], devices: [] }),
       "apartment3d.modelDraft": JSON.stringify({ schema_version: 1, revision: 5, zones: [{ id: "draft" }], devices: [] }),
     }),
+    fetch: async (url) => String(url).includes("/model")
+      ? { ok: false, status: 404, json: async () => ({}) }
+      : okJson({ zones: [{ id: "seed_zone" }], devices: [{ id: "seed_device" }] }),
   });
   const offlineModel = await offline.D.getModel();
   assert("offline fallback prefers last-good remote cache over draft", offlineModel.remote_cached === true && offlineModel.zones[0].id === "cached", offlineModel);
@@ -175,7 +178,9 @@ async function main() {
   assert("offline fallback uses draft before seed", draftModel.offline_draft === true && draftModel.zones[0].id === "draft", draftModel);
 
   const seedFallback = loadModule({
-    fetch: async (url) => url.includes("asset.localhost")
+    fetch: async (url) => String(url).includes("/model")
+      ? { ok: false, status: 404, json: async () => ({}) }
+      : url.includes("asset.localhost")
       ? { ok: false, status: 404, json: async () => ({}) }
       : okJson({ zones: [{ id: "seed_only" }], devices: [] }),
   });
@@ -266,6 +271,10 @@ async function main() {
   const cleanup = D.bindStates(stateClient, { devices: [{ ha_entity_id: "light.bound" }] }, (entity, state) => stateEvents.push({ entity, state }));
   await new Promise((resolve) => setImmediate(resolve));
   assert("bindStates emits initial bound states only", stateEvents.length === 1 && stateEvents[0].entity === "light.bound", stateEvents);
+  const allReadStates = await D.readStates(stateClient);
+  assert("readStates can read all HA states", allReadStates["light.bound"].state === "on" && allReadStates["light.unbound"].state === "off", allReadStates);
+  const filteredReadStates = await D.readStates(stateClient, ["light.bound"]);
+  assert("readStates filters requested HA ids", filteredReadStates["light.bound"].state === "on" && !filteredReadStates["light.unbound"], filteredReadStates);
   subCb({ data: { entity_id: "light.bound", new_state: { state: "off" } } });
   subCb({ data: { entity_id: "light.unbound", new_state: { state: "on" } } });
   assert("bindStates filters state_changed events to bound ids", stateEvents.length === 2 && stateEvents[1].state.state === "off", stateEvents);
@@ -276,7 +285,7 @@ async function main() {
   await D.callService(svcClient, "light", "turn_on", { entity_id: "light.bound", brightness_pct: 80 });
   await D.callService(svcClient, "media_player", "media_pause", { area_id: "living_room" });
   assert("callService shapes entity target and service_data", svcCalls[0].target.entity_id === "light.bound" && svcCalls[0].service_data.brightness_pct === 80 && !("entity_id" in svcCalls[0].service_data), svcCalls[0]);
-  assert("callService leaves non-entity data in service_data", svcCalls[1].target === undefined && svcCalls[1].service_data.area_id === "living_room", svcCalls[1]);
+  assert("callService maps HA target data out of service_data", svcCalls[1].target.area_id === "living_room" && !("area_id" in svcCalls[1].service_data), svcCalls[1]);
 
   process.stdout.write("\napartment_tracks_test\n");
   const simTracks = loadModule({ simTracks: () => ({ type: "tracks", tracks: [{ id: "t1" }] }) });

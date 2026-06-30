@@ -283,14 +283,26 @@
 
   /* ---------------- entity state binding ---------------- */
 
+  async function readStates(client, ids = []) {
+    if (!client || typeof client.call !== "function") return {};
+    const wanted = new Set((ids || []).filter(Boolean));
+    const states = await client.call({ type: "get_states" });
+    const out = {};
+    for (const s of states || []) {
+      if (!s?.entity_id) continue;
+      if (!wanted.size || wanted.has(s.entity_id)) out[s.entity_id] = s;
+    }
+    return out;
+  }
+
   function bindStates(client, model, onState) {
     if (!client) return () => {};
     const ids = new Set((model.devices || []).map((d) => d.ha_entity_id).filter(Boolean));
     let unsub = null;
     (async () => {
       try {
-        const states = await client.call({ type: "get_states" });
-        for (const s of states || []) if (ids.has(s.entity_id)) onState(s.entity_id, s);
+        const states = await readStates(client, [...ids]);
+        for (const [entityId, state] of Object.entries(states)) onState(entityId, state);
         unsub = await client.subscribeEvents("state_changed", (ev) => {
           const d = ev?.data;
           if (d && ids.has(d.entity_id) && d.new_state) onState(d.entity_id, d.new_state);
@@ -364,6 +376,6 @@
 
   window.HomeApartmentData = {
     getModel, saveModel, getRegistry, buildPalette,
-    bindStates, callService, openTracks, EMPTY_MODEL,
+    readStates, bindStates, callService, openTracks, EMPTY_MODEL,
   };
 })();

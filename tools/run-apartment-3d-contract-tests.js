@@ -8,6 +8,7 @@ const REPO = path.resolve(__dirname, "..");
 const APT = fs.readFileSync(path.join(REPO, "app", "src", "home-apartment.jsx"), "utf8");
 const CARDS = fs.readFileSync(path.join(REPO, "app", "src", "home-apartment-cards.jsx"), "utf8");
 const DATA = fs.readFileSync(path.join(REPO, "app", "src", "home-apartment-data.js"), "utf8");
+const APP = fs.readFileSync(path.join(REPO, "app", "src", "home-app.jsx"), "utf8");
 const MODES = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "modes.js"), "utf8");
 const ENGINE = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "engine.js"), "utf8");
 const RIG = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "rig.js"), "utf8");
@@ -74,9 +75,18 @@ assert("card buttons are real touch targets", CARDS.includes('type="button"') &&
 assert("card controls stop canvas gesture propagation", CARDS.includes("const stopCardEvent") && CARDS.includes("onPointerDown={stopCardEvent}") && CARDS.includes("onClick={(e) => { stopCardEvent(e); onClick?.(e); }}"));
 assert("apartment service calls support HA callService and raw call", DATA.includes('typeof client.callService === "function"') && DATA.includes('typeof client.call !== "function"'));
 assert("apartment service payload uses HA target fields", DATA.includes('const targetKeys = new Set(["entity_id", "area_id", "device_id"])') && DATA.includes("payload.target = target"));
+assert("apartment data exposes HA readback helper", DATA.includes("async function readStates") && DATA.includes("readStates, bindStates"));
 assert("apartment controls optimistically update selected state", APT.includes("function aptOptimisticServiceState") && APT.includes("setServicePulse((n) => n + 1)") && APT.includes("statesRef.current[entityId] = optimistic"));
 assert("apartment controls rollback optimistic state on failure", APT.includes("statesRef.current[entityId] = prev") && APT.includes("didn't respond"));
+assert("apartment controls verify state after accepted HA service calls", APT.includes("function aptExpectedServiceState") && APT.includes("window.HomeApartmentData.readStates(client, [entityId])") && APT.includes("is still ${verified.state} in Home Assistant"));
 assert("apartment debug API can open a controllable card for button audits", APT.includes("openFirstControllableCard") && APT.includes("setCardId(dev.id)"));
+
+process.stdout.write("\nhome_light_state_query_contract_test\n");
+assert("home app detects direct light-state questions", APP.includes("function isDirectLightStateQuestion") && APP.includes("which|what|list|show|tell|are|currently"));
+assert("home app answers light-state questions from fresh HA get_states", APP.includes("const answerDirectLightStateQuestion") && APP.includes('client.call({ type: "get_states" })'));
+assert("direct light-state answer runs before external/local router", APP.indexOf("await answerDirectLightStateQuestion(text)") > 0
+  && APP.indexOf("await answerDirectLightStateQuestion(text)") < APP.indexOf('let route = "local"'));
+assert("direct light-state answer includes apartment switch-backed lamps", APP.includes("apartmentSwitchIds") && APP.includes("Lights and switch-backed lamps"));
 
 process.stdout.write("\napartment_calibrated_projection_contract_test\n");
 assert("engine reads solved camera center C", ENGINE.includes("const calibratedCenter = Array.isArray(ex?.C)") && ENGINE.includes("new THREE.Vector3(+ex.C[0], +ex.C[1], +ex.C[2])"));

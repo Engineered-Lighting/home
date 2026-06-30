@@ -93,6 +93,37 @@ function AptHudButton({ label, onClick, active, disabled, title, mobile = readAp
   );
 }
 
+function AptZoomButton({ label, title, onClick, disabled, mobile = readAptViewport().mobile }) {
+  const size = mobile ? 44 : 38;
+  return (
+    <button
+      type="button"
+      className="hg-focusable"
+      aria-label={title}
+      title={title}
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        width: size,
+        height: size,
+        display: "grid",
+        placeItems: "center",
+        border: "1px solid var(--hg-border-soft)",
+        background: disabled ? "rgba(10,12,16,0.30)" : "rgba(10,12,16,0.62)",
+        color: disabled ? "var(--hg-fg-5)" : "var(--hg-fg-0)",
+        fontFamily: APT_FONT_MONO,
+        fontSize: mobile ? 18 : 16,
+        lineHeight: 1,
+        cursor: disabled ? "default" : "pointer",
+        backdropFilter: "blur(10px)",
+        boxShadow: "0 10px 28px rgba(0,0,0,0.28)",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
 /* Live MJPEG feed, undistorted on the fly. When the snapped camera carries
    solved intrinsics with real distortion (dist[0] != 0) the raw <img> stays in
    the DOM hidden (opacity 0, NOT display:none — Chrome stops decoding
@@ -788,6 +819,16 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     }
   }, [showToast, refitMobileOverview, liveCam, calibCam]);
 
+  const zoomApartment = useCallback((dir) => {
+    const rig = engineRef.current?.rig;
+    if (!rig) return;
+    if (rig.inCameraPose?.()) {
+      showToast("camera view is locked - tap back before zooming");
+      return;
+    }
+    rig.stepZoom(dir, 260);
+  }, [showToast]);
+
   const callSvc = useCallback(async (domain, service, data) => {
     const client = window.__hav_haClient;
     if (!client || simActive) { showToast("sim mode — controls disabled"); return; }
@@ -852,6 +893,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
       }),
       apartmentFit: () => engineRef.current?.debugFit?.() || null,
       setMode: pickMode,
+      zoomIn: () => zoomApartment(1),
+      zoomOut: () => zoomApartment(-1),
       flyFirstCamera: () => {
         const dev = (model.devices || []).find((d) => d.type === "camera" || d.camera?.frigate_name);
         return dev ? flyToDeviceView(dev) : false;
@@ -869,7 +912,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     return () => {
       if (window.__havApartmentDebug === api) delete window.__havApartmentDebug;
     };
-  }, [open, phase, mode, liveOn, liveCam, mobile, viewport, model.devices, pickMode, flyToDeviceView]);
+  }, [open, phase, mode, liveOn, liveCam, mobile, viewport, model.devices, pickMode, zoomApartment, flyToDeviceView]);
 
   if (!open) return null;
 
@@ -880,6 +923,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const cameraSnap = cameraTop && !calibCam;
   const mobileCameraSnap = mobile && cameraTop;
   const hideViewHud = mobile ? cameraTop : cameraSnap;
+  const showZoomHud = !editing && !cameraTop && phase !== "boot" && phase !== "loading" && phase !== "error";
   const topPad = mobile ? "calc(8px + env(safe-area-inset-top, 0px)) 10px 8px" : "12px 18px";
   const bottomPad = mobile ? "8px 10px calc(10px + env(safe-area-inset-bottom, 0px))" : "14px 18px";
   const liveFeedStyle = mobile
@@ -1016,6 +1060,26 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         <div style={{ position: "absolute", left: 0, right: 0, top: "44%", textAlign: "center",
                       fontFamily: APT_FONT_MONO, fontSize: 11, color: "var(--hg-crit)" }}>
           renderer failed — {error}
+        </div>
+      )}
+
+      {showZoomHud && (
+        <div
+          aria-label="apartment zoom controls"
+          style={{
+            position: "absolute",
+            right: mobile ? 10 : 18,
+            top: "50%",
+            transform: "translateY(-50%)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+            pointerEvents: "auto",
+            zIndex: 6,
+          }}
+        >
+          <AptZoomButton label="+" title="zoom in" onClick={() => zoomApartment(1)} mobile={mobile} />
+          <AptZoomButton label="-" title="zoom out" onClick={() => zoomApartment(-1)} mobile={mobile} />
         </div>
       )}
 

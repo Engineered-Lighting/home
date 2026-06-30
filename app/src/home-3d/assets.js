@@ -47,10 +47,14 @@ function browserDevBase() {
     return null;
 }
 
-/* Ordered candidate URLs for an asset; `simName` is the bundled fallback. */
+/* Ordered candidate URLs for an asset; `simName` is the bundled fallback.
+ * In simulation, prefer bundled fixtures when they exist. Modes without a
+ * bundled fixture (mesh/photo) still use the runtime asset service so preview
+ * and audit paths can exercise the real scan/mesh instead of only the error UI.
+ */
 export function candidates(name, simName, { sim = false } = {}) {
     const list = [];
-    if (!sim) {
+    if (!sim || !simName) {
         const base = overrideBase();
         if (base) list.push(`${base.replace(/\/+$/, '')}/${name}`);
         const devBase = browserDevBase();

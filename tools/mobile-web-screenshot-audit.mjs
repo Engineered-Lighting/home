@@ -20,6 +20,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO = path.resolve(__dirname, "..");
 const SRC_DIR = path.join(REPO, "app", "src");
+const APARTMENT_DATA_DIR = path.join(REPO, "app", "data", "apartment");
 
 const DEFAULT_VIEWPORTS = [
   { name: "phone-390x844", width: 390, height: 844 },
@@ -28,6 +29,7 @@ const DEFAULT_VIEWPORTS = [
 ];
 
 const MOBILE_DEEP_VIEWPORTS = [
+  { name: "compact-phone-390x680", width: 390, height: 680 },
   { name: "small-phone-360x740", width: 360, height: 740 },
   { name: "phone-390x844", width: 390, height: 844 },
   { name: "large-phone-430x932", width: 430, height: 932 },
@@ -66,9 +68,10 @@ const TIMING_BUDGETS_MS = {
   "02-simulation-home": 7000,
   "18-apartment-cloud": 18000,
   "19-apartment-photo": 12000,
-  "20-apartment-mesh": 12000,
+  "20-apartment-mesh": 20000,
   "21-apartment-fly-camera": 9000,
 };
+const APARTMENT_FIT_TIMEOUT_MS = 18000;
 
 const FEATURE_MATRIX = [
   ["01-boot", "App boot or first-run screen", "Header, main surface, and bottom affordances fit the viewport."],
@@ -90,7 +93,7 @@ const FEATURE_MATRIX = [
   ["17-look", "Look drawer", "Vision prompt drawer opens and fits the viewport."],
   ["18-apartment-cloud", "Apartment cloud mode", "3D Apartment opens with the full apartment visible inside the mobile safe viewport."],
   ["19-apartment-photo", "Apartment photo mode", "Photo/splat mode keeps the full apartment visible, or falls back with a clear asset error."],
-  ["20-apartment-mesh", "Apartment mesh mode", "Mesh mode keeps the full apartment visible, or falls back with a clear asset error."],
+  ["20-apartment-mesh", "Apartment mesh mode", "Mesh mode keeps the full apartment visible without the mesh-unavailable fallback."],
   ["21-apartment-fly-camera", "Apartment fly-to-camera/live view", "Camera fly-to locks to mesh/live view and hides mode controls on mobile."],
 ];
 
@@ -125,7 +128,7 @@ const DESKTOP_FEATURE_MATRIX = [
   ["13-look", "Look drawer", "Vision prompt drawer opens and fits desktop width."],
   ["14-apartment-cloud", "Apartment cloud mode", "3D Apartment opens with the full apartment visible at desktop width."],
   ["15-apartment-photo", "Apartment photo mode", "Photo/splat mode keeps the full apartment visible, or falls back with a clear asset error."],
-  ["16-apartment-mesh", "Apartment mesh mode", "Mesh mode keeps the full apartment visible, or falls back with a clear asset error."],
+  ["16-apartment-mesh", "Apartment mesh mode", "Mesh mode keeps the full apartment visible without the mesh-unavailable fallback."],
   ["17-apartment-fly-camera", "Apartment fly-to-camera/live view", "Camera fly-to keeps snap-safe controls without breaking desktop layout."],
 ];
 
@@ -305,36 +308,56 @@ function contentType(filePath) {
   return "application/octet-stream";
 }
 
-function safeAppFile(requestUrl) {
-  const pathname = new URL(requestUrl, "http://local").pathname;
-  const raw = decodeURIComponent(pathname === "/" ? "/index.html" : pathname);
-  const candidate = path.resolve(SRC_DIR, "." + raw);
-  const relative = path.relative(SRC_DIR, candidate);
+function safeFile(root, rawPath) {
+  const raw = decodeURIComponent(rawPath || "/");
+  const normalized = raw.startsWith("/") ? raw : `/${raw}`;
+  const candidate = path.resolve(root, "." + normalized);
+  const relative = path.relative(root, candidate);
   if (relative.startsWith("..") || path.isAbsolute(relative)) return null;
   return candidate;
+}
+
+function safeAppFile(requestUrl) {
+  const pathname = new URL(requestUrl, "http://local").pathname;
+  return safeFile(SRC_DIR, pathname === "/" ? "/index.html" : pathname);
+}
+
+function safeApartmentAssetFile(requestUrl) {
+  const pathname = new URL(requestUrl, "http://local").pathname;
+  if (!pathname.startsWith("/assets/apartment/")) return null;
+  return safeFile(APARTMENT_DATA_DIR, pathname.slice("/assets/apartment/".length));
+}
+
+function serveFile(res, filePath) {
+  fssync.stat(filePath, (statErr, stat) => {
+    if (statErr || !stat.isFile()) {
+      res.writeHead(404);
+      res.end("not found");
+      return;
+    }
+    res.writeHead(200, {
+      "Content-Type": contentType(filePath),
+      "Cache-Control": "no-store",
+    });
+    fssync.createReadStream(filePath).pipe(res);
+  });
 }
 
 function startStaticServer() {
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
+      const assetPath = safeApartmentAssetFile(req.url || "/");
+      if (assetPath && fssync.existsSync(assetPath)) {
+        serveFile(res, assetPath);
+        return;
+      }
       const filePath = safeAppFile(req.url || "/");
       if (!filePath) {
         res.writeHead(403);
         res.end("forbidden");
         return;
       }
-      fssync.readFile(filePath, (err, data) => {
-        if (err) {
-          res.writeHead(404);
-          res.end("not found");
-          return;
-        }
-        res.writeHead(200, {
-          "Content-Type": contentType(filePath),
-          "Cache-Control": "no-store",
-        });
-        res.end(data);
-      });
+      serveFile(res, filePath);
     });
     server.on("error", reject);
     server.listen(0, "127.0.0.1", () => {
@@ -524,10 +547,20 @@ async function ensureVisualHealth(page, context) {
 }
 
 async function ensureApartmentFit(page, context) {
-  await page.waitForFunction(() => !!window.__havApartmentDebug?.apartmentFit?.(), null, { timeout: 6000 });
+  await page.waitForFunction(() => !!window.__havApartmentDebug?.apartmentFit?.(), null, { timeout: APARTMENT_FIT_TIMEOUT_MS });
   const fit = await page.evaluate(() => window.__havApartmentDebug?.apartmentFit?.());
   if (!fit?.ok) throw new Error(`${context}: ${apartmentFitDetail(fit)}`);
   return apartmentFitDetail(fit);
+}
+
+async function ensureNoApartmentModeError(page, mode, context) {
+  const phrase = mode === "mesh" ? "mesh unavailable" : "photo unavailable";
+  const result = await page.evaluate((needle) => {
+    const text = String(document.body?.textContent || "").toLowerCase();
+    return { phrase: needle, found: text.includes(needle) };
+  }, phrase);
+  if (result.found) throw new Error(`${context}: ${result.phrase}`);
+  return `${mode} mode rendered without ${result.phrase}`;
 }
 
 async function ensureCameraSnapLocked(page, context) {
@@ -933,7 +966,9 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors, prof
       await step("16-apartment-mesh", "Apartment mesh mode", async () => {
         await page.evaluate(() => window.__havApartmentDebug?.setMode?.("mesh"));
         await page.waitForTimeout(2600);
-        return ensureApartmentFit(page, "desktop apartment mesh fit");
+        const fit = await ensureApartmentFit(page, "desktop apartment mesh fit");
+        const mode = await ensureNoApartmentModeError(page, "mesh", "desktop apartment mesh mode");
+        return `${fit}; ${mode}`;
       });
 
       await step("17-apartment-fly-camera", "Apartment fly-to-camera/live view", async () => {
@@ -1024,7 +1059,9 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors, prof
     await step("20-apartment-mesh", "Apartment mesh mode", async () => {
       await page.evaluate(() => window.__havApartmentDebug?.setMode?.("mesh"));
       await page.waitForTimeout(2600);
-      return ensureApartmentFit(page, "apartment mesh fit");
+      const fit = await ensureApartmentFit(page, "apartment mesh fit");
+      const mode = await ensureNoApartmentModeError(page, "mesh", "apartment mesh mode");
+      return `${fit}; ${mode}`;
     });
 
     await step("21-apartment-fly-camera", "Apartment fly-to-camera/live view", async () => {
@@ -1372,10 +1409,21 @@ async function cdpEnsureVisualHealth(client, context) {
 }
 
 async function cdpEnsureApartmentFit(client, context) {
-  await cdpWaitFor(client, "!!window.__havApartmentDebug?.apartmentFit?.()", 6000);
+  await cdpWaitFor(client, "!!window.__havApartmentDebug?.apartmentFit?.()", APARTMENT_FIT_TIMEOUT_MS);
   const fit = await cdpEval(client, "window.__havApartmentDebug?.apartmentFit?.()", true);
   if (!fit?.ok) throw new Error(`${context}: ${apartmentFitDetail(fit)}`);
   return apartmentFitDetail(fit);
+}
+
+async function cdpEnsureNoApartmentModeError(client, mode, context) {
+  const phrase = mode === "mesh" ? "mesh unavailable" : "photo unavailable";
+  const result = await cdpEval(client, `(() => {
+    const needle = ${JSON.stringify(phrase)};
+    const text = String(document.body && document.body.textContent || "").toLowerCase();
+    return { phrase: needle, found: text.includes(needle) };
+  })()`, true);
+  if (result.found) throw new Error(`${context}: ${result.phrase}`);
+  return `${mode} mode rendered without ${result.phrase}`;
 }
 
 async function cdpEnsureCameraSnapLocked(client, context) {
@@ -1770,7 +1818,9 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors, profile = 
       await step("16-apartment-mesh", "Apartment mesh mode", async () => {
         await cdpEval(client, "window.__havApartmentDebug && window.__havApartmentDebug.setMode('mesh')", true);
         await cdpDelay(2600);
-        return cdpEnsureApartmentFit(client, "desktop apartment mesh fit");
+        const fit = await cdpEnsureApartmentFit(client, "desktop apartment mesh fit");
+        const mode = await cdpEnsureNoApartmentModeError(client, "mesh", "desktop apartment mesh mode");
+        return `${fit}; ${mode}`;
       });
 
       await step("17-apartment-fly-camera", "Apartment fly-to-camera/live view", async () => {
@@ -1869,7 +1919,9 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors, profile = 
     await step("20-apartment-mesh", "Apartment mesh mode", async () => {
       await cdpEval(client, "window.__havApartmentDebug && window.__havApartmentDebug.setMode('mesh')", true);
       await cdpDelay(2600);
-      return cdpEnsureApartmentFit(client, "apartment mesh fit");
+      const fit = await cdpEnsureApartmentFit(client, "apartment mesh fit");
+      const mode = await cdpEnsureNoApartmentModeError(client, "mesh", "apartment mesh mode");
+      return `${fit}; ${mode}`;
     });
 
     await step("21-apartment-fly-camera", "Apartment fly-to-camera/live view", async () => {

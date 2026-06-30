@@ -216,6 +216,10 @@ function AptUndistortedFeed({ src, snapshotSrc, snapshotIntervalMs = 0, alt, int
   const [frameSrc, setFrameSrc] = useState(src);
   const warpedReadyRef = useRef(false);
   const rawSeenRef = useRef(false);
+  const publishFrameRef = useRef(null);
+  const refreshTimerRef = useRef(0);
+  const loadWatchdogRef = useRef(0);
+  const frameRequestRef = useRef(0);
   const useSnapshots = !!(snapshotSrc && snapshotIntervalMs > 0);
 
   const K = intrinsics && intrinsics.K;
@@ -229,12 +233,59 @@ function AptUndistortedFeed({ src, snapshotSrc, snapshotIntervalMs = 0, alt, int
     rawSeenRef.current = false;
     onStatus?.("connecting");
     const base = useSnapshots ? snapshotSrc : src;
-    const publish = () => setFrameSrc(useSnapshots ? aptCacheBust(base, Date.now()) : base);
-    publish();
-    if (!useSnapshots) return undefined;
-    const timer = setInterval(publish, Math.max(350, snapshotIntervalMs));
-    return () => clearInterval(timer);
+    const clearTimers = () => {
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+      if (loadWatchdogRef.current) clearTimeout(loadWatchdogRef.current);
+      refreshTimerRef.current = 0;
+      loadWatchdogRef.current = 0;
+    };
+    const publish = (delay = 0) => {
+      clearTimers();
+      const run = () => {
+        const frameId = ++frameRequestRef.current;
+        const next = useSnapshots ? aptCacheBust(base, Date.now()) : base;
+        setFrameSrc(next);
+        if (useSnapshots) {
+          const timeout = Math.max(12000, snapshotIntervalMs * 8);
+          loadWatchdogRef.current = setTimeout(() => {
+            if (frameRequestRef.current !== frameId) return;
+            onStatus?.("retrying");
+            publish(0);
+          }, timeout);
+        }
+      };
+      if (delay > 0) refreshTimerRef.current = setTimeout(run, delay);
+      else run();
+    };
+    publishFrameRef.current = publish;
+    publish(0);
+    return () => {
+      publishFrameRef.current = null;
+      clearTimers();
+    };
   }, [src, snapshotSrc, snapshotIntervalMs, useSnapshots, onStatus]);
+
+  const handleImageLoad = useCallback(() => {
+    if (loadWatchdogRef.current) clearTimeout(loadWatchdogRef.current);
+    loadWatchdogRef.current = 0;
+    frameRequestRef.current += 1;
+    onStatus?.(useSnapshots ? "frame" : "raw");
+    if (useSnapshots) {
+      publishFrameRef.current?.(Math.max(900, snapshotIntervalMs));
+    }
+  }, [useSnapshots, snapshotIntervalMs, onStatus]);
+
+  const handleImageError = useCallback(() => {
+    if (loadWatchdogRef.current) clearTimeout(loadWatchdogRef.current);
+    loadWatchdogRef.current = 0;
+    frameRequestRef.current += 1;
+    onStatus?.(useSnapshots ? "retrying" : "error");
+    if (useSnapshots) {
+      publishFrameRef.current?.(Math.max(1600, snapshotIntervalMs * 2));
+    } else {
+      setFallback(true);
+    }
+  }, [useSnapshots, snapshotIntervalMs, onStatus]);
 
   useEffect(() => {
     if (!wantWarp) return undefined;
@@ -396,7 +447,7 @@ function AptUndistortedFeed({ src, snapshotSrc, snapshotIntervalMs = 0, alt, int
   }, [wantWarp, src, snapshotSrc, intrinsics, useSnapshots, onStatus]);
 
   if (!wantWarp) {
-    return <img src={frameSrc} alt={alt} onLoad={() => onStatus?.(useSnapshots ? "frame" : "raw")} onError={() => onStatus?.("error")} style={style} />;
+    return <img src={frameSrc} alt={alt} onLoad={handleImageLoad} onError={handleImageError} style={style} />;
   }
   const fit = style?.objectFit || "fill";
   const frameStyle = { ...style, position: "relative", overflow: "hidden" };
@@ -411,8 +462,8 @@ function AptUndistortedFeed({ src, snapshotSrc, snapshotIntervalMs = 0, alt, int
     <div style={frameStyle}>
       <img
         ref={imgRef} src={frameSrc} alt="" aria-hidden="true" crossOrigin="anonymous"
-        onLoad={() => onStatus?.(useSnapshots ? "frame" : "raw")}
-        onError={() => { onStatus?.("error"); setFallback(true); }}
+        onLoad={handleImageLoad}
+        onError={handleImageError}
         style={{ ...fillStyle, opacity: warpedReady ? 0 : 1, pointerEvents: "none" }}
       />
       <canvas
@@ -1433,7 +1484,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
             // canvas would come back with a dead context and no warp
             src={liveFeedBase}
             snapshotSrc={liveSnapshotSrc}
-            snapshotIntervalMs={mobile ? 650 : 0}
+            snapshotIntervalMs={mobile ? 1400 : 0}
             alt={liveCam.name}
             intrinsics={liveCam.camera?.intrinsics || null}
             style={liveFeedStyle}

@@ -58,8 +58,10 @@ assert("warped camera frame appears only after first draw", APT.includes("setWar
 assert("camera alignment helper distinguishes estimated vs calibrated", APT.includes("function aptCameraAlignment") && APT.includes("camera - estimated pose"));
 assert("camera snap requires exact alignment metadata", APT.includes("const calib = alignment.exact"));
 assert("camera debug snapshot exposes alignment status", APT.includes("cameraAlignment: liveCam ? aptCameraAlignment(liveCam) : null"));
-assert("mobile live feed uses snapshot refresh fallback", APT.includes("function aptSnapshotSrc") && APT.includes("snapshotIntervalMs={mobile ? 650 : 0}"));
+assert("mobile live feed uses snapshot refresh fallback", APT.includes("function aptSnapshotSrc") && APT.includes("snapshotIntervalMs={mobile ? 1400 : 0}"));
 assert("snapshot refresh keeps the calibrated frame cache-busted", APT.includes("function aptCacheBust") && APT.includes('onStatus?.(useSnapshots ? "frame" : "raw")'));
+assert("snapshot refresh waits for image load before the next frame", APT.includes("publishFrameRef.current?.(Math.max(900, snapshotIntervalMs))") && !APT.includes("setInterval(publish"));
+assert("snapshot refresh has a slow-network retry watchdog", APT.includes("loadWatchdogRef") && APT.includes('onStatus?.("retrying")'));
 assert("camera feed maps pixels into the shared projection frame", APT.includes('objectFit: "fill"') && APT.includes('const liveFeedSettled = ["idle", "raw", "frame", "warped"].includes(liveFeedStatus);'));
 
 process.stdout.write("\napartment_photo_mobile_asset_contract_test\n");

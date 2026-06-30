@@ -17,6 +17,9 @@ const types = {
   ".las": "application/octet-stream",
 };
 
+const HEAVY_CACHE = "private, max-age=604800, stale-while-revalidate=86400";
+const METADATA_CACHE = "private, no-cache";
+
 const assetGroups = [
   { key: "points", required: true, files: ["points.ply"] },
   { key: "scan", required: true, files: ["apartment.spz", "apartment.ply"] },
@@ -98,6 +101,13 @@ function clientHasFreshCopy(req, stat, etag) {
   return Number.isFinite(since) && Math.floor(stat.mtimeMs / 1000) <= Math.floor(since / 1000);
 }
 
+function cachePolicy(file) {
+  const ext = path.extname(file).toLowerCase();
+  if (ext === ".json") return METADATA_CACHE;
+  if ([".ply", ".spz", ".glb", ".wasm", ".jpg", ".jpeg", ".png", ".webp"].includes(ext)) return HEAVY_CACHE;
+  return METADATA_CACHE;
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") {
     sendHeaders(res, 204);
@@ -135,10 +145,11 @@ const server = http.createServer(async (req, res) => {
     if (!stat.isFile()) throw new Error("not a file");
     const ext = path.extname(file).toLowerCase();
     const etag = fileEtag(stat);
+    const cache = cachePolicy(file);
     const headers = {
       "Content-Type": types[ext] || "application/octet-stream",
       "Content-Length": stat.size,
-      "Cache-Control": "private, no-cache",
+      "Cache-Control": cache,
       "ETag": etag,
       "Last-Modified": stat.mtime.toUTCString(),
       "Accept-Ranges": "bytes",

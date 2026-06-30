@@ -47,7 +47,9 @@
        the JSX loader uses (home-3d siblings re-import with it; vendor libs
        are version-dirred and deliberately cacheable). -->
   <script type="module">
-    const cb = '?cb=' + Date.now();
+    const cb = window.HG_WEB_MODE && window.__HOME_ASSET_VERSION
+      ? '?v=' + encodeURIComponent(window.__HOME_ASSET_VERSION)
+      : '?cb=' + Date.now();
     import('./home-3d/engine.js' + cb)
       .then((m) => window.__home3dResolve(m))
       .catch((e) => { console.error('[home-3d] engine load failed', e); window.Home3D.error = e; window.__home3dResolve(null); });
@@ -83,7 +85,9 @@
        produced. -->
   <script>
     (function () {
-      var cb = '?cb=' + Date.now();
+      var cb = window.HG_WEB_MODE && window.__HOME_ASSET_VERSION
+        ? '?v=' + encodeURIComponent(window.__HOME_ASSET_VERSION)
+        : '?cb=' + Date.now();
       var PREFETCH_WINDOW = 6;
       var files = [
         ['home-tauri.jsx', true],

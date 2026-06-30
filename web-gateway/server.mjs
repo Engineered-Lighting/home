@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
@@ -33,8 +34,26 @@ const PACKAGE_JSON = (() => {
     return {};
   }
 })();
+function readGitCommit() {
+  try {
+    return execFileSync("git", ["rev-parse", "--short=12", "HEAD"], {
+      cwd: ROOT,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return "local";
+  }
+}
+
 const BUILD_VERSION = process.env.HOME_BUILD_VERSION || PACKAGE_JSON.version || "0.1.0";
-const BUILD_COMMIT = process.env.HOME_BUILD_COMMIT || process.env.GITHUB_SHA || "local";
+const BUILD_COMMIT = process.env.HOME_BUILD_COMMIT || process.env.GITHUB_SHA || readGitCommit();
+const BUILD_STARTED_AT = Date.now().toString(36);
+const BUILD_ASSET_VERSION = process.env.HOME_WEB_ASSET_VERSION || `${BUILD_COMMIT}-${BUILD_STARTED_AT}`;
+const STATIC_VERSIONED_CACHE = "private, max-age=31536000, immutable";
+const STATIC_REVALIDATE_CACHE = "private, no-cache";
+const APARTMENT_HEAVY_CACHE = "private, max-age=604800, stale-while-revalidate=86400";
+const APARTMENT_METADATA_CACHE = "private, no-cache";
 
 const MIME = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -154,6 +173,7 @@ function gatewayHealth() {
     service: "home-web-gateway",
     version: BUILD_VERSION,
     commit: BUILD_COMMIT,
+    assetVersion: BUILD_ASSET_VERSION,
     host: HOST,
     port: PORT,
     auth: {
@@ -740,24 +760,74 @@ function serveFile(req, res, filePath, { cache = "no-store" } = {}) {
   });
 }
 
+function jsString(value) {
+  return JSON.stringify(String(value || ""));
+}
+
+function sendIndex(req, res, filePath) {
+  fs.readFile(filePath, "utf8", (err, html) => {
+    if (err) {
+      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("not found");
+      return;
+    }
+    const runtime = `<script>window.__HOME_BUILD_VERSION=${jsString(BUILD_VERSION)};window.__HOME_BUILD_COMMIT=${jsString(BUILD_COMMIT)};window.__HOME_ASSET_VERSION=${jsString(BUILD_ASSET_VERSION)};</script>`;
+    const body = html.includes("</head>") ? html.replace("</head>", `${runtime}\n</head>`) : `${runtime}\n${html}`;
+    const etag = `"index-${Buffer.byteLength(body).toString(16)}-${BUILD_ASSET_VERSION}"`;
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Length": Buffer.byteLength(body),
+      "Cache-Control": "no-store",
+      "ETag": etag,
+    });
+    if (req.method === "HEAD") res.end();
+    else res.end(body);
+  });
+}
+
+function isApartmentMetadata(pathname) {
+  return /\.(?:json|webmanifest)$/i.test(pathname);
+}
+
+function isApartmentHeavy(pathname) {
+  return /\.(?:ply|spz|glb|wasm|jpg|jpeg|png|webp)$/i.test(pathname);
+}
+
+function appStaticCache(pathname, parsed) {
+  if (pathname === "/index.html") return "no-store";
+  if (pathname === "/home-service-worker.js") return STATIC_REVALIDATE_CACHE;
+  if (pathname === "/site.webmanifest" || pathname.endsWith(".webmanifest")) return STATIC_REVALIDATE_CACHE;
+  if (pathname.startsWith("/vendor/")) return STATIC_VERSIONED_CACHE;
+  if (parsed.searchParams.has("v")) return STATIC_VERSIONED_CACHE;
+  return STATIC_REVALIDATE_CACHE;
+}
+
 function serveStatic(req, res) {
   const parsed = new URL(req.url, "http://home.local");
   if (parsed.pathname === "/healthz") {
-    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.writeHead(200, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+    });
     res.end(JSON.stringify(gatewayHealth()));
     return;
   }
 
   if (parsed.pathname.startsWith("/assets/apartment/")) {
     const rel = parsed.pathname.slice("/assets/apartment/".length);
+    const cache = isApartmentMetadata(parsed.pathname)
+      ? APARTMENT_METADATA_CACHE
+      : isApartmentHeavy(parsed.pathname)
+        ? APARTMENT_HEAVY_CACHE
+        : STATIC_REVALIDATE_CACHE;
     const configured = safeFile(APARTMENT_ASSETS_DIR, rel);
     if (configured && fs.existsSync(configured)) {
-      serveFile(req, res, configured, { cache: "private, no-cache" });
+      serveFile(req, res, configured, { cache });
       return;
     }
     const fallback = safeFile(FALLBACK_APARTMENT_DIR, rel);
     if (fallback) {
-      serveFile(req, res, fallback, { cache: "private, no-cache" });
+      serveFile(req, res, fallback, { cache });
       return;
     }
   }
@@ -769,12 +839,11 @@ function serveStatic(req, res) {
     res.end("bad path");
     return;
   }
-  const cache = pathname === "/index.html"
-    ? "no-store"
-    : pathname.startsWith("/vendor/")
-      ? "private, max-age=31536000, immutable"
-      : "no-cache";
-  serveFile(req, res, filePath, { cache });
+  if (pathname === "/index.html") {
+    sendIndex(req, res, filePath);
+    return;
+  }
+  serveFile(req, res, filePath, { cache: appStaticCache(pathname, parsed) });
 }
 
 function proxyHttp(req, res, route) {

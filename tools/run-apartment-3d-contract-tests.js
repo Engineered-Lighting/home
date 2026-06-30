@@ -70,6 +70,10 @@ assert("tracker fallback converts websocket bases to http", DATA.includes("funct
 assert("tracker fallback fetches live /model", DATA.includes('fetcher(`${base}/model`, { cache: "no-store" })'));
 assert("tracker model is tried before local remote cache", DATA.indexOf("const trackerModel = await fetchTrackerModel();") > 0
   && DATA.indexOf("const trackerModel = await fetchTrackerModel();") < DATA.indexOf('localStorage.getItem("apartment3d.remoteCache")'));
+assert("HA model can be enriched from tracker calibration", DATA.includes("function mergeTrackerCameraCalibration")
+  && DATA.includes("calibration_enriched: true"));
+assert("tracker enrichment is limited to cameras missing calibration", DATA.includes("const camerasNeedCalibration = (model.devices || []).some")
+  && DATA.includes("!cameraCalibrationComplete(d)"));
 
 if (fail) {
   process.stdout.write(`\n${pass} pass . ${fail} fail\n`);

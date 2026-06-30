@@ -107,6 +107,45 @@
     return null;
   }
 
+  function cameraCalibrationComplete(dev) {
+    const intr = dev?.camera?.intrinsics;
+    const extr = dev?.camera?.extrinsics;
+    return !!(intr?.K && Array.isArray(intr.image_size)
+      && extr?.q_wxyz && Array.isArray(extr.C));
+  }
+
+  function cameraKeys(dev) {
+    return [dev?.id, dev?.camera?.frigate_name, dev?.ha_entity_id].filter(Boolean);
+  }
+
+  function mergeTrackerCameraCalibration(model, trackerModel) {
+    if (!model || !Array.isArray(model.devices)
+        || !trackerModel || !Array.isArray(trackerModel.devices)) return model;
+    const byKey = new Map();
+    for (const dev of trackerModel.devices) {
+      if (!cameraCalibrationComplete(dev)) continue;
+      for (const key of cameraKeys(dev)) byKey.set(key, dev);
+    }
+    let changed = false;
+    const devices = model.devices.map((dev) => {
+      const trackerDev = cameraKeys(dev).map((key) => byKey.get(key)).find(Boolean);
+      if (!trackerDev) return dev;
+      const trackerCamera = trackerDev.camera || {};
+      const nextCamera = { ...(dev.camera || {}) };
+      let cameraChanged = false;
+      for (const key of ["intrinsics", "extrinsics"]) {
+        if (!trackerCamera[key]) continue;
+        if (JSON.stringify(nextCamera[key] || null) === JSON.stringify(trackerCamera[key])) continue;
+        nextCamera[key] = trackerCamera[key];
+        cameraChanged = true;
+      }
+      if (!cameraChanged) return dev;
+      changed = true;
+      return { ...dev, camera: nextCamera };
+    });
+    return changed ? { ...model, devices, calibration_enriched: true } : model;
+  }
+
   /* ---------------- model ---------------- */
 
   async function getModel({ endpoint, token, sim } = {}) {
@@ -135,11 +174,16 @@
               const seed = await fetchSeed();
               if (seed) return { ...model, zones: seed.zones, devices: seed.devices, seeded: true };
             }
+            const camerasNeedCalibration = (model.devices || []).some((d) =>
+              d?.camera?.frigate_name && !cameraCalibrationComplete(d));
+            const enriched = camerasNeedCalibration
+              ? mergeTrackerCameraCalibration(model, await fetchTrackerModel())
+              : model;
             // stash the last-good REMOTE doc — boot races (tauriFetch not
             // ready yet) must fall back to THIS, never to the seed, or the
             // user sees their edits "overwritten" until the next remote load
-            try { localStorage.setItem("apartment3d.remoteCache", JSON.stringify(model)); } catch (e) { /* */ }
-            return model;
+            try { localStorage.setItem("apartment3d.remoteCache", JSON.stringify(enriched)); } catch (e) { /* */ }
+            return enriched;
           }
         }
       } catch (e) { /* fall through */ }

@@ -575,6 +575,17 @@ async function ensureNoApartmentModeError(page, mode, context) {
   return `${mode} mode rendered without ${result.phrase}`;
 }
 
+async function exerciseApartmentZoom(page, context) {
+  const zoomIn = page.locator('button[aria-label="zoom in"]').first();
+  const zoomOut = page.locator('button[aria-label="zoom out"]').first();
+  if (!(await maybeClick(zoomIn, 1800))) throw new Error(`${context}: zoom in button missing`);
+  await page.waitForTimeout(350);
+  if (!(await maybeClick(zoomOut, 1800))) throw new Error(`${context}: zoom out button missing`);
+  await page.waitForTimeout(450);
+  const fit = await ensureApartmentFit(page, `${context} after zoom`);
+  return `zoom controls responded; ${fit}`;
+}
+
 async function ensureCameraSnapLocked(page, context) {
   await page.waitForFunction(() => !!window.__havApartmentDebug?.snapshot?.()?.liveCam, null, { timeout: 5000 });
   const result = await page.evaluate(() => {
@@ -776,10 +787,11 @@ async function runButtonProbes(page, buttonItems) {
     const mesh = await ensureNoApartmentModeError(page, "mesh", "apartment mesh button mode");
     await clickButtonByName(page, /^cloud$/i, 2600);
     const fit = await ensureApartmentFit(page, "apartment mode fit");
+    const zoom = await exerciseApartmentZoom(page, "apartment zoom controls");
     const detail = await ensureVisualHealth(page, "apartment mode controls");
     await clickButtonByName(page, /close/i);
     await page.waitForFunction(() => !window.__havApartmentDebug, null, { timeout: 5000 });
-    return `${detail}; ${fit}; ${photo}; ${mesh}`;
+    return `${detail}; ${fit}; ${zoom}; ${photo}; ${mesh}`;
   });
 
   await recordButtonProbe(buttonItems, "b08-remote-dialog", "Remote dialog profile buttons, test all, and close respond", async () => {
@@ -852,10 +864,11 @@ async function runDesktopButtonProbes(page, buttonItems) {
     const mesh = await ensureNoApartmentModeError(page, "mesh", "desktop apartment mesh button mode");
     await clickButtonByName(page, /^cloud$/i, 2600);
     const fit = await ensureApartmentFit(page, "desktop apartment mode fit");
+    const zoom = await exerciseApartmentZoom(page, "desktop apartment zoom controls");
     const detail = await ensureVisualHealth(page, "desktop apartment mode controls");
     await clickButtonByName(page, /close/i);
     await page.waitForFunction(() => !window.__havApartmentDebug, null, { timeout: 5000 });
-    return `${detail}; ${fit}; ${photo}; ${mesh}`;
+    return `${detail}; ${fit}; ${zoom}; ${photo}; ${mesh}`;
   });
 
   await recordButtonProbe(buttonItems, "d07-apartment-camera-buttons", "Apartment camera back returns to overview", async () => {
@@ -1458,6 +1471,17 @@ async function cdpEnsureNoApartmentModeError(client, mode, context) {
   return `${mode} mode rendered without ${result.phrase}`;
 }
 
+async function cdpExerciseApartmentZoom(client, context) {
+  let ok = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="zoom in"]')`);
+  if (!ok) throw new Error(`${context}: zoom in button missing`);
+  await cdpDelay(350);
+  ok = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="zoom out"]')`);
+  if (!ok) throw new Error(`${context}: zoom out button missing`);
+  await cdpDelay(450);
+  const fit = await cdpEnsureApartmentFit(client, `${context} after zoom`);
+  return `zoom controls responded; ${fit}`;
+}
+
 async function cdpEnsureCameraSnapLocked(client, context) {
   await cdpWaitFor(client, "!!window.__havApartmentDebug?.snapshot?.()?.liveCam", 5000);
   const result = await cdpEval(client, `(() => {
@@ -1647,10 +1671,11 @@ async function cdpRunButtonProbes(client, buttonItems) {
     const mesh = await cdpEnsureNoApartmentModeError(client, "mesh", "apartment mesh button mode");
     await cdpClickButton(client, "^cloud$", 2600);
     const fit = await cdpEnsureApartmentFit(client, "apartment mode fit");
+    const zoom = await cdpExerciseApartmentZoom(client, "apartment zoom controls");
     const detail = await cdpEnsureVisualHealth(client, "apartment mode controls");
     await cdpClickButton(client, "close", 600);
     await cdpWaitFor(client, "!window.__havApartmentDebug", 5000);
-    return `${detail}; ${fit}; ${photo}; ${mesh}`;
+    return `${detail}; ${fit}; ${zoom}; ${photo}; ${mesh}`;
   });
 
   await cdpRecordButtonProbe(buttonItems, "b08-remote-dialog", "Remote dialog profile buttons, test all, and close respond", async () => {
@@ -1722,10 +1747,11 @@ async function cdpRunDesktopButtonProbes(client, buttonItems) {
     const mesh = await cdpEnsureNoApartmentModeError(client, "mesh", "desktop apartment mesh button mode");
     await cdpClickButton(client, "^cloud$", 2600);
     const fit = await cdpEnsureApartmentFit(client, "desktop apartment mode fit");
+    const zoom = await cdpExerciseApartmentZoom(client, "desktop apartment zoom controls");
     const detail = await cdpEnsureVisualHealth(client, "desktop apartment mode controls");
     await cdpClickButton(client, "close", 600);
     await cdpWaitFor(client, "!window.__havApartmentDebug", 5000);
-    return `${detail}; ${fit}; ${photo}; ${mesh}`;
+    return `${detail}; ${fit}; ${zoom}; ${photo}; ${mesh}`;
   });
 
   await cdpRecordButtonProbe(buttonItems, "d07-apartment-camera-buttons", "Apartment camera back returns to overview", async () => {

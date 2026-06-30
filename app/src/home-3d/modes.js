@@ -71,6 +71,7 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
         const { SplatMesh, SparkRenderer } = await import('@sparkjsdev/spark');
         if (scene && renderer && !state.sparkRenderer) {
             const sr = new SparkRenderer({ renderer });
+            sr.visible = false;
             sr.frustumCulled = false;
             sr.traverse((o) => { o.frustumCulled = false; });
             // Spark encodes splats relative to the SparkRenderer origin and its
@@ -163,7 +164,12 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
     }
 
     function visibleFor(mode) {
-        if (state.splat) state.splat.visible = mode === 'splat' || !!state.fading;
+        const splatActive = mode === 'splat' || !!state.fading;
+        if (state.splat) {
+            state.splat.visible = splatActive;
+            if (!splatActive && 'opacity' in state.splat) state.splat.opacity = 0;
+        }
+        if (state.sparkRenderer) state.sparkRenderer.visible = splatActive;
         if (state.mesh) state.mesh.visible = mode === 'mesh';
         setPointsVisible(mode === 'points' || !!state.fading);
     }
@@ -225,7 +231,8 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
 
         /* explicit Spark tick — belt and suspenders over its autoUpdate */
         tickSpark(cam, time) {
-            if (!state.sparkRenderer || (!state.splat && !state.fading)) return;
+            const splatActive = !!state.fading || state.mode === 'splat' || state.targetMode === 'splat';
+            if (!state.sparkRenderer || !splatActive || (!state.splat && !state.fading)) return;
             try {
                 state.sparkRenderer.update({ scene, camera: cam, time });
             } catch (e) { /* */ }
@@ -238,6 +245,7 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
             return {
                 splat: !!state.splat,
                 splatVisible: state.splat ? state.splat.visible : null,
+                sparkVisible: state.sparkRenderer ? state.sparkRenderer.visible : null,
                 numSplats: state.splat ? (state.splat.numSplats ?? null) : null,
                 srParent: state.sparkRenderer ? (state.sparkRenderer.parent?.type || 'none') : 'none',
             };

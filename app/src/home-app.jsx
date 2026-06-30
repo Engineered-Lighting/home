@@ -431,28 +431,41 @@ function HomeHeader({
               </svg>
             </button>
             {menuOpen && (
-              <div
-                role="menu"
-                style={{
-                  position: "absolute",
-                  top: "calc(100% + 7px)",
-                  right: 0,
-                  zIndex: 80,
-                  width: "min(230px, calc(100vw - 24px))",
-                  maxHeight: "min(360px, calc(100dvh - 96px))",
-                  overflowY: "auto",
-                  background: "var(--hg-bg-1)",
-                  border: "1px solid var(--hg-border)",
-                  borderRadius: 7,
-                  boxShadow: "0 18px 52px rgba(0,0,0,0.48)",
-                }}
-              >
-                {onOpenPeople && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenPeople)}>people</button>}
-                {onOpenIntelligence && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenIntelligence)}>intelligence</button>}
-                {onOpenVideoLabeler && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenVideoLabeler)}>video labeler</button>}
-                {onToggleTheme && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onToggleTheme)}>{theme === "dark" ? "light mode" : "dark mode"}</button>}
-                {sim?.active && onOpenSimulationControls && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenSimulationControls)}>simulation</button>}
-              </div>
+              <>
+                <div
+                  aria-hidden="true"
+                  onClick={() => setMenuOpen(false)}
+                  style={{
+                    position: "fixed",
+                    inset: 0,
+                    zIndex: 79,
+                    cursor: "default",
+                    background: "transparent",
+                  }}
+                />
+                <div
+                  role="menu"
+                  style={{
+                    position: "absolute",
+                    top: "calc(100% + 7px)",
+                    right: 0,
+                    zIndex: 80,
+                    width: "min(230px, calc(100vw - 24px))",
+                    maxHeight: "min(360px, calc(100dvh - 96px))",
+                    overflowY: "auto",
+                    background: "var(--hg-bg-1)",
+                    border: "1px solid var(--hg-border)",
+                    borderRadius: 7,
+                    boxShadow: "0 18px 52px rgba(0,0,0,0.48)",
+                  }}
+                >
+                  {onOpenPeople && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenPeople)}>people</button>}
+                  {onOpenIntelligence && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenIntelligence)}>intelligence</button>}
+                  {onOpenVideoLabeler && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenVideoLabeler)}>video labeler</button>}
+                  {onToggleTheme && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onToggleTheme)}>{theme === "dark" ? "light mode" : "dark mode"}</button>}
+                  {sim?.active && onOpenSimulationControls && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenSimulationControls)}>simulation</button>}
+                </div>
+              </>
             )}
           </span>
         )}

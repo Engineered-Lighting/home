@@ -856,6 +856,14 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         const dev = (model.devices || []).find((d) => d.type === "camera" || d.camera?.frigate_name);
         return dev ? flyToDeviceView(dev) : false;
       },
+      flyFirstCalibratedCamera: () => {
+        const dev = (model.devices || []).find((d) =>
+          (d.type === "camera" || d.camera?.frigate_name) &&
+          d.camera?.intrinsics &&
+          d.camera?.extrinsics
+        );
+        return dev ? flyToDeviceView(dev) : false;
+      },
     };
     window.__havApartmentDebug = api;
     return () => {
@@ -870,7 +878,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const hoverDevice = (model.devices || []).find((d) => d.id === hoverId) || null;
   const cameraTop = inCamPose || !!liveCam;
   const cameraSnap = cameraTop && !calibCam;
-  const mobileCameraSnap = mobile && cameraSnap;
+  const mobileCameraSnap = mobile && cameraTop;
+  const hideViewHud = mobile ? cameraTop : cameraSnap;
   const topPad = mobile ? "calc(10px + env(safe-area-inset-top, 0px)) 12px 8px" : "12px 18px";
   const bottomPad = mobile ? "10px 10px calc(12px + env(safe-area-inset-bottom, 0px))" : "14px 18px";
   const liveFeedStyle = mobile
@@ -1011,7 +1020,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
       )}
 
       {/* bottom HUD (view mode) */}
-      {!editing && !cameraSnap && (
+      {!editing && !hideViewHud && (
         <div style={{
           position: "absolute", left: 0, right: 0, bottom: 0, display: "flex",
           alignItems: mobile ? "stretch" : "flex-end",

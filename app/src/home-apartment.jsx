@@ -83,10 +83,10 @@ function AptHudButton({ label, onClick, active, disabled, title, mobile = readAp
         background: active ? "var(--hg-ice)" : "rgba(10,12,16,0.55)",
         border: "1px solid " + (active ? "var(--hg-ice)" : "var(--hg-border-soft)"),
         color: active ? "#0b0d11" : (disabled ? "var(--hg-fg-5)" : "var(--hg-fg-1)"),
-        minHeight: mobile ? 40 : "auto",
+        minHeight: mobile ? 38 : "auto",
         minWidth: mobile ? 44 : "auto",
-        padding: mobile ? "8px 11px" : "5px 12px", fontFamily: APT_FONT_MONO, fontSize: mobile ? 10 : 10.5,
-        letterSpacing: "0.1em", textTransform: "lowercase",
+        padding: mobile ? "7px 10px" : "5px 12px", fontFamily: APT_FONT_MONO, fontSize: mobile ? 9.5 : 10.5,
+        letterSpacing: mobile ? "0.08em" : "0.1em", textTransform: "lowercase",
         cursor: disabled ? "default" : "pointer", backdropFilter: "blur(6px)",
       }}
     >{label}</button>
@@ -880,15 +880,15 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const cameraSnap = cameraTop && !calibCam;
   const mobileCameraSnap = mobile && cameraTop;
   const hideViewHud = mobile ? cameraTop : cameraSnap;
-  const topPad = mobile ? "calc(10px + env(safe-area-inset-top, 0px)) 12px 8px" : "12px 18px";
-  const bottomPad = mobile ? "10px 10px calc(12px + env(safe-area-inset-bottom, 0px))" : "14px 18px";
+  const topPad = mobile ? "calc(8px + env(safe-area-inset-top, 0px)) 10px 8px" : "12px 18px";
+  const bottomPad = mobile ? "8px 10px calc(10px + env(safe-area-inset-bottom, 0px))" : "14px 18px";
   const liveFeedStyle = mobile
     ? {
         width: "100vw",
         height: "100dvh",
         maxWidth: "none",
         maxHeight: "none",
-        objectFit: "cover",
+        objectFit: "contain",
         background: "#000",
         boxShadow: "none",
         opacity: 0.88,

@@ -542,7 +542,19 @@ async function recordButtonProbe(buttonItems, id, detail, fn) {
 
 async function ensureVisualHealth(page, context) {
   const health = await visualHealth(page);
-  if (!health.ok) throw new Error(`${context}: ${visualHealthDetail(health)}`);
+  if (!health.ok) {
+    try {
+      const id = String(context || "visual-health")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 80) || "visual-health";
+      const outDir = path.join(REPO, "tools", "reports", "mobile-web", "_debug");
+      await fs.mkdir(outDir, { recursive: true });
+      await page.screenshot({ path: path.join(outDir, `${id}.png`), fullPage: false });
+    } catch {}
+    throw new Error(`${context}: ${visualHealthDetail(health)}`);
+  }
   return visualHealthDetail(health);
 }
 
@@ -776,7 +788,7 @@ async function runButtonProbes(page, buttonItems) {
     if (!(await maybeClick(remote, 1800))) throw new Error("remote profile button missing");
     await expectVisibleText(page, /Remote access \/ Travel readiness/i);
     await clickButtonByName(page, /Home LAN/i);
-    await clickButtonByName(page, /Remote via Tailscale/i);
+    await clickButtonByName(page, /Remote via Tailscale|tailscale|tail/i);
     await clickButtonByName(page, /^Custom$/i);
     await clickButtonByName(page, /Home LAN/i);
     await clickButtonByName(page, /test all/i, 2500);
@@ -803,7 +815,7 @@ async function runDesktopButtonProbes(page, buttonItems) {
     if (!(await maybeClick(remote, 1800))) throw new Error("remote profile button missing");
     await expectVisibleText(page, /Remote access \/ Travel readiness/i);
     await clickButtonByName(page, /Home LAN/i);
-    await clickButtonByName(page, /Remote via Tailscale/i);
+    await clickButtonByName(page, /Remote via Tailscale|tailscale|tail/i);
     await clickButtonByName(page, /^Custom$/i);
     await clickButtonByName(page, /Home LAN/i);
     await clickButtonByName(page, /test all/i, 2500);
@@ -1412,7 +1424,19 @@ async function cdpVisualHealth(client) {
 
 async function cdpEnsureVisualHealth(client, context) {
   const health = await cdpVisualHealth(client);
-  if (!health.ok) throw new Error(`${context}: ${visualHealthDetail(health)}`);
+  if (!health.ok) {
+    try {
+      const id = String(context || "visual-health")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 80) || "visual-health";
+      const outDir = path.join(REPO, "tools", "reports", "mobile-web", "_debug");
+      await fs.mkdir(outDir, { recursive: true });
+      await cdpScreenshot(client, outDir, id);
+    } catch {}
+    throw new Error(`${context}: ${visualHealthDetail(health)}`);
+  }
   return visualHealthDetail(health);
 }
 
@@ -1636,7 +1660,7 @@ async function cdpRunButtonProbes(client, buttonItems) {
     await cdpDelay(450);
     await cdpExpectText(client, "Remote access / Travel readiness");
     await cdpClickButton(client, "Home LAN");
-    await cdpClickButton(client, "Remote via Tailscale");
+    await cdpClickButton(client, "Remote via Tailscale|tailscale|tail");
     await cdpClickButton(client, "^Custom$");
     await cdpClickButton(client, "Home LAN");
     await cdpClickButton(client, "test all", 700);
@@ -1663,7 +1687,7 @@ async function cdpRunDesktopButtonProbes(client, buttonItems) {
     await cdpDelay(450);
     await cdpExpectText(client, "Remote access / Travel readiness");
     await cdpClickButton(client, "Home LAN");
-    await cdpClickButton(client, "Remote via Tailscale");
+    await cdpClickButton(client, "Remote via Tailscale|tailscale|tail");
     await cdpClickButton(client, "^Custom$");
     await cdpClickButton(client, "Home LAN");
     await cdpClickButton(client, "test all", 700);

@@ -14,15 +14,27 @@ const { useState, useEffect, useRef, useCallback } = React;
 const CARD_FONT_MONO = '"Geist Mono", "JetBrains Mono", monospace';
 const CARD_FONT_SANS = '"Geist", "Inter", sans-serif';
 
+function aptCardViewport() {
+  if (typeof window === "undefined") return { width: 1024, height: 768, mobile: false };
+  const width = window.innerWidth || 1024;
+  const height = window.innerHeight || 768;
+  return { width, height, mobile: width < 700 };
+}
+
 function AptDeviceLabel({ device, screen, dim }) {
   if (!screen || !screen.visible) return null;
+  const vp = aptCardViewport();
+  const x = vp.mobile ? Math.min(Math.max(screen.x, 54), Math.max(54, vp.width - 54)) : screen.x;
   return (
     <div style={{
-      position: "absolute", left: screen.x, top: screen.y,
+      position: "absolute", left: x, top: screen.y,
       transform: "translate(-50%, -130%)", pointerEvents: "none",
-      fontFamily: CARD_FONT_MONO, fontSize: 9.5, letterSpacing: "0.08em",
+      fontFamily: CARD_FONT_MONO, fontSize: vp.mobile ? 8.5 : 9.5, letterSpacing: vp.mobile ? "0.06em" : "0.08em",
       color: "var(--hg-fg-2)", opacity: dim ? 0.55 : 1,
       textShadow: "0 1px 4px rgba(0,0,0,0.9)", whiteSpace: "nowrap",
+      maxWidth: vp.mobile ? "46vw" : "none",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
       textTransform: "lowercase",
     }}>{device.name}</div>
   );
@@ -30,16 +42,22 @@ function AptDeviceLabel({ device, screen, dim }) {
 
 function AptPersonLabel({ track, screen }) {
   if (!track || !screen || !screen.visible) return null;
+  const vp = aptCardViewport();
+  const x = vp.mobile ? Math.min(Math.max(screen.x, 86), Math.max(86, vp.width - 86)) : screen.x;
   const name = (track.person && (track.conf ?? 1) > 0.5) ? track.person : null;
   const act = track.activity && (track.activity_conf ?? 0) > 0.6 ? track.activity.replace(/_/g, " ") : null;
   const text = [name || "someone", act].filter(Boolean).join(" · ");
   return (
     <div style={{
-      position: "absolute", left: screen.x, top: screen.y,
-      transform: "translate(-50%, -240%)", pointerEvents: "none",
-      fontFamily: CARD_FONT_MONO, fontSize: 10.5, letterSpacing: "0.08em",
+      position: "absolute", left: x, top: screen.y,
+      transform: vp.mobile ? "translate(-50%, -205%)" : "translate(-50%, -240%)", pointerEvents: "none",
+      fontFamily: CARD_FONT_MONO, fontSize: vp.mobile ? 9 : 10.5, letterSpacing: vp.mobile ? "0.055em" : "0.08em",
       color: "var(--hg-ice)", textShadow: "0 1px 6px rgba(0,0,0,0.9)",
-      whiteSpace: "nowrap", textTransform: "lowercase",
+      whiteSpace: "nowrap",
+      maxWidth: vp.mobile ? "58vw" : "none",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      textTransform: "lowercase",
     }}>{text}</div>
   );
 }
@@ -47,12 +65,17 @@ function AptPersonLabel({ track, screen }) {
 /* room-level presence chip (pos unknown — the honesty ladder's middle rung) */
 function AptRoomChip({ track }) {
   if (!track || track.pos || !track.room) return null;
+  const vp = aptCardViewport();
   return (
     <div style={{
-      position: "absolute", left: 18, bottom: 92,
-      fontFamily: CARD_FONT_MONO, fontSize: 10, letterSpacing: "0.1em",
+      position: "absolute", left: vp.mobile ? 12 : 18, bottom: vp.mobile ? "calc(78px + env(safe-area-inset-bottom, 0px))" : 92,
+      maxWidth: vp.mobile ? "calc(100vw - 24px)" : "none",
+      fontFamily: CARD_FONT_MONO, fontSize: vp.mobile ? 9 : 10, letterSpacing: vp.mobile ? "0.07em" : "0.1em",
       color: "var(--hg-ice)", border: "1px solid var(--hg-border-soft)",
       background: "rgba(10,12,16,0.75)", padding: "5px 10px",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
       textTransform: "lowercase",
     }}>
       {(track.person || "someone")} · in {String(track.room).replace(/_/g, " ")}
@@ -77,8 +100,10 @@ function AptControlCard({ device, state, screen, bounds, onClose, onService, onF
 
   const maxWidth = bounds?.width || window.innerWidth;
   const maxHeight = bounds?.height || window.innerHeight;
-  const x = Math.min(Math.max(screen.x + 18, 10), Math.max(10, maxWidth - 280));
-  const y = Math.min(Math.max(screen.y - 30, 56), Math.max(56, maxHeight - 220));
+  const mobile = maxWidth < 700;
+  const cardWidth = mobile ? Math.min(300, Math.max(240, maxWidth - 20)) : 260;
+  const x = Math.min(Math.max(screen.x + (mobile ? 10 : 18), 10), Math.max(10, maxWidth - cardWidth - 10));
+  const y = Math.min(Math.max(screen.y - 30, mobile ? 74 : 56), Math.max(mobile ? 74 : 56, maxHeight - (mobile ? 260 : 220)));
 
   const row = { display: "flex", alignItems: "center", gap: 8, marginTop: 8 };
   const btn = (label, onClick, primary) => (
@@ -93,9 +118,11 @@ function AptControlCard({ device, state, screen, bounds, onClose, onService, onF
 
   return (
     <div style={{
-      position: "absolute", left: x, top: y, width: 260,
+      position: "absolute", left: x, top: y, width: cardWidth,
+      maxHeight: mobile ? "min(58dvh, 320px)" : "none",
+      overflowY: mobile ? "auto" : "visible",
       background: "var(--hg-bg-1)", border: "1px solid var(--hg-border)",
-      padding: "12px 14px", zIndex: 5, boxShadow: "0 8px 28px rgba(0,0,0,0.5)",
+      padding: mobile ? "10px 12px" : "12px 14px", zIndex: 5, boxShadow: "0 8px 28px rgba(0,0,0,0.5)",
     }}>
       <div style={{ display: "flex", alignItems: "baseline" }}>
         <span style={{ fontFamily: CARD_FONT_SANS, fontSize: 13, color: "var(--hg-fg-0)" }}>

@@ -5,7 +5,7 @@
  * home state and must stay network-bound.
  */
 
-const CACHE_NAME = "home-web-static-v1";
+const CACHE_NAME = "home-web-static-v2";
 const SAME_ORIGIN_STATIC = /\.(?:js|jsx|css|png|jpg|jpeg|webp|svg|ico|webmanifest|wasm)$/i;
 const HEAVY_APARTMENT_ASSET = /^\/assets\/apartment\/.*\.(?:ply|spz|glb|wasm|jpg|jpeg|png|webp)$/i;
 const NEVER_CACHE_PREFIXES = [
@@ -24,6 +24,15 @@ self.addEventListener("activate", (event) => {
     const names = await caches.keys();
     await Promise.all(names.filter((name) => name !== CACHE_NAME).map((name) => caches.delete(name)));
     await self.clients.claim();
+    const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    await Promise.all(clients.map(async (client) => {
+      try {
+        const url = new URL(client.url);
+        if (url.origin !== self.location.origin) return;
+        if (url.pathname.startsWith("/proxy/") || url.pathname.startsWith("/api/")) return;
+        await client.navigate(client.url);
+      } catch (e) { /* best-effort stale app refresh */ }
+    }));
   })());
 });
 

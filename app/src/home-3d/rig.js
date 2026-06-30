@@ -13,6 +13,7 @@ const AZ_STOPS = 8;
 const ELEVATIONS = [35, 60];          // degrees
 const ZOOM_FACTORS = [1.0, 0.55, 0.3]; // × fitDistance
 const HOME = { az: 1, el: 0, zoom: 0 };
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
 
 const MAX_PREVIEW = THREE.MathUtils.degToRad(20);
 const DRAG_RESIST = 0.35;
@@ -23,6 +24,55 @@ const TAU_PIVOT = 0.55;               // s (EL 0.003/frame ≈ 5.5 s is too drea
 const TAU_DRIFT = 1.1;
 
 const easeInOutCubic = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+
+function boxCorners(box) {
+    const min = box.min, max = box.max;
+    return [
+        new THREE.Vector3(min.x, min.y, min.z),
+        new THREE.Vector3(min.x, min.y, max.z),
+        new THREE.Vector3(min.x, max.y, min.z),
+        new THREE.Vector3(min.x, max.y, max.z),
+        new THREE.Vector3(max.x, min.y, min.z),
+        new THREE.Vector3(max.x, min.y, max.z),
+        new THREE.Vector3(max.x, max.y, min.z),
+        new THREE.Vector3(max.x, max.y, max.z),
+    ];
+}
+
+function fitViewport(aspect) {
+    // Portrait mobile has a very narrow horizontal FOV and persistent top/bottom
+    // HUD. Keep the whole apartment inside the usable center band instead of
+    // reusing the desktop's tight dollhouse crop.
+    if (aspect < 0.55) return { safeX: 0.82, safeY: 0.58, extra: 1.04 };
+    if (aspect < 0.78) return { safeX: 0.86, safeY: 0.64, extra: 1.02 };
+    return { safeX: 0.94, safeY: 0.84, extra: 1.0 };
+}
+
+function projectedFitDistance(box, target, az, el, fovV, aspect, safeX, safeY) {
+    const dir = new THREE.Vector3(
+        Math.cos(el) * Math.sin(az),
+        Math.sin(el),
+        Math.cos(el) * Math.cos(az),
+    ).normalize();
+    const forward = dir.clone().multiplyScalar(-1);
+    let right = forward.clone().cross(WORLD_UP);
+    if (right.lengthSq() < 1e-6) right = new THREE.Vector3(1, 0, 0);
+    right.normalize();
+    const up = right.clone().cross(forward).normalize();
+    const tanV = Math.tan(fovV / 2) * safeY;
+    const tanH = Math.tan(fovV / 2) * aspect * safeX;
+    let required = 0;
+    for (const corner of boxCorners(box)) {
+        const rel = corner.clone().sub(target);
+        const along = rel.dot(forward);
+        required = Math.max(
+            required,
+            Math.abs(rel.dot(right)) / Math.max(1e-6, tanH) - along,
+            Math.abs(rel.dot(up)) / Math.max(1e-6, tanV) - along,
+        );
+    }
+    return Math.max(1, required);
+}
 
 export function createRig(camera) {
     const state = {
@@ -60,11 +110,39 @@ export function createRig(camera) {
         };
     }
 
+    function applyOrbitPose() {
+        const p = state.pivot;
+        const az = cur.az + state.previewAz;
+        const el = THREE.MathUtils.clamp(cur.el + state.previewEl, 0.05, Math.PI / 2 - 0.02);
+        const r = cur.radius;
+        const t = state.target;
+        camera.position.set(
+            t.x + r * Math.cos(el) * Math.sin(az),
+            t.y + r * Math.sin(el),
+            t.z + r * Math.cos(el) * Math.cos(az),
+        );
+        camera.lookAt(t);
+        camera.rotateY(p.dx);
+        camera.rotateX(p.dy);
+        camera.updateMatrixWorld(true);
+    }
+
     function goTo({ az = state.az, el = state.el, zoom = state.zoom, dur = 450 }) {
         state.az = ((az % AZ_STOPS) + AZ_STOPS) % AZ_STOPS;
         state.el = THREE.MathUtils.clamp(el, 0, ELEVATIONS.length - 1);
         state.zoom = THREE.MathUtils.clamp(zoom, 0, ZOOM_FACTORS.length - 1);
-        startTween(azRad(state.az), elRad(state.el), zoomRadius(state.zoom), dur);
+        const toAz = azRad(state.az);
+        const toEl = elRad(state.el);
+        const toRadius = zoomRadius(state.zoom);
+        if (dur <= 0) {
+            tween = null;
+            cur.az = toAz;
+            cur.el = toEl;
+            cur.radius = toRadius;
+            applyOrbitPose();
+        } else {
+            startTween(toAz, toEl, toRadius, dur);
+        }
     }
 
     const rig = {
@@ -75,18 +153,29 @@ export function createRig(camera) {
         stepZoom(dir, dur = 350) { if (!state.locked) goTo({ zoom: state.zoom + dir, dur }); },
         snapHome(dur = 500) { if (!state.locked) goTo({ ...HOME, dur }); },
 
-        /* Fit the apartment bounds (world space). Called once assets load.
-         * 0.85 (not a "safe" 1.1+): the apartment is a flat slab, so the
-         * bounding-sphere fit massively over-distances — verified visually. */
-        fitBounds(box3) {
+        /* Fit the apartment bounds (world space). Desktop keeps the established
+         * tight dollhouse crop; portrait mobile uses projected box corners so
+         * the whole apartment lands inside the usable HUD-safe viewport. */
+        fitBounds(box3, { dur = 700 } = {}) {
             const sphere = box3.getBoundingSphere(new THREE.Sphere());
             const fovV = THREE.MathUtils.degToRad(camera.fov);
             const fovH = 2 * Math.atan(Math.tan(fovV / 2) * camera.aspect);
-            const fit = (sphere.radius * 0.85) / Math.sin(Math.min(fovV, fovH) / 2);
-            state.fitDistance = fit;
             state.target.copy(sphere.center);
             state.target.y = Math.min(Math.max(0.9, sphere.center.y * 0.6), sphere.center.y);
-            goTo({ dur: 700 });
+            const viewport = fitViewport(camera.aspect || 1);
+            const sphereFit = (sphere.radius * 0.85) / Math.sin(Math.min(fovV, fovH) / 2);
+            const viewFit = projectedFitDistance(
+                box3,
+                state.target,
+                azRad(state.az),
+                elRad(state.el),
+                fovV,
+                camera.aspect || 1,
+                viewport.safeX,
+                viewport.safeY,
+            );
+            state.fitDistance = Math.max(sphereFit, viewFit) * viewport.extra;
+            goTo({ zoom: HOME.zoom, dur });
         },
 
         /* pointer-driven previews (rubber band) ------------------------------ */
@@ -160,18 +249,7 @@ export function createRig(camera) {
             p.dx += (p.cx - p.dx) * k2;
             p.dy += (p.cy - p.dy) * k2;
 
-            const az = cur.az + state.previewAz;
-            const el = THREE.MathUtils.clamp(cur.el + state.previewEl, 0.05, Math.PI / 2 - 0.02);
-            const r = cur.radius;
-            const t = state.target;
-            camera.position.set(
-                t.x + r * Math.cos(el) * Math.sin(az),
-                t.y + r * Math.sin(el),
-                t.z + r * Math.cos(el) * Math.cos(az),
-            );
-            camera.lookAt(t);
-            camera.rotateY(p.dx);
-            camera.rotateX(p.dy);
+            applyOrbitPose();
         },
 
         isTweening() { return !!tween; },
@@ -234,8 +312,17 @@ export function createRig(camera) {
             poseTween = null;
             heldPose = null;
             state.locked = false;
+            state.previewAz = 0;
+            state.previewEl = 0;
+            state.pivot.tx = 0; state.pivot.ty = 0;
+            state.pivot.cx = 0; state.pivot.cy = 0;
+            state.pivot.dx = 0; state.pivot.dy = 0;
+            cur.az = azRad(state.az);
+            cur.el = elRad(state.el);
+            cur.radius = zoomRadius(state.zoom);
             camera.fov = BASE_FOV;
             camera.updateProjectionMatrix();
+            applyOrbitPose();
         },
     };
     return rig;

@@ -92,7 +92,7 @@ const FEATURE_MATRIX = [
   ["16-spatial", "Spatial map drawer", "Map drawer opens without trapping or clipping the input."],
   ["17-look", "Look drawer", "Vision prompt drawer opens and fits the viewport."],
   ["18-apartment-cloud", "Apartment cloud mode", "3D Apartment opens with the full apartment visible inside the mobile safe viewport."],
-  ["19-apartment-photo", "Apartment photo mode", "Photo/splat mode keeps the full apartment visible, or falls back with a clear asset error."],
+  ["19-apartment-photo", "Apartment photo mode", "Photo/splat mode renders the real apartment scan without the unavailable fallback."],
   ["20-apartment-mesh", "Apartment mesh mode", "Mesh mode keeps the full apartment visible without the mesh-unavailable fallback."],
   ["21-apartment-fly-camera", "Apartment fly-to-camera/live view", "Camera fly-to locks to mesh/live view and hides mode controls on mobile."],
 ];
@@ -108,7 +108,7 @@ const BUTTON_PROBE_MATRIX = [
   ["b08-remote-dialog", "Remote", "Remote access dialog opens, profile buttons respond, test-all starts, and close dismisses it."],
   ["b09-slash-command", "Input", "Slash command input accepts and executes a command from mobile."],
   ["b10-drawer-closes", "Drawers", "World, lights, spatial, and look drawers expose a working close control."],
-  ["b11-apartment-mode-buttons", "Apartment", "Cloud/photo/mesh HUD buttons respond without leaving a blank view."],
+  ["b11-apartment-mode-buttons", "Apartment", "Cloud/photo/mesh HUD buttons respond and render runtime scan/mesh assets."],
   ["b12-apartment-camera-buttons", "Apartment", "Fly-to-camera exposes only snap-safe controls before resetting cleanly."],
 ];
 
@@ -127,7 +127,7 @@ const DESKTOP_FEATURE_MATRIX = [
   ["12-spatial", "Spatial map drawer", "Map drawer opens without breaking desktop layout."],
   ["13-look", "Look drawer", "Vision prompt drawer opens and fits desktop width."],
   ["14-apartment-cloud", "Apartment cloud mode", "3D Apartment opens with the full apartment visible at desktop width."],
-  ["15-apartment-photo", "Apartment photo mode", "Photo/splat mode keeps the full apartment visible, or falls back with a clear asset error."],
+  ["15-apartment-photo", "Apartment photo mode", "Photo/splat mode renders the real apartment scan without the unavailable fallback."],
   ["16-apartment-mesh", "Apartment mesh mode", "Mesh mode keeps the full apartment visible without the mesh-unavailable fallback."],
   ["17-apartment-fly-camera", "Apartment fly-to-camera/live view", "Camera fly-to keeps snap-safe controls without breaking desktop layout."],
 ];
@@ -138,7 +138,7 @@ const DESKTOP_BUTTON_PROBE_MATRIX = [
   ["d03-remote-dialog", "Remote", "Remote access dialog opens, profile buttons respond, test-all starts, and close dismisses it."],
   ["d04-slash-command", "Input", "Slash command input accepts and executes a command at desktop width."],
   ["d05-drawer-closes", "Drawers", "World, lights, spatial, and look drawers expose a working close control."],
-  ["d06-apartment-mode-buttons", "Apartment", "Cloud/photo/mesh sequence returns to cloud without leaving a blank view."],
+  ["d06-apartment-mode-buttons", "Apartment", "Cloud/photo/mesh sequence renders runtime scan/mesh assets and returns to cloud."],
   ["d07-apartment-camera-buttons", "Apartment", "Fly-to-camera controls are snap-safe and back returns to the full-apartment overview."],
 ];
 
@@ -759,13 +759,15 @@ async function runButtonProbes(page, buttonItems) {
     await page.waitForFunction(() => !!window.__havApartmentDebug, null, { timeout: 12000 });
     await clickButtonByName(page, /^cloud$/i);
     await clickButtonByName(page, /^photo$/i, 2600);
+    const photo = await ensureNoApartmentModeError(page, "photo", "apartment photo button mode");
     await clickButtonByName(page, /^mesh$/i, 2600);
+    const mesh = await ensureNoApartmentModeError(page, "mesh", "apartment mesh button mode");
     await clickButtonByName(page, /^cloud$/i, 2600);
     const fit = await ensureApartmentFit(page, "apartment mode fit");
     const detail = await ensureVisualHealth(page, "apartment mode controls");
     await clickButtonByName(page, /close/i);
     await page.waitForFunction(() => !window.__havApartmentDebug, null, { timeout: 5000 });
-    return `${detail}; ${fit}`;
+    return `${detail}; ${fit}; ${photo}; ${mesh}`;
   });
 
   await recordButtonProbe(buttonItems, "b08-remote-dialog", "Remote dialog profile buttons, test all, and close respond", async () => {
@@ -833,13 +835,15 @@ async function runDesktopButtonProbes(page, buttonItems) {
     await page.waitForFunction(() => !!window.__havApartmentDebug, null, { timeout: 12000 });
     await clickButtonByName(page, /^cloud$/i);
     await clickButtonByName(page, /^photo$/i, 2600);
+    const photo = await ensureNoApartmentModeError(page, "photo", "desktop apartment photo button mode");
     await clickButtonByName(page, /^mesh$/i, 2600);
+    const mesh = await ensureNoApartmentModeError(page, "mesh", "desktop apartment mesh button mode");
     await clickButtonByName(page, /^cloud$/i, 2600);
     const fit = await ensureApartmentFit(page, "desktop apartment mode fit");
     const detail = await ensureVisualHealth(page, "desktop apartment mode controls");
     await clickButtonByName(page, /close/i);
     await page.waitForFunction(() => !window.__havApartmentDebug, null, { timeout: 5000 });
-    return `${detail}; ${fit}`;
+    return `${detail}; ${fit}; ${photo}; ${mesh}`;
   });
 
   await recordButtonProbe(buttonItems, "d07-apartment-camera-buttons", "Apartment camera back returns to overview", async () => {
@@ -960,7 +964,9 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors, prof
       await step("15-apartment-photo", "Apartment photo/splat mode", async () => {
         await page.evaluate(() => window.__havApartmentDebug?.setMode?.("splat"));
         await page.waitForTimeout(2600);
-        return ensureApartmentFit(page, "desktop apartment photo fit");
+        const fit = await ensureApartmentFit(page, "desktop apartment photo fit");
+        const mode = await ensureNoApartmentModeError(page, "photo", "desktop apartment photo mode");
+        return `${fit}; ${mode}`;
       });
 
       await step("16-apartment-mesh", "Apartment mesh mode", async () => {
@@ -1053,7 +1059,9 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors, prof
     await step("19-apartment-photo", "Apartment photo/splat mode", async () => {
       await page.evaluate(() => window.__havApartmentDebug?.setMode?.("splat"));
       await page.waitForTimeout(2600);
-      return ensureApartmentFit(page, "apartment photo fit");
+      const fit = await ensureApartmentFit(page, "apartment photo fit");
+      const mode = await ensureNoApartmentModeError(page, "photo", "apartment photo mode");
+      return `${fit}; ${mode}`;
     });
 
     await step("20-apartment-mesh", "Apartment mesh mode", async () => {
@@ -1610,13 +1618,15 @@ async function cdpRunButtonProbes(client, buttonItems) {
     await cdpWaitFor(client, "!!window.__havApartmentDebug", 12000);
     await cdpClickButton(client, "^cloud$");
     await cdpClickButton(client, "^photo$", 2600);
+    const photo = await cdpEnsureNoApartmentModeError(client, "photo", "apartment photo button mode");
     await cdpClickButton(client, "^mesh$", 2600);
+    const mesh = await cdpEnsureNoApartmentModeError(client, "mesh", "apartment mesh button mode");
     await cdpClickButton(client, "^cloud$", 2600);
     const fit = await cdpEnsureApartmentFit(client, "apartment mode fit");
     const detail = await cdpEnsureVisualHealth(client, "apartment mode controls");
     await cdpClickButton(client, "close", 600);
     await cdpWaitFor(client, "!window.__havApartmentDebug", 5000);
-    return `${detail}; ${fit}`;
+    return `${detail}; ${fit}; ${photo}; ${mesh}`;
   });
 
   await cdpRecordButtonProbe(buttonItems, "b08-remote-dialog", "Remote dialog profile buttons, test all, and close respond", async () => {
@@ -1683,13 +1693,15 @@ async function cdpRunDesktopButtonProbes(client, buttonItems) {
     await cdpWaitFor(client, "!!window.__havApartmentDebug", 12000);
     await cdpClickButton(client, "^cloud$");
     await cdpClickButton(client, "^photo$", 2600);
+    const photo = await cdpEnsureNoApartmentModeError(client, "photo", "desktop apartment photo button mode");
     await cdpClickButton(client, "^mesh$", 2600);
+    const mesh = await cdpEnsureNoApartmentModeError(client, "mesh", "desktop apartment mesh button mode");
     await cdpClickButton(client, "^cloud$", 2600);
     const fit = await cdpEnsureApartmentFit(client, "desktop apartment mode fit");
     const detail = await cdpEnsureVisualHealth(client, "desktop apartment mode controls");
     await cdpClickButton(client, "close", 600);
     await cdpWaitFor(client, "!window.__havApartmentDebug", 5000);
-    return `${detail}; ${fit}`;
+    return `${detail}; ${fit}; ${photo}; ${mesh}`;
   });
 
   await cdpRecordButtonProbe(buttonItems, "d07-apartment-camera-buttons", "Apartment camera back returns to overview", async () => {
@@ -1812,7 +1824,9 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors, profile = 
       await step("15-apartment-photo", "Apartment photo/splat mode", async () => {
         await cdpEval(client, "window.__havApartmentDebug && window.__havApartmentDebug.setMode('splat')", true);
         await cdpDelay(2600);
-        return cdpEnsureApartmentFit(client, "desktop apartment photo fit");
+        const fit = await cdpEnsureApartmentFit(client, "desktop apartment photo fit");
+        const mode = await cdpEnsureNoApartmentModeError(client, "photo", "desktop apartment photo mode");
+        return `${fit}; ${mode}`;
       });
 
       await step("16-apartment-mesh", "Apartment mesh mode", async () => {
@@ -1913,7 +1927,9 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors, profile = 
     await step("19-apartment-photo", "Apartment photo/splat mode", async () => {
       await cdpEval(client, "window.__havApartmentDebug && window.__havApartmentDebug.setMode('splat')", true);
       await cdpDelay(2600);
-      return cdpEnsureApartmentFit(client, "apartment photo fit");
+      const fit = await cdpEnsureApartmentFit(client, "apartment photo fit");
+      const mode = await cdpEnsureNoApartmentModeError(client, "photo", "apartment photo mode");
+      return `${fit}; ${mode}`;
     });
 
     await step("20-apartment-mesh", "Apartment mesh mode", async () => {

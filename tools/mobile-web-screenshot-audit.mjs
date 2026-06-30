@@ -595,12 +595,16 @@ async function ensureCameraSnapLocked(page, context) {
     const forbidden = Array.from(document.querySelectorAll("button"))
       .map((button) => String(button.textContent || "").replace(/\s+/g, " ").trim().toLowerCase())
       .filter((label) => forbiddenLabels.includes(label));
-    return { liveCam: snap.liveCam || null, forbidden };
+    return { liveCam: snap.liveCam || null, mobile: !!snap.mobile, forbidden, cameraFrame: snap.cameraFrame || null };
   });
   if (result.forbidden.length) {
     throw new Error(`${context}: camera snap exposes mode buttons: ${result.forbidden.join(", ")}`);
   }
-  return `camera ${result.liveCam} snapped; mode buttons hidden`;
+  if (result.mobile && (!result.cameraFrame || !(result.cameraFrame.width > 40) || !(result.cameraFrame.height > 40))) {
+    throw new Error(`${context}: camera snap missing aligned frame`);
+  }
+  const frame = result.cameraFrame ? `; frame ${result.cameraFrame.width}x${result.cameraFrame.height}` : "";
+  return `camera ${result.liveCam} snapped; mode buttons hidden${frame}`;
 }
 
 async function ensureDesktopHeader(page, context) {
@@ -1491,12 +1495,16 @@ async function cdpEnsureCameraSnapLocked(client, context) {
     const forbidden = Array.from(document.querySelectorAll("button"))
       .map((button) => String(button.textContent || "").replace(/\\s+/g, " ").trim().toLowerCase())
       .filter((label) => forbiddenLabels.includes(label));
-    return { liveCam: snap.liveCam || null, forbidden };
+    return { liveCam: snap.liveCam || null, mobile: !!snap.mobile, forbidden, cameraFrame: snap.cameraFrame || null };
   })()`, true);
   if (result.forbidden.length) {
     throw new Error(`${context}: camera snap exposes mode buttons: ${result.forbidden.join(", ")}`);
   }
-  return `camera ${result.liveCam} snapped; mode buttons hidden`;
+  if (result.mobile && (!result.cameraFrame || !(result.cameraFrame.width > 40) || !(result.cameraFrame.height > 40))) {
+    throw new Error(`${context}: camera snap missing aligned frame`);
+  }
+  const frame = result.cameraFrame ? `; frame ${result.cameraFrame.width}x${result.cameraFrame.height}` : "";
+  return `camera ${result.liveCam} snapped; mode buttons hidden${frame}`;
 }
 
 async function cdpEnsureDesktopHeader(client, context) {

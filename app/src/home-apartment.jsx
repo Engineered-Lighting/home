@@ -75,6 +75,39 @@ function aptServiceBase(storageKey, runtimeKey, fallback) {
   return fallback;
 }
 
+function aptCameraAspect(dev) {
+  const size = dev?.camera?.intrinsics?.image_size;
+  if (Array.isArray(size) && +size[0] > 0 && +size[1] > 0) return +size[0] / +size[1];
+  const aspect = +dev?.camera?.aspect;
+  if (aspect > 0.2 && aspect < 5) return aspect;
+  return 16 / 9;
+}
+
+function aptMobileCameraFrame(viewport, dev) {
+  const width = Math.max(1, viewport?.width || window.innerWidth || 390);
+  const height = Math.max(1, viewport?.height || window.innerHeight || 844);
+  const aspect = aptCameraAspect(dev);
+  const topReserve = Math.min(128, Math.max(96, Math.round(height * 0.14)));
+  const bottomReserve = Math.min(112, Math.max(78, Math.round(height * 0.12)));
+  const maxW = Math.max(1, width);
+  const maxH = Math.max(1, height - topReserve - bottomReserve);
+  let frameW = maxW;
+  let frameH = frameW / aspect;
+  if (frameH > maxH) {
+    frameH = maxH;
+    frameW = frameH * aspect;
+  }
+  const left = Math.max(0, Math.round((width - frameW) / 2));
+  const top = Math.round(topReserve + Math.max(0, (maxH - frameH) / 2));
+  return {
+    position: "absolute",
+    left,
+    top,
+    width: Math.round(frameW),
+    height: Math.round(frameH),
+  };
+}
+
 function AptHudButton({ label, onClick, active, disabled, title, mobile = readAptViewport().mobile }) {
   return (
     <button
@@ -136,14 +169,23 @@ function AptZoomButton({ label, title, onClick, disabled, mobile = readAptViewpo
    (no THREE — that stays inside home-3d). Falls back to the plain <img>
    when there are no intrinsics, no WebGL, shader trouble, or the stream is
    CORS-blocked (crossOrigin load error). */
-function AptUndistortedFeed({ src, alt, intrinsics, style }) {
+function AptUndistortedFeed({ src, alt, intrinsics, style, onStatus }) {
   const canvasRef = useRef(null);
   const imgRef = useRef(null);
   const [fallback, setFallback] = useState(false);
+  const [warpedReady, setWarpedReady] = useState(false);
+  const warpedReadyRef = useRef(false);
 
   const K = intrinsics && intrinsics.K;
   const dist = (intrinsics && intrinsics.dist) || [];
   const wantWarp = !fallback && !!(K && dist.length >= 1 && dist[0] !== 0);
+
+  useEffect(() => {
+    setFallback(false);
+    setWarpedReady(false);
+    warpedReadyRef.current = false;
+    onStatus?.("connecting");
+  }, [src, onStatus]);
 
   useEffect(() => {
     if (!wantWarp) return undefined;
@@ -271,10 +313,16 @@ function AptUndistortedFeed({ src, alt, intrinsics, style }) {
       } catch (e) {
         // CORS-tainted stream — give the user the raw feed instead
         cancelAnimationFrame(raf);
+        onStatus?.("raw");
         setFallback(true);
         return;
       }
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      if (!warpedReadyRef.current) {
+        warpedReadyRef.current = true;
+        setWarpedReady(true);
+        onStatus?.("warped");
+      }
     };
     raf = requestAnimationFrame(draw);
 
@@ -292,20 +340,32 @@ function AptUndistortedFeed({ src, alt, intrinsics, style }) {
       } catch (e) { /* context already gone */ }
       if (img) img.src = "";   // close the hidden MJPEG connection immediately
     };
-  }, [wantWarp, src, intrinsics]);
+  }, [wantWarp, src, intrinsics, onStatus]);
 
   if (!wantWarp) {
-    return <img src={src} alt={alt} style={style} />;
+    return <img src={src} alt={alt} onLoad={() => onStatus?.("raw")} onError={() => onStatus?.("error")} style={style} />;
   }
+  const fit = style?.objectFit || "contain";
+  const frameStyle = { ...style, position: "relative", overflow: "hidden" };
+  const fillStyle = {
+    position: "absolute",
+    inset: 0,
+    width: "100%",
+    height: "100%",
+    objectFit: fit,
+  };
   return (
-    <div style={{ position: "relative" }}>
+    <div style={frameStyle}>
       <img
         ref={imgRef} src={src} alt="" aria-hidden="true" crossOrigin="anonymous"
-        onError={() => setFallback(true)}
-        style={{ position: "absolute", left: 0, top: 0, width: 2, height: 2,
-                 opacity: 0, pointerEvents: "none" }}
+        onLoad={() => onStatus?.("raw")}
+        onError={() => { onStatus?.("error"); setFallback(true); }}
+        style={{ ...fillStyle, opacity: warpedReady ? 0 : 1, pointerEvents: "none" }}
       />
-      <canvas ref={canvasRef} style={style} />
+      <canvas
+        ref={canvasRef}
+        style={{ ...fillStyle, opacity: warpedReady ? 1 : 0, pointerEvents: "none" }}
+      />
     </div>
   );
 }
@@ -318,6 +378,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const detachRef = useRef(null);
   const wasMaximizedRef = useRef(null);
   const flyTimerRef = useRef(null);     // pending feed-reveal timeout
+  const flySeqRef = useRef(0);
   const preSnapModeRef = useRef(null);  // render mode to restore after a camera snap
   const [phase, setPhase] = useState("boot");
   const [error, setError] = useState(null);
@@ -339,6 +400,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const [inCamPose, setInCamPose] = useState(false);
   const [liveCam, setLiveCam] = useState(null);   // camera device while snapped
   const [liveOn, setLiveOn] = useState(false);    // live feed vs 3D from the pose
+  const [liveFeedStatus, setLiveFeedStatus] = useState("idle");
   const [calibCam, setCalibCam] = useState(null); // correspondence-capture overlay
   const calibPickRef = useRef(false);
   const calibApiRef = useRef(null);
@@ -479,13 +541,14 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     return () => {
       cancelled = true;
       if (flyTimerRef.current) { clearTimeout(flyTimerRef.current); flyTimerRef.current = null; }
+      flySeqRef.current += 1;
       detachRef.current?.();
       detachRef.current = null;
       // this component instance PERSISTS across open/close (home-app renders
       // it permanently; open=false just renders null) — clear per-session UI
       // state here or a live feed / calibration overlay / control card
       // resurrects the next time the view opens
-      setLiveCam(null); setLiveOn(false); setCalibCam(null); setCardId(null);
+      setLiveCam(null); setLiveOn(false); setLiveFeedStatus("idle"); setCalibCam(null); setCardId(null);
       setEditing(false);
       const eng = engineRef.current;
       if (eng) {
@@ -735,13 +798,18 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
      then flies home */
   const exitCameraPose = useCallback(() => {
     if (flyTimerRef.current) { clearTimeout(flyTimerRef.current); flyTimerRef.current = null; }
-    setLiveCam(null); setLiveOn(false); setCalibCam(null);
+    flySeqRef.current += 1;
+    setLiveCam(null); setLiveOn(false); setLiveFeedStatus("idle"); setCalibCam(null);
     const e = engineRef.current;
     if (!e) return;
     const back = preSnapModeRef.current;
     preSnapModeRef.current = null;
     if (back && e.modes.mode !== back) e.modes.setMode(back, { duration: 0 }).catch(() => {});
     e.rig.returnToOverview();
+    setTimeout(() => {
+      const eng = engineRef.current;
+      if (eng && !eng.rig.inCameraPose?.()) eng.refit?.({ dur: 0 });
+    }, 820);
   }, []);
 
   /* keyboard */
@@ -779,7 +847,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     const wasCameraPose = !!engine.rig.inCameraPose?.();
     if (engine.rig.inCameraPose?.()) {
       if (flyTimerRef.current) { clearTimeout(flyTimerRef.current); flyTimerRef.current = null; }
-      setLiveCam(null); setLiveOn(false); setCalibCam(null);
+      flySeqRef.current += 1;
+      setLiveCam(null); setLiveOn(false); setLiveFeedStatus("idle"); setCalibCam(null);
       engine.rig.resetPose?.();
     }
     engine.refit?.({ dur: wasCameraPose ? 0 : dur });
@@ -853,30 +922,68 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     }
   }, [model, endpoint, token, simActive, showToast]);
 
+  const revealCameraFeedWhenReady = useCallback((dev, seq) => {
+    const started = performance.now();
+    const tick = () => {
+      if (seq !== flySeqRef.current) return;
+      const rig = engineRef.current?.rig;
+      if (rig?.inCameraPose?.()) {
+        flyTimerRef.current = null;
+        if (!simActive && dev.camera?.frigate_name) {
+          setLiveFeedStatus("connecting");
+          setLiveOn(true);
+        }
+        return;
+      }
+      if (performance.now() - started > 5200) {
+        flyTimerRef.current = null;
+        if (!simActive && dev.camera?.frigate_name) {
+          setLiveFeedStatus("connecting");
+          setLiveOn(true);
+          showToast("camera feed shown while pose finishes");
+        }
+        return;
+      }
+      flyTimerRef.current = setTimeout(tick, 120);
+    };
+    flyTimerRef.current = setTimeout(tick, 120);
+  }, [showToast, simActive]);
+
   const flyToDeviceView = useCallback((dev) => {
     if (!dev) return false;
     const eng = engineRef.current;
+    if (!eng) return false;
+    const seq = ++flySeqRef.current;
+    if (flyTimerRef.current) { clearTimeout(flyTimerRef.current); flyTimerRef.current = null; }
+    setLiveCam(dev);
+    setLiveOn(false);
+    setLiveFeedStatus(dev.camera?.frigate_name && !simActive ? "waiting for pose" : "idle");
+    setCalibCam(null);
     const calib = !!(dev.camera && dev.camera.extrinsics && dev.camera.intrinsics);
-    // Camera snaps always use the textured mesh behind the live feed. Switching
-    // to cloud/photo while snapped breaks the pose/readability on phones.
-    if (eng) {
-      if (preSnapModeRef.current == null) preSnapModeRef.current = eng.modes.mode;
-      eng.modes.setMode("mesh", { duration: 0 }).then(() => setMode("mesh")).catch(() => {});
-    }
-    eng?.flyToDevice(dev, { fovScale: calib && !mobile ? 1 / 0.74 : 1 });
-    if (flyTimerRef.current) clearTimeout(flyTimerRef.current);
-    if (!simActive && dev.camera?.frigate_name) {
-      flyTimerRef.current = setTimeout(() => {
-        flyTimerRef.current = null;
-        if (engineRef.current?.rig.inCameraPose?.()) {
-          setLiveCam(dev); setLiveOn(true);
-        }
-      }, 950);
-    } else {
-      setLiveCam(dev); setLiveOn(false);
-    }
+    (async () => {
+      try {
+        // Camera snaps always use the textured mesh behind the live feed.
+        // Awaiting mesh avoids the old mobile race where the rig entered a
+        // camera pose while the cloud/mesh transition was still unresolved.
+        if (preSnapModeRef.current == null) preSnapModeRef.current = eng.modes.mode;
+        await eng.modes.setMode("mesh", { duration: 0 });
+        if (seq !== flySeqRef.current) return;
+        setMode("mesh");
+        setModeError(null);
+        eng.flyToDevice(dev, { fovScale: calib && !mobile ? 1 / 0.74 : 1 });
+        revealCameraFeedWhenReady(dev, seq);
+      } catch (e) {
+        if (seq !== flySeqRef.current) return;
+        setModeError({
+          mode: "mesh",
+          message: "mesh unavailable",
+          detail: `${e?.message || String(e || "asset load failed")} - check mesh.glb / collision.glb`,
+        });
+        showToast("camera snap needs mesh - check mesh.glb asset");
+      }
+    })();
     return true;
-  }, [mobile, simActive]);
+  }, [mobile, simActive, revealCameraFeedWhenReady, showToast]);
 
   useEffect(() => {
     if (!open || typeof window === "undefined") return undefined;
@@ -885,7 +992,12 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         phase,
         mode,
         liveOn,
+        liveFeedStatus,
         liveCam: liveCam?.id || liveCam?.name || null,
+        cameraFrame: mobile && liveCam ? (() => {
+          const frame = aptMobileCameraFrame(viewport, liveCam);
+          return { left: frame.left, top: frame.top, width: frame.width, height: frame.height };
+        })() : null,
         mobile,
         viewport,
         devices: (model.devices || []).length,
@@ -912,7 +1024,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     return () => {
       if (window.__havApartmentDebug === api) delete window.__havApartmentDebug;
     };
-  }, [open, phase, mode, liveOn, liveCam, mobile, viewport, model.devices, pickMode, zoomApartment, flyToDeviceView]);
+  }, [open, phase, mode, liveOn, liveFeedStatus, liveCam, mobile, viewport, model.devices, pickMode, zoomApartment, flyToDeviceView]);
 
   if (!open) return null;
 
@@ -926,7 +1038,38 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const showZoomHud = !editing && !cameraTop && phase !== "boot" && phase !== "loading" && phase !== "error";
   const topPad = mobile ? "calc(8px + env(safe-area-inset-top, 0px)) 10px 8px" : "12px 18px";
   const bottomPad = mobile ? "8px 10px calc(10px + env(safe-area-inset-bottom, 0px))" : "14px 18px";
-  const liveFeedStyle = mobile
+  const mobileCameraFrame = mobile && cameraSnap && liveCam ? aptMobileCameraFrame(viewport, liveCam) : null;
+  const hostFrameStyle = mobileCameraFrame
+    ? {
+        ...mobileCameraFrame,
+        right: "auto",
+        bottom: "auto",
+        zIndex: 1,
+        overflow: "hidden",
+        touchAction: "none",
+        cursor: "grab",
+      }
+    : {
+        position: "absolute",
+        top: 0,
+        bottom: 0,
+        right: 0,
+        left: calibCam && !mobile ? "46%" : 0,
+        touchAction: "none",
+        cursor: "grab",
+      };
+  const liveFeedStyle = mobileCameraFrame
+    ? {
+        width: "100%",
+        height: "100%",
+        maxWidth: "none",
+        maxHeight: "none",
+        objectFit: "contain",
+        background: "#000",
+        boxShadow: "none",
+        opacity: 0.88,
+      }
+    : mobile
     ? {
         width: "100vw",
         height: "100dvh",
@@ -938,6 +1081,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         opacity: 0.88,
       }
     : {
+        width: "min(92vw, calc(74vh * 16 / 9))",
         height: "74vh",
         aspectRatio: "16 / 9",
         objectFit: "cover",
@@ -967,10 +1111,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
 
       {/* engine canvas is appended imperatively (persistent across mounts —
           see the boot effect); React must never own or recreate it */}
-      <div ref={hostRef} style={{ position: "absolute", top: 0, bottom: 0, right: 0,
-                                  left: calibCam && !mobile ? "46%" : 0,
-                                  touchAction: "none", cursor: "grab" }}
-      />
+      <div ref={hostRef} style={hostFrameStyle} />
 
       {/* top bar */}
       {!editing && (
@@ -1166,10 +1307,24 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
       {/* live camera feed — full-viewport MJPEG from Frigate, shown over the
           3D canvas while snapped; mode switching returns after backing out */}
       {liveCam && liveOn && !calibCam && (
-        <div style={{ position: "absolute", inset: 0,
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      padding: 0,
-                      pointerEvents: "none" }}>
+        <div style={mobileCameraFrame
+          ? {
+              ...mobileCameraFrame,
+              zIndex: 3,
+              overflow: "hidden",
+              pointerEvents: "none",
+              display: "block",
+            }
+          : {
+              position: "absolute",
+              inset: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 0,
+              pointerEvents: "none",
+              zIndex: 3,
+            }}>
           {/* full-viewport on mobile so video and WebGL share the same frame;
               holds the same pose behind it — true 1:1 alignment lands with
               per-camera calibration (fov + principal point). Calibrated
@@ -1184,6 +1339,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
             alt={liveCam.name}
             intrinsics={liveCam.camera?.intrinsics || null}
             style={liveFeedStyle}
+            onStatus={setLiveFeedStatus}
           />
           <div style={{ position: "absolute", top: mobile ? "calc(54px + env(safe-area-inset-top, 0px))" : 52, left: mobile ? 12 : 18, fontFamily: APT_FONT_MONO,
                         fontSize: 9.5, letterSpacing: "0.12em", color: "var(--hg-ice)",
@@ -1191,6 +1347,24 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
                         display: mobile ? "none" : "block" }}>
             live · {liveCam.name} · mjpeg
           </div>
+        </div>
+      )}
+      {cameraSnap && liveCam && liveFeedStatus && !["idle", "raw", "warped"].includes(liveFeedStatus) && (
+        <div style={{
+          position: "absolute",
+          left: mobileCameraFrame ? mobileCameraFrame.left + 10 : mobile ? 12 : 18,
+          top: mobileCameraFrame ? mobileCameraFrame.top + 10 : mobile ? "calc(54px + env(safe-area-inset-top, 0px))" : 52,
+          zIndex: 4,
+          fontFamily: APT_FONT_MONO,
+          fontSize: mobile ? 9 : 9.5,
+          letterSpacing: "0.1em",
+          color: "var(--hg-ice)",
+          background: "rgba(10,12,16,0.72)",
+          border: "1px solid var(--hg-border-soft)",
+          padding: "5px 8px",
+          pointerEvents: "none",
+        }}>
+          {liveFeedStatus}
         </div>
       )}
 

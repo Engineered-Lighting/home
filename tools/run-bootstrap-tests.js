@@ -99,6 +99,13 @@ assert("web runtime and service resolver load before ordered boot chain",
     indexSource.indexOf("./home-web-runtime.js") < indexSource.indexOf("./home-services.js") &&
     indexSource.indexOf("./home-services.js") < indexSource.indexOf("var files ="),
   staticScripts);
+assert("React and Babel runtime libraries are served locally for travel startup",
+  indexSource.includes("./vendor/react-18.3.1/react.production.min.js") &&
+    indexSource.includes("./vendor/react-18.3.1/react-dom.production.min.js") &&
+    indexSource.includes("./vendor/babel-7.29.0/babel.min.js") &&
+    !indexSource.includes("https://unpkg.com/react@") &&
+    !indexSource.includes("https://unpkg.com/@babel/standalone@"),
+  staticScripts);
 assert("all JSX boot entries run through Babel",
   entries.filter((entry) => entry.name.endsWith(".jsx")).every((entry) => entry.babel),
   entries.filter((entry) => entry.name.endsWith(".jsx") && !entry.babel));
@@ -112,7 +119,13 @@ assert("loader uses launch-time cache buster",
 assert("no static text/babel script tags remain",
   !/<script\s+type=["']text\/babel["']\s+src=/.test(indexSource));
 assert("ordered loader fetches each file with three attempts",
-  indexSource.includes("fetchWithRetry(name + cb, 3)"));
+  indexSource.includes("fetchWithRetry(name + cb, 3)") &&
+    indexSource.includes("fetchBootText(i).then(function (text)"));
+assert("boot loader prefetches a bounded window while preserving ordered execution",
+  indexSource.includes("var PREFETCH_WINDOW = 6") &&
+    indexSource.includes("function primeWindow(start)") &&
+    indexSource.includes("primeWindow(0);") &&
+    /execute\(name,\s*code\);\s*boot\.loaded\+\+;[\s\S]*primeWindow\(i \+ 1\);[\s\S]*step\(i \+ 1\);/.test(indexSource));
 assert("status 0 empty loads are rejected",
   indexSource.includes("xhr.status === 0 && xhr.responseText.length > 0"));
 assert("XHR timeout becomes a hard boot failure",
@@ -128,7 +141,7 @@ assert("boot-file XHRs preserve gateway auth cookies",
 assert("Babel transform failures stop the boot chain",
   indexSource.includes("Babel transform failed in") && indexSource.includes("boot.failed = name"));
 assert("files execute before the chain advances",
-  /execute\(name,\s*code\);\s*boot\.loaded\+\+;\s*step\(i \+ 1\);/.test(indexSource));
+  /execute\(name,\s*code\);\s*boot\.loaded\+\+;[\s\S]*step\(i \+ 1\);/.test(indexSource));
 assert("visible overlay is used for loader failures",
   indexSource.includes("function overlay(title, detail)") &&
     indexSource.includes("Failed to load ") &&

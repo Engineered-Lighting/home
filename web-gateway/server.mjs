@@ -763,7 +763,12 @@ function serveStatic(req, res) {
     res.end("bad path");
     return;
   }
-  serveFile(req, res, filePath, { cache: pathname === "/index.html" ? "no-store" : "no-cache" });
+  const cache = pathname === "/index.html"
+    ? "no-store"
+    : pathname.startsWith("/vendor/")
+      ? "private, max-age=31536000, immutable"
+      : "no-cache";
+  serveFile(req, res, filePath, { cache });
 }
 
 function proxyHttp(req, res, route) {

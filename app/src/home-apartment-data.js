@@ -302,12 +302,29 @@
     return () => { try { unsub && unsub(); } catch (e) { /* */ } };
   }
 
-  async function callService(client, domain, service, data) {
-    return client.call({
-      type: "call_service", domain, service,
-      target: data.entity_id ? { entity_id: data.entity_id } : undefined,
-      service_data: Object.fromEntries(Object.entries(data).filter(([k]) => k !== "entity_id")),
-    });
+  function buildServicePayload(domain, service, data = {}) {
+    const targetKeys = new Set(["entity_id", "area_id", "device_id"]);
+    const target = {};
+    const serviceData = {};
+    for (const [key, value] of Object.entries(data || {})) {
+      if (value == null) continue;
+      if (targetKeys.has(key)) target[key] = value;
+      else serviceData[key] = value;
+    }
+    const payload = { type: "call_service", domain, service, service_data: serviceData };
+    if (Object.keys(target).length > 0) payload.target = target;
+    return payload;
+  }
+
+  async function callService(client, domain, service, data = {}) {
+    if (!client) throw new Error("Home Assistant client is not ready");
+    if (typeof client.callService === "function") {
+      return client.callService(domain, service, data || {});
+    }
+    if (typeof client.call !== "function") {
+      throw new Error("Home Assistant client cannot call services");
+    }
+    return client.call(buildServicePayload(domain, service, data));
   }
 
   /* ---------------- tracker WS ---------------- */

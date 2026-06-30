@@ -6,6 +6,7 @@ const path = require("node:path");
 
 const REPO = path.resolve(__dirname, "..");
 const APT = fs.readFileSync(path.join(REPO, "app", "src", "home-apartment.jsx"), "utf8");
+const CARDS = fs.readFileSync(path.join(REPO, "app", "src", "home-apartment-cards.jsx"), "utf8");
 const DATA = fs.readFileSync(path.join(REPO, "app", "src", "home-apartment-data.js"), "utf8");
 const MODES = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "modes.js"), "utf8");
 const ENGINE = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "engine.js"), "utf8");
@@ -64,6 +65,15 @@ assert("camera feed maps pixels into the shared projection frame", APT.includes(
 process.stdout.write("\napartment_photo_mobile_asset_contract_test\n");
 assert("mobile photo mode prefers generated mobile splat", MODES.includes("'apartment.mobile.ply'") && MODES.indexOf("'apartment.mobile.ply'") < MODES.indexOf("'apartment.ply'"));
 assert("splat load has a timeout instead of hanging forever", MODES.includes("splat load timeout") && MODES.includes("mobile ? 45000 : 90000"));
+
+process.stdout.write("\napartment_light_control_contract_test\n");
+assert("card buttons are real touch targets", CARDS.includes('type="button"') && CARDS.includes("minHeight: mobile ? 38"));
+assert("card controls stop canvas gesture propagation", CARDS.includes("const stopCardEvent") && CARDS.includes("onPointerDown={stopCardEvent}") && CARDS.includes("onClick={(e) => { stopCardEvent(e); onClick?.(e); }}"));
+assert("apartment service calls support HA callService and raw call", DATA.includes('typeof client.callService === "function"') && DATA.includes('typeof client.call !== "function"'));
+assert("apartment service payload uses HA target fields", DATA.includes('const targetKeys = new Set(["entity_id", "area_id", "device_id"])') && DATA.includes("payload.target = target"));
+assert("apartment controls optimistically update selected state", APT.includes("function aptOptimisticServiceState") && APT.includes("setServicePulse((n) => n + 1)") && APT.includes("statesRef.current[entityId] = optimistic"));
+assert("apartment controls rollback optimistic state on failure", APT.includes("statesRef.current[entityId] = prev") && APT.includes("didn't respond"));
+assert("apartment debug API can open a controllable card for button audits", APT.includes("openFirstControllableCard") && APT.includes("setCardId(dev.id)"));
 
 process.stdout.write("\napartment_calibrated_projection_contract_test\n");
 assert("engine reads solved camera center C", ENGINE.includes("const calibratedCenter = Array.isArray(ex?.C)") && ENGINE.includes("new THREE.Vector3(+ex.C[0], +ex.C[1], +ex.C[2])"));

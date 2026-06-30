@@ -108,6 +108,23 @@ function aptMobileCameraFrame(viewport, dev) {
   };
 }
 
+function aptCameraAlignment(dev) {
+  const intr = dev?.camera?.intrinsics;
+  const extr = dev?.camera?.extrinsics;
+  const intrOk = !!(intr?.K && Array.isArray(intr.image_size));
+  const extrOk = !!(extr?.q_wxyz && Array.isArray(extr.C));
+  if (intrOk && extrOk) {
+    const rms = Number.isFinite(+extr.rms_px) ? ` · ${(+extr.rms_px).toFixed(1)}px rms` : "";
+    return { exact: true, short: "camera - calibrated overlay", detail: `calibrated overlay${rms}` };
+  }
+  const missing = [intrOk ? "" : "lens", extrOk ? "" : "pose"].filter(Boolean).join(" + ");
+  return {
+    exact: false,
+    short: "camera - estimated pose",
+    detail: `estimated alignment - missing ${missing || "calibration"}`,
+  };
+}
+
 function AptHudButton({ label, onClick, active, disabled, title, mobile = readAptViewport().mobile }) {
   return (
     <button
@@ -955,11 +972,14 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     if (!eng) return false;
     const seq = ++flySeqRef.current;
     if (flyTimerRef.current) { clearTimeout(flyTimerRef.current); flyTimerRef.current = null; }
+    const alignment = aptCameraAlignment(dev);
+    const calib = alignment.exact;
     setLiveCam(dev);
     setLiveOn(false);
-    setLiveFeedStatus(dev.camera?.frigate_name && !simActive ? "waiting for pose" : "idle");
+    setLiveFeedStatus(dev.camera?.frigate_name && !simActive
+      ? (calib ? "waiting for calibrated pose" : "waiting for estimated pose")
+      : "idle");
     setCalibCam(null);
-    const calib = !!(dev.camera && dev.camera.extrinsics && dev.camera.intrinsics);
     (async () => {
       try {
         // Camera snaps always use the textured mesh behind the live feed.
@@ -994,6 +1014,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         liveOn,
         liveFeedStatus,
         liveCam: liveCam?.id || liveCam?.name || null,
+        cameraAlignment: liveCam ? aptCameraAlignment(liveCam) : null,
         cameraFrame: mobile && liveCam ? (() => {
           const frame = aptMobileCameraFrame(viewport, liveCam);
           return { left: frame.left, top: frame.top, width: frame.width, height: frame.height };
@@ -1033,6 +1054,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const hoverDevice = (model.devices || []).find((d) => d.id === hoverId) || null;
   const cameraTop = inCamPose || !!liveCam;
   const cameraSnap = cameraTop && !calibCam;
+  const cameraAlignment = liveCam ? aptCameraAlignment(liveCam) : null;
   const mobileCameraSnap = mobile && cameraTop;
   const hideViewHud = mobile ? cameraTop : cameraSnap;
   const showZoomHud = !editing && !cameraTop && phase !== "boot" && phase !== "loading" && phase !== "error";
@@ -1087,6 +1109,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         objectFit: "cover",
         boxShadow: "0 0 60px 10px rgba(0,0,0,0.35)",
       };
+  const showCameraAlignmentBadge = cameraSnap && liveCam && cameraAlignment
+    && (!cameraAlignment.exact || !["idle", "raw", "warped"].includes(liveFeedStatus));
 
   return (
     <div
@@ -1135,7 +1159,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
             <span style={{ fontFamily: APT_FONT_MONO, fontSize: 8.5, letterSpacing: "0.1em",
                            color: "var(--hg-ice)", lineHeight: 1.35,
                            marginLeft: 0, maxWidth: "100%" }}>
-              camera - mesh locked
+              {cameraAlignment?.short || "camera - mesh locked"}
             </span>
           )}
           {simActive && !mobileCameraSnap && (
@@ -1349,7 +1373,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
           </div>
         </div>
       )}
-      {cameraSnap && liveCam && liveFeedStatus && !["idle", "raw", "warped"].includes(liveFeedStatus) && (
+      {showCameraAlignmentBadge && (
         <div style={{
           position: "absolute",
           left: mobileCameraFrame ? mobileCameraFrame.left + 10 : mobile ? 12 : 18,
@@ -1363,8 +1387,10 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
           border: "1px solid var(--hg-border-soft)",
           padding: "5px 8px",
           pointerEvents: "none",
+          maxWidth: mobileCameraFrame ? Math.max(120, mobileCameraFrame.width - 20) : mobile ? "calc(100vw - 24px)" : 360,
         }}>
-          {liveFeedStatus}
+          {cameraAlignment?.detail || liveFeedStatus}
+          {!["idle", "raw", "warped"].includes(liveFeedStatus) ? ` · ${liveFeedStatus}` : ""}
         </div>
       )}
 

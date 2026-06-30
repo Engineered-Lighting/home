@@ -34,6 +34,14 @@
     return clean;
   }
 
+  function toHttpBase(base) {
+    const clean = String(base || "").replace(/\/+$/, "");
+    if (!clean) return "";
+    if (clean.startsWith("ws://")) return "http://" + clean.slice("ws://".length);
+    if (clean.startsWith("wss://")) return "https://" + clean.slice("wss://".length);
+    return clean;
+  }
+
   const EMPTY_MODEL = {
     schema_version: 1, revision: 0, exists: false,
     meta: { frame: "z_up_metric_floor0" },
@@ -70,6 +78,30 @@
         const fetcher = ((window.IS_TAURI || window.__TAURI__) && window.tauriFetch) || fetch;
         const r = await fetcher(u, { cache: "no-store" });
         if (r.ok) return await r.json();
+      } catch (e) { /* next */ }
+    }
+    return null;
+  }
+
+  async function fetchTrackerModel() {
+    const bases = [];
+    try { bases.push(defaultTrackerBase()); } catch (e) { /* */ }
+    try {
+      const resolved = window.HomeServices?.get?.("tracker");
+      if (resolved) bases.push(resolved);
+    } catch (e) { /* */ }
+    for (const raw of [...new Set(bases.filter(Boolean))]) {
+      const base = toHttpBase(raw);
+      if (!base) continue;
+      try {
+        const fetcher = ((window.IS_TAURI || window.__TAURI__) && window.tauriFetch) || fetch;
+        const r = await fetcher(`${base}/model`, { cache: "no-store" });
+        if (!r.ok) continue;
+        const model = await r.json();
+        if (model && Array.isArray(model.devices)) {
+          try { localStorage.setItem("apartment3d.remoteCache", JSON.stringify(model)); } catch (e) { /* */ }
+          return { ...model, tracker_cached: true };
+        }
       } catch (e) { /* next */ }
     }
     return null;
@@ -112,6 +144,8 @@
         }
       } catch (e) { /* fall through */ }
     }
+    const trackerModel = await fetchTrackerModel();
+    if (trackerModel) return trackerModel;
     // offline fallback order: last-good remote copy, then draft, then seed.
     // The remote cache outranks everything — a boot race must show the
     // user's real saved layout, not the seed.

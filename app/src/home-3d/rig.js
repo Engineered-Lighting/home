@@ -90,6 +90,13 @@ export function createRig(camera) {
     let heldPose = null;    // held camera pose after arrival
     const BASE_FOV = camera.fov;
 
+    function applyCustomProjection(matrix) {
+        if (!matrix) return false;
+        camera.projectionMatrix.copy(matrix);
+        camera.projectionMatrixInverse.copy(matrix).invert();
+        return true;
+    }
+
     function azRad(i) { return (i / AZ_STOPS) * Math.PI * 2; }
     function elRad(i) { return THREE.MathUtils.degToRad(ELEVATIONS[i]); }
     function zoomRadius(i) { return state.fitDistance * ZOOM_FACTORS[i]; }
@@ -218,7 +225,10 @@ export function createRig(camera) {
                 camera.fov = p.fromFov + (p.toFov - p.fromFov) * fk;
                 camera.updateProjectionMatrix();
                 if (p.t >= p.dur) {
-                    if (p.hold) heldPose = { pos: p.toPos, quat: p.toQuat, fov: p.toFov };
+                    if (p.hold) {
+                        heldPose = { pos: p.toPos, quat: p.toQuat, fov: p.toFov, projection: p.projection || null };
+                        applyCustomProjection(heldPose.projection);
+                    }
                     else { state.locked = false; camera.fov = p.toFov; camera.updateProjectionMatrix(); }
                     poseTween = null;
                 }
@@ -227,6 +237,7 @@ export function createRig(camera) {
             if (heldPose) {
                 camera.position.copy(heldPose.pos);
                 camera.quaternion.copy(heldPose.quat);
+                applyCustomProjection(heldPose.projection);
                 return;
             }
             if (tween) {
@@ -272,7 +283,7 @@ export function createRig(camera) {
          * the fov morphing in the FINAL 40% of the flight (lens-breathing
          * arrival). The pose is HELD (orbit suspended) until
          * returnToOverview() flies back and unlocks. */
-        flyToPose({ position, quaternion, fov, dur = 900 }) {
+        flyToPose({ position, quaternion, fov, dur = 900, projection = null }) {
             state.locked = true;
             poseTween = {
                 t: 0, dur, hold: true,
@@ -280,6 +291,7 @@ export function createRig(camera) {
                 fromFov: camera.fov,
                 toPos: position.clone(), toQuat: quaternion.clone(),
                 toFov: fov || camera.fov,
+                projection,
             };
         },
         returnToOverview(dur = 700) {

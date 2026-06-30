@@ -15,6 +15,9 @@ if (-not $auth) {
 if ($auth) {
   $env:HOME_WEB_BASIC_AUTH = $auth
 }
+if (-not $env:HOME_WEB_AUTH_REQUIRED) {
+  $env:HOME_WEB_AUTH_REQUIRED = "0"
+}
 
 Set-Location $repo
 & $node $server

@@ -15,6 +15,7 @@ const HOST = process.env.HOME_WEB_HOST || "127.0.0.1";
 const PORT = Number(process.env.HOME_WEB_PORT || 5181);
 const APARTMENT_ASSETS_DIR = path.resolve(process.env.HOME_WEB_APARTMENT_ASSETS_DIR || path.join(ROOT, "app", "data", "apartment"));
 const LEGACY_BASIC_AUTH = (process.env.HOME_WEB_BASIC_AUTH || "").trim();
+const AUTH_REQUIRED = /^(1|true|yes|on)$/i.test(String(process.env.HOME_WEB_AUTH_REQUIRED || ""));
 const defaultAuthRoot =
   process.env.APPDATA ||
   process.env.LOCALAPPDATA ||
@@ -158,6 +159,7 @@ function gatewayHealth() {
     auth: {
       enabled: authState.enabled,
       source: authState.source,
+      required: AUTH_REQUIRED,
     },
     apartmentAssetsDir: APARTMENT_ASSETS_DIR,
     routes: routeSummary(),
@@ -197,6 +199,9 @@ function hashPassword(password, salt = crypto.randomBytes(18).toString("base64ur
 }
 
 function loadAuthState() {
+  if (!AUTH_REQUIRED) {
+    return { enabled: false, source: "tailscale", username: "" };
+  }
   try {
     if (fs.existsSync(AUTH_FILE)) {
       const data = JSON.parse(fs.readFileSync(AUTH_FILE, "utf8"));
@@ -216,6 +221,7 @@ function loadAuthState() {
   if (legacy) {
     return { enabled: true, source: "env", ...legacy };
   }
+  console.warn("[auth] HOME_WEB_AUTH_REQUIRED=1 but no valid auth file or HOME_WEB_BASIC_AUTH value was found; gateway auth is disabled");
   return { enabled: false, source: "disabled", username: "" };
 }
 
@@ -851,6 +857,7 @@ function checkConfig() {
     apartmentAssetsDir: APARTMENT_ASSETS_DIR,
     authEnabled: authState.enabled,
     authSource: authState.source,
+    authRequired: AUTH_REQUIRED,
     authFile: AUTH_FILE,
     routes: routeSummary(),
   };

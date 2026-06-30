@@ -156,7 +156,7 @@ function completionValue(cmd, commands) {
   const renderEnd = source.indexOf("</div>", renderStart);
   const renderBlock = renderStart >= 0 && renderEnd >= 0 ? source.slice(renderStart, renderEnd) : "";
   assert("InputRow accepts the S80 control props",
-    /function InputRow\(\{\s*value,\s*onChange,\s*onSend,\s*voice,\s*onMicToggle,\s*isStreaming,\s*onStop,\s*focusToken\s*\}\)/.test(inputBlock),
+    /function InputRow\(\{\s*value,\s*onChange,\s*onSend,\s*voice,\s*onMicToggle,\s*isStreaming,\s*onStop,\s*focusToken,\s*mobile\s*=\s*false\s*\}\)/.test(inputBlock),
     inputBlock.slice(0, 300));
   assert("InputRow focus guard does not steal initial FirstRun focus",
     /useEffect\(\(\) => \{ if \(focusToken\) inputRef\.current\?\.focus\(\); \}, \[focusToken\]\)/.test(inputBlock),
@@ -185,14 +185,24 @@ function completionValue(cmd, commands) {
     /value\.trim\(\)\.length > 0 && \([\s\S]*aria-label="Send"[\s\S]*onClick=\{onSend\}[\s\S]*\{isSlash \? "run" : "send"\}/.test(inputBlock),
     inputBlock.slice(0, 4000));
   assert("MicButton receives InputRow mic toggle and button invokes onClick",
-    /<MicButton state=\{voice\.state\} onClick=\{onMicToggle\} \/>/.test(inputBlock) &&
-    /function MicButton\(\{ state, onClick \}\)[\s\S]*onClick=\{onClick\}/.test(source),
+    /<MicButton state=\{voice\.state\} onClick=\{onMicToggle\} mobile=\{mobile\} \/>/.test(inputBlock) &&
+    /function MicButton\(\{ state, onClick, mobile = false \}\)[\s\S]*onClick=\{onClick\}/.test(source),
     inputBlock.slice(-700));
-  assert("HomeApp renders InputRow with stopStreaming and streaming state",
-    /isStreaming=\{streamingIds\.current\.size > 0 \|\| events\.some\(e => e\.streaming\)\}/.test(renderBlock) &&
+  assert("HomeApp renders InputRow with stopStreaming and visible streaming state",
+    /isStreaming=\{events\.some\(\(e\) => e\.streaming\)\}/.test(renderBlock) &&
     /onStop=\{stopStreaming\}/.test(renderBlock) &&
     /focusToken=\{focusToken\}/.test(renderBlock),
     renderBlock.slice(0, 900));
+  const sendToHaStart = source.indexOf("const sendToHA = useCallback");
+  const sendToHaEnd = source.indexOf("const stopStreaming = useCallback", sendToHaStart);
+  const sendToHaBlock = sendToHaStart >= 0 && sendToHaEnd >= 0 ? source.slice(sendToHaStart, sendToHaEnd) : "";
+  assert("sendToHA settles streaming bubble on intent-end and run completion",
+    /const finalizeStreamingBubble = \(\) =>/.test(sendToHaBlock) &&
+    /finalizeStreamingBubble\(\);/.test(sendToHaBlock) &&
+    /const pendingStreamingId = streamingBubbleId/.test(sendToHaBlock) &&
+    /streamingIds\.current\.delete\(pendingStreamingId\)/.test(sendToHaBlock) &&
+    /e\.id === pendingStreamingId[\s\S]*streaming: false/.test(sendToHaBlock),
+    sendToHaBlock.slice(-1600));
   assert("stopStreaming cancels active run, timers, and streaming ids",
     /activeRunRef\.current\.cancel\?\.\(\)/.test(stopBlock) &&
     /activeRunRef\.current = null/.test(stopBlock) &&

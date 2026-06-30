@@ -29,7 +29,21 @@
 
   if ("serviceWorker" in navigator && !window.HG_DISABLE_SERVICE_WORKER) {
     window.addEventListener("load", () => {
-      navigator.serviceWorker.register("./home-service-worker.js", { scope: "./" })
+      const build = window.__HOME_ASSET_VERSION || window.__HOME_BUILD_COMMIT || "dev";
+      const swUrl = `./home-service-worker.js?v=${encodeURIComponent(build)}`;
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (refreshing) return;
+        refreshing = true;
+        try {
+          const key = `home-sw-refresh:${build}`;
+          if (sessionStorage.getItem(key)) return;
+          sessionStorage.setItem(key, "1");
+        } catch (e) { /* sessionStorage can fail in private mode */ }
+        window.location.reload();
+      });
+      navigator.serviceWorker.register(swUrl, { scope: "./" })
+        .then((registration) => registration.update().catch(() => {}))
         .catch((err) => console.warn("[home-web] service worker registration failed", err));
     }, { once: true });
   }

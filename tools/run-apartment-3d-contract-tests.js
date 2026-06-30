@@ -41,6 +41,17 @@ assert("zoom controls hide during camera pose", APT.includes("const showZoomHud 
 assert("debug API exposes zoomIn", APT.includes("zoomIn: () => zoomApartment(1)"));
 assert("debug API exposes zoomOut", APT.includes("zoomOut: () => zoomApartment(-1)"));
 
+process.stdout.write("\napartment_camera_snap_contract_test\n");
+assert("mobile camera frame helper exists", APT.includes("function aptMobileCameraFrame"));
+assert("camera snap stores the target camera immediately", APT.includes("setLiveCam(dev);") && APT.includes('setLiveFeedStatus(dev.camera?.frigate_name && !simActive ? "waiting for pose" : "idle");'));
+assert("camera snap awaits mesh before fly-to-camera", APT.includes('await eng.modes.setMode("mesh", { duration: 0 });') && APT.includes("eng.flyToDevice(dev"));
+assert("camera feed reveal polls until pose is held", APT.includes("const revealCameraFeedWhenReady"));
+assert("feed reveal checks rig.inCameraPose", APT.includes("rig?.inCameraPose?.()"));
+assert("debug snapshot exposes live feed status", APT.includes("liveFeedStatus,"));
+assert("debug snapshot exposes camera frame", APT.includes("cameraFrame: mobile && liveCam"));
+assert("raw camera frame remains visible before warp", APT.includes("opacity: warpedReady ? 0 : 1"));
+assert("warped camera frame appears only after first draw", APT.includes("setWarpedReady(true)") && APT.includes('onStatus?.("warped")'));
+
 if (fail) {
   process.stdout.write(`\n${pass} pass . ${fail} fail\n`);
   process.exit(1);

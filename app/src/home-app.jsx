@@ -3399,7 +3399,7 @@ const SLASH_CMDS = [
   { cmd: "/describe-clip", hint: "<camera> [frames] [interval_s]", desc: "watch a multi-frame clip from a camera and describe motion. e.g. /describe-clip kitchen, /describe-clip driveway 6 1.5", category: "vision" },
   { cmd: "/find-clips", hint: "<query>",    desc: "search Frigate clips via semantic-search CLIP (e.g. 'package on porch'). Returns recent matches with thumbnails.", category: "vision" },
   { cmd: "/spatial",    hint: "",           desc: "open the light-footprint map — Addendum 38 Phase 1 calibration review: which lights illuminate which space", category: "vision" },
-  { cmd: "/apartment",  hint: "",           desc: "open the 3d apartment — full-screen spatial command center (white point cloud of the real scan; photo/mesh modes + devices + the dot land in later phases). alias: /3d", category: "vision" },
+  { cmd: "/apartment",  hint: "prewarm|status", desc: "open the 3d apartment, or warm/check its cached scan assets before opening. alias: /3d", category: "vision" },
   { cmd: "/labeler",    hint: "[base <url>]", desc: "open the video timeline labeler — review footage, edit segment labels. alias: /vl", category: "vision" },
   { cmd: "/look",       hint: "<camera> <question>", desc: "ask the vision model a spatial question about a camera — it reasons by 'pointing' (boxing what it sees), rendered as the paper's two-panel figure. e.g. /look kitchen what is on the counter", category: "vision" },
   // ── world + recap ─────────────────────────────────────────────
@@ -6601,6 +6601,33 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       }
       case "apartment":
       case "3d": {
+        const sub = arg.trim().toLowerCase();
+        if (sub === "prewarm" || sub === "warm" || sub === "prewarm status" || sub === "warm status" || sub === "status") {
+          const prewarm = window.HomeApartmentPrewarm;
+          if (!prewarm) {
+            addEvent({ kind: "system", text: "apartment prewarm module not loaded", tone: "error" });
+            return true;
+          }
+          if (sub === "prewarm" || sub === "warm") {
+            prewarm.start({ mode: "full", reason: "slash", force: true });
+          }
+          const s = prewarm.status();
+          const fmt = (bytes) => bytes ? `${(bytes / 1024 / 1024).toFixed(bytes > 1024 * 1024 ? 1 : 3)} MB` : "0 MB";
+          const warmed = (s.warmed || []).map((item) => `${item.label}: ${fmt(item.bytes)} in ${item.ms}ms`).join("\n");
+          const failed = (s.failed || []).map((item) => `${item.label}: ${item.error}`).join("\n");
+          addEvent({
+            kind: "system",
+            tone: s.state === "ready" || s.state === "running" ? "ok" : "warn",
+            text:
+              `apartment prewarm ${s.state}` +
+              (s.mode ? ` (${s.mode})` : "") +
+              (s.current ? `\ncurrent: ${s.current}` : "") +
+              (s.modules ? `\nmodules: ${s.modules.ok ? "ready" : "degraded"} (${s.modules.loaded} loaded)` : "") +
+              (warmed ? `\nwarmed:\n${warmed}` : "") +
+              (failed ? `\nfailed:\n${failed}` : ""),
+          });
+          return true;
+        }
         // Full-screen 3D apartment takeover (white point cloud, P0).
         if (!window.HomeApartmentView) {
           addEvent({ kind: "system", text: "apartment module not loaded", tone: "error" });

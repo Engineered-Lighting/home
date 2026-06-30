@@ -681,6 +681,23 @@ function safeFile(root, urlPath) {
   return full.startsWith(path.resolve(root)) ? full : null;
 }
 
+function fileEtag(stat) {
+  return `"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
+}
+
+function normalizeEtag(value) {
+  return String(value || "").trim().replace(/^W\//, "").replace(/^"|"$/g, "");
+}
+
+function clientHasFreshCopy(req, stat, etag) {
+  const inm = String(req.headers["if-none-match"] || "");
+  if (inm && inm.split(",").some((v) => normalizeEtag(v) === normalizeEtag(etag))) return true;
+  const ims = req.headers["if-modified-since"];
+  if (!ims) return false;
+  const since = Date.parse(String(ims));
+  return Number.isFinite(since) && Math.floor(stat.mtimeMs / 1000) <= Math.floor(since / 1000);
+}
+
 function serveFile(req, res, filePath, { cache = "no-store" } = {}) {
   fs.stat(filePath, (err, stat) => {
     if (err || !stat.isFile()) {
@@ -689,11 +706,30 @@ function serveFile(req, res, filePath, { cache = "no-store" } = {}) {
       return;
     }
     const type = MIME.get(path.extname(filePath).toLowerCase()) || "application/octet-stream";
-    res.writeHead(200, {
+    const etag = fileEtag(stat);
+    const headers = {
       "Content-Type": type,
       "Content-Length": stat.size,
       "Cache-Control": cache,
+      "ETag": etag,
+      "Last-Modified": stat.mtime.toUTCString(),
+    };
+    if (clientHasFreshCopy(req, stat, etag)) {
+      res.writeHead(304, {
+        "Cache-Control": cache,
+        "ETag": etag,
+        "Last-Modified": stat.mtime.toUTCString(),
+      });
+      res.end();
+      return;
+    }
+    res.writeHead(200, {
+      ...headers,
     });
+    if (req.method === "HEAD") {
+      res.end();
+      return;
+    }
     fs.createReadStream(filePath).pipe(res);
   });
 }
@@ -710,12 +746,12 @@ function serveStatic(req, res) {
     const rel = parsed.pathname.slice("/assets/apartment/".length);
     const configured = safeFile(APARTMENT_ASSETS_DIR, rel);
     if (configured && fs.existsSync(configured)) {
-      serveFile(req, res, configured, { cache: "no-cache" });
+      serveFile(req, res, configured, { cache: "private, no-cache" });
       return;
     }
     const fallback = safeFile(FALLBACK_APARTMENT_DIR, rel);
     if (fallback) {
-      serveFile(req, res, fallback, { cache: "no-cache" });
+      serveFile(req, res, fallback, { cache: "private, no-cache" });
       return;
     }
   }

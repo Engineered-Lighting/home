@@ -19,6 +19,29 @@ import * as THREE from 'three';
 const cb = new URL(import.meta.url).search || '';
 const sib = (name) => import(`./${name}${cb}`);
 
+export async function preloadModules({ includeRenderers = true } = {}) {
+    const jobs = [
+        sib('pointcloud.js'),
+        sib('rig.js'),
+        sib('modes.js'),
+        sib('markers.js'),
+        sib('picking.js'),
+        sib('assets.js'),
+    ];
+    if (includeRenderers) {
+        jobs.push(import('three/addons/loaders/GLTFLoader.js'));
+        jobs.push(import('@sparkjsdev/spark'));
+    }
+    const results = await Promise.allSettled(jobs);
+    return {
+        ok: results.every((r) => r.status === 'fulfilled'),
+        loaded: results.filter((r) => r.status === 'fulfilled').length,
+        failed: results
+            .filter((r) => r.status === 'rejected')
+            .map((r) => String(r.reason?.message || r.reason || 'module preload failed')),
+    };
+}
+
 export async function createEngine({ canvas, hostEl, sim = false }) {
     const [pointcloudM, rigM, modesM, markersM, pickingM, assetsM] = await Promise.all([
         sib('pointcloud.js'), sib('rig.js'), sib('modes.js'),

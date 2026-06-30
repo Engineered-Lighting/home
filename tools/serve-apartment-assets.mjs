@@ -81,6 +81,23 @@ function safePath(urlPath) {
   return full;
 }
 
+function fileEtag(stat) {
+  return `"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
+}
+
+function normalizeEtag(value) {
+  return String(value || "").trim().replace(/^W\//, "").replace(/^"|"$/g, "");
+}
+
+function clientHasFreshCopy(req, stat, etag) {
+  const inm = String(req.headers["if-none-match"] || "");
+  if (inm && inm.split(",").some((v) => normalizeEtag(v) === normalizeEtag(etag))) return true;
+  const ims = req.headers["if-modified-since"];
+  if (!ims) return false;
+  const since = Date.parse(String(ims));
+  return Number.isFinite(since) && Math.floor(stat.mtimeMs / 1000) <= Math.floor(since / 1000);
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") {
     sendHeaders(res, 204);
@@ -117,11 +134,25 @@ const server = http.createServer(async (req, res) => {
     const stat = await fs.stat(file);
     if (!stat.isFile()) throw new Error("not a file");
     const ext = path.extname(file).toLowerCase();
-    sendHeaders(res, 200, {
+    const etag = fileEtag(stat);
+    const headers = {
       "Content-Type": types[ext] || "application/octet-stream",
       "Content-Length": stat.size,
-      "Cache-Control": "no-store",
-    });
+      "Cache-Control": "private, no-cache",
+      "ETag": etag,
+      "Last-Modified": stat.mtime.toUTCString(),
+      "Accept-Ranges": "bytes",
+    };
+    if (clientHasFreshCopy(req, stat, etag)) {
+      sendHeaders(res, 304, {
+        "Cache-Control": headers["Cache-Control"],
+        "ETag": etag,
+        "Last-Modified": headers["Last-Modified"],
+      });
+      res.end();
+      return;
+    }
+    sendHeaders(res, 200, headers);
     if (req.method === "HEAD") {
       res.end();
       return;

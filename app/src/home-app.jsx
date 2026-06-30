@@ -4069,6 +4069,39 @@ function findRecentAssistantIdx(prev, text, kind = "home", lookback = 20, window
   return -1;
 }
 
+function isDirectLightStateQuestion(text) {
+  const t = String(text || "").toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+  if (!t) return false;
+  if (!/\b(lights?|lamps?)\b/.test(t)) return false;
+  if (!/\bon\b/.test(t)) return false;
+  if (/\b(turn|switch|toggle|set|make|dim|brighten)\b/.test(t)) return false;
+  return /\b(which|what|list|show|tell|are|currently)\b/.test(t);
+}
+
+function humanizeEntityId(entityId) {
+  return String(entityId || "")
+    .replace(/^[^.]+\./, "")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+function friendlyStateName(state, modelNames) {
+  const entityId = state?.entity_id || "";
+  const modelName = modelNames?.get?.(entityId);
+  if (modelName) return modelName;
+  return state?.attributes?.friendly_name || humanizeEntityId(entityId);
+}
+
+function isLightOrLampState(state, apartmentSwitchIds) {
+  const entityId = state?.entity_id || "";
+  const domain = entityId.split(".")[0];
+  if (domain === "light") return true;
+  if (domain !== "switch") return false;
+  if (apartmentSwitchIds?.has?.(entityId)) return true;
+  const haystack = `${state?.attributes?.friendly_name || ""} ${humanizeEntityId(entityId)}`.toLowerCase();
+  return /\b(light|lamp|lamps|ambient)\b/.test(haystack);
+}
+
 function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voiceOverride, themeOverride, autoplay = true }) {
   const viewport = useViewportProfile();
   const mobile = viewport.mobile;
@@ -7505,8 +7538,60 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     ).catch(() => { /* onError above already handled */ });
   }, [addEvent]);
 
+  const answerDirectLightStateQuestion = useCallback(async (text) => {
+    if (!isDirectLightStateQuestion(text)) return false;
+    addEvent({ kind: "user", text });
+    if (sim.active) {
+      addEvent({ kind: "system", text: "[sim] live Home Assistant state is mocked off", tone: "info" });
+      return true;
+    }
+    const client = haClientRef.current;
+    if (!client || connection !== "online" || typeof client.call !== "function") {
+      addEvent({ kind: "system", text: "not connected - cannot read live light state", tone: "warn" });
+      return true;
+    }
+
+    try {
+      const modelNames = new Map();
+      const apartmentSwitchIds = new Set();
+      try {
+        if (window.HomeApartmentData?.getModel && endpoint && token) {
+          const aptModel = await window.HomeApartmentData.getModel({ endpoint, token, sim: false });
+          for (const dev of aptModel?.devices || []) {
+            const entityId = dev?.ha_entity_id;
+            if (!entityId) continue;
+            const domain = entityId.split(".")[0];
+            if (domain !== "light" && domain !== "switch") continue;
+            if (dev.name || dev.id) modelNames.set(entityId, dev.name || dev.id);
+            if (domain === "switch") apartmentSwitchIds.add(entityId);
+          }
+        }
+      } catch (e) {
+        console.warn("[home] apartment light model lookup failed", e);
+      }
+
+      const states = await client.call({ type: "get_states" });
+      const onStates = (states || [])
+        .filter((state) => isLightOrLampState(state, apartmentSwitchIds))
+        .filter((state) => state?.state === "on");
+      const names = onStates
+        .map((state) => friendlyStateName(state, modelNames))
+        .filter(Boolean)
+        .sort((a, b) => a.localeCompare(b));
+      const switchBacked = onStates.some((state) => String(state?.entity_id || "").startsWith("switch."));
+      const textOut = names.length
+        ? `I checked Home Assistant just now. ${switchBacked ? "Lights and switch-backed lamps" : "Lights"} currently on: ${names.join(", ")}.`
+        : "I checked Home Assistant just now. No light entities or apartment switch-backed lamps are on.";
+      addEvent({ kind: "home", text: textOut });
+    } catch (e) {
+      console.warn("[home] live light state lookup failed", e);
+      addEvent({ kind: "system", text: `could not read live light state - ${e?.message || "Home Assistant query failed"}`, tone: "warn" });
+    }
+    return true;
+  }, [addEvent, connection, endpoint, sim.active, token]);
+
   /* ── Free-form user input ─────────────────────────────────────────── */
-  const sendInput = useCallback(() => {
+  const sendInput = useCallback(async () => {
     const text = input.trim();
     if (!text) return;
     if (text.startsWith("/")) {
@@ -7515,6 +7600,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       return;
     }
     setInput("");
+    if (await answerDirectLightStateQuestion(text)) return;
     // External Reasoning router: classify the text + dispatch externally
     // ONLY if (a) classifier returned "external" AND (b) the user has
     // enabled auto-routing AND (c) provider is configured. Otherwise
@@ -7536,7 +7622,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     } else {
       sendToHA(text);
     }
-  }, [input, handleCommand, sendToHA, dispatchExternal]);
+  }, [input, handleCommand, answerDirectLightStateQuestion, sendToHA, dispatchExternal]);
 
   /* ── Global keyboard shortcuts ─────────────────────────────────────── */
   useEffect(() => {

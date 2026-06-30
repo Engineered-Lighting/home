@@ -153,6 +153,22 @@ function aptOptimisticServiceState(prev, domain, service) {
   return { ...prev, state: nextState };
 }
 
+function aptExpectedServiceState(domain, service, optimistic) {
+  if (optimistic?.state) return optimistic.state;
+  if (service === "turn_on") return domain === "media_player" ? "playing" : "on";
+  if (service === "turn_off") return "off";
+  return null;
+}
+
+function aptStateMatchesExpected(state, expected) {
+  if (!expected) return true;
+  return state?.state === expected;
+}
+
+function aptDelay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function AptHudButton({ label, onClick, active, disabled, title, mobile = readAptViewport().mobile }) {
   return (
     <button
@@ -1031,6 +1047,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     const entityId = data?.entity_id;
     const prev = entityId ? statesRef.current[entityId] : null;
     const optimistic = aptOptimisticServiceState(prev, domain, service);
+    const expected = aptExpectedServiceState(domain, service, optimistic);
     const dev = entityId ? (model.devices || []).find((d) => d.ha_entity_id === entityId) : null;
     if (entityId && optimistic) {
       statesRef.current[entityId] = optimistic;
@@ -1039,6 +1056,27 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     }
     try {
       await window.HomeApartmentData.callService(client, domain, service, data);
+      if (entityId && typeof window.HomeApartmentData.readStates === "function") {
+        try {
+          let verified = null;
+          for (const delayMs of [350, 900, 1600]) {
+            await aptDelay(delayMs);
+            const states = await window.HomeApartmentData.readStates(client, [entityId]);
+            verified = states[entityId] || null;
+            if (verified) {
+              statesRef.current[entityId] = verified;
+              if (dev) engineRef.current?.overlay.setDeviceState(dev.id, verified);
+              setServicePulse((n) => n + 1);
+            }
+            if (verified && aptStateMatchesExpected(verified, expected)) break;
+          }
+          if (verified && expected && !aptStateMatchesExpected(verified, expected)) {
+            showToast(`${dev?.name || entityId} is still ${verified.state} in Home Assistant`);
+          }
+        } catch (e) {
+          console.warn("[apartment] service state readback failed", e);
+        }
+      }
     } catch (e) {
       if (entityId && prev) {
         statesRef.current[entityId] = prev;

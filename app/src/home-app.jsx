@@ -4231,6 +4231,19 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         setExternalKeyModalOpen(false);
         return true;
       },
+      openApartmentForAudit: () => {
+        const haBase = webDefaultBase("HG_DEFAULT_HA_BASE");
+        if (haBase) setEndpoint(haBase);
+        // Keep FirstRun out of the way without claiming HA is connected. The
+        // live Apartment audit only needs tracker/assets/Frigate; setting
+        // "online" here would start HA subscription effects with no socket.
+        setConnection("reconnecting");
+        setVideoLabelerOpen(false);
+        setPeopleOpen(false);
+        setIntelligenceOpen(false);
+        setApartmentOpen(true);
+        return true;
+      },
     };
     window.__havUiDebug = api;
     return () => {

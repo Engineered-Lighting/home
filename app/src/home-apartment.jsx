@@ -136,6 +136,12 @@ function aptCacheBust(url, value) {
   return `${url}${url.includes("?") ? "&" : "?"}_=${encodeURIComponent(value)}`;
 }
 
+function aptInitialFrameSrc(src, snapshotSrc, snapshotIntervalMs) {
+  return snapshotSrc && snapshotIntervalMs > 0
+    ? aptCacheBust(snapshotSrc, Date.now())
+    : src;
+}
+
 function aptOptimisticServiceState(prev, domain, service) {
   if (!prev || !["light", "switch", "media_player"].includes(domain)) return null;
   let nextState = prev.state;
@@ -213,7 +219,7 @@ function AptUndistortedFeed({ src, snapshotSrc, snapshotIntervalMs = 0, alt, int
   const imgRef = useRef(null);
   const [fallback, setFallback] = useState(false);
   const [warpedReady, setWarpedReady] = useState(false);
-  const [frameSrc, setFrameSrc] = useState(src);
+  const [frameSrc, setFrameSrc] = useState(() => aptInitialFrameSrc(src, snapshotSrc, snapshotIntervalMs));
   const warpedReadyRef = useRef(false);
   const rawSeenRef = useRef(false);
   const publishFrameRef = useRef(null);
@@ -447,7 +453,18 @@ function AptUndistortedFeed({ src, snapshotSrc, snapshotIntervalMs = 0, alt, int
   }, [wantWarp, src, snapshotSrc, intrinsics, useSnapshots, onStatus]);
 
   if (!wantWarp) {
-    return <img src={frameSrc} alt={alt} onLoad={handleImageLoad} onError={handleImageError} style={style} />;
+    return (
+      <img
+        src={frameSrc}
+        alt={alt}
+        data-apt-live-feed="img"
+        data-apt-live-visible="1"
+        data-apt-frame-src={frameSrc || ""}
+        onLoad={handleImageLoad}
+        onError={handleImageError}
+        style={style}
+      />
+    );
   }
   const fit = style?.objectFit || "fill";
   const frameStyle = { ...style, position: "relative", overflow: "hidden" };
@@ -462,12 +479,17 @@ function AptUndistortedFeed({ src, snapshotSrc, snapshotIntervalMs = 0, alt, int
     <div style={frameStyle}>
       <img
         ref={imgRef} src={frameSrc} alt="" aria-hidden="true" crossOrigin="anonymous"
+        data-apt-live-feed="img"
+        data-apt-live-visible={warpedReady ? "0" : "1"}
+        data-apt-frame-src={frameSrc || ""}
         onLoad={handleImageLoad}
         onError={handleImageError}
         style={{ ...fillStyle, opacity: warpedReady ? 0 : 1, pointerEvents: "none" }}
       />
       <canvas
         ref={canvasRef}
+        data-apt-live-feed="canvas"
+        data-apt-live-visible={warpedReady ? "1" : "0"}
         style={{ ...fillStyle, opacity: warpedReady ? 1 : 0, pointerEvents: "none" }}
       />
     </div>

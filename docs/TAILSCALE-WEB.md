@@ -214,11 +214,14 @@ npm run test:home2
 npm run build:home2
 ```
 
-For phone-sized browser changes, also run the mobile screenshot matrix before
-deploying:
+For browser layout changes, run both mobile and desktop screenshot gates before
+deploying. The desktop gate protects the installed Tauri app's shared frontend
+shape by checking Tauri-like and wide desktop browser viewports:
 
 ```powershell
 npm run web:mobile-audit:matrix
+npm run web:mobile-audit:deep
+npm run web:desktop-audit
 ```
 
 For actual screenshots, run against either the local dev server or the private
@@ -226,7 +229,8 @@ Tailscale Serve URL. The audit uses Playwright when installed and otherwise
 falls back to installed Chrome through the Chrome debugging protocol:
 
 ```powershell
-npm run web:mobile-audit -- --url https://<your-tailnet-serve-url>/
+npm run web:mobile-audit:deep -- --url https://<your-tailnet-serve-url>/
+npm run web:desktop-audit -- --url https://<your-tailnet-serve-url>/
 ```
 
 Optional Playwright setup:
@@ -236,11 +240,21 @@ npm install --save-dev playwright
 npx playwright install chromium
 ```
 
-The audit captures phone, large-phone, and narrow-tablet mobile viewports for
-the first-run path, mobile header actions, slash-command surfaces,
-travel/profile diagnostics, cameras, drawers, and Apartment `cloud`, `photo`,
-`mesh`, and fly-to-camera views. The generated screenshots and report stay
-under `tools/reports/`, which is ignored by git.
+The deep mobile audit captures small-phone, phone, large-phone, landscape
+phone, and narrow-tablet viewports for the first-run path, mobile header
+actions, slash-command surfaces, travel/profile diagnostics, cameras, drawers,
+and Apartment `cloud`, `photo`, `mesh`, mode switching, fly-to-camera, and
+back-to-overview behavior. The desktop audit captures `820x900` and `1280x900`
+viewports and checks that desktop controls do not collapse into the mobile
+menu. Reports include coarse timing summaries for boot and Apartment surfaces.
+Generated screenshots and reports stay under `tools/reports/`, which is ignored
+by git.
+
+Chrome-based automation does not fully prove iPhone Safari behavior. Before
+travel or after mobile Apartment changes, open the Tailscale URL on iPhone
+Safari and manually verify login, safe-area/address-bar behavior, chat,
+cameras, lights, remote readiness, and Apartment `cloud`/`photo`/`mesh` plus
+camera snap/back with the real Frigate feed.
 
 Manual checks from a browser, then from a second Tailscale-connected device:
 

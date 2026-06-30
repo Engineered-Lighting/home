@@ -20,13 +20,55 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO = path.resolve(__dirname, "..");
 const SRC_DIR = path.join(REPO, "app", "src");
-const DEFAULT_OUT = path.join(REPO, "tools", "reports", "mobile-web", timestamp());
 
 const DEFAULT_VIEWPORTS = [
   { name: "phone-390x844", width: 390, height: 844 },
   { name: "large-phone-430x932", width: 430, height: 932 },
   { name: "narrow-tablet-690x1024", width: 690, height: 1024 },
 ];
+
+const MOBILE_DEEP_VIEWPORTS = [
+  { name: "small-phone-360x740", width: 360, height: 740 },
+  { name: "phone-390x844", width: 390, height: 844 },
+  { name: "large-phone-430x932", width: 430, height: 932 },
+  { name: "phone-landscape-690x390", width: 690, height: 390 },
+  { name: "narrow-tablet-690x1024", width: 690, height: 1024 },
+];
+
+const DESKTOP_VIEWPORTS = [
+  { name: "tauri-desktop-820x900", width: 820, height: 900 },
+  { name: "desktop-1280x900", width: 1280, height: 900 },
+];
+
+const PROFILE_CONFIGS = {
+  mobile: {
+    title: "Mobile Web Screenshot Audit",
+    reportDir: "mobile-web",
+    viewports: DEFAULT_VIEWPORTS,
+    desktop: false,
+  },
+  "mobile-deep": {
+    title: "Deep Mobile Web Screenshot Audit",
+    reportDir: "mobile-web",
+    viewports: MOBILE_DEEP_VIEWPORTS,
+    desktop: false,
+  },
+  desktop: {
+    title: "Desktop Web Screenshot Audit",
+    reportDir: "desktop-web",
+    viewports: DESKTOP_VIEWPORTS,
+    desktop: true,
+  },
+};
+
+const TIMING_BUDGETS_MS = {
+  "01-boot": 35000,
+  "02-simulation-home": 7000,
+  "18-apartment-cloud": 18000,
+  "19-apartment-photo": 12000,
+  "20-apartment-mesh": 12000,
+  "21-apartment-fly-camera": 9000,
+};
 
 const FEATURE_MATRIX = [
   ["01-boot", "App boot or first-run screen", "Header, main surface, and bottom affordances fit the viewport."],
@@ -66,6 +108,42 @@ const BUTTON_PROBE_MATRIX = [
   ["b11-apartment-mode-buttons", "Apartment", "Cloud/photo/mesh HUD buttons respond without leaving a blank view."],
   ["b12-apartment-camera-buttons", "Apartment", "Fly-to-camera exposes only snap-safe controls before resetting cleanly."],
 ];
+
+const DESKTOP_FEATURE_MATRIX = [
+  ["01-boot", "Desktop boot", "Header, feed, and input render without overflow at desktop/Tauri widths."],
+  ["02-simulation-home", "Simulation home surface", "A usable non-secret desktop state is available for UI screenshots."],
+  ["03-desktop-header", "Desktop header", "Desktop controls remain desktop-style; the mobile actions menu is not substituted."],
+  ["04-remote-dialog", "Remote access / Travel readiness", "Profile selector, test-all, copy buttons, and readiness summary fit desktop widths."],
+  ["05-slash-palette", "Slash command palette", "Command menu remains usable from the desktop input row."],
+  ["06-help", "/help output", "Help/category output is readable without horizontal clipping."],
+  ["07-profile-status", "/profile status output", "Active service profile is visible for travel debugging."],
+  ["08-travel-status", "/travel status output", "Travel readiness status is visible and copyable."],
+  ["09-cameras", "/cameras output", "Camera snapshots/results fit desktop width."],
+  ["10-world-state", "World-state drawer", "Room/state drawer can be opened and dismissed."],
+  ["11-lights", "Living Lights drawer", "Lighting controls are usable at desktop width."],
+  ["12-spatial", "Spatial map drawer", "Map drawer opens without breaking desktop layout."],
+  ["13-look", "Look drawer", "Vision prompt drawer opens and fits desktop width."],
+  ["14-apartment-cloud", "Apartment cloud mode", "3D Apartment opens with the full apartment visible at desktop width."],
+  ["15-apartment-photo", "Apartment photo mode", "Photo/splat mode keeps the full apartment visible, or falls back with a clear asset error."],
+  ["16-apartment-mesh", "Apartment mesh mode", "Mesh mode keeps the full apartment visible, or falls back with a clear asset error."],
+  ["17-apartment-fly-camera", "Apartment fly-to-camera/live view", "Camera fly-to keeps snap-safe controls without breaking desktop layout."],
+];
+
+const DESKTOP_BUTTON_PROBE_MATRIX = [
+  ["d01-home-layout", "Home", "Visible controls stay inside the desktop viewport."],
+  ["d02-desktop-header", "Header", "Remote profile remains reachable and the mobile menu is absent."],
+  ["d03-remote-dialog", "Remote", "Remote access dialog opens, profile buttons respond, test-all starts, and close dismisses it."],
+  ["d04-slash-command", "Input", "Slash command input accepts and executes a command at desktop width."],
+  ["d05-drawer-closes", "Drawers", "World, lights, spatial, and look drawers expose a working close control."],
+  ["d06-apartment-mode-buttons", "Apartment", "Cloud/photo/mesh sequence returns to cloud without leaving a blank view."],
+  ["d07-apartment-camera-buttons", "Apartment", "Fly-to-camera controls are snap-safe and back returns to the full-apartment overview."],
+];
+
+function matrixForProfile(profile) {
+  return profile === "desktop"
+    ? { features: DESKTOP_FEATURE_MATRIX, buttonProbes: DESKTOP_BUTTON_PROBE_MATRIX }
+    : { features: FEATURE_MATRIX, buttonProbes: BUTTON_PROBE_MATRIX };
+}
 
 const VISUAL_HEALTH_EXPRESSION = `(() => {
   const vw = window.innerWidth || document.documentElement.clientWidth || 0;
@@ -112,14 +190,22 @@ function timestamp() {
   return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
 
+function defaultOut(profile) {
+  const config = PROFILE_CONFIGS[profile] || PROFILE_CONFIGS.mobile;
+  return path.join(REPO, "tools", "reports", config.reportDir, timestamp());
+}
+
 function usage() {
   return [
     "Usage: node tools/mobile-web-screenshot-audit.mjs [options]",
     "",
     "Options:",
     "  --url <url>                 App URL to test. If omitted, serves app/src on a random localhost port.",
-    "  --out <dir>                 Output directory. Default: tools/reports/mobile-web/<timestamp>",
-    "  --viewports <list>          Comma list of WIDTHxHEIGHT. Default: 390x844,430x932,768x1024",
+    "  --out <dir>                 Output directory. Default: tools/reports/<profile>/<timestamp>",
+    "  --profile <name>            mobile, mobile-deep, or desktop. Default: mobile.",
+    "  --deep                      Alias for --profile mobile-deep.",
+    "  --desktop                   Alias for --profile desktop.",
+    "  --viewports <list>          Comma list of WIDTHxHEIGHT. Defaults come from the profile.",
     "  --headed                    Run Chromium visibly.",
     "  --matrix-only               Write the feature matrix/report without launching a browser.",
     "  --help                      Show this help.",
@@ -137,8 +223,9 @@ function usage() {
 function parseArgs(argv) {
   const args = {
     url: process.env.HOME_MOBILE_AUDIT_URL || "",
-    out: process.env.HOME_MOBILE_AUDIT_OUT || DEFAULT_OUT,
-    viewports: DEFAULT_VIEWPORTS,
+    out: process.env.HOME_MOBILE_AUDIT_OUT || "",
+    profile: process.env.HOME_MOBILE_AUDIT_PROFILE || "mobile",
+    viewports: null,
     headed: false,
     matrixOnly: false,
     help: false,
@@ -148,11 +235,19 @@ function parseArgs(argv) {
     if (arg === "--help" || arg === "-h") args.help = true;
     else if (arg === "--headed") args.headed = true;
     else if (arg === "--matrix-only") args.matrixOnly = true;
+    else if (arg === "--deep") args.profile = "mobile-deep";
+    else if (arg === "--desktop") args.profile = "desktop";
+    else if (arg === "--profile") args.profile = argv[++i] || args.profile;
     else if (arg === "--url") args.url = argv[++i] || "";
     else if (arg === "--out") args.out = path.resolve(argv[++i] || args.out);
     else if (arg === "--viewports") args.viewports = parseViewports(argv[++i] || "");
     else throw new Error(`unknown argument: ${arg}`);
   }
+  if (!PROFILE_CONFIGS[args.profile]) {
+    throw new Error(`unknown profile: ${args.profile}. Expected one of ${Object.keys(PROFILE_CONFIGS).join(", ")}`);
+  }
+  if (!args.viewports) args.viewports = PROFILE_CONFIGS[args.profile].viewports;
+  if (!args.out) args.out = defaultOut(args.profile);
   return args;
 }
 
@@ -229,10 +324,14 @@ async function closeServer(server) {
 
 async function writeMatrixReport(outDir, extras = {}) {
   await fs.mkdir(outDir, { recursive: true });
+  const profile = extras.profile || "mobile";
+  const profileConfig = PROFILE_CONFIGS[profile] || PROFILE_CONFIGS.mobile;
+  const matrices = matrixForProfile(profile);
   const lines = [
-    "# Mobile Web Screenshot Audit",
+    `# ${profileConfig.title}`,
     "",
     `Generated: ${new Date().toISOString()}`,
+    `Profile: ${profile}`,
     "",
     "## Status",
     "",
@@ -242,13 +341,13 @@ async function writeMatrixReport(outDir, extras = {}) {
     "",
     "| ID | Surface | Expected |",
     "| --- | --- | --- |",
-    ...FEATURE_MATRIX.map(([id, title, expected]) => `| ${id} | ${title} | ${expected} |`),
+    ...matrices.features.map(([id, title, expected]) => `| ${id} | ${title} | ${expected} |`),
     "",
     "## Button / Tap Probe Matrix",
     "",
     "| ID | Surface | Expected |",
     "| --- | --- | --- |",
-    ...BUTTON_PROBE_MATRIX.map(([id, title, expected]) => `| ${id} | ${title} | ${expected} |`),
+    ...matrices.buttonProbes.map(([id, title, expected]) => `| ${id} | ${title} | ${expected} |`),
     "",
   ];
   if (extras.results?.length) {
@@ -275,6 +374,19 @@ async function writeMatrixReport(outDir, extras = {}) {
       lines.push("");
     }
   }
+  if (extras.results?.some((result) => result.timings?.length)) {
+    lines.push("## Timing Summary", "");
+    for (const result of extras.results) {
+      if (!result.timings?.length) continue;
+      lines.push(`### ${result.viewport}`);
+      lines.push("");
+      for (const item of result.timings) {
+        const budget = item.budgetMs ? ` / budget ${item.budgetMs}ms` : "";
+        lines.push(`- ${item.ok ? "PASS" : "WARN"} ${item.id}: ${item.ms}ms${budget}`);
+      }
+      lines.push("");
+    }
+  }
   if (extras.errors?.length) {
     lines.push("## Browser Errors", "");
     for (const err of extras.errors.slice(0, 80)) lines.push(`- ${err}`);
@@ -285,8 +397,9 @@ async function writeMatrixReport(outDir, extras = {}) {
     path.join(outDir, "matrix.json"),
     JSON.stringify({
       generatedAt: new Date().toISOString(),
-      features: FEATURE_MATRIX.map(([id, title, expected]) => ({ id, title, expected })),
-      buttonProbes: BUTTON_PROBE_MATRIX.map(([id, title, expected]) => ({ id, title, expected })),
+      profile,
+      features: matrices.features.map(([id, title, expected]) => ({ id, title, expected })),
+      buttonProbes: matrices.buttonProbes.map(([id, title, expected]) => ({ id, title, expected })),
       ...extras,
     }, null, 2),
     "utf8",
@@ -359,6 +472,11 @@ function apartmentFitDetail(fit) {
   return `apartment bounds ${bounds} inside safe ${safe} (${v.width || "?"}x${v.height || "?"})`;
 }
 
+function timingEntry(id, ms) {
+  const budgetMs = TIMING_BUDGETS_MS[id] || 0;
+  return { id, ms, budgetMs, ok: !budgetMs || ms <= budgetMs };
+}
+
 async function visualHealth(page) {
   return page.evaluate(VISUAL_HEALTH_EXPRESSION);
 }
@@ -398,6 +516,39 @@ async function ensureCameraSnapLocked(page, context) {
     throw new Error(`${context}: camera snap exposes mode buttons: ${result.forbidden.join(", ")}`);
   }
   return `camera ${result.liveCam} snapped; mode buttons hidden`;
+}
+
+async function ensureDesktopHeader(page, context) {
+  const result = await page.evaluate(() => {
+    const visible = (el) => {
+      if (!el) return false;
+      const rect = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return rect.width > 1 && rect.height > 1 && style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity) !== 0;
+    };
+    return {
+      mobileMenuVisible: visible(document.querySelector('button[aria-label="Open mobile actions"]')),
+      remoteVisible: visible(document.querySelector('button[aria-label="Remote profile"]')),
+      peopleVisible: visible(document.querySelector('button[aria-label^="Open people"]')),
+      intelligenceVisible: visible(document.querySelector('button[aria-label="Open intelligence atlas"]')),
+      videoLabelerVisible: visible(document.querySelector('button[aria-label="Open video labeler"]')),
+    };
+  });
+  if (result.mobileMenuVisible) throw new Error(`${context}: mobile actions menu is visible on desktop`);
+  if (!result.remoteVisible) throw new Error(`${context}: remote profile button is missing on desktop`);
+  const detail = await ensureVisualHealth(page, context);
+  const optional = [
+    result.peopleVisible ? "people" : "",
+    result.intelligenceVisible ? "intelligence" : "",
+    result.videoLabelerVisible ? "video labeler" : "",
+  ].filter(Boolean).join(", ") || "wide-mode optional icons hidden";
+  return `${detail}; desktop header preserved; ${optional}`;
+}
+
+async function exitCameraAndEnsureFit(page, context) {
+  await clickButtonByName(page, /back/i, 2500);
+  await page.waitForTimeout(900);
+  return ensureApartmentFit(page, context);
 }
 
 async function clickButtonByName(page, name, timeout = 1800) {
@@ -447,10 +598,17 @@ async function clickMobileMenuItem(page, label) {
 async function runButtonProbes(page, buttonItems) {
   await recordButtonProbe(buttonItems, "b12-apartment-camera-buttons", "Apartment back and close buttons respond", async () => {
     await page.waitForFunction(() => !!window.__havApartmentDebug, null, { timeout: 5000 });
+    const active = await page.evaluate(() => !!window.__havApartmentDebug?.snapshot?.()?.liveCam);
+    if (!active) {
+      const ok = await page.evaluate(() => window.__havApartmentDebug?.flyFirstCamera?.());
+      if (!ok) throw new Error("no camera device available for fly-to test");
+      await page.waitForTimeout(1600);
+    }
     const snap = await ensureCameraSnapLocked(page, "apartment fly-camera controls");
     const detail = await ensureVisualHealth(page, "apartment fly-camera controls");
+    const fit = await exitCameraAndEnsureFit(page, "apartment back-to-overview fit");
     await closeOverlays(page);
-    return `${detail}; ${snap}; fly-camera screenshot captured as 21-apartment-fly-camera.png`;
+    return `${detail}; ${snap}; ${fit}; fly-camera screenshot captured as 21-apartment-fly-camera.png`;
   });
 
   await closeOverlays(page);
@@ -530,13 +688,14 @@ async function runButtonProbes(page, buttonItems) {
     return ensureVisualHealth(page, "drawers closed");
   });
 
-  await recordButtonProbe(buttonItems, "b11-apartment-mode-buttons", "Apartment cloud/photo/mesh HUD buttons respond", async () => {
+  await recordButtonProbe(buttonItems, "b11-apartment-mode-buttons", "Apartment cloud/photo/mesh/cloud HUD sequence responds", async () => {
     await closeOverlays(page);
     await runCommand(page, "/apartment", 3200);
     await page.waitForFunction(() => !!window.__havApartmentDebug, null, { timeout: 12000 });
     await clickButtonByName(page, /^cloud$/i);
     await clickButtonByName(page, /^photo$/i, 2600);
     await clickButtonByName(page, /^mesh$/i, 2600);
+    await clickButtonByName(page, /^cloud$/i, 2600);
     const fit = await ensureApartmentFit(page, "apartment mode fit");
     const detail = await ensureVisualHealth(page, "apartment mode controls");
     await clickButtonByName(page, /close/i);
@@ -560,7 +719,80 @@ async function runButtonProbes(page, buttonItems) {
   });
 }
 
-async function runViewportAudit(browser, appUrl, viewport, outRoot, errors) {
+async function runDesktopButtonProbes(page, buttonItems) {
+  await closeOverlays(page);
+
+  await recordButtonProbe(buttonItems, "d01-home-layout", "Desktop home controls fit viewport", async () => {
+    return ensureVisualHealth(page, "desktop home");
+  });
+
+  await recordButtonProbe(buttonItems, "d02-desktop-header", "Desktop header remains intact", async () => {
+    return ensureDesktopHeader(page, "desktop header");
+  });
+
+  await recordButtonProbe(buttonItems, "d03-remote-dialog", "Remote dialog profile buttons, test all, and close respond", async () => {
+    await closeOverlays(page);
+    const remote = page.locator('button[aria-label="Remote profile"]').first();
+    if (!(await maybeClick(remote, 1800))) throw new Error("remote profile button missing");
+    await expectVisibleText(page, /Remote access \/ Travel readiness/i);
+    await clickButtonByName(page, /Home LAN/i);
+    await clickButtonByName(page, /Remote via Tailscale/i);
+    await clickButtonByName(page, /^Custom$/i);
+    await clickButtonByName(page, /Home LAN/i);
+    await clickButtonByName(page, /test all/i, 2500);
+    await page.waitForTimeout(500);
+    await clickButtonByName(page, /^x$|close/i);
+    return ensureVisualHealth(page, "desktop remote dialog closed");
+  });
+
+  await recordButtonProbe(buttonItems, "d04-slash-command", "Slash command input executes", async () => {
+    await closeOverlays(page);
+    await runCommand(page, "/profile status", 900);
+    await expectVisibleText(page, /profile/i);
+    return ensureVisualHealth(page, "desktop profile command");
+  });
+
+  await recordButtonProbe(buttonItems, "d05-drawer-closes", "World/lights/spatial/look drawers close from desktop", async () => {
+    for (const command of ["/world-state", "/lights", "/spatial", "/look kitchen what is on the counter"]) {
+      await closeOverlays(page);
+      await runCommand(page, command, 900);
+      await clickButtonByName(page, /close/i, 2500);
+      await page.waitForTimeout(250);
+    }
+    return ensureVisualHealth(page, "desktop drawers closed");
+  });
+
+  await recordButtonProbe(buttonItems, "d06-apartment-mode-buttons", "Apartment cloud/photo/mesh/cloud HUD sequence responds", async () => {
+    await closeOverlays(page);
+    await runCommand(page, "/apartment", 3200);
+    await page.waitForFunction(() => !!window.__havApartmentDebug, null, { timeout: 12000 });
+    await clickButtonByName(page, /^cloud$/i);
+    await clickButtonByName(page, /^photo$/i, 2600);
+    await clickButtonByName(page, /^mesh$/i, 2600);
+    await clickButtonByName(page, /^cloud$/i, 2600);
+    const fit = await ensureApartmentFit(page, "desktop apartment mode fit");
+    const detail = await ensureVisualHealth(page, "desktop apartment mode controls");
+    await clickButtonByName(page, /close/i);
+    await page.waitForFunction(() => !window.__havApartmentDebug, null, { timeout: 5000 });
+    return `${detail}; ${fit}`;
+  });
+
+  await recordButtonProbe(buttonItems, "d07-apartment-camera-buttons", "Apartment camera back returns to overview", async () => {
+    await closeOverlays(page);
+    await runCommand(page, "/apartment", 3200);
+    await page.waitForFunction(() => !!window.__havApartmentDebug, null, { timeout: 12000 });
+    const ok = await page.evaluate(() => window.__havApartmentDebug?.flyFirstCamera?.());
+    if (!ok) throw new Error("no camera device available for fly-to test");
+    await page.waitForTimeout(1600);
+    const snap = await ensureCameraSnapLocked(page, "desktop apartment fly-camera controls");
+    const detail = await ensureVisualHealth(page, "desktop apartment fly-camera controls");
+    const fit = await exitCameraAndEnsureFit(page, "desktop apartment back-to-overview fit");
+    await clickButtonByName(page, /close/i);
+    return `${detail}; ${snap}; ${fit}`;
+  });
+}
+
+async function runViewportAudit(browser, appUrl, viewport, outRoot, errors, profile = "mobile") {
   const context = await browser.newContext({
     viewport: { width: viewport.width, height: viewport.height },
     isMobile: viewport.width < 700,
@@ -577,6 +809,8 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors) {
   await fs.mkdir(outDir, { recursive: true });
   const items = [];
   const buttonItems = [];
+  const timings = [];
+  const desktop = !!PROFILE_CONFIGS[profile]?.desktop;
   const capture = async (id, detail = "") => {
     try {
       const file = await screenshot(page, outDir, id);
@@ -586,24 +820,99 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors) {
     }
   };
   const step = async (id, detail, fn) => {
+    const started = Date.now();
     try {
       const result = await fn();
-      await capture(id, result || detail);
+      const ms = Date.now() - started;
+      timings.push(timingEntry(id, ms));
+      await capture(id, `${result || detail}; ${ms}ms`);
     } catch (err) {
+      const ms = Date.now() - started;
+      timings.push({ ...timingEntry(id, ms), ok: false });
       items.push({ id, ok: false, detail: `${detail}: ${err?.message || err}` });
     }
   };
 
   try {
+    const bootStarted = Date.now();
     await page.goto(appUrl, { waitUntil: "domcontentloaded" });
     await waitForBoot(page);
-    await capture("01-boot", "Initial load");
+    const bootMs = Date.now() - bootStarted;
+    timings.push(timingEntry("01-boot", bootMs));
+    await capture("01-boot", `Initial load; ${bootMs}ms`);
 
     await step("02-simulation-home", "Enter simulation for non-secret UI state", async () => {
       await enterSimulation(page);
     });
 
-    await step("03-mobile-actions-menu", "Header actions menu", async () => {
+    if (desktop) {
+      await step("03-desktop-header", "Desktop header", async () => {
+        return ensureDesktopHeader(page, "desktop header");
+      });
+
+      await closeOverlays(page);
+      await step("04-remote-dialog", "Remote access / Travel readiness", async () => {
+        const remote = page.locator('button[aria-label="Remote profile"]').first();
+        if (!(await maybeClick(remote, 1800))) throw new Error("remote profile button missing");
+        await expectVisibleText(page, /Remote access \/ Travel readiness/i);
+        await page.waitForTimeout(600);
+      });
+
+      await closeOverlays(page);
+      await step("05-slash-palette", "Slash command palette", async () => {
+        const input = await commandInput(page);
+        await input.click();
+        await input.fill("/");
+        await page.waitForTimeout(700);
+      });
+
+      for (const [id, command, waitMs] of [
+        ["06-help", "/help", 800],
+        ["07-profile-status", "/profile status", 800],
+        ["08-travel-status", "/travel status", 900],
+        ["09-cameras", "/cameras", 1800],
+        ["10-world-state", "/world-state", 1000],
+        ["11-lights", "/lights", 1000],
+        ["12-spatial", "/spatial", 1000],
+        ["13-look", "/look kitchen what is on the counter", 1000],
+      ]) {
+        await closeOverlays(page);
+        await step(id, command, async () => {
+          await runCommand(page, command, waitMs);
+        });
+      }
+
+      await closeOverlays(page);
+      await step("14-apartment-cloud", "/apartment cloud mode", async () => {
+        await runCommand(page, "/apartment", 3600);
+        await page.waitForFunction(() => !!window.__havApartmentDebug, null, { timeout: 12000 });
+        return ensureApartmentFit(page, "desktop apartment cloud fit");
+      });
+
+      await step("15-apartment-photo", "Apartment photo/splat mode", async () => {
+        await page.evaluate(() => window.__havApartmentDebug?.setMode?.("splat"));
+        await page.waitForTimeout(2600);
+        return ensureApartmentFit(page, "desktop apartment photo fit");
+      });
+
+      await step("16-apartment-mesh", "Apartment mesh mode", async () => {
+        await page.evaluate(() => window.__havApartmentDebug?.setMode?.("mesh"));
+        await page.waitForTimeout(2600);
+        return ensureApartmentFit(page, "desktop apartment mesh fit");
+      });
+
+      await step("17-apartment-fly-camera", "Apartment fly-to-camera/live view", async () => {
+        const ok = await page.evaluate(() => window.__havApartmentDebug?.flyFirstCamera?.());
+        if (!ok) throw new Error("no camera device available for fly-to test");
+        await page.waitForTimeout(1600);
+        const snap = await ensureCameraSnapLocked(page, "desktop apartment fly-camera screenshot");
+        const detail = await ensureVisualHealth(page, "desktop apartment fly-camera screenshot");
+        return `${detail}; ${snap}`;
+      });
+
+      await runDesktopButtonProbes(page, buttonItems);
+    } else {
+      await step("03-mobile-actions-menu", "Header actions menu", async () => {
       await openMobileMenu(page);
       await page.waitForTimeout(500);
     });
@@ -689,12 +998,13 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors) {
       return `${detail}; ${snap}`;
     });
 
-    await runButtonProbes(page, buttonItems);
+      await runButtonProbes(page, buttonItems);
+    }
   } finally {
     await context.close();
   }
 
-  return { viewport: viewport.name, items, buttonItems };
+  return { viewport: viewport.name, items, buttonItems, timings };
 }
 
 function chromeCandidates() {
@@ -1042,6 +1352,39 @@ async function cdpEnsureCameraSnapLocked(client, context) {
   return `camera ${result.liveCam} snapped; mode buttons hidden`;
 }
 
+async function cdpEnsureDesktopHeader(client, context) {
+  const result = await cdpEval(client, `(() => {
+    const visible = (el) => {
+      if (!el) return false;
+      const rect = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return rect.width > 1 && rect.height > 1 && style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity) !== 0;
+    };
+    return {
+      mobileMenuVisible: visible(document.querySelector('button[aria-label="Open mobile actions"]')),
+      remoteVisible: visible(document.querySelector('button[aria-label="Remote profile"]')),
+      peopleVisible: visible(document.querySelector('button[aria-label^="Open people"]')),
+      intelligenceVisible: visible(document.querySelector('button[aria-label="Open intelligence atlas"]')),
+      videoLabelerVisible: visible(document.querySelector('button[aria-label="Open video labeler"]')),
+    };
+  })()`, true);
+  if (result.mobileMenuVisible) throw new Error(`${context}: mobile actions menu is visible on desktop`);
+  if (!result.remoteVisible) throw new Error(`${context}: remote profile button is missing on desktop`);
+  const detail = await cdpEnsureVisualHealth(client, context);
+  const optional = [
+    result.peopleVisible ? "people" : "",
+    result.intelligenceVisible ? "intelligence" : "",
+    result.videoLabelerVisible ? "video labeler" : "",
+  ].filter(Boolean).join(", ") || "wide-mode optional icons hidden";
+  return `${detail}; desktop header preserved; ${optional}`;
+}
+
+async function cdpExitCameraAndEnsureFit(client, context) {
+  await cdpClickButton(client, "back", 900);
+  await cdpDelay(900);
+  return cdpEnsureApartmentFit(client, context);
+}
+
 async function cdpRecordButtonProbe(buttonItems, id, detail, fn) {
   try {
     const result = await fn();
@@ -1082,10 +1425,17 @@ async function cdpExpectText(client, pattern) {
 async function cdpRunButtonProbes(client, buttonItems) {
   await cdpRecordButtonProbe(buttonItems, "b12-apartment-camera-buttons", "Apartment back and close buttons respond", async () => {
     await cdpWaitFor(client, "!!window.__havApartmentDebug", 5000);
+    const active = await cdpEval(client, "!!window.__havApartmentDebug?.snapshot?.()?.liveCam", true);
+    if (!active) {
+      const ok = await cdpEval(client, "window.__havApartmentDebug && window.__havApartmentDebug.flyFirstCamera()", true);
+      if (!ok) throw new Error("no camera device available for fly-to test");
+      await cdpDelay(1600);
+    }
     const snap = await cdpEnsureCameraSnapLocked(client, "apartment fly-camera controls");
     const detail = await cdpEnsureVisualHealth(client, "apartment fly-camera controls");
+    const fit = await cdpExitCameraAndEnsureFit(client, "apartment back-to-overview fit");
     await cdpCloseOverlays(client);
-    return `${detail}; ${snap}; fly-camera screenshot captured as 21-apartment-fly-camera.png`;
+    return `${detail}; ${snap}; ${fit}; fly-camera screenshot captured as 21-apartment-fly-camera.png`;
   });
 
   await cdpCloseOverlays(client);
@@ -1163,13 +1513,14 @@ async function cdpRunButtonProbes(client, buttonItems) {
     return cdpEnsureVisualHealth(client, "drawers closed");
   });
 
-  await cdpRecordButtonProbe(buttonItems, "b11-apartment-mode-buttons", "Apartment cloud/photo/mesh HUD buttons respond", async () => {
+  await cdpRecordButtonProbe(buttonItems, "b11-apartment-mode-buttons", "Apartment cloud/photo/mesh/cloud HUD sequence responds", async () => {
     await cdpCloseOverlays(client);
     await cdpRunCommand(client, "/apartment", 3200);
     await cdpWaitFor(client, "!!window.__havApartmentDebug", 12000);
     await cdpClickButton(client, "^cloud$");
     await cdpClickButton(client, "^photo$", 2600);
     await cdpClickButton(client, "^mesh$", 2600);
+    await cdpClickButton(client, "^cloud$", 2600);
     const fit = await cdpEnsureApartmentFit(client, "apartment mode fit");
     const detail = await cdpEnsureVisualHealth(client, "apartment mode controls");
     await cdpClickButton(client, "close", 600);
@@ -1193,11 +1544,85 @@ async function cdpRunButtonProbes(client, buttonItems) {
   });
 }
 
-async function runViewportAuditCdp(appUrl, viewport, outRoot, errors) {
+async function cdpRunDesktopButtonProbes(client, buttonItems) {
+  await cdpCloseOverlays(client);
+
+  await cdpRecordButtonProbe(buttonItems, "d01-home-layout", "Desktop home controls fit viewport", async () => {
+    return cdpEnsureVisualHealth(client, "desktop home");
+  });
+
+  await cdpRecordButtonProbe(buttonItems, "d02-desktop-header", "Desktop header remains intact", async () => {
+    return cdpEnsureDesktopHeader(client, "desktop header");
+  });
+
+  await cdpRecordButtonProbe(buttonItems, "d03-remote-dialog", "Remote dialog profile buttons, test all, and close respond", async () => {
+    await cdpCloseOverlays(client);
+    const ok = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Remote profile"]')`);
+    if (!ok) throw new Error("remote profile button missing");
+    await cdpDelay(450);
+    await cdpExpectText(client, "Remote access / Travel readiness");
+    await cdpClickButton(client, "Home LAN");
+    await cdpClickButton(client, "Remote via Tailscale");
+    await cdpClickButton(client, "^Custom$");
+    await cdpClickButton(client, "Home LAN");
+    await cdpClickButton(client, "test all", 700);
+    await cdpClickButton(client, "^x$|close");
+    return cdpEnsureVisualHealth(client, "desktop remote dialog closed");
+  });
+
+  await cdpRecordButtonProbe(buttonItems, "d04-slash-command", "Slash command input executes", async () => {
+    await cdpCloseOverlays(client);
+    await cdpRunCommand(client, "/profile status", 900);
+    await cdpExpectText(client, "profile");
+    return cdpEnsureVisualHealth(client, "desktop profile command");
+  });
+
+  await cdpRecordButtonProbe(buttonItems, "d05-drawer-closes", "World/lights/spatial/look drawers close from desktop", async () => {
+    for (const command of ["/world-state", "/lights", "/spatial", "/look kitchen what is on the counter"]) {
+      await cdpCloseOverlays(client);
+      await cdpRunCommand(client, command, 900);
+      await cdpClickButton(client, "close", 450);
+    }
+    return cdpEnsureVisualHealth(client, "desktop drawers closed");
+  });
+
+  await cdpRecordButtonProbe(buttonItems, "d06-apartment-mode-buttons", "Apartment cloud/photo/mesh/cloud HUD sequence responds", async () => {
+    await cdpCloseOverlays(client);
+    await cdpRunCommand(client, "/apartment", 3200);
+    await cdpWaitFor(client, "!!window.__havApartmentDebug", 12000);
+    await cdpClickButton(client, "^cloud$");
+    await cdpClickButton(client, "^photo$", 2600);
+    await cdpClickButton(client, "^mesh$", 2600);
+    await cdpClickButton(client, "^cloud$", 2600);
+    const fit = await cdpEnsureApartmentFit(client, "desktop apartment mode fit");
+    const detail = await cdpEnsureVisualHealth(client, "desktop apartment mode controls");
+    await cdpClickButton(client, "close", 600);
+    await cdpWaitFor(client, "!window.__havApartmentDebug", 5000);
+    return `${detail}; ${fit}`;
+  });
+
+  await cdpRecordButtonProbe(buttonItems, "d07-apartment-camera-buttons", "Apartment camera back returns to overview", async () => {
+    await cdpCloseOverlays(client);
+    await cdpRunCommand(client, "/apartment", 3200);
+    await cdpWaitFor(client, "!!window.__havApartmentDebug", 12000);
+    const ok = await cdpEval(client, "window.__havApartmentDebug && window.__havApartmentDebug.flyFirstCamera()", true);
+    if (!ok) throw new Error("no camera device available for fly-to test");
+    await cdpDelay(1600);
+    const snap = await cdpEnsureCameraSnapLocked(client, "desktop apartment fly-camera controls");
+    const detail = await cdpEnsureVisualHealth(client, "desktop apartment fly-camera controls");
+    const fit = await cdpExitCameraAndEnsureFit(client, "desktop apartment back-to-overview fit");
+    await cdpClickButton(client, "close", 600);
+    return `${detail}; ${snap}; ${fit}`;
+  });
+}
+
+async function runViewportAuditCdp(appUrl, viewport, outRoot, errors, profile = "mobile") {
   const outDir = path.join(outRoot, viewport.name);
   await fs.mkdir(outDir, { recursive: true });
   const items = [];
   const buttonItems = [];
+  const timings = [];
+  const desktop = !!PROFILE_CONFIGS[profile]?.desktop;
   const chrome = await launchChromeForCdp(viewport);
   let client = null;
 
@@ -1210,21 +1635,29 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors) {
     }
   };
   const step = async (id, detail, fn) => {
+    const started = Date.now();
     try {
       const result = await fn();
-      await capture(id, result || detail);
+      const ms = Date.now() - started;
+      timings.push(timingEntry(id, ms));
+      await capture(id, `${result || detail}; ${ms}ms`);
     } catch (err) {
+      const ms = Date.now() - started;
+      timings.push({ ...timingEntry(id, ms), ok: false });
       items.push({ id, ok: false, detail: `${detail}: ${err?.message || err}` });
     }
   };
 
   try {
+    const bootStarted = Date.now();
     client = await createCdpPage(chrome, appUrl, viewport);
     await cdpWaitFor(client, "window.__bootState && (window.__bootState.done || window.__bootState.failed)", 35000);
     await cdpDelay(900);
+    const bootMs = Date.now() - bootStarted;
+    timings.push(timingEntry("01-boot", bootMs));
     const bootFailed = await cdpEval(client, "window.__bootState && window.__bootState.failed ? String(window.__bootState.failed.error || window.__bootState.failed) : ''").catch(() => "");
     if (bootFailed) errors.push(`${viewport.name}: boot failed: ${bootFailed}`);
-    await capture("01-boot", "Initial load");
+    await capture("01-boot", `Initial load; ${bootMs}ms`);
 
     await step("02-simulation-home", "Enter simulation for non-secret UI state", async () => {
       const ok = await cdpAction(client, "(h) => h.clickButton('try simulation') || h.command('/simulation healthy')");
@@ -1232,7 +1665,83 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors) {
       await cdpDelay(1600);
     });
 
-    await step("03-mobile-actions-menu", "Header actions menu", async () => {
+    if (desktop) {
+      await step("03-desktop-header", "Desktop header", async () => {
+        return cdpEnsureDesktopHeader(client, "desktop header");
+      });
+
+      await cdpCloseOverlays(client);
+      await step("04-remote-dialog", "Remote access / Travel readiness", async () => {
+        const ok = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Remote profile"]')`);
+        if (!ok) throw new Error("remote profile button missing");
+        await cdpExpectText(client, "Remote access / Travel readiness");
+        await cdpDelay(600);
+      });
+
+      await cdpCloseOverlays(client);
+      await step("05-slash-palette", "Slash command palette", async () => {
+        const ok = await cdpEval(client, `(() => {
+          const inputs = Array.from(document.querySelectorAll("input"));
+          const el = document.querySelector('input[placeholder="type or /command"]') || inputs[inputs.length - 1];
+          if (!el) return false;
+          el.focus();
+          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+          if (setter) setter.call(el, "/");
+          else el.value = "/";
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          return true;
+        })()`);
+        if (!ok) throw new Error("command input missing");
+        await cdpDelay(700);
+      });
+
+      for (const [id, command, waitMs] of [
+        ["06-help", "/help", 900],
+        ["07-profile-status", "/profile status", 900],
+        ["08-travel-status", "/travel status", 900],
+        ["09-cameras", "/cameras", 1900],
+        ["10-world-state", "/world-state", 1100],
+        ["11-lights", "/lights", 1100],
+        ["12-spatial", "/spatial", 1100],
+        ["13-look", "/look kitchen what is on the counter", 1100],
+      ]) {
+        await cdpCloseOverlays(client);
+        await step(id, command, async () => {
+          await cdpRunCommand(client, command, waitMs);
+        });
+      }
+
+      await cdpCloseOverlays(client);
+      await step("14-apartment-cloud", "/apartment cloud mode", async () => {
+        await cdpRunCommand(client, "/apartment", 3600);
+        await cdpWaitFor(client, "!!window.__havApartmentDebug", 15000);
+        return cdpEnsureApartmentFit(client, "desktop apartment cloud fit");
+      });
+
+      await step("15-apartment-photo", "Apartment photo/splat mode", async () => {
+        await cdpEval(client, "window.__havApartmentDebug && window.__havApartmentDebug.setMode('splat')", true);
+        await cdpDelay(2600);
+        return cdpEnsureApartmentFit(client, "desktop apartment photo fit");
+      });
+
+      await step("16-apartment-mesh", "Apartment mesh mode", async () => {
+        await cdpEval(client, "window.__havApartmentDebug && window.__havApartmentDebug.setMode('mesh')", true);
+        await cdpDelay(2600);
+        return cdpEnsureApartmentFit(client, "desktop apartment mesh fit");
+      });
+
+      await step("17-apartment-fly-camera", "Apartment fly-to-camera/live view", async () => {
+        const ok = await cdpEval(client, "window.__havApartmentDebug && window.__havApartmentDebug.flyFirstCamera()", true);
+        if (!ok) throw new Error("no camera device available for fly-to test");
+        await cdpDelay(1600);
+        const snap = await cdpEnsureCameraSnapLocked(client, "desktop apartment fly-camera screenshot");
+        const detail = await cdpEnsureVisualHealth(client, "desktop apartment fly-camera screenshot");
+        return `${detail}; ${snap}`;
+      });
+
+      await cdpRunDesktopButtonProbes(client, buttonItems);
+    } else {
+      await step("03-mobile-actions-menu", "Header actions menu", async () => {
       const ok = await cdpEval(client, "(() => { const b = document.querySelector('button[aria-label=\"Open mobile actions\"]'); if (!b) return false; b.click(); return true; })()");
       if (!ok) throw new Error("mobile menu button missing");
       await cdpDelay(500);
@@ -1329,7 +1838,8 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors) {
       return `${detail}; ${snap}`;
     });
 
-    await cdpRunButtonProbes(client, buttonItems);
+      await cdpRunButtonProbes(client, buttonItems);
+    }
   } catch (err) {
     errors.push(`${viewport.name}: ${err?.message || err}`);
     if (chrome.stderr()) errors.push(`${viewport.name}: chrome stderr: ${chrome.stderr().slice(-1000)}`);
@@ -1338,7 +1848,7 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors) {
     await chrome.close();
   }
 
-  return { viewport: viewport.name, items, buttonItems };
+  return { viewport: viewport.name, items, buttonItems, timings };
 }
 
 async function main() {
@@ -1349,8 +1859,8 @@ async function main() {
   }
 
   if (args.matrixOnly) {
-    await writeMatrixReport(args.out, { status: "Matrix-only run. No browser screenshots captured." });
-    console.log(`mobile audit matrix written to ${path.join(args.out, "REPORT.md")}`);
+    await writeMatrixReport(args.out, { profile: args.profile, status: "Matrix-only run. No browser screenshots captured." });
+    console.log(`${args.profile} audit matrix written to ${path.join(args.out, "REPORT.md")}`);
     return;
   }
 
@@ -1372,14 +1882,14 @@ async function main() {
       const browser = await playwright.chromium.launch({ headless: !args.headed });
       try {
         for (const viewport of args.viewports) {
-          results.push(await runViewportAudit(browser, appUrl, viewport, args.out, errors));
+          results.push(await runViewportAudit(browser, appUrl, viewport, args.out, errors, args.profile));
         }
       } finally {
         await browser.close();
       }
     } else {
       for (const viewport of args.viewports) {
-        results.push(await runViewportAuditCdp(appUrl, viewport, args.out, errors));
+        results.push(await runViewportAuditCdp(appUrl, viewport, args.out, errors, args.profile));
       }
     }
 
@@ -1387,11 +1897,12 @@ async function main() {
     const buttonFailures = results.flatMap((r) => r.buttonItems || []).filter((i) => !i.ok);
     const failures = [...featureFailures, ...buttonFailures];
     await writeMatrixReport(args.out, {
-      status: `Screenshots captured from ${appUrl} with ${engine}. ${failures.length ? `${featureFailures.length} feature(s), ${buttonFailures.length} button probe(s) failed.` : "All scripted captures and button probes completed."}`,
+      profile: args.profile,
+      status: `${PROFILE_CONFIGS[args.profile].title} captured from ${appUrl} with ${engine}. ${failures.length ? `${featureFailures.length} feature(s), ${buttonFailures.length} button probe(s) failed.` : "All scripted captures and button probes completed."}`,
       results,
       errors,
     });
-    console.log(`mobile screenshots written to ${args.out}`);
+    console.log(`${args.profile} screenshots written to ${args.out}`);
     const totalChecks = results.reduce((sum, r) => sum + r.items.length + (r.buttonItems?.length || 0), 0);
     console.log(`${totalChecks - failures.length} pass, ${failures.length} fail`);
     if (failures.length) process.exitCode = 1;

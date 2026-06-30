@@ -1076,9 +1076,10 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
               {Array.from({ length: 8 }).map((_, i) => (
                 <button key={i} className="hg-focusable"
                   onClick={() => engineRef.current?.rig.goTo({ az: i, dur: 600 })}
-                  style={{ width: 9, height: 9, borderRadius: 9, padding: 0, cursor: "pointer",
+                  style={{ width: 24, height: 24, borderRadius: 24, padding: 0, cursor: "pointer",
                            border: "1px solid var(--hg-border)",
-                           background: i === azIdx ? "var(--hg-ice)" : "transparent" }} />
+                           background: i === azIdx ? "var(--hg-ice)" : "rgba(10,12,16,0.28)",
+                           opacity: i === azIdx ? 1 : 0.58 }} />
               ))}
             </div>
             <span style={{ fontFamily: APT_FONT_MONO, fontSize: 8.5, color: "var(--hg-fg-5)",

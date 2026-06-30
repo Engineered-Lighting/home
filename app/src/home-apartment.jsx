@@ -136,6 +136,17 @@ function aptCacheBust(url, value) {
   return `${url}${url.includes("?") ? "&" : "?"}_=${encodeURIComponent(value)}`;
 }
 
+function aptOptimisticServiceState(prev, domain, service) {
+  if (!prev || !["light", "switch", "media_player"].includes(domain)) return null;
+  let nextState = prev.state;
+  if (service === "turn_on") nextState = domain === "media_player" ? "playing" : "on";
+  else if (service === "turn_off") nextState = "off";
+  else if (service === "toggle") nextState = prev.state === "on" ? "off" : "on";
+  else if (service === "media_play_pause") nextState = prev.state === "playing" ? "paused" : "playing";
+  else return null;
+  return { ...prev, state: nextState };
+}
+
 function AptHudButton({ label, onClick, active, disabled, title, mobile = readAptViewport().mobile }) {
   return (
     <button
@@ -437,6 +448,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const [saving, setSaving] = useState(false);
   const [track, setTrack] = useState(null);          // primary person track
   const [trackerStatus, setTrackerStatus] = useState("connecting");
+  const [, setServicePulse] = useState(0);
   const [hoverId, setHoverId] = useState(null);
   const [cardId, setCardId] = useState(null);
   const [inCamPose, setInCamPose] = useState(false);
@@ -942,10 +954,27 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
 
   const callSvc = useCallback(async (domain, service, data) => {
     const client = window.__hav_haClient;
-    if (!client || simActive) { showToast("sim mode — controls disabled"); return; }
-    try { await window.HomeApartmentData.callService(client, domain, service, data); }
-    catch (e) { showToast(`${data.entity_id || domain} didn't respond`); }
-  }, [simActive, showToast]);
+    if (!client || simActive) { showToast("sim mode - controls disabled"); return; }
+    const entityId = data?.entity_id;
+    const prev = entityId ? statesRef.current[entityId] : null;
+    const optimistic = aptOptimisticServiceState(prev, domain, service);
+    const dev = entityId ? (model.devices || []).find((d) => d.ha_entity_id === entityId) : null;
+    if (entityId && optimistic) {
+      statesRef.current[entityId] = optimistic;
+      if (dev) engineRef.current?.overlay.setDeviceState(dev.id, optimistic);
+      setServicePulse((n) => n + 1);
+    }
+    try {
+      await window.HomeApartmentData.callService(client, domain, service, data);
+    } catch (e) {
+      if (entityId && prev) {
+        statesRef.current[entityId] = prev;
+        if (dev) engineRef.current?.overlay.setDeviceState(dev.id, prev);
+        setServicePulse((n) => n + 1);
+      }
+      showToast(`${entityId || domain} didn't respond`);
+    }
+  }, [simActive, showToast, model.devices]);
 
   const saveModel = useCallback(async () => {
     setSaving(true);
@@ -1065,6 +1094,18 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         );
         return dev ? flyToDeviceView(dev) : false;
       },
+      openFirstControllableCard: () => {
+        const dev = (model.devices || []).find((d) =>
+          d?.ha_entity_id && (d.type === "light" || d.ha_entity_id.startsWith("light.") || d.ha_entity_id.startsWith("switch."))
+        );
+        if (!dev) return null;
+        if (!statesRef.current[dev.ha_entity_id]) {
+          statesRef.current[dev.ha_entity_id] = { entity_id: dev.ha_entity_id, state: "off", attributes: {} };
+        }
+        setCardId(dev.id);
+        setServicePulse((n) => n + 1);
+        return { id: dev.id, entity_id: dev.ha_entity_id, name: dev.name };
+      },
     };
     window.__havApartmentDebug = api;
     return () => {
@@ -1076,6 +1117,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
 
   const pct = progress.total ? Math.floor((progress.loaded / progress.total) * 100) : 0;
   const cardDevice = (model.devices || []).find((d) => d.id === cardId) || null;
+  const cardState = cardDevice ? statesRef.current[cardDevice.ha_entity_id] : null;
   const hoverDevice = (model.devices || []).find((d) => d.id === hoverId) || null;
   const cameraTop = inCamPose || !!liveCam;
   const cameraSnap = cameraTop && !calibCam;
@@ -1479,7 +1521,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
           {cardDevice && (
             <window.AptControlCard
               device={cardDevice}
-              state={statesRef.current[cardDevice.ha_entity_id]}
+              state={cardState}
               screen={anchors[cardId] || { x: (hostSize.width || window.innerWidth) / 2, y: 100 }}
               bounds={hostSize}
               onClose={() => setCardId(null)}

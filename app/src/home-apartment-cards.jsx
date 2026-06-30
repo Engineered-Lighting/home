@@ -87,6 +87,8 @@ function AptRoomChip({ track }) {
 function AptControlCard({ device, state, screen, bounds, onClose, onService, onFlyTo, sim }) {
   const [briDraft, setBriDraft] = useState(null);
   const [volDraft, setVolDraft] = useState(null);
+  const briCommitAtRef = useRef(0);
+  const volCommitAtRef = useRef(0);
   if (!device || !screen) return null;
   const attrs = state?.attributes || {};
   const isLight = device.type === "light" || device.ha_entity_id?.startsWith("light.");
@@ -106,18 +108,48 @@ function AptControlCard({ device, state, screen, bounds, onClose, onService, onF
   const y = Math.min(Math.max(screen.y - 30, mobile ? 74 : 56), Math.max(mobile ? 74 : 56, maxHeight - (mobile ? 260 : 220)));
 
   const row = { display: "flex", alignItems: "center", gap: 8, marginTop: 8 };
+  const stopCardEvent = (e) => { e?.stopPropagation?.(); };
+  const commitBri = (e) => {
+    stopCardEvent(e);
+    const now = performance.now();
+    if (now - briCommitAtRef.current < 180) return;
+    briCommitAtRef.current = now;
+    onService("light", "turn_on", { entity_id: device.ha_entity_id, brightness_pct: bri });
+    setBriDraft(null);
+  };
+  const commitVol = (e) => {
+    stopCardEvent(e);
+    const now = performance.now();
+    if (now - volCommitAtRef.current < 180) return;
+    volCommitAtRef.current = now;
+    onService("media_player", "volume_set", { entity_id: device.ha_entity_id, volume_level: vol / 100 });
+    setVolDraft(null);
+  };
   const btn = (label, onClick, primary) => (
-    <button onClick={onClick} className="hg-focusable" style={{
+    <button type="button"
+      onPointerDown={stopCardEvent}
+      onPointerUp={stopCardEvent}
+      onTouchStart={stopCardEvent}
+      onClick={(e) => { stopCardEvent(e); onClick?.(e); }}
+      className="hg-focusable" style={{
       background: primary ? "var(--hg-ice)" : "transparent",
       border: "1px solid " + (primary ? "var(--hg-ice)" : "var(--hg-border-soft)"),
       color: primary ? "#0b0d11" : "var(--hg-fg-1)", cursor: "pointer",
-      padding: "4px 10px", fontFamily: CARD_FONT_MONO, fontSize: 10,
+      minHeight: mobile ? 38 : "auto",
+      padding: mobile ? "7px 12px" : "4px 10px", fontFamily: CARD_FONT_MONO, fontSize: mobile ? 11 : 10,
       letterSpacing: "0.08em", textTransform: "lowercase",
     }}>{label}</button>
   );
 
   return (
-    <div style={{
+    <div
+      onPointerDown={stopCardEvent}
+      onPointerUp={stopCardEvent}
+      onClick={stopCardEvent}
+      onDoubleClick={stopCardEvent}
+      onTouchStart={stopCardEvent}
+      onWheel={stopCardEvent}
+      style={{
       position: "absolute", left: x, top: y, width: cardWidth,
       maxHeight: mobile ? "min(58dvh, 320px)" : "none",
       overflowY: mobile ? "auto" : "visible",
@@ -132,7 +164,12 @@ function AptControlCard({ device, state, screen, bounds, onClose, onService, onF
                        color: on ? "var(--hg-ice)" : "var(--hg-fg-5)" }}>
           {state?.state || "unknown"}
         </span>
-        <button onClick={onClose} className="hg-focusable" style={{
+        <button type="button"
+          onPointerDown={stopCardEvent}
+          onPointerUp={stopCardEvent}
+          onTouchStart={stopCardEvent}
+          onClick={(e) => { stopCardEvent(e); onClose?.(); }}
+          className="hg-focusable" style={{
           marginLeft: 10, background: "transparent", border: "none",
           color: "var(--hg-fg-4)", cursor: "pointer", fontFamily: CARD_FONT_MONO,
         }}>×</button>
@@ -158,9 +195,12 @@ function AptControlCard({ device, state, screen, bounds, onClose, onService, onF
             <div style={row}>
               <span style={{ fontFamily: CARD_FONT_MONO, fontSize: 9, color: "var(--hg-fg-4)" }}>bri</span>
               <input type="range" min="1" max="100" value={bri}
+                onPointerDown={stopCardEvent}
+                onPointerUp={commitBri}
+                onTouchStart={stopCardEvent}
                 onChange={(e) => setBriDraft(+e.target.value)}
-                onMouseUp={() => { onService("light", "turn_on",
-                  { entity_id: device.ha_entity_id, brightness_pct: bri }); setBriDraft(null); }}
+                onMouseUp={commitBri}
+                onTouchEnd={commitBri}
                 style={{ flex: 1 }} />
               <span style={{ fontFamily: CARD_FONT_MONO, fontSize: 9.5, color: "var(--hg-fg-2)", width: 30 }}>
                 {bri}%
@@ -183,9 +223,12 @@ function AptControlCard({ device, state, screen, bounds, onClose, onService, onF
           <div style={row}>
             <span style={{ fontFamily: CARD_FONT_MONO, fontSize: 9, color: "var(--hg-fg-4)" }}>vol</span>
             <input type="range" min="0" max="100" value={vol}
+              onPointerDown={stopCardEvent}
+              onPointerUp={commitVol}
+              onTouchStart={stopCardEvent}
               onChange={(e) => setVolDraft(+e.target.value)}
-              onMouseUp={() => { onService("media_player", "volume_set",
-                { entity_id: device.ha_entity_id, volume_level: vol / 100 }); setVolDraft(null); }}
+              onMouseUp={commitVol}
+              onTouchEnd={commitVol}
               style={{ flex: 1 }} />
             <span style={{ fontFamily: CARD_FONT_MONO, fontSize: 9.5, color: "var(--hg-fg-2)", width: 30 }}>
               {vol}%

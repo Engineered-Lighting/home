@@ -110,6 +110,7 @@ const BUTTON_PROBE_MATRIX = [
   ["b10-drawer-closes", "Drawers", "World, lights, spatial, and look drawers expose a working close control."],
   ["b11-apartment-mode-buttons", "Apartment", "Cloud/photo/mesh HUD buttons respond and render runtime scan/mesh assets."],
   ["b12-apartment-camera-buttons", "Apartment", "Fly-to-camera exposes only snap-safe controls before resetting cleanly."],
+  ["b13-apartment-light-control", "Apartment", "A device-card light button taps through to a Home Assistant service call on mobile."],
 ];
 
 const DESKTOP_FEATURE_MATRIX = [
@@ -686,6 +687,39 @@ async function clickMobileMenuItem(page, label) {
   return clicked;
 }
 
+async function exerciseApartmentLightControl(page, context) {
+  await runCommand(page, "/apartment", 3200);
+  await page.waitForFunction(() => !!window.__havApartmentDebug, null, { timeout: 12000 });
+  const opened = await page.evaluate(() => {
+    window.__aptAuditServicePayloads = [];
+    window.__hav_haClient = {
+      call(payload) {
+        window.__aptAuditServicePayloads.push(payload);
+        return Promise.resolve({ ok: true });
+      },
+    };
+    return window.__havApartmentDebug?.openFirstControllableCard?.() || null;
+  });
+  if (!opened?.entity_id) throw new Error(`${context}: no controllable light/switch device`);
+  await page.waitForTimeout(450);
+  const surface = await page.evaluate(() => String(document.body?.textContent || "").toLowerCase());
+  if (surface.includes("controls disabled")) {
+    await closeOverlays(page);
+    return `skipped real service tap in simulation profile; card opened for ${opened.entity_id}`;
+  }
+  await clickButtonByName(page, /^turn on$/i, 2500);
+  const payload = await page.waitForFunction(() => {
+    const p = window.__aptAuditServicePayloads?.[0];
+    return p?.type === "call_service" ? p : false;
+  }, null, { timeout: 2500 }).then((handle) => handle.jsonValue());
+  await closeOverlays(page);
+  const target = payload?.target?.entity_id;
+  if (!target || payload.domain !== "light" || payload.service !== "turn_on") {
+    throw new Error(`${context}: unexpected payload ${JSON.stringify(payload)}`);
+  }
+  return `turn on tapped for ${target}; HA service payload captured`;
+}
+
 async function runButtonProbes(page, buttonItems) {
   await recordButtonProbe(buttonItems, "b12-apartment-camera-buttons", "Apartment back and close buttons respond", async () => {
     await page.waitForFunction(() => !!window.__havApartmentDebug, null, { timeout: 5000 });
@@ -703,6 +737,12 @@ async function runButtonProbes(page, buttonItems) {
     const fit = await exitCameraAndEnsureFit(page, "apartment back-to-overview fit");
     await closeOverlays(page);
     return `${detail}; ${snap}; ${fit}; fly-camera screenshot captured as 21-apartment-fly-camera.png`;
+  });
+
+  await closeOverlays(page);
+
+  await recordButtonProbe(buttonItems, "b13-apartment-light-control", "Apartment light card button emits HA service call", async () => {
+    return exerciseApartmentLightControl(page, "apartment light card control");
   });
 
   await closeOverlays(page);
@@ -1582,6 +1622,37 @@ async function cdpExpectText(client, pattern) {
   if (!ok) throw new Error(`text not visible: /${pattern}/i`);
 }
 
+async function cdpExerciseApartmentLightControl(client, context) {
+  await cdpRunCommand(client, "/apartment", 3200);
+  await cdpWaitFor(client, "!!window.__havApartmentDebug", 12000);
+  const opened = await cdpEval(client, `(() => {
+    window.__aptAuditServicePayloads = [];
+    window.__hav_haClient = {
+      call(payload) {
+        window.__aptAuditServicePayloads.push(payload);
+        return Promise.resolve({ ok: true });
+      },
+    };
+    return window.__havApartmentDebug?.openFirstControllableCard?.() || null;
+  })()`, true);
+  if (!opened?.entity_id) throw new Error(`${context}: no controllable light/switch device`);
+  await cdpDelay(450);
+  const surface = await cdpEval(client, "String(document.body && document.body.textContent || '').toLowerCase()", true);
+  if (surface.includes("controls disabled")) {
+    await cdpCloseOverlays(client);
+    return `skipped real service tap in simulation profile; card opened for ${opened.entity_id}`;
+  }
+  await cdpClickButton(client, "^turn on$", 350);
+  await cdpWaitFor(client, "window.__aptAuditServicePayloads?.[0]?.type === 'call_service'", 2500);
+  const payload = await cdpEval(client, "window.__aptAuditServicePayloads?.[0] || null", true);
+  await cdpCloseOverlays(client);
+  const target = payload?.target?.entity_id;
+  if (!target || payload.domain !== "light" || payload.service !== "turn_on") {
+    throw new Error(`${context}: unexpected payload ${JSON.stringify(payload)}`);
+  }
+  return `turn on tapped for ${target}; HA service payload captured`;
+}
+
 async function cdpRunButtonProbes(client, buttonItems) {
   await cdpRecordButtonProbe(buttonItems, "b12-apartment-camera-buttons", "Apartment back and close buttons respond", async () => {
     await cdpWaitFor(client, "!!window.__havApartmentDebug", 5000);
@@ -1596,6 +1667,12 @@ async function cdpRunButtonProbes(client, buttonItems) {
     const fit = await cdpExitCameraAndEnsureFit(client, "apartment back-to-overview fit");
     await cdpCloseOverlays(client);
     return `${detail}; ${snap}; ${fit}; fly-camera screenshot captured as 21-apartment-fly-camera.png`;
+  });
+
+  await cdpCloseOverlays(client);
+
+  await cdpRecordButtonProbe(buttonItems, "b13-apartment-light-control", "Apartment light card button emits HA service call", async () => {
+    return cdpExerciseApartmentLightControl(client, "apartment light card control");
   });
 
   await cdpCloseOverlays(client);

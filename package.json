@@ -14,6 +14,8 @@
     "web:start": "node web-gateway/server.mjs",
     "web:check": "node web-gateway/server.mjs --check",
     "web:mobile-audit": "node tools/mobile-web-screenshot-audit.mjs",
+    "web:mobile-audit:deep": "node tools/mobile-web-screenshot-audit.mjs --profile mobile-deep",
+    "web:desktop-audit": "node tools/mobile-web-screenshot-audit.mjs --profile desktop",
     "web:mobile-audit:matrix": "node tools/mobile-web-screenshot-audit.mjs --matrix-only",
     "test:services": "node tools/run-home-services-tests.js",
     "dev:home2": "npm --workspace apps/home-2 run dev",

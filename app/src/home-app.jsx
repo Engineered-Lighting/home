@@ -120,6 +120,9 @@ function HomeHeader({
     color: "var(--hg-fg-3)",
     display: "inline-flex", alignItems: "center", justifyContent: "center",
     lineHeight: 0,
+    minWidth: 24,
+    minHeight: 24,
+    boxSizing: "border-box",
   };
   const atlasIconColor = theme === "light"
     ? "rgba(31, 79, 168, 0.86)"
@@ -335,7 +338,7 @@ function HomeHeader({
               letterSpacing: "0.12em",
               textTransform: "uppercase",
               cursor: "pointer",
-              minHeight: mobile ? 34 : "auto",
+              minHeight: mobile ? 34 : 24,
             }}
           >
             <span style={{
@@ -361,7 +364,7 @@ function HomeHeader({
               display: "inline-flex",
               alignItems: "center",
               cursor: "pointer",
-              minHeight: mobile ? 34 : "auto",
+              minHeight: mobile ? 34 : 24,
             }}
           >
           <span title="Simulation Mode — everything you see is mocked. Type /simulation off to exit." style={{

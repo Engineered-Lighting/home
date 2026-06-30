@@ -152,6 +152,7 @@ const VISUAL_HEALTH_EXPRESSION = `(() => {
   const body = document.body;
   const issues = [];
   const controls = [];
+  const visibleControls = [];
   const labelFor = (el) => {
     const aria = el.getAttribute("aria-label") || el.getAttribute("title") || "";
     const text = String(el.textContent || "").replace(/\\s+/g, " ").trim();
@@ -160,22 +161,48 @@ const VISUAL_HEALTH_EXPRESSION = `(() => {
   const isVisible = (el, rect, style) => {
     if (!rect || rect.width < 1 || rect.height < 1) return false;
     if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) return false;
+    if (style.pointerEvents === "none") return false;
     if (rect.bottom < 0 || rect.top > vh || rect.right < 0 || rect.left > vw) return false;
     return true;
+  };
+  const isPointerReachable = (el, rect) => {
+    const x = Math.min(Math.max(rect.left + rect.width / 2, 0), Math.max(vw - 1, 0));
+    const y = Math.min(Math.max(rect.top + rect.height / 2, 0), Math.max(vh - 1, 0));
+    const hit = document.elementFromPoint(x, y);
+    return !!hit && (hit === el || el.contains(hit));
   };
   const selectors = "button,[role='button'],[role='menuitem'],input,select,textarea,a[href]";
   for (const el of Array.from(document.querySelectorAll(selectors))) {
     const rect = el.getBoundingClientRect();
     const style = window.getComputedStyle(el);
     if (!isVisible(el, rect, style)) continue;
+    if (!isPointerReachable(el, rect)) continue;
     const label = labelFor(el);
+    if (/^click to paste this command into the input box$/i.test(label)) continue;
     controls.push({ label, x: Math.round(rect.left), y: Math.round(rect.top), w: Math.round(rect.width), h: Math.round(rect.height) });
+    visibleControls.push({ el, label, rect });
     if (rect.left < -1 || rect.right > vw + 1) {
       issues.push(label + ": horizontally clipped (" + Math.round(rect.left) + ".." + Math.round(rect.right) + " of " + vw + ")");
+    }
+    if (rect.top < -1 || rect.bottom > vh + 1) {
+      issues.push(label + ": vertically clipped (" + Math.round(rect.top) + ".." + Math.round(rect.bottom) + " of " + vh + ")");
     }
     const isTapTarget = el.tagName === "BUTTON" || el.getAttribute("role") === "button" || el.getAttribute("role") === "menuitem";
     if (isTapTarget && (rect.width < 24 || rect.height < 24)) {
       issues.push(label + ": small tap target " + Math.round(rect.width) + "x" + Math.round(rect.height));
+    }
+  }
+  for (let i = 0; i < visibleControls.length; i += 1) {
+    for (let j = i + 1; j < visibleControls.length; j += 1) {
+      const a = visibleControls[i];
+      const b = visibleControls[j];
+      if (a.el.contains(b.el) || b.el.contains(a.el)) continue;
+      const overlapX = Math.max(0, Math.min(a.rect.right, b.rect.right) - Math.max(a.rect.left, b.rect.left));
+      const overlapY = Math.max(0, Math.min(a.rect.bottom, b.rect.bottom) - Math.max(a.rect.top, b.rect.top));
+      const overlapArea = overlapX * overlapY;
+      if (overlapArea > 64) {
+        issues.push(a.label + " overlaps " + b.label + " (" + Math.round(overlapArea) + "px)");
+      }
     }
   }
   const scrollWidth = Math.max(doc?.scrollWidth || 0, body?.scrollWidth || 0);
@@ -507,9 +534,11 @@ async function ensureCameraSnapLocked(page, context) {
   await page.waitForFunction(() => !!window.__havApartmentDebug?.snapshot?.()?.liveCam, null, { timeout: 5000 });
   const result = await page.evaluate(() => {
     const snap = window.__havApartmentDebug?.snapshot?.() || {};
+    const forbiddenLabels = ["cloud", "photo", "mesh"];
+    if (snap.mobile) forbiddenLabels.push("calibrate", "live");
     const forbidden = Array.from(document.querySelectorAll("button"))
       .map((button) => String(button.textContent || "").replace(/\s+/g, " ").trim().toLowerCase())
-      .filter((label) => ["cloud", "photo", "mesh"].includes(label));
+      .filter((label) => forbiddenLabels.includes(label));
     return { liveCam: snap.liveCam || null, forbidden };
   });
   if (result.forbidden.length) {
@@ -600,7 +629,10 @@ async function runButtonProbes(page, buttonItems) {
     await page.waitForFunction(() => !!window.__havApartmentDebug, null, { timeout: 5000 });
     const active = await page.evaluate(() => !!window.__havApartmentDebug?.snapshot?.()?.liveCam);
     if (!active) {
-      const ok = await page.evaluate(() => window.__havApartmentDebug?.flyFirstCamera?.());
+      const ok = await page.evaluate(() =>
+        window.__havApartmentDebug?.flyFirstCalibratedCamera?.() ||
+        window.__havApartmentDebug?.flyFirstCamera?.()
+      );
       if (!ok) throw new Error("no camera device available for fly-to test");
       await page.waitForTimeout(1600);
     }
@@ -781,7 +813,10 @@ async function runDesktopButtonProbes(page, buttonItems) {
     await closeOverlays(page);
     await runCommand(page, "/apartment", 3200);
     await page.waitForFunction(() => !!window.__havApartmentDebug, null, { timeout: 12000 });
-    const ok = await page.evaluate(() => window.__havApartmentDebug?.flyFirstCamera?.());
+    const ok = await page.evaluate(() =>
+      window.__havApartmentDebug?.flyFirstCalibratedCamera?.() ||
+      window.__havApartmentDebug?.flyFirstCamera?.()
+    );
     if (!ok) throw new Error("no camera device available for fly-to test");
     await page.waitForTimeout(1600);
     const snap = await ensureCameraSnapLocked(page, "desktop apartment fly-camera controls");
@@ -902,7 +937,10 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors, prof
       });
 
       await step("17-apartment-fly-camera", "Apartment fly-to-camera/live view", async () => {
-        const ok = await page.evaluate(() => window.__havApartmentDebug?.flyFirstCamera?.());
+        const ok = await page.evaluate(() =>
+          window.__havApartmentDebug?.flyFirstCalibratedCamera?.() ||
+          window.__havApartmentDebug?.flyFirstCamera?.()
+        );
         if (!ok) throw new Error("no camera device available for fly-to test");
         await page.waitForTimeout(1600);
         const snap = await ensureCameraSnapLocked(page, "desktop apartment fly-camera screenshot");
@@ -990,7 +1028,10 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors, prof
     });
 
     await step("21-apartment-fly-camera", "Apartment fly-to-camera/live view", async () => {
-      const ok = await page.evaluate(() => window.__havApartmentDebug?.flyFirstCamera?.());
+      const ok = await page.evaluate(() =>
+        window.__havApartmentDebug?.flyFirstCalibratedCamera?.() ||
+        window.__havApartmentDebug?.flyFirstCamera?.()
+      );
       if (!ok) throw new Error("no camera device available for fly-to test");
       await page.waitForTimeout(1600);
       const snap = await ensureCameraSnapLocked(page, "apartment fly-camera screenshot");
@@ -1341,9 +1382,11 @@ async function cdpEnsureCameraSnapLocked(client, context) {
   await cdpWaitFor(client, "!!window.__havApartmentDebug?.snapshot?.()?.liveCam", 5000);
   const result = await cdpEval(client, `(() => {
     const snap = window.__havApartmentDebug?.snapshot?.() || {};
+    const forbiddenLabels = ["cloud", "photo", "mesh"];
+    if (snap.mobile) forbiddenLabels.push("calibrate", "live");
     const forbidden = Array.from(document.querySelectorAll("button"))
       .map((button) => String(button.textContent || "").replace(/\\s+/g, " ").trim().toLowerCase())
-      .filter((label) => ["cloud", "photo", "mesh"].includes(label));
+      .filter((label) => forbiddenLabels.includes(label));
     return { liveCam: snap.liveCam || null, forbidden };
   })()`, true);
   if (result.forbidden.length) {
@@ -1427,7 +1470,7 @@ async function cdpRunButtonProbes(client, buttonItems) {
     await cdpWaitFor(client, "!!window.__havApartmentDebug", 5000);
     const active = await cdpEval(client, "!!window.__havApartmentDebug?.snapshot?.()?.liveCam", true);
     if (!active) {
-      const ok = await cdpEval(client, "window.__havApartmentDebug && window.__havApartmentDebug.flyFirstCamera()", true);
+      const ok = await cdpEval(client, "window.__havApartmentDebug && (window.__havApartmentDebug.flyFirstCalibratedCamera() || window.__havApartmentDebug.flyFirstCamera())", true);
       if (!ok) throw new Error("no camera device available for fly-to test");
       await cdpDelay(1600);
     }
@@ -1605,7 +1648,7 @@ async function cdpRunDesktopButtonProbes(client, buttonItems) {
     await cdpCloseOverlays(client);
     await cdpRunCommand(client, "/apartment", 3200);
     await cdpWaitFor(client, "!!window.__havApartmentDebug", 12000);
-    const ok = await cdpEval(client, "window.__havApartmentDebug && window.__havApartmentDebug.flyFirstCamera()", true);
+    const ok = await cdpEval(client, "window.__havApartmentDebug && (window.__havApartmentDebug.flyFirstCalibratedCamera() || window.__havApartmentDebug.flyFirstCamera())", true);
     if (!ok) throw new Error("no camera device available for fly-to test");
     await cdpDelay(1600);
     const snap = await cdpEnsureCameraSnapLocked(client, "desktop apartment fly-camera controls");
@@ -1731,7 +1774,7 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors, profile = 
       });
 
       await step("17-apartment-fly-camera", "Apartment fly-to-camera/live view", async () => {
-        const ok = await cdpEval(client, "window.__havApartmentDebug && window.__havApartmentDebug.flyFirstCamera()", true);
+        const ok = await cdpEval(client, "window.__havApartmentDebug && (window.__havApartmentDebug.flyFirstCalibratedCamera() || window.__havApartmentDebug.flyFirstCamera())", true);
         if (!ok) throw new Error("no camera device available for fly-to test");
         await cdpDelay(1600);
         const snap = await cdpEnsureCameraSnapLocked(client, "desktop apartment fly-camera screenshot");
@@ -1830,7 +1873,7 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors, profile = 
     });
 
     await step("21-apartment-fly-camera", "Apartment fly-to-camera/live view", async () => {
-      const ok = await cdpEval(client, "window.__havApartmentDebug && window.__havApartmentDebug.flyFirstCamera()", true);
+      const ok = await cdpEval(client, "window.__havApartmentDebug && (window.__havApartmentDebug.flyFirstCalibratedCamera() || window.__havApartmentDebug.flyFirstCamera())", true);
       if (!ok) throw new Error("no camera device available for fly-to test");
       await cdpDelay(1600);
       const snap = await cdpEnsureCameraSnapLocked(client, "apartment fly-camera screenshot");

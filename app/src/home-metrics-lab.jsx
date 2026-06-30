@@ -108,6 +108,18 @@ const LAB_THRESHOLDS = {
 const HG_FONT_MONO = "'Geist Mono', ui-monospace, monospace";
 const HG_FONT_SANS = "'Geist', system-ui, sans-serif";
 
+function isLabMobileViewport() {
+  if (typeof window === "undefined") return false;
+  const vp = window.__hav_viewport;
+  const width = Math.round(
+    (window.visualViewport && window.visualViewport.width) ||
+    window.innerWidth ||
+    (vp && vp.width) ||
+    1024
+  );
+  return !!(vp && vp.mobile) || width < 700;
+}
+
 /* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
  * Pure helpers â€” exposed via window for unit tests
  * â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
@@ -1382,10 +1394,11 @@ function LabChartSvg({ turns, mode, selectedTurn, samplesShared, onSegmentClick,
 }
 
 function LabChartSvgHistory({ turns, samplesShared, onSegmentClick, onSegmentHover, onLineHover }) {
-  const PER_CALL = 280;
-  const STACK_H = 26;
-  const ROW_H = 32;            // a hair taller so spikes have room to breathe
-  const ROW_GAP = 6;
+  const mobile = isLabMobileViewport();
+  const PER_CALL = mobile ? 220 : 280;
+  const STACK_H = mobile ? 22 : 26;
+  const ROW_H = mobile ? 30 : 32;            // a hair taller so spikes have room to breathe
+  const ROW_GAP = mobile ? 5 : 6;
   const N = Math.min(21, turns.length);
   const visibleTurns = turns.slice(-N);
   const SVG_W = N * PER_CALL;
@@ -1545,15 +1558,17 @@ function LabChartSvgHistory({ turns, samplesShared, onSegmentClick, onSegmentHov
     const isSlow = !!t.slow;
     const stroke = isSlow ? "rgba(255,178,90,0.85)" : "rgba(255,255,255,0.30)";
     const shine = isSlow ? "rgba(255,230,180,0.55)" : "rgba(255,255,255,0.45)";
-    const labelText = i === N - 1 ? "now" : `âˆ’${N - 1 - i}`;
+    const labelText = i === N - 1 ? "now" : `-${N - 1 - i}`;
     return (
       <g key={`outline-${i}`}>
         <rect x={cs.toFixed(2)} y={2} width={(ce - cs).toFixed(2)} height={1} fill={shine} />
         <rect x={cs.toFixed(2)} y={2} width={(ce - cs).toFixed(2)} height={STACK_H}
               fill="none" stroke={stroke} strokeWidth={0.6} />
-        <text x={((cs + ce) / 2).toFixed(1)} y={STACK_H + 12}
-              textAnchor="middle" fontFamily="Geist Mono" fontSize={8}
-              fill="rgba(255,255,255,0.42)" letterSpacing="0.16em">{labelText}</text>
+        {!mobile && (
+          <text x={((cs + ce) / 2).toFixed(1)} y={STACK_H + 12}
+                textAnchor="middle" fontFamily="Geist Mono" fontSize={8}
+                fill="rgba(255,255,255,0.42)" letterSpacing="0.16em">{labelText}</text>
+        )}
       </g>
     );
   });
@@ -1579,8 +1594,10 @@ function LabChartSvgHistory({ turns, samplesShared, onSegmentClick, onSegmentHov
 
   return (
     <div style={{
-      display: "grid", gridTemplateColumns: "48px 1fr 70px",
-      gap: 12, alignItems: "stretch",
+      display: "grid",
+      gridTemplateColumns: mobile ? "42px minmax(0, 1fr) 58px" : "48px 1fr 70px",
+      gap: mobile ? 8 : 12,
+      alignItems: "stretch",
     }}>
       {/* Labels column */}
       <div style={{ display: "flex", flexDirection: "column" }}>
@@ -1592,7 +1609,8 @@ function LabChartSvgHistory({ turns, samplesShared, onSegmentClick, onSegmentHov
         {metricsRendered.map((m) => (
           <div key={m.id} style={{
             height: ROW_H + ROW_GAP, display: "flex", alignItems: "center",
-            fontFamily: HG_FONT_MONO, fontSize: 9, letterSpacing: "0.22em",
+            fontFamily: HG_FONT_MONO, fontSize: mobile ? 8.5 : 9,
+            letterSpacing: mobile ? "0.14em" : "0.22em",
             textTransform: "uppercase",
             color: m.isCrit ? "var(--hg-crit)" : (m.isWarn ? "var(--hg-warn)" : "var(--hg-fg-3)"),
           }}>{m.label}</div>
@@ -1680,7 +1698,7 @@ function LabChartSvgHistory({ turns, samplesShared, onSegmentClick, onSegmentHov
       <div style={{ display: "flex", flexDirection: "column" }}>
         <div style={{
           height: STACK_H + 18, display: "flex", alignItems: "center",
-          justifyContent: "flex-end", fontFamily: HG_FONT_MONO, fontSize: 11,
+          justifyContent: "flex-end", fontFamily: HG_FONT_MONO, fontSize: mobile ? 10 : 11,
           color: "var(--hg-fg-0)", fontWeight: 500,
         }}>{N} calls</div>
         {metricsRendered.map((m) => {
@@ -1690,13 +1708,13 @@ function LabChartSvgHistory({ turns, samplesShared, onSegmentClick, onSegmentHov
             <div key={m.id} style={{
               height: ROW_H + ROW_GAP, display: "flex", alignItems: "center",
               justifyContent: "flex-end",
-              fontFamily: HG_FONT_MONO, fontSize: 11, fontWeight: 500,
+              fontFamily: HG_FONT_MONO, fontSize: mobile ? 10 : 11, fontWeight: 500,
               color: m.isWarn ? "var(--hg-warn)" : "var(--hg-fg-0)",
             }}>
               {last}%
               <span style={{
-                fontSize: 8.5, color: "var(--hg-fg-4)",
-                letterSpacing: "0.10em", marginLeft: 6, fontWeight: 400,
+                fontSize: mobile ? 8 : 8.5, color: "var(--hg-fg-4)",
+                letterSpacing: "0.10em", marginLeft: mobile ? 4 : 6, fontWeight: 400,
               }}>pk {pk}</span>
             </div>
           );
@@ -1707,10 +1725,11 @@ function LabChartSvgHistory({ turns, samplesShared, onSegmentClick, onSegmentHov
 }
 
 function LabChartSvgNow({ turn, onSegmentHover, onLineHover }) {
+  const mobile = isLabMobileViewport();
   const SVG_W = 1000;
-  const STACK_H = 34;
-  const ROW_H = 32;
-  const ROW_GAP = 6;
+  const STACK_H = mobile ? 24 : 34;
+  const ROW_H = mobile ? 30 : 32;
+  const ROW_GAP = mobile ? 5 : 6;
   // Metrics â€” VRAM dropped (pill), TEMP added at bottom when sidecar
   // exposes gpu_temp_c (same TEMP_LINE_AVAILABLE gate as history mode).
   const TEMP_LINE_AVAILABLE =
@@ -1799,7 +1818,7 @@ function LabChartSvgNow({ turn, onSegmentHover, onLineHover }) {
       tint = s.slow ? STAGE_TINT_SLOW[s.stage] : STAGE_TINT[s.stage];
     }
     const stroke = (s.slow && s.stage === "audio") ? "rgba(255,178,90,0.85)" : "rgba(255,255,255,0.20)";
-    const showLbl = s.w > 60;
+    const showLbl = !mobile && s.w > 60;
     return (
       <g key={i}>
         <rect x={s.x.toFixed(2)} y={2} width={s.w.toFixed(2)} height={STACK_H}
@@ -1831,19 +1850,23 @@ function LabChartSvgNow({ turn, onSegmentHover, onLineHover }) {
 
   return (
     <div style={{
-      display: "grid", gridTemplateColumns: "48px 1fr 70px",
-      gap: 12, alignItems: "stretch",
+      display: "grid",
+      gridTemplateColumns: mobile ? "42px minmax(0, 1fr) 58px" : "48px 1fr 70px",
+      gap: mobile ? 8 : 12,
+      alignItems: "stretch",
     }}>
       <div style={{ display: "flex", flexDirection: "column" }}>
         <div style={{
           height: STACK_H + 20, display: "flex", alignItems: "center",
-          fontFamily: HG_FONT_MONO, fontSize: 9, letterSpacing: "0.22em",
+          fontFamily: HG_FONT_MONO, fontSize: mobile ? 8.5 : 9,
+          letterSpacing: mobile ? "0.14em" : "0.22em",
           textTransform: "uppercase", color: "var(--hg-fg-3)",
         }}>stack</div>
         {metricsRendered.map((m) => (
           <div key={m.id} style={{
             height: ROW_H + ROW_GAP, display: "flex", alignItems: "center",
-            fontFamily: HG_FONT_MONO, fontSize: 9, letterSpacing: "0.22em",
+            fontFamily: HG_FONT_MONO, fontSize: mobile ? 8.5 : 9,
+            letterSpacing: mobile ? "0.14em" : "0.22em",
             textTransform: "uppercase",
             color: m.isCrit ? "var(--hg-crit)" : (m.isWarn ? "var(--hg-warn)" : "var(--hg-fg-3)"),
           }}>{m.label}</div>
@@ -1893,7 +1916,7 @@ function LabChartSvgNow({ turn, onSegmentHover, onLineHover }) {
       <div style={{ display: "flex", flexDirection: "column" }}>
         <div style={{
           height: STACK_H + 20, display: "flex", alignItems: "center",
-          justifyContent: "flex-end", fontFamily: HG_FONT_MONO, fontSize: 11,
+          justifyContent: "flex-end", fontFamily: HG_FONT_MONO, fontSize: mobile ? 10 : 11,
           color: "var(--hg-fg-0)", fontWeight: 500,
         }}>{total}ms</div>
         {metricsRendered.map((m) => {
@@ -1903,13 +1926,13 @@ function LabChartSvgNow({ turn, onSegmentHover, onLineHover }) {
             <div key={m.id} style={{
               height: ROW_H + ROW_GAP, display: "flex", alignItems: "center",
               justifyContent: "flex-end",
-              fontFamily: HG_FONT_MONO, fontSize: 11, fontWeight: 500,
+              fontFamily: HG_FONT_MONO, fontSize: mobile ? 10 : 11, fontWeight: 500,
               color: m.isWarn ? "var(--hg-warn)" : "var(--hg-fg-0)",
             }}>
               {last}%
               <span style={{
-                fontSize: 8.5, color: "var(--hg-fg-4)",
-                letterSpacing: "0.10em", marginLeft: 6, fontWeight: 400,
+                fontSize: mobile ? 8 : 8.5, color: "var(--hg-fg-4)",
+                letterSpacing: "0.10em", marginLeft: mobile ? 4 : 6, fontWeight: 400,
               }}>pk {pk}</span>
             </div>
           );
@@ -2048,6 +2071,7 @@ function LabChartCard({ turns, samplesShared, tier, baseline, view, setView, sel
   const [tooltipData, setTooltipData] = useState(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   const containerRef = useRef(null);
+  const mobile = isLabMobileViewport();
 
   const N = turns.length;
   const lastTurn = turns[N - 1] || null;
@@ -2067,7 +2091,7 @@ function LabChartCard({ turns, samplesShared, tier, baseline, view, setView, sel
         <div style={{
           fontFamily: HG_FONT_MONO, fontSize: 10.5, letterSpacing: "0.16em",
           textTransform: "uppercase", color: "var(--hg-fg-3)", marginBottom: 8,
-        }}>turns Â· resources per turn</div>
+        }}>turns / resources per turn</div>
         <div style={{
           fontFamily: HG_FONT_MONO, fontSize: 11.5, color: "var(--hg-fg-2)",
         }}>awaiting first turn (typed or voice)</div>
@@ -2173,16 +2197,27 @@ function LabChartCard({ turns, samplesShared, tier, baseline, view, setView, sel
   return (
     <div ref={containerRef} style={{
       marginTop: 16, border: "1px solid var(--hg-border-soft)",
-      padding: "18px 20px", position: "relative",
+      padding: mobile
+        ? "15px 14px calc(28px + env(safe-area-inset-bottom, 0px))"
+        : "18px 20px",
+      position: "relative",
+      marginBottom: mobile ? "calc(18px + env(safe-area-inset-bottom, 0px))" : 0,
     }}>
       <div style={{
-        display: "flex", alignItems: "baseline", gap: 14, marginBottom: 14,
+        display: "flex",
+        alignItems: mobile ? "center" : "baseline",
+        flexWrap: mobile ? "wrap" : "nowrap",
+        gap: mobile ? "8px 10px" : 14,
+        marginBottom: mobile ? 12 : 14,
       }}>
         <span style={{
-          fontFamily: HG_FONT_MONO, fontSize: 10.5, letterSpacing: "0.18em",
+          fontFamily: HG_FONT_MONO,
+          fontSize: mobile ? 9.5 : 10.5,
+          letterSpacing: mobile ? "0.10em" : "0.18em",
           textTransform: "uppercase", color: "var(--hg-fg-2)",
-        }}>turns Â· resources per turn</span>
-        <div style={{ display: "inline-flex", border: "1px solid var(--hg-border-soft)" }}>
+          minWidth: mobile ? "100%" : "auto",
+        }}>{mobile ? "turns / resources" : "turns / resources per turn"}</span>
+        <div style={{ display: "inline-flex", border: "1px solid var(--hg-border-soft)", flexShrink: 0 }}>
           {["history", "now"].map((v) => (
             <button key={v} onClick={() => setView(v)} style={{
               padding: "4px 11px", background: view === v ? "rgba(255,255,255,0.04)" : "transparent",
@@ -2202,6 +2237,7 @@ function LabChartCard({ turns, samplesShared, tier, baseline, view, setView, sel
           }`,
           fontFamily: HG_FONT_MONO, fontSize: 9.5, letterSpacing: "0.20em",
           textTransform: "uppercase",
+          flexShrink: 0,
           color: tier.chartBadge.tone === "warn" ? "var(--hg-warn)" :
                  tier.chartBadge.tone === "crit" ? "var(--hg-crit)" :
                  tier.chartBadge.tone === "ok" ? "var(--hg-fg-2)" : "var(--hg-fg-3)",
@@ -2232,29 +2268,35 @@ function LabChartCard({ turns, samplesShared, tier, baseline, view, setView, sel
       <LabTooltip data={tooltipData} position={tooltipPos} />
 
       <div style={{
-        display: "flex", gap: 14, paddingTop: 12, marginTop: 12,
+        display: "flex",
+        flexWrap: mobile ? "wrap" : "nowrap",
+        gap: mobile ? "7px 10px" : 14,
+        paddingTop: 12,
+        marginTop: 12,
         borderTop: "1px solid var(--hg-border-soft)",
-        fontFamily: HG_FONT_MONO, fontSize: 10, color: "var(--hg-fg-3)",
+        fontFamily: HG_FONT_MONO, fontSize: mobile ? 9.5 : 10, color: "var(--hg-fg-3)",
         letterSpacing: "0.04em", alignItems: "center",
       }}>
         {view === "history" ? (
           <>
             <span>window <b style={{ color: "var(--hg-fg-0)", fontWeight: 500 }}>{Math.min(21, N)} of {N} calls</b></span>
             <span style={{
-              marginLeft: "auto", fontSize: 9, letterSpacing: "0.16em",
+              marginLeft: mobile ? 0 : "auto",
+              fontSize: mobile ? 8.5 : 9,
+              letterSpacing: mobile ? "0.08em" : "0.16em",
               textTransform: "uppercase", color: "var(--hg-fg-4)",
-            }}>history Â· scroll horizontally Â· hover for detail</span>
+            }}>{mobile ? "swipe chart / tap blocks" : "history / scroll horizontally / hover for detail"}</span>
           </>
         ) : (
           <>
             <span>turn duration <b style={{ color: "var(--hg-fg-0)", fontWeight: 500 }}>
               {effectiveSelected?.totalMs || 0}</b> ms</span>
             <button onClick={() => setView("history")} style={{
-              marginLeft: "auto", padding: "3px 9px",
+              marginLeft: mobile ? 0 : "auto", padding: mobile ? "5px 9px" : "3px 9px",
               background: "transparent", border: "1px solid var(--hg-border-soft)",
               fontFamily: HG_FONT_MONO, fontSize: 9.5, letterSpacing: "0.10em",
               textTransform: "lowercase", color: "var(--hg-fg-2)", cursor: "pointer",
-            }}>â† back to history</button>
+            }}>back to history</button>
           </>
         )}
       </div>

@@ -2243,6 +2243,17 @@ function MetricsStrip({
     );
   };
 
+  const trayViewportHeight =
+    typeof window !== "undefined"
+      ? Math.round((window.visualViewport && window.visualViewport.height) || window.innerHeight || 760)
+      : 760;
+  const mobileTrayCap = Math.max(220, Math.min(320, Math.floor(trayViewportHeight * 0.36)));
+  const trayBodyMaxHeight = dockMode
+    ? Math.min(trayHeight, 124)
+    : mobile
+      ? Math.min(trayHeight, mobileTrayCap)
+      : trayHeight;
+
   return (
     <div style={{
       borderTop: dockMode ? "0" : "1px solid var(--hg-border-soft)",
@@ -2470,7 +2481,7 @@ function MetricsStrip({
               >diagnostics</button>
             }
           />
-          <HmTrayBody maxHeight={dockMode ? Math.min(trayHeight, 124) : trayHeight} compact={dockMode}>
+          <HmTrayBody maxHeight={trayBodyMaxHeight} compact={dockMode}>
             <div key={activeTab} style={{ animation: "hg-fade-up 160ms ease-out" }}>
               {activeTab === "ai"      && renderAi()}
               {activeTab === "infra"   && renderInfra()}

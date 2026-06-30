@@ -5962,6 +5962,10 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             addEvent({ kind: "system", text: `stack token save failed · ${e?.message || "localStorage error"}`, tone: "error" });
           }
         } else {
+          if (typeof window !== "undefined" && window.__HOME_WEB_STACK_TOKEN_PROXY) {
+            addEvent({ kind: "system", text: "stack token is proxied by the web gateway; no browser token needed", tone: "ok" });
+            return true;
+          }
           const existing = (typeof localStorage !== "undefined" && localStorage.getItem("hg-stack-token-DEV")) || "";
           if (existing) {
             addEvent({ kind: "system", text: `stack token · <set, ${existing.length} chars>`, tone: "info" });
@@ -8264,6 +8268,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     //   2. localStorage "hg-stack-token-DEV" (developer-set via DevTools).
     // Tokens are never hardcoded in this file. If neither is set, we skip
     // the supervisor poll and AiStackCard renders a "not configured" stub.
+    // In web mode this may be a non-secret gateway marker. The gateway
+    // replaces it with the real server-side token before forwarding.
     const stackToken =
       (typeof window !== "undefined" && window.__STACK_TOKEN) ||
       (typeof localStorage !== "undefined" && localStorage.getItem("hg-stack-token-DEV")) ||

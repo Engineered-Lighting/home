@@ -150,8 +150,14 @@ Three steps, in this order, so neither side desyncs:
 ### Workstation token storage
 
 **Phase 4 hardening** (not MVP) migrates to `tauri-plugin-stronghold` /
-platform keyring. Until then, two paths:
+platform keyring. Until then, three paths:
 
+- **Browser/Tailscale web path:** the Ubuntu web gateway reads `STACK_TOKEN`
+  server-side from `/opt/home-ai-voice/.env` (or `HOME_WEB_STACK_TOKEN_FILE`)
+  and injects it only for `/proxy/supervisor/api/...` requests. The browser
+  receives a non-secret gateway marker, not the token itself. If this path is
+  enabled, `/stack-token` in the web app reports that no browser token is
+  needed.
 - **Dev path (Phase 1 testing):** open DevTools in the Home app and run
   `localStorage.setItem("hg-stack-token-DEV", "<your STACK_TOKEN>")`,
   then reload. The 15-s poller picks it up. To clear:
@@ -161,9 +167,9 @@ platform keyring. Until then, two paths:
   `~/.config/home-app/config.json` (Linux/macOS) and exposes it via a
   `stack_token()` Tauri command. JS never persists the token.
 
-Either way, the token is **not** in the JS bundle or in git — only the
-sender of HTTP requests carries it. If the AiStackCard reads "not
-configured", neither path is set up.
+In every path, the token is **not** in the JS bundle or in git. If the
+AiStackCard reads "not configured", neither the gateway proxy nor a local
+workstation token path is set up.
 
 ### Audit log
 

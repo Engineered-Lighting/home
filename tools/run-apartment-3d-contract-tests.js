@@ -6,7 +6,10 @@ const path = require("node:path");
 
 const REPO = path.resolve(__dirname, "..");
 const APT = fs.readFileSync(path.join(REPO, "app", "src", "home-apartment.jsx"), "utf8");
+const DATA = fs.readFileSync(path.join(REPO, "app", "src", "home-apartment-data.js"), "utf8");
 const MODES = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "modes.js"), "utf8");
+const ENGINE = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "engine.js"), "utf8");
+const RIG = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "rig.js"), "utf8");
 
 let pass = 0;
 let fail = 0;
@@ -43,7 +46,7 @@ assert("debug API exposes zoomOut", APT.includes("zoomOut: () => zoomApartment(-
 
 process.stdout.write("\napartment_camera_snap_contract_test\n");
 assert("mobile camera frame helper exists", APT.includes("function aptMobileCameraFrame"));
-assert("camera snap stores the target camera immediately", APT.includes("setLiveCam(dev);") && APT.includes('setLiveFeedStatus(dev.camera?.frigate_name && !simActive ? "waiting for pose" : "idle");'));
+assert("camera snap stores the target camera immediately", APT.includes("setLiveCam(dev);") && APT.includes('"waiting for calibrated pose"') && APT.includes('"waiting for estimated pose"'));
 assert("camera snap awaits mesh before fly-to-camera", APT.includes('await eng.modes.setMode("mesh", { duration: 0 });') && APT.includes("eng.flyToDevice(dev"));
 assert("camera feed reveal polls until pose is held", APT.includes("const revealCameraFeedWhenReady"));
 assert("feed reveal checks rig.inCameraPose", APT.includes("rig?.inCameraPose?.()"));
@@ -51,6 +54,22 @@ assert("debug snapshot exposes live feed status", APT.includes("liveFeedStatus,"
 assert("debug snapshot exposes camera frame", APT.includes("cameraFrame: mobile && liveCam"));
 assert("raw camera frame remains visible before warp", APT.includes("opacity: warpedReady ? 0 : 1"));
 assert("warped camera frame appears only after first draw", APT.includes("setWarpedReady(true)") && APT.includes('onStatus?.("warped")'));
+assert("camera alignment helper distinguishes estimated vs calibrated", APT.includes("function aptCameraAlignment") && APT.includes("camera - estimated pose"));
+assert("camera snap requires exact alignment metadata", APT.includes("const calib = alignment.exact"));
+assert("camera debug snapshot exposes alignment status", APT.includes("cameraAlignment: liveCam ? aptCameraAlignment(liveCam) : null"));
+
+process.stdout.write("\napartment_calibrated_projection_contract_test\n");
+assert("engine reads solved camera center C", ENGINE.includes("const calibratedCenter = Array.isArray(ex?.C)") && ENGINE.includes("new THREE.Vector3(+ex.C[0], +ex.C[1], +ex.C[2])"));
+assert("engine builds projection from intrinsics K", ENGINE.includes("function projectionFromIntrinsics") && ENGINE.includes("2 * fx / p.w"));
+assert("engine passes calibrated projection into rig", ENGINE.includes("projection = projectionFromIntrinsics(intr, fovScale)") && ENGINE.includes("rig.flyToPose({ position: worldPos, quaternion: worldQuat, fov, dur, projection })"));
+assert("rig preserves custom projection while held", RIG.includes("projection: p.projection || null") && RIG.includes("applyCustomProjection(heldPose.projection)"));
+
+process.stdout.write("\napartment_tracker_model_fallback_contract_test\n");
+assert("data layer has a tracker model fallback", DATA.includes("async function fetchTrackerModel"));
+assert("tracker fallback converts websocket bases to http", DATA.includes("function toHttpBase") && DATA.includes('clean.startsWith("ws://")'));
+assert("tracker fallback fetches live /model", DATA.includes('fetcher(`${base}/model`, { cache: "no-store" })'));
+assert("tracker model is tried before local remote cache", DATA.indexOf("const trackerModel = await fetchTrackerModel();") > 0
+  && DATA.indexOf("const trackerModel = await fetchTrackerModel();") < DATA.indexOf('localStorage.getItem("apartment3d.remoteCache")'));
 
 if (fail) {
   process.stdout.write(`\n${pass} pass . ${fail} fail\n`);

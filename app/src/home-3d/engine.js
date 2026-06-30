@@ -169,6 +169,45 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
         };
     }
 
+    function intrinsicsParams(intr) {
+        if (!intr || !intr.K || !Array.isArray(intr.image_size)) return null;
+        const w = +intr.image_size[0];
+        const h = +intr.image_size[1];
+        if (!(w > 0) || !(h > 0)) return null;
+        const K = intr.K;
+        const fx = Array.isArray(K[0]) ? +K[0][0] : +K[0];
+        const fy = Array.isArray(K[0]) ? +K[1][1] : +K[4];
+        const cx = Array.isArray(K[0]) ? +K[0][2] : +K[2];
+        const cy = Array.isArray(K[0]) ? +K[1][2] : +K[5];
+        if (![fx, fy, cx, cy].every((v) => Number.isFinite(v) && v > 0)) return null;
+        return { fx, fy, cx, cy, w, h };
+    }
+
+    function fovFromIntrinsics(intr, fovScale = 1) {
+        const p = intrinsicsParams(intr);
+        if (!p) return null;
+        const fy = p.fy / Math.max(0.001, fovScale || 1);
+        return THREE.MathUtils.radToDeg(2 * Math.atan(p.h / (2 * fy)));
+    }
+
+    function projectionFromIntrinsics(intr, fovScale = 1) {
+        const p = intrinsicsParams(intr);
+        if (!p) return null;
+        const scale = Math.max(0.001, fovScale || 1);
+        const fx = p.fx / scale;
+        const fy = p.fy / scale;
+        const cx = p.w / 2 + (p.cx - p.w / 2) / scale;
+        const cy = p.h / 2 + (p.cy - p.h / 2) / scale;
+        const n = camera.near;
+        const f = camera.far;
+        return new THREE.Matrix4().set(
+            2 * fx / p.w, 0, 1 - 2 * cx / p.w, 0,
+            0, 2 * fy / p.h, 2 * cy / p.h - 1, 0,
+            0, 0, -(f + n) / (f - n), -(2 * f * n) / (f - n),
+            0, 0, -1, 0,
+        );
+    }
+
     async function loadPoints() {
         let lastErr = null;
         for (const url of assetsM.pointsCandidates({ sim })) {
@@ -310,11 +349,15 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
          * pitch) — honest 'not calibrated' approximation. */
         flyToDevice(device, { dur = 900, fovScale = 1 } = {}) {
             apartmentRoot.updateMatrixWorld(true);
-            const pos = new THREE.Vector3(device.pos[0], device.pos[1], device.pos[2] ?? 1.6);
-            const worldPos = apartmentRoot.localToWorld(pos.clone());
-            let worldQuat, fov;
             const ex = device.camera && device.camera.extrinsics;
-            if (ex && ex.q_wxyz) {
+            const intr = device.camera && device.camera.intrinsics;
+            const calibratedCenter = Array.isArray(ex?.C) && ex.C.length >= 3;
+            const pos = calibratedCenter
+                ? new THREE.Vector3(+ex.C[0], +ex.C[1], +ex.C[2])
+                : new THREE.Vector3(device.pos[0], device.pos[1], device.pos[2] ?? 1.6);
+            const worldPos = apartmentRoot.localToWorld(pos.clone());
+            let worldQuat, fov, projection = null;
+            if (ex && ex.q_wxyz && calibratedCenter) {
                 // q_wxyz is WORLD->CAMERA (OpenCV); a three camera needs
                 // CAMERA->WORLD = conjugate. Then OpenCV cam axes (+Z fwd,
                 // +Y down) -> three (-Z fwd, +Y up) via Rx(180) = diag(1,-1,-1).
@@ -325,9 +368,8 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
                 const rootQ = new THREE.Quaternion();
                 apartmentRoot.getWorldQuaternion(rootQ);
                 worldQuat = rootQ.multiply(q).multiply(flip);
-                const intr = device.camera.intrinsics;
-                fov = intr ? THREE.MathUtils.radToDeg(
-                    2 * Math.atan(intr.image_size[1] / (2 * intr.K[1][1]))) : 70;
+                fov = fovFromIntrinsics(intr, fovScale) || 70;
+                projection = projectionFromIntrinsics(intr, fovScale);
             } else {
                 // manual pose: look along yaw (apartment frame), pitched down 18°
                 const yaw = device.yaw_rad || 0;
@@ -338,14 +380,14 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
                 worldQuat = new THREE.Quaternion().setFromRotationMatrix(m);
                 fov = 70;
             }
-            if (fovScale !== 1) {
+            if (fovScale !== 1 && !projection) {
                 // widen so the central (1/fovScale) band of the viewport spans
                 // exactly the camera's true fov -> a centered live feed at that
                 // fraction continues seamlessly into the surrounding mesh
                 fov = THREE.MathUtils.radToDeg(
                     2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(fov) / 2) * fovScale));
             }
-            rig.flyToPose({ position: worldPos, quaternion: worldQuat, fov, dur });
+            rig.flyToPose({ position: worldPos, quaternion: worldQuat, fov, dur, projection });
         },
         dispose() {
             engine.setRunning(false);

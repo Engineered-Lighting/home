@@ -26,4 +26,11 @@
     HG_DEFAULT_FRIGATE_BASE: "/proxy/frigate",
     HG_DEFAULT_APARTMENT_ASSET_BASE: "/assets/apartment",
   });
+
+  if ("serviceWorker" in navigator && !window.HG_DISABLE_SERVICE_WORKER) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("./home-service-worker.js", { scope: "./" })
+        .catch((err) => console.warn("[home-web] service worker registration failed", err));
+    }, { once: true });
+  }
 })();

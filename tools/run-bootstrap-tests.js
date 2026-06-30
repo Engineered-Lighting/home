@@ -89,7 +89,10 @@ const sourceFiles = fs.readdirSync(SRC_DIR)
   .sort();
 const staticScripts = Array.from(indexSource.matchAll(/<script\s+src=["']\.\/([^"']+)["']/g))
   .map((match) => match[1]);
-const missingSourceFiles = sourceFiles.filter((name) => !positions.has(name) && !staticScripts.includes(name));
+const registeredStaticFiles = ["home-service-worker.js"];
+const missingSourceFiles = sourceFiles.filter((name) => !positions.has(name) &&
+  !staticScripts.includes(name) &&
+  !registeredStaticFiles.includes(name));
 assert("every top-level app/src JS/JSX file is in the boot chain or static pre-runtime",
   missingSourceFiles.length === 0,
   missingSourceFiles);

@@ -23,6 +23,7 @@ const METADATA_CACHE = "private, no-cache";
 const assetGroups = [
   { key: "points", required: true, files: ["points.ply"] },
   { key: "scan", required: true, files: ["apartment.spz", "apartment.ply"] },
+  { key: "scanMobile", required: false, files: ["apartment.mobile.spz", "apartment.mobile.ply"] },
   { key: "mesh", required: true, files: ["mesh.glb", "collision.glb"] },
   { key: "manifest", required: true, files: ["manifest.json"] },
   { key: "frame", required: true, files: ["frame.json"] },

@@ -567,11 +567,13 @@ async function ensureApartmentFit(page, context) {
 
 async function ensureNoApartmentModeError(page, mode, context) {
   const phrase = mode === "mesh" ? "mesh unavailable" : "photo unavailable";
-  const result = await page.evaluate((needle) => {
+  const loading = mode === "mesh" ? "loading mesh" : "loading photo";
+  const result = await page.evaluate(([needle, loadingNeedle]) => {
     const text = String(document.body?.textContent || "").toLowerCase();
-    return { phrase: needle, found: text.includes(needle) };
-  }, phrase);
+    return { phrase: needle, found: text.includes(needle), loading: loadingNeedle, stillLoading: text.includes(loadingNeedle) };
+  }, [phrase, loading]);
   if (result.found) throw new Error(`${context}: ${result.phrase}`);
+  if (result.stillLoading) throw new Error(`${context}: still ${result.loading}`);
   return `${mode} mode rendered without ${result.phrase}`;
 }
 
@@ -1466,12 +1468,15 @@ async function cdpEnsureApartmentFit(client, context) {
 
 async function cdpEnsureNoApartmentModeError(client, mode, context) {
   const phrase = mode === "mesh" ? "mesh unavailable" : "photo unavailable";
+  const loading = mode === "mesh" ? "loading mesh" : "loading photo";
   const result = await cdpEval(client, `(() => {
     const needle = ${JSON.stringify(phrase)};
+    const loadingNeedle = ${JSON.stringify(loading)};
     const text = String(document.body && document.body.textContent || "").toLowerCase();
-    return { phrase: needle, found: text.includes(needle) };
+    return { phrase: needle, found: text.includes(needle), loading: loadingNeedle, stillLoading: text.includes(loadingNeedle) };
   })()`, true);
   if (result.found) throw new Error(`${context}: ${result.phrase}`);
+  if (result.stillLoading) throw new Error(`${context}: still ${result.loading}`);
   return `${mode} mode rendered without ${result.phrase}`;
 }
 

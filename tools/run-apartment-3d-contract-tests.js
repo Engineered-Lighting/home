@@ -61,6 +61,10 @@ assert("mobile live feed uses snapshot refresh fallback", APT.includes("function
 assert("snapshot refresh keeps the calibrated frame cache-busted", APT.includes("function aptCacheBust") && APT.includes('onStatus?.(useSnapshots ? "frame" : "raw")'));
 assert("camera feed maps pixels into the shared projection frame", APT.includes('objectFit: "fill"') && APT.includes('const liveFeedSettled = ["idle", "raw", "frame", "warped"].includes(liveFeedStatus);'));
 
+process.stdout.write("\napartment_photo_mobile_asset_contract_test\n");
+assert("mobile photo mode prefers generated mobile splat", MODES.includes("'apartment.mobile.ply'") && MODES.indexOf("'apartment.mobile.ply'") < MODES.indexOf("'apartment.ply'"));
+assert("splat load has a timeout instead of hanging forever", MODES.includes("splat load timeout") && MODES.includes("mobile ? 45000 : 90000"));
+
 process.stdout.write("\napartment_calibrated_projection_contract_test\n");
 assert("engine reads solved camera center C", ENGINE.includes("const calibratedCenter = Array.isArray(ex?.C)") && ENGINE.includes("new THREE.Vector3(+ex.C[0], +ex.C[1], +ex.C[2])"));
 assert("engine builds projection from intrinsics K", ENGINE.includes("function projectionFromIntrinsics") && ENGINE.includes("2 * fx / p.w"));

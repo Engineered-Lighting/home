@@ -1666,9 +1666,7 @@ function MetricsStrip({
     : null;
 
   let warnChip = null;
-  if (bridgeHealth?.stale_media_integrations?.length > 0) {
-    warnChip = { text: `${bridgeHealth.stale_media_integrations.length} stale media`, tone: "warn" };
-  } else if (bridgeHealth && !bridgeHealth.ha_connected) {
+  if (bridgeHealth && !bridgeHealth.ha_connected) {
     warnChip = { text: "ha down", tone: "crit" };
   } else if (networkMetrics?.switches?.some((sw) => (sw.mem || 0) > 90)) {
     warnChip = { text: "switch ram high", tone: "warn" };
@@ -2053,6 +2051,61 @@ function MetricsStrip({
                       borderRadius: 2,
                     }}>{c.label}</span>
                   ))}
+                </div>
+              )}
+              {stale.length > 0 && (
+                <div style={{
+                  gridColumn: "1 / -1",
+                  paddingTop: 8,
+                  marginTop: 4,
+                  borderTop: "1px solid var(--hg-border-soft)",
+                  minWidth: 0,
+                }}>
+                  <div style={{
+                    fontFamily: "'Geist Mono', monospace",
+                    fontSize: 9,
+                    letterSpacing: "0.14em",
+                    textTransform: "uppercase",
+                    color: "var(--hg-fg-5)",
+                    marginBottom: 5,
+                  }}>stale media</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                    {stale.slice(0, 6).map((m, i) => {
+                      const entity = String(m?.entity_id || "media").replace(/^media_player\./, "").replace(/_/g, " ");
+                      const age = Number.isFinite(m?.age_hours) ? `${Math.round(m.age_hours)}h` : "stale";
+                      return (
+                        <span key={`${entity}-${i}`} style={{
+                          display: "inline-flex",
+                          maxWidth: "100%",
+                          gap: 5,
+                          alignItems: "baseline",
+                          fontFamily: "'Geist Mono', monospace",
+                          fontSize: 10,
+                          color: "var(--hg-warn)",
+                          border: "1px solid color-mix(in srgb, var(--hg-warn) 42%, transparent)",
+                          borderRadius: 2,
+                          padding: "2px 6px",
+                          background: "rgba(255,180,80,0.045)",
+                        }}>
+                          <span style={{
+                            minWidth: 0,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}>{entity}</span>
+                          <span style={{ color: "var(--hg-fg-5)", flex: "0 0 auto" }}>{age}</span>
+                        </span>
+                      );
+                    })}
+                    {stale.length > 6 && (
+                      <span style={{
+                        fontFamily: "'Geist Mono', monospace",
+                        fontSize: 10,
+                        color: "var(--hg-fg-5)",
+                        padding: "2px 0",
+                      }}>+{stale.length - 6} more</span>
+                    )}
+                  </div>
                 </div>
               )}
               {window.HmRoomRow && roomContextRows.length > 0 && (

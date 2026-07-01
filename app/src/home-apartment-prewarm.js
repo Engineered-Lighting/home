@@ -17,7 +17,7 @@
   ];
   const CLOUD_ASSETS = [{ label: "point cloud", names: ["points.ply"] }];
   const FULL_ASSETS = [
-    { label: "photo scan", names: ["apartment.spz", "apartment.ply"] },
+    { label: "photo scan", names: ["apartment.mobile.ply", "apartment.mobile.spz", "apartment.spz", "apartment.ply"] },
     { label: "mesh", names: ["mesh.mobile.glb", "mesh.glb", "collision.glb"] },
   ];
 
@@ -227,17 +227,21 @@
     });
   }
 
+  function idle(cb, timeout = 2500) {
+    if (window.requestIdleCallback) return window.requestIdleCallback(cb, { timeout });
+    return setTimeout(() => cb({ timeRemaining: () => 0, didTimeout: true }), Math.min(timeout, 900));
+  }
+
   function scheduleAutoStart() {
     const waitForBoot = () => {
       if (window.__bootState?.failed) return;
       if (!window.__bootState?.done) {
-        setTimeout(waitForBoot, 1000);
+        setTimeout(waitForBoot, 500);
         return;
       }
-      const idle = window.requestIdleCallback || ((cb) => setTimeout(() => cb({ timeRemaining: () => 0 }), 2500));
-      idle(() => start({ reason: "idle" }), { timeout: 9000 });
+      idle(() => start({ mode: "full", reason: "post-boot" }), window.HG_WEB_MODE ? 1800 : 5000);
     };
-    setTimeout(waitForBoot, window.HG_WEB_MODE ? 2200 : 6000);
+    setTimeout(waitForBoot, window.HG_WEB_MODE ? 350 : 2500);
   }
 
   window.HomeApartmentPrewarm = {

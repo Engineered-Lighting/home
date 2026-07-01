@@ -113,6 +113,7 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
                 splat.frustumCulled = false;
                 apartmentRoot.add(splat);
                 state.splat = splat;
+                visibleFor(state.mode);
                 return splat;
             } catch (e) { lastErr = e; }
         }
@@ -215,6 +216,7 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
                     state.mesh = grp;
                     state.meshSource = src.name;
                     state.meshFallback = !!src.fallback || (src.textured && texturedMeshes === 0 && fallbackMeshes > 0);
+                    visibleFor(state.mode);
                     return grp;
                 } catch (e) { lastErr = e; }
             }
@@ -299,6 +301,23 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
 
         getMesh() { return state.mesh; },
         setMeshNearCut(v) { state.meshNearCut.value = v; },
+
+        async preload(targets = ['splat', 'mesh']) {
+            const list = Array.isArray(targets) ? targets : [targets];
+            const jobs = [];
+            if (list.includes('splat') && !state.splat) {
+                jobs.push(loadSplat()
+                    .then(() => ({ mode: 'splat', ok: true }))
+                    .catch((e) => ({ mode: 'splat', ok: false, error: String(e?.message || e) })));
+            }
+            if (list.includes('mesh') && !state.mesh) {
+                jobs.push(loadMesh()
+                    .then(() => ({ mode: 'mesh', ok: true }))
+                    .catch((e) => ({ mode: 'mesh', ok: false, error: String(e?.message || e) })));
+            }
+            const results = await Promise.all(jobs);
+            return { ok: results.every((r) => r.ok), results };
+        },
 
         debugInfo() {
             return {

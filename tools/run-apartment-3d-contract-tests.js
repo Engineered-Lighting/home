@@ -41,6 +41,9 @@ assert("mesh fallback does not use neon normal material", !MODES.includes("MeshN
 assert("mobile mesh can prefer optional phone asset", MODES.includes("'mesh.mobile.glb'") && MODES.indexOf("'mesh.mobile.glb'") < MODES.indexOf("'mesh.glb'"));
 assert("mesh debug reports fallback source", MODES.includes("meshSource: state.meshSource") && MODES.includes("meshFallback: state.meshFallback"));
 assert("prewarm can fetch optional mobile mesh first", PREWARM.includes('"mesh.mobile.glb"') && PREWARM.indexOf('"mesh.mobile.glb"') < PREWARM.indexOf('"mesh.glb"'));
+assert("prewarm can fetch optional mobile photo scan first", PREWARM.includes('"apartment.mobile.ply"') && PREWARM.indexOf('"apartment.mobile.ply"') < PREWARM.indexOf('"apartment.ply"'));
+assert("mode loader can parse photo and mesh in the background", MODES.includes("async preload(targets = ['splat', 'mesh'])") && MODES.includes("loadSplat()") && MODES.includes("loadMesh()"));
+assert("preloaded photo and mesh remain hidden until selected", MODES.includes("state.splat = splat;\n                visibleFor(state.mode);") && MODES.includes("state.meshFallback = !!src.fallback") && MODES.includes("visibleFor(state.mode);"));
 
 process.stdout.write("\napartment_zoom_control_contract_test\n");
 assert("AptZoomButton component exists", APT.includes("function AptZoomButton"));
@@ -50,6 +53,7 @@ assert("zoom out button calls rig zoom out", APT.includes('title="zoom out"') &&
 assert("zoom controls hide during camera pose", APT.includes("const showZoomHud = !editing && !cameraTop"));
 assert("debug API exposes zoomIn", APT.includes("zoomIn: () => zoomApartment(1)"));
 assert("debug API exposes zoomOut", APT.includes("zoomOut: () => zoomApartment(-1)"));
+assert("apartment view quietly preloads photo and mesh after cloud is ready", APT.includes("function aptShouldModePrewarm") && APT.includes('engine.modes.preload(["splat"])') && APT.includes('engine.modes.preload(["mesh"])'));
 
 process.stdout.write("\napartment_camera_snap_contract_test\n");
 assert("mobile camera frame helper exists", APT.includes("function aptMobileCameraFrame"));

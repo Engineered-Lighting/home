@@ -173,6 +173,18 @@ function aptDelay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function aptShouldModePrewarm() {
+  try {
+    if (localStorage.getItem("apartment3d.modePrewarm") === "off") return false;
+  } catch (e) { /* storage can fail in private mode */ }
+  try {
+    const net = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    if (net?.saveData) return false;
+    if (/^slow-2g|2g$/i.test(net?.effectiveType || "")) return false;
+  } catch (e) { /* */ }
+  return true;
+}
+
 function AptHudButton({ label, onClick, active, disabled, title, mobile = readAptViewport().mobile }) {
   return (
     <button
@@ -597,6 +609,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const statesRef = useRef({});                      // entity_id -> ha state
   const simActive = !!(sim && sim.active);
   const [serviceEpoch, setServiceEpoch] = useState(0);
+  const modePrewarmRef = useRef(null);
 
   useEffect(() => {
     const bump = () => setServiceEpoch((n) => n + 1);
@@ -759,6 +772,56 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
       }
     };
   }, [open, simActive, showToast, embedded]);
+
+  /* Once the cloud is usable, quietly load photo + mesh into the resident
+     engine. The post-boot prewarmer handles network bytes; this handles parser
+     and GPU readiness without switching the visible mode. */
+  useEffect(() => {
+    if (!open || phase !== "ready") return undefined;
+    const engine = engineRef.current;
+    if (!engine?.modes?.preload || !aptShouldModePrewarm()) return undefined;
+    if (modePrewarmRef.current?.engine === engine && modePrewarmRef.current.done) return undefined;
+    const token = { engine, done: false };
+    modePrewarmRef.current = token;
+
+    let cancelled = false;
+    let completed = 0;
+    const timers = [];
+    const idleIds = [];
+    const requestIdle = (cb, timeout) => {
+      if (window.requestIdleCallback) {
+        const id = window.requestIdleCallback(cb, { timeout });
+        idleIds.push(["idle", id]);
+        return;
+      }
+      const id = setTimeout(() => cb({ didTimeout: true, timeRemaining: () => 0 }), Math.min(timeout, 900));
+      idleIds.push(["timeout", id]);
+    };
+    const schedule = (delay, timeout, cb) => {
+      timers.push(setTimeout(() => requestIdle(async () => {
+        if (cancelled) return;
+        const result = await cb();
+        if (!cancelled) {
+          completed += 1;
+          token.done = completed >= 2;
+          window.dispatchEvent(new CustomEvent("home-apartment-mode-prewarm", { detail: result }));
+        }
+      }, timeout), delay));
+    };
+
+    schedule(mobile ? 450 : 700, 2500, () => engine.modes.preload(["splat"]));
+    schedule(mobile ? 2600 : 1600, 4500, () => engine.modes.preload(["mesh"]));
+
+    return () => {
+      cancelled = true;
+      timers.forEach((id) => clearTimeout(id));
+      idleIds.forEach(([kind, id]) => {
+        if (kind === "idle") window.cancelIdleCallback?.(id);
+        else clearTimeout(id);
+      });
+      if (modePrewarmRef.current === token && !token.done) modePrewarmRef.current = null;
+    };
+  }, [open, phase, mobile]);
 
   /* ---------------- model + registry load ---------------- */
   useEffect(() => {

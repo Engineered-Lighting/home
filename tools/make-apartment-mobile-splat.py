@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Create a smaller mobile-friendly Apartment Gaussian-splat PLY.
+"""Create a smaller mobile-friendly Apartment Gaussian-splat PLY fallback.
 
 The full `apartment.ply` is intentionally kept as runtime data, not Git data.
-This tool keeps the same binary PLY property layout and writes a deterministic
-stride sample to `apartment.mobile.ply` so phone browsers do not need to fetch
-and parse the full scan before photo mode becomes usable.
+The web app prefers the full splat for visual quality, but this tool keeps the
+same binary PLY property layout and writes a deterministic uniform sample to
+`apartment.mobile.ply` as a fallback for constrained devices or missing full
+assets.
 """
 from __future__ import annotations
 
@@ -105,6 +106,29 @@ def update_manifest(asset_dir: Path, output: Path, source: Path, count: int, sou
     path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
+def manifest_splat_count(asset_dir: Path, output: Path) -> int:
+    try:
+        manifest = json.loads((asset_dir / "manifest.json").read_text(encoding="utf-8"))
+        return int(manifest.get("files", {}).get(output.name, {}).get("splats") or 0)
+    except Exception:
+        return 0
+
+
+def select_uniform(total: int, target: int) -> list[int]:
+    target = max(1, min(total, target))
+    if target >= total:
+        return list(range(total))
+    selected = []
+    prior = -1
+    for i in range(target):
+        idx = math.floor(i * total / target)
+        if idx == prior:
+            idx = min(total - 1, prior + 1)
+        selected.append(idx)
+        prior = idx
+    return selected
+
+
 def main() -> int:
     repo = Path(__file__).resolve().parent.parent
     default_dir = repo / "app" / "data" / "apartment"
@@ -112,7 +136,7 @@ def main() -> int:
     parser.add_argument("--asset-dir", type=Path, default=default_dir)
     parser.add_argument("--source", default="apartment.ply")
     parser.add_argument("--output", default="apartment.mobile.ply")
-    parser.add_argument("--target-splats", type=int, default=120_000)
+    parser.add_argument("--target-splats", type=int, default=320_000)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
@@ -122,19 +146,22 @@ def main() -> int:
     output = asset_dir / args.output
     if not source.is_file():
         raise SystemExit(f"missing source: {source}")
-    if output.exists() and not args.force and output.stat().st_mtime >= source.stat().st_mtime:
+    blob = source.read_bytes()
+    header, header_end, total, record_size = parse_header(blob)
+    if (
+        output.exists()
+        and not args.force
+        and output.stat().st_mtime >= source.stat().st_mtime
+        and manifest_splat_count(asset_dir, output) >= min(total, args.target_splats)
+    ):
         if not args.quiet:
             print(f"ok {output} already current ({output.stat().st_size} bytes)")
         return 0
-
-    blob = source.read_bytes()
-    header, header_end, total, record_size = parse_header(blob)
     body = memoryview(blob)[header_end:]
     expected = total * record_size
     if len(body) < expected:
         raise SystemExit(f"source body too short: expected {expected}, got {len(body)}")
-    stride = max(1, math.ceil(total / max(1, args.target_splats)))
-    selected = list(range(0, total, stride))
+    selected = select_uniform(total, args.target_splats)
     out_header = rewrite_vertex_count(header, len(selected))
     with output.open("wb") as f:
         f.write(out_header)
@@ -145,7 +172,7 @@ def main() -> int:
     if not args.quiet:
         print(
             f"wrote {output} ({len(selected)} of {total} splats, "
-            f"stride {stride}, {output.stat().st_size} bytes)"
+            f"{output.stat().st_size} bytes)"
         )
     return 0
 

@@ -66,8 +66,9 @@ Required for the full web experience:
 
 - `points.ply` for the full cloud view
 - `apartment.ply` or `apartment.spz` for the scan/splat view
-- `apartment.mobile.ply` is recommended for mobile scan/photo mode; deploys
-  generate it from `apartment.ply` when Python is available
+- `apartment.mobile.ply` is an optional fallback for mobile scan/photo mode.
+  The app prefers the full `apartment.ply` for visual quality; deploys generate
+  a denser mobile fallback from `apartment.ply` when Python is available.
 - `mesh.glb` or `collision.glb` for the mesh view; optional `mesh.mobile.glb`
   is preferred by phone browsers when present
 - `frame.json`, `floor.json`, `manifest.json`, and `seed-model.json`

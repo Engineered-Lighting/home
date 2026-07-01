@@ -575,6 +575,19 @@ async function ensureNoApartmentModeError(page, mode, context) {
   }, [phrase, loading]);
   if (result.found) throw new Error(`${context}: ${result.phrase}`);
   if (result.stillLoading) throw new Error(`${context}: still ${result.loading}`);
+  if (mode === "photo") {
+    const splat = await page.evaluate(() => {
+      const info = window.__havApartmentDebug?.snapshot?.()?.modes || {};
+      return {
+        count: Number(info.numSplats || 0),
+        source: info.splatSource || null,
+      };
+    });
+    if (!(splat.count >= 250000)) {
+      throw new Error(`${context}: low-detail photo splat (${splat.count || "unknown"} splats from ${splat.source || "unknown source"})`);
+    }
+    return `${mode} mode rendered ${Math.round(splat.count / 1000)}k splats without ${result.phrase}`;
+  }
   return `${mode} mode rendered without ${result.phrase}`;
 }
 
@@ -1609,6 +1622,19 @@ async function cdpEnsureNoApartmentModeError(client, mode, context) {
   })()`, true);
   if (result.found) throw new Error(`${context}: ${result.phrase}`);
   if (result.stillLoading) throw new Error(`${context}: still ${result.loading}`);
+  if (mode === "photo") {
+    const splat = await cdpEval(client, `(() => {
+      const info = window.__havApartmentDebug?.snapshot?.()?.modes || {};
+      return {
+        count: Number(info.numSplats || 0),
+        source: info.splatSource || null,
+      };
+    })()`, true);
+    if (!(splat.count >= 250000)) {
+      throw new Error(`${context}: low-detail photo splat (${splat.count || "unknown"} splats from ${splat.source || "unknown source"})`);
+    }
+    return `${mode} mode rendered ${Math.round(splat.count / 1000)}k splats without ${result.phrase}`;
+  }
   if (mode === "mesh") {
     const mesh = await cdpEval(client, `(() => {
       const info = window.__havApartmentDebug?.snapshot?.()?.modes || {};

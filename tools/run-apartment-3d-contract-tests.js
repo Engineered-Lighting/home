@@ -41,9 +41,10 @@ assert("mesh fallback does not use neon normal material", !MODES.includes("MeshN
 assert("mobile mesh can prefer optional phone asset", MODES.includes("'mesh.mobile.glb'") && MODES.indexOf("'mesh.mobile.glb'") < MODES.indexOf("'mesh.glb'"));
 assert("mesh debug reports fallback source", MODES.includes("meshSource: state.meshSource") && MODES.includes("meshFallback: state.meshFallback"));
 assert("prewarm can fetch optional mobile mesh first", PREWARM.includes('"mesh.mobile.glb"') && PREWARM.indexOf('"mesh.mobile.glb"') < PREWARM.indexOf('"mesh.glb"'));
-assert("prewarm can fetch optional mobile photo scan first", PREWARM.includes('"apartment.mobile.ply"') && PREWARM.indexOf('"apartment.mobile.ply"') < PREWARM.indexOf('"apartment.ply"'));
+assert("prewarm fetches full-quality photo scan before mobile fallback", PREWARM.includes('"apartment.ply"') && PREWARM.includes('"apartment.mobile.ply"') && PREWARM.indexOf('"apartment.ply"') < PREWARM.indexOf('"apartment.mobile.ply"'));
 assert("mode loader can parse photo and mesh in the background", MODES.includes("async preload(targets = ['splat', 'mesh'])") && MODES.includes("loadSplat()") && MODES.includes("loadMesh()"));
-assert("preloaded photo and mesh remain hidden until selected", MODES.includes("state.splat = splat;\n                visibleFor(state.mode);") && MODES.includes("state.meshFallback = !!src.fallback") && MODES.includes("visibleFor(state.mode);"));
+assert("preloaded photo and mesh remain hidden until selected", MODES.includes("state.splat = splat;") && MODES.includes("state.mesh = grp;") && MODES.includes("visibleFor(state.mode);"));
+assert("mode debug reports splat source and count", MODES.includes("splatSource: state.splatSource") && MODES.includes("numSplats: state.splat"));
 
 process.stdout.write("\napartment_zoom_control_contract_test\n");
 assert("AptZoomButton component exists", APT.includes("function AptZoomButton"));
@@ -79,7 +80,7 @@ assert("snapshot refresh has a slow-network retry watchdog", APT.includes("loadW
 assert("camera feed maps pixels into the shared projection frame", APT.includes('objectFit: "fill"') && APT.includes("const liveFeedSettled = aptLiveFeedSettled(liveFeedStatus);"));
 
 process.stdout.write("\napartment_photo_mobile_asset_contract_test\n");
-assert("mobile photo mode prefers generated mobile splat", MODES.includes("'apartment.mobile.ply'") && MODES.indexOf("'apartment.mobile.ply'") < MODES.indexOf("'apartment.ply'"));
+assert("mobile photo mode prefers full-quality splat before mobile fallback", MODES.includes("'apartment.ply'") && MODES.includes("'apartment.mobile.ply'") && MODES.indexOf("'apartment.ply'") < MODES.indexOf("'apartment.mobile.ply'"));
 assert("splat load has a timeout instead of hanging forever", MODES.includes("splat load timeout") && MODES.includes("mobile ? 45000 : 90000"));
 
 process.stdout.write("\napartment_light_control_contract_test\n");

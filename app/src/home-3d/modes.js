@@ -17,6 +17,7 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
     const candidates = assetCandidates;
     const state = { mode: 'points', targetMode: 'points', modeSeq: 0,
                     fading: null, splat: null, mesh: null,
+                    splatSource: null,
                     meshSource: null, meshFallback: false,
                     meshNearCut: { value: 0.0 } };
     const listeners = [];
@@ -91,9 +92,12 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
             try { return (window.visualViewport?.width || window.innerWidth || 1024) < 700; }
             catch (e) { return false; }
         })();
+        // Quality beats bandwidth here: the 120k mobile downsample looked like
+        // a fuzzy blob on real phones. Prefer the full 466k splat, then fall
+        // back to mobile only if the full runtime asset is absent.
         const names = mobile
-            ? ['apartment.mobile.ply', 'apartment.spz', 'apartment.ply']
-            : ['apartment.spz', 'apartment.ply']; // SplatTransform's spz flavor defeats Spark's decoder; ply always works
+            ? ['apartment.ply', 'apartment.spz', 'apartment.mobile.ply']
+            : ['apartment.ply', 'apartment.spz']; // SplatTransform's spz flavor defeats Spark's decoder on some exports; ply always works
         const urls = names.flatMap((n) => candidates(n, null, { sim }));
         for (const url of urls) {
             try {
@@ -113,6 +117,7 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
                 splat.frustumCulled = false;
                 apartmentRoot.add(splat);
                 state.splat = splat;
+                state.splatSource = url;
                 visibleFor(state.mode);
                 return splat;
             } catch (e) { lastErr = e; }
@@ -324,6 +329,7 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
                 splat: !!state.splat,
                 splatVisible: state.splat ? state.splat.visible : null,
                 sparkVisible: state.sparkRenderer ? state.sparkRenderer.visible : null,
+                splatSource: state.splatSource,
                 numSplats: state.splat ? (state.splat.numSplats ?? null) : null,
                 srParent: state.sparkRenderer ? (state.sparkRenderer.parent?.type || 'none') : 'none',
                 meshSource: state.meshSource,

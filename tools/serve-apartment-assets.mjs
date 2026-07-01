@@ -25,6 +25,7 @@ const assetGroups = [
   { key: "scan", required: true, files: ["apartment.spz", "apartment.ply"] },
   { key: "scanMobile", required: false, files: ["apartment.mobile.spz", "apartment.mobile.ply"] },
   { key: "mesh", required: true, files: ["mesh.glb", "collision.glb"] },
+  { key: "meshMobile", required: false, files: ["mesh.mobile.glb"] },
   { key: "manifest", required: true, files: ["manifest.json"] },
   { key: "frame", required: true, files: ["frame.json"] },
   { key: "floor", required: true, files: ["floor.json"] },

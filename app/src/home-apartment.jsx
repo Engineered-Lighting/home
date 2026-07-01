@@ -138,8 +138,12 @@ function aptCacheBust(url, value) {
 
 function aptInitialFrameSrc(src, snapshotSrc, snapshotIntervalMs) {
   return snapshotSrc && snapshotIntervalMs > 0
-    ? aptCacheBust(snapshotSrc, Date.now())
+    ? ""
     : src;
+}
+
+function aptLiveFeedSettled(status) {
+  return ["idle", "raw", "frame", "warped"].includes(status);
 }
 
 function aptOptimisticServiceState(prev, domain, service) {
@@ -242,6 +246,7 @@ function AptUndistortedFeed({ src, snapshotSrc, snapshotIntervalMs = 0, alt, int
   const refreshTimerRef = useRef(0);
   const loadWatchdogRef = useRef(0);
   const frameRequestRef = useRef(0);
+  const preloadRef = useRef(null);
   const useSnapshots = !!(snapshotSrc && snapshotIntervalMs > 0);
 
   const K = intrinsics && intrinsics.K;
@@ -258,6 +263,11 @@ function AptUndistortedFeed({ src, snapshotSrc, snapshotIntervalMs = 0, alt, int
     const clearTimers = () => {
       if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
       if (loadWatchdogRef.current) clearTimeout(loadWatchdogRef.current);
+      if (preloadRef.current) {
+        preloadRef.current.onload = null;
+        preloadRef.current.onerror = null;
+        preloadRef.current = null;
+      }
       refreshTimerRef.current = 0;
       loadWatchdogRef.current = 0;
     };
@@ -266,14 +276,36 @@ function AptUndistortedFeed({ src, snapshotSrc, snapshotIntervalMs = 0, alt, int
       const run = () => {
         const frameId = ++frameRequestRef.current;
         const next = useSnapshots ? aptCacheBust(base, Date.now()) : base;
-        setFrameSrc(next);
         if (useSnapshots) {
+          const img = new Image();
+          preloadRef.current = img;
+          img.onload = async () => {
+            if (frameRequestRef.current !== frameId) return;
+            try { if (img.decode) await img.decode(); } catch (e) { /* decoded enough for display */ }
+            if (frameRequestRef.current !== frameId) return;
+            if (loadWatchdogRef.current) clearTimeout(loadWatchdogRef.current);
+            loadWatchdogRef.current = 0;
+            rawSeenRef.current = true;
+            setFrameSrc(next);
+            onStatus?.("frame");
+            publishFrameRef.current?.(Math.max(900, snapshotIntervalMs));
+          };
+          img.onerror = () => {
+            if (frameRequestRef.current !== frameId) return;
+            if (loadWatchdogRef.current) clearTimeout(loadWatchdogRef.current);
+            loadWatchdogRef.current = 0;
+            onStatus?.("retrying");
+            publishFrameRef.current?.(Math.max(1600, snapshotIntervalMs * 2));
+          };
           const timeout = Math.max(12000, snapshotIntervalMs * 8);
           loadWatchdogRef.current = setTimeout(() => {
             if (frameRequestRef.current !== frameId) return;
             onStatus?.("retrying");
             publish(0);
           }, timeout);
+          img.src = next;
+        } else {
+          setFrameSrc(next);
         }
       };
       if (delay > 0) refreshTimerRef.current = setTimeout(run, delay);
@@ -288,6 +320,7 @@ function AptUndistortedFeed({ src, snapshotSrc, snapshotIntervalMs = 0, alt, int
   }, [src, snapshotSrc, snapshotIntervalMs, useSnapshots, onStatus]);
 
   const handleImageLoad = useCallback(() => {
+    if (useSnapshots) return;
     if (loadWatchdogRef.current) clearTimeout(loadWatchdogRef.current);
     loadWatchdogRef.current = 0;
     frameRequestRef.current += 1;
@@ -298,6 +331,7 @@ function AptUndistortedFeed({ src, snapshotSrc, snapshotIntervalMs = 0, alt, int
   }, [useSnapshots, snapshotIntervalMs, onStatus]);
 
   const handleImageError = useCallback(() => {
+    if (useSnapshots) return;
     if (loadWatchdogRef.current) clearTimeout(loadWatchdogRef.current);
     loadWatchdogRef.current = 0;
     frameRequestRef.current += 1;
@@ -469,6 +503,16 @@ function AptUndistortedFeed({ src, snapshotSrc, snapshotIntervalMs = 0, alt, int
   }, [wantWarp, src, snapshotSrc, intrinsics, useSnapshots, onStatus]);
 
   if (!wantWarp) {
+    if (useSnapshots && !frameSrc) {
+      return (
+        <div
+          data-apt-live-feed="loading"
+          data-apt-live-visible="0"
+          data-apt-frame-src=""
+          style={{ ...style, background: "#000" }}
+        />
+      );
+    }
     return (
       <img
         src={frameSrc}
@@ -1112,7 +1156,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
       if (rig?.inCameraPose?.()) {
         flyTimerRef.current = null;
         if (!simActive && dev.camera?.frigate_name) {
-          setLiveFeedStatus("connecting");
+          setLiveFeedStatus((current) => aptLiveFeedSettled(current) ? current : "connecting");
           setLiveOn(true);
         }
         return;
@@ -1120,9 +1164,9 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
       if (performance.now() - started > 5200) {
         flyTimerRef.current = null;
         if (!simActive && dev.camera?.frigate_name) {
-          setLiveFeedStatus("connecting");
+          setLiveFeedStatus((current) => aptLiveFeedSettled(current) ? current : "connecting");
           setLiveOn(true);
-          showToast("camera feed shown while pose finishes");
+          showToast("camera pose still loading - feed is live");
         }
         return;
       }
@@ -1139,24 +1183,23 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     if (flyTimerRef.current) { clearTimeout(flyTimerRef.current); flyTimerRef.current = null; }
     const alignment = aptCameraAlignment(dev);
     const calib = alignment.exact;
+    const hasFeed = !!(!simActive && dev.camera?.frigate_name);
     setLiveCam(dev);
-    setLiveOn(false);
-    setLiveFeedStatus(dev.camera?.frigate_name && !simActive
-      ? (calib ? "waiting for calibrated pose" : "waiting for estimated pose")
-      : "idle");
+    setLiveOn(hasFeed);
+    setLiveFeedStatus(hasFeed ? "connecting" : "idle");
     setCalibCam(null);
+    if (hasFeed) revealCameraFeedWhenReady(dev, seq);
     (async () => {
       try {
         // Camera snaps always use the textured mesh behind the live feed.
-        // Awaiting mesh avoids the old mobile race where the rig entered a
-        // camera pose while the cloud/mesh transition was still unresolved.
+        // The feed starts immediately; mesh/pose loading can take many seconds
+        // on a travel network and should not leave the camera view black.
         if (preSnapModeRef.current == null) preSnapModeRef.current = eng.modes.mode;
         await eng.modes.setMode("mesh", { duration: 0 });
         if (seq !== flySeqRef.current) return;
         setMode("mesh");
         setModeError(null);
         eng.flyToDevice(dev, { fovScale: calib && !mobile ? 1 / 0.74 : 1 });
-        revealCameraFeedWhenReady(dev, seq);
       } catch (e) {
         if (seq !== flySeqRef.current) return;
         setModeError({
@@ -1164,7 +1207,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
           message: "mesh unavailable",
           detail: `${e?.message || String(e || "asset load failed")} - check mesh.glb / collision.glb`,
         });
-        showToast("camera snap needs mesh - check mesh.glb asset");
+        if (!hasFeed) showToast("camera snap needs mesh - check mesh.glb asset");
+        else showToast("mesh unavailable - showing camera feed only");
       }
     })();
     return true;
@@ -1188,6 +1232,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         viewport,
         devices: (model.devices || []).length,
         fit: engineRef.current?.debugFit?.() || null,
+        modes: engineRef.current?.modes?.debugInfo?.() || null,
       }),
       apartmentFit: () => engineRef.current?.debugFit?.() || null,
       setMode: pickMode,
@@ -1287,7 +1332,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         objectFit: "cover",
         boxShadow: "0 0 60px 10px rgba(0,0,0,0.35)",
       };
-  const liveFeedSettled = ["idle", "raw", "frame", "warped"].includes(liveFeedStatus);
+  const liveFeedSettled = aptLiveFeedSettled(liveFeedStatus);
   const showCameraAlignmentBadge = cameraSnap && liveCam && cameraAlignment
     && (!cameraAlignment.exact || !liveFeedSettled);
   const liveFeedBase = liveCam?.camera?.frigate_name

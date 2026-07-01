@@ -18,7 +18,7 @@
   const CLOUD_ASSETS = [{ label: "point cloud", names: ["points.ply"] }];
   const FULL_ASSETS = [
     { label: "photo scan", names: ["apartment.spz", "apartment.ply"] },
-    { label: "mesh", names: ["mesh.glb", "collision.glb"] },
+    { label: "mesh", names: ["mesh.mobile.glb", "mesh.glb", "collision.glb"] },
   ];
 
   let controller = null;

@@ -12,6 +12,7 @@ const APP = fs.readFileSync(path.join(REPO, "app", "src", "home-app.jsx"), "utf8
 const MODES = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "modes.js"), "utf8");
 const ENGINE = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "engine.js"), "utf8");
 const RIG = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "rig.js"), "utf8");
+const PREWARM = fs.readFileSync(path.join(REPO, "app", "src", "home-apartment-prewarm.js"), "utf8");
 
 let pass = 0;
 let fail = 0;
@@ -36,6 +37,10 @@ assert("mesh/non-photo mode hides SparkRenderer", MODES.includes("state.sparkRen
 assert("hidden splat opacity is forced to zero", MODES.includes("if (!splatActive && 'opacity' in state.splat) state.splat.opacity = 0;"));
 assert("tickSpark is gated to active photo/fade modes", MODES.includes("state.mode === 'splat' || state.targetMode === 'splat'"));
 assert("mode debug reports Spark visibility", MODES.includes("sparkVisible: state.sparkRenderer ? state.sparkRenderer.visible : null"));
+assert("mesh fallback does not use neon normal material", !MODES.includes("MeshNormalMaterial") && MODES.includes("meshDisplayMaterial"));
+assert("mobile mesh can prefer optional phone asset", MODES.includes("'mesh.mobile.glb'") && MODES.indexOf("'mesh.mobile.glb'") < MODES.indexOf("'mesh.glb'"));
+assert("mesh debug reports fallback source", MODES.includes("meshSource: state.meshSource") && MODES.includes("meshFallback: state.meshFallback"));
+assert("prewarm can fetch optional mobile mesh first", PREWARM.includes('"mesh.mobile.glb"') && PREWARM.indexOf('"mesh.mobile.glb"') < PREWARM.indexOf('"mesh.glb"'));
 
 process.stdout.write("\napartment_zoom_control_contract_test\n");
 assert("AptZoomButton component exists", APT.includes("function AptZoomButton"));
@@ -48,12 +53,14 @@ assert("debug API exposes zoomOut", APT.includes("zoomOut: () => zoomApartment(-
 
 process.stdout.write("\napartment_camera_snap_contract_test\n");
 assert("mobile camera frame helper exists", APT.includes("function aptMobileCameraFrame"));
-assert("camera snap stores the target camera immediately", APT.includes("setLiveCam(dev);") && APT.includes('"waiting for calibrated pose"') && APT.includes('"waiting for estimated pose"'));
-assert("camera snap awaits mesh before fly-to-camera", APT.includes('await eng.modes.setMode("mesh", { duration: 0 });') && APT.includes("eng.flyToDevice(dev"));
+assert("camera snap stores the target camera immediately", APT.includes("setLiveCam(dev);") && APT.includes("const hasFeed") && APT.includes('setLiveFeedStatus(hasFeed ? "connecting" : "idle")'));
+assert("camera snap starts reachable feed before mesh load", APT.includes("setLiveOn(hasFeed);") && APT.indexOf("revealCameraFeedWhenReady(dev, seq)") < APT.indexOf('await eng.modes.setMode("mesh", { duration: 0 });'));
+assert("camera snap still loads mesh before fly-to-camera", APT.includes('await eng.modes.setMode("mesh", { duration: 0 });') && APT.includes("eng.flyToDevice(dev"));
 assert("camera feed reveal polls until pose is held", APT.includes("const revealCameraFeedWhenReady"));
 assert("feed reveal checks rig.inCameraPose", APT.includes("rig?.inCameraPose?.()"));
 assert("debug snapshot exposes live feed status", APT.includes("liveFeedStatus,"));
 assert("debug snapshot exposes camera frame", APT.includes("cameraFrame: mobile && liveCam"));
+assert("debug snapshot exposes render mode diagnostics", APT.includes("modes: engineRef.current?.modes?.debugInfo?.() || null"));
 assert("raw camera frame remains visible before warp", APT.includes("opacity: warpedReady ? 0 : 1"));
 assert("warped camera frame appears only after first draw", APT.includes("setWarpedReady(true)") && APT.includes('onStatus?.("warped")'));
 assert("camera alignment helper distinguishes estimated vs calibrated", APT.includes("function aptCameraAlignment") && APT.includes("camera - estimated pose"));
@@ -61,10 +68,11 @@ assert("camera snap requires exact alignment metadata", APT.includes("const cali
 assert("camera debug snapshot exposes alignment status", APT.includes("cameraAlignment: liveCam ? aptCameraAlignment(liveCam) : null"));
 assert("mobile live feed uses snapshot refresh fallback", APT.includes("function aptSnapshotSrc") && APT.includes("snapshotIntervalMs={mobile ? 1400 : 0}"));
 assert("mobile live feed disables WebGL warp canvas", APT.includes("intrinsics={mobile ? null : liveCam.camera?.intrinsics || null}"));
-assert("snapshot refresh keeps the calibrated frame cache-busted", APT.includes("function aptCacheBust") && APT.includes('onStatus?.(useSnapshots ? "frame" : "raw")'));
+assert("snapshot refresh keeps the calibrated frame cache-busted", APT.includes("function aptCacheBust") && APT.includes("aptCacheBust(base, Date.now())"));
+assert("snapshot refresh preloads before swapping visible frames", APT.includes("preloadRef") && APT.includes("new Image()") && APT.includes("setFrameSrc(next);"));
 assert("snapshot refresh waits for image load before the next frame", APT.includes("publishFrameRef.current?.(Math.max(900, snapshotIntervalMs))") && !APT.includes("setInterval(publish"));
 assert("snapshot refresh has a slow-network retry watchdog", APT.includes("loadWatchdogRef") && APT.includes('onStatus?.("retrying")'));
-assert("camera feed maps pixels into the shared projection frame", APT.includes('objectFit: "fill"') && APT.includes('const liveFeedSettled = ["idle", "raw", "frame", "warped"].includes(liveFeedStatus);'));
+assert("camera feed maps pixels into the shared projection frame", APT.includes('objectFit: "fill"') && APT.includes("const liveFeedSettled = aptLiveFeedSettled(liveFeedStatus);"));
 
 process.stdout.write("\napartment_photo_mobile_asset_contract_test\n");
 assert("mobile photo mode prefers generated mobile splat", MODES.includes("'apartment.mobile.ply'") && MODES.indexOf("'apartment.mobile.ply'") < MODES.indexOf("'apartment.ply'"));

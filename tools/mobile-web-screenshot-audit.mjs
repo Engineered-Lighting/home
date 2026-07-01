@@ -1528,6 +1528,16 @@ async function cdpEnsureNoApartmentModeError(client, mode, context) {
   })()`, true);
   if (result.found) throw new Error(`${context}: ${result.phrase}`);
   if (result.stillLoading) throw new Error(`${context}: still ${result.loading}`);
+  if (mode === "mesh") {
+    const mesh = await cdpEval(client, `(() => {
+      const info = window.__havApartmentDebug?.snapshot?.()?.modes || {};
+      return {
+        source: info.meshSource || null,
+        fallback: !!info.meshFallback,
+      };
+    })()`, true);
+    if (mesh.fallback) throw new Error(`${context}: coarse mesh fallback rendered (${mesh.source || "unknown source"})`);
+  }
   return `${mode} mode rendered without ${result.phrase}`;
 }
 

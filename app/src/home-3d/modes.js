@@ -17,6 +17,7 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
     const candidates = assetCandidates;
     const state = { mode: 'points', targetMode: 'points', modeSeq: 0,
                     fading: null, splat: null, mesh: null,
+                    meshSource: null, meshFallback: false,
                     meshNearCut: { value: 0.0 } };
     const listeners = [];
     // In-flight load promises: a slow asset (mesh.glb is ~56 MB) must never be
@@ -127,20 +128,64 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
         return p;
     }
 
+    function firstMaterial(material) {
+        return Array.isArray(material) ? material.find(Boolean) : material;
+    }
+
+    function meshDisplayMaterial(src, original, geometry) {
+        const material = firstMaterial(original);
+        const map = material && material.map;
+        if (map) {
+            map.colorSpace = THREE.SRGBColorSpace;
+            map.needsUpdate = true;
+            return new THREE.MeshBasicMaterial({
+                map,
+                side: THREE.FrontSide,
+                toneMapped: false,
+            });
+        }
+        if (geometry?.attributes?.color) {
+            return new THREE.MeshBasicMaterial({
+                vertexColors: true,
+                side: THREE.FrontSide,
+                toneMapped: false,
+            });
+        }
+        return new THREE.MeshBasicMaterial({
+            color: src.textured ? 0xb9c0c7 : 0x8c96a3,
+            side: THREE.DoubleSide,
+            transparent: !src.textured,
+            opacity: src.textured ? 1 : 0.72,
+            toneMapped: false,
+        });
+    }
+
     async function _loadMeshImpl() {
         const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
         let lastErr = null;
         // mesh.glb = the full textured Scaniverse export (1:1, 221k tris);
         // collision.glb is the decimated picking proxy — fallback display only.
-        const sources = [
-            { name: 'mesh.glb', textured: true },
-            { name: 'collision.glb', textured: false },
-        ];
+        const mobile = (() => {
+            try { return (window.visualViewport?.width || window.innerWidth || 1024) < 700; }
+            catch (e) { return false; }
+        })();
+        const sources = mobile
+            ? [
+                { name: 'mesh.mobile.glb', textured: true, mobile: true },
+                { name: 'mesh.glb', textured: true },
+                { name: 'collision.glb', textured: false, fallback: true },
+            ]
+            : [
+                { name: 'mesh.glb', textured: true },
+                { name: 'collision.glb', textured: false, fallback: true },
+            ];
         for (const src of sources) {
             for (const url of candidates(src.name, null, { sim })) {
                 try {
                     const gltf = await new GLTFLoader().loadAsync(url);
                     const grp = gltf.scene;
+                    let texturedMeshes = 0;
+                    let fallbackMeshes = 0;
                     grp.traverse((o) => {
                         if (!o.isMesh) return;
                         // the scene is unlit (cloud needs no lights) — swap PBR
@@ -151,9 +196,9 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
                         // walls render. Plus a near-camera melt (uMeshNearCut,
                         // driven per-frame from orbit radius) for anything the
                         // culling can't catch.
-                        const mat = src.textured && o.material && o.material.map
-                            ? new THREE.MeshBasicMaterial({ map: o.material.map, side: THREE.FrontSide })
-                            : new THREE.MeshNormalMaterial({ flatShading: true });
+                        const mat = meshDisplayMaterial(src, o.material, o.geometry);
+                        if (mat.map || mat.vertexColors) texturedMeshes += 1;
+                        else fallbackMeshes += 1;
                         mat.onBeforeCompile = (sh) => {
                             sh.uniforms.uMeshNearCut = state.meshNearCut;
                             sh.vertexShader = sh.vertexShader
@@ -168,6 +213,8 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
                     });
                     apartmentRoot.add(grp);
                     state.mesh = grp;
+                    state.meshSource = src.name;
+                    state.meshFallback = !!src.fallback || (src.textured && texturedMeshes === 0 && fallbackMeshes > 0);
                     return grp;
                 } catch (e) { lastErr = e; }
             }
@@ -260,6 +307,8 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
                 sparkVisible: state.sparkRenderer ? state.sparkRenderer.visible : null,
                 numSplats: state.splat ? (state.splat.numSplats ?? null) : null,
                 srParent: state.sparkRenderer ? (state.sparkRenderer.parent?.type || 'none') : 'none',
+                meshSource: state.meshSource,
+                meshFallback: state.meshFallback,
             };
         },
 

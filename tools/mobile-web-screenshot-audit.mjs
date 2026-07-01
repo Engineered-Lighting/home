@@ -687,6 +687,36 @@ async function openMobileMenu(page) {
   return maybeClick(page.getByLabel(/open mobile actions/i), 1800);
 }
 
+async function ensureMobileMenuReachable(page, context) {
+  const result = await page.evaluate(() => {
+    const norm = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+    const reachable = (el) => {
+      if (!el) return false;
+      const rect = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      if (rect.width < 1 || rect.height < 1) return false;
+      if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) return false;
+      if (style.pointerEvents === "none") return false;
+      const x = Math.min(Math.max(rect.left + rect.width / 2, 0), Math.max((window.innerWidth || 0) - 1, 0));
+      const y = Math.min(Math.max(rect.top + rect.height / 2, 0), Math.max((window.innerHeight || 0) - 1, 0));
+      const hit = document.elementFromPoint(x, y);
+      return !!hit && (hit === el || el.contains(hit));
+    };
+    const menu = document.querySelector('[role="menu"]');
+    const items = Array.from(document.querySelectorAll('[role="menuitem"]')).map((el) => ({
+      label: norm(el.textContent || el.getAttribute("aria-label") || ""),
+      reachable: reachable(el),
+    }));
+    return { menuReachable: reachable(menu), items };
+  });
+  const required = ["people", "intelligence", "video labeler"];
+  const missing = required.filter((label) => !result.items.some((item) => item.label === label && item.reachable));
+  if (!result.menuReachable || missing.length) {
+    throw new Error(`${context}: mobile menu not reachable (${missing.join(", ") || "menu"})`);
+  }
+  return `mobile menu reachable with ${result.items.length} items`;
+}
+
 async function clickMobileMenuItem(page, label) {
   const item = page.getByRole("menuitem", { name: new RegExp(`^${label}$`, "i") }).first();
   let clicked = await maybeClick(item, 500);
@@ -771,12 +801,13 @@ async function runButtonProbes(page, buttonItems) {
   await recordButtonProbe(buttonItems, "b03-mobile-menu", "Mobile actions menu opens", async () => {
     const ok = await openMobileMenu(page);
     if (!ok) throw new Error("mobile actions button missing");
+    const reachable = await ensureMobileMenuReachable(page, "mobile menu");
     await expectVisibleText(page, /^people$/i);
     await expectVisibleText(page, /^intelligence$/i);
     await expectVisibleText(page, /^video labeler$/i);
     const detail = await ensureVisualHealth(page, "mobile menu");
     await closeOverlays(page);
-    return detail;
+    return `${detail}; ${reachable}`;
   });
 
   await recordButtonProbe(buttonItems, "b04-people-close", "People opens and close dismisses", async () => {
@@ -1074,9 +1105,10 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors, prof
       await runDesktopButtonProbes(page, buttonItems);
     } else {
       await step("03-mobile-actions-menu", "Header actions menu", async () => {
-      await openMobileMenu(page);
-      await page.waitForTimeout(500);
-    });
+        await openMobileMenu(page);
+        await page.waitForTimeout(500);
+        return ensureMobileMenuReachable(page, "mobile actions screenshot");
+      });
 
     for (const [id, label, title] of [
       ["04-people", "people", "People overlay"],
@@ -1402,6 +1434,44 @@ const DOM_HELPERS = `
     el.click();
     return true;
   };
+  const visibleReachable = (selector) => {
+    const el = document.querySelector(selector);
+    if (!el) return false;
+    const rect = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+    if (rect.width < 1 || rect.height < 1) return false;
+    if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) return false;
+    if (style.pointerEvents === "none") return false;
+    const x = Math.min(Math.max(rect.left + rect.width / 2, 0), Math.max((window.innerWidth || 0) - 1, 0));
+    const y = Math.min(Math.max(rect.top + rect.height / 2, 0), Math.max((window.innerHeight || 0) - 1, 0));
+    const hit = document.elementFromPoint(x, y);
+    return !!hit && (hit === el || el.contains(hit));
+  };
+  const menuVisibleReachable = () => {
+    const menu = document.querySelector('[role="menu"]');
+    const items = Array.from(document.querySelectorAll('[role="menuitem"]'));
+    return {
+      menu: visibleReachable('[role="menu"]'),
+      items: items.map((el) => {
+        const label = norm(el.textContent || el.getAttribute("aria-label") || "");
+        const rect = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
+        const x = Math.min(Math.max(rect.left + rect.width / 2, 0), Math.max((window.innerWidth || 0) - 1, 0));
+        const y = Math.min(Math.max(rect.top + rect.height / 2, 0), Math.max((window.innerHeight || 0) - 1, 0));
+        const hit = document.elementFromPoint(x, y);
+        const visible = rect.width >= 1 && rect.height >= 1 &&
+          style.visibility !== "hidden" && style.display !== "none" &&
+          Number(style.opacity) !== 0 && style.pointerEvents !== "none";
+        return {
+          label,
+          visible,
+          reachable: !!hit && (hit === el || el.contains(hit)),
+          rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+        };
+      }),
+      text: menu ? norm(menu.textContent || "") : "",
+    };
+  };
   const existsTextMatch = (pattern) => {
     const re = new RegExp(pattern, "i");
     return Array.from(document.querySelectorAll("body *")).some((el) => re.test(norm(el.textContent)));
@@ -1465,7 +1535,7 @@ const DOM_HELPERS = `
     dispatch("keyup", document);
     return true;
   };
-  return { clickButton, clickButtonMatch, clickSelector, existsTextMatch, clickMenuItem, command, escape };
+  return { clickButton, clickButtonMatch, clickSelector, visibleReachable, menuVisibleReachable, existsTextMatch, clickMenuItem, command, escape };
 })()
 `;
 
@@ -1508,6 +1578,17 @@ async function cdpEnsureVisualHealth(client, context) {
     throw new Error(`${context}: ${visualHealthDetail(health)}`);
   }
   return visualHealthDetail(health);
+}
+
+async function cdpEnsureMobileMenuReachable(client, context) {
+  const result = await cdpAction(client, "(h) => h.menuVisibleReachable()");
+  const required = ["people", "intelligence", "video labeler"];
+  const items = Array.isArray(result?.items) ? result.items : [];
+  const missing = required.filter((label) => !items.some((item) => item.label === label && item.visible && item.reachable));
+  if (!result?.menu || missing.length) {
+    throw new Error(`${context}: mobile menu not reachable (${missing.join(", ") || "menu"})`);
+  }
+  return `mobile menu reachable with ${items.length} items`;
 }
 
 async function cdpEnsureApartmentFit(client, context) {
@@ -1724,12 +1805,13 @@ async function cdpRunButtonProbes(client, buttonItems) {
     const ok = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Open mobile actions"]')`);
     if (!ok) throw new Error("mobile actions button missing");
     await cdpDelay(350);
+    const reachable = await cdpEnsureMobileMenuReachable(client, "mobile menu");
     await cdpExpectText(client, "^people$");
     await cdpExpectText(client, "^intelligence$");
     await cdpExpectText(client, "^video labeler$");
     const detail = await cdpEnsureVisualHealth(client, "mobile menu");
     await cdpCloseOverlays(client);
-    return detail;
+    return `${detail}; ${reachable}`;
   });
 
   await cdpRecordButtonProbe(buttonItems, "b04-people-close", "People opens and close dismisses", async () => {
@@ -2021,10 +2103,11 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors, profile = 
       await cdpRunDesktopButtonProbes(client, buttonItems);
     } else {
       await step("03-mobile-actions-menu", "Header actions menu", async () => {
-      const ok = await cdpEval(client, "(() => { const b = document.querySelector('button[aria-label=\"Open mobile actions\"]'); if (!b) return false; b.click(); return true; })()");
-      if (!ok) throw new Error("mobile menu button missing");
-      await cdpDelay(500);
-    });
+        const ok = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Open mobile actions"]')`);
+        if (!ok) throw new Error("mobile menu button missing");
+        await cdpDelay(500);
+        return cdpEnsureMobileMenuReachable(client, "mobile actions screenshot");
+      });
 
     for (const [id, label, title] of [
       ["04-people", "people", "People overlay"],

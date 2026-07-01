@@ -198,7 +198,7 @@ function HomeHeader({
         minWidth: 0,
         flex: mobile ? "1 1 auto" : "0 1 auto",
         flexWrap: "nowrap",
-        overflow: mobile ? "hidden" : "visible",
+        overflow: mobile && !menuOpen ? "hidden" : "visible",
       }}>
         {/* Phase B F0-08: backend liveness warning pill. Only renders
             when HA itself is online but a downstream service (sidecar
@@ -414,10 +414,16 @@ function HomeHeader({
           )}
         </span>
         {mobile && (
-          <span style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
+          <span style={{
+            position: "relative",
+            display: "inline-flex",
+            flexShrink: 0,
+            zIndex: menuOpen ? 120 : "auto",
+          }}>
             <button
               type="button"
               aria-label="Open mobile actions"
+              aria-expanded={menuOpen ? "true" : "false"}
               className="hg-focusable hg-mobile-touch"
               onClick={() => setMenuOpen((open) => !open)}
               style={{

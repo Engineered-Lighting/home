@@ -17,10 +17,12 @@ const APT_FONT_MONO = '"Geist Mono", "JetBrains Mono", monospace';
 const APT_FONT_SANS = '"Geist", "Inter", sans-serif';
 
 const APT_SERVICE_BY_RUNTIME_KEY = {
+  HG_DEFAULT_HA_BASE: "ha",
   HG_DEFAULT_FRIGATE_BASE: "frigate",
   HG_DEFAULT_TRACKER_BASE: "tracker",
   HG_DEFAULT_APARTMENT_ASSET_BASE: "apartmentAssets",
 };
+const APT_CAMERA_STREAM_REFRESH_MS = 2 * 60 * 1000;
 
 function readAptViewport() {
   if (typeof window === "undefined") return { width: 1024, height: 768, mobile: false, phone: false };
@@ -129,6 +131,100 @@ function aptSnapshotSrc(src) {
   const clean = String(src || "").replace(/\/+$/, "");
   if (!clean || /\/latest\.jpg(?:[?#]|$)/.test(clean)) return clean;
   return `${clean}/latest.jpg`;
+}
+
+function aptHaBaseFromWs(haUrl) {
+  if (!haUrl) return "";
+  if (String(haUrl).startsWith("/")) return String(haUrl).replace(/\/+$/, "");
+  try {
+    const u = new URL(String(haUrl).replace(/^ws/, "http"));
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return "";
+  }
+}
+
+function aptCameraEntity(dev) {
+  return dev?.ha_entity_id || dev?.camera?.ha_entity_id || "";
+}
+
+function aptCameraCanFeed(dev) {
+  return !!(aptCameraEntity(dev) || dev?.camera?.frigate_name);
+}
+
+function useAptSignedCameraStream({ entity, haUrl, enabled }) {
+  const [signed, setSigned] = useState("");
+  const [err, setErr] = useState("");
+  const [streamKey, setStreamKey] = useState(0);
+  const reload = useCallback(() => setStreamKey((n) => n + 1), []);
+
+  useEffect(() => {
+    if (!enabled || !entity || !haUrl) {
+      setSigned("");
+      setErr("");
+      return undefined;
+    }
+    let cancelled = false;
+    let resignTimer = 0;
+    let refreshTimer = 0;
+    setSigned("");
+    setErr("");
+
+    const sign = async () => {
+      try {
+        const client = window.__hav_haClient || null;
+        if (!client || typeof client.call !== "function") {
+          setErr("no ha client");
+          return;
+        }
+        const res = await client.call({
+          type: "auth/sign_path",
+          path: `/api/camera_proxy_stream/${entity}`,
+          expires: 3600,
+        });
+        if (cancelled) return;
+        const base = aptHaBaseFromWs(haUrl);
+        if (!base || !res?.path) throw new Error("missing signed stream path");
+        setSigned(`${base}${res.path}`);
+        setErr("");
+        resignTimer = setTimeout(sign, 50 * 60 * 1000);
+      } catch (e) {
+        if (cancelled) return;
+        console.warn("[apartment] HA camera sign_path failed:", e?.message || e);
+        setErr(String(e?.message || e));
+      }
+    };
+
+    sign();
+    refreshTimer = setInterval(reload, APT_CAMERA_STREAM_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      if (resignTimer) clearTimeout(resignTimer);
+      if (refreshTimer) clearInterval(refreshTimer);
+    };
+  }, [entity, haUrl, enabled, reload]);
+
+  useEffect(() => {
+    if (!enabled) return undefined;
+    let lastReloadAt = 0;
+    const forceReload = () => {
+      const now = Date.now();
+      if (now - lastReloadAt < 10000) return;
+      lastReloadAt = now;
+      reload();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") forceReload();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", forceReload);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", forceReload);
+    };
+  }, [enabled, reload]);
+
+  return { src: signed, err, streamKey, reload };
 }
 
 function aptCacheBust(url, value) {
@@ -246,7 +342,7 @@ function AptZoomButton({ label, title, onClick, disabled, mobile = readAptViewpo
    (no THREE — that stays inside home-3d). Falls back to the plain <img>
    when there are no intrinsics, no WebGL, shader trouble, or the stream is
    CORS-blocked (crossOrigin load error). */
-function AptUndistortedFeed({ src, snapshotSrc, snapshotIntervalMs = 0, alt, intrinsics, style, onStatus }) {
+function AptUndistortedFeed({ src, snapshotSrc, snapshotIntervalMs = 0, alt, intrinsics, style, onStatus, onReload }) {
   const canvasRef = useRef(null);
   const imgRef = useRef(null);
   const [fallback, setFallback] = useState(false);
@@ -318,6 +414,11 @@ function AptUndistortedFeed({ src, snapshotSrc, snapshotIntervalMs = 0, alt, int
           img.src = next;
         } else {
           setFrameSrc(next);
+          loadWatchdogRef.current = setTimeout(() => {
+            if (frameRequestRef.current !== frameId) return;
+            onStatus?.("retrying");
+            onReload?.("no first frame");
+          }, 12000);
         }
       };
       if (delay > 0) refreshTimerRef.current = setTimeout(run, delay);
@@ -329,7 +430,7 @@ function AptUndistortedFeed({ src, snapshotSrc, snapshotIntervalMs = 0, alt, int
       publishFrameRef.current = null;
       clearTimers();
     };
-  }, [src, snapshotSrc, snapshotIntervalMs, useSnapshots, onStatus]);
+  }, [src, snapshotSrc, snapshotIntervalMs, useSnapshots, onStatus, onReload]);
 
   const handleImageLoad = useCallback(() => {
     if (useSnapshots) return;
@@ -1218,7 +1319,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
       const rig = engineRef.current?.rig;
       if (rig?.inCameraPose?.()) {
         flyTimerRef.current = null;
-        if (!simActive && dev.camera?.frigate_name) {
+        if (!simActive && aptCameraCanFeed(dev)) {
           setLiveFeedStatus((current) => aptLiveFeedSettled(current) ? current : "connecting");
           setLiveOn(true);
         }
@@ -1226,7 +1327,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
       }
       if (performance.now() - started > 5200) {
         flyTimerRef.current = null;
-        if (!simActive && dev.camera?.frigate_name) {
+        if (!simActive && aptCameraCanFeed(dev)) {
           setLiveFeedStatus((current) => aptLiveFeedSettled(current) ? current : "connecting");
           setLiveOn(true);
           showToast("camera pose still loading - feed is live");
@@ -1246,7 +1347,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     if (flyTimerRef.current) { clearTimeout(flyTimerRef.current); flyTimerRef.current = null; }
     const alignment = aptCameraAlignment(dev);
     const calib = alignment.exact;
-    const hasFeed = !!(!simActive && dev.camera?.frigate_name);
+    const hasFeed = !!(!simActive && aptCameraCanFeed(dev));
     setLiveCam(dev);
     setLiveOn(hasFeed);
     setLiveFeedStatus(hasFeed ? "connecting" : "idle");
@@ -1302,12 +1403,12 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
       zoomIn: () => zoomApartment(1),
       zoomOut: () => zoomApartment(-1),
       flyFirstCamera: () => {
-        const dev = (model.devices || []).find((d) => d.type === "camera" || d.camera?.frigate_name);
+        const dev = (model.devices || []).find((d) => d.type === "camera" || aptCameraCanFeed(d));
         return dev ? flyToDeviceView(dev) : false;
       },
       flyFirstCalibratedCamera: () => {
         const dev = (model.devices || []).find((d) =>
-          (d.type === "camera" || d.camera?.frigate_name) &&
+          (d.type === "camera" || aptCameraCanFeed(d)) &&
           d.camera?.intrinsics &&
           d.camera?.extrinsics
         );
@@ -1331,6 +1432,14 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
       if (window.__havApartmentDebug === api) delete window.__havApartmentDebug;
     };
   }, [open, phase, mode, liveOn, liveFeedStatus, liveCam, mobile, viewport, model.devices, pickMode, zoomApartment, flyToDeviceView]);
+
+  const liveHaEntity = aptCameraEntity(liveCam);
+  const liveHaBase = endpoint || aptServiceBase("homeAssistantUrl", "HG_DEFAULT_HA_BASE", "http://192.168.0.125:8123");
+  const signedLiveFeed = useAptSignedCameraStream({
+    entity: liveHaEntity,
+    haUrl: liveHaBase,
+    enabled: !!(open && liveOn && liveCam && !calibCam && !simActive && liveHaEntity),
+  });
 
   if (!open) return null;
 
@@ -1398,10 +1507,12 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const liveFeedSettled = aptLiveFeedSettled(liveFeedStatus);
   const showCameraAlignmentBadge = cameraSnap && liveCam && cameraAlignment
     && (!cameraAlignment.exact || !liveFeedSettled);
-  const liveFeedBase = liveCam?.camera?.frigate_name
+  const frigateFeedBase = liveCam?.camera?.frigate_name
     ? `${aptServiceBase("apartment3d.frigateBase", "HG_DEFAULT_FRIGATE_BASE", "http://192.168.0.125:5000")}/api/${liveCam.camera.frigate_name}`
     : "";
-  const liveSnapshotSrc = mobile && liveFeedBase ? aptSnapshotSrc(liveFeedBase) : "";
+  const liveFeedBase = signedLiveFeed.src || frigateFeedBase;
+  const liveFeedSource = signedLiveFeed.src ? "ha" : "frigate";
+  const liveSnapshotSrc = mobile && !signedLiveFeed.src && frigateFeedBase ? aptSnapshotSrc(frigateFeedBase) : "";
 
   return (
     <div
@@ -1619,8 +1730,9 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         </div>
       )}
 
-      {/* live camera feed — full-viewport MJPEG from Frigate, shown over the
-          3D canvas while snapped; mode switching returns after backing out */}
+      {/* live camera feed - prefers HA's signed camera_proxy_stream (same path
+          as the fast vision tray), with Frigate as a fallback. Shown over the
+          3D canvas while snapped; mode switching returns after backing out. */}
       {liveCam && liveOn && !calibCam && (
         <div style={mobileCameraFrame
           ? {
@@ -1647,7 +1759,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
               Mobile Safari/iOS can paint partial gray frames from that canvas
               path, so phone-sized viewports use the raw snapshot feed. */}
           <AptUndistortedFeed
-            key={`${liveCam.id}-${serviceEpoch}`}
+            key={`${liveCam.id}-${serviceEpoch}-${liveFeedSource}-${signedLiveFeed.streamKey}`}
             // key forces a REMOUNT on camera switch: the cleanup deliberately
             // loses the WebGL context (context-budget hygiene), so a reused
             // canvas would come back with a dead context and no warp
@@ -1658,6 +1770,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
             intrinsics={mobile ? null : liveCam.camera?.intrinsics || null}
             style={liveFeedStyle}
             onStatus={setLiveFeedStatus}
+            onReload={signedLiveFeed.src ? signedLiveFeed.reload : undefined}
           />
           <div style={{ position: "absolute", top: mobile ? "calc(54px + env(safe-area-inset-top, 0px))" : 52, left: mobile ? 12 : 18, fontFamily: APT_FONT_MONO,
                         fontSize: 9.5, letterSpacing: "0.12em", color: "var(--hg-ice)",

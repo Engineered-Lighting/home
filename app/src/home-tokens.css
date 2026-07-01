@@ -6,6 +6,7 @@
 @import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap");
 
 :root {
+  color-scheme: dark;
   /* Dark — the canonical EL surface */
   --hg-bg-0: #000000;
   --hg-bg-1: #0A0A0A;
@@ -31,6 +32,7 @@
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
   --hg-bg-0: #000000;
   --hg-bg-1: #0A0A0A;
   --hg-bg-2: #111111;
@@ -55,6 +57,7 @@
 }
 
 [data-theme="light"] {
+  color-scheme: light;
   /* "Paper terminal" — warm off-white parchment, ink-black text.
      Restrained. Still terminal-esque. The accent shifts from ice to
      a deep ink-blue so "lit" elements read as cool against warm paper. */

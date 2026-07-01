@@ -3532,7 +3532,7 @@ const SLASH_CMDS = [
   { cmd: "/help",       hint: "",           desc: "list commands grouped by category (click any entry to fill the input)", category: "meta" },
 ];
 
-function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, onStop, focusToken, mobile = false }) {
+function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, onStop, focusToken, mobile = false, theme = "dark" }) {
   const inputRef = useRef(null);
   const [sel, setSel] = useState(0);
   // HomeApp bumps `focusToken` to pull focus here (e.g. when the chat feed
@@ -3546,6 +3546,17 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
   const matches = isSlash ? SLASH_CMDS.filter((c) => c.cmd.startsWith(firstTok)) : [];
   const showMenu = isSlash && matches.length > 0 && !value.includes(" ");
   const spatialMode = !!(typeof window !== "undefined" && window.__HOME_SPATIAL_MODE);
+  const lightTheme = theme === "light";
+  const menuSurface = lightTheme
+    ? "var(--hg-bg-3)"
+    : spatialMode ? "rgba(5,7,11,0.98)" : "rgba(8,10,14,0.985)";
+  const menuSelected = lightTheme
+    ? "rgba(31,79,168,0.11)"
+    : "rgba(184,216,255,0.08)";
+  const menuShadow = lightTheme
+    ? "0 18px 42px rgba(60,50,30,0.20), 0 0 0 1px rgba(26,24,18,0.04)"
+    : spatialMode ? "0 14px 34px rgba(0,0,0,0.42)" : "0 18px 48px rgba(0,0,0,0.44)";
+  const inputSurface = "var(--hg-bg-0)";
   useEffect(() => { if (sel >= matches.length) setSel(0); }, [matches.length, sel]);
 
   const complete = (cmd) => {
@@ -3572,14 +3583,14 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
           position: "absolute", bottom: "100%", left: mobile ? 8 : spatialMode ? 10 : 12, right: mobile ? 8 : spatialMode ? 10 : 12,
           maxHeight: mobile ? "min(320px, 44dvh)" : spatialMode ? "min(260px, 34vh)" : "min(420px, 46vh)",
           overflowY: "auto",
-          background: spatialMode ? "rgba(5,7,11,0.94)" : "rgba(8,10,14,0.96)",
+          background: menuSurface,
           border: "1px solid var(--hg-border)",
           borderRadius: spatialMode ? 7 : 8,
           marginBottom: spatialMode ? 7 : 8,
           padding: spatialMode ? "4px 0" : "6px 0",
           fontFamily: "'Geist Mono', monospace", fontSize: mobile ? 12.5 : spatialMode ? 11 : 12,
-          boxShadow: spatialMode ? "0 14px 34px rgba(0,0,0,0.42)" : "0 18px 48px rgba(0,0,0,0.44)",
-          backdropFilter: spatialMode ? "blur(14px)" : "blur(18px)",
+          boxShadow: menuShadow,
+          backdropFilter: lightTheme ? "none" : spatialMode ? "blur(14px)" : "blur(18px)",
           zIndex: 20,
           WebkitOverflowScrolling: "touch",
         }}>
@@ -3604,7 +3615,7 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
                 display: "flex", alignItems: "baseline", gap: 10,
                 minHeight: mobile ? 44 : "auto",
                 padding: mobile ? "9px 11px" : spatialMode ? "6px 10px" : "7px 12px",
-                background: i === sel ? "rgba(184,216,255,0.08)" : "transparent",
+                background: i === sel ? menuSelected : "transparent",
                 cursor: "pointer",
               }}>
               <span style={{ color: i === sel ? "var(--hg-fg-0)" : "var(--hg-fg-1)", minWidth: spatialMode ? 74 : 88 }}>{m.cmd}</span>
@@ -3628,7 +3639,7 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
             ? "7px 9px calc(8px + env(safe-area-inset-bottom, 0px))"
             : spatialMode ? "9px 12px 11px" : "10px 12px 12px",
         borderTop: "1px solid var(--hg-border)",
-        background: "var(--hg-bg-0)",
+        background: inputSurface,
         display: "flex", alignItems: "center", gap: mobile ? 8 : 10,
         minHeight: mobile ? 54 : "auto",
       }}>
@@ -3655,7 +3666,7 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
               className="hg-focusable"
               onClick={onStop}
               style={{
-                background: "transparent", border: "1px solid var(--hg-border)",
+                background: lightTheme ? "rgba(26,24,18,0.03)" : "transparent", border: "1px solid var(--hg-border)",
                 padding: mobile ? "8px 10px" : "3px 8px", cursor: "pointer",
                 color: "var(--hg-fg-2)",
                 display: "inline-flex", alignItems: "center", gap: 6,
@@ -3675,7 +3686,7 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
               className="hg-focusable"
               onClick={onSend}
               style={{
-                background: "transparent", border: mobile ? "1px solid var(--hg-border)" : "none", padding: mobile ? "8px 10px" : 0,
+                background: lightTheme ? "rgba(26,24,18,0.03)" : "transparent", border: mobile ? "1px solid var(--hg-border)" : "none", padding: mobile ? "8px 10px" : 0,
                 color: "var(--hg-fg-2)", cursor: "pointer",
                 display: "inline-flex", alignItems: "center", gap: 4,
                 fontFamily: "'Geist Mono', ui-monospace, monospace",
@@ -9803,6 +9814,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         onStop={stopStreaming}
         focusToken={focusToken}
         mobile={mobile}
+        theme={theme}
       />
       {/* External Reasoning provider key-entry modal. position:fixed
        * inside the component itself, so this can render anywhere. See

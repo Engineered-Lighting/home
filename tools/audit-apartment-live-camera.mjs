@@ -378,13 +378,19 @@ const FEED_PROBE = `(() => {
   const status = String(snap.liveFeedStatus || "");
   const badStatus = status === "connecting" || status === "retrying" || status === "error";
   const mobile = !!snap.mobile;
+  const calibratedOverlayCanvasOk = mobile && !!snap.modes?.cameraOverlay && !!loadedHiddenImg && !!visibleCanvas;
+  const requiresCalibratedOverlay = mobile && !!snap.cameraAlignment?.exact;
   return {
     ok: !!snap.liveCam && !!snap.liveOn && !badStatus &&
-      (mobile ? !!loadedVisibleImg && !visibleCanvas : !!(loadedVisibleImg || (loadedHiddenImg && visibleCanvas))),
+      (requiresCalibratedOverlay
+        ? calibratedOverlayCanvasOk
+        : mobile ? (!!loadedVisibleImg && !visibleCanvas) || calibratedOverlayCanvasOk : !!(loadedVisibleImg || (loadedHiddenImg && visibleCanvas))),
     snap,
     imgs,
     canvases,
     mobileRawRequired: mobile,
+    calibratedOverlayCanvasOk,
+    requiresCalibratedOverlay,
     badStatus,
     loadedVisibleImg: !!loadedVisibleImg,
     loadedHiddenImg: !!loadedHiddenImg,

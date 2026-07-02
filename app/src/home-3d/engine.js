@@ -49,13 +49,13 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
     ]);
 
     const renderer = new THREE.WebGLRenderer({
-        canvas, antialias: true, alpha: false, powerPreference: 'high-performance',
+        canvas, antialias: true, alpha: true, powerPreference: 'high-performance',
     });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.setClearColor(0x000000, 1);
+    renderer.setClearColor(0x000000, 0);
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x000000);
+    scene.background = null;
 
     const camera = new THREE.PerspectiveCamera(35, 1, 0.05, 200);
 

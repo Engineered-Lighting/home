@@ -71,13 +71,18 @@ assert("warped camera frame appears only after first draw", APT.includes("setWar
 assert("camera alignment helper distinguishes estimated vs calibrated", APT.includes("function aptCameraAlignment") && APT.includes("camera - estimated pose"));
 assert("camera snap requires exact alignment metadata", APT.includes("const calib = alignment.exact"));
 assert("camera debug snapshot exposes alignment status", APT.includes("cameraAlignment: liveCam ? aptCameraAlignment(liveCam) : null"));
-assert("mobile live feed uses snapshot refresh fallback", APT.includes("function aptSnapshotSrc") && APT.includes("snapshotIntervalMs={mobile ? 1400 : 0}"));
-assert("mobile live feed disables WebGL warp canvas", APT.includes("intrinsics={mobile ? null : liveCam.camera?.intrinsics || null}"));
+assert("mobile live feed uses snapshot refresh fallback", APT.includes("function aptSnapshotSrc") && APT.includes("const liveSnapshotIntervalMs = liveSnapshotSrc ? 1100 : 0"));
+assert("mobile calibrated feed keeps intrinsics for lens-correct overlay", APT.includes("const liveFeedIntrinsics = cameraOverlayActive || !mobile") && APT.includes("intrinsics={liveFeedIntrinsics}"));
+assert("mobile calibrated feed prefers undistorted snapshots", APT.includes("const calibratedMobileSnapshotSrc") && APT.includes('"calibrated-snapshot"'));
 assert("snapshot refresh keeps the calibrated frame cache-busted", APT.includes("function aptCacheBust") && APT.includes("aptCacheBust(base, Date.now())"));
 assert("snapshot refresh preloads before swapping visible frames", APT.includes("preloadRef") && APT.includes("new Image()") && APT.includes("setFrameSrc(next);"));
 assert("snapshot refresh waits for image load before the next frame", APT.includes("publishFrameRef.current?.(Math.max(900, snapshotIntervalMs))") && !APT.includes("setInterval(publish"));
 assert("snapshot refresh has a slow-network retry watchdog", APT.includes("loadWatchdogRef") && APT.includes('onStatus?.("retrying")'));
 assert("camera feed maps pixels into the shared projection frame", APT.includes('objectFit: "fill"') && APT.includes("const liveFeedSettled = aptLiveFeedSettled(liveFeedStatus);"));
+assert("calibrated camera snaps composite mesh over video only after pose lock", APT.includes("const cameraOverlayActive") && APT.includes("inCamPose && !calibCam") && APT.includes("setCameraOverlay(cameraOverlayActive)") && APT.includes("zIndex: cameraOverlayActive ? 4 : 1") && APT.includes("zIndex: cameraOverlayActive ? 2 : 3"));
+assert("mesh overlay restores normal materials outside camera snaps", MODES.includes("function applyCameraOverlay") && MODES.includes("cameraOverlayOriginals") && MODES.includes("o.material = prior.material"));
+assert("mesh overlay uses wireframe for alignment", MODES.includes("wireframe: true") && MODES.includes("cameraOverlay: state.cameraOverlay"));
+assert("3d renderer supports transparent camera compositing", ENGINE.includes("alpha: true") && ENGINE.includes("renderer.setClearColor(0x000000, 0)") && ENGINE.includes("scene.background = null"));
 
 process.stdout.write("\napartment_photo_mobile_asset_contract_test\n");
 assert("mobile photo mode prefers full-quality splat before mobile fallback", MODES.includes("'apartment.ply'") && MODES.includes("'apartment.mobile.ply'") && MODES.indexOf("'apartment.ply'") < MODES.indexOf("'apartment.mobile.ply'"));

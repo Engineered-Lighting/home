@@ -1440,6 +1440,14 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     haUrl: liveHaBase,
     enabled: !!(open && liveOn && liveCam && !calibCam && !simActive && liveHaEntity),
   });
+  const cameraOverlayActive = !!(open && liveOn && liveCam && inCamPose && !calibCam && aptCameraAlignment(liveCam).exact);
+
+  useEffect(() => {
+    const modes = engineRef.current?.modes;
+    if (!modes || typeof modes.setCameraOverlay !== "function") return undefined;
+    modes.setCameraOverlay(cameraOverlayActive);
+    return () => modes.setCameraOverlay(false);
+  }, [cameraOverlayActive, liveCam?.id, serviceEpoch]);
 
   if (!open) return null;
 
@@ -1461,8 +1469,9 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         ...mobileCameraFrame,
         right: "auto",
         bottom: "auto",
-        zIndex: 1,
+        zIndex: cameraOverlayActive ? 4 : 1,
         overflow: "hidden",
+        pointerEvents: cameraOverlayActive ? "none" : "auto",
         touchAction: "none",
         cursor: "grab",
       }
@@ -1472,6 +1481,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         bottom: 0,
         right: 0,
         left: calibCam && !mobile ? "46%" : 0,
+        zIndex: cameraOverlayActive ? 4 : 1,
+        pointerEvents: cameraOverlayActive ? "none" : "auto",
         touchAction: "none",
         cursor: "grab",
       };
@@ -1510,9 +1521,18 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const frigateFeedBase = liveCam?.camera?.frigate_name
     ? `${aptServiceBase("apartment3d.frigateBase", "HG_DEFAULT_FRIGATE_BASE", "http://192.168.0.125:5000")}/api/${liveCam.camera.frigate_name}`
     : "";
-  const liveFeedBase = signedLiveFeed.src || frigateFeedBase;
-  const liveFeedSource = signedLiveFeed.src ? "ha" : "frigate";
-  const liveSnapshotSrc = mobile && !signedLiveFeed.src && frigateFeedBase ? aptSnapshotSrc(frigateFeedBase) : "";
+  const calibratedMobileSnapshotSrc = mobile && cameraOverlayActive && frigateFeedBase
+    ? aptSnapshotSrc(frigateFeedBase)
+    : "";
+  const liveFeedBase = calibratedMobileSnapshotSrc || signedLiveFeed.src || frigateFeedBase;
+  const liveFeedSource = calibratedMobileSnapshotSrc ? "calibrated-snapshot" : signedLiveFeed.src ? "ha" : "frigate";
+  const liveSnapshotSrc = mobile && frigateFeedBase && (calibratedMobileSnapshotSrc || !signedLiveFeed.src)
+    ? aptSnapshotSrc(frigateFeedBase)
+    : "";
+  const liveFeedIntrinsics = cameraOverlayActive || !mobile
+    ? liveCam?.camera?.intrinsics || null
+    : null;
+  const liveSnapshotIntervalMs = liveSnapshotSrc ? 1100 : 0;
 
   return (
     <div
@@ -1737,7 +1757,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         <div style={mobileCameraFrame
           ? {
               ...mobileCameraFrame,
-              zIndex: 3,
+              zIndex: cameraOverlayActive ? 2 : 3,
               overflow: "hidden",
               pointerEvents: "none",
               display: "block",
@@ -1750,7 +1770,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
               justifyContent: "center",
               padding: 0,
               pointerEvents: "none",
-              zIndex: 3,
+              zIndex: cameraOverlayActive ? 2 : 3,
             }}>
           {/* full-viewport on mobile so video and WebGL share the same frame;
               holds the same pose behind it — true 1:1 alignment lands with
@@ -1765,9 +1785,9 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
             // canvas would come back with a dead context and no warp
             src={liveFeedBase}
             snapshotSrc={liveSnapshotSrc}
-            snapshotIntervalMs={mobile ? 1400 : 0}
+            snapshotIntervalMs={liveSnapshotIntervalMs}
             alt={liveCam.name}
-            intrinsics={mobile ? null : liveCam.camera?.intrinsics || null}
+            intrinsics={liveFeedIntrinsics}
             style={liveFeedStyle}
             onStatus={setLiveFeedStatus}
             onReload={signedLiveFeed.src ? signedLiveFeed.reload : undefined}

@@ -19,8 +19,18 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
                     fading: null, splat: null, mesh: null,
                     splatSource: null,
                     meshSource: null, meshFallback: false,
-                    meshNearCut: { value: 0.0 } };
+                    meshNearCut: { value: 0.0 }, cameraOverlay: false };
     const listeners = [];
+    const cameraOverlayOriginals = new WeakMap();
+    const cameraOverlayMaterial = new THREE.MeshBasicMaterial({
+        color: 0xb9dcff,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.36,
+        depthTest: true,
+        depthWrite: false,
+        toneMapped: false,
+    });
     // In-flight load promises: a slow asset (mesh.glb is ~56 MB) must never be
     // fetched twice by two racing setMode calls — that would add a second,
     // unmanaged copy to the scene.
@@ -222,6 +232,7 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
                     state.meshSource = src.name;
                     state.meshFallback = !!src.fallback || (src.textured && texturedMeshes === 0 && fallbackMeshes > 0);
                     visibleFor(state.mode);
+                    applyCameraOverlay();
                     return grp;
                 } catch (e) { lastErr = e; }
             }
@@ -238,6 +249,30 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
         if (state.sparkRenderer) state.sparkRenderer.visible = splatActive;
         if (state.mesh) state.mesh.visible = mode === 'mesh';
         setPointsVisible(mode === 'points' || !!state.fading);
+    }
+
+    function applyCameraOverlay() {
+        if (!state.mesh) return;
+        state.mesh.traverse((o) => {
+            if (!o.isMesh) return;
+            if (state.cameraOverlay) {
+                if (!cameraOverlayOriginals.has(o)) {
+                    cameraOverlayOriginals.set(o, {
+                        material: o.material,
+                        renderOrder: o.renderOrder || 0,
+                    });
+                }
+                o.material = cameraOverlayMaterial;
+                o.renderOrder = 30;
+            } else {
+                const prior = cameraOverlayOriginals.get(o);
+                if (prior) {
+                    o.material = prior.material;
+                    o.renderOrder = prior.renderOrder;
+                    cameraOverlayOriginals.delete(o);
+                }
+            }
+        });
     }
 
     const modes = {
@@ -306,6 +341,12 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
 
         getMesh() { return state.mesh; },
         setMeshNearCut(v) { state.meshNearCut.value = v; },
+        setCameraOverlay(v) {
+            const next = !!v;
+            if (state.cameraOverlay === next) return;
+            state.cameraOverlay = next;
+            applyCameraOverlay();
+        },
 
         async preload(targets = ['splat', 'mesh']) {
             const list = Array.isArray(targets) ? targets : [targets];
@@ -334,6 +375,7 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
                 srParent: state.sparkRenderer ? (state.sparkRenderer.parent?.type || 'none') : 'none',
                 meshSource: state.meshSource,
                 meshFallback: state.meshFallback,
+                cameraOverlay: state.cameraOverlay,
             };
         },
 

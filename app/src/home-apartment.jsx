@@ -110,6 +110,19 @@ function aptMobileCameraFrame(viewport, dev) {
   };
 }
 
+function aptProjectionFrame(viewport, dev) {
+  const frame = aptMobileCameraFrame(viewport, dev);
+  const viewportHeight = Math.max(1, viewport?.height || window.innerHeight || 1);
+  return {
+    viewportWidth: Math.max(1, viewport?.width || window.innerWidth || 1),
+    viewportHeight,
+    left: frame.left,
+    top: frame.top,
+    width: frame.width,
+    height: frame.height,
+  };
+}
+
 function aptCameraAlignment(dev) {
   const intr = dev?.camera?.intrinsics;
   const extr = dev?.camera?.extrinsics;
@@ -117,7 +130,7 @@ function aptCameraAlignment(dev) {
   const extrOk = !!(extr?.q_wxyz && Array.isArray(extr.C));
   if (intrOk && extrOk) {
     const rms = Number.isFinite(+extr.rms_px) ? ` · ${(+extr.rms_px).toFixed(1)}px rms` : "";
-    return { exact: true, short: "camera - calibrated overlay", detail: `calibrated overlay${rms}` };
+    return { exact: true, short: "camera - calibrated view", detail: `calibrated view${rms}` };
   }
   const missing = [intrOk ? "" : "lens", extrOk ? "" : "pose"].filter(Boolean).join(" + ");
   return {
@@ -701,6 +714,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const [liveCam, setLiveCam] = useState(null);   // camera device while snapped
   const [liveOn, setLiveOn] = useState(false);    // live feed vs 3D from the pose
   const [liveFeedStatus, setLiveFeedStatus] = useState("idle");
+  const [cameraPoseReady, setCameraPoseReady] = useState(false);
   const [calibCam, setCalibCam] = useState(null); // correspondence-capture overlay
   const calibPickRef = useRef(false);
   const calibApiRef = useRef(null);
@@ -849,7 +863,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
       // it permanently; open=false just renders null) — clear per-session UI
       // state here or a live feed / calibration overlay / control card
       // resurrects the next time the view opens
-      setLiveCam(null); setLiveOn(false); setLiveFeedStatus("idle"); setCalibCam(null); setCardId(null);
+      setLiveCam(null); setLiveOn(false); setLiveFeedStatus("idle"); setCameraPoseReady(false); setCalibCam(null); setCardId(null);
       setEditing(false);
       const eng = engineRef.current;
       if (eng) {
@@ -1150,7 +1164,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const exitCameraPose = useCallback(() => {
     if (flyTimerRef.current) { clearTimeout(flyTimerRef.current); flyTimerRef.current = null; }
     flySeqRef.current += 1;
-    setLiveCam(null); setLiveOn(false); setLiveFeedStatus("idle"); setCalibCam(null);
+    setLiveCam(null); setLiveOn(false); setLiveFeedStatus("idle"); setCameraPoseReady(false); setCalibCam(null);
     const e = engineRef.current;
     if (!e) return;
     const back = preSnapModeRef.current;
@@ -1199,7 +1213,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     if (engine.rig.inCameraPose?.()) {
       if (flyTimerRef.current) { clearTimeout(flyTimerRef.current); flyTimerRef.current = null; }
       flySeqRef.current += 1;
-      setLiveCam(null); setLiveOn(false); setLiveFeedStatus("idle"); setCalibCam(null);
+      setLiveCam(null); setLiveOn(false); setLiveFeedStatus("idle"); setCameraPoseReady(false); setCalibCam(null);
       engine.rig.resetPose?.();
     }
     engine.refit?.({ dur: wasCameraPose ? 0 : dur });
@@ -1317,8 +1331,10 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     const tick = () => {
       if (seq !== flySeqRef.current) return;
       const rig = engineRef.current?.rig;
-      if (rig?.inCameraPose?.()) {
+      const settled = rig?.cameraPoseSettled?.() || (!rig?.cameraPoseSettled && rig?.inCameraPose?.());
+      if (settled) {
         flyTimerRef.current = null;
+        setCameraPoseReady(true);
         if (!simActive && aptCameraCanFeed(dev)) {
           setLiveFeedStatus((current) => aptLiveFeedSettled(current) ? current : "connecting");
           setLiveOn(true);
@@ -1351,6 +1367,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     setLiveCam(dev);
     setLiveOn(hasFeed);
     setLiveFeedStatus(hasFeed ? "connecting" : "idle");
+    setCameraPoseReady(false);
     setCalibCam(null);
     if (hasFeed) revealCameraFeedWhenReady(dev, seq);
     (async () => {
@@ -1363,7 +1380,10 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         if (seq !== flySeqRef.current) return;
         setMode("mesh");
         setModeError(null);
-        eng.flyToDevice(dev, { fovScale: calib && !mobile ? 1 / 0.74 : 1 });
+        eng.flyToDevice(dev, {
+          fovScale: calib && !mobile ? 1 / 0.74 : 1,
+          projectionFrame: calib && mobile ? aptProjectionFrame(viewport, dev) : null,
+        });
       } catch (e) {
         if (seq !== flySeqRef.current) return;
         setModeError({
@@ -1376,7 +1396,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
       }
     })();
     return true;
-  }, [mobile, simActive, revealCameraFeedWhenReady, showToast]);
+  }, [mobile, viewport, simActive, revealCameraFeedWhenReady, showToast]);
 
   useEffect(() => {
     if (!open || typeof window === "undefined") return undefined;
@@ -1440,14 +1460,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     haUrl: liveHaBase,
     enabled: !!(open && liveOn && liveCam && !calibCam && !simActive && liveHaEntity),
   });
-  const cameraOverlayActive = !!(open && liveOn && liveCam && inCamPose && !calibCam && aptCameraAlignment(liveCam).exact);
-
-  useEffect(() => {
-    const modes = engineRef.current?.modes;
-    if (!modes || typeof modes.setCameraOverlay !== "function") return undefined;
-    modes.setCameraOverlay(cameraOverlayActive);
-    return () => modes.setCameraOverlay(false);
-  }, [cameraOverlayActive, liveCam?.id, serviceEpoch]);
+  const liveCameraExact = !!(liveCam && aptCameraAlignment(liveCam).exact);
+  const cameraSurroundActive = !!(open && liveOn && liveCam && mobile && !calibCam && liveCameraExact && cameraPoseReady);
 
   if (!open) return null;
 
@@ -1464,14 +1478,27 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const topPad = mobile ? "calc(8px + env(safe-area-inset-top, 0px)) 10px 8px" : "12px 18px";
   const bottomPad = mobile ? "8px 10px calc(10px + env(safe-area-inset-bottom, 0px))" : "14px 18px";
   const mobileCameraFrame = mobile && cameraSnap && liveCam ? aptMobileCameraFrame(viewport, liveCam) : null;
-  const hostFrameStyle = mobileCameraFrame
+  const hostFrameStyle = cameraSurroundActive
+    ? {
+        position: "absolute",
+        top: 0,
+        bottom: 0,
+        right: 0,
+        left: 0,
+        zIndex: 1,
+        overflow: "hidden",
+        pointerEvents: "none",
+        touchAction: "none",
+        cursor: "default",
+      }
+    : mobileCameraFrame
     ? {
         ...mobileCameraFrame,
         right: "auto",
         bottom: "auto",
-        zIndex: cameraOverlayActive ? 4 : 1,
+        zIndex: 1,
         overflow: "hidden",
-        pointerEvents: cameraOverlayActive ? "none" : "auto",
+        pointerEvents: "auto",
         touchAction: "none",
         cursor: "grab",
       }
@@ -1481,8 +1508,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         bottom: 0,
         right: 0,
         left: calibCam && !mobile ? "46%" : 0,
-        zIndex: cameraOverlayActive ? 4 : 1,
-        pointerEvents: cameraOverlayActive ? "none" : "auto",
+        zIndex: 1,
+        pointerEvents: "auto",
         touchAction: "none",
         cursor: "grab",
       };
@@ -1521,7 +1548,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const frigateFeedBase = liveCam?.camera?.frigate_name
     ? `${aptServiceBase("apartment3d.frigateBase", "HG_DEFAULT_FRIGATE_BASE", "http://192.168.0.125:5000")}/api/${liveCam.camera.frigate_name}`
     : "";
-  const calibratedMobileSnapshotSrc = mobile && cameraOverlayActive && frigateFeedBase
+  const calibratedMobileSnapshotSrc = mobile && liveCameraExact && frigateFeedBase
     ? aptSnapshotSrc(frigateFeedBase)
     : "";
   const liveFeedBase = calibratedMobileSnapshotSrc || signedLiveFeed.src || frigateFeedBase;
@@ -1529,7 +1556,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const liveSnapshotSrc = mobile && frigateFeedBase && (calibratedMobileSnapshotSrc || !signedLiveFeed.src)
     ? aptSnapshotSrc(frigateFeedBase)
     : "";
-  const liveFeedIntrinsics = cameraOverlayActive || !mobile
+  const liveFeedIntrinsics = (!mobile || liveCameraExact)
     ? liveCam?.camera?.intrinsics || null
     : null;
   const liveSnapshotIntervalMs = liveSnapshotSrc ? 1100 : 0;
@@ -1557,7 +1584,11 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
 
       {/* engine canvas is appended imperatively (persistent across mounts —
           see the boot effect); React must never own or recreate it */}
-      <div ref={hostRef} style={hostFrameStyle} />
+      <div
+        ref={hostRef}
+        data-apt-camera-surround={cameraSurroundActive ? "1" : "0"}
+        style={hostFrameStyle}
+      />
 
       {/* top bar */}
       {!editing && (
@@ -1757,7 +1788,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         <div style={mobileCameraFrame
           ? {
               ...mobileCameraFrame,
-              zIndex: cameraOverlayActive ? 2 : 3,
+              zIndex: 3,
               overflow: "hidden",
               pointerEvents: "none",
               display: "block",
@@ -1770,7 +1801,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
               justifyContent: "center",
               padding: 0,
               pointerEvents: "none",
-              zIndex: cameraOverlayActive ? 2 : 3,
+              zIndex: 3,
             }}>
           {/* full-viewport on mobile so video and WebGL share the same frame;
               holds the same pose behind it — true 1:1 alignment lands with

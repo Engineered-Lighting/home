@@ -1,7 +1,7 @@
 ---
-title: Apartment camera views composite mesh over video
+title: Apartment camera views fill letterbox with mesh
 target: web
 type: fixed
 ---
 
-Calibrated Apartment camera snaps now render the live camera feed underneath a transparent 3D mesh wire overlay so video edges and mesh geometry can be visually aligned.
+Calibrated Apartment camera snaps now keep the live camera feed uninterrupted and render the aligned 3D mesh in the surrounding letterbox space.

@@ -312,6 +312,7 @@ export function createRig(camera) {
             heldPose = null;
         },
         inCameraPose() { return !!(heldPose || (poseTween && poseTween.hold)); },
+        cameraPoseSettled() { return !!heldPose; },
 
         /* Instant hard reset (view unmount / recovery): drop any held or
          * in-flight pose and unlock input. The resident engine survives view

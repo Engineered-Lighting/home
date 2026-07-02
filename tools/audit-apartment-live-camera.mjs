@@ -4,8 +4,8 @@
  *
  * This is intentionally narrower than mobile-web-screenshot-audit.mjs. It
  * proves the live web app can snap to a calibrated apartment camera and render
- * an actual Frigate frame in the overlay. Simulation screenshots are not enough
- * for this path.
+ * an actual Frigate frame with a calibrated mesh surround. Simulation
+ * screenshots are not enough for this path.
  */
 
 import fs from "node:fs/promises";
@@ -31,6 +31,7 @@ function usage() {
     "  --url <url>         App URL. Default: HOME_APARTMENT_CAMERA_AUDIT_URL or live Tailscale URL.",
     "  --viewport WxH      Mobile viewport. Default: 390x844.",
     "  --out <dir>         Output dir. Default: tools/reports/apartment-live-camera/<timestamp>.",
+    "  --hide-feed         Hide the video layer before the screenshot to inspect the mesh alignment.",
     "  --headed            Launch Chrome visibly.",
     "  --help              Show this help.",
   ].join("\n");
@@ -55,6 +56,7 @@ function parseArgs(argv) {
     url: DEFAULT_URL,
     viewport: DEFAULT_VIEWPORT,
     out: defaultOutDir(),
+    hideFeed: false,
     headed: false,
     help: false,
   };
@@ -62,6 +64,7 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === "--help" || arg === "-h") args.help = true;
     else if (arg === "--headed") args.headed = true;
+    else if (arg === "--hide-feed") args.hideFeed = true;
     else if (arg === "--url") args.url = argv[++i] || "";
     else if (arg === "--viewport") args.viewport = parseViewport(argv[++i] || "");
     else if (arg === "--out") args.out = path.resolve(argv[++i] || args.out);
@@ -375,22 +378,46 @@ const FEED_PROBE = `(() => {
   const visibleCanvas = canvases.find((canvas) =>
     canvas.visible && canvas.width > 80 && canvas.height > 80
   );
+  const media = visibleCanvas || loadedVisibleImg || loadedHiddenImg || null;
+  const surround = document.querySelector('[data-apt-camera-surround="1"]');
+  const surroundRectRaw = surround ? surround.getBoundingClientRect() : null;
+  const surroundRect = surroundRectRaw ? {
+    left: surroundRectRaw.left,
+    top: surroundRectRaw.top,
+    width: surroundRectRaw.width,
+    height: surroundRectRaw.height,
+    right: surroundRectRaw.right,
+    bottom: surroundRectRaw.bottom,
+  } : null;
+  const mediaRect = media?.rect || null;
+  const surroundCoversLetterbox = !!surroundRect && !!mediaRect &&
+    surroundRect.width >= mediaRect.width - 2 &&
+    surroundRect.height >= mediaRect.height + 96 &&
+    surroundRect.top <= mediaRect.top - 24 &&
+    surroundRect.bottom >= mediaRect.top + mediaRect.height + 24;
   const status = String(snap.liveFeedStatus || "");
   const badStatus = status === "connecting" || status === "retrying" || status === "error";
   const mobile = !!snap.mobile;
-  const calibratedOverlayCanvasOk = mobile && !!snap.modes?.cameraOverlay && !!loadedHiddenImg && !!visibleCanvas;
-  const requiresCalibratedOverlay = mobile && !!snap.cameraAlignment?.exact;
+  const meshReady = snap.mode === "mesh" && !!snap.modes?.meshSource;
+  const calibratedMediaOk = !!loadedVisibleImg || (!!loadedHiddenImg && !!visibleCanvas);
+  const calibratedSurroundOk = mobile && meshReady && calibratedMediaOk && surroundCoversLetterbox;
+  const requiresCalibratedSurround = mobile && !!snap.cameraAlignment?.exact;
   return {
     ok: !!snap.liveCam && !!snap.liveOn && !badStatus &&
-      (requiresCalibratedOverlay
-        ? calibratedOverlayCanvasOk
-        : mobile ? (!!loadedVisibleImg && !visibleCanvas) || calibratedOverlayCanvasOk : !!(loadedVisibleImg || (loadedHiddenImg && visibleCanvas))),
+      (requiresCalibratedSurround
+        ? calibratedSurroundOk
+        : mobile ? !!loadedVisibleImg || calibratedMediaOk : !!(loadedVisibleImg || (loadedHiddenImg && visibleCanvas))),
     snap,
     imgs,
     canvases,
     mobileRawRequired: mobile,
-    calibratedOverlayCanvasOk,
-    requiresCalibratedOverlay,
+    surroundRect,
+    mediaRect,
+    meshReady,
+    surroundCoversLetterbox,
+    calibratedMediaOk,
+    calibratedSurroundOk,
+    requiresCalibratedSurround,
     badStatus,
     loadedVisibleImg: !!loadedVisibleImg,
     loadedHiddenImg: !!loadedHiddenImg,
@@ -423,13 +450,36 @@ async function runOverlayAudit(args, endpointProbe) {
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
     if (!probe?.ok) {
-      throw new Error(`live camera overlay did not render media; last state: ${JSON.stringify(probe, null, 2).slice(0, 3000)}`);
+      throw new Error(`live camera surround did not render media; last state: ${JSON.stringify(probe, null, 2).slice(0, 3000)}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1800));
+    probe = await cdpEval(client, FEED_PROBE, true);
+    if (!probe?.ok) {
+      throw new Error(`live camera surround did not remain healthy after pose settle; last state: ${JSON.stringify(probe, null, 2).slice(0, 3000)}`);
     }
 
     await fs.mkdir(args.out, { recursive: true });
+    if (args.hideFeed) {
+      await cdpEval(client, `(() => {
+        for (const el of document.querySelectorAll('[data-apt-live-feed]')) {
+          el.style.opacity = '0';
+          el.style.visibility = 'hidden';
+          if (el.parentElement) {
+            el.parentElement.style.opacity = '0';
+            el.parentElement.style.visibility = 'hidden';
+          }
+          if (el.parentElement?.parentElement) {
+            el.parentElement.parentElement.style.opacity = '0';
+            el.parentElement.parentElement.style.visibility = 'hidden';
+          }
+        }
+        return true;
+      })()`, true);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
     const screenshotFile = path.join(args.out, "apartment-live-camera.png");
     await cdpScreenshot(client, screenshotFile);
-    return { ok: true, endpointProbe, overlayProbe: probe, screenshotFile };
+    return { ok: true, endpointProbe, surroundProbe: probe, screenshotFile };
   } finally {
     client?.close();
     await chrome.close();
@@ -453,10 +503,10 @@ async function writeReport(outDir, args, result, error) {
     lines.push(`- JPEG: ${result.endpointProbe.imageBytes} bytes, ${result.endpointProbe.imageType}`);
     lines.push("");
   }
-  if (result?.overlayProbe) {
-    lines.push("## Overlay Probe", "");
+  if (result?.surroundProbe) {
+    lines.push("## Surround Probe", "");
     lines.push("```json");
-    lines.push(JSON.stringify(result.overlayProbe, null, 2));
+    lines.push(JSON.stringify(result.surroundProbe, null, 2));
     lines.push("```", "");
     lines.push(`Screenshot: ${path.basename(result.screenshotFile)}`);
     lines.push("");

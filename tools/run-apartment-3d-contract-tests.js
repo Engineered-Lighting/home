@@ -40,6 +40,7 @@ assert("mode debug reports Spark visibility", MODES.includes("sparkVisible: stat
 assert("mesh fallback does not use neon normal material", !MODES.includes("MeshNormalMaterial") && MODES.includes("meshDisplayMaterial"));
 assert("mobile mesh can prefer optional phone asset", MODES.includes("'mesh.mobile.glb'") && MODES.indexOf("'mesh.mobile.glb'") < MODES.indexOf("'mesh.glb'"));
 assert("mesh debug reports fallback source", MODES.includes("meshSource: state.meshSource") && MODES.includes("meshFallback: state.meshFallback"));
+assert("mesh disables child frustum culling for inside-camera snaps", MODES.includes("o.frustumCulled = false;"));
 assert("prewarm can fetch optional mobile mesh first", PREWARM.includes('"mesh.mobile.glb"') && PREWARM.indexOf('"mesh.mobile.glb"') < PREWARM.indexOf('"mesh.glb"'));
 assert("prewarm fetches full-quality photo scan before mobile fallback", PREWARM.includes('"apartment.ply"') && PREWARM.includes('"apartment.mobile.ply"') && PREWARM.indexOf('"apartment.ply"') < PREWARM.indexOf('"apartment.mobile.ply"'));
 assert("mode loader can parse photo and mesh in the background", MODES.includes("async preload(targets = ['splat', 'mesh'])") && MODES.includes("loadSplat()") && MODES.includes("loadMesh()"));
@@ -62,7 +63,7 @@ assert("camera snap stores the target camera immediately", APT.includes("setLive
 assert("camera snap starts reachable feed before mesh load", APT.includes("setLiveOn(hasFeed);") && APT.indexOf("revealCameraFeedWhenReady(dev, seq)") < APT.indexOf('await eng.modes.setMode("mesh", { duration: 0 });'));
 assert("camera snap still loads mesh before fly-to-camera", APT.includes('await eng.modes.setMode("mesh", { duration: 0 });') && APT.includes("eng.flyToDevice(dev"));
 assert("camera feed reveal polls until pose is held", APT.includes("const revealCameraFeedWhenReady"));
-assert("feed reveal checks rig.inCameraPose", APT.includes("rig?.inCameraPose?.()"));
+assert("feed reveal waits for settled camera pose", APT.includes("rig?.cameraPoseSettled?.()") && APT.includes("setCameraPoseReady(true)"));
 assert("debug snapshot exposes live feed status", APT.includes("liveFeedStatus,"));
 assert("debug snapshot exposes camera frame", APT.includes("cameraFrame: mobile && liveCam"));
 assert("debug snapshot exposes render mode diagnostics", APT.includes("modes: engineRef.current?.modes?.debugInfo?.() || null"));
@@ -72,16 +73,17 @@ assert("camera alignment helper distinguishes estimated vs calibrated", APT.incl
 assert("camera snap requires exact alignment metadata", APT.includes("const calib = alignment.exact"));
 assert("camera debug snapshot exposes alignment status", APT.includes("cameraAlignment: liveCam ? aptCameraAlignment(liveCam) : null"));
 assert("mobile live feed uses snapshot refresh fallback", APT.includes("function aptSnapshotSrc") && APT.includes("const liveSnapshotIntervalMs = liveSnapshotSrc ? 1100 : 0"));
-assert("mobile calibrated feed keeps intrinsics for lens-correct overlay", APT.includes("const liveFeedIntrinsics = cameraOverlayActive || !mobile") && APT.includes("intrinsics={liveFeedIntrinsics}"));
+assert("mobile calibrated feed keeps intrinsics for lens-correct video", APT.includes("const liveFeedIntrinsics = (!mobile || liveCameraExact)") && APT.includes("intrinsics={liveFeedIntrinsics}"));
 assert("mobile calibrated feed prefers undistorted snapshots", APT.includes("const calibratedMobileSnapshotSrc") && APT.includes('"calibrated-snapshot"'));
 assert("snapshot refresh keeps the calibrated frame cache-busted", APT.includes("function aptCacheBust") && APT.includes("aptCacheBust(base, Date.now())"));
 assert("snapshot refresh preloads before swapping visible frames", APT.includes("preloadRef") && APT.includes("new Image()") && APT.includes("setFrameSrc(next);"));
 assert("snapshot refresh waits for image load before the next frame", APT.includes("publishFrameRef.current?.(Math.max(900, snapshotIntervalMs))") && !APT.includes("setInterval(publish"));
 assert("snapshot refresh has a slow-network retry watchdog", APT.includes("loadWatchdogRef") && APT.includes('onStatus?.("retrying")'));
 assert("camera feed maps pixels into the shared projection frame", APT.includes('objectFit: "fill"') && APT.includes("const liveFeedSettled = aptLiveFeedSettled(liveFeedStatus);"));
-assert("calibrated camera snaps composite mesh over video only after pose lock", APT.includes("const cameraOverlayActive") && APT.includes("inCamPose && !calibCam") && APT.includes("setCameraOverlay(cameraOverlayActive)") && APT.includes("zIndex: cameraOverlayActive ? 4 : 1") && APT.includes("zIndex: cameraOverlayActive ? 2 : 3"));
-assert("mesh overlay restores normal materials outside camera snaps", MODES.includes("function applyCameraOverlay") && MODES.includes("cameraOverlayOriginals") && MODES.includes("o.material = prior.material"));
-assert("mesh overlay uses wireframe for alignment", MODES.includes("wireframe: true") && MODES.includes("cameraOverlay: state.cameraOverlay"));
+assert("calibrated mobile camera snaps render mesh around uninterrupted video", APT.includes("const cameraSurroundActive") && APT.includes('data-apt-camera-surround={cameraSurroundActive ? "1" : "0"}') && APT.includes("zIndex: 3"));
+assert("mobile camera snap passes video sub-rect into calibrated projection", APT.includes("function aptProjectionFrame") && APT.includes("projectionFrame: calib && mobile ? aptProjectionFrame(viewport, dev) : null"));
+assert("camera surround waits for held pose before expanding canvas", APT.includes("cameraPoseReady") && APT.includes("liveCameraExact && cameraPoseReady"));
+assert("mesh is not drawn as a material overlay on top of video", !APT.includes("setCameraOverlay") && !MODES.includes("cameraOverlayOriginals") && !MODES.includes("wireframe: true"));
 assert("3d renderer supports transparent camera compositing", ENGINE.includes("alpha: true") && ENGINE.includes("renderer.setClearColor(0x000000, 0)") && ENGINE.includes("scene.background = null"));
 
 process.stdout.write("\napartment_photo_mobile_asset_contract_test\n");
@@ -109,8 +111,10 @@ assert("direct light-state answer includes apartment switch-backed lamps", APP.i
 process.stdout.write("\napartment_calibrated_projection_contract_test\n");
 assert("engine reads solved camera center C", ENGINE.includes("const calibratedCenter = Array.isArray(ex?.C)") && ENGINE.includes("new THREE.Vector3(+ex.C[0], +ex.C[1], +ex.C[2])"));
 assert("engine builds projection from intrinsics K", ENGINE.includes("function projectionFromIntrinsics") && ENGINE.includes("2 * fx / p.w"));
-assert("engine passes calibrated projection into rig", ENGINE.includes("projection = projectionFromIntrinsics(intr, fovScale)") && ENGINE.includes("rig.flyToPose({ position: worldPos, quaternion: worldQuat, fov, dur, projection })"));
+assert("engine maps calibrated projection into optional video sub-rect", ENGINE.includes("function projectionFrameParams") && ENGINE.includes("scaleX: width / vw") && ENGINE.includes("fovScaleY: vh / height"));
+assert("engine passes calibrated projection into rig", ENGINE.includes("projection = projectionFromIntrinsics(intr, fovScale, projectionFrame)") && ENGINE.includes("rig.flyToPose({ position: worldPos, quaternion: worldQuat, fov, dur, projection })"));
 assert("rig preserves custom projection while held", RIG.includes("projection: p.projection || null") && RIG.includes("applyCustomProjection(heldPose.projection)"));
+assert("rig exposes settled camera pose separately from in-flight pose", RIG.includes("cameraPoseSettled() { return !!heldPose; }"));
 
 process.stdout.write("\napartment_tracker_model_fallback_contract_test\n");
 assert("data layer has a tracker model fallback", DATA.includes("async function fetchTrackerModel"));

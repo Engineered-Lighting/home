@@ -183,14 +183,34 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
         return { fx, fy, cx, cy, w, h };
     }
 
-    function fovFromIntrinsics(intr, fovScale = 1) {
+    function projectionFrameParams(frame) {
+        if (!frame) return null;
+        const vw = +frame.viewportWidth;
+        const vh = +frame.viewportHeight;
+        const left = +frame.left || 0;
+        const top = +frame.top || 0;
+        const width = +frame.width;
+        const height = +frame.height;
+        if (!(vw > 0) || !(vh > 0) || !(width > 0) || !(height > 0)) return null;
+        return {
+            scaleX: width / vw,
+            scaleY: height / vh,
+            offsetX: ((2 * left) + width) / vw - 1,
+            offsetY: 1 - ((2 * top) + height) / vh,
+            fovScaleY: vh / height,
+        };
+    }
+
+    function fovFromIntrinsics(intr, fovScale = 1, projectionFrame = null) {
         const p = intrinsicsParams(intr);
         if (!p) return null;
-        const fy = p.fy / Math.max(0.001, fovScale || 1);
+        const frame = projectionFrameParams(projectionFrame);
+        const scale = frame ? frame.fovScaleY : Math.max(0.001, fovScale || 1);
+        const fy = p.fy / scale;
         return THREE.MathUtils.radToDeg(2 * Math.atan(p.h / (2 * fy)));
     }
 
-    function projectionFromIntrinsics(intr, fovScale = 1) {
+    function projectionFromIntrinsics(intr, fovScale = 1, projectionFrame = null) {
         const p = intrinsicsParams(intr);
         if (!p) return null;
         const scale = Math.max(0.001, fovScale || 1);
@@ -198,11 +218,16 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
         const fy = p.fy / scale;
         const cx = p.w / 2 + (p.cx - p.w / 2) / scale;
         const cy = p.h / 2 + (p.cy - p.h / 2) / scale;
+        const frame = projectionFrameParams(projectionFrame);
+        const sx = frame ? frame.scaleX : 1;
+        const sy = frame ? frame.scaleY : 1;
+        const ox = frame ? frame.offsetX : 0;
+        const oy = frame ? frame.offsetY : 0;
         const n = camera.near;
         const f = camera.far;
         return new THREE.Matrix4().set(
-            2 * fx / p.w, 0, 1 - 2 * cx / p.w, 0,
-            0, 2 * fy / p.h, 2 * cy / p.h - 1, 0,
+            sx * (2 * fx / p.w), 0, sx * (1 - 2 * cx / p.w) - ox, 0,
+            0, sy * (2 * fy / p.h), sy * (2 * cy / p.h - 1) - oy, 0,
             0, 0, -(f + n) / (f - n), -(2 * f * n) / (f - n),
             0, 0, -1, 0,
         );
@@ -347,7 +372,7 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
         /* Fly to a camera device's pose. Calibrated extrinsics (P4) when
          * present; else the manual pose (device pos + yaw, slight downward
          * pitch) — honest 'not calibrated' approximation. */
-        flyToDevice(device, { dur = 900, fovScale = 1 } = {}) {
+        flyToDevice(device, { dur = 900, fovScale = 1, projectionFrame = null } = {}) {
             apartmentRoot.updateMatrixWorld(true);
             const ex = device.camera && device.camera.extrinsics;
             const intr = device.camera && device.camera.intrinsics;
@@ -368,8 +393,8 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
                 const rootQ = new THREE.Quaternion();
                 apartmentRoot.getWorldQuaternion(rootQ);
                 worldQuat = rootQ.multiply(q).multiply(flip);
-                fov = fovFromIntrinsics(intr, fovScale) || 70;
-                projection = projectionFromIntrinsics(intr, fovScale);
+                fov = fovFromIntrinsics(intr, fovScale, projectionFrame) || 70;
+                projection = projectionFromIntrinsics(intr, fovScale, projectionFrame);
             } else {
                 // manual pose: look along yaw (apartment frame), pitched down 18°
                 const yaw = device.yaw_rad || 0;

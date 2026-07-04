@@ -501,6 +501,7 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
   }, []);
   const haOnline = !!client && (connection == null || connection === "online");
   const offlineWriteMessage = "Home Assistant is reconnecting; light controls are disabled until it is online.";
+  const mobile = typeof window !== "undefined" && window.innerWidth <= 699;
 
   // Fetch + subscribe on open
   useEffect(() => {
@@ -816,13 +817,14 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
         overflow: "hidden",
       }}>
       {/* Header */}
-      <div style={{ padding: "12px 18px", borderBottom: "1px solid var(--hg-border-soft)",
+      <div style={{ padding: mobile ? "12px 14px" : "12px 18px", borderBottom: "1px solid var(--hg-border-soft)",
                     display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontFamily: FONT_MONO, fontSize: 12, color: "var(--hg-fg-1)", letterSpacing: 1, textTransform: "uppercase" }}>lights</span>
         <button onClick={onClose}
           style={{ background: "transparent", border: "none", color: "var(--hg-fg-2)",
-                   fontFamily: FONT_MONO, fontSize: 11, cursor: "pointer" }}>
-          close · esc
+                   fontFamily: FONT_MONO, fontSize: 11, cursor: "pointer",
+                   minHeight: mobile ? 38 : "auto", whiteSpace: "nowrap" }}>
+          {mobile ? "close" : "close · esc"}
         </button>
       </div>
 

@@ -1680,7 +1680,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
             {!cameraTop && (
               <AptHudButton label="edit" onClick={() => { setCardId(null); setEditing(true); }} mobile={mobile} />
             )}
-            {!embedded && <AptHudButton label={mobileCameraSnap ? "close" : "close · esc"} onClick={onClose} mobile={mobile} />}
+            {!embedded && <AptHudButton label={(mobile || mobileCameraSnap) ? "close" : "close · esc"} onClick={onClose} mobile={mobile} />}
           </span>
         </div>
       )}

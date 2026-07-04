@@ -162,18 +162,20 @@ function HomeHeader({
   const chipMax = mobile ? "min(142px, 36vw)" : "none";
   const mobileMenuItem = {
     all: "unset",
-    minHeight: 42,
-    padding: "0 12px",
+    minHeight: 40,
+    padding: "0 13px",
     display: "flex",
     alignItems: "center",
+    justifyContent: "space-between",
     gap: 8,
     color: "var(--hg-fg-1)",
     borderBottom: "1px solid var(--hg-border-soft)",
     cursor: "pointer",
     fontFamily: "'Geist Mono', monospace",
-    fontSize: 10.5,
-    letterSpacing: "0.09em",
+    fontSize: 10,
+    letterSpacing: "0.075em",
     textTransform: "uppercase",
+    lineHeight: 1.1,
   };
   const mobileMenuAction = (fn) => {
     setMenuOpen(false);
@@ -442,7 +444,7 @@ function HomeHeader({
               width: 6, height: 6, borderRadius: 999,
               background: "var(--hg-warn)",
             }} />
-            sim · {sim.scenario || "—"}
+            {mobile ? "sim" : `sim · ${sim.scenario || "—"}`}
           </span>
           </button>
         )}
@@ -507,16 +509,16 @@ function HomeHeader({
                   role="menu"
                   style={{
                     position: "absolute",
-                    top: "calc(100% + 7px)",
+                    top: "calc(100% + 6px)",
                     right: 0,
                     zIndex: 80,
-                    width: "min(230px, calc(100vw - 24px))",
-                    maxHeight: "min(360px, calc(100dvh - 96px))",
+                    width: "min(218px, calc(100vw - 22px))",
+                    maxHeight: "min(330px, calc(100dvh - 92px))",
                     overflowY: "auto",
                     background: "var(--hg-bg-1)",
                     border: "1px solid var(--hg-border)",
-                    borderRadius: 7,
-                    boxShadow: "0 18px 52px rgba(0,0,0,0.48)",
+                    borderRadius: 8,
+                    boxShadow: "0 16px 46px rgba(0,0,0,0.50)",
                   }}
                 >
                   {serviceProfile && onOpenRemoteProfile && (
@@ -2785,14 +2787,15 @@ function RemoteProfileDialog({
     background: "transparent",
     color: "var(--hg-fg-2)",
     borderRadius: 4,
-    padding: mobile ? "8px 9px" : "7px 10px",
+    padding: mobile ? "7px 8px" : "7px 10px",
     cursor: "pointer",
     fontFamily: "'Geist Mono', monospace",
-    fontSize: mobile ? 9.5 : 10,
-    letterSpacing: "0.08em",
+    fontSize: mobile ? 9 : 10,
+    letterSpacing: mobile ? "0.07em" : "0.08em",
     textTransform: "uppercase",
-    minHeight: mobile ? 36 : "auto",
+    minHeight: mobile ? 34 : "auto",
     boxSizing: "border-box",
+    lineHeight: 1.15,
   };
   return (
     <div
@@ -2825,26 +2828,27 @@ function RemoteProfileDialog({
       }}>
         <div style={{
           padding: mobile
-            ? "calc(11px + env(safe-area-inset-top, 0px)) 12px 10px"
+            ? "calc(9px + env(safe-area-inset-top, 0px)) 12px 9px"
             : "18px 20px 14px",
           borderBottom: "1px solid var(--hg-border-soft)",
           display: "flex",
           alignItems: "flex-start",
-          gap: 14,
+          gap: mobile ? 10 : 14,
         }}>
           <div style={{ flex: 1 }}>
             <div style={{
               fontFamily: "'Geist', system-ui, sans-serif",
-              fontSize: mobile ? 16 : 19,
+              fontSize: mobile ? 15.5 : 19,
               fontWeight: 500,
               color: "var(--hg-fg-0)",
-              marginBottom: 4,
+              marginBottom: mobile ? 3 : 4,
             }}>Remote access / Travel readiness</div>
             <div style={{
               fontFamily: "'Geist Mono', monospace",
-              fontSize: mobile ? 9.5 : 10,
+              fontSize: mobile ? 9 : 10,
               color: "var(--hg-fg-4)",
-              letterSpacing: "0.08em",
+              letterSpacing: mobile ? "0.055em" : "0.08em",
+              lineHeight: 1.35,
             }}>
               {active.label} - v{build.version} - {build.commit} - travel {travel.status}
             </div>
@@ -2856,17 +2860,17 @@ function RemoteProfileDialog({
             cursor: "pointer",
             fontFamily: "'Geist Mono', monospace",
             fontSize: 18,
-            minWidth: mobile ? 44 : "auto",
-            minHeight: mobile ? 44 : "auto",
+            minWidth: mobile ? 40 : "auto",
+            minHeight: mobile ? 40 : "auto",
             lineHeight: 1,
           }}>x</button>
         </div>
 
         <div style={{
-          padding: mobile ? "9px 10px" : "14px 20px",
+          padding: mobile ? "8px 10px" : "14px 20px",
           borderBottom: "1px solid var(--hg-border-soft)",
           display: "flex",
-          gap: mobile ? 6 : 8,
+          gap: mobile ? 5 : 8,
           alignItems: "center",
           flexWrap: "wrap",
         }}>
@@ -2907,13 +2911,13 @@ function RemoteProfileDialog({
             border: `1px solid ${statusColor}`,
             background: travel.status === "ready" ? "rgba(138,190,255,0.06)" : "rgba(255,184,77,0.05)",
             borderRadius: 6,
-            padding: "10px 12px",
-            marginBottom: 14,
+            padding: mobile ? "8px 10px" : "10px 12px",
+            marginBottom: mobile ? 12 : 14,
             display: "grid",
             gridTemplateColumns: mobile ? "1fr" : "minmax(120px, 1fr) minmax(120px, 1fr) minmax(120px, 1fr)",
-            gap: 10,
+            gap: mobile ? 5 : 10,
             fontFamily: "'Geist Mono', monospace",
-            fontSize: 10,
+            fontSize: mobile ? 9.5 : 10,
             color: "var(--hg-fg-3)",
           }}>
             <div><span style={{ color: statusColor, textTransform: "uppercase" }}>{travel.status}</span></div>
@@ -3644,14 +3648,14 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
       {showMenu && (
         <div style={{
           position: "absolute", bottom: "100%", left: mobile ? 8 : spatialMode ? 10 : 12, right: mobile ? 8 : spatialMode ? 10 : 12,
-          maxHeight: mobile ? "min(320px, 44dvh)" : spatialMode ? "min(260px, 34vh)" : "min(420px, 46vh)",
+          maxHeight: mobile ? "min(270px, 36dvh)" : spatialMode ? "min(260px, 34vh)" : "min(420px, 46vh)",
           overflowY: "auto",
           background: menuSurface,
           border: "1px solid var(--hg-border)",
           borderRadius: spatialMode ? 7 : 8,
-          marginBottom: spatialMode ? 7 : 8,
-          padding: spatialMode ? "4px 0" : "6px 0",
-          fontFamily: "'Geist Mono', monospace", fontSize: mobile ? 12.5 : spatialMode ? 11 : 12,
+          marginBottom: mobile ? 6 : spatialMode ? 7 : 8,
+          padding: mobile ? "4px 0" : spatialMode ? "4px 0" : "6px 0",
+          fontFamily: "'Geist Mono', monospace", fontSize: mobile ? 11.5 : spatialMode ? 11 : 12,
           boxShadow: menuShadow,
           backdropFilter: lightTheme ? "none" : spatialMode ? "blur(14px)" : "blur(18px)",
           zIndex: 20,
@@ -3661,10 +3665,10 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            padding: spatialMode ? "4px 10px 6px" : "4px 12px 8px",
+            padding: mobile ? "4px 11px 6px" : spatialMode ? "4px 10px 6px" : "4px 12px 8px",
             color: "var(--hg-fg-4)",
-            fontSize: 9,
-            letterSpacing: "0.14em",
+            fontSize: mobile ? 8.5 : 9,
+            letterSpacing: mobile ? "0.11em" : "0.14em",
             textTransform: "uppercase",
           }}>
             <span>commands</span>
@@ -3675,23 +3679,41 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
               onMouseEnter={() => setSel(i)}
               onMouseDown={(e) => { e.preventDefault(); complete(m.cmd); }}
               style={{
-                display: "flex", alignItems: "baseline", gap: 10,
-                minHeight: mobile ? 44 : "auto",
-                padding: mobile ? "9px 11px" : spatialMode ? "6px 10px" : "7px 12px",
+                display: mobile ? "grid" : "flex",
+                gridTemplateColumns: mobile ? "minmax(74px, max-content) minmax(0, 1fr)" : undefined,
+                gridTemplateAreas: mobile ? "\"cmd hint\" \"desc desc\"" : undefined,
+                alignItems: mobile ? "start" : "baseline",
+                gap: mobile ? "2px 8px" : 10,
+                minHeight: mobile ? 40 : "auto",
+                padding: mobile ? "7px 11px" : spatialMode ? "6px 10px" : "7px 12px",
                 background: i === sel ? menuSelected : "transparent",
                 cursor: "pointer",
               }}>
-              <span style={{ color: i === sel ? "var(--hg-fg-0)" : "var(--hg-fg-1)", minWidth: spatialMode ? 74 : 88 }}>{m.cmd}</span>
-              {m.hint && <span style={{ color: "var(--hg-fg-4)" }}>{m.hint}</span>}
               <span style={{
-                color: "var(--hg-fg-3)",
-                marginLeft: "auto",
-                fontFamily: "'Geist', system-ui, sans-serif",
-                fontSize: spatialMode ? 10.5 : 11.5,
+                gridArea: mobile ? "cmd" : undefined,
+                color: i === sel ? "var(--hg-fg-0)" : "var(--hg-fg-1)",
+                minWidth: mobile ? 0 : spatialMode ? 74 : 88,
+                whiteSpace: "nowrap",
+              }}>{m.cmd}</span>
+              {m.hint && <span style={{
+                gridArea: mobile ? "hint" : undefined,
+                color: "var(--hg-fg-4)",
+                minWidth: 0,
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
-                maxWidth: spatialMode ? 150 : "none",
+              }}>{m.hint}</span>}
+              <span style={{
+                gridArea: mobile ? "desc" : undefined,
+                color: "var(--hg-fg-3)",
+                marginLeft: mobile ? 0 : "auto",
+                fontFamily: "'Geist', system-ui, sans-serif",
+                fontSize: mobile ? 11 : spatialMode ? 10.5 : 11.5,
+                lineHeight: mobile ? 1.25 : 1.2,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                maxWidth: mobile ? "100%" : spatialMode ? 150 : "none",
               }}>{m.desc}</span>
             </div>
           ))}
@@ -3699,12 +3721,12 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
       )}
       <div style={{
           padding: mobile
-            ? "7px 9px calc(8px + env(safe-area-inset-bottom, 0px))"
+            ? "6px 9px calc(7px + env(safe-area-inset-bottom, 0px))"
             : spatialMode ? "9px 12px 11px" : "10px 12px 12px",
         borderTop: "1px solid var(--hg-border)",
         background: inputSurface,
         display: "flex", alignItems: "center", gap: mobile ? 8 : 10,
-        minHeight: mobile ? 54 : "auto",
+        minHeight: mobile ? 50 : "auto",
       }}>
         <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 8 }}>
           <input

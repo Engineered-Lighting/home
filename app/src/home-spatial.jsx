@@ -451,6 +451,7 @@ function HomeSpatialDrawer({ open, onClose, endpoint, token, sim }) {
   const cleanupRef = useRef(function () {});
 
   const simActive = !!(sim && sim.active);
+  const mobile = typeof window !== "undefined" && window.innerWidth <= 699;
 
   const simFixture = useCallback(function () {
     if (!simActive ||
@@ -776,20 +777,20 @@ function HomeSpatialDrawer({ open, onClose, endpoint, token, sim }) {
       {/* Header */}
       <div style={{
         display: "flex", alignItems: "center", gap: 10,
-        padding: "14px 24px 12px",
+        padding: mobile ? "12px 14px 10px" : "14px 24px 12px",
         borderBottom: "1px solid var(--hg-border-soft)",
       }}>
         <div style={{ display: "flex", flexDirection: "column",
-                      lineHeight: 1.05 }}>
+                      lineHeight: 1.05, minWidth: 0 }}>
           <span style={{ fontFamily: SP_FONT_SANS, fontSize: 15,
                          fontWeight: 500, color: "var(--hg-fg-0)",
                          letterSpacing: "-0.02em" }}>spatial</span>
-          <span style={{ fontSize: 8.5, letterSpacing: "0.24em",
+          <span style={{ fontSize: mobile ? 8 : 8.5, letterSpacing: mobile ? "0.18em" : "0.24em",
                          fontWeight: 500, color: "var(--hg-fg-4)",
-                         marginTop: 3 }}>light footprint map</span>
+                         marginTop: 3, whiteSpace: "nowrap" }}>light footprint map</span>
         </div>
         <span style={{ marginLeft: "auto", display: "inline-flex", gap: 6,
-                       alignItems: "center" }}>
+                       alignItems: "center", flexShrink: 0 }}>
           {fetchMs != null && (
             <span style={{ color: "var(--hg-fg-4)", fontSize: 10,
                            marginRight: 4 }}>{fetchMs}ms</span>
@@ -804,10 +805,12 @@ function HomeSpatialDrawer({ open, onClose, endpoint, token, sim }) {
             style={{
               background: "transparent",
               border: "1px solid var(--hg-border-soft)",
-              color: "var(--hg-fg-3)", padding: "4px 9px",
-              fontFamily: SP_FONT_MONO, fontSize: 10,
-              letterSpacing: "0.12em", cursor: "pointer",
+              color: "var(--hg-fg-3)", padding: mobile ? "0 9px" : "4px 9px",
+              fontFamily: SP_FONT_MONO, fontSize: mobile ? 9.5 : 10,
+              letterSpacing: mobile ? "0.08em" : "0.12em", cursor: "pointer",
               textTransform: "lowercase",
+              minHeight: mobile ? 38 : "auto",
+              whiteSpace: "nowrap",
             }}
           >refresh</button>
           <button
@@ -815,12 +818,14 @@ function HomeSpatialDrawer({ open, onClose, endpoint, token, sim }) {
             style={{
               background: "transparent",
               border: "1px solid var(--hg-border-soft)",
-              color: "var(--hg-fg-2)", padding: "4px 11px",
-              fontFamily: SP_FONT_MONO, fontSize: 10.5,
-              letterSpacing: "0.12em", cursor: "pointer",
+              color: "var(--hg-fg-2)", padding: mobile ? "0 11px" : "4px 11px",
+              fontFamily: SP_FONT_MONO, fontSize: mobile ? 9.5 : 10.5,
+              letterSpacing: mobile ? "0.08em" : "0.12em", cursor: "pointer",
               textTransform: "lowercase",
+              minHeight: mobile ? 38 : "auto",
+              whiteSpace: "nowrap",
             }}
-          >close · esc</button>
+          >{mobile ? "close" : "close · esc"}</button>
         </span>
       </div>
 

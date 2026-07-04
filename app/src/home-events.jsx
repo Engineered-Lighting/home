@@ -600,6 +600,10 @@ function ExternalContent({ text, streaming }) {
 function HelpContent({ groups = [], totalCount = 0, tip = "" }) {
   const ROW_BASE = "var(--hg-fg-2)";
   const ROW_HOVER = "var(--hg-fg-0)";
+  const mobile = typeof window !== "undefined" && (
+    (window.matchMedia && window.matchMedia("(max-width: 699px)").matches) ||
+    window.innerWidth <= 699
+  );
   const dispatchFill = (cmd) => {
     // Send the full signature (cmd + hint placeholder) so the user
     // sees what's expected — but the signature with <hint> placeholder
@@ -614,17 +618,17 @@ function HelpContent({ groups = [], totalCount = 0, tip = "" }) {
     <div className="hg-scroll" style={{
       ...T_PROSE,
       color: "var(--hg-fg-2)",
-      maxHeight: "42vh",
+      maxHeight: mobile ? "34vh" : "42vh",
       overflowY: "auto",
-      paddingRight: 4,
+      paddingRight: mobile ? 0 : 4,
     }}>
       <div style={{
         ...T_META,
-        marginBottom: 10,
+        marginBottom: mobile ? 8 : 10,
         color: "var(--hg-fg-3)",
         textTransform: "lowercase",
-        letterSpacing: "0.08em",
-        fontSize: 10.5,
+        letterSpacing: mobile ? "0.055em" : "0.08em",
+        fontSize: mobile ? 10 : 10.5,
       }}>
         {totalCount > 0 ? `${totalCount} commands` : "commands"}
         {tip && (
@@ -634,19 +638,20 @@ function HelpContent({ groups = [], totalCount = 0, tip = "" }) {
         )}
       </div>
       {groups.map((group) => (
-        <div key={group.id} style={{ marginBottom: 14 }}>
+        <div key={group.id} style={{ marginBottom: mobile ? 11 : 14 }}>
           <div style={{
             ...T_META,
             color: "var(--hg-fg-3)",
-            fontSize: 9.5,
-            letterSpacing: "0.18em",
+            fontSize: mobile ? 9 : 9.5,
+            letterSpacing: mobile ? "0.11em" : "0.18em",
             textTransform: "uppercase",
-            marginBottom: 5,
+            marginBottom: mobile ? 4 : 5,
             paddingBottom: 3,
             borderBottom: "1px solid var(--hg-border-soft)",
+            lineHeight: 1.35,
           }}>
             <span>{group.label}</span>
-            {group.desc && (
+            {group.desc && !mobile && (
               <span style={{
                 color: "var(--hg-fg-4)",
                 marginLeft: 8,
@@ -673,6 +678,7 @@ function HelpContent({ groups = [], totalCount = 0, tip = "" }) {
                   onClick={() => dispatchFill(fillValue)}
                   baseColor={ROW_BASE}
                   hoverColor={ROW_HOVER}
+                  mobile={mobile}
                 />
               );
             })}
@@ -683,7 +689,7 @@ function HelpContent({ groups = [], totalCount = 0, tip = "" }) {
   );
 }
 
-function HelpRow({ sig, desc, onClick, baseColor, hoverColor }) {
+function HelpRow({ sig, desc, onClick, baseColor, hoverColor, mobile = false }) {
   const [hovered, setHovered] = React.useState(false);
   return (
     <div
@@ -699,28 +705,30 @@ function HelpRow({ sig, desc, onClick, baseColor, hoverColor }) {
         }
       }}
       title="click to paste this command into the input box"
+      className="hg-help-row"
       style={{
         ...T_SYNTAX,
         display: "grid",
-        gridTemplateColumns: "minmax(0, 28ch) minmax(0, 1fr)",
-        gap: 14,
-        padding: "3px 6px",
+        gridTemplateColumns: mobile ? "minmax(0, 1fr)" : "minmax(0, 28ch) minmax(0, 1fr)",
+        gap: mobile ? 2 : 14,
+        padding: mobile ? "6px 7px" : "3px 6px",
         color: hovered ? hoverColor : baseColor,
         background: hovered ? "color-mix(in oklab, var(--hg-fg-1) 6%, transparent)" : "transparent",
         cursor: "pointer",
-        borderRadius: 2,
+        borderRadius: mobile ? 4 : 2,
         transition: "color 100ms, background 100ms",
-        fontSize: 11.5,
+        fontSize: mobile ? 11 : 11.5,
+        lineHeight: mobile ? 1.28 : 1.2,
       }}
     >
-      <span style={{
+      <span className="hg-help-sig" style={{
         color: hovered ? "var(--hg-fg-0)" : "var(--hg-fg-1)",
         fontFamily: HG_MONO,
         overflow: "hidden",
         textOverflow: "ellipsis",
         whiteSpace: "nowrap",
       }}>{sig}</span>
-      <span style={{
+      <span className="hg-help-desc" style={{
         color: hovered ? "var(--hg-fg-1)" : "var(--hg-fg-3)",
         overflow: "hidden",
         textOverflow: "ellipsis",

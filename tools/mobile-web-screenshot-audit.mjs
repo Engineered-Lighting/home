@@ -741,6 +741,16 @@ async function clickMobileMenuItem(page, label) {
   return clicked;
 }
 
+async function openMobileRemoteProfile(page) {
+  let clicked = await maybeClick(page.locator('button[aria-label="Remote profile"]').first(), 500);
+  if (!clicked) {
+    await openMobileMenu(page);
+    clicked = await maybeClick(page.locator('button[aria-label="Remote profile"]').first(), 1800);
+  }
+  await page.waitForTimeout(450);
+  return clicked;
+}
+
 async function exerciseApartmentLightControl(page, context) {
   await runCommand(page, "/apartment", 3200);
   await page.waitForFunction(() => !!window.__havApartmentDebug, null, { timeout: 12000 });
@@ -897,8 +907,7 @@ async function runButtonProbes(page, buttonItems) {
 
   await recordButtonProbe(buttonItems, "b08-remote-dialog", "Remote dialog profile buttons, test all, and close respond", async () => {
     await closeOverlays(page);
-    const remote = page.locator('button[aria-label="Remote profile"]').first();
-    if (!(await maybeClick(remote, 1800))) throw new Error("remote profile button missing");
+    if (!(await openMobileRemoteProfile(page))) throw new Error("remote profile button missing");
     await expectVisibleText(page, /Remote access \/ Travel readiness/i);
     await clickButtonByName(page, /Home LAN/i);
     await clickButtonByName(page, /Remote via Tailscale|tailscale|tail/i);
@@ -1157,8 +1166,7 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors, prof
 
     await closeOverlays(page);
     await step("12-remote-dialog", "Remote access / Travel readiness", async () => {
-      const remote = page.locator('button[aria-label="Remote profile"]').first();
-      if (!(await maybeClick(remote, 1800))) throw new Error("remote profile button missing");
+      if (!(await openMobileRemoteProfile(page))) throw new Error("remote profile button missing");
       await expectVisibleText(page, /Remote access \/ Travel readiness/i);
       await page.waitForTimeout(600);
     });
@@ -1756,6 +1764,18 @@ async function cdpClickMobileMenuItem(client, label, waitMs = 900) {
   await cdpDelay(waitMs);
 }
 
+async function cdpOpenMobileRemoteProfile(client) {
+  let ok = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Remote profile"]')`);
+  if (!ok) {
+    const opened = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Open mobile actions"]')`);
+    if (!opened) return false;
+    await cdpDelay(180);
+    ok = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Remote profile"]')`);
+  }
+  await cdpDelay(450);
+  return !!ok;
+}
+
 async function cdpExpectText(client, pattern) {
   const ok = await cdpAction(client, `(h) => h.existsTextMatch(${JSON.stringify(pattern)})`);
   if (!ok) throw new Error(`text not visible: /${pattern}/i`);
@@ -1910,9 +1930,8 @@ async function cdpRunButtonProbes(client, buttonItems) {
 
   await cdpRecordButtonProbe(buttonItems, "b08-remote-dialog", "Remote dialog profile buttons, test all, and close respond", async () => {
     await cdpCloseOverlays(client);
-    const ok = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Remote profile"]')`);
+    const ok = await cdpOpenMobileRemoteProfile(client);
     if (!ok) throw new Error("remote profile button missing");
-    await cdpDelay(450);
     await cdpExpectText(client, "Remote access / Travel readiness");
     await cdpClickButton(client, "Home LAN");
     await cdpClickButton(client, "Remote via Tailscale|tailscale|tail");
@@ -2179,7 +2198,7 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors, profile = 
 
     await cdpCloseOverlays(client);
     await step("12-remote-dialog", "Remote access / Travel readiness", async () => {
-      const ok = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Remote profile"]')`);
+      const ok = await cdpOpenMobileRemoteProfile(client);
       if (!ok) throw new Error("remote profile button missing");
       await cdpExpectText(client, "Remote access / Travel readiness");
       await cdpDelay(600);

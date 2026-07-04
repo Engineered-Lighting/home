@@ -135,7 +135,7 @@ function HomeHeader({
     all: "unset",
     display: "inline-flex",
     alignItems: "center",
-    gap: mobile ? 5 : 6,
+    justifyContent: "center",
     border: "1px solid var(--hg-border)",
     color: "var(--hg-fg-1)",
     background: "rgba(138,190,255,0.055)",
@@ -179,6 +179,34 @@ function HomeHeader({
     setMenuOpen(false);
     fn?.();
   };
+  const connectionStatusNode = (
+    <span style={{
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 6,
+      flexShrink: 0,
+      minWidth: 0,
+      maxWidth: mobile ? 86 : 150,
+      overflow: "hidden",
+      color: connection === "auth_invalid" ? "var(--hg-warn)"
+        : isDegraded ? "var(--hg-warn)"
+        : "var(--hg-fg-3)",
+    }}>
+      {/* Phase 1 bugfix: dot pulses ice-blue while a voice session is
+          live (mic open OR speaking), while the adjacent label keeps
+          the connection state readable in the quieter left header. */}
+      <ConnectionDot state={isLive ? "live" : isDegraded ? "degraded" : connection} />
+      <span title={isDegraded ? warnText : ""} style={{
+        minWidth: 0,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        fontFamily: "'Geist Mono', monospace",
+        fontSize: mobile ? 8 : 10,
+        letterSpacing: "0.12em",
+      }}>{statusText}</span>
+    </span>
+  );
   return (
     <div
       data-tauri-drag-region
@@ -195,18 +223,24 @@ function HomeHeader({
         minWidth: 0,
       }}
     >
-      <div data-tauri-drag-region style={{ display: "flex", flexDirection: "column", lineHeight: 1.05, pointerEvents: "none", minWidth: mobile ? 68 : "auto", flexShrink: 0 }}>
+      <div data-tauri-drag-region style={{ display: "flex", flexDirection: "column", lineHeight: 1.05, pointerEvents: "none", minWidth: mobile ? 72 : "auto", flexShrink: 0 }}>
         <span style={{
           fontFamily: "'Geist', system-ui, sans-serif",
           fontSize: mobile ? 16 : 17, fontWeight: 500, color: "var(--hg-fg-0)",
           letterSpacing: "-0.02em",
         }}>home</span>
+        {mobile && (
+          <span style={{ marginTop: 4 }}>
+            {connectionStatusNode}
+          </span>
+        )}
         {!mobile && <span style={{
           fontFamily: "'Geist Mono', monospace",
           fontSize: 8.5, letterSpacing: "0.24em",
           fontWeight: 500, color: "var(--hg-fg-4)", marginTop: 3,
         }}>engineered lighting</span>}
       </div>
+      {!mobile && connectionStatusNode}
       <span style={{
         marginLeft: "auto",
         display: "inline-flex",
@@ -215,7 +249,7 @@ function HomeHeader({
         gap: mobile ? 6 : 10,
         fontSize: 11.5,
         minWidth: 0,
-        flex: mobile ? "1 1 auto" : "0 1 auto",
+        flex: "0 1 auto",
         flexWrap: "nowrap",
         overflow: mobile && !menuOpen ? "hidden" : "visible",
       }}>
@@ -337,7 +371,7 @@ function HomeHeader({
             muted · {muteState.reason || "active"}
           </button>
         )}
-        {serviceProfile && onOpenRemoteProfile && (
+        {!mobile && serviceProfile && onOpenRemoteProfile && (
           <button
             type="button"
             aria-label="Remote profile"
@@ -427,26 +461,9 @@ function HomeHeader({
             onMouseEnter={hoverBright}
             onMouseLeave={(e) => { e.currentTarget.style.color = "var(--hg-fg-1)"; }}
           >
-            {window.IconApartment ? <window.IconApartment size={mobile ? 14 : 15} /> : null}
             <span>{mobile ? "apt" : "apartment"}</span>
           </button>
         )}
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-          {/* Phase 1 bugfix: dot pulses ice-blue while a voice session is
-              live (mic open OR speaking), but the text label only shows
-              non-online states (connecting / bad token / offline). The
-              voice state itself lives in the bottom VoiceBanner. */}
-          <ConnectionDot state={isLive ? "live" : isDegraded ? "degraded" : connection} />
-          {(connection !== "online" || isDegraded) && (
-            <span title={isDegraded ? warnText : ""} style={{
-              color: connection === "auth_invalid" ? "var(--hg-warn)"
-                   : isDegraded ? "var(--hg-warn)"
-                   : "var(--hg-fg-3)",
-              fontFamily: "'Geist Mono', monospace",
-              fontSize: mobile ? 9 : 10, letterSpacing: "0.12em",
-            }}>{statusText}</span>
-          )}
-        </span>
         {mobile && (
           <span style={{
             position: "relative",
@@ -502,6 +519,17 @@ function HomeHeader({
                     boxShadow: "0 18px 52px rgba(0,0,0,0.48)",
                   }}
                 >
+                  {serviceProfile && onOpenRemoteProfile && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      aria-label="Remote profile"
+                      style={mobileMenuItem}
+                      onClick={() => mobileMenuAction(onOpenRemoteProfile)}
+                    >
+                      profile - {serviceProfile.shortLabel}
+                    </button>
+                  )}
                   {onOpenPeople && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenPeople)}>people</button>}
                   {onOpenApartment && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenApartment)}>apartment</button>}
                   {onOpenIntelligence && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenIntelligence)}>intelligence</button>}

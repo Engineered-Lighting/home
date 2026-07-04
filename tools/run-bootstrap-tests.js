@@ -17,6 +17,7 @@ const runtimeSource = fs.readFileSync(path.join(SRC_DIR, "home-web-runtime.js"),
 const serviceWorkerSource = fs.readFileSync(path.join(SRC_DIR, "home-service-worker.js"), "utf8");
 const mountSource = fs.readFileSync(MOUNT, "utf8");
 const appSource = fs.readFileSync(HOME_APP, "utf8");
+const iconsSource = fs.readFileSync(path.join(SRC_DIR, "home-icons.jsx"), "utf8");
 const auditSource = fs.readFileSync(AUDIT, "utf8");
 
 let passes = 0;
@@ -243,6 +244,17 @@ assert("header exposes a dedicated apartment action",
 assert("mobile header menu includes apartment fallback",
   appSource.includes("mobileMenuAction(onOpenApartment)") &&
     appSource.includes(">apartment</button>"));
+assert("mobile header keeps profile control in the menu",
+  appSource.includes("!mobile && serviceProfile && onOpenRemoteProfile") &&
+    appSource.includes("mobileMenuAction(onOpenRemoteProfile)") &&
+    appSource.includes("profile -"));
+assert("header connection status is anchored with the brand",
+  appSource.includes("const connectionStatusNode") &&
+    appSource.includes("{mobile && (") &&
+    appSource.includes("{!mobile && connectionStatusNode}"));
+assert("apartment header action is text-only",
+  !appSource.includes("IconApartment") &&
+    !iconsSource.includes("IconApartment"));
 
 process.stdout.write("\nregistry_boot_inventory_contract_test\n");
 assert("registry audit extracts the boot-loader file array",

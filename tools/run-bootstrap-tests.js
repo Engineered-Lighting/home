@@ -13,6 +13,8 @@ const HOME_APP = path.join(SRC_DIR, "home-app.jsx");
 const AUDIT = path.join(REPO, "tools", "qa-registry-audit.py");
 
 const indexSource = fs.readFileSync(INDEX, "utf8");
+const runtimeSource = fs.readFileSync(path.join(SRC_DIR, "home-web-runtime.js"), "utf8");
+const serviceWorkerSource = fs.readFileSync(path.join(SRC_DIR, "home-service-worker.js"), "utf8");
 const mountSource = fs.readFileSync(MOUNT, "utf8");
 const appSource = fs.readFileSync(HOME_APP, "utf8");
 const auditSource = fs.readFileSync(AUDIT, "utf8");
@@ -149,6 +151,20 @@ assert("visible overlay is used for loader failures",
   indexSource.includes("function overlay(title, detail)") &&
     indexSource.includes("Failed to load ") &&
     indexSource.includes("boot chain stopped"));
+assert("desktop glue is optional only in web mode",
+  indexSource.includes("var webOptionalFiles") &&
+    indexSource.includes("'home-tauri.jsx': true") &&
+    indexSource.includes("function skipOptionalWebFile") &&
+    indexSource.includes("!window.HG_WEB_MODE || !webOptionalFiles[name]") &&
+    indexSource.includes("skipped optional web boot file"));
+assert("web runtime provides browser-safe Tauri fallbacks",
+  runtimeSource.includes("IS_TAURI: false") &&
+    runtimeSource.includes("tauriFetch: browserTauriFetch") &&
+    runtimeSource.includes("loadPrefs: browserLoadPrefs") &&
+    runtimeSource.includes("saveEvents: browserSaveEvents"));
+assert("service worker activation does not forcibly navigate booting clients",
+  serviceWorkerSource.includes("self.clients.claim()") &&
+    !serviceWorkerSource.includes("client.navigate("));
 
 process.stdout.write("\nbootstrap_order_contract_test\n");
 [

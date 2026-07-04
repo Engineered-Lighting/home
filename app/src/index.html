@@ -143,6 +143,9 @@
         ['home-app.jsx', true],
         ['home-mount.jsx', true],
       ];
+      var webOptionalFiles = {
+        'home-tauri.jsx': true,
+      };
 
       var BABEL_PLUGINS = [
         'transform-class-properties',
@@ -255,6 +258,18 @@
         document.head.appendChild(s);
       }
 
+      function skipOptionalWebFile(name, err, index) {
+        if (!window.HG_WEB_MODE || !webOptionalFiles[name]) return false;
+        var reason = String((err && err.message) || err || 'unknown error');
+        console.warn('[boot] skipped optional web boot file ' + name + ' after retries - ' + reason);
+        boot.skipped = boot.skipped || [];
+        boot.skipped.push({ file: name, reason: reason });
+        boot.loaded++;
+        primeWindow(index + 1);
+        step(index + 1);
+        return true;
+      }
+
       function step(i) {
         if (i >= files.length) {
           boot.done = true;
@@ -276,6 +291,7 @@
                 sourceFileName: name,
               }).code;
             } catch (err) {
+              if (skipOptionalWebFile(name, err, i)) return;
               boot.failed = name;
               overlay('Babel transform failed in ' + name +
                 ' — boot chain stopped (downstream files depend on it)',
@@ -288,6 +304,7 @@
           primeWindow(i + 1);
           step(i + 1);
         }).catch(function (err) {
+          if (skipOptionalWebFile(name, err, i)) return;
           boot.failed = name;
           overlay('Failed to load ' + name + ' after 3 attempts — boot chain stopped',
             String((err && err.message) || err));

@@ -89,7 +89,7 @@ function HomeHeader({
   theme, onToggleTheme, voice, connection, sidecarOnline, bridgeOnline,
   bridgeHealth, visionSidecarOnline, visionHealth, frigateMetrics, cameraLabels,
   sim, muteState, onUnmuteClick, onOpenPeople, onOpenIntelligence,
-  onOpenVideoLabeler, onOpenSimulationControls, peopleButtonRef, aiStackState, metrics,
+  onOpenVideoLabeler, onOpenApartment, onOpenSimulationControls, peopleButtonRef, aiStackState, metrics,
   serviceProfile, onOpenRemoteProfile, mobile = false,
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -130,6 +130,25 @@ function HomeHeader({
   const atlasIconBtn = {
     ...iconBtn,
     color: atlasIconColor,
+  };
+  const apartmentBtn = {
+    all: "unset",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: mobile ? 5 : 6,
+    border: "1px solid var(--hg-border)",
+    color: "var(--hg-fg-1)",
+    background: "rgba(138,190,255,0.055)",
+    padding: mobile ? "0 8px" : "3px 8px",
+    borderRadius: 5,
+    fontFamily: "'Geist Mono', monospace",
+    fontSize: mobile ? 9 : 9.5,
+    letterSpacing: "0.08em",
+    textTransform: "lowercase",
+    cursor: "pointer",
+    minHeight: mobile ? 38 : 28,
+    flexShrink: 0,
+    boxSizing: "border-box",
   };
   const hoverBright = (e) => { e.currentTarget.style.color = "var(--hg-fg-0)"; };
   const hoverAtlas = (e) => {
@@ -397,6 +416,21 @@ function HomeHeader({
             face-rec affordances live below now — name chip in the
             vision drawer, named perception line in the chat feed.
             The header stays clean. */}
+        {onOpenApartment && (
+          <button
+            type="button"
+            aria-label="Open apartment view"
+            title="apartment - spatial command center"
+            className="hg-focusable hg-mobile-touch"
+            onClick={onOpenApartment}
+            style={apartmentBtn}
+            onMouseEnter={hoverBright}
+            onMouseLeave={(e) => { e.currentTarget.style.color = "var(--hg-fg-1)"; }}
+          >
+            {window.IconApartment ? <window.IconApartment size={mobile ? 14 : 15} /> : null}
+            <span>{mobile ? "apt" : "apartment"}</span>
+          </button>
+        )}
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
           {/* Phase 1 bugfix: dot pulses ice-blue while a voice session is
               live (mic open OR speaking), but the text label only shows
@@ -469,6 +503,7 @@ function HomeHeader({
                   }}
                 >
                   {onOpenPeople && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenPeople)}>people</button>}
+                  {onOpenApartment && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenApartment)}>apartment</button>}
                   {onOpenIntelligence && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenIntelligence)}>intelligence</button>}
                   {onOpenVideoLabeler && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenVideoLabeler)}>video labeler</button>}
                   {onToggleTheme && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onToggleTheme)}>{theme === "dark" ? "light mode" : "dark mode"}</button>}
@@ -9374,6 +9409,17 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     setLookDrawerOpen(false);
     setExplainConvId(null);
   };
+  const openApartmentFromHeader = () => {
+    setPeopleOpen(false);
+    setIntelligenceOpen(false);
+    setVideoLabelerOpen(false);
+    setLightsOpen(false);
+    setWorldStateDrawerOpen(false);
+    setSpatialDrawerOpen(false);
+    setLookDrawerOpen(false);
+    setExplainConvId(null);
+    setApartmentOpen(true);
+  };
   const metricsStrip = (
     <MetricsStrip
       metrics={metrics}
@@ -9534,6 +9580,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           setApartmentOpen(false);
           setVideoLabelerOpen(true);
         }}
+        onOpenApartment={isSpatialWide ? null : openApartmentFromHeader}
         onOpenSimulationControls={() => setSimulationControlsOpen(true)}
         peopleButtonRef={peopleButtonRef}
         aiStackState={aiStackState}

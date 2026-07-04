@@ -185,6 +185,17 @@ function IconSpeaker({ size = 14, stroke = "currentColor" }) {
   );
 }
 
+function IconApartment({ size = 15, stroke = "currentColor" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={stroke} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 10.5 12 4l8 6.5" />
+      <path d="M6.5 9.2V20h11V9.2" />
+      <path d="M9 20v-6h6v6" />
+      <path d="M9.2 10.5h.1M14.7 10.5h.1" />
+    </svg>
+  );
+}
+
 function IconNeuralNetwork({ size = 16, stroke = "currentColor" }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -209,5 +220,6 @@ Object.assign(window, {
   IconMic, IconSend, IconSun, IconMoon, IconStop, IconLogo,
   IconWaveStatic, IconWaveLive, StatusDot,
   IconBulb, IconPlay, IconPause, IconSkipNext, IconSkipPrev, IconVolume, IconSpeaker,
+  IconApartment,
   IconNeuralNetwork,
 });

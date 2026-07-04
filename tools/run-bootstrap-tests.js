@@ -235,6 +235,15 @@ assert("home-mount renders HomeApp",
 assert("home-mount invokes initial mount immediately",
   /window\.__homeMount\(\);\s*$/.test(mountSource.trim()));
 
+process.stdout.write("\nheader_navigation_contract_test\n");
+assert("header exposes a dedicated apartment action",
+  appSource.includes("onOpenApartment") &&
+    appSource.includes("aria-label=\"Open apartment view\"") &&
+    appSource.includes("openApartmentFromHeader"));
+assert("mobile header menu includes apartment fallback",
+  appSource.includes("mobileMenuAction(onOpenApartment)") &&
+    appSource.includes(">apartment</button>"));
+
 process.stdout.write("\nregistry_boot_inventory_contract_test\n");
 assert("registry audit extracts the boot-loader file array",
   auditSource.includes("extract_boot_loader_scripts") &&

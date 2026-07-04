@@ -1548,15 +1548,13 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const frigateFeedBase = liveCam?.camera?.frigate_name
     ? `${aptServiceBase("apartment3d.frigateBase", "HG_DEFAULT_FRIGATE_BASE", "http://192.168.0.125:5000")}/api/${liveCam.camera.frigate_name}`
     : "";
-  const calibratedMobileSnapshotSrc = mobile && liveCameraExact && frigateFeedBase
+  const mobileSnapshotFallbackSrc = mobile && frigateFeedBase && !signedLiveFeed.src
     ? aptSnapshotSrc(frigateFeedBase)
     : "";
-  const liveFeedBase = calibratedMobileSnapshotSrc || signedLiveFeed.src || frigateFeedBase;
-  const liveFeedSource = calibratedMobileSnapshotSrc ? "calibrated-snapshot" : signedLiveFeed.src ? "ha" : "frigate";
-  const liveSnapshotSrc = mobile && frigateFeedBase && (calibratedMobileSnapshotSrc || !signedLiveFeed.src)
-    ? aptSnapshotSrc(frigateFeedBase)
-    : "";
-  const liveFeedIntrinsics = (!mobile || liveCameraExact)
+  const liveFeedBase = signedLiveFeed.src || mobileSnapshotFallbackSrc || frigateFeedBase;
+  const liveFeedSource = signedLiveFeed.src ? "ha" : mobileSnapshotFallbackSrc ? "snapshot" : "frigate";
+  const liveSnapshotSrc = mobileSnapshotFallbackSrc || "";
+  const liveFeedIntrinsics = !mobile
     ? liveCam?.camera?.intrinsics || null
     : null;
   const liveSnapshotIntervalMs = liveSnapshotSrc ? 1100 : 0;

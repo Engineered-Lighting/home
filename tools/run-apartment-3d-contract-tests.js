@@ -73,8 +73,8 @@ assert("camera alignment helper distinguishes estimated vs calibrated", APT.incl
 assert("camera snap requires exact alignment metadata", APT.includes("const calib = alignment.exact"));
 assert("camera debug snapshot exposes alignment status", APT.includes("cameraAlignment: liveCam ? aptCameraAlignment(liveCam) : null"));
 assert("mobile live feed uses snapshot refresh fallback", APT.includes("function aptSnapshotSrc") && APT.includes("const liveSnapshotIntervalMs = liveSnapshotSrc ? 1100 : 0"));
-assert("mobile calibrated feed keeps intrinsics for lens-correct video", APT.includes("const liveFeedIntrinsics = (!mobile || liveCameraExact)") && APT.includes("intrinsics={liveFeedIntrinsics}"));
-assert("mobile calibrated feed prefers undistorted snapshots", APT.includes("const calibratedMobileSnapshotSrc") && APT.includes('"calibrated-snapshot"'));
+assert("mobile calibrated feed avoids iOS gray WebGL canvas path", APT.includes("const liveFeedIntrinsics = !mobile") && APT.includes("intrinsics={liveFeedIntrinsics}"));
+assert("mobile camera feed prefers HA stream before snapshot fallback", APT.includes("const mobileSnapshotFallbackSrc") && APT.includes("const liveFeedBase = signedLiveFeed.src || mobileSnapshotFallbackSrc || frigateFeedBase") && APT.includes('signedLiveFeed.src ? "ha" : mobileSnapshotFallbackSrc ? "snapshot" : "frigate"'));
 assert("snapshot refresh keeps the calibrated frame cache-busted", APT.includes("function aptCacheBust") && APT.includes("aptCacheBust(base, Date.now())"));
 assert("snapshot refresh preloads before swapping visible frames", APT.includes("preloadRef") && APT.includes("new Image()") && APT.includes("setFrameSrc(next);"));
 assert("snapshot refresh waits for image load before the next frame", APT.includes("publishFrameRef.current?.(Math.max(900, snapshotIntervalMs))") && !APT.includes("setInterval(publish"));

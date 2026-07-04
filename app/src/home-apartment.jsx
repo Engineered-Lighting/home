@@ -1338,6 +1338,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         if (!simActive && aptCameraCanFeed(dev)) {
           setLiveFeedStatus((current) => aptLiveFeedSettled(current) ? current : "connecting");
           setLiveOn(true);
+        } else {
+          setLiveFeedStatus("idle");
         }
         return;
       }
@@ -1347,6 +1349,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
           setLiveFeedStatus((current) => aptLiveFeedSettled(current) ? current : "connecting");
           setLiveOn(true);
           showToast("camera pose still loading - feed is live");
+        } else {
+          setLiveFeedStatus("idle");
         }
         return;
       }
@@ -1365,25 +1369,22 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     const calib = alignment.exact;
     const hasFeed = !!(!simActive && aptCameraCanFeed(dev));
     setLiveCam(dev);
-    setLiveOn(hasFeed);
-    setLiveFeedStatus(hasFeed ? "connecting" : "idle");
+    setLiveOn(false);
+    setLiveFeedStatus("flying");
     setCameraPoseReady(false);
     setCalibCam(null);
-    if (hasFeed) revealCameraFeedWhenReady(dev, seq);
     (async () => {
+      let meshReady = false;
       try {
         // Camera snaps always use the textured mesh behind the live feed.
-        // The feed starts immediately; mesh/pose loading can take many seconds
-        // on a travel network and should not leave the camera view black.
+        // Keep the feed hidden during the camera flight so the user sees the
+        // 3D swoop into the calibrated pose; stream signing still preloads.
         if (preSnapModeRef.current == null) preSnapModeRef.current = eng.modes.mode;
         await eng.modes.setMode("mesh", { duration: 0 });
         if (seq !== flySeqRef.current) return;
+        meshReady = true;
         setMode("mesh");
         setModeError(null);
-        eng.flyToDevice(dev, {
-          fovScale: calib && !mobile ? 1 / 0.74 : 1,
-          projectionFrame: calib && mobile ? aptProjectionFrame(viewport, dev) : null,
-        });
       } catch (e) {
         if (seq !== flySeqRef.current) return;
         setModeError({
@@ -1392,7 +1393,30 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
           detail: `${e?.message || String(e || "asset load failed")} - check mesh.glb / collision.glb`,
         });
         if (!hasFeed) showToast("camera snap needs mesh - check mesh.glb asset");
-        else showToast("mesh unavailable - showing camera feed only");
+        else showToast("mesh unavailable - flying with current scan");
+      }
+      try {
+        if (seq !== flySeqRef.current) return;
+        eng.flyToDevice(dev, {
+          dur: mobile ? 1150 : 980,
+          fovScale: calib && !mobile ? 1 / 0.74 : 1,
+          projectionFrame: calib && mobile ? aptProjectionFrame(viewport, dev) : null,
+        });
+        revealCameraFeedWhenReady(dev, seq);
+      } catch (e) {
+        if (seq !== flySeqRef.current) return;
+        if (meshReady) setModeError({
+          mode: "mesh",
+          message: "mesh unavailable",
+          detail: `${e?.message || String(e || "camera pose failed")} - check camera calibration`,
+        });
+        if (!hasFeed) showToast("camera snap needs mesh - check mesh.glb asset");
+        else {
+          setCameraPoseReady(true);
+          setLiveFeedStatus((current) => aptLiveFeedSettled(current) ? current : "connecting");
+          setLiveOn(true);
+          showToast("camera pose failed - showing camera feed only");
+        }
       }
     })();
     return true;
@@ -1408,6 +1432,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         liveFeedStatus,
         liveCam: liveCam?.id || liveCam?.name || null,
         cameraAlignment: liveCam ? aptCameraAlignment(liveCam) : null,
+        cameraPoseFlying: !!engineRef.current?.rig?.cameraPoseFlying?.(),
+        cameraPoseReady,
         cameraFrame: mobile && liveCam ? (() => {
           const frame = aptMobileCameraFrame(viewport, liveCam);
           return { left: frame.left, top: frame.top, width: frame.width, height: frame.height };
@@ -1451,14 +1477,14 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     return () => {
       if (window.__havApartmentDebug === api) delete window.__havApartmentDebug;
     };
-  }, [open, phase, mode, liveOn, liveFeedStatus, liveCam, mobile, viewport, model.devices, pickMode, zoomApartment, flyToDeviceView]);
+  }, [open, phase, mode, liveOn, liveFeedStatus, liveCam, cameraPoseReady, mobile, viewport, model.devices, pickMode, zoomApartment, flyToDeviceView]);
 
   const liveHaEntity = aptCameraEntity(liveCam);
   const liveHaBase = endpoint || aptServiceBase("homeAssistantUrl", "HG_DEFAULT_HA_BASE", "http://192.168.0.125:8123");
   const signedLiveFeed = useAptSignedCameraStream({
     entity: liveHaEntity,
     haUrl: liveHaBase,
-    enabled: !!(open && liveOn && liveCam && !calibCam && !simActive && liveHaEntity),
+    enabled: !!(open && liveCam && !calibCam && !simActive && liveHaEntity),
   });
   const liveCameraExact = !!(liveCam && aptCameraAlignment(liveCam).exact);
   const cameraSurroundActive = !!(open && liveOn && liveCam && mobile && !calibCam && liveCameraExact && cameraPoseReady);
@@ -1478,7 +1504,9 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const topPad = mobile ? "calc(8px + env(safe-area-inset-top, 0px)) 10px 8px" : "12px 18px";
   const bottomPad = mobile ? "8px 10px calc(10px + env(safe-area-inset-bottom, 0px))" : "14px 18px";
   const mobileCameraFrame = mobile && cameraSnap && liveCam ? aptMobileCameraFrame(viewport, liveCam) : null;
+  const cameraFlightActive = !!(cameraSnap && liveCam && !cameraPoseReady && !calibCam);
   const hostFrameStyle = cameraSurroundActive
+    || cameraFlightActive
     ? {
         position: "absolute",
         top: 0,

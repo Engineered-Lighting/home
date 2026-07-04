@@ -94,7 +94,7 @@ const FEATURE_MATRIX = [
   ["18-apartment-cloud", "Apartment cloud mode", "3D Apartment opens with the full apartment visible inside the mobile safe viewport."],
   ["19-apartment-photo", "Apartment photo mode", "Photo/splat mode renders the real apartment scan without the unavailable fallback."],
   ["20-apartment-mesh", "Apartment mesh mode", "Mesh mode keeps the full apartment visible without the mesh-unavailable fallback."],
-  ["21-apartment-fly-camera", "Apartment fly-to-camera/live view", "Camera fly-to locks to mesh/live view and hides mode controls on mobile."],
+  ["21-apartment-fly-camera", "Apartment fly-to-camera/live view", "Camera fly-to animates through the 3D model, then locks to mesh/live view and hides mode controls on mobile."],
 ];
 
 const BUTTON_PROBE_MATRIX = [
@@ -109,7 +109,7 @@ const BUTTON_PROBE_MATRIX = [
   ["b09-slash-command", "Input", "Slash command input accepts and executes a command from mobile."],
   ["b10-drawer-closes", "Drawers", "World, lights, spatial, and look drawers expose a working close control."],
   ["b11-apartment-mode-buttons", "Apartment", "Cloud/photo/mesh HUD buttons respond and render runtime scan/mesh assets."],
-  ["b12-apartment-camera-buttons", "Apartment", "Fly-to-camera exposes only snap-safe controls before resetting cleanly."],
+  ["b12-apartment-camera-buttons", "Apartment", "Fly-to-camera exposes only snap-safe controls after the animated 3D swoop, then resets cleanly."],
   ["b13-apartment-light-control", "Apartment", "A device-card light button taps through to a Home Assistant service call on mobile."],
 ];
 
@@ -634,6 +634,24 @@ async function ensureCameraSnapLocked(page, context) {
   return `camera ${result.liveCam} snapped; mode buttons hidden${frame}${feed}`;
 }
 
+async function ensureCameraFlightStarted(page, context) {
+  const result = await page.evaluate(() => {
+    const snap = window.__havApartmentDebug?.snapshot?.() || {};
+    return {
+      liveCam: snap.liveCam || null,
+      liveOn: !!snap.liveOn,
+      cameraPoseFlying: !!snap.cameraPoseFlying,
+      cameraPoseReady: !!snap.cameraPoseReady,
+      liveFeedStatus: snap.liveFeedStatus || "",
+    };
+  });
+  if (!result.liveCam) throw new Error(`${context}: camera did not activate`);
+  if (result.cameraPoseReady) return `camera ${result.liveCam} settled before flight sample`;
+  if (!result.cameraPoseFlying) throw new Error(`${context}: camera pose is not animating`);
+  if (result.liveOn) throw new Error(`${context}: live feed covered the 3D camera flight`);
+  return `camera ${result.liveCam} flight animating before feed reveal (${result.liveFeedStatus || "status unknown"})`;
+}
+
 async function ensureDesktopHeader(page, context) {
   const result = await page.evaluate(() => {
     const visible = (el) => {
@@ -788,19 +806,22 @@ async function runButtonProbes(page, buttonItems) {
   await recordButtonProbe(buttonItems, "b12-apartment-camera-buttons", "Apartment back and close buttons respond", async () => {
     await page.waitForFunction(() => !!window.__havApartmentDebug, null, { timeout: 5000 });
     const active = await page.evaluate(() => !!window.__havApartmentDebug?.snapshot?.()?.liveCam);
+    let flight = "camera already active";
     if (!active) {
       const ok = await page.evaluate(() =>
         window.__havApartmentDebug?.flyFirstCalibratedCamera?.() ||
         window.__havApartmentDebug?.flyFirstCamera?.()
       );
       if (!ok) throw new Error("no camera device available for fly-to test");
-      await page.waitForTimeout(1600);
+      await page.waitForTimeout(220);
+      flight = await ensureCameraFlightStarted(page, "apartment camera flight");
+      await page.waitForTimeout(1380);
     }
     const snap = await ensureCameraSnapLocked(page, "apartment fly-camera controls");
     const detail = await ensureVisualHealth(page, "apartment fly-camera controls");
     const fit = await exitCameraAndEnsureFit(page, "apartment back-to-overview fit");
     await closeOverlays(page);
-    return `${detail}; ${snap}; ${fit}; fly-camera screenshot captured as 21-apartment-fly-camera.png`;
+    return `${detail}; ${flight}; ${snap}; ${fit}; fly-camera screenshot captured as 21-apartment-fly-camera.png`;
   });
 
   await closeOverlays(page);
@@ -990,12 +1011,14 @@ async function runDesktopButtonProbes(page, buttonItems) {
       window.__havApartmentDebug?.flyFirstCamera?.()
     );
     if (!ok) throw new Error("no camera device available for fly-to test");
-    await page.waitForTimeout(1600);
+    await page.waitForTimeout(220);
+    const flight = await ensureCameraFlightStarted(page, "desktop apartment camera flight");
+    await page.waitForTimeout(1380);
     const snap = await ensureCameraSnapLocked(page, "desktop apartment fly-camera controls");
     const detail = await ensureVisualHealth(page, "desktop apartment fly-camera controls");
     const fit = await exitCameraAndEnsureFit(page, "desktop apartment back-to-overview fit");
     await clickButtonByName(page, /close/i);
-    return `${detail}; ${snap}; ${fit}`;
+    return `${detail}; ${flight}; ${snap}; ${fit}`;
   });
 }
 
@@ -1118,10 +1141,12 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors, prof
           window.__havApartmentDebug?.flyFirstCamera?.()
         );
         if (!ok) throw new Error("no camera device available for fly-to test");
-        await page.waitForTimeout(1600);
+        await page.waitForTimeout(220);
+        const flight = await ensureCameraFlightStarted(page, "desktop apartment fly-camera screenshot flight");
+        await page.waitForTimeout(1380);
         const snap = await ensureCameraSnapLocked(page, "desktop apartment fly-camera screenshot");
         const detail = await ensureVisualHealth(page, "desktop apartment fly-camera screenshot");
-        return `${detail}; ${snap}`;
+        return `${detail}; ${flight}; ${snap}`;
       });
 
       await runDesktopButtonProbes(page, buttonItems);
@@ -1213,10 +1238,12 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors, prof
         window.__havApartmentDebug?.flyFirstCamera?.()
       );
       if (!ok) throw new Error("no camera device available for fly-to test");
-      await page.waitForTimeout(1600);
+      await page.waitForTimeout(220);
+      const flight = await ensureCameraFlightStarted(page, "apartment fly-camera screenshot flight");
+      await page.waitForTimeout(1380);
       const snap = await ensureCameraSnapLocked(page, "apartment fly-camera screenshot");
       const detail = await ensureVisualHealth(page, "apartment fly-camera screenshot");
-      return `${detail}; ${snap}`;
+      return `${detail}; ${flight}; ${snap}`;
     });
 
       await runButtonProbes(page, buttonItems);
@@ -1699,6 +1726,24 @@ async function cdpEnsureCameraSnapLocked(client, context) {
   return `camera ${result.liveCam} snapped; mode buttons hidden${frame}${feed}`;
 }
 
+async function cdpEnsureCameraFlightStarted(client, context) {
+  const result = await cdpEval(client, `(() => {
+    const snap = window.__havApartmentDebug?.snapshot?.() || {};
+    return {
+      liveCam: snap.liveCam || null,
+      liveOn: !!snap.liveOn,
+      cameraPoseFlying: !!snap.cameraPoseFlying,
+      cameraPoseReady: !!snap.cameraPoseReady,
+      liveFeedStatus: snap.liveFeedStatus || "",
+    };
+  })()`, true);
+  if (!result.liveCam) throw new Error(`${context}: camera did not activate`);
+  if (result.cameraPoseReady) return `camera ${result.liveCam} settled before flight sample`;
+  if (!result.cameraPoseFlying) throw new Error(`${context}: camera pose is not animating`);
+  if (result.liveOn) throw new Error(`${context}: live feed covered the 3D camera flight`);
+  return `camera ${result.liveCam} flight animating before feed reveal (${result.liveFeedStatus || "status unknown"})`;
+}
+
 async function cdpEnsureDesktopHeader(client, context) {
   const result = await cdpEval(client, `(() => {
     const visible = (el) => {
@@ -1816,16 +1861,19 @@ async function cdpRunButtonProbes(client, buttonItems) {
   await cdpRecordButtonProbe(buttonItems, "b12-apartment-camera-buttons", "Apartment back and close buttons respond", async () => {
     await cdpWaitFor(client, "!!window.__havApartmentDebug", 5000);
     const active = await cdpEval(client, "!!window.__havApartmentDebug?.snapshot?.()?.liveCam", true);
+    let flight = "camera already active";
     if (!active) {
       const ok = await cdpEval(client, "window.__havApartmentDebug && (window.__havApartmentDebug.flyFirstCalibratedCamera() || window.__havApartmentDebug.flyFirstCamera())", true);
       if (!ok) throw new Error("no camera device available for fly-to test");
-      await cdpDelay(1600);
+      await cdpDelay(220);
+      flight = await cdpEnsureCameraFlightStarted(client, "apartment camera flight");
+      await cdpDelay(1380);
     }
     const snap = await cdpEnsureCameraSnapLocked(client, "apartment fly-camera controls");
     const detail = await cdpEnsureVisualHealth(client, "apartment fly-camera controls");
     const fit = await cdpExitCameraAndEnsureFit(client, "apartment back-to-overview fit");
     await cdpCloseOverlays(client);
-    return `${detail}; ${snap}; ${fit}; fly-camera screenshot captured as 21-apartment-fly-camera.png`;
+    return `${detail}; ${flight}; ${snap}; ${fit}; fly-camera screenshot captured as 21-apartment-fly-camera.png`;
   });
 
   await cdpCloseOverlays(client);
@@ -2009,12 +2057,14 @@ async function cdpRunDesktopButtonProbes(client, buttonItems) {
     await cdpWaitFor(client, "!!window.__havApartmentDebug", 12000);
     const ok = await cdpEval(client, "window.__havApartmentDebug && (window.__havApartmentDebug.flyFirstCalibratedCamera() || window.__havApartmentDebug.flyFirstCamera())", true);
     if (!ok) throw new Error("no camera device available for fly-to test");
-    await cdpDelay(1600);
+    await cdpDelay(220);
+    const flight = await cdpEnsureCameraFlightStarted(client, "desktop apartment camera flight");
+    await cdpDelay(1380);
     const snap = await cdpEnsureCameraSnapLocked(client, "desktop apartment fly-camera controls");
     const detail = await cdpEnsureVisualHealth(client, "desktop apartment fly-camera controls");
     const fit = await cdpExitCameraAndEnsureFit(client, "desktop apartment back-to-overview fit");
     await cdpClickButton(client, "close", 600);
-    return `${detail}; ${snap}; ${fit}`;
+    return `${detail}; ${flight}; ${snap}; ${fit}`;
   });
 }
 
@@ -2139,10 +2189,12 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors, profile = 
       await step("17-apartment-fly-camera", "Apartment fly-to-camera/live view", async () => {
         const ok = await cdpEval(client, "window.__havApartmentDebug && (window.__havApartmentDebug.flyFirstCalibratedCamera() || window.__havApartmentDebug.flyFirstCamera())", true);
         if (!ok) throw new Error("no camera device available for fly-to test");
-        await cdpDelay(1600);
+        await cdpDelay(220);
+        const flight = await cdpEnsureCameraFlightStarted(client, "desktop apartment fly-camera screenshot flight");
+        await cdpDelay(1380);
         const snap = await cdpEnsureCameraSnapLocked(client, "desktop apartment fly-camera screenshot");
         const detail = await cdpEnsureVisualHealth(client, "desktop apartment fly-camera screenshot");
-        return `${detail}; ${snap}`;
+        return `${detail}; ${flight}; ${snap}`;
       });
 
       await cdpRunDesktopButtonProbes(client, buttonItems);
@@ -2243,10 +2295,12 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors, profile = 
     await step("21-apartment-fly-camera", "Apartment fly-to-camera/live view", async () => {
       const ok = await cdpEval(client, "window.__havApartmentDebug && (window.__havApartmentDebug.flyFirstCalibratedCamera() || window.__havApartmentDebug.flyFirstCamera())", true);
       if (!ok) throw new Error("no camera device available for fly-to test");
-      await cdpDelay(1600);
+      await cdpDelay(220);
+      const flight = await cdpEnsureCameraFlightStarted(client, "apartment fly-camera screenshot flight");
+      await cdpDelay(1380);
       const snap = await cdpEnsureCameraSnapLocked(client, "apartment fly-camera screenshot");
       const detail = await cdpEnsureVisualHealth(client, "apartment fly-camera screenshot");
-      return `${detail}; ${snap}`;
+      return `${detail}; ${flight}; ${snap}`;
     });
 
       await cdpRunButtonProbes(client, buttonItems);

@@ -37,6 +37,9 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
   const [view, setView] = useState("graph");   // graph | list | queue
   const [identities, setIdentities] = useState(null);  // null=loading, []=empty
   const [error, setError] = useState(null);
+  // Attempt number while fetchWithRetry is still reconnecting (null = idle).
+  // Distinct from `error`, which is the terminal state after retries are spent.
+  const [reconnecting, setReconnecting] = useState(null);
   const [loadedAt, setLoadedAt] = useState(null);
   const [selectedUuid, setSelectedUuid] = useState(null);
   // F-4b: backend reports {ready:false, setup_error:"..."} when the
@@ -113,6 +116,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
   const refresh = useCallback(async () => {
     setError(null);
     setNotReady(null);
+    setReconnecting(null);
     if (sim?.active) {
       // AR16-3 guard: sim mode never shows the ready:false banner — it
       // would conflict with sim's own fixture data shape.
@@ -128,11 +132,23 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
     }
     try {
       const url = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/identities`;
-      const resp = await window.tauriFetch(url, {
-        headers: { Authorization: `Bearer ${token}` },
-        cache: "no-store",
+      // fetchWithRetry rides out the AI-box reboot window: while it is still
+      // retrying we surface a "Reconnecting…" banner (via onAttempt); it only
+      // throws once retries are exhausted or the status is non-retryable.
+      const resp = await window.fetchWithRetry({
+        url,
+        options: {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        },
+        onAttempt: ({ attempt, nextDelay }) => {
+          if (nextDelay != null) setReconnecting(attempt);
+        },
       });
+      setReconnecting(null);
       if (!resp.ok) {
+        // fetchWithRetry throws rather than resolving non-ok, so this is a
+        // defensive fallback only.
         setError(`HTTP ${resp.status} ${resp.statusText}`);
         setIdentities([]);
         return;
@@ -179,7 +195,15 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
         }
       }
     } catch (e) {
-      setError(`Network error: ${e.message || e}`);
+      setReconnecting(null);
+      const status = e && e.lastStatus;
+      if (e && e.reason === "http" && status) {
+        setError(`HTTP ${status}`);
+      } else if (e && e.attempts) {
+        setError(`Identity store unreachable after ${e.attempts} ${e.attempts === 1 ? "attempt" : "attempts"}.`);
+      } else {
+        setError(`Network error: ${e.message || e}`);
+      }
       setIdentities([]);
     }
     // NOTE: `sim?.snapshot` deliberately omitted — it's an object reference
@@ -428,6 +452,19 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
       <div className="hg-scroll" style={{
         flex: 1, overflow: "auto", padding: "24px 32px",
       }}>
+        {reconnecting != null && !error && (
+          <div style={{
+            border: "1px solid var(--hg-ice)",
+            background: "color-mix(in oklab, var(--hg-ice) 6%, transparent)",
+            padding: "10px 14px",
+            color: "var(--hg-ice)",
+            fontSize: 11, letterSpacing: "0.04em",
+            marginBottom: 16,
+          }}>
+            <strong style={{ marginRight: 8 }}>reconnecting to identity store…</strong>
+            waiting for the network (attempt {reconnecting}).
+          </div>
+        )}
         {error && (
           <div style={{
             border: "1px solid var(--hg-warn)",
@@ -436,8 +473,21 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
             color: "var(--hg-warn)",
             fontSize: 11, letterSpacing: "0.04em",
             marginBottom: 16,
+            display: "flex", alignItems: "center", gap: 12,
           }}>
-            <strong style={{ marginRight: 8 }}>error:</strong>{error}
+            <span style={{ flex: 1 }}>
+              <strong style={{ marginRight: 8 }}>error:</strong>{error}
+            </span>
+            <button
+              onClick={() => refresh()}
+              className="hg-focusable"
+              style={{
+                background: "transparent", border: "1px solid var(--hg-warn)",
+                color: "var(--hg-warn)", padding: "4px 11px",
+                fontFamily: PEOPLE_FONT_MONO, fontSize: 10, letterSpacing: "0.12em",
+                cursor: "pointer", textTransform: "lowercase", whiteSpace: "nowrap",
+              }}
+            >retry now</button>
           </div>
         )}
         {notReady && (
@@ -460,7 +510,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
             </div>
           </div>
         )}
-        {identities === null && !error && !notReady && (
+        {identities === null && !error && !notReady && reconnecting == null && (
           <div style={{ color: "var(--hg-fg-3)", fontSize: 11 }}>loading identities…</div>
         )}
         {identities !== null && (

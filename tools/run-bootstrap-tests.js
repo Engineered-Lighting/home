@@ -19,6 +19,10 @@ const mountSource = fs.readFileSync(MOUNT, "utf8");
 const appSource = fs.readFileSync(HOME_APP, "utf8");
 const iconsSource = fs.readFileSync(path.join(SRC_DIR, "home-icons.jsx"), "utf8");
 const auditSource = fs.readFileSync(AUDIT, "utf8");
+const fetchRetrySource = fs.readFileSync(path.join(SRC_DIR, "home-fetch-with-retry.js"), "utf8");
+const peopleSource = fs.readFileSync(path.join(SRC_DIR, "home-people.jsx"), "utf8");
+const worldstateSource = fs.readFileSync(path.join(SRC_DIR, "home-worldstate.jsx"), "utf8");
+const explainSource = fs.readFileSync(path.join(SRC_DIR, "home-explain.jsx"), "utf8");
 
 let passes = 0;
 let fails = 0;
@@ -186,6 +190,15 @@ assert("service worker logs its version on install and activate",
   serviceWorkerSource.includes("[home-sw]") &&
     serviceWorkerSource.includes("installing") &&
     serviceWorkerSource.includes("active"));
+assert("service worker install precaches the app shell best-effort",
+  serviceWorkerSource.includes("PRECACHE_URLS") &&
+    /caches\.open\(CACHE_NAME\)[\s\S]*addAll\(PRECACHE_URLS\)/.test(serviceWorkerSource) &&
+    serviceWorkerSource.includes("event.waitUntil(precacheShell())") &&
+    /async function precacheShell\(\)\s*\{[\s\S]*try\s*\{[\s\S]*addAll\(PRECACHE_URLS\)[\s\S]*\}\s*catch/.test(serviceWorkerSource) &&
+    serviceWorkerSource.includes("self.skipWaiting()"));
+assert("service worker precache never caches the worker itself",
+  serviceWorkerSource.includes("PRECACHE_URLS") &&
+    !/PRECACHE_URLS\s*=\s*\[[\s\S]*home-service-worker\.js[\s\S]*\]/.test(serviceWorkerSource));
 
 process.stdout.write("\nbootstrap_recoverable_boot_contract_test\n");
 assert("boot fetch failures reconnect with backoff instead of a dead end",
@@ -258,6 +271,42 @@ before("home-video-labeler-timeline.jsx", "home-video-labeler.jsx");
 before("home-app.jsx", "home-mount.jsx", "HomeApp loads before mount");
 assert("home-mount.jsx is the final boot file", names[names.length - 1] === "home-mount.jsx",
   names.slice(-5));
+
+present("home-fetch-with-retry.js");
+before("home-fetch-with-retry.js", "home-people.jsx", "fetch-with-retry loads before People");
+before("home-fetch-with-retry.js", "home-worldstate.jsx", "fetch-with-retry loads before Worldstate");
+before("home-fetch-with-retry.js", "home-explain.jsx", "fetch-with-retry loads before Explain");
+
+process.stdout.write("\nresilience_fetch_with_retry_contract_test\n");
+assert("fetch-with-retry exposes a global fetchWithRetry",
+  /(?:glob|window|globalThis)\.fetchWithRetry\s*=/.test(fetchRetrySource) &&
+    fetchRetrySource.includes("function fetchWithRetry"));
+assert("fetch-with-retry only retries transient statuses",
+  /RETRYABLE_STATUS\s*=\s*\{[^}]*408[^}]*429[^}]*502[^}]*503[^}]*504/.test(fetchRetrySource) &&
+    /NON_RETRYABLE_STATUS\s*=\s*\{[^}]*400[^}]*401[^}]*403[^}]*404[^}]*409/.test(fetchRetrySource));
+assert("fetch-with-retry aborts each attempt via AbortController and honors Retry-After",
+  fetchRetrySource.includes("new AbortController()") &&
+    fetchRetrySource.includes("parseRetryAfter") &&
+    fetchRetrySource.includes("RETRY_AFTER_CAP_MS"));
+assert("fetch-with-retry throws with attempts/lastStatus/reason metadata",
+  fetchRetrySource.includes("wrapped.reason") &&
+    fetchRetrySource.includes("wrapped.attempts") &&
+    fetchRetrySource.includes("wrapped.lastStatus"));
+assert("People identity load uses fetchWithRetry with a reconnecting banner",
+  peopleSource.includes("window.fetchWithRetry(") &&
+    peopleSource.includes("setReconnecting") &&
+    /reconnecting to identity store/i.test(peopleSource) &&
+    peopleSource.includes(">retry now</button>"));
+assert("Worldstate load uses fetchWithRetry with a reconnecting banner",
+  worldstateSource.includes("window.fetchWithRetry(") &&
+    worldstateSource.includes("setReconnecting") &&
+    /reconnecting to world state/i.test(worldstateSource) &&
+    worldstateSource.includes(">retry now</button>"));
+assert("Explain load uses fetchWithRetry with a reconnecting banner",
+  explainSource.includes("window.fetchWithRetry(") &&
+    explainSource.includes("setReconnecting") &&
+    /reconnecting to routing log/i.test(explainSource) &&
+    explainSource.includes(">retry now</button>"));
 
 process.stdout.write("\nbootstrap_mount_watchdog_contract_test\n");
 assert("watchdog lives in index.html",

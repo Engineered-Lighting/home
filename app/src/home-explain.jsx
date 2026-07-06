@@ -279,6 +279,11 @@ function ToolCallRow({ entry, highlighted, onHover }) {
 function HomeExplainDrawer({ open, onClose, convId, endpoint, token, sim }) {
   const [entries, setEntries] = useState(null);   // null = loading, [] = fetched/empty, [..] = ok
   const [error, setError] = useState(null);
+  // Attempt number while fetchWithRetry is still reconnecting (null = idle).
+  const [reconnecting, setReconnecting] = useState(null);
+  // Bumped by the "retry now" button to re-run the fetch effect after retries
+  // are exhausted (the fetch lives in an effect, not a standalone callback).
+  const [reloadNonce, setReloadNonce] = useState(0);
   const [openedAt, setOpenedAt] = useState(null);
   const [fetchMs, setFetchMs] = useState(null);
   const containerRef = useRef(null);
@@ -299,6 +304,7 @@ function HomeExplainDrawer({ open, onClose, convId, endpoint, token, sim }) {
     setOpenedAt(Date.now());
     setEntries(null);
     setError(null);
+    setReconnecting(null);
     setFetchMs(null);
 
     const fixture = simFixture();
@@ -322,12 +328,21 @@ function HomeExplainDrawer({ open, onClose, convId, endpoint, token, sim }) {
       try {
         const base = endpoint.replace(/\/+$/, "");
         const url = `${base}/api/extended_openai_conversation/routing_log?conv_id=${encodeURIComponent(convId)}`;
-        const tauriFetch = window.tauriFetch || fetch;
-        const r = await tauriFetch(url, {
-          headers: { Authorization: `Bearer ${token}` },
-          cache: "no-store",
-          signal: controller.signal,
+        // Retry through the AI-box reboot window with a reconnecting banner;
+        // fetchWithRetry only throws once retries are spent or the status is
+        // non-retryable.
+        const r = await window.fetchWithRetry({
+          url,
+          options: {
+            headers: { Authorization: `Bearer ${token}` },
+            cache: "no-store",
+            signal: controller.signal,
+          },
+          onAttempt: ({ attempt, nextDelay }) => {
+            if (nextDelay != null) setReconnecting(attempt);
+          },
         });
+        setReconnecting(null);
         if (!r.ok) {
           setError(`HTTP ${r.status}`);
           setEntries([]);
@@ -339,8 +354,13 @@ function HomeExplainDrawer({ open, onClose, convId, endpoint, token, sim }) {
         setEntries(arr);
         setFetchMs(Date.now() - t0);
       } catch (e) {
-        if (e?.name === "AbortError") return;
-        setError(e?.message || String(e));
+        // Our own controller only aborts on unmount/dep-change cleanup.
+        if (controller.signal.aborted) return;
+        setReconnecting(null);
+        const status = e && e.lastStatus;
+        if (e && e.reason === "http" && status) setError(`HTTP ${status}`);
+        else if (e && e.attempts) setError(`routing log unreachable after ${e.attempts} ${e.attempts === 1 ? "attempt" : "attempts"}`);
+        else setError(e?.message || String(e));
         setEntries([]);
         setFetchMs(Date.now() - t0);
       }
@@ -349,7 +369,7 @@ function HomeExplainDrawer({ open, onClose, convId, endpoint, token, sim }) {
     return () => {
       try { controller.abort(); } catch {}
     };
-  }, [open, convId, endpoint, token, simFixture]);
+  }, [open, convId, endpoint, token, simFixture, reloadNonce]);
 
   // Escape closes
   useEffect(() => {
@@ -446,16 +466,36 @@ function HomeExplainDrawer({ open, onClose, convId, endpoint, token, sim }) {
         </div>
 
         {/* Loading state */}
-        {entries === null && (
+        {entries === null && reconnecting == null && (
           <div style={{ padding: "40px 24px", textAlign: "center", color: "var(--hg-fg-3)", fontSize: 11 }}>
             loading routing log…
           </div>
         )}
 
+        {/* Reconnecting (retrying through a box-reboot window) */}
+        {reconnecting != null && !error && (
+          <div style={{ padding: "40px 24px", textAlign: "center", color: "var(--hg-ice)", fontSize: 11 }}>
+            reconnecting to routing log… waiting for the network (attempt {reconnecting}).
+          </div>
+        )}
+
         {/* Error state */}
         {error && entries !== null && (
-          <div style={{ padding: "20px 24px", color: "var(--hg-crit)", fontSize: 11 }}>
-            {error}
+          <div style={{
+            padding: "20px 24px", color: "var(--hg-crit)", fontSize: 11,
+            display: "flex", alignItems: "center", gap: 12,
+          }}>
+            <span style={{ flex: 1 }}>{error}</span>
+            <button
+              onClick={() => setReloadNonce((n) => n + 1)}
+              className="hg-focusable"
+              style={{
+                background: "transparent", border: "1px solid var(--hg-crit)",
+                color: "var(--hg-crit)", padding: "4px 11px",
+                fontFamily: EXPLAIN_FONT_MONO, fontSize: 10, letterSpacing: "0.12em",
+                cursor: "pointer", textTransform: "lowercase", whiteSpace: "nowrap",
+              }}
+            >retry now</button>
           </div>
         )}
 

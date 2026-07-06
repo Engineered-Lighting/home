@@ -45,9 +45,41 @@ const NEVER_CACHE_PREFIXES = [
   "/healthz",
 ];
 
-self.addEventListener("install", () => {
+// Small always-loaded shell + top-of-chain modules. These are the files that
+// fail first when the box goes down mid-navigation, so seeding them at install
+// lets networkFirst fall back to a warm copy during the reboot window. The app
+// shell ("/") is fetched as a navigation and matches directly; the versioned
+// JSX/JS requests carry a ?v= query, so their precache value is mainly the
+// shell — precache stays strictly best-effort. Deliberately excludes the SW
+// itself and every heavy apartment asset (font/image/model bytes).
+const PRECACHE_URLS = [
+  "/",
+  "home-web-runtime.js",
+  "home-services.js",
+  "home-tokens.css",
+  "home-tauri.jsx",
+  "home-app.jsx",
+  "home-events.jsx",
+  "home-people.jsx",
+];
+
+async function precacheShell() {
+  // Best-effort: a single unreachable file (flaky first-load) must NOT reject
+  // install, or the worker would never take over. addAll is atomic-all-or-
+  // nothing, so its rejection is swallowed here rather than propagated.
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    await cache.addAll(PRECACHE_URLS);
+    console.info(`[home-sw] ${SW_VERSION} precached ${PRECACHE_URLS.length} shell file(s)`);
+  } catch (err) {
+    console.warn(`[home-sw] ${SW_VERSION} precache skipped — ${(err && err.message) || err}`);
+  }
+}
+
+self.addEventListener("install", (event) => {
   console.info(`[home-sw] ${SW_VERSION} installing (cache ${CACHE_NAME})`);
   self.skipWaiting();
+  event.waitUntil(precacheShell());
 });
 
 self.addEventListener("activate", (event) => {

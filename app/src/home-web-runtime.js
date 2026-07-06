@@ -162,7 +162,11 @@
         window.location.reload();
       });
       navigator.serviceWorker.register(swUrl, { scope: "./" })
-        .then((registration) => registration.update().catch(() => {}))
+        .then((registration) => {
+          console.info("[home-web] service worker registered", swUrl,
+            "(build " + build + ")");
+          return registration.update().catch(() => {});
+        })
         .catch((err) => console.warn("[home-web] service worker registration failed", err));
     }, { once: true });
   }

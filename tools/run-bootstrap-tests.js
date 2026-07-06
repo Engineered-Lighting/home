@@ -166,6 +166,49 @@ assert("web runtime provides browser-safe Tauri fallbacks",
 assert("service worker activation does not forcibly navigate booting clients",
   serviceWorkerSource.includes("self.clients.claim()") &&
     !serviceWorkerSource.includes("client.navigate("));
+assert("service worker derives its cache name from the per-deploy ?v= version",
+  serviceWorkerSource.includes("self.location.href") &&
+    serviceWorkerSource.includes('searchParams.get("v")') &&
+    /CACHE_NAME\s*=\s*`home-web-static-\$\{SW_VERSION\}`/.test(serviceWorkerSource) &&
+    !serviceWorkerSource.includes('CACHE_NAME = "home-web-static-v2"'));
+assert("service worker install skips waiting and activate claims clients",
+  serviceWorkerSource.includes("self.skipWaiting()") &&
+    serviceWorkerSource.includes("self.clients.claim()"));
+assert("service worker network-first uses a timeout with cache fallback",
+  serviceWorkerSource.includes("function fetchWithTimeout") &&
+    serviceWorkerSource.includes("NETWORK_TIMEOUT_MS") &&
+    /catch[\s\S]*cache\.match\(request\)[\s\S]*return cached/.test(serviceWorkerSource));
+assert("service worker prefers network for JSX modules once warm",
+  serviceWorkerSource.includes("function preferNetwork") &&
+    serviceWorkerSource.includes("NETWORK_PREFERRED_AFTER_MS") &&
+    /isJsxModule\(url\) && preferNetwork\(\)/.test(serviceWorkerSource));
+assert("service worker logs its version on install and activate",
+  serviceWorkerSource.includes("[home-sw]") &&
+    serviceWorkerSource.includes("installing") &&
+    serviceWorkerSource.includes("active"));
+
+process.stdout.write("\nbootstrap_recoverable_boot_contract_test\n");
+assert("boot fetch failures reconnect with backoff instead of a dead end",
+  indexSource.includes("function scheduleBootRetry") &&
+    indexSource.includes("function backoffDelay") &&
+    /scheduleBootRetry\(i, err\);\s*\n\s*\}\);/.test(indexSource));
+assert("boot reconnecting overlay is shown instead of the terminal error",
+  indexSource.includes("function reconnectingOverlay") &&
+    indexSource.includes("Reconnecting to home"));
+assert("reconnecting overlay offers a reload that unregisters the service worker",
+  indexSource.includes("function unregisterSwAndReload") &&
+    indexSource.includes("getRegistrations") &&
+    indexSource.includes("r.unregister()") &&
+    indexSource.includes("Reload now"));
+assert("terminal Babel failure is bounded and clears the reconnecting state",
+  indexSource.includes("babelFailures[name] <= 3") &&
+    indexSource.includes("boot.reconnecting = false"));
+assert("mount watchdog stays quiet while the boot loader is reconnecting",
+  indexSource.includes("if (boot.reconnecting) { setTimeout(watchdog, 2000); return; }"));
+assert("boot outcome and service worker version are logged",
+  indexSource.includes("function swVersionLabel") &&
+    indexSource.includes("[boot] chain complete") &&
+    indexSource.includes("[boot] starting chain"));
 
 process.stdout.write("\nbootstrap_order_contract_test\n");
 [

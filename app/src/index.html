@@ -155,25 +155,111 @@
 
       var boot = window.__bootState = {
         loaded: 0, total: files.length, current: null, failed: null, done: false,
-        prefetchWindow: PREFETCH_WINDOW,
+        prefetchWindow: PREFETCH_WINDOW, reconnecting: false, retryAttempts: 0,
       };
       var fetches = [];
+      var babelFailures = {};
+
+      function swVersionLabel() {
+        return (window.HG_WEB_MODE && window.__HOME_ASSET_VERSION) ||
+          window.__HOME_BUILD_COMMIT || 'dev';
+      }
+
+      function removeOverlay() {
+        var el = document.getElementById('hg-boot-overlay');
+        if (el && el.parentNode) el.parentNode.removeChild(el);
+      }
 
       function overlay(title, detail) {
         var msg = '[boot] ' + title + (detail ? '\n' + detail : '');
         console.error(msg);
-        var el = document.getElementById('hg-boot-overlay');
-        if (!el) {
-          el = document.createElement('div');
-          el.id = 'hg-boot-overlay';
-          el.style.cssText =
-            'position:fixed;top:0;left:0;right:0;z-index:99999;' +
-            'background:#3b0d0d;color:#ffd7d7;font:12px/1.5 Consolas,monospace;' +
-            'padding:10px 14px;border-bottom:1px solid #a33;' +
-            'white-space:pre-wrap;max-height:45vh;overflow:auto;';
-          (document.body || document.documentElement).appendChild(el);
-        }
+        // A terminal overlay always replaces any prior (e.g. reconnecting)
+        // overlay so its style/handlers can't leak through.
+        removeOverlay();
+        var el = document.createElement('div');
+        el.id = 'hg-boot-overlay';
+        el.style.cssText =
+          'position:fixed;top:0;left:0;right:0;z-index:99999;' +
+          'background:#3b0d0d;color:#ffd7d7;font:12px/1.5 Consolas,monospace;' +
+          'padding:10px 14px;border-bottom:1px solid #a33;' +
+          'white-space:pre-wrap;max-height:45vh;overflow:auto;';
+        (document.body || document.documentElement).appendChild(el);
         el.textContent = msg;
+      }
+
+      /* Full escape hatch: unregister every service worker, then reload. Lets a
+         stranded user recover without knowing about browser site-data settings.
+         Reloads even if the unregister rejects or the API is missing. */
+      function unregisterSwAndReload() {
+        function reload() { try { window.location.reload(); } catch (_) {} }
+        try {
+          if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+            navigator.serviceWorker.getRegistrations().then(function (regs) {
+              return Promise.all((regs || []).map(function (r) {
+                try { return r.unregister(); } catch (_) { return null; }
+              }));
+            }).then(reload, reload);
+            return;
+          }
+        } catch (_) {}
+        reload();
+      }
+
+      /* Recoverable boot state. Shown instead of a terminal error when a boot
+         file fails to FETCH (status 0 / timeout / abort — the AI-box reboot
+         window). We keep retrying with backoff so the app self-heals when the
+         box returns, and expose a manual reload that also clears the SW. */
+      function reconnectingOverlay(name, err, attempt) {
+        boot.reconnecting = true;
+        console.error('[boot] Failed to load ' + name + ' — ' +
+          String((err && err.message) || err) +
+          ' (reconnecting, attempt ' + attempt + ')');
+        removeOverlay();
+        var el = document.createElement('div');
+        el.id = 'hg-boot-overlay';
+        el.style.cssText =
+          'position:fixed;top:0;left:0;right:0;z-index:99999;' +
+          'background:#12222b;color:#cfe8f2;font:12px/1.5 Consolas,monospace;' +
+          'padding:10px 14px;border-bottom:1px solid #2f6d84;' +
+          'display:flex;align-items:center;gap:12px;flex-wrap:wrap;';
+        (document.body || document.documentElement).appendChild(el);
+        var msg = document.createElement('span');
+        msg.textContent = 'Reconnecting to home… waiting for the network ' +
+          '(attempt ' + attempt + ').';
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = 'Reload now';
+        btn.style.cssText =
+          'font:11px/1 Consolas,monospace;color:#0c1418;background:#8fd0e6;' +
+          'border:0;padding:6px 12px;cursor:pointer;border-radius:3px;';
+        btn.addEventListener('click', function () {
+          msg.textContent = 'Reloading…';
+          btn.disabled = true;
+          unregisterSwAndReload();
+        });
+        el.appendChild(msg);
+        el.appendChild(btn);
+      }
+
+      function backoffDelay(attempt) {
+        // 1s, 2s, 4s, 8s, 16s, then capped at 30s.
+        return Math.min(30000, 1000 * Math.pow(2, Math.min(attempt - 1, 5)));
+      }
+
+      function scheduleBootRetry(i, err) {
+        boot.retryAttempts++;
+        var attempt = boot.retryAttempts;
+        reconnectingOverlay(files[i][0], err, attempt);
+        // Keep the mount watchdog calm: this is a known, actively-retrying
+        // state, not a silent stall.
+        lastProgressAt = Date.now();
+        setTimeout(function () {
+          // Drop cached failed fetches in the prefetch window so the retry
+          // re-hits the network instead of replaying the same failure.
+          var end = Math.min(files.length, i + PREFETCH_WINDOW);
+          for (var j = i; j < end; j++) fetches[j] = null;
+          step(i);
+        }, backoffDelay(attempt));
       }
 
       /* Success = HTTP 200, or status 0 WITH content (file:// and custom
@@ -274,6 +360,10 @@
         if (i >= files.length) {
           boot.done = true;
           boot.current = null;
+          if (boot.reconnecting) { boot.reconnecting = false; removeOverlay(); }
+          console.info('[boot] chain complete — ' + boot.loaded + '/' + boot.total +
+            ' files, sw ' + swVersionLabel() +
+            (boot.skipped && boot.skipped.length ? ', skipped ' + boot.skipped.length : ''));
           return;
         }
         var name = files[i][0];
@@ -292,6 +382,12 @@
               }).code;
             } catch (err) {
               if (skipOptionalWebFile(name, err, i)) return;
+              // A transform error is usually a real syntax fault — but a
+              // truncated fetch (flaky Tailscale) is indistinguishable. Re-fetch
+              // a few times before declaring the chain dead.
+              babelFailures[name] = (babelFailures[name] || 0) + 1;
+              if (babelFailures[name] <= 3) { scheduleBootRetry(i, err); return; }
+              boot.reconnecting = false;
               boot.failed = name;
               overlay('Babel transform failed in ' + name +
                 ' — boot chain stopped (downstream files depend on it)',
@@ -299,17 +395,21 @@
               return;
             }
           }
+          if (boot.reconnecting) { boot.reconnecting = false; removeOverlay(); }
           execute(name, code);
           boot.loaded++;
           primeWindow(i + 1);
           step(i + 1);
         }).catch(function (err) {
           if (skipOptionalWebFile(name, err, i)) return;
-          boot.failed = name;
-          overlay('Failed to load ' + name + ' after 3 attempts — boot chain stopped',
-            String((err && err.message) || err));
+          // Network failure (status 0 / timeout / abort) — the AI-box reboot
+          // window. Never a dead end: keep retrying with backoff so the app
+          // self-heals when the box returns, and offer a manual escape hatch.
+          scheduleBootRetry(i, err);
         });
       }
+      console.info('[boot] starting chain — sw ' + swVersionLabel() + ', ' +
+        files.length + ' files');
       primeWindow(0);
       step(0);
 
@@ -324,6 +424,7 @@
         if (root && root.children.length > 0) return; /* mounted — done */
         if (boot.failed) return; /* overlay already explains it */
         if (!boot.done) {
+          if (boot.reconnecting) { setTimeout(watchdog, 2000); return; } /* actively retrying */
           if (boot.loaded !== lastLoaded) {
             lastLoaded = boot.loaded;
             lastProgressAt = Date.now();

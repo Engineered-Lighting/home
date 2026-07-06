@@ -871,17 +871,37 @@ function appStaticCache(pathname, parsed) {
   return STATIC_REVALIDATE_CACHE;
 }
 
-function serveStatic(req, res) {
-  const parsed = new URL(req.url, "http://home.local");
-  if (parsed.pathname === "/healthz") {
-    res.writeHead(200, {
-      "Content-Type": "application/json; charset=utf-8",
-      "Cache-Control": "no-store",
-    });
-    res.end(JSON.stringify(gatewayHealth()));
+// Watchdog/liveness endpoint. Answered before auth so an external monitor can
+// poll it on a locked-down (auth-required) gateway, and handled for both GET
+// and HEAD. Logs at debug because the web-app watchdog hits it every ~5 min.
+function handleHealthz(req, res) {
+  console.debug(`[healthz] ${req.method} ${req.url}`);
+  if (req.method === "HEAD") {
+    res.writeHead(200, { "Cache-Control": "no-store" });
+    res.end();
     return;
   }
+  if (req.method !== "GET") {
+    res.writeHead(405, { "Cache-Control": "no-store", Allow: "GET, HEAD" });
+    res.end();
+    return;
+  }
+  // Superset payload: the spec-required { status, commit, uptime } plus the
+  // existing gatewayHealth() fields (routes, auth, stackTokenProxy) that the
+  // readiness probe in run-web-gateway-stack-token-tests.js relies on. `commit`
+  // is pinned to the asset version per spec, overriding gatewayHealth's
+  // git-only commit.
+  const body = {
+    ...gatewayHealth(),
+    status: "ok",
+    commit: BUILD_ASSET_VERSION,
+    uptime: process.uptime(),
+  };
+  sendJson(res, 200, body, { "Cache-Control": "no-store" });
+}
 
+function serveStatic(req, res) {
+  const parsed = new URL(req.url, "http://home.local");
   if (parsed.pathname.startsWith("/assets/apartment/")) {
     const rel = parsed.pathname.slice("/assets/apartment/".length);
     const cache = isApartmentMetadata(parsed.pathname)
@@ -1011,6 +1031,10 @@ if (process.argv.includes("--check")) {
 
 const server = http.createServer(async (req, res) => {
   const parsed = new URL(req.url, "http://home.local");
+  if (parsed.pathname === "/healthz") {
+    handleHealthz(req, res);
+    return;
+  }
   if (parsed.pathname === "/auth" || parsed.pathname.startsWith("/auth/")) {
     await handleAuthRoute(req, res, parsed);
     return;

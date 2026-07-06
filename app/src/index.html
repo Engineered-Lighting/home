@@ -96,6 +96,9 @@
         : '?cb=' + Date.now();
       var PREFETCH_WINDOW = 6;
       var files = [
+        // Resilient HTTP helper (window.fetchWithRetry) — must load before any
+        // panel that uses it (people / worldstate / explain).
+        ['home-fetch-with-retry.js', false],
         ['home-tauri.jsx', true],
         ['home-ha.jsx', true],
         ['home-icons.jsx', true],

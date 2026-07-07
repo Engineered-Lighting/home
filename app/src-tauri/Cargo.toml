@@ -1,6 +1,6 @@
 [package]
 name = "home"
-version = "0.1.0"
+version = "0.1.1"
 description = "Local AI chat client for Home Assistant"
 authors = ["Engineered Lighting"]
 edition = "2021"

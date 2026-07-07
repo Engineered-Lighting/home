@@ -1,6 +1,6 @@
 {
   "name": "home",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local AI home coordinator. The existing Home desktop app lives in app/; experimental sibling apps live under apps/.",
   "private": true,
   "workspaces": [

@@ -23,7 +23,7 @@ jobs:
             tauri_target: ""
           - name: macos-arm64
             runs-on: macos-14
-            bundle_glob: app/src-tauri/target/release/bundle/dmg/Home_*_aarch64.dmg
+            bundle_glob: app/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Home_*_aarch64.dmg
             tauri_target: aarch64-apple-darwin
           # Intel macOS (macos-13) was added but stayed queued for 3+ hours
           # on contended free-tier runners. Apple Silicon is the dominant

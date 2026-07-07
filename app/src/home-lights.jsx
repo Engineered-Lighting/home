@@ -436,7 +436,7 @@ function CascadeCard({ title, subtitle, intro, winning, locked, children }) {
 // routing to the external provider (ChatGPT) for that one turn, bypassing
 // the local Qwen3-VL classifier (the local model has no code-editing
 // tools; the external API has the headroom to propose concrete changes).
-function TravelModeCard({ active, available, busy, disabled, onToggle }) {
+function TravelModeCard({ active, available, busy, disabled, onToggle, compact = false }) {
   const cardBorder = active ? "rgba(232,140,48,0.82)" : "var(--hg-border)";
   const lockText = active ? "travel mode on" : "travel mode off";
   const body = available
@@ -446,22 +446,22 @@ function TravelModeCard({ active, available, busy, disabled, onToggle }) {
     : "Home Assistant does not expose the Travel Mode helper yet. Deploy the updated HA packages first.";
   return (
     <div style={{
-      margin: "12px 16px 8px",
-      padding: "14px 16px",
+      margin: compact ? "10px 14px 8px" : "12px 16px 8px",
+      padding: compact ? "10px 12px" : "14px 16px",
       border: "1px solid " + cardBorder,
       borderLeft: "3px solid " + cardBorder,
       borderRadius: 8,
       background: active ? "rgba(232,140,48,0.12)" : "var(--hg-bg-1)",
       display: "flex",
       flexDirection: "column",
-      gap: 10,
+      gap: compact ? 7 : 10,
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
           <span style={{ fontFamily: FONT_MONO, fontSize: 10, color: active ? "#e88c30" : "var(--hg-fg-2)", textTransform: "uppercase", letterSpacing: 0.8 }}>
             travel mode
           </span>
-          <span style={{ fontFamily: FONT_SANS, fontSize: 16, color: "var(--hg-fg-0)", lineHeight: 1.2 }}>
+          <span style={{ fontFamily: FONT_SANS, fontSize: compact ? 15 : 16, color: "var(--hg-fg-0)", lineHeight: 1.2 }}>
             {lockText}
           </span>
         </div>
@@ -484,10 +484,10 @@ function TravelModeCard({ active, available, busy, disabled, onToggle }) {
           {busy ? "saving" : active ? "turn off" : "turn on"}
         </button>
       </div>
-      <div style={{ fontFamily: FONT_SANS, fontSize: 12, lineHeight: 1.45, color: "var(--hg-fg-1)" }}>
+      <div style={{ fontFamily: FONT_SANS, fontSize: compact ? 11.5 : 12, lineHeight: 1.4, color: "var(--hg-fg-1)" }}>
         {body}
       </div>
-      <div style={{ fontFamily: FONT_MONO, fontSize: 10, lineHeight: 1.45, color: "var(--hg-fg-2)", textTransform: "uppercase", letterSpacing: 0.5 }}>
+      <div style={{ fontFamily: FONT_MONO, fontSize: 10, lineHeight: 1.35, color: "var(--hg-fg-2)", textTransform: "uppercase", letterSpacing: 0.5 }}>
         blocks pilots / scenes / ambient switches
       </div>
     </div>
@@ -961,18 +961,23 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
         </div>
       )}
 
-      {/* Scrollable body — `hg-scroll` class applies the app's themed
-          thin (6px) scrollbar from home-tokens.css instead of the
-          default chunky Windows/WebView one. */}
-      <div className="hg-scroll" style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
-
+      {/* Travel Mode is a safety control, so keep it outside the scroll
+          body where it cannot be hidden by restored scroll position. */}
+      <div style={{ borderBottom: "1px solid var(--hg-border-soft)", background: "var(--hg-bg-0)" }}>
         <TravelModeCard
           active={travelModeActive}
           available={travelModeAvailable}
           busy={travelModeBusy}
           disabled={!haOnline}
           onToggle={setTravelMode}
+          compact={mobile}
         />
+      </div>
+
+      {/* Scrollable body — `hg-scroll` class applies the app's themed
+          thin (6px) scrollbar from home-tokens.css instead of the
+          default chunky Windows/WebView one. */}
+      <div className="hg-scroll" style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
 
         {/* ── Right Now ─────────────────────────────────────────── */}
         <div style={{ margin: "12px 16px", padding: "12px 16px",

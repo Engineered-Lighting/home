@@ -165,7 +165,10 @@ async function expectReject(name, promise, pattern) {
   process.stdout.write("\ntravel_mode_wiring_test\n");
   assert("travel mode helper constant is present", source.includes('const TRAVEL_MODE_ENTITY = "input_boolean.living_lights_travel_mode";'));
   assert("travel mode helper is covered by owned prefix subscription", source.includes('"input_boolean.living_lights_"'));
-  assert("travel mode card is rendered at top of drawer", source.indexOf("<TravelModeCard") > -1 && source.indexOf("<TravelModeCard") < source.indexOf("{/* ── Right Now"));
+  const renderStart = source.indexOf("<div role=\"dialog\"");
+  const travelRender = source.indexOf("<TravelModeCard", renderStart);
+  const scrollBody = source.indexOf("className=\"hg-scroll\"", renderStart);
+  assert("travel mode card is rendered before the drawer scroll body", travelRender > -1 && scrollBody > -1 && travelRender < scrollBody);
   assert("travel mode force-off includes every Living Lights bulb",
     [
       "light.dining_table_left",

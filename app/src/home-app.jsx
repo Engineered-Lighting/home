@@ -47,6 +47,80 @@ function applyAsrCorrection(text) {
   return text.replace(ASR_RE, (m) => ASR_ALIASES[m.toLowerCase()] || m);
 }
 
+function canonicalChatText(text) {
+  return String(text || "").replace(/\s+/g, " ").trim();
+}
+
+function collapseRepeatedAdjacentText(text) {
+  if (typeof text !== "string" || !text) return text;
+  const normalized = text.replace(/\r\n/g, "\n");
+  const trimmed = normalized.trim();
+  if (!trimmed) return text;
+
+  const sameCanonical = (items) => {
+    if (items.length < 2) return false;
+    const first = canonicalChatText(items[0]);
+    if (first.length < 8) return false;
+    return items.every((item) => canonicalChatText(item) === first);
+  };
+
+  const paragraphs = trimmed.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+  if (sameCanonical(paragraphs)) return paragraphs[0];
+
+  const lines = trimmed.split(/\n/).map((p) => p.trim()).filter(Boolean);
+  if (sameCanonical(lines)) return lines[0];
+
+  const words = canonicalChatText(trimmed).split(" ").filter(Boolean);
+  if (words.length >= 6 && words.length % 2 === 0) {
+    const mid = words.length / 2;
+    const first = words.slice(0, mid).join(" ");
+    const second = words.slice(mid).join(" ");
+    if (first.length >= 18 && first === second) return first;
+  }
+
+  return text;
+}
+
+function normalizeChatEventText(text) {
+  return collapseRepeatedAdjacentText(applyAsrCorrection(text));
+}
+
+function mergeStreamingText(current, incoming) {
+  const cur = normalizeChatEventText(String(current || ""));
+  const next = normalizeChatEventText(String(incoming || ""));
+  if (!next) return cur;
+  if (!cur) return next;
+
+  const curKey = canonicalChatText(cur);
+  const nextKey = canonicalChatText(next);
+  if (nextKey === curKey) return cur;
+  if (next.startsWith(cur) || nextKey.startsWith(curKey)) return next;
+  if (cur.endsWith(next) || curKey.endsWith(nextKey)) return cur;
+  return normalizeChatEventText(cur + next);
+}
+
+function duplicateEventGroupKey(kind) {
+  if (kind === "user" || kind === "voice") return "user";
+  if (kind === "home" || kind === "external" || kind === "perception") return kind;
+  return "";
+}
+
+function isRecentDuplicateEvent(prev, ev, lookback = 10, windowMs = 8000) {
+  const group = duplicateEventGroupKey(ev?.kind);
+  const target = canonicalChatText(ev?.text);
+  if (!group || !target) return false;
+  const now = new Date();
+  const start = Math.max(0, prev.length - lookback);
+  for (let i = prev.length - 1; i >= start; i--) {
+    const e = prev[i];
+    if (duplicateEventGroupKey(e?.kind) !== group) continue;
+    if (canonicalChatText(e?.text) !== target) continue;
+    if (!_withinWindow(e.time, windowMs, now)) continue;
+    return true;
+  }
+  return false;
+}
+
 function readViewportProfile() {
   if (typeof window === "undefined") {
     return { width: 1024, height: 768, mobile: false, phone: false };
@@ -4204,14 +4278,14 @@ function _withinWindow(eventTimeStr, windowMs = 8000, nowDate = new Date()) {
 }
 
 function findRecentUserIdx(prev, text, lookback = 8, windowMs = 8000) {
-  const target = (text || "").trim();
+  const target = canonicalChatText(normalizeChatEventText(text || ""));
   if (!target) return -1;
   const now = new Date();
   const start = Math.max(0, prev.length - lookback);
   for (let i = prev.length - 1; i >= start; i--) {
     const e = prev[i];
     if ((e.kind === "user" || e.kind === "voice") &&
-        (e.text || "").trim() === target &&
+        canonicalChatText(normalizeChatEventText(e.text || "")) === target &&
         _withinWindow(e.time, windowMs, now)) {
       return i;
     }
@@ -4220,14 +4294,14 @@ function findRecentUserIdx(prev, text, lookback = 8, windowMs = 8000) {
 }
 
 function findRecentAssistantIdx(prev, text, kind = "home", lookback = 20, windowMs = 8000) {
-  const target = (text || "").trim();
+  const target = canonicalChatText(normalizeChatEventText(text || ""));
   if (!target) return -1;
   const now = new Date();
   const start = Math.max(0, prev.length - lookback);
   for (let i = prev.length - 1; i >= start; i--) {
     const e = prev[i];
     if (e.kind === kind &&
-        (e.text || "").trim() === target &&
+        canonicalChatText(normalizeChatEventText(e.text || "")) === target &&
         _withinWindow(e.time, windowMs, now)) {
       return i;
     }
@@ -4411,6 +4485,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   // (rather than always mutating the last appended event, which
   // breaks if anything else appends mid-stream).
   const currentExternalEventIdRef = useRef(null);
+  const lastSubmittedTextRef = useRef({ text: "", ts: 0 });
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -5051,9 +5126,12 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     // shows forbidden spellings, regardless of source (SSE raw vLLM,
     // HA WS event, parakeet STT echo, etc).
     const corrected = ev?.text
-      ? { ...ev, text: applyAsrCorrection(ev.text) }
+      ? { ...ev, text: normalizeChatEventText(ev.text) }
       : ev;
-    setEvents((prev) => [...prev, { id: nextId(), time: fmtTime(), ...corrected }]);
+    setEvents((prev) => {
+      if (isRecentDuplicateEvent(prev, corrected)) return prev;
+      return [...prev, { id: nextId(), time: fmtTime(), ...corrected }];
+    });
   }, []);
 
   // Lab sim-mode injection (Addendum 10). Runs after `sim` is available
@@ -5092,7 +5170,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
 
   const finishStream = useCallback((id, patch = {}) => {
     streamingIds.current.delete(id);
-    setEvents((prev) => prev.map((e) => e.id === id ? { ...e, ...patch, streaming: false } : e));
+    setEvents((prev) => prev.map((e) => e.id === id
+      ? { ...e, ...patch, text: normalizeChatEventText((patch && patch.text) || e.text || ""), streaming: false }
+      : e));
   }, []);
 
   /* ── Boot phase driver: "settling" → "ready" ──────────────────────────
@@ -5794,7 +5874,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       streamingBubbleId = null;
       streamingIds.current.delete(id);
       setEvents((prev) => prev.map((e) =>
-        e.id === id ? { ...e, streaming: false } : e));
+        e.id === id ? { ...e, text: normalizeChatEventText(e.text || ""), streaming: false } : e));
       return true;
     };
 
@@ -5839,10 +5919,11 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           setEvents((prev) => {
             const last = prev[prev.length - 1];
             if (last && last.kind === "home" && last.streaming && last.id === streamingBubbleId) {
-              // Append the delta. HA sends deltas (not accumulated text),
-              // unlike the s2s personaplex bridge which sends snapshots.
+              // HA usually sends deltas, but some provider/tool paths emit
+              // accumulated snapshots. Merge defensively so snapshots don't
+              // render as "answer answer" when appended like deltas.
               return [...prev.slice(0, -1),
-                      { ...last, text: (last.text || "") + prog.textDelta }];
+                      { ...last, text: mergeStreamingText(last.text, prog.textDelta) }];
             }
             // First content delta of the turn — replace the thinking stub.
             const next = prev.filter((e) => e.id !== thinkingId);
@@ -5851,7 +5932,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             streamingIds.current.add(newId);
             return [...next, {
               id: newId, kind: "home", time: fmtTime(),
-              text: prog.textDelta, streaming: true,
+              text: normalizeChatEventText(prog.textDelta), streaming: true,
             }];
           });
           return;
@@ -5963,7 +6044,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       setEvents((prev) => prev
         .filter((e) => e.id !== thinkingId)
         .map((e) => pendingStreamingId && e.id === pendingStreamingId
-          ? { ...e, streaming: false }
+          ? { ...e, text: normalizeChatEventText(e.text || ""), streaming: false }
           : e));
       if (activeRunRef.current?.id === run.id) activeRunRef.current = null;
     }
@@ -7657,16 +7738,18 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     // mutating events appended by other paths during the stream).
     const appendDelta = (delta) => {
       setEvents((prev) => prev.map((e) =>
-        e.id === externalId ? { ...e, text: applyAsrCorrection((e.text || "") + delta) } : e,
+        e.id === externalId ? { ...e, text: mergeStreamingText(e.text, delta || "") } : e,
       ));
     };
     const finalize = (extra) => {
       const fixed = extra && typeof extra.text === "string"
-        ? { ...extra, text: applyAsrCorrection(extra.text) }
+        ? { ...extra, text: normalizeChatEventText(extra.text) }
         : extra;
       setEvents((prev) => prev
         .filter((e) => e.id !== thinkingId)
-        .map((e) => e.id === externalId ? { ...e, ...(fixed || {}), streaming: false } : e),
+        .map((e) => e.id === externalId
+          ? { ...e, ...(fixed || {}), text: normalizeChatEventText((fixed && fixed.text) || e.text || ""), streaming: false }
+          : e),
       );
     };
     const replaceWithError = (msg, tone) => {
@@ -7772,6 +7855,13 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   const sendInput = useCallback(async () => {
     const text = input.trim();
     if (!text) return;
+    const submitKey = canonicalChatText(text);
+    const now = Date.now();
+    if (submitKey && lastSubmittedTextRef.current.text === submitKey
+        && now - lastSubmittedTextRef.current.ts < 1200) {
+      return;
+    }
+    lastSubmittedTextRef.current = { text: submitKey, ts: now };
     if (text.startsWith("/")) {
       setInput("");
       handleCommand(text);
@@ -7897,7 +7987,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       if (!haEvent || !haEvent.type) return;
       console.log("[ha voice]", haEvent.type, haEvent.data);
       if (haEvent.type === "stt-end") {
-        const transcript = applyAsrCorrection(haEvent.data?.stt_output?.text || "");
+        const transcript = normalizeChatEventText(haEvent.data?.stt_output?.text || "");
         if (transcript) {
           setEvents((prev) => prev.map((e) =>
             e.id === voiceId ? { ...e, text: transcript } : e
@@ -8070,7 +8160,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // vs HA WS conversation.finished). Without this, the bridge's
         // raw Parakeet output ("Marcella") and HA's corrected output
         // ("Marcelo") render as two different bubbles for one utterance.
-        const text = applyAsrCorrection(rawText);
+        const text = normalizeChatEventText(rawText);
         if (role === "user") {
           // User-side partials still ignored: the Parakeet transcript
           // arrives all at once at end-of-utterance, no streaming.
@@ -8417,7 +8507,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // on insert) we must correct here too — otherwise the same
         // logical text shows as two bubbles when one source emits
         // "Marcello" and the other "Marcelo".
-        const correctedUser = applyAsrCorrection(entry.user);
+        const correctedUser = normalizeChatEventText(entry.user);
         // Dedup user/voice bubble against the last ~8 events.
         const userIdx = findRecentUserIdx(prev, correctedUser, 8);
         const newUserEvents = [];
@@ -8466,7 +8556,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             }
           }
           if (heardText) {
-            const correctedHeard = applyAsrCorrection(heardText);
+            const correctedHeard = normalizeChatEventText(heardText);
             if (findRecentUserIdx(prev, correctedHeard, 8) === -1) {
               newUserEvents.push({
                 id: nextId(), kind: "voice", time: fmtTime(),
@@ -8488,7 +8578,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           : entry.assistant;
         // Same Tauri-side ASR correction: catches the SSE-feed path
         // (raw vLLM completions that bypassed HA's output backstop).
-        const correctedAssistant = applyAsrCorrection(cleanedText);
+        const correctedAssistant = normalizeChatEventText(cleanedText);
         const assistantEvent = entry.assistant
           ? [{
               id: nextId(),
@@ -8812,7 +8902,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       (ev) => {
         const d = ev?.data || {};
         const room = d.room || "";
-        const caption = applyAsrCorrection(d.caption || "");
+        const caption = normalizeChatEventText(d.caption || "");
         if (!caption) return;
         const text = room ? `${room}: ${caption}` : caption;
         // 8-event lookback dedupe — matches the SSE handler's window.
@@ -8952,8 +9042,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // on assistant_text before the event fires, but this is the
         // single line of defense for the user_input_text path AND a
         // safety net if HA somehow misses.
-        const userTextC = applyAsrCorrection(userText);
-        const assistantTextC = applyAsrCorrection(assistantText);
+        const userTextC = normalizeChatEventText(userText);
+        const assistantTextC = normalizeChatEventText(assistantText);
         // M5: capture conversation_id so the explainability drawer can
         // filter the routing log by it later. WS event carries it
         // directly per slim payload (see comment above).

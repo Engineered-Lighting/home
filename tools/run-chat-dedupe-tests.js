@@ -74,6 +74,28 @@ assert("true token delta still appends",
 assert("duplicate snapshot does not append twice",
   H.mergeStreamingText("A car covered with a tarp", "A car covered with a tarp") === "A car covered with a tarp");
 
+assert("stream overlap keeps one full camera answer",
+  H.mergeStreamingText(
+    "A car covered with a silver protective",
+    "A car covered with a silver protective cover is in the driveway.",
+  ) === "A car covered with a silver protective cover is in the driveway.");
+
+assert("suffix after full camera answer is ignored",
+  H.mergeStreamingText(
+    "A car covered with a silver protective cover is in the driveway.",
+    "cover is in the driveway.",
+  ) === "A car covered with a silver protective cover is in the driveway.");
+
+assert("prefix full suffix fragments collapse across lines",
+  H.normalizeChatEventText(
+    "A car covered with a silver protective\nA car covered with a silver protective cover is in the driveway.\ncover is in the driveway.",
+  ) === "A car covered with a silver protective cover is in the driveway.");
+
+assert("prefix full suffix fragments collapse without newlines",
+  H.normalizeChatEventText(
+    "A car covered with a silver protective A car covered with a silver protective cover is in the driveway. cover is in the driveway.",
+  ) === "A car covered with a silver protective cover is in the driveway.");
+
 assert("adjacent duplicate paragraphs collapse",
   H.normalizeChatEventText("Whats in my driveway\n\nWhats in my driveway") === "Whats in my driveway");
 

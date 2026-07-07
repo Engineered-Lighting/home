@@ -443,7 +443,7 @@ function TravelModeCard({ active, available, busy, disabled, onToggle, compact =
     ? active
       ? "Known lighting outputs are locked out and forced off."
       : "Turn this on before travel to block lighting automations and force known lights off."
-    : "Home Assistant does not expose the Travel Mode helper yet. Deploy the updated HA packages first.";
+    : "Travel Mode is not visible in the current HA state cache yet. Tap to try; reload the app if HA just restarted.";
   return (
     <div style={{
       margin: compact ? "10px 14px 8px" : "12px 16px 8px",
@@ -467,7 +467,7 @@ function TravelModeCard({ active, available, busy, disabled, onToggle, compact =
         </div>
         <button
           type="button"
-          disabled={disabled || busy || !available}
+          disabled={disabled || busy}
           onClick={() => onToggle(!active)}
           style={{
             background: active ? "#e88c30" : "var(--hg-bg-2)",
@@ -477,8 +477,8 @@ function TravelModeCard({ active, available, busy, disabled, onToggle, compact =
             padding: "7px 12px",
             fontFamily: FONT_MONO,
             fontSize: 11,
-            cursor: disabled || busy || !available ? "not-allowed" : "pointer",
-            opacity: disabled || busy || !available ? 0.5 : 1,
+            cursor: disabled || busy ? "not-allowed" : "pointer",
+            opacity: disabled || busy ? 0.5 : 1,
             whiteSpace: "nowrap",
           }}>
           {busy ? "saving" : active ? "turn off" : "turn on"}
@@ -597,6 +597,16 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
   const offlineWriteMessage = "Home Assistant is reconnecting; light controls are disabled until it is online.";
   const mobile = typeof window !== "undefined" && window.innerWidth <= 699;
 
+  const readHaStates = async () => {
+    const r = await client.call({ type: "get_states" });
+    const arr = Array.isArray(r) ? r : [];
+    const map = {};
+    for (const s of arr) {
+      if (s && s.entity_id) map[s.entity_id] = s;
+    }
+    return map;
+  };
+
   // Fetch + subscribe on open
   useEffect(() => {
     if (!open || !haOnline) return undefined;
@@ -607,13 +617,8 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
     let active = true;
     const fetch = async () => {
       try {
-        const r = await client.call({ type: "get_states" });
+        const map = await readHaStates();
         if (!active) return;
-        const arr = Array.isArray(r) ? r : [];
-        const map = {};
-        for (const s of arr) {
-          if (s && s.entity_id) map[s.entity_id] = s;
-        }
         setStates(map);
         setError(null);
       } catch (e) {
@@ -839,10 +844,20 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
     try {
       await haCallService(client, "input_boolean", enabled ? "turn_on" : "turn_off", { entity_id: TRAVEL_MODE_ENTITY });
       if (enabled) await forceTravelLightsOff();
+      let confirmedStates = null;
+      try {
+        confirmedStates = await readHaStates();
+      } catch (_) {
+        confirmedStates = null;
+      }
+      const confirmedHelper = confirmedStates?.[TRAVEL_MODE_ENTITY];
+      if (!confirmedHelper) {
+        throw new Error("Travel Mode helper is not loaded in Home Assistant yet. Reload HA packages or restart HA Core.");
+      }
       setStates(prev => ({
-        ...prev,
+        ...(confirmedStates || prev),
         [TRAVEL_MODE_ENTITY]: {
-          ...(prev[TRAVEL_MODE_ENTITY] || { entity_id: TRAVEL_MODE_ENTITY, attributes: {} }),
+          ...(confirmedHelper || prev[TRAVEL_MODE_ENTITY] || { entity_id: TRAVEL_MODE_ENTITY, attributes: {} }),
           state: enabled ? "on" : "off",
         },
       }));

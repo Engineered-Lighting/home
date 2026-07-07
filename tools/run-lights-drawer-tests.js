@@ -169,6 +169,8 @@ async function expectReject(name, promise, pattern) {
   const travelRender = source.indexOf("<TravelModeCard", renderStart);
   const scrollBody = source.indexOf("className=\"hg-scroll\"", renderStart);
   assert("travel mode card is rendered before the drawer scroll body", travelRender > -1 && scrollBody > -1 && travelRender < scrollBody);
+  assert("travel mode button is not disabled by stale missing helper state", !source.includes("disabled={disabled || busy || !available}"));
+  assert("travel mode toggle verifies helper after service call", source.includes("confirmedStates = await readHaStates()") && source.includes("Travel Mode helper is not loaded in Home Assistant yet"));
   assert("travel mode force-off includes every Living Lights bulb",
     [
       "light.dining_table_left",

@@ -69,6 +69,20 @@ function collapseRepeatedAdjacentText(text) {
 
   const lines = trimmed.split(/\n/).map((p) => p.trim()).filter(Boolean);
   if (sameCanonical(lines)) return lines[0];
+  if (lines.length > 1) {
+    const kept = lines.filter((line, idx) => {
+      const lineKey = canonicalChatText(line);
+      if (lineKey.length < 12) return true;
+      return !lines.some((other, otherIdx) => {
+        if (otherIdx === idx) return false;
+        const otherKey = canonicalChatText(other);
+        return otherKey.length >= lineKey.length + 5 && otherKey.includes(lineKey);
+      });
+    });
+    if (kept.length > 0 && kept.length < lines.length) {
+      return collapseRepeatedAdjacentText(kept.join("\n"));
+    }
+  }
 
   const words = canonicalChatText(trimmed).split(" ").filter(Boolean);
   if (words.length >= 6 && words.length % 2 === 0) {
@@ -78,11 +92,57 @@ function collapseRepeatedAdjacentText(text) {
     if (first.length >= 18 && first === second) return first;
   }
 
+  const collapsedOverlap = collapseOverlappingWordRuns(words);
+  if (collapsedOverlap) return collapsedOverlap;
+
   return text;
 }
 
 function normalizeChatEventText(text) {
   return collapseRepeatedAdjacentText(applyAsrCorrection(text));
+}
+
+function collapseOverlappingWordRuns(words) {
+  if (!Array.isArray(words) || words.length < 8) return "";
+  let out = words.slice();
+
+  for (let k = Math.min(Math.floor(out.length / 2), 48); k >= 3; k--) {
+    const first = out.slice(0, k).join(" ");
+    const next = out.slice(k, k * 2).join(" ");
+    if (first.length >= 18 && first === next) {
+      out = out.slice(k);
+      break;
+    }
+  }
+
+  for (let k = Math.min(Math.floor(out.length / 2), 48); k >= 3; k--) {
+    const suffix = out.slice(-k).join(" ");
+    const before = out.slice(0, -k);
+    const prior = before.slice(-k).join(" ");
+    if (suffix.length >= 18 && suffix === prior) {
+      out = before;
+      break;
+    }
+  }
+
+  const collapsed = out.join(" ");
+  return collapsed && collapsed !== words.join(" ") ? collapsed : "";
+}
+
+function mergeByWordOverlap(current, incoming) {
+  const curWords = canonicalChatText(current).split(" ").filter(Boolean);
+  const nextWords = canonicalChatText(incoming).split(" ").filter(Boolean);
+  if (!curWords.length) return incoming;
+  if (!nextWords.length) return current;
+
+  for (let k = Math.min(curWords.length, nextWords.length, 64); k >= 3; k--) {
+    const curTail = curWords.slice(-k).join(" ");
+    const nextHead = nextWords.slice(0, k).join(" ");
+    if (curTail.length >= 18 && curTail === nextHead) {
+      return normalizeChatEventText(curWords.concat(nextWords.slice(k)).join(" "));
+    }
+  }
+  return "";
 }
 
 function mergeStreamingText(current, incoming) {
@@ -96,6 +156,10 @@ function mergeStreamingText(current, incoming) {
   if (nextKey === curKey) return cur;
   if (next.startsWith(cur) || nextKey.startsWith(curKey)) return next;
   if (cur.endsWith(next) || curKey.endsWith(nextKey)) return cur;
+  if (curKey.includes(nextKey)) return cur;
+  if (nextKey.includes(curKey)) return next;
+  const overlapped = mergeByWordOverlap(cur, next);
+  if (overlapped) return overlapped;
   return normalizeChatEventText(cur + next);
 }
 

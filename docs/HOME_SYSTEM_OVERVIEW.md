@@ -166,7 +166,7 @@ The "always-on home brain." Anchors every household state.
 - **Frigate NVR add-on** — :5000 web UI + :8554 go2rtc RTSP restream. Detector: **Coral EdgeTPU (PCI)** per `ha-config/frigate-config.yaml.example`. Decoder: Intel iGPU (VAAPI). Five cameras, full zone definitions, semantic search, audio events (10 sound classes), face recognition all enabled.
 - **MQTT broker** — `core-mosquitto` add-on, port :1883, user `frigate` (also used by the predictive-lighting addon). Every cross-process signal in this house flows through MQTT.
 - **`predictive-lighting` custom add-on** — `addons/predictive-lighting/`. Two responsibilities sharing one MQTT subscription: a zone-transition logger (cold storage / ground truth) and the kinematic anticipator (live predictions). Persists to `/share/predictive-lighting/`. Heartbeat every 60 s on `predictive-lighting/eval/heartbeat`. See [§14](#14-lighting-system--living-lights) for behavior.
-- **HA packages directory** (`ha-config/packages/`) — 24 YAML files, including the generated observability classifier, 10 generated pilot automations (one per light-targeting zone), Adaptive Lighting config, Frigate stats, manual override detection, override lifecycle, away sweep, good-morning scene support, gradient lighting, ambient switches, shadow-mode decision logger, belief-engine scaffold, learning-loop scaffold, eval-heartbeat watchdog, and the anticipated kill switch.
+- **HA packages directory** (`ha-config/packages/`) - 25 YAML files, including the generated observability classifier, 10 generated pilot automations (one per light-targeting zone), Adaptive Lighting config, Frigate stats, manual override detection, override lifecycle, away sweep, good-morning scene support, gradient lighting, ambient switches, shadow-mode decision logger, belief-engine scaffold, learning-loop scaffold, eval-heartbeat watchdog, the anticipated kill switch, and Travel Mode enforcement.
 - **Voice integrations** — HA Assist pipelines, Voice PE pairing.
 - **Smart-home integrations (likely Zigbee/Wi-Fi/Hue) — see "Unknowns" below.**
 
@@ -341,7 +341,7 @@ home/
 │   │   ├── room_binding.py           # area/room canonicalization
 │   │   ├── functions/                # 16 tool implementations
 │   │   └── test_*.py                 # pytest suites
-│   └── packages/                     # 24 YAML packages (Living Lights core + HA helpers)
+│   └── packages/                     # 25 YAML packages (Living Lights core + HA helpers)
 │       ├── adaptive_lighting.yaml    # Layer 1 — color-temperature curve
 │       ├── living_lights_observability.yaml   # 8-state classifier + brightness template
 │       ├── living_lights_pilot_*.yaml         # 10 generated per-zone pilots
@@ -351,6 +351,7 @@ home/
 │       ├── living_lights_belief_engine.yaml    # perception event normalizer (scaffold)
 │       ├── living_lights_learning.yaml         # preference deviation capture (scaffold)
 │       ├── living_lights_anticipated_killswitch.yaml  # one-toggle anticipation kill
+│       ├── living_lights_travel_mode.yaml          # travel lock force-off enforcement
 │       └── eval_anticipator_heartbeat.yaml     # Phase-2 eval harness watchdog
 ├── addons/
 │   └── predictive-lighting/   # custom HAOS add-on
@@ -584,11 +585,12 @@ HA is the canonical home-state surface. Everything in this system either feeds H
 
 ### 9d. Helper entities used across the system
 
-The exact source-derived `input_boolean` inventory is generated in [`docs/qa/home-app-feature-audit.md#home-assistant-input-boolean-flags`](qa/home-app-feature-audit.md#home-assistant-input-boolean-flags). The repo currently defines 50 current `input_boolean` flags across `ha-config/*.yaml` and `ha-config/packages/*.yaml`; the short list below names the helpers most often involved in runtime behavior.
+The exact source-derived `input_boolean` inventory is generated in [`docs/qa/home-app-feature-audit.md#home-assistant-input-boolean-flags`](qa/home-app-feature-audit.md#home-assistant-input-boolean-flags). The repo currently defines 51 current `input_boolean` flags across `ha-config/*.yaml` and `ha-config/packages/*.yaml`; the short list below names the helpers most often involved in runtime behavior.
 
 - `input_boolean.user_at_home` — household presence sentinel.
 - `input_boolean.homeai_sleep` — sleep mode (drives `binary_sensor.living_lights_is_night_safe`).
 - `input_boolean.living_lights_enabled` / `living_lights_shadow` — master kill switches for actuation.
+- `input_boolean.living_lights_travel_mode` - travel lock; blocks known lighting turn-on paths and force-turns known lights/switches off.
 - `input_boolean.living_lights_zone_<slug>_enabled` (one per zone) — per-zone kill.
 - `input_boolean.living_lights_anticipated_enabled` — Phase-4 kill switch (default OFF).
 - `input_boolean.homeai_movie` / `homeai_dnd` / `homeai_sleep` — Jarvis-mute composite signals.
@@ -600,7 +602,7 @@ The exact source-derived `input_boolean` inventory is generated in [`docs/qa/hom
 
 The authoritative package source is `ha-config/packages/*.yaml`. Current packages:
 
-`adaptive_lighting.yaml`, `eval_anticipator_heartbeat.yaml`, `frigate_stats.yaml`, `homeai_good_morning.yaml`, `living_lights_ambient.yaml`, `living_lights_anticipated_killswitch.yaml`, `living_lights_away_sweep.yaml`, `living_lights_belief_engine.yaml`, `living_lights_gradient.yaml`, `living_lights_learning.yaml`, `living_lights_manual_detection.yaml`, `living_lights_observability.yaml`, `living_lights_override_lifecycle.yaml`, `living_lights_pilot_dining_left.yaml`, `living_lights_pilot_dining_right.yaml`, `living_lights_pilot_front_door.yaml`, `living_lights_pilot_front_left.yaml`, `living_lights_pilot_island_left.yaml`, `living_lights_pilot_island_right.yaml`, `living_lights_pilot_office.yaml`, `living_lights_pilot_sink.yaml`, `living_lights_pilot_sofa.yaml`, `living_lights_pilot_weights.yaml`, `living_lights_shadow.yaml`.
+`adaptive_lighting.yaml`, `eval_anticipator_heartbeat.yaml`, `frigate_stats.yaml`, `homeai_good_morning.yaml`, `living_lights_ambient.yaml`, `living_lights_anticipated_killswitch.yaml`, `living_lights_away_sweep.yaml`, `living_lights_belief_engine.yaml`, `living_lights_gradient.yaml`, `living_lights_learning.yaml`, `living_lights_manual_detection.yaml`, `living_lights_observability.yaml`, `living_lights_override_lifecycle.yaml`, `living_lights_travel_mode.yaml`, `living_lights_pilot_dining_left.yaml`, `living_lights_pilot_dining_right.yaml`, `living_lights_pilot_front_door.yaml`, `living_lights_pilot_front_left.yaml`, `living_lights_pilot_island_left.yaml`, `living_lights_pilot_island_right.yaml`, `living_lights_pilot_office.yaml`, `living_lights_pilot_sink.yaml`, `living_lights_pilot_sofa.yaml`, `living_lights_pilot_weights.yaml`, `living_lights_shadow.yaml`.
 
 ---
 
@@ -615,8 +617,8 @@ Ten of the automations are emitted by `tools/build-living-lights-actuators.py`, 
 - **alias:** `Living Lights — <slug> actuator`
 - **id:** `living_lights_actuator_<slug>`
 - **mode:** `restart` (interruptible — re-trigger aborts the in-progress ramp)
-- **triggers:** (a) state change on `sensor.<camera>_<slug>_lighting_state`, (b) direct Frigate zone occupancy wakeups such as `binary_sensor.<zone>_person_occupancy`, (c) attribute change on `predicted_brightness_pct` of the classifier sensor, (d) `input_boolean.living_lights_asleep` flips, and (e) `input_boolean.living_lights_shadow` to `"off"` for cutover.
-- **conditions:** all three master toggles ON (`living_lights_enabled` on, `living_lights_shadow` off, `living_lights_zone_<slug>_enabled` on), a same-state classifier churn guard that skips no-op `present -> present` style events, and a `last_manual_at` template gate that respects manual touches while in managed states (`vacant`, `present`, `pass_through`, `asleep`).
+- **triggers:** (a) state change on `sensor.<camera>_<slug>_lighting_state`, (b) direct Frigate zone occupancy wakeups such as `binary_sensor.<zone>_person_occupancy`, (c) attribute change on `predicted_brightness_pct` of the classifier sensor, (d) `input_boolean.living_lights_asleep` flips, (e) `input_boolean.living_lights_shadow` to `"off"` for cutover, and (f) `input_boolean.living_lights_travel_mode` changes.
+- **conditions:** master gates allowing actuation (`living_lights_enabled` on, `living_lights_shadow` off, `living_lights_travel_mode` off, `living_lights_zone_<slug>_enabled` on), a same-state classifier churn guard that skips no-op `present -> present` style events, and a `last_manual_at` template gate that respects manual touches while in managed states (`vacant`, `present`, `pass_through`, `asleep`).
 - **actions:** an `if`/`choose` block that dispatches by classifier state (`vacant`, `away`, `presence_override`, `present`, `pass_through`, `anticipated`, `default` / `night_safe` / other); each branch ends in `light.turn_on` / `light.turn_off` against the zone's target lights. The `vacant` branch contains co-controller guards so it skips a shared light when a sibling zone is non-vacant.
 
 The per-zone deltas:
@@ -646,10 +648,11 @@ The per-zone deltas:
 
 | File | Alias | Trigger | Conditions | Action |
 |---|---|---|---|---|
-| `living_lights_ambient.yaml` | `Living Lights — ambient switches` | state-change on `media_player.lg_tv` / `user_at_home` / `living_lights_asleep`; HA start | master toggles ON, shadow OFF | Turn OFF the two MSS110 ambient switches if TV-playing OR away OR asleep; otherwise turn ON. |
+| `living_lights_ambient.yaml` | `Living Lights - ambient switches` | state-change on `media_player.lg_tv` / `user_at_home` / `living_lights_asleep` / `living_lights_travel_mode`; HA start | master toggles ON, shadow OFF, travel mode OFF | Turn OFF the two MSS110 ambient switches if TV-playing OR away OR asleep; otherwise turn ON. |
 | `living_lights_shadow.yaml` | `Living Lights — log decisions on classifier transition` | state-change on any of the 15 `*_lighting_state` sensors | (none) | Build a JSONL line (from/to state + predicted + dwell + speed + last_manual_at + shadow_mode), base64-encode, append via `shell_command.living_lights_append_log` to `/config/lighting_decisions.log`. Used during shadow mode to validate before cutover. |
-| `living_lights_gradient.yaml` | `Living Lights - sofa gradient actuator` | state-change on `sensor.living_room_sofa_gradient` | all three master toggles + `living_lights_gradient_enabled` ON + sofa state in `[present, pass_through]` + 60-s manual cooldown + 6-s rate-limit | Per-light `light.turn_on` against `front_left`, `front_right`, `rear_left`, `rear_right` at the gradient-computed pct + the classifier's color temperature. |
+| `living_lights_gradient.yaml` | `Living Lights - sofa gradient actuator` | state-change on `sensor.living_room_sofa_gradient` / `input_boolean.living_lights_travel_mode` | master gates allowing actuation + `living_lights_gradient_enabled` ON + sofa state in `[present, pass_through]` + 60-s manual cooldown + 6-s rate-limit | Per-light `light.turn_on` against `front_left`, `front_right`, `rear_left`, `rear_right` at the gradient-computed pct + the classifier's color temperature. |
 | `living_lights_gradient.yaml` | `Living Lights - log sofa gradient decisions` | state-change on `sensor.living_room_sofa_gradient` | (none) | Append a gradient-decision JSONL line via `shell_command.living_lights_append_log`. |
+| `living_lights_travel_mode.yaml` | `Living Lights - travel mode force off` | travel mode ON; HA start; every 5 min; known light/switch turns ON | `living_lights_travel_mode` ON | Turn OFF every known lighting output in the repo inventory. |
 | `living_lights_belief_engine.yaml` | `Living Lights — homeai_proactive → perception_event` | event `homeai_proactive` | (none) | Normalize event into a canonical PerceptionEvent JSON, append to `/config/perception_events.jsonl`, fire `extended_openai_conversation_living_lights_perception_event` bus event. Default-off downstream (belief updates gate on `living_lights_evidence_engine_enabled`). |
 | `living_lights_belief_engine.yaml` | `Living Lights — frigate audio → perception_event` | state-change off→on on any of the 10 audio binary_sensors (`*_speech_sound`, `*_music_sound`, `*_tv_sound`, `*_doorbell_sound`, `*_knock_sound`) | (none) | Normalize as PerceptionEvent (kind=audio), append JSONL. |
 | `living_lights_belief_engine.yaml` | `Living Lights — perception event log rotation` | `time at: 03:00:00`; HA start | (none) | Run `shell_command.living_lights_rotate_perception_log` (date-based rename + 30-day retention). |
@@ -665,19 +668,23 @@ The per-zone deltas:
 | `homeai_jarvis_mute.yaml` | `Jarvis: refresh muted-effective every minute` | (every minute, time_pattern) | (none) | `update_entity` on `binary_sensor.jarvis_muted_effective` so the now-based template re-evaluates (catches timer expiry + TV grace). |
 | `homeai_proactive.yaml` | `HomeAI — left home` | `person.engineeredlighting` → `not_home` (debounced) | (mode/quiet-hours gates) | Fire `homeai_proactive` bus event with `type=left`; turn off indoor lights. |
 | `homeai_proactive.yaml` | `HomeAI — arrived home (stage 1)` | `person.engineeredlighting → home` for some delay | (mode/quiet-hours gates) | Fire `homeai_proactive` event with `type=arrived`, status pending. |
-| `homeai_proactive.yaml` | `HomeAI — return-home lights (backstop)` | follow-on from arrival, after pending window | (mode/quiet-hours gates) | Call `script.homeai_return_home` to apply the return-home scene. |
+| `homeai_proactive.yaml` | `HomeAI - return-home lights (backstop)` | follow-on from arrival, after pending window | travel mode OFF | Call `script.homeai_return_home` to apply the return-home scene. |
 | `homeai_proactive.yaml` | `HomeAI — face confirmed (stage 2)` | `sensor.<entry_camera>_last_recognized_face` matches a known face within window | (mode/quiet-hours gates) | Fire `homeai_proactive` event with `type=face_confirmed`, escalate to spoken welcome via Voice PE. |
 | `homeai_proactive.yaml` | `HomeAI — room entered` | per-room occupancy `→ on` for debounce | (mode/quiet-hours gates) | Fire `homeai_proactive` event with `type=room_entry`. |
-| `homeai_proactive.yaml` | `HomeAI — return-home scene` (the script) | called by other automations | (none) | Apply return-home scene to the configured indoor light list. |
+| `homeai_proactive.yaml` | `HomeAI - return-home scene` (the script) | called by other automations | travel mode OFF | Apply return-home scene to the configured indoor light list. |
 | `homeai_proactive_test.yaml` | 6 `HomeAI TEST — …` automations | one `input_button` each (`homeai_test_arrival`, `homeai_test_arrival_unconfirmed`, `homeai_test_left_home`, `homeai_test_room_entry`, `homeai_test_face_confirm`, `homeai_test_run_all`) | (test gates: `test: true` payload to skip time-based rate-limits) | Fire the exact bus events the production automations fire; lets you exercise the proactive coordinator without leaving the house. Detail in [`docs/RUNBOOK.md`](RUNBOOK.md#proactive-smart-home). |
 
 ### 10e. The killswitch (no automation, but a helper)
 
 `living_lights_anticipated_killswitch.yaml` declares `input_boolean.living_lights_anticipated_enabled` (initial OFF). Flipping it OFF makes the classifier collapse the `anticipated` state to `vacant` everywhere. No automation reads it — the classifier templates do, directly.
 
-### 10f. Counts
+### 10f. Travel Mode
 
-Counting every alias above: **24 unique HA automations** plus the 10 generated pilots plus 1 generated script = **35 automation-shaped pieces of YAML on disk**.
+`living_lights_observability.yaml` declares `input_boolean.living_lights_travel_mode`, and `/lights` exposes it as the Travel Mode card. When ON, generated pilots, the gradient actuator, the CT direct-push path, ambient switches, and the HomeAI return-home scene refuse to turn known lights on. `living_lights_travel_mode.yaml` is the enforcement backstop: on HA start, every 5 minutes, and whenever a known lighting output reports `on`, it pushes those bulbs/switches back off.
+
+### 10g. Counts
+
+Counting every alias above: **25 unique HA automations** plus the 10 generated pilots plus 1 generated script = **36 automation-shaped pieces of YAML on disk**.
 
 ---
 
@@ -991,6 +998,7 @@ The `vacant` branch eases down to the idle baseline over `VACANT_TRANSITION_S = 
 | Change anticipated pre-warm | `tools/build-living-lights-yaml.py:ANTICIPATED_PCT / ANTICIPATED_DECAY_S` and `tools/build-living-lights-actuators.py:ANTICIPATED_TRANSITION_S` |
 | Tune anticipator algorithm | `addons/predictive-lighting/anticipate.py` constants at the top |
 | Add a watch-zone | `tools/build-living-lights-yaml.py:MOVIE_WATCH_ZONES` (auto-populated from LR zones today) |
+| Disable known lighting output while traveling | Flip `input_boolean.living_lights_travel_mode` ON in HA or use the Travel Mode card at the top of `/lights` |
 | Disable anticipation everywhere | Flip `input_boolean.living_lights_anticipated_enabled` OFF in HA UI |
 | Disable a single zone | Flip `input_boolean.living_lights_zone_<slug>_enabled` OFF |
 
@@ -1255,7 +1263,7 @@ Per direction, separated into four buckets.
 | **Zone** | A Frigate-defined polygon inside a camera's FOV (e.g., `sofa`, `Dining_Left`, `island_left`). |
 | **Entity** | An HA-addressable thing (a light, a sensor, an automation). Each entity has an `entity_id` like `light.front_left`. |
 | **Scene** | A named bundle of entity states HA can apply atomically. The `script.homeai_return_home` is scene-like. |
-| **Automation** | An HA trigger → conditions → actions block. Living Lights ships ~24 hand-written and 10 generated automations. |
+| **Automation** | An HA trigger → conditions → actions block. Living Lights ships ~25 hand-written and 10 generated automations. |
 | **Classifier sensor** | The per-zone template sensor `sensor.<camera>_<slug>_lighting_state` that resolves the 8-state classifier. |
 | **Confidence ramp** | The pilot's two-stage brightness ramp: a fast initial jump (`RAMP_FAST_S = 2.0`) then a slow climb (`RAMP_SLOW_S = 10.0`). |
 | **Watch zone** | A Living Lights zone where presence is treated as "user is here to be quiet" — during TV, brightness collapses to `floor`. All living-room zones are watch zones as of this session. |
@@ -1264,6 +1272,7 @@ Per direction, separated into four buckets.
 | **Chain lookahead** | The anticipator's CHAIN_DEPTH=2 mechanism — predict the next room AND the room beyond it in the same compass direction. |
 | **WATCH_TV_BRANCH** | The brightness-template short-circuit emitted for every watch zone: during TV, return `floor` regardless of state. |
 | **Shadow mode** | `input_boolean.living_lights_shadow=on` — all pilot actuation gated off; the decision logger still records what would have happened. |
+| **Travel Mode** | `input_boolean.living_lights_travel_mode=on` - blocks known lighting turn-on paths and force-turns known lighting outputs off while traveling. |
 | **Killswitch** | `input_boolean.living_lights_anticipated_enabled` — one-toggle disable for the entire anticipation layer. |
 
 ---
@@ -1408,7 +1417,7 @@ Every section is keyed to specific files so a single-file change can trigger a s
 | `ha-config/spatial_model.json` (camera_edges/zone_to_room) | §11 (anticipated direction), §14 |
 | Add/remove an automation in `ha-config/packages/` or `ha-config/*.yaml` | §10 (automation enumeration) |
 | Voice stack swap (Kokoro ↔ Chatterbox) | §4 (Ubuntu box), §12 (AI stack), §13 (voice flow) |
-| Killswitch / shadow-mode / kill behavior | §14 (Living Lights), §15 (limitations) |
+| Killswitch / shadow-mode / travel-mode / kill behavior | §14 (Living Lights), §15 (limitations) |
 | Roadmap items move category | §19 (roadmap) |
 
 A quick health check: `git log --since=1.month -- 'ha-config/**' 'addons/**' 'tools/build-living-lights-*' 'stack/docker-compose.yml'` should give you a list of files touched recently. Anything in there that isn't reflected in this doc is doc-debt.

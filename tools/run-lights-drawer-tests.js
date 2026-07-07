@@ -162,6 +162,41 @@ async function expectReject(name, promise, pattern) {
     source.includes("if (!open || !haOnline) return undefined;") &&
     source.includes("}, [open, client, haOnline]);"));
 
+  process.stdout.write("\ntravel_mode_wiring_test\n");
+  assert("travel mode helper constant is present", source.includes('const TRAVEL_MODE_ENTITY = "input_boolean.living_lights_travel_mode";'));
+  assert("travel mode helper is covered by owned prefix subscription", source.includes('"input_boolean.living_lights_"'));
+  assert("travel mode card is rendered at top of drawer", source.indexOf("<TravelModeCard") > -1 && source.indexOf("<TravelModeCard") < source.indexOf("{/* ── Right Now"));
+  assert("travel mode force-off includes every Living Lights bulb",
+    [
+      "light.dining_table_left",
+      "light.dining_table_right",
+      "light.dining_light",
+      "light.dining_light_2",
+      "light.dining_room_floodlight_timed",
+      "light.front_left",
+      "light.front_right",
+      "light.kitchen_floodlight_timed",
+      "light.island_left",
+      "light.island_right",
+      "light.living_room_lights",
+      "light.office",
+      "light.outdoor_light",
+      "light.rear_left",
+      "light.rear_right",
+      "light.sink",
+      "light.sink_light",
+      "light.sink_light_2",
+      "light.ambient_light_left_mss110_main_channel",
+      "light.ambient_light_right_mss110_main_channel",
+    ].every((entityId) => source.includes(entityId)));
+  assert("travel mode force-off includes ambient switches",
+    source.includes("switch.ambient_light_left_mss110_main_channel") &&
+    source.includes("switch.ambient_light_right_mss110_main_channel") &&
+    source.includes("switch.workshop_light_left_mss110_main_channel") &&
+    source.includes("switch.workshop_light_right_mss110_main_channel"));
+  assert("direct CT push is blocked while travel mode is on",
+    source.includes('setError("travel mode is on: lighting output is blocked")'));
+
   if (fails) {
     console.log("\nFailures:");
     for (const f of failures) console.log("- " + f.name + (f.detail ? ": " + JSON.stringify(f.detail) : ""));

@@ -222,6 +222,10 @@ automation:
         entity_id: input_boolean.user_at_home
         to: "on"
         for: "00:01:30"
+    condition:
+      - condition: state
+        entity_id: input_boolean.living_lights_travel_mode
+        state: "off"
     action:
       - service: script.turn_on
         target:
@@ -303,6 +307,9 @@ script:
     alias: "HomeAI — return-home scene"
     mode: restart
     sequence:
+      - condition: state
+        entity_id: input_boolean.living_lights_travel_mode
+        state: "off"
       - choose:
           # NIGHT (after 22:00 or before 06:00) — low + very warm,
           # just the living room + ambient strips.

@@ -6,9 +6,10 @@
 #
 # Layer 2 — the confidence ramp. mode:restart so the ramp is interruptible.
 #
-# INERT until all 3 master toggles ON:
+# INERT until all master gates allow actuation:
 #   input_boolean.living_lights_enabled = on
 #   input_boolean.living_lights_shadow = off
+#   input_boolean.living_lights_travel_mode = off
 #   input_boolean.living_lights_zone_sofa_enabled = on
 #
 # Rollback: delete this file + reload automations.
@@ -18,7 +19,7 @@ automation:
     id: living_lights_actuator_sofa
     description: >
       Actuates ['light.front_left', 'light.front_right', 'light.rear_left', 'light.rear_right'] from sensor.living_room_sofa_lighting_state via the confidence ramp.
-      Inert until all 3 master toggles ON.
+      Inert until all master gates allow actuation.
     mode: restart
     triggers:
       # occupancy state changes (vacant / present / pass_through / away ...)
@@ -44,6 +45,11 @@ automation:
       - trigger: state
         entity_id: input_boolean.living_lights_shadow
         to: "off"
+      # Travel mode leaving should re-evaluate the current target; travel
+      # mode entering is blocked by the condition below and by the force-off
+      # package.
+      - trigger: state
+        entity_id: input_boolean.living_lights_travel_mode
       # Periodic re-evaluation so cooldown-expiry isn't gated on a presence
       # event. The pilot is mode:restart and exits early when no work is to
       # be done; re-evaluation is cheap.
@@ -55,6 +61,9 @@ automation:
         state: "on"
       - condition: state
         entity_id: input_boolean.living_lights_shadow
+        state: "off"
+      - condition: state
+        entity_id: input_boolean.living_lights_travel_mode
         state: "off"
       - condition: state
         entity_id: input_boolean.living_lights_zone_sofa_enabled

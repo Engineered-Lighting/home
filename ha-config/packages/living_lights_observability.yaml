@@ -23,6 +23,9 @@ input_boolean:
   living_lights_shadow:
     name: "Living Lights — shadow mode (log only, no actuation)"
     icon: mdi:eye-outline
+  living_lights_travel_mode:
+    name: "Living Lights - travel mode (force off)"
+    icon: mdi:bag-suitcase
   living_lights_asleep:
     name: "Living Lights — asleep (auto, presence-inferred)"
     icon: mdi:sleep
@@ -4280,6 +4283,9 @@ automation:
         state: "on"
       - condition: state
         entity_id: input_boolean.living_lights_shadow
+        state: "off"
+      - condition: state
+        entity_id: input_boolean.living_lights_travel_mode
         state: "off"
     actions:
       - action: light.turn_on

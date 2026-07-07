@@ -5,8 +5,8 @@
 # only (no brightness) — so they are NOT part of the confidence ramp; they
 # moved here out of the sofa pilot.
 #
-# Gated like the pilots: inert until living_lights_enabled = on AND
-# living_lights_shadow = off.
+# Gated like the pilots: inert until living_lights_enabled = on,
+# living_lights_shadow = off, and living_lights_travel_mode = off.
 #
 # Rollback: delete this file + reload automations.
 
@@ -23,6 +23,7 @@ automation:
           - media_player.lg_tv
           - input_boolean.user_at_home
           - input_boolean.living_lights_asleep
+          - input_boolean.living_lights_travel_mode
       - trigger: homeassistant
         event: start
     conditions:
@@ -31,6 +32,9 @@ automation:
         state: "on"
       - condition: state
         entity_id: input_boolean.living_lights_shadow
+        state: "off"
+      - condition: state
+        entity_id: input_boolean.living_lights_travel_mode
         state: "off"
     actions:
       - if:

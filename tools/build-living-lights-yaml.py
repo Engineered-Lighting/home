@@ -220,6 +220,12 @@ def emit_input_boolean() -> str:
              # No `initial:` — post-cutover the system is live; shadow must
              # restore its last state (default off) so a restart never
              # silently re-shadows Living Lights with legacy already disabled.
+             '  living_lights_travel_mode:',
+             '    name: "Living Lights - travel mode (force off)"',
+             "    icon: mdi:bag-suitcase",
+             # No `initial:`. Travel mode must restore across HA restarts
+             # so a reboot while the user is away cannot silently re-enable
+             # lighting automations.
              '  living_lights_asleep:',
              '    name: "Living Lights — asleep (auto, presence-inferred)"',
              "    icon: mdi:sleep",
@@ -1548,6 +1554,9 @@ def emit_automations() -> str:
         '        state: "on"',
         "      - condition: state",
         "        entity_id: input_boolean.living_lights_shadow",
+        '        state: "off"',
+        "      - condition: state",
+        "        entity_id: input_boolean.living_lights_travel_mode",
         '        state: "off"',
         "    actions:",
         "      - action: light.turn_on",

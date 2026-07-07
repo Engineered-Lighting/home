@@ -42,6 +42,38 @@ const LIGHTS_ZONES = [
   { slug: "e28",               camera: "driveway",    friendly: "Driveway" },
 ];
 
+const TRAVEL_MODE_ENTITY = "input_boolean.living_lights_travel_mode";
+const TRAVEL_MODE_CONTROLLED_LIGHTS = [
+  "light.dining_table_left",
+  "light.dining_table_right",
+  "light.dining_light",
+  "light.dining_light_2",
+  "light.dining_room_floodlight_timed",
+  "light.front_left",
+  "light.front_right",
+  "light.kitchen_floodlight_timed",
+  "light.island_left",
+  "light.island_right",
+  "light.living_room_lights",
+  "light.office",
+  "light.outdoor_light",
+  "light.rear_left",
+  "light.rear_right",
+  "light.sink",
+  "light.sink_light",
+  "light.sink_light_2",
+  "light.ambient_light_left_mss110_main_channel",
+  "light.ambient_light_right_mss110_main_channel",
+];
+const TRAVEL_MODE_CONTROLLED_SWITCHES = [
+  "switch.ambient_light_left_mss110_main_channel",
+  "switch.ambient_light_right_mss110_main_channel",
+  "switch.smart_plug_mini_mss110_main_channel",
+  "switch.workshop_light_left_mss110_main_channel",
+  "switch.workshop_light_right_mss110_main_channel",
+  "switch.smart_plug_mini_mss110_main_channel_2",
+];
+
 // ── Helpers ────────────────────────────────────────────────────────────
 const FONT_MONO = '"Geist Mono", "JetBrains Mono", "SF Mono", monospace';
 const FONT_SANS = 'Inter, "SF Pro", -apple-system, sans-serif';
@@ -72,6 +104,9 @@ function toNum(v, fallback = 0) {
 // default; gaming/working_hours/tv each contribute a known floor or
 // present override. Returns a string like "working-hours active (+30%)".
 function describeWinningModifier(states, slug) {
+  if (getState(states, TRAVEL_MODE_ENTITY) === "on") {
+    return { label: "travel mode", detail: "lighting output blocked", severity: "warn" };
+  }
   const sensorId = stateSensorFor(slug);
   const profile = getState(states, "sensor.living_lights_profile", "—");
   const predBri = toNum(getAttr(states, sensorId, "predicted_brightness_pct"), null);
@@ -401,6 +436,64 @@ function CascadeCard({ title, subtitle, intro, winning, locked, children }) {
 // routing to the external provider (ChatGPT) for that one turn, bypassing
 // the local Qwen3-VL classifier (the local model has no code-editing
 // tools; the external API has the headroom to propose concrete changes).
+function TravelModeCard({ active, available, busy, disabled, onToggle }) {
+  const cardBorder = active ? "rgba(232,140,48,0.82)" : "var(--hg-border)";
+  const lockText = active ? "travel mode on" : "travel mode off";
+  const body = available
+    ? active
+      ? "Known lighting outputs are locked out and forced off."
+      : "Turn this on before travel to block lighting automations and force known lights off."
+    : "Home Assistant does not expose the Travel Mode helper yet. Deploy the updated HA packages first.";
+  return (
+    <div style={{
+      margin: "12px 16px 8px",
+      padding: "14px 16px",
+      border: "1px solid " + cardBorder,
+      borderLeft: "3px solid " + cardBorder,
+      borderRadius: 8,
+      background: active ? "rgba(232,140,48,0.12)" : "var(--hg-bg-1)",
+      display: "flex",
+      flexDirection: "column",
+      gap: 10,
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+          <span style={{ fontFamily: FONT_MONO, fontSize: 10, color: active ? "#e88c30" : "var(--hg-fg-2)", textTransform: "uppercase", letterSpacing: 0.8 }}>
+            travel mode
+          </span>
+          <span style={{ fontFamily: FONT_SANS, fontSize: 16, color: "var(--hg-fg-0)", lineHeight: 1.2 }}>
+            {lockText}
+          </span>
+        </div>
+        <button
+          type="button"
+          disabled={disabled || busy || !available}
+          onClick={() => onToggle(!active)}
+          style={{
+            background: active ? "#e88c30" : "var(--hg-bg-2)",
+            color: active ? "#110b04" : "var(--hg-fg-1)",
+            border: "1px solid " + (active ? "#e88c30" : "var(--hg-border)"),
+            borderRadius: 999,
+            padding: "7px 12px",
+            fontFamily: FONT_MONO,
+            fontSize: 11,
+            cursor: disabled || busy || !available ? "not-allowed" : "pointer",
+            opacity: disabled || busy || !available ? 0.5 : 1,
+            whiteSpace: "nowrap",
+          }}>
+          {busy ? "saving" : active ? "turn off" : "turn on"}
+        </button>
+      </div>
+      <div style={{ fontFamily: FONT_SANS, fontSize: 12, lineHeight: 1.45, color: "var(--hg-fg-1)" }}>
+        {body}
+      </div>
+      <div style={{ fontFamily: FONT_MONO, fontSize: 10, lineHeight: 1.45, color: "var(--hg-fg-2)", textTransform: "uppercase", letterSpacing: 0.5 }}>
+        blocks pilots / scenes / ambient switches
+      </div>
+    </div>
+  );
+}
+
 function FrozenCard({ title, subtitle, intro, knobs, fileLocation, whyFrozen, currentValues, placeholder, topicKey, onAsk }) {
   const [intent, setIntent] = useState("");
   const submit = () => {
@@ -489,6 +582,7 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
   const [zone, setZone] = useState("office");
   const [states, setStates] = useState({});  // { entity_id: { state, attributes } }
   const [error, setError] = useState(null);
+  const [travelModeBusy, setTravelModeBusy] = useState(false);
   const subRef = useRef(null);
   // Ref + scroll helper for the "tune ToD ↑" buttons on per-modifier
   // cards (where the CT slider used to live). Each modifier card carries
@@ -680,13 +774,13 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
   // and the per-modifier overrides apply uniformly across all
   // light-controlled zones, pushing one CT to all lights matches what
   // the classifier would compute anyway, in the common case.
-  const ALL_CONTROLLED_LIGHTS = [
-    "light.office", "light.front_left", "light.front_right",
-    "light.rear_left", "light.rear_right",
-    "light.sink", "light.island_left", "light.island_right",
-  ];
+  const ALL_CONTROLLED_LIGHTS = TRAVEL_MODE_CONTROLLED_LIGHTS;
   const pushCTToAllLights = (ct) => {
     if (!haOnline) { setError(offlineWriteMessage); return; }
+    if (getState(states, TRAVEL_MODE_ENTITY) === "on") {
+      setError("travel mode is on: lighting output is blocked");
+      return;
+    }
     if (!Number.isFinite(ct) || ct < 1800 || ct > 4500) return;
     try {
       const p = haCallService(client, "light", "turn_on", {
@@ -730,6 +824,35 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
     haCallService(client, "input_boolean", cur ? "turn_off" : "turn_on", { entity_id })
       .catch((e) => setError(`toggle ${entity_id}: ${e?.message || e}`));
   };
+  const forceTravelLightsOff = async () => {
+    await haCallService(client, "light", "turn_off", {
+      entity_id: TRAVEL_MODE_CONTROLLED_LIGHTS,
+      transition: 1,
+    });
+    await haCallService(client, "switch", "turn_off", {
+      entity_id: TRAVEL_MODE_CONTROLLED_SWITCHES,
+    });
+  };
+  const setTravelMode = async (enabled) => {
+    if (!haOnline) { setError(offlineWriteMessage); return; }
+    setTravelModeBusy(true);
+    try {
+      await haCallService(client, "input_boolean", enabled ? "turn_on" : "turn_off", { entity_id: TRAVEL_MODE_ENTITY });
+      if (enabled) await forceTravelLightsOff();
+      setStates(prev => ({
+        ...prev,
+        [TRAVEL_MODE_ENTITY]: {
+          ...(prev[TRAVEL_MODE_ENTITY] || { entity_id: TRAVEL_MODE_ENTITY, attributes: {} }),
+          state: enabled ? "on" : "off",
+        },
+      }));
+      setError(null);
+    } catch (e) {
+      setError("travel mode " + (enabled ? "on" : "off") + ": " + (e?.message || e));
+    } finally {
+      setTravelModeBusy(false);
+    }
+  };
   const setText = (entity_id, value) => {
     if (!haOnline) { setError(offlineWriteMessage); return; }
     haCallService(client, "input_text", "set_value", { entity_id, value })
@@ -739,6 +862,9 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
   // Read entity helpers
   const n = (eid, fallback = 0) => toNum(getState(states, eid), fallback);
   const b = (eid) => getState(states, eid);
+  const travelModeState = b(TRAVEL_MODE_ENTITY);
+  const travelModeAvailable = travelModeState != null;
+  const travelModeActive = travelModeState === "on";
   const cls = stateSensorFor(zone);
   const predBri = toNum(getAttr(states, cls, "predicted_brightness_pct"), null);
   const predCT  = toNum(getAttr(states, cls, "predicted_color_temp_kelvin"), null);
@@ -839,6 +965,14 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
           thin (6px) scrollbar from home-tokens.css instead of the
           default chunky Windows/WebView one. */}
       <div className="hg-scroll" style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
+
+        <TravelModeCard
+          active={travelModeActive}
+          available={travelModeAvailable}
+          busy={travelModeBusy}
+          disabled={!haOnline}
+          onToggle={setTravelMode}
+        />
 
         {/* ── Right Now ─────────────────────────────────────────── */}
         <div style={{ margin: "12px 16px", padding: "12px 16px",

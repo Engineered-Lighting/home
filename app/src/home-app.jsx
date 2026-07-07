@@ -227,7 +227,7 @@ function HomeHeader({
   theme, onToggleTheme, voice, connection, sidecarOnline, bridgeOnline,
   bridgeHealth, visionSidecarOnline, visionHealth, frigateMetrics, cameraLabels,
   sim, muteState, onUnmuteClick, onOpenPeople, onOpenIntelligence,
-  onOpenVideoLabeler, onOpenApartment, onOpenSimulationControls, peopleButtonRef, aiStackState, metrics,
+  onOpenVideoLabeler, onOpenApartment, onOpenSimulationControls, aiStackState, metrics,
   serviceProfile, onOpenRemoteProfile, mobile = false,
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -262,13 +262,6 @@ function HomeHeader({
     minHeight: 24,
     boxSizing: "border-box",
   };
-  const atlasIconColor = theme === "light"
-    ? "rgba(31, 79, 168, 0.86)"
-    : "rgba(238,248,255,0.78)";
-  const atlasIconBtn = {
-    ...iconBtn,
-    color: atlasIconColor,
-  };
   const apartmentBtn = {
     all: "unset",
     display: "inline-flex",
@@ -289,19 +282,13 @@ function HomeHeader({
     boxSizing: "border-box",
   };
   const hoverBright = (e) => { e.currentTarget.style.color = "var(--hg-fg-0)"; };
-  const hoverAtlas = (e) => {
-    e.currentTarget.style.color = "var(--hg-fg-0)";
-  };
   const hoverWarn   = (e) => { e.currentTarget.style.color = "var(--hg-warn)"; };
   const unhover     = (e) => { e.currentTarget.style.color = "var(--hg-fg-3)"; };
-  const unhoverAtlas = (e) => {
-    e.currentTarget.style.color = atlasIconColor;
-  };
   const chipMax = mobile ? "min(142px, 36vw)" : "none";
-  const mobileMenuItem = {
+  const actionMenuItem = {
     all: "unset",
-    minHeight: 40,
-    padding: "0 13px",
+    minHeight: mobile ? 40 : 36,
+    padding: mobile ? "0 13px" : "0 12px",
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
@@ -310,15 +297,92 @@ function HomeHeader({
     borderBottom: "1px solid var(--hg-border-soft)",
     cursor: "pointer",
     fontFamily: "'Geist Mono', monospace",
-    fontSize: 10,
+    fontSize: mobile ? 10 : 9.5,
     letterSpacing: "0.075em",
     textTransform: "uppercase",
     lineHeight: 1.1,
   };
-  const mobileMenuAction = (fn) => {
+  const actionMenu = (
+    <span style={{
+      position: "relative",
+      display: "inline-flex",
+      flexShrink: 0,
+      zIndex: menuOpen ? 120 : "auto",
+    }}>
+      <button
+        type="button"
+        aria-label={mobile ? "Open mobile actions" : "Open app actions"}
+        aria-expanded={menuOpen ? "true" : "false"}
+        className="hg-focusable hg-mobile-touch"
+        onClick={() => setMenuOpen((open) => !open)}
+        style={{
+          ...iconBtn,
+          width: mobile ? 38 : 32,
+          height: mobile ? 38 : 32,
+          border: "1px solid var(--hg-border)",
+          borderRadius: mobile ? 6 : 5,
+          background: "rgba(255,255,255,0.025)",
+        }}
+      >
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M3 4.5h10M3 8h10M3 11.5h10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+        </svg>
+      </button>
+      {menuOpen && (
+        <>
+          <div
+            aria-hidden="true"
+            onClick={() => setMenuOpen(false)}
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 79,
+              cursor: "default",
+              background: "transparent",
+            }}
+          />
+          <div
+            role="menu"
+            style={{
+              position: "absolute",
+              top: mobile ? "calc(100% + 6px)" : "calc(100% + 8px)",
+              right: 0,
+              zIndex: 80,
+              width: mobile ? "min(218px, calc(100vw - 22px))" : 226,
+              maxHeight: mobile ? "min(330px, calc(100dvh - 92px))" : "min(360px, calc(100vh - 86px))",
+              overflowY: "auto",
+              background: "var(--hg-bg-1)",
+              border: "1px solid var(--hg-border)",
+              borderRadius: 8,
+              boxShadow: "0 16px 46px rgba(0,0,0,0.50)",
+            }}
+          >
+            {serviceProfile && onOpenRemoteProfile && (
+              <button
+                type="button"
+                role="menuitem"
+                aria-label="Remote profile"
+                style={actionMenuItem}
+                onClick={() => runMenuAction(onOpenRemoteProfile)}
+              >
+                profile - {serviceProfile.shortLabel}
+              </button>
+            )}
+            {onOpenPeople && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenPeople)}>people</button>}
+            {onOpenApartment && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenApartment)}>apartment</button>}
+            {onOpenIntelligence && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenIntelligence)}>intelligence</button>}
+            {onOpenVideoLabeler && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenVideoLabeler)}>video labeler</button>}
+            {onToggleTheme && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onToggleTheme)}>{theme === "dark" ? "light mode" : "dark mode"}</button>}
+            {sim?.active && onOpenSimulationControls && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenSimulationControls)}>simulation</button>}
+          </div>
+        </>
+      )}
+    </span>
+  );
+  function runMenuAction(fn) {
     setMenuOpen(false);
     fn?.();
-  };
+  }
   const connectionStatusNode = (
     <span style={{
       display: "inline-flex",
@@ -511,40 +575,6 @@ function HomeHeader({
             muted · {muteState.reason || "active"}
           </button>
         )}
-        {!mobile && serviceProfile && onOpenRemoteProfile && (
-          <button
-            type="button"
-            aria-label="Remote profile"
-            onClick={onOpenRemoteProfile}
-            title={`Connection profile: ${serviceProfile.label}`}
-            className="hg-focusable hg-mobile-touch"
-            style={{
-              all: "unset",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 5,
-              border: "1px solid var(--hg-border)",
-              color: "var(--hg-fg-3)",
-              padding: "2px 7px",
-              borderRadius: 2,
-              fontFamily: "'Geist Mono', monospace",
-              fontSize: 9,
-              letterSpacing: "0.12em",
-              textTransform: "uppercase",
-              cursor: "pointer",
-              minHeight: mobile ? 30 : 24,
-              flexShrink: 0,
-            }}
-          >
-            <span style={{
-              width: 6,
-              height: 6,
-              borderRadius: 999,
-              background: serviceProfile.id === "tailscale" ? "var(--hg-ice)" : "var(--hg-fg-4)",
-            }} />
-            {serviceProfile.shortLabel}
-          </button>
-        )}
         {/* Simulation Mode pill — unmissable amber chip so the designer
             (or anyone) instantly knows the data is mocked. */}
         {sim?.active && (
@@ -604,151 +634,7 @@ function HomeHeader({
             <span>{mobile ? "apt" : "apartment"}</span>
           </button>
         )}
-        {mobile && (
-          <span style={{
-            position: "relative",
-            display: "inline-flex",
-            flexShrink: 0,
-            zIndex: menuOpen ? 120 : "auto",
-          }}>
-            <button
-              type="button"
-              aria-label="Open mobile actions"
-              aria-expanded={menuOpen ? "true" : "false"}
-              className="hg-focusable hg-mobile-touch"
-              onClick={() => setMenuOpen((open) => !open)}
-              style={{
-                ...iconBtn,
-                width: 38,
-                height: 38,
-                border: "1px solid var(--hg-border)",
-                borderRadius: 6,
-                background: "rgba(255,255,255,0.025)",
-              }}
-            >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M3 4.5h10M3 8h10M3 11.5h10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              </svg>
-            </button>
-            {menuOpen && (
-              <>
-                <div
-                  aria-hidden="true"
-                  onClick={() => setMenuOpen(false)}
-                  style={{
-                    position: "fixed",
-                    inset: 0,
-                    zIndex: 79,
-                    cursor: "default",
-                    background: "transparent",
-                  }}
-                />
-                <div
-                  role="menu"
-                  style={{
-                    position: "absolute",
-                    top: "calc(100% + 6px)",
-                    right: 0,
-                    zIndex: 80,
-                    width: "min(218px, calc(100vw - 22px))",
-                    maxHeight: "min(330px, calc(100dvh - 92px))",
-                    overflowY: "auto",
-                    background: "var(--hg-bg-1)",
-                    border: "1px solid var(--hg-border)",
-                    borderRadius: 8,
-                    boxShadow: "0 16px 46px rgba(0,0,0,0.50)",
-                  }}
-                >
-                  {serviceProfile && onOpenRemoteProfile && (
-                    <button
-                      type="button"
-                      role="menuitem"
-                      aria-label="Remote profile"
-                      style={mobileMenuItem}
-                      onClick={() => mobileMenuAction(onOpenRemoteProfile)}
-                    >
-                      profile - {serviceProfile.shortLabel}
-                    </button>
-                  )}
-                  {onOpenPeople && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenPeople)}>people</button>}
-                  {onOpenApartment && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenApartment)}>apartment</button>}
-                  {onOpenIntelligence && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenIntelligence)}>intelligence</button>}
-                  {onOpenVideoLabeler && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenVideoLabeler)}>video labeler</button>}
-                  {onToggleTheme && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onToggleTheme)}>{theme === "dark" ? "light mode" : "dark mode"}</button>}
-                  {sim?.active && onOpenSimulationControls && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenSimulationControls)}>simulation</button>}
-                </div>
-              </>
-            )}
-          </span>
-        )}
-        {!mobile && onOpenPeople && (
-          <button
-            ref={peopleButtonRef}
-            aria-label="Open people — relationships and identities"
-            title="people · relationships and identities"
-            className="hg-focusable"
-            onClick={onOpenPeople}
-            style={iconBtn}
-            onMouseEnter={hoverBright} onMouseLeave={unhover}
-          >
-            {/* Two-figure glyph — recognizable without leaning on emoji. */}
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-              <circle cx="5" cy="4.2" r="1.6" stroke="currentColor" strokeWidth="1.1" />
-              <path d="M2 11c0-1.7 1.3-3 3-3s3 1.3 3 3" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-              <circle cx="9.8" cy="5.2" r="1.3" stroke="currentColor" strokeWidth="1.1" />
-              <path d="M8 11c0-1.4 0.9-2.4 2-2.7" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-            </svg>
-          </button>
-        )}
-        {!mobile && onOpenIntelligence && (
-          <button
-            aria-label="Open intelligence atlas"
-            title="intelligence atlas"
-            className="hg-focusable"
-            onClick={onOpenIntelligence}
-            style={atlasIconBtn}
-            onMouseEnter={hoverAtlas} onMouseLeave={unhoverAtlas}
-          >
-            {window.IconNeuralNetwork
-              ? <window.IconNeuralNetwork size={17} />
-              : (
-                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path d="M6.2 7.2 12 5.4l5.8 2.7M6.2 7.2l2.1 7.2M17.8 8.1l-2.1 6.8M8.3 14.4l7.4.5M12 5.4l3.7 9.5M12 5.4 8.3 14.4" stroke="currentColor" strokeWidth="1.05" strokeLinecap="round" opacity="0.44" />
-                  <circle cx="12" cy="5.4" r="2.05" fill="currentColor" />
-                  <circle cx="6.2" cy="7.2" r="1.45" fill="currentColor" opacity="0.68" />
-                  <circle cx="17.8" cy="8.1" r="1.45" fill="currentColor" opacity="0.68" />
-                  <circle cx="8.3" cy="14.4" r="1.65" fill="currentColor" opacity="0.8" />
-                  <circle cx="15.7" cy="14.9" r="1.65" fill="currentColor" opacity="0.8" />
-                </svg>
-              )}
-          </button>
-        )}
-        {!mobile && onOpenVideoLabeler && (
-          <button
-            aria-label="Open video labeler"
-            title="video labeler — review and label footage"
-            className="hg-focusable"
-            onClick={onOpenVideoLabeler}
-            style={iconBtn}
-            onMouseEnter={hoverBright} onMouseLeave={unhover}
-          >
-            {/* Film-strip glyph — frame + sprocket rows. */}
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-              <rect x="1.2" y="2.6" width="11.6" height="8.8" rx="1" stroke="currentColor" strokeWidth="1.1" />
-              <path d="M4.4 2.6v8.8M9.6 2.6v8.8" stroke="currentColor" strokeWidth="1.1" />
-              <path d="M1.2 5.5h3.2M1.2 8.4h3.2M9.6 5.5h3.2M9.6 8.4h3.2" stroke="currentColor" strokeWidth="0.9" opacity="0.6" />
-            </svg>
-          </button>
-        )}
-        {!mobile && onToggleTheme && (
-          <button
-            aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-            className="hg-focusable"
-            onClick={onToggleTheme}
-            style={iconBtn}
-            onMouseEnter={hoverBright} onMouseLeave={unhover}
-          >{theme === "dark" ? <IconSun size={14} /> : <IconMoon size={14} />}</button>
-        )}
+        {actionMenu}
         {IS_TAURI && (
           <>
             <button
@@ -5083,7 +4969,6 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   const feedRef = useRef(null);
   const timers = useRef([]);
   const rootRef = useRef(null);
-  const peopleButtonRef = useRef(null);
   const streamingIds = useRef(new Set());
   const haClientRef = useRef(null);
   const activeRunRef = useRef(null); // { id, cancel }
@@ -5095,11 +4980,6 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   }, []);
   const closePeopleOverlay = useCallback(() => {
     setPeopleOpen(false);
-    const focusPeopleButton = () => {
-      try { peopleButtonRef.current?.focus?.(); } catch {}
-    };
-    if (typeof requestAnimationFrame === "function") requestAnimationFrame(focusPeopleButton);
-    else setTimeout(focusPeopleButton, 0);
   }, []);
 
   /* ── First-run boot sequence ──────────────────────────────────────────
@@ -9786,7 +9666,6 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         }}
         onOpenApartment={isSpatialWide ? null : openApartmentFromHeader}
         onOpenSimulationControls={() => setSimulationControlsOpen(true)}
-        peopleButtonRef={peopleButtonRef}
         aiStackState={aiStackState}
         metrics={metrics}
         serviceProfile={serviceProfile}

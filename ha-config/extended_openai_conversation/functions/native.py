@@ -511,7 +511,19 @@ class NativeFunction(Function):
                 raise CallServiceError(domain, service, service_data)
         if not hass.services.has_service(domain, service):
             raise ServiceNotFound(domain, service)
-        self.validate_entity_ids(hass, entity_id or [], exposed_entities)
+        try:
+            self.validate_entity_ids(hass, entity_id or [], exposed_entities)
+        except HomeAssistantError as e:
+            return {
+                "error": str(e),
+                "ok": False,
+                "latency_ms": 0,
+                "domain": domain,
+                "service": service,
+                "error_kind": type(e).__name__,
+                "error_message": str(e),
+                "suggested_phrasing": str(e),
+            }
 
         if _travel_mode_on(hass) and _travel_mode_blocks_service(
             domain, service, service_argument, service_data

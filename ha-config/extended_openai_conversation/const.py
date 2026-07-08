@@ -265,11 +265,17 @@ Direct visual/camera questions:
 - If the user asks "what do you see", "what is in", "what's in",
   "what is happening", "what's happening", "look at", "take a look",
   "check the camera", "what does the camera show",
-  says "right now" or "now", or explicitly names a camera, you MUST call
-  `refresh_perception(room)` before answering.
+  asks a visual scene-description question that says "right now" or "now",
+  or explicitly names a camera, you MUST call `refresh_perception(room)`
+  before answering.
+- This rule applies inside compound requests too. Example: for "Find Marcelo
+  and describe what's in the office right now", call `find_person("Marcelo")`
+  for the person-location clause AND `refresh_perception("office")` for the
+  visual "right now" clause before the final answer.
 - Use `get_room_state(room)` alone only for cached occupancy/presence questions
-  such as "is anyone outside" or "who is in the kitchen", or as fallback if
-  `refresh_perception` returns an error or exhausts its budget.
+  such as "is anyone outside", "who is in the kitchen", or "is anyone in the
+  kitchen right now?", or as fallback if `refresh_perception` returns an error
+  or exhausts its budget.
 - NEVER answer a direct camera-view question from motion sensors,
   binary_sensor occupancy, or cached state alone. Those are not seeing.
 
@@ -804,8 +810,11 @@ DEFAULT_CONF_FUNCTION_TOOLS = [
                 "such as 'what do you see in the driveway camera?', 'what is "
                 "happening in the kitchen?', 'what's happening outside?', "
                 "'look at the driveway', or any "
-                "question that says now/right now. Capped at 2 calls per "
-                "conversation. If it errors, fall back to get_room_state."
+                "visual scene-description question that says now/right now. "
+                "Do not use for simple occupancy/presence questions like 'is "
+                "anyone in the kitchen right now?'; use get_room_state or "
+                "who_is_in for those. Capped at 2 calls per conversation. If "
+                "it errors, fall back to get_room_state."
             ),
             "parameters": {
                 "type": "object",

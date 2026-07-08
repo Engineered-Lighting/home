@@ -392,6 +392,25 @@ def _result_error_has_ok_false_and_error_kind():
 t("error path returns {error, ok=false, latency_ms, error_kind, error_message}",
   _result_error_has_ok_false_and_error_kind)
 
+def _validation_error_returns_tool_error_instead_of_raising():
+    svcs = _FakeServices()
+    hass = _FakeHass(svcs)
+    fn = _make_fn()
+    def _raise_validation_error(_h, _eids, _exp):
+        raise HomeAssistantError("Unable to find entity lock.front_door")
+    fn.validate_entity_ids = _raise_validation_error  # type: ignore
+    args = {"domain": "lock", "service": "lock",
+            "service_data": {"entity_id": ["lock.front_door"]}}
+    r = asyncio.run(fn.execute_service_single(
+        hass, {"name": "execute_service_single"}, args, None, [],
+    ))
+    assert r["ok"] is False, r
+    assert r["error_kind"] == "HomeAssistantError", r
+    assert "lock.front_door" in r["error_message"], r
+    assert len(svcs.calls) == 0, "validation errors must not dispatch"
+t("entity validation errors return structured tool errors instead of raising HTTP 500",
+  _validation_error_returns_tool_error_instead_of_raising)
+
 def _result_latency_reflects_actual_dispatch_time():
     """latency_ms should be measured around the actual async_call — a slow
     HA service call surfaces as a higher latency_ms."""

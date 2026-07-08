@@ -1246,7 +1246,10 @@ def evaluate_attempt(scenario, ssc_result: Optional[dict],
 async def run_w_suite(cfg: Cfg, attempts_per: int = 5,
                       only_phase: Optional[int] = None,
                       only_ids: Optional[list[str]] = None,
-                      strict: bool = False) -> tuple[list, int]:
+                      strict: bool = False,
+                      include_write_gated: bool = False,
+                      inconclusive_max_rate: float = 0.10,
+                      corpus_path: Optional[Path] = None) -> tuple[list, int]:
     """Returns (results, exit_code). Exit codes:
       0 — all scenarios ≥ threshold (green)
       1 — at least one scenario below threshold but above 0/5 (drift)
@@ -1258,11 +1261,18 @@ async def run_w_suite(cfg: Cfg, attempts_per: int = 5,
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import workflow_scenarios as ws_mod
 
-    p(f"\n{BOLD}{DIM}── W mode (workflow suite, {attempts_per}-shot per scenario) ──{RST}")
+    tier_label = "read-only + write-gated" if include_write_gated else "read-only"
+    p(f"\n{BOLD}{DIM}── W mode (workflow suite, {attempts_per}-shot per scenario, {tier_label}) ──{RST}")
 
-    scenarios = ws_mod.scenarios_for(phase=only_phase, only_ids=only_ids)
+    scenarios = ws_mod.scenarios_for(
+        phase=only_phase,
+        only_ids=only_ids,
+        include_write_gated=include_write_gated,
+    )
     if not scenarios:
         p(f"  {YEL}WARN{RST}: no scenarios match the filter")
+        if only_ids and not include_write_gated:
+            p(f"  {DIM}hint: the requested ids may be write-gated; rerun with --include-write-gated{RST}")
         return [], 3
 
     # ─ Preflight 1: classifier routes every query LOCAL ─
@@ -1282,13 +1292,14 @@ async def run_w_suite(cfg: Cfg, attempts_per: int = 5,
     p(f"  {DIM}preflight: sidecar healthz OK ({cfg.chattee_url.split('/conv')[0]}/healthz){RST}")
 
     # ─ Preflight 3: safe entities available ─
-    ok, fails = await preflight_safe_entities(cfg, ws_mod.SAFE_ENTITIES)
+    preflight_entities = ws_mod.preflight_entities_for(scenarios)
+    ok, fails = await preflight_safe_entities(cfg, preflight_entities)
     if not ok:
         p(f"  {RED}PREFLIGHT FAIL — safe entities{RST}")
         for f in fails:
             p(f"    {RED}↳ {f}{RST}")
         return [], 3
-    p(f"  {DIM}preflight: {len(ws_mod.SAFE_ENTITIES)} safe entities available{RST}")
+    p(f"  {DIM}preflight: {len(preflight_entities)} safe/setup entities available{RST}")
 
     extra_forbidden = [ws_mod.SAFE_ENTITY_GUARD]
     invariants = ws_mod.INVARIANTS
@@ -1419,10 +1430,18 @@ async def run_w_suite(cfg: Cfg, attempts_per: int = 5,
     # Surface the flake summary.
     total_inc = sum(r.inconclusive_count for r in results)
     total_attempts = sum(len(r.attempts) for r in results)
+    inc_rate = total_inc / max(total_attempts, 1)
     if total_inc:
         p(f"\n  {YEL}sidecar flake: {total_inc}/{total_attempts} attempts "
           f"had SSE timeouts ({100*total_inc//max(total_attempts,1)}%) — "
           f"agent responded correctly but metrics tee dropped the trace{RST}")
+    if inc_rate > inconclusive_max_rate:
+        p(f"  {RED}inconclusive cap exceeded: {inc_rate:.0%} > {inconclusive_max_rate:.0%}{RST}")
+        if rc == 0:
+            rc = 1
+    if corpus_path is not None:
+        write_workflow_corpus(results, scenarios, cfg, corpus_path)
+        p(f"  {DIM}attempt corpus written to {corpus_path}{RST}")
     return results, rc
 
 
@@ -1489,6 +1508,76 @@ def write_workflow_report(results: list, report_path: Path) -> None:
             lines.append("")
     with Path(report_path).open("a", encoding="utf-8") as f:
         f.write("\n".join(lines))
+
+
+def _git_commit() -> str:
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "--short=12", "HEAD"],
+            cwd=str(Path(__file__).resolve().parents[1]),
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        return out.strip()
+    except Exception:
+        return ""
+
+
+def _classify_attempt_failure(attempt: AttemptResult) -> str:
+    if attempt.passed:
+        return "pass"
+    text = " ".join(attempt.failures or []).lower()
+    if attempt.inconclusive or "sse flake" in text or "no sse terminal completion" in text:
+        return "trace_loss"
+    if "rest error" in text or "sidecar" in text or "ws event" in text:
+        return "service_outage"
+    if "safe allow-list" in text or "travel mode" in text or "forbidden execute_services" in text:
+        return "unsafe_tool_call"
+    if "missing required" in text or "speech missing" in text or "speech matched forbidden" in text:
+        return "model_behavior"
+    if "invariant" in text or "tool budget exceeded" in text:
+        return "assertion_drift"
+    return "unknown"
+
+
+def default_workflow_corpus_path() -> Path:
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    return Path(__file__).resolve().parent / "reports" / "llm-workflow" / stamp / "attempts.jsonl"
+
+
+def write_workflow_corpus(results: list, scenarios: list, cfg: Cfg,
+                          corpus_path: Path) -> None:
+    """Write one JSONL record per attempt for later regression analysis."""
+    by_id = {getattr(s, "id", ""): s for s in scenarios}
+    commit = _git_commit()
+    corpus_path.parent.mkdir(parents=True, exist_ok=True)
+    with corpus_path.open("w", encoding="utf-8") as f:
+        for result in results:
+            scenario = by_id.get(result.scenario_id)
+            for attempt in result.attempts:
+                record = {
+                    "run_ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                    "commit": commit,
+                    "agent_id": cfg.agent_id,
+                    "ha_url": cfg.ha_url,
+                    "trace_url": cfg.chattee_url,
+                    "scenario_id": result.scenario_id,
+                    "phase": result.phase,
+                    "safety_level": getattr(scenario, "safety_level", ""),
+                    "expected_behavior": getattr(scenario, "expected_behavior", ""),
+                    "query": getattr(scenario, "query", ""),
+                    "attempt": attempt.attempt_idx,
+                    "passed": attempt.passed,
+                    "inconclusive": attempt.inconclusive,
+                    "failure_class": _classify_attempt_failure(attempt),
+                    "failures": attempt.failures,
+                    "tool_call_names": attempt.tool_call_names,
+                    "assistant_text": attempt.speech_snippet,
+                    "conversation_id": attempt.conv_id,
+                    "completions": attempt.completions,
+                    "elapsed_s": attempt.elapsed_s,
+                }
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -1612,6 +1701,12 @@ async def main_async(args: argparse.Namespace) -> int:
         results, rc = await run_w_suite(
             cfg, attempts_per=attempts, only_phase=only_phase,
             only_ids=only_ids, strict=args.strict,
+            include_write_gated=args.include_write_gated,
+            inconclusive_max_rate=args.inconclusive_max_rate,
+            corpus_path=(
+                None if args.no_corpus else
+                (Path(args.corpus_out) if args.corpus_out else default_workflow_corpus_path())
+            ),
         )
         write_workflow_report(results, report_path)
         p(f"\n{DIM}report written to {report_path}{RST}")
@@ -1681,6 +1776,22 @@ def main():
     ap.add_argument(
         "--only", default="",
         help="W mode: comma-separated scenario ids to run (e.g. office_dim_warm,who_then_dim)",
+    )
+    ap.add_argument(
+        "--include-write-gated", action="store_true",
+        help="W mode: include scenarios that may mutate safe-listed entities or helper state",
+    )
+    ap.add_argument(
+        "--inconclusive-max-rate", type=float, default=0.10,
+        help="W mode: fail if inconclusive/trace-loss attempts exceed this rate (default 0.10)",
+    )
+    ap.add_argument(
+        "--corpus-out", default="",
+        help="W mode: JSONL attempt corpus path (default tools/reports/llm-workflow/<timestamp>/attempts.jsonl)",
+    )
+    ap.add_argument(
+        "--no-corpus", action="store_true",
+        help="W mode: do not write the JSONL attempt corpus",
     )
     args = ap.parse_args()
     rc = asyncio.run(main_async(args))

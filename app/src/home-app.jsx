@@ -299,7 +299,7 @@ function HomeHeader({
     fontFamily: "'Geist Mono', monospace",
     fontSize: mobile ? 10 : 9.5,
     letterSpacing: "0.075em",
-    textTransform: "uppercase",
+    textTransform: "lowercase",
     lineHeight: 1.1,
   };
   const actionMenu = (

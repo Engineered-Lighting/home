@@ -51,6 +51,93 @@ function canonicalChatText(text) {
   return String(text || "").replace(/\s+/g, " ").trim();
 }
 
+function canonicalChatTextLoose(text) {
+  return canonicalChatText(text)
+    .toLowerCase()
+    .replace(/[^\w'\s]+/g, " ")
+    .replace(/\b(a|an|the)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function chatWordTokens(text) {
+  const loose = canonicalChatTextLoose(text);
+  return loose ? loose.split(" ").filter(Boolean) : [];
+}
+
+function orderedTokenOverlapScore(a, b) {
+  const aWords = chatWordTokens(a);
+  const bWords = chatWordTokens(b);
+  const minLen = Math.min(aWords.length, bWords.length);
+  if (!minLen) return 0;
+  const prev = new Array(bWords.length + 1).fill(0);
+  const cur = new Array(bWords.length + 1).fill(0);
+  for (let i = 1; i <= aWords.length; i++) {
+    for (let j = 1; j <= bWords.length; j++) {
+      cur[j] = aWords[i - 1] === bWords[j - 1]
+        ? prev[j - 1] + 1
+        : Math.max(prev[j], cur[j - 1]);
+    }
+    for (let j = 0; j <= bWords.length; j++) prev[j] = cur[j];
+  }
+  return prev[bWords.length] / minLen;
+}
+
+function isNearDuplicateChatText(a, b) {
+  const aKey = canonicalChatTextLoose(a);
+  const bKey = canonicalChatTextLoose(b);
+  if (!aKey || !bKey) return false;
+  if (aKey === bKey) return true;
+  const minChars = Math.min(aKey.length, bKey.length);
+  if (minChars >= 18 && (aKey.includes(bKey) || bKey.includes(aKey))) return true;
+
+  const aWords = chatWordTokens(a);
+  const bWords = chatWordTokens(b);
+  const minWords = Math.min(aWords.length, bWords.length);
+  if (minWords < 5) return false;
+  const score = orderedTokenOverlapScore(a, b);
+  if (score >= 0.82) return true;
+  const sameEdge = aWords[0] === bWords[0]
+    || aWords[aWords.length - 1] === bWords[bWords.length - 1];
+  return minWords >= 8 && sameEdge && score >= 0.72;
+}
+
+function splitChatClauses(text) {
+  const parts = [];
+  for (const line of String(text || "").replace(/\r\n/g, "\n").split(/\n+/)) {
+    const matches = line.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [];
+    for (const m of matches) {
+      const trimmed = m.trim();
+      if (trimmed) parts.push(trimmed);
+    }
+  }
+  return parts;
+}
+
+function collapseNearDuplicateClauses(text) {
+  if (typeof text !== "string" || !text) return text;
+  const clauses = splitChatClauses(text);
+  if (clauses.length < 2) return text;
+  const kept = [];
+  let changed = false;
+  for (const clause of clauses) {
+    let matched = false;
+    for (let i = 0; i < kept.length; i++) {
+      if (!isNearDuplicateChatText(kept[i], clause)) continue;
+      const clauseWords = chatWordTokens(clause).length;
+      const keptWords = chatWordTokens(kept[i]).length;
+      if (clauseWords > keptWords || clause.length > kept[i].length) {
+        kept[i] = clause;
+      }
+      matched = true;
+      changed = true;
+      break;
+    }
+    if (!matched) kept.push(clause);
+  }
+  return changed ? kept.join(" ") : text;
+}
+
 function collapseRepeatedAdjacentText(text) {
   if (typeof text !== "string" || !text) return text;
   const normalized = text.replace(/\r\n/g, "\n");
@@ -99,7 +186,9 @@ function collapseRepeatedAdjacentText(text) {
 }
 
 function normalizeChatEventText(text) {
-  return collapseRepeatedAdjacentText(applyAsrCorrection(text));
+  return collapseRepeatedAdjacentText(collapseNearDuplicateClauses(
+    collapseRepeatedAdjacentText(applyAsrCorrection(text)),
+  ));
 }
 
 function collapseOverlappingWordRuns(words) {
@@ -145,22 +234,57 @@ function mergeByWordOverlap(current, incoming) {
   return "";
 }
 
+function mergeByCharOverlap(current, incoming) {
+  const cur = String(current || "");
+  const next = String(incoming || "");
+  if (!cur || !next) return "";
+  const curKey = cur.toLowerCase();
+  const nextKey = next.toLowerCase();
+  for (let k = Math.min(cur.length, next.length, 96); k >= 8; k--) {
+    if (curKey.slice(-k) === nextKey.slice(0, k)) {
+      return normalizeChatEventText(cur + next.slice(k));
+    }
+  }
+  return "";
+}
+
+function joinStreamingFallback(current, incoming, rawIncoming) {
+  const cur = String(current || "");
+  const next = String(incoming || "");
+  const raw = String(rawIncoming || "");
+  if (!cur) return next;
+  if (!next) return cur;
+  if (/^\s/.test(raw)) return `${cur}${/\s$/.test(cur) || /^\s/.test(next) ? "" : " "}${next}`;
+  if (/^[.,!?;:)\]}]/.test(next)) return `${cur}${next}`;
+  if (/[\s([{]$/.test(cur)) return `${cur}${next}`;
+  if (!/\s/.test(next) && next.length <= 4) return `${cur}${next}`;
+  return `${cur} ${next}`;
+}
+
 function mergeStreamingText(current, incoming) {
+  const rawNext = applyAsrCorrection(String(incoming || ""));
   const cur = normalizeChatEventText(String(current || ""));
-  const next = normalizeChatEventText(String(incoming || ""));
+  const next = normalizeChatEventText(rawNext);
   if (!next) return cur;
   if (!cur) return next;
 
   const curKey = canonicalChatText(cur);
   const nextKey = canonicalChatText(next);
+  const curLoose = canonicalChatTextLoose(cur);
+  const nextLoose = canonicalChatTextLoose(next);
   if (nextKey === curKey) return cur;
-  if (next.startsWith(cur) || nextKey.startsWith(curKey)) return next;
-  if (cur.endsWith(next) || curKey.endsWith(nextKey)) return cur;
-  if (curKey.includes(nextKey)) return cur;
-  if (nextKey.includes(curKey)) return next;
+  if (next.startsWith(cur) || nextKey.startsWith(curKey) || nextLoose.startsWith(curLoose)) return next;
+  if (cur.endsWith(next) || curKey.endsWith(nextKey) || curLoose.endsWith(nextLoose)) return cur;
+  if (curKey.includes(nextKey) || curLoose.includes(nextLoose)) return cur;
+  if (nextKey.includes(curKey) || nextLoose.includes(curLoose)) return next;
+  if (isNearDuplicateChatText(cur, next)) {
+    return chatWordTokens(next).length >= chatWordTokens(cur).length ? next : cur;
+  }
+  const charOverlapped = mergeByCharOverlap(cur, next);
+  if (charOverlapped) return charOverlapped;
   const overlapped = mergeByWordOverlap(cur, next);
   if (overlapped) return overlapped;
-  return normalizeChatEventText(cur + next);
+  return normalizeChatEventText(joinStreamingFallback(cur, next, rawNext));
 }
 
 function duplicateEventGroupKey(kind) {
@@ -4327,6 +4451,22 @@ function findRecentAssistantIdx(prev, text, kind = "home", lookback = 20, window
   return -1;
 }
 
+function findRecentAssistantLikeIdx(prev, text, kind = "home", lookback = 20, windowMs = 8000) {
+  const target = normalizeChatEventText(text || "");
+  const targetKey = canonicalChatText(target);
+  if (!targetKey) return -1;
+  const now = new Date();
+  const start = Math.max(0, prev.length - lookback);
+  for (let i = prev.length - 1; i >= start; i--) {
+    const e = prev[i];
+    if (e.kind !== kind || !_withinWindow(e.time, windowMs, now)) continue;
+    const existing = normalizeChatEventText(e.text || "");
+    if (canonicalChatText(existing) === targetKey) return i;
+    if (isNearDuplicateChatText(existing, target)) return i;
+  }
+  return -1;
+}
+
 function isDirectLightStateQuestion(text) {
   const t = String(text || "").toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
   if (!t) return false;
@@ -6024,11 +6164,43 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       }
 
       if (haEvent.type === "intent-end") {
-        const { convId } = extractIntentEnd(haEvent);
+        const { convId, speech } = extractIntentEnd(haEvent);
         if (convId) setConversationId(convId);
-        // Lock the streaming bubble (if one exists) so the trailing stop-
-        // button / visual cue settles.
-        finalizeStreamingBubble();
+        const speechText = normalizeChatEventText(speech || "");
+        if (speechText) {
+          const activeStreamingId = streamingBubbleId;
+          streamingBubbleId = null;
+          if (activeStreamingId) streamingIds.current.delete(activeStreamingId);
+          setEvents((prev) => {
+            const activeIdx = activeStreamingId
+              ? prev.findIndex((e) => e.id === activeStreamingId)
+              : -1;
+            const existingIdx = activeIdx !== -1
+              ? activeIdx
+              : findRecentAssistantLikeIdx(prev, speechText, "home", 30);
+            if (existingIdx !== -1) {
+              return prev.map((e, i) => i === existingIdx
+                ? {
+                    ...e,
+                    text: mergeStreamingText(e.text, speechText),
+                    streaming: false,
+                    convId: convId || e.convId,
+                  }
+                : e);
+            }
+            return [...prev.filter((e) => e.id !== thinkingId), {
+              id: nextId(),
+              kind: "home",
+              time: fmtTime(),
+              text: speechText,
+              convId,
+            }];
+          });
+        } else {
+          // Lock the streaming bubble (if one exists) so the trailing stop-
+          // button / visual cue settles.
+          finalizeStreamingBubble();
+        }
         // Surface a perception card per vision tool the LLM called this
         // turn. Tool results are NEVER in HA events, so we hit the
         // sidecar's ring-buffer endpoints (/reason/latest, /describe/latest)
@@ -8660,7 +8832,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // "Marcello" and the other "Marcelo".
         const correctedUser = normalizeChatEventText(entry.user);
         // Dedup user/voice bubble against the last ~8 events.
-        const userIdx = findRecentUserIdx(prev, correctedUser, 8);
+        const userIdx = findRecentUserIdx(prev, correctedUser, 20);
         const newUserEvents = [];
         if (userIdx === -1 && correctedUser) {
           // No local user event → originated outside the Home app (Voice PE).
@@ -8708,7 +8880,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           }
           if (heardText) {
             const correctedHeard = normalizeChatEventText(heardText);
-            if (findRecentUserIdx(prev, correctedHeard, 8) === -1) {
+            if (findRecentUserIdx(prev, correctedHeard, 20) === -1) {
               newUserEvents.push({
                 id: nextId(), kind: "voice", time: fmtTime(),
                 text: correctedHeard,
@@ -8746,10 +8918,22 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // assistant role, and the new conv.finished subscriber uses the
         // same lookup helper. Scan back 20 events (action cards +
         // perceptions can interleave between duplicates).
-        return [...prev, ...newUserEvents, ...actionCards, ...assistantEvent.filter((ev) => {
-          if (ev.kind !== "home" && ev.kind !== "perception") return true;
-          return findRecentAssistantIdx(prev, ev.text, ev.kind, 20) === -1;
-        })];
+        let nextEvents = [...prev, ...newUserEvents, ...actionCards];
+        for (const ev of assistantEvent) {
+          if (ev.kind !== "home" && ev.kind !== "perception") {
+            nextEvents = [...nextEvents, ev];
+            continue;
+          }
+          const existingIdx = findRecentAssistantLikeIdx(nextEvents, ev.text, ev.kind, 20);
+          if (existingIdx === -1) {
+            nextEvents = [...nextEvents, ev];
+            continue;
+          }
+          nextEvents = nextEvents.map((e, i) => i === existingIdx
+            ? { ...e, text: mergeStreamingText(e.text, ev.text), streaming: false }
+            : e);
+        }
+        return nextEvents;
       });
     };
     es.onerror = (e) => {
@@ -9200,8 +9384,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // directly per slim payload (see comment above).
         const convId = d.conversation_id || null;
         setEvents((prev) => {
-          const userIdx = findRecentUserIdx(prev, userTextC, 8);
-          const asstIdx = findRecentAssistantIdx(prev, assistantTextC, "home", 20);
+          const userIdx = findRecentUserIdx(prev, userTextC, 20);
+          const asstIdx = findRecentAssistantLikeIdx(prev, assistantTextC, "home", 30);
           const newUser = (userTextC && userIdx === -1)
             ? [{ id: nextId(), kind: "voice", time: fmtTime(), text: userTextC, convId }]
             : [];
@@ -9219,6 +9403,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             if (asstIdx !== -1 && !augmented[asstIdx]?.convId) {
               augmented = augmented.map((e, i) => i === asstIdx ? { ...e, convId } : e);
             }
+          }
+          if (asstIdx !== -1 && assistantTextC) {
+            augmented = augmented.map((e, i) => i === asstIdx
+              ? {
+                  ...e,
+                  text: mergeStreamingText(e.text, assistantTextC),
+                  streaming: false,
+                  convId: convId || e.convId,
+                }
+              : e);
           }
           if (newUser.length === 0 && newAsst.length === 0) {
             return augmented === prev ? prev : augmented;

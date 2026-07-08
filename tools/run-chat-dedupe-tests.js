@@ -46,9 +46,11 @@ const helperSource = [
     collapseRepeatedAdjacentText,
     normalizeChatEventText,
     mergeStreamingText,
+    isNearDuplicateChatText,
     isRecentDuplicateEvent,
     findRecentUserIdx,
     findRecentAssistantIdx,
+    findRecentAssistantLikeIdx,
   });
   `,
 ].join("\n");
@@ -86,6 +88,12 @@ assert("suffix after full camera answer is ignored",
     "cover is in the driveway.",
   ) === "A car covered with a silver protective cover is in the driveway.");
 
+assert("near-duplicate partial is replaced by canonical final answer",
+  H.mergeStreamingText(
+    "I don't have full picture right now.",
+    "I don't have a full picture right now. I can check specific areas if you'd like.",
+  ) === "I don't have a full picture right now. I can check specific areas if you'd like.");
+
 assert("prefix full suffix fragments collapse across lines",
   H.normalizeChatEventText(
     "A car covered with a silver protective\nA car covered with a silver protective cover is in the driveway.\ncover is in the driveway.",
@@ -95,6 +103,17 @@ assert("prefix full suffix fragments collapse without newlines",
   H.normalizeChatEventText(
     "A car covered with a silver protective A car covered with a silver protective cover is in the driveway. cover is in the driveway.",
   ) === "A car covered with a silver protective cover is in the driveway.");
+
+assert("near-duplicate answer fragments collapse into one final answer",
+  H.normalizeChatEventText(
+    "I don't have full picture right now. I don't have a full picture right now. I can check specific areas if you'd like. can check specific areas you'd like.",
+  ) === "I don't have a full picture right now. I can check specific areas if you'd like.");
+
+assert("similar final answer matches active partial bubble",
+  H.isNearDuplicateChatText(
+    "I don't have full picture right now.",
+    "I don't have a full picture right now. I can check specific areas if you'd like.",
+  ));
 
 assert("adjacent duplicate paragraphs collapse",
   H.normalizeChatEventText("Whats in my driveway\n\nWhats in my driveway") === "Whats in my driveway");
@@ -115,6 +134,12 @@ assert("recent duplicate user/voice text is detected across kind names",
 
 assert("recent duplicate assistant text is detected",
   H.isRecentDuplicateEvent(prev, { kind: "home", text: "A car is parked outside" }));
+
+assert("recent similar assistant text is detected",
+  H.findRecentAssistantLikeIdx([
+    ...prev,
+    { kind: "home", time: nowTime(), text: "I don't have full picture right now.", streaming: true },
+  ], "I don't have a full picture right now. I can check specific areas if you'd like.", "home", 20) === 2);
 
 assert("distinct assistant text is not treated as duplicate",
   !H.isRecentDuplicateEvent(prev, { kind: "home", text: "A person is outside" }));

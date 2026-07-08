@@ -94,11 +94,14 @@
       var cb = window.HG_WEB_MODE && window.__HOME_ASSET_VERSION
         ? '?v=' + encodeURIComponent(window.__HOME_ASSET_VERSION)
         : '?cb=' + Date.now();
+      window.__HOME_BOOT_ASSET_SUFFIX = cb;
       var PREFETCH_WINDOW = 6;
       var files = [
         // Resilient HTTP helper (window.fetchWithRetry) — must load before any
         // panel that uses it (people / worldstate / explain).
         ['home-fetch-with-retry.js', false],
+        ['home-perf.js', false],
+        ['home-feature-loader.js', false],
         ['home-tauri.jsx', true],
         ['home-ha.jsx', true],
         ['home-icons.jsx', true],
@@ -146,6 +149,51 @@
         ['home-app.jsx', true],
         ['home-mount.jsx', true],
       ];
+      var deferredFeatureFiles = {
+        'home-people-helpers.js': true,
+        'home-people.jsx': true,
+        'home-worldstate-helpers.js': true,
+        'home-worldstate.jsx': true,
+        'home-spatial-helpers.js': true,
+        'home-spatial.jsx': true,
+        'home-look.jsx': true,
+        'home-lights.jsx': true,
+        'home-intelligence.jsx': true,
+        'home-apartment-data.js': true,
+        'home-apartment-sim.js': true,
+        'home-apartment-prewarm.js': true,
+        'home-apartment-cards.jsx': true,
+        'home-apartment-calibrate.jsx': true,
+        'home-apartment-edit.jsx': true,
+        'home-apartment.jsx': true,
+        'home-video-labeler-data.js': true,
+        'home-video-labeler-timeline.jsx': true,
+        'home-video-labeler.jsx': true,
+      };
+      function readLazyFeaturesEnabled() {
+        var raw = '';
+        try {
+          var params = new URLSearchParams(window.location.search || '');
+          raw = params.get('lazyFeatures') || params.get('lazy') || '';
+        } catch (_) {}
+        raw = String(raw || '').trim().toLowerCase();
+        if (['0', 'off', 'false', 'no'].indexOf(raw) >= 0) return false;
+        if (['1', 'on', 'true', 'yes'].indexOf(raw) >= 0) return true;
+        try {
+          raw = String(localStorage.getItem('home.perf.lazyFeatures') || '').trim().toLowerCase();
+          if (['0', 'off', 'false', 'no'].indexOf(raw) >= 0) return false;
+          if (['1', 'on', 'true', 'yes'].indexOf(raw) >= 0) return true;
+        } catch (_) {}
+        return !!(window.HG_WEB_MODE && !window.__TAURI__ && !window.__TAURI_INTERNALS__);
+      }
+      var lazyFeaturesEnabled = readLazyFeaturesEnabled();
+      var originalFileCount = files.length;
+      if (lazyFeaturesEnabled) {
+        files = files.filter(function (item) { return !deferredFeatureFiles[item[0]]; });
+      }
+      window.__HOME_LAZY_FEATURES_ENABLED = lazyFeaturesEnabled;
+      window.__HOME_DEFERRED_FEATURE_FILES = Object.keys(deferredFeatureFiles);
+      window.__HOME_BOOT_FILES = files.map(function (item) { return item[0]; });
       var webOptionalFiles = {
         'home-tauri.jsx': true,
       };
@@ -159,7 +207,13 @@
       var boot = window.__bootState = {
         loaded: 0, total: files.length, current: null, failed: null, done: false,
         prefetchWindow: PREFETCH_WINDOW, reconnecting: false, retryAttempts: 0,
+        lazyFeaturesEnabled: lazyFeaturesEnabled, originalTotal: originalFileCount,
       };
+      if (window.__homePerf) window.__homePerf.mark('boot:start', {
+        total: files.length,
+        originalTotal: originalFileCount,
+        lazyFeaturesEnabled: lazyFeaturesEnabled,
+      });
       var fetches = [];
       var babelFailures = {};
 
@@ -367,15 +421,27 @@
           console.info('[boot] chain complete — ' + boot.loaded + '/' + boot.total +
             ' files, sw ' + swVersionLabel() +
             (boot.skipped && boot.skipped.length ? ', skipped ' + boot.skipped.length : ''));
+          if (window.__homePerf) window.__homePerf.mark('boot:complete', {
+            loaded: boot.loaded,
+            total: boot.total,
+            skipped: boot.skipped || [],
+            lazyFeaturesEnabled: lazyFeaturesEnabled,
+          });
           return;
         }
         var name = files[i][0];
         var isBabel = files[i][1];
         boot.current = name;
+        var fetchStart = performance.now ? performance.now() : Date.now();
         fetchBootText(i).then(function (text) {
+          if (window.__homePerf) {
+            window.__homePerf.recordBootFile(name, 'fetch',
+              (performance.now ? performance.now() : Date.now()) - fetchStart);
+          }
           var code = text;
           if (isBabel) {
             try {
+              var transformStart = performance.now ? performance.now() : Date.now();
               code = Babel.transform(text, {
                 filename: name,
                 presets: ['react', 'env'],
@@ -383,6 +449,10 @@
                 sourceMaps: 'inline',
                 sourceFileName: name,
               }).code;
+              if (window.__homePerf) {
+                window.__homePerf.recordBootFile(name, 'transform',
+                  (performance.now ? performance.now() : Date.now()) - transformStart);
+              }
             } catch (err) {
               if (skipOptionalWebFile(name, err, i)) return;
               // A transform error is usually a real syntax fault — but a
@@ -399,7 +469,12 @@
             }
           }
           if (boot.reconnecting) { boot.reconnecting = false; removeOverlay(); }
+          var executeStart = performance.now ? performance.now() : Date.now();
           execute(name, code);
+          if (window.__homePerf) {
+            window.__homePerf.recordBootFile(name, 'execute',
+              (performance.now ? performance.now() : Date.now()) - executeStart);
+          }
           boot.loaded++;
           primeWindow(i + 1);
           step(i + 1);
@@ -412,7 +487,7 @@
         });
       }
       console.info('[boot] starting chain — sw ' + swVersionLabel() + ', ' +
-        files.length + ' files');
+        files.length + ' files' + (lazyFeaturesEnabled ? ' (' + (originalFileCount - files.length) + ' deferred)' : ''));
       primeWindow(0);
       step(0);
 

@@ -3609,6 +3609,7 @@ const SLASH_CMDS = [
   { cmd: "/find",       hint: "<text>",     desc: "search past chat events for matching text", category: "debug" },
   { cmd: "/debug",    hint: "on|off|bundle",  desc: "show/hide diag events or export profile diagnostics", category: "debug" },
   { cmd: "/test",       hint: "classifier|external-privacy|external-suite", desc: "run built-in test suites and print a pass/fail summary", category: "debug" },
+  { cmd: "/perf",       hint: "status|copy|lazy on|lazy off", desc: "inspect boot/load performance and toggle web feature lazy loading", category: "debug" },
   { cmd: "/route-log",  hint: "[tail]",     desc: "dump recent external-routing decisions as JSONL. alias: /routes", category: "debug" },
   { cmd: "/lab-dump",       hint: "",       desc: "dump labSamplesRef + labTurnsRef + anchor stats as JSON (Addendum 32 evidence-gathering for line-graph flatness bug)", category: "debug" },
   { cmd: "/lab-dump-watch", hint: "<sec>|stop", desc: "auto-dump every N seconds for 12 iterations (timing-window evidence)", category: "debug" },
@@ -3622,6 +3623,73 @@ const SLASH_CMDS = [
   { cmd: "/about",    hint: "",        desc: "show version + repo info", category: "meta" },
   { cmd: "/help",       hint: "",           desc: "list commands grouped by category (click any entry to fill the input)", category: "meta" },
 ];
+
+function FeatureLoadingSurface({ open, title, status, error, onClose, mobile = false, fullscreen = true }) {
+  if (!open) return null;
+  const state = status?.state || "idle";
+  const pending = state === "loading" || state === "idle";
+  const panelStyle = fullscreen ? {
+    position: "fixed",
+    inset: 0,
+    zIndex: 7600,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: mobile ? "18px" : "32px",
+    background: "rgba(0,0,0,0.86)",
+    color: "var(--hg-fg-0)",
+  } : {
+    position: "relative",
+    minHeight: mobile ? 220 : 320,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: mobile ? "18px" : "32px",
+    background: "rgba(0,0,0,0.72)",
+    color: "var(--hg-fg-0)",
+  };
+  return (
+    <div style={panelStyle} role="status" aria-live="polite">
+      <div style={{
+        width: "min(420px, 100%)",
+        border: "1px solid var(--hg-border)",
+        background: "rgba(7,9,13,0.96)",
+        padding: mobile ? "18px" : "22px",
+        boxShadow: "0 18px 54px rgba(0,0,0,0.42)",
+        fontFamily: "'Geist Mono', monospace",
+      }}>
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 14,
+          marginBottom: 14,
+        }}>
+          <div style={{ fontSize: 10, letterSpacing: 2.4, color: "var(--hg-fg-2)" }}>
+            {title}
+          </div>
+          {onClose && (
+            <button type="button" onClick={onClose} style={{
+              border: "1px solid var(--hg-border)",
+              background: "rgba(255,255,255,0.03)",
+              color: "var(--hg-fg-2)",
+              padding: "8px 10px",
+              fontFamily: "'Geist Mono', monospace",
+              fontSize: 11,
+              cursor: "pointer",
+            }}>close</button>
+          )}
+        </div>
+        <div style={{ fontSize: mobile ? 18 : 20, lineHeight: 1.35 }}>
+          {pending ? "loading" : "could not load"}
+        </div>
+        <div style={{ marginTop: 10, color: error ? "var(--hg-warn)" : "var(--hg-fg-3)", fontSize: 12, lineHeight: 1.5 }}>
+          {error || status?.error || (pending ? "pulling this feature module into the running app." : "try again, or use /perf lazy off and reload.")}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, onStop, focusToken, mobile = false, theme = "dark" }) {
   const inputRef = useRef(null);
@@ -4411,6 +4479,12 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   // re-keys the drawer so a repeated /look re-runs cleanly.
   const [lookDrawerOpen, setLookDrawerOpen] = useState(false);
   const [lookInitial, setLookInitial] = useState({ camera: null, question: "", nonce: 0 });
+  const [featureLoadTick, setFeatureLoadTick] = useState(0);
+  const [featureLoadErrors, setFeatureLoadErrors] = useState({});
+  const featureStatusFor = (feature) => {
+    featureLoadTick; // render dependency for loader CustomEvent updates
+    return window.HomeFeatureLoader?.status?.(feature) || { feature, state: "loaded" };
+  };
   // Master plan F.3: full bridge /healthz snapshot for the DebugPanel
   // (only populated when debugMode is on to avoid wasted polls).
   const [bridgeHealth, setBridgeHealth] = useState(null);
@@ -4436,6 +4510,12 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   // breaks if anything else appends mid-stream).
   const currentExternalEventIdRef = useRef(null);
   const lastSubmittedTextRef = useRef({ text: "", ts: 0 });
+
+  useEffect(() => {
+    const onFeatureLoader = () => setFeatureLoadTick((tick) => tick + 1);
+    window.addEventListener("home-feature-loader", onFeatureLoader);
+    return () => window.removeEventListener("home-feature-loader", onFeatureLoader);
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -4466,6 +4546,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         setPeopleOpen(false);
         setIntelligenceOpen(false);
         setApartmentOpen(true);
+        window.HomeFeatureLoader?.load?.("apartment", "audit").catch((e) => {
+          console.warn("[feature-loader] apartment audit load failed", e?.message || e);
+        });
         return true;
       },
     };
@@ -5078,6 +5161,59 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     });
   }, []);
 
+  const ensureFeature = useCallback(async (feature, label = feature, reason = "open") => {
+    const loader = window.HomeFeatureLoader;
+    if (!loader?.load) return true;
+    const status = loader.status?.(feature);
+    if (status?.state === "loaded") return true;
+    setFeatureLoadErrors((prev) => ({ ...prev, [feature]: null }));
+    setFeatureLoadTick((tick) => tick + 1);
+    try {
+      await loader.load(feature, reason);
+      setFeatureLoadTick((tick) => tick + 1);
+      return true;
+    } catch (err) {
+      const message = err?.message || String(err);
+      setFeatureLoadErrors((prev) => ({ ...prev, [feature]: message }));
+      setFeatureLoadTick((tick) => tick + 1);
+      addEvent({ kind: "system", text: `${label} load failed - ${message}`, tone: "error" });
+      return false;
+    }
+  }, [addEvent]);
+
+  const prefetchFeature = useCallback((feature, reason = "idle") => {
+    const loader = window.HomeFeatureLoader;
+    if (!loader?.prefetch) return;
+    loader.prefetch(feature, reason).finally(() => setFeatureLoadTick((tick) => tick + 1));
+  }, []);
+
+  useEffect(() => {
+    if (bootPhase !== "ready" || !window.__HOME_LAZY_FEATURES_ENABLED || !window.HomeFeatureLoader) return undefined;
+    const nav = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    const saveData = !!nav?.saveData;
+    const slowLink = /(^|-)2g$/.test(String(nav?.effectiveType || ""));
+    const features = saveData || slowLink
+      ? ["lights", "apartment"]
+      : ["lights", "apartment", "people", "world", "spatial", "look", "intelligence", "videoLabeler"];
+    const timers = [];
+    const schedule = (fn, delay) => {
+      const run = () => {
+        if (typeof requestIdleCallback === "function") requestIdleCallback(fn, { timeout: 2500 });
+        else fn();
+      };
+      const id = setTimeout(run, delay);
+      timers.push(id);
+    };
+    features.forEach((feature, index) => {
+      schedule(() => prefetchFeature(feature, "idle-after-boot"), 900 + index * 700);
+    });
+    return () => timers.forEach((id) => clearTimeout(id));
+  }, [bootPhase, prefetchFeature]);
+
+  useEffect(() => {
+    if (spatialLayout) ensureFeature("apartment", "apartment", "spatial-layout");
+  }, [ensureFeature, spatialLayout]);
+
   // Lab sim-mode injection (Addendum 10). Runs after `sim` is available
   // from useSimulation. When a lab fixture is in the snapshot, overwrite
   // the refs + bump tick.
@@ -5397,6 +5533,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       webMode: !!window.HG_WEB_MODE,
       userAgent: navigator.userAgent,
     });
+    bundle.performance = window.__homePerf?.snapshot?.() || null;
+    bundle.featureLoader = window.HomeFeatureLoader?.statusAll?.() || null;
     const text = JSON.stringify(bundle, null, 2);
     try {
       await navigator.clipboard?.writeText?.(text);
@@ -5440,6 +5578,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       webMode: !!window.HG_WEB_MODE,
       userAgent: navigator.userAgent,
     });
+    bundle.performance = window.__homePerf?.snapshot?.() || null;
+    bundle.featureLoader = window.HomeFeatureLoader?.statusAll?.() || null;
     const text = JSON.stringify(bundle, null, 2);
     try {
       await navigator.clipboard?.writeText?.(text);
@@ -6837,6 +6977,58 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         addEvent({ kind: "system", text: `unknown /external subcommand: ${sub}`, tone: "warn" });
         return true;
       }
+      case "perf": {
+        const parts = arg.trim().split(/\s+/).filter(Boolean);
+        const sub = (parts[0] || "status").toLowerCase();
+        if (sub === "lazy") {
+          const next = (parts[1] || "").toLowerCase();
+          if (next === "on" || next === "off") {
+            try { localStorage.setItem("home.perf.lazyFeatures", next); } catch {}
+            addEvent({
+              kind: "system",
+              text: `perf lazy ${next} - reload to apply`,
+              tone: "ok",
+            });
+            return true;
+          }
+          addEvent({
+            kind: "system",
+            text: `perf lazy - ${window.__HOME_LAZY_FEATURES_ENABLED ? "on" : "off"}`,
+            tone: "info",
+          });
+          return true;
+        }
+        const snapshot = window.__homePerf?.snapshot?.() || {};
+        if (sub === "copy" || sub === "bundle") {
+          const text = JSON.stringify(snapshot, null, 2);
+          navigator.clipboard?.writeText?.(text).then(() => {
+            addEvent({ kind: "system", text: "perf bundle copied", tone: "ok" });
+          }, () => {
+            addEvent({ kind: "system", text: `perf bundle:\n${text.slice(0, 1800)}`, tone: "info" });
+          });
+          return true;
+        }
+        const boot = snapshot.boot || {};
+        const state = boot.state || {};
+        const slow = (boot.slowestFiles || []).slice(0, 6)
+          .map((row) => `  ${row.file}: ${row.totalMs}ms`)
+          .join("\n");
+        const features = window.HomeFeatureLoader?.statusAll?.() || {};
+        const featureLines = Object.entries(features)
+          .map(([id, st]) => `  ${id}: ${st?.state || "unknown"}${st?.durationMs ? ` (${st.durationMs}ms)` : ""}`)
+          .join("\n");
+        addEvent({
+          kind: "system",
+          tone: "info",
+          text:
+            `perf status\n` +
+            `lazy features: ${window.__HOME_LAZY_FEATURES_ENABLED ? "on" : "off"}\n` +
+            `boot: ${state.loaded ?? "?"}/${state.total ?? "?"}${state.done ? " complete" : " running"}\n` +
+            (slow ? `slowest boot files:\n${slow}\n` : "") +
+            (featureLines ? `features:\n${featureLines}` : ""),
+        });
+        return true;
+      }
       case "test": {
         const [sub] = arg.split(/\s+/).filter(Boolean);
         if (!sub) {
@@ -6874,12 +7066,14 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       case "spatial": {
         // Addendum 38 Phase 1 — open the light-footprint Map drawer.
         setSpatialDrawerOpen(true);
+        ensureFeature("spatial", "spatial", "slash");
         return true;
       }
       case "home2":
       case "spatial-home": {
         const next = !/^off|classic|chat|0|false$/i.test(arg.trim());
         setSpatialLayout(next);
+        if (next) ensureFeature("apartment", "apartment", "spatial-layout");
         try { localStorage.setItem("hg-layout-v2", next ? "spatial" : "classic"); } catch (e) { /* ignore */ }
         addEvent({
           kind: "system",
@@ -6896,7 +7090,10 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         if (sub === "prewarm" || sub === "warm" || sub === "prewarm status" || sub === "warm status" || sub === "status") {
           const prewarm = window.HomeApartmentPrewarm;
           if (!prewarm) {
-            addEvent({ kind: "system", text: "apartment prewarm module not loaded", tone: "error" });
+            addEvent({ kind: "system", text: "loading apartment modules...", tone: "info" });
+            ensureFeature("apartment", "apartment", "prewarm").then((ok) => {
+              if (ok) handleCommand(`/apartment ${sub}`);
+            });
             return true;
           }
           if (sub === "prewarm" || sub === "warm") {
@@ -6920,16 +7117,14 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           return true;
         }
         // Full-screen 3D apartment takeover (white point cloud, P0).
-        if (!window.HomeApartmentView) {
-          addEvent({ kind: "system", text: "apartment module not loaded", tone: "error" });
-          return true;
-        }
         if (spatialLayout) {
           addEvent({ kind: "system", text: "apartment is already primary in Home 2 layout", tone: "info" });
+          ensureFeature("apartment", "apartment", "spatial-layout");
           return true;
         }
         setVideoLabelerOpen(false);
         setApartmentOpen(true);
+        ensureFeature("apartment", "apartment", "slash");
         return true;
       }
       case "labeler":
@@ -6950,14 +7145,11 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           }
           return true;
         }
-        if (!window.HomeVideoLabelerOverlay) {
-          addEvent({ kind: "system", text: "video labeler module not loaded", tone: "error" });
-          return true;
-        }
         setPeopleOpen(false);
         setIntelligenceOpen(false);
         setApartmentOpen(false);
         setVideoLabelerOpen(true);
+        ensureFeature("videoLabeler", "video labeler", "slash");
         return true;
       }
       case "look": {
@@ -6974,6 +7166,18 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           nonce: Date.now(),
         });
         setLookDrawerOpen(true);
+        if (!window.HomeLookDrawer || !window.HomeLookParseArg) {
+          ensureFeature("look", "look", "slash").then((ok) => {
+            if (ok && window.HomeLookParseArg) {
+              const reparsed = window.HomeLookParseArg(arg);
+              setLookInitial({
+                camera: reparsed.camera,
+                question: reparsed.question,
+                nonce: Date.now(),
+              });
+            }
+          });
+        }
         return true;
       }
       case "world-state":
@@ -6992,6 +7196,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           // No room arg, no --raw → open the drawer with full view
           setWorldStateInitialRoom(null);
           setWorldStateDrawerOpen(true);
+          ensureFeature("world", "world state", "slash");
           return true;
         }
         if (!wantsRaw && argSansFlags) {
@@ -6999,6 +7204,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           // that room. User can ×-clear the filter to widen.
           setWorldStateInitialRoom(argSansFlags);
           setWorldStateDrawerOpen(true);
+          ensureFeature("world", "world state", "slash");
           return true;
         }
         // Fall through to legacy raw dump (--raw flag explicitly given).
@@ -7377,6 +7583,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           return true;
         }
         setLightsOpen(true);
+        ensureFeature("lights", "lights", "slash");
         return true;
       }
       case "why-light": {
@@ -7642,7 +7849,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     // CALL time, by which point it's defined. Its identity is stable
     // (its own deps are [addEvent], itself stable), so omitting it
     // doesn't cause a memoization correctness issue.
-  }, [addEvent, announceTravelReadiness, applyServiceProfile, connectTo, copyDebugBundle, copyRecoveryCommands, copyTravelBundle, currentTravelReadiness, debugMode, endpoint, events, kokoroVoice, metricsBase, playScript, runRemoteCheck, runTravelCheck, s2sBase, s2sToken, s2sVoice, sendToHA, spatialLayout, stopStreaming, syncServiceStateFromResolver, token]);
+  }, [addEvent, announceTravelReadiness, applyServiceProfile, connectTo, copyDebugBundle, copyRecoveryCommands, copyTravelBundle, currentTravelReadiness, debugMode, endpoint, ensureFeature, events, kokoroVoice, metricsBase, playScript, runRemoteCheck, runTravelCheck, s2sBase, s2sToken, s2sVoice, sendToHA, spatialLayout, stopStreaming, syncServiceStateFromResolver, token]);
 
   /* ── External Reasoning dispatch (see home-external.jsx) ─────────────
    *
@@ -9493,6 +9700,35 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     setLookDrawerOpen(false);
     setExplainConvId(null);
   };
+  const openPeopleFeature = () => {
+    setVideoLabelerOpen(false);
+    setIntelligenceOpen(false);
+    setApartmentOpen(false);
+    setPeopleOpen(true);
+    ensureFeature("people", "people", "header");
+  };
+  const openIntelligenceFeature = () => {
+    setVideoLabelerOpen(false);
+    setPeopleOpen(false);
+    setApartmentOpen(false);
+    setIntelligenceOpen(true);
+    ensureFeature("intelligence", "intelligence", "header");
+  };
+  const openVideoLabelerFeature = () => {
+    setPeopleOpen(false);
+    setIntelligenceOpen(false);
+    setApartmentOpen(false);
+    setVideoLabelerOpen(true);
+    ensureFeature("videoLabeler", "video labeler", "header");
+  };
+  const openLightsFeature = () => {
+    setPeopleOpen(false);
+    setIntelligenceOpen(false);
+    setVideoLabelerOpen(false);
+    setApartmentOpen(false);
+    setLightsOpen(true);
+    ensureFeature("lights", "lights", "header");
+  };
   const openApartmentFromHeader = () => {
     setPeopleOpen(false);
     setIntelligenceOpen(false);
@@ -9503,6 +9739,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     setLookDrawerOpen(false);
     setExplainConvId(null);
     setApartmentOpen(true);
+    ensureFeature("apartment", "apartment", "header");
   };
   const metricsStrip = (
     <MetricsStrip
@@ -9593,21 +9830,25 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
               closeSpatialToolSurfaces();
               setSpatialOpsDockOpen(false);
               setVideoLabelerOpen(true);
+              ensureFeature("videoLabeler", "video labeler", "spatial-rail");
             }}
             onPeople={() => {
               closeSpatialToolSurfaces();
               setSpatialOpsDockOpen(false);
               setPeopleOpen(true);
+              ensureFeature("people", "people", "spatial-rail");
             }}
             onIntelligence={() => {
               closeSpatialToolSurfaces();
               setSpatialOpsDockOpen(false);
               setIntelligenceOpen(true);
+              ensureFeature("intelligence", "intelligence", "spatial-rail");
             }}
             onLights={() => {
               closeSpatialToolSurfaces();
               setSpatialOpsDockOpen(false);
               setLightsOpen(true);
+              ensureFeature("lights", "lights", "spatial-rail");
             }}
             onOps={() => {
               closeSpatialToolSurfaces();
@@ -9639,6 +9880,28 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           )}
         </div>
       )}
+      {isSpatialWide && !window.HomeApartmentView && (
+        <div data-theme="dark" style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          bottom: 0,
+          right: spatialStageRight,
+          zIndex: 0,
+          minWidth: 0,
+          overflow: "hidden",
+          background: "#000",
+        }}>
+          <FeatureLoadingSurface
+            open={true}
+            title="apartment"
+            status={featureStatusFor("apartment")}
+            error={featureLoadErrors.apartment}
+            mobile={mobile}
+            fullscreen={false}
+          />
+        </div>
+      )}
       <div style={appColumnStyle}>
       <HomeHeader
         theme={theme}
@@ -9655,15 +9918,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         sim={sim}
         muteState={muteState}
         onUnmuteClick={handleUnmuteClick}
-        onOpenPeople={isSpatialWide ? null : () => { setVideoLabelerOpen(false); setPeopleOpen(true); }}
-        onOpenIntelligence={isSpatialWide ? null : () => { setVideoLabelerOpen(false); setIntelligenceOpen(true); }}
-        onOpenVideoLabeler={isSpatialWide ? null : () => {
-          // full-screen surfaces are mutually exclusive (see state decl)
-          setPeopleOpen(false);
-          setIntelligenceOpen(false);
-          setApartmentOpen(false);
-          setVideoLabelerOpen(true);
-        }}
+        onOpenPeople={isSpatialWide ? null : openPeopleFeature}
+        onOpenIntelligence={isSpatialWide ? null : openIntelligenceFeature}
+        onOpenVideoLabeler={isSpatialWide ? null : openVideoLabelerFeature}
         onOpenApartment={isSpatialWide ? null : openApartmentFromHeader}
         onOpenSimulationControls={() => setSimulationControlsOpen(true)}
         aiStackState={aiStackState}
@@ -9706,6 +9963,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           spatialMode={isSpatialWide}
         />
       )}
+      {peopleOpen && !window.HomePeopleOverlay && (
+        <FeatureLoadingSurface
+          open={peopleOpen}
+          title="people"
+          status={featureStatusFor("people")}
+          error={featureLoadErrors.people}
+          onClose={closePeopleOverlay}
+          mobile={mobile}
+        />
+      )}
       {/* M5 (Addendum 27) — explainability drawer. Mounted alongside
           people overlay so it can co-exist (people open + drawer open
           for a tool-firing turn = both visible, drawer on the right). */}
@@ -9718,6 +9985,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           spatialMode={isSpatialWide}
         />
       )}
+      {intelligenceOpen && !window.HomeIntelligenceOverlay && (
+        <FeatureLoadingSurface
+          open={intelligenceOpen}
+          title="intelligence"
+          status={featureStatusFor("intelligence")}
+          error={featureLoadErrors.intelligence}
+          onClose={() => setIntelligenceOpen(false)}
+          mobile={mobile}
+        />
+      )}
       {/* /labeler — full-screen video timeline labeler (M0 shell; see
           home-video-labeler.jsx). Sim containment lives in the overlay +
           its data layer (media URLs bypass tauriFetch). */}
@@ -9727,6 +10004,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           onClose={() => setVideoLabelerOpen(false)}
           sim={sim}
           spatialMode={isSpatialWide}
+        />
+      )}
+      {videoLabelerOpen && !window.HomeVideoLabelerOverlay && (
+        <FeatureLoadingSurface
+          open={videoLabelerOpen}
+          title="video labeler"
+          status={featureStatusFor("videoLabeler")}
+          error={featureLoadErrors.videoLabeler}
+          onClose={() => setVideoLabelerOpen(false)}
+          mobile={mobile}
         />
       )}
       {window.HomeExplainDrawer && (
@@ -9780,6 +10067,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           }}
         />
       )}
+      {lightsOpen && !window.HomeLightsDrawer && (
+        <FeatureLoadingSurface
+          open={lightsOpen}
+          title="lights"
+          status={featureStatusFor("lights")}
+          error={featureLoadErrors.lights}
+          onClose={() => setLightsOpen(false)}
+          mobile={mobile}
+        />
+      )}
       {/* F-32 (Addendum 27) — world-state drawer. Same right-anchored
           slot as the explain drawer; users typically open one OR the
           other (both technically valid but the explain drawer wins
@@ -9794,6 +10091,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           initialRoom={worldStateInitialRoom}
         />
       )}
+      {worldStateDrawerOpen && !window.HomeWorldStateDrawer && (
+        <FeatureLoadingSurface
+          open={worldStateDrawerOpen}
+          title="world state"
+          status={featureStatusFor("world")}
+          error={featureLoadErrors.world}
+          onClose={() => setWorldStateDrawerOpen(false)}
+          mobile={mobile}
+        />
+      )}
       {/* Addendum 38 Phase 1 — /spatial light-footprint drawer. Same
           right-anchored slot as the world-state + explain drawers. */}
       {window.HomeSpatialDrawer && (
@@ -9803,6 +10110,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           endpoint={endpoint}
           token={token}
           sim={sim}
+        />
+      )}
+      {spatialDrawerOpen && !window.HomeSpatialDrawer && (
+        <FeatureLoadingSurface
+          open={spatialDrawerOpen}
+          title="spatial"
+          status={featureStatusFor("spatial")}
+          error={featureLoadErrors.spatial}
+          onClose={() => setSpatialDrawerOpen(false)}
+          mobile={mobile}
         />
       )}
       {/* /apartment — full-screen 3D spatial command center. Full-viewport
@@ -9815,6 +10132,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           endpoint={endpoint}
           token={token}
           sim={sim}
+        />
+      )}
+      {apartmentOpen && !spatialLayout && !window.HomeApartmentView && (
+        <FeatureLoadingSurface
+          open={apartmentOpen}
+          title="apartment"
+          status={featureStatusFor("apartment")}
+          error={featureLoadErrors.apartment}
+          onClose={() => setApartmentOpen(false)}
+          mobile={mobile}
         />
       )}
       {/* Phase 0.5 — /look "Thinking with Visual Primitives" drawer. Same
@@ -9845,6 +10172,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
                          text: `look · ${e.text}` });
             }
           }}
+        />
+      )}
+      {lookDrawerOpen && !window.HomeLookDrawer && (
+        <FeatureLoadingSurface
+          open={lookDrawerOpen}
+          title="look"
+          status={featureStatusFor("look")}
+          error={featureLoadErrors.look}
+          onClose={() => setLookDrawerOpen(false)}
+          mobile={mobile}
         />
       )}
       {/* Boot sequence — one atomic conditional. While bootPhase !== "ready"

@@ -110,6 +110,16 @@ class _FakeRegistryEntry:
         self.labels = set(labels or [])
 
 
+class _ComputedName:
+    """String-like HA name object used to reproduce ComputedNameType crashes."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def __str__(self):
+        return self.value
+
+
 # Module-level fixtures the mock registries read from.
 _FAKE_AREAS: list[_FakeArea] = []
 _FAKE_FLOORS: list[_FakeFloor] = []
@@ -539,6 +549,31 @@ def _find_entity_exposed_filter():
     ids = [e["entity_id"] for e in r["data"]["candidates"]]
     assert ids == ["light.kitchen_main"], ids
 t("find_entity honors exposed_entities", _find_entity_exposed_filter)
+
+
+def _find_entity_tolerates_computed_name_values():
+    global _FAKE_ENTITIES, _FAKE_STATES
+    _FAKE_ENTITIES.append(
+        _FakeRegistryEntry(
+            "light.computed_name_lamp",
+            name=_ComputedName("Computed Office Lamp"),
+            area_id="office_id",
+            aliases={_ComputedName("computed alias")},
+        )
+    )
+    _FAKE_STATES["light.computed_name_lamp"] = _FakeStateObj(
+        "light.computed_name_lamp",
+        "on",
+        {"friendly_name": _ComputedName("Computed Friendly Lamp")},
+    )
+    fn = _make_fn()
+    r = _call(fn, "find_entity", {"query": "computed", "domain": "light"})
+    ids = [e["entity_id"] for e in r["data"]["candidates"]]
+    assert "light.computed_name_lamp" in ids, r
+    row = next(e for e in r["data"]["candidates"] if e["entity_id"] == "light.computed_name_lamp")
+    assert row["name"] == "Computed Office Lamp", row
+    assert "computed alias" in row["aliases"], row
+t("find_entity tolerates HA computed-name objects", _find_entity_tolerates_computed_name_values)
 
 
 section("entities_by_domain")

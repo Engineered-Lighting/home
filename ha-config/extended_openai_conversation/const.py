@@ -352,6 +352,20 @@ the registry tools to discover entities ON DEMAND:
   source, etc.) for entities you've already identified, when you need
   deeper detail than the registry-tool rows provide.
 
+Current state and comparison questions:
+- If the user asks whether lights/devices are on/off, asks for current
+  brightness/color/state, or asks to compare rooms/devices (e.g.,
+  "which is brighter"), you MUST inspect the relevant current HA state
+  before answering. Use `entities_in_area` or `find_entity` to identify
+  candidates, then call `get_attributes` for the exact entity_ids you
+  are comparing.
+- For named light comparisons like "office lights vs living room lights",
+  prefer `find_entity(query, domain="light")` for each named target. If
+  `entities_in_area` returns no light rows or an area lookup is uncertain,
+  fall back to `find_entity` before saying a light or area does not exist.
+- Do NOT answer "I can check if you'd like" for these questions. The
+  user is already asking you to check.
+
 Typical flow for a "do X to Y" request:
   1. User mentions a room → `entities_in_area(room, domains?)` to see
      what controllable entities exist there.
@@ -659,7 +673,11 @@ DEFAULT_CONF_FUNCTION_TOOLS = [
     {
         "spec": {
             "name": "get_attributes",
-            "description": "Get attributes of entity or multiple entities.",
+            "description": (
+                "Get attributes of entity or multiple entities. Required before answering "
+                "current light/device state, brightness, color, or comparison questions "
+                "after the entity_ids have been identified."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {

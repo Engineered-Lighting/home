@@ -135,7 +135,7 @@ const DESKTOP_FEATURE_MATRIX = [
 
 const DESKTOP_BUTTON_PROBE_MATRIX = [
   ["d01-home-layout", "Home", "Visible controls stay inside the desktop viewport."],
-  ["d02-desktop-header", "Header", "Remote profile remains reachable and the mobile menu is absent."],
+  ["d02-desktop-header", "Header", "Desktop actions menu remains reachable and the mobile-specific menu is absent."],
   ["d03-remote-dialog", "Remote", "Remote access dialog opens, profile buttons respond, test-all starts, and close dismisses it."],
   ["d04-slash-command", "Input", "Slash command input accepts and executes a command at desktop width."],
   ["d05-drawer-closes", "Drawers", "World, lights, spatial, and look drawers expose a working close control."],
@@ -662,6 +662,7 @@ async function ensureDesktopHeader(page, context) {
     };
     return {
       mobileMenuVisible: visible(document.querySelector('button[aria-label="Open mobile actions"]')),
+      appMenuVisible: visible(document.querySelector('button[aria-label="Open app actions"]')),
       remoteVisible: visible(document.querySelector('button[aria-label="Remote profile"]')),
       peopleVisible: visible(document.querySelector('button[aria-label^="Open people"]')),
       intelligenceVisible: visible(document.querySelector('button[aria-label="Open intelligence atlas"]')),
@@ -669,13 +670,14 @@ async function ensureDesktopHeader(page, context) {
     };
   });
   if (result.mobileMenuVisible) throw new Error(`${context}: mobile actions menu is visible on desktop`);
-  if (!result.remoteVisible) throw new Error(`${context}: remote profile button is missing on desktop`);
+  if (!result.appMenuVisible) throw new Error(`${context}: desktop actions menu is missing`);
   const detail = await ensureVisualHealth(page, context);
   const optional = [
+    result.remoteVisible ? "profile" : "",
     result.peopleVisible ? "people" : "",
     result.intelligenceVisible ? "intelligence" : "",
     result.videoLabelerVisible ? "video labeler" : "",
-  ].filter(Boolean).join(", ") || "wide-mode optional icons hidden";
+  ].filter(Boolean).join(", ") || "actions menu owns secondary controls";
   return `${detail}; desktop header preserved; ${optional}`;
 }
 
@@ -714,8 +716,12 @@ async function enterSimulation(page) {
   }
 }
 
+async function openActionsMenu(page) {
+  return maybeClick(page.getByLabel(/open (mobile|app) actions/i), 1800);
+}
+
 async function openMobileMenu(page) {
-  return maybeClick(page.getByLabel(/open mobile actions/i), 1800);
+  return openActionsMenu(page);
 }
 
 async function ensureMobileMenuReachable(page, context) {
@@ -759,14 +765,18 @@ async function clickMobileMenuItem(page, label) {
   return clicked;
 }
 
-async function openMobileRemoteProfile(page) {
+async function openRemoteProfile(page) {
   let clicked = await maybeClick(page.locator('button[aria-label="Remote profile"]').first(), 500);
   if (!clicked) {
-    await openMobileMenu(page);
+    await openActionsMenu(page);
     clicked = await maybeClick(page.locator('button[aria-label="Remote profile"]').first(), 1800);
   }
   await page.waitForTimeout(450);
   return clicked;
+}
+
+async function openMobileRemoteProfile(page) {
+  return openRemoteProfile(page);
 }
 
 async function exerciseApartmentLightControl(page, context) {
@@ -954,8 +964,7 @@ async function runDesktopButtonProbes(page, buttonItems) {
 
   await recordButtonProbe(buttonItems, "d03-remote-dialog", "Remote dialog profile buttons, test all, and close respond", async () => {
     await closeOverlays(page);
-    const remote = page.locator('button[aria-label="Remote profile"]').first();
-    if (!(await maybeClick(remote, 1800))) throw new Error("remote profile button missing");
+    if (!(await openRemoteProfile(page))) throw new Error("remote profile action missing");
     await expectVisibleText(page, /Remote access \/ Travel readiness/i);
     await clickButtonByName(page, /Home LAN/i);
     await clickButtonByName(page, /Remote via Tailscale|tailscale|tail/i);
@@ -1082,8 +1091,7 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors, prof
 
       await closeOverlays(page);
       await step("04-remote-dialog", "Remote access / Travel readiness", async () => {
-        const remote = page.locator('button[aria-label="Remote profile"]').first();
-        if (!(await maybeClick(remote, 1800))) throw new Error("remote profile button missing");
+        if (!(await openRemoteProfile(page))) throw new Error("remote profile action missing");
         await expectVisibleText(page, /Remote access \/ Travel readiness/i);
         await page.waitForTimeout(600);
       });
@@ -1754,6 +1762,7 @@ async function cdpEnsureDesktopHeader(client, context) {
     };
     return {
       mobileMenuVisible: visible(document.querySelector('button[aria-label="Open mobile actions"]')),
+      appMenuVisible: visible(document.querySelector('button[aria-label="Open app actions"]')),
       remoteVisible: visible(document.querySelector('button[aria-label="Remote profile"]')),
       peopleVisible: visible(document.querySelector('button[aria-label^="Open people"]')),
       intelligenceVisible: visible(document.querySelector('button[aria-label="Open intelligence atlas"]')),
@@ -1761,13 +1770,14 @@ async function cdpEnsureDesktopHeader(client, context) {
     };
   })()`, true);
   if (result.mobileMenuVisible) throw new Error(`${context}: mobile actions menu is visible on desktop`);
-  if (!result.remoteVisible) throw new Error(`${context}: remote profile button is missing on desktop`);
+  if (!result.appMenuVisible) throw new Error(`${context}: desktop actions menu is missing`);
   const detail = await cdpEnsureVisualHealth(client, context);
   const optional = [
+    result.remoteVisible ? "profile" : "",
     result.peopleVisible ? "people" : "",
     result.intelligenceVisible ? "intelligence" : "",
     result.videoLabelerVisible ? "video labeler" : "",
-  ].filter(Boolean).join(", ") || "wide-mode optional icons hidden";
+  ].filter(Boolean).join(", ") || "actions menu owns secondary controls";
   return `${detail}; desktop header preserved; ${optional}`;
 }
 
@@ -1812,13 +1822,17 @@ async function cdpClickMobileMenuItem(client, label, waitMs = 900) {
 async function cdpOpenMobileRemoteProfile(client) {
   let ok = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Remote profile"]')`);
   if (!ok) {
-    const opened = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Open mobile actions"]')`);
+    const opened = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Open mobile actions"], button[aria-label="Open app actions"]')`);
     if (!opened) return false;
     await cdpDelay(180);
     ok = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Remote profile"]')`);
   }
   await cdpDelay(450);
   return !!ok;
+}
+
+async function cdpOpenRemoteProfile(client) {
+  return cdpOpenMobileRemoteProfile(client);
 }
 
 async function cdpExpectText(client, pattern) {
@@ -2004,9 +2018,8 @@ async function cdpRunDesktopButtonProbes(client, buttonItems) {
 
   await cdpRecordButtonProbe(buttonItems, "d03-remote-dialog", "Remote dialog profile buttons, test all, and close respond", async () => {
     await cdpCloseOverlays(client);
-    const ok = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Remote profile"]')`);
-    if (!ok) throw new Error("remote profile button missing");
-    await cdpDelay(450);
+    const ok = await cdpOpenRemoteProfile(client);
+    if (!ok) throw new Error("remote profile action missing");
     await cdpExpectText(client, "Remote access / Travel readiness");
     await cdpClickButton(client, "Home LAN");
     await cdpClickButton(client, "Remote via Tailscale|tailscale|tail");
@@ -2124,8 +2137,8 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors, profile = 
 
       await cdpCloseOverlays(client);
       await step("04-remote-dialog", "Remote access / Travel readiness", async () => {
-        const ok = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Remote profile"]')`);
-        if (!ok) throw new Error("remote profile button missing");
+        const ok = await cdpOpenRemoteProfile(client);
+        if (!ok) throw new Error("remote profile action missing");
         await cdpExpectText(client, "Remote access / Travel readiness");
         await cdpDelay(600);
       });

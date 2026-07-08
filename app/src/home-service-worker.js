@@ -56,6 +56,8 @@ const PRECACHE_URLS = [
   "/",
   "home-web-runtime.js",
   "home-services.js",
+  "home-perf.js",
+  "home-feature-loader.js",
   "home-tokens.css",
   "home-tauri.jsx",
   "home-app.jsx",

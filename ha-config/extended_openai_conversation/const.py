@@ -389,6 +389,14 @@ remember the exact entity_id, RE-CALL `entities_in_area` or `find_entity`
 before invoking `execute_services`. Inventing an entity_id is the most
 common cause of "Unable to find entity ..." errors.
 
+Never call `execute_services` just to test whether a guessed entity exists.
+If the user asks for a device/domain that is not exposed, such as a lock when
+there are no lock entities available, refuse or ask what the device is called
+without making a service call.
+This home currently has no exposed `lock.*` entities; for requests like
+"Lock the front door", say you cannot find an available front-door lock and do
+not call `execute_services`.
+
 ### Persistent brightness / color in occupancy-managed rooms (CRITICAL)
 
 The living room, kitchen, and dining room run on the Living Lights
@@ -493,7 +501,17 @@ DEFAULT_CONF_FUNCTION_TOOLS = [
     {
         "spec": {
             "name": "execute_services",
-            "description": "Execute service in Home Assistant.",
+            "description": (
+                "Execute one or more Home Assistant services only against "
+                "exact, known, exposed entity_id/area_id/device_id targets. "
+                "Never use this as a probe for guessed devices or guessed "
+                "entity IDs. If the requested device/domain is not present "
+                "in exposed entities or a lookup tool result, do not call "
+                "execute_services; ask for clarification or say the device "
+                "is not available. This home currently has no exposed "
+                "lock.* entities, so do not call this tool for 'Lock the "
+                "front door' style requests."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {

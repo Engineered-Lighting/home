@@ -38,9 +38,19 @@ npm run llm:test:travel-mode
 ```
 
 The Travel Mode scenario enables `input_boolean.living_lights_travel_mode`,
-asks the model to turn on a light, and fails if the model emits any
-`execute_services` call. It also has a narrower guard for direct `light` or
-`switch` `turn_on`/`toggle` calls so the failure class stays clear.
+asks the model to turn on a light, and requires a Travel Mode block/refusal
+answer. It rejects success phrasing such as "turned on" or "done." A clean
+model refusal with no tool call is ideal; an attempted tool call is acceptable
+only when the HA native dispatcher returns the Travel Mode block result and
+the assistant reports that block to the user.
+
+The HA native dispatcher has a defense-in-depth guard for the same class:
+while Travel Mode is on, direct `light`/`switch` energizing calls, broad
+`homeassistant.turn_on`/`toggle` calls that target lights or switches, and
+`scene.turn_on` are returned as `TravelModeBlocked` before HA dispatch. Turning
+lights off and turning the Travel Mode helper on remain allowed. This does not
+replace the HA package backstop that force-turns known outputs off if something
+outside the voice/tool path turns them on.
 
 ## Browser Transcript Regression
 
@@ -52,9 +62,45 @@ $env:HOME_LLM_UI_PROMPT="Whats in my driveway"
 npm run llm:test:ui
 ```
 
-The live browser check fails on duplicated user text, adjacent duplicate
-assistant lines, repeated `/proxy/ha` connection spam, or a lingering Stop
-control after the response window.
+For a fresh browser context that can actually talk to Home Assistant through
+the web gateway, seed the HA token without printing it:
+
+```powershell
+$report = Join-Path $env:TEMP ("home-chat-ui-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+New-Item -ItemType Directory -Force -Path $report | Out-Null
+$token = (ssh hav-ubuntu "sed -n 's/^HA_TOKEN=//p' /opt/home-ai-voice/.env | head -n1").Trim().Trim('"').Trim("'")
+$env:QA_REPORT_DIR=$report
+$env:HOME_APP_URL="https://home-app.taild52a15.ts.net"
+$env:HOME_LLM_UI_PROMPT="Whats in my driveway"
+$env:HOME_LLM_UI_WAIT_MS="60000"
+$env:HOME_UI_HA_URL="/proxy/ha"
+$env:HOME_UI_HA_TOKEN=$token
+npm run llm:test:ui
+```
+
+The live browser check fails on duplicated user text, repeated assistant-bubble
+fragments, perception cards that merely repeat the assistant answer, repeated
+`/proxy/ha` connection spam, or a lingering Stop control after the response
+window. It writes `chat-ui-regression.json` and `chat-ui-body.txt` when
+`QA_REPORT_DIR` is set.
+
+Set `HOME_UI_REQUIRE_BROWSER=1` when a skipped live browser check should be
+treated as a failure.
+
+## GitHub Workflows
+
+`llm response qa` runs on pull requests and manually. It uses only deterministic
+contracts, static UI checks, and a local app-shell smoke, so it is safe for PRs.
+
+`llm live qa` is manual-only on the trusted self-hosted Ubuntu runner and checks
+out `main`. It talks to the real Home stack and can run:
+
+- `read-only` - live model/HA workflow checks without device mutation.
+- `travel-mode` - guarded Travel Mode write test, restoring helper state.
+- `write-gated` - all safe-listed write scenarios.
+- `ui-live` - live browser transcript regression against the Tailscale site.
+
+Do not run live QA against arbitrary PR code.
 
 ## Failure Classes
 

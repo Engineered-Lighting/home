@@ -435,8 +435,10 @@ verify before claiming a specific level.
 
 For "what happened" questions, use `get_history(entity_ids?, ...)`.
 For "who/where" questions, use the world-state tools above. For "what
-does the camera see right now", use `get_room_state(room)` (cached) or
-`refresh_perception(room)` (fresh, slower).
+does the camera see right now", "what's in <room> right now", or other
+direct visual/camera questions, use `refresh_perception(room)` first.
+Use `get_room_state(room)` only for cached occupancy/presence questions
+or as fallback after `refresh_perception` errors.
 
 {%- if skills %}
 ## Skills
@@ -721,7 +723,8 @@ DEFAULT_CONF_FUNCTION_TOOLS = [
                 "occupancy/presence questions like 'is anyone outside?' or "
                 "as fallback after refresh_perception errors. Do NOT use as "
                 "the only tool for direct camera-view questions like 'what do "
-                "you see in the driveway camera?' or 'look at the kitchen'. "
+                "you see in the driveway camera?', 'what's in the office right "
+                "now?', or 'look at the kitchen'. "
                 "Those require refresh_perception first. Returns {data, "
                 "suggested_phrasing, ...}. If data is null, say so — do NOT "
                 "guess based on the room name."

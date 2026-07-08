@@ -135,6 +135,18 @@ assert("recent duplicate user/voice text is detected across kind names",
 assert("recent duplicate assistant text is detected",
   H.isRecentDuplicateEvent(prev, { kind: "home", text: "A car is parked outside" }));
 
+assert("perception card repeating recent assistant answer is suppressed",
+  H.isRecentDuplicateEvent([
+    ...prev,
+    { kind: "home", time: nowTime(), text: "A covered vehicle is parked in the driveway." },
+  ], { kind: "perception", text: "driveway: A covered vehicle is parked in the driveway." }));
+
+assert("distinct perception card after assistant answer is preserved",
+  !H.isRecentDuplicateEvent([
+    ...prev,
+    { kind: "home", time: nowTime(), text: "A covered vehicle is parked in the driveway." },
+  ], { kind: "perception", text: "driveway: A person is taking out the trash." }));
+
 assert("recent similar assistant text is detected",
   H.findRecentAssistantLikeIdx([
     ...prev,

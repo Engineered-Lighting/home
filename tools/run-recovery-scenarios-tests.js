@@ -98,18 +98,21 @@ process.stdout.write("\nvision_direct_camera_question_contract_test\n");
 assert("default prompt forces fresh perception for direct camera-view questions",
   CONST.includes("Direct visual/camera questions:") &&
   CONST.includes('"what do you see"') &&
+  CONST.includes("what's in the office right") &&
   CONST.includes("MUST call") &&
   CONST.includes("`refresh_perception(room)` before answering") &&
   CONST.includes("NEVER answer a direct camera-view question from motion sensors"));
 assert("get_room_state tool description rejects cached-only camera answers",
   CONST.includes("Do NOT use as ") &&
   CONST.includes("the only tool for direct camera-view questions") &&
+  CONST.includes("what's in the office right") &&
   CONST.includes("Those require refresh_perception first"));
 assert("refresh_perception tool description names direct driveway-camera questions",
   CONST.includes("Use FIRST for direct visual/camera questions") &&
   CONST.includes("what do you see in the driveway camera"));
 assert("helper prompt/function snippets preserve fresh-vision contract",
   WORLD_STATE_PROMPT.includes("Direct visual/camera questions:") &&
+  WORLD_STATE_PROMPT.includes("what's in the office right now") &&
   WORLD_STATE_PROMPT.includes("Those are not seeing") &&
   WORLD_STATE_FUNCTIONS.includes("Do NOT use as the only tool for direct camera-view questions") &&
   WORLD_STATE_FUNCTIONS.includes("Use FIRST for direct visual/camera questions"));

@@ -331,9 +331,13 @@ class _FakeServices:
             raise self.raise_exc
 
 class _FakeHass:
-    def __init__(self, services: _FakeServices):
+    def __init__(self, services: _FakeServices, states: dict[str, str] | None = None):
         self.services = services
-        self.states = types.SimpleNamespace(get=lambda _entity_id: None)
+        self._states = {
+            entity_id: types.SimpleNamespace(state=state)
+            for entity_id, state in (states or {}).items()
+        }
+        self.states = types.SimpleNamespace(get=lambda entity_id: self._states.get(entity_id))
 
 def _make_fn():
     # NativeFunction needs voluptuous Schema to not blow up — our voluptuous
@@ -427,6 +431,84 @@ def _result_works_through_execute_service_loop():
         assert isinstance(r["latency_ms"], int)
 t("execute_service (multi-call) preserves M0.3 shape per item",
   _result_works_through_execute_service_loop)
+
+# ── Travel Mode service-call guard ─────────────────────────────────────────
+section("Travel Mode service-call guard")
+
+def _travel_mode_state_on() -> dict[str, str]:
+    return {"input_boolean.living_lights_travel_mode": "on"}
+
+def _travel_mode_light_turn_on_blocked_before_dispatch():
+    _LIVING_LIGHTS_CALLS.clear()
+    svcs = _FakeServices()
+    hass = _FakeHass(svcs, states=_travel_mode_state_on())
+    args = {"domain": "light", "service": "turn_on",
+            "service_data": {"area_id": "kitchen", "brightness_pct": 100}}
+    r = _exec_service(hass, args)
+    assert r["ok"] is False, r
+    assert r["blocked"] is True and r["blocked_by"] == "travel_mode", r
+    assert r["error_kind"] == "TravelModeBlocked", r
+    assert "Travel Mode" in r["suggested_phrasing"], r
+    assert len(svcs.calls) == 0, f"blocked calls must not dispatch: {svcs.calls}"
+    assert _LIVING_LIGHTS_CALLS == [], "Travel Mode must win before Living Lights reroute"
+t("Travel Mode ON blocks light.turn_on before HA dispatch or Living Lights reroute",
+  _travel_mode_light_turn_on_blocked_before_dispatch)
+
+def _travel_mode_switch_turn_on_blocked():
+    svcs = _FakeServices()
+    hass = _FakeHass(svcs, states=_travel_mode_state_on())
+    args = {"domain": "switch", "service": "turn_on",
+            "service_data": {"entity_id": ["switch.ambient_light_left_mss110_main_channel"]}}
+    r = _exec_service(hass, args)
+    assert r["ok"] is False and r["blocked_by"] == "travel_mode", r
+    assert len(svcs.calls) == 0, svcs.calls
+t("Travel Mode ON blocks switch.turn_on lighting outputs",
+  _travel_mode_switch_turn_on_blocked)
+
+def _travel_mode_homeassistant_turn_on_light_blocked():
+    svcs = _FakeServices()
+    hass = _FakeHass(svcs, states=_travel_mode_state_on())
+    args = {"domain": "homeassistant", "service": "turn_on",
+            "service_data": {"entity_id": ["light.office"]}}
+    r = _exec_service(hass, args)
+    assert r["ok"] is False and r["blocked_by"] == "travel_mode", r
+    assert len(svcs.calls) == 0, svcs.calls
+t("Travel Mode ON blocks homeassistant.turn_on when it targets a light",
+  _travel_mode_homeassistant_turn_on_light_blocked)
+
+def _travel_mode_scene_turn_on_blocked():
+    svcs = _FakeServices()
+    hass = _FakeHass(svcs, states=_travel_mode_state_on())
+    args = {"domain": "scene", "service": "turn_on",
+            "service_data": {"entity_id": ["scene.good_morning"]}}
+    r = _exec_service(hass, args)
+    assert r["ok"] is False and r["blocked_by"] == "travel_mode", r
+    assert len(svcs.calls) == 0, svcs.calls
+t("Travel Mode ON blocks scene.turn_on because scenes may energize lights",
+  _travel_mode_scene_turn_on_blocked)
+
+def _travel_mode_allows_turn_off():
+    svcs = _FakeServices()
+    hass = _FakeHass(svcs, states=_travel_mode_state_on())
+    args = {"domain": "light", "service": "turn_off",
+            "service_data": {"entity_id": ["light.office"]}}
+    r = _exec_service(hass, args)
+    assert r["ok"] is True and r["domain"] == "light", r
+    assert len(svcs.calls) == 1, svcs.calls
+t("Travel Mode ON still allows light.turn_off",
+  _travel_mode_allows_turn_off)
+
+def _travel_mode_can_be_enabled_by_voice_or_ui():
+    svcs = _FakeServices()
+    hass = _FakeHass(svcs, states={"input_boolean.living_lights_travel_mode": "off"})
+    args = {"domain": "input_boolean", "service": "turn_on",
+            "service_data": {"entity_id": ["input_boolean.living_lights_travel_mode"]}}
+    r = _exec_service(hass, args)
+    assert r["ok"] is True, r
+    assert len(svcs.calls) == 1, svcs.calls
+    assert svcs.calls[0]["service_data"]["entity_id"] == ["input_boolean.living_lights_travel_mode"]
+t("Travel Mode helper itself can still be turned on",
+  _travel_mode_can_be_enabled_by_voice_or_ui)
 
 # ── Living Lights persistent override guard ───────────────────────────
 section("Living Lights execute_services reroute")

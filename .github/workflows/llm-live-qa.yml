@@ -1,0 +1,111 @@
+name: llm live qa
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "Live QA suite to run"
+        required: true
+        default: "read-only"
+        type: choice
+        options:
+          - read-only
+          - travel-mode
+          - write-gated
+          - ui-live
+
+permissions:
+  contents: read
+
+concurrency:
+  group: llm-live-qa
+  cancel-in-progress: false
+
+jobs:
+  live:
+    name: live home-stack QA
+    # Manual, deploy-only runner. This job talks to the real home stack, so it
+    # must stay on trusted main and must not run arbitrary PR code.
+    runs-on: [self-hosted, linux, x64, home-web]
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Require trusted main ref
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
+            echo "Refusing live QA from ${GITHUB_REF}. Run this workflow from main."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          npm install --no-audit --no-fund
+          python3 -m pip install --user --quiet httpx websockets
+
+      - name: Load local HA credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          env_file="/opt/home-ai-voice/.env"
+          if [[ ! -r "${env_file}" ]]; then
+            echo "Cannot read ${env_file}"
+            exit 1
+          fi
+          ha_url="$(sed -n 's/^HA_URL=//p' "${env_file}" | head -n1 | tr -d "'\"")"
+          ha_token="$(sed -n 's/^HA_TOKEN=//p' "${env_file}" | head -n1 | tr -d "'\"")"
+          if [[ -z "${ha_url}" || -z "${ha_token}" ]]; then
+            echo "HA_URL or HA_TOKEN missing in ${env_file}"
+            exit 1
+          fi
+          echo "::add-mask::${ha_token}"
+          echo "HA_URL=${ha_url}" >> "${GITHUB_ENV}"
+          echo "HA_TOKEN=${ha_token}" >> "${GITHUB_ENV}"
+
+      - name: Run selected suite
+        shell: bash
+        env:
+          SUITE: ${{ inputs.suite }}
+          HOME_APP_URL: https://home-app.taild52a15.ts.net
+          HOME_LLM_UI_PROMPT: Whats in my driveway
+          HOME_LLM_UI_WAIT_MS: "60000"
+          HOME_UI_HA_URL: /proxy/ha
+          PYTHONIOENCODING: utf-8
+        run: |
+          set -euo pipefail
+          case "${SUITE}" in
+            read-only)
+              python3 tools/diagnose-identity.py --workflow --quick
+              ;;
+            travel-mode)
+              python3 tools/diagnose-identity.py --workflow --quick --only travel_mode_blocks_light_on --include-write-gated
+              ;;
+            write-gated)
+              python3 tools/diagnose-identity.py --workflow --quick --include-write-gated
+              ;;
+            ui-live)
+              npm install --no-save playwright
+              mkdir -p tools/reports/llm-ui-live
+              HOME_UI_REQUIRE_BROWSER=1 HOME_UI_HA_TOKEN="${HA_TOKEN}" QA_REPORT_DIR=tools/reports/llm-ui-live node tools/run-chat-ui-regression.js
+              ;;
+            *)
+              echo "Unknown suite: ${SUITE}"
+              exit 2
+              ;;
+          esac
+
+      - name: Upload QA reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: llm-live-qa-${{ inputs.suite }}
+          path: |
+            tools/diagnose-report.md
+            tools/reports/llm-workflow/**
+            tools/reports/llm-ui-live/**
+          if-no-files-found: ignore

@@ -21,6 +21,13 @@
     "test:services": "node tools/run-home-services-tests.js",
     "test:resilience": "node tools/run-resilience-tests.js",
     "test:apartment3d": "node tools/run-apartment-3d-contract-tests.js",
+    "test:chat-dedupe": "node tools/run-chat-dedupe-tests.js",
+    "llm:test:deterministic": "node tools/run-chat-dedupe-tests.js && py -3 tools/test-workflow-scenarios.py",
+    "llm:test:quick": "py -3 tools/diagnose-identity.py --workflow --quick --phase1-only",
+    "llm:test:read-only": "py -3 tools/diagnose-identity.py --workflow --quick",
+    "llm:test:write-gated": "py -3 tools/diagnose-identity.py --workflow --quick --include-write-gated",
+    "llm:test:travel-mode": "py -3 tools/diagnose-identity.py --workflow --quick --only travel_mode_blocks_light_on --include-write-gated",
+    "llm:test:ui": "node tools/run-chat-ui-regression.js",
     "dev:home2": "npm --workspace apps/home-2 run dev",
     "build:home2": "npm --workspace apps/home-2 run build",
     "test:home2": "npm --workspace apps/home-2 run test"

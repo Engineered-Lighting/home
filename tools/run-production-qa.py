@@ -10,8 +10,8 @@ Stage map:
     1. Unit tests              (run-test-coverage.py)   — < 10s
     2. Live service health     (qa-service-probes.py)   — < 30s
     3. Feature probe matrix    (probe-runner.py)         — read-only by default
-    4. UI app smoke            (qa-browser-smoke.js)     — local shell/Atlas
-    5. Workflow scenarios      (diagnose-identity.py)    — write-gated opt-in
+    4. UI app smoke            (qa-browser-smoke.js)     — local app shell
+    5. Workflow scenarios      (diagnose-identity.py)    — read-only; writes opt-in
     6. Cleanup                 (qa-state-guard.py)      — always runs
 
 Per AR31-9 (crash recovery), checkpoint is written BEFORE and AFTER
@@ -75,9 +75,9 @@ STAGES: list[StageDef] = [
     StageDef("stage3", "Feature probe matrix",
              description="Feature-validation probes from tools/feature-validation-probes.json"),
     StageDef("stage4", "UI app smoke",
-             description="Local app shell + Atlas source smoke"),
+             description="Local app shell + intelligence route source smoke"),
     StageDef("stage5", "Workflow scenarios",
-             description="diagnose-identity.py --workflow (skipped by --quick)"),
+             description="diagnose-identity.py --workflow read-only (skipped by --quick)"),
     StageDef("stage6", "Cleanup", always_run=True,
              description="State restore (qa-state-guard.py)"),
 ]
@@ -379,24 +379,20 @@ def run_stage4(state: OrchestratorState) -> qc.StageResult:
 
 
 def run_stage5(state: OrchestratorState) -> qc.StageResult:
-    """Workflow command validation. The existing workflow suite can call
-    safe-listed write actions, so it is opt-in only."""
+    """Workflow command validation.
+
+    Runs read-only workflow scenarios by default. Safe-listed writes,
+    helper-state setup, and Travel Mode mutation tests remain opt-in via
+    --include-write-gated.
+    """
     print(qc.bold("\n---- Stage 5: Workflow scenarios ----"))
     _stage_begin(state, "stage5")
     t0 = time.monotonic()
-    if not state.cli_args.get("include_write_gated"):
-        result = qc.StageResult(
-            name="Workflow scenarios", status="SKIP",
-            started_at=t0, elapsed_s=0,
-            summary="write-gated workflow scenarios excluded by default",
-            details={"required_flag": "--include-write-gated"},
-            artifacts=["stage5.json"],
-        )
-        _stage_end(state, "stage5", result)
-        return result
 
     cmd = ["py", "-3", str(qc.REPO_ROOT / "tools" / "diagnose-identity.py"),
            "--workflow", "--quick", "--phase1-only"]
+    if state.cli_args.get("include_write_gated"):
+        cmd.append("--include-write-gated")
     try:
         res = subprocess.run(cmd, capture_output=True, text=True,
                              encoding="utf-8", errors="replace", timeout=240,
@@ -413,6 +409,7 @@ def run_stage5(state: OrchestratorState) -> qc.StageResult:
     elapsed = time.monotonic() - t0
     details = {
         "exit_code": exit_code,
+        "mode": "read-only + write-gated" if state.cli_args.get("include_write_gated") else "read-only",
         "stdout_tail": stdout_tail,
         "stderr_tail": stderr_tail,
         "timed_out": timed_out,

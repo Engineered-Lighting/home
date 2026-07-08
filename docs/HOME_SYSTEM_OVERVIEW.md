@@ -680,7 +680,7 @@ The per-zone deltas:
 
 ### 10f. Travel Mode
 
-`living_lights_observability.yaml` declares `input_boolean.living_lights_travel_mode`, and `/lights` exposes it as the Travel Mode card. When ON, generated pilots, the gradient actuator, the CT direct-push path, ambient switches, and the HomeAI return-home scene refuse to turn known lights on. `living_lights_travel_mode.yaml` is the enforcement backstop: on HA start, every 5 minutes, and whenever a known lighting output reports `on`, it pushes those bulbs/switches back off.
+`living_lights_observability.yaml` declares `input_boolean.living_lights_travel_mode`, and `/lights` exposes it as the Travel Mode card. When ON, generated pilots, the gradient actuator, the CT direct-push path, ambient switches, and the HomeAI return-home scene refuse to turn known lights on. The native voice/tool dispatcher also blocks direct light/switch energizing calls before dispatch. `living_lights_travel_mode.yaml` is the enforcement backstop: on HA start, every 5 minutes, and whenever a known lighting output reports `on`, it pushes those bulbs/switches back off.
 
 ### 10g. Counts
 
@@ -1085,7 +1085,7 @@ cargo tauri dev
 - Sim mode is purely UI fixtures — no HA, no AI box, no cameras.
 - Real mode is the only way to exercise voice + lighting + cameras.
 - `docs/SCENARIO-TESTS.md` has UI-only scenario harness.
-- `tools/diagnose-identity.py --workflow` runs the W-mode planner-test suite against a real HA (mutates `light.office` + `media_player.living_room` only).
+- `tools/diagnose-identity.py --workflow` runs the read-only W-mode planner-test suite against a real HA. Safe-listed writes, including Travel Mode mutation tests, require `--include-write-gated`.
 
 ---
 

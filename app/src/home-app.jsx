@@ -294,6 +294,8 @@ function duplicateEventGroupKey(kind) {
 }
 
 function isRecentDuplicateEvent(prev, ev, lookback = 10, windowMs = 8000) {
+  if (isRedundantPerceptionOfAssistant(prev, ev, lookback, windowMs)) return true;
+
   const group = duplicateEventGroupKey(ev?.kind);
   const target = canonicalChatText(ev?.text);
   if (!group || !target) return false;
@@ -305,6 +307,35 @@ function isRecentDuplicateEvent(prev, ev, lookback = 10, windowMs = 8000) {
     if (canonicalChatText(e?.text) !== target) continue;
     if (!_withinWindow(e.time, windowMs, now)) continue;
     return true;
+  }
+  return false;
+}
+
+function perceptionAnswerText(text) {
+  const normalized = normalizeChatEventText(text || "");
+  const lines = normalized
+    .replace(/\r\n/g, "\n")
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length >= 2 && /^[a-z0-9_ -]{2,32}$/i.test(lines[0])) {
+    return lines.slice(1).join(" ");
+  }
+  return normalized.replace(/^[a-z0-9_ -]{2,32}:\s*/i, "");
+}
+
+function isRedundantPerceptionOfAssistant(prev, ev, lookback = 10, windowMs = 8000) {
+  if (ev?.kind !== "perception") return false;
+  const target = perceptionAnswerText(ev.text);
+  if (!canonicalChatText(target)) return false;
+
+  const now = new Date();
+  const start = Math.max(0, prev.length - lookback);
+  for (let i = prev.length - 1; i >= start; i--) {
+    const e = prev[i];
+    if (e?.kind !== "home") continue;
+    if (!_withinWindow(e.time, windowMs, now)) continue;
+    if (isNearDuplicateChatText(e.text || "", target)) return true;
   }
   return false;
 }

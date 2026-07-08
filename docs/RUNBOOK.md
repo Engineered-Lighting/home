@@ -816,14 +816,16 @@ against the live agent. All three write to `tools/diagnose-report.md`.
 |---|---|---|---|
 | **V** (validation, default) | *(no flag)* | Spelling rule + classifier + transcript delivery + live conversation regressions (9 scenarios) | Sends ~12 REST conversations |
 | **D** (discovery) | `--watch <seconds>` | Tail real traffic for N seconds, flag anomalies in routing log / WS events / bridge logs | Read-only |
-| **W** (workflow) | `--workflow` | Multi-step agent planning — 8 Phase-1 + 7 Phase-2 + 4 Phase-3 mute scenarios, 5 attempts each, asserts on tool-call sequence | Mutates `light.office` + `media_player.living_room` only (enforced by safe-entity guard) |
+| **W** (workflow) | `--workflow` | Multi-step agent planning across read-only and write-gated scenarios, 5 attempts each, asserts on tool-call sequence | Read-only by default. Safe-listed helper/device writes require `--include-write-gated` and are enforced by the safe-entity guard. |
 
 ### W mode (workflow planning tests)
 
 ```powershell
 cd C:\Claude\home
-PYTHONIOENCODING=utf-8 py -3 tools/diagnose-identity.py --workflow             # full 19 scenarios × 5 attempts (~10-15 min)
-PYTHONIOENCODING=utf-8 py -3 tools/diagnose-identity.py --workflow --quick     # 3 attempts each (~6-8 min)
+PYTHONIOENCODING=utf-8 py -3 tools/diagnose-identity.py --workflow             # read-only scenarios × 5 attempts
+PYTHONIOENCODING=utf-8 py -3 tools/diagnose-identity.py --workflow --quick     # read-only scenarios × 3 attempts
+PYTHONIOENCODING=utf-8 py -3 tools/diagnose-identity.py --workflow --quick --include-write-gated  # opt-in safe-listed writes
+PYTHONIOENCODING=utf-8 py -3 tools/diagnose-identity.py --workflow --quick --only travel_mode_blocks_light_on --include-write-gated  # guarded Travel Mode E2E
 PYTHONIOENCODING=utf-8 py -3 tools/diagnose-identity.py --workflow --phase1-only  # only the 8 mechanical scenarios
 PYTHONIOENCODING=utf-8 py -3 tools/diagnose-identity.py --workflow --strict    # require N/N pass (no drift)
 PYTHONIOENCODING=utf-8 py -3 tools/diagnose-identity.py --workflow --only office_dim_warm,who_then_dim   # single-scenario debug

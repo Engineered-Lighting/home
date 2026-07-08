@@ -1,0 +1,36 @@
+name: llm response qa
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic:
+    name: deterministic chat and ui contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Node dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Chat de-duplication contracts
+        run: node tools/run-chat-dedupe-tests.js
+
+      - name: Workflow scenario contracts
+        run: python3 tools/test-workflow-scenarios.py
+
+      - name: Browser transcript static regression
+        run: node tools/run-chat-ui-regression.js
+
+      - name: App-shell smoke
+        run: node tools/qa-browser-smoke.js

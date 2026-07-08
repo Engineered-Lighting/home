@@ -247,12 +247,10 @@ def test_travel_mode_guard_blocks_energizing_service_calls() -> None:
     assert travel.setup_state and travel.teardown_state, "travel scenario must restore helper state"
     entities = ws.preflight_entities_for([travel])
     assert ws.TRAVEL_MODE_ENTITY in entities, "travel helper should be preflighted"
-    assert any(assertion.name == "execute_services" and assertion.args_predicate is None
-               for assertion in travel.forbidden_tools), \
-        "travel scenario must forbid all service calls while travel mode is on"
-    assert any(assertion.args_predicate is ws.any_light_or_switch_on
-               for assertion in travel.forbidden_tools), \
-        "travel scenario must forbid light/switch turn_on/toggle calls"
+    assert not travel.forbidden_tools, \
+        "tool-layer TravelModeBlocked is the safety boundary; live scenario validates block speech"
+    assert travel.speech_must_match, "travel scenario must require block/refusal speech"
+    assert travel.speech_must_not_match, "travel scenario must reject success phrasing"
 
 
 t("travel mode guard blocks energizing light and switch service calls",

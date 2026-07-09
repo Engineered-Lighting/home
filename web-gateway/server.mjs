@@ -900,6 +900,81 @@ function handleHealthz(req, res) {
   sendJson(res, 200, body, { "Cache-Control": "no-store" });
 }
 
+function handleResetCache(req, res) {
+  if (req.method === "HEAD") {
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+    });
+    res.end();
+    return;
+  }
+  if (req.method !== "GET") {
+    res.writeHead(405, { "Cache-Control": "no-store", Allow: "GET, HEAD" });
+    res.end();
+    return;
+  }
+
+  const freshTarget = `/?fresh=${encodeURIComponent(BUILD_ASSET_VERSION)}`;
+  const body = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Resetting Home Cache</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #050606;
+      color: #f4f7f8;
+      font: 15px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    main { width: min(30rem, calc(100vw - 3rem)); }
+    p { color: #aeb8bd; }
+    a { color: #9dccff; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>resetting home cache</h1>
+    <p id="status">clearing service worker and cached app assets...</p>
+    <p><a href="${freshTarget}">open home</a></p>
+  </main>
+  <script>
+    (async function () {
+      const status = document.getElementById("status");
+      try {
+        if ("serviceWorker" in navigator && navigator.serviceWorker.getRegistrations) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(regs.map((reg) => reg.unregister()));
+        }
+        if ("caches" in window && caches.keys) {
+          const names = await caches.keys();
+          await Promise.all(names
+            .filter((name) => /^home-web-static-/.test(name))
+            .map((name) => caches.delete(name)));
+        }
+        status.textContent = "cache cleared. loading the current build...";
+      } catch (err) {
+        status.textContent = "cache reset had a problem, trying a fresh load anyway...";
+      }
+      window.location.replace("${freshTarget}");
+    })();
+  </script>
+</body>
+</html>`;
+  res.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Length": Buffer.byteLength(body),
+    "Cache-Control": "no-store",
+  });
+  res.end(body);
+}
+
 function serveStatic(req, res) {
   const parsed = new URL(req.url, "http://home.local");
   if (parsed.pathname.startsWith("/assets/apartment/")) {
@@ -1033,6 +1108,10 @@ const server = http.createServer(async (req, res) => {
   const parsed = new URL(req.url, "http://home.local");
   if (parsed.pathname === "/healthz") {
     handleHealthz(req, res);
+    return;
+  }
+  if (parsed.pathname === "/reset-cache") {
+    handleResetCache(req, res);
     return;
   }
   if (parsed.pathname === "/auth" || parsed.pathname.startsWith("/auth/")) {

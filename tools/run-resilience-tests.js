@@ -342,6 +342,19 @@ async function testHealthz() {
     assert("HEAD /healthz sets Cache-Control: no-store",
       /no-store/.test(String(head.headers["cache-control"] || "")), head.headers["cache-control"]);
     assert("HEAD /healthz has an empty body", head.body === "", JSON.stringify(head.body));
+
+    const reset = await request(port, "/reset-cache", "GET");
+    assert("GET /reset-cache returns 200", reset.status === 200, reset.status);
+    assert("GET /reset-cache sets Cache-Control: no-store",
+      /no-store/.test(String(reset.headers["cache-control"] || "")), reset.headers["cache-control"]);
+    assert("GET /reset-cache unregisters service workers",
+      reset.body.includes("serviceWorker") && reset.body.includes("getRegistrations") && reset.body.includes("unregister"),
+      reset.body.slice(0, 200));
+    assert("GET /reset-cache clears home web static caches",
+      reset.body.includes("home-web-static-") && reset.body.includes("caches.delete"),
+      reset.body.slice(0, 200));
+    assert("GET /reset-cache reloads a fresh build URL",
+      reset.body.includes("/?fresh="), reset.body.slice(0, 200));
   } finally {
     if (child.exitCode == null) child.kill();
   }

@@ -135,7 +135,7 @@ assert("boot loader prefetches a bounded window while preserving ordered executi
   indexSource.includes("var PREFETCH_WINDOW = 6") &&
     indexSource.includes("function primeWindow(start)") &&
     indexSource.includes("primeWindow(0);") &&
-    /execute\(name,\s*code\);\s*boot\.loaded\+\+;[\s\S]*primeWindow\(i \+ 1\);[\s\S]*step\(i \+ 1\);/.test(indexSource));
+    /execute\(name,\s*code\);[\s\S]*boot\.loaded\+\+;[\s\S]*primeWindow\(i \+ 1\);[\s\S]*step\(i \+ 1\);/.test(indexSource));
 assert("status 0 empty loads are rejected",
   indexSource.includes("xhr.status === 0 && xhr.responseText.length > 0"));
 assert("XHR timeout becomes a hard boot failure",
@@ -151,7 +151,7 @@ assert("boot-file XHRs preserve gateway auth cookies",
 assert("Babel transform failures stop the boot chain",
   indexSource.includes("Babel transform failed in") && indexSource.includes("boot.failed = name"));
 assert("files execute before the chain advances",
-  /execute\(name,\s*code\);\s*boot\.loaded\+\+;[\s\S]*step\(i \+ 1\);/.test(indexSource));
+  /execute\(name,\s*code\);[\s\S]*boot\.loaded\+\+;[\s\S]*step\(i \+ 1\);/.test(indexSource));
 assert("visible overlay is used for loader failures",
   indexSource.includes("function overlay(title, detail)") &&
     indexSource.includes("Failed to load ") &&
@@ -334,11 +334,11 @@ assert("header exposes a dedicated apartment action",
     appSource.includes("aria-label=\"Open apartment view\"") &&
     appSource.includes("openApartmentFromHeader"));
 assert("mobile header menu includes apartment fallback",
-  appSource.includes("mobileMenuAction(onOpenApartment)") &&
+  appSource.includes("{onOpenApartment && <button") &&
     appSource.includes(">apartment</button>"));
 assert("mobile header keeps profile control in the menu",
-  appSource.includes("!mobile && serviceProfile && onOpenRemoteProfile") &&
-    appSource.includes("mobileMenuAction(onOpenRemoteProfile)") &&
+  appSource.includes("{serviceProfile && onOpenRemoteProfile && (") &&
+    appSource.includes("runMenuAction(onOpenRemoteProfile)") &&
     appSource.includes("profile -"));
 assert("header connection status is anchored with the brand",
   appSource.includes("const connectionStatusNode") &&

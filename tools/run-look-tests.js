@@ -39,7 +39,7 @@ function loadHelpers(cameras, extraWindow) {
   const end = source.indexOf("/* A plain text segment", start);
   if (start < 0 || end < 0) throw new Error("home-look helper block not found");
   const script = source.slice(start, end)
-    + "\nObject.assign(window, { LK_CAMERAS, lkParseArg, lkVisionUrl });";
+    + "\nObject.assign(window, { LK_CAMERAS, lkParseArg, lkVisionUrl, lkReasonZoomRequest });";
   const sandbox = {
     window: { ...(cameras ? { HG_CAMERAS: cameras } : {}), ...(extraWindow || {}) },
     React: {
@@ -54,11 +54,22 @@ function loadHelpers(cameras, extraWindow) {
   return sandbox.window;
 }
 
-(function main() {
+function loadAppDeepLookHelpers() {
+  const start = appSource.indexOf("const DEEP_LOOK_CAMERA_META");
+  const end = appSource.indexOf("const ASR_ALIASES", start);
+  if (start < 0 || end < 0) throw new Error("home-app deep look helper block not found");
+  const script = appSource.slice(start, end);
+  const sandbox = { window: {} };
+  vm.runInNewContext(script, sandbox, { filename: "home-app.deep-look.js" });
+  return sandbox.window;
+}
+
+(async function main() {
   process.stdout.write("\nlook_helper_exports_test\n");
   const api = loadHelpers();
   assert("lkParseArg exported in test harness", typeof api.lkParseArg === "function");
   assert("lkVisionUrl exported in test harness", typeof api.lkVisionUrl === "function");
+  assert("lkReasonZoomRequest exported in test harness", typeof api.lkReasonZoomRequest === "function");
   assert("fallback camera roster is present", Array.isArray(api.LK_CAMERAS) && api.LK_CAMERAS.length >= 5, api.LK_CAMERAS);
 
   process.stdout.write("\nlook_parse_default_roster_test\n");
@@ -89,6 +100,56 @@ function loadHelpers(cameras, extraWindow) {
   assert("web runtime vision default wins over metrics derivation", webLook.lkVisionUrl("http://192.168.0.100:8092") === "/proxy/vision", webLook.lkVisionUrl("http://192.168.0.100:8092"));
   assert("invalid metrics base returns empty string", api.lkVisionUrl("not a url") === "", api.lkVisionUrl("not a url"));
   assert("empty metrics base returns empty string", api.lkVisionUrl("") === "", api.lkVisionUrl(""));
+
+  process.stdout.write("\nnatural_deep_look_classifier_test\n");
+  const deep = loadAppDeepLookHelpers();
+  assert("apartment visual question triggers deep look", deep.detectDeepLookIntent("what do you see in my apartment")?.scope === "apartment", deep.detectDeepLookIntent("what do you see in my apartment"));
+  assert("home visual question uses home scope", deep.detectDeepLookIntent("what do you see in my home")?.scope === "home", deep.detectDeepLookIntent("what do you see in my home"));
+  assert("specific camera visual question resolves camera", deep.detectDeepLookIntent("look at the driveway")?.explicitCamera === "driveway", deep.detectDeepLookIntent("look at the driveway"));
+  assert("light state question does not trigger deep look", deep.detectDeepLookIntent("which lights are on") === null, deep.detectDeepLookIntent("which lights are on"));
+  assert("light action does not trigger deep look", deep.detectDeepLookIntent("turn off all my lights") === null, deep.detectDeepLookIntent("turn off all my lights"));
+
+  const selectedApt = deep.selectDeepLookCameras(
+    deep.detectDeepLookIntent("what do you see in my apartment"),
+    { rooms: { kitchen: { occupied: true, age_s: 5 }, living_room: { age_s: 30 } } },
+    3
+  ).map((c) => c.id);
+  assert("apartment smart selection prioritizes occupied indoor cameras", selectedApt[0] === "kitchen" && !selectedApt.includes("driveway"), selectedApt);
+  const selectedHome = deep.selectDeepLookCameras(
+    deep.detectDeepLookIntent("what do you see in my home"),
+    { rooms: { driveway: { occupied: true, age_s: 2 } } },
+    3
+  ).map((c) => c.id);
+  assert("home smart selection can include outdoor cameras", selectedHome.includes("driveway"), selectedHome);
+
+  process.stdout.write("\nlook_reason_zoom_request_test\n");
+  let seenRequest = null;
+  await api.lkReasonZoomRequest({
+    metricsBase: "http://192.168.0.100:8092",
+    camera: "kitchen",
+    question: "what is on the counter",
+    cacheBust: 123,
+    fetchImpl: async (url, opts) => {
+      seenRequest = { url, opts };
+      return {
+        ok: true,
+        async json() {
+          return {
+            camera: "kitchen",
+            answer: "a mug is on the counter",
+            overview_url: "/reason_zoom/kitchen/overview.jpg",
+            detail_url: "/reason_zoom/kitchen/detail.jpg",
+          };
+        },
+      };
+    },
+  }).then((data) => {
+    assert("reason_zoom request hits sidecar endpoint", seenRequest.url === "http://192.168.0.100:8091/reason_zoom", seenRequest);
+    assert("reason_zoom request posts camera/question", seenRequest.opts.body === JSON.stringify({ camera: "kitchen", question: "what is on the counter" }), seenRequest.opts.body);
+    assert("reason_zoom response creates cache-busted detail URL", data.detailUrl === "http://192.168.0.100:8091/reason_zoom/kitchen/detail.jpg?cb=123", data);
+  }).catch((e) => {
+    assert("reason_zoom request should not throw", false, e.message);
+  });
 
   process.stdout.write("\nlook_command_wiring_test\n");
   assert("HomeLookParseArg is exported to window", source.includes("window.HomeLookParseArg = lkParseArg;"));

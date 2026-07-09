@@ -89,6 +89,53 @@ function lkVisionUrl(metricsBase) {
   return "";
 }
 
+function lkAppendCacheBust(url, cacheBust) {
+  if (!url) return "";
+  const stamp = cacheBust || Date.now();
+  return String(url) + (String(url).includes("?") ? "&" : "?") + "cb=" + stamp;
+}
+
+function lkJoinUrl(base, path, cacheBust) {
+  if (!path) return "";
+  const raw = String(path);
+  if (/^https?:\/\//i.test(raw)) return lkAppendCacheBust(raw, cacheBust);
+  const b = String(base || "").replace(/\/+$/, "");
+  const p = raw.replace(/^\/+/, "");
+  return lkAppendCacheBust(b + "/" + p, cacheBust);
+}
+
+async function lkReasonZoomRequest(opts) {
+  const options = opts || {};
+  const question = String(options.question || "").trim();
+  if (!question) throw new Error("question required");
+  const visionBase = String(options.visionBase || lkVisionUrl(options.metricsBase) || "").replace(/\/+$/, "");
+  if (!visionBase) throw new Error("vision-sidecar URL not derivable");
+  const fetchImpl = options.fetchImpl || window.tauriFetch || fetch;
+  const camera = options.camera || "auto";
+  const r = await fetchImpl(visionBase + "/reason_zoom", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ camera, question }),
+    cache: "no-store",
+    signal: options.signal,
+  });
+  if (!r.ok) {
+    let detail = "";
+    try { detail = (await r.text()).slice(0, 180); } catch (_) {}
+    throw new Error("reason_zoom · HTTP " + r.status + (detail ? " · " + detail : ""));
+  }
+  const data = await r.json();
+  const shot = data.camera || camera || "auto";
+  const cb = options.cacheBust || Date.now();
+  return {
+    ...data,
+    camera: shot,
+    overviewUrl: lkJoinUrl(visionBase, data.overview_url, cb),
+    detailUrl: lkJoinUrl(visionBase, data.detail_url, cb),
+    visionBase,
+  };
+}
+
 /* A plain text segment of a reasoning trace, with any stray bare <box>
  * tags (boxes not paired with a <ref>) removed. */
 function lkPlain(s, key) {
@@ -173,7 +220,6 @@ function HomeLookDrawer({ open, onClose, metricsBase, sim,
     try { if (abortRef.current) abortRef.current.abort(); } catch (_) {}
     const controller = new AbortController();
     abortRef.current = controller;
-    const tauriFetch = window.tauriFetch || fetch;
     try {
       // /reason_zoom does the foveated two-pass loop: pass 1 locates the
       // single region most relevant to the question (the model picks); the
@@ -185,35 +231,23 @@ function HomeLookDrawer({ open, onClose, metricsBase, sim,
       // broad questions the model picks a wide box and pass 2 is
       // effectively a re-pass over the whole frame; for detail questions
       // it picks tight and pass 2 sees the zoomed pixels.
-      const r = await tauriFetch(vu + "/reason_zoom", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        // camera "auto" → the sidecar routes to the right room itself.
-        body: JSON.stringify({ camera: cam || "auto", question: qq }),
-        cache: "no-store",
+      const data = await lkReasonZoomRequest({
+        metricsBase,
+        camera: cam || "auto",
+        question: qq,
         signal: controller.signal,
       });
-      if (!r.ok) {
-        let detail = "";
-        try { detail = (await r.text()).slice(0, 180); } catch (_) {}
-        const msg = "reason_zoom · HTTP " + r.status + (detail ? " · " + detail : "");
-        setError(msg);
-        if (ot) ot({ type: "error", text: msg });
-        return;
-      }
-      const data = await r.json();
       setResult(data);
       // /reason_zoom returns relative paths in overview_url / detail_url
       // (e.g. "/reason_zoom/kitchen/overview.jpg"). Prepend the sidecar
       // base. Cache-buster ensures the new frame loads (the sidecar
       // writes the JPEG fresh on every reason_zoom call).
       const shot = data.camera || cam || "kitchen";
-      const cb = "?cb=" + Date.now();
-      setFrameUrl(vu + data.overview_url + cb);
-      setDetailUrl(vu + data.detail_url + cb);
+      setFrameUrl(data.overviewUrl);
+      setDetailUrl(data.detailUrl);
       if (ot) ot({
         type: "answer", camera: shot, answer: data.answer || "",
-        annotatedUrl: vu + data.detail_url + cb,
+        annotatedUrl: data.detailUrl || null,
       });
     } catch (e) {
       if (e && e.name === "AbortError") return;
@@ -569,3 +603,5 @@ function HomeLookDrawer({ open, onClose, metricsBase, sim,
 
 window.HomeLookDrawer = HomeLookDrawer;
 window.HomeLookParseArg = lkParseArg;
+window.HomeLookReasonZoomRequest = lkReasonZoomRequest;
+window.HomeLookVisionUrl = lkVisionUrl;

@@ -229,14 +229,11 @@ function loadServiceWorkerInstall(opts = {}) {
 async function testServiceWorkerPrecache() {
   process.stdout.write("\nservice_worker_precache_test\n");
   const EXPECTED = [
-    "/",
-    "home-web-runtime.js",
-    "home-services.js",
     "home-tokens.css",
-    "home-tauri.jsx",
-    "home-app.jsx",
-    "home-events.jsx",
-    "home-people.jsx",
+    "favicon.svg",
+    "favicon-32.png",
+    "apple-touch-icon.png",
+    "site.webmanifest",
   ];
 
   // Happy path: install precaches the shell list into the versioned cache.
@@ -255,7 +252,10 @@ async function testServiceWorkerPrecache() {
       Array.isArray(state.addAllArgs) && !state.addAllArgs.some((u) => /home-service-worker\.js/.test(u)),
       state.addAllArgs);
     assert("precache list excludes heavy apartment assets",
-      Array.isArray(state.addAllArgs) && !state.addAllArgs.some((u) => /\.(ply|spz|glb|png|jpe?g|webp)$/i.test(u)),
+      Array.isArray(state.addAllArgs) && !state.addAllArgs.some((u) => /^\/?assets\/apartment\//.test(u)),
+      state.addAllArgs);
+    assert("precache list excludes executable app code",
+      Array.isArray(state.addAllArgs) && !state.addAllArgs.some((u) => /\.(js|jsx)$/i.test(u) || u === "/"),
       state.addAllArgs);
   }
 

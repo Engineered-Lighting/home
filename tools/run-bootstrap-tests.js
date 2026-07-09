@@ -178,24 +178,24 @@ assert("service worker derives its cache name from the per-deploy ?v= version",
 assert("service worker install skips waiting and activate claims clients",
   serviceWorkerSource.includes("self.skipWaiting()") &&
     serviceWorkerSource.includes("self.clients.claim()"));
-assert("service worker network-first uses a timeout with cache fallback",
-  serviceWorkerSource.includes("function fetchWithTimeout") &&
-    serviceWorkerSource.includes("NETWORK_TIMEOUT_MS") &&
-    /catch[\s\S]*cache\.match\(request\)[\s\S]*return cached/.test(serviceWorkerSource));
-assert("service worker prefers network for JSX modules once warm",
-  serviceWorkerSource.includes("function preferNetwork") &&
-    serviceWorkerSource.includes("NETWORK_PREFERRED_AFTER_MS") &&
-    /isJsxModule\(url\) && preferNetwork\(\)/.test(serviceWorkerSource));
+assert("service worker bypasses app shell and app code modules",
+  serviceWorkerSource.includes("function isAppCodeModule") &&
+    serviceWorkerSource.includes("isAppShell(request, url) || isAppCodeModule(url)") &&
+    serviceWorkerSource.includes("avoids stale code on"));
 assert("service worker logs its version on install and activate",
   serviceWorkerSource.includes("[home-sw]") &&
     serviceWorkerSource.includes("installing") &&
     serviceWorkerSource.includes("active"));
-assert("service worker install precaches the app shell best-effort",
+assert("service worker install precaches non-code shell assets best-effort",
   serviceWorkerSource.includes("PRECACHE_URLS") &&
     /caches\.open\(CACHE_NAME\)[\s\S]*addAll\(PRECACHE_URLS\)/.test(serviceWorkerSource) &&
     serviceWorkerSource.includes("event.waitUntil(precacheShell())") &&
     /async function precacheShell\(\)\s*\{[\s\S]*try\s*\{[\s\S]*addAll\(PRECACHE_URLS\)[\s\S]*\}\s*catch/.test(serviceWorkerSource) &&
     serviceWorkerSource.includes("self.skipWaiting()"));
+assert("service worker precache excludes app shell and app modules",
+  !/PRECACHE_URLS\s*=\s*\[[\s\S]*["']\/["'][\s\S]*\]/.test(serviceWorkerSource) &&
+    !/PRECACHE_URLS\s*=\s*\[[\s\S]*home-app\.jsx[\s\S]*\]/.test(serviceWorkerSource) &&
+    !/PRECACHE_URLS\s*=\s*\[[\s\S]*home-web-runtime\.js[\s\S]*\]/.test(serviceWorkerSource));
 assert("service worker precache never caches the worker itself",
   serviceWorkerSource.includes("PRECACHE_URLS") &&
     !/PRECACHE_URLS\s*=\s*\[[\s\S]*home-service-worker\.js[\s\S]*\]/.test(serviceWorkerSource));

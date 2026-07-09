@@ -121,6 +121,17 @@ assert("adjacent duplicate paragraphs collapse",
 assert("adjacent duplicate word-runs collapse when long enough",
   H.normalizeChatEventText("A car is parked outside A car is parked outside") === "A car is parked outside");
 
+const apartmentStatusAnswer = "I don't currently see anyone in any room. The driveway camera shows a person in a red shirt standing near a covered car, while another person walks a dog across the street. The kitchen appears to be empty with the stove, sink, and open cabinets visible. All other rooms seem unoccupied at the moment.";
+
+assert("screenshot apartment status duplicate paragraph collapses",
+  H.normalizeChatEventText(`${apartmentStatusAnswer}\n\n${apartmentStatusAnswer}`) === apartmentStatusAnswer);
+
+assert("screenshot apartment status final merge stays single",
+  H.mergeStreamingText(apartmentStatusAnswer, apartmentStatusAnswer) === apartmentStatusAnswer);
+
+assert("screenshot apartment status duplicated final merge collapses",
+  H.mergeStreamingText(apartmentStatusAnswer, `${apartmentStatusAnswer}\n\n${apartmentStatusAnswer}`) === apartmentStatusAnswer);
+
 assert("short repeated phrases are preserved",
   H.normalizeChatEventText("no no no no no no") === "no no no no no no");
 

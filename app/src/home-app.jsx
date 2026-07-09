@@ -186,8 +186,12 @@ function collapseRepeatedAdjacentText(text) {
 }
 
 function normalizeChatEventText(text) {
+  const corrected = applyAsrCorrection(text);
+  const adjacentCollapsed = collapseRepeatedAdjacentText(corrected);
+  const sentenceCollapsed = collapseRepeatedSentenceBlocks(adjacentCollapsed);
+  const halfCollapsed = collapseRepeatedTokenHalves(sentenceCollapsed);
   return collapseRepeatedAdjacentText(collapseNearDuplicateClauses(
-    collapseRepeatedAdjacentText(applyAsrCorrection(text)),
+    halfCollapsed || sentenceCollapsed,
   ));
 }
 
@@ -216,6 +220,34 @@ function collapseOverlappingWordRuns(words) {
 
   const collapsed = out.join(" ");
   return collapsed && collapsed !== words.join(" ") ? collapsed : "";
+}
+
+function collapseRepeatedTokenHalves(text) {
+  const normalized = canonicalChatText(text);
+  if (!normalized) return "";
+  const words = normalized.split(" ").filter(Boolean);
+  if (words.length < 8 || words.length % 2 !== 0) return "";
+  const mid = words.length / 2;
+  const first = words.slice(0, mid).join(" ");
+  const second = words.slice(mid).join(" ");
+  if (first.length >= 24 && first === second) return first;
+  return "";
+}
+
+function collapseRepeatedSentenceBlocks(text) {
+  if (typeof text !== "string" || !text) return text;
+  const clauses = splitChatClauses(text);
+  if (clauses.length < 4 || clauses.length % 2 !== 0) return text;
+  const mid = clauses.length / 2;
+  const first = clauses.slice(0, mid).join(" ");
+  const second = clauses.slice(mid).join(" ");
+  if (
+    canonicalChatText(first).length >= 40
+    && canonicalChatText(first) === canonicalChatText(second)
+  ) {
+    return first;
+  }
+  return text;
 }
 
 function mergeByWordOverlap(current, incoming) {
@@ -8544,18 +8576,19 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // PersonaPlex speaks instead of dumping the whole utterance at
         // end-of-speech (PersonaPlex can ramble for 60+ seconds).
         if (role === "assistant") {
+          const cleanText = normalizeChatEventText(text || "");
           if (partial) {
             setEvents((prev) => {
               // Append/replace the live streaming home event for this turn.
               const last = prev[prev.length - 1];
               if (last && last.kind === "home" && last.streaming) {
-                return [...prev.slice(0, -1), { ...last, text }];
+                return [...prev.slice(0, -1), { ...last, text: cleanText }];
               }
               return [...prev, {
                 id: nextId(),
                 kind: "home",
                 time: fmtTime(),
-                text,
+                text: cleanText,
                 streaming: true,
               }];
             });
@@ -8566,16 +8599,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           setEvents((prev) => {
             const last = prev[prev.length - 1];
             if (last && last.kind === "home" && last.streaming) {
-              return [...prev.slice(0, -1), { ...last, text, streaming: false }];
+              return [...prev.slice(0, -1), { ...last, text: cleanText, streaming: false }];
             }
             // Dedup against recent assistant bubbles: HA WS event and
             // s2s bridge can both fire for the same turn.
-            if (findRecentAssistantIdx(prev, text, "home", 20) !== -1) return prev;
+            if (findRecentAssistantIdx(prev, cleanText, "home", 20) !== -1) return prev;
             return [...prev, {
               id: nextId(),
               kind: "home",
               time: fmtTime(),
-              text,
+              text: cleanText,
             }];
           });
           setMetrics((prev) => ({

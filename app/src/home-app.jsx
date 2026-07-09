@@ -6185,6 +6185,11 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         if (!prog) return;
 
         if (prog.toolCalls && prog.toolCalls.length) {
+          // Tool calls can arrive after a short assistant preamble such as
+          // "I'll check...". Close that pre-tool bubble before inserting the
+          // system/tool beat; otherwise it remains streaming behind the final
+          // answer and the input row stays stuck on STOP.
+          finalizeStreamingBubble();
           for (const tc of prog.toolCalls) {
             turnToolCalls.push(tc);
             // Small "looking…" beat so the user sees the LLM commit to a
@@ -6215,6 +6220,21 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             }
             // First content delta of the turn — replace the thinking stub.
             const next = prev.filter((e) => e.id !== thinkingId);
+            if (streamingBubbleId) {
+              const previousId = streamingBubbleId;
+              streamingBubbleId = null;
+              streamingIds.current.delete(previousId);
+              for (let i = 0; i < next.length; i++) {
+                if (next[i].id === previousId) {
+                  next[i] = {
+                    ...next[i],
+                    text: normalizeChatEventText(next[i].text || ""),
+                    streaming: false,
+                  };
+                  break;
+                }
+              }
+            }
             const newId = nextId();
             streamingBubbleId = newId;
             streamingIds.current.add(newId);
@@ -6356,17 +6376,20 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       // by a streaming bubble), the existing filter removes the stub. If it
       // did start but HA never emitted intent-end, settle that bubble too so
       // the STOP affordance never remains wedged after run.done resolves.
+      const runStillActive = activeRunRef.current?.id === run.id;
       const pendingStreamingId = streamingBubbleId;
+      const staleStreamingIds = runStillActive ? new Set(streamingIds.current) : new Set();
       if (pendingStreamingId) {
         streamingBubbleId = null;
         streamingIds.current.delete(pendingStreamingId);
       }
+      if (runStillActive) streamingIds.current.clear();
       setEvents((prev) => prev
         .filter((e) => e.id !== thinkingId)
-        .map((e) => pendingStreamingId && e.id === pendingStreamingId
+        .map((e) => (pendingStreamingId && e.id === pendingStreamingId) || staleStreamingIds.has(e.id)
           ? { ...e, text: normalizeChatEventText(e.text || ""), streaming: false }
           : e));
-      if (activeRunRef.current?.id === run.id) activeRunRef.current = null;
+      if (runStillActive) activeRunRef.current = null;
     }
   }, [connection, conversationId, addEvent, metricsBase, endpoint, muteState?.muted]);
 

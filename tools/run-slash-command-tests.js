@@ -38,7 +38,7 @@ function assert(name, cond, detail) {
 
 function extractCatalog() {
   const start = source.indexOf("const SLASH_CMD_CATEGORIES");
-  const end = source.indexOf("function InputRow", start);
+  const end = source.indexOf("function FeatureLoadingSurface", start);
   if (start < 0 || end < 0) throw new Error("slash command catalog block not found");
   const script = source.slice(start, end) + "\nObject.assign(window, { SLASH_CMD_CATEGORIES, SLASH_CMDS });";
   const sandbox = { window: {} };
@@ -156,7 +156,7 @@ function completionValue(cmd, commands) {
   const renderEnd = source.indexOf("</div>", renderStart);
   const renderBlock = renderStart >= 0 && renderEnd >= 0 ? source.slice(renderStart, renderEnd) : "";
   assert("InputRow accepts the S80 control props",
-    /function InputRow\(\{\s*value,\s*onChange,\s*onSend,\s*voice,\s*onMicToggle,\s*isStreaming,\s*onStop,\s*focusToken,\s*mobile\s*=\s*false\s*\}\)/.test(inputBlock),
+    /function InputRow\(\{\s*value,\s*onChange,\s*onSend,\s*voice,\s*onMicToggle,\s*isStreaming,\s*onStop,\s*focusToken,\s*mobile\s*=\s*false,\s*theme\s*=\s*"dark"\s*\}\)/.test(inputBlock),
     inputBlock.slice(0, 300));
   assert("InputRow focus guard does not steal initial FirstRun focus",
     /useEffect\(\(\) => \{ if \(focusToken\) inputRef\.current\?\.focus\(\); \}, \[focusToken\]\)/.test(inputBlock),
@@ -198,10 +198,13 @@ function completionValue(cmd, commands) {
   const sendToHaBlock = sendToHaStart >= 0 && sendToHaEnd >= 0 ? source.slice(sendToHaStart, sendToHaEnd) : "";
   assert("sendToHA settles streaming bubble on intent-end and run completion",
     /const finalizeStreamingBubble = \(\) =>/.test(sendToHaBlock) &&
+    /if \(prog\.toolCalls && prog\.toolCalls\.length\) \{[\s\S]*finalizeStreamingBubble\(\);/.test(sendToHaBlock) &&
+    /const previousId = streamingBubbleId/.test(sendToHaBlock) &&
     /finalizeStreamingBubble\(\);/.test(sendToHaBlock) &&
     /const pendingStreamingId = streamingBubbleId/.test(sendToHaBlock) &&
-    /streamingIds\.current\.delete\(pendingStreamingId\)/.test(sendToHaBlock) &&
-    /e\.id === pendingStreamingId[\s\S]*streaming: false/.test(sendToHaBlock),
+    /const staleStreamingIds = runStillActive \? new Set\(streamingIds\.current\) : new Set\(\)/.test(sendToHaBlock) &&
+    /if \(runStillActive\) streamingIds\.current\.clear\(\)/.test(sendToHaBlock) &&
+    /staleStreamingIds\.has\(e\.id\)[\s\S]*streaming: false/.test(sendToHaBlock),
     sendToHaBlock.slice(-1600));
   assert("stopStreaming cancels active run, timers, and streaming ids",
     /activeRunRef\.current\.cancel\?\.\(\)/.test(stopBlock) &&

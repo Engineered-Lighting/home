@@ -978,6 +978,76 @@ async def _call_service(cfg: Cfg, op: dict) -> None:
         sys.stderr.write(f"_call_service: {domain}.{service} failed: {e}\n")
 
 
+# ─── HA state snapshot helpers (live workflow cleanup) ─────────────
+
+
+def _entity_ids_from_service_op(op: dict) -> list[str]:
+    data = op.get("data") or {}
+    target = op.get("target") or {}
+    raw = data.get("entity_id", target.get("entity_id"))
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return [raw]
+    if isinstance(raw, (list, tuple, set)):
+        return [item for item in raw if isinstance(item, str)]
+    return []
+
+
+def _restore_op_for_entity(entity_id: str, state: str) -> dict | None:
+    if entity_id.startswith("input_boolean.") and state in {"on", "off"}:
+        return {
+            "domain": "input_boolean",
+            "service": "turn_on" if state == "on" else "turn_off",
+            "data": {"entity_id": entity_id},
+        }
+    if entity_id.startswith("input_text."):
+        return {
+            "domain": "input_text",
+            "service": "set_value",
+            "data": {"entity_id": entity_id, "value": state or ""},
+        }
+    if entity_id.startswith("input_datetime.") and state not in {"unknown", "unavailable", ""}:
+        return {
+            "domain": "input_datetime",
+            "service": "set_datetime",
+            "data": {"entity_id": entity_id, "datetime": state},
+        }
+    return None
+
+
+async def _snapshot_service_entities(cfg: Cfg, ops: list[dict]) -> dict[str, str]:
+    """Capture mutable helper state before workflow setup changes it."""
+    entity_ids = sorted({
+        entity_id
+        for op in ops
+        for entity_id in _entity_ids_from_service_op(op)
+        if entity_id.startswith(("input_boolean.", "input_text.", "input_datetime."))
+    })
+    if not entity_ids:
+        return {}
+    headers = {"Authorization": f"Bearer {cfg.ha_token}"}
+    snapshot: dict[str, str] = {}
+    async with httpx.AsyncClient(timeout=8.0) as client:
+        for entity_id in entity_ids:
+            try:
+                r = await client.get(f"{cfg.ha_url}/api/states/{entity_id}", headers=headers)
+                if r.status_code == 200:
+                    state = r.json().get("state")
+                    if isinstance(state, str) and _restore_op_for_entity(entity_id, state):
+                        snapshot[entity_id] = state
+            except Exception as e:
+                sys.stderr.write(f"_snapshot_service_entities: {entity_id} failed: {e}\n")
+    return snapshot
+
+
+async def _restore_service_entity_snapshot(cfg: Cfg, snapshot: dict[str, str]) -> None:
+    for entity_id, state in snapshot.items():
+        op = _restore_op_for_entity(entity_id, state)
+        if op:
+            await _call_service(cfg, op)
+
+
 # ─── Preflight checks (exit 3 on any failure) ─────────────────────
 def preflight_classifier(scenarios) -> tuple[bool, list[str]]:
     """Run every scenario's query through external_routing.classify_intent
@@ -1317,6 +1387,9 @@ async def run_w_suite(cfg: Cfg, attempts_per: int = 5,
             wr = WorkflowResult(
                 scenario_id=sc.id, phase=sc.phase, threshold=sc.pass_threshold,
             )
+            state_snapshot = await _snapshot_service_entities(
+                cfg, list(sc.setup_state or []) + list(sc.teardown_state or [])
+            )
             for i in range(attempts_per):
                 conv_id = f"w-{sc.id[:20]}-{i+1}-{uuid.uuid4().hex[:8]}"
                 # Pre-scenario state setup (Phase 4A.9 addendum 9).
@@ -1375,10 +1448,15 @@ async def run_w_suite(cfg: Cfg, attempts_per: int = 5,
                     )
                     attempt.conv_id = conv_id
                 wr.attempts.append(attempt)
-                # Per-attempt cleanup so leftover mute state doesn't
-                # poison the next attempt or scenario.
-                for op in (sc.teardown_state or []):
-                    await _call_service(cfg, op)
+                # Per-attempt cleanup so leftover helper state doesn't
+                # poison the next attempt or scenario. Prefer restoring
+                # the state this live suite found over static fixture
+                # teardown values.
+                if state_snapshot:
+                    await _restore_service_entity_snapshot(cfg, state_snapshot)
+                else:
+                    for op in (sc.teardown_state or []):
+                        await _call_service(cfg, op)
                 # 500ms hygiene between attempts (give vLLM queue room).
                 await asyncio.sleep(0.5)
             # Drain WS event queue between scenarios (HA's WS has a

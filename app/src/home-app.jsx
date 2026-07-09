@@ -414,7 +414,7 @@ function HomeHeader({
   theme, onToggleTheme, voice, connection, sidecarOnline, bridgeOnline,
   bridgeHealth, visionSidecarOnline, visionHealth, frigateMetrics, cameraLabels,
   sim, muteState, onUnmuteClick, onOpenPeople, onOpenIntelligence,
-  onOpenVideoLabeler, onOpenApartment, onOpenSimulationControls, aiStackState, metrics,
+  onOpenVideoLabeler, onOpenApartment, onOpenLights, onOpenSimulationControls, aiStackState, metrics,
   serviceProfile, onOpenRemoteProfile, mobile = false,
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -557,6 +557,7 @@ function HomeHeader({
             )}
             {onOpenPeople && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenPeople)}>people</button>}
             {onOpenApartment && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenApartment)}>apartment</button>}
+            {onOpenLights && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenLights)}>lights</button>}
             {onOpenIntelligence && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenIntelligence)}>intelligence</button>}
             {onOpenVideoLabeler && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenVideoLabeler)}>video labeler</button>}
             {onToggleTheme && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onToggleTheme)}>{theme === "dark" ? "light mode" : "dark mode"}</button>}
@@ -10180,6 +10181,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         onOpenIntelligence={isSpatialWide ? null : openIntelligenceFeature}
         onOpenVideoLabeler={isSpatialWide ? null : openVideoLabelerFeature}
         onOpenApartment={isSpatialWide ? null : openApartmentFromHeader}
+        onOpenLights={isSpatialWide ? null : openLightsFeature}
         onOpenSimulationControls={() => setSimulationControlsOpen(true)}
         aiStackState={aiStackState}
         metrics={metrics}

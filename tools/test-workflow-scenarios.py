@@ -257,6 +257,22 @@ t("travel mode guard blocks energizing light and switch service calls",
   test_travel_mode_guard_blocks_energizing_service_calls)
 
 
+def test_live_runner_preserves_stateful_helper_state() -> None:
+    runner = (TOOLS_DIR / "diagnose-identity.py").read_text(encoding="utf-8")
+    assert "async def _snapshot_service_entities" in runner, \
+        "live runner should snapshot helper states before scenario setup"
+    assert "async def _restore_service_entity_snapshot" in runner, \
+        "live runner should restore the original helper states after attempts"
+    assert "list(sc.setup_state or []) + list(sc.teardown_state or [])" in runner, \
+        "runner should snapshot every helper touched by setup or teardown"
+    assert "await _restore_service_entity_snapshot(cfg, state_snapshot)" in runner, \
+        "runner should prefer restoring the starting state over static teardown"
+
+
+t("live runner preserves stateful helper state",
+  test_live_runner_preserves_stateful_helper_state)
+
+
 def test_cross_cutting_invariants_catch_planner_failures() -> None:
     assert ws.inv_non_empty_speech([], "done")[0] is True, "normal speech should pass"
     assert ws.inv_non_empty_speech([], "")[0] is False, "empty speech should fail"

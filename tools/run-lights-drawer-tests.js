@@ -164,6 +164,13 @@ async function expectReject(name, promise, pattern) {
 
   process.stdout.write("\ntravel_mode_wiring_test\n");
   assert("travel mode helper constant is present", source.includes('const TRAVEL_MODE_ENTITY = "input_boolean.living_lights_travel_mode";'));
+  assert("travel mode state has a local fail-safe cache", source.includes('const TRAVEL_MODE_CACHE_KEY = "home.lights.travelMode.state.v1";') && source.includes("function seedTravelModeState"));
+  assert("travel mode cache only seeds fail-closed on state", source.includes('getItem(TRAVEL_MODE_CACHE_KEY) === "on" ? "on" : null') && source.includes("removeItem(TRAVEL_MODE_CACHE_KEY)"));
+  assert("drawer seeds travel mode from cache before HA sync", source.includes("useState(() => seedTravelModeState({}))"));
+  assert("HA fetch reconciles cached travel mode state", source.includes("setStates(seedTravelModeState(map))"));
+  assert("travel mode state changes refresh the local cache", source.includes("if (eid === TRAVEL_MODE_ENTITY) persistTravelModeState(ns.state);"));
+  assert("enabling travel mode fails visually closed before confirmation", source.includes('setStates(prev => ({ ...prev, [TRAVEL_MODE_ENTITY]: makeTravelModeState("on", true) }));'));
+  assert("travel mode card has a checking state instead of showing off while unknown", source.includes('"checking travel mode"') && source.includes("Checking Home Assistant before showing the travel safety state."));
   assert("travel mode helper is covered by owned prefix subscription", source.includes('"input_boolean.living_lights_"'));
   const renderStart = source.indexOf("<div role=\"dialog\"");
   const travelRender = source.indexOf("<TravelModeCard", renderStart);
@@ -201,6 +208,12 @@ async function expectReject(name, promise, pattern) {
     source.includes("switch.workshop_light_right_mss110_main_channel"));
   assert("direct CT push is blocked while travel mode is on",
     source.includes('setError("travel mode is on: lighting output is blocked")'));
+
+  process.stdout.write("\nheader_menu_wiring_test\n");
+  const appSource = fs.readFileSync(path.join(REPO, "app", "src", "home-app.jsx"), "utf8");
+  assert("HomeHeader accepts lights menu opener", appSource.includes("onOpenApartment, onOpenLights, onOpenSimulationControls"));
+  assert("hamburger menu includes lowercase lights item", appSource.includes("onClick={() => runMenuAction(onOpenLights)}>lights</button>"));
+  assert("app passes /lights opener into HomeHeader", appSource.includes("onOpenLights={isSpatialWide ? null : openLightsFeature}"));
 
   if (fails) {
     console.log("\nFailures:");

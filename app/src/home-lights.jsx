@@ -43,6 +43,7 @@ const LIGHTS_ZONES = [
 ];
 
 const TRAVEL_MODE_ENTITY = "input_boolean.living_lights_travel_mode";
+const TRAVEL_MODE_CACHE_KEY = "home.lights.travelMode.state.v1";
 const TRAVEL_MODE_CONTROLLED_LIGHTS = [
   "light.dining_table_left",
   "light.dining_table_right",
@@ -92,6 +93,50 @@ function getAttr(statesByEntity, entity_id, attr, fallback = null) {
   if (!s?.attributes) return fallback;
   const v = s.attributes[attr];
   return v == null ? fallback : v;
+}
+function normalizeTravelModeState(value) {
+  return value === "on" || value === "off" ? value : null;
+}
+function makeTravelModeState(state, cached = false) {
+  return {
+    entity_id: TRAVEL_MODE_ENTITY,
+    state,
+    attributes: {
+      friendly_name: "Living Lights - travel mode (force off)",
+      _home_cached: cached,
+    },
+  };
+}
+function readCachedTravelModeState() {
+  if (typeof window === "undefined" || !window.localStorage) return null;
+  try {
+    // Fail closed only. A cached "off" could hide a true-on state from
+    // another device until HA sync completes, so we only seed from "on".
+    return window.localStorage.getItem(TRAVEL_MODE_CACHE_KEY) === "on" ? "on" : null;
+  } catch (_) {
+    return null;
+  }
+}
+function persistTravelModeState(state) {
+  const normalized = normalizeTravelModeState(state);
+  if (!normalized || typeof window === "undefined" || !window.localStorage) return;
+  try {
+    if (normalized === "on") window.localStorage.setItem(TRAVEL_MODE_CACHE_KEY, "on");
+    else window.localStorage.removeItem(TRAVEL_MODE_CACHE_KEY);
+  } catch (_) {
+    // localStorage may be unavailable in private/locked-down webviews.
+  }
+}
+function seedTravelModeState(map) {
+  const states = map && typeof map === "object" ? { ...map } : {};
+  const live = normalizeTravelModeState(states[TRAVEL_MODE_ENTITY]?.state);
+  if (live) {
+    persistTravelModeState(live);
+    return states;
+  }
+  const cached = readCachedTravelModeState();
+  if (cached) states[TRAVEL_MODE_ENTITY] = makeTravelModeState(cached, true);
+  return states;
 }
 function toNum(v, fallback = 0) {
   if (v == null) return fallback;
@@ -436,10 +481,16 @@ function CascadeCard({ title, subtitle, intro, winning, locked, children }) {
 // routing to the external provider (ChatGPT) for that one turn, bypassing
 // the local Qwen3-VL classifier (the local model has no code-editing
 // tools; the external API has the headroom to propose concrete changes).
-function TravelModeCard({ active, available, busy, disabled, onToggle, compact = false }) {
+function TravelModeCard({ active, available, cached, busy, disabled, onToggle, compact = false }) {
   const cardBorder = active ? "rgba(232,140,48,0.82)" : "var(--hg-border)";
-  const lockText = active ? "travel mode on" : "travel mode off";
-  const body = available
+  const lockText = !available ? "checking travel mode" : active ? "travel mode on" : "travel mode off";
+  const body = !available
+    ? "Checking Home Assistant before showing the travel safety state."
+    : cached
+    ? active
+      ? "Last known state is on; confirming with Home Assistant."
+      : "Confirming with Home Assistant."
+    : available
     ? active
       ? "Known lighting outputs are locked out and forced off."
       : "Turn this on before travel to block lighting automations and force known lights off."
@@ -580,7 +631,7 @@ function FrozenCard({ title, subtitle, intro, knobs, fileLocation, whyFrozen, cu
 
 function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askExternal, spatialMode = false }) {
   const [zone, setZone] = useState("office");
-  const [states, setStates] = useState({});  // { entity_id: { state, attributes } }
+  const [states, setStates] = useState(() => seedTravelModeState({}));  // { entity_id: { state, attributes } }
   const [error, setError] = useState(null);
   const [travelModeBusy, setTravelModeBusy] = useState(false);
   const subRef = useRef(null);
@@ -619,7 +670,7 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
       try {
         const map = await readHaStates();
         if (!active) return;
-        setStates(map);
+        setStates(seedTravelModeState(map));
         setError(null);
       } catch (e) {
         if (!active) return;
@@ -658,6 +709,7 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
         if (!owned && !isClassifier) return;
         const ns = ev.data?.new_state;
         if (!ns) return;
+        if (eid === TRAVEL_MODE_ENTITY) persistTravelModeState(ns.state);
         setStates(prev => ({ ...prev, [eid]: ns }));
       });
       subRef.current = unsub;
@@ -842,6 +894,10 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
     if (!haOnline) { setError(offlineWriteMessage); return; }
     setTravelModeBusy(true);
     try {
+      if (enabled) {
+        persistTravelModeState("on");
+        setStates(prev => ({ ...prev, [TRAVEL_MODE_ENTITY]: makeTravelModeState("on", true) }));
+      }
       await haCallService(client, "input_boolean", enabled ? "turn_on" : "turn_off", { entity_id: TRAVEL_MODE_ENTITY });
       if (enabled) await forceTravelLightsOff();
       let confirmedStates = null;
@@ -854,11 +910,13 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
       if (!confirmedHelper) {
         throw new Error("Travel Mode helper is not loaded in Home Assistant yet. Reload HA packages or restart HA Core.");
       }
+      const targetTravelModeState = enabled ? "on" : "off";
+      persistTravelModeState(targetTravelModeState);
       setStates(prev => ({
         ...(confirmedStates || prev),
         [TRAVEL_MODE_ENTITY]: {
           ...(confirmedHelper || prev[TRAVEL_MODE_ENTITY] || { entity_id: TRAVEL_MODE_ENTITY, attributes: {} }),
-          state: enabled ? "on" : "off",
+          state: targetTravelModeState,
         },
       }));
       setError(null);
@@ -880,6 +938,7 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
   const travelModeState = b(TRAVEL_MODE_ENTITY);
   const travelModeAvailable = travelModeState != null;
   const travelModeActive = travelModeState === "on";
+  const travelModeCached = !!getAttr(states, TRAVEL_MODE_ENTITY, "_home_cached", false);
   const cls = stateSensorFor(zone);
   const predBri = toNum(getAttr(states, cls, "predicted_brightness_pct"), null);
   const predCT  = toNum(getAttr(states, cls, "predicted_color_temp_kelvin"), null);
@@ -982,6 +1041,7 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
         <TravelModeCard
           active={travelModeActive}
           available={travelModeAvailable}
+          cached={travelModeCached}
           busy={travelModeBusy}
           disabled={!haOnline}
           onToggle={setTravelMode}

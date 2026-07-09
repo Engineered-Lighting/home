@@ -4531,6 +4531,26 @@ function findRecentAssistantLikeIdx(prev, text, kind = "home", lookback = 20, wi
   return -1;
 }
 
+function findPriorAssistantSameTurnIdx(prev, text, kind = "home", lookback = 60) {
+  const target = normalizeChatEventText(text || "");
+  const targetKey = canonicalChatText(target);
+  if (!targetKey) return -1;
+  const start = Math.max(0, prev.length - lookback);
+  for (let i = prev.length - 1; i >= start; i--) {
+    const e = prev[i];
+    if (e?.kind === "user" || e?.kind === "voice") return -1;
+    if (e?.kind !== kind) continue;
+    const existing = normalizeChatEventText(e.text || "");
+    if (canonicalChatText(existing) === targetKey) return i;
+    if (isNearDuplicateChatText(existing, target)) return i;
+  }
+  return -1;
+}
+
+function findAssistantDuplicateIdx(prev, text, kind = "home", lookback = 60) {
+  return findPriorAssistantSameTurnIdx(prev, text, kind, lookback);
+}
+
 function isDirectLightStateQuestion(text) {
   const t = String(text || "").toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
   if (!t) return false;
@@ -6261,7 +6281,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
               : -1;
             const existingIdx = activeIdx !== -1
               ? activeIdx
-              : findRecentAssistantLikeIdx(prev, speechText, "home", 30);
+              : findAssistantDuplicateIdx(prev, speechText, "home", 60);
             if (existingIdx !== -1) {
               return prev.map((e, i) => i === existingIdx
                 ? {
@@ -8627,7 +8647,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             }
             // Dedup against recent assistant bubbles: HA WS event and
             // s2s bridge can both fire for the same turn.
-            if (findRecentAssistantIdx(prev, cleanText, "home", 20) !== -1) return prev;
+            if (findAssistantDuplicateIdx(prev, cleanText, "home", 60) !== -1) return prev;
             return [...prev, {
               id: nextId(),
               kind: "home",
@@ -9012,7 +9032,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             nextEvents = [...nextEvents, ev];
             continue;
           }
-          const existingIdx = findRecentAssistantLikeIdx(nextEvents, ev.text, ev.kind, 20);
+          const existingIdx = findAssistantDuplicateIdx(nextEvents, ev.text, ev.kind, 60);
           if (existingIdx === -1) {
             nextEvents = [...nextEvents, ev];
             continue;
@@ -9473,7 +9493,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         const convId = d.conversation_id || null;
         setEvents((prev) => {
           const userIdx = findRecentUserIdx(prev, userTextC, 20);
-          const asstIdx = findRecentAssistantLikeIdx(prev, assistantTextC, "home", 30);
+          const asstIdx = findAssistantDuplicateIdx(prev, assistantTextC, "home", 60);
           const newUser = (userTextC && userIdx === -1)
             ? [{ id: nextId(), kind: "voice", time: fmtTime(), text: userTextC, convId }]
             : [];

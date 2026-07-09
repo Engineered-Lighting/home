@@ -51,6 +51,7 @@ const helperSource = [
     findRecentUserIdx,
     findRecentAssistantIdx,
     findRecentAssistantLikeIdx,
+    findAssistantDuplicateIdx,
   });
   `,
 ].join("\n");
@@ -131,6 +132,25 @@ assert("screenshot apartment status final merge stays single",
 
 assert("screenshot apartment status duplicated final merge collapses",
   H.mergeStreamingText(apartmentStatusAnswer, `${apartmentStatusAnswer}\n\n${apartmentStatusAnswer}`) === apartmentStatusAnswer);
+
+const fullPictureAnswer = "I don't have a full picture right now. I can describe specific rooms if you'd like\u2014just say which one.";
+
+assert("screenshot full-picture duplicate paragraph collapses",
+  H.normalizeChatEventText(`${fullPictureAnswer}\n\n${fullPictureAnswer}`) === fullPictureAnswer);
+
+assert("delayed duplicate assistant answer is found within same turn",
+  H.findAssistantDuplicateIdx([
+    { kind: "user", time: nowTime(), text: "What do you see in my home" },
+    { kind: "home", time: nowTime(), text: fullPictureAnswer },
+    { kind: "perception", time: nowTime(), text: "driveway: A person walks by." },
+  ], fullPictureAnswer, "home", 60) === 1);
+
+assert("same assistant answer after a new user turn is preserved",
+  H.findAssistantDuplicateIdx([
+    { kind: "user", time: nowTime(), text: "What do you see in my home" },
+    { kind: "home", time: nowTime(), text: fullPictureAnswer },
+    { kind: "user", time: nowTime(), text: "Ask again" },
+  ], fullPictureAnswer, "home", 60) === -1);
 
 assert("short repeated phrases are preserved",
   H.normalizeChatEventText("no no no no no no") === "no no no no no no");

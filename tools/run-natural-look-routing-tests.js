@@ -88,16 +88,17 @@ function eventTexts(events) {
 
   process.stdout.write("\nabstract_visual_positive_scenarios\n");
   [
-    ["what do you see in my apartment", "apartment", null],
-    ["what's going on inside", "apartment", null],
-    ["check my apartment visually", "apartment", null],
-    ["what's happening in the kitchen", "apartment", "kitchen"],
-    ["look at the driveway", "home", "driveway"],
-    ["does anything look weird", "apartment", null],
-    ["give me a visual status", "apartment", null],
-  ].forEach(([prompt, scope, camera]) => {
+    ["what do you see in my apartment", "apartment", null, "quick_scan"],
+    ["what's going on inside", "apartment", null, "quick_scan"],
+    ["check my apartment visually", "apartment", null, "quick_scan"],
+    ["what's happening in the kitchen", "apartment", "kitchen", "targeted_look"],
+    ["look at the driveway", "home", "driveway", "targeted_look"],
+    ["does anything look weird", "apartment", null, "anomaly_scan"],
+    ["describe everything in the kitchen", "apartment", "kitchen", "detailed_scan"],
+    ["give me a visual status", "apartment", null, "quick_scan"],
+  ].forEach(([prompt, scope, camera, mode]) => {
     const intent = api.detectDeepLookIntent(prompt);
-    assert(`triggers visual routing: ${prompt}`, !!intent && intent.scope === scope && intent.explicitCamera === camera, intent);
+    assert(`triggers visual routing: ${prompt}`, !!intent && intent.scope === scope && intent.explicitCamera === camera && intent.mode === mode, intent);
   });
 
   process.stdout.write("\nabstract_visual_negative_scenarios\n");
@@ -113,6 +114,10 @@ function eventTexts(events) {
     "what's going on with the app",
     "describe the implementation plan",
     "what do you think about this release",
+    "what's going on with the website",
+    "what do you see in this UI bug",
+    "look at the test output",
+    "describe the desktop build error",
   ].forEach((prompt) => {
     assert(`does not trigger visual routing: ${prompt}`, api.detectDeepLookIntent(prompt) === null, api.detectDeepLookIntent(prompt));
   });
@@ -142,10 +147,10 @@ function eventTexts(events) {
     assert("HA fallback is not called on look success", h.calls.sendToHA.length === 0, h.calls.sendToHA);
     assert("one user event is emitted", h.events.filter((e) => e.kind === "user").length === 1, h.events);
     assert("transcript shows looking deeply", texts.includes("looking deeply · kitchen"), texts);
-    assert("transcript includes final grounded answer", h.events.filter((e) => e.kind === "home").length === 1 && texts.includes("No people, movement, or obvious issues stand out."), texts);
+    assert("transcript includes one final grounded answer", h.events.filter((e) => e.kind === "home").length === 1 && texts.includes("Nothing important stands out."), texts);
     assert("perception cards carry annotated segmentation image mode", h.events.filter((e) => e.kind === "perception").every((e) => e.imageMode === "annotated" && e.snapshotUrl), h.events.filter((e) => e.kind === "perception"));
     const finalAnswer = h.events.find((e) => e.kind === "home")?.text || "";
-    assert("final broad answer is focused, not room-label inventory", finalAnswer.includes("I checked ") && finalAnswer.length < 140 && !/living room:|kitchen:|dining room:|coffee table|wooden island/i.test(finalAnswer), finalAnswer);
+    assert("final broad answer is focused, not room-label inventory", finalAnswer.includes("I checked ") && finalAnswer.length < 120 && !/living room:|kitchen:|dining room:|coffee table|wooden island/i.test(finalAnswer), finalAnswer);
     assert("abstract prompt is not echoed as slash look", !texts.includes("/look what do you see in my apartment"), texts);
   }
 
@@ -156,7 +161,7 @@ function eventTexts(events) {
       { ok: true, name: "kitchen", answer: "kitchen with white cabinets, stove, sink, wooden island, and doorway to bedroom." },
       { ok: true, name: "dining room", answer: "A dining area with a white oval table and three chairs on a wooden floor." },
     ], []);
-    assert("broad low-signal inventory becomes quiet status", summary === "I checked living room, kitchen, and dining room. No people, movement, or obvious issues stand out.", summary);
+    assert("broad low-signal inventory becomes quiet status", summary === "I checked living room, kitchen, and dining room. Nothing important stands out.", summary);
   }
   {
     const summary = api.summarizeDeepLookResults("what do you see in my home", [
@@ -186,6 +191,25 @@ function eventTexts(events) {
       { ok: true, name: "kitchen", answer: "No obvious activity." },
     ], []);
     assert("package grammar stays natural", summary.includes("In the driveway, a package is sitting") && !summary.includes("I see a package is"), summary);
+  }
+  {
+    const summary = api.summarizeDeepLookResults("what do you see in my home", [
+      { ok: true, name: "driveway", answer: "I don't have a full picture right now. I don't have a full picture right now. I can check specific areas if you'd like. I can check specific areas if you'd like." },
+    ], []);
+    assert("duplicated model text collapses before final answer", (summary.match(/full picture/g) || []).length === 1 && (summary.match(/specific areas/g) || []).length === 1, summary);
+  }
+  {
+    const summary = api.summarizeDeepLookResults("describe everything in the kitchen", [
+      { ok: true, name: "kitchen", answer: "A kitchen with white cabinets, stove, sink, wooden island, and doorway to bedroom." },
+    ], []);
+    assert("detailed mode preserves useful inventory", /white cabinets|wooden island/i.test(summary), summary);
+  }
+  {
+    const summary = api.summarizeDeepLookResults("does anything look weird", [
+      { ok: true, name: "living room", answer: "The frame is blurry and hard to tell." },
+      { ok: true, name: "kitchen", answer: "No obvious activity." },
+    ], []);
+    assert("uncertain visual results are not overstated", summary.includes("I'm not fully sure") && summary.includes("frame is blurry"), summary);
   }
 
   process.stdout.write("\nmocked_submit_partial_failure_scenario\n");

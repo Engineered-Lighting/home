@@ -37,15 +37,19 @@
     if (!s) return null;
 
     const actionish = /\b(turn|switch|set|dim|brighten|open|close|lock|unlock|start|stop|restart|enable|disable|toggle|run|play|pause)\b/.test(s);
-    const nonVisualDomain = /\b(lights?|lamps?|travel mode|temperature|thermostat|token|stack|models?|vllm|password|github|deploy|release|app|build|repo|branch|pr|pull request|installer)\b/.test(s);
+    const nonVisualDomain = /\b(lights?|lamps?|travel mode|temperature|thermostat|token|stack|models?|vllm|password|github|deploy|release|app|build|repo|branch|pr|pull request|installer|bug|error|ui|desktop|mobile|website|code|test|tests?)\b/.test(s);
     if (actionish || nonVisualDomain) return null;
 
     const explicitCamera = DEEP_LOOK_CAMERA_META.find((cam) => {
       const names = [cam.id.replace(/_/g, " "), cam.name].concat(cam.aliases || []);
       return names.some((name) => name && new RegExp("\\b" + escapeRegExp(name) + "\\b").test(s));
     });
+    const anomalyVisual =
+      /\b(does anything look weird|anything look weird)\b/.test(s) ||
+      /\b(anything (?:wrong|off|strange|unusual|different|changed|out of place)|does anything look (?:wrong|off|strange|unusual|different)|what changed)\b/.test(s);
     const broadVisual =
-      /\b(does anything look weird|anything look weird|visual status|look around|take a look|what can you see)\b/.test(s) ||
+      anomalyVisual ||
+      /\b(visual status|look around|take a look|what can you see)\b/.test(s) ||
       /\b(is anything happening|anything happening|what(?:'s| is) happening|what(?:'s| is) going on)\b/.test(s);
     const directVisual =
       /\b(what do you see|look at|describe)\b/.test(s) ||
@@ -62,7 +66,22 @@
       text: raw,
       scope,
       explicitCamera: explicitCamera ? explicitCamera.id : null,
+      mode: detectDeepLookMode(s, !!explicitCamera),
     };
+  }
+
+  function detectDeepLookMode(normalizedText, hasExplicitCamera) {
+    const s = deepLookNormalize(normalizedText);
+    if (/\b(describe everything|everything you see|in detail|detailed|full visual|inventory|list everything|all objects|object list)\b/.test(s)) {
+      return "detailed_scan";
+    }
+    if (/\b(anything (?:wrong|off|weird|strange|unusual|different|changed|out of place)|does anything look (?:wrong|off|weird|strange|unusual|different)|what changed)\b/.test(s)) {
+      return "anomaly_scan";
+    }
+    if (hasExplicitCamera || /\b(look at|what(?:'s| is) in|what(?:'s| is) visible in|show me|check the)\b/.test(s)) {
+      return "targeted_look";
+    }
+    return "quick_scan";
   }
 
   function selectDeepLookCameras(intent, roomContext, limit) {
@@ -83,6 +102,7 @@
       const age = Number(d.age_s ?? d.age_seconds ?? d.perception_age_seconds);
       if (occupied) cam.score -= 1000;
       if (Number.isFinite(age)) cam.score += Math.min(age, 600) / 10;
+      if (intent.mode === "anomaly_scan" && Number.isFinite(age)) cam.score += Math.min(age, 900) / 20;
     }
     return metas.sort((a, b) => a.score - b.score || a.priority - b.priority).slice(0, max);
   }
@@ -94,78 +114,178 @@
 
   function buildFocusedLookQuestion(question, intent, camera) {
     const original = String(question || "").trim();
-    if (!isBroadDeepLookQuestion(original)) {
-      return `${original}\nAnswer in one short sentence. Focus on what directly answers the question.`;
-    }
     const place = camera && camera.name ? camera.name : "this camera";
+    const mode = intent && intent.mode ? intent.mode : (isBroadDeepLookQuestion(original) ? "quick_scan" : "targeted_look");
+    if (mode === "detailed_scan") {
+      return [
+        `Look carefully at the ${place} camera for this user question: "${original}"`,
+        "Answer naturally in one or two short sentences.",
+        "A detailed inventory is allowed because the user asked for detail.",
+        "Mention uncertainty if the frame is unclear.",
+      ].join(" ");
+    }
+    if (mode === "targeted_look") {
+      return [
+        `${original}`,
+        `Use only the ${place} camera.`,
+        "Answer in one short sentence.",
+        "Focus on what directly answers the question and mention uncertainty if the frame is unclear.",
+      ].join(" ");
+    }
+    const anomalyLine = mode === "anomaly_scan"
+      ? "Focus first on anything unsafe, unusual, changed, out of place, or worth checking."
+      : "Focus first on anything the user needs to care about.";
     return [
       `Look at the ${place} camera for this user question: "${original}"`,
       "Answer in one short, plain sentence for a home-monitoring dashboard.",
-      "Focus only on people, activity, packages, pets, vehicles, open doors/windows, hazards, or unusual changes.",
+      anomalyLine,
+      "Only call out people, activity, packages, pets, vehicles, open doors/windows, hazards, lights, leaks, smoke, or unusual changes.",
       "If nothing important is happening, say exactly: No obvious activity.",
       "Do not list ordinary furniture or room contents unless they are the important finding.",
     ].join(" ");
+  }
+
+  function dedupeDeepLookText(answer) {
+    const text = String(answer || "")
+      .replace(/\s+/g, " ")
+      .replace(/\s+([.,!?;:])/g, "$1")
+      .trim();
+    if (!text) return "";
+    const sentences = text
+      .split(/(?<=[.!?])\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const out = [];
+    const seen = new Set();
+    for (const sentence of sentences.length ? sentences : [text]) {
+      const key = deepLookNormalize(sentence).replace(/[^\w\s]/g, "");
+      if (!key || seen.has(key)) continue;
+      const duplicate = out.some((existing) => {
+        const a = deepLookNormalize(existing).replace(/[^\w\s]/g, "");
+        return a && (a.includes(key) || key.includes(a));
+      });
+      if (!duplicate) {
+        seen.add(key);
+        out.push(sentence);
+      }
+    }
+    return out.join(" ").trim();
+  }
+
+  function deepLookSentence(text) {
+    const t = dedupeDeepLookText(text);
+    if (!t) return "";
+    return /[.!?]$/.test(t) ? t : `${t}.`;
+  }
+
+  function classifyLookFinding(answer) {
+    const s = deepLookNormalize(answer);
+    if (!s || /^no obvious activity\.?$/.test(s)) return "quiet";
+    if (/\b(unclear|not sure|hard to tell|cannot tell|can't tell|blurry|blocked|obscured|dark|low light)\b/.test(s)) return "uncertain";
+    if (/\b(smoke|fire|water|leak|flood|fallen|fall|broken|hazard|spill|sparks?|alarm)\b/.test(s)) return "hazard";
+    if (/\b(package|parcel|delivery|box)\b/.test(s)) return "package";
+    if (/\b(person|people|someone|human|standing|walking|sitting|motion|moving)\b/.test(s)) return "person";
+    if (/\b(dog|cat|pet)\b/.test(s)) return "pet";
+    if (/\b(vehicle|car|truck|van|bus|driveway|parked)\b/.test(s)) return "vehicle";
+    if (/\b(door\s+open|open\s+door|window\s+open|open\s+window|garage\s+open)\b/.test(s)) return "door_window";
+    if (/\b(light(?:s)?\s+(?:on|off)|lamp(?:s)?\s+(?:on|off)|lit|dark)\b/.test(s)) return "light";
+    if (/\b(looks|seems|appears)\s+(normal|quiet|empty|clear)\b/.test(s)) return "quiet";
+    const hasManyObjects = (s.match(/,/g) || []).length >= 2 ||
+      /\b(couch|coffee table|table|chair|chairs|plant|bicycle|painting|cabinet|sink|stove|island|window|speaker|surfboard|floor)\b/.test(s);
+    return hasManyObjects ? "inventory" : "activity";
+  }
+
+  function lookFindingImportance(category) {
+    const weights = {
+      hazard: 100,
+      person: 90,
+      package: 80,
+      door_window: 76,
+      pet: 72,
+      vehicle: 68,
+      light: 62,
+      activity: 55,
+      uncertain: 30,
+      inventory: 10,
+      quiet: 0,
+    };
+    return Object.prototype.hasOwnProperty.call(weights, category) ? weights[category] : 20;
+  }
+
+  function normalizeLookFinding(result) {
+    const rawText = String(result && result.answer ? result.answer : "");
+    const summary = deepLookSentence(rawText);
+    const category = classifyLookFinding(summary);
+    return {
+      camera: result && result.id ? result.id : "",
+      name: result && result.name ? result.name : "",
+      summary: summary || "I got a fresh grounded frame, but no text answer came back.",
+      category,
+      importance: lookFindingImportance(category),
+      confidence: category === "uncertain" ? "low" : "normal",
+      rawText,
+      imageUrl: result && result.data ? (result.data.detailUrl || result.data.overviewUrl || null) : null,
+      data: result && result.data ? result.data : null,
+    };
+  }
+
+  function isLowSignalFinding(finding, mode) {
+    if (!finding) return true;
+    if (mode === "detailed_scan") return false;
+    return finding.category === "quiet" || finding.category === "inventory";
+  }
+
+  function readableDeepLookList(items) {
+    const list = (items || []).filter(Boolean);
+    if (list.length <= 1) return list[0] || "";
+    if (list.length === 2) return `${list[0]} and ${list[1]}`;
+    return `${list.slice(0, -1).join(", ")}, and ${list[list.length - 1]}`;
+  }
+
+  function formatLookObservation(finding) {
+    const roomPattern = new RegExp("^(?:a|an|the)?\\s*" + escapeRegExp(finding.name).replace(/\\s+/g, "\\s+") + "\\s+(?:with|shows?|contains?|has|appears?|looks?)\\s+", "i");
+    let text = deepLookSentence(finding.summary).replace(roomPattern, "");
+    const lowerFirst = (value) => value ? value.charAt(0).toLowerCase() + value.slice(1) : value;
+    if (/^(i\s+see)\b/i.test(text)) {
+      // Already a natural first-person observation.
+    } else if (/^(there\s+is|there\s+are|it\s+looks|nothing|no\s+|someone|people|a\s+person|a\s+package|a\s+vehicle|a\s+dog|a\s+cat|a\s+car|the\s+)/i.test(text)) {
+      text = lowerFirst(text);
+    } else if (/^(a|an)\s+/i.test(text) && /\b(is|are|walks?|stands?|sits?|lies?|appears?|looks?|moves?|parks?|holds?|carries?)\b/i.test(text)) {
+      text = lowerFirst(text);
+    } else if (/^(a|an|the)\s+/i.test(text)) {
+      text = text.replace(/^a\s+/i, "I see a ").replace(/^an\s+/i, "I see an ").replace(/^the\s+/i, "I see the ");
+    } else if (!/^(nothing|no\s+)/i.test(text)) {
+      text = `I see ${lowerFirst(text)}`;
+    }
+    const prefix = finding.confidence === "low" ? "I'm not fully sure, but " : "";
+    return `In the ${finding.name}, ${prefix}${text}`;
   }
 
   function summarizeDeepLookResults(question, results, failures) {
     const ok = (results || []).filter((r) => r && r.ok);
     const bad = failures || [];
     if (!ok.length) return "";
-    const cleanAnswer = (answer) => String(answer || "")
-      .replace(/\s+/g, " ")
-      .replace(/\s+([.,!?;:])/g, "$1")
-      .trim();
-    const sentence = (text) => {
-      const t = cleanAnswer(text);
-      if (!t) return "I got a fresh grounded frame, but no text answer came back.";
-      return /[.!?]$/.test(t) ? t : `${t}.`;
-    };
     const failed = bad.length
-      ? ` I could not inspect ${bad.map((f) => f.name).join(", ")}.`
+      ? ` I could not inspect ${readableDeepLookList(bad.map((f) => f.name))}.`
       : "";
-    const isBroad = isBroadDeepLookQuestion(question);
-    if (ok.length === 1) return sentence(ok[0].answer) + failed;
-    const readableList = (items) => {
-      if (items.length <= 1) return items[0] || "";
-      if (items.length === 2) return `${items[0]} and ${items[1]}`;
-      return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
-    };
-    const isLowSignal = (answer) => {
-      const s = cleanAnswer(answer).toLowerCase();
-      if (!s) return true;
-      if (/^no obvious activity\.?$/.test(s)) return true;
-      if (/\b(looks|seems|appears)\s+(normal|quiet|empty|clear)\b/.test(s)) return true;
-      const notable = /\b(person|people|someone|motion|moving|walk|standing|sitting|dog|cat|pet|package|vehicle|car|truck|door\s+open|open\s+door|window\s+open|hazard|smoke|water|leak|fallen|unusual|weird)\b/.test(s);
-      const inventory = (s.match(/,/g) || []).length >= 3 || /\b(couch|coffee table|table|chair|chairs|plant|bicycle|painting|cabinet|sink|stove|island|window|speaker|surfboard|floor)\b/.test(s);
-      return !notable && inventory;
-    };
-    const observation = (r) => {
-      const roomPattern = new RegExp("^(?:a|an|the)?\\s*" + escapeRegExp(r.name).replace(/\\s+/g, "\\s+") + "\\s+(?:with|shows?|contains?|has)\\s+", "i");
-      let text = sentence(r.answer).replace(roomPattern, "");
-      const lowerFirst = (value) => value ? value.charAt(0).toLowerCase() + value.slice(1) : value;
-      if (/^(i\s+see)\b/i.test(text)) {
-        // Already a natural first-person observation.
-      } else if (/^(there\s+is|there\s+are|it\s+looks|nothing|no\s+|someone|people|a\s+person|a\s+package|a\s+vehicle|a\s+dog|a\s+cat|a\s+car|the\s+)/i.test(text)) {
-        text = lowerFirst(text);
-      } else if (/^(a|an)\s+/i.test(text) && /\b(is|are|walks?|stands?|sits?|lies?|appears?|looks?|moves?|parks?|holds?|carries?)\b/i.test(text)) {
-        text = lowerFirst(text);
-      } else if (/^(a|an|the)\s+/i.test(text)) {
-        text = text.replace(/^a\s+/i, "I see a ").replace(/^an\s+/i, "I see an ").replace(/^the\s+/i, "I see the ");
-      } else if (!/^(nothing|no\s+)/i.test(text)) {
-        text = `I see ${lowerFirst(text)}`;
-      }
-      return `In the ${r.name}, ${text}`;
-    };
-    const rooms = readableList(ok.map((r) => r.name));
-    if (isBroad) {
-      const notable = ok.filter((r) => !isLowSignal(r.answer));
-      if (!notable.length) return `I checked ${rooms}. No people, movement, or obvious issues stand out.${failed}`;
-      const focused = notable.map(observation).join(" ");
-      const normal = ok.filter((r) => isLowSignal(r.answer)).map((r) => r.name);
-      const normalText = normal.length ? ` The other checked areas look quiet: ${readableList(normal)}.` : "";
-      return `Quick scan: ${focused}${normalText}${failed}`;
+    const intent = detectDeepLookIntent(question);
+    const mode = intent && intent.mode ? intent.mode : (isBroadDeepLookQuestion(question) ? "quick_scan" : "targeted_look");
+    const findings = ok.map(normalizeLookFinding);
+    if (ok.length === 1 && mode !== "quick_scan" && mode !== "anomaly_scan") {
+      return formatLookObservation(findings[0]) + failed;
     }
-    const observations = ok.map(observation);
+    const rooms = readableDeepLookList(findings.map((r) => r.name));
+    const notable = findings
+      .filter((finding) => !isLowSignalFinding(finding, mode))
+      .sort((a, b) => b.importance - a.importance);
+    if (mode === "quick_scan" || mode === "anomaly_scan") {
+      if (!notable.length) return `I checked ${rooms}. Nothing important stands out.${failed}`;
+      const focused = notable.map(formatLookObservation).join(" ");
+      const quiet = findings.filter((finding) => isLowSignalFinding(finding, mode)).map((finding) => finding.name);
+      const quietText = quiet.length ? ` The other checked areas look quiet: ${readableDeepLookList(quiet)}.` : "";
+      return `Quick scan: ${focused}${quietText}${failed}`;
+    }
+    const observations = findings.map(formatLookObservation);
     return `I checked ${rooms}. ${observations.join(" ")}${failed}`;
   }
 
@@ -225,13 +345,14 @@
           signal: controller ? controller.signal : undefined,
         });
         if (!data || typeof data !== "object") throw new Error("malformed look response");
-        const answer = normalize(data.answer || "");
+        const answer = dedupeDeepLookText(normalize(data.answer || ""));
         results.push({ ok: true, id: cam.id, name: cam.name, answer, data });
         addEvent({
           kind: "perception",
           text: `${cam.id}: ${answer || "(grounded look)"}`,
           snapshotUrl: data.detailUrl || data.overviewUrl || null,
           imageMode: "annotated",
+          rawText: data.answer || "",
         });
       } catch (e) {
         const aborted = e && e.name === "AbortError";
@@ -273,6 +394,9 @@
     selectDeepLookCameras,
     summarizeDeepLookResults,
     buildFocusedLookQuestion,
+    classifyLookFinding,
+    dedupeDeepLookText,
+    normalizeLookFinding,
     runNaturalDeepLook,
   };
   if (typeof window !== "undefined") {

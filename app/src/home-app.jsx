@@ -3860,6 +3860,14 @@ const SLASH_CMDS = [
   { cmd: "/help",       hint: "",           desc: "list commands grouped by category (click any entry to fill the input)", category: "meta" },
 ];
 
+function isMobileHiddenCommand(cmd) {
+  return cmd === "/labeler" || cmd === "/vl";
+}
+
+function availableSlashCommands({ mobile = false } = {}) {
+  return mobile ? SLASH_CMDS.filter((c) => !isMobileHiddenCommand(c.cmd)) : SLASH_CMDS;
+}
+
 function FeatureLoadingSurface({ open, title, status, error, onClose, mobile = false, fullscreen = true }) {
   if (!open) return null;
   const state = status?.state || "idle";
@@ -3938,7 +3946,8 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
   useEffect(() => { if (focusToken) inputRef.current?.focus(); }, [focusToken]);
   const isSlash = value.startsWith("/");
   const firstTok = value.split(/\s+/)[0];
-  const matches = isSlash ? SLASH_CMDS.filter((c) => c.cmd.startsWith(firstTok)) : [];
+  const slashCommands = availableSlashCommands({ mobile });
+  const matches = isSlash ? slashCommands.filter((c) => c.cmd.startsWith(firstTok)) : [];
   const showMenu = isSlash && matches.length > 0 && !value.includes(" ");
   const spatialMode = !!(typeof window !== "undefined" && window.__HOME_SPATIAL_MODE);
   const lightTheme = theme === "light";
@@ -3955,7 +3964,7 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
   useEffect(() => { if (sel >= matches.length) setSel(0); }, [matches.length, sel]);
 
   const complete = (cmd) => {
-    onChange(cmd + (SLASH_CMDS.find(c => c.cmd === cmd)?.hint ? " " : ""));
+    onChange(cmd + (slashCommands.find(c => c.cmd === cmd)?.hint ? " " : ""));
     inputRef.current?.focus();
   };
   const handleKey = (e) => {
@@ -4635,6 +4644,7 @@ function isLightOrLampState(state, apartmentSwitchIds) {
 function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voiceOverride, themeOverride, autoplay = true }) {
   const viewport = useViewportProfile();
   const mobile = viewport.mobile;
+  const videoLabelerAvailable = !mobile;
   const initialPrefs = useMemo(() => loadPrefs({
     endpoint: webDefaultBase("HG_DEFAULT_HA_BASE"),
     token: "",
@@ -4743,6 +4753,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   // intelligence / apartment) — opening one closes the rest, which kills
   // Escape-stacking and z-fights between fixed inset-0 overlays.
   const [videoLabelerOpen, setVideoLabelerOpen] = useState(false);
+  useEffect(() => {
+    if (!videoLabelerAvailable) setVideoLabelerOpen(false);
+  }, [videoLabelerAvailable]);
   // S79: the active Simulation Mode header pill opens this local controls
   // dialog for switching scenarios, resetting fixtures, or returning live.
   const [simulationControlsOpen, setSimulationControlsOpen] = useState(false);
@@ -7096,14 +7109,15 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // (groups + commands) so HelpContent in home-events.jsx can
         // render hover-brighten + click-to-fill-input UX. The old
         // flat text rendering is no longer reachable from here.
+        const visibleCommands = availableSlashCommands({ mobile });
         const groups = SLASH_CMD_CATEGORIES.map((cat) => {
-          const cmds = SLASH_CMDS.filter((c) => c.category === cat.id);
+          const cmds = visibleCommands.filter((c) => c.category === cat.id);
           return { ...cat, commands: cmds };
         }).filter((g) => g.commands.length > 0);
         // Uncategorized fallback — surfaces drift the moment a command
         // is added without a category (instead of silently disappearing
         // from /help).
-        const uncategorized = SLASH_CMDS.filter((c) => !c.category);
+        const uncategorized = visibleCommands.filter((c) => !c.category);
         if (uncategorized.length > 0) {
           groups.push({
             id: "_uncategorized",
@@ -7121,7 +7135,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         addEvent({
           kind: "help",
           groups,
-          totalCount: SLASH_CMDS.length,
+          totalCount: visibleCommands.length,
           tip: "hover any command to highlight · click to paste into the input box · then hit Enter",
         });
         return true;
@@ -7464,6 +7478,14 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // Video timeline labeler (M0). `/labeler base <url>` rewires the
         // service base; bare /labeler
         // opens the full-screen overlay, closing the other takeovers.
+        if (!videoLabelerAvailable) {
+          addEvent({
+            kind: "system",
+            text: "video labeler is hidden on mobile. use desktop web or the desktop app for that workflow.",
+            tone: "info",
+          });
+          return true;
+        }
         const a = arg.trim();
         if (/^base\s+\S/.test(a)) {
           const url = a.replace(/^base\s+/, "").trim().replace(/\/+$/, "");
@@ -10100,6 +10122,14 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     ensureFeature("intelligence", "intelligence", "header");
   };
   const openVideoLabelerFeature = () => {
+    if (!videoLabelerAvailable) {
+      addEvent({
+        kind: "system",
+        text: "video labeler is hidden on mobile. use desktop web or the desktop app for that workflow.",
+        tone: "info",
+      });
+      return;
+    }
     setPeopleOpen(false);
     setIntelligenceOpen(false);
     setApartmentOpen(false);
@@ -10305,7 +10335,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         onUnmuteClick={handleUnmuteClick}
         onOpenPeople={isSpatialWide ? null : openPeopleFeature}
         onOpenIntelligence={isSpatialWide ? null : openIntelligenceFeature}
-        onOpenVideoLabeler={isSpatialWide ? null : openVideoLabelerFeature}
+        onOpenVideoLabeler={isSpatialWide || !videoLabelerAvailable ? null : openVideoLabelerFeature}
         onOpenApartment={isSpatialWide ? null : openApartmentFromHeader}
         onOpenLights={isSpatialWide ? null : openLightsFeature}
         onOpenSimulationControls={() => setSimulationControlsOpen(true)}
@@ -10385,7 +10415,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       {/* /labeler — full-screen video timeline labeler (M0 shell; see
           home-video-labeler.jsx). Sim containment lives in the overlay +
           its data layer (media URLs bypass tauriFetch). */}
-      {window.HomeVideoLabelerOverlay && (
+      {videoLabelerAvailable && window.HomeVideoLabelerOverlay && (
         <window.HomeVideoLabelerOverlay
           open={videoLabelerOpen}
           onClose={() => setVideoLabelerOpen(false)}
@@ -10393,7 +10423,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           spatialMode={isSpatialWide}
         />
       )}
-      {videoLabelerOpen && !window.HomeVideoLabelerOverlay && (
+      {videoLabelerAvailable && videoLabelerOpen && !window.HomeVideoLabelerOverlay && (
         <FeatureLoadingSurface
           open={videoLabelerOpen}
           title="video labeler"

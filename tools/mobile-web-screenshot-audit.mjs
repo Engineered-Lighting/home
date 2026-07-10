@@ -76,10 +76,9 @@ const APARTMENT_FIT_TIMEOUT_MS = 18000;
 const FEATURE_MATRIX = [
   ["01-boot", "App boot or first-run screen", "Header, main surface, and bottom affordances fit the viewport."],
   ["02-simulation-home", "Simulation home surface", "A usable non-secret test state is available for UI screenshots."],
-  ["03-mobile-actions-menu", "Mobile header actions menu", "People, intelligence, video labeler, theme, and simulation actions remain reachable."],
+  ["03-mobile-actions-menu", "Mobile header actions menu", "People, apartment, lights, intelligence, theme, and simulation actions remain reachable; desktop-only video labeler stays hidden."],
   ["04-people", "People overlay", "Overlay opens from the mobile actions menu and remains dismissible."],
   ["05-intelligence", "Intelligence atlas overlay", "Atlas opens from the mobile actions menu without clipping close/actions."],
-  ["06-video-labeler", "Video labeler overlay", "Labeler opens and its primary controls fit on phone width."],
   ["07-simulation-controls", "Simulation controls", "Scenario controls are reachable from mobile header actions."],
   ["08-slash-palette", "Slash command palette", "Command menu is scrollable above the mobile input bar."],
   ["09-help", "/help output", "Help/category output is readable without horizontal clipping."],
@@ -103,7 +102,6 @@ const BUTTON_PROBE_MATRIX = [
   ["b03-mobile-menu", "Header", "Mobile actions opens and exposes its action buttons."],
   ["b04-people-close", "People", "People opens from the mobile menu and close dismisses it."],
   ["b05-intelligence-close", "Intelligence", "Intelligence opens from the mobile menu and close dismisses it."],
-  ["b06-video-labeler-tabs", "Video labeler", "Video labeler opens, label/jobs tabs respond, refresh is clickable, and close dismisses it."],
   ["b07-simulation-controls", "Simulation", "Simulation controls open, reset is clickable, and close dismisses it."],
   ["b08-remote-dialog", "Remote", "Remote access dialog opens, profile buttons respond, test-all starts, and close dismisses it."],
   ["b09-slash-command", "Input", "Slash command input accepts and executes a command from mobile."],
@@ -746,10 +744,14 @@ async function ensureMobileMenuReachable(page, context) {
     }));
     return { menuReachable: reachable(menu), items };
   });
-  const required = ["people", "intelligence", "video labeler"];
+  const required = ["people", "apartment", "lights", "intelligence"];
   const missing = required.filter((label) => !result.items.some((item) => item.label === label && item.reachable));
+  const hidden = result.items.some((item) => item.label === "video labeler" && item.reachable);
   if (!result.menuReachable || missing.length) {
     throw new Error(`${context}: mobile menu not reachable (${missing.join(", ") || "menu"})`);
+  }
+  if (hidden) {
+    throw new Error(`${context}: desktop-only video labeler is visible on mobile`);
   }
   return `mobile menu reachable with ${result.items.length} items`;
 }
@@ -858,7 +860,6 @@ async function runButtonProbes(page, buttonItems) {
     const reachable = await ensureMobileMenuReachable(page, "mobile menu");
     await expectVisibleText(page, /^people$/i);
     await expectVisibleText(page, /^intelligence$/i);
-    await expectVisibleText(page, /^video labeler$/i);
     const detail = await ensureVisualHealth(page, "mobile menu");
     await closeOverlays(page);
     return `${detail}; ${reachable}`;
@@ -878,18 +879,6 @@ async function runButtonProbes(page, buttonItems) {
     await expectVisibleText(page, /intelligence/i);
     await clickButtonByName(page, /close/i);
     return ensureVisualHealth(page, "intelligence closed");
-  });
-
-  await recordButtonProbe(buttonItems, "b06-video-labeler-tabs", "Video labeler tabs, refresh, and close respond", async () => {
-    const opened = await clickMobileMenuItem(page, "video labeler");
-    if (!opened) throw new Error("video labeler menu item did not click");
-    await expectVisibleText(page, /video labeler/i);
-    await clickButtonByName(page, /^jobs$/i);
-    await clickButtonByName(page, /^label$/i);
-    const refreshed = await maybeClick(page.getByRole("button", { name: /^refresh$/i }).first(), 900);
-    await clickButtonByName(page, /close/i);
-    const detail = await ensureVisualHealth(page, "video labeler closed");
-    return refreshed ? detail : `${detail}; refresh absent in simulation state`;
   });
 
   await recordButtonProbe(buttonItems, "b07-simulation-controls", "Simulation controls reset and close respond", async () => {
@@ -1168,7 +1157,6 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors, prof
     for (const [id, label, title] of [
       ["04-people", "people", "People overlay"],
       ["05-intelligence", "intelligence", "Intelligence atlas overlay"],
-      ["06-video-labeler", "video labeler", "Video labeler overlay"],
       ["07-simulation-controls", "simulation", "Simulation controls"],
     ]) {
       await closeOverlays(page);
@@ -1638,11 +1626,15 @@ async function cdpEnsureVisualHealth(client, context) {
 
 async function cdpEnsureMobileMenuReachable(client, context) {
   const result = await cdpAction(client, "(h) => h.menuVisibleReachable()");
-  const required = ["people", "intelligence", "video labeler"];
+  const required = ["people", "apartment", "lights", "intelligence"];
   const items = Array.isArray(result?.items) ? result.items : [];
   const missing = required.filter((label) => !items.some((item) => item.label === label && item.visible && item.reachable));
+  const hidden = items.some((item) => item.label === "video labeler" && item.visible && item.reachable);
   if (!result?.menu || missing.length) {
     throw new Error(`${context}: mobile menu not reachable (${missing.join(", ") || "menu"})`);
+  }
+  if (hidden) {
+    throw new Error(`${context}: desktop-only video labeler is visible on mobile`);
   }
   return `mobile menu reachable with ${items.length} items`;
 }
@@ -1916,7 +1908,6 @@ async function cdpRunButtonProbes(client, buttonItems) {
     const reachable = await cdpEnsureMobileMenuReachable(client, "mobile menu");
     await cdpExpectText(client, "^people$");
     await cdpExpectText(client, "^intelligence$");
-    await cdpExpectText(client, "^video labeler$");
     const detail = await cdpEnsureVisualHealth(client, "mobile menu");
     await cdpCloseOverlays(client);
     return `${detail}; ${reachable}`;
@@ -1934,18 +1925,6 @@ async function cdpRunButtonProbes(client, buttonItems) {
     await cdpExpectText(client, "intelligence");
     await cdpClickButton(client, "close", 450);
     return cdpEnsureVisualHealth(client, "intelligence closed");
-  });
-
-  await cdpRecordButtonProbe(buttonItems, "b06-video-labeler-tabs", "Video labeler tabs, refresh, and close respond", async () => {
-    await cdpClickMobileMenuItem(client, "video labeler", 900);
-    await cdpExpectText(client, "video labeler");
-    await cdpClickButton(client, "^jobs$");
-    await cdpClickButton(client, "^label$");
-    const refreshed = await cdpAction(client, `(h) => h.clickButtonMatch("^refresh$")`);
-    if (refreshed) await cdpDelay(350);
-    await cdpClickButton(client, "close");
-    const detail = await cdpEnsureVisualHealth(client, "video labeler closed");
-    return refreshed ? detail : `${detail}; refresh absent in simulation state`;
   });
 
   await cdpRecordButtonProbe(buttonItems, "b07-simulation-controls", "Simulation controls reset and close respond", async () => {
@@ -2222,7 +2201,6 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors, profile = 
     for (const [id, label, title] of [
       ["04-people", "people", "People overlay"],
       ["05-intelligence", "intelligence", "Intelligence atlas overlay"],
-      ["06-video-labeler", "video labeler", "Video labeler overlay"],
       ["07-simulation-controls", "simulation", "Simulation controls"],
     ]) {
       await cdpCloseOverlays(client);

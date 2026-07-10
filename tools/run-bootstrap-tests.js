@@ -340,6 +340,15 @@ assert("mobile header keeps profile control in the menu",
   appSource.includes("{serviceProfile && onOpenRemoteProfile && (") &&
     appSource.includes("runMenuAction(onOpenRemoteProfile)") &&
     appSource.includes("profile -"));
+assert("video labeler is hidden on mobile",
+  appSource.includes("const videoLabelerAvailable = !mobile") &&
+    appSource.includes("onOpenVideoLabeler={isSpatialWide || !videoLabelerAvailable ? null : openVideoLabelerFeature}") &&
+    appSource.includes("video labeler is hidden on mobile"));
+assert("mobile slash/help hide desktop-only labeler command",
+  appSource.includes("function isMobileHiddenCommand(cmd)") &&
+    appSource.includes("function availableSlashCommands") &&
+    appSource.includes("const slashCommands = availableSlashCommands({ mobile });") &&
+    appSource.includes("const visibleCommands = availableSlashCommands({ mobile });"));
 assert("header connection status is anchored with the brand",
   appSource.includes("const connectionStatusNode") &&
     appSource.includes("{mobile && (") &&

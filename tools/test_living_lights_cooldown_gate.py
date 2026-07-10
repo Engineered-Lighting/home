@@ -508,6 +508,35 @@ def main() -> int:
     except TypeError as exc:
         failures.append(f"[sentinel_1970] TypeError: {exc}")
 
+    default_office = _mod.emit_actuator("office", _mod.LIGHT_TARGETS["office"])
+    canary_office = _mod.emit_actuator(
+        "office",
+        _mod.LIGHT_TARGETS["office"],
+        omit_ct_zones={"office"},
+    )
+    canary_sink = _mod.emit_actuator(
+        "sink",
+        _mod.LIGHT_TARGETS["sink"],
+        omit_ct_zones={"office"},
+    )
+    if "color_temp_kelvin:" not in default_office:
+        failures.append("[ct_default] office pilot must keep CT injection by default")
+    else:
+        passed_checks += 1
+        print("  OK ct_default: office injects CT by default")
+    if "color_temp_kelvin:" in canary_office:
+        failures.append("[ct_canary] office canary pilot must omit CT injection")
+    elif "Adaptive Lighting canary owns color" not in canary_office:
+        failures.append("[ct_canary] office canary pilot should document why CT is omitted")
+    else:
+        passed_checks += 1
+        print("  OK ct_canary: office canary omits CT")
+    if "color_temp_kelvin:" not in canary_sink:
+        failures.append("[ct_non_canary] non-canary zones must keep CT injection")
+    else:
+        passed_checks += 1
+        print("  OK ct_non_canary: sink still injects CT")
+
     if failures:
         print()
         for f in failures:

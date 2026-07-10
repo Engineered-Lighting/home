@@ -29,11 +29,10 @@ Gradient-safe: the zone classifier emits the SAME ct value the gradient
 package reads, so the pilot and gradient don't fight on sofa lights.
 Carve-out: `light.turn_off` calls (away branch) never carry ct.
 
-Assumes Adaptive Lighting `take_over_control: false` (the current setting,
-adaptive_lighting.yaml line ~48). If that flag is ever flipped to true, the
-ct injection here will trip AL's manual_control on every pilot tick — must
-either remove the injection OR call adaptive_lighting.set_manual_control to
-re-enroll after each pilot.
+Assumes Adaptive Lighting `take_over_control: false` for ordinary generated
+pilots. If that flag is ever flipped to true for a canary profile, that canary
+zone must omit this generator's `color_temp_kelvin` injection so Living Lights
+continues to own brightness while Adaptive Lighting owns color.
 
 The ambient L/R switches moved to their own package
 (living_lights_ambient.yaml).
@@ -66,7 +65,7 @@ ANTICIPATED_TRANSITION_S = 1.5
 HOUSE_CT_FALLBACK = 2700
 
 
-def _ct_data_line(camera: str, slug: str) -> str:
+def _ct_data_line(camera: str, slug: str, *, inject: bool = True) -> str:
     """Return the YAML data line that pins this light to the house ct curve.
 
     Source-of-truth chain (Flavor A — zone-aware):
@@ -79,6 +78,8 @@ def _ct_data_line(camera: str, slug: str) -> str:
 
     Caller MUST only inject this on `light.turn_on` — never on `turn_off`.
     """
+    if not inject:
+        return "# color_temp_kelvin omitted: Adaptive Lighting canary owns color"
     sensor = f"sensor.{camera}_{slug}_lighting_state"
     # NOTE: the closing `}}"` lives in a non-f-string so the `}}` is two
     # literal closing braces (Jinja's `}}` end-of-expression). In an
@@ -629,7 +630,7 @@ def _override_block(slug, light_entity_ids, ct_line, indent) -> str:
     return vars_block + "\n" + turn_on
 
 
-def emit_actuator(slug: str, targets: list) -> str:
+def emit_actuator(slug: str, targets: list, *, omit_ct_zones: set[str] | None = None) -> str:
     camera = ZONE_CAMERA[slug]
     sensor_id = f"sensor.{camera}_{slug}_lighting_state"
     stable_entity = f"binary_sensor.{camera}_{slug}_person_occupancy_stable"
@@ -638,7 +639,8 @@ def emit_actuator(slug: str, targets: list) -> str:
     # so the pilot and gradient agree on sofa lights during movie mode
     # (gradient reads the same predicted_color_temp_kelvin). One template,
     # used on every turn_on emission below — NEVER on the away turn_off.
-    ct_line = _ct_data_line(camera, slug)
+    omit_ct_zones = omit_ct_zones or set()
+    ct_line = _ct_data_line(camera, slug, inject=slug not in omit_ct_zones)
 
     light_targets = [t for t in targets if t[0] == "light"]
     light_entity_ids = [t[1] for t in light_targets]
@@ -1522,6 +1524,12 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true",
                     help="Write the YAML files (default: dry-run)")
     ap.add_argument("--zone", help="Build only this zone")
+    ap.add_argument("--omit-ct-zone", action="append", default=[],
+                    help=(
+                        "Omit color_temp_kelvin injection for this zone. Use only "
+                        "for an isolated Adaptive Lighting canary profile with "
+                        "take_over_control_mode=pause_changed. Repeatable."
+                    ))
     args = ap.parse_args()
 
     repo = Path(__file__).resolve().parent.parent
@@ -1533,6 +1541,11 @@ def main() -> int:
             print(f"Unknown zone: {args.zone}.")
             return 2
         targets = {args.zone: LIGHT_TARGETS[args.zone]}
+    omit_ct_zones = set(args.omit_ct_zone or [])
+    unknown_omit_zones = sorted(omit_ct_zones - set(LIGHT_TARGETS))
+    if unknown_omit_zones:
+        print(f"Unknown --omit-ct-zone: {', '.join(unknown_omit_zones)}.")
+        return 2
 
     built = 0
     skipped = 0
@@ -1541,7 +1554,7 @@ def main() -> int:
             print(f"SKIP {slug} (no known light targets)")
             skipped += 1
             continue
-        yaml = emit_actuator(slug, light_targets)
+        yaml = emit_actuator(slug, light_targets, omit_ct_zones=omit_ct_zones)
         outfile = pkg_dir / f"living_lights_pilot_{slug}.yaml"
         if args.apply:
             outfile.write_text(yaml, encoding="utf-8")

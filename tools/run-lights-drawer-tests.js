@@ -209,6 +209,20 @@ async function expectReject(name, promise, pattern) {
   assert("direct CT push is blocked while travel mode is on",
     source.includes('setError("travel mode is on: lighting output is blocked")'));
 
+  process.stdout.write("\nadaptive_lighting_diagnostics_test\n");
+  assert("Adaptive Lighting diagnostics component is present",
+    source.includes("function AdaptiveLightingDiagnosticsCard"));
+  assert("Adaptive Lighting diagnostics renders in the scroll body",
+    source.includes("<AdaptiveLightingDiagnosticsCard states={states} haOnline={haOnline} />"));
+  assert("Adaptive Lighting diagnostics subscribes to adapt switches",
+    source.includes('"switch.adaptive_lighting_adapt_brightness_home"') &&
+    source.includes('"switch.adaptive_lighting_adapt_color_home"') &&
+    source.includes('"switch.adaptive_lighting_sleep_mode_home"'));
+  assert("Adaptive Lighting diagnostics warns when brightness adaptation is on",
+    source.includes("brightness adaptation is on; Living Lights should own brightness."));
+  assert("Adaptive Lighting diagnostics exposes takeover mode for canary review",
+    source.includes('"take_over_control_mode"') && source.includes("takeover"));
+
   process.stdout.write("\nheader_menu_wiring_test\n");
   const appSource = fs.readFileSync(path.join(REPO, "app", "src", "home-app.jsx"), "utf8");
   assert("HomeHeader accepts lights menu opener", appSource.includes("onOpenApartment, onOpenLights, onOpenSimulationControls"));

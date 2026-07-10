@@ -545,6 +545,91 @@ function TravelModeCard({ active, available, cached, busy, disabled, onToggle, c
   );
 }
 
+function AdaptiveLightingDiagnosticsCard({ states, haOnline }) {
+  const main = getState(states, "switch.home_adaptive_lighting_home", "unknown");
+  const targetCT = toNum(getAttr(states, "switch.home_adaptive_lighting_home", "color_temp_kelvin"), null);
+  const adaptBrightness = getState(states, "switch.adaptive_lighting_adapt_brightness_home", "unknown");
+  const adaptColor = getState(states, "switch.adaptive_lighting_adapt_color_home", "unknown");
+  const sleepMode = getState(states, "switch.adaptive_lighting_sleep_mode_home", "unknown");
+  const takeOver = getAttr(states, "switch.home_adaptive_lighting_home", "take_over_control", "false");
+  const mode = getAttr(states, "switch.home_adaptive_lighting_home", "take_over_control_mode", "pause_all");
+  const danger = adaptBrightness === "on";
+  const stale = !haOnline || main === "unknown";
+  const cell = (label, value, tone = "normal") => (
+    <div style={{
+      minWidth: 0,
+      padding: "7px 8px",
+      border: "1px solid var(--hg-border-soft)",
+      background: "rgba(255,255,255,0.015)",
+    }}>
+      <div style={{ fontFamily: FONT_MONO, fontSize: 9, color: "var(--hg-fg-2)", textTransform: "uppercase", letterSpacing: 1 }}>
+        {label}
+      </div>
+      <div style={{
+        marginTop: 3,
+        fontFamily: FONT_MONO,
+        fontSize: 12,
+        color: tone === "danger" ? "#ff7777" : tone === "ok" ? "var(--hg-accent, #3aa6ff)" : "var(--hg-fg-0)",
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+      }}>
+        {value}
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{
+      margin: "8px 16px",
+      border: "1px solid " + (danger ? "rgba(255,119,119,0.65)" : "var(--hg-border)"),
+      borderRadius: 6,
+      background: "rgba(0,0,0,0.18)",
+      overflow: "hidden",
+    }}>
+      <div style={{ padding: "10px 12px", display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontFamily: FONT_MONO, fontSize: 11, color: "var(--hg-fg-1)", textTransform: "uppercase", letterSpacing: 1.4 }}>
+            adaptive lighting
+          </div>
+          <div style={{ marginTop: 4, fontFamily: FONT_SANS, fontSize: 12, color: "var(--hg-fg-2)", lineHeight: 1.35 }}>
+            {danger
+              ? "brightness adaptation is on; Living Lights should own brightness."
+              : stale
+              ? "waiting for Home Assistant state."
+              : "color curve only; Living Lights owns brightness and on/off."}
+          </div>
+        </div>
+        <div style={{
+          flex: "0 0 auto",
+          border: "1px solid " + (danger ? "rgba(255,119,119,0.7)" : "var(--hg-border)"),
+          color: danger ? "#ff7777" : "var(--hg-fg-1)",
+          padding: "5px 8px",
+          fontFamily: FONT_MONO,
+          fontSize: 10,
+          textTransform: "uppercase",
+          letterSpacing: 1,
+        }}>
+          {danger ? "check" : main}
+        </div>
+      </div>
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+        gap: 6,
+        padding: "0 12px 12px",
+      }}>
+        {cell("target", targetCT == null ? "unknown" : `${targetCT} K`, targetCT == null ? "normal" : "ok")}
+        {cell("adapt color", adaptColor, adaptColor === "on" ? "ok" : "normal")}
+        {cell("adapt brightness", adaptBrightness, danger ? "danger" : "normal")}
+        {cell("takeover", `${takeOver} / ${mode}`)}
+        {cell("sleep mode", sleepMode)}
+        {cell("source", "HACS v1.31-ready")}
+      </div>
+    </div>
+  );
+}
+
 function FrozenCard({ title, subtitle, intro, knobs, fileLocation, whyFrozen, currentValues, placeholder, topicKey, onAsk }) {
   const [intent, setIntent] = useState("");
   const submit = () => {
@@ -691,6 +776,9 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
       "media_player.lg_tv",
       "sensor.steam_steam_76561198136331341",
       "switch.home_adaptive_lighting_home",
+      "switch.adaptive_lighting_adapt_brightness_home",
+      "switch.adaptive_lighting_adapt_color_home",
+      "switch.adaptive_lighting_sleep_mode_home",
     ]);
     try {
       // Signature is subscribeEvents(eventType, onEvent) — eventType FIRST,
@@ -1053,6 +1141,8 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
           thin (6px) scrollbar from home-tokens.css instead of the
           default chunky Windows/WebView one. */}
       <div className="hg-scroll" style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
+
+        <AdaptiveLightingDiagnosticsCard states={states} haOnline={haOnline} />
 
         {/* ── Right Now ─────────────────────────────────────────── */}
         <div style={{ margin: "12px 16px", padding: "12px 16px",

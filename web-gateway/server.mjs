@@ -1026,6 +1026,11 @@ function proxyHttp(req, res, route) {
   }, (upstreamRes) => {
     const headers = { ...upstreamRes.headers };
     delete headers["content-security-policy"];
+    if (route.prefix === "/proxy/frigate" && /^\/clips\/faces\//.test(suffix.split("?")[0])) {
+      const ext = path.extname(targetUrl.pathname).toLowerCase();
+      headers["content-type"] = MIME.get(ext) || headers["content-type"] || "application/octet-stream";
+      headers["cache-control"] = headers["cache-control"] || "private, max-age=3600";
+    }
     res.writeHead(upstreamRes.statusCode || 502, headers);
     upstreamRes.pipe(res);
   });

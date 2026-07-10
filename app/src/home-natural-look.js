@@ -142,8 +142,18 @@
     const observation = (r) => {
       const roomPattern = new RegExp("^(?:a|an|the)?\\s*" + escapeRegExp(r.name).replace(/\\s+/g, "\\s+") + "\\s+(?:with|shows?|contains?|has)\\s+", "i");
       let text = sentence(r.answer).replace(roomPattern, "");
-      if (/^(a|an|the)\s+/i.test(text)) text = text.replace(/^a\s+/i, "I see a ").replace(/^an\s+/i, "I see an ").replace(/^the\s+/i, "I see the ");
-      else if (!/^(i\s+see|there\s+is|there\s+are|it\s+looks|nothing|no\s+)/i.test(text)) text = `I see ${text.charAt(0).toLowerCase()}${text.slice(1)}`;
+      const lowerFirst = (value) => value ? value.charAt(0).toLowerCase() + value.slice(1) : value;
+      if (/^(i\s+see)\b/i.test(text)) {
+        // Already a natural first-person observation.
+      } else if (/^(there\s+is|there\s+are|it\s+looks|nothing|no\s+|someone|people|a\s+person|a\s+package|a\s+vehicle|a\s+dog|a\s+cat|a\s+car|the\s+)/i.test(text)) {
+        text = lowerFirst(text);
+      } else if (/^(a|an)\s+/i.test(text) && /\b(is|are|walks?|stands?|sits?|lies?|appears?|looks?|moves?|parks?|holds?|carries?)\b/i.test(text)) {
+        text = lowerFirst(text);
+      } else if (/^(a|an|the)\s+/i.test(text)) {
+        text = text.replace(/^a\s+/i, "I see a ").replace(/^an\s+/i, "I see an ").replace(/^the\s+/i, "I see the ");
+      } else if (!/^(nothing|no\s+)/i.test(text)) {
+        text = `I see ${lowerFirst(text)}`;
+      }
       return `In the ${r.name}, ${text}`;
     };
     const rooms = readableList(ok.map((r) => r.name));

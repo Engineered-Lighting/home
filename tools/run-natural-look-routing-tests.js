@@ -166,6 +166,27 @@ function eventTexts(events) {
     ], []);
     assert("broad notable activity stays focused", summary.includes("Quick scan: In the driveway") && summary.includes("person is walking") && summary.includes("living room and kitchen") && !summary.includes("white cabinets"), summary);
   }
+  {
+    const summary = api.summarizeDeepLookResults("what is happening outside", [
+      { ok: true, name: "driveway", answer: "A person walks on the sidewalk near a covered car." },
+      { ok: true, name: "living room", answer: "No obvious activity." },
+    ], []);
+    assert("notable action grammar stays natural", summary.includes("In the driveway, a person walks") && !summary.includes("I see a person walks"), summary);
+  }
+  {
+    const summary = api.summarizeDeepLookResults("does anything look weird", [
+      { ok: true, name: "kitchen", answer: "There is water on the floor near the sink." },
+      { ok: true, name: "living room", answer: "No obvious activity." },
+    ], []);
+    assert("there-is grammar lowercases after room clause", summary.includes("In the kitchen, there is water") && !summary.includes(", There is"), summary);
+  }
+  {
+    const summary = api.summarizeDeepLookResults("what is happening outside", [
+      { ok: true, name: "driveway", answer: "A package is sitting near the front door." },
+      { ok: true, name: "kitchen", answer: "No obvious activity." },
+    ], []);
+    assert("package grammar stays natural", summary.includes("In the driveway, a package is sitting") && !summary.includes("I see a package is"), summary);
+  }
 
   process.stdout.write("\nmocked_submit_partial_failure_scenario\n");
   {

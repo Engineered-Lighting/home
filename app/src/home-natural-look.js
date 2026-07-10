@@ -84,7 +84,36 @@
     return "quick_scan";
   }
 
-  function selectDeepLookCameras(intent, roomContext, limit) {
+  function normalizePerceptionHints(perceptionHints, nowMs) {
+    if (!Array.isArray(perceptionHints)) return [];
+    const now = Number.isFinite(nowMs) ? nowMs : Date.now();
+    return perceptionHints
+      .map((hint) => hint && (hint.perception || hint.homePerception || hint))
+      .filter((hint) => {
+        if (!hint || typeof hint !== "object") return false;
+        const camera = String(hint.camera || "").replace(/\s+/g, "_");
+        if (!camera) return false;
+        const freshUntil = Date.parse(hint.fresh_until || hint.freshUntil || "");
+        return Number.isFinite(freshUntil) && freshUntil >= now;
+      });
+  }
+
+  function perceptionHintScore(hint, intent) {
+    const text = deepLookNormalize([
+      hint.summary,
+      hint.semantic_hint,
+      hint.sub_label,
+      hint.label,
+      Array.isArray(hint.zones) ? hint.zones.join(" ") : "",
+    ].join(" "));
+    let score = -350;
+    if (intent.mode === "anomaly_scan" && /\b(unusual|unknown|linger|package|delivery|person|motion|activity|vehicle|car)\b/.test(text)) score -= 250;
+    if (/\b(person|people|occupied|someone|unknown)\b/.test(text)) score -= 200;
+    if (/\b(no obvious activity|all clear|quiet)\b/.test(text)) score += 80;
+    return score;
+  }
+
+  function selectDeepLookCameras(intent, roomContext, limit, perceptionHints) {
     const max = Number.isFinite(Number(limit)) ? Math.max(1, Number(limit)) : 3;
     if (!intent) return [];
     if (intent.explicitCamera) return [deepLookCameraMeta(intent.explicitCamera)];
@@ -103,6 +132,14 @@
       if (occupied) cam.score -= 1000;
       if (Number.isFinite(age)) cam.score += Math.min(age, 600) / 10;
       if (intent.mode === "anomaly_scan" && Number.isFinite(age)) cam.score += Math.min(age, 900) / 20;
+    }
+    const hints = normalizePerceptionHints(perceptionHints, Date.now());
+    for (const hint of hints) {
+      const cameraId = String(hint.camera || "").replace(/\s+/g, "_");
+      const cam = metas.find((m) => m.id === cameraId);
+      if (!cam) continue;
+      cam.score += perceptionHintScore(hint, intent);
+      cam.perceptionHint = hint.summary || hint.semantic_hint || hint.label || "";
     }
     return metas.sort((a, b) => a.score - b.score || a.priority - b.priority).slice(0, max);
   }
@@ -294,7 +331,7 @@
     const addEvent = typeof opts.addEvent === "function" ? opts.addEvent : function () {};
     const intent = detectDeepLookIntent(text);
     if (!intent || opts.simActive) return { handled: false, reason: !intent ? "no-intent" : "simulation" };
-    const cameras = selectDeepLookCameras(intent, opts.roomContext, opts.limit || 3);
+    const cameras = selectDeepLookCameras(intent, opts.roomContext, opts.limit || 3, opts.perceptionHints);
     if (!cameras.length) return { handled: false, reason: "no-cameras" };
 
     addEvent({ kind: "user", text });
@@ -392,6 +429,7 @@
     deepLookCameraMeta,
     detectDeepLookIntent,
     selectDeepLookCameras,
+    normalizePerceptionHints,
     summarizeDeepLookResults,
     buildFocusedLookQuestion,
     classifyLookFinding,

@@ -1,0 +1,59 @@
+# HomeAI Frigate perception bridge
+#
+# Default-off, read-only bridge from Frigate MQTT topics into the Home app.
+# This package deliberately forwards raw payloads only; tested app-side code
+# normalizes Frigate version differences and dedupes display cards.
+
+input_boolean:
+  homeai_frigate_perception_enabled:
+    name: HomeAI Frigate perception bridge
+    icon: mdi:cctv
+
+automation:
+  - alias: "HomeAI — Frigate reviews → perception event"
+    id: homeai_frigate_reviews_to_perception_event
+    mode: parallel
+    max: 50
+    triggers:
+      - trigger: mqtt
+        topic: frigate/reviews
+    conditions:
+      - condition: state
+        entity_id: input_boolean.homeai_frigate_perception_enabled
+        state: "on"
+    actions:
+      - event: homeai_perception
+        event_data:
+          topic: "{{ trigger.topic }}"
+          received_at: "{{ now().isoformat() }}"
+          payload: "{{ trigger.payload }}"
+          payload_json: "{{ trigger.payload_json | default({}, true) }}"
+
+  - alias: "HomeAI — Frigate events → perception enrichment"
+    id: homeai_frigate_events_to_perception_enrichment
+    mode: parallel
+    max: 100
+    triggers:
+      - trigger: mqtt
+        topic: frigate/events
+    conditions:
+      - condition: state
+        entity_id: input_boolean.homeai_frigate_perception_enabled
+        state: "on"
+      - condition: template
+        value_template: >-
+          {% set payload = trigger.payload_json | default({}, true) %}
+          {% set after = payload.after | default({}, true) %}
+          {{ after.camera is defined and (
+            after.sub_label is defined or
+            after.attributes is defined or
+            after.current_zones is defined or
+            after.entered_zones is defined
+          ) }}
+    actions:
+      - event: homeai_perception
+        event_data:
+          topic: "{{ trigger.topic }}"
+          received_at: "{{ now().isoformat() }}"
+          payload: "{{ trigger.payload }}"
+          payload_json: "{{ trigger.payload_json | default({}, true) }}"

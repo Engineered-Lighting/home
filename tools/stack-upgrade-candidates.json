@@ -1,0 +1,143 @@
+{
+  "schema": 1,
+  "productionRule": "Do not make disruptive production upgrades while traveling unless recovering a blocker.",
+  "candidateTracks": [
+    {
+      "id": "inventory",
+      "label": "Stack inventory and docs correction",
+      "priority": "p0",
+      "productionSafe": true,
+      "goal": "Record the actual running stack before any upgrade decision.",
+      "promotionGates": [
+        "Actual vLLM model and served model name are captured.",
+        "STT and TTS engines are captured.",
+        "CUDA, driver, torch, vLLM, Frigate, Home Assistant, and Extended OpenAI versions are captured when live probes are available.",
+        "Docs/comments that disagree with runtime config are flagged."
+      ],
+      "rollback": "No runtime rollback needed; documentation-only corrections revert by Git commit."
+    },
+    {
+      "id": "llm-text-tool",
+      "label": "Text/tool model challenger",
+      "priority": "p1",
+      "productionSafe": false,
+      "candidates": [
+        "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8 baseline",
+        "nvidia/Qwen3.6-27B-NVFP4",
+        "Qwen/Qwen3-Coder-30B-A3B-Instruct where coding/dev-agent use is isolated from home control"
+      ],
+      "goal": "Improve tool-call reliability and latency without weakening Home safety.",
+      "promotionGates": [
+        "No duplicated assistant messages across repeated scenario runs.",
+        "STOP clears automatically after final response.",
+        "Travel Mode blocks 100% of light-on/write attempts.",
+        "Tool calls produce one natural final answer.",
+        "p95 latency is equal or better than baseline, or the tradeoff is explicitly accepted."
+      ],
+      "rollback": "Restore previous vLLM model ID, served model name, compose/env values, and container image."
+    },
+    {
+      "id": "llm-vision",
+      "label": "Vision and /look model challenger",
+      "priority": "p1",
+      "productionSafe": false,
+      "candidates": [
+        "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8 baseline",
+        "Qwen3.6 vision-capable NVFP4 variants if available",
+        "Qwen3-Omni experimental only"
+      ],
+      "goal": "Improve camera reasoning, segmentation, and abstract /look behavior.",
+      "promotionGates": [
+        "Abstract visual prompts route to /look.",
+        "Vision quality is equal or better than Qwen3-VL baseline.",
+        "Segmentation images are useful and readable.",
+        "Camera/perception media does not flicker blank images.",
+        "VRAM headroom remains safe under normal stack load."
+      ],
+      "rollback": "Restore previous VISION_MODEL, vLLM model, and vision-sidecar env values."
+    },
+    {
+      "id": "stt",
+      "label": "Speech-to-text challenger",
+      "priority": "p2",
+      "productionSafe": false,
+      "candidates": [
+        "Current Wyoming Parakeet baseline",
+        "Newer Parakeet unified/streaming candidates",
+        "faster-whisper large-v3-turbo",
+        "faster-whisper FunASR/SenseVoiceSmall"
+      ],
+      "goal": "Improve voice command recognition without false commands.",
+      "promotionGates": [
+        "Room names and local proper nouns transcribe correctly.",
+        "No false light commands from silence, music, or TV audio.",
+        "No regression in noisy-room voice commands.",
+        "Latency is equal or better than baseline."
+      ],
+      "rollback": "Restore previous Wyoming pipeline, STT container, and HA voice pipeline selection."
+    },
+    {
+      "id": "tts",
+      "label": "Text-to-speech challenger",
+      "priority": "p2",
+      "productionSafe": false,
+      "candidates": [
+        "Current Chatterbox primary baseline",
+        "Chatterbox Multilingual V3",
+        "Current Kokoro fallback baseline",
+        "Newer Kokoro-FastAPI releases"
+      ],
+      "goal": "Improve responsiveness, interruption, and voice quality while preserving fallback.",
+      "promotionGates": [
+        "First audio latency is equal or better than baseline.",
+        "Interruption/stop behavior remains correct.",
+        "Fallback to Kokoro still works when Chatterbox fails.",
+        "No VRAM pressure regression."
+      ],
+      "rollback": "Restore previous TTS_ENGINE, TTS_FALLBACK, voice names, and Wyoming TTS upstream."
+    },
+    {
+      "id": "frigate-ha",
+      "label": "Frigate and Home Assistant feature adoption",
+      "priority": "p2",
+      "productionSafe": false,
+      "goal": "Use upstream semantic triggers, review events, AI Tasks, and automation tooling safely.",
+      "promotionGates": [
+        "Frigate config and database are backed up.",
+        "Home Assistant snapshot exists.",
+        "Driveway face tracking remains disabled or ignored for identity enrollment.",
+        "Frigate reviews/semantic labels improve Home perception without spam.",
+        "HA AI Tasks are optional enrichment, not safety-critical control."
+      ],
+      "rollback": "Restore Frigate config/database, HA snapshot, and custom integration backup."
+    },
+    {
+      "id": "runtime",
+      "label": "CUDA, PyTorch, vLLM runtime modernization",
+      "priority": "p3",
+      "productionSafe": false,
+      "goal": "Modernize Blackwell runtime only in a maintenance window.",
+      "promotionGates": [
+        "NVIDIA driver supports target CUDA runtime.",
+        "All custom containers rebuild with target torch/cu wheels.",
+        "vLLM, Parakeet, Chatterbox, Kokoro, and vision-sidecar pass health checks.",
+        "Rollback image tags and driver/toolkit restore steps are documented."
+      ],
+      "rollback": "Restore previous driver/toolkit/container images and known-good compose values."
+    },
+    {
+      "id": "frontend",
+      "label": "Frontend dependency modernization",
+      "priority": "p4",
+      "productionSafe": false,
+      "goal": "Modernize React/Vite/Three only after app behavior is stable.",
+      "promotionGates": [
+        "Mobile and desktop screenshot audits pass.",
+        "Apartment 3D cloud/photo/mesh views pass.",
+        "Hamburger menu and lights/travel-mode interactions pass.",
+        "No text/button overlap regressions."
+      ],
+      "rollback": "Revert dependency and lockfile changes by Git commit and redeploy previous web gateway version."
+    }
+  ]
+}

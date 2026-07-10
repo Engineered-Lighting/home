@@ -131,6 +131,21 @@ function eventTexts(events) {
   assert("explicit camera wins over occupied smart ranking", JSON.stringify(explicit) === JSON.stringify(["kitchen"]), explicit);
   const occupied = api.selectDeepLookCameras(api.detectDeepLookIntent("what do you see in my apartment"), { rooms: { dining_room: { occupied: true }, kitchen: { age_s: 2 } } }, 3).map((c) => c.id);
   assert("occupied rooms rank first", occupied[0] === "dining_room", occupied);
+  const freshUntil = new Date(Date.now() + 60_000).toISOString();
+  const hinted = api.selectDeepLookCameras(
+    api.detectDeepLookIntent("what do you see in my apartment"),
+    null,
+    3,
+    [{ camera: "kitchen", fresh_until: freshUntil, semantic_hint: "person in kitchen", summary: "kitchen: possible person" }],
+  ).map((c) => c.id);
+  assert("fresh Frigate perception hints rank camera first", hinted[0] === "kitchen", hinted);
+  const stale = api.selectDeepLookCameras(
+    api.detectDeepLookIntent("what do you see in my apartment"),
+    null,
+    3,
+    [{ camera: "kitchen", fresh_until: "2020-01-01T00:00:00.000Z", semantic_hint: "person in kitchen", summary: "kitchen: possible person" }],
+  ).map((c) => c.id);
+  assert("stale Frigate perception hints do not rank camera", stale[0] !== "kitchen", stale);
   const malformed = api.selectDeepLookCameras(api.detectDeepLookIntent("what do you see in my apartment"), { rooms: "broken" }, 99).map((c) => c.id);
   assert("malformed roomContext still returns safe indoor defaults", malformed.length === 4 && !malformed.includes("driveway"), malformed);
   assert("camera selection caps at requested limit", api.selectDeepLookCameras(api.detectDeepLookIntent("what do you see in my apartment"), null, 2).length === 2);

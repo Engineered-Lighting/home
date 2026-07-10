@@ -8406,13 +8406,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       metricsBase,
       metricsBaseFromEndpoint,
       normalizeAnswer: normalizeChatEventText,
+      perceptionHints: (window.HomeFrigatePerception?.freshPerceptionHints
+        ? window.HomeFrigatePerception.freshPerceptionHints(events)
+        : events.filter((e) => e.kind === "perception" && e.perception).map((e) => e.perception)),
       roomContext,
       sendToHA,
       simActive: sim.active,
       lookRunner: window.HomeLookReasonZoomRequest,
     });
     return !!result?.handled;
-  }, [addEvent, endpoint, ensureFeature, metricsBase, roomContext, sendToHA, sim.active]);
+  }, [addEvent, endpoint, ensureFeature, events, metricsBase, roomContext, sendToHA, sim.active]);
 
   /* ── Free-form user input ─────────────────────────────────────────── */
   const sendInput = useCallback(async () => {
@@ -9402,7 +9405,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       }
     });
     return unsub;
-  }, [connection]);
+  }, [connection, sim.active]);
 
   /* ── Routing decisions → live [route] diag stream ────────────────────
    *
@@ -9533,6 +9536,26 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     );
     return unsub;
   }, [connection]);
+
+  useEffect(() => {
+    if (sim.active) return undefined;
+    if (connection !== "online" || !haClientRef.current) return undefined;
+    const normalizer = window.HomeFrigatePerception;
+    if (!normalizer?.normalizeHomePerceptionEvent) return undefined;
+    const unsub = haClientRef.current.subscribeEvents(
+      "homeai_perception",
+      (ev) => {
+        const normalized = normalizer.normalizeHomePerceptionEvent(ev?.data || {});
+        if (!normalized) return;
+        setEvents((prev) => {
+          if (normalizer.isDuplicatePerceptionEvent(prev, normalized)) return prev;
+          const feedEvent = normalizer.toPerceptionFeedEvent(normalized, { nextId, fmtTime });
+          return feedEvent ? [...prev, feedEvent] : prev;
+        });
+      },
+    );
+    return unsub;
+  }, [connection, sim.active]);
 
   /* ── Jarvis mute (Addendum 9) — header pill subscription ───────────
    *

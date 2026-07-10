@@ -121,6 +121,9 @@ function persistTravelModeState(state) {
   const normalized = normalizeTravelModeState(state);
   if (!normalized || typeof window === "undefined") return;
   window.__HOME_TRAVEL_MODE_STATE = normalized;
+  try {
+    window.dispatchEvent?.(new CustomEvent("home-travel-mode-change", { detail: { state: normalized } }));
+  } catch (_) {}
   if (!window.localStorage) return;
   try {
     if (normalized === "on") window.localStorage.setItem(TRAVEL_MODE_CACHE_KEY, "on");

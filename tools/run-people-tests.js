@@ -716,6 +716,12 @@ process.stdout.write("\n[1mpeople overlay interaction contract (DOC-S83)[0m\n");
     peopleSource.includes("function unlinkedFaceBuckets(facesByPerson, identities)") &&
     peopleSource.includes("unlinked face bucket") &&
     peopleSource.includes("No unknown identities or unlinked Frigate face buckets are visible right now."));
+  assert("unlinked Frigate buckets can be resolved from the card",
+    peopleSource.includes("function UnlinkedFaceBucketCard({ bucket, frigateUrl, endpoint, token, sim, onSaved })") &&
+    peopleSource.includes("/api/extended_openai_conversation/identities/create") &&
+    peopleSource.includes("frigate_person_name: bucket.name") &&
+    peopleSource.includes("create identity") &&
+    peopleSource.includes("do not identify"));
   assert("HomeHeader accepts and attaches People menu focus ref",
     /function HomeHeader\(\{[\s\S]*peopleButtonRef[\s\S]*\}\)/.test(appSource) &&
     /\{onOpenPeople && <button[\s\S]*role="menuitem"[\s\S]*ref=\{peopleButtonRef\}[\s\S]*onClick=\{\(\) => runMenuAction\(onOpenPeople\)\}/.test(appSource));

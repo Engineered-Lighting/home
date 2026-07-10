@@ -1394,12 +1394,71 @@ function unlinkedFaceBuckets(facesByPerson, identities) {
     .sort((a, b) => b.files.length - a.files.length || a.name.localeCompare(b.name));
 }
 
-function UnlinkedFaceBucketCard({ bucket, frigateUrl }) {
+function UnlinkedFaceBucketCard({ bucket, frigateUrl, endpoint, token, sim, onSaved }) {
+  const [name, setName] = useState(bucket.name);
+  const [rel, setRel] = useState("unknown");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
   const base = String(frigateUrl || "").replace(/\/+$/, "");
   const folder = encodeURIComponent(bucket.name);
   const urls = base
     ? bucket.files.slice(0, 6).map((f) => `${base}/clips/faces/${folder}/${encodeURIComponent(f)}`)
     : [];
+
+  async function createLinkedIdentity(mode = "identity") {
+    setError(null);
+    const displayName = mode === "ignore" ? `ignored ${bucket.name}` : name.trim();
+    const relationshipType = mode === "ignore" ? "do_not_identify" : rel;
+    if (!displayName) {
+      setError("name required");
+      return;
+    }
+    setSaving(true);
+    try {
+      if (sim?.active) {
+        await new Promise((r) => setTimeout(r, 250));
+        onSaved?.({
+          display_name: displayName,
+          relationship_type: relationshipType,
+          aliases: [{ kind: "frigate_name", alias: bucket.name }],
+        });
+        return;
+      }
+      const url = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/identities/create`;
+      const resp = await window.tauriFetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          display_name: displayName,
+          relationship_type: relationshipType,
+          notes: mode === "ignore"
+            ? `ignored from unlinked Frigate face bucket ${bucket.name}`
+            : `created from unlinked Frigate face bucket ${bucket.name}`,
+          frigate_person_name: bucket.name,
+          actor: "people_queue",
+        }),
+      });
+      if (!resp.ok) {
+        const body = await resp.text().catch(() => "");
+        setError(`HTTP ${resp.status}: ${body.slice(0, 120)}`);
+        return;
+      }
+      const result = await resp.json();
+      if (result.error) {
+        setError(result.error);
+        return;
+      }
+      onSaved?.(result);
+    } catch (e) {
+      setError(`network error: ${e.message || e}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div style={{
       border: "1px solid var(--hg-warn)",
@@ -1446,8 +1505,91 @@ function UnlinkedFaceBucketCard({ bucket, frigateUrl }) {
         </div>
       )}
       <div style={{ fontSize: 11, lineHeight: 1.5, color: "var(--hg-fg-3)" }}>
-        Frigate has captures for this name, but the Home identity store does not have a matching
-        identity alias yet. This usually means the identity sync/enrollment pipeline needs attention.
+        Frigate has captures for this bucket, but Home does not have a matching identity alias.
+        Name it if this is a real person, or mark it as do not identify if the bucket is junk.
+      </div>
+      <input
+        type="text"
+        value={name}
+        disabled={saving}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="person name"
+        className="hg-focusable"
+        style={{
+          background: "var(--hg-input-bg)",
+          border: "1px solid var(--hg-border-soft)",
+          padding: "8px 10px",
+          fontFamily: PEOPLE_FONT_SANS,
+          fontSize: 14,
+          color: "var(--hg-fg-0)",
+          outline: "none",
+        }}
+      />
+      <select
+        value={rel}
+        disabled={saving}
+        onChange={(e) => setRel(e.target.value)}
+        className="hg-focusable"
+        style={{
+          background: "var(--hg-input-bg)",
+          border: "1px solid var(--hg-border-soft)",
+          padding: "8px 10px",
+          fontFamily: PEOPLE_FONT_MONO,
+          fontSize: 11,
+          color: "var(--hg-fg-1)",
+          letterSpacing: "0.04em",
+          outline: "none",
+          cursor: saving ? "default" : "pointer",
+        }}
+      >
+        {REL_TYPE_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+      {error && (
+        <div style={{ color: "var(--hg-crit)", fontSize: 10, lineHeight: 1.4 }}>{error}</div>
+      )}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+        gap: 8,
+      }}>
+        <button
+          onClick={() => createLinkedIdentity("identity")}
+          disabled={saving || !name.trim()}
+          className="hg-focusable"
+          style={{
+            background: "var(--hg-ice)",
+            border: "1px solid var(--hg-ice)",
+            color: "var(--hg-bg-0)",
+            padding: "8px 10px",
+            fontFamily: PEOPLE_FONT_MONO,
+            fontSize: 10,
+            letterSpacing: "0.14em",
+            textTransform: "lowercase",
+            cursor: saving || !name.trim() ? "default" : "pointer",
+          }}
+        >
+          {saving ? "saving..." : "create identity"}
+        </button>
+        <button
+          onClick={() => createLinkedIdentity("ignore")}
+          disabled={saving}
+          className="hg-focusable"
+          style={{
+            background: "transparent",
+            border: "1px solid var(--hg-border-soft)",
+            color: "var(--hg-fg-2)",
+            padding: "8px 10px",
+            fontFamily: PEOPLE_FONT_MONO,
+            fontSize: 10,
+            letterSpacing: "0.14em",
+            textTransform: "lowercase",
+            cursor: saving ? "default" : "pointer",
+          }}
+        >
+          do not identify
+        </button>
       </div>
     </div>
   );
@@ -1513,6 +1655,10 @@ function PeopleQueueView({ identities, facesByPerson, frigateUrl, sim, endpoint,
             key={bucket.name}
             bucket={bucket}
             frigateUrl={frigateUrl}
+            endpoint={endpoint}
+            token={token}
+            sim={sim}
+            onSaved={onSaved}
           />
         ))}
         {unknowns.map((i) => (

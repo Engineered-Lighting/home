@@ -4608,6 +4608,16 @@ function findAssistantDuplicateIdx(prev, text, kind = "home", lookback = 60) {
   return findPriorAssistantSameTurnIdx(prev, text, kind, lookback);
 }
 
+function findActiveAssistantStreamingIdx(prev, kind = "home", lookback = 80) {
+  const start = Math.max(0, prev.length - lookback);
+  for (let i = prev.length - 1; i >= start; i--) {
+    const e = prev[i];
+    if (e?.kind === "user" || e?.kind === "voice") return -1;
+    if (e?.kind === kind && e?.streaming) return i;
+  }
+  return -1;
+}
+
 function isDirectLightStateQuestion(text) {
   const t = String(text || "").toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
   if (!t) return false;
@@ -6344,7 +6354,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           setEvents((prev) => {
             const activeIdx = activeStreamingId
               ? prev.findIndex((e) => e.id === activeStreamingId)
-              : -1;
+              : findActiveAssistantStreamingIdx(prev, "home", 80);
             const existingIdx = activeIdx !== -1
               ? activeIdx
               : findAssistantDuplicateIdx(prev, speechText, "home", 60);
@@ -8722,8 +8732,10 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
               if (last && last.kind === "home" && last.streaming) {
                 return [...prev.slice(0, -1), { ...last, text: cleanText }];
               }
+              const newId = nextId();
+              streamingIds.current.add(newId);
               return [...prev, {
-                id: nextId(),
+                id: newId,
                 kind: "home",
                 time: fmtTime(),
                 text: cleanText,
@@ -8737,11 +8749,19 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           setEvents((prev) => {
             const last = prev[prev.length - 1];
             if (last && last.kind === "home" && last.streaming) {
+              streamingIds.current.delete(last.id);
               return [...prev.slice(0, -1), { ...last, text: cleanText, streaming: false }];
             }
             // Dedup against recent assistant bubbles: HA WS event and
             // s2s bridge can both fire for the same turn.
-            if (findAssistantDuplicateIdx(prev, cleanText, "home", 60) !== -1) return prev;
+            const existingIdx = findAssistantDuplicateIdx(prev, cleanText, "home", 60);
+            if (existingIdx !== -1) {
+              const existing = prev[existingIdx];
+              if (existing?.streaming) streamingIds.current.delete(existing.id);
+              return prev.map((e, i) => i === existingIdx
+                ? { ...e, text: mergeStreamingText(e.text, cleanText), streaming: false }
+                : e);
+            }
             return [...prev, {
               id: nextId(),
               kind: "home",
@@ -9137,10 +9157,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             nextEvents = [...nextEvents, ev];
             continue;
           }
-          const existingIdx = findAssistantDuplicateIdx(nextEvents, ev.text, ev.kind, 60);
+          const streamingIdx = findActiveAssistantStreamingIdx(nextEvents, ev.kind, 80);
+          const existingIdx = streamingIdx !== -1
+            ? streamingIdx
+            : findAssistantDuplicateIdx(nextEvents, ev.text, ev.kind, 60);
           if (existingIdx === -1) {
             nextEvents = [...nextEvents, ev];
             continue;
+          }
+          if (nextEvents[existingIdx]?.streaming) {
+            streamingIds.current.delete(nextEvents[existingIdx].id);
           }
           nextEvents = nextEvents.map((e, i) => i === existingIdx
             ? { ...e, text: mergeStreamingText(e.text, ev.text), streaming: false }
@@ -9598,7 +9624,12 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         const convId = d.conversation_id || null;
         setEvents((prev) => {
           const userIdx = findRecentUserIdx(prev, userTextC, 20);
-          const asstIdx = findAssistantDuplicateIdx(prev, assistantTextC, "home", 60);
+          const streamingAsstIdx = assistantTextC
+            ? findActiveAssistantStreamingIdx(prev, "home", 80)
+            : -1;
+          const asstIdx = streamingAsstIdx !== -1
+            ? streamingAsstIdx
+            : findAssistantDuplicateIdx(prev, assistantTextC, "home", 60);
           const newUser = (userTextC && userIdx === -1)
             ? [{ id: nextId(), kind: "voice", time: fmtTime(), text: userTextC, convId }]
             : [];
@@ -9618,6 +9649,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             }
           }
           if (asstIdx !== -1 && assistantTextC) {
+            if (augmented[asstIdx]?.streaming) {
+              streamingIds.current.delete(augmented[asstIdx].id);
+            }
             augmented = augmented.map((e, i) => i === asstIdx
               ? {
                   ...e,

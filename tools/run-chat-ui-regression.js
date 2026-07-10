@@ -245,6 +245,7 @@ function runStaticChecks() {
     check("streaming merge helper exists", source.includes("function mergeStreamingText"), "home-app.jsx"),
     check("recent duplicate guard exists", source.includes("function isRecentDuplicateEvent"), "home-app.jsx"),
     check("assistant-like replacement guard exists", source.includes("findRecentAssistantLikeIdx"), "home-app.jsx"),
+    check("final answers settle active assistant streaming bubble", source.includes("function findActiveAssistantStreamingIdx") && source.includes("streamingAsstIdx"), "home-app.jsx"),
     check("input remains single command source", source.includes('aria-label="Command input"'), "home-app.jsx"),
     check("stop streaming control is state-backed", source.includes("stopStreaming") && source.includes("streamingIds.current") && source.includes("activeRunRef"), "home-app.jsx"),
   ];

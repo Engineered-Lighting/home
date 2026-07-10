@@ -52,6 +52,7 @@ const helperSource = [
     findRecentAssistantIdx,
     findRecentAssistantLikeIdx,
     findAssistantDuplicateIdx,
+    findActiveAssistantStreamingIdx,
     serviceCallMayEnergizeLights,
     shouldSuppressActionCardsForToolCall,
   });
@@ -176,6 +177,22 @@ assert("same assistant answer after a new user turn is preserved",
     { kind: "home", time: nowTime(), text: fullPictureAnswer },
     { kind: "user", time: nowTime(), text: "Ask again" },
   ], fullPictureAnswer, "home", 60) === -1);
+
+assert("active streaming assistant is found across interleaved system/perception events",
+  H.findActiveAssistantStreamingIdx([
+    { kind: "user", time: nowTime(), text: "What do you see in my apartment" },
+    { kind: "home", time: nowTime(), text: "I'll check current status", streaming: true },
+    { kind: "system", time: nowTime(), text: "system get_all_rooms_state..." },
+    { kind: "perception", time: nowTime(), text: "driveway: A person walks by." },
+  ], "home", 80) === 1);
+
+assert("active streaming assistant search stops at a newer user turn",
+  H.findActiveAssistantStreamingIdx([
+    { kind: "user", time: nowTime(), text: "First question" },
+    { kind: "home", time: nowTime(), text: "Old partial", streaming: true },
+    { kind: "user", time: nowTime(), text: "Second question" },
+    { kind: "system", time: nowTime(), text: "system connected" },
+  ], "home", 80) === -1);
 
 assert("short repeated phrases are preserved",
   H.normalizeChatEventText("no no no no no no") === "no no no no no no");

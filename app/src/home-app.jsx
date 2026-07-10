@@ -345,6 +345,22 @@ function mergeStreamingText(current, incoming) {
   return normalizeChatEventText(joinStreamingFallback(cur, next, rawNext));
 }
 
+function settleAssistantFinalText(current, finalText) {
+  const cur = normalizeChatEventText(String(current || ""));
+  const final = normalizeChatEventText(String(finalText || ""));
+  if (!final) return cur;
+  if (!cur) return final;
+  const curKey = canonicalChatText(cur);
+  const finalKey = canonicalChatText(final);
+  const curLoose = canonicalChatTextLoose(cur);
+  const finalLoose = canonicalChatTextLoose(final);
+  if (curKey === finalKey) return final;
+  if (finalKey.includes(curKey) || finalLoose.includes(curLoose)) return final;
+  if (curKey.includes(finalKey) || curLoose.includes(finalLoose)) return final;
+  if (isNearDuplicateChatText(cur, final)) return final;
+  return mergeStreamingText(cur, final);
+}
+
 function readCachedTravelModeOn() {
   try {
     if (typeof window !== "undefined" && window.__HOME_TRAVEL_MODE_STATE === "on") return true;
@@ -5523,7 +5539,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     const slowLink = /(^|-)2g$/.test(String(nav?.effectiveType || ""));
     const features = saveData || slowLink
       ? ["lights", "apartment"]
-      : ["lights", "apartment", "people", "world", "spatial", "look", "intelligence", "videoLabeler"];
+      : ["lights", "apartment", "people", "world", "spatial", "look", "intelligence", ...(videoLabelerAvailable ? ["videoLabeler"] : [])];
     const timers = [];
     const schedule = (fn, delay) => {
       const run = () => {
@@ -5537,7 +5553,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       schedule(() => prefetchFeature(feature, "idle-after-boot"), 900 + index * 700);
     });
     return () => timers.forEach((id) => clearTimeout(id));
-  }, [bootPhase, prefetchFeature]);
+  }, [bootPhase, prefetchFeature, videoLabelerAvailable]);
 
   useEffect(() => {
     if (spatialLayout) ensureFeature("apartment", "apartment", "spatial-layout");
@@ -6392,7 +6408,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
               return prev.map((e, i) => i === existingIdx
                 ? {
                     ...e,
-                    text: mergeStreamingText(e.text, speechText),
+                    text: settleAssistantFinalText(e.text, speechText),
                     streaming: false,
                     convId: convId || e.convId,
                   }
@@ -6512,7 +6528,11 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       if (runStillActive) streamingIds.current.clear();
       setEvents((prev) => prev
         .filter((e) => e.id !== thinkingId)
-        .map((e) => (pendingStreamingId && e.id === pendingStreamingId) || staleStreamingIds.has(e.id)
+        .map((e) => (
+          (pendingStreamingId && e.id === pendingStreamingId)
+          || staleStreamingIds.has(e.id)
+          || e.streaming
+        )
           ? { ...e, text: normalizeChatEventText(e.text || ""), streaming: false }
           : e));
       if (runStillActive) activeRunRef.current = null;

@@ -246,8 +246,14 @@ async function readEntityStates(entityIds) {
 function ControlSlider({ kind, label, sub, value, min, max, step, unit, disabled, mixed, applying, onDrag, onCommit }) {
   const debRef = React.useRef(null);
   React.useEffect(() => () => { if (debRef.current) { clearTimeout(debRef.current); debRef.current = null; } }, []);
+  React.useEffect(() => {
+    if (!disabled || !debRef.current) return;
+    clearTimeout(debRef.current);
+    debRef.current = null;
+  }, [disabled]);
 
   const handleChange = (e) => {
+    if (disabled) return;
     const v = Number(e.target.value);
     if (onDrag) onDrag(v);
     if (debRef.current) clearTimeout(debRef.current);
@@ -257,6 +263,7 @@ function ControlSlider({ kind, label, sub, value, min, max, step, unit, disabled
     }, 120);
   };
   const flush = (e) => {
+    if (disabled) return;
     if (debRef.current) { clearTimeout(debRef.current); debRef.current = null; }
     if (onCommit) onCommit(Number(e.target.value));
   };
@@ -314,16 +321,31 @@ function fireServiceCall(opts) {
 /* ── ControlCardShell ─────────────────────────────────────────────────────
  * The glassy card surface shared by both control cards. `muted` dims a
  * read-only (superseded/expired/failed/unavailable) card. */
-function ControlCardShell({ children, muted, accent }) {
+function ControlCardShell({ children, muted, accent, locked }) {
   return (
-    <div className="hg-fade" style={{
+    <div className="hg-fade" aria-disabled={locked ? "true" : undefined} style={{
+      position: "relative",
       margin: "7px 0",
       background: "var(--hg-bg-1)",
       border: `1px solid ${accent && !muted ? "var(--hg-border)" : "var(--hg-border-soft)"}`,
       borderRadius: 8,
       padding: "11px 13px",
       opacity: muted ? 0.55 : 1,
-    }}>{children}</div>
+    }}>
+      {children}
+      {locked && (
+        <div
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            inset: 0,
+            borderRadius: 8,
+            pointerEvents: "none",
+            background: "linear-gradient(180deg, rgba(245,158,11,0.035), rgba(0,0,0,0.035))",
+          }}
+        />
+      )}
+    </div>
   );
 }
 
@@ -582,7 +604,7 @@ function LightControlCard({ ctx, lifecycle, onControlAction }) {
   };
 
   return (
-    <ControlCardShell accent muted={travelModeLocked}>
+    <ControlCardShell accent muted={travelModeLocked} locked={travelModeLocked}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 9 }}>
         <window.IconBulb size={13} stroke="var(--hg-ice-bright)" />
         <span style={{ fontFamily: HC_SANS, fontSize: 12.5, fontWeight: 500, color: "var(--hg-fg-0)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>

@@ -46,6 +46,7 @@ const helperSource = [
     collapseRepeatedAdjacentText,
     normalizeChatEventText,
     mergeStreamingText,
+    settleAssistantFinalText,
     isNearDuplicateChatText,
     isRecentDuplicateEvent,
     sanitizeChatEventForStorage,
@@ -137,6 +138,12 @@ assert("travel-mode blocked streaming merge keeps one final sentence",
     "Travel Mode is on so did not\n\nTravel Mode is on, so I did not turn on any lights.",
   ) === "Travel Mode is on, so I did not turn on any lights.");
 
+assert("intent-end final answer replaces streamed duplicate draft",
+  H.settleAssistantFinalText(
+    "Travel Mode is on, so I did not turn on any lights.\n\nTravel Mode is on so did not",
+    "Travel Mode is on, so I did not turn on any lights.",
+  ) === "Travel Mode is on, so I did not turn on any lights.");
+
 assert("persisted duplicated streaming event is normalized and settled",
   (() => {
     const ev = H.sanitizeChatEventForStorage({
@@ -160,6 +167,12 @@ assert("adjacent duplicate word-runs collapse when long enough",
   H.normalizeChatEventText("A car is parked outside A car is parked outside") === "A car is parked outside");
 
 const apartmentStatusAnswer = "I don't currently see anyone in any room. The driveway camera shows a person in a red shirt standing near a covered car, while another person walks a dog across the street. The kitchen appears to be empty with the stove, sink, and open cabinets visible. All other rooms seem unoccupied at the moment.";
+
+assert("intent-end final answer replaces abstract visual duplicate draft",
+  H.settleAssistantFinalText(
+    "I don't currently see anyone in any room. The driveway camera shows a person in a red shirt standing near a covered car, while another person walks a dog across the street.",
+    apartmentStatusAnswer,
+  ) === apartmentStatusAnswer);
 
 assert("screenshot apartment status duplicate paragraph collapses",
   H.normalizeChatEventText(`${apartmentStatusAnswer}\n\n${apartmentStatusAnswer}`) === apartmentStatusAnswer);

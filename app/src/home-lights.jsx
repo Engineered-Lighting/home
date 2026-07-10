@@ -119,7 +119,9 @@ function readCachedTravelModeState() {
 }
 function persistTravelModeState(state) {
   const normalized = normalizeTravelModeState(state);
-  if (!normalized || typeof window === "undefined" || !window.localStorage) return;
+  if (!normalized || typeof window === "undefined") return;
+  window.__HOME_TRAVEL_MODE_STATE = normalized;
+  if (!window.localStorage) return;
   try {
     if (normalized === "on") window.localStorage.setItem(TRAVEL_MODE_CACHE_KEY, "on");
     else window.localStorage.removeItem(TRAVEL_MODE_CACHE_KEY);

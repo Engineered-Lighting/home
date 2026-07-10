@@ -52,11 +52,25 @@ const helperSource = [
     findRecentAssistantIdx,
     findRecentAssistantLikeIdx,
     findAssistantDuplicateIdx,
+    serviceCallMayEnergizeLights,
+    shouldSuppressActionCardsForToolCall,
   });
   `,
 ].join("\n");
 
-const sandbox = { window: {}, Date, RegExp, String, Math };
+const sandbox = {
+  window: {},
+  localStorage: {
+    _data: new Map(),
+    getItem(key) { return this._data.has(key) ? this._data.get(key) : null; },
+    setItem(key, value) { this._data.set(key, String(value)); },
+    removeItem(key) { this._data.delete(key); },
+  },
+  Date,
+  RegExp,
+  String,
+  Math,
+};
 vm.runInNewContext(helperSource, sandbox, { filename: "home-app.chat-dedupe-helpers.js" });
 const H = sandbox.window;
 
@@ -109,6 +123,17 @@ assert("near-duplicate answer fragments collapse into one final answer",
   H.normalizeChatEventText(
     "I don't have full picture right now. I don't have a full picture right now. I can check specific areas if you'd like. can check specific areas you'd like.",
   ) === "I don't have a full picture right now. I can check specific areas if you'd like.");
+
+assert("travel-mode blocked response keeps one final sentence",
+  H.normalizeChatEventText(
+    "Travel Mode is on, so I did not turn on any lights.\n\nTravel Mode is on so did not\n\nTravel Mode is on, so I did not turn on any lights.",
+  ) === "Travel Mode is on, so I did not turn on any lights.");
+
+assert("travel-mode blocked streaming merge keeps one final sentence",
+  H.mergeStreamingText(
+    "Travel Mode is on, so I did not turn on any lights.",
+    "Travel Mode is on so did not\n\nTravel Mode is on, so I did not turn on any lights.",
+  ) === "Travel Mode is on, so I did not turn on any lights.");
 
 assert("similar final answer matches active partial bubble",
   H.isNearDuplicateChatText(
@@ -186,6 +211,33 @@ assert("recent similar assistant text is detected",
 
 assert("distinct assistant text is not treated as duplicate",
   !H.isRecentDuplicateEvent(prev, { kind: "home", text: "A person is outside" }));
+
+assert("travel mode suppresses execute_services light action cards",
+  H.shouldSuppressActionCardsForToolCall("execute_services", {
+    list: [{
+      domain: "light",
+      service: "turn_on",
+      service_data: { entity_id: ["light.office"] },
+    }],
+  }, true));
+
+assert("travel mode does not suppress harmless turn_off cards",
+  !H.shouldSuppressActionCardsForToolCall("execute_services", {
+    list: [{
+      domain: "light",
+      service: "turn_off",
+      service_data: { entity_id: ["light.office"] },
+    }],
+  }, true));
+
+assert("travel mode does not suppress non-light action cards",
+  !H.shouldSuppressActionCardsForToolCall("execute_services", {
+    list: [{
+      domain: "media_player",
+      service: "media_pause",
+      service_data: { entity_id: ["media_player.living_room"] },
+    }],
+  }, true));
 
 process.stdout.write("\n");
 process.stdout.write(`${passes} pass . ${fails} fail\n`);

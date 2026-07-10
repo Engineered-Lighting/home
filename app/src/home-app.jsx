@@ -60,9 +60,21 @@ function canonicalChatTextLoose(text) {
     .trim();
 }
 
+const HOME_TRAVEL_MODE_CACHE_KEY = "home.lights.travelMode.state.v1";
+
 function chatWordTokens(text) {
   const loose = canonicalChatTextLoose(text);
   return loose ? loose.split(" ").filter(Boolean) : [];
+}
+
+function isTokenSubsequence(shortWords, longWords) {
+  if (!Array.isArray(shortWords) || !Array.isArray(longWords)) return false;
+  if (shortWords.length < 5 || longWords.length < shortWords.length) return false;
+  let j = 0;
+  for (let i = 0; i < longWords.length && j < shortWords.length; i++) {
+    if (shortWords[j] === longWords[i]) j++;
+  }
+  return j === shortWords.length;
 }
 
 function orderedTokenOverlapScore(a, b) {
@@ -95,6 +107,7 @@ function isNearDuplicateChatText(a, b) {
   const bWords = chatWordTokens(b);
   const minWords = Math.min(aWords.length, bWords.length);
   if (minWords < 5) return false;
+  if (isTokenSubsequence(aWords, bWords) || isTokenSubsequence(bWords, aWords)) return true;
   const score = orderedTokenOverlapScore(a, b);
   if (score >= 0.82) return true;
   const sameEdge = aWords[0] === bWords[0]
@@ -317,6 +330,41 @@ function mergeStreamingText(current, incoming) {
   const overlapped = mergeByWordOverlap(cur, next);
   if (overlapped) return overlapped;
   return normalizeChatEventText(joinStreamingFallback(cur, next, rawNext));
+}
+
+function readCachedTravelModeOn() {
+  try {
+    if (typeof window !== "undefined" && window.__HOME_TRAVEL_MODE_STATE === "on") return true;
+    if (typeof localStorage !== "undefined") {
+      return localStorage.getItem(HOME_TRAVEL_MODE_CACHE_KEY) === "on";
+    }
+  } catch (_) {}
+  return false;
+}
+
+function serviceCallMayEnergizeLights(call) {
+  if (!call || typeof call !== "object") return false;
+  const domain = String(call.domain || "").toLowerCase();
+  const service = String(call.service || "").toLowerCase();
+  if (service !== "turn_on" && service !== "toggle") return false;
+  if (domain === "light" || domain === "switch" || domain === "scene") return true;
+  if (domain === "homeassistant") {
+    const sd = call.service_data || {};
+    const targets = [sd.entity_id, sd.area_id, sd.device_id].flat().filter(Boolean).join(" ").toLowerCase();
+    return !targets || /\b(light|switch)\./.test(targets);
+  }
+  if (domain === "script") {
+    const sd = call.service_data || {};
+    const targets = [sd.entity_id, sd.area_id, sd.device_id].flat().filter(Boolean).join(" ").toLowerCase();
+    return /light|lighting|living_lights|good_morning|return_home/.test(targets);
+  }
+  return false;
+}
+
+function shouldSuppressActionCardsForToolCall(name, parsed, travelModeOn = readCachedTravelModeOn()) {
+  if (name !== "execute_services" || !travelModeOn) return false;
+  const calls = Array.isArray(parsed?.list) ? parsed.list : [];
+  return calls.some(serviceCallMayEnergizeLights);
 }
 
 function duplicateEventGroupKey(kind) {
@@ -8892,6 +8940,17 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           || (() => { try { return JSON.parse(fn.arguments || "{}"); } catch { return {}; } })();
 
         if (name === "execute_services" && parsed && Array.isArray(parsed.list)) {
+          if (shouldSuppressActionCardsForToolCall(name, parsed)) {
+            actionCards.push({
+              id: nextId(), kind: "tool", time: fmtTime(),
+              name,
+              args: parsed,
+              status: "blocked",
+              latency: null,
+              note: "travel mode blocked lighting output",
+            });
+            continue;
+          }
           // Group by service key to coalesce many entity actions into one card.
           const groups = new Map();
           for (const call of parsed.list) {

@@ -123,9 +123,18 @@ function VoiceContent({ text }) {
 }
 
 function HomeContent({ text, streaming }) {
+  const displayText = (() => {
+    try {
+      return window.HomeNormalizeChatEventText
+        ? window.HomeNormalizeChatEventText(text || "")
+        : (text || "");
+    } catch {
+      return text || "";
+    }
+  })();
   return (
     <div style={{ ...T_PROSE, ...HG_FG_BRIGHT }}>
-      {text}
+      {displayText}
       {streaming && <span className="hg-caret" />}
     </div>
   );

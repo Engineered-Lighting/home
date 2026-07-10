@@ -208,6 +208,19 @@ function normalizeChatEventText(text) {
   ));
 }
 
+if (typeof window !== "undefined") {
+  window.HomeNormalizeChatEventText = normalizeChatEventText;
+}
+
+function sanitizeChatEventForStorage(ev) {
+  if (!ev || typeof ev !== "object") return ev;
+  const next = ev.text
+    ? { ...ev, text: normalizeChatEventText(ev.text) }
+    : { ...ev };
+  if (next.streaming) delete next.streaming;
+  return next;
+}
+
 function collapseOverlappingWordRuns(words) {
   if (!Array.isArray(words) || words.length < 8) return "";
   let out = words.slice();
@@ -4673,7 +4686,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     debugMode: false,   // Show internal diag events ([parakeet], [direct], [kokoro], etc.) in feed
   }), []);
   const initialEventsFromStorage = useMemo(
-    () => (initialEvents ? initialEvents : loadEvents()),
+    () => (initialEvents ? initialEvents : loadEvents()).map(sanitizeChatEventForStorage),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
@@ -5439,9 +5452,26 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * Onboarding-injected hints (`e.onboarding`) are session-scoped UI, not
    * chat history — filtered out so they never persist or stack across launches. */
   useEffect(() => {
-    const id = requestAnimationFrame(() => saveEvents(events.filter((e) => !e.onboarding)));
+    const id = requestAnimationFrame(() => saveEvents(
+      events.filter((e) => !e.onboarding).map(sanitizeChatEventForStorage),
+    ));
     return () => cancelAnimationFrame(id);
   }, [events]);
+
+  useEffect(() => {
+    if (!events.some((e) => e.streaming)) return undefined;
+    if (activeRunRef.current || currentExternalCtrlRef.current) return undefined;
+    if (voice.state && !["inactive", "ready", "idle", "error"].includes(voice.state)) return undefined;
+    const id = setTimeout(() => {
+      if (activeRunRef.current || currentExternalCtrlRef.current) return;
+      if (voice.state && !["inactive", "ready", "idle", "error"].includes(voice.state)) return;
+      streamingIds.current.clear();
+      setEvents((prev) => prev.map((e) => e.streaming
+        ? { ...e, text: normalizeChatEventText(e.text || ""), streaming: false }
+        : e));
+    }, 1500);
+    return () => clearTimeout(id);
+  }, [events, voice.state]);
 
   /* Persist conversation_id whenever it changes */
   useEffect(() => { saveConversationId(conversationId); }, [conversationId]);

@@ -48,6 +48,7 @@ const helperSource = [
     mergeStreamingText,
     isNearDuplicateChatText,
     isRecentDuplicateEvent,
+    sanitizeChatEventForStorage,
     findRecentUserIdx,
     findRecentAssistantIdx,
     findRecentAssistantLikeIdx,
@@ -135,6 +136,16 @@ assert("travel-mode blocked streaming merge keeps one final sentence",
     "Travel Mode is on, so I did not turn on any lights.",
     "Travel Mode is on so did not\n\nTravel Mode is on, so I did not turn on any lights.",
   ) === "Travel Mode is on, so I did not turn on any lights.");
+
+assert("persisted duplicated streaming event is normalized and settled",
+  (() => {
+    const ev = H.sanitizeChatEventForStorage({
+      kind: "home",
+      text: "Travel Mode is on, so I did not turn on any lights.\n\nTravel Mode is on so did not\n\nTravel Mode is on, so I did not turn on any lights.",
+      streaming: true,
+    });
+    return ev.text === "Travel Mode is on, so I did not turn on any lights." && !ev.streaming;
+  })());
 
 assert("similar final answer matches active partial bubble",
   H.isNearDuplicateChatText(

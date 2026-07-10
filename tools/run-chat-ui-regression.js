@@ -246,6 +246,9 @@ function runStaticChecks() {
     check("recent duplicate guard exists", source.includes("function isRecentDuplicateEvent"), "home-app.jsx"),
     check("assistant-like replacement guard exists", source.includes("findRecentAssistantLikeIdx"), "home-app.jsx"),
     check("final answers settle active assistant streaming bubble", source.includes("function findActiveAssistantStreamingIdx") && source.includes("streamingAsstIdx"), "home-app.jsx"),
+    check("persisted events are sanitized before save", source.includes("sanitizeChatEventForStorage") && source.includes(".map(sanitizeChatEventForStorage)"), "home-app.jsx"),
+    check("orphan streaming bubbles auto-settle when idle", source.includes("orphan") || source.includes("streamingIds.current.clear()") && source.includes("[\"inactive\", \"ready\", \"idle\", \"error\"]"), "home-app.jsx"),
+    check("home renderer normalizes duplicated text", fs.readFileSync(path.join(REPO, "app", "src", "home-events.jsx"), "utf8").includes("HomeNormalizeChatEventText"), "home-events.jsx"),
     check("input remains single command source", source.includes('aria-label="Command input"'), "home-app.jsx"),
     check("stop streaming control is state-backed", source.includes("stopStreaming") && source.includes("streamingIds.current") && source.includes("activeRunRef"), "home-app.jsx"),
   ];

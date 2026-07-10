@@ -710,6 +710,12 @@ process.stdout.write("\n[1mpeople overlay interaction contract (DOC-S83)[0m\n");
   assert("list row click opens same detail panel and panel close clears selection",
     peopleSource.includes("onRowClick={(id) => setSelectedUuid(id.uuid)}") &&
     peopleSource.includes("onClose={() => setSelectedUuid(null)}"));
+  assert("queue receives Frigate face buckets and resolved image base",
+    /<PeopleQueueView[\s\S]*facesByPerson=\{facesByPerson\}[\s\S]*frigateUrl=\{faceImageBaseUrl\}/.test(peopleSource));
+  assert("queue surfaces unlinked Frigate buckets instead of false-empty state",
+    peopleSource.includes("function unlinkedFaceBuckets(facesByPerson, identities)") &&
+    peopleSource.includes("unlinked face bucket") &&
+    peopleSource.includes("No unknown identities or unlinked Frigate face buckets are visible right now."));
   assert("HomeHeader accepts and attaches People menu focus ref",
     /function HomeHeader\(\{[\s\S]*peopleButtonRef[\s\S]*\}\)/.test(appSource) &&
     /\{onOpenPeople && <button[\s\S]*role="menuitem"[\s\S]*ref=\{peopleButtonRef\}[\s\S]*onClick=\{\(\) => runMenuAction\(onOpenPeople\)\}/.test(appSource));

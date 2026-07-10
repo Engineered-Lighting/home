@@ -550,6 +550,8 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
             {view === "queue" && (
               <PeopleQueueView
                 identities={identities}
+                facesByPerson={facesByPerson}
+                frigateUrl={faceImageBaseUrl}
                 sim={sim}
                 endpoint={endpoint}
                 token={token}
@@ -1365,12 +1367,99 @@ function PeopleQueueCard({ identity, endpoint, token, sim, avatarBlobUrls, onSav
 /* ─────────────────────────────────────────────────────────────────────
  * Sub-component: PeopleQueueView
  * ──────────────────────────────────────────────────────────────────── */
-function PeopleQueueView({ identities, sim, endpoint, token, avatarBlobUrls, onSaved }) {
+function identityFrigateNames(identity) {
+  const names = new Set();
+  if (!identity) return names;
+  if (Array.isArray(identity.aliases)) {
+    for (const a of identity.aliases) {
+      if (a && a.kind === "frigate_name" && a.alias) names.add(String(a.alias).trim().toLowerCase());
+    }
+  }
+  if (identity.display_name) names.add(String(identity.display_name).trim().toLowerCase());
+  return names;
+}
+
+function unlinkedFaceBuckets(facesByPerson, identities) {
+  if (!facesByPerson || typeof facesByPerson !== "object") return [];
+  const linked = new Set();
+  for (const identity of identities || []) {
+    for (const name of identityFrigateNames(identity)) linked.add(name);
+  }
+  return Object.entries(facesByPerson)
+    .filter(([name, files]) => {
+      const key = String(name || "").trim().toLowerCase();
+      return key && !linked.has(key) && Array.isArray(files) && files.length > 0;
+    })
+    .map(([name, files]) => ({ name, files }))
+    .sort((a, b) => b.files.length - a.files.length || a.name.localeCompare(b.name));
+}
+
+function UnlinkedFaceBucketCard({ bucket, frigateUrl }) {
+  const base = String(frigateUrl || "").replace(/\/+$/, "");
+  const folder = encodeURIComponent(bucket.name);
+  const urls = base
+    ? bucket.files.slice(0, 6).map((f) => `${base}/clips/faces/${folder}/${encodeURIComponent(f)}`)
+    : [];
+  return (
+    <div style={{
+      border: "1px solid var(--hg-warn)",
+      padding: 14,
+      background: "color-mix(in srgb, var(--hg-warn) 8%, var(--hg-bg-1))",
+      display: "flex",
+      flexDirection: "column",
+      gap: 10,
+    }}>
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        fontFamily: PEOPLE_FONT_MONO,
+        fontSize: 10,
+        letterSpacing: "0.12em",
+        color: "var(--hg-warn)",
+      }}>
+        <span>unlinked face bucket</span>
+        <span style={{ marginLeft: "auto", color: "var(--hg-fg-3)" }}>{bucket.files.length} captures</span>
+      </div>
+      <div style={{ fontSize: 16, color: "var(--hg-fg-0)" }}>{bucket.name}</div>
+      {urls.length > 0 && (
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+          gap: 6,
+        }}>
+          {urls.map((url) => (
+            <img
+              key={url}
+              src={url}
+              alt=""
+              loading="lazy"
+              style={{
+                width: "100%",
+                aspectRatio: "1 / 1",
+                objectFit: "cover",
+                border: "1px solid var(--hg-border-soft)",
+                background: "var(--hg-bg-0)",
+              }}
+            />
+          ))}
+        </div>
+      )}
+      <div style={{ fontSize: 11, lineHeight: 1.5, color: "var(--hg-fg-3)" }}>
+        Frigate has captures for this name, but the Home identity store does not have a matching
+        identity alias yet. This usually means the identity sync/enrollment pipeline needs attention.
+      </div>
+    </div>
+  );
+}
+
+function PeopleQueueView({ identities, facesByPerson, frigateUrl, sim, endpoint, token, avatarBlobUrls, onSaved }) {
   // The queue is everyone tagged 'unknown' — the auto-seed default for
   // Frigate-discovered faces. Once the user assigns a relationship type,
   // the card drops out (next refresh removes it from this filter).
   const unknowns = (identities || []).filter((i) => i.relationship_type === "unknown");
-  if (unknowns.length === 0) {
+  const unlinkedBuckets = unlinkedFaceBuckets(facesByPerson, identities);
+  if (unknowns.length === 0 && unlinkedBuckets.length === 0) {
     return (
       <div style={{
         textAlign: "center", padding: "60px 20px",
@@ -1381,8 +1470,8 @@ function PeopleQueueView({ identities, sim, endpoint, token, avatarBlobUrls, onS
           textTransform: "uppercase", color: "var(--hg-fg-3)", marginBottom: 8,
         }}>queue is empty</div>
         <div style={{ fontSize: 12, color: "var(--hg-fg-4)", lineHeight: 1.6, maxWidth: 480, margin: "0 auto" }}>
-          All known faces have been tagged. New faces detected by Frigate will appear here
-          for you to name + relate.
+          No unknown identities or unlinked Frigate face buckets are visible right now.
+          If you expected new faces, check the face detector and identity sync pipeline.
           {sim?.active && (
             <span style={{ display: "block", marginTop: 8, color: "var(--hg-fg-4)" }}>
               (sim mode active — no real Frigate detection)
@@ -1398,12 +1487,34 @@ function PeopleQueueView({ identities, sim, endpoint, token, avatarBlobUrls, onS
         fontSize: 9, letterSpacing: "0.18em", textTransform: "uppercase",
         color: "var(--hg-fg-3)", marginBottom: 16,
       }}>
-        {unknowns.length} unidentified — assign names + relationships
+        {unknowns.length} unidentified identities
+        {unlinkedBuckets.length > 0 ? ` + ${unlinkedBuckets.length} unlinked Frigate buckets` : ""}
       </div>
+      {unlinkedBuckets.length > 0 && (
+        <div style={{
+          marginBottom: 18,
+          padding: 12,
+          border: "1px solid var(--hg-border-soft)",
+          background: "var(--hg-bg-1)",
+          color: "var(--hg-fg-3)",
+          fontSize: 11,
+          lineHeight: 1.5,
+        }}>
+          These buckets exist in Frigate but are not linked to Home identities. They are shown here
+          so the queue does not report a false empty state.
+        </div>
+      )}
       <div style={{
         display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
         gap: 14,
       }}>
+        {unlinkedBuckets.map((bucket) => (
+          <UnlinkedFaceBucketCard
+            key={bucket.name}
+            bucket={bucket}
+            frigateUrl={frigateUrl}
+          />
+        ))}
         {unknowns.map((i) => (
           <PeopleQueueCard
             key={i.uuid}

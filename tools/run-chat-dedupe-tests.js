@@ -138,6 +138,23 @@ assert("travel-mode blocked streaming merge keeps one final sentence",
     "Travel Mode is on so did not\n\nTravel Mode is on, so I did not turn on any lights.",
   ) === "Travel Mode is on, so I did not turn on any lights.");
 
+assert("camera answer drops orphan fragment between duplicate finals",
+  H.normalizeChatEventText(
+    "A motorcycle covered with a tarp is parked in the driveway.\n\nmotorcycle covered with\n\nA motorcycle covered with a tarp is parked in the driveway.",
+  ) === "A motorcycle covered with a tarp is parked in the driveway.");
+
+assert("camera answer final transcript replaces partial duplicate draft",
+  H.settleAssistantFinalText(
+    "A motorcycle covered with a tarp is parked in the driveway.\n\nmotorcycle covered with",
+    "A motorcycle covered with a tarp is parked in the driveway.",
+  ) === "A motorcycle covered with a tarp is parked in the driveway.");
+
+assert("conversation finished final transcript replaces stale streamed draft",
+  H.settleAssistantFinalText(
+    "I don't have a full picture right now.\n\nI don't have a full picture right now. I can check specific rooms if you'd like.",
+    "I don't have a full picture right now. I can check specific rooms if you'd like.",
+  ) === "I don't have a full picture right now. I can check specific rooms if you'd like.");
+
 assert("intent-end final answer replaces streamed duplicate draft",
   H.settleAssistantFinalText(
     "Travel Mode is on, so I did not turn on any lights.\n\nTravel Mode is on so did not",

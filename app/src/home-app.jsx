@@ -133,9 +133,22 @@ function collapseNearDuplicateClauses(text) {
   if (clauses.length < 2) return text;
   const kept = [];
   let changed = false;
+  const isContainedFragment = (shortText, longText) => {
+    const shortKey = canonicalChatTextLoose(shortText);
+    const longKey = canonicalChatTextLoose(longText);
+    if (!shortKey || !longKey || shortKey === longKey) return false;
+    const shortWords = shortKey.split(" ").filter(Boolean).length;
+    if (shortWords < 2 || shortWords > 10) return false;
+    return longKey.length >= shortKey.length + 8 && longKey.includes(shortKey);
+  };
   for (const clause of clauses) {
     let matched = false;
     for (let i = 0; i < kept.length; i++) {
+      if (isContainedFragment(clause, kept[i])) {
+        matched = true;
+        changed = true;
+        break;
+      }
       if (!isNearDuplicateChatText(kept[i], clause)) continue;
       const clauseWords = chatWordTokens(clause).length;
       const keptWords = chatWordTokens(kept[i]).length;
@@ -146,7 +159,15 @@ function collapseNearDuplicateClauses(text) {
       changed = true;
       break;
     }
-    if (!matched) kept.push(clause);
+    if (!matched) {
+      for (let i = kept.length - 1; i >= 0; i--) {
+        if (isContainedFragment(kept[i], clause)) {
+          kept.splice(i, 1);
+          changed = true;
+        }
+      }
+      kept.push(clause);
+    }
   }
   return changed ? kept.join(" ") : text;
 }
@@ -349,16 +370,7 @@ function settleAssistantFinalText(current, finalText) {
   const cur = normalizeChatEventText(String(current || ""));
   const final = normalizeChatEventText(String(finalText || ""));
   if (!final) return cur;
-  if (!cur) return final;
-  const curKey = canonicalChatText(cur);
-  const finalKey = canonicalChatText(final);
-  const curLoose = canonicalChatTextLoose(cur);
-  const finalLoose = canonicalChatTextLoose(final);
-  if (curKey === finalKey) return final;
-  if (finalKey.includes(curKey) || finalLoose.includes(curLoose)) return final;
-  if (curKey.includes(finalKey) || curLoose.includes(finalLoose)) return final;
-  if (isNearDuplicateChatText(cur, final)) return final;
-  return mergeStreamingText(cur, final);
+  return final;
 }
 
 function readCachedTravelModeOn() {
@@ -8831,7 +8843,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
               const existing = prev[existingIdx];
               if (existing?.streaming) streamingIds.current.delete(existing.id);
               return prev.map((e, i) => i === existingIdx
-                ? { ...e, text: mergeStreamingText(e.text, cleanText), streaming: false }
+                ? { ...e, text: settleAssistantFinalText(e.text, cleanText), streaming: false }
                 : e);
             }
             return [...prev, {
@@ -9241,7 +9253,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             streamingIds.current.delete(nextEvents[existingIdx].id);
           }
           nextEvents = nextEvents.map((e, i) => i === existingIdx
-            ? { ...e, text: mergeStreamingText(e.text, ev.text), streaming: false }
+            ? { ...e, text: settleAssistantFinalText(e.text, ev.text), streaming: false }
             : e);
         }
         return nextEvents;
@@ -9752,7 +9764,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             augmented = augmented.map((e, i) => i === asstIdx
               ? {
                   ...e,
-                  text: mergeStreamingText(e.text, assistantTextC),
+                  text: settleAssistantFinalText(e.text, assistantTextC),
                   streaming: false,
                   convId: convId || e.convId,
                 }

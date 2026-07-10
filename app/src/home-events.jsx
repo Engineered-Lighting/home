@@ -449,9 +449,10 @@ function SystemContent({ text, tone }) {
  * perception lines (those came from a separate code path with no
  * cached frame); the chip falls back to the text-only layout.
  */
-function PerceptionContent({ text, snapshotUrl }) {
+function PerceptionContent({ text, snapshotUrl, imageMode }) {
   const [expanded, setExpanded] = React.useState(false);
   const [imgFailed, setImgFailed] = React.useState(false);
+  const isAnnotated = imageMode === "annotated";
   // Parse the text — bridge emits "perceived ROOM: SUMMARY" or just SUMMARY.
   // Try to extract a room name from the first colon-prefixed token.
   let room = null;
@@ -466,11 +467,66 @@ function PerceptionContent({ text, snapshotUrl }) {
   const clickable = summary.length > 90 || hasThumb;
   // Layout: thumbnail (when present) | room label | summary | (right slot)
   const cols = hasThumb
-    ? (expanded ? "minmax(180px, 280px) minmax(60px, 100px) 1fr auto"
+    ? (isAnnotated ? "1fr"
+      : expanded ? "minmax(180px, 280px) minmax(60px, 100px) 1fr auto"
                 : "minmax(40px, 56px) minmax(60px, 100px) 1fr auto")
     : (room ? "minmax(60px, 100px) 1fr auto"
             : "auto 1fr auto");
   const thumbSize = expanded ? 200 : 40;
+  if (hasThumb && isAnnotated) {
+    return (
+      <div
+        onClick={() => setExpanded((v) => !v)}
+        style={{
+          ...T_SYNTAX,
+          display: "grid",
+          gridTemplateColumns: "1fr",
+          gap: 8,
+          cursor: "pointer",
+          color: "var(--hg-fg-3)",
+          fontSize: 11,
+          lineHeight: 1.5,
+          paddingTop: 4,
+          paddingBottom: 4,
+        }}
+      >
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: room ? "minmax(74px, 108px) 1fr" : "auto 1fr",
+          columnGap: 10,
+          alignItems: "baseline",
+        }}>
+          <span style={{
+            ...HG_FAINT,
+            fontWeight: 400,
+            letterSpacing: "0.06em",
+            color: "var(--hg-fg-4)",
+          }}>{room ? room : "perceived"}</span>
+          <span style={{
+            color: "var(--hg-fg-2)",
+            fontFamily: "'Geist', system-ui, sans-serif",
+            fontSize: 12,
+            fontWeight: 400,
+          }}>{short}</span>
+        </div>
+        <img
+          src={snapshotUrl}
+          alt={room ? `${room} segmented view` : "segmented perception view"}
+          loading="lazy"
+          onError={() => setImgFailed(true)}
+          style={{
+            width: "100%",
+            maxHeight: expanded ? "62vh" : 260,
+            objectFit: "contain",
+            borderRadius: 5,
+            border: "1px solid var(--hg-border)",
+            background: "rgba(0,0,0,0.35)",
+            display: "block",
+          }}
+        />
+      </div>
+    );
+  }
   return (
     <div
       onClick={() => clickable && setExpanded((v) => !v)}
@@ -764,7 +820,7 @@ function EventContent({ e, onConfirm, onCancel, onUndo, onControlAction, lifecyc
         return <ActionContent id={e.id} title={e.title} service={e.service} target={e.target} attrs={e.attrs} status={e.status} latency={e.latency} reason={e.reason} traceId={e.traceId} onConfirm={onConfirm} onCancel={onCancel} onUndo={onUndo} />;
       case "home":       return <HomeContent text={e.text} streaming={e.streaming} />;
       case "external":   return <ExternalContent text={e.text} streaming={e.streaming} />;
-      case "perception": return <PerceptionContent text={e.text} snapshotUrl={e.snapshotUrl} />;
+      case "perception": return <PerceptionContent text={e.text} snapshotUrl={e.snapshotUrl} imageMode={e.imageMode} />;
       case "proactive":  return <ProactiveContent text={e.text} />;
       case "diag":       return <DiagContent text={e.text} channel={e.channel} />;
       case "system":     return <SystemContent text={e.text} tone={e.tone} />;

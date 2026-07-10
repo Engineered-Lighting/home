@@ -142,6 +142,7 @@ function eventTexts(events) {
     assert("one user event is emitted", h.events.filter((e) => e.kind === "user").length === 1, h.events);
     assert("transcript shows looking deeply", texts.includes("looking deeply · kitchen"), texts);
     assert("transcript includes final grounded answer", h.events.filter((e) => e.kind === "home").length === 1 && texts.includes("I looked deeply at"), texts);
+    assert("perception cards carry annotated segmentation image mode", h.events.filter((e) => e.kind === "perception").every((e) => e.imageMode === "annotated" && e.snapshotUrl), h.events.filter((e) => e.kind === "perception"));
     assert("abstract prompt is not echoed as slash look", !texts.includes("/look what do you see in my apartment"), texts);
   }
 

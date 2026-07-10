@@ -161,6 +161,7 @@
           kind: "perception",
           text: `${cam.id}: ${answer || "(grounded look)"}`,
           snapshotUrl: data.detailUrl || data.overviewUrl || null,
+          imageMode: "annotated",
         });
       } catch (e) {
         const aborted = e && e.name === "AbortError";

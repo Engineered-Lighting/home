@@ -91,12 +91,34 @@
     const ok = (results || []).filter((r) => r && r.ok);
     const bad = failures || [];
     if (!ok.length) return "";
-    const lines = ok.map((r) => `${r.name}: ${r.answer || "I got a fresh grounded frame, but no text answer came back."}`);
+    const cleanAnswer = (answer) => String(answer || "")
+      .replace(/\s+/g, " ")
+      .replace(/\s+([.,!?;:])/g, "$1")
+      .trim();
+    const sentence = (text) => {
+      const t = cleanAnswer(text);
+      if (!t) return "I got a fresh grounded frame, but no text answer came back.";
+      return /[.!?]$/.test(t) ? t : `${t}.`;
+    };
     const failed = bad.length
       ? ` I could not inspect ${bad.map((f) => f.name).join(", ")}.`
       : "";
-    if (ok.length === 1) return `I looked deeply at ${ok[0].name}. ${ok[0].answer || lines[0]}${failed}`;
-    return `I looked deeply at ${ok.map((r) => r.name).join(", ")}. ${lines.join(" ")}${failed}`;
+    if (ok.length === 1) return sentence(ok[0].answer) + failed;
+    const readableList = (items) => {
+      if (items.length <= 1) return items[0] || "";
+      if (items.length === 2) return `${items[0]} and ${items[1]}`;
+      return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+    };
+    const observation = (r) => {
+      const roomPattern = new RegExp("^(?:a|an|the)?\\s*" + escapeRegExp(r.name).replace(/\\s+/g, "\\s+") + "\\s+(?:with|shows?|contains?|has)\\s+", "i");
+      let text = sentence(r.answer).replace(roomPattern, "");
+      if (/^(a|an|the)\s+/i.test(text)) text = text.replace(/^a\s+/i, "I see a ").replace(/^an\s+/i, "I see an ").replace(/^the\s+/i, "I see the ");
+      else if (!/^(i\s+see|there\s+is|there\s+are|it\s+looks|nothing|no\s+)/i.test(text)) text = `I see ${text.charAt(0).toLowerCase()}${text.slice(1)}`;
+      return `In the ${r.name}, ${text}`;
+    };
+    const rooms = readableList(ok.map((r) => r.name));
+    const observations = ok.map(observation);
+    return `I checked ${rooms}. ${observations.join(" ")}${failed}`;
   }
 
   async function runNaturalDeepLook(text, options) {

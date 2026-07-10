@@ -141,8 +141,10 @@ function eventTexts(events) {
     assert("HA fallback is not called on look success", h.calls.sendToHA.length === 0, h.calls.sendToHA);
     assert("one user event is emitted", h.events.filter((e) => e.kind === "user").length === 1, h.events);
     assert("transcript shows looking deeply", texts.includes("looking deeply · kitchen"), texts);
-    assert("transcript includes final grounded answer", h.events.filter((e) => e.kind === "home").length === 1 && texts.includes("I looked deeply at"), texts);
+    assert("transcript includes final grounded answer", h.events.filter((e) => e.kind === "home").length === 1 && texts.includes("I checked "), texts);
     assert("perception cards carry annotated segmentation image mode", h.events.filter((e) => e.kind === "perception").every((e) => e.imageMode === "annotated" && e.snapshotUrl), h.events.filter((e) => e.kind === "perception"));
+    const finalAnswer = h.events.find((e) => e.kind === "home")?.text || "";
+    assert("final multi-camera answer is natural, not room-label dump", finalAnswer.includes("I checked ") && finalAnswer.includes("In the kitchen,") && !/living room:|kitchen:|dining room:/i.test(finalAnswer), finalAnswer);
     assert("abstract prompt is not echoed as slash look", !texts.includes("/look what do you see in my apartment"), texts);
   }
 

@@ -1139,11 +1139,17 @@ class IdentityListView(CORSHomeAssistantView):
         identities = await hass.async_add_executor_job(_list)
         # Addendum 24: expose the Frigate base URL so the people overlay
         # can build face-crop image URLs without hardcoding the IP.
+        from dataclasses import asdict
         from .frigate_sync import base_url as _frigate_base_url
+        data = hass.data.get(DOMAIN, {})
+        seed_report = data.get("frigate_seed_report")
+        capabilities = data.get("frigate_capabilities")
         return self.json({
             "enabled": True, "ready": True,
             "identities": identities,
             "frigate_url": _frigate_base_url(),
+            "frigate_seed_report": asdict(seed_report) if seed_report is not None else None,
+            "frigate_capabilities": asdict(capabilities) if capabilities is not None else None,
         })
 
 

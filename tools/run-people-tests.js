@@ -21,6 +21,7 @@ const path = require("path");
 const H = require(path.join(__dirname, "..", "app", "src", "home-people-helpers.js"));
 const peopleSource = fs.readFileSync(path.join(__dirname, "..", "app", "src", "home-people.jsx"), "utf8");
 const appSource = fs.readFileSync(path.join(__dirname, "..", "app", "src", "home-app.jsx"), "utf8");
+const haInitSource = fs.readFileSync(path.join(__dirname, "..", "ha-config", "extended_openai_conversation", "__init__.py"), "utf8");
 
 let passes = 0;
 let fails = 0;
@@ -711,11 +712,19 @@ process.stdout.write("\n[1mpeople overlay interaction contract (DOC-S83)[0m\n");
     peopleSource.includes("onRowClick={(id) => setSelectedUuid(id.uuid)}") &&
     peopleSource.includes("onClose={() => setSelectedUuid(null)}"));
   assert("queue receives Frigate face buckets and resolved image base",
-    /<PeopleQueueView[\s\S]*facesByPerson=\{facesByPerson\}[\s\S]*frigateUrl=\{faceImageBaseUrl\}/.test(peopleSource));
-  assert("queue surfaces unlinked Frigate buckets instead of false-empty state",
+    /<PeopleQueueView[\s\S]*facesByPerson=\{facesByPerson\}[\s\S]*frigateUrl=\{faceImageBaseUrl\}[\s\S]*facesStatus=\{facesStatus\}[\s\S]*frigateDiagnostics=\{frigateDiagnostics\}/.test(peopleSource));
+  assert("queue surfaces unlinked Frigate buckets and diagnostic empty state",
     peopleSource.includes("function unlinkedFaceBuckets(facesByPerson, identities)") &&
+    peopleSource.includes("function peopleQueueDiagnostics") &&
     peopleSource.includes("unlinked face bucket") &&
-    peopleSource.includes("No unknown identities or unlinked Frigate face buckets are visible right now."));
+    peopleSource.includes("home does not currently have any unknown identities or unlinked frigate face buckets to review"));
+  assert("queue empty state explains likely upstream causes",
+    peopleSource.includes("driveway face recognition is intentionally disabled") &&
+    peopleSource.includes("minimum-capture settings") &&
+    peopleSource.includes("identity reseed loop"));
+  assert("identities endpoint exposes sanitized Frigate diagnostics",
+    haInitSource.includes('"frigate_seed_report": asdict(seed_report) if seed_report is not None else None') &&
+    haInitSource.includes('"frigate_capabilities": asdict(capabilities) if capabilities is not None else None'));
   assert("unlinked Frigate buckets can be resolved from the card",
     peopleSource.includes("function UnlinkedFaceBucketCard({ bucket, frigateUrl, endpoint, token, sim, onSaved })") &&
     peopleSource.includes("/api/extended_openai_conversation/identities/create") &&

@@ -52,6 +52,8 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
   // gallery + hover thumbnails.
   const [frigateUrl, setFrigateUrl] = useState(null);
   const [facesByPerson, setFacesByPerson] = useState(null);
+  const [facesStatus, setFacesStatus] = useState({ state: "idle" });
+  const [frigateDiagnostics, setFrigateDiagnostics] = useState(null);
   // Addendum 24 Phase 3: HEAD-pre-check map per identity uuid → boolean.
   // AR24-9: SVG <image onError> can't distinguish 404 from network blip,
   // so we pre-fetch presence once and render <image> only when truthy.
@@ -122,6 +124,9 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
       // would conflict with sim's own fixture data shape.
       const simIdentities = (sim.snapshot?.people?.identities) || [];
       setIdentities(simIdentities);
+      setFacesByPerson(null);
+      setFacesStatus({ state: "sim" });
+      setFrigateDiagnostics(null);
       setLoadedAt(Date.now());
       return;
     }
@@ -170,6 +175,10 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
         return;
       }
       setIdentities(payload.identities || []);
+      setFrigateDiagnostics({
+        seedReport: payload.frigate_seed_report || null,
+        capabilities: payload.frigate_capabilities || null,
+      });
       setLoadedAt(Date.now());
       // Addendum 24: capture the Frigate URL the integration reports.
       // Fetch /api/faces THROUGH the HA-side FrigateProxyView so CORS
@@ -178,6 +187,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
       // stay direct-to-Frigate because <img> tags don't trigger CORS.
       if (payload.frigate_url) {
         setFrigateUrl(payload.frigate_url);
+        setFacesStatus({ state: "loading" });
         const proxyUrl = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/frigate_proxy?path=api/faces`;
         try {
           const fresp = await window.tauriFetch(proxyUrl, {
@@ -188,11 +198,25 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
             const fpayload = await fresp.json();
             if (fpayload && typeof fpayload === "object") {
               setFacesByPerson(fpayload);
+              setFacesStatus({
+                state: "loaded",
+                bucketCount: Object.keys(fpayload).length,
+                loadedAt: Date.now(),
+              });
             }
+          } else {
+            setFacesByPerson(null);
+            setFacesStatus({ state: "error", error: `HTTP ${fresp.status}` });
           }
-        } catch {
+        } catch (e) {
           // Proxy unreachable — gallery shows empty state.
+          setFacesByPerson(null);
+          setFacesStatus({ state: "error", error: e?.message || String(e) });
         }
+      } else {
+        setFrigateUrl(null);
+        setFacesByPerson(null);
+        setFacesStatus({ state: "missing_url" });
       }
     } catch (e) {
       setReconnecting(null);
@@ -552,6 +576,8 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
                 identities={identities}
                 facesByPerson={facesByPerson}
                 frigateUrl={faceImageBaseUrl}
+                facesStatus={facesStatus}
+                frigateDiagnostics={frigateDiagnostics}
                 sim={sim}
                 endpoint={endpoint}
                 token={token}
@@ -1394,6 +1420,71 @@ function unlinkedFaceBuckets(facesByPerson, identities) {
     .sort((a, b) => b.files.length - a.files.length || a.name.localeCompare(b.name));
 }
 
+function peopleQueueDiagnostics({ identities, facesByPerson, facesStatus, frigateDiagnostics }) {
+  const allIdentities = Array.isArray(identities) ? identities : [];
+  const unknowns = allIdentities.filter((i) => i.relationship_type === "unknown");
+  const linkedNames = new Set();
+  for (const identity of allIdentities) {
+    for (const name of identityFrigateNames(identity)) linkedNames.add(name);
+  }
+  const buckets = facesByPerson && typeof facesByPerson === "object"
+    ? Object.entries(facesByPerson)
+      .filter(([, files]) => Array.isArray(files))
+      .map(([name, files]) => ({
+        name,
+        key: String(name || "").trim().toLowerCase(),
+        count: files.length,
+        linked: linkedNames.has(String(name || "").trim().toLowerCase()),
+      }))
+    : [];
+  const train = buckets.find((b) => b.key === "train");
+  const linkedBuckets = buckets.filter((b) => b.linked && b.key !== "train");
+  const unlinkedBuckets = buckets.filter((b) => b.key && !b.linked && b.key !== "train" && b.count > 0);
+  const caps = frigateDiagnostics?.capabilities || null;
+  const seed = frigateDiagnostics?.seedReport || null;
+  return {
+    identityCount: allIdentities.length,
+    unknownCount: unknowns.length,
+    bucketCount: buckets.length,
+    linkedBucketCount: linkedBuckets.length,
+    unlinkedBucketCount: unlinkedBuckets.length,
+    trainCaptureCount: train ? train.count : null,
+    facesState: facesStatus?.state || "idle",
+    facesError: facesStatus?.error || null,
+    faceLibraryReachable: caps ? !!caps.face_library : null,
+    frigateReachable: caps ? !!caps.reachable : null,
+    lastSeedFound: seed && typeof seed.frigate_faces_found === "number" ? seed.frigate_faces_found : null,
+    lastSeedCreated: seed && typeof seed.identities_created === "number" ? seed.identities_created : null,
+    lastSeedErrors: seed && Array.isArray(seed.errors) ? seed.errors : [],
+  };
+}
+
+function QueueStat({ label, value, tone = "normal" }) {
+  const color = tone === "warn" ? "var(--hg-warn)" : tone === "crit" ? "var(--hg-crit)" : "var(--hg-fg-0)";
+  return (
+    <div style={{
+      border: "1px solid var(--hg-border-soft)",
+      background: "var(--hg-bg-1)",
+      padding: "10px 12px",
+      minWidth: 0,
+    }}>
+      <div style={{
+        fontFamily: PEOPLE_FONT_MONO,
+        fontSize: 9,
+        letterSpacing: "0.14em",
+        color: "var(--hg-fg-4)",
+        textTransform: "uppercase",
+        marginBottom: 6,
+      }}>{label}</div>
+      <div style={{
+        fontFamily: PEOPLE_FONT_MONO,
+        fontSize: 16,
+        color,
+      }}>{value}</div>
+    </div>
+  );
+}
+
 function UnlinkedFaceBucketCard({ bucket, frigateUrl, endpoint, token, sim, onSaved }) {
   const [name, setName] = useState(bucket.name);
   const [rel, setRel] = useState("unknown");
@@ -1595,25 +1686,90 @@ function UnlinkedFaceBucketCard({ bucket, frigateUrl, endpoint, token, sim, onSa
   );
 }
 
-function PeopleQueueView({ identities, facesByPerson, frigateUrl, sim, endpoint, token, avatarBlobUrls, onSaved }) {
+function PeopleQueueView({ identities, facesByPerson, frigateUrl, facesStatus, frigateDiagnostics, sim, endpoint, token, avatarBlobUrls, onSaved }) {
   // The queue is everyone tagged 'unknown' — the auto-seed default for
   // Frigate-discovered faces. Once the user assigns a relationship type,
   // the card drops out (next refresh removes it from this filter).
   const unknowns = (identities || []).filter((i) => i.relationship_type === "unknown");
   const unlinkedBuckets = unlinkedFaceBuckets(facesByPerson, identities);
+  const diagnostics = peopleQueueDiagnostics({ identities, facesByPerson, facesStatus, frigateDiagnostics });
   if (unknowns.length === 0 && unlinkedBuckets.length === 0) {
     return (
       <div style={{
-        textAlign: "center", padding: "60px 20px",
+        padding: "28px 0 60px",
         color: "var(--hg-fg-3)",
       }}>
         <div style={{
-          fontFamily: PEOPLE_FONT_MONO, fontSize: 11, letterSpacing: "0.16em",
-          textTransform: "uppercase", color: "var(--hg-fg-3)", marginBottom: 8,
-        }}>queue is empty</div>
-        <div style={{ fontSize: 12, color: "var(--hg-fg-4)", lineHeight: 1.6, maxWidth: 480, margin: "0 auto" }}>
-          No unknown identities or unlinked Frigate face buckets are visible right now.
-          If you expected new faces, check the face detector and identity sync pipeline.
+          border: "1px solid var(--hg-border-soft)",
+          background: "var(--hg-bg-1)",
+          padding: 16,
+          maxWidth: 640,
+          margin: "0 auto",
+        }}>
+          <div style={{
+            fontFamily: PEOPLE_FONT_MONO, fontSize: 11, letterSpacing: "0.16em",
+            textTransform: "uppercase", color: "var(--hg-fg-2)", marginBottom: 8,
+          }}>queue is empty</div>
+          <div style={{ fontSize: 13, color: "var(--hg-fg-1)", lineHeight: 1.55, marginBottom: 14 }}>
+            home does not currently have any unknown identities or unlinked frigate face buckets to review.
+          </div>
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+            gap: 8,
+            marginBottom: 14,
+          }}>
+            <QueueStat label="identities" value={diagnostics.identityCount} />
+            <QueueStat label="unknown" value={diagnostics.unknownCount} />
+            <QueueStat label="face buckets" value={diagnostics.bucketCount || "none"} />
+            <QueueStat label="unlinked" value={diagnostics.unlinkedBucketCount} />
+            <QueueStat label="train" value={diagnostics.trainCaptureCount == null ? "unknown" : diagnostics.trainCaptureCount} />
+          </div>
+          <div style={{
+            fontFamily: PEOPLE_FONT_MONO,
+            fontSize: 10,
+            letterSpacing: "0.08em",
+            color: diagnostics.facesState === "error" ? "var(--hg-warn)" : "var(--hg-fg-3)",
+            lineHeight: 1.6,
+            marginBottom: 12,
+          }}>
+            frigate faces: {diagnostics.facesState}
+            {diagnostics.facesError ? ` · ${diagnostics.facesError}` : ""}
+            {diagnostics.lastSeedFound != null ? ` · last seed found ${diagnostics.lastSeedFound}` : ""}
+            {diagnostics.lastSeedCreated != null ? ` · created ${diagnostics.lastSeedCreated}` : ""}
+          </div>
+          <div style={{ fontSize: 12, color: "var(--hg-fg-3)", lineHeight: 1.6 }}>
+            {diagnostics.facesState === "loaded" && diagnostics.bucketCount > 0 ? (
+              <>
+                frigate is only reporting buckets already linked to home identities
+                {diagnostics.trainCaptureCount === 0 ? ", and the training bucket is empty." : "."}
+              </>
+            ) : diagnostics.facesState === "error" ? (
+              <>the people tab could not read frigate's face library, so the queue cannot see new buckets.</>
+            ) : (
+              <>the people tab has not loaded frigate's face library yet.</>
+            )}
+          </div>
+          <div style={{ marginTop: 14, fontSize: 12, color: "var(--hg-fg-4)", lineHeight: 1.7 }}>
+            <div>likely causes:</div>
+            <div>· driveway face recognition is intentionally disabled, so passerby faces do not enter this queue</div>
+            <div>· a new indoor face has not met Frigate's threshold/minimum-capture settings yet</div>
+            <div>· frigate recognized the person as an existing bucket instead of creating a new one</div>
+            <div>· the ha identity reseed loop has not picked up a new frigate bucket yet</div>
+          </div>
+          {diagnostics.lastSeedErrors.length > 0 && (
+            <div style={{
+              marginTop: 12,
+              padding: 10,
+              border: "1px solid var(--hg-warn)",
+              color: "var(--hg-warn)",
+              fontFamily: PEOPLE_FONT_MONO,
+              fontSize: 10,
+              lineHeight: 1.5,
+            }}>
+              seed errors: {diagnostics.lastSeedErrors.slice(0, 2).join(" · ")}
+            </div>
+          )}
           {sim?.active && (
             <span style={{ display: "block", marginTop: 8, color: "var(--hg-fg-4)" }}>
               (sim mode active — no real Frigate detection)

@@ -138,14 +138,33 @@ function eventTexts(events) {
     assert("successful abstract prompt is handled", result.handled === true && result.fallback === false, result);
     assert("feature loader is called for look natural-language", JSON.stringify(h.calls.ensureFeature[0]) === JSON.stringify(["look", "look", "natural-language"]), h.calls.ensureFeature);
     assert("look runner called once per selected camera", h.calls.lookRunner.length === 3, h.calls.lookRunner.map((c) => c.camera));
+    assert("broad abstract prompt sends focused monitoring instruction", h.calls.lookRunner.every((c) => c.question.includes("home-monitoring dashboard") && c.question.includes("Do not list ordinary furniture")), h.calls.lookRunner.map((c) => c.question));
     assert("HA fallback is not called on look success", h.calls.sendToHA.length === 0, h.calls.sendToHA);
     assert("one user event is emitted", h.events.filter((e) => e.kind === "user").length === 1, h.events);
     assert("transcript shows looking deeply", texts.includes("looking deeply · kitchen"), texts);
-    assert("transcript includes final grounded answer", h.events.filter((e) => e.kind === "home").length === 1 && texts.includes("I checked "), texts);
+    assert("transcript includes final grounded answer", h.events.filter((e) => e.kind === "home").length === 1 && texts.includes("No people, movement, or obvious issues stand out."), texts);
     assert("perception cards carry annotated segmentation image mode", h.events.filter((e) => e.kind === "perception").every((e) => e.imageMode === "annotated" && e.snapshotUrl), h.events.filter((e) => e.kind === "perception"));
     const finalAnswer = h.events.find((e) => e.kind === "home")?.text || "";
-    assert("final multi-camera answer is natural, not room-label dump", finalAnswer.includes("I checked ") && finalAnswer.includes("In the kitchen,") && !/living room:|kitchen:|dining room:/i.test(finalAnswer), finalAnswer);
+    assert("final broad answer is focused, not room-label inventory", finalAnswer.includes("I checked ") && finalAnswer.length < 140 && !/living room:|kitchen:|dining room:|coffee table|wooden island/i.test(finalAnswer), finalAnswer);
     assert("abstract prompt is not echoed as slash look", !texts.includes("/look what do you see in my apartment"), texts);
+  }
+
+  process.stdout.write("\nfocused_summary_scenarios\n");
+  {
+    const summary = api.summarizeDeepLookResults("what do you see in my apartment", [
+      { ok: true, name: "living room", answer: "A living room with a couch, coffee table, plant, bicycle, door and picture." },
+      { ok: true, name: "kitchen", answer: "kitchen with white cabinets, stove, sink, wooden island, and doorway to bedroom." },
+      { ok: true, name: "dining room", answer: "A dining area with a white oval table and three chairs on a wooden floor." },
+    ], []);
+    assert("broad low-signal inventory becomes quiet status", summary === "I checked living room, kitchen, and dining room. No people, movement, or obvious issues stand out.", summary);
+  }
+  {
+    const summary = api.summarizeDeepLookResults("what do you see in my home", [
+      { ok: true, name: "living room", answer: "No obvious activity." },
+      { ok: true, name: "driveway", answer: "A person is walking near a covered car." },
+      { ok: true, name: "kitchen", answer: "kitchen with white cabinets, sink, stove, and island." },
+    ], []);
+    assert("broad notable activity stays focused", summary.includes("Quick scan: In the driveway") && summary.includes("person is walking") && summary.includes("living room and kitchen") && !summary.includes("white cabinets"), summary);
   }
 
   process.stdout.write("\nmocked_submit_partial_failure_scenario\n");

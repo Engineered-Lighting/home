@@ -87,6 +87,26 @@
     return metas.sort((a, b) => a.score - b.score || a.priority - b.priority).slice(0, max);
   }
 
+  function isBroadDeepLookQuestion(question) {
+    const s = deepLookNormalize(question);
+    return /\b(what do you see|what can you see|look around|take a look|visual status|anything happening|what(?:'s| is) happening|what(?:'s| is) going on|anything look weird)\b/.test(s);
+  }
+
+  function buildFocusedLookQuestion(question, intent, camera) {
+    const original = String(question || "").trim();
+    if (!isBroadDeepLookQuestion(original)) {
+      return `${original}\nAnswer in one short sentence. Focus on what directly answers the question.`;
+    }
+    const place = camera && camera.name ? camera.name : "this camera";
+    return [
+      `Look at the ${place} camera for this user question: "${original}"`,
+      "Answer in one short, plain sentence for a home-monitoring dashboard.",
+      "Focus only on people, activity, packages, pets, vehicles, open doors/windows, hazards, or unusual changes.",
+      "If nothing important is happening, say exactly: No obvious activity.",
+      "Do not list ordinary furniture or room contents unless they are the important finding.",
+    ].join(" ");
+  }
+
   function summarizeDeepLookResults(question, results, failures) {
     const ok = (results || []).filter((r) => r && r.ok);
     const bad = failures || [];
@@ -103,11 +123,21 @@
     const failed = bad.length
       ? ` I could not inspect ${bad.map((f) => f.name).join(", ")}.`
       : "";
+    const isBroad = isBroadDeepLookQuestion(question);
     if (ok.length === 1) return sentence(ok[0].answer) + failed;
     const readableList = (items) => {
       if (items.length <= 1) return items[0] || "";
       if (items.length === 2) return `${items[0]} and ${items[1]}`;
       return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+    };
+    const isLowSignal = (answer) => {
+      const s = cleanAnswer(answer).toLowerCase();
+      if (!s) return true;
+      if (/^no obvious activity\.?$/.test(s)) return true;
+      if (/\b(looks|seems|appears)\s+(normal|quiet|empty|clear)\b/.test(s)) return true;
+      const notable = /\b(person|people|someone|motion|moving|walk|standing|sitting|dog|cat|pet|package|vehicle|car|truck|door\s+open|open\s+door|window\s+open|hazard|smoke|water|leak|fallen|unusual|weird)\b/.test(s);
+      const inventory = (s.match(/,/g) || []).length >= 3 || /\b(couch|coffee table|table|chair|chairs|plant|bicycle|painting|cabinet|sink|stove|island|window|speaker|surfboard|floor)\b/.test(s);
+      return !notable && inventory;
     };
     const observation = (r) => {
       const roomPattern = new RegExp("^(?:a|an|the)?\\s*" + escapeRegExp(r.name).replace(/\\s+/g, "\\s+") + "\\s+(?:with|shows?|contains?|has)\\s+", "i");
@@ -117,6 +147,14 @@
       return `In the ${r.name}, ${text}`;
     };
     const rooms = readableList(ok.map((r) => r.name));
+    if (isBroad) {
+      const notable = ok.filter((r) => !isLowSignal(r.answer));
+      if (!notable.length) return `I checked ${rooms}. No people, movement, or obvious issues stand out.${failed}`;
+      const focused = notable.map(observation).join(" ");
+      const normal = ok.filter((r) => isLowSignal(r.answer)).map((r) => r.name);
+      const normalText = normal.length ? ` The other checked areas look quiet: ${readableList(normal)}.` : "";
+      return `Quick scan: ${focused}${normalText}${failed}`;
+    }
     const observations = ok.map(observation);
     return `I checked ${rooms}. ${observations.join(" ")}${failed}`;
   }
@@ -173,7 +211,7 @@
         const data = await runner({
           metricsBase,
           camera: cam.id,
-          question: text,
+          question: buildFocusedLookQuestion(text, intent, cam),
           signal: controller ? controller.signal : undefined,
         });
         if (!data || typeof data !== "object") throw new Error("malformed look response");
@@ -224,6 +262,7 @@
     detectDeepLookIntent,
     selectDeepLookCameras,
     summarizeDeepLookResults,
+    buildFocusedLookQuestion,
     runNaturalDeepLook,
   };
   if (typeof window !== "undefined") {

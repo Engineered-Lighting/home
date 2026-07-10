@@ -27,6 +27,33 @@ const { useState, useEffect, useRef, useCallback, useMemo } = React;
 const PEOPLE_FONT_MONO = "'Geist Mono', ui-monospace, monospace";
 const PEOPLE_FONT_SANS = "'Geist', system-ui, sans-serif";
 
+function usePeopleViewport() {
+  const read = useCallback(() => {
+    if (typeof window === "undefined") return { width: 1024, height: 768, mobile: false };
+    const vv = window.visualViewport;
+    const width = Math.round(vv?.width || window.innerWidth || 1024);
+    const height = Math.round(vv?.height || window.innerHeight || 768);
+    return { width, height, mobile: width < 700 };
+  }, []);
+  const [viewport, setViewport] = useState(read);
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    let raf = null;
+    const update = () => {
+      if (raf) cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => setViewport(read()));
+    };
+    window.addEventListener("resize", update);
+    window.visualViewport?.addEventListener("resize", update);
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      window.removeEventListener("resize", update);
+      window.visualViewport?.removeEventListener("resize", update);
+    };
+  }, [read]);
+  return viewport;
+}
+
 /* ─────────────────────────────────────────────────────────────────────
  * Sub-component: HomePeopleOverlay
  *
@@ -623,6 +650,8 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
  * ──────────────────────────────────────────────────────────────────── */
 function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl, endpoint, avatarPresence, avatarBlobUrls, onNodeClick }) {
   const H = (typeof window !== "undefined" && window.HomePeopleHelpers) || null;
+  const peopleViewport = usePeopleViewport();
+  const isMobile = peopleViewport.mobile;
 
   // Addendum 23: hover state. Tracks the uuid currently being
   // pointed at; null when no hover. Mouse-leave is debounced ~50ms
@@ -703,10 +732,17 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
   // Slice 6 will add real edges when the detail panel can manage them.
   const edges = H.buildEdgeGeometry(layout, relationships || []);
 
-  // SVG sizing — content has natural radius up to 400; pad for avatars.
-  // Canvas is centered around origin (0,0).
-  const PAD = 80;  // half the largest avatar + buffer
-  const VIEW_HALF = 380 + PAD;
+  // SVG sizing. Desktop keeps the full relationship-ring field; mobile
+  // fits to the actual visible nodes so sparse graphs do not render as a
+  // tiny cluster in an oversized 920px coordinate space.
+  const activeRings = new Set(layout.filter((n) => !n.overflow).map((n) => n.ring));
+  const nodeExtent = layout.reduce((max, n) => {
+    const radius = Math.max(Math.abs(n.x || 0), Math.abs(n.y || 0));
+    return Math.max(max, radius + (n.size || 0) / 2 + 46);
+  }, 160);
+  const VIEW_HALF = isMobile
+    ? Math.max(180, Math.min(460, nodeExtent + 32))
+    : 460;
   const VIEW_SIZE = VIEW_HALF * 2;
 
   // Addendum 23: pre-compute the connected-uuid set + tooltip placement
@@ -742,18 +778,22 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
 
   return (
     <div style={{
-      display: "flex", justifyContent: "center",
-      padding: "20px 0",
+      display: "flex", justifyContent: "center", alignItems: "center",
+      padding: isMobile ? "8px 0 22px" : "20px 0",
+      minHeight: isMobile ? "calc(100dvh - 230px)" : "auto",
+      width: "100%",
     }}>
       <svg
         width="100%"
-        height="auto"
+        height={isMobile ? "min(68dvh, 680px)" : "auto"}
         viewBox={`${-VIEW_HALF} ${-VIEW_HALF} ${VIEW_SIZE} ${VIEW_SIZE}`}
         style={{
-          maxHeight: "min(80vh, 800px)",
-          maxWidth: "min(80vw, 1000px)",
+          maxHeight: isMobile ? "min(68dvh, 680px)" : "min(80vh, 800px)",
+          maxWidth: isMobile ? "calc(100vw - 20px)" : "min(80vw, 1000px)",
+          minHeight: isMobile ? 420 : "auto",
           display: "block",
         }}
+        preserveAspectRatio="xMidYMid meet"
         aria-label="Relationship graph"
       >
         {/* Subtle ring guides — radial vignette per Addendum 14 visual polish */}
@@ -764,7 +804,7 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
             fill="none"
             stroke="var(--hg-border-soft)"
             strokeWidth={0.5}
-            opacity={0.4}
+            opacity={activeRings.has(r) ? 0.4 : isMobile ? 0 : 0.18}
           />
         ))}
 
@@ -1440,6 +1480,9 @@ function peopleQueueDiagnostics({ identities, facesByPerson, facesStatus, frigat
   const train = buckets.find((b) => b.key === "train");
   const linkedBuckets = buckets.filter((b) => b.linked && b.key !== "train");
   const unlinkedBuckets = buckets.filter((b) => b.key && !b.linked && b.key !== "train" && b.count > 0);
+  const knownBuckets = buckets
+    .filter((b) => b.key && b.key !== "train" && b.count > 0)
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
   const caps = frigateDiagnostics?.capabilities || null;
   const seed = frigateDiagnostics?.seedReport || null;
   return {
@@ -1448,6 +1491,7 @@ function peopleQueueDiagnostics({ identities, facesByPerson, facesStatus, frigat
     bucketCount: buckets.length,
     linkedBucketCount: linkedBuckets.length,
     unlinkedBucketCount: unlinkedBuckets.length,
+    knownBucketSummary: knownBuckets.slice(0, 6).map((b) => `${b.name} ${b.count}`).join(" · "),
     trainCaptureCount: train ? train.count : null,
     facesState: facesStatus?.state || "idle",
     facesError: facesStatus?.error || null,
@@ -1757,6 +1801,21 @@ function PeopleQueueView({ identities, facesByPerson, frigateUrl, facesStatus, f
             <div>· frigate recognized the person as an existing bucket instead of creating a new one</div>
             <div>· the ha identity reseed loop has not picked up a new frigate bucket yet</div>
           </div>
+          {diagnostics.knownBucketSummary && (
+            <div style={{
+              marginTop: 12,
+              padding: 10,
+              border: "1px solid var(--hg-border-soft)",
+              background: "var(--hg-bg-0)",
+              fontFamily: PEOPLE_FONT_MONO,
+              fontSize: 10,
+              letterSpacing: "0.06em",
+              color: "var(--hg-fg-3)",
+              lineHeight: 1.5,
+            }}>
+              current frigate buckets: {diagnostics.knownBucketSummary}
+            </div>
+          )}
           {diagnostics.lastSeedErrors.length > 0 && (
             <div style={{
               marginTop: 12,

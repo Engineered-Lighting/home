@@ -722,6 +722,15 @@ process.stdout.write("\n[1mpeople overlay interaction contract (DOC-S83)[0m\n");
     peopleSource.includes("driveway face recognition is intentionally disabled") &&
     peopleSource.includes("minimum-capture settings") &&
     peopleSource.includes("identity reseed loop"));
+  assert("queue empty state lists current Frigate buckets when available",
+    peopleSource.includes("knownBucketSummary") &&
+    peopleSource.includes("current frigate buckets: {diagnostics.knownBucketSummary}"));
+  assert("mobile people graph uses a viewport-aware tight viewBox",
+    peopleSource.includes("function usePeopleViewport()") &&
+    peopleSource.includes("const peopleViewport = usePeopleViewport();") &&
+    peopleSource.includes("const nodeExtent = layout.reduce") &&
+    peopleSource.includes("Math.max(180, Math.min(460, nodeExtent + 32))") &&
+    peopleSource.includes('maxWidth: isMobile ? "calc(100vw - 20px)"'));
   assert("identities endpoint exposes sanitized Frigate diagnostics",
     haInitSource.includes('"frigate_seed_report": asdict(seed_report) if seed_report is not None else None') &&
     haInitSource.includes('"frigate_capabilities": asdict(capabilities) if capabilities is not None else None'));

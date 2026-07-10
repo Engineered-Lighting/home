@@ -261,7 +261,7 @@
       importance: lookFindingImportance(category),
       confidence: category === "uncertain" ? "low" : "normal",
       rawText,
-      imageUrl: result && result.data ? (result.data.detailUrl || result.data.overviewUrl || null) : null,
+      imageUrl: result && result.data ? (result.data.annotatedUrl || result.data.detailUrl || result.data.overviewUrl || null) : null,
       data: result && result.data ? result.data : null,
     };
   }
@@ -343,7 +343,9 @@
 
     const ensureFeature = opts.ensureFeature || (async () => true);
     const loaded = await ensureFeature("look", "look", "natural-language");
-    const runner = opts.lookRunner || (typeof window !== "undefined" && window.HomeLookReasonZoomRequest);
+    const runner = opts.lookFullFrameRunner
+      || opts.lookRunner
+      || (typeof window !== "undefined" && (window.HomeLookReasonRequest || window.HomeLookReasonZoomRequest));
     if (!loaded || typeof runner !== "function") {
       addEvent({
         kind: "system",
@@ -387,7 +389,7 @@
         addEvent({
           kind: "perception",
           text: `${cam.id}: ${answer || "(grounded look)"}`,
-          snapshotUrl: data.detailUrl || data.overviewUrl || null,
+          snapshotUrl: data.annotatedUrl || data.detailUrl || data.overviewUrl || null,
           imageMode: "annotated",
           rawText: data.answer || "",
         });

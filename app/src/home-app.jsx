@@ -4525,6 +4525,15 @@ function visionBaseFromEndpoint(metricsBase, endpoint) {
   return siblingServiceBase(metricsBase, endpoint, "HG_DEFAULT_VISION_BASE", 8091, "http://192.168.0.100:8091");
 }
 
+function visionMediaUrlFromEndpoint(pathOrUrl, metricsBase, endpoint) {
+  const raw = String(pathOrUrl || "").trim();
+  if (!raw) return "";
+  if (/^https?:\/\//i.test(raw) || raw.startsWith("/proxy/")) return raw;
+  const base = visionBaseFromEndpoint(metricsBase, endpoint);
+  if (!base) return raw;
+  return `${String(base).replace(/\/+$/, "")}/${raw.replace(/^\/+/, "")}`;
+}
+
 function supervisorBaseFromEndpoint(metricsBase, endpoint) {
   return siblingServiceBase(metricsBase, endpoint, "HG_DEFAULT_SUPERVISOR_BASE", 8093, "http://192.168.0.100:8093");
 }
@@ -6460,12 +6469,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
                     if (isDescribe) {
                       const desc = data.description || "(no description)";
                       if (data.snapshot_url) {
-                        snapshotUrl = visionOrigin + data.snapshot_url + "?cb=" + Date.now();
+                        snapshotUrl = visionMediaUrlFromEndpoint(data.snapshot_url, base, endpoint) + "?cb=" + Date.now();
                       }
                       cardText = `${cam}: ${desc}`;
                     } else {
                       if (data.annotated_url) {
-                        snapshotUrl = visionOrigin + data.annotated_url + "?cb=" + Date.now();
+                        snapshotUrl = visionMediaUrlFromEndpoint(data.annotated_url, base, endpoint) + "?cb=" + Date.now();
+                      } else if (data.detail_url) {
+                        snapshotUrl = visionMediaUrlFromEndpoint(data.detail_url, base, endpoint) + "?cb=" + Date.now();
+                      } else if (data.snapshot_url) {
+                        snapshotUrl = visionMediaUrlFromEndpoint(data.snapshot_url, base, endpoint) + "?cb=" + Date.now();
                       }
                       cardText = `${cam}: ${data.answer || "(grounded look)"}`;
                     }
@@ -6473,6 +6486,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
                       kind: "perception",
                       text: cardText,
                       snapshotUrl,
+                      imageMode: isDescribe ? undefined : "annotated",
                     });
                   })
                   .catch((err) => {
@@ -8436,6 +8450,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       roomContext,
       sendToHA,
       simActive: sim.active,
+      lookFullFrameRunner: window.HomeLookReasonRequest,
       lookRunner: window.HomeLookReasonZoomRequest,
     });
     return !!result?.handled;
@@ -9536,6 +9551,10 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         const caption = normalizeChatEventText(d.caption || "");
         if (!caption) return;
         const text = room ? `${room}: ${caption}` : caption;
+        const base = metricsBase || metricsBaseFromEndpoint(endpoint);
+        const snapshotUrl = d.snapshot_url
+          ? visionMediaUrlFromEndpoint(d.snapshot_url, base, endpoint)
+          : null;
         // 8-event lookback dedupe — matches the SSE handler's window.
         // PerceptionContent renders the chip; snapshotUrl is consumed
         // by the same component for thumbnail rendering when present.
@@ -9551,7 +9570,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             channel: "perception",
             time: fmtTime(),
             text,
-            snapshotUrl: d.snapshot_url || null,
+            snapshotUrl,
             source: d.source || null,
             latencyMs: d.latency_ms != null ? d.latency_ms : null,
           }];
@@ -10695,6 +10714,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
                 kind: "perception",
                 text: `${e.camera} — ${e.answer || "(no answer)"}`,
                 snapshotUrl: e.annotatedUrl || null,
+                imageMode: e.annotatedUrl ? "annotated" : undefined,
               });
             } else if (e.type === "error") {
               addEvent({ kind: "system", tone: "error",

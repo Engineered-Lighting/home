@@ -594,7 +594,14 @@ def _extract_answer(text: str) -> str:
     one, else the whole reasoning with the primitive markup stripped (the
     model tends to describe-then-ground, so this yields the prose)."""
     m = re.search(r"ANSWER:\s*(.+)", text, re.IGNORECASE)
-    return _strip_primitives(m.group(1) if m else text)
+    if m:
+        answer = _strip_primitives(m.group(1))
+        if answer:
+            return answer
+        before = text[:m.start()].strip()
+        if before:
+            return _strip_primitives(before)
+    return _strip_primitives(text)
 
 
 def annotate_frame(jpeg: bytes, prims: list[dict]) -> tuple[bytes, int, int]:

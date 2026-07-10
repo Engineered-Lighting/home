@@ -106,6 +106,12 @@ function loadHelpers() {
   assert("describe_clip records sampling and inference latency", visionServiceSource.includes("sampling_ms") && visionServiceSource.includes("inference_ms"));
   assert("describe_clip returns captured frame count", visionServiceSource.includes("frames_captured=len(jpegs)"));
 
+  process.stdout.write("\nvision_reason_answer_contract_test\n");
+  assert("reason answer parser falls back when ANSWER line only contains boxes",
+    visionServiceSource.includes("before = text[:m.start()].strip()") &&
+    visionServiceSource.includes("return _strip_primitives(before)"),
+    "_extract_answer should preserve readable prose before primitive-only ANSWER lines");
+
   if (fails) {
     console.log("\nFailures:");
     for (const f of failures) console.log("- " + f.name + (f.detail ? ": " + JSON.stringify(f.detail) : ""));

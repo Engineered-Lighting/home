@@ -110,6 +110,21 @@ function completionValue(cmd, commands) {
   assert("/route-log advertises /routes alias", /\/routes/.test(byCmd["/route-log"] && byCmd["/route-log"].desc || ""), byCmd["/route-log"]);
   assert("/s2s catalog describes configuration, not retired on/off voice mode", byCmd["/s2s"] && !/\bon\|off\b/i.test(byCmd["/s2s"].hint + " " + byCmd["/s2s"].desc), byCmd["/s2s"]);
 
+  process.stdout.write("\nvision_media_contract_test\n");
+  assert("vision media helper rebases relative sidecar paths",
+    source.includes("function visionMediaUrlFromEndpoint") &&
+    source.includes("raw.startsWith(\"/proxy/\")") &&
+    source.includes("visionBaseFromEndpoint(metricsBase, endpoint)"),
+    "visionMediaUrlFromEndpoint missing");
+  assert("HA perception captions resolve sidecar snapshot URLs",
+    source.includes("const snapshotUrl = d.snapshot_url") &&
+    source.includes("visionMediaUrlFromEndpoint(d.snapshot_url, base, endpoint)"),
+    "perception_caption relative snapshot URL fix missing");
+  assert("look transcript cards retain annotated image mode",
+    source.includes("imageMode: e.annotatedUrl ? \"annotated\" : undefined") &&
+    source.includes("imageMode: isDescribe ? undefined : \"annotated\""),
+    "look transcript annotated mode missing");
+
   process.stdout.write("\nslash_command_handler_coherence_test\n");
   const handleBlock = extractHandleBlock();
   const handlerCases = Array.from(handleBlock.matchAll(/case\s+"([^"]+)"\s*:/g), (m) => m[1]);
@@ -162,7 +177,8 @@ function completionValue(cmd, commands) {
     /useEffect\(\(\) => \{ if \(focusToken\) inputRef\.current\?\.focus\(\); \}, \[focusToken\]\)/.test(inputBlock),
     inputBlock.slice(0, 600));
   assert("slash menu filters only command prefixes before first argument",
-    /SLASH_CMDS\.filter\(\(c\) => c\.cmd\.startsWith\(firstTok\)\)/.test(inputBlock) &&
+    /const slashCommands = availableSlashCommands\(\{ mobile \}\)/.test(inputBlock) &&
+    /slashCommands\.filter\(\(c\) => c\.cmd\.startsWith\(firstTok\)\)/.test(inputBlock) &&
     /showMenu = isSlash && matches\.length > 0 && !value\.includes\(" "\)/.test(inputBlock),
     inputBlock.slice(0, 900));
   assert("slash menu keyboard navigation handles up down tab and Enter completion",
@@ -225,7 +241,7 @@ function completionValue(cmd, commands) {
 
   process.stdout.write("\nslash_command_surface_contract_test\n");
   const helpBlock = extractCaseBlock("help");
-  assert("/help emits structured help event", /kind:\s*"help"[\s\S]*groups[\s\S]*totalCount:\s*SLASH_CMDS\.length/.test(helpBlock), helpBlock.slice(0, 600));
+  assert("/help emits structured help event", /kind:\s*"help"[\s\S]*groups[\s\S]*totalCount:\s*visibleCommands\.length/.test(helpBlock), helpBlock.slice(0, 900));
   assert("/help includes Simulation Mode help when sim is active", /sim\.active[\s\S]*window\.SimulationCommand[\s\S]*formatSimHelp/.test(helpBlock), helpBlock.slice(0, 600));
   assert("HelpContent renders clickable command rows", /function\s+HelpContent/.test(eventsSource) && /function\s+HelpRow/.test(eventsSource), "HelpContent/HelpRow missing");
   assert("HelpContent dispatches hg-fill-input events", /CustomEvent\("hg-fill-input"[\s\S]*detail:\s*cmd/.test(eventsSource), "missing hg-fill-input dispatch");

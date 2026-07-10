@@ -489,6 +489,7 @@ function usePerceptionImageReady(snapshotUrl) {
 
 function PerceptionContent({ text, snapshotUrl, imageMode }) {
   const [expanded, setExpanded] = React.useState(false);
+  const [lightboxOpen, setLightboxOpen] = React.useState(false);
   const imageState = usePerceptionImageReady(snapshotUrl);
   const isAnnotated = imageMode === "annotated";
   // Parse the text — bridge emits "perceived ROOM: SUMMARY" or just SUMMARY.
@@ -503,6 +504,84 @@ function PerceptionContent({ text, snapshotUrl, imageMode }) {
   const short = expanded ? summary : (summary.length > 90 ? summary.slice(0, 88) + "…" : summary);
   const hasThumb = Boolean(snapshotUrl) && imageState === "loaded";
   const clickable = summary.length > 90 || hasThumb;
+  const openLightbox = React.useCallback((e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    if (hasThumb) setLightboxOpen(true);
+  }, [hasThumb]);
+  const closeLightbox = React.useCallback(() => setLightboxOpen(false), []);
+  React.useEffect(() => {
+    if (!lightboxOpen) return undefined;
+    const onKey = (e) => {
+      if (e.key === "Escape") setLightboxOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightboxOpen]);
+  const lightbox = lightboxOpen && hasThumb ? (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={room ? `${room} perception image` : "perception image"}
+      onClick={closeLightbox}
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 99999,
+        background: "rgba(0,0,0,0.92)",
+        display: "grid",
+        gridTemplateRows: "auto minmax(0, 1fr)",
+        gap: 10,
+        padding: "calc(env(safe-area-inset-top, 0px) + 14px) 14px calc(env(safe-area-inset-bottom, 0px) + 14px)",
+        boxSizing: "border-box",
+      }}
+    >
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 12,
+        color: "rgba(255,255,255,0.8)",
+        fontFamily: HG_MONO,
+        fontSize: 11,
+        letterSpacing: "0.08em",
+      }}>
+        <span>{room ? room : "perception"}</span>
+        <button
+          type="button"
+          onClick={closeLightbox}
+          style={{
+            color: "white",
+            background: "rgba(255,255,255,0.08)",
+            border: "1px solid rgba(255,255,255,0.18)",
+            borderRadius: 4,
+            padding: "9px 12px",
+            fontFamily: HG_MONO,
+            fontSize: 11,
+            letterSpacing: "0.08em",
+            textTransform: "lowercase",
+          }}
+        >close</button>
+      </div>
+      <img
+        src={snapshotUrl}
+        alt={room ? `${room} perception full size` : "perception full size"}
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          alignSelf: "center",
+          justifySelf: "center",
+          maxWidth: "100%",
+          maxHeight: "100%",
+          objectFit: "contain",
+          borderRadius: 6,
+          background: "black",
+          boxShadow: "0 18px 60px rgba(0,0,0,0.45)",
+        }}
+      />
+    </div>
+  ) : null;
   // Layout: thumbnail (when present) | room label | summary | (right slot)
   const cols = hasThumb
     ? (isAnnotated ? "1fr"
@@ -513,106 +592,118 @@ function PerceptionContent({ text, snapshotUrl, imageMode }) {
   const thumbSize = expanded ? 200 : 40;
   if (hasThumb && isAnnotated) {
     return (
-      <div
-        onClick={() => setExpanded((v) => !v)}
-        style={{
-          ...T_SYNTAX,
-          display: "grid",
-          gridTemplateColumns: "1fr",
-          gap: 8,
-          cursor: "pointer",
-          color: "var(--hg-fg-3)",
-          fontSize: 11,
-          lineHeight: 1.5,
-          paddingTop: 4,
-          paddingBottom: 4,
-        }}
-      >
-        <div style={{
-          display: "grid",
-          gridTemplateColumns: room ? "minmax(74px, 108px) 1fr" : "auto 1fr",
-          columnGap: 10,
-          alignItems: "baseline",
-        }}>
-          <span style={{
-            ...HG_FAINT,
-            fontWeight: 400,
-            letterSpacing: "0.06em",
-            color: "var(--hg-fg-4)",
-          }}>{room ? room : "perceived"}</span>
-          <span style={{
-            color: "var(--hg-fg-2)",
-            fontFamily: "'Geist', system-ui, sans-serif",
-            fontSize: 12,
-            fontWeight: 400,
-          }}>{short}</span>
-        </div>
-        <img
-          src={snapshotUrl}
-          alt={room ? `${room} segmented view` : "segmented perception view"}
-          loading="lazy"
-          decoding="async"
-          onError={(e) => { e.currentTarget.style.display = "none"; }}
+      <React.Fragment>
+        <div
+          onClick={() => setExpanded((v) => !v)}
           style={{
-            width: "100%",
-            maxHeight: expanded ? "62vh" : 260,
-            objectFit: "contain",
-            borderRadius: 5,
-            border: "1px solid var(--hg-border)",
-            background: "rgba(0,0,0,0.35)",
-            display: "block",
+            ...T_SYNTAX,
+            display: "grid",
+            gridTemplateColumns: "1fr",
+            gap: 8,
+            cursor: "pointer",
+            color: "var(--hg-fg-3)",
+            fontSize: 11,
+            lineHeight: 1.5,
+            paddingTop: 4,
+            paddingBottom: 4,
           }}
-        />
-      </div>
+        >
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: room ? "minmax(74px, 108px) 1fr" : "auto 1fr",
+            columnGap: 10,
+            alignItems: "baseline",
+          }}>
+            <span style={{
+              ...HG_FAINT,
+              fontWeight: 400,
+              letterSpacing: "0.06em",
+              color: "var(--hg-fg-4)",
+            }}>{room ? room : "perceived"}</span>
+            <span style={{
+              color: "var(--hg-fg-2)",
+              fontFamily: "'Geist', system-ui, sans-serif",
+              fontSize: 12,
+              fontWeight: 400,
+            }}>{short}</span>
+          </div>
+          <img
+            src={snapshotUrl}
+            alt={room ? `${room} segmented view` : "segmented perception view"}
+            loading="lazy"
+            decoding="async"
+            onClick={openLightbox}
+            onError={(e) => { e.currentTarget.style.display = "none"; }}
+            style={{
+              width: "100%",
+              maxHeight: expanded ? "62vh" : "min(360px, 46vh)",
+              objectFit: "contain",
+              borderRadius: 5,
+              border: "1px solid var(--hg-border)",
+              background: "rgba(0,0,0,0.35)",
+              display: "block",
+              cursor: "zoom-in",
+            }}
+          />
+        </div>
+        {lightbox}
+      </React.Fragment>
     );
   }
   return (
-    <div
-      onClick={() => clickable && setExpanded((v) => !v)}
-      style={{
-        ...T_SYNTAX,
-        display: "grid",
-        gridTemplateColumns: cols,
-        columnGap: 10,
-        alignItems: hasThumb ? "center" : "baseline",
-        cursor: clickable ? "pointer" : "default",
-        color: "var(--hg-fg-3)",
-        fontSize: 11,
-        lineHeight: 1.5,
-        paddingTop: 2, paddingBottom: 2,
-      }}
-    >
-      {hasThumb && (
-        <img
-          src={snapshotUrl}
-          alt={room ? `${room} snapshot` : "perception snapshot"}
-          loading="lazy"
-          decoding="async"
-          onError={(e) => { e.currentTarget.style.display = "none"; }}
-          style={{
-            width: thumbSize,
-            height: thumbSize * 0.6,
-            objectFit: "cover",
-            borderRadius: 3,
-            border: "1px solid var(--hg-border)",
-            display: "block",
-          }}
-        />
-      )}
-      <span style={{
-        ...HG_FAINT,
-        fontWeight: 400,
-        letterSpacing: "0.06em",
-        color: "var(--hg-fg-4)",
-      }}>{room ? room : "perceived"}</span>
-      <span style={{
-        color: "var(--hg-fg-2)",
-        fontFamily: "'Geist', system-ui, sans-serif",
-        fontSize: 12,
-        fontWeight: 400,
-      }}>{short}</span>
-      <span />
-    </div>
+    <React.Fragment>
+      <div
+        onClick={() => clickable && setExpanded((v) => !v)}
+        style={{
+          ...T_SYNTAX,
+          display: "grid",
+          gridTemplateColumns: cols,
+          columnGap: 10,
+          alignItems: hasThumb ? "center" : "baseline",
+          cursor: clickable ? "pointer" : "default",
+          color: "var(--hg-fg-3)",
+          fontSize: 11,
+          lineHeight: 1.5,
+          paddingTop: 2, paddingBottom: 2,
+        }}
+      >
+        {hasThumb && (
+          <img
+            src={snapshotUrl}
+            alt={room ? `${room} snapshot` : "perception snapshot"}
+            loading="lazy"
+            decoding="async"
+            onClick={openLightbox}
+            onError={(e) => { e.currentTarget.style.display = "none"; }}
+            style={{
+              width: expanded ? "min(100%, 280px)" : thumbSize,
+              height: expanded ? "auto" : thumbSize * 0.6,
+              maxHeight: expanded ? "42vh" : undefined,
+              objectFit: expanded ? "contain" : "cover",
+              borderRadius: 3,
+              border: "1px solid var(--hg-border)",
+              display: "block",
+              cursor: "zoom-in",
+              background: "rgba(0,0,0,0.35)",
+            }}
+          />
+        )}
+        <span style={{
+          ...HG_FAINT,
+          fontWeight: 400,
+          letterSpacing: "0.06em",
+          color: "var(--hg-fg-4)",
+        }}>{room ? room : "perceived"}</span>
+        <span style={{
+          color: "var(--hg-fg-2)",
+          fontFamily: "'Geist', system-ui, sans-serif",
+          fontSize: 12,
+          fontWeight: 400,
+        }}>{short}</span>
+        <span />
+      </div>
+      {lightbox}
+    </React.Fragment>
   );
 }
 

@@ -136,6 +136,37 @@ async function lkReasonZoomRequest(opts) {
   };
 }
 
+async function lkReasonRequest(opts) {
+  const options = opts || {};
+  const question = String(options.question || "").trim();
+  if (!question) throw new Error("question required");
+  const visionBase = String(options.visionBase || lkVisionUrl(options.metricsBase) || "").replace(/\/+$/, "");
+  if (!visionBase) throw new Error("vision-sidecar URL not derivable");
+  const fetchImpl = options.fetchImpl || window.tauriFetch || fetch;
+  const camera = options.camera || "auto";
+  const r = await fetchImpl(visionBase + "/reason", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ camera, question }),
+    cache: "no-store",
+    signal: options.signal,
+  });
+  if (!r.ok) {
+    let detail = "";
+    try { detail = (await r.text()).slice(0, 180); } catch (_) {}
+    throw new Error("reason · HTTP " + r.status + (detail ? " · " + detail : ""));
+  }
+  const data = await r.json();
+  const shot = data.camera || camera || "auto";
+  const cb = options.cacheBust || Date.now();
+  return {
+    ...data,
+    camera: shot,
+    annotatedUrl: lkJoinUrl(visionBase, data.annotated_url, cb),
+    visionBase,
+  };
+}
+
 /* A plain text segment of a reasoning trace, with any stray bare <box>
  * tags (boxes not paired with a <ref>) removed. */
 function lkPlain(s, key) {
@@ -603,5 +634,6 @@ function HomeLookDrawer({ open, onClose, metricsBase, sim,
 
 window.HomeLookDrawer = HomeLookDrawer;
 window.HomeLookParseArg = lkParseArg;
+window.HomeLookReasonRequest = lkReasonRequest;
 window.HomeLookReasonZoomRequest = lkReasonZoomRequest;
 window.HomeLookVisionUrl = lkVisionUrl;

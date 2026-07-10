@@ -64,6 +64,7 @@ function makeHarness(overrides = {}) {
       return {
         camera: req.camera,
         answer: `${req.camera} looks normal`,
+        annotatedUrl: `/annotated/${req.camera}.jpg`,
         detailUrl: `/detail/${req.camera}.jpg`,
       };
     },
@@ -164,6 +165,7 @@ function eventTexts(events) {
     assert("transcript shows looking deeply", texts.includes("looking deeply · kitchen"), texts);
     assert("transcript includes one final grounded answer", h.events.filter((e) => e.kind === "home").length === 1 && texts.includes("Nothing important stands out."), texts);
     assert("perception cards carry annotated segmentation image mode", h.events.filter((e) => e.kind === "perception").every((e) => e.imageMode === "annotated" && e.snapshotUrl), h.events.filter((e) => e.kind === "perception"));
+    assert("perception cards prefer full-frame annotated images over zoom crops", h.events.filter((e) => e.kind === "perception").every((e) => String(e.snapshotUrl || "").startsWith("/annotated/")), h.events.filter((e) => e.kind === "perception"));
     const finalAnswer = h.events.find((e) => e.kind === "home")?.text || "";
     assert("final broad answer is focused, not room-label inventory", finalAnswer.includes("I checked ") && finalAnswer.length < 120 && !/living room:|kitchen:|dining room:|coffee table|wooden island/i.test(finalAnswer), finalAnswer);
     assert("abstract prompt is not echoed as slash look", !texts.includes("/look what do you see in my apartment"), texts);

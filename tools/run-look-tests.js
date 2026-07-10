@@ -41,7 +41,7 @@ function loadHelpers(cameras, extraWindow) {
   const end = source.indexOf("/* A plain text segment", start);
   if (start < 0 || end < 0) throw new Error("home-look helper block not found");
   const script = source.slice(start, end)
-    + "\nObject.assign(window, { LK_CAMERAS, lkParseArg, lkVisionUrl, lkReasonZoomRequest });";
+    + "\nObject.assign(window, { LK_CAMERAS, lkParseArg, lkVisionUrl, lkReasonRequest, lkReasonZoomRequest });";
   const sandbox = {
     window: { ...(cameras ? { HG_CAMERAS: cameras } : {}), ...(extraWindow || {}) },
     React: {
@@ -67,6 +67,7 @@ function loadAppDeepLookHelpers() {
   const api = loadHelpers();
   assert("lkParseArg exported in test harness", typeof api.lkParseArg === "function");
   assert("lkVisionUrl exported in test harness", typeof api.lkVisionUrl === "function");
+  assert("lkReasonRequest exported in test harness", typeof api.lkReasonRequest === "function");
   assert("lkReasonZoomRequest exported in test harness", typeof api.lkReasonZoomRequest === "function");
   assert("fallback camera roster is present", Array.isArray(api.LK_CAMERAS) && api.LK_CAMERAS.length >= 5, api.LK_CAMERAS);
 
@@ -149,9 +150,39 @@ function loadAppDeepLookHelpers() {
     assert("reason_zoom request should not throw", false, e.message);
   });
 
+  process.stdout.write("\nlook_reason_full_frame_request_test\n");
+  seenRequest = null;
+  await api.lkReasonRequest({
+    metricsBase: "http://192.168.0.100:8092",
+    camera: "driveway",
+    question: "what is in the driveway",
+    cacheBust: 456,
+    fetchImpl: async (url, opts) => {
+      seenRequest = { url, opts };
+      return {
+        ok: true,
+        async json() {
+          return {
+            camera: "driveway",
+            answer: "a covered vehicle is in the driveway",
+            annotated_url: "/reason/driveway/annotated.jpg",
+          };
+        },
+      };
+    },
+  }).then((data) => {
+    assert("full-frame reason request hits sidecar endpoint", seenRequest.url === "http://192.168.0.100:8091/reason", seenRequest);
+    assert("full-frame reason request posts camera/question", seenRequest.opts.body === JSON.stringify({ camera: "driveway", question: "what is in the driveway" }), seenRequest.opts.body);
+    assert("full-frame reason response creates cache-busted annotated URL", data.annotatedUrl === "http://192.168.0.100:8091/reason/driveway/annotated.jpg?cb=456", data);
+  }).catch((e) => {
+    assert("full-frame reason request should not throw", false, e.message);
+  });
+
   process.stdout.write("\nlook_command_wiring_test\n");
   assert("HomeLookParseArg is exported to window", source.includes("window.HomeLookParseArg = lkParseArg;"));
   assert("HomeLookDrawer is exported to window", source.includes("window.HomeLookDrawer = HomeLookDrawer;"));
+  assert("HomeLookReasonRequest is exported to window", source.includes("window.HomeLookReasonRequest = lkReasonRequest;"));
+  assert("natural look uses full-frame runner before zoom runner", appSource.includes("lookFullFrameRunner: window.HomeLookReasonRequest") && naturalLookSource.includes("opts.lookFullFrameRunner"));
   assert("natural look router is loaded before home-app", appSource.includes("window.HomeNaturalLook") && fs.readFileSync(path.join(REPO, "app", "src", "index.html"), "utf8").indexOf("home-natural-look.js") < fs.readFileSync(path.join(REPO, "app", "src", "index.html"), "utf8").indexOf("home-app.jsx"));
   const lookCaseStart = appSource.indexOf('case "look"');
   const lookCaseEnd = appSource.indexOf('case "world-state"', lookCaseStart);

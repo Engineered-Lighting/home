@@ -710,9 +710,9 @@ process.stdout.write("\n[1mpeople overlay interaction contract (DOC-S83)[0m\n");
   assert("list row click opens same detail panel and panel close clears selection",
     peopleSource.includes("onRowClick={(id) => setSelectedUuid(id.uuid)}") &&
     peopleSource.includes("onClose={() => setSelectedUuid(null)}"));
-  assert("HomeHeader accepts and attaches People button focus ref",
+  assert("HomeHeader accepts and attaches People menu focus ref",
     /function HomeHeader\(\{[\s\S]*peopleButtonRef[\s\S]*\}\)/.test(appSource) &&
-    /\{onOpenPeople && \([\s\S]*<button[\s\S]*ref=\{peopleButtonRef\}[\s\S]*onClick=\{onOpenPeople\}/.test(appSource));
+    /\{onOpenPeople && <button[\s\S]*role="menuitem"[\s\S]*ref=\{peopleButtonRef\}[\s\S]*onClick=\{\(\) => runMenuAction\(onOpenPeople\)\}/.test(appSource));
   assert("HomeApp restores focus to People header button on overlay close",
     appSource.includes("const peopleButtonRef = useRef(null);") &&
     appSource.includes("const closePeopleOverlay = useCallback(() => {") &&

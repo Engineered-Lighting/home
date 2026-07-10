@@ -415,7 +415,7 @@ function HomeHeader({
   bridgeHealth, visionSidecarOnline, visionHealth, frigateMetrics, cameraLabels,
   sim, muteState, onUnmuteClick, onOpenPeople, onOpenIntelligence,
   onOpenVideoLabeler, onOpenApartment, onOpenLights, onOpenSimulationControls, aiStackState, metrics,
-  serviceProfile, onOpenRemoteProfile, mobile = false,
+  serviceProfile, onOpenRemoteProfile, peopleButtonRef, mobile = false,
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const isLive = voice.state !== "inactive" && voice.state !== "no-mic";
@@ -555,7 +555,7 @@ function HomeHeader({
                 profile - {serviceProfile.shortLabel}
               </button>
             )}
-            {onOpenPeople && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenPeople)}>people</button>}
+            {onOpenPeople && <button type="button" role="menuitem" ref={peopleButtonRef} style={actionMenuItem} onClick={() => runMenuAction(onOpenPeople)}>people</button>}
             {onOpenApartment && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenApartment)}>apartment</button>}
             {onOpenLights && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenLights)}>lights</button>}
             {onOpenIntelligence && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenIntelligence)}>intelligence</button>}
@@ -5276,6 +5276,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   const feedRef = useRef(null);
   const timers = useRef([]);
   const rootRef = useRef(null);
+  const peopleButtonRef = useRef(null);
   const streamingIds = useRef(new Set());
   const haClientRef = useRef(null);
   const activeRunRef = useRef(null); // { id, cancel }
@@ -5287,6 +5288,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   }, []);
   const closePeopleOverlay = useCallback(() => {
     setPeopleOpen(false);
+    window.requestAnimationFrame(() => {
+      peopleButtonRef.current?.focus?.();
+    });
   }, []);
 
   /* ── First-run boot sequence ──────────────────────────────────────────
@@ -10250,6 +10254,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         metrics={metrics}
         serviceProfile={serviceProfile}
         onOpenRemoteProfile={() => setRemotePanelOpen(true)}
+        peopleButtonRef={peopleButtonRef}
         mobile={mobile}
       />
       <SimulationControlsDialog

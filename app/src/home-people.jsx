@@ -219,6 +219,18 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
     if (open) refresh();
   }, [open, refresh]);
 
+  const faceImageBaseUrl = useMemo(() => {
+    try {
+      const services = (typeof window !== "undefined") ? window.HomeServices : null;
+      const resolved = services && typeof services.get === "function"
+        ? services.get("frigate")
+        : "";
+      return resolved || frigateUrl;
+    } catch {
+      return frigateUrl;
+    }
+  }, [frigateUrl]);
+
   // Phase 3 avatar pre-check (AR24-9). One HEAD per identity at load
   // time + after every identity_mutation refresh. Sim mode skips —
   // sim fixtures don't have avatar files on disk.
@@ -519,7 +531,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
               <PeopleGraphView
                 identities={identities}
                 facesByPerson={facesByPerson}
-                frigateUrl={frigateUrl}
+                frigateUrl={faceImageBaseUrl}
                 endpoint={endpoint}
                 avatarPresence={avatarPresence}
                 avatarBlobUrls={avatarBlobUrls}
@@ -564,7 +576,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
         token={token}
         sim={sim}
         facesByPerson={facesByPerson}
-        frigateUrl={frigateUrl}
+        frigateUrl={faceImageBaseUrl}
         avatarPresence={avatarPresence}
         avatarBlobUrls={avatarBlobUrls}
         onAvatarChanged={(uuid, present) => refreshAvatars(uuid, present)}

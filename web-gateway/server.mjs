@@ -194,7 +194,7 @@ const routes = [
     prefix: "/proxy/frigate",
     env: "HOME_WEB_FRIGATE_TARGET",
     target: envTarget("HOME_WEB_FRIGATE_TARGET", "http://192.168.0.125:5000"),
-    allow: rx(/^\/api\//),
+    allow: rx(/^\/(api\/|clips\/faces\/)/),
     ws: false,
   },
 ];

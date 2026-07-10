@@ -17,97 +17,6 @@ function fmtTime(d = new Date()) {
 let _id = 0;
 const nextId = () => `e-${++_id}`;
 
-const DEEP_LOOK_CAMERA_META = [
-  { id: "living_room", name: "living room", indoor: true, priority: 10, aliases: ["living", "couch"] },
-  { id: "kitchen", name: "kitchen", indoor: true, priority: 20, aliases: ["counter", "stove"] },
-  { id: "dining_room", name: "dining room", indoor: true, priority: 30, aliases: ["dining"] },
-  { id: "workshop", name: "workshop", indoor: true, priority: 40, aliases: ["office", "desk"] },
-  { id: "driveway", name: "driveway", indoor: false, priority: 90, aliases: ["outside", "front", "car", "street"] },
-];
-
-function deepLookNormalize(text) {
-  return String(text || "").toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
-}
-
-function deepLookCameraMeta(id) {
-  const key = String(id || "").replace(/\s+/g, "_");
-  return DEEP_LOOK_CAMERA_META.find((c) => c.id === key) || {
-    id: key,
-    name: String(id || key).replace(/_/g, " "),
-    indoor: true,
-    priority: 70,
-    aliases: [],
-  };
-}
-
-function detectDeepLookIntent(text) {
-  const raw = String(text || "").trim();
-  const s = deepLookNormalize(raw);
-  if (!s) return null;
-  const actionish = /\b(turn|switch|set|dim|brighten|open|close|lock|unlock|start|stop|restart|enable|disable|toggle|run|play|pause)\b/.test(s);
-  const stateOnly = /\b(lights?|lamps?|travel mode|temperature|thermostat|token|stack|models?|vllm|password|github|deploy|release)\b/.test(s);
-  if (actionish || stateOnly) return null;
-
-  const explicitCamera = DEEP_LOOK_CAMERA_META.find((cam) => {
-    const names = [cam.id.replace(/_/g, " "), cam.name].concat(cam.aliases || []);
-    return names.some((name) => name && new RegExp("\\b" + name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b").test(s));
-  });
-  const visual =
-    /\b(what do you see|what can you see|look around|take a look|look at|describe)\b/.test(s) ||
-    /\b(what(?:'s| is) (?:in|inside|happening|going on|visible))\b/.test(s) ||
-    /\b(camera|cameras|visually|see in|seeing in)\b/.test(s);
-  const place =
-    /\b(apartment|home|house|room|camera|kitchen|living room|dining room|workshop|office|driveway|outside)\b/.test(s) ||
-    !!explicitCamera;
-  if (!visual || !place) return null;
-  const scope = /\b(home|house)\b/.test(s) && !/\b(apartment)\b/.test(s) ? "home" : "apartment";
-  return {
-    text: raw,
-    scope,
-    explicitCamera: explicitCamera ? explicitCamera.id : null,
-  };
-}
-
-function selectDeepLookCameras(intent, roomContext, limit = 3) {
-  if (!intent) return [];
-  if (intent.explicitCamera) return [deepLookCameraMeta(intent.explicitCamera)];
-  const includeOutdoor = intent.scope === "home";
-  const metas = DEEP_LOOK_CAMERA_META
-    .filter((cam) => includeOutdoor || cam.indoor)
-    .map((cam) => ({ ...cam, score: cam.priority }));
-  const rooms = roomContext && typeof roomContext.rooms === "object" ? roomContext.rooms : {};
-  for (const cam of metas) {
-    const d = rooms[cam.id] || {};
-    const occupied = d.occupied === true || !!d.occupant || !!d.identity || !!d.person ||
-      (Array.isArray(d.persons) && d.persons.length > 0);
-    const age = Number(d.age_s ?? d.age_seconds ?? d.perception_age_seconds);
-    if (occupied) cam.score -= 1000;
-    if (Number.isFinite(age)) cam.score += Math.min(age, 600) / 10;
-  }
-  return metas.sort((a, b) => a.score - b.score || a.priority - b.priority).slice(0, limit);
-}
-
-function summarizeDeepLookResults(question, results, failures) {
-  const ok = (results || []).filter((r) => r && r.ok);
-  const bad = failures || [];
-  if (!ok.length) return "";
-  const lines = ok.map((r) => `${r.name}: ${r.answer || "I got a fresh grounded frame, but no text answer came back."}`);
-  const failed = bad.length
-    ? ` I could not inspect ${bad.map((f) => f.name).join(", ")}.`
-    : "";
-  if (ok.length === 1) return `I looked deeply at ${ok[0].name}. ${ok[0].answer || lines[0]}${failed}`;
-  return `I looked deeply at ${ok.map((r) => r.name).join(", ")}. ${lines.join(" ")}${failed}`;
-}
-
-if (typeof window !== "undefined") {
-  Object.assign(window, {
-    detectDeepLookIntent,
-    selectDeepLookCameras,
-    summarizeDeepLookResults,
-    DEEP_LOOK_CAMERA_META,
-  });
-}
-
 /* ── Tauri-side ASR correction ───────────────────────────────────────
  * Mirrors HA-side PERSON_NAME_ALIASES (ha-config/extended_openai_conversation/
  * const.py). Applied to every event text rendered as a bubble (user echo,
@@ -8374,79 +8283,21 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   }, [addEvent, connection, endpoint, sim.active, token]);
 
   const runNaturalDeepLook = useCallback(async (text) => {
-    const intent = detectDeepLookIntent(text);
-    if (!intent || sim.active) return false;
-    const cameras = selectDeepLookCameras(intent, roomContext, 3);
-    if (!cameras.length) return false;
-
-    addEvent({ kind: "user", text });
-    addEvent({
-      kind: "system",
-      tone: "info",
-      text: `looking deeply · ${cameras.map((c) => c.name).join(", ")}`,
+    const api = window.HomeNaturalLook;
+    if (!api || typeof api.runNaturalDeepLook !== "function") return false;
+    const result = await api.runNaturalDeepLook(text, {
+      addEvent,
+      endpoint,
+      ensureFeature,
+      metricsBase,
+      metricsBaseFromEndpoint,
+      normalizeAnswer: normalizeChatEventText,
+      roomContext,
+      sendToHA,
+      simActive: sim.active,
+      lookRunner: window.HomeLookReasonZoomRequest,
     });
-
-    const loaded = await ensureFeature("look", "look", "natural-language");
-    const runner = window.HomeLookReasonZoomRequest;
-    if (!loaded || typeof runner !== "function") {
-      addEvent({ kind: "system", tone: "warn", text: "grounded look unavailable - using quick caption fallback" });
-      await sendToHA(text, { echoUser: false });
-      return true;
-    }
-
-    const base = metricsBase || metricsBaseFromEndpoint(endpoint);
-    const results = [];
-    const failures = [];
-    for (let i = 0; i < cameras.length; i++) {
-      const cam = cameras[i];
-      const controller = new AbortController();
-      const timeout = setTimeout(() => {
-        try { controller.abort(); } catch (_) {}
-      }, 12000);
-      try {
-        addEvent({
-          kind: "system",
-          tone: "info",
-          text: `grounded look ${i + 1}/${cameras.length} · ${cam.name}`,
-        });
-        const data = await runner({
-          metricsBase: base,
-          camera: cam.id,
-          question: text,
-          signal: controller.signal,
-        });
-        const answer = normalizeChatEventText(data.answer || "");
-        results.push({ ok: true, id: cam.id, name: cam.name, answer, data });
-        addEvent({
-          kind: "perception",
-          text: `${cam.id}: ${answer || "(grounded look)"}`,
-          snapshotUrl: data.detailUrl || data.overviewUrl || null,
-        });
-      } catch (e) {
-        const aborted = e && e.name === "AbortError";
-        failures.push({
-          id: cam.id,
-          name: cam.name,
-          error: aborted ? "timeout" : (e?.message || String(e)),
-        });
-        addEvent({
-          kind: "system",
-          tone: "warn",
-          text: `grounded look failed · ${cam.name} · ${aborted ? "timeout" : (e?.message || "error")}`,
-        });
-      } finally {
-        clearTimeout(timeout);
-      }
-    }
-
-    const summary = summarizeDeepLookResults(text, results, failures);
-    if (summary) {
-      addEvent({ kind: "home", text: summary });
-    } else {
-      addEvent({ kind: "system", tone: "warn", text: "grounded look failed for every selected camera - using quick caption fallback" });
-      await sendToHA(text, { echoUser: false });
-    }
-    return true;
+    return !!result?.handled;
   }, [addEvent, endpoint, ensureFeature, metricsBase, roomContext, sendToHA, sim.active]);
 
   /* ── Free-form user input ─────────────────────────────────────────── */

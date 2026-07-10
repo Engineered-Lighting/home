@@ -9,8 +9,10 @@ const vm = require("vm");
 const REPO = path.resolve(__dirname, "..");
 const LOOK_SRC = path.join(REPO, "app", "src", "home-look.jsx");
 const APP_SRC = path.join(REPO, "app", "src", "home-app.jsx");
+const NATURAL_LOOK_SRC = path.join(REPO, "app", "src", "home-natural-look.js");
 const source = fs.readFileSync(LOOK_SRC, "utf8");
 const appSource = fs.readFileSync(APP_SRC, "utf8");
+const naturalLookSource = fs.readFileSync(NATURAL_LOOK_SRC, "utf8");
 
 let passes = 0;
 let fails = 0;
@@ -55,13 +57,9 @@ function loadHelpers(cameras, extraWindow) {
 }
 
 function loadAppDeepLookHelpers() {
-  const start = appSource.indexOf("const DEEP_LOOK_CAMERA_META");
-  const end = appSource.indexOf("const ASR_ALIASES", start);
-  if (start < 0 || end < 0) throw new Error("home-app deep look helper block not found");
-  const script = appSource.slice(start, end);
-  const sandbox = { window: {} };
-  vm.runInNewContext(script, sandbox, { filename: "home-app.deep-look.js" });
-  return sandbox.window;
+  const sandbox = { window: {}, module: { exports: {} }, exports: {}, URL, setTimeout, clearTimeout, AbortController };
+  vm.runInNewContext(naturalLookSource, sandbox, { filename: "home-natural-look.js" });
+  return sandbox.module.exports;
 }
 
 (async function main() {
@@ -154,6 +152,7 @@ function loadAppDeepLookHelpers() {
   process.stdout.write("\nlook_command_wiring_test\n");
   assert("HomeLookParseArg is exported to window", source.includes("window.HomeLookParseArg = lkParseArg;"));
   assert("HomeLookDrawer is exported to window", source.includes("window.HomeLookDrawer = HomeLookDrawer;"));
+  assert("natural look router is loaded before home-app", appSource.includes("window.HomeNaturalLook") && fs.readFileSync(path.join(REPO, "app", "src", "index.html"), "utf8").indexOf("home-natural-look.js") < fs.readFileSync(path.join(REPO, "app", "src", "index.html"), "utf8").indexOf("home-app.jsx"));
   const lookCaseStart = appSource.indexOf('case "look"');
   const lookCaseEnd = appSource.indexOf('case "world-state"', lookCaseStart);
   const lookCase = lookCaseStart >= 0 && lookCaseEnd >= 0 ? appSource.slice(lookCaseStart, lookCaseEnd) : "";

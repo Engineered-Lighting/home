@@ -22,6 +22,7 @@
     "test:resilience": "node tools/run-resilience-tests.js",
     "test:apartment3d": "node tools/run-apartment-3d-contract-tests.js",
     "test:chat-dedupe": "node tools/run-chat-dedupe-tests.js",
+    "test:natural-look": "node tools/run-natural-look-routing-tests.js",
     "llm:test:deterministic": "node tools/run-chat-dedupe-tests.js && py -3 tools/test-workflow-scenarios.py",
     "llm:test:quick": "py -3 tools/diagnose-identity.py --workflow --quick --phase1-only",
     "llm:test:read-only": "py -3 tools/diagnose-identity.py --workflow --quick",

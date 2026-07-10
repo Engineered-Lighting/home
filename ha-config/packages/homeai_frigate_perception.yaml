@@ -44,11 +44,12 @@ automation:
         value_template: >-
           {% set payload = trigger.payload_json | default({}, true) %}
           {% set after = payload.after | default({}, true) %}
+          {% set attrs = after.attributes | default({}, true) %}
+          {% set semantic = attrs.semantic_trigger | default(attrs.trigger | default(attrs.description | default('', true), true), true) %}
+          {% set sub_label = after.sub_label | default('', true) %}
           {{ after.camera is defined and (
-            after.sub_label is defined or
-            after.attributes is defined or
-            after.current_zones is defined or
-            after.entered_zones is defined
+            semantic | string | trim | length > 0 or
+            sub_label | string | trim | length > 0
           ) }}
     actions:
       - event: homeai_perception

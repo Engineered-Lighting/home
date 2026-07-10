@@ -20,6 +20,7 @@
 
   const OUTDOOR_CAMERAS = new Set(["driveway"]);
   const DEFAULT_FRESH_MS = 90 * 1000;
+  const DISPLAYABLE_SOURCES = new Set(["frigate_review", "semantic_trigger"]);
 
   function asObject(value) {
     return value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -210,6 +211,7 @@
 
   function toPerceptionFeedEvent(event, deps = {}) {
     if (!event) return null;
+    if (!DISPLAYABLE_SOURCES.has(event.source)) return null;
     let snapshotUrl = event.urls?.snapshot || event.urls?.thumbnail || "";
     if (!snapshotUrl && Array.isArray(event.event_ids) && event.event_ids[0]) {
       const serviceBase = deps.frigateBase ||

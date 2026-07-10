@@ -87,6 +87,23 @@ const derivedThumb = api.toPerceptionFeedEvent(
   { nextId: () => "feed-2", fmtTime: () => "10:00:01", frigateBase: "/proxy/frigate" },
 );
 assert("Frigate event id derives thumbnail URL for perception card", derivedThumb.snapshotUrl.includes("/proxy/frigate/api/events/evt-driveway-1/thumbnail.jpg"), derivedThumb);
+const rawObjectEvent = api.normalizeHomePerceptionEvent({
+  topic: "frigate/events",
+  payload_json: {
+    type: "update",
+    after: {
+      id: "evt-kitchen-sink",
+      camera: "kitchen",
+      label: "sink",
+      current_zones: ["counter"],
+      start_time: NOW / 1000,
+    },
+  },
+}, { nowMs: NOW });
+assert("raw object events still normalize for routing hints", rawObjectEvent?.source === "frigate_event", rawObjectEvent);
+assert("raw object events do not render as perception feed cards",
+  api.toPerceptionFeedEvent(rawObjectEvent, { nextId: () => "feed-raw", fmtTime: () => "10:00:02" }) === null,
+  rawObjectEvent);
 
 process.stdout.write("\nfrigate_perception_freshness_tests\n");
 assert("fresh hints include current events", api.freshPerceptionHints([feedEvent], NOW + 10_000).length === 1);

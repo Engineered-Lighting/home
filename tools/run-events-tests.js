@@ -62,6 +62,11 @@ assert("help rows dispatch input fill event", source.includes('CustomEvent("hg-f
 assert("why-click gate class is present", source.includes("hg-why-clickable"));
 assert("controllable actions prefer LightControlCard", source.includes("window.LightControlCard"));
 assert("controllable actions prefer MediaControlCard", source.includes("window.MediaControlCard"));
+assert("perception thumbnails preload before entering image layout",
+  source.includes("function usePerceptionImageReady") &&
+  source.includes('imageState === "loaded"') &&
+  source.includes('const img = new Image()') &&
+  !source.includes("Boolean(snapshotUrl) && !imgFailed"));
 
 process.stdout.write("\nevents_speaker_mapping_test\n");
 const cases = [

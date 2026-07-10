@@ -449,9 +449,38 @@ function SystemContent({ text, tone }) {
  * perception lines (those came from a separate code path with no
  * cached frame); the chip falls back to the text-only layout.
  */
+function usePerceptionImageReady(snapshotUrl) {
+  const [state, setState] = React.useState(() => snapshotUrl ? "loading" : "idle");
+  React.useEffect(() => {
+    if (!snapshotUrl) {
+      setState("idle");
+      return undefined;
+    }
+    let cancelled = false;
+    setState("loading");
+    const img = new Image();
+    img.decoding = "async";
+    img.onload = async () => {
+      try { if (img.decode) await img.decode(); } catch (_) {}
+      if (!cancelled) setState("loaded");
+    };
+    img.onerror = () => {
+      if (!cancelled) setState("error");
+    };
+    img.src = snapshotUrl;
+    return () => {
+      cancelled = true;
+      img.onload = null;
+      img.onerror = null;
+      img.src = "";
+    };
+  }, [snapshotUrl]);
+  return state;
+}
+
 function PerceptionContent({ text, snapshotUrl, imageMode }) {
   const [expanded, setExpanded] = React.useState(false);
-  const [imgFailed, setImgFailed] = React.useState(false);
+  const imageState = usePerceptionImageReady(snapshotUrl);
   const isAnnotated = imageMode === "annotated";
   // Parse the text — bridge emits "perceived ROOM: SUMMARY" or just SUMMARY.
   // Try to extract a room name from the first colon-prefixed token.
@@ -463,7 +492,7 @@ function PerceptionContent({ text, snapshotUrl, imageMode }) {
     summary = m[2];
   }
   const short = expanded ? summary : (summary.length > 90 ? summary.slice(0, 88) + "…" : summary);
-  const hasThumb = Boolean(snapshotUrl) && !imgFailed;
+  const hasThumb = Boolean(snapshotUrl) && imageState === "loaded";
   const clickable = summary.length > 90 || hasThumb;
   // Layout: thumbnail (when present) | room label | summary | (right slot)
   const cols = hasThumb
@@ -513,7 +542,8 @@ function PerceptionContent({ text, snapshotUrl, imageMode }) {
           src={snapshotUrl}
           alt={room ? `${room} segmented view` : "segmented perception view"}
           loading="lazy"
-          onError={() => setImgFailed(true)}
+          decoding="async"
+          onError={(e) => { e.currentTarget.style.display = "none"; }}
           style={{
             width: "100%",
             maxHeight: expanded ? "62vh" : 260,
@@ -548,7 +578,8 @@ function PerceptionContent({ text, snapshotUrl, imageMode }) {
           src={snapshotUrl}
           alt={room ? `${room} snapshot` : "perception snapshot"}
           loading="lazy"
-          onError={() => setImgFailed(true)}
+          decoding="async"
+          onError={(e) => { e.currentTarget.style.display = "none"; }}
           style={{
             width: thumbSize,
             height: thumbSize * 0.6,

@@ -5378,6 +5378,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   const rootRef = useRef(null);
   const peopleButtonRef = useRef(null);
   const streamingIds = useRef(new Set());
+  const frigatePerceptionHintsRef = useRef([]);
   const haClientRef = useRef(null);
   const activeRunRef = useRef(null); // { id, cancel }
   const resetFeedScrollTop = useCallback(() => {
@@ -8427,7 +8428,10 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       metricsBaseFromEndpoint,
       normalizeAnswer: normalizeChatEventText,
       perceptionHints: (window.HomeFrigatePerception?.freshPerceptionHints
-        ? window.HomeFrigatePerception.freshPerceptionHints(events)
+        ? window.HomeFrigatePerception.freshPerceptionHints([
+            ...frigatePerceptionHintsRef.current,
+            ...events.filter((e) => e.kind === "perception" && e.perception),
+          ])
         : events.filter((e) => e.kind === "perception" && e.perception).map((e) => e.perception)),
       roomContext,
       sendToHA,
@@ -9567,11 +9571,12 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       (ev) => {
         const normalized = normalizer.normalizeHomePerceptionEvent(ev?.data || {});
         if (!normalized) return;
-        setEvents((prev) => {
-          if (normalizer.isDuplicatePerceptionEvent(prev, normalized)) return prev;
-          const feedEvent = normalizer.toPerceptionFeedEvent(normalized, { nextId, fmtTime });
-          return feedEvent ? [...prev, feedEvent] : prev;
-        });
+        const prevHints = frigatePerceptionHintsRef.current || [];
+        if (normalizer.isDuplicatePerceptionEvent(prevHints, normalized)) return;
+        frigatePerceptionHintsRef.current = [
+          ...prevHints.slice(-39),
+          { homePerception: normalized, createdAt: Date.now() },
+        ];
       },
     );
     return unsub;

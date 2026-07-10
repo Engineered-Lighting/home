@@ -3,6 +3,7 @@
 
 const path = require("path");
 const api = require(path.join("..", "app", "src", "home-frigate-perception.js"));
+const appSource = require("fs").readFileSync(path.join(__dirname, "..", "app", "src", "home-app.jsx"), "utf8");
 
 let passes = 0;
 let fails = 0;
@@ -104,6 +105,10 @@ assert("raw object events still normalize for routing hints", rawObjectEvent?.so
 assert("raw object events do not render as perception feed cards",
   api.toPerceptionFeedEvent(rawObjectEvent, { nextId: () => "feed-raw", fmtTime: () => "10:00:02" }) === null,
   rawObjectEvent);
+assert("automatic HA perception subscription stores hidden hints instead of appending feed cards",
+  appSource.includes("frigatePerceptionHintsRef.current = [") &&
+  !appSource.includes("const feedEvent = normalizer.toPerceptionFeedEvent(normalized"),
+);
 
 process.stdout.write("\nfrigate_perception_freshness_tests\n");
 assert("fresh hints include current events", api.freshPerceptionHints([feedEvent], NOW + 10_000).length === 1);

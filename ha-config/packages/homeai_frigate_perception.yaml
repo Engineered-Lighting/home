@@ -44,9 +44,9 @@ automation:
         value_template: >-
           {% set payload = trigger.payload_json | default({}, true) %}
           {% set after = payload.after | default({}, true) %}
-          {% set attrs = after.attributes | default({}, true) %}
-          {% set semantic = attrs.semantic_trigger | default(attrs.trigger | default(attrs.description | default('', true), true), true) %}
-          {% set sub_label = after.sub_label | default('', true) %}
+          {% set attrs = after.get('attributes', {}) %}
+          {% set semantic = attrs.get('semantic_trigger') or attrs.get('trigger') or attrs.get('description') or after.get('semantic_trigger') or payload.get('semantic_hint') or payload.get('trigger') or '' %}
+          {% set sub_label = after.get('sub_label') or '' %}
           {{ after.camera is defined and (
             semantic | string | trim | length > 0 or
             sub_label | string | trim | length > 0

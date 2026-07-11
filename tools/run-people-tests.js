@@ -868,6 +868,15 @@ process.stdout.write("\n[1mpeople overlay interaction contract (DOC-S83)[0m\n");
     peopleSource.includes("people-node-soft-glow") &&
     peopleSource.includes("const branchGroups = (() => {") &&
     peopleSource.includes("Branch labels use the final node positions") &&
+    peopleSource.includes("function clampPeopleGraphCamera(camera, viewBox, isMobile)") &&
+    peopleSource.includes("function peopleGraphCameraViewBox(viewBox, camera)") &&
+    peopleSource.includes("const [graphCamera, setGraphCamera] = useState({ scale: 1, x: 0, y: 0 })") &&
+    peopleSource.includes("touchAction: \"none\"") &&
+    peopleSource.includes("overscrollBehavior: \"contain\"") &&
+    peopleSource.includes("gesturestart") &&
+    peopleSource.includes("if (!ev.ctrlKey) return;") &&
+    peopleSource.includes("onTouchMove={handleGraphTouchMove}") &&
+    peopleSource.includes("onDoubleClick={() => setGraphCamera({ scale: 1, x: 0, y: 0 })}") &&
     !peopleSource.includes('strokeDasharray="2,8"') &&
     !peopleSource.includes("cluster-label-${ring}-${name}"));
   assert("identities endpoint exposes sanitized Frigate diagnostics",

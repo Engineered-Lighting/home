@@ -54,6 +54,35 @@ function usePeopleViewport() {
   return viewport;
 }
 
+function clampPeopleGraphCamera(camera, viewBox, isMobile) {
+  const maxScale = isMobile ? 3 : 2.4;
+  const scale = Math.max(1, Math.min(maxScale, Number(camera?.scale) || 1));
+  if (!viewBox || !Number.isFinite(viewBox.w) || !Number.isFinite(viewBox.h)) {
+    return { scale, x: 0, y: 0 };
+  }
+  const visibleW = viewBox.w / scale;
+  const visibleH = viewBox.h / scale;
+  const maxX = Math.max(0, (viewBox.w - visibleW) / 2);
+  const maxY = Math.max(0, (viewBox.h - visibleH) / 2);
+  return {
+    scale,
+    x: Math.max(-maxX, Math.min(maxX, Number(camera?.x) || 0)),
+    y: Math.max(-maxY, Math.min(maxY, Number(camera?.y) || 0)),
+  };
+}
+
+function peopleGraphCameraViewBox(viewBox, camera) {
+  const scale = Math.max(1, Number(camera?.scale) || 1);
+  const visibleW = viewBox.w / scale;
+  const visibleH = viewBox.h / scale;
+  return {
+    x: viewBox.x + (viewBox.w - visibleW) / 2 + (Number(camera?.x) || 0),
+    y: viewBox.y + (viewBox.h - visibleH) / 2 + (Number(camera?.y) || 0),
+    w: visibleW,
+    h: visibleH,
+  };
+}
+
 /* ─────────────────────────────────────────────────────────────────────
  * Sub-component: HomePeopleOverlay
  *
@@ -652,6 +681,23 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
   const H = (typeof window !== "undefined" && window.HomePeopleHelpers) || null;
   const peopleViewport = usePeopleViewport();
   const isMobile = peopleViewport.mobile;
+  const [graphCamera, setGraphCamera] = useState({ scale: 1, x: 0, y: 0 });
+  const graphCameraRef = useRef(graphCamera);
+  const graphGestureRef = useRef(null);
+  const graphSvgRef = useRef(null);
+  useEffect(() => {
+    const el = graphSvgRef.current;
+    if (!el) return undefined;
+    const preventPagePinch = (ev) => ev.preventDefault();
+    el.addEventListener("gesturestart", preventPagePinch);
+    el.addEventListener("gesturechange", preventPagePinch);
+    el.addEventListener("gestureend", preventPagePinch);
+    return () => {
+      el.removeEventListener("gesturestart", preventPagePinch);
+      el.removeEventListener("gesturechange", preventPagePinch);
+      el.removeEventListener("gestureend", preventPagePinch);
+    };
+  }, []);
 
   // Addendum 23: hover state. Tracks the uuid currently being
   // pointed at; null when no hover. Mouse-leave is debounced ~50ms
@@ -789,6 +835,102 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
   const graphViewBox = isMobile
     ? mobileViewBox
     : { x: -VIEW_HALF, y: -VIEW_HALF, w: VIEW_SIZE, h: VIEW_SIZE };
+  useEffect(() => {
+    graphCameraRef.current = graphCamera;
+  }, [graphCamera]);
+  useEffect(() => {
+    setGraphCamera((prev) => clampPeopleGraphCamera(prev, graphViewBox, isMobile));
+  }, [graphViewBox.x, graphViewBox.y, graphViewBox.w, graphViewBox.h, isMobile]);
+  const zoomedGraphViewBox = useMemo(
+    () => peopleGraphCameraViewBox(graphViewBox, graphCamera),
+    [graphViewBox.x, graphViewBox.y, graphViewBox.w, graphViewBox.h, graphCamera],
+  );
+  const graphClientDeltaToViewBox = useCallback((dx, dy, camera = graphCameraRef.current) => {
+    const rect = graphSvgRef.current?.getBoundingClientRect?.();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return { dx: 0, dy: 0 };
+    const current = peopleGraphCameraViewBox(graphViewBox, camera);
+    return {
+      dx: (dx / rect.width) * current.w,
+      dy: (dy / rect.height) * current.h,
+    };
+  }, [graphViewBox.x, graphViewBox.y, graphViewBox.w, graphViewBox.h]);
+  const handleGraphWheel = useCallback((ev) => {
+    if (!ev.ctrlKey) return;
+    ev.preventDefault();
+    const current = graphCameraRef.current;
+    const factor = Math.exp(-ev.deltaY * 0.002);
+    setGraphCamera(clampPeopleGraphCamera({
+      ...current,
+      scale: current.scale * factor,
+    }, graphViewBox, isMobile));
+  }, [graphViewBox.x, graphViewBox.y, graphViewBox.w, graphViewBox.h, isMobile]);
+  const handleGraphTouchStart = useCallback((ev) => {
+    if (ev.touches.length >= 2) {
+      ev.preventDefault();
+      const [a, b] = ev.touches;
+      graphGestureRef.current = {
+        type: "pinch",
+        distance: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1,
+        scale: graphCameraRef.current.scale,
+        x: graphCameraRef.current.x,
+        y: graphCameraRef.current.y,
+        cx: (a.clientX + b.clientX) / 2,
+        cy: (a.clientY + b.clientY) / 2,
+      };
+    } else if (ev.touches.length === 1 && graphCameraRef.current.scale > 1.01) {
+      const t = ev.touches[0];
+      graphGestureRef.current = {
+        type: "pan",
+        x: graphCameraRef.current.x,
+        y: graphCameraRef.current.y,
+        clientX: t.clientX,
+        clientY: t.clientY,
+      };
+    }
+  }, []);
+  const handleGraphTouchMove = useCallback((ev) => {
+    const gesture = graphGestureRef.current;
+    if (!gesture) return;
+    ev.preventDefault();
+    if (gesture.type === "pinch" && ev.touches.length >= 2) {
+      const [a, b] = ev.touches;
+      const distance = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || gesture.distance;
+      const cx = (a.clientX + b.clientX) / 2;
+      const cy = (a.clientY + b.clientY) / 2;
+      const move = graphClientDeltaToViewBox(gesture.cx - cx, gesture.cy - cy, {
+        scale: gesture.scale,
+        x: gesture.x,
+        y: gesture.y,
+      });
+      setGraphCamera(clampPeopleGraphCamera({
+        scale: gesture.scale * (distance / gesture.distance),
+        x: gesture.x + move.dx,
+        y: gesture.y + move.dy,
+      }, graphViewBox, isMobile));
+    } else if (gesture.type === "pan" && ev.touches.length === 1) {
+      const t = ev.touches[0];
+      const move = graphClientDeltaToViewBox(gesture.clientX - t.clientX, gesture.clientY - t.clientY);
+      setGraphCamera(clampPeopleGraphCamera({
+        scale: graphCameraRef.current.scale,
+        x: gesture.x + move.dx,
+        y: gesture.y + move.dy,
+      }, graphViewBox, isMobile));
+    }
+  }, [graphClientDeltaToViewBox, graphViewBox.x, graphViewBox.y, graphViewBox.w, graphViewBox.h, isMobile]);
+  const handleGraphTouchEnd = useCallback((ev) => {
+    if (ev.touches.length === 0) {
+      graphGestureRef.current = null;
+    } else if (ev.touches.length === 1 && graphCameraRef.current.scale > 1.01) {
+      const t = ev.touches[0];
+      graphGestureRef.current = {
+        type: "pan",
+        x: graphCameraRef.current.x,
+        y: graphCameraRef.current.y,
+        clientX: t.clientX,
+        clientY: t.clientY,
+      };
+    }
+  }, []);
   const branchGroups = (() => {
     const labels = {
       "holly-family": "holly family",
@@ -865,16 +1007,25 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
       width: "100%",
     }}>
       <svg
+        ref={graphSvgRef}
         width="100%"
         height={isMobile ? "calc(100dvh - 118px)" : "auto"}
-        viewBox={`${graphViewBox.x} ${graphViewBox.y} ${graphViewBox.w} ${graphViewBox.h}`}
+        viewBox={`${zoomedGraphViewBox.x} ${zoomedGraphViewBox.y} ${zoomedGraphViewBox.w} ${zoomedGraphViewBox.h}`}
         style={{
           maxHeight: isMobile ? "calc(100dvh - 118px)" : "min(80vh, 800px)",
           maxWidth: isMobile ? "100vw" : "min(80vw, 1000px)",
           minHeight: isMobile ? "min(720px, calc(100dvh - 118px))" : "auto",
           display: "block",
+          touchAction: "none",
+          overscrollBehavior: "contain",
         }}
         preserveAspectRatio="xMidYMid meet"
+        onWheel={handleGraphWheel}
+        onTouchStart={handleGraphTouchStart}
+        onTouchMove={handleGraphTouchMove}
+        onTouchEnd={handleGraphTouchEnd}
+        onTouchCancel={handleGraphTouchEnd}
+        onDoubleClick={() => setGraphCamera({ scale: 1, x: 0, y: 0 })}
         aria-label="Relationship graph"
       >
         <defs>

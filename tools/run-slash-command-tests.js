@@ -116,6 +116,11 @@ function completionValue(cmd, commands) {
     source.includes("raw.startsWith(\"/proxy/\")") &&
     source.includes("visionBaseFromEndpoint(metricsBase, endpoint)"),
     "visionMediaUrlFromEndpoint missing");
+  assert("vision media helper proxies absolute sidecar URLs in browser mode",
+    source.includes("webDefaultBase(\"HG_DEFAULT_VISION_BASE\")") &&
+    source.includes("u.port === \"8091\"") &&
+    source.includes("return `${proxied.replace(/\\/+$/, \"\")}${u.pathname}${u.search}`"),
+    "absolute vision sidecar URLs are not rewritten through the web proxy");
   assert("HA perception captions resolve sidecar snapshot URLs",
     source.includes("const snapshotUrl = d.snapshot_url") &&
     source.includes("visionMediaUrlFromEndpoint(d.snapshot_url, base, endpoint)"),

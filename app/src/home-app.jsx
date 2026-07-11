@@ -4555,7 +4555,28 @@ function visionBaseFromEndpoint(metricsBase, endpoint) {
 function visionMediaUrlFromEndpoint(pathOrUrl, metricsBase, endpoint) {
   const raw = String(pathOrUrl || "").trim();
   if (!raw) return "";
-  if (/^https?:\/\//i.test(raw) || raw.startsWith("/proxy/")) return raw;
+  if (raw.startsWith("/proxy/")) return raw;
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const u = new URL(raw);
+      const proxied = webDefaultBase("HG_DEFAULT_VISION_BASE");
+      const isBrowserProxy = proxied && proxied.startsWith("/");
+      const isVisionSidecar =
+        u.port === "8091" ||
+        /^192\.168\./.test(u.hostname) ||
+        /^100\./.test(u.hostname) ||
+        u.hostname === "localhost" ||
+        u.hostname === "127.0.0.1" ||
+        u.hostname === "engineeredlightingserver1" ||
+        u.hostname.endsWith(".taild52a15.ts.net");
+      if (isBrowserProxy && isVisionSidecar) {
+        return `${proxied.replace(/\/+$/, "")}${u.pathname}${u.search}`;
+      }
+    } catch {
+      return raw;
+    }
+    return raw;
+  }
   const base = visionBaseFromEndpoint(metricsBase, endpoint);
   if (!base) return raw;
   return `${String(base).replace(/\/+$/, "")}/${raw.replace(/^\/+/, "")}`;
@@ -7958,6 +7979,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             ["find_person", "locate a person across cameras + HA presence"],
             ["who_is_in", "list persons currently in a specific room"],
             ["refresh_perception", "force a fresh vision-sidecar caption (1-3s blocking)"],
+            ["grounded_look", "inspect a camera with segmentation / boxes for visual grounding"],
           ] },
           { group: "vision (multi-frame + clips)", tools: [
             ["describe_clip", "watch a short clip (N frames over Xs) and describe motion — F-3"],

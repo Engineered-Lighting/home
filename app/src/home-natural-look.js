@@ -5,7 +5,7 @@
  */
 (function () {
   const DEEP_LOOK_CAMERA_META = [
-    { id: "living_room", name: "living room", indoor: true, priority: 10, aliases: ["living", "couch"] },
+    { id: "living_room", name: "living room", indoor: true, priority: 10, aliases: ["living", "couch", "coffee table"] },
     { id: "kitchen", name: "kitchen", indoor: true, priority: 20, aliases: ["counter", "stove"] },
     { id: "dining_room", name: "dining room", indoor: true, priority: 30, aliases: ["dining"] },
     { id: "workshop", name: "workshop", indoor: true, priority: 40, aliases: ["office", "desk"] },
@@ -56,7 +56,7 @@
       /\b(what(?:'s| is) (?:in|inside|visible))\b/.test(s) ||
       /\b(camera|cameras|visually|see in|seeing in)\b/.test(s);
     const place =
-      /\b(apartment|home|house|room|camera|kitchen|living room|dining room|workshop|office|driveway|outside|inside)\b/.test(s) ||
+      /\b(apartment|home|house|room|camera|kitchen|living room|dining room|workshop|office|driveway|outside|inside|coffee table)\b/.test(s) ||
       !!explicitCamera;
     if (!(directVisual && place) && !broadVisual) return null;
     const scope = /\b(home|house|outside|driveway)\b/.test(s) && !/\b(apartment|inside)\b/.test(s)
@@ -158,6 +158,7 @@
         `Look carefully at the ${place} camera for this user question: "${original}"`,
         "Answer naturally in one or two short sentences.",
         "A detailed inventory is allowed because the user asked for detail.",
+        "Use zoom/crop plus segmentation or bounding boxes when useful.",
         "Mention uncertainty if the frame is unclear.",
       ].join(" ");
     }
@@ -166,6 +167,7 @@
         `${original}`,
         `Use only the ${place} camera.`,
         "Answer in one short sentence.",
+        "Use zoom/crop plus segmentation or bounding boxes when useful.",
         "Focus on what directly answers the question and mention uncertainty if the frame is unclear.",
       ].join(" ");
     }
@@ -176,6 +178,7 @@
       `Look at the ${place} camera for this user question: "${original}"`,
       "Answer in one short, plain sentence for a home-monitoring dashboard.",
       anomalyLine,
+      "Use zoom/crop plus segmentation or bounding boxes when useful.",
       "Only call out people, activity, packages, pets, vehicles, open doors/windows, hazards, lights, leaks, smoke, or unusual changes.",
       "If nothing important is happening, say exactly: No obvious activity.",
       "Do not list ordinary furniture or room contents unless they are the important finding.",
@@ -343,9 +346,9 @@
 
     const ensureFeature = opts.ensureFeature || (async () => true);
     const loaded = await ensureFeature("look", "look", "natural-language");
-    const runner = opts.lookFullFrameRunner
-      || opts.lookRunner
-      || (typeof window !== "undefined" && (window.HomeLookReasonRequest || window.HomeLookReasonZoomRequest));
+    const runner = opts.lookRunner
+      || opts.lookFullFrameRunner
+      || (typeof window !== "undefined" && (window.HomeLookReasonZoomRequest || window.HomeLookReasonRequest));
     if (!loaded || typeof runner !== "function") {
       addEvent({
         kind: "system",

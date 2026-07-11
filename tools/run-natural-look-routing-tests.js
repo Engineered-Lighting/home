@@ -93,6 +93,7 @@ function eventTexts(events) {
     ["what's going on inside", "apartment", null, "quick_scan"],
     ["check my apartment visually", "apartment", null, "quick_scan"],
     ["what's happening in the kitchen", "apartment", "kitchen", "targeted_look"],
+    ["what do you see on my coffee table", "apartment", "living_room", "targeted_look"],
     ["look at the driveway", "home", "driveway", "targeted_look"],
     ["does anything look weird", "apartment", null, "anomaly_scan"],
     ["describe everything in the kitchen", "apartment", "kitchen", "detailed_scan"],
@@ -160,6 +161,7 @@ function eventTexts(events) {
     assert("feature loader is called for look natural-language", JSON.stringify(h.calls.ensureFeature[0]) === JSON.stringify(["look", "look", "natural-language"]), h.calls.ensureFeature);
     assert("look runner called once per selected camera", h.calls.lookRunner.length === 3, h.calls.lookRunner.map((c) => c.camera));
     assert("broad abstract prompt sends focused monitoring instruction", h.calls.lookRunner.every((c) => c.question.includes("home-monitoring dashboard") && c.question.includes("Do not list ordinary furniture")), h.calls.lookRunner.map((c) => c.question));
+    assert("broad abstract prompt asks for zoom or segmentation", h.calls.lookRunner.every((c) => c.question.includes("zoom/crop plus segmentation")), h.calls.lookRunner.map((c) => c.question));
     assert("HA fallback is not called on look success", h.calls.sendToHA.length === 0, h.calls.sendToHA);
     assert("one user event is emitted", h.events.filter((e) => e.kind === "user").length === 1, h.events);
     assert("transcript shows looking deeply", texts.includes("looking deeply · kitchen"), texts);
@@ -169,6 +171,15 @@ function eventTexts(events) {
     const finalAnswer = h.events.find((e) => e.kind === "home")?.text || "";
     assert("final broad answer is focused, not room-label inventory", finalAnswer.includes("I checked ") && finalAnswer.length < 120 && !/living room:|kitchen:|dining room:|coffee table|wooden island/i.test(finalAnswer), finalAnswer);
     assert("abstract prompt is not echoed as slash look", !texts.includes("/look what do you see in my apartment"), texts);
+  }
+
+  process.stdout.write("\ncoffee_table_targeted_scenario\n");
+  {
+    const h = makeHarness();
+    const result = await h.api.runNaturalDeepLook("what do you see on my coffee table", h.options);
+    assert("coffee table question is handled by natural look", result.handled === true && result.fallback === false, result);
+    assert("coffee table routes to living room camera", h.calls.lookRunner.length === 1 && h.calls.lookRunner[0].camera === "living_room", h.calls.lookRunner);
+    assert("targeted coffee table look asks for zoom/segmentation", h.calls.lookRunner[0].question.includes("zoom/crop plus segmentation"), h.calls.lookRunner[0].question);
   }
 
   process.stdout.write("\nfocused_summary_scenarios\n");

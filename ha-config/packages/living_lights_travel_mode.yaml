@@ -7,6 +7,12 @@
 # return-home aliases, outdoor light, and workshop plug lights known to
 # this repo.
 
+input_boolean:
+  living_lights_vision_capture_override:
+    name: Living Lights vision capture override
+    icon: mdi:camera-iris
+    initial: false
+
 automation:
   - alias: "Living Lights - travel mode force off"
     id: living_lights_travel_mode_force_off
@@ -52,6 +58,9 @@ automation:
       - condition: state
         entity_id: input_boolean.living_lights_travel_mode
         state: "on"
+      - condition: state
+        entity_id: input_boolean.living_lights_vision_capture_override
+        state: "off"
     actions:
       - action: light.turn_off
         target:

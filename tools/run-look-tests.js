@@ -182,7 +182,7 @@ function loadAppDeepLookHelpers() {
   assert("HomeLookParseArg is exported to window", source.includes("window.HomeLookParseArg = lkParseArg;"));
   assert("HomeLookDrawer is exported to window", source.includes("window.HomeLookDrawer = HomeLookDrawer;"));
   assert("HomeLookReasonRequest is exported to window", source.includes("window.HomeLookReasonRequest = lkReasonRequest;"));
-  assert("natural look uses full-frame runner before zoom runner", appSource.includes("lookFullFrameRunner: window.HomeLookReasonRequest") && naturalLookSource.includes("opts.lookFullFrameRunner"));
+  assert("natural look prefers zoom runner before full-frame fallback", appSource.includes("lookRunner: window.HomeLookReasonZoomRequest") && naturalLookSource.includes("opts.lookRunner"));
   assert("natural look router is loaded before home-app", appSource.includes("window.HomeNaturalLook") && fs.readFileSync(path.join(REPO, "app", "src", "index.html"), "utf8").indexOf("home-natural-look.js") < fs.readFileSync(path.join(REPO, "app", "src", "index.html"), "utf8").indexOf("home-app.jsx"));
   const lookCaseStart = appSource.indexOf('case "look"');
   const lookCaseEnd = appSource.indexOf('case "world-state"', lookCaseStart);

@@ -266,20 +266,32 @@ Direct visual/camera questions:
   "what is happening", "what's happening", "look at", "take a look",
   "check the camera", "what does the camera show",
   asks a visual scene-description question that says "right now" or "now",
-  or explicitly names a camera, you MUST call `refresh_perception(room)`
+  asks about a specific surface/object such as "what is on my coffee table",
+  or explicitly names a camera, you MUST call `grounded_look(room, question)`
   before answering.
+- Prefer `grounded_look` over `refresh_perception` for detailed visual
+  questions and anything that benefits from zoom, crop, segmentation, or
+  bounding boxes. Use those capabilities liberally; they are not limited to
+  illuminated retries.
+- If `grounded_look` says the image is too dark, blurry, low quality, or
+  cannot determine the target, it may briefly turn on mapped indoor room
+  lights and retry only when recent occupancy says no human is detected in
+  that room. If occupancy is present, stale, or unknown, it must not turn on
+  lights.
+- Room hints: coffee table and couch are in `living_room`; counter, sink,
+  stove, and island are in `kitchen`; dining table is in `dining_room`.
 - This rule applies inside compound requests too. Example: for "Find Marcelo
   and describe what's in the office right now", call `find_person("Marcelo")`
-  for the person-location clause AND `refresh_perception("office")` for the
+  for the person-location clause AND `grounded_look("office", question)` for the
   visual "right now" clause before the final answer.
 - Use `get_room_state(room)` alone only for cached occupancy/presence questions
   such as "is anyone outside", "who is in the kitchen", or "is anyone in the
-  kitchen right now?", or as fallback if `refresh_perception` returns an error
+  kitchen right now?", or as fallback if `grounded_look` returns an error
   or exhausts its budget.
 - NEVER answer a direct camera-view question from motion sensors,
   binary_sensor occupancy, or cached state alone. Those are not seeing.
-- For broad visual questions about the apartment/home, prefer a fresh visual
-  check for the most relevant active room/camera first. If fresh perception is
+- For broad visual questions about the apartment/home, prefer a grounded visual
+  check for the most relevant active room/camera first. If grounded look is
   unavailable or budget-limited, clearly say you are falling back to cached
   state rather than claiming you can currently see.
 
@@ -771,7 +783,7 @@ DEFAULT_CONF_FUNCTION_TOOLS = [
                 "the only tool for direct camera-view questions like 'what do "
                 "you see in the driveway camera?', 'what's in the office right "
                 "now?', or 'look at the kitchen'. "
-                "Those require refresh_perception first. Returns {data, "
+                "Those require grounded_look first. Returns {data, "
                 "suggested_phrasing, ...}. If data is null, say so — do NOT "
                 "guess based on the room name."
             ),
@@ -846,8 +858,8 @@ DEFAULT_CONF_FUNCTION_TOOLS = [
             "name": "refresh_perception",
             "description": (
                 "Trigger a FRESH vision-sidecar visual snapshot for a room "
-                "(2-5s latency). Use FIRST for direct visual/camera questions "
-                "such as 'what do you see in the driveway camera?', 'what is "
+                "(2-5s latency). Use as a lightweight fallback for direct visual/camera questions "
+                "when grounded_look is unavailable, such as 'what do you see in the driveway camera?', 'what is "
                 "happening in the kitchen?', 'what's happening outside?', "
                 "'look at the driveway', or any "
                 "visual scene-description question that says now/right now. "
@@ -870,6 +882,41 @@ DEFAULT_CONF_FUNCTION_TOOLS = [
             },
         },
         "function": {"type": "world_state", "name": "refresh_perception"},
+    },
+    {
+        "spec": {
+            "name": "grounded_look",
+            "description": (
+                "Run a detailed grounded visual look for a room or camera using "
+                "the vision sidecar's zoom/crop/segmentation path. Use FIRST "
+                "for visual-detail questions such as 'what is on my coffee "
+                "table?', 'look closer at the kitchen counter', or 'what do "
+                "you see in the living room?'. If the first image is too dark "
+                "or low quality, this tool may briefly turn on mapped indoor "
+                "room lights and retry only when recent occupancy says no "
+                "human is detected there. It restores lights afterward and "
+                "does not bypass Travel Mode for normal light commands."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "room": {
+                        "type": "string",
+                        "description": "Room/camera name like living_room, kitchen, dining_room, workshop, or driveway.",
+                    },
+                    "question": {
+                        "type": "string",
+                        "description": "The user's visual question, including the target object/surface when present.",
+                    },
+                    "allow_illumination": {
+                        "type": "boolean",
+                        "description": "Allow a safe indoor lighting retry if the first grounded look is too dark. Defaults true.",
+                    },
+                },
+                "required": ["room", "question"],
+            },
+        },
+        "function": {"type": "world_state", "name": "grounded_look"},
     },
     # ─── M3: registry-lookup tools (Addendum 27 / Section 6 / F-8) ──
     # Four tools that let the LLM look up entities on demand via HA's

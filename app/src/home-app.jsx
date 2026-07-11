@@ -6362,6 +6362,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             const friendly = tc.name === "look" ? "looking"
               : tc.name === "describe_camera" ? "looking quickly"
               : tc.name === "refresh_perception" ? "looking freshly"
+              : tc.name === "grounded_look" ? "looking closely"
               : tc.name === "look_zoom" ? "looking closer"
               : tc.name;
             const camHint = (tc.args && (tc.args.camera || tc.args.room))
@@ -6458,7 +6459,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // (home-events.jsx:423) parses the room out and labels the card.
         const visionTools = turnToolCalls.filter((t) =>
           t.name === "look" || t.name === "look_zoom" ||
-          t.name === "describe_camera" || t.name === "refresh_perception");
+          t.name === "describe_camera" || t.name === "refresh_perception" ||
+          t.name === "grounded_look");
         if (visionTools.length) {
           try {
             const base = metricsBase || metricsBaseFromEndpoint(endpoint);

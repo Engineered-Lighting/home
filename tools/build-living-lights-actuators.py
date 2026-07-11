@@ -1181,6 +1181,12 @@ def _emit_detection_automation(light_entity, owning_zones, camera) -> str:
       - condition: state
         entity_id: input_boolean.living_lights_enabled
         state: "on"
+      # Vision capture may temporarily raise lights for a camera snapshot and
+      # then restore them. Those writes are system-owned, not manual touches.
+      - condition: state
+        entity_id: input_boolean.living_lights_vision_capture_override
+        state: "off"
+        for: "00:00:05"
     actions:
       - variables:
           actual_pct: >-
@@ -1323,6 +1329,12 @@ def _emit_fast_manual_arm_automation(light_entity, owning_zones, camera) -> str:
       - condition: state
         entity_id: input_boolean.living_lights_enabled
         state: "on"
+      # Vision capture may temporarily raise lights for a camera snapshot and
+      # then restore them. Those writes are system-owned, not manual touches.
+      - condition: state
+        entity_id: input_boolean.living_lights_vision_capture_override
+        state: "off"
+        for: "00:00:05"
     actions:
       - variables:
           ctx_id: "hold-{{{{ now().timestamp() | int }}}}-{{{{ now().microsecond }}}}"

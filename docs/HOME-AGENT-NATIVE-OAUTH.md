@@ -1,10 +1,32 @@
 # Home Agent native OAuth boundary
 
 The Windows Home Agent surface authenticates directly with Home Assistant's
-authorization-code flow with PKCE. OAuth tokens never enter webview JavaScript,
-localStorage, command return values, logs, or BFF browser cookies. See the
+authorization-code flow through a pre-bound loopback callback. OAuth tokens
+never enter webview JavaScript, localStorage, command return values, logs, or
+BFF browser cookies. See the
 [Home Assistant Authentication API](https://developers.home-assistant.io/docs/auth_api/)
 for the upstream flow and native redirect metadata contract.
+
+## Upstream limitation and acceptance boundary
+
+Home Assistant Core 2026.7.1 does **not** enforce PKCE: its token view ignores
+`code_challenge`/`code_verifier`, and the official Authentication API does not
+specify them. This client intentionally omits those parameters rather than
+presenting an ignored verifier as a security control. HA also provides no
+client secret, so this installed application is not an OAuth confidential
+client. Until HA adds and documents verifier enforcement, an authorization
+code is a short-lived bearer credential until its first successful exchange.
+
+The supported native boundary is consequently narrower: the HTTPS system
+browser and local OS are trusted for the login ceremony; the redirect is an
+exact registered loopback URI; Rust binds the fixed loopback listener before
+opening the browser; a fresh 256-bit state is accepted once; callback Host,
+path, query shape, state, and size are checked; and the code is exchanged
+immediately without crossing the webview. A hostile browser extension or
+local process able to read the callback URL remains outside this threat model.
+Do not enable native login on an untrusted Windows account or browser profile.
+Re-review this boundary before every HA major upgrade and migrate to enforced
+PKCE when HA supplies it.
 
 ## Required Windows configuration
 
@@ -39,10 +61,12 @@ contains exactly:
 
 Before opening a browser, the native client independently fetches the first
 10 KiB of that page and requires the exact link. It then binds the loopback
-listener, creates random state and a PKCE verifier, and opens HA in the system
-browser. Callback state comparison is length-sensitive and constant-time; the
-listener accepts a bounded HTTP/1.1 request on loopback only and expires after
-five minutes.
+listener, creates random one-time state, and opens HA in the system browser.
+Callback state comparison is length-sensitive and constant-time; the listener
+accepts only the exact Host, path, and single `state`/`code` query pair in a
+bounded HTTP/1.1 request on loopback, closes after the first valid callback,
+and expires after five minutes. The response forbids referrer propagation,
+framing, subresources, and caching.
 
 ## Credential lifecycle
 
@@ -114,5 +138,7 @@ cargo test --manifest-path app/src-tauri/Cargo.toml
 The final command requires a Windows Rust toolchain and compatible native
 linker/build tools. Before live acceptance, also verify external-browser login,
 restart refresh, invalid-refresh cleanup, HA-offline logout persistence/retry,
-main-window command denial, and the exact public metadata document against the
-registered private HTTPS origin.
+main-window command denial, the exact public metadata document against the
+registered private HTTPS origin, and that the deployed HA version still has
+the limitation documented above. Native activation remains a canary gate, not
+a prerequisite for record-only ingest or the browser BFF.

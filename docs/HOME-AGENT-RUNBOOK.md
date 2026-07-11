@@ -19,12 +19,15 @@ adding broad proxy routes or mounting legacy databases.
 - HA Edge with reviewed subscriptions, privacy filtering, encrypted delivery
   spool, epoch/sequence delivery, mTLS, application bearer, Core-synchronized
   entity/user privacy blocks, and explicit gaps.
-- HA OAuth/PKCE BFF with opaque strict cookies, CSRF/Origin checks, browser-bound
-  OAuth state, HA revocation revalidation, restart-safe AES-GCM-sealed sessions,
-  authority-side logout/expiry revocation, and a narrow semantic route set.
+- HA authorization-code BFF with opaque strict cookies, CSRF/Origin checks,
+  browser-bound one-time state, HA revocation revalidation, restart-safe
+  AES-GCM-sealed sessions, authority-side logout/expiry revocation, and a narrow
+  semantic route set. HA 2026.7.1 does not enforce PKCE; the boundary does not
+  claim protection from ignored verifier parameters.
 - A separate `/home-agent/` surface for consent, typed preview, explicit commit,
-  and status, plus a Windows-native OAuth/PKCE transport isolated in its own
-  Tauri window. Private travel initiatives use native-only exact routes: list
+  and status, plus a Windows-native authorization-code transport with a
+  pre-bound, one-time-state loopback callback isolated in its own Tauri window.
+  Private travel initiatives use native-only exact routes: list
   responses are opaque, while the atomic claim alone releases deterministic
   greeting text after fresh evidence and consent revalidation.
 - Legacy containment: browser secrets/history are purged, model action tools
@@ -225,6 +228,16 @@ header. A missing or malformed `HOME_WEB_AGENT_ORIGINS` disables browser Agent
 routes rather than falling back to the legacy origin, and makes
 `node web-gateway/server.mjs --check` exit non-zero.
 
+HA Core 2026.7.1 neither documents nor enforces PKCE for this flow. The BFF is
+a confidential server-side *token-handling boundary*, not an OAuth confidential
+client: HA supplies no client secret. The authorization code is protected by
+continuous TLS to the exact dedicated callback, random one-time state bound to
+an HttpOnly `__Host-` initiation cookie, immediate server-side exchange, and a
+no-referrer redirect into an opaque HttpOnly session. Ensure every proxy and
+observability layer redacts or excludes the callback query string; preserving a
+request-target access log fails the authentication gate. Reassess and adopt
+enforced PKCE when HA implements it.
+
 The Agent host serves only `/home-agent/*`, `/api/agent/*`, and the fixed
 `/native-oauth-client` metadata page. It has no gateway Basic-login, legacy UI,
 legacy proxy, health, or websocket surface. The static Agent bundle has no
@@ -242,7 +255,7 @@ logout revokes its HA refresh token before the BFF deletes the local sealed
 envelope. If HA is temporarily unavailable, the cookie is cleared and the
 session remains fail-closed as a sealed retry row. Idle and absolute expiry use
 the same bounded revocation janitor. A BFF restart reloads valid and pending
-sessions while deliberately invalidating in-flight OAuth/PKCE state.
+sessions while deliberately invalidating in-flight authorization state.
 
 Startup rejects insecure/malformed browser origins, an OAuth callback outside
 the exact allowed origin/path, credentialed/query-bearing HA or Core URLs, and
@@ -261,6 +274,14 @@ the browser BFF. Configure the non-secret native endpoints in the Windows
 process environment exactly as documented in
 `docs/HOME-AGENT-NATIVE-OAUTH.md`. The `HOME_NATIVE_AGENT_BFF_URL` value is the
 private HTTPS web-gateway origin, never the deployment's loopback HTTP BFF.
+
+The native flow is not PKCE-protected because HA ignores verifier parameters.
+Its supported boundary pre-binds the exact loopback listener before opening the
+trusted system browser, requires one random state exactly once, validates the
+callback Host/path/query, and exchanges the bearer code immediately in Rust.
+The code and tokens never enter the webview. Treat a hostile browser extension
+or local process that can read callback URLs as outside this canary's threat
+model; leave native login disabled on an untrusted Windows profile.
 
 The dedicated Agent host publishes `/native-oauth-client` without Basic auth;
 that sub-10 KiB document contains the exact HA client-metadata redirect link
@@ -497,7 +518,10 @@ Never initialize a replacement ledger during recovery or bypass this gate.
   and compile-tested, but live acceptance still requires a signed Windows
   release build, exact HA client registration/metadata verification, a real
   Credential Manager login-refresh-restart-logout test, and the operator's
-  private HTTPS gateway configuration. Typed initiative list/claim and semantic
+  private HTTPS gateway configuration, plus explicit verification that the
+  deployed HA authorization-code behavior still matches the documented
+  no-PKCE limitation and the native-machine threat model is acceptable. Typed
+  initiative list/claim and semantic
   relationship/presence query routes are implemented only on the native
   allowlist and are still disabled outside canary rollout.
 - Live credential rotation, firewall application, LUKS/key provisioning, HA

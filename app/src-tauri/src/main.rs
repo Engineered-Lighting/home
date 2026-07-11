@@ -505,10 +505,11 @@ mod tests {
     }
 
     #[test]
-    fn native_oauth_uses_external_browser_pkce_metadata_and_windows_credentials() {
-        assert!(NATIVE_AUTH_RS.contains("code_challenge_method"));
-        assert!(NATIVE_AUTH_RS.contains("S256"));
+    fn native_oauth_uses_external_browser_bound_loopback_and_windows_credentials() {
+        assert!(!NATIVE_AUTH_RS.contains("code_challenge"));
+        assert!(!NATIVE_AUTH_RS.contains("code_verifier"));
         assert!(NATIVE_AUTH_RS.contains("metadata_allows_redirect"));
+        assert!(NATIVE_AUTH_RS.contains("constant_time_equal"));
         assert!(NATIVE_AUTH_RS.contains("127.0.0.1"));
         assert!(WINDOWS_CREDENTIALS_RS.contains("ShellExecuteW"));
     }

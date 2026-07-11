@@ -598,7 +598,7 @@ test("unconfigured server exposes health but denies private routes", async () =>
   assert.equal((await denied.json()).error, "bff_unconfigured");
 });
 
-test("OAuth start is origin-checked and binds state to an HttpOnly browser nonce", async () => {
+test("OAuth start is origin-checked and binds state to an HttpOnly browser nonce without fake PKCE", async () => {
   const config = configured();
   const base = await listen(createBff(config));
   const denied = await fetch(`${base}/api/agent/auth/start`, { method: "POST" });
@@ -614,7 +614,8 @@ test("OAuth start is origin-checked and binds state to an HttpOnly browser nonce
   assert.equal(authorize.pathname, "/auth/authorize");
   assert.equal(authorize.searchParams.get("redirect_uri"), config.redirectUri);
   assert.ok(authorize.searchParams.get("state"));
-  assert.ok(authorize.searchParams.get("code_challenge"));
+  assert.equal(authorize.searchParams.has("code_challenge"), false);
+  assert.equal(authorize.searchParams.has("code_challenge_method"), false);
   assert.match(started.headers.get("set-cookie") || "", new RegExp(`${OAUTH_COOKIE_NAME}=`));
   assert.match(started.headers.get("set-cookie") || "", /HttpOnly/);
   assert.match(started.headers.get("set-cookie") || "", /SameSite=Lax/);
@@ -622,9 +623,16 @@ test("OAuth start is origin-checked and binds state to an HttpOnly browser nonce
 
 test("OAuth callback requires the initiating browser nonce and creates a bound session", async () => {
   const config = configured();
+  let exchangeCalls = 0;
   const fetchImpl = async (url, init) => {
     assert.equal(init.redirect, "error");
     if (String(url).endsWith("/auth/token")) {
+      exchangeCalls += 1;
+      assert.equal(init.body.get("grant_type"), "authorization_code");
+      assert.equal(init.body.get("client_id"), config.clientId);
+      assert.equal(init.body.get("redirect_uri"), config.redirectUri);
+      assert.equal(init.body.get("code"), "code");
+      assert.equal(init.body.has("code_verifier"), false);
       return new Response(JSON.stringify({
         access_token: "ha-access", refresh_token: "ha-refresh", expires_in: 1800,
       }), { status: 200, headers: { "content-type": "application/json" } });
@@ -664,6 +672,47 @@ test("OAuth callback requires the initiating browser nonce and creates a bound s
   const cookies = callback.headers.get("set-cookie") || "";
   assert.match(cookies, new RegExp(`${COOKIE_NAME}=`));
   assert.match(cookies, new RegExp(`${OAUTH_COOKIE_NAME}=;`));
+  assert.equal(callback.headers.get("referrer-policy"), "no-referrer");
+  assert.equal(exchangeCalls, 1);
+
+  const replay = await fetch(
+    `${base}/api/agent/auth/callback?state=${encodeURIComponent(restartState)}&code=code`,
+    { headers: { cookie: nonceCookie }, redirect: "manual" },
+  );
+  assert.equal(replay.status, 400);
+  assert.equal((await replay.json()).error, "oauth_state_invalid");
+  assert.equal(exchangeCalls, 1, "a consumed callback must never exchange twice");
+});
+
+test("OAuth callback rejects duplicate or extra parameters before token exchange", async () => {
+  const config = configured();
+  let upstreamCalls = 0;
+  const base = await listen(createBff(config, {
+    fetchImpl: async () => {
+      upstreamCalls += 1;
+      throw new Error("malformed callback must not reach HA");
+    },
+  }));
+  const started = await fetch(`${base}/api/agent/auth/start`, {
+    method: "POST", headers: { origin: "https://home.test" },
+  });
+  const startBody = await started.json();
+  const state = new URL(startBody.authorize_url).searchParams.get("state");
+  const nonceCookie = (started.headers.get("set-cookie") || "").split(";")[0];
+
+  for (const query of [
+    `state=${encodeURIComponent(state)}&code=one&code=two`,
+    `state=${encodeURIComponent(state)}&code=one&iss=https%3A%2F%2Fha.test`,
+    `state=${encodeURIComponent(state)}&code=one%20two`,
+    `state=${encodeURIComponent(state)}&code=`,
+  ]) {
+    const response = await fetch(`${base}/api/agent/auth/callback?${query}`, {
+      headers: { cookie: nonceCookie }, redirect: "manual",
+    });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error, "oauth_callback_invalid");
+  }
+  assert.equal(upstreamCalls, 0);
 });
 
 test("logout revokes the HA refresh token before deleting the sealed session", async () => {

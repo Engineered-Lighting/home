@@ -466,8 +466,6 @@ impl NativeAuthState {
                 .set_nonblocking(true)
                 .map_err(|_| "native_oauth_callback_unavailable".to_string())?;
             let state = Zeroizing::new(random_url_token(32));
-            let verifier = Zeroizing::new(random_url_token(48));
-            let challenge = pkce_challenge(&verifier);
             let mut authorize = config
                 .ha_url
                 .join("/auth/authorize")
@@ -477,13 +475,11 @@ impl NativeAuthState {
                 .append_pair("client_id", config.client_id.as_str())
                 .append_pair("redirect_uri", config.redirect_uri.as_str())
                 .append_pair("response_type", "code")
-                .append_pair("state", &state)
-                .append_pair("code_challenge", &challenge)
-                .append_pair("code_challenge_method", "S256");
+                .append_pair("state", &state);
             windows_credentials::open_external(authorize.as_str())?;
-            Ok((listener, state, verifier))
+            Ok((listener, state))
         })();
-        let (listener, state, verifier) = match setup {
+        let (listener, state) = match setup {
             Ok(value) => value,
             Err(error) => {
                 self.login_in_progress.store(false, Ordering::SeqCst);
@@ -492,7 +488,7 @@ impl NativeAuthState {
         };
         let owner = Arc::clone(self);
         std::thread::spawn(move || {
-            let result = owner.complete_login(listener, &state, &verifier);
+            let result = owner.complete_login(listener, &state);
             owner.login_in_progress.store(false, Ordering::SeqCst);
             let _ = app.emit(
                 "native-auth-changed",
@@ -526,22 +522,22 @@ impl NativeAuthState {
         Ok(())
     }
 
-    fn complete_login(
-        &self,
-        listener: TcpListener,
-        state: &str,
-        verifier: &str,
-    ) -> Result<(), String> {
+    fn complete_login(&self, listener: TcpListener, state: &str) -> Result<(), String> {
         let code = receive_oauth_callback(listener, state, self.ready()?.0)?;
-        self.exchange_authorization_code(&code, verifier)
+        self.exchange_authorization_code(&code)
     }
 
-    fn exchange_authorization_code(&self, code: &str, verifier: &str) -> Result<(), String> {
+    fn exchange_authorization_code(&self, code: &str) -> Result<(), String> {
         let (config, client) = self.ready()?;
         let token_url = config
             .ha_url
             .join("/auth/token")
             .map_err(|_| "native_token_exchange_failed".to_string())?;
+        // HA Core's documented token endpoint currently neither authenticates
+        // native clients nor enforces PKCE. The pre-bound loopback listener,
+        // exact registered redirect, and one-time random state are the actual
+        // callback controls; sending an ignored verifier would create false
+        // assurance rather than an interception defense.
         let response = client
             .post(token_url)
             .form(&[
@@ -549,7 +545,6 @@ impl NativeAuthState {
                 ("code", code),
                 ("client_id", config.client_id.as_str()),
                 ("redirect_uri", config.redirect_uri.as_str()),
-                ("code_verifier", verifier),
             ])
             .send()
             .map_err(|_| "native_token_exchange_failed".to_string())?;
@@ -807,10 +802,6 @@ fn random_url_token(bytes: usize) -> String {
     encoded
 }
 
-fn pkce_challenge(verifier: &str) -> String {
-    URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
-}
-
 fn constant_time_equal(left: &str, right: &str) -> bool {
     if left.len() != right.len() {
         return false;
@@ -886,8 +877,22 @@ fn callback_from_stream(
     block.zeroize();
     let text =
         std::str::from_utf8(&request).map_err(|_| "native_oauth_callback_invalid".to_string())?;
-    let line = text
-        .lines()
+    let code = callback_from_request(text, expected_state, config)?;
+    write_callback_response(
+        stream,
+        200,
+        "Authentication received. You may return to Home.",
+    )?;
+    Ok(code)
+}
+
+fn callback_from_request(
+    text: &str,
+    expected_state: &str,
+    config: &NativeConfig,
+) -> Result<Zeroizing<String>, String> {
+    let mut lines = text.split("\r\n");
+    let line = lines
         .next()
         .ok_or_else(|| "native_oauth_callback_invalid".to_string())?;
     let mut parts = line.split_whitespace();
@@ -897,7 +902,39 @@ fn callback_from_stream(
     let target = parts
         .next()
         .ok_or_else(|| "native_oauth_callback_invalid".to_string())?;
-    if parts.next() != Some("HTTP/1.1") || parts.next().is_some() {
+    if !target.starts_with('/')
+        || target.starts_with("//")
+        || parts.next() != Some("HTTP/1.1")
+        || parts.next().is_some()
+    {
+        return Err("native_oauth_callback_invalid".to_string());
+    }
+    let mut host = None;
+    for header in lines {
+        if header.is_empty() {
+            break;
+        }
+        let (name, value) = header
+            .split_once(':')
+            .ok_or_else(|| "native_oauth_callback_invalid".to_string())?;
+        if name.eq_ignore_ascii_case("host") {
+            if host.replace(value.trim()).is_some() {
+                return Err("native_oauth_callback_invalid".to_string());
+            }
+        }
+    }
+    let expected_host = format!(
+        "{}:{}",
+        config
+            .redirect_uri
+            .host_str()
+            .ok_or_else(|| "native_oauth_callback_invalid".to_string())?,
+        config
+            .redirect_uri
+            .port()
+            .ok_or_else(|| "native_oauth_callback_invalid".to_string())?,
+    );
+    if host != Some(expected_host.as_str()) {
         return Err("native_oauth_callback_invalid".to_string());
     }
     let parsed = Url::parse(&format!("http://127.0.0.1{target}"))
@@ -912,7 +949,7 @@ fn callback_from_stream(
             "state" if state.is_none() => state = Some(value.into_owned()),
             "code" if code.is_none() => code = Some(value.into_owned()),
             "state" | "code" => return Err("native_oauth_callback_invalid".to_string()),
-            _ => {}
+            _ => return Err("native_oauth_callback_invalid".to_string()),
         }
     }
     let mut state =
@@ -922,14 +959,12 @@ fn callback_from_stream(
     }
     state.zeroize();
     let code = Zeroizing::new(code.ok_or_else(|| "native_oauth_callback_invalid".to_string())?);
-    if code.is_empty() || code.len() > 4096 {
+    if code.is_empty()
+        || code.len() > 4096
+        || !code.bytes().all(|value| (0x21..=0x7e).contains(&value))
+    {
         return Err("native_oauth_callback_invalid".to_string());
     }
-    write_callback_response(
-        stream,
-        200,
-        "Authentication received. You may return to Home.",
-    )?;
     Ok(code)
 }
 
@@ -941,7 +976,7 @@ fn write_callback_response(
     let reason = if status == 200 { "OK" } else { "Bad Request" };
     let body = format!("<!doctype html><meta charset=utf-8><title>Home</title><p>{message}</p>");
     let response = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Security-Policy: default-src 'none'; style-src 'unsafe-inline'\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Security-Policy: default-src 'none'; style-src 'unsafe-inline'\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
         body.len(),
     );
     stream
@@ -1097,14 +1132,39 @@ mod tests {
     }
 
     #[test]
-    fn pkce_is_s256_and_state_comparison_is_length_sensitive() {
-        assert_eq!(
-            pkce_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
-            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
-        );
+    fn state_comparison_is_length_sensitive() {
         assert!(constant_time_equal("same-state", "same-state"));
         assert!(!constant_time_equal("same-state", "other-state"));
         assert!(!constant_time_equal("short", "shorter"));
+    }
+
+    #[test]
+    fn loopback_callback_requires_exact_host_state_and_query_shape() {
+        let config = NativeConfig::from_values(
+            "https://ha.test",
+            "https://agent.test",
+            "https://client.test",
+            "http://127.0.0.1:43821/oauth/callback",
+        )
+        .unwrap();
+        let valid = "GET /oauth/callback?state=expected-state&code=one-time-code HTTP/1.1\r\nHost: 127.0.0.1:43821\r\nConnection: close\r\n\r\n";
+        assert_eq!(
+            callback_from_request(valid, "expected-state", &config)
+                .unwrap()
+                .as_str(),
+            "one-time-code",
+        );
+
+        for invalid in [
+            "GET /oauth/callback?state=wrong&code=one-time-code HTTP/1.1\r\nHost: 127.0.0.1:43821\r\n\r\n",
+            "GET /oauth/callback?state=expected-state&code=one&code=two HTTP/1.1\r\nHost: 127.0.0.1:43821\r\n\r\n",
+            "GET /oauth/callback?state=expected-state&code=one&iss=https%3A%2F%2Fha.test HTTP/1.1\r\nHost: 127.0.0.1:43821\r\n\r\n",
+            "GET /oauth/callback?state=expected-state&code=one%20two HTTP/1.1\r\nHost: 127.0.0.1:43821\r\n\r\n",
+            "GET /oauth/callback?state=expected-state&code=one HTTP/1.1\r\nHost: localhost:43821\r\n\r\n",
+            "GET /oauth/callback?state=expected-state&code=one HTTP/1.1\r\nHost: 127.0.0.1:43821\r\nHost: 127.0.0.1:43821\r\n\r\n",
+        ] {
+            assert!(callback_from_request(invalid, "expected-state", &config).is_err());
+        }
     }
 
     #[test]

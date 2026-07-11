@@ -86,7 +86,13 @@ async function behaviorTest() {
   assert("broad Tauri HTTP and default core capabilities are removed", !/^\s*tauri-plugin-http\s*=/m.test(cargo) && !/\.plugin\(tauri_plugin_http/m.test(main) && !mainCapability.includes("http:") && !mainCapability.includes("core:default"));
   assert("refresh tokens use Windows Credential Manager", ["CredWriteW", "CredReadW", "CredDeleteW", "CRED_PERSIST_LOCAL_MACHINE"].every((value) => credentials.includes(value)));
   assert("access tokens are kept in zeroizing Rust memory", nativeAuth.includes("Option<Zeroizing<String>>") && nativeAuth.includes("bytes.zeroize()"));
-  assert("OAuth is PKCE S256 with exact client metadata validation", nativeAuth.includes('append_pair("code_challenge_method", "S256")') && nativeAuth.includes("metadata_allows_redirect") && nativeAuth.includes("MAX_METADATA_BYTES"));
+  assert("OAuth uses exact metadata and one-time loopback binding without ignored PKCE parameters",
+    !nativeAuth.includes('append_pair("code_challenge"') &&
+    !nativeAuth.includes('("code_verifier",') &&
+    nativeAuth.includes("metadata_allows_redirect") &&
+    nativeAuth.includes("MAX_METADATA_BYTES") &&
+    nativeAuth.includes("callback_from_request") &&
+    nativeAuth.includes("constant_time_equal"));
   assert("OAuth callback is locked to loopback port 43821", nativeAuth.includes("const LOCKED_CALLBACK_PORT: u16 = 43_821") && nativeAuth.includes('value.host_str() != Some("127.0.0.1")'));
   const logoutImplementation = nativeAuth.slice(nativeAuth.indexOf("pub fn logout"), nativeAuth.indexOf("fn revoke_pending_locked"));
   assert("logout enters durable revocation-pending state before active deletion", logoutImplementation.indexOf("write(&config.pending_credential_target") < logoutImplementation.indexOf("delete(&config.credential_target") && nativeAuth.includes("start_pending_revocation_retry"));

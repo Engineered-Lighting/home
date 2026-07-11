@@ -66,10 +66,6 @@ function timingSafeEqual(a, b) {
   return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
-function sha256Base64Url(value) {
-  return crypto.createHash("sha256").update(value).digest("base64url");
-}
-
 function parseCookies(header) {
   const out = {};
   for (const pair of String(header || "").split(";")) {
@@ -99,7 +95,15 @@ function json(res, status, payload, headers = {}) {
 }
 
 function redirect(res, location, headers = {}) {
-  res.writeHead(302, { Location: location, "Cache-Control": "no-store", ...headers });
+  res.writeHead(302, {
+    Location: location,
+    "Cache-Control": "no-store",
+    // The HA authorization code arrives in the callback query. Never allow a
+    // subsequent same-origin navigation to inherit that URL as its Referer.
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    ...headers,
+  });
   res.end();
 }
 
@@ -603,10 +607,9 @@ class SessionStore {
 
   createPreauth() {
     const state = randomToken();
-    const verifier = randomToken(48);
     const browserNonce = randomToken();
-    this.preauth.set(state, { verifier, browserNonce, createdAt: this.now() });
-    return { state, verifier, browserNonce, challenge: sha256Base64Url(verifier) };
+    this.preauth.set(state, { browserNonce, createdAt: this.now() });
+    return { state, browserNonce };
   }
 
   consumePreauth(state, browserNonce) {
@@ -931,13 +934,34 @@ function requireCsrf(req, session, res) {
   return false;
 }
 
-async function exchangeCode(config, code, verifier, fetchImpl) {
+function oauthCallbackParameters(url) {
+  const stateValues = url.searchParams.getAll("state");
+  const codeValues = url.searchParams.getAll("code");
+  if (
+    [...url.searchParams.keys()].length !== 2 ||
+    stateValues.length !== 1 || codeValues.length !== 1
+  ) return null;
+  const [state] = stateValues;
+  const [code] = codeValues;
+  if (
+    !/^[A-Za-z0-9_-]{43}$/.test(state) ||
+    !code || code.length > 4_096 || /[^\x21-\x7e]/.test(code)
+  ) return null;
+  return { state, code };
+}
+
+async function exchangeCode(config, code, fetchImpl) {
+  // HA Core's documented authorization-code endpoint does not authenticate
+  // this client or enforce PKCE. The BFF therefore relies on its actual
+  // controls: an exact same-origin HTTPS callback, one-time state bound to an
+  // HttpOnly initiation cookie, prompt server-side exchange, and no token in
+  // browser JavaScript. Do not send ignored verifier parameters and describe
+  // them as protection.
   const body = new URLSearchParams({
     grant_type: "authorization_code",
     code,
     client_id: config.clientId,
     redirect_uri: config.redirectUri,
-    code_verifier: verifier,
   });
   const response = await fetchImpl(`${config.haUrl}/auth/token`, {
     method: "POST",
@@ -1191,8 +1215,6 @@ function createBff(config, { fetchImpl = fetch, store } = {}) {
         redirect_uri: config.redirectUri,
         response_type: "code",
         state: pending.state,
-        code_challenge: pending.challenge,
-        code_challenge_method: "S256",
       }).toString();
       return json(
         res,
@@ -1203,17 +1225,23 @@ function createBff(config, { fetchImpl = fetch, store } = {}) {
     }
 
     if (url.pathname === "/api/agent/auth/callback" && req.method === "GET") {
+      const callback = oauthCallbackParameters(url);
+      if (!callback) return json(
+        res,
+        400,
+        { error: "oauth_callback_invalid" },
+        { "Set-Cookie": clearOauthCookie(config.secureCookie) },
+      );
       const browserNonce = parseCookies(req.headers.cookie)[OAUTH_COOKIE_NAME];
-      const pending = sessions.consumePreauth(url.searchParams.get("state"), browserNonce);
-      const code = url.searchParams.get("code");
-      if (!pending || !code) return json(
+      const pending = sessions.consumePreauth(callback.state, browserNonce);
+      if (!pending) return json(
         res,
         400,
         { error: "oauth_state_invalid" },
         { "Set-Cookie": clearOauthCookie(config.secureCookie) },
       );
       try {
-        const tokens = await exchangeCode(config, code, pending.verifier, fetchImpl);
+        const tokens = await exchangeCode(config, callback.code, fetchImpl);
         try {
           const principal = await fetchWhoami(config, tokens.accessToken, fetchImpl);
           const session = sessions.createSession({

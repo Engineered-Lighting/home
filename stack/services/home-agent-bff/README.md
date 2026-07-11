@@ -1,9 +1,9 @@
 # Home Agent BFF
 
-Fail-closed browser edge for the Home Agent. It owns Home Assistant OAuth
-sessions and exposes only the typed Agent API allowlist. It deliberately does
-not proxy Frigate, model, stack-supervisor, Intelligence, or arbitrary HA
-paths.
+Fail-closed browser edge for the Home Agent. It owns the server side of Home
+Assistant authorization-code sessions and exposes only the typed Agent API
+allowlist. It deliberately does not proxy Frigate, model, stack-supervisor,
+Intelligence, or arbitrary HA paths.
 
 The service is not ready until all of these are supplied:
 
@@ -25,6 +25,25 @@ fixed roots with credentials, paths, queries, and fragments rejected. HA is
 HTTPS except for explicit loopback/test use. The test-only HTTP escape requires
 both `NODE_ENV=test` and `HOME_AGENT_ALLOW_INSECURE_TEST_URLS=1`.
 
+Home Assistant Core 2026.7.1 does not enforce PKCE on this endpoint: its token
+view does not bind the authorization code to a `code_challenge`, and the
+official Authentication API does not specify a verifier. The BFF therefore
+does not send or claim protection from ignored PKCE parameters. It is a
+confidential *token-handling boundary*, not an OAuth confidential client: HA
+issues no client secret. Its effective controls are the dedicated same-origin
+HTTPS callback, 256-bit one-time state bound to a separate `__Host-` HttpOnly
+initiation cookie, exact callback parameter parsing, immediate server-side code
+exchange, and an opaque `__Host-` HttpOnly application session. Access and
+refresh tokens never enter browser JavaScript.
+
+Because the code is a bearer until first redemption, TLS must be continuous
+from the browser to both HA and the dedicated Agent origin. Reverse proxies
+must not log the callback query string, observability must redact it, and the
+callback response's `Referrer-Policy: no-referrer` must be preserved. A proxy
+that terminates TLS onto an untrusted network, logs request targets, rewrites
+the callback, or shares the Agent origin with legacy content fails this gate.
+Reassess this design when HA implements and documents an enforced PKCE flow.
+
 Production Compose uses the file form so the service credential is mounted as
 a read-only secret instead of appearing in the container environment.
 
@@ -36,9 +55,8 @@ local Node SQLite session database. Tokens are opened only around HA
 refresh/`whoami`/revocation calls and a rotated token bundle is immediately
 resealed. The database contains only sealed token envelopes and bounded
 session metadata, so valid sessions and revocation-pending records survive a
-BFF restart. OAuth PKCE preauthorization state remains intentionally ephemeral:
-a restart invalidates every in-flight callback instead of accepting stale
-state.
+BFF restart. Authorization preflight state remains intentionally ephemeral: a
+restart invalidates every in-flight callback instead of accepting stale state.
 
 Logout posts `token=<refresh token>&action=revoke` to HA before deleting the
 local envelope. If HA is unavailable, the browser is denied and its cookie is

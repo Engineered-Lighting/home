@@ -865,12 +865,11 @@ process.stdout.write("\n[1mpeople overlay interaction contract (DOC-S83)[0m\n");
     peopleSource.includes("people-node-soft-glow") &&
     peopleSource.includes("const branchGroups = (() => {") &&
     peopleSource.includes("Branch halos use the final node positions") &&
-    peopleSource.includes("const [depthEnabled, setDepthEnabled] = useState(false);") &&
-    peopleSource.includes("window.addEventListener(\"deviceorientation\", handleOrientation") &&
-    peopleSource.includes("orientation.requestPermission") &&
-    peopleSource.includes("constellation depth") &&
-    peopleSource.includes("depth-star") &&
-    peopleSource.includes("prefers-reduced-motion: reduce") &&
+    peopleSource.includes("people-graph-grid") &&
+    peopleSource.includes("people-edge-glow") &&
+    peopleSource.includes("constellation-point") &&
+    !peopleSource.includes("deviceorientation") &&
+    !peopleSource.includes("orientation.requestPermission") &&
     !peopleSource.includes("cluster-label-${ring}-${name}"));
   assert("identities endpoint exposes sanitized Frigate diagnostics",
     haInitSource.includes('"frigate_seed_report": asdict(seed_report) if seed_report is not None else None') &&

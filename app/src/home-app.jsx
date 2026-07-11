@@ -926,7 +926,7 @@ function HomeHeader({
             <span>{mobile ? "apt" : "apartment"}</span>
           </button>
         )}
-        {actionMenu}
+        {!mobile && actionMenu}
         {IS_TAURI && (
           <>
             <button

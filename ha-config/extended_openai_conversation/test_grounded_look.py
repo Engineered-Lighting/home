@@ -155,6 +155,14 @@ async def main():
         "clear answer does not trigger illumination",
         not fn._needs_illumination({"data": {"answer": "A mug is on the coffee table."}}),
     )
+    assert_true(
+        "coffee table question infers living room",
+        fn._infer_room_from_question("what is on my coffee table") == "living_room",
+    )
+    assert_true(
+        "counter question infers kitchen",
+        fn._infer_room_from_question("what is on the counter") == "kitchen",
+    )
 
     hass = _Hass({})
     safe = fn._room_safe_for_illumination(hass, _Agg(occupied=False), "living_room")

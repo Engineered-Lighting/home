@@ -320,7 +320,15 @@ class WorldStateFunction(Function):
         question = (arguments.get("question") or "").strip()
         allow_illumination = bool(arguments.get("allow_illumination", True))
         if not room:
-            return {"error": "room argument required"}
+            room = self._infer_room_from_question(question)
+        if not room:
+            return {
+                "error": (
+                    "room argument required; ask which room or include a target "
+                    "such as coffee table, kitchen counter, dining table, "
+                    "workshop, or driveway"
+                )
+            }
         if not question:
             question = f"What do you see in the {room}?"
 
@@ -418,6 +426,20 @@ class WorldStateFunction(Function):
             "confidence_band": "unknown",
             "freshness": "fresh",
         }
+
+    def _infer_room_from_question(self, question: str) -> str:
+        q = (question or "").lower().replace("-", " ")
+        aliases = (
+            ("living_room", ("living room", "coffee table", "couch", "sofa", "tv", "bicycle")),
+            ("kitchen", ("kitchen", "counter", "island", "sink", "stove", "oven")),
+            ("dining_room", ("dining room", "dining table", "table", "chairs")),
+            ("workshop", ("workshop", "office", "desk")),
+            ("driveway", ("driveway", "outside", "front yard", "street", "car", "vehicle")),
+        )
+        for room, terms in aliases:
+            if any(term in q for term in terms):
+                return room
+        return ""
 
     async def _reason_zoom(
         self,

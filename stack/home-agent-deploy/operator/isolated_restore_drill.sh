@@ -573,7 +573,7 @@ validation="$(
       select '\''listen='\'' || current_setting('\''listen_addresses'\'');
       select '\''recovery='\'' || pg_is_in_recovery()::text;
       select '\''revision='\'' || version_num from public.alembic_version;
-      select '\''schemas='\'' || string_agg(nspname, '\'', '\'' order by nspname)
+      select '\''schemas='\'' || string_agg(nspname, '\'','\'' order by nspname)
         from pg_namespace
        where nspname = any(array[
          '\''engagement'\'', '\''identity'\'', '\''ingest'\'', '\''knowledge'\'',
@@ -584,7 +584,11 @@ validation="$(
 )"
 expected_validation="$(printf 'version=%s\nchecksums=on\nlisten=\nrecovery=false\nrevision=%s\nschemas=%s' \
   "$expected_version_num" "$HOME_AGENT_EXPECTED_DB_REVISION" "$EXPECTED_SCHEMAS")"
-[[ "$validation" == "$expected_validation" ]] || die "restored database contract validation failed"
+if [[ "$validation" != "$expected_validation" ]]; then
+  printf 'restore drill: expected contract:\n%s\n' "$expected_validation" >&2
+  printf 'restore drill: observed contract:\n%s\n' "$validation" >&2
+  die "restored database contract validation failed"
+fi
 
 docker exec --user 999:999 "$database_container" sh -ec '
   export PGPASSWORD="$(cat /run/secrets/postgres_owner_password)"

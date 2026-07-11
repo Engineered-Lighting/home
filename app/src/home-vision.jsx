@@ -36,6 +36,20 @@ const HG_CAMERAS = [
   { id: "driveway",    entity: "camera.driveway",    name: "driveway"    },
 ];
 
+const HUMAN_OCCUPANCY_LABELS = new Set(["person", "people", "human", "humans"]);
+
+function _isHumanOccupancyLabel(label) {
+  const value = String(label || "").trim().toLowerCase();
+  return HUMAN_OCCUPANCY_LABELS.has(value);
+}
+
+function _cameraHasHumanOccupancy(labelsForCamera) {
+  return (labelsForCamera || []).some((label) => {
+    if (typeof label === "string") return _isHumanOccupancyLabel(label);
+    return _isHumanOccupancyLabel(label?.label || label?.name || label?.type || label?.object);
+  });
+}
+
 /* Periodic MJPEG remount cadence. Each tile re-handshakes its stream
  * every 2 min to shed silently-dead connections; the per-camera
  * refreshPhaseMs offset spreads the 5 remounts across the window so
@@ -399,7 +413,7 @@ function HomeVisionCard({
     }
   }, [simActive]);
   const active = cameras[idx];
-  const occupied = cameras.filter((c) => (labels[c.id] || []).length > 0).length;
+  const occupied = cameras.filter((c) => _cameraHasHumanOccupancy(labels[c.id])).length;
   const anyOccupied = occupied > 0;
   // Phase 1.5 item 7: carousel refs + IntersectionObserver
   // setup. In wide-mode the camera tiles live in a horizontal

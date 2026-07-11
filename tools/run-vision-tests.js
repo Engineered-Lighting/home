@@ -39,7 +39,7 @@ function loadHelpers() {
   const end = source.indexOf("/* Live frame:", start);
   if (start < 0 || end < 0) throw new Error("home-vision helper block not found");
   const script = source.slice(start, end)
-    + "\nObject.assign(window, { HG_CAMERAS, VISION_REFRESH_MS, _haBaseFromWs });";
+    + "\nObject.assign(window, { HG_CAMERAS, VISION_REFRESH_MS, _haBaseFromWs, _cameraHasHumanOccupancy });";
   const sandbox = { window: {}, URL };
   vm.runInNewContext(script, sandbox, { filename: "home-vision.helpers.js" });
   return sandbox.window;
@@ -71,7 +71,10 @@ function loadHelpers() {
   assert("Simulation Mode suppresses live errors", source.includes("const err = simulationSrc ? null : live.err"));
   assert("Simulation Mode uses deterministic stream key", source.includes("const streamKey = simulationSrc ? `sim-${camera.id}` : live.streamKey"));
   assert("Simulation Mode changes remount live/sim frames", source.includes("prevSimRef.current !== simActive") && source.includes("setOpenCount((c) => c + 1)"));
-  assert("occupied count derives from labels prop", source.includes("const occupied = cameras.filter((c) => (labels[c.id] || []).length > 0).length;"), source);
+  assert("camera occupancy ignores non-human objects", H._cameraHasHumanOccupancy(["car", "sink", "chair"]) === false);
+  assert("camera occupancy counts explicit human labels", H._cameraHasHumanOccupancy(["car", "person"]) === true);
+  assert("camera occupancy accepts object-shaped human labels", H._cameraHasHumanOccupancy([{ label: "person" }]) === true);
+  assert("occupied count derives from human-only helper", source.includes("const occupied = cameras.filter((c) => _cameraHasHumanOccupancy(labels[c.id])).length;"), source);
   assert("active camera labels derive from labels prop", source.includes("const objLabels = (labels[active.id] || []);"), source);
   assert("collapsed summary surfaces occupied count", source.includes('`${cameras.length} cameras') && source.includes('`${occupied} occupied`'));
   assert("vision exports card and camera roster", source.includes("Object.assign(window, { HomeVisionCard, HG_CAMERAS });"));

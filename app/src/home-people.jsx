@@ -755,7 +755,16 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
   const nodeBounds = layout.reduce((bounds, n) => {
     if (!n || n.overflow) return bounds;
     const textScale = n.textScale || 1;
-    const padX = (n.size || 0) / 2 + (isMobile ? 28 : 46);
+    const name = String(n.identity?.display_name || "?");
+    const role = String(n.identity?.relationship_subrole || n.identity?.relationship_type || "");
+    const nameFont = Math.max(9, Math.round((n.size || 0) * 0.18 * textScale));
+    const roleFont = Math.max(7, Math.round((n.size || 0) * 0.14 * textScale));
+    const labelHalf = Math.max(
+      (n.size || 0) / 2,
+      name.length * nameFont * 0.31,
+      role.length * roleFont * 0.34,
+    );
+    const padX = labelHalf + (isMobile ? 18 : 28);
     const padTop = (n.size || 0) / 2 + (isMobile ? 28 : 46);
     const padBottom = (n.size || 0) / 2 + (isMobile ? 52 * textScale : 64);
     return {
@@ -769,9 +778,9 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
   const mobileViewBox = hasNodeBounds
     ? {
         x: nodeBounds.minX,
-        y: nodeBounds.minY,
+        y: nodeBounds.minY - 28,
         w: Math.max(260, nodeBounds.maxX - nodeBounds.minX),
-        h: Math.max(220, nodeBounds.maxY - nodeBounds.minY),
+        h: Math.max(220, nodeBounds.maxY - nodeBounds.minY + 44),
       }
     : { x: -260, y: -220, w: 520, h: 440 };
   const VIEW_HALF = 460;
@@ -779,6 +788,42 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
   const graphViewBox = isMobile
     ? mobileViewBox
     : { x: -VIEW_HALF, y: -VIEW_HALF, w: VIEW_SIZE, h: VIEW_SIZE };
+  const branchGroups = (() => {
+    const labels = {
+      "holly-family": "holly family",
+      "felipe-ashley-family": "ashley + felipe",
+      friends: "friends",
+    };
+    const grouped = new Map();
+    for (const n of layout) {
+      if (!n || n.overflow || !n.familyBranch) continue;
+      if (!grouped.has(n.familyBranch)) grouped.set(n.familyBranch, []);
+      grouped.get(n.familyBranch).push(n);
+    }
+    return Array.from(grouped.entries()).flatMap(([branch, nodes]) => {
+      if (nodes.length < 2) return [];
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (const n of nodes) {
+        const pad = (n.size || 0) / 2 + (isMobile ? 22 : 18);
+        minX = Math.min(minX, (n.x || 0) - pad);
+        maxX = Math.max(maxX, (n.x || 0) + pad);
+        minY = Math.min(minY, (n.y || 0) - pad);
+        maxY = Math.max(maxY, (n.y || 0) + pad);
+      }
+      if (!Number.isFinite(minX) || !Number.isFinite(maxX)) return [];
+      const cx = (minX + maxX) / 2;
+      const cy = (minY + maxY) / 2;
+      return [{
+        key: branch,
+        label: labels[branch] || branch.replace(/-/g, " "),
+        cx,
+        cy,
+        rx: Math.max(54, (maxX - minX) / 2),
+        ry: Math.max(44, (maxY - minY) / 2),
+        labelY: minY - (isMobile ? 12 : 10),
+      }];
+    });
+  })();
 
   // Addendum 23: pre-compute the connected-uuid set + tooltip placement
   // for the currently-hovered node. useMemo prevents recomputation
@@ -892,70 +937,41 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
           );
         })}
 
-        {/* Addendum 22 cluster arc labels — render a faint dashed arc
-            + a small text label slightly OUTSIDE each cluster's ring
-            so the grouping is visually explicit ("parents",
-            "siblings", "children", "in-laws"). Only renders when a
-            cluster has ≥ 2 members (single-member clusters are
-            visually self-evident). */}
-        {[1, 2, 3].flatMap((ring) => {
-          const clusters = H.clustersForRing ? H.clustersForRing(layout, ring) : {};
-          return Object.entries(clusters).flatMap(([name, members]) => {
-            if (members.length < 2) return [];
-            // Cluster bounds: midpoint between members' avg + outer
-            // radius (radius + size + label gap).
-            const ringRadius = H.radiusForRing(ring);
-            const labelRadius = ringRadius + (members[0].size / 2) + 22;
-            // Compute centroid angle of the cluster (average direction
-            // from origin to the members' midpoint).
-            let sumX = 0, sumY = 0;
-            for (const m of members) { sumX += m.x; sumY += m.y; }
-            const cx = sumX / members.length;
-            const cy = sumY / members.length;
-            const centroidAngle = Math.atan2(cy, cx);
-            const labelX = labelRadius * Math.cos(centroidAngle);
-            const labelY = labelRadius * Math.sin(centroidAngle);
-            // Arc endpoints flank the cluster's outermost members.
-            const angles = members.map((m) => Math.atan2(m.y, m.x));
-            const aMin = Math.min(...angles);
-            const aMax = Math.max(...angles);
-            const arcWidth = (members[0].size / 2) + 8;  // small pad
-            const arcR = ringRadius + arcWidth;
-            const a1 = aMin - 0.06;  // ~3.5° pad outside outer members
-            const a2 = aMax + 0.06;
-            const arcX1 = arcR * Math.cos(a1);
-            const arcY1 = arcR * Math.sin(a1);
-            const arcX2 = arcR * Math.cos(a2);
-            const arcY2 = arcR * Math.sin(a2);
-            // SVG arc path: M start A rx ry x-rotation large-arc sweep END
-            const largeArc = (a2 - a1) > Math.PI ? 1 : 0;
-            const sweep = 1;  // clockwise
-            const arcPath = `M ${arcX1.toFixed(1)} ${arcY1.toFixed(1)} `
-              + `A ${arcR.toFixed(1)} ${arcR.toFixed(1)} 0 ${largeArc} ${sweep} `
-              + `${arcX2.toFixed(1)} ${arcY2.toFixed(1)}`;
-            return [
-              <path
-                key={`cluster-arc-${ring}-${name}`}
-                d={arcPath}
-                fill="none"
-                stroke="var(--hg-fg-4)"
-                strokeWidth={0.6}
-                strokeDasharray="2,3"
-                opacity={0.55}
-              />,
-              <text
-                key={`cluster-label-${ring}-${name}`}
-                x={labelX} y={labelY + 3}
-                textAnchor="middle"
-                fontFamily={PEOPLE_FONT_MONO}
-                fontSize={9}
-                letterSpacing="0.14em"
-                fill="var(--hg-fg-3)"
-                style={{ textTransform: "uppercase" }}
-              >{name}</text>,
-            ];
-          });
-        })}
+        {/* Branch halos use the final node positions, not idealized ring
+            math, so they stay attached to the actual family/friend
+            constellations after mobile collision resolution. */}
+        {branchGroups.map((g) => (
+          <g key={`branch-${g.key}`} aria-hidden="true">
+            <ellipse
+              cx={g.cx}
+              cy={g.cy}
+              rx={g.rx}
+              ry={g.ry}
+              fill="none"
+              stroke="var(--hg-fg-3)"
+              strokeWidth={isMobile ? 0.7 : 0.55}
+              strokeDasharray="2,8"
+              opacity={isMobile ? 0.34 : 0.24}
+            />
+            <text
+              x={g.cx}
+              y={g.labelY}
+              textAnchor="middle"
+              fontFamily={PEOPLE_FONT_MONO}
+              fontSize={isMobile ? 9.5 : 8}
+              letterSpacing="0.16em"
+              fill="var(--hg-fg-3)"
+              stroke="var(--hg-bg-0)"
+              strokeWidth={3}
+              strokeLinejoin="round"
+              paintOrder="stroke fill"
+              opacity={isMobile ? 0.78 : 0.58}
+              style={{ textTransform: "uppercase" }}
+            >
+              {g.label}
+            </text>
+          </g>
+        ))}
 
         {/* Nodes */}
         {layout.map((node) => {

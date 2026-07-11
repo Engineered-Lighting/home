@@ -233,6 +233,7 @@
   }
 
   function scheduleAutoStart() {
+    if (window.__HOME_BACKGROUND_WARMUP_CONTROLS_APARTMENT) return;
     const waitForBoot = () => {
       if (window.__bootState?.failed) return;
       if (!window.__bootState?.done) {

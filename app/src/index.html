@@ -14,14 +14,95 @@
   <style>
     html, body, #root { height: 100%; width: 100%; margin: 0; }
     body {
-      background: var(--hg-bg-0);
-      color: var(--hg-fg-0);
+      background: #050606;
+      color: #f4f2ec;
       overflow: hidden;
       user-select: none;
       -webkit-user-select: none;
     }
     /* Re-allow text selection in the conversation feed + inputs. */
     .hg-scroll, .hg-scroll *, input, textarea { user-select: text; -webkit-user-select: text; }
+    #hg-boot-shell {
+      position: fixed;
+      inset: 0;
+      z-index: 9000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #050606;
+      color: #f4f2ec;
+      font-family: Consolas, "SFMono-Regular", "Liberation Mono", monospace;
+      padding: max(18px, env(safe-area-inset-top)) 18px max(18px, env(safe-area-inset-bottom));
+      box-sizing: border-box;
+      pointer-events: none;
+    }
+    #hg-boot-shell[data-disabled="1"] { display: none; }
+    .hg-boot-card {
+      width: min(520px, 88vw);
+      transform: translateY(-3vh);
+    }
+    .hg-boot-ascii {
+      margin: 0;
+      font: 700 clamp(12px, 3.25vw, 20px)/1.04 Consolas, "SFMono-Regular", "Liberation Mono", monospace;
+      letter-spacing: 0;
+      white-space: pre;
+      color: #f4f2ec;
+      text-align: center;
+      opacity: 0.94;
+    }
+    .hg-boot-subtitle {
+      margin-top: 18px;
+      text-align: center;
+      font: 10px/1.4 Consolas, "SFMono-Regular", "Liberation Mono", monospace;
+      letter-spacing: 0.32em;
+      color: rgba(244, 242, 236, 0.44);
+    }
+    .hg-boot-bar {
+      position: relative;
+      height: 2px;
+      margin-top: 34px;
+      overflow: hidden;
+      background: rgba(244, 242, 236, 0.12);
+    }
+    .hg-boot-bar span {
+      display: block;
+      width: 8%;
+      height: 100%;
+      background: #f4f2ec;
+      box-shadow: 0 0 18px rgba(244, 242, 236, 0.3);
+      transition: width 180ms ease;
+    }
+    #hg-boot-shell[data-phase="idle"] .hg-boot-bar span,
+    #hg-boot-shell[data-phase="fetching"] .hg-boot-bar span {
+      animation: hg-boot-pulse 1.7s ease-in-out infinite;
+    }
+    #hg-boot-shell[data-phase="reconnecting"] .hg-boot-bar span,
+    #hg-boot-shell[data-phase="stalled"] .hg-boot-bar span,
+    #hg-boot-shell[data-phase="failed"] .hg-boot-bar span {
+      background: #f0a33a;
+      box-shadow: 0 0 18px rgba(240, 163, 58, 0.35);
+    }
+    .hg-boot-status {
+      margin-top: 12px;
+      display: flex;
+      gap: 14px;
+      justify-content: space-between;
+      color: rgba(244, 242, 236, 0.48);
+      font: 10px/1.5 Consolas, "SFMono-Regular", "Liberation Mono", monospace;
+      letter-spacing: 0.14em;
+      text-transform: lowercase;
+    }
+    .hg-boot-current {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    @keyframes hg-boot-pulse {
+      0% { opacity: 0.55; }
+      50% { opacity: 1; }
+      100% { opacity: 0.55; }
+    }
   </style>
   <script src="./vendor/react-18.3.1/react.production.min.js"></script>
   <script src="./vendor/react-18.3.1/react-dom.production.min.js"></script>
@@ -48,6 +129,23 @@
   <script src="./home-services.js"></script>
 </head>
 <body>
+  <div id="hg-boot-shell" data-phase="idle" aria-live="polite" aria-label="Home app loading">
+    <div class="hg-boot-card">
+      <pre class="hg-boot-ascii"> __
+/ /_  ____  ____ ___  ___
+/ __ \/ __ \/ __ `__ \/ _ \
+/ / / / /_/ / / / / / /  __/
+/_/ /_/\____/_/ /_/ /_/\___/</pre>
+      <div class="hg-boot-subtitle">engineered lighting</div>
+      <div class="hg-boot-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="3">
+        <span style="width:3%"></span>
+      </div>
+      <div class="hg-boot-status">
+        <span class="hg-boot-phase">starting</span>
+        <span class="hg-boot-current">initializing</span>
+      </div>
+    </div>
+  </div>
   <div id="root"></div>
   <!-- 3D engine bootstrap: dynamic import propagates the same cache-buster
        the JSX loader uses (home-3d siblings re-import with it; vendor libs
@@ -188,7 +286,25 @@
         } catch (_) {}
         return !!(window.HG_WEB_MODE && !window.__TAURI__ && !window.__TAURI_INTERNALS__);
       }
+      function readFlag(name, storageKey) {
+        var raw = '';
+        try { raw = new URLSearchParams(window.location.search || '').get(name) || ''; } catch (_) {}
+        raw = String(raw || '').trim().toLowerCase();
+        if (['0', 'off', 'false', 'no'].indexOf(raw) >= 0) return false;
+        if (['1', 'on', 'true', 'yes'].indexOf(raw) >= 0) return true;
+        if (storageKey) {
+          try { raw = String(localStorage.getItem(storageKey) || '').trim().toLowerCase(); } catch (_) { raw = ''; }
+          if (['0', 'off', 'false', 'no'].indexOf(raw) >= 0) return false;
+          if (['1', 'on', 'true', 'yes'].indexOf(raw) >= 0) return true;
+        }
+        return null;
+      }
       var lazyFeaturesEnabled = readLazyFeaturesEnabled();
+      var bootShellEnabled = readFlag('bootShell', 'home.perf.bootShell') !== false;
+      if (!bootShellEnabled) {
+        var shellOff = document.getElementById('hg-boot-shell');
+        if (shellOff) shellOff.setAttribute('data-disabled', '1');
+      }
       var originalFileCount = files.length;
       if (lazyFeaturesEnabled) {
         files = files.filter(function (item) { return !deferredFeatureFiles[item[0]]; });
@@ -210,6 +326,7 @@
         loaded: 0, total: files.length, current: null, failed: null, done: false,
         prefetchWindow: PREFETCH_WINDOW, reconnecting: false, retryAttempts: 0,
         lazyFeaturesEnabled: lazyFeaturesEnabled, originalTotal: originalFileCount,
+        phase: 'starting', shellEnabled: bootShellEnabled,
       };
       if (window.__homePerf) window.__homePerf.mark('boot:start', {
         total: files.length,
@@ -218,6 +335,45 @@
       });
       var fetches = [];
       var babelFailures = {};
+      function bootProgressPct() {
+        if (!boot || !boot.total) return 3;
+        if (boot.done) return 100;
+        return Math.max(3, Math.min(99, Math.round((boot.loaded / boot.total) * 100)));
+      }
+
+      function updateBootShell(phase, detail) {
+        if (phase) boot.phase = phase;
+        var shell = document.getElementById('hg-boot-shell');
+        if (!shell || !bootShellEnabled) return;
+        var pct = bootProgressPct();
+        shell.setAttribute('data-phase', boot.phase || 'starting');
+        var bar = shell.querySelector('.hg-boot-bar');
+        var fill = shell.querySelector('.hg-boot-bar span');
+        var phaseEl = shell.querySelector('.hg-boot-phase');
+        var currentEl = shell.querySelector('.hg-boot-current');
+        if (bar) bar.setAttribute('aria-valuenow', String(pct));
+        if (fill) fill.style.width = pct + '%';
+        if (phaseEl) phaseEl.textContent = boot.done ? 'ready' : (boot.phase || 'starting');
+        if (currentEl) currentEl.textContent = detail || boot.current || (lazyFeaturesEnabled ? 'lazy features enabled' : 'loading');
+        window.__homeBootShell = {
+          enabled: bootShellEnabled,
+          phase: boot.phase,
+          percent: pct,
+          current: boot.current,
+          detail: detail || null,
+          updatedAt: Date.now(),
+        };
+      }
+
+      window.__homeRemoveBootShell = function () {
+        var shell = document.getElementById('hg-boot-shell');
+        if (shell && shell.parentNode) shell.parentNode.removeChild(shell);
+        window.__homeBootShell = Object.assign({}, window.__homeBootShell || {}, {
+          removed: true,
+          updatedAt: Date.now(),
+        });
+      };
+      updateBootShell('starting', 'preparing boot chain');
 
       function swVersionLabel() {
         return (window.HG_WEB_MODE && window.__HOME_ASSET_VERSION) ||
@@ -230,6 +386,7 @@
       }
 
       function overlay(title, detail) {
+        updateBootShell('failed', title);
         var msg = '[boot] ' + title + (detail ? '\n' + detail : '');
         console.error(msg);
         // A terminal overlay always replaces any prior (e.g. reconnecting)
@@ -270,6 +427,7 @@
          box returns, and expose a manual reload that also clears the SW. */
       function reconnectingOverlay(name, err, attempt) {
         boot.reconnecting = true;
+        updateBootShell('reconnecting', name + ' · attempt ' + attempt);
         console.error('[boot] Failed to load ' + name + ' — ' +
           String((err && err.message) || err) +
           ' (reconnecting, attempt ' + attempt + ')');
@@ -410,6 +568,7 @@
         boot.skipped = boot.skipped || [];
         boot.skipped.push({ file: name, reason: reason });
         boot.loaded++;
+        updateBootShell('executing', 'skipped ' + name);
         primeWindow(index + 1);
         step(index + 1);
         return true;
@@ -420,6 +579,7 @@
           boot.done = true;
           boot.current = null;
           if (boot.reconnecting) { boot.reconnecting = false; removeOverlay(); }
+          updateBootShell('complete', 'mounting interface');
           console.info('[boot] chain complete — ' + boot.loaded + '/' + boot.total +
             ' files, sw ' + swVersionLabel() +
             (boot.skipped && boot.skipped.length ? ', skipped ' + boot.skipped.length : ''));
@@ -434,6 +594,7 @@
         var name = files[i][0];
         var isBabel = files[i][1];
         boot.current = name;
+        updateBootShell('fetching', name);
         var fetchStart = performance.now ? performance.now() : Date.now();
         fetchBootText(i).then(function (text) {
           if (window.__homePerf) {
@@ -443,6 +604,7 @@
           var code = text;
           if (isBabel) {
             try {
+              updateBootShell('transforming', name);
               var transformStart = performance.now ? performance.now() : Date.now();
               code = Babel.transform(text, {
                 filename: name,
@@ -471,6 +633,7 @@
             }
           }
           if (boot.reconnecting) { boot.reconnecting = false; removeOverlay(); }
+          updateBootShell('executing', name);
           var executeStart = performance.now ? performance.now() : Date.now();
           execute(name, code);
           if (window.__homePerf) {
@@ -478,6 +641,7 @@
               (performance.now ? performance.now() : Date.now()) - executeStart);
           }
           boot.loaded++;
+          updateBootShell('executing', name);
           primeWindow(i + 1);
           step(i + 1);
         }).catch(function (err) {
@@ -509,6 +673,7 @@
             lastLoaded = boot.loaded;
             lastProgressAt = Date.now();
           } else if (Date.now() - lastProgressAt > 90000) {
+            updateBootShell('stalled', boot.current || 'mount');
             overlay('Boot chain stalled at ' + boot.current,
               boot.loaded + '/' + boot.total + ' files executed');
             return;

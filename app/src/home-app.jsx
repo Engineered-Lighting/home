@@ -5565,32 +5565,163 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
 
   const prefetchFeature = useCallback((feature, reason = "idle") => {
     const loader = window.HomeFeatureLoader;
-    if (!loader?.prefetch) return;
-    loader.prefetch(feature, reason).finally(() => setFeatureLoadTick((tick) => tick + 1));
+    if (!loader?.prefetch) return Promise.resolve(false);
+    return loader.prefetch(feature, reason)
+      .then(() => true)
+      .catch(() => false)
+      .finally(() => setFeatureLoadTick((tick) => tick + 1));
   }, []);
 
   useEffect(() => {
     if (bootPhase !== "ready" || !window.__HOME_LAZY_FEATURES_ENABLED || !window.HomeFeatureLoader) return undefined;
+    const readWarmupFlag = () => {
+      let raw = "";
+      try { raw = new URLSearchParams(window.location.search || "").get("warmup") || ""; } catch (_) {}
+      raw = String(raw || "").trim().toLowerCase();
+      if (["0", "off", "false", "no"].includes(raw)) return false;
+      if (["1", "on", "true", "yes"].includes(raw)) return true;
+      try { raw = String(localStorage.getItem("home.perf.backgroundWarmup") || "").trim().toLowerCase(); } catch (_) { raw = ""; }
+      if (["0", "off", "false", "no"].includes(raw)) return false;
+      if (["1", "on", "true", "yes"].includes(raw)) return true;
+      return true;
+    };
+    if (!readWarmupFlag()) {
+      window.__HOME_BACKGROUND_WARMUP = {
+        enabled: false,
+        state: "disabled",
+        reason: "warmup flag off",
+        updatedAt: Date.now(),
+      };
+      return undefined;
+    }
     const nav = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
     const saveData = !!nav?.saveData;
     const slowLink = /(^|-)2g$/.test(String(nav?.effectiveType || ""));
-    const features = saveData || slowLink
-      ? ["lights", "apartment"]
-      : ["lights", "apartment", "people", "world", "spatial", "look", "intelligence", ...(videoLabelerAvailable ? ["videoLabeler"] : [])];
+    const cellular = /cellular/i.test(String(nav?.type || ""));
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
     const timers = [];
-    const schedule = (fn, delay) => {
-      const run = () => {
-        if (typeof requestIdleCallback === "function") requestIdleCallback(fn, { timeout: 2500 });
-        else fn();
-      };
-      const id = setTimeout(run, delay);
-      timers.push(id);
-    };
-    features.forEach((feature, index) => {
-      schedule(() => prefetchFeature(feature, "idle-after-boot"), 900 + index * 700);
+    const activity = { lastAt: Date.now() };
+    const markActive = () => { activity.lastAt = Date.now(); };
+    ["pointerdown", "touchstart", "keydown", "wheel", "scroll"].forEach((name) => {
+      window.addEventListener(name, markActive, { passive: true, capture: true });
     });
-    return () => timers.forEach((id) => clearTimeout(id));
-  }, [bootPhase, prefetchFeature, videoLabelerAvailable]);
+    const setWarmup = (patch) => {
+      window.__HOME_BACKGROUND_WARMUP = {
+        enabled: true,
+        state: "running",
+        saveData,
+        slowLink,
+        cellular,
+        startedAt: window.__HOME_BACKGROUND_WARMUP?.startedAt || Date.now(),
+        updatedAt: Date.now(),
+        completed: window.__HOME_BACKGROUND_WARMUP?.completed || [],
+        skipped: window.__HOME_BACKGROUND_WARMUP?.skipped || [],
+        failed: window.__HOME_BACKGROUND_WARMUP?.failed || [],
+        ...patch,
+      };
+    };
+    const wait = (ms) => new Promise((resolve) => {
+      const id = setTimeout(resolve, ms);
+      timers.push(id);
+    });
+    const idle = () => new Promise((resolve) => {
+      if (typeof requestIdleCallback === "function") {
+        const id = requestIdleCallback(resolve, { timeout: 3000 });
+        timers.push(id);
+      } else {
+        const id = setTimeout(resolve, 0);
+        timers.push(id);
+      }
+    });
+    const waitForQuiet = async () => {
+      for (let i = 0; i < 8; i++) {
+        const focused = !!document.activeElement && ["INPUT", "TEXTAREA"].includes(document.activeElement.tagName);
+        const recentlyActive = Date.now() - activity.lastAt < 1400;
+        if (!focused && !recentlyActive) return true;
+        setWarmup({ state: "deferred", current: null, reason: focused ? "input focused" : "recent interaction" });
+        await wait(1200);
+      }
+      return false;
+    };
+    const runJob = async (name, fn) => {
+      if (controller?.signal?.aborted) return;
+      if (!(await waitForQuiet())) {
+        setWarmup({ skipped: [...(window.__HOME_BACKGROUND_WARMUP?.skipped || []), { name, reason: "interaction timeout" }] });
+        return;
+      }
+      await idle();
+      setWarmup({ state: "running", current: name, reason: null });
+      const started = Date.now();
+      try {
+        const detail = await fn();
+        setWarmup({
+          current: null,
+          completed: [...(window.__HOME_BACKGROUND_WARMUP?.completed || []), { name, durationMs: Date.now() - started, detail }],
+        });
+      } catch (err) {
+        setWarmup({
+          current: null,
+          failed: [...(window.__HOME_BACKGROUND_WARMUP?.failed || []), { name, error: err?.message || String(err) }],
+        });
+      }
+      await wait(650);
+    };
+    let cancelled = false;
+    setWarmup({ state: "queued", current: null });
+    (async () => {
+      await wait(1800);
+      if (cancelled) return;
+      await runJob("people feature", () => prefetchFeature("people", "background-warmup"));
+      if (connection === "online" && endpoint && token) {
+        await runJob("people data", async () => {
+          if (!window.HomePeoplePrewarm?.start) return { skipped: true, reason: "prewarm api unavailable" };
+          return window.HomePeoplePrewarm.start({
+            endpoint,
+            token,
+            signal: controller?.signal,
+            maxAvatars: saveData || slowLink ? 3 : 10,
+            maxFaceThumbs: saveData || slowLink ? 0 : 8,
+          });
+        });
+      } else {
+        setWarmup({ skipped: [...(window.__HOME_BACKGROUND_WARMUP?.skipped || []), { name: "people data", reason: "HA not online" }] });
+      }
+      window.__HOME_BACKGROUND_WARMUP_CONTROLS_APARTMENT = true;
+      await runJob("apartment feature", () => prefetchFeature("apartment", "background-warmup"));
+      await runJob("apartment modules", async () => {
+        if (!window.Home3D?.ready) return { skipped: true, reason: "3d bridge unavailable" };
+        const engine = await window.Home3D.ready;
+        if (engine?.preloadModules) return engine.preloadModules({ includeRenderers: true });
+        return { skipped: true, reason: "preloadModules unavailable" };
+      });
+      await runJob("apartment assets", async () => {
+        if (!window.HomeApartmentPrewarm?.start) return { skipped: true, reason: "prewarm api unavailable" };
+        const fullAllowed = !(saveData || slowLink || cellular);
+        window.HomeApartmentPrewarm.start({
+          mode: fullAllowed ? "full" : "metadata",
+          reason: fullAllowed ? "background-warmup" : "background-warmup-conservative",
+        });
+        for (let i = 0; i < 90; i++) {
+          const status = window.HomeApartmentPrewarm.status?.() || {};
+          if (status.state && status.state !== "running") return status;
+          await wait(1000);
+        }
+        return window.HomeApartmentPrewarm.status?.() || { state: "unknown" };
+      });
+      setWarmup({ state: "complete", current: null, completedAt: Date.now() });
+    })();
+    return () => {
+      cancelled = true;
+      controller?.abort?.();
+      timers.forEach((id) => {
+        try { clearTimeout(id); } catch (_) {}
+        try { cancelIdleCallback(id); } catch (_) {}
+      });
+      ["pointerdown", "touchstart", "keydown", "wheel", "scroll"].forEach((name) => {
+        window.removeEventListener(name, markActive, { capture: true });
+      });
+    };
+  }, [bootPhase, connection, endpoint, prefetchFeature, token]);
 
   useEffect(() => {
     if (spatialLayout) ensureFeature("apartment", "apartment", "spatial-layout");

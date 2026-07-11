@@ -3457,5 +3457,88 @@ function PreferencesSection({ identityUuid, preferences, endpoint, token, sim, o
   );
 }
 
+async function prewarmPeopleData({ endpoint, token, signal, maxAvatars = 8, maxFaceThumbs = 8 } = {}) {
+  const base = String(endpoint || "").replace(/\/+$/, "");
+  if (!base || !token) return { ok: false, skipped: true, reason: "missing credentials" };
+  const headers = { Authorization: `Bearer ${token}` };
+  const startedAt = Date.now();
+  const out = {
+    ok: true,
+    identities: 0,
+    relationships: 0,
+    faceBuckets: 0,
+    avatarsChecked: 0,
+    avatarsWarmed: 0,
+    faceThumbsWarmed: 0,
+    durationMs: 0,
+  };
+
+  const jsonFetch = async (url) => {
+    const resp = await fetch(url, { headers, cache: "no-store", signal });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return resp.json();
+  };
+
+  const warmImage = async (url, authed = false) => {
+    try {
+      const resp = await fetch(url, {
+        headers: authed ? headers : undefined,
+        cache: "force-cache",
+        signal,
+      });
+      if (!resp.ok) return false;
+      await resp.blob();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  };
+
+  const payload = await jsonFetch(`${base}/api/extended_openai_conversation/identities`);
+  const identities = Array.isArray(payload?.identities) ? payload.identities : [];
+  out.identities = identities.length;
+  out.relationships = Array.isArray(payload?.relationships) ? payload.relationships.length : 0;
+
+  let facesByPerson = null;
+  if (payload?.frigate_url) {
+    try {
+      facesByPerson = await jsonFetch(`${base}/api/extended_openai_conversation/frigate_proxy?path=api/faces`);
+      out.faceBuckets = facesByPerson && typeof facesByPerson === "object" ? Object.keys(facesByPerson).length : 0;
+    } catch (err) {
+      out.facesError = err?.message || String(err);
+    }
+  }
+
+  for (const identity of identities.slice(0, maxAvatars)) {
+    if (signal?.aborted) break;
+    if (!identity?.uuid) continue;
+    out.avatarsChecked++;
+    const avatarUrl = `${base}/api/extended_openai_conversation/identity/${encodeURIComponent(identity.uuid)}/avatar`;
+    if (await warmImage(avatarUrl, true)) out.avatarsWarmed++;
+  }
+
+  const H = (typeof window !== "undefined" && window.HomePeopleHelpers) || null;
+  const faceBase = payload?.frigate_url ? String(payload.frigate_url).replace(/\/+$/, "") : "";
+  if (H?.frigateFaceCropUrls && facesByPerson && faceBase) {
+    const urls = [];
+    for (const identity of identities) {
+      const result = H.frigateFaceCropUrls(facesByPerson, identity, faceBase);
+      for (const url of result.urls || []) {
+        urls.push(url);
+        if (urls.length >= maxFaceThumbs) break;
+      }
+      if (urls.length >= maxFaceThumbs) break;
+    }
+    for (const url of urls) {
+      if (signal?.aborted) break;
+      if (await warmImage(url, false)) out.faceThumbsWarmed++;
+    }
+  }
+
+  out.durationMs = Date.now() - startedAt;
+  return out;
+}
+
 // Expose to window for home-app.jsx consumption
+window.HomePeoplePrewarm = { start: prewarmPeopleData };
 window.HomePeopleOverlay = HomePeopleOverlay;

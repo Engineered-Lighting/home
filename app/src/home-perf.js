@@ -95,9 +95,13 @@
           current: window.__bootState.current || null,
           failed: window.__bootState.failed || null,
           skipped: window.__bootState.skipped || [],
+          phase: window.__bootState.phase || null,
+          shellEnabled: !!window.__bootState.shellEnabled,
         } : null,
+        shell: window.__homeBootShell || null,
         slowestFiles: summarizeBootFiles().slice(0, 12),
       },
+      warmup: window.__HOME_BACKGROUND_WARMUP || null,
       features: window.HomeFeatureLoader && window.HomeFeatureLoader.statusAll
         ? window.HomeFeatureLoader.statusAll()
         : null,

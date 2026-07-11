@@ -17,6 +17,9 @@ window.__homeMount = function () {
   if (el.children.length > 0) return true; // already mounted
   if (!window.__homeRoot) window.__homeRoot = ReactDOM.createRoot(el);
   window.__homeRoot.render(<HomeApp />);
+  if (typeof window.__homeRemoveBootShell === "function") {
+    requestAnimationFrame(() => window.__homeRemoveBootShell());
+  }
   return true;
 };
 

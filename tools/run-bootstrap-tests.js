@@ -201,6 +201,27 @@ assert("service worker precache never caches the worker itself",
     !/PRECACHE_URLS\s*=\s*\[[\s\S]*home-service-worker\.js[\s\S]*\]/.test(serviceWorkerSource));
 
 process.stdout.write("\nbootstrap_recoverable_boot_contract_test\n");
+assert("inline boot shell renders before app scripts",
+  indexSource.includes('id="hg-boot-shell"') &&
+    indexSource.includes("hg-boot-ascii") &&
+    indexSource.includes("hg-boot-bar") &&
+    indexSource.indexOf('id="hg-boot-shell"') < indexSource.indexOf('id="root"'),
+  "boot shell must be body markup, not React-rendered UI");
+assert("boot shell has a troubleshooting escape hatch",
+  indexSource.includes("readFlag('bootShell', 'home.perf.bootShell')") &&
+    indexSource.includes("data-disabled"));
+assert("boot shell tracks loader phases",
+  indexSource.includes("function updateBootShell") &&
+    indexSource.includes("updateBootShell('fetching'") &&
+    indexSource.includes("updateBootShell('transforming'") &&
+    indexSource.includes("updateBootShell('executing'") &&
+    indexSource.includes("updateBootShell('reconnecting'") &&
+    indexSource.includes("updateBootShell('complete'") &&
+    indexSource.includes("updateBootShell('failed'"));
+assert("home mount removes the static boot shell after React render",
+  mountSource.includes("window.__homeRemoveBootShell") &&
+    mountSource.includes("requestAnimationFrame") &&
+    mountSource.indexOf("window.__homeRoot.render(<HomeApp />)") < mountSource.indexOf("window.__homeRemoveBootShell"));
 assert("boot fetch failures reconnect with backoff instead of a dead end",
   indexSource.includes("function scheduleBootRetry") &&
     indexSource.includes("function backoffDelay") &&
@@ -222,6 +243,36 @@ assert("boot outcome and service worker version are logged",
   indexSource.includes("function swVersionLabel") &&
     indexSource.includes("[boot] chain complete") &&
     indexSource.includes("[boot] starting chain"));
+
+process.stdout.write("\nbackground_warmup_contract_test\n");
+assert("background warmup has a URL/localStorage kill switch",
+  appSource.includes('get("warmup")') &&
+    appSource.includes("home.perf.backgroundWarmup") &&
+    appSource.includes("state: \"disabled\""));
+assert("background warmup waits for ready online credentials before tokened people data",
+  appSource.includes("bootPhase !== \"ready\"") &&
+    appSource.includes("connection === \"online\" && endpoint && token") &&
+    appSource.includes("HomePeoplePrewarm.start"));
+assert("background warmup pauses during interaction and focused input",
+  appSource.includes("recent interaction") &&
+    appSource.includes("input focused") &&
+    appSource.includes("waitForQuiet"));
+assert("background warmup keeps apartment prewarm conservative on constrained links",
+  appSource.includes("saveData") &&
+    appSource.includes("slowLink") &&
+    appSource.includes("cellular") &&
+    appSource.includes("background-warmup-conservative"));
+assert("background warmup controls apartment auto-prewarm",
+  appSource.includes("__HOME_BACKGROUND_WARMUP_CONTROLS_APARTMENT") &&
+    fs.readFileSync(path.join(SRC_DIR, "home-apartment-prewarm.js"), "utf8").includes("__HOME_BACKGROUND_WARMUP_CONTROLS_APARTMENT"));
+assert("perf snapshot exposes boot shell and warmup state",
+  fs.readFileSync(path.join(SRC_DIR, "home-perf.js"), "utf8").includes("window.__homeBootShell") &&
+    fs.readFileSync(path.join(SRC_DIR, "home-perf.js"), "utf8").includes("window.__HOME_BACKGROUND_WARMUP"));
+assert("people prewarm exposes a quiet data warmer",
+  peopleSource.includes("window.HomePeoplePrewarm") &&
+    peopleSource.includes("prewarmPeopleData") &&
+    peopleSource.includes("cache: \"no-store\"") &&
+    peopleSource.includes("cache: \"force-cache\""));
 
 process.stdout.write("\nbootstrap_order_contract_test\n");
 [
@@ -333,13 +384,14 @@ assert("header exposes a dedicated apartment action",
   appSource.includes("onOpenApartment") &&
     appSource.includes("aria-label=\"Open apartment view\"") &&
     appSource.includes("openApartmentFromHeader"));
-assert("mobile header menu includes apartment fallback",
-  appSource.includes("{onOpenApartment && <button") &&
-    appSource.includes(">apartment</button>"));
-assert("mobile header keeps profile control in the menu",
-  appSource.includes("{serviceProfile && onOpenRemoteProfile && (") &&
-    appSource.includes("runMenuAction(onOpenRemoteProfile)") &&
-    appSource.includes("profile -"));
+assert("mobile header exposes people and apartment as direct actions",
+  appSource.includes("{onOpenPeople && mobile && (") &&
+    appSource.includes("aria-label=\"Open people view\"") &&
+    appSource.includes("aria-label=\"Open apartment view\""));
+assert("mobile header does not render the desktop actions menu",
+  appSource.includes("{!mobile && actionMenu}") &&
+    appSource.includes("serviceProfile && onOpenRemoteProfile && !mobile") &&
+    appSource.includes("{onToggleTheme && !mobile"));
 assert("video labeler is hidden on mobile",
   appSource.includes("const videoLabelerAvailable = !mobile") &&
     appSource.includes("onOpenVideoLabeler={isSpatialWide || !videoLabelerAvailable ? null : openVideoLabelerFeature}") &&

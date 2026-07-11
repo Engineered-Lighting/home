@@ -13,7 +13,7 @@ require_absolute() {
   esac
 }
 
-for command in docker openssl findmnt grep sha256sum install stat readlink; do
+for command in docker openssl dirname findmnt grep sha256sum install stat readlink ssh-keygen; do
   command -v "$command" >/dev/null 2>&1 || { echo "missing command: $command" >&2; exit 69; }
 done
 
@@ -26,6 +26,10 @@ done
 : "${HOME_AGENT_PGBACKREST_CONF:?missing HOME_AGENT_PGBACKREST_CONF}"
 : "${HOME_AGENT_PGBACKREST_SFTP_KEY:?missing HOME_AGENT_PGBACKREST_SFTP_KEY}"
 : "${HOME_AGENT_PGBACKREST_SFTP_PUBLIC_KEY:?missing HOME_AGENT_PGBACKREST_SFTP_PUBLIC_KEY}"
+: "${HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS:?missing HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS}"
+: "${HOME_AGENT_RESTORE_DRILL_ROOT:?missing HOME_AGENT_RESTORE_DRILL_ROOT}"
+: "${HOME_AGENT_PGBACKREST_IMAGE:?missing HOME_AGENT_PGBACKREST_IMAGE}"
+: "${HOME_AGENT_EXPECTED_DB_REVISION:?missing HOME_AGENT_EXPECTED_DB_REVISION}"
 : "${HOME_AGENT_EDGE_BIND_ADDR:?missing HOME_AGENT_EDGE_BIND_ADDR}"
 : "${HOME_AGENT_POLICY_DIGEST:?missing HOME_AGENT_POLICY_DIGEST}"
 : "${HOME_AGENT_ROLLOUT_MODE:?missing HOME_AGENT_ROLLOUT_MODE}"
@@ -44,13 +48,37 @@ require_absolute HOME_AGENT_TLS_DIR "$HOME_AGENT_TLS_DIR"
 require_absolute HOME_AGENT_PGBACKREST_CONF "$HOME_AGENT_PGBACKREST_CONF"
 require_absolute HOME_AGENT_PGBACKREST_SFTP_KEY "$HOME_AGENT_PGBACKREST_SFTP_KEY"
 require_absolute HOME_AGENT_PGBACKREST_SFTP_PUBLIC_KEY "$HOME_AGENT_PGBACKREST_SFTP_PUBLIC_KEY"
+require_absolute HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS "$HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS"
+require_absolute HOME_AGENT_RESTORE_DRILL_ROOT "$HOME_AGENT_RESTORE_DRILL_ROOT"
+[ ! -L "$HOME_AGENT_RESTORE_DRILL_ROOT" ] || {
+  echo "HOME_AGENT_RESTORE_DRILL_ROOT may not be a symlink" >&2
+  exit 78
+}
 
 [ "$HOME_AGENT_EDGE_BIND_ADDR" != "0.0.0.0" ] || {
   echo "HOME_AGENT_EDGE_BIND_ADDR may not be 0.0.0.0" >&2; exit 78;
 }
+printf '%s' "$HOME_AGENT_POSTGRES_IMAGE" | grep -Eq '@sha256:[0-9a-f]{64}$' || {
+  echo "HOME_AGENT_POSTGRES_IMAGE must use an immutable sha256 digest" >&2
+  exit 78
+}
+printf '%s' "$HOME_AGENT_EXPECTED_DB_REVISION" | grep -Eq '^[A-Za-z0-9._-]+$' || {
+  echo "HOME_AGENT_EXPECTED_DB_REVISION is invalid" >&2
+  exit 78
+}
 
 install -d -m 0700 -o 999 -g 999 "$HOME_AGENT_DATA_ROOT/postgres"
 install -d -m 0700 -o 999 -g 999 "$HOME_AGENT_DATA_ROOT/pgbackrest-spool"
+restore_parent="$(dirname "$HOME_AGENT_RESTORE_DRILL_ROOT")"
+[ -d "$restore_parent" ] || {
+  echo "restore-drill parent does not exist: $restore_parent" >&2
+  exit 78
+}
+case "$(findmnt -n -o SOURCE -T "$restore_parent" || true)" in
+  /dev/mapper/*) ;;
+  *) echo "$restore_parent is not on a verified /dev/mapper encrypted mount" >&2; exit 78 ;;
+esac
+install -d -m 0700 -o root -g root "$HOME_AGENT_RESTORE_DRILL_ROOT"
 install -d -m 0555 -o 10001 -g 10001 "$HOME_AGENT_DATA_ROOT/resource-monitor"
 install -d -m 0700 -o 10001 -g 10001 "$HOME_AGENT_RUNTIME_ROOT"
 install -d -m 0700 -o 1000 -g 1000 "$HOME_AGENT_SESSION_ROOT"
@@ -66,6 +94,16 @@ for target in "$HOME_AGENT_DATA_ROOT" "$HOME_AGENT_RUNTIME_ROOT" "$HOME_AGENT_SE
     *) echo "$target is not on a verified /dev/mapper encrypted mount" >&2; exit 78 ;;
   esac
 done
+restore_source_device="$(findmnt -n -o SOURCE -T "$HOME_AGENT_RESTORE_DRILL_ROOT" || true)"
+case "$restore_source_device" in
+  /dev/mapper/*) ;;
+  *) echo "$HOME_AGENT_RESTORE_DRILL_ROOT is not on a verified /dev/mapper encrypted mount" >&2; exit 78 ;;
+esac
+verify_restore_root="$(stat -c '%u:%g:%a' "$HOME_AGENT_RESTORE_DRILL_ROOT")"
+[ "$verify_restore_root" = "0:0:700" ] || {
+  echo "incorrect restore-drill root ownership/mode: $HOME_AGENT_RESTORE_DRILL_ROOT" >&2
+  exit 78
+}
 
 # These stores have distinct backup/retention semantics. Canonical paths may
 # neither coincide nor contain one another, even through symlinks.
@@ -92,6 +130,12 @@ assert_separate_roots "$data_root" "$ledger_root"
 assert_separate_roots "$runtime_root" "$session_root"
 assert_separate_roots "$runtime_root" "$ledger_root"
 assert_separate_roots "$session_root" "$ledger_root"
+restore_drill_root="$(readlink -f "$HOME_AGENT_RESTORE_DRILL_ROOT")"
+postgres_root="$(readlink -f "$HOME_AGENT_DATA_ROOT/postgres")"
+[ -n "$restore_drill_root" ] && [ -n "$postgres_root" ] || {
+  echo "cannot canonicalize restore-drill roots" >&2; exit 78;
+}
+assert_separate_roots "$restore_drill_root" "$postgres_root"
 
 ledger_path="$HOME_AGENT_ERASURE_LEDGER_ROOT/ledger.jsonl"
 ledger_head_path="$HOME_AGENT_ERASURE_LEDGER_ROOT/ledger.head.json"
@@ -180,6 +224,7 @@ require_pgbackrest_setting() {
 require_pgbackrest_setting '^repo1-type=sftp$' 'repo1-type=sftp'
 require_pgbackrest_setting '^repo1-path=/[^[:space:]]+$' 'an absolute repository path'
 require_pgbackrest_setting '^repo1-sftp-host=[^[:space:]]+$' 'a dedicated SFTP host'
+require_pgbackrest_setting '^repo1-sftp-host-port=[0-9]+$' 'an explicit SFTP port'
 require_pgbackrest_setting '^repo1-sftp-host-user=homeagent_backup$' 'the dedicated non-admin SFTP user'
 require_pgbackrest_setting '^repo1-sftp-private-key-file=/run/pgbackrest-sftp/id_ed25519$' 'the mounted private-key path'
 require_pgbackrest_setting '^repo1-sftp-public-key-file=/run/pgbackrest-sftp/id_ed25519.pub$' 'the mounted public-key path'
@@ -188,6 +233,7 @@ require_pgbackrest_setting '^repo1-sftp-host-key-hash-type=sha256$' 'SHA-256 hos
 require_pgbackrest_setting '^repo1-sftp-host-fingerprint=[0-9a-f]{64}$' 'a verified SHA-256 host-key fingerprint'
 require_pgbackrest_setting '^repo1-cipher-type=aes-256-cbc$' 'AES-256-CBC repository encryption'
 require_pgbackrest_setting '^repo1-cipher-pass=[0-9a-f]{64}$' 'a 256-bit repository cipher passphrase'
+require_pgbackrest_setting '^repo1-bundle=y$' 'repository file bundling for SFTP resilience'
 require_pgbackrest_setting '^pg1-user=home_agent_backup$' 'the least-privilege PostgreSQL backup role'
 for key_path in "$HOME_AGENT_PGBACKREST_SFTP_KEY" "$HOME_AGENT_PGBACKREST_SFTP_PUBLIC_KEY"; do
   [ -s "$key_path" ] || { echo "missing pgBackRest SFTP key file: $key_path" >&2; exit 78; }
@@ -200,6 +246,23 @@ for key_path in "$HOME_AGENT_PGBACKREST_SFTP_KEY" "$HOME_AGENT_PGBACKREST_SFTP_P
   chmod 0640 "$key_path"
   verify_secret 0:999:640 "$key_path"
 done
+known_hosts_path="$HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS"
+[ -s "$known_hosts_path" ] && [ ! -L "$known_hosts_path" ] || {
+  echo "missing or unsafe pinned known_hosts file: $known_hosts_path" >&2
+  exit 78
+}
+known_hosts_source="$(findmnt -n -o SOURCE -T "$known_hosts_path" || true)"
+case "$known_hosts_source" in
+  /dev/mapper/*) ;;
+  *) echo "$known_hosts_path is not on a verified /dev/mapper encrypted mount" >&2; exit 78 ;;
+esac
+chown root:999 "$known_hosts_path"
+chmod 0640 "$known_hosts_path"
+verify_secret 0:999:640 "$known_hosts_path"
+ssh-keygen -l -f "$known_hosts_path" -E sha256 >/dev/null 2>&1 || {
+  echo "pinned known_hosts contains no valid OpenSSH host key" >&2
+  exit 78
+}
 verify_secret 999:999:700 "$HOME_AGENT_DATA_ROOT/pgbackrest-spool"
 verify_secret 10001:10001:700 "$HOME_AGENT_ERASURE_LEDGER_ROOT"
 verify_secret 10001:10001:600 "$ledger_path"

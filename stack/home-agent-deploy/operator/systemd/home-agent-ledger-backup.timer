@@ -1,0 +1,10 @@
+[Unit]
+Description=Five-minute Home Agent erasure-ledger replication
+
+[Timer]
+OnCalendar=*-*-* *:0/5:00
+Persistent=true
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

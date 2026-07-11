@@ -307,6 +307,7 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertIn("repo1-sftp-host-key-check-type=fingerprint", pgbackrest)
         self.assertIn("repo1-sftp-host-key-hash-type=sha256", pgbackrest)
         self.assertIn("repo1-cipher-type=aes-256-cbc", pgbackrest)
+        self.assertIn("repo1-bundle=y", pgbackrest)
 
         preflight = read("stack/home-agent-deploy/preflight.sh")
         self.assertIn("HOME_AGENT_PGBACKREST_SFTP_KEY", preflight)
@@ -317,6 +318,7 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertIn("'^repo1-sftp-host-fingerprint=[0-9a-f]{64}$'", preflight)
         self.assertIn("'^repo1-cipher-type=aes-256-cbc$'", preflight)
         self.assertIn("'^repo1-cipher-pass=[0-9a-f]{64}$'", preflight)
+        self.assertIn("'^repo1-bundle=y$'", preflight)
 
         roles = read("stack/home-agent-deploy/provision-roles.sh")
         runtime_grants = read("stack/home-agent-deploy/apply-grants.sh")

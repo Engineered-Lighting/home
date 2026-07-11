@@ -90,6 +90,9 @@ mode-0700 directory on encrypted storage. It must not be inside the PostgreSQL,
 runtime, or session roots. Replicate its encrypted `ledger.jsonl` and
 `ledger.head.json` together to an operator-controlled destination independent
 of pgBackRest; PostgreSQL backups intentionally cannot roll this ledger back.
+Install the commit-marker-ordered replication timer using
+`stack/home-agent-deploy/operator/ERASURE-LEDGER-BACKUP.md`; its rclone
+credential and staging directory must also remain on the encrypted mapper.
 
 Copy the non-secret environment template and calculate the versioned policy
 digest:
@@ -164,6 +167,9 @@ HBA file even for existing clusters, so the backup container never receives or
 impersonates the bootstrap owner. Its SQL authority is limited to read-only
 settings (not live query statistics) and the four PostgreSQL 17 backup/WAL
 control functions required by pgBackRest.
+Keep `repo1-bundle=y` as well: new backups are grouped into bundle files to
+reduce small-file SFTP operations and improve restore resilience without
+changing the repository cipher or retention rules.
 
 Run the strict preflight as root because the Compose secret source directories
 are deliberately not traversable by an ordinary host account. It verifies
@@ -212,6 +218,25 @@ Check readiness without printing environment variables or secrets:
 sudo docker compose --env-file home-agent.env -f home-agent-compose.yml ps
 sudo docker compose --env-file home-agent.env -f home-agent-compose.yml logs --tail=100 backup-gate migrate grant-runtime core-api core-ingest core-worker bff edge-ingress
 ```
+
+## Isolated database restore drill
+
+After building the digest-labeled PostgreSQL/pgBackRest image, run the staged
+restore drill for one explicit completed backup label. Direct libssh2 SFTP
+restore is not an acceptance path: the operator stages the encrypted repository
+with native host-key-pinned OpenSSH SFTP, then verifies, restores, and boots it
+locally with `network_mode=none` and no published ports.
+
+```sh
+sudo bash home-agent-deploy/operator/isolated_restore_drill.sh \
+  /srv/home-agent/config/home-agent.env \
+  20260711-220110F
+```
+
+The drill must pass revision, seven-schema, page-checksum, schema-dump, clean
+shutdown, and offline checksum validation. Detailed prerequisites, failure
+retention, and cleanup guards are documented in
+`stack/home-agent-deploy/operator/RESTORE-DRILL.md`.
 
 ## Web and OAuth routing
 

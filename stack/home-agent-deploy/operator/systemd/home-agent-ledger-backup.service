@@ -1,0 +1,31 @@
+[Unit]
+Description=Replicate the Home Agent erasure ledger off-host
+Requires=srv-home\x2dagent.mount
+After=srv-home\x2dagent.mount network-online.target
+Wants=network-online.target
+ConditionPathIsMountPoint=/srv/home-agent
+ConditionPathIsDirectory=/srv/home-agent/ledger-replication
+
+[Service]
+Type=oneshot
+TimeoutStartSec=4min30s
+User=root
+Group=root
+EnvironmentFile=/etc/home-agent/ledger-backup.env
+ExecStart=/usr/local/sbin/home-agent-ledger-backup
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/srv/home-agent/erasure-ledger
+ReadWritePaths=/srv/home-agent/ledger-replication
+ReadWritePaths=/srv/home-agent/config/rclone.conf
+ReadWritePaths=/run/lock

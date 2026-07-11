@@ -374,8 +374,20 @@ process.stdout.write("\n[1msubrole clustering + ring offset[0m\n");
     H.subroleCluster({ relationship_subrole: "father" }) === "parents");
   assert("subroleCluster: sister → siblings",
     H.subroleCluster({ relationship_subrole: "sister" }) === "siblings");
+  assert("subroleCluster: brother → siblings",
+    H.subroleCluster({ relationship_subrole: "brother" }) === "siblings");
+  assert("subroleCluster: girlfriend → partners",
+    H.subroleCluster({ relationship_subrole: "girlfriend" }) === "partners");
+  assert("subroleCluster: sister-in-law → in-laws",
+    H.subroleCluster({ relationship_subrole: "sister-in-law" }) === "in-laws");
   assert("subroleCluster: son → children",
     H.subroleCluster({ relationship_subrole: "son" }) === "children");
+  assert("subroleCluster: stepson → children",
+    H.subroleCluster({ relationship_subrole: "stepson" }) === "children");
+  assert("subroleCluster: nephew → extended family",
+    H.subroleCluster({ relationship_subrole: "nephew" }) === "extended family");
+  assert("subroleCluster: friend → friends",
+    H.subroleCluster({ relationship_subrole: "friend" }) === "friends");
   assert("subroleCluster: mother-in-law → in-laws",
     H.subroleCluster({ relationship_subrole: "mother-in-law" }) === "in-laws");
   assert("subroleCluster: case-insensitive",
@@ -476,10 +488,85 @@ process.stdout.write("\n[1msubrole clustering + ring offset[0m\n");
   // ── Cluster ORDER determinism ──
   // parents comes before siblings → parents placed at startAngle,
   // siblings placed at startAngle + runStep.
-  assert("CLUSTER_ORDER[0] is 'parents'",
-    H.CLUSTER_ORDER[0] === "parents");
+  assert("CLUSTER_ORDER keeps parents after partners",
+    H.CLUSTER_ORDER[1] === "parents");
   assert("'parents' is mapped from 'mother' subrole",
     H.SUBROLE_TO_CLUSTER.mother === "parents");
+})();
+
+(function () {
+  // Mobile can opt into larger avatars + tighter radii while desktop
+  // default geometry stays unchanged.
+  const ids = [
+    { uuid: "me", relationship_type: "me" },
+    { uuid: "holly", relationship_type: "partner", relationship_subrole: "girlfriend" },
+    { uuid: "felipe", relationship_type: "family_immediate", relationship_subrole: "brother" },
+    { uuid: "mark", relationship_type: "friend", relationship_subrole: "friend" },
+    { uuid: "pat", relationship_type: "friend", relationship_subrole: "friend" },
+  ];
+  const desktop = H.buildRadialLayout(ids);
+  const mobile = H.buildRadialLayout(ids, {
+    radiusScale: 0.84,
+    avatarScale: 1.46,
+    clusterStepScale: 0.92,
+    textScale: 1.28,
+  });
+  const desktopHolly = desktop.find((n) => n.uuid === "holly");
+  const mobileHolly = mobile.find((n) => n.uuid === "holly");
+  assert("desktop avatar size unchanged",
+    desktopHolly.size === 60, desktopHolly);
+  assert("mobile avatar size scales up",
+    mobileHolly.size > desktopHolly.size, { desktop: desktopHolly.size, mobile: mobileHolly.size });
+  assert("mobile radius scales down",
+    Math.hypot(mobileHolly.x, mobileHolly.y) < Math.hypot(desktopHolly.x, desktopHolly.y),
+    { desktop: desktopHolly, mobile: mobileHolly });
+  assert("mobile text scale is carried on graph nodes",
+    mobileHolly.textScale === 1.28, mobileHolly);
+})();
+
+(function () {
+  const ids = [
+    { uuid: "me", display_name: "Marcelo", relationship_type: "me" },
+    { uuid: "holly", display_name: "Holly", relationship_type: "partner", relationship_subrole: "girlfriend" },
+    { uuid: "ben", display_name: "Ben", relationship_type: "family_immediate", relationship_subrole: "stepson" },
+    { uuid: "peter", display_name: "Peter", relationship_type: "family_immediate", relationship_subrole: "stepson" },
+    { uuid: "felipe", display_name: "Felipe", relationship_type: "family_immediate", relationship_subrole: "brother" },
+    { uuid: "ashley", display_name: "Ashley", relationship_type: "family_extended", relationship_subrole: "sister-in-law" },
+    { uuid: "aurelio", display_name: "Aurelio", relationship_type: "family_immediate", relationship_subrole: "nephew" },
+  ];
+  const layout = H.buildRadialLayout(ids);
+  const byUuid = new Map(layout.map((n) => [n.uuid, n]));
+  const holly = byUuid.get("holly");
+  const ben = byUuid.get("ben");
+  const peter = byUuid.get("peter");
+  const felipe = byUuid.get("felipe");
+  const ashley = byUuid.get("ashley");
+  const aurelio = byUuid.get("aurelio");
+  assert("known family layout marks Holly branch",
+    holly.familyBranch === "holly-family" &&
+    ben.familyBranch === "holly-family" &&
+    peter.familyBranch === "holly-family");
+  assert("Ben and Peter sit farther from center than Holly",
+    Math.hypot(ben.x, ben.y) > Math.hypot(holly.x, holly.y) &&
+    Math.hypot(peter.x, peter.y) > Math.hypot(holly.x, holly.y));
+  assert("Felipe and Ashley are side by side in one branch",
+    felipe.familyBranch === "felipe-ashley-family" &&
+    ashley.familyBranch === "felipe-ashley-family" &&
+    Math.abs(felipe.x - ashley.x) + Math.abs(felipe.y - ashley.y) > 40);
+  assert("Aurelio branches beyond Felipe and Ashley",
+    aurelio.familyBranch === "felipe-ashley-family" &&
+    Math.hypot(aurelio.x, aurelio.y) > Math.hypot((felipe.x + ashley.x) / 2, (felipe.y + ashley.y) / 2));
+
+  const known = H.buildKnownFamilyRelationships(ids);
+  assert("known family relationships include Holly to Ben and Peter",
+    known.some((r) => r.from_uuid === "holly" && r.to_uuid === "ben" && r.rel_type === "parent") &&
+    known.some((r) => r.from_uuid === "holly" && r.to_uuid === "peter" && r.rel_type === "parent"),
+    known);
+  assert("known family relationships include Felipe/Ashley partner and Aurelio parent edges",
+    known.some((r) => r.from_uuid === "felipe" && r.to_uuid === "ashley" && r.rel_type === "partner") &&
+    known.some((r) => r.from_uuid === "felipe" && r.to_uuid === "aurelio" && r.rel_type === "parent") &&
+    known.some((r) => r.from_uuid === "ashley" && r.to_uuid === "aurelio" && r.rel_type === "parent"),
+    known);
 })();
 
 /* ────────────────────────────────────────────────────────────────────────
@@ -728,9 +815,12 @@ process.stdout.write("\n[1mpeople overlay interaction contract (DOC-S83)[0m\n");
   assert("mobile people graph uses a viewport-aware tight viewBox",
     peopleSource.includes("function usePeopleViewport()") &&
     peopleSource.includes("const peopleViewport = usePeopleViewport();") &&
+    peopleSource.includes("radiusScale: 0.84") &&
+    peopleSource.includes("avatarScale: 1.46") &&
+    peopleSource.includes("textScale: 1.28") &&
     peopleSource.includes("const nodeExtent = layout.reduce") &&
-    peopleSource.includes("Math.max(180, Math.min(460, nodeExtent + 32))") &&
-    peopleSource.includes('maxWidth: isMobile ? "calc(100vw - 20px)"'));
+    peopleSource.includes("Math.max(150, Math.min(390, nodeExtent + 12))") &&
+    peopleSource.includes('height={isMobile ? "min(84dvh, 820px)"'));
   assert("identities endpoint exposes sanitized Frigate diagnostics",
     haInitSource.includes('"frigate_seed_report": asdict(seed_report) if seed_report is not None else None') &&
     haInitSource.includes('"frigate_capabilities": asdict(capabilities) if capabilities is not None else None'));

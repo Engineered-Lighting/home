@@ -724,13 +724,26 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
     );
   }
 
-  // Layout
-  const layout = H.buildRadialLayout(graphable);
+  // Layout. Mobile gets a slightly larger, tighter graph: larger faces
+  // make the relationship web legible, while reduced radii keep every
+  // node inside the phone viewport.
+  const layout = H.buildRadialLayout(graphable, isMobile
+    ? {
+        radiusScale: 0.84,
+        avatarScale: 1.46,
+        clusterStepScale: 0.92,
+        textScale: 1.28,
+      }
+    : undefined);
 
-  // Edge geometry — we don't yet load explicit relationships in Slice 5;
-  // implicit edges (ring-1 → center) carry the visual story for MVP.
-  // Slice 6 will add real edges when the detail panel can manage them.
-  const edges = H.buildEdgeGeometry(layout, relationships || []);
+  // Edge geometry. In addition to HA relationship rows, overlay a small
+  // trusted-family map from the seeded face folders so the graph can show
+  // parent/partner branches immediately after identities sync.
+  const knownFamilyRelationships = H.buildKnownFamilyRelationships
+    ? H.buildKnownFamilyRelationships(graphable)
+    : [];
+  const relationshipRows = [...(relationships || []), ...knownFamilyRelationships];
+  const edges = H.buildEdgeGeometry(layout, relationshipRows);
 
   // SVG sizing. Desktop keeps the full relationship-ring field; mobile
   // fits to the actual visible nodes so sparse graphs do not render as a
@@ -741,7 +754,7 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
     return Math.max(max, radius + (n.size || 0) / 2 + 46);
   }, 160);
   const VIEW_HALF = isMobile
-    ? Math.max(180, Math.min(460, nodeExtent + 32))
+      ? Math.max(150, Math.min(390, nodeExtent + 12))
     : 460;
   const VIEW_SIZE = VIEW_HALF * 2;
 
@@ -779,18 +792,18 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
   return (
     <div style={{
       display: "flex", justifyContent: "center", alignItems: "center",
-      padding: isMobile ? "8px 0 22px" : "20px 0",
-      minHeight: isMobile ? "calc(100dvh - 230px)" : "auto",
+      padding: isMobile ? "0 0 max(22px, env(safe-area-inset-bottom))" : "20px 0",
+      minHeight: isMobile ? "calc(100dvh - 154px)" : "auto",
       width: "100%",
     }}>
       <svg
         width="100%"
-        height={isMobile ? "min(68dvh, 680px)" : "auto"}
+        height={isMobile ? "min(84dvh, 820px)" : "auto"}
         viewBox={`${-VIEW_HALF} ${-VIEW_HALF} ${VIEW_SIZE} ${VIEW_SIZE}`}
         style={{
-          maxHeight: isMobile ? "min(68dvh, 680px)" : "min(80vh, 800px)",
-          maxWidth: isMobile ? "calc(100vw - 20px)" : "min(80vw, 1000px)",
-          minHeight: isMobile ? 420 : "auto",
+          maxHeight: isMobile ? "min(84dvh, 820px)" : "min(80vh, 800px)",
+          maxWidth: isMobile ? "100vw" : "min(80vw, 1000px)",
+          minHeight: isMobile ? "min(620px, calc(100dvh - 160px))" : "auto",
           display: "block",
         }}
         preserveAspectRatio="xMidYMid meet"
@@ -910,7 +923,7 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
                         stroke="var(--hg-border)" strokeWidth={1} strokeDasharray="3,2" />
                 <text x={0} y={4} textAnchor="middle"
                       fontFamily={PEOPLE_FONT_MONO}
-                      fontSize={Math.max(9, node.size * 0.22)}
+                      fontSize={Math.max(9, node.size * 0.22 * (node.textScale || 1))}
                       fill="var(--hg-fg-3)">
                   +{node.overflowCount}
                 </text>
@@ -969,7 +982,7 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
                       x={0} y={Math.round(node.size * 0.13)}
                       textAnchor="middle"
                       fontFamily={PEOPLE_FONT_SANS}
-                      fontSize={Math.round(node.size * 0.36)}
+                      fontSize={Math.round(node.size * 0.36 * (node.textScale || 1))}
                       fontWeight={300}
                       fill={isCenter ? "var(--hg-ice)" : "var(--hg-fg-1)"}
                       opacity={isArchived ? 0.6 : 1}
@@ -1012,10 +1025,10 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
                   creating a clean halo that hides the edge stroke
                   beneath the text. No bbox math needed. */}
               <text
-                x={0} y={node.size / 2 + 14}
+                x={0} y={node.size / 2 + 14 * (node.textScale || 1)}
                 textAnchor="middle"
                 fontFamily={PEOPLE_FONT_MONO}
-                fontSize={Math.max(9, Math.round(node.size * 0.18))}
+                fontSize={Math.max(9, Math.round(node.size * 0.18 * (node.textScale || 1)))}
                 fill="var(--hg-fg-0)"
                 stroke="var(--hg-bg-0)"
                 strokeWidth={4}
@@ -1038,10 +1051,10 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
                   : (id?.relationship_type || "").replace(/_/g, " ");
                 return (
                   <text
-                    x={0} y={node.size / 2 + 26}
+                    x={0} y={node.size / 2 + 28 * (node.textScale || 1)}
                     textAnchor="middle"
                     fontFamily={PEOPLE_FONT_MONO}
-                    fontSize={Math.max(7, Math.round(node.size * 0.14))}
+                    fontSize={Math.max(7, Math.round(node.size * 0.14 * (node.textScale || 1)))}
                     fill="var(--hg-fg-3)"
                     stroke="var(--hg-bg-0)"
                     strokeWidth={3}

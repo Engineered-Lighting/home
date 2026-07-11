@@ -506,12 +506,13 @@ process.stdout.write("\n[1msubrole clustering + ring offset[0m\n");
   ];
   const desktop = H.buildRadialLayout(ids);
   const mobile = H.buildRadialLayout(ids, {
-    radiusScale: 1.16,
-    avatarScale: 1.36,
-    clusterStepScale: 1.18,
-    textScale: 1.24,
-    collisionPadding: 56,
-    centerCollisionPadding: 76,
+    radiusScale: 1.2,
+    avatarScale: 1.4,
+    clusterStepScale: 1.2,
+    textScale: 1.28,
+    collisionPadding: 64,
+    centerCollisionPadding: 88,
+    collisionIterations: 120,
   });
   const desktopHolly = desktop.find((n) => n.uuid === "holly");
   const mobileHolly = mobile.find((n) => n.uuid === "holly");
@@ -523,7 +524,7 @@ process.stdout.write("\n[1msubrole clustering + ring offset[0m\n");
     Math.hypot(mobileHolly.x, mobileHolly.y) >= Math.hypot(desktopHolly.x, desktopHolly.y),
     { desktop: desktopHolly, mobile: mobileHolly });
   assert("mobile text scale is carried on graph nodes",
-    mobileHolly.textScale === 1.24, mobileHolly);
+    mobileHolly.textScale === 1.28, mobileHolly);
 })();
 
 (function () {
@@ -535,6 +536,9 @@ process.stdout.write("\n[1msubrole clustering + ring offset[0m\n");
     { uuid: "felipe", display_name: "Felipe", relationship_type: "family_immediate", relationship_subrole: "brother" },
     { uuid: "ashley", display_name: "Ashley", relationship_type: "family_extended", relationship_subrole: "sister-in-law" },
     { uuid: "aurelio", display_name: "Aurelio", relationship_type: "family_immediate", relationship_subrole: "nephew" },
+    { uuid: "david", display_name: "David", relationship_type: "friend", relationship_subrole: "friend" },
+    { uuid: "mark", display_name: "Mark", relationship_type: "friend", relationship_subrole: "friend" },
+    { uuid: "pat", display_name: "Pat", relationship_type: "friend", relationship_subrole: "friend" },
   ];
   const layout = H.buildRadialLayout(ids);
   const byUuid = new Map(layout.map((n) => [n.uuid, n]));
@@ -544,6 +548,9 @@ process.stdout.write("\n[1msubrole clustering + ring offset[0m\n");
   const felipe = byUuid.get("felipe");
   const ashley = byUuid.get("ashley");
   const aurelio = byUuid.get("aurelio");
+  const david = byUuid.get("david");
+  const mark = byUuid.get("mark");
+  const pat = byUuid.get("pat");
   assert("known family layout marks Holly branch",
     holly.familyBranch === "holly-family" &&
     ben.familyBranch === "holly-family" &&
@@ -558,6 +565,14 @@ process.stdout.write("\n[1msubrole clustering + ring offset[0m\n");
   assert("Aurelio branches beyond Felipe and Ashley",
     aurelio.familyBranch === "felipe-ashley-family" &&
     Math.hypot(aurelio.x, aurelio.y) > Math.hypot((felipe.x + ashley.x) / 2, (felipe.y + ashley.y) / 2));
+  assert("known friends are grouped in one graph branch",
+    david.familyBranch === "friends" &&
+    mark.familyBranch === "friends" &&
+    pat.familyBranch === "friends");
+  assert("known friends stay visually close to each other",
+    Math.hypot(david.x - mark.x, david.y - mark.y) < 180 &&
+    Math.hypot(mark.x - pat.x, mark.y - pat.y) < 180,
+    { david, mark, pat });
 
   const known = H.buildKnownFamilyRelationships(ids);
   assert("known family relationships include Holly to Ben and Peter",
@@ -571,12 +586,13 @@ process.stdout.write("\n[1msubrole clustering + ring offset[0m\n");
     known);
 
   const mobileLayout = H.buildRadialLayout(ids, {
-    radiusScale: 1.16,
-    avatarScale: 1.36,
-    clusterStepScale: 1.18,
-    textScale: 1.24,
-    collisionPadding: 56,
-    centerCollisionPadding: 76,
+    radiusScale: 1.2,
+    avatarScale: 1.4,
+    clusterStepScale: 1.2,
+    textScale: 1.28,
+    collisionPadding: 64,
+    centerCollisionPadding: 88,
+    collisionIterations: 120,
   }).filter((n) => !n.overflow);
   const collisions = [];
   for (let i = 0; i < mobileLayout.length; i++) {
@@ -584,7 +600,7 @@ process.stdout.write("\n[1msubrole clustering + ring offset[0m\n");
       const a = mobileLayout[i];
       const b = mobileLayout[j];
       const dist = Math.hypot(a.x - b.x, a.y - b.y);
-      const min = ((a.size || 0) + (b.size || 0)) / 2 + 28;
+      const min = ((a.size || 0) + (b.size || 0)) / 2 + 32;
       if (dist < min) collisions.push([a.uuid, b.uuid, dist, min]);
     }
   }
@@ -838,13 +854,15 @@ process.stdout.write("\n[1mpeople overlay interaction contract (DOC-S83)[0m\n");
   assert("mobile people graph uses a viewport-aware tight viewBox",
     peopleSource.includes("function usePeopleViewport()") &&
     peopleSource.includes("const peopleViewport = usePeopleViewport();") &&
-    peopleSource.includes("radiusScale: 1.16") &&
-    peopleSource.includes("avatarScale: 1.36") &&
-    peopleSource.includes("textScale: 1.24") &&
-    peopleSource.includes("collisionPadding: 56") &&
+    peopleSource.includes("radiusScale: 1.2") &&
+    peopleSource.includes("avatarScale: 1.4") &&
+    peopleSource.includes("textScale: 1.28") &&
+    peopleSource.includes("collisionPadding: 64") &&
     peopleSource.includes("const nodeBounds = layout.reduce") &&
     peopleSource.includes("const graphViewBox = isMobile") &&
-    peopleSource.includes('height={isMobile ? "calc(100dvh - 148px)"'));
+    peopleSource.includes('height={isMobile ? "calc(100dvh - 148px)"') &&
+    peopleSource.includes("people-graph-field") &&
+    peopleSource.includes("people-node-soft-glow"));
   assert("identities endpoint exposes sanitized Frigate diagnostics",
     haInitSource.includes('"frigate_seed_report": asdict(seed_report) if seed_report is not None else None') &&
     haInitSource.includes('"frigate_capabilities": asdict(capabilities) if capabilities is not None else None'));

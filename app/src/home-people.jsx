@@ -729,12 +729,13 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
   // node inside the phone viewport.
   const layout = H.buildRadialLayout(graphable, isMobile
     ? {
-        radiusScale: 1.16,
-        avatarScale: 1.36,
-        clusterStepScale: 1.18,
-        textScale: 1.24,
-        collisionPadding: 56,
-        centerCollisionPadding: 76,
+        radiusScale: 1.2,
+        avatarScale: 1.4,
+        clusterStepScale: 1.2,
+        textScale: 1.28,
+        collisionPadding: 64,
+        centerCollisionPadding: 88,
+        collisionIterations: 120,
       }
     : undefined);
 
@@ -754,9 +755,9 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
   const nodeBounds = layout.reduce((bounds, n) => {
     if (!n || n.overflow) return bounds;
     const textScale = n.textScale || 1;
-    const padX = (n.size || 0) / 2 + (isMobile ? 36 : 46);
-    const padTop = (n.size || 0) / 2 + (isMobile ? 34 : 46);
-    const padBottom = (n.size || 0) / 2 + (isMobile ? 58 * textScale : 64);
+    const padX = (n.size || 0) / 2 + (isMobile ? 28 : 46);
+    const padTop = (n.size || 0) / 2 + (isMobile ? 28 : 46);
+    const padBottom = (n.size || 0) / 2 + (isMobile ? 52 * textScale : 64);
     return {
       minX: Math.min(bounds.minX, (n.x || 0) - padX),
       maxX: Math.max(bounds.maxX, (n.x || 0) + padX),
@@ -830,15 +831,39 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
         preserveAspectRatio="xMidYMid meet"
         aria-label="Relationship graph"
       >
+        <defs>
+          <radialGradient id="people-graph-field" cx="50%" cy="48%" r="66%">
+            <stop offset="0%" stopColor="var(--hg-fg-2)" stopOpacity="0.11" />
+            <stop offset="52%" stopColor="var(--hg-fg-3)" stopOpacity="0.035" />
+            <stop offset="100%" stopColor="var(--hg-bg-0)" stopOpacity="0" />
+          </radialGradient>
+          <filter id="people-node-soft-glow" x="-35%" y="-35%" width="170%" height="170%">
+            <feGaussianBlur stdDeviation="3" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+        <rect
+          x={graphViewBox.x}
+          y={graphViewBox.y}
+          width={graphViewBox.w}
+          height={graphViewBox.h}
+          fill="url(#people-graph-field)"
+          opacity={isMobile ? 0.9 : 0.45}
+          aria-hidden="true"
+        />
         {/* Subtle ring guides — radial vignette per Addendum 14 visual polish */}
         {[1, 2, 3].map((r) => (
           <circle
             key={`ring-${r}`}
-            cx={0} cy={0} r={H.radiusForRing(r)}
+            cx={0} cy={0} r={H.radiusForRing(r) * (isMobile ? 1.2 : 1)}
             fill="none"
             stroke="var(--hg-border-soft)"
-            strokeWidth={0.5}
-            opacity={activeRings.has(r) ? 0.4 : isMobile ? 0 : 0.18}
+            strokeWidth={isMobile ? 0.75 : 0.5}
+            strokeDasharray={isMobile ? "2,8" : undefined}
+            opacity={activeRings.has(r) ? (isMobile ? 0.28 : 0.4) : isMobile ? 0 : 0.18}
           />
         ))}
 
@@ -857,7 +882,8 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
               stroke={e.style.stroke}
               strokeWidth={incident ? (e.style.width + 0.8) : e.style.width}
               strokeDasharray={e.style.dash || undefined}
-              opacity={dimmed ? 0.25 : 0.85}
+              opacity={dimmed ? 0.2 : isMobile ? 0.68 : 0.85}
+              strokeLinecap="round"
               style={{ transition: "opacity 180ms ease, stroke-width 180ms ease" }}
               aria-label={e.relType
                 ? `${e.relType}${e.status === "ended" ? " (ended)" : ""}`
@@ -988,6 +1014,7 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
                 fill="var(--hg-bg-1)"
                 stroke={strokeColor}
                 strokeWidth={strokeWidth}
+                filter={isCenter && isMobile ? "url(#people-node-soft-glow)" : undefined}
                 style={{ transition: "stroke 180ms ease, stroke-width 180ms ease" }}
               />
               {/* Addendum 24 Phase 3: custom avatar wins when the parent

@@ -238,9 +238,20 @@
         );
       }
     }
+    function placeNamedArc(names, angleStart, angleStep, radiusMultiplier, branch) {
+      const nodes = names.map((name) => byName.get(name)).filter(Boolean);
+      if (nodes.length === 0) return;
+      const radius = radiusForRing(2) * radiusScale * radiusMultiplier;
+      const start = angleStart - ((nodes.length - 1) * angleStep) / 2;
+      for (let i = 0; i < nodes.length; i++) {
+        const angle = start + i * angleStep;
+        setNode(nodes[i], Math.cos(angle) * radius, Math.sin(angle) * radius, branch);
+      }
+    }
 
     placeParentChildren("holly", ["ben", "peter"], -0.72, "holly-family");
     placePairWithChild("felipe", "ashley", "aurelio", 2.42, "felipe-ashley-family");
+    placeNamedArc(["david", "mark", "pat"], 1.08, 0.36, 0.96, "friends");
     return resolveLayoutCollisions(layout, opts);
   }
 
@@ -621,7 +632,13 @@
         });
       }
     }
-    return applyKnownFamilyPositions(out, { radiusScale, avatarScale });
+    return applyKnownFamilyPositions(out, {
+      radiusScale,
+      avatarScale,
+      collisionPadding: opts.collisionPadding,
+      centerCollisionPadding: opts.centerCollisionPadding,
+      collisionIterations: opts.collisionIterations,
+    });
   }
 
   /* ── Edge styling ─────────────────────────────────────────────────

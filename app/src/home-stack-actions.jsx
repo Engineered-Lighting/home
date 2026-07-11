@@ -5,8 +5,9 @@
  * can drive supervisor actions without parallel auth/retry logic.
  *
  * The supervisor lives at <metricsBase host>:8093 and accepts a Bearer
- * STACK_TOKEN (read from localStorage 'hg-stack-token-DEV' or
- * window.__STACK_TOKEN). The supervisor returns:
+ * STACK_TOKEN supplied through the native/server-controlled
+ * window.__STACK_TOKEN boundary. Legacy localStorage token keys are purged and
+ * never read. The supervisor returns:
  *   • 200/202 + { task_id } on accepted action
  *   • 409 + { detail: { task_id, verb } } when another task is already running
  *   • 401 if the token is wrong

@@ -16,7 +16,10 @@ if ($auth) {
   $env:HOME_WEB_BASIC_AUTH = $auth
 }
 if (-not $env:HOME_WEB_AUTH_REQUIRED) {
-  $env:HOME_WEB_AUTH_REQUIRED = "0"
+  $env:HOME_WEB_AUTH_REQUIRED = "1"
+}
+if (-not $env:HOME_WEB_ENABLE_LEGACY_HA_PROXY) {
+  $env:HOME_WEB_ENABLE_LEGACY_HA_PROXY = "0"
 }
 
 Set-Location $repo

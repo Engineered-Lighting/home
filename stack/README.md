@@ -1,5 +1,10 @@
 # stack/ — the Ubuntu AI box services
 
+The governed Home Agent is intentionally a separate Compose project at
+`home-agent-compose.yml`; it does not join this GPU/legacy Intelligence
+lifecycle. Use `docs/HOME-AGENT-RUNBOOK.md` for its fail-closed storage,
+backup, mTLS, OAuth, and rollout gates.
+
 The Docker Compose stack the desktop client talks to. Runs vLLM,
 Wyoming Parakeet (STT), Kokoro (TTS), a vision sidecar, and the
 metrics sidecar that the Home app polls.
@@ -24,7 +29,7 @@ RTX 4090 + RTX 6000 Blackwell.
 ```
 stack/
 ├── docker-compose.yml      # one source of truth for the whole stack
-├── .env.example            # template for HF_TOKEN, HA_TOKEN, ports
+├── .env.example            # template for HF_TOKEN, bind addresses, and ports
 ├── scripts/
 │   ├── stack.sh            # up / down / restart / status / logs
 │   └── stack.ps1           # Windows wrapper (ssh → AI box)
@@ -76,8 +81,10 @@ guide, including recovery recipes and Home Assistant configuration.
 | vision-sidecar   |  8091 | Camera image description            |
 | metrics-sidecar  |  8092 | Telemetry for the Home desktop app  |
 
-All bind to `0.0.0.0` by default — they're reachable across the LAN.
-Don't expose them to the public internet.
+Sensitive model, vision, metrics/chat-proxy, and S2S bridge ports bind to
+`127.0.0.1` by default. Set their explicit `*_BIND_ADDR` variables only to a
+reviewed host address protected by the host firewall. The separate Agent Core
+publishes neither PostgreSQL nor its application roles.
 
 ## metrics-sidecar in particular
 

@@ -60,6 +60,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -70,6 +71,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # Force-enable for tests in case the env was sticky
 os.environ.pop("EXTENDED_OPENAI_IDENTITY_STORE", None)
+os.environ["EXTENDED_OPENAI_IDENTITY_SEMANTIC_WRITES"] = "legacy_migration_only"
 
 from identity_store import (  # type: ignore[import]
     IdentityStore,
@@ -428,6 +430,65 @@ def _every_mutation_writes_audit_row():
     assert kinds == ["identity_mutation"] * 3, kinds
 t("every mutation writes a change_log row", _every_mutation_writes_audit_row)
 
+def _audit_is_content_minimized():
+    s = fresh()
+    u = s.create_identity("SENSITIVE-NAME-CANARY")
+    s.update_identity(u, {"notes": "SENSITIVE-NOTE-CANARY"})
+    s.delete_identity(u, queue_frigate_delete=False)
+    rows = s._conn.execute(
+        "SELECT before_json, after_json, link_conv_id, link_turn_id "
+        "FROM change_log ORDER BY id"
+    ).fetchall()
+    serialized = json.dumps([dict(row) for row in rows])
+    assert "SENSITIVE-NAME-CANARY" not in serialized
+    assert "SENSITIVE-NOTE-CANARY" not in serialized
+    assert all(row["before_json"] is None for row in rows)
+    assert all(
+        set(json.loads(row["after_json"])) == {"operation_code"}
+        for row in rows
+    )
+    assert all(row["link_conv_id"] is None for row in rows)
+    assert all(row["link_turn_id"] is None for row in rows)
+t("audit rows never retain identity snapshots or conversation links",
+  _audit_is_content_minimized)
+
+def _setup_scrubs_historical_audit_snapshots():
+    with tempfile.TemporaryDirectory() as directory:
+        path = str(Path(directory) / "identity.db")
+        first = IdentityStore(db_path=path)
+        first.setup()
+        first._conn.execute(
+            "INSERT INTO change_log(ts, kind, actor, target_uuid, before_json, "
+            "after_json, link_conv_id) VALUES(?, 'identity_mutation', 'user', "
+            "?, ?, ?, ?)",
+            (
+                "2026-07-11T00:00:00Z",
+                "opaque-id",
+                '{"display_name":"SENSITIVE-HISTORICAL-CANARY"}',
+                '{"notes":"SENSITIVE-HISTORICAL-NOTE"}',
+                "conversation-canary",
+            ),
+        )
+        first.close()
+        reopened = IdentityStore(db_path=path)
+        reopened.setup()
+        row = reopened._conn.execute(
+            "SELECT before_json, after_json, link_conv_id FROM change_log"
+        ).fetchone()
+        assert row["before_json"] is None
+        assert json.loads(row["after_json"]) == {
+            "operation_code": "legacy_scrubbed"
+        }
+        assert row["link_conv_id"] is None
+        raw = Path(path).read_bytes()
+        assert b"SENSITIVE-HISTORICAL-CANARY" not in raw
+        assert b"SENSITIVE-HISTORICAL-NOTE" not in raw
+        assert b"conversation-canary" not in raw
+        wal = Path(path + "-wal")
+        assert not wal.exists() or b"SENSITIVE-HISTORICAL-CANARY" not in wal.read_bytes()
+        reopened.close()
+t("setup scrubs historical full audit snapshots", _setup_scrubs_historical_audit_snapshots)
+
 def _purge_respects_ttl_and_pinned():
     s = fresh()
     u = s.create_identity("Sarah")
@@ -485,6 +546,52 @@ t("EXTENDED_OPENAI_IDENTITY_STORE=off → all methods no-op",
 
 
 # ── Privacy flags (typed columns per AR-5) ─────────────────────────────
+section("semantic cutover freeze")
+
+def _semantic_freeze_is_irreversible_and_recognition_stays_operational():
+    with tempfile.TemporaryDirectory() as directory:
+        path = str(Path(directory) / "identity.db")
+        mutable = IdentityStore(db_path=path)
+        mutable.setup()
+        assert mutable.semantic_writes_frozen is False
+        mutable.create_identity("Reviewed before cutover")
+        mutable.close()
+
+        os.environ.pop("EXTENDED_OPENAI_IDENTITY_SEMANTIC_WRITES", None)
+        frozen = IdentityStore(db_path=path)
+        frozen.setup()
+        assert frozen.semantic_writes_frozen is True
+        try:
+            frozen.create_identity("Must fail")
+            raise AssertionError("semantic create unexpectedly succeeded")
+        except PermissionError:
+            pass
+        recognition_uuid = frozen.ensure_recognition_enrollment(
+            "new_frigate_cluster", display_label="Unreviewed recognition"
+        )
+        assert recognition_uuid
+        assert frozen.resolve_frigate_name("new_frigate_cluster") is not None
+        frozen.close()
+
+        os.environ["EXTENDED_OPENAI_IDENTITY_SEMANTIC_WRITES"] = (
+            "legacy_migration_only"
+        )
+        reopened = IdentityStore(db_path=path)
+        reopened.setup()
+        assert reopened.semantic_writes_frozen is True
+        try:
+            reopened.add_alias(recognition_uuid, "Must fail")
+            raise AssertionError("semantic alias unexpectedly succeeded")
+        except PermissionError:
+            pass
+        reopened.close()
+
+t(
+    "Core cutover marker freezes semantics but preserves recognition enrollment",
+    _semantic_freeze_is_irreversible_and_recognition_stays_operational,
+)
+
+
 section("privacy flags")
 
 def _typed_flags_round_trip():

@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("INTELLIGENCE_SCHEDULER_ENABLED", "0")
+os.environ.setdefault("INTELLIGENCE_READ_ONLY", "0")
 
 from fastapi.testclient import TestClient  # noqa: E402
 

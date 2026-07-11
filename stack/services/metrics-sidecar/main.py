@@ -6,12 +6,8 @@ Two responsibilities:
    throughput / TTFT (scraped from vLLM's Prometheus) — exposed at
    GET /metrics for the Home desktop client to poll.
 
-2. Chat tee — proxies vLLM's OpenAI-compatible API (/v1/chat/completions,
-   /v1/models, /v1/*) so HA's Extended OpenAI Conv can call this service
-   instead of vLLM directly. Every chat completion gets captured and
-   re-broadcast on GET /conversations/stream (SSE), so the Home desktop
-   sees ALL conversation activity — typed turns, voice mode, Voice PE
-   wake-word turns — in one place, regardless of who initiated it.
+2. Transparent vLLM proxy — forwards OpenAI-compatible API traffic without
+   retaining, parsing, broadcasting, or persisting conversation content.
 
 Designed to be tiny — single file, no DB, no auth. Lives behind the
 private LAN/Tailnet (same trust boundary as the rest of the stack).
@@ -39,6 +35,10 @@ VLLM_METRICS_URL = os.environ.get("VLLM_METRICS_URL", "http://vllm:8000/metrics"
 VLLM_UPSTREAM    = os.environ.get("VLLM_UPSTREAM_URL", "http://vllm:8000")
 SCRAPE_INTERVAL_S = float(os.environ.get("SCRAPE_INTERVAL_S", "2.0"))
 PROXY_TIMEOUT_S = float(os.environ.get("PROXY_TIMEOUT_S", "300.0"))
+# Greenfield containment lock. A stale host .env must not restore the old
+# unauthenticated conversation tee. Reintroduction requires a separate,
+# authenticated design rather than a production environment toggle.
+CONVERSATION_CONTENT_ENABLED = False
 
 app = FastAPI(title="Home sidecar", version="0.3.0")  # bump for M0 schema additions
 app.add_middleware(
@@ -322,60 +322,8 @@ def metrics() -> dict:
     }
 
 
-# ── Chat tee: proxy vLLM + broadcast each completion to subscribers ────
-
-# Each subscriber gets an asyncio.Queue. Producers push completion events
-# (dicts). The /conversations/stream SSE endpoint pops from its queue.
-_subscribers: set = set()
-# Recent completions buffer for clients that connect mid-conversation or
-# want to backfill state. Bounded to keep memory tiny.
-_recent_completions: list = []
-_RECENT_MAX = 50
-
-
-async def _broadcast_completion(event: dict) -> None:
-    _recent_completions.append(event)
-    if len(_recent_completions) > _RECENT_MAX:
-        del _recent_completions[: len(_recent_completions) - _RECENT_MAX]
-    dead = []
-    for q in list(_subscribers):
-        try:
-            q.put_nowait(event)
-        except asyncio.QueueFull:
-            dead.append(q)
-    for q in dead:
-        _subscribers.discard(q)
-
-
-def _accumulate_tool_call_delta(buf: list, deltas: list) -> None:
-    """OpenAI streaming tool calls arrive as deltas indexed by `index`.
-    Patch the matching slot in `buf` so by stream-end we have full names
-    + arguments strings to feed back as a structured tool call list."""
-    for tc in deltas or []:
-        idx = tc.get("index", 0)
-        while len(buf) <= idx:
-            buf.append({"id": None, "type": "function",
-                        "function": {"name": "", "arguments": ""}})
-        slot = buf[idx]
-        if tc.get("id"): slot["id"] = tc["id"]
-        f = tc.get("function") or {}
-        if f.get("name"):      slot["function"]["name"] += f["name"]
-        if f.get("arguments"): slot["function"]["arguments"] += f["arguments"]
-
-
-def _user_message_from_body(body: dict) -> str:
-    """Pluck the latest user message from an OpenAI chat-completions body."""
-    for m in reversed(body.get("messages") or []):
-        if m.get("role") == "user":
-            c = m.get("content")
-            if isinstance(c, str):
-                return c
-            # Multimodal content is a list of parts; concat the text ones.
-            if isinstance(c, list):
-                return " ".join(
-                    p.get("text", "") for p in c if isinstance(p, dict) and p.get("type") == "text"
-                ).strip()
-    return ""
+# Content-blind vLLM proxy. Conversation bodies are never retained, parsed for
+# telemetry, persisted, or broadcast by this process.
 
 
 @app.post("/v1/chat/completions")
@@ -387,132 +335,24 @@ async def proxy_chat_completions(request: Request):
         return JSONResponse({"error": "invalid json"}, status_code=400)
     is_stream = bool(body.get("stream"))
     upstream = VLLM_UPSTREAM.rstrip("/") + "/v1/chat/completions"
-    user_msg = _user_message_from_body(body)
     headers = {k: v for k, v in request.headers.items()
                if k.lower() not in ("host", "content-length", "connection")}
-
-    # M0.1 — capture upstream-call latency. `t_request_started` is the
-    # wall-clock when the proxy started forwarding; `upstream_ms` is the
-    # measured upstream duration emitted on the broadcast so the lab tab
-    # + baseline script can slice latency per LLM call (including each
-    # agent-loop step). For non-stream this is end-to-end; for stream this
-    # is request-start → stream-finalized.
-    t_request_started = time.time()
 
     if not is_stream:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as c:
             r = await c.post(upstream, json=body, headers=headers)
-        try:
-            resp = r.json()
-            msg = (resp.get("choices") or [{}])[0].get("message") or {}
-            # M0.2 — token counts from vLLM's `usage` block. Always present
-            # on non-stream OpenAI responses; safe-access in case some
-            # error path returns a body without it.
-            usage = resp.get("usage") or {}
-            await _broadcast_completion({
-                "ts": time.time(),
-                "id": resp.get("id"),
-                "model": resp.get("model"),
-                "user": user_msg,
-                "assistant": msg.get("content") or "",
-                "tool_calls": msg.get("tool_calls") or [],
-                "streamed": False,
-                # M0 instrumentation (additive — existing consumers ignore unknown keys)
-                "t_request_started": t_request_started,
-                "upstream_ms": int((time.time() - t_request_started) * 1000),
-                "prompt_tokens": usage.get("prompt_tokens"),
-                "completion_tokens": usage.get("completion_tokens"),
-                "total_tokens": usage.get("total_tokens"),
-            })
-            return JSONResponse(content=resp, status_code=r.status_code)
-        except Exception as e:
-            log.warning("non-stream tee failed: %s", e)
-            return Response(content=r.content, status_code=r.status_code,
-                            media_type=r.headers.get("content-type", "application/json"))
+        return Response(content=r.content, status_code=r.status_code,
+                        media_type=r.headers.get("content-type", "application/json"))
 
-    # Streaming path — tee chunks back to client, accumulate, broadcast on end.
+    # Streaming path forwards raw chunks without accumulating content.
     async def gen() -> AsyncGenerator[bytes, None]:
-        full_content = ""
-        tool_calls: list = []
-        model = body.get("model")
-        completion_id = None
-        # M0.2 — vLLM emits a final chunk (when client sets stream_options=
-        # {"include_usage": true}) with a `usage` block. Capture it when
-        # present; otherwise leaves counts as None and downstream
-        # aggregator treats them as "no data" rather than zero.
-        usage: dict = {}
-        # M0.1 — capture upstream stream finish time and first-token time
-        # (TTFT measured by sidecar, complementing the vLLM prometheus
-        # scrape which is a 2s-rolling average).
-        t_first_token: Optional[float] = None
         try:
             async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as c:
                 async with c.stream("POST", upstream, json=body, headers=headers) as r:
-                    async for raw_line in r.aiter_lines():
-                        if not raw_line:
-                            yield b"\n"
-                            continue
-                        if raw_line.startswith("data: "):
-                            payload = raw_line[6:].strip()
-                            yield (raw_line + "\n\n").encode()
-                            if payload == "[DONE]":
-                                continue
-                            try:
-                                obj = json.loads(payload)
-                                if obj.get("id") and not completion_id:
-                                    completion_id = obj["id"]
-                                if obj.get("model"):
-                                    model = obj["model"]
-                                if obj.get("usage"):
-                                    usage = obj["usage"]
-                                for ch in obj.get("choices") or []:
-                                    d = ch.get("delta") or {}
-                                    if isinstance(d.get("content"), str):
-                                        if d["content"] and t_first_token is None:
-                                            t_first_token = time.time()
-                                        full_content += d["content"]
-                                    if d.get("tool_calls"):
-                                        if t_first_token is None:
-                                            t_first_token = time.time()
-                                        _accumulate_tool_call_delta(tool_calls, d["tool_calls"])
-                            except Exception:
-                                pass
-                        else:
-                            yield (raw_line + "\n").encode()
+                    async for chunk in r.aiter_raw():
+                        yield chunk
         except Exception as e:
-            log.warning("upstream stream error: %s", e)
-        # Finalise the tool call args from string → parsed JSON where possible.
-        finalised_tcs = []
-        for tc in tool_calls:
-            tcc = dict(tc)
-            fn = dict(tcc.get("function") or {})
-            args_str = fn.get("arguments") or ""
-            try:
-                fn["arguments_parsed"] = json.loads(args_str) if args_str else None
-            except Exception:
-                fn["arguments_parsed"] = None
-            tcc["function"] = fn
-            finalised_tcs.append(tcc)
-        t_done = time.time()
-        await _broadcast_completion({
-            "ts": t_done,
-            "id": completion_id,
-            "model": model,
-            "user": user_msg,
-            "assistant": full_content,
-            "tool_calls": finalised_tcs,
-            "streamed": True,
-            # M0 instrumentation
-            "t_request_started": t_request_started,
-            "upstream_ms": int((t_done - t_request_started) * 1000),
-            "ttft_observed_ms": (
-                int((t_first_token - t_request_started) * 1000)
-                if t_first_token else None
-            ),
-            "prompt_tokens": usage.get("prompt_tokens"),
-            "completion_tokens": usage.get("completion_tokens"),
-            "total_tokens": usage.get("total_tokens"),
-        })
+            log.warning("upstream stream error: %s", type(e).__name__)
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
@@ -538,38 +378,18 @@ async def proxy_passthrough(rest_of_path: str, request: Request):
 
 
 @app.get("/conversations/recent")
-def recent_conversations(since: float = 0.0):
-    return {
-        "now": time.time(),
-        "since": since,
-        "entries": [e for e in _recent_completions if e["ts"] > since],
-    }
+def recent_conversations():
+    return JSONResponse(
+        {"error": "capability_disabled"},
+        status_code=404,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/conversations/stream")
-async def stream_conversations(request: Request, backfill_n: int = 0):
-    q: asyncio.Queue = asyncio.Queue(maxsize=64)
-    _subscribers.add(q)
-
-    async def gen() -> AsyncGenerator[bytes, None]:
-        try:
-            yield b": connected\n\n"
-            # Optionally send the last N recent completions on connect so
-            # a freshly-loaded UI shows recent context immediately.
-            if backfill_n > 0:
-                for ev in _recent_completions[-backfill_n:]:
-                    yield f"data: {json.dumps(ev)}\n\n".encode()
-            while True:
-                if await request.is_disconnected():
-                    return
-                try:
-                    ev = await asyncio.wait_for(q.get(), timeout=20.0)
-                    yield f"data: {json.dumps(ev)}\n\n".encode()
-                except asyncio.TimeoutError:
-                    yield b": ping\n\n"
-        finally:
-            _subscribers.discard(q)
-
-    return StreamingResponse(gen(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache",
-                                      "X-Accel-Buffering": "no"})
+async def stream_conversations():
+    return JSONResponse(
+        {"error": "capability_disabled"},
+        status_code=404,
+        headers={"Cache-Control": "no-store"},
+    )

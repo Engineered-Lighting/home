@@ -46,10 +46,11 @@ def _env_float(name: str, default: float, *, minimum: float) -> float:
 
 def scheduler_config() -> dict[str, Any]:
     return {
-        "enabled": _env_bool("INTELLIGENCE_SCHEDULER_ENABLED", True),
+        "enabled": _env_bool("INTELLIGENCE_SCHEDULER_ENABLED", False),
         "evidence_pull_interval_s": _env_float("INTELLIGENCE_EVIDENCE_PULL_INTERVAL_S", 300.0, minimum=60.0),
         "multimodal_capture_interval_s": _env_float("INTELLIGENCE_MULTIMODAL_CAPTURE_INTERVAL_S", 60.0, minimum=30.0),
         "ingest_interval_s": _env_float("INTELLIGENCE_INGEST_INTERVAL_S", 3600.0, minimum=60.0),
+        "memory_enabled": _env_bool("INTELLIGENCE_MEMORY_ENABLED", False),
         "memory_interval_s": _env_float("INTELLIGENCE_MEMORY_INTERVAL_S", 86400.0, minimum=300.0),
         "tick_s": _env_float("INTELLIGENCE_SCHEDULER_TICK_S", 60.0, minimum=5.0),
         "initial_delay_s": _env_float("INTELLIGENCE_SCHEDULER_INITIAL_DELAY_S", 60.0, minimum=0.0),
@@ -167,7 +168,7 @@ def _scheduler_tick() -> dict[str, Any]:
                 interval_s=cfg["ingest_interval_s"],
                 now=now,
             )
-        if next_memory <= now:
+        if cfg["memory_enabled"] and next_memory <= now:
             _state["in_flight"] = "daily_memory"
             execute_daily_memory(conn, source="scheduler")
             ran.append("daily_memory")
@@ -206,6 +207,7 @@ async def _loop() -> None:
             "evidence_pull_interval_s": cfg["evidence_pull_interval_s"],
             "multimodal_capture_interval_s": cfg["multimodal_capture_interval_s"],
             "ingest_interval_s": cfg["ingest_interval_s"],
+            "memory_enabled": cfg["memory_enabled"],
             "memory_interval_s": cfg["memory_interval_s"],
         }
     )
@@ -235,6 +237,7 @@ def start_scheduler() -> None:
             "evidence_pull_interval_s": cfg["evidence_pull_interval_s"],
             "multimodal_capture_interval_s": cfg["multimodal_capture_interval_s"],
             "ingest_interval_s": cfg["ingest_interval_s"],
+            "memory_enabled": cfg["memory_enabled"],
             "memory_interval_s": cfg["memory_interval_s"],
         }
     )
@@ -296,11 +299,12 @@ def scheduler_status(conn: sqlite3.Connection | None = None) -> dict[str, Any]:
             "evidence_pull_interval_s": cfg["evidence_pull_interval_s"],
             "multimodal_capture_interval_s": cfg["multimodal_capture_interval_s"],
             "ingest_interval_s": cfg["ingest_interval_s"],
+            "memory_enabled": cfg["memory_enabled"],
             "memory_interval_s": cfg["memory_interval_s"],
             "next_evidence_pull_at": _iso(next_evidence_pull),
             "next_multimodal_capture_at": _iso(next_multimodal_capture),
             "next_ingest_at": _iso(next_ingest),
-            "next_memory_at": _iso(next_memory),
+            "next_memory_at": _iso(next_memory) if cfg["memory_enabled"] else None,
         }
     finally:
         if close_conn:

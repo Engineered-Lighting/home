@@ -505,11 +505,8 @@ def run_log_kind_test():
 
 
 def run_log_decision_default_kind_test():
-    """log_decision() must add `kind: routing_decision` to pre-M0 entries
-    that don't carry one — otherwise the analyzer can't tell which kind
-    a backcompat entry is. Test the additive behavior via a fake hass
-    that captures the serialized line."""
-    print(f"{DIM}── log_decision default kind ──{RST}")
+    """The MVP containment lock must beat a stale ``full`` environment."""
+    print(f"{DIM}── log_decision hard-off containment ──{RST}")
     import asyncio
     from external_routing import log_decision, LOG_KIND_ROUTING_DECISION
 
@@ -534,27 +531,21 @@ def run_log_decision_default_kind_test():
     entry_no_kind = {"ts": "now", "conv_id": "cid-X", "intent": "local",
                      "matched": "HOME_VERBS", "dispatched": "local"}
 
+    prior_mode = os.environ.get("EXTERNAL_ROUTING_LOG_MODE")
+    os.environ["EXTERNAL_ROUTING_LOG_MODE"] = "full"
     try:
-        asyncio.get_event_loop().run_until_complete(log_decision(fake, entry_no_kind))
-    except RuntimeError:
-        # Python 3.12 deprecation — try the new pattern
-        asyncio.new_event_loop().run_until_complete(log_decision(fake, entry_no_kind))
+        asyncio.run(log_decision(fake, entry_no_kind))
+    finally:
+        if prior_mode is None:
+            os.environ.pop("EXTERNAL_ROUTING_LOG_MODE", None)
+        else:
+            os.environ["EXTERNAL_ROUTING_LOG_MODE"] = prior_mode
 
     failed = []
     try:
-        line = captured.get("line")
-        assert line, "no line captured"
-        parsed = json.loads(line)
-        assert parsed.get("kind") == LOG_KIND_ROUTING_DECISION, \
-            f"missing kind default, got {parsed.get('kind')!r}"
-        print(f"  {GREEN}OK{RST}: pre-M0 entry got kind=routing_decision injected")
-
-        events = captured.get("events") or []
-        assert len(events) == 1, f"expected 1 fired event, got {len(events)}"
-        evt_type, evt_data = events[0]
-        assert evt_data.get("kind") == LOG_KIND_ROUTING_DECISION, \
-            f"fired event missing kind: {evt_data}"
-        print(f"  {GREEN}OK{RST}: HA event payload mirrors file write (kind injected)")
+        assert captured.get("line") is None, "contentful log line escaped hard-off gate"
+        assert not captured.get("events"), "routing event escaped hard-off gate"
+        print(f"  {GREEN}OK{RST}: stale full-mode env cannot write or publish content")
     except (AssertionError, json.JSONDecodeError) as e:
         failed.append(str(e))
 

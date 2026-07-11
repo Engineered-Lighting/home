@@ -9,14 +9,18 @@
 #     --network host \
 #     --gpus all \
 #     --restart unless-stopped \
+#     --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+#     --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m \
 #     -v /opt/home-ai-voice/video-labeler-data:/data \
-#     -v /var/run/docker.sock:/var/run/docker.sock \
-#     --env-file /opt/home-ai-voice/.env \
-#     -e PORT=8099 -e DATA_DIR=/data \
+#     -v /etc/home-ai-voice/secrets/video_labeler_token:/run/secrets/video_labeler_token:ro \
+#     --env-file /etc/home-ai-voice/video-labeler.env \
+#     -e PORT=8099 -e BIND_HOST=127.0.0.1 -e DATA_DIR=/data \
+#     -e VIDEO_LABELER_API_TOKEN_FILE=/run/secrets/video_labeler_token \
 #     video-labeler
 #
-# docker.sock is mounted for the M2+ GPU-eviction / deadman-restore machinery
-# (stop + compose-up of VRAM-holding containers); it is unused in M0.
+# The isolated research container deliberately has no Docker socket. M2+
+# host-level GPU eviction remains disabled until it has a separate narrow
+# supervisor rather than root-equivalent access to the Docker daemon.
 #
 # Equivalent compose shape, FOR REFERENCE ONLY if it is ever folded in:
 services:
@@ -27,10 +31,17 @@ services:
     network_mode: host        # binds PORT (default 8099) directly on the host
     volumes:
       - /opt/home-ai-voice/video-labeler-data:/data
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /etc/home-ai-voice/secrets/video_labeler_token:/run/secrets/video_labeler_token:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m
     environment:
       - DATA_DIR=/data
       - PORT=8099
+      - BIND_HOST=127.0.0.1
+      - VIDEO_LABELER_API_TOKEN_FILE=/run/secrets/video_labeler_token
       - MIN_FREE_VRAM_GB=6
     deploy:
       resources:

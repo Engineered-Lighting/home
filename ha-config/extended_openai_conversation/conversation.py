@@ -32,12 +32,17 @@ from .const import (
     CONF_FUNCTION_TOOLS,
     CONF_PROMPT,
     CONF_SKILLS,
+    CONTAINED_DEFAULT_PROMPT,
     DEFAULT_CONF_FUNCTION_TOOLS,
     DEFAULT_PROMPT,
     DEFAULT_WORKING_DIRECTORY,
     DOMAIN,
     EVENT_CONVERSATION_FINISHED,
+    EXTERNAL_REASONING_ROUTING_ENABLED,
+    MODEL_PRIVATE_CONTEXT_ENABLED,
+    MODEL_TOOL_CATALOG_ENABLED,
     PERSON_NAME_ALIASES,
+    is_model_action_tool_disabled,
 )
 from .entity import ExtendedOpenAIBaseLLMEntity
 from .exceptions import (
@@ -393,16 +398,10 @@ class ExtendedOpenAIAgentEntity(
             if corrected != user_input.text:
                 try:
                     with open("/config/asr_debug.log", "a") as _f:
-                        _f.write(
-                            f"{time.time():.3f} APPLIED "
-                            f"{user_input.text[:80]!r} → {corrected[:80]!r}\n"
-                        )
+                        _f.write(f"{time.time():.3f} ASR_CORRECTION_APPLIED\n")
                 except Exception:  # noqa: BLE001
                     pass
-                _LOGGER.info(
-                    "asr_correction: %r → %r",
-                    user_input.text[:60], corrected[:60],
-                )
+                _LOGGER.info("asr_correction_applied")
                 user_input.text = corrected
 
         # ── Jarvis mute gate (Addendum 9) ───────────────────────
@@ -424,10 +423,10 @@ class ExtendedOpenAIAgentEntity(
             self._transient_this_turn = False
             # 1. Resume command — always honored.
             if _is_resume:
-                _LOGGER.info("jarvis-mute: resume command %r", _raw_text[:80])
+                _LOGGER.info("jarvis-mute: resume command")
                 try:
                     with open("/config/asr_debug.log", "a") as _f:
-                        _f.write(f"{time.time():.3f} JARVIS_RESUME {_raw_text[:80]!r}\n")
+                        _f.write(f"{time.time():.3f} JARVIS_RESUME\n")
                 except Exception:  # noqa: BLE001
                     pass
                 await self._clear_mute_state(user_input)
@@ -440,7 +439,7 @@ class ExtendedOpenAIAgentEntity(
                 )
             # 2. Transient unmute — process this turn normally, mute holds.
             if _is_muted_now and _is_transient:
-                _LOGGER.info("jarvis-mute: transient unmute %r", _raw_text[:80])
+                _LOGGER.info("jarvis-mute: transient unmute")
                 # Strip the marker phrase so the LLM gets the actual question.
                 user_input.text = re.sub(
                     r"\b(just this once|one quick question|real quick|"
@@ -454,10 +453,10 @@ class ExtendedOpenAIAgentEntity(
                 # forced False by the response-builder override.
             # 3. Muted with no special handling — drop silently.
             elif _is_muted_now:
-                _LOGGER.info("jarvis-mute: dropped %r", _raw_text[:80])
+                _LOGGER.info("jarvis-mute: dropped")
                 try:
                     with open("/config/asr_debug.log", "a") as _f:
-                        _f.write(f"{time.time():.3f} JARVIS_MUTED_DROP {_raw_text[:80]!r}\n")
+                        _f.write(f"{time.time():.3f} JARVIS_MUTED_DROP\n")
                 except Exception:  # noqa: BLE001
                     pass
                 resp = intent.IntentResponse(language=user_input.language)
@@ -470,12 +469,12 @@ class ExtendedOpenAIAgentEntity(
                 )
             # 4. Mute command (currently unmuted) — apply + ack.
             elif _mute_intent and _mute_intent["kind"] != "transient_unmute":
-                _LOGGER.info("jarvis-mute: apply %s", _mute_intent)
+                _LOGGER.info("jarvis-mute: apply kind=%s", _mute_intent.get("kind"))
                 try:
                     with open("/config/asr_debug.log", "a") as _f:
                         _f.write(
                             f"{time.time():.3f} JARVIS_MUTE_APPLY "
-                            f"{_mute_intent!r} from {_raw_text[:80]!r}\n"
+                            f"kind={_mute_intent.get('kind', 'unknown')}\n"
                         )
                 except Exception:  # noqa: BLE001
                     pass
@@ -501,14 +500,23 @@ class ExtendedOpenAIAgentEntity(
         # cache it (below) keyed by the post-DEVICE_CONV_MEMORY-rewrite
         # conversation_id AND the device_id, so every turn of this
         # conversation can resolve the correct area. See room_binding.py.
-        room = parse_marker(getattr(user_input, "extra_system_prompt", None))
+        if not MODEL_PRIVATE_CONTEXT_ENABLED:
+            # Ordinary MVP turns are current-turn only. Ignore a client-sent
+            # conversation id and proactive room marker so neither legacy chat
+            # history nor private location enters the model boundary.
+            user_input.conversation_id = None
+        room = (
+            parse_marker(getattr(user_input, "extra_system_prompt", None))
+            if MODEL_PRIVATE_CONTEXT_ENABLED
+            else None
+        )
         _LOGGER.debug(
             "hg-diag async_process IN cid=%s dev=%s room_marker=%s",
             user_input.conversation_id,
             dev,
             room,
         )
-        if dev:
+        if dev and MODEL_PRIVATE_CONTEXT_ENABLED:
             last = DEVICE_CONV_MEMORY.get(dev)
             if last and (time.time() - last[0]) < DEVICE_CONV_TTL_SEC:
                 user_input.conversation_id = last[1]
@@ -540,6 +548,8 @@ class ExtendedOpenAIAgentEntity(
         }
         _log_decision_fn = None  # populated if external_routing is loadable
         try:
+            if not EXTERNAL_REASONING_ROUTING_ENABLED:
+                raise ImportError("external reasoning routing is disabled")
             from .external_routing import (
                 classify_intent_with_rule as _classify_intent_with_rule,
                 ask_external as _ask_external,
@@ -554,10 +564,8 @@ class ExtendedOpenAIAgentEntity(
 
             if _api_key and _intent_label == "external":
                 _LOGGER.info(
-                    "external routing: dispatching '%s' externally (matched=%s, text len=%d)",
-                    (user_input.text or "")[:60].replace("\n", " "),
+                    "external routing dispatch matched=%s",
                     _matched_rule,
-                    len(user_input.text or ""),
                 )
                 _ext_t0 = time.time()
                 try:
@@ -566,7 +574,7 @@ class ExtendedOpenAIAgentEntity(
                     _ext_routing_state["ext_status"] = "ok"
                     _ext_routing_state["ext_latency_ms"] = int((time.time() - _ext_t0) * 1000)
                     _ext_routing_state["ext_reply_chars"] = len(_answer)
-                    _ext_routing_state["ext_reply_snippet"] = _answer[:500]
+                    _ext_routing_state["ext_reply_snippet"] = None
                     # Phase 4A.7: output-side ASR backstop. Even with RULE 0.5
                     # in the prompt, the model occasionally hallucinates
                     # "Marcello"; apply the same substitution to the response
@@ -577,43 +585,42 @@ class ExtendedOpenAIAgentEntity(
                             try:
                                 with open("/config/asr_debug.log", "a") as _f:
                                     _f.write(
-                                        f"{time.time():.3f} OUTPUT_APPLIED ext "
-                                        f"{_answer[:100]!r} → {_corrected[:100]!r}\n"
+                                        f"{time.time():.3f} OUTPUT_CORRECTION_APPLIED ext\n"
                                     )
                             except Exception:  # noqa: BLE001
                                 pass
                             _answer = _corrected
-                            _ext_routing_state["ext_reply_snippet"] = _answer[:500]
+                            _ext_routing_state["ext_reply_snippet"] = None
                     _resp = intent.IntentResponse(language=user_input.language)
                     _resp.async_set_speech(_answer)
                     try:
                         await _log_decision_fn(self.hass, {
                             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                             "conv_id": user_input.conversation_id,
-                            "text": user_input.text or "",
-                            "text_len": len(user_input.text or ""),
+                            "text": "",
+                            "text_len": None,
+                            "content_discarded": True,
                             "local_reply_chars": None,
                             "local_reply_snippet": None,
                             **_ext_routing_state,
                         })
                     except Exception:  # noqa: BLE001 — logging must never break routing
                         pass
-                    # Fire conversation_finished for external too. SLIM
-                    # payload: only the user text + assistant response —
-                    # NOT the full chat_log (which can balloon past 32 KB
-                    # for tool-using turns, exceeding HA's recorder + WS
-                    # delivery limits and breaking transcript rendering
-                    # in the Home app). See plan Addendum 4 fix-up.
+                    # Completion provenance is content-free. The response is
+                    # already returned to the authenticated current caller;
+                    # repeating text on the HA event bus risks Recorder and
+                    # debug subscribers turning an ordinary turn into memory.
                     try:
                         self.hass.bus.async_fire(
                             EVENT_CONVERSATION_FINISHED,
                             {
                                 "conversation_id": user_input.conversation_id,
                                 "agent_id": self.subentry.subentry_id,
-                                "user_input_text": user_input.text or "",
-                                "assistant_text": _answer,
                                 "route": "external",
+                                "language": user_input.language,
+                                "content_discarded": True,
                             },
+                            context=getattr(user_input, "context", None),
                         )
                     except Exception:  # noqa: BLE001 — never break routing on event fire
                         pass
@@ -657,17 +664,18 @@ class ExtendedOpenAIAgentEntity(
                 await _log_decision_fn(self.hass, {
                     "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     "conv_id": result.conversation_id or user_input.conversation_id,
-                    "text": user_input.text or "",
-                    "text_len": len(user_input.text or ""),
+                    "text": "",
+                    "text_len": None,
+                    "content_discarded": True,
                     "local_reply_chars": len(_local_reply),
-                    "local_reply_snippet": _local_reply[:500],
+                    "local_reply_snippet": None,
                     **_ext_routing_state,
                 })
             except Exception:  # noqa: BLE001 — logging must never break routing
                 pass
-        if dev and result.conversation_id:
+        if dev and result.conversation_id and MODEL_PRIVATE_CONTEXT_ENABLED:
             DEVICE_CONV_MEMORY[dev] = (time.time(), result.conversation_id)
-        if room and result.conversation_id:
+        if room and result.conversation_id and MODEL_PRIVATE_CONTEXT_ENABLED:
             # HA may surface the real conversation_id only in the result.
             bind(room, result.conversation_id)
         return result
@@ -754,33 +762,28 @@ class ExtendedOpenAIAgentEntity(
                 try:
                     with open("/config/asr_debug.log", "a") as _f:
                         _f.write(
-                            f"{time.time():.3f} OUTPUT_APPLIED local "
-                            f"{_assistant_text[:100]!r} → {_corrected_text[:100]!r}\n"
+                            f"{time.time():.3f} OUTPUT_CORRECTION_APPLIED local\n"
                         )
                 except Exception:  # noqa: BLE001
                     pass
                 _assistant_text = _corrected_text
         intent_response.async_set_speech(_assistant_text)
 
-        # Fire conversation finished event with SLIM payload — only the
-        # user text + assistant response. The full chat_log (with system
-        # prompt, tool_calls, tool_results) routinely exceeded 32 KB on
-        # tool-using turns, triggering recorder warnings and breaking
-        # transcript delivery to the Home app over WS. See plan
-        # Addendum 4 fix-up. The local-path message routing in
-        # conversation.py uses chat_log.content directly anyway; the
-        # event is only consumed by external subscribers (Home app for
-        # transcript rendering) which only need user/assistant text.
+        # Fire only content-free completion provenance. The authenticated
+        # caller already has the current-turn request and response; publishing
+        # them again would let Recorder/debug subscribers create an unmanaged
+        # conversation store.
         try:
             self.hass.bus.async_fire(
                 EVENT_CONVERSATION_FINISHED,
                 {
                     "conversation_id": user_input.conversation_id,
                     "agent_id": self.subentry.subentry_id,
-                    "user_input_text": user_input.text or "",
-                    "assistant_text": _assistant_text,
                     "route": "local",
+                    "language": user_input.language,
+                    "content_discarded": True,
                 },
+                context=getattr(user_input, "context", None),
             )
         except Exception:  # noqa: BLE001 — never break the response on event fire
             pass
@@ -813,13 +816,19 @@ class ExtendedOpenAIAgentEntity(
         user_input: ConversationInput,
     ) -> str:
         """Build system prompt with exposed entities and skills."""
-        raw_prompt: str = self.subentry.data.get(CONF_PROMPT, DEFAULT_PROMPT)
+        raw_prompt: str = (
+            self.subentry.data.get(CONF_PROMPT, DEFAULT_PROMPT)
+            if MODEL_PRIVATE_CONTEXT_ENABLED
+            else CONTAINED_DEFAULT_PROMPT
+        )
 
         # Proactive room binding: if this conversation (or its device) was
         # tagged with a room, that room is the authoritative current area --
         # overriding the speaker device's physical area. See room_binding.py.
-        bound_room = resolve(
-            user_input.conversation_id, getattr(user_input, "device_id", None)
+        bound_room = (
+            resolve(user_input.conversation_id, getattr(user_input, "device_id", None))
+            if MODEL_PRIVATE_CONTEXT_ENABLED
+            else None
         )
         _LOGGER.debug(
             "hg-diag _build_system_prompt cid=%s dev=%s bound_room=%s",
@@ -830,12 +839,24 @@ class ExtendedOpenAIAgentEntity(
 
         result = template.Template(raw_prompt, self.hass).async_render(
             {
-                "ha_name": self.hass.config.location_name,
-                "exposed_entities": exposed_entities,
-                "current_device_id": llm_context.device_id,
+                "ha_name": (
+                    self.hass.config.location_name
+                    if MODEL_PRIVATE_CONTEXT_ENABLED
+                    else "Home"
+                ),
+                "exposed_entities": (
+                    exposed_entities if MODEL_PRIVATE_CONTEXT_ENABLED else []
+                ),
+                "current_device_id": (
+                    llm_context.device_id if MODEL_PRIVATE_CONTEXT_ENABLED else None
+                ),
                 "bound_area": bound_room,
                 "user_input": user_input,
-                "skills": self._get_enabled_skills(),
+                "skills": (
+                    self._get_enabled_skills()
+                    if MODEL_PRIVATE_CONTEXT_ENABLED
+                    else []
+                ),
             },
             parse_result=False,
         )
@@ -854,16 +875,25 @@ class ExtendedOpenAIAgentEntity(
 
     def _get_enabled_skills(self) -> list[Skill]:
         """Get enabled skills as list for template rendering."""
+        if not MODEL_PRIVATE_CONTEXT_ENABLED:
+            return []
         enabled_skill_names = self.skills
         all_skills = self.skill_manager.get_all_skills()
 
         return [s for s in all_skills if s.name in enabled_skill_names]
 
     def _get_exposed_entities(self) -> list[dict[str, Any]]:
+        if not MODEL_PRIVATE_CONTEXT_ENABLED:
+            return []
         return get_exposed_entities(self.hass)
 
     def _get_function_tools(self) -> list[dict[str, Any]]:
         """Get custom functions configuration."""
+        if not MODEL_TOOL_CATALOG_ENABLED:
+            # This check precedes YAML parsing, so a stored custom tool cannot
+            # smuggle camera, identity, state, file, network, or action data
+            # back into the legacy model boundary.
+            return []
         try:
             function_tools_config = self.subentry.data.get(CONF_FUNCTION_TOOLS)
             function_tools: list[dict[str, Any]] | None = (
@@ -872,6 +902,20 @@ class ExtendedOpenAIAgentEntity(
                 else DEFAULT_CONF_FUNCTION_TOOLS
             )
             if function_tools:
+                disabled_names = [
+                    str((tool.get("spec") or {}).get("name") or "unnamed")
+                    for tool in function_tools
+                    if isinstance(tool, dict) and is_model_action_tool_disabled(tool)
+                ]
+                if disabled_names:
+                    _LOGGER.warning(
+                        "Model action containment removed tools: %s",
+                        ", ".join(disabled_names),
+                    )
+                function_tools = [
+                    tool for tool in function_tools
+                    if not is_model_action_tool_disabled(tool)
+                ]
                 for function_tool in function_tools:
                     if isinstance(function_tool, dict) and "function" in function_tool:
                         function_config = function_tool["function"]

@@ -280,10 +280,9 @@ async def auto_seed_identities_from_frigate(
                 continue
             try:
                 display_name = _frigate_name_to_display(frigate_name)
-                store.create_identity(
-                    display_name,
-                    relationship_type="unknown",  # user decides via people tab
-                    frigate_person_name=frigate_name,
+                store.ensure_recognition_enrollment(
+                    frigate_name,
+                    display_label=display_name,
                     actor="frigate_sync",
                 )
                 report.identities_created += 1

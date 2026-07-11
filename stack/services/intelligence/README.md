@@ -1,6 +1,12 @@
 # Home Intelligence Core
 
-Read-only long-horizon intelligence sidecar for the Home app.
+> **Quarantined legacy system.** The supported stack deployment is read-only,
+> internal-network-only, receives neither a Home Assistant token nor the HA
+> configuration tree, and has scheduler/memory/capture disabled. Historical HA
+> pull settings below must not be re-enabled or used as an Agent Core context
+> source.
+
+Read-only long-horizon intelligence sidecar for the legacy Home app.
 
 This service ingests lighting override evidence and lighting decision logs,
 stores them in an append-first SQLite ledger, aggregates repeated manual

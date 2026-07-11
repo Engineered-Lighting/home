@@ -27,6 +27,37 @@ from .base import Function
 
 _LOGGER = logging.getLogger(__name__)
 
+_MODEL_ACTION_FUNCTIONS = frozenset(
+    {"execute_service", "execute_service_single", "add_automation", "invoke_script"}
+)
+
+
+def _model_action_disabled(
+    tool: str, domain: str | None = None, service: str | None = None
+) -> dict[str, Any]:
+    """Return the fail-closed result for every model-originated mutation.
+
+    This check lives in the dispatcher as a second boundary after tool-surface
+    filtering.  No argument—including the former ``confirmed=true`` flag—can
+    turn it into an allow decision.
+    """
+    result: dict[str, Any] = {
+        "success": False,
+        "ok": False,
+        "capability_disabled": True,
+        "error_kind": "model_action_disabled",
+        "error_message": (
+            "Model-originated Home Assistant actions are disabled until the "
+            "external safety kernel is available."
+        ),
+        "tool": tool,
+    }
+    if domain:
+        result["domain"] = domain
+    if service:
+        result["service"] = service
+    return result
+
 
 _LL_MANAGED_AREA_TO_ZONE = {
     "kitchen": "kitchen",
@@ -311,6 +342,8 @@ class NativeFunction(Function):
         exposed_entities: list[dict[str, Any]],
     ) -> Any:
         name = function_config["name"]
+        if name in _MODEL_ACTION_FUNCTIONS:
+            return _model_action_disabled(name)
         if name == "execute_service":
             return await self.execute_service(
                 hass, function_config, arguments, llm_context, exposed_entities
@@ -354,6 +387,15 @@ class NativeFunction(Function):
         llm_context: llm.LLMContext | None,
         exposed_entities: list[dict[str, Any]],
     ) -> dict[str, Any]:
+        # Defense in depth: this method used to trust model-supplied
+        # `confirmed=true`.  It now returns before validation, mutation of the
+        # arguments, logging a false confirmation, or any HA service lookup.
+        domain = str(service_argument.get("domain") or "")
+        service = str(service_argument.get("service") or "")
+        return _model_action_disabled("execute_service_single", domain, service)
+
+        # Legacy dispatcher retained temporarily for non-model migration
+        # reference. It is unreachable through this method.
         # M0.3: standardized tool-result shape. We RETURN additive `ok` +
         # `latency_ms` fields alongside the legacy `success`/`error` keys
         # so existing LLM prompts that key on "success" still parse, while
@@ -428,9 +470,10 @@ class NativeFunction(Function):
         # `confirmed: true` only fires when a matching
         # `requires_confirmation` was logged on this conv_id within
         # the last 60s.
-        confirmed_flag = service_argument.pop("confirmed", False)
-        if isinstance(confirmed_flag, str):
-            confirmed_flag = confirmed_flag.lower() in ("true", "yes", "1")
+        # Unreachable legacy reference path. A model-supplied confirmation is
+        # intentionally never read; execute_service_single returns the
+        # containment result before reaching this code.
+        confirmed_flag = False
         is_high_impact = domain in HIGH_IMPACT_DOMAINS
         if is_high_impact and not confirmed_flag:
             # Intercept: log + return the structured result, do NOT dispatch.
@@ -663,7 +706,10 @@ class NativeFunction(Function):
         arguments: dict[str, Any],
         llm_context: llm.LLMContext | None,
         exposed_entities: list[dict[str, Any]],
-    ) -> str:
+    ) -> Any:
+        return _model_action_disabled("add_automation")
+
+        # Legacy implementation retained temporarily for migration reference.
         automation_config = yaml.safe_load(arguments["automation_config"])
         config = {"id": str(round(time.time() * 1000))}
         if isinstance(automation_config, list):
@@ -753,6 +799,9 @@ class NativeFunction(Function):
 
         Result shape mirrors execute_service_single (ok/latency_ms/...).
         """
+        return _model_action_disabled("invoke_script", "script", "turn_on")
+
+        # Legacy implementation retained temporarily for migration reference.
         entity_id = (arguments.get("entity_id") or "").strip()
         if not entity_id:
             return {

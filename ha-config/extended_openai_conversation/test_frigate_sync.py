@@ -48,6 +48,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # Force-enable for tests
 os.environ.pop("EXTENDED_OPENAI_FRIGATE_SYNC", None)
 os.environ.pop("EXTENDED_OPENAI_IDENTITY_STORE", None)
+os.environ["EXTENDED_OPENAI_IDENTITY_SEMANTIC_WRITES"] = "legacy_migration_only"
 
 from identity_store import IdentityStore  # type: ignore[import]
 from frigate_sync import (  # type: ignore[import]

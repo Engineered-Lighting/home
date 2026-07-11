@@ -137,8 +137,12 @@ EVENT_ROUTING_DECISION = "extended_openai_conversation.routing_decision"
 
 
 def _log_mode() -> str:
-    mode = os.environ.get(_LOG_MODE_ENV, "full").strip().lower()
-    return mode if mode in _VALID_MODES else "full"
+    # Locked containment default: historical environments often set this to
+    # ``full``, which persisted utterances and response snippets under
+    # /config.  The legacy external router is disabled for the MVP, so its
+    # contentful audit channel is hard-off too.  A later reviewed design must
+    # introduce a new content-minimized ledger rather than flipping an env var.
+    return "off"
 
 
 def _write_log_line_sync(line: str) -> None:

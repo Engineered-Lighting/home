@@ -806,33 +806,15 @@
   }
 
   function loadProactivePending(defaultState) {
-    const fallback = defaultState || IDLE_STATE;
-    try {
-      const raw = window.localStorage.getItem(PROACTIVE_PENDING_KEY);
-      if (!raw) return fallback;
-      const parsed = JSON.parse(raw);
-      const snap = _proactivePendingSnapshot(parsed);
-      if (!snap) {
-        window.localStorage.removeItem(PROACTIVE_PENDING_KEY);
-        return fallback;
-      }
-      if (Date.now() - snap.sinceTs > PROACTIVE_PENDING_MAX_AGE_MS) {
-        window.localStorage.removeItem(PROACTIVE_PENDING_KEY);
-        return fallback;
-      }
-      return { ...fallback, ...snap, restored: true };
-    } catch (e) {
-      try { window.localStorage.removeItem(PROACTIVE_PENDING_KEY); } catch (_) {}
-      return fallback;
-    }
+    // Person/room/arrival state is private current context and must remain
+    // session-only until it enters a governed memory transaction.
+    try { window.localStorage.removeItem(PROACTIVE_PENDING_KEY); } catch (_) {}
+    return defaultState || IDLE_STATE;
   }
 
   function saveProactivePending(state) {
-    try {
-      const snap = _proactivePendingSnapshot(state);
-      if (snap) window.localStorage.setItem(PROACTIVE_PENDING_KEY, JSON.stringify(snap));
-      else window.localStorage.removeItem(PROACTIVE_PENDING_KEY);
-    } catch (e) {}
+    void state;
+    try { window.localStorage.removeItem(PROACTIVE_PENDING_KEY); } catch (_) {}
   }
 
   // ── useProactiveCoordinator — the React hook (called once in HomeApp) ───

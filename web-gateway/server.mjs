@@ -6,6 +6,8 @@ import https from "node:https";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { classifyAgentOrigin, parseAgentOriginBoundary } from "./agent-origin.mjs";
+import { safeFile } from "./path-security.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -16,7 +18,7 @@ const HOST = process.env.HOME_WEB_HOST || "127.0.0.1";
 const PORT = Number(process.env.HOME_WEB_PORT || 5181);
 const APARTMENT_ASSETS_DIR = path.resolve(process.env.HOME_WEB_APARTMENT_ASSETS_DIR || path.join(ROOT, "app", "data", "apartment"));
 const LEGACY_BASIC_AUTH = (process.env.HOME_WEB_BASIC_AUTH || "").trim();
-const AUTH_REQUIRED = /^(1|true|yes|on)$/i.test(String(process.env.HOME_WEB_AUTH_REQUIRED || ""));
+const AUTH_REQUIRED = /^(1|true|yes|on)$/i.test(String(process.env.HOME_WEB_AUTH_REQUIRED || "1"));
 const defaultAuthRoot =
   process.env.APPDATA ||
   process.env.LOCALAPPDATA ||
@@ -27,6 +29,14 @@ const AUTH_FILE = path.resolve(
 );
 const AUTH_COOKIE = "home_web_auth";
 const PASSWORD_MIN_LENGTH = 12;
+const agentOriginBoundary = parseAgentOriginBoundary(process.env.HOME_WEB_AGENT_ORIGINS, {
+  allowInsecure: process.env.NODE_ENV === "test" &&
+    process.env.HOME_WEB_ALLOW_INSECURE_TEST_AGENT_ORIGINS === "1",
+});
+const PRIMARY_AGENT_ORIGIN = agentOriginBoundary.valid ? agentOriginBoundary.origins[0] : "";
+if (!agentOriginBoundary.valid) {
+  console.warn("[agent-origin] HOME_WEB_AGENT_ORIGINS is missing or invalid; browser Agent routes are disabled");
+}
 const PACKAGE_JSON = (() => {
   try {
     return JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
@@ -56,6 +66,8 @@ const APARTMENT_HEAVY_CACHE = "private, max-age=604800, stale-while-revalidate=8
 const APARTMENT_METADATA_CACHE = "private, no-cache";
 const STACK_TOKEN_PROXY_MARKER = "__home_web_gateway_stack_token__";
 const DEFAULT_STACK_TOKEN_FILE = "/opt/home-ai-voice/.env";
+const NATIVE_OAUTH_REDIRECT_URI = "http://127.0.0.1:43821/oauth/callback";
+const NATIVE_OAUTH_CLIENT_METADATA = `<!doctype html><html><head><meta charset="utf-8"><link rel="redirect_uri" href="${NATIVE_OAUTH_REDIRECT_URI}"></head><body>Home Agent native OAuth client metadata.</body></html>`;
 
 const MIME = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -78,6 +90,12 @@ const MIME = new Map([
 
 function envTarget(name, fallback) {
   return (process.env[name] || fallback).replace(/\/+$/, "");
+}
+
+function envEnabled(name) {
+  return ["1", "true", "yes", "on"].includes(
+    String(process.env[name] || "").trim().toLowerCase(),
+  );
 }
 
 function parseEnvValue(value) {
@@ -121,24 +139,64 @@ function loadStackTokenProxy() {
 }
 
 const stackTokenProxy = loadStackTokenProxy();
+const legacyHaProxyEnabled = envEnabled("HOME_WEB_ENABLE_LEGACY_HA_PROXY");
 
 function rx(pattern) {
   return (suffix) => pattern.test(suffix.split("?")[0]);
 }
 
+const UUID_PATH = "[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+const NATIVE_AGENT_ROUTES = Object.freeze([
+  ["GET", /^\/native\/v1\/snapshot$/],
+  ["GET", /^\/native\/v1\/initiatives$/],
+  ["POST", new RegExp(`^/native/v1/initiatives/${UUID_PATH}/claim$`, "i")],
+  ["GET", new RegExp(`^/native/v1/places/${UUID_PATH}/descriptor-relationship$`, "i")],
+  ["GET", new RegExp(`^/native/v1/places/${UUID_PATH}/parents/current-presence$`, "i")],
+  ["POST", /^\/native\/v1\/memory-transactions$/],
+  ["GET", new RegExp(`^/native/v1/memory-transactions/${UUID_PATH}$`, "i")],
+  ["POST", new RegExp(`^/native/v1/memory-transactions/${UUID_PATH}/confirm$`, "i")],
+  ["PUT", /^\/native\/v1\/preferences\/(location_memory|travel_greetings)$/],
+  ["POST", new RegExp(`^/native/v1/facts/${UUID_PATH}/(correction-preview|retraction-preview|forget-preview)$`, "i")],
+  ["POST", new RegExp(`^/native/v1/descriptor-(corrections|retractions)/${UUID_PATH}/confirm$`, "i")],
+  ["POST", new RegExp(`^/native/v1/erasure-requests/${UUID_PATH}/confirm$`, "i")],
+]);
+
+function isNativeAgentRoute(method, suffix) {
+  const parsed = new URL(suffix, "http://home.local");
+  if (parsed.search) return false;
+  const pathname = parsed.pathname;
+  return NATIVE_AGENT_ROUTES.some(([allowedMethod, pattern]) =>
+    method === allowedMethod && pattern.test(pathname));
+}
+
 const routes = [
+  {
+    prefix: "/api/agent",
+    env: "HOME_WEB_AGENT_BFF_TARGET",
+    target: envTarget("HOME_WEB_AGENT_BFF_TARGET", "http://127.0.0.1:8097/api/agent"),
+    allow: (suffix, method) =>
+      rx(/^\/(auth\/(start|callback|session|logout)|v1\/)/)(suffix) ||
+      isNativeAgentRoute(method, suffix),
+    ws: false,
+  },
   {
     prefix: "/proxy/ha",
     env: "HOME_WEB_HA_TARGET",
     target: envTarget("HOME_WEB_HA_TARGET", "http://192.168.0.125:8123"),
     allow: rx(/^\/api\/(websocket$|states(?:\/|$)|services\/|conversation\/process$|camera_proxy|camera_proxy_stream|tts_proxy\/|extended_openai_conversation\/)/),
     ws: true,
+    enabled: legacyHaProxyEnabled,
   },
   {
     prefix: "/proxy/metrics",
     env: "HOME_WEB_METRICS_TARGET",
     target: envTarget("HOME_WEB_METRICS_TARGET", "http://192.168.0.100:8092"),
-    allow: rx(/^\/(healthz|metrics|conversations\/(stream|recent|event)|traces?\/|traces$)/),
+    allow: (suffix) => {
+      const pathOnly = suffix.split("?")[0];
+      if (/^\/(healthz|metrics)$/.test(pathOnly)) return true;
+      return envEnabled("HOME_WEB_ENABLE_CONTENTFUL_METRICS_PROXY") &&
+        /^\/(conversations\/(stream|recent|event)|traces?\/|traces$)/.test(pathOnly);
+    },
     ws: false,
   },
   {
@@ -147,6 +205,7 @@ const routes = [
     target: envTarget("HOME_WEB_VLLM_TARGET", "http://192.168.0.100:8000"),
     allow: rx(/^\/(health|healthz|v1\/(models|chat\/completions|completions))/),
     ws: false,
+    enabled: envEnabled("HOME_WEB_ENABLE_LEGACY_VLLM_PROXY"),
   },
   {
     prefix: "/proxy/vision",
@@ -154,6 +213,7 @@ const routes = [
     target: envTarget("HOME_WEB_VISION_TARGET", "http://192.168.0.100:8091"),
     allow: rx(/^\/(healthz|snapshot\/|describe_clip|describe|reason|reason_zoom|locate|api\/)/),
     ws: false,
+    enabled: envEnabled("HOME_WEB_ENABLE_LEGACY_VISION_PROXY"),
   },
   {
     prefix: "/proxy/intelligence",
@@ -161,6 +221,7 @@ const routes = [
     target: envTarget("HOME_WEB_INTELLIGENCE_TARGET", "http://192.168.0.100:8095"),
     allow: rx(/^\/(healthz|api\/|lighting|memory|episodes|decisions|experiments|proposals|readiness)/),
     ws: false,
+    enabled: envEnabled("HOME_WEB_ENABLE_LEGACY_INTELLIGENCE_PROXY"),
   },
   {
     prefix: "/proxy/supervisor",
@@ -168,6 +229,7 @@ const routes = [
     target: envTarget("HOME_WEB_SUPERVISOR_TARGET", "http://home-app.taild52a15.ts.net:8093"),
     allow: rx(/^\/(healthz|api\/(stack|services)\/)/),
     ws: false,
+    enabled: envEnabled("HOME_WEB_ENABLE_LEGACY_SUPERVISOR_PROXY"),
   },
   {
     prefix: "/proxy/bridge",
@@ -175,6 +237,7 @@ const routes = [
     target: envTarget("HOME_WEB_S2S_TARGET", "http://192.168.0.100:8094"),
     allow: rx(/^\/(healthz|rooms|s2s)/),
     ws: true,
+    enabled: envEnabled("HOME_WEB_ENABLE_LEGACY_BRIDGE_PROXY"),
   },
   {
     prefix: "/proxy/tracker",
@@ -182,6 +245,7 @@ const routes = [
     target: envTarget("HOME_WEB_TRACKER_TARGET", "http://192.168.0.100:8098"),
     allow: rx(/^\/(healthz|ws\/tracks|tracks|calib\/|apartment_model|model|seed-model|frame)/),
     ws: true,
+    enabled: envEnabled("HOME_WEB_ENABLE_LEGACY_TRACKER_PROXY"),
   },
   {
     prefix: "/proxy/video-labeler",
@@ -189,6 +253,7 @@ const routes = [
     target: envTarget("HOME_WEB_VIDEO_LABELER_TARGET", "http://192.168.0.100:8099"),
     allow: rx(/^\/(healthz|api\/video-labeler\/)/),
     ws: false,
+    enabled: envEnabled("HOME_WEB_ENABLE_LEGACY_VIDEO_LABELER_PROXY"),
   },
   {
     prefix: "/proxy/frigate",
@@ -196,11 +261,12 @@ const routes = [
     target: envTarget("HOME_WEB_FRIGATE_TARGET", "http://192.168.0.125:5000"),
     allow: rx(/^\/api\//),
     ws: false,
+    enabled: envEnabled("HOME_WEB_ENABLE_LEGACY_FRIGATE_PROXY"),
   },
 ];
 
 function routeSummary() {
-  return routes.map(({ prefix, env, target, ws }) => {
+  return routes.filter((route) => route.enabled !== false).map(({ prefix, env, target, ws }) => {
     let host = target;
     try {
       const parsed = new URL(target);
@@ -230,6 +296,11 @@ function gatewayHealth() {
       enabled: stackTokenProxy.enabled,
       source: stackTokenProxy.source,
     },
+    agentOriginBoundary: {
+      configured: agentOriginBoundary.configured,
+      valid: agentOriginBoundary.valid,
+      count: agentOriginBoundary.origins.length,
+    },
     apartmentAssetsDir: APARTMENT_ASSETS_DIR,
     routes: routeSummary(),
     ts: new Date().toISOString(),
@@ -241,7 +312,12 @@ function parseCookies(header) {
   for (const part of String(header || "").split(";")) {
     const idx = part.indexOf("=");
     if (idx < 0) continue;
-    out[part.slice(0, idx).trim()] = decodeURIComponent(part.slice(idx + 1).trim());
+    try {
+      out[part.slice(0, idx).trim()] = decodeURIComponent(part.slice(idx + 1).trim());
+    } catch {
+      // Ignore malformed attacker-controlled pairs instead of rejecting the
+      // entire request or terminating the async server callback.
+    }
   }
   return out;
 }
@@ -290,8 +366,8 @@ function loadAuthState() {
   if (legacy) {
     return { enabled: true, source: "env", ...legacy };
   }
-  console.warn("[auth] HOME_WEB_AUTH_REQUIRED=1 but no valid auth file or HOME_WEB_BASIC_AUTH value was found; gateway auth is disabled");
-  return { enabled: false, source: "disabled", username: "" };
+  console.warn("[auth] authentication is required but no valid credential source exists; gateway is fail-closed");
+  return { enabled: false, source: "unconfigured", username: "" };
 }
 
 let authState = loadAuthState();
@@ -314,11 +390,11 @@ function authCookieValue() {
 }
 
 function setAuthCookie(res) {
-  res.setHeader("Set-Cookie", `${AUTH_COOKIE}=${encodeURIComponent(authCookieValue())}; HttpOnly; SameSite=Lax; Path=/`);
+  res.setHeader("Set-Cookie", `${AUTH_COOKIE}=${encodeURIComponent(authCookieValue())}; HttpOnly; Secure; SameSite=Lax; Path=/`);
 }
 
 function clearAuthCookie(res) {
-  res.setHeader("Set-Cookie", `${AUTH_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
+  res.setHeader("Set-Cookie", `${AUTH_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`);
 }
 
 function writePassword(username, password) {
@@ -334,7 +410,7 @@ function writePassword(username, password) {
 }
 
 function hasValidAuth(req) {
-  if (!authState.enabled) return { ok: true, setCookie: false };
+  if (!authState.enabled) return { ok: !AUTH_REQUIRED, setCookie: false };
   const cookies = parseCookies(req.headers.cookie);
   if (cookies[AUTH_COOKIE] === authCookieValue()) return { ok: true, setCookie: false };
 
@@ -378,6 +454,24 @@ function sendJson(res, status, body, headers = {}) {
     ...headers,
   });
   res.end(JSON.stringify(body));
+}
+
+function sendNativeOauthClientMetadata(req, res) {
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    res.writeHead(405, { Allow: "GET, HEAD", "Cache-Control": "no-store" });
+    res.end();
+    return;
+  }
+  const body = Buffer.from(NATIVE_OAUTH_CLIENT_METADATA, "utf8");
+  res.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Length": body.length,
+    "Cache-Control": "public, max-age=300",
+    "Content-Security-Policy": "default-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+  });
+  res.end(req.method === "HEAD" ? undefined : body);
 }
 
 function wantsHtml(req) {
@@ -655,8 +749,7 @@ async function handleAuthRoute(req, res, parsed) {
 
   if (parsed.pathname === "/auth/login" && req.method === "POST") {
     if (!authState.enabled) {
-      setAuthCookie(res);
-      sendJson(res, 200, { ok: true });
+      sendJson(res, 503, { ok: false, error: "authentication_unconfigured" });
       return;
     }
     let body;
@@ -719,7 +812,7 @@ async function handleAuthRoute(req, res, parsed) {
 function cleanHeaders(reqHeaders, target) {
   const headers = { ...reqHeaders };
   headers.host = new URL(target).host;
-  if (String(headers.authorization || "").startsWith("Basic ")) delete headers.authorization;
+  if (/^Basic\s/i.test(String(headers.authorization || ""))) delete headers.authorization;
   delete headers.cookie;
   delete headers["proxy-authorization"];
   return headers;
@@ -732,7 +825,30 @@ function isSupervisorStackApi(route, suffix) {
 }
 
 function proxyHeaders(reqHeaders, route, suffix) {
+  if (route.prefix === "/api/agent" && suffix.startsWith("/native/")) {
+    // Native ingress is a bearer-authenticated semantic protocol, not a
+    // generic header tunnel. In particular, discard cookies, gateway Basic,
+    // client-asserted principal/actor headers, forwarding headers, and request
+    // IDs before BFF whoami derives the principal independently.
+    const headers = { host: new URL(route.target).host };
+    if (/^Bearer\s/.test(String(reqHeaders.authorization || ""))) {
+      headers.authorization = reqHeaders.authorization;
+    }
+    for (const name of ["accept", "content-type", "content-length", "user-agent"]) {
+      if (reqHeaders[name] !== undefined) headers[name] = reqHeaders[name];
+    }
+    return headers;
+  }
   const headers = cleanHeaders(reqHeaders, route.target);
+  if (route.prefix === "/api/agent" && !suffix.startsWith("/native/")) {
+    const agentCookies = String(reqHeaders.cookie || "")
+      .split(";")
+      .map((value) => value.trim())
+      .filter((value) =>
+        value.startsWith("__Host-home_agent=") ||
+        value.startsWith("__Host-home_agent_oauth="));
+    if (agentCookies.length) headers.cookie = agentCookies.join("; ");
+  }
   if (route.prefix === "/proxy/supervisor") {
     delete headers.authorization;
     if (isSupervisorStackApi(route, suffix) && stackTokenProxy.enabled) {
@@ -743,7 +859,21 @@ function proxyHeaders(reqHeaders, route, suffix) {
 }
 
 function findRoute(urlPath) {
-  return routes.find((route) => urlPath === route.prefix || urlPath.startsWith(route.prefix + "/"));
+  return routes.find((route) => route.enabled !== false &&
+    (urlPath === route.prefix || urlPath.startsWith(route.prefix + "/")));
+}
+
+function findDisabledRoute(urlPath) {
+  return routes.find((route) => route.enabled === false &&
+    (urlPath === route.prefix || urlPath.startsWith(route.prefix + "/")));
+}
+
+function sendCapabilityDisabled(res, capability) {
+  sendJson(res, 404, {
+    ok: false,
+    error: "capability_disabled",
+    capability,
+  });
 }
 
 function routeSuffix(route, reqUrl) {
@@ -759,18 +889,6 @@ function buildTargetUrl(route, suffix) {
   const suffixPath = parsed.pathname.startsWith("/") ? parsed.pathname : `/${parsed.pathname}`;
   parsed.pathname = `${basePath}${suffixPath}`;
   return parsed;
-}
-
-function safeFile(root, urlPath) {
-  let decoded;
-  try {
-    decoded = decodeURIComponent(urlPath.split("?")[0]);
-  } catch {
-    return null;
-  }
-  const normalized = path.normalize(decoded).replace(/^(\.\.[/\\])+/, "");
-  const full = path.resolve(root, normalized.replace(/^[/\\]+/, ""));
-  return full.startsWith(path.resolve(root)) ? full : null;
 }
 
 function fileEtag(stat) {
@@ -840,7 +958,7 @@ function sendIndex(req, res, filePath) {
     const stackProxyRuntime = stackTokenProxy.enabled
       ? `window.__HOME_WEB_STACK_TOKEN_PROXY=true;window.__STACK_TOKEN=${jsString(STACK_TOKEN_PROXY_MARKER)};`
       : "window.__HOME_WEB_STACK_TOKEN_PROXY=false;";
-    const runtime = `<script>window.__HOME_BUILD_VERSION=${jsString(BUILD_VERSION)};window.__HOME_BUILD_COMMIT=${jsString(BUILD_COMMIT)};window.__HOME_ASSET_VERSION=${jsString(BUILD_ASSET_VERSION)};${stackProxyRuntime}</script>`;
+    const runtime = `<script>window.__HOME_BUILD_VERSION=${jsString(BUILD_VERSION)};window.__HOME_BUILD_COMMIT=${jsString(BUILD_COMMIT)};window.__HOME_ASSET_VERSION=${jsString(BUILD_ASSET_VERSION)};window.HG_AGENT_ORIGIN=${jsString(PRIMARY_AGENT_ORIGIN)};${stackProxyRuntime}</script>`;
     const body = html.includes("</head>") ? html.replace("</head>", `${runtime}\n</head>`) : `${runtime}\n${html}`;
     const etag = `"index-${Buffer.byteLength(body).toString(16)}-${BUILD_ASSET_VERSION}"`;
     res.writeHead(200, {
@@ -852,6 +970,24 @@ function sendIndex(req, res, filePath) {
     if (req.method === "HEAD") res.end();
     else res.end(body);
   });
+}
+
+function sendLegacyHomeQuarantine(req, res) {
+  const body = Buffer.from(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Legacy Home UI quarantined</title>
+<style>body{margin:0;background:#070909;color:#e9eeee;font:16px/1.55 system-ui,sans-serif}main{max-width:44rem;margin:12vh auto;padding:2rem}code{color:#b6d8cf}a{color:#83c8b8}</style></head>
+<body><main><h1>Legacy Home web UI is quarantined</h1>
+<p>The broad Home Assistant browser proxy is disabled by the Home Agent containment policy. Use the native Home Assistant app for device control or the dedicated Home Agent origin for governed memory.</p>
+<p>An operator may temporarily enable <code>HOME_WEB_ENABLE_LEGACY_HA_PROXY=1</code> only for reviewed legacy access.</p></main></body></html>`, "utf8");
+  res.writeHead(503, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Length": body.length,
+    "Cache-Control": "no-store",
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+    "X-Content-Type-Options": "nosniff",
+  });
+  res.end(req.method === "HEAD" ? undefined : body);
 }
 
 function isApartmentMetadata(pathname) {
@@ -901,7 +1037,16 @@ function serveStatic(req, res) {
     }
   }
 
-  const pathname = parsed.pathname === "/" ? "/index.html" : parsed.pathname;
+  if (parsed.pathname === "/home-agent") {
+    res.writeHead(308, { Location: "/home-agent/", "Cache-Control": "no-store" });
+    res.end();
+    return;
+  }
+  const pathname = parsed.pathname === "/"
+    ? "/index.html"
+    : parsed.pathname === "/home-agent/"
+      ? "/home-agent/index.html"
+      : parsed.pathname;
   const filePath = safeFile(APP_DIR, pathname);
   if (!filePath) {
     res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
@@ -909,6 +1054,10 @@ function serveStatic(req, res) {
     return;
   }
   if (pathname === "/index.html") {
+    if (!legacyHaProxyEnabled) {
+      sendLegacyHomeQuarantine(req, res);
+      return;
+    }
     sendIndex(req, res, filePath);
     return;
   }
@@ -917,13 +1066,14 @@ function serveStatic(req, res) {
 
 function proxyHttp(req, res, route) {
   const suffix = routeSuffix(route, req.url);
-  if (!route.allow(suffix)) {
+  if (!route.allow(suffix, req.method)) {
     res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
     res.end("proxy path not allowed");
     return;
   }
 
   const targetUrl = buildTargetUrl(route, suffix);
+  const nativeAgentRequest = route.prefix === "/api/agent" && isNativeAgentRoute(req.method, suffix);
   const client = targetUrl.protocol === "https:" ? https : http;
   const upstream = client.request(targetUrl, {
     method: req.method,
@@ -931,6 +1081,15 @@ function proxyHttp(req, res, route) {
   }, (upstreamRes) => {
     const headers = { ...upstreamRes.headers };
     delete headers["content-security-policy"];
+    if (nativeAgentRequest) {
+      delete headers["set-cookie"];
+      delete headers.location;
+      if ((upstreamRes.statusCode || 0) >= 300 && (upstreamRes.statusCode || 0) < 400) {
+        upstreamRes.resume();
+        sendJson(res, 502, { ok: false, error: "native_upstream_redirect_denied" });
+        return;
+      }
+    }
     res.writeHead(upstreamRes.statusCode || 502, headers);
     upstreamRes.pipe(res);
   });
@@ -950,7 +1109,7 @@ function proxyUpgrade(req, socket, head, route) {
     return;
   }
   const suffix = routeSuffix(route, req.url);
-  if (!route.allow(suffix)) {
+  if (!route.allow(suffix, req.method)) {
     socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
     socket.destroy();
     return;
@@ -999,30 +1158,84 @@ function checkConfig() {
     authFile: AUTH_FILE,
     stackTokenProxyEnabled: stackTokenProxy.enabled,
     stackTokenProxySource: stackTokenProxy.source,
+    agentOriginBoundary: {
+      configured: agentOriginBoundary.configured,
+      valid: agentOriginBoundary.valid,
+      origins: agentOriginBoundary.origins,
+    },
     routes: routeSummary(),
   };
   console.log(JSON.stringify(summary, null, 2));
+  return agentOriginBoundary.valid;
 }
 
 if (process.argv.includes("--check")) {
-  checkConfig();
-  process.exit(0);
+  process.exit(checkConfig() ? 0 : 1);
 }
 
 const server = http.createServer(async (req, res) => {
   const parsed = new URL(req.url, "http://home.local");
+  const agentContext = classifyAgentOrigin(req.headers, agentOriginBoundary);
+  const route = findRoute(parsed.pathname);
+  const nativeAgentRequest = route?.prefix === "/api/agent" &&
+    isNativeAgentRoute(req.method, routeSuffix(route, req.url));
+
+  if (agentContext.agentHost) {
+    if (!agentContext.originAllowed) {
+      sendJson(res, 403, { ok: false, error: "agent_origin_mismatch" });
+      return;
+    }
+    if (parsed.pathname === "/native-oauth-client" && !parsed.search) {
+      sendNativeOauthClientMetadata(req, res);
+      return;
+    }
+    if (parsed.pathname === "/home-agent/" || parsed.pathname.startsWith("/home-agent/")) {
+      serveStatic(req, res);
+      return;
+    }
+    if (route?.prefix === "/api/agent") {
+      proxyHttp(req, res, route);
+      return;
+    }
+    sendJson(res, 404, { ok: false, error: "agent_origin_route_denied" });
+    return;
+  }
+
+  if (nativeAgentRequest) {
+    // Preserve the typed native bearer channel during origin migration. It
+    // has no browser cookie/session semantics and the BFF validates whoami.
+    proxyHttp(req, res, route);
+    return;
+  }
+
+  if (
+    parsed.pathname === "/native-oauth-client" ||
+    parsed.pathname === "/home-agent" || parsed.pathname.startsWith("/home-agent/") ||
+    route?.prefix === "/api/agent"
+  ) {
+    sendJson(res, 404, { ok: false, error: "agent_origin_required" });
+    return;
+  }
+
   if (parsed.pathname === "/auth" || parsed.pathname.startsWith("/auth/")) {
     await handleAuthRoute(req, res, parsed);
     return;
   }
 
   if (!requireAuth(req, res)) return;
-  const route = findRoute(parsed.pathname);
-  if (route) proxyHttp(req, res, route);
+  const disabledRoute = findDisabledRoute(parsed.pathname);
+  if (disabledRoute) {
+    sendCapabilityDisabled(res, `legacy_proxy:${disabledRoute.prefix.slice("/proxy/".length)}`);
+  } else if (route) proxyHttp(req, res, route);
   else serveStatic(req, res);
 });
 
 server.on("upgrade", (req, socket, head) => {
+  if (classifyAgentOrigin(req.headers, agentOriginBoundary).agentHost) {
+    socket.write("HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nagent origin does not permit websocket upgrades");
+    socket.destroy();
+    return;
+  }
   if (!hasValidAuth(req).ok) {
     socket.write(`HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nauthentication required`);
     socket.destroy();
@@ -1031,7 +1244,10 @@ server.on("upgrade", (req, socket, head) => {
   const parsed = new URL(req.url, "http://home.local");
   const route = findRoute(parsed.pathname);
   if (!route) {
-    socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+    const disabledRoute = findDisabledRoute(parsed.pathname);
+    socket.write(disabledRoute
+      ? "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain; charset=utf-8\r\n\r\ncapability_disabled"
+      : "HTTP/1.1 404 Not Found\r\n\r\n");
     socket.destroy();
     return;
   }

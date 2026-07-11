@@ -23,6 +23,24 @@
         "fullscreen": false,
         "skipTaskbar": false,
         "alwaysOnTop": false
+      },
+      {
+        "title": "Home Agent",
+        "label": "agent",
+        "url": "home-agent/index.html",
+        "width": 920,
+        "height": 860,
+        "minWidth": 560,
+        "minHeight": 560,
+        "resizable": true,
+        "decorations": true,
+        "shadow": true,
+        "transparent": false,
+        "fullscreen": false,
+        "skipTaskbar": false,
+        "alwaysOnTop": false,
+        "visible": false,
+        "devtools": false
       }
     ],
     "security": {

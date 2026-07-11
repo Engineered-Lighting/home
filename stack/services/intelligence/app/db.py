@@ -6,6 +6,15 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
+def _read_only_enabled() -> bool:
+    return os.environ.get("INTELLIGENCE_READ_ONLY", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
 def default_db_path() -> Path:
     raw = os.environ.get("INTELLIGENCE_DB")
     if raw:
@@ -15,16 +24,29 @@ def default_db_path() -> Path:
 
 
 def connect(path: Path | None = None) -> sqlite3.Connection:
+    explicit_path = path is not None
     db_path = path or default_db_path()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    read_only = _read_only_enabled() and not explicit_path
+    if read_only:
+        if not db_path.is_file():
+            raise FileNotFoundError(f"read-only Intelligence database is missing: {db_path}")
+        uri = f"{db_path.resolve().as_uri()}?mode=ro&immutable=1"
+        conn = sqlite3.connect(uri, uri=True)
+        conn.execute("PRAGMA query_only=ON")
+    else:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        conn.execute("PRAGMA journal_mode=WAL")
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
 def init_db(conn: sqlite3.Connection) -> None:
+    if int(conn.execute("PRAGMA query_only").fetchone()[0]):
+        # Quarantined legacy evidence is never migrated or otherwise mutated
+        # merely because the process starts or a health endpoint is queried.
+        return
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS raw_events (

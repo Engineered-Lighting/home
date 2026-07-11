@@ -194,17 +194,11 @@ const openaiProvider = {
   model: "gpt-4o-mini",
 
   isConfigured() {
-    try {
-      const k = localStorage.getItem("hg-external-token-DEV");
-      return typeof k === "string" && k.length > 10;
-    } catch {
-      return false;
-    }
+    return false;
   },
 
   _getKey() {
-    try { return localStorage.getItem("hg-external-token-DEV") || ""; }
-    catch { return ""; }
+    return "";
   },
 
   /**
@@ -398,25 +392,14 @@ async function askExternal(text, callbacks, signal) {
 function ExternalKeyModal({ onClose }) {
   const [value, setValue] = React.useState("");
   const [showing, setShowing] = React.useState(false);
-  const existing = (() => {
-    try { return localStorage.getItem("hg-external-token-DEV") || ""; }
-    catch { return ""; }
-  })();
+  const existing = "";
   const masked = existing
     ? `${existing.slice(0, 3)}...${existing.slice(-4)} (${existing.length} chars)`
     : "(not set)";
 
   const doSave = React.useCallback(() => {
-    const v = value.trim();
-    if (!v) return;
-    try {
-      localStorage.setItem("hg-external-token-DEV", v);
-      // First-time set: auto-enable external auto-routing.
-      if (!localStorage.getItem("hg-external-enabled")) {
-        localStorage.setItem("hg-external-enabled", "on");
-      }
-    } catch (e) { console.warn("[external] save failed:", e && e.name); }
-    onClose && onClose({ saved: true });
+    void value;
+    onClose && onClose({ blocked: "secure-bff-required" });
   }, [value, onClose]);
 
   const doClear = React.useCallback(() => {

@@ -28,7 +28,7 @@ plus the vLLM round-trip. Caps protect against pathological calls.
 
 Env:
   HA_URL            default http://192.168.0.125:8123
-  HA_TOKEN          required
+  HA_TOKEN          optional; production containment leaves it empty
   VLLM_URL          default http://vllm:8000  (sidecar runs in the same
                     docker network; vllm is reachable by service name)
   VISION_MODEL      default qwen3-vl-30b      (served-model-name from vLLM)
@@ -63,7 +63,7 @@ log = logging.getLogger("vision-sidecar")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 HA_URL = os.environ.get("HA_URL", "http://192.168.0.125:8123")
-HA_TOKEN = os.environ["HA_TOKEN"]
+HA_TOKEN = os.environ.get("HA_TOKEN", "")
 VLLM_URL = os.environ.get("VLLM_URL", "http://vllm:8000")
 VISION_MODEL = os.environ.get("VISION_MODEL", "qwen3-vl-30b")
 VISION_MAX_TOKENS = int(os.environ.get("VISION_MAX_TOKENS", "200"))

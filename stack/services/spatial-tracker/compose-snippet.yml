@@ -6,7 +6,9 @@ services:
     container_name: hav-spatial-tracker
     restart: unless-stopped
     ports:
-      - "8098:8098"
+      # Research adapter is quarantined to the host; expose a reviewed bind
+      # address explicitly only after adding service authentication.
+      - "127.0.0.1:8098:8098"
     volumes:
       - ./services/spatial-tracker/data:/data
     environment:
@@ -16,7 +18,9 @@ services:
       - MQTT_PASS=${MQTT_PASS:-}
       - FRIGATE_URL=http://192.168.0.125:5000
       - HA_URL=http://192.168.0.125:8123
-      - HA_TOKEN=${HA_TOKEN:-}
+      # No HA bearer: the quarantined tracker may use its on-disk model and
+      # untrusted sensor feeds, but cannot call HA APIs or services.
+      - HA_TOKEN=
       - DATA_DIR=/data
       - PORT=8098
       - REPLAY_MODE=0

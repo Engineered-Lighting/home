@@ -33,5 +33,7 @@ COPY videolabeler ./videolabeler
 EXPOSE 8099
 ENV DATA_DIR=/data PORT=8099
 
-# shell form so ${PORT} resolves at container start
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8099}"]
+# Host networking is used only to reach the local model runtime. Fail closed
+# unless Uvicorn itself binds loopback; setting BIND_HOST must never publish
+# this bearer-protected research surface on the LAN.
+CMD ["sh", "-ec", "host=${BIND_HOST:-127.0.0.1}; case \"$host\" in 127.0.0.1|::1) ;; *) echo 'BIND_HOST must be loopback' >&2; exit 78;; esac; exec uvicorn main:app --host \"$host\" --port \"${PORT:-8099}\""]

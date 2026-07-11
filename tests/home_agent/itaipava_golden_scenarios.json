@@ -1,0 +1,364 @@
+{
+  "schema_version": 1,
+  "suite": "itaipava-mvp-golden-v1",
+  "scenarios": [
+    {
+      "id": "complete-itaipava",
+      "title": "Complete Itaipava travel and memory story",
+      "status": "covered",
+      "expected_outcome": "test_passes",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "node": "stack/services/home-agent-core/tests/test_postgres_vertical_slice.py::test_complete_itaipava_commit_and_scoped_forgetting"
+        }
+      ]
+    },
+    {
+      "id": "stale",
+      "title": "Stale Itaipava location",
+      "status": "covered",
+      "expected_outcome": "test_passes",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "node": "stack/services/home-agent-core/tests/test_location.py::test_freshness_and_visit_state_do_not_hide_gaps"
+        },
+        {
+          "kind": "python_test",
+          "node": "stack/services/home-agent-core/tests/test_postgres_vertical_slice.py::test_complete_itaipava_commit_and_scoped_forgetting"
+        }
+      ]
+    },
+    {
+      "id": "jitter",
+      "title": "GPS boundary jitter",
+      "status": "covered",
+      "expected_outcome": "test_passes",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "node": "stack/services/home-agent-core/tests/test_location.py::test_anchor_rejects_tracker_switch_and_incompatible_jitter"
+        }
+      ]
+    },
+    {
+      "id": "app-closed",
+      "title": "App closed throughout departure and arrival",
+      "status": "covered",
+      "expected_outcome": "test_passes",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "node": "stack/services/home-agent-core/tests/test_app_closed_journey.py::test_app_closed_edge_restart_reconnect_and_core_replay_are_stable"
+        }
+      ],
+      "coverage_note": "The cross-module harness starts only the encrypted HA Edge spool and typed Core ingest, retains the complete journey over disconnect and Edge restart, then proves one stable PostgreSQL visit after Core restart and at-least-once replay."
+    },
+    {
+      "id": "correction",
+      "title": "Place correction",
+      "status": "covered",
+      "expected_outcome": "test_passes",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "node": "stack/services/home-agent-core/tests/test_postgres_vertical_slice.py::test_complete_itaipava_commit_and_scoped_forgetting"
+        }
+      ]
+    },
+    {
+      "id": "forget",
+      "title": "Place-memory forgetting",
+      "status": "covered",
+      "expected_outcome": "test_passes",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "node": "stack/services/home-agent-core/tests/test_postgres_vertical_slice.py::test_complete_itaipava_commit_and_scoped_forgetting"
+        }
+      ]
+    },
+    {
+      "id": "association-not-presence",
+      "title": "Association does not imply presence",
+      "status": "covered",
+      "expected_outcome": "test_passes",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "node": "stack/services/home-agent-core/tests/test_memory.py::test_itaipava_descriptor_is_perspective_scoped_and_never_ownership"
+        },
+        {
+          "kind": "python_test",
+          "node": "stack/services/home-agent-core/tests/test_postgres_vertical_slice.py::test_complete_itaipava_commit_and_scoped_forgetting"
+        }
+      ]
+    },
+    {
+      "id": "kitchen",
+      "title": "Kitchen investigation",
+      "status": "capability_disabled",
+      "expected_outcome": "capability_disabled",
+      "evidence": [
+        {
+          "kind": "capability_disabled",
+          "policy_key": "active_room",
+          "handler": "stack/services/home-agent-core/app/api.py::semantic_router::active_room_disabled",
+          "outcome": "capability_disabled"
+        }
+      ]
+    },
+    {
+      "id": "lighting",
+      "title": "Manual lighting correction",
+      "status": "capability_disabled",
+      "expected_outcome": "capability_disabled",
+      "evidence": [
+        {
+          "kind": "capability_disabled",
+          "policy_key": "lighting_learning",
+          "handler": "stack/services/home-agent-core/app/api.py::semantic_router::learning_disabled",
+          "outcome": "capability_disabled"
+        }
+      ]
+    },
+    {
+      "id": "rooms",
+      "title": "Multiple occupants in different rooms",
+      "status": "capability_disabled",
+      "expected_outcome": "capability_disabled",
+      "evidence": [
+        {
+          "kind": "capability_disabled",
+          "policy_key": "active_room",
+          "handler": "stack/services/home-agent-core/app/api.py::semantic_router::active_room_disabled",
+          "outcome": "capability_disabled"
+        }
+      ]
+    },
+    {
+      "id": "guest",
+      "title": "Unknown guest",
+      "status": "capability_disabled",
+      "expected_outcome": "capability_disabled",
+      "evidence": [
+        {
+          "kind": "capability_disabled",
+          "policy_key": "active_room",
+          "handler": "stack/services/home-agent-core/app/api.py::semantic_router::active_room_disabled",
+          "outcome": "capability_disabled"
+        }
+      ]
+    },
+    {
+      "id": "camera-injection",
+      "title": "Camera prompt injection",
+      "status": "capability_disabled",
+      "expected_outcome": "capability_disabled",
+      "evidence": [
+        {
+          "kind": "capability_disabled",
+          "policy_key": "active_room",
+          "handler": "stack/services/home-agent-core/app/api.py::semantic_router::active_room_disabled",
+          "outcome": "capability_disabled"
+        },
+        {
+          "kind": "python_test",
+          "node": "ha-config/home_agent_edge/test_edge.py::EdgePolicyTests::test_location_keeps_only_reviewed_attributes"
+        }
+      ]
+    },
+    {
+      "id": "retrieved-injection",
+      "title": "Retrieved-memory prompt injection",
+      "status": "covered",
+      "expected_outcome": "test_passes",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "node": "stack/services/home-agent-core/tests/test_context.py::test_retrieved_memory_injection_is_tainted_and_cannot_bypass_verifier"
+        }
+      ],
+      "coverage_note": "Free-form candidate and retrieved text fails the typed descriptor verifier, is emitted only as a content-free tainted_excluded decision, and both model and action contexts remain capability_disabled."
+    },
+    {
+      "id": "ai-box-outage",
+      "title": "AI box unavailable",
+      "status": "covered",
+      "expected_outcome": "test_passes",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "node": "stack/services/home-agent-core/tests/test_postgres_vertical_slice.py::test_complete_itaipava_commit_and_scoped_forgetting"
+        },
+        {
+          "kind": "python_test",
+          "node": "stack/services/home-agent-core/tests/test_memory.py::test_travel_greeting_is_a_deterministic_typed_template"
+        }
+      ],
+      "coverage_note": "The complete Core slice and greeting renderer execute without configuring or calling any model worker."
+    },
+    {
+      "id": "ha-reconnect",
+      "title": "Home Assistant disconnect and reconnect",
+      "status": "covered",
+      "expected_outcome": "test_passes",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "node": "ha-config/home_agent_edge/test_edge.py::DeliveryTests::test_transport_disconnect_retains_batch_and_reconnect_delivers_once"
+        },
+        {
+          "kind": "python_test",
+          "node": "ha-config/home_agent_edge/test_edge.py::OutboxTests::test_restart_downtime_is_an_explicit_coverage_gap"
+        }
+      ]
+    },
+    {
+      "id": "recorder-gap",
+      "title": "Recorder history incomplete",
+      "status": "covered",
+      "expected_outcome": "test_passes",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "node": "stack/services/home-agent-core/tests/test_postgres_vertical_slice.py::test_location_quality_switch_and_coverage_gates"
+        },
+        {
+          "kind": "python_test",
+          "node": "stack/services/home-agent-core/tests/test_location.py::test_freshness_and_visit_state_do_not_hide_gaps"
+        }
+      ]
+    },
+    {
+      "id": "duplicate-evidence",
+      "title": "Duplicate person and device-tracker evidence",
+      "status": "covered",
+      "expected_outcome": "test_passes",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "node": "stack/services/home-agent-core/tests/test_location.py::test_anchor_requires_two_distinct_roots_and_ten_minute_dwell"
+        },
+        {
+          "kind": "python_test",
+          "node": "ha-config/home_agent_edge/test_edge.py::OutboxTests::test_person_and_source_tracker_share_deterministic_lineage"
+        }
+      ]
+    },
+    {
+      "id": "context-governance",
+      "title": "Context compaction with governance preserved",
+      "status": "covered",
+      "expected_outcome": "test_passes",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "node": "stack/services/home-agent-core/tests/test_context.py::test_context_compaction_replay_preserves_governance_and_provenance"
+        }
+      ],
+      "coverage_note": "The deterministic replay compiler preserves policy, authenticated principal, consent, privacy, and observation-root provenance; governance substitution fails closed and tainted text is excluded without any model hookup."
+    },
+    {
+      "id": "circular-summaries",
+      "title": "Circular summary self-corroboration attempt",
+      "status": "covered",
+      "expected_outcome": "test_passes",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "node": "stack/services/home-agent-core/tests/test_postgres_vertical_slice.py::test_complete_itaipava_commit_and_scoped_forgetting"
+        },
+        {
+          "kind": "python_test",
+          "node": "stack/services/home-agent-core/tests/test_location.py::test_anchor_requires_two_distinct_roots_and_ten_minute_dwell"
+        }
+      ]
+    },
+    {
+      "id": "cascade-deletion",
+      "title": "Cascade deletion through embeddings and initiatives",
+      "status": "capability_disabled",
+      "expected_outcome": "capability_disabled",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "node": "stack/services/home-agent-core/tests/test_postgres_vertical_slice.py::test_complete_itaipava_commit_and_scoped_forgetting"
+        },
+        {
+          "kind": "capability_disabled",
+          "policy_key": "vjepa",
+          "handler": "stack/services/home-agent-core/app/api.py::semantic_router::vjepa_disabled",
+          "outcome": "capability_disabled"
+        }
+      ],
+      "coverage_note": "Normalized summary/copy/retrieval-index lineage and initiative invalidation are tested; the excluded V-JEPA/media embedding path deterministically returns capability_disabled."
+    },
+    {
+      "id": "checkpoint-residual",
+      "title": "Deleted clip already used in a model checkpoint",
+      "status": "capability_disabled",
+      "expected_outcome": "capability_disabled",
+      "evidence": [
+        {
+          "kind": "capability_disabled",
+          "policy_key": "vjepa",
+          "handler": "stack/services/home-agent-core/app/api.py::semantic_router::vjepa_disabled",
+          "outcome": "capability_disabled"
+        },
+        {
+          "kind": "python_test",
+          "node": "stack/services/home-agent-core/tests/test_ledger.py::test_erasure_ledger_is_encrypted_append_only_and_idempotent"
+        }
+      ],
+      "coverage_note": "Checkpoint creation/integration is disabled; erasure receipts still carry checkpoint_affected and exact residual codes."
+    },
+    {
+      "id": "shared-screen-privacy",
+      "title": "Shared-screen location privacy",
+      "status": "covered",
+      "expected_outcome": "test_passes",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "node": "stack/services/home-agent-core/tests/test_bootstrap_auth.py::test_private_initiatives_require_native_channel_attestation"
+        },
+        {
+          "kind": "python_test",
+          "node": "tests/home_agent/test_repository_contract.py::RepositoryBoundaryTests::test_bff_and_core_share_only_typed_web_contracts"
+        }
+      ]
+    },
+    {
+      "id": "people-conflict",
+      "title": "Conflicting People Graph relationships",
+      "status": "covered",
+      "expected_outcome": "test_passes",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "node": "stack/services/home-agent-core/tests/test_postgres_vertical_slice.py::test_location_quality_switch_and_coverage_gates"
+        },
+        {
+          "kind": "python_test",
+          "node": "stack/services/home-agent-core/tests/test_people_privacy_cutover.py::test_postgres_reviewed_people_cutover_is_exact_and_collision_safe"
+        }
+      ]
+    },
+    {
+      "id": "blind-spot-absence",
+      "title": "Camera blind spot and invalid absence inference",
+      "status": "capability_disabled",
+      "expected_outcome": "capability_disabled",
+      "evidence": [
+        {
+          "kind": "capability_disabled",
+          "policy_key": "active_room",
+          "handler": "stack/services/home-agent-core/app/api.py::semantic_router::active_room_disabled",
+          "outcome": "capability_disabled"
+        }
+      ]
+    }
+  ]
+}

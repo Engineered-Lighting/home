@@ -1,0 +1,507 @@
+# Home Agent Core deployment runbook
+
+This runbook deploys the greenfield Home Agent beside the legacy GPU stack. It
+does not extend or mount Intelligence, and it does not enable model-originated
+physical actions.
+
+The repository implementation is deliberately fail-closed. Live acceptance
+still requires the named operator confirmations, a seven-day record-only run,
+and a successful isolated restore drill. Do not work around a failing gate by
+adding broad proxy routes or mounting legacy databases.
+
+## What is implemented
+
+- Dedicated PostgreSQL-backed Core roles (`api`, `ingest`, `worker`) with
+  bitemporal semantic records, encrypted locators, evidence roots, deterministic
+  memory previews, scoped forgetting, and role-aware credentials.
+- A 24-hour/100 MB row-encrypted runtime SQLite spool that is mounted outside
+  the durable backup path.
+- HA Edge with reviewed subscriptions, privacy filtering, encrypted delivery
+  spool, epoch/sequence delivery, mTLS, application bearer, Core-synchronized
+  entity/user privacy blocks, and explicit gaps.
+- HA OAuth/PKCE BFF with opaque strict cookies, CSRF/Origin checks, browser-bound
+  OAuth state, HA revocation revalidation, restart-safe AES-GCM-sealed sessions,
+  authority-side logout/expiry revocation, and a narrow semantic route set.
+- A separate `/home-agent/` surface for consent, typed preview, explicit commit,
+  and status, plus a Windows-native OAuth/PKCE transport isolated in its own
+  Tauri window. Private travel initiatives use native-only exact routes: list
+  responses are opaque, while the atomic claim alone releases deterministic
+  greeting text after fresh evidence and consent revalidation.
+- Legacy containment: browser secrets/history are purged, model action tools
+  are recursively denied, Intelligence is loopback/read-only with generated
+  memory and capture off, and contentful metrics tracing is off.
+- Reviewed People cutover with typed aliases, recognition bindings, executable
+  privacy/status projection, non-authoritative relationship candidates, and
+  independently receipted whole-person auto-expiry.
+
+## Phase 0: operational containment
+
+These are live administrative actions and are not performed by a source-tree
+change. Complete and record them before connecting persistent context:
+
+1. Revoke and rotate the HA LLAT, stack token, bridge/S2S token, external API
+   key, gateway credential, and every reused bearer.
+2. Install the new desktop/web build once so its startup migration removes old
+   localStorage credentials and private content.
+3. Confirm a model request cannot dispatch native services, scripts,
+   composites, REST/file actions, lighting overrides, or gesture capture.
+4. Keep Intelligence bound to loopback and leave
+   `INTELLIGENCE_READ_ONLY=1`, `INTELLIGENCE_MEMORY_ENABLED=0`, multimodal ring
+   and pilot off, and contentful metrics tracing off.
+5. Keep every `HOME_WEB_ENABLE_LEGACY_*_PROXY` flag off, including
+   `HOME_WEB_ENABLE_LEGACY_HA_PROXY`. Merely configuring `HOME_WEB_HA_TARGET`
+   does not enable its broad WebSocket/service/camera/conversation proxy; with
+   the flag off, the legacy Home web UI shows a quarantine page. Use the native
+   Home Assistant app for device control. Video Labeler must
+   use a mode-0600 `video_labeler_token`, bind `127.0.0.1`, and be reached only
+   through an authenticated admin tunnel. Its container must use the dedicated
+   mode-0600 `/etc/home-ai-voice/video-labeler.env`, a read-only root, dropped
+   capabilities, and no Docker socket. Vision, model/chat, metrics, S2S,
+   and spatial research endpoints stay loopback-bound unless a reviewed host
+   address and firewall allowlist are configured.
+6. Apply host default-deny firewall policy. Permit TCP 8443 only from the HA
+   host to `HOME_AGENT_EDGE_BIND_ADDR`; never publish PostgreSQL or Core.
+7. Run the local containment tests:
+
+   ```sh
+   npm run test:security
+   npm run test:native-agent-security
+   node tools/run-web-gateway-stack-token-tests.js
+   (cd stack/services/home-agent-bff && npm test)
+   ```
+
+## Encrypted storage and secrets
+
+Create and mount the approved LUKS volume first. The exact block device and key
+source are operator decisions; do not paste recovery keys into `.env`, shell
+history, tickets, or this repository.
+
+`HOME_AGENT_SESSION_ROOT` is a separate UID-1000 mode-0700 runtime directory
+for the BFF's sealed SQLite session ledger. Keep it on an encrypted
+`/dev/mapper` mount but exclude it from off-host backups, just like
+`HOME_AGENT_RUNTIME_ROOT`. The ledger exists to survive a process restart long
+enough to revoke HA refresh tokens; it is not durable household knowledge.
+
+`HOME_AGENT_ERASURE_LEDGER_ROOT` is a fourth, independent UID-10001
+mode-0700 directory on encrypted storage. It must not be inside the PostgreSQL,
+runtime, or session roots. Replicate its encrypted `ledger.jsonl` and
+`ledger.head.json` together to an operator-controlled destination independent
+of pgBackRest; PostgreSQL backups intentionally cannot roll this ledger back.
+
+Copy the non-secret environment template and calculate the versioned policy
+digest:
+
+```sh
+cd /opt/home/home-github/stack
+cp home-agent.env.example home-agent.env
+sha256sum home-agent-deploy/policy/home-agent-mvp-v1.json
+```
+
+Fill `home-agent.env`, then generate independent secrets. The helper refuses to
+overwrite an existing set. It stores a root-only mode-0600 master set under
+`/etc/home-agent/secrets/master` and materializes distinct mode-0400 copies
+under `runtime/<service>` with the numeric owner of that unprivileged
+container:
+
+```sh
+sudo sh home-agent-deploy/bootstrap-secrets.sh /etc/home-agent/secrets
+```
+
+Create the independent ledger directory, then perform its only permitted
+initialization. This command refuses either existing ledger file; never use it
+as recovery from missing or damaged ledger state:
+
+```sh
+sudo install -d -m 0700 -o 10001 -g 10001 /srv/home-agent/erasure-ledger
+sudo docker compose --env-file home-agent.env -f home-agent-compose.yml \
+  --profile operator run --rm --build ledger-init
+```
+
+Do not point Compose at the master files or make them group/world-readable.
+Each service-specific directory contains only the files that service needs,
+and Compose mounts those files individually. The Core worker does not receive
+the durable knowledge-encryption key. To rotate a value, update its protected
+master file and rerun preflight to atomically refresh the per-service copies
+before restarting only the affected services.
+
+The BFF session-encryption key is the exception to blind rotation: first log
+out/drain all BFF sessions, allow the revocation janitor to clear pending rows,
+and verify the session database is empty. Retain the old key until then. Losing
+it while rows remain would prevent HA-side refresh-token revocation.
+
+Create a private CA, server certificate with the Edge hostname/IP in its SAN,
+and a dedicated HA Edge client certificate. Install these server-side files:
+
+```text
+/etc/home-agent/tls/server.crt
+/etc/home-agent/tls/server.key
+/etc/home-agent/tls/client-ca.crt
+```
+
+Install the client certificate, client key, CA certificate, and a separate copy
+of the master `edge_token` on the HA host. All HA-side key/token files must be
+mode 0600.
+
+Configure `pgbackrest.conf` from
+`stack/home-agent-deploy/pgbackrest.conf.example` using the separately approved
+off-host destination and backup cipher secret. Store it outside the repo.
+Preflight sets it to `root:999` mode 0640 so PostgreSQL and the UID/GID-999
+backup gate can read it without making the repository credential writable; it
+also enforces a UID/GID-999 mode-0700 pgBackRest spool. Keep
+`pg1-user=home_agent_backup`: preflight mounts that role's separate mode-0400
+password only into the backup gate. PostgreSQL uses the deployment-owned SCRAM
+HBA file even for existing clusters, so the backup container never receives or
+impersonates the bootstrap owner. Its SQL authority is limited to read-only
+settings (not live query statistics) and the four PostgreSQL 17 backup/WAL
+control functions required by pgBackRest.
+
+Run the strict preflight as root because the Compose secret source directories
+are deliberately not traversable by an ordinary host account. It verifies
+absolute, mutually non-nested paths, `/dev/mapper` mounts,
+master files, exact per-service ownership/modes, pgBackRest ownership, policy
+digest, the rendered Compose configuration, required files, and the
+unprivileged mTLS ingress configuration; it starts no application service:
+
+```sh
+sudo sh home-agent-deploy/preflight.sh ./home-agent.env
+```
+
+## Build and start
+
+Validate the dedicated Compose project, then start it:
+
+```sh
+sudo docker compose --env-file home-agent.env -f home-agent-compose.yml config
+sudo docker compose --env-file home-agent.env -f home-agent-compose.yml build
+sudo docker compose --env-file home-agent.env -f home-agent-compose.yml up -d
+```
+
+Startup ordering is enforced:
+
+```text
+PostgreSQL ready
+→ runtime roles provisioned
+→ dedicated backup role authenticated
+→ pgBackRest stanza/check/full encrypted off-host backup
+→ transactional migration
+→ least-privilege grants
+→ API / ingest / worker
+→ mTLS Edge ingress and OAuth BFF
+```
+
+PostgreSQL uses the immutable official 17.10 Bookworm image index configured in
+`home-agent.env`; no database or Core port is published. A pgBackRest failure
+prevents the semantic roles from starting. Raw runtime observations live only
+under `HOME_AGENT_RUNTIME_ROOT`; sealed OAuth session/revocation state lives
+only under `HOME_AGENT_SESSION_ROOT`. Neither path belongs in the durable
+PostgreSQL or off-host backup source.
+
+Check readiness without printing environment variables or secrets:
+
+```sh
+sudo docker compose --env-file home-agent.env -f home-agent-compose.yml ps
+sudo docker compose --env-file home-agent.env -f home-agent-compose.yml logs --tail=100 backup-gate migrate grant-runtime core-api core-ingest core-worker bff edge-ingress
+```
+
+## Web and OAuth routing
+
+Provision a dedicated private HTTPS name such as
+`agent.home.example.internal`. It must not be the origin that serves the large
+legacy Home UI. Register that exact origin as the HA OAuth client and the exact
+`https://agent.home.example.internal/api/agent/auth/callback` redirect. Set only
+the dedicated origin in `HOME_AGENT_ALLOWED_ORIGINS`.
+
+Point the existing web gateway at the loopback BFF if they share a host:
+
+```text
+HOME_WEB_AGENT_ORIGINS=https://agent.home.example.internal
+HOME_WEB_AGENT_BFF_TARGET=http://127.0.0.1:8097/api/agent
+```
+
+If they do not share a host, use a private authenticated transport; do not
+change the BFF bind to `0.0.0.0`. Configure the reverse proxy/Tailscale Serve
+with separate legacy and Agent HTTPS hostnames and preserve the original Host
+header. A missing or malformed `HOME_WEB_AGENT_ORIGINS` disables browser Agent
+routes rather than falling back to the legacy origin, and makes
+`node web-gateway/server.mjs --check` exit non-zero.
+
+The Agent host serves only `/home-agent/*`, `/api/agent/*`, and the fixed
+`/native-oauth-client` metadata page. It has no gateway Basic-login, legacy UI,
+legacy proxy, health, or websocket surface. The static Agent bundle has no
+parent-path dependencies. Requests carrying an Origin must exactly match the
+configured Agent origin. On every other host, browser Agent static/session/API
+routes and OAuth metadata return 404, even with valid gateway Basic or HA
+Bearer credentials. This prevents same-origin legacy UI script execution from
+reading Agent CSRF state or mutating semantic memory.
+
+The Agent host relies on HA OAuth/BFF authentication, not the legacy gateway
+Basic cookie. Open `https://agent.home.example.internal/home-agent/`; `/agent`
+in the legacy web UI opens the configured dedicated origin in a separate
+`noopener` tab, so the two JavaScript realms never share an opener. Browser
+logout revokes its HA refresh token before the BFF deletes the local sealed
+envelope. If HA is temporarily unavailable, the cookie is cleared and the
+session remains fail-closed as a sealed retry row. Idle and absolute expiry use
+the same bounded revocation janitor. A BFF restart reloads valid and pending
+sessions while deliberately invalidating in-flight OAuth/PKCE state.
+
+Startup rejects insecure/malformed browser origins, an OAuth callback outside
+the exact allowed origin/path, credentialed/query-bearing HA or Core URLs, and
+non-root service URLs. HA is HTTPS except explicit loopback/test use. All BFF
+HA/Core fetches use redirect-error mode so credentials and semantic bodies
+cannot follow a 3xx response.
+
+The legacy Intelligence proxy and contentful metrics proxy remain disabled
+unless explicitly re-enabled with their containment override variables; they
+are never Core retrieval sources.
+
+### Windows native OAuth
+
+The packaged Windows Agent window uses a different native OAuth redirect from
+the browser BFF. Configure the non-secret native endpoints in the Windows
+process environment exactly as documented in
+`docs/HOME-AGENT-NATIVE-OAUTH.md`. The `HOME_NATIVE_AGENT_BFF_URL` value is the
+private HTTPS web-gateway origin, never the deployment's loopback HTTP BFF.
+
+The dedicated Agent host publishes `/native-oauth-client` without Basic auth;
+that sub-10 KiB document contains the exact HA client-metadata redirect link
+and no application/session data. Exact typed native Agent routes also bypass
+gateway Basic because HA Bearer and Basic share the `Authorization` header.
+The bearer is preserved to the BFF, which immediately validates HA `whoami`.
+Native typed routes remain usable during origin migration, but they never gain
+browser cookie/session semantics. Non-Agent routes on the Agent host are
+denied, and browser Agent routes on legacy hosts are denied.
+
+## HA Edge
+
+Copy `ha-config/home_agent_edge/` into HA's custom-components location using the
+repository's HA deployment process, restart HA, then create the integration.
+Configure:
+
+- the exact `person`, active `device_tracker`, and reviewed zone entity IDs;
+- blocked entity/user IDs implementing privacy directives;
+- the HTTPS `/v1/ingest/envelopes` Edge endpoint;
+- the same mTLS origin's exact `GET /v1/ingest/privacy-policy` endpoint;
+- server CA, client certificate/key, spool encryption key, and bearer-token
+  file paths;
+- an encrypted local spool path, 24-hour age, and 100 MB size;
+- conversation content hard-disabled (there is no runtime text toggle).
+
+The raw spool path must be on encrypted runtime storage excluded from Home
+Assistant and off-host backups. The integration rejects `/config`, `/backup`,
+and `/share`; its privacy-safe `/tmp/home_agent_edge/runtime.sqlite` default is
+ephemeral. For restart/replay durability, mount a dedicated host directory at
+that path without adding it to a backup set. Keep the separate spool key file
+mode 0600. Loss of the runtime mount is a coverage gap, never permission to
+reconstruct or retain coordinates elsewhere.
+
+Do not select cameras, broad state wildcards, scripts, scenes, switches, or
+action events. Verify restart, duplicate, reordering, source-switch, malformed
+input, and overflow tests before record-only observation begins.
+
+Before semantic cutover, every ignored/do-not-track person must have every
+tracked HA entity and HA user UUID present in the Edge static blocked lists.
+Core synchronizes reviewed bindings dynamically and rejects racing/unknown-user
+events, but it cannot infer an HA entity that was never reviewed or bound.
+
+## Explicit identity and locality confirmation
+
+First call HA's authenticated view and record the returned HA UUID without the
+access token:
+
+```text
+GET /api/home_agent_edge/whoami
+```
+
+Then run the container-local interactive bootstrap. It reads the route-scoped
+service and operator bearers plus the bootstrap secret from mounted files,
+never prints them or coordinates, and does not enable either location opt-in:
+
+```sh
+sudo docker compose --env-file home-agent.env -f home-agent-compose.yml exec core-api \
+  python /operator/provision_identity.py
+```
+
+The workflow requires exact confirmations for the HA-user-to-Marcelo binding,
+the tracker binding, each explicit parent edge, and the private Itaipava
+locality. Import reviewed stable UUIDs when available. Do not use implicit
+legacy `parent` labels as `parent_of` facts.
+
+After binding, sign into `/home-agent/` and enable location memory only if
+Marcelo opts in. Travel greetings are a separate choice and remain operationally
+shadow-only until the native attestation channel exists. The place teaching UI
+will not propose a descriptor without a current supported visit, and commit
+requires a second explicit preview confirmation.
+
+## Reviewed legacy Identity Store migration
+
+Use the one-shot `identity-migration` Compose profile only after the legacy
+Identity Store writer is stopped and its SQLite WAL has been checkpointed.
+Verify that neither `<database>-wal` nor `<database>-journal` exists; the tool
+also refuses to open a source with either sidecar present. Do not copy the
+legacy database into Core, the repository, or a backed-up directory.
+
+Grant the fixed migration UID read access to the stopped source file without
+making it group/world-readable, then start the profile with an absolute source
+path:
+
+```sh
+sudo setfacl -m u:10001:r-- /private/path/identity.sqlite
+sudo env HOME_AGENT_LEGACY_IDENTITY_DB=/private/path/identity.sqlite \
+  docker compose --env-file home-agent.env -f home-agent-compose.yml \
+  --profile operator run --rm identity-migration
+```
+
+At the prompt, enter `/legacy/identity.sqlite`. With the default answers the
+tool performs a counts-and-digests-only review and sends no Core writes. It
+opens SQLite with `mode=ro` and `query_only`, validates schema version 1, and
+installs a SQLite authorizer that permits only the selected identity, alias,
+enrollment, role, and relationship columns. It cannot read notes, preferences,
+generated content, face-crop metadata, change-log snapshots, or pending-write
+payloads.
+
+Apply mode requires `HOME_AGENT_ROLLOUT_MODE=shadow` and fetches Core's fixed authenticated
+`GET /v1/operator-capabilities` contract, requires an exact confirmation for
+the review digest and every item, and calls only the typed People migration
+routes. Stable UUID import requires the reviewed source
+digest; a retry is idempotent only when every projected field and provenance
+value match exactly. The profile receives a dedicated operator-audience token
+and bootstrap token, but no BFF service token, database URL, knowledge key,
+runtime spool key, or PostgreSQL network. It mounts the legacy database
+read-only, requires a private TTY, and uses Docker logging driver `none`.
+
+Aliases, Frigate recognition bindings, privacy directives, archived status,
+and explicit relationship candidates use exact typed endpoints. `ignored` and
+legacy `do_not_identify` import only a suppressed placeholder plus the blocking
+directive; aliases, recognition bindings, and roles are skipped. A legacy
+`parent` classification or relationship remains a non-authoritative candidate
+with unknown perspective; this migration never calls the authoritative
+parent-confirmation endpoint. A safety-critical directive failure stops later
+dependent operations for that person.
+
+Optional review artifacts contain counts, stable UUIDs, source digests,
+endpoint requirements, and a plan digest only. The tool creates them
+exclusively on POSIX storage with mode 0600 and refuses an existing path.
+Remove the temporary source ACL after review:
+
+```sh
+sudo setfacl -x u:10001 /private/path/identity.sqlite
+```
+
+Run the synthetic safety suite before live review:
+
+```sh
+python -m unittest discover -s stack/home-agent-deploy/operator/tests -v
+```
+
+## Record-only, shadow, and canary gates
+
+Every fresh deployment starts with `HOME_AGENT_ROLLOUT_MODE=record_only`.
+
+Keep Edge/Core in record-only operation for at least seven days and until 500
+relevant events or three controlled journeys have been observed. Confirm:
+
+- duplicates/replays preserve one stable visit identity;
+- gaps and snapshot recovery never manufacture an arrival;
+- exact raw coordinates are absent from PostgreSQL logs and off-host backups;
+- location persistence is absent before opt-in;
+- private initiatives are absent from web snapshots; before canary they remain
+  shadow-only, and canary presentation uses the one-time native claim only;
+- a tracker switch opens conflict rather than silently merging evidence;
+- stale or insufficient fixes never create a specific property anchor.
+
+Core health exposes the locked resource budget. Durable-volume free space is
+`warn` at 20%, suspends optional API mutations at 15%, and enters
+privacy-essential/read-only degraded mode at 10%; ingest then receives 507 and
+HA Edge retains or expires its bounded spool with explicit gaps. Health also
+alerts above 1,000 location events in 24 hours or 100 MiB of location payloads
+in seven days. These thresholds are deployment policy, not environment-tunable
+model inputs.
+
+Only after that gate passes, stop Core, set
+`HOME_AGENT_ROLLOUT_MODE=shadow`, rerun `preflight.sh`, and restart. Shadow is
+the only mode authorized for reviewed People/privacy migration and semantic
+cutover; persistent memory and presentation remain disabled. Confirm Marcelo's
+HA binding and both explicit parent facts, verify each privacy directive across
+ingress/retrieval/initiatives/export, freeze legacy semantic writes, and retain
+the reviewed migration report.
+
+Only after the shadow gates and the place-memory replay/restore/erasure suite
+pass may the operator set `HOME_AGENT_ROLLOUT_MODE=canary`, rerun preflight, and
+restart for the single supervised private teaching/greeting canary. Return to
+`shadow` or `record_only` on any failed gate; never reactivate legacy semantic
+authority.
+
+For the supervised canary, verify two simultaneously authenticated desktop
+clients can list only the same opaque initiative ID and expiry, exactly one
+claim succeeds, and exactly one presentation attempt is recorded. At claim
+time Core must reject or suppress stale (>15 minute), departed, conflicted,
+partial-coverage, consent-disabled, descriptor-changed, and locator-mismatched
+visits. The returned sentence is the fixed `travel_arrival_v1` rendering of the
+active encrypted descriptor; no model participates.
+
+An unresolved teaching anchor remains `needs_confirmation` with
+`location_unresolved`. The private preview shows the complete digest-bound
+locator summary and visible resolved parent names, but its Confirm control is
+disabled. Wait for two anchor-eligible fixes and create a fresh preview; never
+convert the locality-only transaction into a guessed property.
+
+Only then run the supervised Itaipava teaching, correction, scoped-forgetting,
+crash-boundary, backup, and restore scenarios. Physical actions, active-room
+perception, learning, Atlas/V-JEPA, and media migration must continue returning
+`capability_disabled`.
+
+The canonical 24-scenario acceptance inventory is
+`tests/home_agent/itaipava_golden_scenarios.json`. Run
+`python tests/home_agent/test_repository_contract.py` to validate its exact
+scenario set, test-node references, and disabled-capability handlers. A
+manifest entry may be only `covered` or `capability_disabled`; the repository
+contract rejects hidden `gap` entries. The app-closed journey is exercised by
+an Edge-to-Core PostgreSQL replay harness. Retrieved-memory injection and
+context compaction are exercised by the deterministic governed replay compiler,
+which excludes untrusted text and keeps model/action contexts disabled.
+
+## Backup and restore gate
+
+WAL archive timeout is five minutes and the startup gate takes a full encrypted
+off-host backup. Schedule incremental backups and a monthly isolated restore.
+Never mount `HOME_AGENT_RUNTIME_ROOT`, `HOME_AGENT_SESSION_ROOT`, or the
+erasure ledger into the PostgreSQL backup job. Replicate the encrypted ledger
+and its head separately.
+
+A restored database must remain isolated from BFF/Edge until every later
+erasure epoch has been replayed and verified. With only PostgreSQL and its
+internal network running, invoke:
+
+```sh
+sudo docker compose --env-file home-agent.env -f home-agent-compose.yml \
+  --profile operator run --rm restore-replay
+```
+
+The dedicated erasure role replays the independent encrypted ledger
+idempotently. API and ingest readiness remain quarantined for a missing,
+stale, ahead, or divergent head and while an erasure receipt is still pending.
+Never initialize a replacement ledger during recovery or bypass this gate.
+
+## Known gated work
+
+- Typed correction and retraction use preview/confirm bitemporal transactions;
+  direct database edits remain unsupported.
+- The reviewed importer and typed People/privacy routes are implemented.
+  `do_not_track`, `ignored`, `silent`, `private`, archived, and due-auto-expiry
+  gates are executable. Auto-expiry scrubs identity-linked semantic records,
+  exact place locators, durable headers, and keyed runtime-spool subjects, then
+  remains `ledger_pending` until the independent erasure ledger is durable.
+  Edge-spool deletion remains an explicit external residual until separately
+  verified or its hard 24-hour TTL expires.
+- Native Tauri OAuth/Windows Credential Manager source transport is implemented
+  and compile-tested, but live acceptance still requires a signed Windows
+  release build, exact HA client registration/metadata verification, a real
+  Credential Manager login-refresh-restart-logout test, and the operator's
+  private HTTPS gateway configuration. Typed initiative list/claim and semantic
+  relationship/presence query routes are implemented only on the native
+  allowlist and are still disabled outside canary rollout.
+- Live credential rotation, firewall application, LUKS/key provisioning, HA
+  OAuth registration, certificates, off-host repository credentials, seven-day
+  observation, and human confirmations are operator work, not source changes.
+
+These are release gates, not optional follow-ups.

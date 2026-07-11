@@ -1,0 +1,26 @@
+{
+  "policy_version": "home-agent-mvp-v1",
+  "rollout_default": "record_only",
+  "rollout_order": ["record_only", "shadow", "canary"],
+  "persistent_memory_minimum_rollout": "canary",
+  "location_memory_default": false,
+  "travel_greetings_default": false,
+  "private_initiative_surfaces": ["private_tauri"],
+  "model_physical_actions": false,
+  "external_routing_for_private_data": false,
+  "raw_observation_ttl_seconds": 86400,
+  "runtime_spool_max_bytes": 104857600,
+  "disk_warn_free_percent": 20,
+  "disk_stop_optional_free_percent": 15,
+  "disk_read_only_free_percent": 10,
+  "ingest_daily_event_alert": 1000,
+  "ingest_weekly_byte_alert": 104857600,
+  "disabled_capabilities": [
+    "active_room",
+    "atlas_training",
+    "lighting_learning",
+    "physical_actions",
+    "vjepa"
+  ],
+  "legacy_intelligence_authority": false
+}

@@ -1,15 +1,388 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod native_auth;
+mod windows_credentials;
+
+use native_auth::{
+    AgentOperation, NativeAgentResponse, NativeAuthState, NativeAuthStatus, NativeLoginStarted,
+};
+use std::sync::Arc;
 use tauri::Manager;
+use uuid::Uuid;
+
+const AGENT_WINDOW_LABEL: &str = "agent";
+
+fn native_authority_window(label: &str) -> bool {
+    label == AGENT_WINDOW_LABEL
+}
+
+fn require_agent_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    if native_authority_window(window.label()) {
+        Ok(())
+    } else {
+        Err("native_agent_window_not_authorized".to_string())
+    }
+}
+
+#[tauri::command]
+fn open_agent_window(window: tauri::WebviewWindow, app: tauri::AppHandle) -> Result<(), String> {
+    if window.label() != "main" && window.label() != AGENT_WINDOW_LABEL {
+        return Err("native_agent_window_not_authorized".to_string());
+    }
+    let agent = app
+        .get_webview_window(AGENT_WINDOW_LABEL)
+        .ok_or_else(|| "native_agent_window_unavailable".to_string())?;
+    agent
+        .show()
+        .map_err(|_| "native_agent_window_unavailable".to_string())?;
+    agent
+        .unminimize()
+        .map_err(|_| "native_agent_window_unavailable".to_string())?;
+    agent
+        .set_focus()
+        .map_err(|_| "native_agent_window_unavailable".to_string())
+}
+
+#[tauri::command]
+fn close_agent_window(window: tauri::WebviewWindow, app: tauri::AppHandle) -> Result<(), String> {
+    require_agent_window(&window)?;
+    window
+        .hide()
+        .map_err(|_| "native_agent_window_unavailable".to_string())?;
+    let main = app
+        .get_webview_window("main")
+        .ok_or_else(|| "native_main_window_unavailable".to_string())?;
+    main.show()
+        .map_err(|_| "native_main_window_unavailable".to_string())?;
+    main.unminimize()
+        .map_err(|_| "native_main_window_unavailable".to_string())?;
+    main.set_focus()
+        .map_err(|_| "native_main_window_unavailable".to_string())
+}
+
+fn validated_uuid(value: String) -> Result<String, String> {
+    Uuid::parse_str(&value)
+        .map(|parsed| parsed.to_string())
+        .map_err(|_| "native_agent_identifier_invalid".to_string())
+}
+
+fn validated_text(value: String) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > 4_096 {
+        return Err("native_agent_text_invalid".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+fn validated_digest(value: String) -> Result<String, String> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("native_agent_preview_digest_invalid".to_string());
+    }
+    Ok(value.to_ascii_lowercase())
+}
+
+async fn run_agent(
+    state: Arc<NativeAuthState>,
+    operation: AgentOperation,
+) -> Result<NativeAgentResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || state.agent_request(operation))
+        .await
+        .map_err(|_| "native_agent_unavailable".to_string())?
+}
+
+#[tauri::command]
+fn native_auth_status(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<NativeAuthState>>,
+) -> Result<NativeAuthStatus, String> {
+    require_agent_window(&window)?;
+    Ok(state.status())
+}
+
+#[tauri::command]
+async fn native_auth_login(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<NativeAuthState>>,
+) -> Result<NativeLoginStarted, String> {
+    require_agent_window(&window)?;
+    let owner = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || owner.start_login(app))
+        .await
+        .map_err(|_| "native_login_failed".to_string())?
+}
+
+#[tauri::command]
+async fn native_auth_logout(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<NativeAuthState>>,
+) -> Result<NativeAuthStatus, String> {
+    require_agent_window(&window)?;
+    let owner = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || owner.logout())
+        .await
+        .map_err(|_| "native_logout_failed".to_string())?
+}
+
+#[tauri::command]
+async fn native_agent_snapshot(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<NativeAuthState>>,
+) -> Result<NativeAgentResponse, String> {
+    require_agent_window(&window)?;
+    run_agent(Arc::clone(state.inner()), AgentOperation::Snapshot).await
+}
+
+#[tauri::command]
+async fn native_agent_list_initiatives(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<NativeAuthState>>,
+) -> Result<NativeAgentResponse, String> {
+    require_agent_window(&window)?;
+    run_agent(Arc::clone(state.inner()), AgentOperation::ListInitiatives).await
+}
+
+#[tauri::command]
+async fn native_agent_claim_initiative(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<NativeAuthState>>,
+    initiative_id: String,
+) -> Result<NativeAgentResponse, String> {
+    require_agent_window(&window)?;
+    run_agent(
+        Arc::clone(state.inner()),
+        AgentOperation::ClaimInitiative {
+            initiative_id: validated_uuid(initiative_id)?,
+            session_id: Uuid::new_v4().to_string(),
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+async fn native_agent_explain_descriptor(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<NativeAuthState>>,
+    place_id: String,
+) -> Result<NativeAgentResponse, String> {
+    require_agent_window(&window)?;
+    run_agent(
+        Arc::clone(state.inner()),
+        AgentOperation::ExplainDescriptor {
+            place_id: validated_uuid(place_id)?,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+async fn native_agent_query_parent_presence(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<NativeAuthState>>,
+    place_id: String,
+) -> Result<NativeAgentResponse, String> {
+    require_agent_window(&window)?;
+    run_agent(
+        Arc::clone(state.inner()),
+        AgentOperation::QueryParentPresence {
+            place_id: validated_uuid(place_id)?,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+async fn native_agent_set_preference(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<NativeAuthState>>,
+    key: String,
+    enabled: bool,
+) -> Result<NativeAgentResponse, String> {
+    require_agent_window(&window)?;
+    let key = match key.as_str() {
+        "location_memory" => "location_memory",
+        "travel_greetings" => "travel_greetings",
+        _ => return Err("native_agent_preference_invalid".to_string()),
+    };
+    run_agent(
+        Arc::clone(state.inner()),
+        AgentOperation::SetPreference {
+            key,
+            enabled,
+            artifact_id: Uuid::new_v4().to_string(),
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+async fn native_agent_propose_memory(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<NativeAuthState>>,
+    visit_id: String,
+    exact_text: String,
+) -> Result<NativeAgentResponse, String> {
+    require_agent_window(&window)?;
+    run_agent(
+        Arc::clone(state.inner()),
+        AgentOperation::ProposeMemory {
+            visit_id: validated_uuid(visit_id)?,
+            exact_text: validated_text(exact_text)?,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+async fn native_agent_get_memory(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<NativeAuthState>>,
+    transaction_id: String,
+) -> Result<NativeAgentResponse, String> {
+    require_agent_window(&window)?;
+    run_agent(
+        Arc::clone(state.inner()),
+        AgentOperation::GetMemory {
+            transaction_id: validated_uuid(transaction_id)?,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+async fn native_agent_confirm_memory(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<NativeAuthState>>,
+    transaction_id: String,
+    preview_digest: String,
+) -> Result<NativeAgentResponse, String> {
+    require_agent_window(&window)?;
+    run_agent(
+        Arc::clone(state.inner()),
+        AgentOperation::ConfirmMemory {
+            transaction_id: validated_uuid(transaction_id)?,
+            preview_digest: validated_digest(preview_digest)?,
+            artifact_id: Uuid::new_v4().to_string(),
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+async fn native_agent_preview_correction(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<NativeAuthState>>,
+    fact_id: String,
+    exact_text: String,
+) -> Result<NativeAgentResponse, String> {
+    require_agent_window(&window)?;
+    run_agent(
+        Arc::clone(state.inner()),
+        AgentOperation::PreviewCorrection {
+            fact_id: validated_uuid(fact_id)?,
+            exact_text: validated_text(exact_text)?,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+async fn native_agent_confirm_correction(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<NativeAuthState>>,
+    transaction_id: String,
+    preview_digest: String,
+) -> Result<NativeAgentResponse, String> {
+    require_agent_window(&window)?;
+    run_agent(
+        Arc::clone(state.inner()),
+        AgentOperation::ConfirmCorrection {
+            transaction_id: validated_uuid(transaction_id)?,
+            preview_digest: validated_digest(preview_digest)?,
+            artifact_id: Uuid::new_v4().to_string(),
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+async fn native_agent_preview_retraction(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<NativeAuthState>>,
+    fact_id: String,
+) -> Result<NativeAgentResponse, String> {
+    require_agent_window(&window)?;
+    run_agent(
+        Arc::clone(state.inner()),
+        AgentOperation::PreviewRetraction {
+            fact_id: validated_uuid(fact_id)?,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+async fn native_agent_confirm_retraction(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<NativeAuthState>>,
+    transaction_id: String,
+    preview_digest: String,
+) -> Result<NativeAgentResponse, String> {
+    require_agent_window(&window)?;
+    run_agent(
+        Arc::clone(state.inner()),
+        AgentOperation::ConfirmRetraction {
+            transaction_id: validated_uuid(transaction_id)?,
+            preview_digest: validated_digest(preview_digest)?,
+            artifact_id: Uuid::new_v4().to_string(),
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+async fn native_agent_preview_forget(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<NativeAuthState>>,
+    fact_id: String,
+) -> Result<NativeAgentResponse, String> {
+    require_agent_window(&window)?;
+    run_agent(
+        Arc::clone(state.inner()),
+        AgentOperation::PreviewForget {
+            fact_id: validated_uuid(fact_id)?,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+async fn native_agent_confirm_forget(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<NativeAuthState>>,
+    request_id: String,
+    preview_digest: String,
+) -> Result<NativeAgentResponse, String> {
+    require_agent_window(&window)?;
+    run_agent(
+        Arc::clone(state.inner()),
+        AgentOperation::ConfirmForget {
+            request_id: validated_uuid(request_id)?,
+            preview_digest: validated_digest(preview_digest)?,
+        },
+    )
+    .await
+}
 
 fn main() {
+    let native_auth = Arc::new(NativeAuthState::new());
+    native_auth.start_pending_revocation_retry();
     tauri::Builder::default()
-        // Single-instance plugin must be registered FIRST so subsequent
-        // launches reach the handler before any window-create logic runs.
-        // When a second home.exe starts, this handler fires on the original
-        // instance with the new launch's argv + cwd. We just bring the
-        // existing window to front and exit the second instance.
+        .manage(native_auth)
+        // Single-instance plugin must be registered first so a second launch
+        // can focus the existing shell. OAuth callbacks use a Rust loopback
+        // listener and never pass authorization codes through argv/webview.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.show();
@@ -17,17 +390,59 @@ fn main() {
                 let _ = win.unminimize();
             }
         }))
-        .plugin(tauri_plugin_http::init())
-        .plugin(tauri_plugin_shell::init())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == AGENT_WINDOW_LABEL {
+                    // Keep the authority label bound to the reviewed local
+                    // document for the process lifetime. Closing the Agent
+                    // surface hides it instead of destroying/recreating or
+                    // navigating a privileged webview.
+                    api.prevent_close();
+                    let _ = window.hide();
+                } else if window.label() == "main" {
+                    // The hidden Agent window must not keep the process alive
+                    // after the main shell closes.
+                    if let Some(agent) = window.app_handle().get_webview_window(AGENT_WINDOW_LABEL)
+                    {
+                        let _ = agent.destroy();
+                    }
+                }
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            open_agent_window,
+            close_agent_window,
+            native_auth_status,
+            native_auth_login,
+            native_auth_logout,
+            native_agent_snapshot,
+            native_agent_list_initiatives,
+            native_agent_claim_initiative,
+            native_agent_explain_descriptor,
+            native_agent_query_parent_presence,
+            native_agent_set_preference,
+            native_agent_propose_memory,
+            native_agent_get_memory,
+            native_agent_confirm_memory,
+            native_agent_preview_correction,
+            native_agent_confirm_correction,
+            native_agent_preview_retraction,
+            native_agent_confirm_retraction,
+            native_agent_preview_forget,
+            native_agent_confirm_forget,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
 
 #[cfg(test)]
 mod tests {
+    use super::native_authority_window;
     use serde_json::Value;
 
     const MAIN_RS: &str = include_str!("main.rs");
+    const NATIVE_AUTH_RS: &str = include_str!("native_auth.rs");
+    const WINDOWS_CREDENTIALS_RS: &str = include_str!("windows_credentials.rs");
     const CARGO_TOML: &str = include_str!("../Cargo.toml");
     const TAURI_CONF: &str = include_str!("../tauri.conf.json");
     const DEFAULT_CAPABILITY: &str = include_str!("../capabilities/default.json");
@@ -37,151 +452,85 @@ mod tests {
     }
 
     #[test]
-    fn single_instance_plugin_is_first_and_refocuses_main_window() {
-        let single = MAIN_RS
-            .find(".plugin(tauri_plugin_single_instance::init")
-            .expect("single-instance plugin should be registered");
-        let http = MAIN_RS
-            .find(".plugin(tauri_plugin_http::init())")
-            .expect("HTTP plugin should be registered");
-        let shell = MAIN_RS
-            .find(".plugin(tauri_plugin_shell::init())")
-            .expect("shell plugin should be registered");
-
-        assert!(
-            single < http && single < shell,
-            "single-instance plugin must stay first so second launches focus the original window"
-        );
-
-        let handler = &MAIN_RS[single..http];
-        assert!(handler.contains("get_webview_window(\"main\")"));
-        assert!(handler.contains("win.show()"));
-        assert!(handler.contains("win.set_focus()"));
-        assert!(handler.contains("win.unminimize()"));
-        assert!(
-            MAIN_RS.contains("#![cfg_attr(not(debug_assertions), windows_subsystem = \"windows\")]"),
-            "release builds should not spawn a console window on Windows"
-        );
-    }
-
-    #[test]
-    fn cargo_manifest_declares_required_tauri_plugins() {
-        for dependency in [
-            "tauri-plugin-single-instance",
-            "tauri-plugin-http",
-            "tauri-plugin-shell",
-            "serde_json",
-        ] {
-            assert!(
-                CARGO_TOML.contains(dependency),
-                "Cargo.toml should declare {dependency}"
-            );
+    fn bearer_ingress_commands_are_removed_and_native_commands_are_narrow() {
+        for forbidden in
+            ["store", "has", "clear"].map(|verb| format!("auth_{verb}_{}", "ephemeral"))
+        {
+            assert!(!MAIN_RS.contains(&forbidden));
         }
-        assert!(
-            CARGO_TOML.contains("features = [\"protocol-asset\", \"devtools\"]"),
-            "Tauri should keep protocol-asset and devtools enabled"
-        );
-        assert!(
-            CARGO_TOML.contains("panic = \"abort\"")
-                && CARGO_TOML.contains("lto = true")
-                && CARGO_TOML.contains("strip = true"),
-            "release profile should stay compact and deterministic"
-        );
+        for command in [
+            "native_auth_status",
+            "native_auth_login",
+            "native_auth_logout",
+            "native_agent_snapshot",
+            "native_agent_list_initiatives",
+            "native_agent_claim_initiative",
+            "native_agent_explain_descriptor",
+            "native_agent_query_parent_presence",
+            "native_agent_set_preference",
+            "native_agent_propose_memory",
+            "native_agent_get_memory",
+            "native_agent_confirm_memory",
+            "native_agent_preview_correction",
+            "native_agent_confirm_correction",
+            "native_agent_preview_retraction",
+            "native_agent_confirm_retraction",
+            "native_agent_preview_forget",
+            "native_agent_confirm_forget",
+        ] {
+            assert!(MAIN_RS.contains(command), "missing {command}");
+        }
+        assert!(!MAIN_RS.contains(&["fn native_agent_", "request"].concat()));
+        assert!(MAIN_RS.contains(&["native_agent_claim_", "initiative"].concat()));
     }
 
     #[test]
-    fn tauri_manifest_pins_main_window_and_bundle_shape() {
+    fn native_tokens_never_cross_the_command_return_boundary() {
+        assert!(NATIVE_AUTH_RS.contains("Zeroizing<String>"));
+        assert!(NATIVE_AUTH_RS.contains("windows_credentials::write"));
+        assert!(WINDOWS_CREDENTIALS_RS.contains("CredWriteW"));
+        assert!(WINDOWS_CREDENTIALS_RS.contains("CredReadW"));
+        assert!(WINDOWS_CREDENTIALS_RS.contains("CredDeleteW"));
+        assert!(!MAIN_RS.contains(&["access_", "token"].concat()));
+        assert!(!MAIN_RS.contains(&["refresh_", "token"].concat()));
+    }
+
+    #[test]
+    fn browser_http_plugin_and_universal_network_capability_are_absent() {
+        assert!(!CARGO_TOML.contains(&["tauri-plugin", "-http"].concat()));
+        assert!(!MAIN_RS.contains(&["tauri_plugin", "_http"].concat()));
+        assert!(!DEFAULT_CAPABILITY.contains("http:default"));
+        assert!(!DEFAULT_CAPABILITY.contains("http://*:*/*"));
+        assert!(!DEFAULT_CAPABILITY.contains("https://*:*/*"));
+    }
+
+    #[test]
+    fn native_oauth_uses_external_browser_pkce_metadata_and_windows_credentials() {
+        assert!(NATIVE_AUTH_RS.contains("code_challenge_method"));
+        assert!(NATIVE_AUTH_RS.contains("S256"));
+        assert!(NATIVE_AUTH_RS.contains("metadata_allows_redirect"));
+        assert!(NATIVE_AUTH_RS.contains("127.0.0.1"));
+        assert!(WINDOWS_CREDENTIALS_RS.contains("ShellExecuteW"));
+    }
+
+    #[test]
+    fn native_authority_is_denied_to_main_and_allowed_only_to_agent() {
+        assert!(!native_authority_window("main"));
+        assert!(!native_authority_window("unknown"));
+        assert!(native_authority_window("agent"));
+        assert!(MAIN_RS.contains("require_agent_window(&window)?"));
+    }
+
+    #[test]
+    fn tauri_manifest_isolates_agent_from_the_legacy_main_window() {
         let conf = json(TAURI_CONF);
         assert_eq!(conf["productName"], "Home");
         assert_eq!(conf["identifier"], "com.engineeredlighting.home");
-        assert_eq!(conf["build"]["frontendDist"], "../src");
-
-        let windows = conf["app"]["windows"]
-            .as_array()
-            .expect("windows should be an array");
-        assert_eq!(windows.len(), 1, "Home should remain a single-window shell");
-        let main = &windows[0];
-        assert_eq!(main["label"], "main");
-        assert_eq!(main["title"], "Home");
-        assert_eq!(main["resizable"], true);
-        assert_eq!(main["decorations"], false);
-        assert_eq!(main["transparent"], false);
-        assert_eq!(main["fullscreen"], false);
-        assert_eq!(main["width"], 820);
-        assert_eq!(main["height"], 900);
-        assert_eq!(main["minWidth"], 360);
-        assert_eq!(main["minHeight"], 480);
-
-        assert_eq!(conf["bundle"]["active"], true);
-        let targets: Vec<&str> = conf["bundle"]["targets"]
-            .as_array()
-            .expect("bundle targets should be an array")
-            .iter()
-            .map(|item| item.as_str().expect("bundle target should be a string"))
-            .collect();
-        assert_eq!(targets, vec!["msi", "dmg"]);
-    }
-
-    #[test]
-    fn asset_protocol_scope_stays_limited_to_apartment_data() {
-        let conf = json(TAURI_CONF);
-        let asset = &conf["app"]["security"]["assetProtocol"];
-        assert_eq!(asset["enable"], true);
-        let scope: Vec<&str> = asset["scope"]
-            .as_array()
-            .expect("asset scope should be an array")
-            .iter()
-            .map(|item| item.as_str().expect("asset scope should be a string"))
-            .collect();
-        assert_eq!(scope, vec!["C:/Claude/home/app/data/apartment/**"]);
-    }
-
-    #[test]
-    fn default_capability_matches_main_window_and_runtime_plugins() {
-        let capability = json(DEFAULT_CAPABILITY);
-        assert_eq!(capability["identifier"], "default");
-
-        let windows: Vec<&str> = capability["windows"]
-            .as_array()
-            .expect("capability windows should be an array")
-            .iter()
-            .map(|item| item.as_str().expect("window label should be a string"))
-            .collect();
-        assert_eq!(windows, vec!["main"]);
-
-        let permissions = capability["permissions"]
-            .as_array()
-            .expect("permissions should be an array");
-        for permission in [
-            "core:default",
-            "core:window:allow-close",
-            "core:window:allow-minimize",
-            "core:window:allow-maximize",
-            "core:window:allow-unmaximize",
-            "core:window:allow-start-dragging",
-            "core:window:allow-set-title",
-            "core:webview:allow-internal-toggle-devtools",
-            "shell:default",
-        ] {
-            assert!(
-                permissions.iter().any(|item| item.as_str() == Some(permission)),
-                "default capability should include {permission}"
-            );
-        }
-
-        let http = permissions
-            .iter()
-            .find(|item| item.get("identifier").and_then(Value::as_str) == Some("http:default"))
-            .expect("default capability should include http:default permission");
-        let urls: Vec<&str> = http["allow"]
-            .as_array()
-            .expect("http allow list should be an array")
-            .iter()
-            .map(|item| item["url"].as_str().expect("allow entry should have a URL"))
-            .collect();
-        assert_eq!(
-            urls,
-            vec!["http://*:*/*", "https://*:*/*", "ws://*:*/*", "wss://*:*/*"]
-        );
+        let windows = conf["app"]["windows"].as_array().expect("windows array");
+        assert_eq!(windows.len(), 2);
+        assert_eq!(windows[0]["label"], "main");
+        assert_eq!(windows[1]["label"], "agent");
+        assert_eq!(windows[1]["url"], "home-agent/index.html");
+        assert_eq!(windows[1]["visible"], false);
     }
 }

@@ -114,6 +114,9 @@ async function waitForGateway(port, child) {
         HOME_WEB_HOST: "127.0.0.1",
         HOME_WEB_PORT: String(gatewayPort),
         HOME_WEB_AUTH_REQUIRED: "0",
+        HOME_WEB_ENABLE_LEGACY_SUPERVISOR_PROXY: "1",
+        HOME_WEB_ENABLE_LEGACY_HA_PROXY: "1",
+        HOME_WEB_HA_TARGET: `http://127.0.0.1:${upstreamPort}`,
         HOME_WEB_SUPERVISOR_TARGET: `http://127.0.0.1:${upstreamPort}`,
         HOME_WEB_STACK_TOKEN: "",
         STACK_TOKEN: "",
@@ -126,10 +129,25 @@ async function waitForGateway(port, child) {
     assert("health reports token proxy enabled", health.stackTokenProxy?.enabled === true, health.stackTokenProxy);
     assert("health reports token source without token value", health.stackTokenProxy?.source === "file", health.stackTokenProxy);
 
+    const malformedCookie = await request(gatewayPort, "/healthz", {
+      Cookie: "attacker=%E0%A4%A",
+    });
+    assert("malformed cookie cannot terminate the gateway", malformedCookie.status === 200, malformedCookie.status);
+    assert("gateway remains alive after malformed cookie", child.exitCode == null, child.exitCode);
+
     const html = await request(gatewayPort, "/");
     assert("index serves successfully", html.status === 200, html.status);
     assert("index exposes gateway proxy marker", html.body.includes("window.__HOME_WEB_STACK_TOKEN_PROXY=true"), html.body.slice(0, 300));
     assert("index does not expose real token", !html.body.includes(FAKE_TOKEN));
+
+    for (const agentPath of [
+      "/home-agent/index.html",
+      "/api/agent/auth/session",
+      "/native-oauth-client",
+    ]) {
+      const denied = await request(gatewayPort, agentPath);
+      assert(`missing Agent-origin configuration fails closed: ${agentPath}`, denied.status === 404, denied.status);
+    }
 
     upstreamRequests.length = 0;
     const stack = await request(gatewayPort, "/proxy/supervisor/api/stack/status", {
@@ -144,6 +162,11 @@ async function waitForGateway(port, child) {
     });
     assert("supervisor health request succeeds through proxy", healthz.status === 200, healthz.status);
     assert("supervisor health receives no browser token", upstreamRequests[0]?.authorization === "", upstreamRequests[0]);
+
+    upstreamRequests.length = 0;
+    const haStates = await request(gatewayPort, "/proxy/ha/api/states");
+    assert("explicit operator opt-in enables the reviewed legacy HA proxy", haStates.status === 200, haStates.status);
+    assert("opted-in HA proxy reaches only the configured target", upstreamRequests[0]?.url === "/api/states", upstreamRequests[0]);
   } finally {
     if (child && child.exitCode == null) child.kill();
     await close(upstream);

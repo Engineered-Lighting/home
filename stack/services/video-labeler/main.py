@@ -44,8 +44,9 @@ import os
 import shutil
 import time
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from videolabeler import db as vldb
 from videolabeler import gpuexclusive
@@ -59,6 +60,7 @@ from videolabeler.api import videos as videos_api
 from videolabeler.config import Config
 from videolabeler.jobqueue import queue as jobq
 from videolabeler.jobqueue.runner import JobRunner
+from videolabeler.security import SecurityConfigurationError, bearer_is_valid, load_api_token
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
@@ -69,6 +71,12 @@ log = logging.getLogger("videolabeler.main")
 WAL_CHECKPOINT_IDLE_S = 60.0
 
 cfg = Config()
+try:
+    api_token = load_api_token()
+    auth_configuration_error = None
+except SecurityConfigurationError as exc:
+    api_token = None
+    auth_configuration_error = str(exc)
 runner = JobRunner(cfg)
 started = time.time()
 _bg_tasks: list[asyncio.Task] = []
@@ -165,10 +173,33 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="video-labeler", version="0.1.0", lifespan=lifespan)
-# the Home app's webview calls these endpoints cross-origin; without CORS
-# headers every fetch() dies as "Failed to fetch"
-app.add_middleware(CORSMiddleware, allow_origins=["*"],
-                   allow_methods=["*"], allow_headers=["*"])
+if cfg.allowed_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(cfg.allowed_origins),
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
+
+
+@app.middleware("http")
+async def require_api_bearer(request: Request, call_next):
+    if request.url.path == "/healthz":
+        return await call_next(request)
+    if api_token is None:
+        return JSONResponse(
+            {"error": "authentication_unconfigured", "capability": "video_labeler"},
+            status_code=503,
+        )
+    if not bearer_is_valid(request.headers.get("authorization"), api_token):
+        return JSONResponse(
+            {"error": "authentication_required"},
+            status_code=401,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return await call_next(request)
+
+
 app.include_router(videos_api.build_router(cfg))
 app.include_router(media_api.build_router(cfg))
 app.include_router(jobs_api.build_router(cfg))
@@ -196,8 +227,12 @@ async def healthz():
     except Exception:
         gpu_excl = {"active": False}
     return {
-        "ok": db_ok,
+        "ok": db_ok and api_token is not None,
         "db": db_ok,
+        "auth_configured": api_token is not None,
+        "configuration_error": "invalid_auth_configuration"
+        if auth_configuration_error
+        else None,
         "jobs_running": jobs_running,
         "gpu_free_gb": _gpu_free_gb(),
         "disk_free_gb": disk_free_gb,
@@ -245,4 +280,4 @@ async def gpu_restore(body: dict | None = None):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=cfg.port)
+    uvicorn.run(app, host=cfg.bind_host, port=cfg.port)

@@ -1,0 +1,498 @@
+name: home-agent
+
+# Dedicated, CPU-only Home Agent deployment. This intentionally does not join
+# the legacy GPU/Intelligence project and publishes neither PostgreSQL nor the
+# Core roles on the host.
+
+x-core-environment: &core-environment
+  HOME_AGENT_PORT: "8104"
+  HOME_AGENT_RUNTIME_SPOOL_PATH: /runtime/runtime.sqlite
+  HOME_AGENT_RUNTIME_TTL_SECONDS: "86400"
+  HOME_AGENT_RUNTIME_MAX_BYTES: "104857600"
+  HOME_AGENT_STORAGE_MONITOR_PATH: /storage-monitor/durable
+  HOME_AGENT_DATABASE_URL_FILE: /run/secrets/database_url
+  HOME_AGENT_POLICY_VERSION: home-agent-mvp-v1
+  HOME_AGENT_POLICY_DIGEST: "${HOME_AGENT_POLICY_DIGEST:?hash stack/home-agent-deploy/policy/home-agent-mvp-v1.json}"
+  # Read-only deployment policy. Advancing this value requires an operator
+  # review and container replacement; no API can promote its own rollout mode.
+  HOME_AGENT_ROLLOUT_MODE: "${HOME_AGENT_ROLLOUT_MODE:-record_only}"
+
+x-core-service: &core-service
+  build:
+    context: ./services/home-agent-core
+  image: engineered-lighting/home-agent-core:local
+  restart: unless-stopped
+  read_only: true
+  user: "10001:10001"
+  security_opt:
+    - no-new-privileges:true
+  cap_drop: [ALL]
+  tmpfs:
+    - /tmp:size=16m,mode=1777
+  mem_limit: 512m
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8104/readyz', timeout=3).read()"]
+    interval: 15s
+    timeout: 5s
+    retries: 8
+    start_period: 20s
+
+services:
+  postgres:
+    build:
+      context: ./home-agent-deploy
+      dockerfile: postgres.Dockerfile
+      args:
+        POSTGRES_BASE_IMAGE: "${HOME_AGENT_POSTGRES_IMAGE:-postgres:17.10-bookworm@sha256:17b6c778de50f4bb9a878c36e736110fbcd9b7020377d6fdfdf20f7c0347e40a}"
+    image: engineered-lighting/home-agent-postgres:17.10
+    platform: linux/amd64
+    restart: unless-stopped
+    shm_size: 256m
+    environment:
+      POSTGRES_DB: home_agent
+      POSTGRES_USER: home_agent_owner
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_owner_password
+      # Every socket and network client authenticates. In particular, the
+      # backup container may never impersonate the bootstrap superuser.
+      POSTGRES_INITDB_ARGS: --data-checksums --auth-host=scram-sha-256 --auth-local=scram-sha-256
+    command:
+      - postgres
+      - -c
+      - fsync=on
+      - -c
+      - synchronous_commit=on
+      - -c
+      - full_page_writes=on
+      - -c
+      - password_encryption=scram-sha-256
+      - -c
+      - hba_file=/etc/pg_hba-home-agent.conf
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - max_connections=40
+      - -c
+      - log_statement=none
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_timeout=300
+      - -c
+      - archive_command=pgbackrest --stanza=home-agent archive-push %p
+    secrets:
+      - source: postgres_owner_password_postgres
+        target: postgres_owner_password
+    volumes:
+      - type: bind
+        source: "${HOME_AGENT_DATA_ROOT:?set to the dedicated encrypted volume}/postgres"
+        target: /var/lib/postgresql/data
+      - "${HOME_AGENT_PGBACKREST_CONF:?configure encrypted off-host pgBackRest repository}:/etc/pgbackrest/pgbackrest.conf:ro"
+      - "${HOME_AGENT_DATA_ROOT}/pgbackrest-spool:/var/spool/pgbackrest"
+      - postgres-socket:/var/run/postgresql
+      - ./home-agent-deploy/postgres-pg_hba.conf:/etc/pg_hba-home-agent.conf:ro
+    networks: [postgres-net, backup-egress]
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U home_agent_owner -d home_agent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+  backup-gate:
+    build:
+      context: ./home-agent-deploy
+      dockerfile: postgres.Dockerfile
+      args:
+        POSTGRES_BASE_IMAGE: "${HOME_AGENT_POSTGRES_IMAGE:-postgres:17.10-bookworm@sha256:17b6c778de50f4bb9a878c36e736110fbcd9b7020377d6fdfdf20f7c0347e40a}"
+    image: engineered-lighting/home-agent-postgres:17.10
+    restart: "no"
+    user: "999:999"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    entrypoint: ["/bin/sh", "/deploy/backup-gate.sh"]
+    environment:
+      POSTGRES_BACKUP_PASSWORD_FILE: /run/secrets/postgres_backup_password
+    secrets:
+      - source: postgres_backup_password_backup_gate
+        target: postgres_backup_password
+    volumes:
+      - type: bind
+        source: "${HOME_AGENT_DATA_ROOT:?set to the dedicated encrypted volume}/postgres"
+        target: /var/lib/postgresql/data
+        read_only: true
+      - "${HOME_AGENT_PGBACKREST_CONF:?configure encrypted off-host pgBackRest repository}:/etc/pgbackrest/pgbackrest.conf:ro"
+      - "${HOME_AGENT_DATA_ROOT}/pgbackrest-spool:/var/spool/pgbackrest"
+      - postgres-socket:/var/run/postgresql
+      - ./home-agent-deploy:/deploy:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    networks: [backup-egress]
+    depends_on:
+      provision-roles: {condition: service_completed_successfully}
+
+  provision-roles:
+    image: "${HOME_AGENT_POSTGRES_IMAGE:-postgres:17.10-bookworm@sha256:17b6c778de50f4bb9a878c36e736110fbcd9b7020377d6fdfdf20f7c0347e40a}"
+    platform: linux/amd64
+    restart: "no"
+    entrypoint: ["/bin/sh", "/deploy/provision-roles.sh"]
+    environment:
+      PGHOST: postgres
+      PGDATABASE: home_agent
+      PGUSER: home_agent_owner
+      POSTGRES_OWNER_PASSWORD_FILE: /run/secrets/postgres_owner_password
+    secrets:
+      - source: postgres_owner_password_provision
+        target: postgres_owner_password
+      - source: postgres_api_password_provision
+        target: postgres_api_password
+      - source: postgres_ingest_password_provision
+        target: postgres_ingest_password
+      - source: postgres_worker_password_provision
+        target: postgres_worker_password
+      - source: postgres_erasure_password_provision
+        target: postgres_erasure_password
+      - source: postgres_backup_password_provision
+        target: postgres_backup_password
+    volumes:
+      - ./home-agent-deploy:/deploy:ro
+    networks: [postgres-net]
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  migrate:
+    <<: *core-service
+    restart: "no"
+    command: ["migrate"]
+    environment:
+      HOME_AGENT_DATABASE_URL_FILE: /run/secrets/database_url
+    secrets:
+      - source: database_url_owner_migrate
+        target: database_url
+    networks: [postgres-net]
+    depends_on:
+      backup-gate: {condition: service_completed_successfully}
+    healthcheck: {disable: true}
+
+  grant-runtime:
+    image: "${HOME_AGENT_POSTGRES_IMAGE:-postgres:17.10-bookworm@sha256:17b6c778de50f4bb9a878c36e736110fbcd9b7020377d6fdfdf20f7c0347e40a}"
+    platform: linux/amd64
+    restart: "no"
+    entrypoint: ["/bin/sh", "/deploy/apply-grants.sh"]
+    environment:
+      PGHOST: postgres
+      PGDATABASE: home_agent
+      PGUSER: home_agent_owner
+      POSTGRES_OWNER_PASSWORD_FILE: /run/secrets/postgres_owner_password
+    secrets:
+      - source: postgres_owner_password_grant
+        target: postgres_owner_password
+    volumes:
+      - ./home-agent-deploy:/deploy:ro
+    networks: [postgres-net]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+
+  core-api:
+    <<: *core-service
+    command: ["api"]
+    environment:
+      <<: *core-environment
+      HOME_AGENT_ROLE: api
+      HOME_AGENT_KNOWLEDGE_ENCRYPTION_KEY_FILE: /run/secrets/knowledge_encryption_key
+      HOME_AGENT_SERVICE_TOKEN_FILE: /run/secrets/service_token
+      HOME_AGENT_OPERATOR_TOKEN_FILE: /run/secrets/operator_token
+      HOME_AGENT_BOOTSTRAP_TOKEN_FILE: /run/secrets/bootstrap_token
+    secrets:
+      - source: database_url_api_core_api
+        target: database_url
+      - source: knowledge_encryption_key_core_api
+        target: knowledge_encryption_key
+      - source: service_token_core_api
+        target: service_token
+      - source: operator_token_core_api
+        target: operator_token
+      - source: bootstrap_token_core_api
+        target: bootstrap_token
+    volumes:
+      - ./home-agent-deploy/operator:/operator:ro
+      - type: bind
+        source: "${HOME_AGENT_DATA_ROOT}/resource-monitor"
+        target: /storage-monitor/durable
+        read_only: true
+      - type: bind
+        source: "${HOME_AGENT_ERASURE_LEDGER_ROOT:?set independent encrypted ledger directory}"
+        target: /erasure-ledger
+        read_only: true
+    networks: [postgres-net, api-net]
+    depends_on:
+      grant-runtime: {condition: service_completed_successfully}
+
+  core-ingest:
+    <<: *core-service
+    command: ["ingest"]
+    environment:
+      <<: *core-environment
+      HOME_AGENT_ROLE: ingest
+      HOME_AGENT_KNOWLEDGE_ENCRYPTION_KEY_FILE: /run/secrets/knowledge_encryption_key
+      HOME_AGENT_RUNTIME_SPOOL_KEY_FILE: /run/secrets/runtime_spool_key
+      HOME_AGENT_EDGE_TOKEN_FILE: /run/secrets/edge_token
+    secrets:
+      - source: database_url_ingest_core_ingest
+        target: database_url
+      - source: runtime_spool_key_core_ingest
+        target: runtime_spool_key
+      - source: knowledge_encryption_key_core_ingest
+        target: knowledge_encryption_key
+      - source: edge_token_core_ingest
+        target: edge_token
+    volumes:
+      - type: bind
+        source: "${HOME_AGENT_RUNTIME_ROOT:?set encrypted backup-excluded runtime directory}"
+        target: /runtime
+      - type: bind
+        source: "${HOME_AGENT_DATA_ROOT}/resource-monitor"
+        target: /storage-monitor/durable
+        read_only: true
+      - type: bind
+        source: "${HOME_AGENT_ERASURE_LEDGER_ROOT}"
+        target: /erasure-ledger
+        read_only: true
+    networks: [postgres-net, ingest-net]
+    depends_on:
+      grant-runtime: {condition: service_completed_successfully}
+
+  core-worker:
+    <<: *core-service
+    command: ["worker"]
+    environment:
+      <<: *core-environment
+      HOME_AGENT_ROLE: worker
+      HOME_AGENT_RUNTIME_SPOOL_KEY_FILE: /run/secrets/runtime_spool_key
+      HOME_AGENT_ERASURE_LEDGER_PATH: /erasure-ledger/ledger.jsonl
+      HOME_AGENT_ERASURE_LEDGER_HEAD_PATH: /erasure-ledger/ledger.head.json
+      HOME_AGENT_ERASURE_LEDGER_KEY_FILE: /run/secrets/erasure_ledger_key
+    secrets:
+      - source: database_url_worker_core_worker
+        target: database_url
+      - source: runtime_spool_key_core_worker
+        target: runtime_spool_key
+      - source: erasure_ledger_key_core_worker
+        target: erasure_ledger_key
+    volumes:
+      - type: bind
+        source: "${HOME_AGENT_RUNTIME_ROOT}"
+        target: /runtime
+      - type: bind
+        source: "${HOME_AGENT_DATA_ROOT}/resource-monitor"
+        target: /storage-monitor/durable
+        read_only: true
+      - type: bind
+        source: "${HOME_AGENT_ERASURE_LEDGER_ROOT}"
+        target: /erasure-ledger
+    networks: [postgres-net]
+    depends_on:
+      grant-runtime: {condition: service_completed_successfully}
+
+  ledger-init:
+    <<: *core-service
+    profiles: [operator]
+    restart: "no"
+    command: ["ledger-init"]
+    environment:
+      HOME_AGENT_ERASURE_LEDGER_PATH: /erasure-ledger/ledger.jsonl
+      HOME_AGENT_ERASURE_LEDGER_HEAD_PATH: /erasure-ledger/ledger.head.json
+      HOME_AGENT_ERASURE_LEDGER_KEY_FILE: /run/secrets/erasure_ledger_key
+    secrets:
+      - source: erasure_ledger_key_ledger_init
+        target: erasure_ledger_key
+    volumes:
+      - type: bind
+        source: "${HOME_AGENT_ERASURE_LEDGER_ROOT:?set independent encrypted ledger directory}"
+        target: /erasure-ledger
+    network_mode: none
+    healthcheck: {disable: true}
+
+  restore-replay:
+    <<: *core-service
+    profiles: [operator]
+    restart: "no"
+    command: ["restore-replay"]
+    environment:
+      HOME_AGENT_ROLE: restore
+      HOME_AGENT_DATABASE_URL_FILE: /run/secrets/database_url
+      HOME_AGENT_ERASURE_LEDGER_PATH: /erasure-ledger/ledger.jsonl
+      HOME_AGENT_ERASURE_LEDGER_HEAD_PATH: /erasure-ledger/ledger.head.json
+      HOME_AGENT_ERASURE_LEDGER_KEY_FILE: /run/secrets/erasure_ledger_key
+    secrets:
+      - source: database_url_erasure_restore_replay
+        target: database_url
+      - source: erasure_ledger_key_restore_replay
+        target: erasure_ledger_key
+    volumes:
+      - type: bind
+        source: "${HOME_AGENT_ERASURE_LEDGER_ROOT}"
+        target: /erasure-ledger
+    networks: [postgres-net]
+    depends_on:
+      grant-runtime: {condition: service_completed_successfully}
+    healthcheck: {disable: true}
+
+  edge-ingress:
+    image: "${HOME_AGENT_NGINX_IMAGE:-nginxinc/nginx-unprivileged:1.29-alpine}"
+    restart: unless-stopped
+    user: "101:101"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    ports:
+      - "${HOME_AGENT_EDGE_BIND_ADDR:?set an HA-reachable allowlisted address}:8443:8443"
+    volumes:
+      - ./home-agent-deploy/nginx-edge.conf:/etc/nginx/nginx.conf:ro
+    secrets:
+      - source: tls_server_crt
+        target: server.crt
+      - source: tls_server_key
+        target: server.key
+      - source: tls_client_ca
+        target: client-ca.crt
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /var/cache/nginx:size=16m,mode=0755
+    networks: [ingest-net, edge-public]
+    depends_on:
+      core-ingest: {condition: service_healthy}
+    mem_limit: 64m
+
+  bff:
+    build:
+      context: ./services/home-agent-bff
+    image: engineered-lighting/home-agent-bff:local
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    environment:
+      HOME_AGENT_BFF_HOST: 0.0.0.0
+      HOME_AGENT_BFF_PORT: "8097"
+      HOME_AGENT_ALLOWED_ORIGINS: "${HOME_AGENT_ALLOWED_ORIGINS:?set exact HTTPS origins}"
+      HOME_AGENT_HA_URL: "${HOME_AGENT_HA_URL:?set Home Assistant base URL}"
+      HOME_AGENT_OAUTH_CLIENT_ID: "${HOME_AGENT_OAUTH_CLIENT_ID:?set registered HA client ID}"
+      HOME_AGENT_OAUTH_REDIRECT_URI: "${HOME_AGENT_OAUTH_REDIRECT_URI:?set /api/agent/auth/callback URL}"
+      HOME_AGENT_POST_LOGIN_REDIRECT: /home-agent/index.html
+      HOME_AGENT_CORE_URL: http://core-api:8104
+      HOME_AGENT_CORE_TOKEN_FILE: /run/secrets/service_token
+      HOME_AGENT_SESSION_ENCRYPTION_KEY_FILE: /run/secrets/session_encryption_key
+      HOME_AGENT_SESSION_DB_PATH: /sessions/sessions.sqlite
+      HOME_AGENT_PRINCIPAL_REVALIDATE_MS: "0"
+    secrets:
+      - source: service_token_bff
+        target: service_token
+      - source: session_encryption_key_bff
+        target: session_encryption_key
+    volumes:
+      - type: bind
+        source: "${HOME_AGENT_SESSION_ROOT:?set to encrypted, backup-excluded BFF session directory}"
+        target: /sessions
+    ports:
+      - "${HOME_AGENT_BFF_BIND_ADDR:-127.0.0.1}:${HOME_AGENT_BFF_PORT:-8097}:8097"
+    networks: [api-net, bff-public]
+    depends_on:
+      core-api: {condition: service_healthy}
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8097/healthz').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  identity-migration:
+    image: engineered-lighting/home-agent-core:local
+    profiles: [operator]
+    restart: "no"
+    user: "10001:10001"
+    read_only: true
+    init: true
+    stdin_open: true
+    tty: true
+    entrypoint: ["python", "/operator/migrate_legacy_identity.py"]
+    environment:
+      HOME_AGENT_MIGRATION_CORE_URL: http://core-api:8104
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    secrets:
+      - source: operator_token_identity_migration
+        target: operator_token
+      - source: bootstrap_token_identity_migration
+        target: bootstrap_token
+    volumes:
+      - ./home-agent-deploy/operator:/operator:ro
+      - type: bind
+        source: "${HOME_AGENT_LEGACY_IDENTITY_DB:-/dev/null}"
+        target: /legacy/identity.sqlite
+        read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    networks: [api-net]
+    depends_on:
+      core-api: {condition: service_healthy}
+    mem_limit: 256m
+    logging:
+      driver: none
+
+secrets:
+  # Docker Compose file-backed secrets preserve source ownership. Each source
+  # below is therefore a distinct per-service copy materialized by preflight.
+  # The container receives only its explicitly listed files.
+  postgres_owner_password_postgres: {file: "${HOME_AGENT_SECRETS_DIR:?set secrets directory}/runtime/postgres/postgres_owner_password"}
+  postgres_owner_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_owner_password"}
+  postgres_api_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_api_password"}
+  postgres_ingest_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_ingest_password"}
+  postgres_worker_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_worker_password"}
+  postgres_erasure_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_erasure_password"}
+  postgres_backup_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_backup_password"}
+  postgres_backup_password_backup_gate: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/backup-gate/postgres_backup_password"}
+  postgres_owner_password_grant: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/grant-runtime/postgres_owner_password"}
+  database_url_owner_migrate: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/migrate/database_url"}
+  database_url_api_core_api: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-api/database_url"}
+  knowledge_encryption_key_core_api: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-api/knowledge_encryption_key"}
+  service_token_core_api: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-api/service_token"}
+  operator_token_core_api: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-api/operator_token"}
+  bootstrap_token_core_api: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-api/bootstrap_token"}
+  database_url_ingest_core_ingest: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-ingest/database_url"}
+  runtime_spool_key_core_ingest: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-ingest/runtime_spool_key"}
+  knowledge_encryption_key_core_ingest: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-ingest/knowledge_encryption_key"}
+  edge_token_core_ingest: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-ingest/edge_token"}
+  database_url_worker_core_worker: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-worker/database_url"}
+  runtime_spool_key_core_worker: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-worker/runtime_spool_key"}
+  erasure_ledger_key_core_worker: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-worker/erasure_ledger_key"}
+  erasure_ledger_key_ledger_init: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/ledger-init/erasure_ledger_key"}
+  database_url_erasure_restore_replay: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/restore-replay/database_url"}
+  erasure_ledger_key_restore_replay: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/restore-replay/erasure_ledger_key"}
+  service_token_bff: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/bff/service_token"}
+  session_encryption_key_bff: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/bff/session_encryption_key"}
+  operator_token_identity_migration: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/identity-migration/operator_token"}
+  bootstrap_token_identity_migration: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/identity-migration/bootstrap_token"}
+  tls_server_crt: {file: "${HOME_AGENT_TLS_DIR:?mount server.crt server.key and client-ca.crt}/server.crt"}
+  tls_server_key: {file: "${HOME_AGENT_TLS_DIR}/server.key"}
+  tls_client_ca: {file: "${HOME_AGENT_TLS_DIR}/client-ca.crt"}
+
+networks:
+  postgres-net: {internal: true}
+  api-net: {internal: true}
+  ingest-net: {internal: true}
+  edge-public: {}
+  bff-public: {}
+  backup-egress: {}
+
+volumes:
+  postgres-socket: {}

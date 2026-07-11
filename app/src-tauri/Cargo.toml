@@ -4,23 +4,36 @@ version = "0.1.0"
 description = "Local AI chat client for Home Assistant"
 authors = ["Engineered Lighting"]
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.88"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# devtools feature is enabled here so right-click → Inspect works on the
-# production .msi too. Trivial size overhead (~200 KB), worth it for debug.
-tauri = { version = "2", features = ["protocol-asset", "devtools"] }
-tauri-plugin-http = "2"
-tauri-plugin-shell = "2"
+# Production webviews must not expose an inspector capable of reading private
+# application state. Use a separate debug-only manifest for local inspection.
+tauri = { version = "2", features = ["protocol-asset"] }
 # Single-instance plugin: prevents a second home.exe from creating a
 # second window. Second launch focuses the existing window instead.
 # Avoids "two app windows fighting over MJPEG TCP connections to HA".
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64 = "0.22"
+rand = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-native-roots"] }
+sha2 = "0.10"
+url = "2.5"
+uuid = { version = "1", features = ["v4"] }
+zeroize = "1.8"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security_Credentials",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
 
 [profile.release]
 panic = "abort"

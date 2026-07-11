@@ -285,6 +285,18 @@ class LivingLightsFunction(Function):
         exposed_entities: list[dict[str, Any]],
     ) -> Any:
         name = function_config["name"]
+        if name in {"set_presence_override", "clear_presence_override"}:
+            return {
+                "success": False,
+                "ok": False,
+                "capability_disabled": True,
+                "error_kind": "model_action_disabled",
+                "error_message": (
+                    "Model-originated lighting actions are disabled until "
+                    "the external safety kernel is available."
+                ),
+                "tool": name,
+            }
         if name == "set_presence_override":
             return await self._set_presence_override(hass, arguments)
         if name == "clear_presence_override":

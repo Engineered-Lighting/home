@@ -1844,7 +1844,6 @@ function MetricsStrip({
     })();
     const _stackToken =
       (typeof window !== "undefined" && window.__STACK_TOKEN) ||
-      (typeof localStorage !== "undefined" && localStorage.getItem("hg-stack-token-DEV")) ||
       "";
     const _onBannerAction = async (verb) => {
       const HSA = window.HomeStackActions;
@@ -2162,7 +2161,6 @@ function MetricsStrip({
     })();
     const _stackToken =
       (typeof window !== "undefined" && window.__STACK_TOKEN) ||
-      (typeof localStorage !== "undefined" && localStorage.getItem("hg-stack-token-DEV")) ||
       "";
     return (
       <window.HmLabTab
@@ -3018,6 +3016,8 @@ function FirstRun({
   onRemoteCheck = null,
   serviceProbeResults = null,
   serviceProbeRunning = false,
+  nativeSecure = false,
+  onNativeAuth = null,
 }) {
   const [url, setUrl] = useState(endpoint || webDefaultBase("HG_DEFAULT_HA_BASE") || "http://192.168.0.125:8123");
   // Start the token field empty when the last connection failed — a rejected
@@ -3081,6 +3081,31 @@ function FirstRun({
             alignSelf: "flex-start",
           }}>continue ↵</button>
         )}
+      </div>
+    );
+  }
+
+  if (nativeSecure) {
+    return (
+      <div style={{
+        minHeight: "100%", display: "flex", flexDirection: "column",
+        justifyContent: compact ? "flex-start" : "center",
+        padding: compact ? "40px 22px 34px" : "48px 28px 56px",
+      }}>
+        <div style={{ fontSize: compact ? 18 : 22, fontWeight: 500, marginBottom: 8 }}>
+          Sign in securely.
+        </div>
+        <div style={{ fontSize: 13, color: "var(--hg-fg-3)", lineHeight: 1.55, marginBottom: 24 }}>
+          The desktop app uses Home Assistant OAuth in your system browser. Access and refresh tokens never enter this webview.
+        </div>
+        <button className="hg-focusable" onClick={() => onNativeAuth?.()} style={{
+          alignSelf: "flex-start", padding: "9px 14px", cursor: "pointer",
+          border: "1px solid var(--hg-ice)", background: "transparent",
+          color: "var(--hg-ice-bright)", fontFamily: "'Geist Mono', monospace",
+          fontSize: 10.5, letterSpacing: "0.12em", textTransform: "uppercase",
+        }}>
+          Open Home Agent
+        </button>
       </div>
     );
   }
@@ -3477,11 +3502,12 @@ const SLASH_CMD_CATEGORIES = [
 ];
 
 const SLASH_CMDS = [
+  { cmd: "/agent", hint: "", desc: "open the governed Home Agent surface", category: "navigation" },
   // ── connection ────────────────────────────────────────────────
   { cmd: "/connect",  hint: "<url> [<token>]", desc: "connect to a Home Assistant endpoint", category: "connection" },
   { cmd: "/endpoint", hint: "<url>",   desc: "change endpoint url", category: "connection" },
   { cmd: "/token",    hint: "<token>", desc: "update the HA long-lived access token", category: "connection" },
-  { cmd: "/stack-token", hint: "<token>", desc: "save STACK_TOKEN for AI stack supervisor (from /opt/home-ai-voice/.env)", category: "connection" },
+  { cmd: "/stack-token", hint: "", desc: "disabled: stack credentials are server-side only", category: "connection" },
   { cmd: "/metrics",  hint: "<url>",   desc: "set the metrics-sidecar base url", category: "connection" },
   { cmd: "/s2s",      hint: "<url> | token <hex> | voice <name>", desc: "configure s2s bridge — url, token, or per-session voice override", category: "connection" },
   { cmd: "/profile",  hint: "status|lan|tailscale|custom", desc: "switch or inspect the active service profile", category: "connection" },
@@ -4946,8 +4972,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * NOT persisted — it's transient session state (Phase 1.5). The home
    * app always boots with voice mode inactive; mic-tap activates it. */
   useEffect(() => {
-    savePrefs({ endpoint, token, model, theme, metricsBase, s2sBase, s2sToken, s2sVoice, kokoroVoice, debugMode });
-  }, [endpoint, token, model, theme, metricsBase, s2sBase, s2sToken, s2sVoice, kokoroVoice, debugMode]);
+    savePrefs({ endpoint, model, theme, metricsBase, s2sBase, s2sVoice, kokoroVoice, debugMode });
+  }, [endpoint, model, theme, metricsBase, s2sBase, s2sVoice, kokoroVoice, debugMode]);
 
   /* Persist events on change (debounced via rAF — cheap enough at our scale).
    * Onboarding-injected hints (`e.onboarding`) are session-scoped UI, not
@@ -5123,6 +5149,20 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   /* ── Connect (HA WS auth + sidecar discovery) ────────── */
   const connectTo = useCallback(async (haUrl, accessToken, options = {}) => {
     if (!haUrl || !accessToken) return;
+    if (window.IS_TAURI) {
+      setToken("");
+      addEvent({
+        kind: "system",
+        text: "direct bearer login is disabled in desktop mode · open /agent for native OAuth",
+        tone: "warn",
+      });
+      return;
+    }
+    haUrl = window.HomeSecurity?.sanitizeServiceUrl?.(haUrl) || "";
+    if (!haUrl) {
+      addEvent({ kind: "system", text: "invalid Home Assistant URL", tone: "error" });
+      return;
+    }
     if (!options.profileManaged && window.HomeServices && !window.HG_WEB_MODE) {
       try {
         const currentHa = window.HomeServices.get("ha");
@@ -5208,6 +5248,36 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     setConnection("online");
     addEvent({ kind: "system", text: `connected · home assistant ${haClientRef.current.haVersion || ""}`, tone: "ok" });
   }, [addEvent, metricsBase, probeMetricsBase, model]);
+
+  const openAgentSurface = useCallback(async () => {
+    if (window.IS_TAURI) {
+      try {
+        const invoke = window.__TAURI__?.core?.invoke;
+        if (!invoke) throw new Error("native_agent_window_unavailable");
+        await invoke("open_agent_window");
+      } catch (cause) {
+        addEvent({
+          kind: "system",
+          text: cause?.message || String(cause || "native_agent_window_unavailable"),
+          tone: "error",
+        });
+      }
+      return;
+    }
+    try {
+      const configured = new URL(String(window.HG_AGENT_ORIGIN || ""));
+      if (configured.protocol !== "https:" || configured.origin !== String(window.HG_AGENT_ORIGIN)) {
+        throw new Error("agent_origin_unavailable");
+      }
+      window.open(
+        new URL("/home-agent/index.html", configured.origin).href,
+        "_blank",
+        "noopener,noreferrer",
+      );
+    } catch {
+      addEvent({ kind: "system", text: "dedicated Agent origin is not configured", tone: "error" });
+    }
+  }, [addEvent]);
 
   const confirmModel = useCallback((name) => {
     if (name) setModel(name);
@@ -6073,6 +6143,10 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     switch (cmd) {
       case "connect":
       case "endpoint":
+        if (window.IS_TAURI) {
+          addEvent({ kind: "system", text: "desktop bearer commands are disabled · use /agent", tone: "warn" });
+          return true;
+        }
         if (arg) {
           const parts = arg.split(/\s+/);
           const url = parts[0];
@@ -6084,34 +6158,24 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         }
         return true;
       case "token":
+        if (window.IS_TAURI) {
+          setToken("");
+          addEvent({ kind: "system", text: "desktop bearer commands are disabled · use /agent", tone: "warn" });
+          return true;
+        }
         if (arg) { setToken(arg); addEvent({ kind: "system", text: "token updated", tone: "ok" }); }
         else addEvent({ kind: "system", text: "usage: /token <ha long-lived access token>", tone: "info" });
         return true;
+      case "agent":
+        void openAgentSurface();
+        return true;
       case "stack-token":
       case "stacktoken":
-        // Saves the STACK_TOKEN to localStorage so AiStackCard reads
-        // it on next render. See docs/RUNBOOK.md → "Workstation token
-        // storage" → DevTools quick path. Phase 4 Tauri-bootstrap
-        // will replace this with a 0600 config file.
-        if (arg) {
-          try {
-            localStorage.setItem("hg-stack-token-DEV", arg.trim());
-            addEvent({ kind: "system", text: "stack token saved · reload to pick up (Ctrl+R)", tone: "ok" });
-          } catch (e) {
-            addEvent({ kind: "system", text: `stack token save failed · ${e?.message || "localStorage error"}`, tone: "error" });
-          }
-        } else {
-          if (typeof window !== "undefined" && window.__HOME_WEB_STACK_TOKEN_PROXY) {
-            addEvent({ kind: "system", text: "stack token is proxied by the web gateway; no browser token needed", tone: "ok" });
-            return true;
-          }
-          const existing = (typeof localStorage !== "undefined" && localStorage.getItem("hg-stack-token-DEV")) || "";
-          if (existing) {
-            addEvent({ kind: "system", text: `stack token · <set, ${existing.length} chars>`, tone: "info" });
-          } else {
-            addEvent({ kind: "system", text: "usage: /stack-token <STACK_TOKEN from /opt/home-ai-voice/.env>", tone: "info" });
-          }
-        }
+        addEvent({
+          kind: "system",
+          text: "browser stack tokens are disabled; use the authenticated admin BFF",
+          tone: "warn",
+        });
         return true;
       case "mute": {
         // /mute              -> set explicit boolean (manual mute)
@@ -6829,8 +6893,11 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // opens the full-screen overlay, closing the other takeovers.
         const a = arg.trim();
         if (/^base\s+\S/.test(a)) {
-          const url = a.replace(/^base\s+/, "").trim().replace(/\/+$/, "");
+          const url = window.HomeSecurity?.sanitizeServiceUrl?.(
+            a.replace(/^base\s+/, "").trim(),
+          ) || "";
           try {
+            if (!url) throw new Error("invalid service URL");
             if (window.HomeServices) window.HomeServices.setOverride("videoLabeler", url);
             else localStorage.setItem("videoLabeler.base", url);
             syncServiceStateFromResolver();
@@ -7532,7 +7599,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     // CALL time, by which point it's defined. Its identity is stable
     // (its own deps are [addEvent], itself stable), so omitting it
     // doesn't cause a memoization correctness issue.
-  }, [addEvent, announceTravelReadiness, applyServiceProfile, connectTo, copyDebugBundle, copyRecoveryCommands, copyTravelBundle, currentTravelReadiness, debugMode, endpoint, events, kokoroVoice, metricsBase, playScript, runRemoteCheck, runTravelCheck, s2sBase, s2sToken, s2sVoice, sendToHA, spatialLayout, stopStreaming, syncServiceStateFromResolver, token]);
+  }, [addEvent, announceTravelReadiness, applyServiceProfile, connectTo, copyDebugBundle, copyRecoveryCommands, copyTravelBundle, currentTravelReadiness, debugMode, endpoint, events, kokoroVoice, metricsBase, openAgentSurface, playScript, runRemoteCheck, runTravelCheck, s2sBase, s2sToken, s2sVoice, sendToHA, spatialLayout, stopStreaming, syncServiceStateFromResolver, token]);
 
   /* ── External Reasoning dispatch (see home-external.jsx) ─────────────
    *
@@ -8454,17 +8521,14 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     const bridgeUrl = s2sBaseFromEndpoint(endpoint);
     const supervisorUrl = supervisorBaseFromEndpoint(base, endpoint);
 
-    // STACK_TOKEN comes from one of (in priority order):
-    //   1. window.__STACK_TOKEN  (set by the Tauri stack_token() command at
-    //      app startup — Phase 4 hardening). MVP doesn't wire this yet.
-    //   2. localStorage "hg-stack-token-DEV" (developer-set via DevTools).
-    // Tokens are never hardcoded in this file. If neither is set, we skip
+    // STACK_TOKEN may come only from window.__STACK_TOKEN, populated by a
+    // native/server-controlled boundary. Legacy localStorage token keys are
+    // purged at startup and deliberately never read. If no marker exists, we skip
     // the supervisor poll and AiStackCard renders a "not configured" stub.
     // In web mode this may be a non-secret gateway marker. The gateway
     // replaces it with the real server-side token before forwarding.
     const stackToken =
       (typeof window !== "undefined" && window.__STACK_TOKEN) ||
-      (typeof localStorage !== "undefined" && localStorage.getItem("hg-stack-token-DEV")) ||
       "";
 
     const poll = async () => {
@@ -9779,6 +9843,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             onRemoteCheck={() => runRemoteCheck(true)}
             serviceProbeResults={serviceProbeResults}
             serviceProbeRunning={serviceProbeRunning}
+            nativeSecure={window.IS_TAURI === true}
+            onNativeAuth={openAgentSurface}
           />
         ) : (
           <div style={{

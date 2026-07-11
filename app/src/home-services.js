@@ -304,7 +304,26 @@
   }
 
   function normalizeUrl(value) {
-    return String(value || "").trim().replace(/\/+$/, "");
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    if (window.HomeSecurity?.sanitizeServiceUrl) {
+      return window.HomeSecurity.sanitizeServiceUrl(raw);
+    }
+    try {
+      if (raw.startsWith("/") && !raw.startsWith("//")) {
+        const relative = new URL(raw, "https://home.invalid");
+        return relative.pathname.replace(/\/+$/, "") || "/";
+      }
+      const parsed = new URL(raw);
+      if (!["http:", "https:"].includes(parsed.protocol)) return "";
+      parsed.username = "";
+      parsed.password = "";
+      parsed.search = "";
+      parsed.hash = "";
+      return parsed.toString().replace(/\/$/, "");
+    } catch {
+      return "";
+    }
   }
 
   function isService(service) {
@@ -327,11 +346,12 @@
     return {
       profile,
       custom: cleanServiceMap(state.custom),
-      selected: state.selected && typeof state.selected === "object" ? state.selected : {},
-      errors: Array.isArray(state.errors) ? state.errors.slice(-ERROR_LIMIT) : [],
-      lastProbeAt: typeof state.lastProbeAt === "string" ? state.lastProbeAt : "",
-      lastProbeProfile: typeof state.lastProbeProfile === "string" ? state.lastProbeProfile : "",
-      lastProbe: Array.isArray(state.lastProbe) ? state.lastProbe : [],
+      selected: cleanSelected(state.selected),
+      // Diagnostic/probe history is live state and is no longer persisted.
+      errors: [],
+      lastProbeAt: "",
+      lastProbeProfile: "",
+      lastProbe: [],
     };
   }
 
@@ -341,6 +361,16 @@
     for (const service of SERVICE_KEYS) {
       const value = normalizeUrl(input[service]);
       if (value) out[service] = value;
+    }
+    return out;
+  }
+
+  function cleanSelected(input) {
+    const out = {};
+    if (!input || typeof input !== "object") return out;
+    for (const [profile, services] of Object.entries(input)) {
+      const clean = cleanServiceMap(services);
+      if (Object.keys(clean).length) out[profile] = clean;
     }
     return out;
   }

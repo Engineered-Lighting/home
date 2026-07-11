@@ -5,8 +5,8 @@
 #   2. docker build -t video-labeler
 #   3. docker run standalone (does NOT touch the existing compose stack):
 #      --network host (native Ollama on 127.0.0.1 in later milestones),
-#      --gpus all, docker.sock mounted for the M2 eviction/deadman machinery,
-#      --env-file /opt/home-ai-voice/.env supplies shared secrets on-box,
+#      --gpus all, with no Docker socket or host-control capability,
+#      --env-file /etc/home-ai-voice/video-labeler.env is service-specific,
 #      /opt/home-ai-voice/video-labeler-data:/data
 #   4. verify /healthz from this machine (retry loop — first boot runs
 #      migrations before binding)
@@ -25,6 +25,16 @@ ssh hav-ubuntu 'rm -rf ~/video-labeler-deploy/.venv ~/video-labeler-deploy/.pyte
 Write-Host "2/4 building image"
 ssh hav-ubuntu 'docker build -q -t video-labeler ~/video-labeler-deploy'
 
+ssh hav-ubuntu @'
+set -eu
+token=/etc/home-ai-voice/secrets/video_labeler_token
+environment=/etc/home-ai-voice/video-labeler.env
+test -s "$token"
+test "$(stat -c %a "$token")" = 600
+test -s "$environment"
+test "$(stat -c %a "$environment")" = 600
+'@
+
 Write-Host "3/4 starting container (standalone, env from /opt/home-ai-voice/.env)"
 ssh hav-ubuntu @'
 docker rm -f hav-video-labeler 2>/dev/null
@@ -32,10 +42,15 @@ docker run -d --name hav-video-labeler \
   --network host \
   --gpus all \
   --restart unless-stopped \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m \
+  --cap-drop ALL \
+  --security-opt no-new-privileges:true \
   -v /opt/home-ai-voice/video-labeler-data:/data \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  --env-file /opt/home-ai-voice/.env \
-  -e PORT=8099 -e DATA_DIR=/data \
+  -v /etc/home-ai-voice/secrets/video_labeler_token:/run/secrets/video_labeler_token:ro \
+  --env-file /etc/home-ai-voice/video-labeler.env \
+  -e PORT=8099 -e BIND_HOST=127.0.0.1 -e DATA_DIR=/data \
+  -e VIDEO_LABELER_API_TOKEN_FILE=/run/secrets/video_labeler_token \
   -e VLM_MODEL=labeler-qwen2.5vl-32b \
   -e VLM_KEEP_ALIVE=30m \
   video-labeler
@@ -50,7 +65,8 @@ $ok = $false
 foreach ($i in 1..12) {
     Start-Sleep -Seconds 5
     try {
-        $h = Invoke-RestMethod -Uri "http://192.168.0.100:8099/healthz" -TimeoutSec 5
+        $raw = ssh hav-ubuntu 'curl -fsS --max-time 5 http://127.0.0.1:8099/healthz'
+        $h = $raw | ConvertFrom-Json
         Write-Host ("healthz: ok={0} db={1} jobs_running={2} gpu_free_gb={3} disk_free_gb={4}" `
             -f $h.ok, $h.db, $h.jobs_running, $h.gpu_free_gb, $h.disk_free_gb)
         $ok = $true
@@ -62,4 +78,4 @@ foreach ($i in 1..12) {
 if (-not $ok) {
     throw "video-labeler /healthz never came up - check: ssh hav-ubuntu 'docker logs hav-video-labeler'"
 }
-Write-Host "deployed. API: http://192.168.0.100:8099/api/video-labeler/  inbox: /opt/home-ai-voice/video-labeler-data/inbox" -ForegroundColor Green
+Write-Host "deployed loopback-only. Use an authenticated admin tunnel for the API. inbox: /opt/home-ai-voice/video-labeler-data/inbox" -ForegroundColor Green

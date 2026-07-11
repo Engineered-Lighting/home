@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 from contextlib import contextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from .db import connect, default_db_path, init_db, rows_to_dicts
@@ -73,6 +74,10 @@ from .sandbox import explain_synthetic_experiment_chain, run_synthetic_experimen
 from .scheduler import scheduler_status, start_scheduler, stop_scheduler
 
 
+INTELLIGENCE_READ_ONLY = os.environ.get("INTELLIGENCE_READ_ONLY", "1").strip().lower() not in {
+    "0", "false", "no", "off",
+}
+
 app = FastAPI(title="Home Intelligence Core", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
@@ -81,6 +86,18 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def quarantine_mutations(request: Request, call_next):
+    """Keep the legacy evidence lab read-only unless an operator overrides it."""
+    if INTELLIGENCE_READ_ONLY and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        return JSONResponse(
+            {"error": "capability_disabled", "detail": "legacy Intelligence is read-only"},
+            status_code=403,
+            headers={"Cache-Control": "no-store"},
+        )
+    return await call_next(request)
 
 
 @contextmanager

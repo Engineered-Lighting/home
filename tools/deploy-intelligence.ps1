@@ -32,7 +32,7 @@ rsync -a --delete --exclude data/ /tmp/home-intelligence-deploy/intelligence/ "`
 cat > "`$REMOTE_ROOT/docker-compose.intelligence.yml" <<'YAML'
 # Compose OVERLAY for the Home Intelligence Core service.
 # Port 8095 avoids the existing 8094 conflict (hav-personaplex-bridge).
-# HA API evidence pull is canonical; /config is mounted only as a visibly labeled fallback snapshot.
+# Read-only quarantine overlay; no HA/model authority or automatic capture.
 services:
   intelligence:
     build:
@@ -40,24 +40,28 @@ services:
     image: home-ai-voice/intelligence:local
     container_name: hav-intelligence
     restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
     ports:
-      - "8095:8094"
+      - "127.0.0.1:8095:8094"
     volumes:
-      - /opt/home-ai-voice/intelligence-data:/data
-      - ./ha-evidence:/config:ro
+      - /opt/home-ai-voice/intelligence-data:/data:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
     environment:
       INTELLIGENCE_DATA_DIR: /data
-      INTELLIGENCE_HA_CONFIG_DIR: /config
-      INTELLIGENCE_SCHEDULER_ENABLED: `${INTELLIGENCE_SCHEDULER_ENABLED:-1}
+      INTELLIGENCE_SCHEDULER_ENABLED: "0"
+      INTELLIGENCE_MEMORY_ENABLED: "0"
+      INTELLIGENCE_READ_ONLY: "1"
       INTELLIGENCE_EVIDENCE_PULL_INTERVAL_S: `${INTELLIGENCE_EVIDENCE_PULL_INTERVAL_S:-60}
       INTELLIGENCE_INGEST_INTERVAL_S: `${INTELLIGENCE_INGEST_INTERVAL_S:-3600}
       INTELLIGENCE_MEMORY_INTERVAL_S: `${INTELLIGENCE_MEMORY_INTERVAL_S:-86400}
-      INTELLIGENCE_HA_BASE_URL: `${INTELLIGENCE_HA_BASE_URL:-http://192.168.0.125:8123}
-      INTELLIGENCE_HA_TOKEN: `${INTELLIGENCE_HA_TOKEN:-}
       INTELLIGENCE_VLLM_URL: `${INTELLIGENCE_VLLM_URL:-http://vllm:8000}
       INTELLIGENCE_QWEN_MODEL: `${INTELLIGENCE_QWEN_MODEL:-qwen3-vl-30b}
-      INTELLIGENCE_MULTIMODAL_ENABLED: `${INTELLIGENCE_MULTIMODAL_ENABLED:-1}
-      INTELLIGENCE_MULTIMODAL_RING_ENABLED: `${INTELLIGENCE_MULTIMODAL_RING_ENABLED:-1}
+      INTELLIGENCE_MULTIMODAL_ENABLED: "0"
+      INTELLIGENCE_MULTIMODAL_RING_ENABLED: "0"
       INTELLIGENCE_MULTIMODAL_RING_INTERVAL_S: `${INTELLIGENCE_MULTIMODAL_RING_INTERVAL_S:-2}
       INTELLIGENCE_MULTIMODAL_RING_RETENTION_S: `${INTELLIGENCE_MULTIMODAL_RING_RETENTION_S:-90}
       INTELLIGENCE_MULTIMODAL_CAMERAS: `${INTELLIGENCE_MULTIMODAL_CAMERAS:-living_room}
@@ -66,21 +70,20 @@ services:
       INTELLIGENCE_MULTIMODAL_MAX_QWEN_JOBS_PER_HOUR: `${INTELLIGENCE_MULTIMODAL_MAX_QWEN_JOBS_PER_HOUR:-6}
       INTELLIGENCE_MULTIMODAL_MIN_DISK_FREE_MB: `${INTELLIGENCE_MULTIMODAL_MIN_DISK_FREE_MB:-2048}
       INTELLIGENCE_MULTIMODAL_CAPTURE_INTERVAL_S: `${INTELLIGENCE_MULTIMODAL_CAPTURE_INTERVAL_S:-60}
-      INTELLIGENCE_MULTIMODAL_PILOT_ENABLED: `${INTELLIGENCE_MULTIMODAL_PILOT_ENABLED:-1}
+      INTELLIGENCE_MULTIMODAL_PILOT_ENABLED: "0"
       INTELLIGENCE_MULTIMODAL_PILOT_ZONES: `${INTELLIGENCE_MULTIMODAL_PILOT_ZONES:-office}
       INTELLIGENCE_MULTIMODAL_PILOT_KINDS: `${INTELLIGENCE_MULTIMODAL_PILOT_KINDS:-pending_preference,override_event}
       INTELLIGENCE_MULTIMODAL_PILOT_LOOKBACK_S: `${INTELLIGENCE_MULTIMODAL_PILOT_LOOKBACK_S:-180}
       INTELLIGENCE_MULTIMODAL_PILOT_MAX_PACKETS_PER_RUN: `${INTELLIGENCE_MULTIMODAL_PILOT_MAX_PACKETS_PER_RUN:-2}
-      INTELLIGENCE_MULTIMODAL_PILOT_AUTO_LABEL: `${INTELLIGENCE_MULTIMODAL_PILOT_AUTO_LABEL:-1}
+      INTELLIGENCE_MULTIMODAL_PILOT_AUTO_LABEL: "0"
       INTELLIGENCE_MULTIMODAL_PILOT_MIN_LABEL_FRAMES: `${INTELLIGENCE_MULTIMODAL_PILOT_MIN_LABEL_FRAMES:-2}
-      HA_TOKEN: `${HA_TOKEN:-}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8094/healthz').read()\""]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
-    networks: [homeai]
+    networks: [intelligence-quarantine]
 YAML
 cd "`$REMOTE_ROOT"
 docker compose -f docker-compose.yml -f docker-compose.intelligence.yml build intelligence
@@ -103,7 +106,7 @@ PY
   fi
   sleep 1
 done
-python3 services/intelligence/scripts/smoke-intelligence.py --base http://127.0.0.1:8095 --expect-scheduler
+python3 services/intelligence/scripts/smoke-intelligence.py --base http://127.0.0.1:8095
 "@
 
 $remoteScript | ssh $HostName "tr -d '\r' | bash -s"

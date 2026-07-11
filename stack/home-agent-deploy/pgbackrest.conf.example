@@ -1,0 +1,27 @@
+# Copy outside the repository, fill in the approved off-host repository, set
+# mode 0640/root:GID-999 (the container postgres group), and point
+# HOME_AGENT_PGBACKREST_CONF at it. Preflight enforces that mode/ownership.
+[global]
+repo1-type=s3
+repo1-path=/home-agent
+repo1-s3-bucket=REPLACE_ME
+repo1-s3-endpoint=REPLACE_ME
+repo1-s3-region=REPLACE_ME
+repo1-s3-key=REPLACE_ME
+repo1-s3-key-secret=REPLACE_ME
+repo1-cipher-type=aes-256-cbc
+repo1-cipher-pass=REPLACE_WITH_SEPARATE_BACKUP_SECRET
+repo1-retention-full=4
+repo1-retention-diff=7
+archive-async=y
+spool-path=/var/spool/pgbackrest
+process-max=2
+start-fast=y
+log-level-console=info
+log-level-file=off
+
+[home-agent]
+pg1-path=/var/lib/postgresql/data
+pg1-port=5432
+pg1-user=home_agent_backup
+pg1-database=home_agent

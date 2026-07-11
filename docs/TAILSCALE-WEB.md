@@ -106,11 +106,10 @@ npm run web:start
 
 ## Gateway auth
 
-Tailscale is the real access boundary. By default, the gateway does not show a
-second login screen; a Tailscale-connected browser goes straight to the app.
-
-If you ever want the extra gateway password again, opt in with
-`HOME_WEB_AUTH_REQUIRED=1`.
+Gateway authentication is required by default and remains an independent
+boundary even when Tailscale is used. Do not expose a gateway started with
+`HOME_WEB_AUTH_REQUIRED=0`; that explicit opt-out is reserved for isolated
+loopback development.
 
 Generate one username/password pair:
 
@@ -134,7 +133,8 @@ below, and that file takes precedence over the initial environment variable:
   or `~/.config/EngineeredLightingHome/web-auth.json`
 - Override path: `HOME_WEB_AUTH_FILE`
 
-An existing auth file is ignored while `HOME_WEB_AUTH_REQUIRED` is unset or `0`.
+An existing auth file is used while authentication is required. If neither a
+valid auth file nor bootstrap credential exists, the gateway fails closed.
 
 Home Assistant bearer tokens still pass through. Stack supervisor bearer auth is
 handled server-side by the gateway for browser web access. The gateway strips
@@ -145,7 +145,8 @@ its own cookies and Basic auth before proxying requests upstream.
 No-admin setup uses the current user's Startup folder. The launcher runs
 `tools/start-home-web-gateway.ps1`, which starts `web-gateway/server.mjs` and
 passes through `HOME_WEB_BASIC_AUTH` from the user's Windows environment. That
-password is ignored unless `HOME_WEB_AUTH_REQUIRED=1` is also set.
+password is ignored only when an operator explicitly sets
+`HOME_WEB_AUTH_REQUIRED=0` for isolated loopback development.
 
 To test the same starter manually:
 
@@ -181,6 +182,8 @@ Override these only if your local addresses change:
 
 ```bash
 export HOME_WEB_HA_TARGET="http://192.168.0.125:8123"
+# Keep this quarantined legacy capability off. A target alone never enables it.
+export HOME_WEB_ENABLE_LEGACY_HA_PROXY="0"
 export HOME_WEB_METRICS_TARGET="http://192.168.0.100:8092"
 export HOME_WEB_VLLM_TARGET="http://192.168.0.100:8000"
 export HOME_WEB_VISION_TARGET="http://192.168.0.100:8091"
@@ -211,8 +214,14 @@ returns the token value.
 
 ## Proxy policy
 
-The gateway does not expose whole services. It only allows the path families the
-Home app uses:
+The broad legacy service proxies are quarantined by default. Configuring a
+target does not enable one. The Home Assistant WebSocket/service/camera/
+conversation path additionally requires the explicit temporary operator flag
+`HOME_WEB_ENABLE_LEGACY_HA_PROXY=1`; when it is off, the legacy Home page shows
+a quarantine notice. Use native Home Assistant for normal device control.
+
+When a corresponding reviewed `HOME_WEB_ENABLE_LEGACY_*_PROXY=1` exception is
+active, the gateway still restricts it to these path families:
 
 - `/proxy/ha/api/websocket`, states, services, conversation process, camera
   proxy/stream, TTS proxy, and extended conversation endpoints

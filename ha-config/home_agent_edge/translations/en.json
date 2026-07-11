@@ -1,0 +1,34 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Home Agent Edge",
+        "description": "Configure the reviewed, mTLS-only event delivery edge.",
+        "data": {
+          "endpoint": "Agent Core ingest URL",
+          "client_cert": "Client certificate path",
+          "client_key": "Client private-key path",
+          "ca_cert": "Agent Core CA certificate path",
+          "edge_token_path": "Agent Core edge-token file path",
+          "entity_ids": "Reviewed entity IDs",
+          "blocked_entity_ids": "Do-not-track entity IDs",
+          "blocked_user_ids": "Do-not-track HA user IDs",
+          "spool_path": "Encrypted outbox database path",
+          "spool_key_path": "Outbox key path",
+          "spool_max_bytes": "Maximum encrypted payload bytes",
+          "spool_max_age_seconds": "Maximum pending-event age"
+        }
+      }
+    },
+    "error": {
+      "invalid_endpoint": "The endpoint must be an HTTPS URL without embedded credentials.",
+      "certificate_file_not_found": "A certificate or key file was not found.",
+      "invalid_entity_allowlist": "At least one exact entity ID is required.",
+      "invalid_spool_path": "The spool and key paths must be distinct absolute paths.",
+      "spool_path_must_be_backup_excluded": "The raw spool must be outside Home Assistant backup roots."
+    },
+    "abort": {
+      "already_configured": "This Agent Core endpoint is already configured."
+    }
+  }
+}

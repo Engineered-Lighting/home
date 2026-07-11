@@ -554,6 +554,24 @@ def main() -> int:
     hass.data["extended_openai_conversation"] = {
         "world_state": FakeAggregator([{"zone": "office"}])
     }
+    calls_before_containment = len(hass.services.calls)
+    r = run(fn.execute(
+        hass,
+        {"name": "set_presence_override"},
+        {"zone": "office", "source": "voice", "brightness_pct": 100},
+        None,
+        [],
+    ))
+    assert_eq("model lighting override is capability-disabled",
+              r.get("error_kind"), "model_action_disabled")
+    r = run(fn.execute(
+        hass, {"name": "clear_presence_override"}, {"zone": "office"}, None, [],
+    ))
+    assert_eq("model override clear is capability-disabled",
+              r.get("error_kind"), "model_action_disabled")
+    assert_eq("disabled model lighting tools make no HA calls",
+              len(hass.services.calls), calls_before_containment)
+
     r = run(fn.execute(hass, {"name": "get_recent_overrides"}, {}, None, []))
     assert_("dispatcher routes get_recent_overrides", r.get("ok") is True)
     assert_eq("dispatcher recent override count", r["count"], 1)

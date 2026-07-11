@@ -21,9 +21,10 @@ function getTauriWindow() {
          win?.appWindow       || null;
 }
 
-/* Wrapper around fetch that uses Tauri's HTTP plugin in Tauri (bypassing
- * webview CORS), falling back to the browser fetch. The plugin lives at
- * window.__TAURI__.http.fetch in Tauri 2.x.
+/* Browser fetch wrapper. The former broad Tauri HTTP plugin is intentionally
+ * removed: native Agent/HA authentication and semantic requests cross only
+ * the typed Rust command boundary. Legacy cross-origin service calls are
+ * fail-closed in the packaged desktop app.
  *
  * Simulation Mode guard: when `window.__SIM_ACTIVE === true`, return a
  * safe `{ok:false}` response without making the network call. This is
@@ -46,20 +47,37 @@ async function tauriFetch(url, init) {
       text: async () => "",
     };
   }
-  if (IS_TAURI && _tauri.http?.fetch) {
-    return _tauri.http.fetch(url, init);
+  if (IS_TAURI) {
+    void url;
+    void init;
+    return {
+      ok: false, status: 0, statusText: "native-typed-transport-required",
+      json: async () => ({}),
+      text: async () => "",
+    };
   }
   return fetch(url, init);
 }
 
-/* localStorage-backed prefs. Two-arg writer accepts either a key/value or an
- * object of edits (so callers don't have to think). */
+/* localStorage-backed non-sensitive prefs. Credentials and private history
+ * are deliberately excluded; HomeSecurity removes values from older builds. */
 const PREFS_KEY = "hg-prefs";
+
+function safePrefs(input) {
+  if (window.HomeSecurity?.sanitizePrefs) {
+    return window.HomeSecurity.sanitizePrefs(input);
+  }
+  const {
+    token, accessToken, refreshToken, s2sToken,
+    stackToken, externalToken, apiKey, ...rest
+  } = input || {};
+  return rest;
+}
 
 function loadPrefs(defaults = {}) {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
-    const prefs = raw ? { ...defaults, ...JSON.parse(raw) } : { ...defaults };
+    const prefs = raw ? { ...defaults, ...safePrefs(JSON.parse(raw)) } : { ...defaults };
     if (typeof window !== "undefined" && window.HomeServices && !window.HG_WEB_MODE) {
       const services = window.HomeServices;
       const endpoint = services.get("ha");
@@ -94,45 +112,25 @@ function loadPrefs(defaults = {}) {
 
 function savePrefs(prefs) {
   try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+    localStorage.setItem(PREFS_KEY, JSON.stringify(safePrefs(prefs)));
   } catch {}
 }
 
-const EVENTS_KEY = "hg-events";
-const CONV_ID_KEY = "hg-conv-id";
-const MAX_EVENTS = 200;
-
 function loadEvents() {
-  try {
-    const raw = localStorage.getItem(EVENTS_KEY);
-    if (!raw) return [];
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr.slice(-MAX_EVENTS) : [];
-  } catch {
-    return [];
-  }
+  return [];
 }
 
 function saveEvents(events) {
-  try {
-    const trimmed = events.slice(-MAX_EVENTS).map((e) => {
-      // Persisted events are always at rest — strip the streaming flag so
-      // restored turns don't show a blinking caret.
-      const { streaming, ...rest } = e;
-      return rest;
-    });
-    localStorage.setItem(EVENTS_KEY, JSON.stringify(trimmed));
-  } catch {}
+  // Conversation/event content is session-only until an explicit governed
+  // memory transaction elects and encrypts a source turn.
+  void events;
 }
 
 function loadConversationId() {
-  try { return localStorage.getItem(CONV_ID_KEY) || null; } catch { return null; }
+  return null;
 }
 function saveConversationId(id) {
-  try {
-    if (id) localStorage.setItem(CONV_ID_KEY, id);
-    else    localStorage.removeItem(CONV_ID_KEY);
-  } catch {}
+  void id;
 }
 
 /* localStorage-backed onboarding flags — its own tiny blob (savePrefs writes a

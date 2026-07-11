@@ -21,6 +21,9 @@ class Config:
     def __init__(self, env=os.environ):
         self.data_dir = env.get("DATA_DIR", "/data")
         self.port = int(env.get("PORT", "8099"))
+        self.bind_host = env.get("BIND_HOST", "127.0.0.1")
+        if self.bind_host not in {"127.0.0.1", "::1"}:
+            raise ValueError("BIND_HOST must be loopback")
         self.min_free_vram_gb = float(env.get("MIN_FREE_VRAM_GB", "6"))
         self.inbox_dir = env.get("INBOX_DIR") or os.path.join(self.data_dir, "inbox")
         self.db_path = os.path.join(self.data_dir, "videolabeler.db")
@@ -47,6 +50,11 @@ class Config:
         self.vlm_api_key = env.get("VLM_API_KEY", "")
         self.vlm_timeout_s = float(env.get("VLM_TIMEOUT_S", "180"))
         self.vlm_keep_alive = env.get("VLM_KEEP_ALIVE", "10m")
+        self.allowed_origins = tuple(
+            origin.strip()
+            for origin in env.get("VIDEO_LABELER_ALLOWED_ORIGINS", "").split(",")
+            if origin.strip()
+        )
 
     def ensure_dirs(self) -> None:
         for d in (self.data_dir, self.inbox_dir, self.originals_dir,

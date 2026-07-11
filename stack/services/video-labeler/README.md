@@ -44,6 +44,9 @@ tests/                       pytest (ffmpeg-dependent tests skip without it)
 |---|---|---|
 | `DATA_DIR` | `/data` | everything lives under here |
 | `PORT` | `8099` | uvicorn bind port |
+| `BIND_HOST` | `127.0.0.1` | loopback by default; use a reviewed interface plus firewall only when approved |
+| `VIDEO_LABELER_API_TOKEN_FILE` | (unset) | mode-0600 bearer file; the API returns 503 until configured |
+| `VIDEO_LABELER_ALLOWED_ORIGINS` | (empty) | comma-separated exact admin origins; wildcard CORS is not allowed |
 | `INBOX_DIR` | `{DATA_DIR}/inbox` | manual-import scan dir |
 | `MIN_FREE_VRAM_GB` | `6` | gpu-lane guardrail (reserved; unused in M0) |
 | `VLM_BASE_URL` | `http://127.0.0.1:11434/v1` | OpenAI-compatible chat endpoint (M2) |
@@ -55,6 +58,14 @@ tests/                       pytest (ffmpeg-dependent tests skip without it)
 | `VJEPA_WEIGHTS_PATH` | (empty) | explicit local checkpoint; disables download AND fallback |
 | `VJEPA_WEIGHTS_URL` | (empty) | overrides the dl.fbaipublicfiles.com bucket url |
 | `LOG_LEVEL` | `INFO` | |
+
+### Contained deployment
+
+Use the dedicated mode-0600 `/etc/home-ai-voice/video-labeler.env`; never pass
+the main stack `.env` to this research container. The supported deployment has
+no Docker socket, drops all Linux capabilities, enables `no-new-privileges`,
+and uses a read-only root filesystem. Host-level GPU eviction/deadman control
+is disabled until it can be replaced by a narrow authenticated supervisor.
 
 ## Data layout (under DATA_DIR)
 
@@ -143,8 +154,11 @@ M4 embeddings + clusters + neighbors:
   fails the loader falls back LOUDLY to the non-2.1 `vjepa2_vit_large`
   @256px and stamps `model_id` accordingly -- never a silent substitute.
 
-Media endpoints are UNAUTHENTICATED by design (LAN-only) — that is what lets
-`<video>` elements hit stream URLs directly.
+Every API and media endpoint requires `Authorization: Bearer`; only the
+redacted `/healthz` readiness response is public. The service binds loopback by
+default and the generic legacy gateway route is disabled by default. Use a
+private authenticated admin tunnel when operating the research system; do not
+put the bearer in a URL.
 
 ## Job queue semantics
 
@@ -169,6 +183,17 @@ when ffmpeg/ffprobe are not on PATH. Do not create a `.venv` inside this
 directory before deploying (the deploy script scp's the whole tree).
 
 ## Deploy
+
+Create the dedicated bearer on the Ubuntu host first; never place it in the
+shared `.env` or a URL:
+
+```sh
+sudo install -d -m 0700 /etc/home-ai-voice/secrets
+umask 077
+openssl rand -hex 32 | sudo tee /etc/home-ai-voice/secrets/video_labeler_token >/dev/null
+sudo chown root:root /etc/home-ai-voice/secrets/video_labeler_token
+sudo chmod 0600 /etc/home-ai-voice/secrets/video_labeler_token
+```
 
 ```
 powershell -File tools\deploy-video-labeler.ps1   # from the repo root

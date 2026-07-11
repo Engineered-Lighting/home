@@ -354,6 +354,76 @@ def _exec_service(hass, args, exposed=None) -> dict:
     )
     return asyncio.run(coro)
 
+
+# The remaining pre-containment dispatch assertions below are retained as
+# migration history, but are intentionally not executed: model-originated HA
+# actions are now disabled wholesale.  These fail-closed tests replace the old
+# low/high-impact distinction.
+section("Greenfield agent action containment")
+
+def _all_service_arguments_are_denied():
+    for confirmed in (None, False, True, "true", "yes", 1):
+        svcs = _FakeServices()
+        hass = _FakeHass(svcs)
+        args = {
+            "domain": "lock",
+            "service": "unlock",
+            "service_data": {"entity_id": ["lock.front_door"]},
+        }
+        if confirmed is not None:
+            args["confirmed"] = confirmed
+        original = dict(args)
+        r = _exec_service(hass, args)
+        assert r["ok"] is False and r["success"] is False, r
+        assert r["capability_disabled"] is True, r
+        assert r["error_kind"] == "model_action_disabled", r
+        assert len(svcs.calls) == 0, svcs.calls
+        assert args == original, "containment must not consume or trust confirmed"
+t("confirmed=true and every other flag have no dispatch authority",
+  _all_service_arguments_are_denied)
+
+def _low_impact_is_also_denied():
+    svcs = _FakeServices()
+    hass = _FakeHass(svcs)
+    r = _exec_service(hass, {
+        "domain": "light", "service": "turn_on",
+        "service_data": {"entity_id": ["light.kitchen"]},
+        "confirmed": True,
+    })
+    assert r["error_kind"] == "model_action_disabled", r
+    assert len(svcs.calls) == 0
+t("routine light services are denied too (MVP has no model actions)",
+  _low_impact_is_also_denied)
+
+def _native_dispatcher_and_script_are_denied():
+    svcs = _FakeServices()
+    hass = _FakeHass(svcs)
+    fn = _make_fn()
+    for name, args in (
+        ("execute_service", {"list": [{
+            "domain": "light", "service": "turn_off",
+            "service_data": {"entity_id": ["light.kitchen"]},
+        }]}),
+        ("execute_service_single", {
+            "domain": "light", "service": "turn_off",
+            "service_data": {"entity_id": ["light.kitchen"]},
+        }),
+        ("invoke_script", {"entity_id": "script.morning"}),
+        ("add_automation", {"automation_config": "[]"}),
+    ):
+        r = asyncio.run(fn.execute(hass, {"name": name}, args, None, []))
+        assert r["error_kind"] == "model_action_disabled", (name, r)
+    assert len(svcs.calls) == 0
+t("native action entry points fail closed before HA lookup or dispatch",
+  _native_dispatcher_and_script_are_denied)
+
+print(f"\n{passes} pass · {fails} fail")
+if fails:
+    print("\nFailures:")
+    for n, m in failures:
+        print(f"  - {n}: {m}")
+sys.exit(0 if fails == 0 else 1)
+
 def _result_success_has_ok_and_latency():
     svcs = _FakeServices()
     hass = _FakeHass(svcs)

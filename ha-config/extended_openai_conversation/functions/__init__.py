@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ..exceptions import FunctionNotFound
 from .base import Function
+from .disabled import DisabledModelActionFunction
 from .bash import BashFunction
 from .composite import CompositeFunction
 from .file import EditFileFunction, ReadFileFunction, WriteFileFunction
@@ -22,6 +23,7 @@ from .world_state import WorldStateFunction
 __all__ = [
     "BashFunction",
     "CompositeFunction",
+    "DisabledModelActionFunction",
     "EditFileFunction",
     "FrigateFunction",
     "GestureTrainingFunction",
@@ -41,22 +43,24 @@ __all__ = [
     "get_function",
 ]
 
+_DISABLED_ACTION = DisabledModelActionFunction()
+
 FUNCTIONS: dict[str, Function] = {
     "native": NativeFunction(),
-    "script": ScriptFunction(),
+    "script": _DISABLED_ACTION,
     "template": TemplateFunction(),
-    "rest": RestFunction(),
+    "rest": _DISABLED_ACTION,
     "scrape": ScrapeFunction(),
-    "composite": CompositeFunction(),
+    "composite": _DISABLED_ACTION,
     "sqlite": SqliteFunction(),
-    "bash": BashFunction(),
+    "bash": _DISABLED_ACTION,
     "read_file": ReadFileFunction(),
-    "write_file": WriteFileFunction(),
-    "edit_file": EditFileFunction(),
+    "write_file": _DISABLED_ACTION,
+    "edit_file": _DISABLED_ACTION,
     "world_state": WorldStateFunction(),
     "registry": RegistryFunction(),
     "frigate": FrigateFunction(),
-    "gesture_training": GestureTrainingFunction(),
+    "gesture_training": _DISABLED_ACTION,
     "recap": RecapFunction(),
     "living_lights": LivingLightsFunction(),
 }

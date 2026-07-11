@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from functools import wraps
 from pathlib import Path
 
 from aiohttp import web
@@ -14,7 +15,7 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.const import CONF_API_KEY, Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryNotReady, Unauthorized
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
@@ -1632,6 +1633,67 @@ def _delete_avatar_file_sync(uuid: str) -> bool:
     return False
 
 
+def _admin_only_legacy_handler(handler):
+    """Require HA administrator authority for every legacy private API."""
+
+    @wraps(handler)
+    async def wrapped(self, request: web.Request, *args, **kwargs):
+        user = request.get("hass_user")
+        if user is None or not bool(getattr(user, "is_admin", False)):
+            raise Unauthorized()
+        return await handler(self, request, *args, **kwargs)
+
+    wrapped._home_agent_admin_guard = True
+    return wrapped
+
+
+_LEGACY_PRIVATE_VIEW_CLASSES = (
+    RoutingLogView,
+    WorldStateView,
+    RecentOverridesView,
+    LightingDecisionsView,
+    RecentPendingPreferencesView,
+    LightingEvidenceStatusView,
+    LightingEvidenceExportView,
+    SpatialModelView,
+    ApartmentModelView,
+    IdentityListView,
+    IdentityDetailView,
+    IdentityBackupView,
+    IdentityCreateView,
+    RelationshipsView,
+    PreferencesView,
+    FrigateProxyView,
+    AvatarView,
+)
+for _view_class in _LEGACY_PRIVATE_VIEW_CLASSES:
+    for _method_name in ("get", "head", "post", "put", "patch", "delete"):
+        _handler = _view_class.__dict__.get(_method_name)
+        if _handler is not None and not getattr(
+            _handler, "_home_agent_admin_guard", False
+        ):
+            setattr(
+                _view_class,
+                _method_name,
+                _admin_only_legacy_handler(_handler),
+            )
+
+
+_LEGACY_SENSITIVE_LOG_NAMES = ("asr_debug.log", "external_routing.log")
+
+
+def _purge_legacy_sensitive_logs(config_dir: str) -> None:
+    """Delete prior contentful conversation/debug logs without reading them."""
+
+    root = Path(config_dir)
+    for name in _LEGACY_SENSITIVE_LOG_NAMES:
+        candidate = root / name
+        try:
+            candidate.unlink(missing_ok=True)
+        except OSError as exc:
+            raise RuntimeError("legacy sensitive log purge failed") from exc
+
+
 PLATFORMS = [Platform.AI_TASK, Platform.CONVERSATION]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
@@ -1640,6 +1702,15 @@ type ExtendedOpenAIConfigEntry = ConfigEntry[AsyncClient]
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up OpenAI Conversation."""
+    try:
+        await hass.async_add_executor_job(
+            _purge_legacy_sensitive_logs, hass.config.config_dir
+        )
+    except Exception as exc:  # fail closed before private legacy APIs register
+        _LOGGER.error(
+            "Legacy sensitive log purge failed closed: %s", type(exc).__name__
+        )
+        return False
     await async_migrate_integration(hass)
     await async_setup_services(hass, config)
     # Register the routing-log REST view for the Home app's /route-log

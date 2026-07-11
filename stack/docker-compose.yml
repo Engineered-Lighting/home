@@ -14,7 +14,7 @@ services:
     container_name: hav-vllm
     restart: unless-stopped
     # vLLM is no longer published on the host — only reachable from the
-    # metrics-sidecar (which proxies + tees chat completions to clients).
+    # metrics-sidecar (which proxies chat completions without retaining content).
     # External HA traffic to :8000 now hits the sidecar, which forwards
     # to vllm:8000 inside the docker network.
     expose:
@@ -301,10 +301,13 @@ services:
     container_name: hav-vision-sidecar
     restart: unless-stopped
     ports:
-      - "${VISION_SIDECAR_PORT:-8091}:8091"
+      - "${VISION_SIDECAR_BIND_ADDR:-127.0.0.1}:${VISION_SIDECAR_PORT:-8091}:8091"
     environment:
       HA_URL: ${HA_URL:-http://192.168.0.125:8123}
-      HA_TOKEN: ${HA_TOKEN:?HA_TOKEN must be set in .env for vision sidecar}
+      # This untrusted/model-adjacent adapter receives no HA bearer. Direct
+      # RTSP remains available for an authenticated, operator-invoked research
+      # request; HA camera_proxy fallback fails closed without a credential.
+      HA_TOKEN: ""
       VLLM_URL: ${VLLM_URL:-http://vllm:8000}
       VISION_MODEL: ${VISION_MODEL:-qwen3-vl-30b}
       VISION_MAX_TOKENS: ${VISION_MAX_TOKENS:-200}
@@ -345,20 +348,18 @@ services:
     restart: unless-stopped
     ports:
       # 8000: chat proxy — HA's Extended OpenAI Conv calls this for /v1/*
-      # 8092: telemetry + conversation SSE stream for the Home desktop app
-      - "${VLLM_PORT:-8000}:8092"
-      - "${METRICS_SIDECAR_PORT:-8092}:8092"
-    volumes:
-      # Master plan Phase A2: persistent trace storage. The /trace endpoint
-      # appends per-turn TraceContext JSON to traces.ndjson here.
-      - ./services/metrics-sidecar/data:/app/data
+      # 8092: redacted operational telemetry for the Home desktop app
+      - "${MODEL_EDGE_BIND_ADDR:-127.0.0.1}:${VLLM_PORT:-8000}:8092"
+      - "${METRICS_SIDECAR_BIND_ADDR:-127.0.0.1}:${METRICS_SIDECAR_PORT:-8092}:8092"
     environment:
+      # Private conversation bodies must never enter unauthenticated metrics
+      # buffers/endpoints. This is deliberately not host-overridable.
+      METRICS_CONVERSATION_CONTENT_ENABLED: "0"
       VLLM_METRICS_URL: ${VLLM_METRICS_URL:-http://vllm:8000/metrics}
       VLLM_UPSTREAM_URL: ${VLLM_UPSTREAM_URL:-http://vllm:8000}
       # 0.5s so ttft/tps/cpu roll in in real time — the home-app polls
       # /metrics every 750ms; a 2.0s scrape made them a stale snapshot.
       SCRAPE_INTERVAL_S: ${SCRAPE_INTERVAL_S:-0.5}
-      TRACES_DIR: /app/data
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: utility
     deploy:
@@ -394,24 +395,33 @@ services:
     image: home-ai-voice/intelligence:local
     container_name: hav-intelligence
     restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
     ports:
-      - "${INTELLIGENCE_PORT:-8095}:8094"
+      # Legacy Atlas/lighting lab is quarantined to the Ubuntu host. It is not
+      # routed through the Agent BFF or included in Agent retrieval.
+      - "127.0.0.1:${INTELLIGENCE_PORT:-8095}:8094"
     volumes:
-      - ${INTELLIGENCE_DATA_HOST_DIR:-./intelligence-data}:/data
-      - ../ha-config:/config:ro
+      - ${INTELLIGENCE_DATA_HOST_DIR:-./intelligence-data}:/data:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
     environment:
       INTELLIGENCE_DATA_DIR: /data
-      INTELLIGENCE_HA_CONFIG_DIR: /config
-      INTELLIGENCE_SCHEDULER_ENABLED: ${INTELLIGENCE_SCHEDULER_ENABLED:-1}
+      # Legacy Intelligence is a quarantined read-only evidence lab. These
+      # containment gates are deliberately not host-overridable.
+      INTELLIGENCE_SCHEDULER_ENABLED: "0"
       INTELLIGENCE_EVIDENCE_PULL_INTERVAL_S: ${INTELLIGENCE_EVIDENCE_PULL_INTERVAL_S:-60}
       INTELLIGENCE_INGEST_INTERVAL_S: ${INTELLIGENCE_INGEST_INTERVAL_S:-3600}
+      # Generated wiki memory is legacy derived content, not governed memory.
+      INTELLIGENCE_MEMORY_ENABLED: "0"
+      INTELLIGENCE_READ_ONLY: "1"
       INTELLIGENCE_MEMORY_INTERVAL_S: ${INTELLIGENCE_MEMORY_INTERVAL_S:-86400}
-      INTELLIGENCE_HA_BASE_URL: ${INTELLIGENCE_HA_BASE_URL:-http://192.168.0.125:8123}
-      INTELLIGENCE_HA_TOKEN: ${INTELLIGENCE_HA_TOKEN:-}
       INTELLIGENCE_VLLM_URL: ${INTELLIGENCE_VLLM_URL:-http://vllm:8000}
       INTELLIGENCE_QWEN_MODEL: ${INTELLIGENCE_QWEN_MODEL:-qwen3-vl-30b}
-      INTELLIGENCE_MULTIMODAL_ENABLED: ${INTELLIGENCE_MULTIMODAL_ENABLED:-1}
-      INTELLIGENCE_MULTIMODAL_RING_ENABLED: ${INTELLIGENCE_MULTIMODAL_RING_ENABLED:-1}
+      INTELLIGENCE_MULTIMODAL_ENABLED: "0"
+      INTELLIGENCE_MULTIMODAL_RING_ENABLED: "0"
       INTELLIGENCE_MULTIMODAL_RING_INTERVAL_S: ${INTELLIGENCE_MULTIMODAL_RING_INTERVAL_S:-2}
       INTELLIGENCE_MULTIMODAL_RING_RETENTION_S: ${INTELLIGENCE_MULTIMODAL_RING_RETENTION_S:-90}
       INTELLIGENCE_MULTIMODAL_CAMERAS: ${INTELLIGENCE_MULTIMODAL_CAMERAS:-living_room}
@@ -420,21 +430,20 @@ services:
       INTELLIGENCE_MULTIMODAL_MAX_QWEN_JOBS_PER_HOUR: ${INTELLIGENCE_MULTIMODAL_MAX_QWEN_JOBS_PER_HOUR:-6}
       INTELLIGENCE_MULTIMODAL_MIN_DISK_FREE_MB: ${INTELLIGENCE_MULTIMODAL_MIN_DISK_FREE_MB:-2048}
       INTELLIGENCE_MULTIMODAL_CAPTURE_INTERVAL_S: ${INTELLIGENCE_MULTIMODAL_CAPTURE_INTERVAL_S:-60}
-      INTELLIGENCE_MULTIMODAL_PILOT_ENABLED: ${INTELLIGENCE_MULTIMODAL_PILOT_ENABLED:-1}
+      INTELLIGENCE_MULTIMODAL_PILOT_ENABLED: "0"
       INTELLIGENCE_MULTIMODAL_PILOT_ZONES: ${INTELLIGENCE_MULTIMODAL_PILOT_ZONES:-office}
       INTELLIGENCE_MULTIMODAL_PILOT_KINDS: ${INTELLIGENCE_MULTIMODAL_PILOT_KINDS:-pending_preference,override_event}
       INTELLIGENCE_MULTIMODAL_PILOT_LOOKBACK_S: ${INTELLIGENCE_MULTIMODAL_PILOT_LOOKBACK_S:-180}
       INTELLIGENCE_MULTIMODAL_PILOT_MAX_PACKETS_PER_RUN: ${INTELLIGENCE_MULTIMODAL_PILOT_MAX_PACKETS_PER_RUN:-2}
-      INTELLIGENCE_MULTIMODAL_PILOT_AUTO_LABEL: ${INTELLIGENCE_MULTIMODAL_PILOT_AUTO_LABEL:-1}
+      INTELLIGENCE_MULTIMODAL_PILOT_AUTO_LABEL: "0"
       INTELLIGENCE_MULTIMODAL_PILOT_MIN_LABEL_FRAMES: ${INTELLIGENCE_MULTIMODAL_PILOT_MIN_LABEL_FRAMES:-2}
-      HA_TOKEN: ${HA_TOKEN:-}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8094/healthz').read()\""]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
-    networks: [homeai]
+    networks: [intelligence-quarantine]
     logging:
       driver: json-file
       options:
@@ -596,7 +605,7 @@ services:
     container_name: hav-personaplex-bridge
     restart: unless-stopped
     ports:
-      - "${S2S_BRIDGE_PORT:-8094}:8094"
+      - "${S2S_BRIDGE_BIND_ADDR:-127.0.0.1}:${S2S_BRIDGE_PORT:-8094}:8094"
     environment:
       # Backend selection.
       #   `echo`           — no-model loopback for testing plumbing
@@ -611,26 +620,22 @@ services:
       # bridge skips verification by default (internal LAN traffic).
       S2S_MODEL_URL: ${S2S_MODEL_URL:-wss://s2s-model:8998/api/chat}
       S2S_MODEL_TLS_VERIFY: ${S2S_MODEL_TLS_VERIFY:-false}
-      CHATTEE_URL: ${CHATTEE_URL:-http://metrics-sidecar:8092/conversations/event}
-      # HA dispatch for tool calls (Phase 1+). Reuses HA_TOKEN already
-      # set in .env for the vision-sidecar; no new credentials needed.
-      HA_URL: ${HA_URL:-http://192.168.0.125:8123}
-      HA_TOKEN: ${HA_TOKEN:-}
+      # Conversation broadcasting/tracing is containment-locked off. A stale
+      # host environment must not redirect private voice content elsewhere.
+      CHATTEE_URL: ""
+      # Containment gate: this model-adjacent research bridge receives no HA
+      # credential and therefore cannot dispatch services or run Assist on
+      # the household's behalf. Human controls remain available through HA.
+      # A future voice path must use the separate Safety Kernel design.
+      S2S_HA_DISPATCH_ENABLED: "false"
       # WS auth — generate via openssl rand -hex 32 and add BRIDGE_TOKEN
       # to .env. Empty value disables auth (dev only).
       BRIDGE_TOKEN: ${BRIDGE_TOKEN:-}
       # Default voice for Phase 0 / first connection. Override per-session
       # via Home app's `/s2s` slash command. NATM2 chosen in Phase 0 audition.
       DEFAULT_VOICE: ${DEFAULT_VOICE:-NATM2.pt}
-      # Reverted to false (May 2026): DirectDispatcher path + 4B model
-      # was producing fake "[fired ...]" text without firing real tools,
-      # missing most natural commands, and bypassing HA's
-      # `execute_services` event so the home app's inline action cards
-      # disappeared. Back on HA's `assist_pipeline/run` → Extended OpenAI
-      # Conv → vLLM (30B-MoE). ~5 s latency but reliable. The 400ms win
-      # the original flag bought us isn't worth a model that misses
-      # half the commands.
-      DIRECT_DISPATCH: ${DIRECT_DISPATCH:-false}
+      # DIRECT_DISPATCH is intentionally absent, not merely default-false:
+      # an environment override must not restore model action authority.
       VLLM_URL: ${BRIDGE_VLLM_URL:-http://vllm:8000}
       VLLM_MODEL_NAME: ${BRIDGE_VLLM_MODEL:-qwen3-vl-30b}
       # Phase 2.10: bridge-side entity aliases for "kitchen lights"
@@ -742,6 +747,9 @@ networks:
   homeai:
     driver: bridge
     name: homeai-net
+  intelligence-quarantine:
+    driver: bridge
+    internal: true
 
 volumes:
   hf_cache:

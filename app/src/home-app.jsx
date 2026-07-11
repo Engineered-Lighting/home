@@ -538,7 +538,7 @@ function HomeHeader({
     minHeight: 24,
     boxSizing: "border-box",
   };
-  const apartmentBtn = {
+  const navChipBtn = {
     all: "unset",
     display: "inline-flex",
     alignItems: "center",
@@ -633,7 +633,7 @@ function HomeHeader({
               boxShadow: "0 16px 46px rgba(0,0,0,0.50)",
             }}
           >
-            {serviceProfile && onOpenRemoteProfile && (
+            {serviceProfile && onOpenRemoteProfile && !mobile && (
               <button
                 type="button"
                 role="menuitem"
@@ -644,12 +644,12 @@ function HomeHeader({
                 profile - {serviceProfile.shortLabel}
               </button>
             )}
-            {onOpenPeople && <button type="button" role="menuitem" ref={peopleButtonRef} style={actionMenuItem} onClick={() => runMenuAction(onOpenPeople)}>people</button>}
-            {onOpenApartment && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenApartment)}>apartment</button>}
-            {onOpenLights && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenLights)}>lights</button>}
-            {onOpenIntelligence && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenIntelligence)}>intelligence</button>}
+            {onOpenPeople && !mobile && <button type="button" role="menuitem" ref={peopleButtonRef} style={actionMenuItem} onClick={() => runMenuAction(onOpenPeople)}>people</button>}
+            {onOpenApartment && !mobile && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenApartment)}>apartment</button>}
+            {onOpenLights && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenLights)}>{mobile ? "lights + travel mode" : "lights"}</button>}
+            {onOpenIntelligence && !mobile && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenIntelligence)}>intelligence</button>}
             {onOpenVideoLabeler && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenVideoLabeler)}>video labeler</button>}
-            {onToggleTheme && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onToggleTheme)}>{theme === "dark" ? "light mode" : "dark mode"}</button>}
+            {onToggleTheme && !mobile && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onToggleTheme)}>{theme === "dark" ? "light mode" : "dark mode"}</button>}
             {sim?.active && onOpenSimulationControls && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenSimulationControls)}>simulation</button>}
           </div>
         </>
@@ -897,6 +897,21 @@ function HomeHeader({
             face-rec affordances live below now — name chip in the
             vision drawer, named perception line in the chat feed.
             The header stays clean. */}
+        {onOpenPeople && mobile && (
+          <button
+            type="button"
+            ref={peopleButtonRef}
+            aria-label="Open people view"
+            title="people - identities and relationships"
+            className="hg-focusable hg-mobile-touch"
+            onClick={onOpenPeople}
+            style={navChipBtn}
+            onMouseEnter={hoverBright}
+            onMouseLeave={(e) => { e.currentTarget.style.color = "var(--hg-fg-1)"; }}
+          >
+            <span>people</span>
+          </button>
+        )}
         {onOpenApartment && (
           <button
             type="button"
@@ -904,7 +919,7 @@ function HomeHeader({
             title="apartment - spatial command center"
             className="hg-focusable hg-mobile-touch"
             onClick={onOpenApartment}
-            style={apartmentBtn}
+            style={navChipBtn}
             onMouseEnter={hoverBright}
             onMouseLeave={(e) => { e.currentTarget.style.color = "var(--hg-fg-1)"; }}
           >

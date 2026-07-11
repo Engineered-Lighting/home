@@ -218,6 +218,14 @@ class RepositoryBoundaryTests(unittest.TestCase):
             read("stack/home-agent-deploy/backup-gate.sh"),
         )
         self.assertIn("ssl_verify_client on", read("stack/home-agent-deploy/nginx-edge.conf"))
+        self.assertIn(
+            "/var/cache/nginx:size=16m,mode=0700,uid=101,gid=101",
+            compose,
+        )
+        self.assertIn(
+            "--tmpfs /var/cache/nginx:rw,size=16m,mode=0700,uid=101,gid=101",
+            read("stack/home-agent-deploy/preflight.sh"),
+        )
 
     def test_edge_ingress_exposes_only_exact_typed_mtls_routes(self) -> None:
         nginx = read("stack/home-agent-deploy/nginx-edge.conf")

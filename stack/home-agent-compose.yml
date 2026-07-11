@@ -368,7 +368,7 @@ services:
         target: client-ca.crt
     tmpfs:
       - /tmp:size=16m,mode=1777
-      - /var/cache/nginx:size=16m,mode=0755
+      - /var/cache/nginx:size=16m,mode=0700,uid=101,gid=101
     networks: [ingest-net, edge-public]
     depends_on:
       core-ingest: {condition: service_healthy}

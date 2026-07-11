@@ -217,7 +217,7 @@ docker compose --env-file "$env_file" \
 docker run --rm --user 101:101 --read-only \
   --add-host core-ingest:127.0.0.1 \
   --tmpfs /tmp:rw,size=16m,mode=1777 \
-  --tmpfs /var/cache/nginx:rw,size=16m,mode=0755 \
+  --tmpfs /var/cache/nginx:rw,size=16m,mode=0700,uid=101,gid=101 \
   -v "$deploy_dir/nginx-edge.conf:/etc/nginx/nginx.conf:ro" \
   -v "$HOME_AGENT_TLS_DIR/server.crt:/run/secrets/server.crt:ro" \
   -v "$HOME_AGENT_TLS_DIR/server.key:/run/secrets/server.key:ro" \

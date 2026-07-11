@@ -180,6 +180,7 @@
     const avatarScale = Number.isFinite(opts.avatarScale) && opts.avatarScale > 0
       ? opts.avatarScale
       : 1;
+    const portraitLayout = opts.portraitLayout === true;
     const byName = new Map();
     for (const node of layout || []) {
       if (!node || node.overflow || node.pinned) continue;
@@ -249,9 +250,15 @@
       }
     }
 
-    placeParentChildren("holly", ["ben", "peter"], -0.72, "holly-family");
-    placePairWithChild("felipe", "ashley", "aurelio", 2.42, "felipe-ashley-family");
-    placeNamedArc(["david", "mark", "pat"], 1.08, 0.36, 0.96, "friends");
+    if (portraitLayout) {
+      placeParentChildren("holly", ["ben", "peter"], -0.98, "holly-family");
+      placePairWithChild("felipe", "ashley", "aurelio", 2.28, "felipe-ashley-family");
+      placeNamedArc(["david", "mark", "pat"], 1.28, 0.32, 0.88, "friends");
+    } else {
+      placeParentChildren("holly", ["ben", "peter"], -0.72, "holly-family");
+      placePairWithChild("felipe", "ashley", "aurelio", 2.42, "felipe-ashley-family");
+      placeNamedArc(["david", "mark", "pat"], 1.08, 0.36, 0.96, "friends");
+    }
     return resolveLayoutCollisions(layout, opts);
   }
 
@@ -638,6 +645,7 @@
       collisionPadding: opts.collisionPadding,
       centerCollisionPadding: opts.centerCollisionPadding,
       collisionIterations: opts.collisionIterations,
+      portraitLayout: opts.portraitLayout,
     });
   }
 

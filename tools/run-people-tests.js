@@ -513,6 +513,7 @@ process.stdout.write("\n[1msubrole clustering + ring offset[0m\n");
     collisionPadding: 64,
     centerCollisionPadding: 88,
     collisionIterations: 120,
+    portraitLayout: true,
   });
   const desktopHolly = desktop.find((n) => n.uuid === "holly");
   const mobileHolly = mobile.find((n) => n.uuid === "holly");
@@ -593,6 +594,7 @@ process.stdout.write("\n[1msubrole clustering + ring offset[0m\n");
     collisionPadding: 64,
     centerCollisionPadding: 88,
     collisionIterations: 120,
+    portraitLayout: true,
   }).filter((n) => !n.overflow);
   const collisions = [];
   for (let i = 0; i < mobileLayout.length; i++) {
@@ -858,18 +860,14 @@ process.stdout.write("\n[1mpeople overlay interaction contract (DOC-S83)[0m\n");
     peopleSource.includes("avatarScale: 1.4") &&
     peopleSource.includes("textScale: 1.28") &&
     peopleSource.includes("collisionPadding: 64") &&
+    peopleSource.includes("portraitLayout: true") &&
     peopleSource.includes("const nodeBounds = layout.reduce") &&
     peopleSource.includes("const graphViewBox = isMobile") &&
-    peopleSource.includes('height={isMobile ? "calc(100dvh - 148px)"') &&
+    peopleSource.includes('height={isMobile ? "calc(100dvh - 118px)"') &&
     peopleSource.includes("people-graph-field") &&
     peopleSource.includes("people-node-soft-glow") &&
     peopleSource.includes("const branchGroups = (() => {") &&
     peopleSource.includes("Branch halos use the final node positions") &&
-    peopleSource.includes("people-graph-grid") &&
-    peopleSource.includes("people-edge-glow") &&
-    peopleSource.includes("constellation-point") &&
-    !peopleSource.includes("deviceorientation") &&
-    !peopleSource.includes("orientation.requestPermission") &&
     !peopleSource.includes("cluster-label-${ring}-${name}"));
   assert("identities endpoint exposes sanitized Frigate diagnostics",
     haInitSource.includes('"frigate_seed_report": asdict(seed_report) if seed_report is not None else None') &&

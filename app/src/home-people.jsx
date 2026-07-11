@@ -736,6 +736,7 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
         collisionPadding: 64,
         centerCollisionPadding: 88,
         collisionIterations: 120,
+        portraitLayout: true,
       }
     : undefined);
 
@@ -789,10 +790,10 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
     ? mobileViewBox
     : { x: -VIEW_HALF, y: -VIEW_HALF, w: VIEW_SIZE, h: VIEW_SIZE };
   const branchGroups = (() => {
-    const branchStyles = {
-      "holly-family": { label: "holly family", accent: "var(--hg-ice)" },
-      "felipe-ashley-family": { label: "ashley + felipe", accent: "var(--hg-warn)" },
-      friends: { label: "friends", accent: "var(--hg-fg-2)" },
+    const labels = {
+      "holly-family": "holly family",
+      "felipe-ashley-family": "ashley + felipe",
+      friends: "friends",
     };
     const grouped = new Map();
     for (const n of layout) {
@@ -815,8 +816,7 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
       const cy = (minY + maxY) / 2;
       return [{
         key: branch,
-        label: branchStyles[branch]?.label || branch.replace(/-/g, " "),
-        accent: branchStyles[branch]?.accent || "var(--hg-fg-3)",
+        label: labels[branch] || branch.replace(/-/g, " "),
         cx,
         cy,
         rx: Math.max(54, (maxX - minX) / 2),
@@ -825,25 +825,6 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
       }];
     });
   })();
-  const constellationField = useMemo(() => {
-    const count = isMobile ? 48 : 72;
-    const seedBase = graphable.length * 97 + 31;
-    const points = [];
-    let seed = seedBase;
-    const rnd = () => {
-      seed = (seed * 1664525 + 1013904223) >>> 0;
-      return seed / 4294967296;
-    };
-    for (let i = 0; i < count; i++) {
-      points.push({
-        x: graphViewBox.x + rnd() * graphViewBox.w,
-        y: graphViewBox.y + rnd() * graphViewBox.h,
-        r: 0.35 + rnd() * (isMobile ? 0.85 : 0.58),
-        o: 0.10 + rnd() * 0.24,
-      });
-    }
-    return points;
-  }, [graphViewBox.x, graphViewBox.y, graphViewBox.w, graphViewBox.h, graphable.length, isMobile]);
 
   // Addendum 23: pre-compute the connected-uuid set + tooltip placement
   // for the currently-hovered node. useMemo prevents recomputation
@@ -880,18 +861,17 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
     <div style={{
       display: "flex", justifyContent: "center", alignItems: "center",
       padding: isMobile ? "0 0 max(22px, env(safe-area-inset-bottom))" : "20px 0",
-      minHeight: isMobile ? "calc(100dvh - 154px)" : "auto",
+      minHeight: isMobile ? "calc(100dvh - 118px)" : "auto",
       width: "100%",
-      position: "relative",
     }}>
       <svg
         width="100%"
-        height={isMobile ? "calc(100dvh - 148px)" : "auto"}
+        height={isMobile ? "calc(100dvh - 118px)" : "auto"}
         viewBox={`${graphViewBox.x} ${graphViewBox.y} ${graphViewBox.w} ${graphViewBox.h}`}
         style={{
-          maxHeight: isMobile ? "calc(100dvh - 148px)" : "min(80vh, 800px)",
+          maxHeight: isMobile ? "calc(100dvh - 118px)" : "min(80vh, 800px)",
           maxWidth: isMobile ? "100vw" : "min(80vw, 1000px)",
-          minHeight: isMobile ? "min(640px, calc(100dvh - 148px))" : "auto",
+          minHeight: isMobile ? "min(720px, calc(100dvh - 118px))" : "auto",
           display: "block",
         }}
         preserveAspectRatio="xMidYMid meet"
@@ -899,22 +879,12 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
       >
         <defs>
           <radialGradient id="people-graph-field" cx="50%" cy="48%" r="66%">
-            <stop offset="0%" stopColor="var(--hg-ice)" stopOpacity="0.16" />
-            <stop offset="48%" stopColor="var(--hg-fg-3)" stopOpacity="0.055" />
+            <stop offset="0%" stopColor="var(--hg-fg-2)" stopOpacity="0.11" />
+            <stop offset="52%" stopColor="var(--hg-fg-3)" stopOpacity="0.035" />
             <stop offset="100%" stopColor="var(--hg-bg-0)" stopOpacity="0" />
           </radialGradient>
-          <pattern id="people-graph-grid" width="42" height="42" patternUnits="userSpaceOnUse">
-            <path d="M 42 0 L 0 0 0 42" fill="none" stroke="var(--hg-border-soft)" strokeWidth="0.45" opacity="0.22" />
-          </pattern>
-          <filter id="people-edge-glow" x="-15%" y="-15%" width="130%" height="130%">
-            <feGaussianBlur stdDeviation="2.4" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
           <filter id="people-node-soft-glow" x="-35%" y="-35%" width="170%" height="170%">
-            <feGaussianBlur stdDeviation="4.5" result="blur" />
+            <feGaussianBlur stdDeviation="3" result="blur" />
             <feMerge>
               <feMergeNode in="blur" />
               <feMergeNode in="SourceGraphic" />
@@ -930,64 +900,23 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
           opacity={isMobile ? 0.9 : 0.45}
           aria-hidden="true"
         />
-        <rect
-          x={graphViewBox.x}
-          y={graphViewBox.y}
-          width={graphViewBox.w}
-          height={graphViewBox.h}
-          fill="url(#people-graph-grid)"
-          opacity={isMobile ? 0.26 : 0.18}
-          aria-hidden="true"
-        />
-        <g aria-hidden="true">
-          {constellationField.map((s, idx) => (
-            <circle
-              key={`constellation-point-${idx}`}
-              cx={s.x}
-              cy={s.y}
-              r={s.r}
-              fill="var(--hg-fg-2)"
-              opacity={s.o}
-            />
-          ))}
-        </g>
         {/* Subtle ring guides — radial vignette per Addendum 14 visual polish */}
-        <g aria-hidden="true">
-          {[1, 2, 3].map((r) => (
-            <circle
-              key={`ring-${r}`}
-              cx={0} cy={0} r={H.radiusForRing(r) * (isMobile ? 1.2 : 1)}
-              fill="none"
-              stroke="var(--hg-border-soft)"
-              strokeWidth={isMobile ? 0.75 : 0.5}
-              strokeDasharray={isMobile ? "2,8" : undefined}
-              opacity={activeRings.has(r) ? (isMobile ? 0.28 : 0.4) : isMobile ? 0 : 0.18}
-            />
-          ))}
-        </g>
+        {[1, 2, 3].map((r) => (
+          <circle
+            key={`ring-${r}`}
+            cx={0} cy={0} r={H.radiusForRing(r) * (isMobile ? 1.2 : 1)}
+            fill="none"
+            stroke="var(--hg-border-soft)"
+            strokeWidth={isMobile ? 0.75 : 0.5}
+            strokeDasharray={isMobile ? "2,8" : undefined}
+            opacity={activeRings.has(r) ? (isMobile ? 0.28 : 0.4) : isMobile ? 0 : 0.18}
+          />
+        ))}
 
         {/* Edges first, so nodes render above. Hover state (Addendum 23):
             edges incident on hovered node stay full opacity + bump
             stroke-width; other edges fade to 0.25. When hovering the
             center, no fade (AR23-2). */}
-        <g filter="url(#people-edge-glow)" aria-hidden="true">
-        {edges.map((e, idx) => {
-          const incident = hoveredUuid && (e.fromUuid === hoveredUuid || e.toUuid === hoveredUuid);
-          const dimmed = hoveredUuid && !incident && !hoveringCenter;
-          return (
-            <line
-              key={`edge-glow-${idx}`}
-              x1={e.x1} y1={e.y1}
-              x2={e.x2} y2={e.y2}
-              stroke={e.style.stroke}
-              strokeWidth={(incident ? (e.style.width + 0.8) : e.style.width) + (isMobile ? 3.5 : 2.6)}
-              strokeLinecap="round"
-              opacity={dimmed ? 0.06 : isMobile ? 0.18 : 0.12}
-            />
-          );
-        })}
-        </g>
-        <g>
         {edges.map((e, idx) => {
           const incident = hoveredUuid && (e.fromUuid === hoveredUuid || e.toUuid === hoveredUuid);
           const dimmed = hoveredUuid && !incident && !hoveringCenter;
@@ -1008,12 +937,10 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
             />
           );
         })}
-        </g>
 
         {/* Branch halos use the final node positions, not idealized ring
             math, so they stay attached to the actual family/friend
             constellations after mobile collision resolution. */}
-        <g>
         {branchGroups.map((g) => (
           <g key={`branch-${g.key}`} aria-hidden="true">
             <ellipse
@@ -1021,12 +948,11 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
               cy={g.cy}
               rx={g.rx}
               ry={g.ry}
-              fill={g.accent}
-              fillOpacity={isMobile ? 0.045 : 0.028}
-              stroke={g.accent}
-              strokeWidth={isMobile ? 0.85 : 0.65}
-              strokeDasharray="2,7"
-              opacity={isMobile ? 0.7 : 0.48}
+              fill="none"
+              stroke="var(--hg-fg-3)"
+              strokeWidth={isMobile ? 0.7 : 0.55}
+              strokeDasharray="2,8"
+              opacity={isMobile ? 0.34 : 0.24}
             />
             <text
               x={g.cx}
@@ -1035,19 +961,18 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
               fontFamily={PEOPLE_FONT_MONO}
               fontSize={isMobile ? 9.5 : 8}
               letterSpacing="0.16em"
-              fill={g.accent}
+              fill="var(--hg-fg-3)"
               stroke="var(--hg-bg-0)"
               strokeWidth={3}
               strokeLinejoin="round"
               paintOrder="stroke fill"
-              opacity={isMobile ? 0.9 : 0.66}
+              opacity={isMobile ? 0.78 : 0.58}
               style={{ textTransform: "uppercase" }}
             >
               {g.label}
             </text>
           </g>
         ))}
-        </g>
 
         {/* Nodes */}
         {layout.map((node) => {
@@ -1085,13 +1010,6 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
           // center which is already (0,0) inside the <g>).
           const scaleTransform = isHovered ? " scale(1.10)" : "";
           // Stroke brightens on hover.
-          const branchAccent = node.familyBranch === "holly-family"
-            ? "var(--hg-ice)"
-            : node.familyBranch === "felipe-ashley-family"
-              ? "var(--hg-warn)"
-              : node.familyBranch === "friends"
-                ? "var(--hg-fg-2)"
-                : "var(--hg-fg-3)";
           const strokeColor = isCenter
             ? "var(--hg-ice)"
             : (isHovered ? "var(--hg-fg-1)" : "var(--hg-fg-3)");
@@ -1108,20 +1026,6 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
                onPointerEnter={(ev) => handleHoverEnter(node.uuid, ev.nativeEvent)}
                onPointerLeave={handleHoverLeave}
                aria-label={`${id?.display_name || "unknown"}, ${id?.relationship_type || "?"}`}>
-              <circle
-                r={node.size / 2 + (isCenter ? 13 : 8)}
-                fill={branchAccent}
-                opacity={isCenter ? 0.12 : 0.065}
-                filter="url(#people-node-soft-glow)"
-              />
-              <circle
-                r={node.size / 2 + (isCenter ? 7 : 4)}
-                fill="none"
-                stroke={branchAccent}
-                strokeWidth={isCenter ? 1.3 : 0.9}
-                strokeDasharray={isCenter ? undefined : "2,5"}
-                opacity={isHovered || isCenter ? 0.72 : 0.42}
-              />
               <circle
                 r={node.size / 2}
                 fill="var(--hg-bg-1)"

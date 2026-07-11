@@ -1,7 +1,7 @@
 ---
-title: Restyle the people graph as a constellation map
+title: Tune the mobile people graph layout
 target: web
 type: changed
 ---
 
-People graph now has a more immersive static constellation treatment with branch territories, glowing relationship lines, stronger avatar rings, and a richer background field.
+People graph keeps the minimal relationship-map styling while using a taller portrait layout on phones and preserving trusted family and friend relationship metadata.

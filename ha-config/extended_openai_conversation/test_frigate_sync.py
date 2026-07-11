@@ -45,8 +45,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-# Force-enable for tests
-os.environ.pop("EXTENDED_OPENAI_FRIGATE_SYNC", None)
+# Force-enable the legacy bridge for functional tests. Production has the
+# inverse default and must opt in explicitly.
+os.environ["EXTENDED_OPENAI_FRIGATE_SYNC"] = "on"
 os.environ.pop("EXTENDED_OPENAI_IDENTITY_STORE", None)
 os.environ["EXTENDED_OPENAI_IDENTITY_SEMANTIC_WRITES"] = "legacy_migration_only"
 
@@ -192,8 +193,20 @@ async def _probe_disabled():
         assert caps.reachable is False
         assert "disabled" in (caps.last_error or "")
     finally:
-        os.environ.pop("EXTENDED_OPENAI_FRIGATE_SYNC", None)
+        os.environ["EXTENDED_OPENAI_FRIGATE_SYNC"] = "on"
 t("EXTENDED_OPENAI_FRIGATE_SYNC=off short-circuits probe", _probe_disabled)
+
+async def _probe_default_disabled():
+    os.environ.pop("EXTENDED_OPENAI_FRIGATE_SYNC", None)
+    try:
+        http = MockHttpClient()
+        caps = await probe_frigate_capabilities(http_client=http)
+        assert caps.reachable is False
+        assert "disabled" in (caps.last_error or "")
+        assert http.calls == []
+    finally:
+        os.environ["EXTENDED_OPENAI_FRIGATE_SYNC"] = "on"
+t("Frigate sync is fail-closed when the setting is absent", _probe_default_disabled)
 
 
 # ── Auto-seed ────────────────────────────────────────────────────────

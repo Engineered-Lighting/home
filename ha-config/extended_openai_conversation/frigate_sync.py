@@ -29,9 +29,11 @@ flows:
 
 Disable
 -------
-Set `EXTENDED_OPENAI_FRIGATE_SYNC=off` to disable. Auto-seed and
-writeback become no-ops; identity_store can still be used manually
-via the people tab + API.
+Frigate synchronization is disabled by default. Set
+`EXTENDED_OPENAI_FRIGATE_SYNC=on` only for the isolated legacy
+recognition/enrollment workflow after an operator review. Any other value
+keeps auto-seed, polling, and writeback as no-ops; identity_store can still be
+used manually via the people tab + API.
 
 Why a separate file
 -------------------
@@ -68,7 +70,9 @@ FRIGATE_WRITEBACK_TIMEOUT_S = 10.0
 
 
 def is_disabled() -> bool:
-    return os.environ.get(FRIGATE_SYNC_DISABLED_ENV, "").lower() == "off"
+    """Fail closed unless the legacy recognition bridge is explicitly enabled."""
+
+    return os.environ.get(FRIGATE_SYNC_DISABLED_ENV, "off").strip().lower() != "on"
 
 
 def base_url() -> str:

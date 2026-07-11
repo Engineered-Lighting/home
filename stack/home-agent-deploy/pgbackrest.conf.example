@@ -2,13 +2,16 @@
 # mode 0640/root:GID-999 (the container postgres group), and point
 # HOME_AGENT_PGBACKREST_CONF at it. Preflight enforces that mode/ownership.
 [global]
-repo1-type=s3
-repo1-path=/home-agent
-repo1-s3-bucket=REPLACE_ME
-repo1-s3-endpoint=REPLACE_ME
-repo1-s3-region=REPLACE_ME
-repo1-s3-key=REPLACE_ME
-repo1-s3-key-secret=REPLACE_ME
+repo1-type=sftp
+repo1-path=/repo/home-agent
+repo1-sftp-host=REPLACE_WITH_SEPARATE_BACKUP_HOST
+repo1-sftp-host-port=22
+repo1-sftp-host-user=homeagent_backup
+repo1-sftp-private-key-file=/run/pgbackrest-sftp/id_ed25519
+repo1-sftp-public-key-file=/run/pgbackrest-sftp/id_ed25519.pub
+repo1-sftp-host-key-check-type=fingerprint
+repo1-sftp-host-key-hash-type=sha256
+repo1-sftp-host-fingerprint=REPLACE_WITH_VERIFIED_SHA256_HEX_FINGERPRINT
 repo1-cipher-type=aes-256-cbc
 repo1-cipher-pass=REPLACE_WITH_SEPARATE_BACKUP_SECRET
 repo1-retention-full=4

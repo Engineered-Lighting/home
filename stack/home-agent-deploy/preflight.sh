@@ -13,7 +13,7 @@ require_absolute() {
   esac
 }
 
-for command in docker openssl findmnt sha256sum install stat readlink; do
+for command in docker openssl findmnt grep sha256sum install stat readlink; do
   command -v "$command" >/dev/null 2>&1 || { echo "missing command: $command" >&2; exit 69; }
 done
 
@@ -24,6 +24,8 @@ done
 : "${HOME_AGENT_SECRETS_DIR:?missing HOME_AGENT_SECRETS_DIR}"
 : "${HOME_AGENT_TLS_DIR:?missing HOME_AGENT_TLS_DIR}"
 : "${HOME_AGENT_PGBACKREST_CONF:?missing HOME_AGENT_PGBACKREST_CONF}"
+: "${HOME_AGENT_PGBACKREST_SFTP_KEY:?missing HOME_AGENT_PGBACKREST_SFTP_KEY}"
+: "${HOME_AGENT_PGBACKREST_SFTP_PUBLIC_KEY:?missing HOME_AGENT_PGBACKREST_SFTP_PUBLIC_KEY}"
 : "${HOME_AGENT_EDGE_BIND_ADDR:?missing HOME_AGENT_EDGE_BIND_ADDR}"
 : "${HOME_AGENT_POLICY_DIGEST:?missing HOME_AGENT_POLICY_DIGEST}"
 : "${HOME_AGENT_ROLLOUT_MODE:?missing HOME_AGENT_ROLLOUT_MODE}"
@@ -40,6 +42,8 @@ require_absolute HOME_AGENT_ERASURE_LEDGER_ROOT "$HOME_AGENT_ERASURE_LEDGER_ROOT
 require_absolute HOME_AGENT_SECRETS_DIR "$HOME_AGENT_SECRETS_DIR"
 require_absolute HOME_AGENT_TLS_DIR "$HOME_AGENT_TLS_DIR"
 require_absolute HOME_AGENT_PGBACKREST_CONF "$HOME_AGENT_PGBACKREST_CONF"
+require_absolute HOME_AGENT_PGBACKREST_SFTP_KEY "$HOME_AGENT_PGBACKREST_SFTP_KEY"
+require_absolute HOME_AGENT_PGBACKREST_SFTP_PUBLIC_KEY "$HOME_AGENT_PGBACKREST_SFTP_PUBLIC_KEY"
 
 [ "$HOME_AGENT_EDGE_BIND_ADDR" != "0.0.0.0" ] || {
   echo "HOME_AGENT_EDGE_BIND_ADDR may not be 0.0.0.0" >&2; exit 78;
@@ -157,9 +161,45 @@ for name in server.crt server.key client-ca.crt; do
   chmod 0640 "$path"
 done
 [ -s "$HOME_AGENT_PGBACKREST_CONF" ] || { echo "missing pgBackRest config" >&2; exit 78; }
+config_source="$(findmnt -n -o SOURCE -T "$HOME_AGENT_PGBACKREST_CONF" || true)"
+case "$config_source" in
+  /dev/mapper/*) ;;
+  *) echo "$HOME_AGENT_PGBACKREST_CONF is not on a verified /dev/mapper encrypted mount" >&2; exit 78 ;;
+esac
 chown root:999 "$HOME_AGENT_PGBACKREST_CONF"
 chmod 0640 "$HOME_AGENT_PGBACKREST_CONF"
 verify_secret 0:999:640 "$HOME_AGENT_PGBACKREST_CONF"
+require_pgbackrest_setting() {
+  pattern="$1"
+  description="$2"
+  grep -Eq "$pattern" "$HOME_AGENT_PGBACKREST_CONF" || {
+    echo "pgBackRest config must set $description" >&2
+    exit 78
+  }
+}
+require_pgbackrest_setting '^repo1-type=sftp$' 'repo1-type=sftp'
+require_pgbackrest_setting '^repo1-path=/[^[:space:]]+$' 'an absolute repository path'
+require_pgbackrest_setting '^repo1-sftp-host=[^[:space:]]+$' 'a dedicated SFTP host'
+require_pgbackrest_setting '^repo1-sftp-host-user=homeagent_backup$' 'the dedicated non-admin SFTP user'
+require_pgbackrest_setting '^repo1-sftp-private-key-file=/run/pgbackrest-sftp/id_ed25519$' 'the mounted private-key path'
+require_pgbackrest_setting '^repo1-sftp-public-key-file=/run/pgbackrest-sftp/id_ed25519.pub$' 'the mounted public-key path'
+require_pgbackrest_setting '^repo1-sftp-host-key-check-type=fingerprint$' 'strict fingerprint host-key checking'
+require_pgbackrest_setting '^repo1-sftp-host-key-hash-type=sha256$' 'SHA-256 host-key hashing'
+require_pgbackrest_setting '^repo1-sftp-host-fingerprint=[0-9a-f]{64}$' 'a verified SHA-256 host-key fingerprint'
+require_pgbackrest_setting '^repo1-cipher-type=aes-256-cbc$' 'AES-256-CBC repository encryption'
+require_pgbackrest_setting '^repo1-cipher-pass=[0-9a-f]{64}$' 'a 256-bit repository cipher passphrase'
+require_pgbackrest_setting '^pg1-user=home_agent_backup$' 'the least-privilege PostgreSQL backup role'
+for key_path in "$HOME_AGENT_PGBACKREST_SFTP_KEY" "$HOME_AGENT_PGBACKREST_SFTP_PUBLIC_KEY"; do
+  [ -s "$key_path" ] || { echo "missing pgBackRest SFTP key file: $key_path" >&2; exit 78; }
+  key_source="$(findmnt -n -o SOURCE -T "$key_path" || true)"
+  case "$key_source" in
+    /dev/mapper/*) ;;
+    *) echo "$key_path is not on a verified /dev/mapper encrypted mount" >&2; exit 78 ;;
+  esac
+  chown root:999 "$key_path"
+  chmod 0640 "$key_path"
+  verify_secret 0:999:640 "$key_path"
+done
 verify_secret 999:999:700 "$HOME_AGENT_DATA_ROOT/pgbackrest-spool"
 verify_secret 10001:10001:700 "$HOME_AGENT_ERASURE_LEDGER_ROOT"
 verify_secret 10001:10001:600 "$ledger_path"

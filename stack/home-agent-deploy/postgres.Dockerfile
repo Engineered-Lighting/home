@@ -4,5 +4,5 @@ FROM ${POSTGRES_BASE_IMAGE}
 RUN apt-get update \
     && apt-get install --no-install-recommends -y pgbackrest ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /var/spool/pgbackrest \
-    && chown postgres:postgres /var/spool/pgbackrest
+    && mkdir -p /var/spool/pgbackrest /run/pgbackrest-sftp \
+    && chown postgres:postgres /var/spool/pgbackrest /run/pgbackrest-sftp

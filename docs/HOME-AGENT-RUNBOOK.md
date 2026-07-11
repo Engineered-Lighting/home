@@ -147,10 +147,17 @@ mode 0600.
 
 Configure `pgbackrest.conf` from
 `stack/home-agent-deploy/pgbackrest.conf.example` using the separately approved
-off-host destination and backup cipher secret. Store it outside the repo.
+off-host SFTP destination, independently verified SHA-256 host-key fingerprint,
+and backup cipher secret. Store it outside the repo on the encrypted mapper.
+Generate a dedicated key pair there, set `HOME_AGENT_PGBACKREST_SFTP_KEY` and
+`HOME_AGENT_PGBACKREST_SFTP_PUBLIC_KEY` to those files, and install only the
+public key on the non-admin, key-only SFTP account. The private key is mounted
+read-only at `/run/pgbackrest-sftp/id_ed25519`; neither key belongs in the
+source checkout or a container image.
 Preflight sets it to `root:999` mode 0640 so PostgreSQL and the UID/GID-999
 backup gate can read it without making the repository credential writable; it
-also enforces a UID/GID-999 mode-0700 pgBackRest spool. Keep
+also enforces the encrypted mount, SFTP host-key pin, AES-256-CBC repository
+cipher, dedicated key mounts, and a UID/GID-999 mode-0700 pgBackRest spool. Keep
 `pg1-user=home_agent_backup`: preflight mounts that role's separate mode-0400
 password only into the backup gate. PostgreSQL uses the deployment-owned SCRAM
 HBA file even for existing clusters, so the backup container never receives or

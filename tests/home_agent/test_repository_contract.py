@@ -211,6 +211,8 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertNotIn("ports:", postgres_block)
         self.assertIn("HOME_AGENT_RUNTIME_ROOT", compose)
         self.assertIn("HOME_AGENT_DATA_ROOT", compose)
+        self.assertEqual(compose.count("/run/pgbackrest-sftp/id_ed25519:ro"), 2)
+        self.assertEqual(compose.count("/run/pgbackrest-sftp/id_ed25519.pub:ro"), 2)
         self.assertIn(
             "pgbackrest --stanza=home-agent check",
             read("stack/home-agent-deploy/backup-gate.sh"),
@@ -293,6 +295,20 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertIn("pg1-user=home_agent_backup", pgbackrest)
         self.assertIn("pg1-database=home_agent", pgbackrest)
         self.assertNotIn("pg1-user=home_agent_owner", pgbackrest)
+        self.assertIn("repo1-type=sftp", pgbackrest)
+        self.assertIn("repo1-sftp-host-key-check-type=fingerprint", pgbackrest)
+        self.assertIn("repo1-sftp-host-key-hash-type=sha256", pgbackrest)
+        self.assertIn("repo1-cipher-type=aes-256-cbc", pgbackrest)
+
+        preflight = read("stack/home-agent-deploy/preflight.sh")
+        self.assertIn("HOME_AGENT_PGBACKREST_SFTP_KEY", preflight)
+        self.assertIn("HOME_AGENT_PGBACKREST_SFTP_PUBLIC_KEY", preflight)
+        self.assertIn("not on a verified /dev/mapper encrypted mount", preflight)
+        self.assertIn("'^repo1-type=sftp$'", preflight)
+        self.assertIn("'^repo1-sftp-host-key-check-type=fingerprint$'", preflight)
+        self.assertIn("'^repo1-sftp-host-fingerprint=[0-9a-f]{64}$'", preflight)
+        self.assertIn("'^repo1-cipher-type=aes-256-cbc$'", preflight)
+        self.assertIn("'^repo1-cipher-pass=[0-9a-f]{64}$'", preflight)
 
         roles = read("stack/home-agent-deploy/provision-roles.sh")
         runtime_grants = read("stack/home-agent-deploy/apply-grants.sh")

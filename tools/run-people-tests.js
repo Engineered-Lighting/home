@@ -867,7 +867,8 @@ process.stdout.write("\n[1mpeople overlay interaction contract (DOC-S83)[0m\n");
     peopleSource.includes("people-graph-field") &&
     peopleSource.includes("people-node-soft-glow") &&
     peopleSource.includes("const branchGroups = (() => {") &&
-    peopleSource.includes("Branch halos use the final node positions") &&
+    peopleSource.includes("Branch labels use the final node positions") &&
+    !peopleSource.includes('strokeDasharray="2,8"') &&
     !peopleSource.includes("cluster-label-${ring}-${name}"));
   assert("identities endpoint exposes sanitized Frigate diagnostics",
     haInitSource.includes('"frigate_seed_report": asdict(seed_report) if seed_report is not None else None') &&

@@ -938,22 +938,11 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
           );
         })}
 
-        {/* Branch halos use the final node positions, not idealized ring
+        {/* Branch labels use the final node positions, not idealized ring
             math, so they stay attached to the actual family/friend
-            constellations after mobile collision resolution. */}
+            groups after mobile collision resolution. */}
         {branchGroups.map((g) => (
           <g key={`branch-${g.key}`} aria-hidden="true">
-            <ellipse
-              cx={g.cx}
-              cy={g.cy}
-              rx={g.rx}
-              ry={g.ry}
-              fill="none"
-              stroke="var(--hg-fg-3)"
-              strokeWidth={isMobile ? 0.7 : 0.55}
-              strokeDasharray="2,8"
-              opacity={isMobile ? 0.34 : 0.24}
-            />
             <text
               x={g.cx}
               y={g.labelY}

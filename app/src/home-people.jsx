@@ -729,10 +729,12 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
   // node inside the phone viewport.
   const layout = H.buildRadialLayout(graphable, isMobile
     ? {
-        radiusScale: 0.84,
-        avatarScale: 1.46,
-        clusterStepScale: 0.92,
-        textScale: 1.28,
+        radiusScale: 1.08,
+        avatarScale: 1.26,
+        clusterStepScale: 1.12,
+        textScale: 1.18,
+        collisionPadding: 42,
+        centerCollisionPadding: 58,
       }
     : undefined);
 
@@ -754,7 +756,7 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
     return Math.max(max, radius + (n.size || 0) / 2 + 46);
   }, 160);
   const VIEW_HALF = isMobile
-      ? Math.max(150, Math.min(390, nodeExtent + 12))
+      ? Math.max(220, Math.min(620, nodeExtent + 34))
     : 460;
   const VIEW_SIZE = VIEW_HALF * 2;
 

@@ -241,6 +241,74 @@
 
     placeParentChildren("holly", ["ben", "peter"], -0.72, "holly-family");
     placePairWithChild("felipe", "ashley", "aurelio", 2.42, "felipe-ashley-family");
+    return resolveLayoutCollisions(layout, opts);
+  }
+
+  function resolveLayoutCollisions(layout, opts) {
+    opts = opts || {};
+    if (!Array.isArray(layout) || layout.length < 2) return layout;
+    const iterations = Number.isFinite(opts.collisionIterations)
+      ? Math.max(0, opts.collisionIterations)
+      : 80;
+    const padding = Number.isFinite(opts.collisionPadding)
+      ? opts.collisionPadding
+      : 30;
+    const centerPadding = Number.isFinite(opts.centerCollisionPadding)
+      ? opts.centerCollisionPadding
+      : 42;
+    const nodes = layout.filter((n) => n && !n.overflow && !n.pinned);
+    const center = nodes.find((n) => n.ring === 0) || null;
+    function minDistance(a, b) {
+      const labelPad = a.ring === 0 || b.ring === 0 ? centerPadding : padding;
+      return ((a.size || 0) + (b.size || 0)) / 2 + labelPad;
+    }
+    for (let iter = 0; iter < iterations; iter++) {
+      let moved = false;
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const a = nodes[i];
+          const b = nodes[j];
+          const min = minDistance(a, b);
+          let dx = b.x - a.x;
+          let dy = b.y - a.y;
+          let dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist >= min) continue;
+          if (dist < 0.001) {
+            const angle = ((i + 1) * 1.618 + (j + 1) * 0.733) * Math.PI;
+            dx = Math.cos(angle);
+            dy = Math.sin(angle);
+            dist = 1;
+          }
+          const overlap = (min - dist) / 2;
+          const ux = dx / dist;
+          const uy = dy / dist;
+          const aFixed = a.ring === 0;
+          const bFixed = b.ring === 0;
+          if (!aFixed) {
+            a.x -= ux * (bFixed ? overlap * 2 : overlap);
+            a.y -= uy * (bFixed ? overlap * 2 : overlap);
+          }
+          if (!bFixed) {
+            b.x += ux * (aFixed ? overlap * 2 : overlap);
+            b.y += uy * (aFixed ? overlap * 2 : overlap);
+          }
+          moved = true;
+        }
+      }
+      if (center) {
+        for (const n of nodes) {
+          if (n.ring === 0) continue;
+          const min = minDistance(center, n);
+          const dist = Math.sqrt(n.x * n.x + n.y * n.y);
+          if (dist > min) continue;
+          const angle = dist > 0.001 ? Math.atan2(n.y, n.x) : -Math.PI / 2;
+          n.x = Math.cos(angle) * min;
+          n.y = Math.sin(angle) * min;
+          moved = true;
+        }
+      }
+      if (!moved) break;
+    }
     return layout;
   }
 

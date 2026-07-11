@@ -506,10 +506,12 @@ process.stdout.write("\n[1msubrole clustering + ring offset[0m\n");
   ];
   const desktop = H.buildRadialLayout(ids);
   const mobile = H.buildRadialLayout(ids, {
-    radiusScale: 0.84,
-    avatarScale: 1.46,
-    clusterStepScale: 0.92,
-    textScale: 1.28,
+    radiusScale: 1.08,
+    avatarScale: 1.26,
+    clusterStepScale: 1.12,
+    textScale: 1.18,
+    collisionPadding: 42,
+    centerCollisionPadding: 58,
   });
   const desktopHolly = desktop.find((n) => n.uuid === "holly");
   const mobileHolly = mobile.find((n) => n.uuid === "holly");
@@ -517,11 +519,11 @@ process.stdout.write("\n[1msubrole clustering + ring offset[0m\n");
     desktopHolly.size === 60, desktopHolly);
   assert("mobile avatar size scales up",
     mobileHolly.size > desktopHolly.size, { desktop: desktopHolly.size, mobile: mobileHolly.size });
-  assert("mobile radius scales down",
-    Math.hypot(mobileHolly.x, mobileHolly.y) < Math.hypot(desktopHolly.x, desktopHolly.y),
+  assert("mobile radius gives larger avatars room to breathe",
+    Math.hypot(mobileHolly.x, mobileHolly.y) >= Math.hypot(desktopHolly.x, desktopHolly.y),
     { desktop: desktopHolly, mobile: mobileHolly });
   assert("mobile text scale is carried on graph nodes",
-    mobileHolly.textScale === 1.28, mobileHolly);
+    mobileHolly.textScale === 1.18, mobileHolly);
 })();
 
 (function () {
@@ -567,6 +569,27 @@ process.stdout.write("\n[1msubrole clustering + ring offset[0m\n");
     known.some((r) => r.from_uuid === "felipe" && r.to_uuid === "aurelio" && r.rel_type === "parent") &&
     known.some((r) => r.from_uuid === "ashley" && r.to_uuid === "aurelio" && r.rel_type === "parent"),
     known);
+
+  const mobileLayout = H.buildRadialLayout(ids, {
+    radiusScale: 1.08,
+    avatarScale: 1.26,
+    clusterStepScale: 1.12,
+    textScale: 1.18,
+    collisionPadding: 42,
+    centerCollisionPadding: 58,
+  }).filter((n) => !n.overflow);
+  const collisions = [];
+  for (let i = 0; i < mobileLayout.length; i++) {
+    for (let j = i + 1; j < mobileLayout.length; j++) {
+      const a = mobileLayout[i];
+      const b = mobileLayout[j];
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      const min = ((a.size || 0) + (b.size || 0)) / 2 + 20;
+      if (dist < min) collisions.push([a.uuid, b.uuid, dist, min]);
+    }
+  }
+  assert("mobile family graph has no overlapping avatar circles",
+    collisions.length === 0, collisions);
 })();
 
 /* ────────────────────────────────────────────────────────────────────────
@@ -815,11 +838,12 @@ process.stdout.write("\n[1mpeople overlay interaction contract (DOC-S83)[0m\n");
   assert("mobile people graph uses a viewport-aware tight viewBox",
     peopleSource.includes("function usePeopleViewport()") &&
     peopleSource.includes("const peopleViewport = usePeopleViewport();") &&
-    peopleSource.includes("radiusScale: 0.84") &&
-    peopleSource.includes("avatarScale: 1.46") &&
-    peopleSource.includes("textScale: 1.28") &&
+    peopleSource.includes("radiusScale: 1.08") &&
+    peopleSource.includes("avatarScale: 1.26") &&
+    peopleSource.includes("textScale: 1.18") &&
+    peopleSource.includes("collisionPadding: 42") &&
     peopleSource.includes("const nodeExtent = layout.reduce") &&
-    peopleSource.includes("Math.max(150, Math.min(390, nodeExtent + 12))") &&
+    peopleSource.includes("Math.max(220, Math.min(620, nodeExtent + 34))") &&
     peopleSource.includes('height={isMobile ? "min(84dvh, 820px)"'));
   assert("identities endpoint exposes sanitized Frigate diagnostics",
     haInitSource.includes('"frigate_seed_report": asdict(seed_report) if seed_report is not None else None') &&

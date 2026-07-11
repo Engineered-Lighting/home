@@ -729,12 +729,12 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
   // node inside the phone viewport.
   const layout = H.buildRadialLayout(graphable, isMobile
     ? {
-        radiusScale: 1.08,
-        avatarScale: 1.26,
-        clusterStepScale: 1.12,
-        textScale: 1.18,
-        collisionPadding: 42,
-        centerCollisionPadding: 58,
+        radiusScale: 1.16,
+        avatarScale: 1.36,
+        clusterStepScale: 1.18,
+        textScale: 1.24,
+        collisionPadding: 56,
+        centerCollisionPadding: 76,
       }
     : undefined);
 
@@ -751,14 +751,33 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
   // fits to the actual visible nodes so sparse graphs do not render as a
   // tiny cluster in an oversized 920px coordinate space.
   const activeRings = new Set(layout.filter((n) => !n.overflow).map((n) => n.ring));
-  const nodeExtent = layout.reduce((max, n) => {
-    const radius = Math.max(Math.abs(n.x || 0), Math.abs(n.y || 0));
-    return Math.max(max, radius + (n.size || 0) / 2 + 46);
-  }, 160);
-  const VIEW_HALF = isMobile
-      ? Math.max(220, Math.min(620, nodeExtent + 34))
-    : 460;
+  const nodeBounds = layout.reduce((bounds, n) => {
+    if (!n || n.overflow) return bounds;
+    const textScale = n.textScale || 1;
+    const padX = (n.size || 0) / 2 + (isMobile ? 36 : 46);
+    const padTop = (n.size || 0) / 2 + (isMobile ? 34 : 46);
+    const padBottom = (n.size || 0) / 2 + (isMobile ? 58 * textScale : 64);
+    return {
+      minX: Math.min(bounds.minX, (n.x || 0) - padX),
+      maxX: Math.max(bounds.maxX, (n.x || 0) + padX),
+      minY: Math.min(bounds.minY, (n.y || 0) - padTop),
+      maxY: Math.max(bounds.maxY, (n.y || 0) + padBottom),
+    };
+  }, { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
+  const hasNodeBounds = Number.isFinite(nodeBounds.minX) && Number.isFinite(nodeBounds.maxX);
+  const mobileViewBox = hasNodeBounds
+    ? {
+        x: nodeBounds.minX,
+        y: nodeBounds.minY,
+        w: Math.max(260, nodeBounds.maxX - nodeBounds.minX),
+        h: Math.max(220, nodeBounds.maxY - nodeBounds.minY),
+      }
+    : { x: -260, y: -220, w: 520, h: 440 };
+  const VIEW_HALF = 460;
   const VIEW_SIZE = VIEW_HALF * 2;
+  const graphViewBox = isMobile
+    ? mobileViewBox
+    : { x: -VIEW_HALF, y: -VIEW_HALF, w: VIEW_SIZE, h: VIEW_SIZE };
 
   // Addendum 23: pre-compute the connected-uuid set + tooltip placement
   // for the currently-hovered node. useMemo prevents recomputation
@@ -800,12 +819,12 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
     }}>
       <svg
         width="100%"
-        height={isMobile ? "min(84dvh, 820px)" : "auto"}
-        viewBox={`${-VIEW_HALF} ${-VIEW_HALF} ${VIEW_SIZE} ${VIEW_SIZE}`}
+        height={isMobile ? "calc(100dvh - 148px)" : "auto"}
+        viewBox={`${graphViewBox.x} ${graphViewBox.y} ${graphViewBox.w} ${graphViewBox.h}`}
         style={{
-          maxHeight: isMobile ? "min(84dvh, 820px)" : "min(80vh, 800px)",
+          maxHeight: isMobile ? "calc(100dvh - 148px)" : "min(80vh, 800px)",
           maxWidth: isMobile ? "100vw" : "min(80vw, 1000px)",
-          minHeight: isMobile ? "min(620px, calc(100dvh - 160px))" : "auto",
+          minHeight: isMobile ? "min(640px, calc(100dvh - 148px))" : "auto",
           display: "block",
         }}
         preserveAspectRatio="xMidYMid meet"

@@ -207,13 +207,13 @@
       if (!left || !right) return;
       const radial = unit(angle);
       const perp = { x: -radial.y, y: radial.x };
-      const radius = radiusForRing(1) * radiusScale * 1.05;
-      const sep = 76 * avatarScale;
+      const radius = radiusForRing(1) * radiusScale * 1.08;
+      const sep = 96 * avatarScale;
       const mid = { x: radial.x * radius, y: radial.y * radius };
       setNode(left, mid.x - perp.x * sep / 2, mid.y - perp.y * sep / 2, branch);
       setNode(right, mid.x + perp.x * sep / 2, mid.y + perp.y * sep / 2, branch);
       if (child) {
-        setNode(child, mid.x + radial.x * 116 * radiusScale, mid.y + radial.y * 116 * radiusScale, branch);
+        setNode(child, mid.x + radial.x * 150 * radiusScale, mid.y + radial.y * 150 * radiusScale, branch);
       }
     }
     function placeParentChildren(parentName, childNames, angle, branch) {
@@ -223,10 +223,10 @@
       if (children.length === 0) return;
       const radial = unit(angle);
       const perp = { x: -radial.y, y: radial.x };
-      const radius = radiusForRing(1) * radiusScale * 0.98;
+      const radius = radiusForRing(1) * radiusScale * 1.04;
       setNode(parent, radial.x * radius, radial.y * radius, branch);
-      const childSpread = Math.max(54, 46 * avatarScale);
-      const outward = 122 * radiusScale;
+      const childSpread = Math.max(76, 58 * avatarScale);
+      const outward = 160 * radiusScale;
       const start = -((children.length - 1) * childSpread) / 2;
       for (let i = 0; i < children.length; i++) {
         const offset = start + i * childSpread;

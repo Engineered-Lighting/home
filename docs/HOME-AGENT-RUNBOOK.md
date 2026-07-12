@@ -246,19 +246,20 @@ legacy Home UI. Register that exact origin as the HA OAuth client and the exact
 `https://agent.home.example.internal/api/agent/auth/callback` redirect. Set only
 the dedicated origin in `HOME_AGENT_ALLOWED_ORIGINS`.
 
-Point the existing web gateway at the loopback BFF if they share a host:
+Do not serve this origin from `web-gateway`, even through its hostname boundary.
+Deploy the separate fail-closed service in
+`stack/home-agent-deploy/agent-origin/compose.yml`. Its immutable image copies
+only the four built Agent assets, reaches `bff:8097` only through the existing
+internal Core API network, and publishes only to `127.0.0.1:8096`. Tailscale Serve terminates
+TLS for the dedicated origin and is the only permitted ingress. The BFF remains
+loopback-only for native compatibility; never change its bind to a LAN or
+wildcard host address.
 
-```text
-HOME_WEB_AGENT_ORIGINS=https://agent.home.example.internal
-HOME_WEB_AGENT_BFF_TARGET=http://127.0.0.1:8097/api/agent
-```
-
-If they do not share a host, use a private authenticated transport; do not
-change the BFF bind to `0.0.0.0`. Configure the reverse proxy/Tailscale Serve
-with separate legacy and Agent HTTPS hostnames and preserve the original Host
-header. A missing or malformed `HOME_WEB_AGENT_ORIGINS` disables browser Agent
-routes rather than falling back to the legacy origin, and makes
-`node web-gateway/server.mjs --check` exit non-zero.
+The complete preflight, staged exposure, callback-log canary, acceptance, and
+rollback procedure is in
+`stack/home-agent-deploy/agent-origin/README.md`. Save the existing complete
+Tailscale Serve configuration before adding the Agent listener so rollback
+preserves the legacy port-443 UI and port-10000 HA HTTPS handlers.
 
 HA Core 2026.7.1 neither documents nor enforces PKCE for this flow. The BFF is
 a confidential server-side *token-handling boundary*, not an OAuth confidential
@@ -461,6 +462,41 @@ relevant events or three controlled journeys have been observed. Confirm:
   shadow-only, and canary presentation uses the one-time native claim only;
 - a tracker switch opens conflict rather than silently merging evidence;
 - stale or insufficient fixes never create a specific property anchor.
+
+The read-only operator endpoint
+`GET /v1/operator-rollout/phase2-readiness` is the canonical counter for this
+gate. It requires both the operator bearer and offline bootstrap credential and
+returns the fixed `phase2-record-only-gate-v1` JSON contract. The observation
+window begins at the first accepted durable Edge envelope's database ingest
+time. The 500-event path counts only accepted location-related `state_changed`
+or `location_fix` envelopes with continuous or Recorder-reconstructed
+coverage. Conversation metadata is user-spammable and never advances this
+gate. Startup snapshots, snapshot-only recovery, coverage gaps, unknown
+coverage, duplicates, and quarantine rows never advance it.
+
+The endpoint never discovers or auto-counts visits. To review a controlled
+journey, repeat a paired `controlled_principal_id=<uuid>` and
+`controlled_journey_id=<uuid>` query parameter. Selection is an operator
+attestation held only for that request; it is not persisted. Core counts the
+selected journey only when RLS resolves that exact principal/visit pair and
+the visit:
+
+- was created within the current observation window after explicit
+  `location_memory` consent (the consent row's timestamp must be no later than
+  the visit creation time, so later consent cannot qualify old evidence);
+- is departed, has sufficient coverage, and contains at least ten minutes of
+  stable dwell;
+- begins at a continuous `device_tracker` transition root from exactly one
+  Edge stream; and
+- has neither a snapshot/gap envelope nor a gap/unknown/snapshot-only coverage
+  interval overlapping its observed range.
+
+An empty journey query therefore reports zero journeys even if visit rows
+exist. This keeps the default-off consent path intact: the normal record-only
+deployment advances through 500 redacted envelope headers, while suppressed
+raw location never becomes journey evidence. `ready_to_advance=true` requires
+the seven-day window, one of the two evidence thresholds, and the deployment
+still being in `record_only`; the endpoint cannot change rollout mode.
 
 Core health exposes the locked resource budget. Durable-volume free space is
 `warn` at 20%, suspends optional API mutations at 15%, and enters

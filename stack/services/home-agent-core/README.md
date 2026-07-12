@@ -128,6 +128,23 @@ credential and authenticated HA UUID):
 - `GET /v1/places/{id}/descriptor-relationship`
 - `GET /v1/places/{id}/parents/current-presence`
 
+Offline operator-only API (requires the operator bearer plus bootstrap
+credential and is never proxied by the BFF):
+
+- `GET /v1/operator-rollout`
+- `GET /v1/operator-rollout/phase2-readiness`
+
+The Phase 2 readiness response is read-only and deterministic. It reports the
+seven-day observation window and counts only accepted continuous transition
+location envelopes toward the 500-event threshold. Conversation metadata,
+snapshots, and gaps are reported or ignored but never counted. Controlled
+journeys are never enumerated automatically: the
+operator must supply paired principal/visit UUID query parameters, after which
+the inspector verifies explicit location consent predating the visit, a
+departed sufficient visit, a continuous device-tracker root, ten-minute dwell,
+and no overlapping snapshot or coverage gap. The response contains no names,
+coordinates, locators, state payloads, or source event content.
+
 The proposal route accepts only the typed `place_social_descriptor` MVP shape;
 there is no generic predicate/object write API.
 

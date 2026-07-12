@@ -198,6 +198,34 @@ def test_rollout_policy_defaults_record_only_and_has_no_mutation_route(tmp_path)
     assert mutation_attempt.status_code == 405
 
 
+def test_phase2_readiness_is_operator_only_and_requires_paired_ids(tmp_path) -> None:
+    app = create_app(
+        settings_for(tmp_path).model_copy(update={"rollout_mode": "record_only"})
+    )
+    app.state.restore_gate = CurrentRestoreGate()
+    operator_headers = {
+        "Authorization": "Bearer operator-token-with-at-least-32-chars",
+    }
+    with TestClient(app) as client:
+        denied = client.get(
+            "/v1/operator-rollout/phase2-readiness", headers=operator_headers
+        )
+        unpaired = client.get(
+            "/v1/operator-rollout/phase2-readiness",
+            headers={
+                **operator_headers,
+                "X-Home-Agent-Bootstrap": "bootstrap-token-with-at-least-32-chars",
+            },
+            params={"controlled_journey_id": str(uuid.uuid4())},
+        )
+
+    assert denied.status_code == 401
+    assert unpaired.status_code == 422
+    assert unpaired.json()["error"]["message"] == (
+        "controlled principal and journey IDs must be paired"
+    )
+
+
 def test_credentials_are_role_scoped_and_bootstrap_is_optional(tmp_path) -> None:
     spool_key = base64.urlsafe_b64encode(b"s" * 32).decode().rstrip("=")
     knowledge_key = base64.urlsafe_b64encode(b"k" * 32).decode().rstrip("=")

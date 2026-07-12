@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import ValidationError
 
 from .auth import (
@@ -44,6 +44,7 @@ from .models import (
     MemoryInspection,
     ParentConfirmation,
     ParentPresenceView,
+    Phase2ReadinessView,
     PersonCreate,
     PersonView,
     PlaceCreate,
@@ -61,6 +62,7 @@ from .models import (
     VisitCreate,
     VisitView,
 )
+from .phase2 import ControlledJourneyReference, Phase2GateInspector
 from .store import CoreStore
 
 
@@ -254,6 +256,45 @@ def semantic_router() -> APIRouter:
             semantic_people_writes=mode in {"shadow", "canary"},
             persistent_memory_writes=mode == "canary",
         )
+
+    @router.get(
+        "/operator-rollout/phase2-readiness",
+        response_model=Phase2ReadinessView,
+    )
+    async def phase2_readiness(
+        _service: OperatorService,
+        store: Store,
+        _bootstrap: None = Depends(require_bootstrap),
+        controlled_principal_id: list[uuid.UUID] | None = Query(default=None),
+        controlled_journey_id: list[uuid.UUID] | None = Query(default=None),
+    ) -> Phase2ReadinessView:
+        """Evaluate the record-only gate without discovering private visits.
+
+        A journey counts only when the operator supplies a paired principal and
+        visit UUID. The inspector validates the selected visit through RLS and
+        returns no names, states, coordinates, locators, or source payloads.
+        """
+
+        principal_ids = controlled_principal_id or []
+        journey_ids = controlled_journey_id or []
+        if len(principal_ids) != len(journey_ids):
+            raise ValidationDomainError(
+                "controlled principal and journey IDs must be paired"
+            )
+        if len(journey_ids) > 20:
+            raise ValidationDomainError(
+                "at most 20 controlled journeys may be inspected at once"
+            )
+        references = [
+            ControlledJourneyReference(principal_id=principal_id, visit_id=visit_id)
+            for principal_id, visit_id in zip(
+                principal_ids, journey_ids, strict=True
+            )
+        ]
+        return await Phase2GateInspector(
+            store.database,
+            rollout_mode=store.settings.rollout_mode,
+        ).inspect(references)
 
     @router.post("/people/verify-reviewed", response_model=PersonView)
     async def verify_reviewed_person(

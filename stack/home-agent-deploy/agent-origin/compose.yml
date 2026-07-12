@@ -1,0 +1,53 @@
+name: home-agent-origin
+
+services:
+  origin:
+    build:
+      context: ../../services/home-agent-origin
+      additional_contexts:
+        agent_assets: ../../../app/src/home-agent
+    image: engineered-lighting/home-agent-origin:local
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    environment:
+      HOME_AGENT_WEB_HOST: 0.0.0.0
+      HOME_AGENT_WEB_PORT: "8096"
+      HOME_AGENT_WEB_PUBLIC_ORIGIN: "${HOME_AGENT_WEB_PUBLIC_ORIGIN:?set exact tailnet-only HTTPS origin}"
+      HOME_AGENT_WEB_BFF_URL: http://bff:8097
+      HOME_AGENT_WEB_ASSET_ROOT: /srv/home-agent
+    ports:
+      - "${HOME_AGENT_WEB_BIND_ADDR:-127.0.0.1}:${HOME_AGENT_WEB_PUBLISHED_PORT:-8096}:8096"
+    networks:
+      - core-api
+    mem_limit: 128m
+    pids_limit: 64
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          const http=require('node:http');const host=new URL(process.env.HOME_AGENT_WEB_PUBLIC_ORIGIN).host;
+          const r=http.get({host:'127.0.0.1',port:8096,path:'/home-agent/index.html',headers:{Host:host}},
+          x=>{x.resume();if(x.statusCode!==200)process.exit(1)});r.on('error',()=>process.exit(1));
+          r.setTimeout(3000,()=>{r.destroy();process.exit(1)});
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: local
+      options:
+        max-size: 1m
+        max-file: "2"
+
+networks:
+  core-api:
+    external: true
+    name: "${HOME_AGENT_API_NETWORK:-home-agent_api-net}"

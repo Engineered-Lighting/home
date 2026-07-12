@@ -186,6 +186,46 @@ class RolloutStatus(StrictModel):
     ingest_projection: Literal[True] = True
 
 
+class Phase2JourneyEvaluation(StrictModel):
+    visit_id: uuid.UUID
+    qualifies: bool
+    reason_codes: list[str]
+
+
+class Phase2ReadinessView(StrictModel):
+    contract: Literal["phase2-record-only-gate-v1"] = "phase2-record-only-gate-v1"
+    evaluated_at: datetime
+    rollout_mode: RolloutMode
+    started_at: datetime | None
+    eligible_at: datetime | None
+    elapsed_seconds: int = Field(ge=0)
+    minimum_elapsed_seconds: Literal[604800] = 604800
+    time_requirement_met: bool
+    total_envelopes: int = Field(ge=0)
+    relevant_envelopes: int = Field(ge=0)
+    relevant_envelopes_required: Literal[500] = 500
+    relevant_envelopes_remaining: int = Field(ge=0)
+    excluded_snapshot_envelopes: int = Field(ge=0)
+    excluded_gap_envelopes: int = Field(ge=0)
+    quarantined_envelopes: int = Field(ge=0)
+    submitted_controlled_journeys: int = Field(ge=0)
+    unique_controlled_journeys: int = Field(ge=0)
+    qualifying_controlled_journeys: int = Field(ge=0)
+    controlled_journeys_required: Literal[3] = 3
+    controlled_journeys_remaining: int = Field(ge=0)
+    controlled_journeys: list[Phase2JourneyEvaluation]
+    evidence_requirement_met: bool
+    threshold_path: Literal["events", "journeys", "both", "none"]
+    ready_to_advance: bool
+    blockers: list[str]
+    location_consent_default_off: Literal[True] = True
+    snapshots_count_as_events: Literal[False] = False
+    gaps_count_as_events: Literal[False] = False
+    journeys_are_automatically_inferred: Literal[False] = False
+
+    _evaluated = field_validator("evaluated_at")(_aware)
+
+
 class PrincipalBindingCreate(StrictModel):
     ha_user_id: str = Field(min_length=1, max_length=64)
     person_id: uuid.UUID

@@ -1,0 +1,11 @@
+{
+  "name": "home-agent-origin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "node --check server.mjs && node --check src/origin.mjs",
+    "test": "node --test test/*.test.mjs"
+  }
+}

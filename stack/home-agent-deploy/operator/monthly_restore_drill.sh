@@ -41,4 +41,3 @@ esac
 
 echo "monthly restore drill selected completed backup $label"
 exec bash "$operator" "$env_file" "$label"
-

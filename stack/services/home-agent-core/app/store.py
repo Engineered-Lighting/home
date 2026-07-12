@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Mapping
 
 from psycopg.types.range import Range
-from sqlalchemy import and_, func, literal, or_, select, update
+from sqlalchemy import and_, delete, func, literal, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 
@@ -35,6 +35,7 @@ from .memory import (
     propose_parents_mountain_house,
     render_travel_arrival,
 )
+from .maintenance import WorkerMaintenanceInspector
 from .resources import inspect_disk_budget
 from .models import (
     ConfirmMemoryRequest,
@@ -49,6 +50,7 @@ from .models import (
     ForgetConfirm,
     ForgetPreview,
     IngestBatch,
+    IngestEnvelope,
     IngestResult,
     EdgePrivacyPolicyView,
     InitiativeClaim,
@@ -105,6 +107,23 @@ BINDING_REQUEST_TTL = timedelta(hours=24)
 BINDING_PROPOSAL_TTL = timedelta(minutes=15)
 BINDING_REVIEW_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 BINDING_PROPOSAL_CONTRACT = "principal-binding-proposal-v1"
+OBSERVATION_ROOT_NAMESPACE = uuid.UUID("23603892-6ac5-4a54-a046-ef4edc0201ea")
+
+
+def stable_observation_root(envelope: IngestEnvelope) -> uuid.UUID:
+    """Derive a replay-stable root when an old Edge omitted its own root ID."""
+
+    return uuid.uuid5(
+        OBSERVATION_ROOT_NAMESPACE,
+        canonical_json(
+            {
+                "edge_instance_id": envelope.edge_instance_id,
+                "source_name": envelope.source_name,
+                "epoch": str(envelope.epoch),
+                "sequence": envelope.sequence,
+            }
+        ).decode("utf-8"),
+    )
 
 
 def binding_person_snapshot_digest(person: Mapping[str, Any]) -> str:
@@ -184,6 +203,8 @@ class CoreStore:
         self.database = database
         self.spool = spool
         self.settings = settings
+        self.maintenance_inspector = WorkerMaintenanceInspector(database)
+        self.maintenance_observed_after: datetime | None = None
         knowledge_key = settings.decoded_knowledge_key()
         self.knowledge_cipher = FieldCipher(
             knowledge_key,
@@ -240,6 +261,9 @@ class CoreStore:
             ),
         )
         async with self.database.transaction() as connection:
+            runtime_now = (
+                await connection.execute(select(func.clock_timestamp()))
+            ).scalar_one()
             for envelope in ordered:
                 stream_key = f"{envelope.edge_instance_id}:{envelope.source_name}"
                 stream_id = await self._ensure_stream(connection, envelope)
@@ -271,7 +295,9 @@ class CoreStore:
                     )
                     continue
 
-                root_id = envelope.root_observation_id or uuid7()
+                root_id = envelope.root_observation_id or stable_observation_root(
+                    envelope
+                )
                 family_id = envelope.evidence_family_id or root_id
                 (
                     spool_allowed,
@@ -281,27 +307,22 @@ class CoreStore:
                     connection, envelope, precise_location=precise_location
                 )
                 if spool_allowed:
-                    spool_result = self.spool.append(
-                        stream_key=stream_key,
-                        epoch=str(envelope.epoch),
-                        sequence=envelope.sequence,
-                        observed_at=envelope.source_observed_at,
-                        received_at=envelope.edge_received_at,
-                        payload=envelope.payload,
-                        metadata={
-                            "entity_id": envelope.entity_id,
-                            "root_observation_id": str(root_id),
-                            "coverage": envelope.coverage,
-                            **{
-                                key: value
-                                for key, value in envelope.metadata.items()
-                                if key in SAFE_METADATA_KEYS
-                            },
-                        },
-                        user_scope_id=envelope.ha_context.user_id,
+                    # Reinspect before every raw append. A large (max-500)
+                    # batch must not reuse one heartbeat beyond its liveness
+                    # window if the worker dies during per-envelope work.
+                    maintenance = (
+                        await self.maintenance_inspector.inspect_in_transaction(
+                            connection,
+                            observed_after=self.maintenance_observed_after,
+                        )
                     )
-                else:
-                    spool_result = SpoolAppendResult(inserted=False, evicted=())
+                    if not maintenance.ready:
+                        spool_allowed = False
+                        raw_payload_status = (
+                            "suppressed_retention_worker_unavailable"
+                        )
+                        redact_identity = redact_identity or precise_location
+                spool_result = SpoolAppendResult(inserted=False, evicted=())
                 stored_root_id = uuid7() if redact_identity else root_id
                 stored_family_id = stored_root_id if redact_identity else family_id
                 durable_metadata = {
@@ -382,13 +403,101 @@ class CoreStore:
                     else:
                         duplicates += 1
                 else:
-                    accepted += 1
-                    if (
-                        spool_allowed
-                        and envelope.event_type == "location_fix"
-                        and self._optional_work_allowed()
-                    ):
-                        project_location = True
+                    # A durable duplicate or sequence conflict must never gain
+                    # raw retention on replay. Only a newly inserted header may
+                    # populate the short-lived spool.
+                    if spool_allowed:
+                        spool_result = self.spool.append(
+                            stream_key=stream_key,
+                            epoch=str(envelope.epoch),
+                            sequence=envelope.sequence,
+                            observed_at=envelope.source_observed_at,
+                            received_at=envelope.edge_received_at,
+                            payload=envelope.payload,
+                            metadata={
+                                "entity_id": envelope.entity_id,
+                                "root_observation_id": str(root_id),
+                                "coverage": envelope.coverage,
+                                **{
+                                    key: value
+                                    for key, value in envelope.metadata.items()
+                                    if key in SAFE_METADATA_KEYS
+                                },
+                            },
+                            user_scope_id=envelope.ha_context.user_id,
+                            now=runtime_now,
+                        )
+                    if spool_result.conflict:
+                        # A raw row can outlive a rolled-back PostgreSQL
+                        # transaction. Never bind a changed replay to that
+                        # orphan: remove the new header and quarantine the
+                        # sequence after securely deleting the orphaned row.
+                        if not self.spool.discard(
+                            stream_key, str(envelope.epoch), envelope.sequence
+                        ):
+                            raise RuntimeError(
+                                "conflicting runtime spool row disappeared"
+                            )
+                        await connection.execute(
+                            delete(schema.envelopes).where(
+                                schema.envelopes.c.envelope_id == inserted
+                            )
+                        )
+                        await connection.execute(
+                            insert(schema.quarantine)
+                            .values(
+                                quarantine_id=uuid7(),
+                                edge_instance_id=envelope.edge_instance_id,
+                                source_name=envelope.source_name,
+                                epoch=envelope.epoch,
+                                sequence=envelope.sequence,
+                                payload_sha256=payload_hash,
+                                reason_code="runtime_spool_payload_conflict",
+                                details={"event_type": envelope.event_type},
+                            )
+                            .on_conflict_do_nothing(
+                                constraint="quarantine_sequence"
+                            )
+                        )
+                        quarantined_count += 1
+                        gap_id = uuid7()
+                        gap_start = min(
+                            envelope.source_observed_at,
+                            envelope.edge_received_at,
+                        )
+                        gap_end = max(
+                            envelope.source_observed_at,
+                            envelope.edge_received_at,
+                        )
+                        if gap_end <= gap_start:
+                            gap_end = gap_start + timedelta(microseconds=1)
+                        await connection.execute(
+                            insert(schema.coverage_intervals).values(
+                                coverage_id=gap_id,
+                                stream_id=stream_id,
+                                entity_id=(
+                                    None if redact_identity else envelope.entity_id
+                                ),
+                                interval=Range(gap_start, gap_end, bounds="[)"),
+                                status="gap",
+                                reason_code="runtime_spool_payload_conflict",
+                                source_sequence_start=envelope.sequence,
+                                source_sequence_end=envelope.sequence,
+                            )
+                        )
+                        opened_gaps.append(str(gap_id))
+                        inserted = None
+                        spool_result = SpoolAppendResult(
+                            inserted=False, evicted=()
+                        )
+                    else:
+                        accepted += 1
+                        if (
+                            spool_allowed
+                            and envelope.event_type == "location_fix"
+                            and self._optional_work_allowed()
+                        ):
+                            project_location = True
 
                 # Edge retention/overflow replaces the original observation
                 # with a sequence-preserving coverage_gap envelope. Its
@@ -421,6 +530,31 @@ class CoreStore:
                             reason_code=reason_code,
                             source_sequence_start=sequence_start,
                             source_sequence_end=sequence_end,
+                        )
+                    )
+                    opened_gaps.append(str(gap_id))
+
+                if (
+                    inserted is not None
+                    and envelope.event_type != "coverage_gap"
+                    and raw_payload_status
+                    == "suppressed_retention_worker_unavailable"
+                ):
+                    start = min(envelope.source_observed_at, envelope.edge_received_at)
+                    end = max(envelope.source_observed_at, envelope.edge_received_at)
+                    if end <= start:
+                        end = start + timedelta(microseconds=1)
+                    gap_id = uuid7()
+                    await connection.execute(
+                        insert(schema.coverage_intervals).values(
+                            coverage_id=gap_id,
+                            stream_id=stream_id,
+                            entity_id=(None if redact_identity else envelope.entity_id),
+                            interval=Range(start, end, bounds="[)"),
+                            status="gap",
+                            reason_code="retention_worker_unavailable",
+                            source_sequence_start=envelope.sequence,
+                            source_sequence_end=envelope.sequence,
                         )
                     )
                     opened_gaps.append(str(gap_id))
@@ -460,7 +594,7 @@ class CoreStore:
                     sequence,
                     marker_id,
                 ) in spool_result.evicted:
-                    now = datetime.now(UTC)
+                    now = runtime_now
                     gap_id = uuid.UUID(marker_id)
                     try:
                         edge_instance_id, source_name = evicted_stream.rsplit(":", 1)
@@ -3038,6 +3172,7 @@ class CoreStore:
                             purpose="ha_user_person_binding.confirm",
                             proposal_digest=proposal["proposal_digest"],
                             client_nonce=value.confirmation_nonce,
+                            operation_time=now,
                         )
                     )
                     binding_id = uuid7()
@@ -5998,6 +6133,7 @@ class CoreStore:
         purpose: str,
         proposal_digest: str,
         client_nonce: uuid.UUID,
+        operation_time: datetime | None = None,
     ) -> uuid.UUID:
         """Mint and consume server authority for one authenticated gesture.
 
@@ -6006,7 +6142,10 @@ class CoreStore:
         """
 
         artifact_id = uuid7()
-        now = datetime.now(UTC)
+        now = operation_time or datetime.now(UTC)
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("confirmation operation time must be timezone-aware")
+        now = now.astimezone(UTC)
         nonce_digest = hashlib.sha256(client_nonce.bytes).hexdigest()
         existing = (
             await connection.execute(

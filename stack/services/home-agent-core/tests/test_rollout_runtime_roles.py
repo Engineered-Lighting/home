@@ -56,10 +56,44 @@ async def seed_ready_evidence(owner: Database) -> None:
     stream_id = uuid.uuid4()
     epoch = uuid.uuid4()
     async with owner.transaction() as connection:
+        database_started_at, maintenance_time = (
+            await connection.execute(
+                text("SELECT pg_postmaster_start_time(), clock_timestamp()")
+            )
+        ).one()
         await connection.execute(
             text(
                 "TRUNCATE TABLE operations.rollout_authorizations, "
                 "ingest.envelopes, ingest.source_streams CASCADE"
+            )
+        )
+        await connection.execute(delete(schema.worker_maintenance_state))
+        await connection.execute(
+            insert(schema.worker_maintenance_state).values(
+                state_key="durable_worker",
+                worker_instance_id=uuid.uuid4(),
+                database_started_at=database_started_at,
+                kernel_version="worker-maintenance-cycle-v1",
+                state="running",
+                started_at=maintenance_time,
+                heartbeat_at=maintenance_time,
+                heartbeat_sequence=1,
+                maintenance_attempted_at=maintenance_time,
+                maintenance_succeeded_at=maintenance_time,
+                success_sequence=1,
+                consecutive_failures=0,
+                last_error_code=None,
+                stopped_at=None,
+                spool_rows_pruned=0,
+                binding_retention_receipt={
+                    "proposals_expired": 0,
+                    "staged_requests_expired": 0,
+                    "pending_requests_expired": 0,
+                    "requests_expired": 0,
+                    "proposals_purged": 0,
+                    "requests_purged": 0,
+                },
+                updated_at=maintenance_time,
             )
         )
         await connection.execute(
@@ -117,6 +151,11 @@ def receipt_values(*, from_mode: str, to_mode: str) -> dict:
         "policy_version": "home-agent-mvp-v1",
         "policy_digest": POLICY_DIGEST,
         "input_digest": "d" * 64,
+        "worker_instance_id": uuid.uuid4(),
+        "worker_success_sequence": 1,
+        "worker_kernel_version": "worker-maintenance-cycle-v1",
+        "worker_maintenance_succeeded_at": now,
+        "worker_proof_digest": "e" * 64,
         "readiness_evaluated_at": now,
         "authorized_at": now,
     }
@@ -262,6 +301,7 @@ async def test_one_shot_role_is_the_only_writer_and_every_gate_reads_receipt() -
                         "ingest.envelopes, ingest.source_streams CASCADE"
                     )
                 )
+                await connection.execute(delete(schema.worker_maintenance_state))
         finally:
             for database in databases:
                 await database.close()

@@ -1,18 +1,29 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
+import os
+import signal
 from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from starlette.routing import Match
 
 from . import __version__
 from .api import ingest_router, semantic_router
+from .auth import (
+    require_bootstrap,
+    require_native_service_identity,
+    require_operator_bearer,
+    require_service_identity,
+)
 from .config import Settings
 from .db import Database
 from .errors import DomainError
 from .ledger import EncryptedErasureLedger
+from .maintenance import WorkerMaintenanceInspector
 from .models import HealthView
 from .restore import RestoreQuarantineGate, outbox_health
 from .resources import (
@@ -24,6 +35,106 @@ from .rollout import RolloutAuthorizationGate
 from .spool import DisabledRuntimeSpool, EncryptedRuntimeSpool
 from .store import CoreStore
 from .worker import DurableWorker
+
+
+LOGGER = logging.getLogger("home_agent.main")
+
+
+def terminate_on_unexpected_worker_exit(
+    task: asyncio.Task,
+    stop: asyncio.Event,
+    *,
+    terminate=None,
+) -> None:
+    """Make Docker's restart policy observe a dead maintenance loop."""
+
+    if stop.is_set():
+        return
+    error_class = "None"
+    with suppress(BaseException):
+        error = task.exception()
+        if error is not None:
+            error_class = type(error).__name__
+    LOGGER.critical(
+        "worker task exited unexpectedly "
+        "code=worker_task_exited error_class=%s",
+        error_class,
+    )
+    (terminate or os.kill)(os.getpid(), signal.SIGTERM)
+
+
+def maintenance_route_auth_contract(request: Request) -> tuple[str, bool] | None:
+    """Resolve the matched route's declared authentication dependency graph."""
+
+    for route in request.app.routes:
+        match, _child_scope = route.matches(request.scope)
+        if match is not Match.FULL:
+            continue
+        dependant = getattr(route, "dependant", None)
+        if dependant is None:
+            return None
+        calls = set()
+        pending = [dependant]
+        while pending:
+            dependency = pending.pop()
+            call = getattr(dependency, "call", None)
+            if call is not None:
+                calls.add(call)
+            pending.extend(getattr(dependency, "dependencies", ()))
+        requires_bootstrap = require_bootstrap in calls
+        if require_operator_bearer in calls:
+            return ("operator", requires_bootstrap)
+        if require_native_service_identity in calls:
+            return ("native_service", requires_bootstrap)
+        if require_service_identity in calls:
+            return ("service", requires_bootstrap)
+        return None
+    return None
+
+
+def trusted_maintenance_gated_caller(request: Request, settings: Settings) -> bool:
+    """Recognize a credential only for the matched route's declared audience."""
+
+    contract = maintenance_route_auth_contract(request)
+    if contract is None:
+        return False
+    audience, requires_bootstrap = contract
+
+    authorization = request.headers.get("authorization", "")
+    if not authorization.startswith("Bearer "):
+        return False
+    supplied = authorization.removeprefix("Bearer ").strip()
+    if audience in {"service", "native_service"}:
+        if settings.service_token is None or not hmac.compare_digest(
+            supplied, settings.service_token.get_secret_value()
+        ):
+            return False
+        ha_user_id = request.headers.get("x-authenticated-ha-user", "")
+        if not ha_user_id or len(ha_user_id) > 64:
+            return False
+        if requires_bootstrap:
+            if settings.bootstrap_token is None or not hmac.compare_digest(
+                request.headers.get("x-home-agent-bootstrap", ""),
+                settings.bootstrap_token.get_secret_value(),
+            ):
+                return False
+        if audience == "native_service":
+            if not hmac.compare_digest(
+                request.headers.get("x-home-agent-channel", ""),
+                "private_tauri",
+            ):
+                return False
+        return True
+    if audience != "operator" or settings.operator_token is None:
+        return False
+    if not hmac.compare_digest(supplied, settings.operator_token.get_secret_value()):
+        return False
+    if not requires_bootstrap:
+        return True
+    return settings.bootstrap_token is not None and hmac.compare_digest(
+        request.headers.get("x-home-agent-bootstrap", ""),
+        settings.bootstrap_token.get_secret_value(),
+    )
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -87,6 +198,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         cache_seconds=settings.restore_gate_cache_seconds,
     )
     rollout_gate = RolloutAuthorizationGate(database, settings)
+    maintenance_inspector = WorkerMaintenanceInspector(database)
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
@@ -128,8 +240,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise RuntimeError(
                 "rollout authorization rejected: " + rollout_status.code
             )
+        application.state.maintenance_observed_after = await database.current_time()
+        if store is not None:
+            store.maintenance_observed_after = (
+                application.state.maintenance_observed_after
+            )
+        if operator_store is not None:
+            operator_store.maintenance_observed_after = (
+                application.state.maintenance_observed_after
+            )
         if worker is not None:
+            restore_status = await application.state.restore_gate.status(force=True)
+            if not restore_status.current:
+                try:
+                    spool.close()
+                finally:
+                    if operator_database is not None:
+                        await operator_database.close()
+                    await database.close()
+                raise RuntimeError(
+                    "worker restore quarantine rejected: " + restore_status.code
+                )
             task = asyncio.create_task(worker.run(stop))
+            task.add_done_callback(
+                lambda completed: terminate_on_unexpected_worker_exit(
+                    completed, stop
+                )
+            )
         try:
             yield
         finally:
@@ -160,6 +297,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.ledger = ledger
     application.state.restore_gate = restore_gate
     application.state.rollout_gate = rollout_gate
+    application.state.maintenance_inspector = maintenance_inspector
+    application.state.maintenance_observed_after = None
 
     @application.middleware("http")
     async def resource_budget_guard(request: Request, call_next):
@@ -213,6 +352,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
         return await call_next(request)
 
+    @application.middleware("http")
+    async def worker_maintenance_guard(request: Request, call_next):
+        """Fail closed for trusted semantic writes after record-only rollout.
+
+        Ingest remains available because the store can durably acknowledge a
+        redacted header while suppressing raw-spool persistence.  Privacy
+        cancellation, opt-out, forgetting, and erasure writes also remain
+        available during worker degradation.
+        """
+
+        gated_write = (
+            settings.rollout_mode in {"shadow", "canary"}
+            and settings.role in {"api", "all"}
+            and request.method not in {"GET", "HEAD", "OPTIONS"}
+            and request.url.path != "/v1/ingest/envelopes"
+            and not is_privacy_essential_write(request.url.path)
+        )
+        # Preserve endpoint authentication semantics: an invalid or missing
+        # bearer must reach the normal dependency and receive its 401/403.
+        if gated_write and trusted_maintenance_gated_caller(request, settings):
+            maintenance = await request.app.state.maintenance_inspector.inspect(
+                observed_after=request.app.state.maintenance_observed_after,
+            )
+            if not maintenance.ready:
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": {
+                            "code": "worker_maintenance_unavailable",
+                            "message": (
+                                "semantic writes require a current retention worker"
+                            ),
+                            "details": maintenance.as_public_dict(),
+                        }
+                    },
+                )
+        return await call_next(request)
+
     @application.exception_handler(DomainError)
     async def domain_error_handler(_request: Request, exc: DomainError) -> JSONResponse:
         headers = {"WWW-Authenticate": "Bearer"} if exc.status_code == 401 else None
@@ -239,6 +416,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             operator_revision = settings.readiness_migration
         gate_status = await application.state.restore_gate.status()
         rollout_status = await application.state.rollout_gate.status()
+        maintenance_status = await application.state.maintenance_inspector.inspect(
+            expected_instance_id=(
+                worker.maintenance_instance_id if worker is not None else None
+            ),
+            observed_after=application.state.maintenance_observed_after,
+        )
         outbox_status = await outbox_health(database)
         resources = await resource_budget_snapshot(
             database,
@@ -256,6 +439,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 and migration_ok
                 and gate_status.current
                 and rollout_status.authorized
+                and maintenance_status.ready
                 and outbox_status.code == "current"
                 and resources["status"] == "ok"
                 else "degraded"
@@ -271,6 +455,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "failed_erasure": outbox_status.failed_erasure,
                 "unsupported": outbox_status.unsupported,
             },
+            worker_maintenance=maintenance_status.as_public_dict(),
             spool=spool.stats(),
             resources=resources,
             policy_version=settings.policy_version,
@@ -303,11 +488,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             operator_revision = settings.readiness_migration
         gate_status = await application.state.restore_gate.status(force=True)
         rollout_status = await application.state.rollout_gate.status(force=True)
+        maintenance_status = await application.state.maintenance_inspector.inspect(
+            expected_instance_id=(
+                worker.maintenance_instance_id if worker is not None else None
+            ),
+            observed_after=application.state.maintenance_observed_after,
+        )
         outbox_status = await outbox_health(database)
         resources = await resource_budget_snapshot(
             database,
             monitor_path=settings.storage_monitor_path,
             include_ingest_metrics=settings.role in {"api", "ingest", "all"},
+        )
+        maintenance_required = (
+            settings.role in {"worker", "all"}
+            or settings.rollout_mode in {"shadow", "canary"}
         )
         ready_state = (
             database_ok
@@ -315,6 +510,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             and operator_revision == settings.readiness_migration
             and gate_status.current
             and rollout_status.authorized
+            and (maintenance_status.ready or not maintenance_required)
             and outbox_status.ready
             and resources["ready"]
         )
@@ -327,6 +523,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "expected_migration": settings.readiness_migration,
                 "restore_gate": gate_status.code,
                 "rollout_authorization": rollout_status.code,
+                "worker_maintenance": maintenance_status.as_public_dict(),
                 "ledger_epoch": gate_status.ledger_epoch,
                 "database_epoch": gate_status.database_epoch,
                 "outbox": outbox_status.code,

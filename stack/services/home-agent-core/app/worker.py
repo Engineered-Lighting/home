@@ -11,6 +11,7 @@ from typing import Any
 from pydantic import ValidationError
 from sqlalchemy import or_, select, update, func
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import DBAPIError
 
 from . import schema
 from .crypto import canonical_json
@@ -20,6 +21,13 @@ from .ledger import (
     ErasureLedgerRecord,
     LedgerEntry,
     LedgerHead,
+    LedgerIntegrityError,
+)
+from .maintenance import (
+    WORKER_MAINTENANCE_FAILURE_CODES,
+    WorkerMaintenanceInspector,
+    WorkerMaintenanceStatus,
+    validate_binding_retention_receipt,
 )
 from .spool import DisabledRuntimeSpool, EncryptedRuntimeSpool
 
@@ -32,6 +40,29 @@ AUDITED_NO_EXTERNAL_EFFECT_TOPICS = (
     "memory.descriptor.correction",
     "memory.descriptor.retraction",
 )
+WORKER_HEARTBEAT_INTERVAL_SECONDS = 10.0
+WORKER_MAINTENANCE_INTERVAL_SECONDS = 60.0
+WORKER_RETRY_SECONDS = 5.0
+WORKER_FAILURE_CODES = WORKER_MAINTENANCE_FAILURE_CODES
+
+
+class WorkerMaintenanceLeaseLost(RuntimeError):
+    """The PostgreSQL worker-instance fence no longer belongs to this process."""
+
+
+class WorkerMaintenanceFatal(RuntimeError):
+    """A non-retryable maintenance integrity or contract failure."""
+
+
+class WorkerMaintenanceRetryable(RuntimeError):
+    """A retryable failure carrying one fixed, content-free operation code."""
+
+    def __init__(self, failure_code: str, cause: Exception) -> None:
+        if failure_code not in WORKER_FAILURE_CODES:
+            raise ValueError("worker maintenance failure code is not allowlisted")
+        super().__init__(failure_code)
+        self.failure_code = failure_code
+        self.__cause__ = cause
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,49 +89,309 @@ class DurableWorker:
         self.spool = spool
         self.claim_lease = timedelta(seconds=claim_lease_seconds)
         self.poll_seconds = poll_seconds
+        self._maintenance_instance_id = uuid.uuid4()
+        self._maintenance_inspector = WorkerMaintenanceInspector(database)
+        self._maintenance_registered = False
+
+    @property
+    def maintenance_instance_id(self) -> uuid.UUID:
+        """Internal instance fence for Core lifecycle integration; never serialize it."""
+
+        return self._maintenance_instance_id
+
+    async def inspect_local_maintenance(self) -> WorkerMaintenanceStatus:
+        return await self._maintenance_inspector.inspect(
+            expected_instance_id=self._maintenance_instance_id
+        )
+
+    async def public_maintenance_health(self) -> dict[str, str]:
+        return (await self.inspect_local_maintenance()).as_public_dict()
 
     async def run(self, stop: asyncio.Event) -> None:
-        next_prune = datetime.now(UTC)
-        next_binding_expiry = next_prune
-        while not stop.is_set():
-            now = datetime.now(UTC)
-            if now >= next_prune:
-                await asyncio.to_thread(self.spool.prune)
-                next_prune = now + timedelta(minutes=1)
-            if now >= next_binding_expiry:
+        loop = asyncio.get_running_loop()
+        next_registration = loop.time()
+        next_maintenance = loop.time()
+        next_heartbeat = loop.time()
+        try:
+            while not stop.is_set():
+                monotonic_now = loop.time()
+                if not self._maintenance_registered:
+                    if monotonic_now < next_registration:
+                        await self._wait_for_stop(
+                            stop, min(self.poll_seconds, next_registration - monotonic_now)
+                        )
+                        continue
+                    try:
+                        await self._register_maintenance()
+                    except WorkerMaintenanceLeaseLost:
+                        raise
+                    except MemoryError:
+                        raise
+                    except Exception as exc:
+                        self._log_worker_failure(
+                            "worker_registration_failed", exc
+                        )
+                        next_registration = monotonic_now + WORKER_RETRY_SECONDS
+                        continue
+                    next_maintenance = monotonic_now
+                    next_heartbeat = monotonic_now
+
+                if monotonic_now >= next_maintenance:
+                    try:
+                        await self._run_maintenance_cycle()
+                    except (WorkerMaintenanceLeaseLost, WorkerMaintenanceFatal):
+                        raise
+                    except MemoryError:
+                        raise
+                    except WorkerMaintenanceRetryable as exc:
+                        await self._record_failure_best_effort(
+                            exc.failure_code,
+                            exc.__cause__ or exc,
+                        )
+                        next_maintenance = monotonic_now + WORKER_RETRY_SECONDS
+                    except Exception as exc:
+                        await self._record_failure_best_effort(
+                            "binding_retention_failed", exc
+                        )
+                        next_maintenance = monotonic_now + WORKER_RETRY_SECONDS
+                    else:
+                        next_maintenance = (
+                            monotonic_now + WORKER_MAINTENANCE_INTERVAL_SECONDS
+                        )
+
+                monotonic_now = loop.time()
+                if monotonic_now >= next_heartbeat:
+                    try:
+                        await self._heartbeat_maintenance()
+                    except WorkerMaintenanceLeaseLost:
+                        raise
+                    except MemoryError:
+                        raise
+                    except Exception as exc:
+                        self._log_worker_failure("worker_heartbeat_failed", exc)
+                        next_heartbeat = monotonic_now + WORKER_RETRY_SECONDS
+                    else:
+                        next_heartbeat = (
+                            monotonic_now + WORKER_HEARTBEAT_INTERVAL_SECONDS
+                        )
+
                 try:
-                    await self._expire_principal_binding_work(now)
+                    processed = await self.run_once()
+                except (WorkerMaintenanceLeaseLost, WorkerMaintenanceFatal):
+                    raise
+                except MemoryError:
+                    raise
                 except Exception as exc:
-                    LOGGER.error(
-                        "binding retention failed "
-                        "code=principal_binding_retention_failed error_class=%s",
-                        type(exc).__name__,
+                    await self._record_failure_best_effort("worker_loop_failed", exc)
+                    processed = False
+
+                monotonic_now = loop.time()
+                if processed:
+                    continue
+                next_due = min(next_maintenance, next_heartbeat)
+                await self._wait_for_stop(
+                    stop,
+                    min(
+                        self.poll_seconds,
+                        max(0.0, next_due - monotonic_now),
+                    ),
+                )
+        finally:
+            if self._maintenance_registered:
+                await self._stop_maintenance()
+
+    async def _run_maintenance_cycle(self) -> dict[str, int]:
+        now = await self._database_now()
+        try:
+            if isinstance(self.spool, DisabledRuntimeSpool):
+                spool_rows_pruned = await asyncio.to_thread(self.spool.prune)
+            else:
+                spool_rows_pruned = await asyncio.to_thread(
+                    self.spool.prune, now=now
+                )
+        except MemoryError:
+            raise
+        except Exception as exc:
+            raise WorkerMaintenanceRetryable(
+                "runtime_spool_prune_failed", exc
+            ) from exc
+        if (
+            isinstance(spool_rows_pruned, bool)
+            or not isinstance(spool_rows_pruned, int)
+            or spool_rows_pruned < 0
+        ):
+            error = WorkerMaintenanceFatal("runtime spool prune receipt is invalid")
+            await self._record_failure_best_effort(
+                "runtime_spool_prune_failed", error
+            )
+            raise error
+        try:
+            await asyncio.to_thread(self.ledger.head)
+        except LedgerIntegrityError as exc:
+            await self._record_failure_best_effort("worker_loop_failed", exc)
+            raise WorkerMaintenanceFatal(
+                "erasure ledger integrity check failed"
+            ) from exc
+        except MemoryError:
+            raise
+        except Exception as exc:
+            raise WorkerMaintenanceRetryable("worker_loop_failed", exc) from exc
+
+        try:
+            async with self.database.transaction() as connection:
+                receipt_value = (
+                    await connection.execute(
+                        select(
+                            func.operations.run_worker_maintenance_cycle(
+                                self._maintenance_instance_id,
+                                spool_rows_pruned,
+                            )
+                        )
                     )
-                next_binding_expiry = now + timedelta(minutes=1)
-            processed = await self.run_once(now=now)
-            if processed:
-                continue
-            try:
-                await asyncio.wait_for(stop.wait(), timeout=self.poll_seconds)
-            except TimeoutError:
-                continue
+                ).scalar_one()
+        except DBAPIError as exc:
+            if getattr(exc.orig, "sqlstate", None) == "55000":
+                raise WorkerMaintenanceLeaseLost(
+                    "worker maintenance instance fence was lost"
+                ) from exc
+            raise WorkerMaintenanceRetryable(
+                "binding_retention_failed", exc
+            ) from exc
+        try:
+            return validate_binding_retention_receipt(receipt_value)
+        except ValueError as exc:
+            await self._record_failure_best_effort("binding_retention_failed", exc)
+            raise WorkerMaintenanceFatal(
+                "worker maintenance kernel receipt is invalid"
+            ) from exc
 
-    async def _expire_principal_binding_work(self, now: datetime) -> None:
-        """Run the database-owned binding retention kernel.
-
-        Keeping this in the durable worker ensures abandoned requests and
-        proposals expire even when neither the subject nor an operator returns.
-        The SECURITY DEFINER function is deliberately executable by the worker
-        role but not by the browser-facing API role.
-        """
-
+    async def _database_now(self) -> datetime:
         async with self.database.transaction() as connection:
-            await connection.execute(
-                select(func.privacy.expire_principal_binding_work(now))
+            value = (
+                await connection.execute(select(func.clock_timestamp()))
+            ).scalar_one()
+        if not isinstance(value, datetime) or value.tzinfo is None:
+            raise WorkerMaintenanceFatal("database clock result is invalid")
+        return value.astimezone(UTC)
+
+    async def _register_maintenance(self) -> None:
+        async with self.database.transaction() as connection:
+            registered = (
+                await connection.execute(
+                    select(
+                        func.operations.register_worker_maintenance(
+                            self._maintenance_instance_id
+                        )
+                    )
+                )
+            ).scalar_one()
+        if registered is not True:
+            raise WorkerMaintenanceLeaseLost(
+                "worker maintenance instance registration was rejected"
+            )
+        self._maintenance_registered = True
+
+    async def _heartbeat_maintenance(self) -> None:
+        async with self.database.transaction() as connection:
+            owned = (
+                await connection.execute(
+                    select(
+                        func.operations.heartbeat_worker_maintenance(
+                            self._maintenance_instance_id
+                        )
+                    )
+                )
+            ).scalar_one()
+        if owned is not True:
+            self._maintenance_registered = False
+            raise WorkerMaintenanceLeaseLost(
+                "worker maintenance heartbeat fence was lost"
             )
 
+    async def _fail_maintenance(self, failure_code: str) -> None:
+        if failure_code not in WORKER_FAILURE_CODES:
+            raise WorkerMaintenanceFatal(
+                "worker maintenance failure code is not allowlisted"
+            )
+        async with self.database.transaction() as connection:
+            owned = (
+                await connection.execute(
+                    select(
+                        func.operations.fail_worker_maintenance(
+                            self._maintenance_instance_id,
+                            failure_code,
+                        )
+                    )
+                )
+            ).scalar_one()
+        if owned is not True:
+            self._maintenance_registered = False
+            raise WorkerMaintenanceLeaseLost(
+                "worker maintenance failure fence was lost"
+            )
+
+    async def _stop_maintenance(self) -> None:
+        try:
+            async with self.database.transaction() as connection:
+                owned = (
+                    await connection.execute(
+                        select(
+                            func.operations.stop_worker_maintenance(
+                                self._maintenance_instance_id
+                            )
+                        )
+                    )
+                ).scalar_one()
+        finally:
+            self._maintenance_registered = False
+        if owned is not True:
+            raise WorkerMaintenanceLeaseLost(
+                "worker maintenance stop fence was lost"
+            )
+
+    async def _record_failure_best_effort(
+        self, failure_code: str, exc: Exception
+    ) -> None:
+        if failure_code not in WORKER_FAILURE_CODES:
+            raise WorkerMaintenanceFatal(
+                "worker maintenance failure code is not allowlisted"
+            )
+        try:
+            await self._fail_maintenance(failure_code)
+        except WorkerMaintenanceLeaseLost:
+            raise
+        except MemoryError:
+            raise
+        except Exception as record_error:
+            self._log_worker_failure(
+                "worker_failure_receipt_unavailable", record_error
+            )
+        self._log_worker_failure(failure_code, exc)
+
+    @staticmethod
+    def _log_worker_failure(code: str, exc: Exception) -> None:
+        LOGGER.error(
+            "durable worker degraded code=%s error_class=%s",
+            code,
+            type(exc).__name__,
+        )
+
+    @staticmethod
+    async def _wait_for_stop(stop: asyncio.Event, timeout: float) -> None:
+        if timeout <= 0:
+            await asyncio.sleep(0)
+            return
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=timeout)
+        except TimeoutError:
+            return
+
     async def run_once(self, *, now: datetime | None = None) -> bool:
-        now = (now or datetime.now(UTC)).astimezone(UTC)
+        now = (
+            now.astimezone(UTC)
+            if now is not None
+            else await self._database_now()
+        )
         claim = await self._claim_one(now)
         if claim is None:
             auto_expiry_claim = await self._claim_topic(AUTO_EXPIRY_OUTBOX_TOPIC, now)

@@ -136,4 +136,7 @@ def is_privacy_essential_write(path: str) -> bool:
         path.startswith("/v1/erasure-requests/")
         or path.startswith("/v1/preferences/")
         or (path.startswith("/v1/people/") and path.endswith("/privacy-directives"))
+        or path == "/v1/principal-binding-request/cancel"
+        or path == "/v1/forget-preview"
+        or (path.startswith("/v1/facts/") and path.endswith("/forget-preview"))
     )

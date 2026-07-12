@@ -21,6 +21,11 @@ from .crypto import sha256_json
 from .db import Database
 from .errors import CapabilityDisabledError, ConflictError
 from .ids import uuid7
+from .maintenance import (
+    WORKER_MAINTENANCE_KERNEL_VERSION,
+    WorkerMaintenanceInspector,
+    worker_maintenance_proof_digest,
+)
 from .models import (
     RolloutAuthorizationRequest,
     RolloutAuthorizationView,
@@ -99,6 +104,37 @@ def evaluate_rollout_receipt(
         return RolloutAuthorizationStatus(False, "authorization_policy_mismatch")
     if not hmac.compare_digest(str(receipt.get("input_digest", "")), input_digest):
         return RolloutAuthorizationStatus(False, "authorization_evidence_stale")
+    try:
+        worker_instance_id = receipt.get("worker_instance_id")
+        if not isinstance(worker_instance_id, uuid.UUID):
+            worker_instance_id = uuid.UUID(str(worker_instance_id))
+        worker_success_sequence = int(receipt.get("worker_success_sequence"))
+        worker_kernel_version = str(receipt.get("worker_kernel_version", ""))
+        worker_succeeded_at = receipt.get("worker_maintenance_succeeded_at")
+        readiness_evaluated_at = receipt.get("readiness_evaluated_at")
+        if (
+            worker_instance_id.version not in {4, 7}
+            or worker_success_sequence < 1
+            or worker_kernel_version != WORKER_MAINTENANCE_KERNEL_VERSION
+            or not hasattr(worker_succeeded_at, "utcoffset")
+            or worker_succeeded_at.utcoffset() is None
+            or not hasattr(readiness_evaluated_at, "utcoffset")
+            or readiness_evaluated_at.utcoffset() is None
+            or worker_succeeded_at > readiness_evaluated_at
+        ):
+            raise ValueError("invalid worker proof shape")
+        expected_worker_digest = worker_maintenance_proof_digest(
+            worker_instance_id=worker_instance_id,
+            success_sequence=worker_success_sequence,
+            kernel_version=worker_kernel_version,
+            maintenance_succeeded_at=worker_succeeded_at,
+        )
+    except (TypeError, ValueError, AttributeError, OverflowError):
+        return RolloutAuthorizationStatus(False, "authorization_worker_proof_invalid")
+    if not hmac.compare_digest(
+        str(receipt.get("worker_proof_digest", "")), expected_worker_digest
+    ):
+        return RolloutAuthorizationStatus(False, "authorization_worker_proof_invalid")
     return RolloutAuthorizationStatus(
         True,
         "authorized",
@@ -107,7 +143,26 @@ def evaluate_rollout_receipt(
 
 
 def _view(row: Mapping[str, Any]) -> RolloutAuthorizationView:
-    return RolloutAuthorizationView(**dict(row))
+    return RolloutAuthorizationView(
+        **{
+            key: row[key]
+            for key in (
+                "authorization_id",
+                "operator_request_id",
+                "from_mode",
+                "to_mode",
+                "rule_version",
+                "policy_version",
+                "policy_digest",
+                "input_digest",
+                "worker_kernel_version",
+                "worker_success_sequence",
+                "worker_proof_digest",
+                "readiness_evaluated_at",
+                "authorized_at",
+            )
+        }
+    )
 
 
 class RolloutAuthorizationService:
@@ -181,6 +236,21 @@ class RolloutAuthorizationService:
                     "record-only evidence is not ready for shadow authorization",
                     details={"blockers": list(readiness.blockers)},
                 )
+            worker_proof = await WorkerMaintenanceInspector(
+                self.database
+            ).inspect_in_transaction(connection)
+            if (
+                not worker_proof.ready
+                or worker_proof.worker_instance_id is None
+                or worker_proof.success_sequence is None
+                or worker_proof.kernel_version is None
+                or worker_proof.maintenance_succeeded_at is None
+                or worker_proof.proof_digest is None
+            ):
+                raise CapabilityDisabledError(
+                    "worker maintenance is not current for shadow authorization",
+                    details={"worker_maintenance_status": worker_proof.code},
+                )
             if not hmac.compare_digest(
                 request.expected_input_digest,
                 readiness.input_digest,
@@ -248,6 +318,13 @@ class RolloutAuthorizationService:
                             policy_version=self.settings.policy_version,
                             policy_digest=self.settings.policy_digest,
                             input_digest=readiness.input_digest,
+                            worker_instance_id=worker_proof.worker_instance_id,
+                            worker_success_sequence=worker_proof.success_sequence,
+                            worker_kernel_version=worker_proof.kernel_version,
+                            worker_maintenance_succeeded_at=(
+                                worker_proof.maintenance_succeeded_at
+                            ),
+                            worker_proof_digest=worker_proof.proof_digest,
                             readiness_evaluated_at=readiness.evaluated_at,
                             authorized_at=evaluated_at,
                         )
@@ -295,7 +372,12 @@ class RolloutAuthorizationGate:
                 )
                 if not shadow.authorized:
                     return shadow
-                if not readiness.ready_to_advance:
+                non_worker_blockers = [
+                    blocker
+                    for blocker in readiness.blockers
+                    if blocker != "worker_maintenance_not_current"
+                ]
+                if non_worker_blockers:
                     return RolloutAuthorizationStatus(
                         False, "authorization_evidence_no_longer_ready"
                     )

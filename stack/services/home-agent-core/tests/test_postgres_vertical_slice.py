@@ -44,6 +44,7 @@ from app.spool import DisabledRuntimeSpool, EncryptedRuntimeSpool
 from app.store import CoreStore
 from app.worker import DurableWorker
 from tests.binding_helpers import complete_staged_principal_binding
+from tests.maintenance_helpers import seed_current_worker_maintenance
 
 
 pytestmark = pytest.mark.skipif(
@@ -65,6 +66,7 @@ async def _reset_test_authority(database: Database) -> None:
     qualified = ", ".join(f'"{table.schema}"."{table.name}"' for table in tables)
     async with database.transaction() as connection:
         await connection.execute(text(f"TRUNCATE TABLE {qualified} CASCADE"))
+    await seed_current_worker_maintenance(database)
 
 
 @pytest.mark.asyncio

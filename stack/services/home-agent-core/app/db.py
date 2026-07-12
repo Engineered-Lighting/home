@@ -5,6 +5,7 @@ import random
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
@@ -82,6 +83,14 @@ class Database:
                 return bool((await connection.execute(text("SELECT 1"))).scalar_one())
         except Exception:
             return False
+
+    async def current_time(self) -> datetime:
+        """Return PostgreSQL's wall clock for cross-process safety boundaries."""
+
+        async with self.transaction() as connection:
+            return (
+                await connection.execute(text("SELECT clock_timestamp()"))
+            ).scalar_one()
 
     async def migration_revision(self) -> str | None:
         try:

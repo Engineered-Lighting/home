@@ -44,17 +44,26 @@ SELECT format('REVOKE %I FROM %I', parent.rolname, member.rolname)
 FROM pg_auth_members AS membership
 JOIN pg_roles AS parent ON parent.oid = membership.roleid
 JOIN pg_roles AS member ON member.oid = membership.member
-WHERE member.rolname IN ('home_agent_rollout', 'home_agent_binding_operator') \gexec
+WHERE member.rolname IN (
+  'home_agent_api', 'home_agent_binding_operator', 'home_agent_ingest',
+  'home_agent_worker', 'home_agent_erasure', 'home_agent_rollout',
+  'home_agent_backup'
+) \gexec
 
-ALTER ROLE home_agent_api PASSWORD :'api_password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
+ALTER ROLE home_agent_api PASSWORD :'api_password' NOSUPERUSER NOCREATEDB
+  NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
 ALTER ROLE home_agent_binding_operator PASSWORD :'binding_operator_password'
   NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
-ALTER ROLE home_agent_ingest PASSWORD :'ingest_password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
-ALTER ROLE home_agent_worker PASSWORD :'worker_password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
-ALTER ROLE home_agent_erasure PASSWORD :'erasure_password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
+ALTER ROLE home_agent_ingest PASSWORD :'ingest_password' NOSUPERUSER NOCREATEDB
+  NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
+ALTER ROLE home_agent_worker PASSWORD :'worker_password' NOSUPERUSER NOCREATEDB
+  NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
+ALTER ROLE home_agent_erasure PASSWORD :'erasure_password' NOSUPERUSER NOCREATEDB
+  NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
 ALTER ROLE home_agent_rollout PASSWORD :'rollout_password' NOSUPERUSER
   NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS CONNECTION LIMIT 1;
-ALTER ROLE home_agent_backup PASSWORD :'backup_password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+ALTER ROLE home_agent_backup PASSWORD :'backup_password' NOSUPERUSER NOCREATEDB
+  NOCREATEROLE NOREPLICATION INHERIT NOBYPASSRLS;
 
 ALTER ROLE home_agent_api SET statement_timeout = '15s';
 ALTER ROLE home_agent_binding_operator SET statement_timeout = '15s';

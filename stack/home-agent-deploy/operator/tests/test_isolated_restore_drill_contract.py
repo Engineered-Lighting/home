@@ -123,6 +123,9 @@ class IsolatedRestoreDrillContractTests(unittest.TestCase):
             "EXPECTED_SCHEMAS=engagement,identity,ingest,knowledge,media,operations,privacy",
             "data_checksums",
             "public.alembic_version",
+            "operations.worker_maintenance_state",
+            "worker_maintenance_persistence=u",
+            "worker_maintenance_rows=0",
             "pg_dump",
             "--schema-only --no-owner --no-acl",
             "Database cluster state",
@@ -157,6 +160,7 @@ class IsolatedRestoreDrillContractTests(unittest.TestCase):
         self.assertIn("does **not** restore directly", documentation)
         self.assertIn("StrictHostKeyChecking=yes", documentation)
         self.assertIn("network_mode=none", documentation)
+        self.assertIn("post-migration full backup", documentation)
         self.assertIn("full isolated Home Assistant application restore", documentation)
 
 

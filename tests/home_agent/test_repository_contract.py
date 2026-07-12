@@ -387,7 +387,7 @@ class RepositoryBoundaryTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, rollout_block)
         self.assertIn(
-            "HOME_AGENT_EXPECTED_DB_REVISION=0005_principal_binding_proposals",
+            "HOME_AGENT_EXPECTED_DB_REVISION=0006_worker_maintenance_health",
             read("stack/home-agent.env.example"),
         )
         migration = read(
@@ -485,6 +485,38 @@ class RepositoryBoundaryTests(unittest.TestCase):
             "pg_catalog.pg_create_restore_point(text)",
         ):
             self.assertIn(signature, roles)
+
+    def test_every_online_database_role_drops_stale_memberships(self) -> None:
+        roles = read("stack/home-agent-deploy/provision-roles.sh")
+        for role in (
+            "home_agent_api",
+            "home_agent_binding_operator",
+            "home_agent_ingest",
+            "home_agent_worker",
+            "home_agent_erasure",
+            "home_agent_rollout",
+        ):
+            self.assertRegex(
+                roles,
+                rf"ALTER ROLE {role} PASSWORD[^;]*NOINHERIT NOBYPASSRLS",
+            )
+        self.assertRegex(
+            roles,
+            r"ALTER ROLE home_agent_backup PASSWORD[^;]*INHERIT NOBYPASSRLS",
+        )
+        membership_scope = roles.split(
+            "FROM pg_auth_members AS membership", 1
+        )[1].split("\\gexec", 1)[0]
+        for role in (
+            "home_agent_api",
+            "home_agent_binding_operator",
+            "home_agent_ingest",
+            "home_agent_worker",
+            "home_agent_erasure",
+            "home_agent_rollout",
+            "home_agent_backup",
+        ):
+            self.assertIn(role, membership_scope)
 
     def test_erasure_ledger_mounts_and_operator_audience_fail_closed(self) -> None:
         compose = read("stack/home-agent-compose.yml")

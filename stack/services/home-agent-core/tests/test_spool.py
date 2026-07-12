@@ -3,12 +3,13 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app.spool import EncryptedRuntimeSpool
+from app.spool import DisabledRuntimeSpool, EncryptedRuntimeSpool
 
 
 NOW = datetime(2026, 7, 11, 15, 0, tzinfo=UTC)
@@ -51,6 +52,171 @@ def test_spool_is_encrypted_idempotent_and_expires(tmp_path) -> None:
         spool.get("edge:location", "epoch-1", 1, now=NOW + timedelta(minutes=6)) is None
     )
     spool.close()
+
+
+def test_effective_clock_high_water_survives_rollback_and_restart(tmp_path) -> None:
+    path = tmp_path / "rollback-safe.sqlite"
+    ttl = timedelta(minutes=5)
+    spool = EncryptedRuntimeSpool(
+        path, b"s" * 32, ttl_seconds=int(ttl.total_seconds())
+    )
+    spool.append(
+        stream_key="edge:location",
+        epoch="epoch-1",
+        sequence=1,
+        observed_at=NOW,
+        received_at=NOW,
+        payload={"value": 1},
+        metadata={"entity_id": "device_tracker.private"},
+        now=NOW,
+    )
+
+    high_water = NOW + timedelta(minutes=4)
+    assert spool.get(
+        "edge:location", "epoch-1", 1, now=high_water
+    ) is not None
+    spool.close()
+
+    reopened = EncryptedRuntimeSpool(
+        path, b"s" * 32, ttl_seconds=int(ttl.total_seconds())
+    )
+    rollback = NOW - timedelta(days=2)
+    reopened.append(
+        stream_key="edge:location",
+        epoch="epoch-1",
+        sequence=2,
+        observed_at=rollback,
+        received_at=rollback,
+        payload={"value": 2},
+        metadata={"entity_id": "device_tracker.private"},
+        now=rollback,
+    )
+    records = reopened.recent_for_entity(
+        "device_tracker.private",
+        since=rollback - timedelta(days=1),
+        now=rollback,
+    )
+    assert [record.sequence for record in records] == [2, 1]
+    assert reopened.prune(now=rollback) == 0
+
+    with sqlite3.connect(path) as connection:
+        persisted_clock = datetime.fromisoformat(
+            connection.execute(
+                "SELECT high_water_at FROM runtime_clock "
+                "WHERE clock_key='effective_utc'"
+            ).fetchone()[0]
+        )
+        second_expiry = datetime.fromisoformat(
+            connection.execute(
+                "SELECT expires_at FROM raw_observations WHERE sequence=2"
+            ).fetchone()[0]
+        )
+    assert persisted_clock == high_water
+    assert second_expiry == high_water + ttl
+
+    after_first_expiry = NOW + timedelta(minutes=5, seconds=1)
+    assert reopened.prune(now=after_first_expiry) == 1
+    assert reopened.get(
+        "edge:location", "epoch-1", 1, now=rollback
+    ) is None
+    assert reopened.delete_for_entities(
+        ["device_tracker.private"], now=rollback
+    ) == 1
+    with sqlite3.connect(path) as connection:
+        marker = connection.execute(
+            "SELECT created_at, expires_at FROM gap_markers"
+        ).fetchone()
+    assert datetime.fromisoformat(marker[0]) == after_first_expiry
+    assert datetime.fromisoformat(marker[1]) == after_first_expiry + ttl
+    assert reopened.prune(now=rollback) == 0
+    assert reopened.stats()["gap_markers"] == 1
+    assert reopened.prune(now=after_first_expiry + ttl) == 1
+    assert reopened.stats()["gap_markers"] == 0
+    reopened.close()
+
+
+def test_duplicate_spool_sequence_detects_conflict_and_can_be_discarded(
+    tmp_path,
+) -> None:
+    spool = EncryptedRuntimeSpool(tmp_path / "conflict.sqlite", b"c" * 32)
+    values = {
+        "stream_key": "edge:location",
+        "epoch": "epoch-1",
+        "sequence": 1,
+        "observed_at": NOW,
+        "received_at": NOW,
+        "payload": {"latitude": -22.4},
+        "metadata": {
+            "entity_id": "device_tracker.private",
+            "root_observation_id": str(uuid.uuid4()),
+        },
+        "now": NOW,
+    }
+
+    assert spool.append(**values).inserted
+    exact = spool.append(**values)
+    assert not exact.inserted
+    assert not exact.conflict
+    changed_payload = spool.append(
+        **{**values, "payload": {"latitude": -23.0}}
+    )
+    assert changed_payload.conflict
+    changed_metadata = spool.append(
+        **{**values, "metadata": {**values["metadata"], "coverage": "gap"}}
+    )
+    assert changed_metadata.conflict
+    assert spool.discard("edge:location", "epoch-1", 1)
+    assert not spool.discard("edge:location", "epoch-1", 1)
+    assert spool.get("edge:location", "epoch-1", 1, now=NOW) is None
+    spool.close()
+
+
+def test_disabled_spool_accepts_optional_effective_clock_arguments() -> None:
+    spool = DisabledRuntimeSpool()
+    assert spool.prune(now=NOW) == 0
+    assert spool.delete_for_entities(["person.private"], now=NOW) == 0
+    assert spool.delete_for_subjects([], ["ha-private"], now=NOW) == 0
+    with pytest.raises(RuntimeError, match="disabled"):
+        spool.get("stream", "epoch", 1, now=NOW)
+
+
+def test_revision_one_spool_bootstraps_high_water_without_extending_rows(
+    tmp_path,
+) -> None:
+    path = tmp_path / "revision-one.sqlite"
+    spool = EncryptedRuntimeSpool(path, b"s" * 32, ttl_seconds=300)
+    spool.append(
+        stream_key="edge:location",
+        epoch="epoch-1",
+        sequence=1,
+        observed_at=NOW,
+        received_at=NOW,
+        payload={"value": 1},
+        metadata={},
+        now=NOW,
+    )
+    spool.close()
+    with sqlite3.connect(path) as connection:
+        connection.execute("DROP TABLE runtime_clock")
+        connection.execute("DELETE FROM schema_version WHERE version=2")
+
+    migrated = EncryptedRuntimeSpool(path, b"s" * 32, ttl_seconds=300)
+    assert migrated.get(
+        "edge:location", "epoch-1", 1, now=NOW - timedelta(days=1)
+    ) is not None
+    with sqlite3.connect(path) as connection:
+        high_water = datetime.fromisoformat(
+            connection.execute(
+                "SELECT high_water_at FROM runtime_clock"
+            ).fetchone()[0]
+        )
+        versions = connection.execute(
+            "SELECT version FROM schema_version ORDER BY version"
+        ).fetchall()
+    assert high_water == NOW
+    assert versions == [(1,), (2,)]
+    assert migrated.prune(now=NOW + timedelta(minutes=6)) == 1
+    migrated.close()
 
 
 def test_spool_overflow_drops_oldest_and_writes_gap_marker(tmp_path) -> None:
@@ -243,7 +409,7 @@ def test_user_scoped_non_entity_row_is_tagged_and_erased_without_plaintext_uuid(
         ).fetchone()[0]
     assert user_id not in metadata
     assert "user_scope_tag" in metadata
-    assert spool.delete_for_subjects([], [user_id]) == 1
+    assert spool.delete_for_subjects([], [user_id], now=NOW) == 1
     assert spool.stats()["records"] == 0
     assert spool.stats()["gap_markers"] == 1
     assert user_id.encode() not in path.read_bytes()

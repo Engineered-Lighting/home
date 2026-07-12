@@ -20,7 +20,7 @@ Run `preflight.sh` after configuring these non-secret values in
 HOME_AGENT_RESTORE_DRILL_ROOT=/srv/home-agent/restore-drills
 HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS=/srv/home-agent/backup-sftp/formd_known_hosts
 HOME_AGENT_PGBACKREST_IMAGE=engineered-lighting/home-agent-postgres:17.10
-HOME_AGENT_EXPECTED_DB_REVISION=0005_principal_binding_proposals
+HOME_AGENT_EXPECTED_DB_REVISION=0006_worker_maintenance_health
 ```
 
 The restore root and `known_hosts` file must be on the encrypted mapper. The
@@ -45,6 +45,12 @@ native OpenSSH staging path used by this drill.
 
 Choose an explicit completed pgBackRest label from the backup report. Do not
 use `latest`; a drill must remain attributable to one immutable backup set.
+The Compose `backup-gate` intentionally runs before Alembic, so its deployment
+backup proves the rollback boundary at the previous revision. After a migration
+and healthy service replacement, run `backup-gate` once more to create a
+post-migration full backup and use that new immutable label for the acceptance
+drill. A pre-migration backup must fail the new revision contract; it is not a
+substitute for this post-migration proof.
 
 ```sh
 cd /opt/home/home-github/stack

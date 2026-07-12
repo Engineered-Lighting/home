@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -26,4 +27,8 @@ def current_unit_migration(monkeypatch):
     async def migration_revision(_database: Database) -> str:
         return Settings.model_fields["readiness_migration"].default
 
+    async def current_time(_database: Database) -> datetime:
+        return datetime.now(UTC)
+
     monkeypatch.setattr(Database, "migration_revision", migration_revision)
+    monkeypatch.setattr(Database, "current_time", current_time)

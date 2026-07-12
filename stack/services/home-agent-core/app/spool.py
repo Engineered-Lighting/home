@@ -33,6 +33,7 @@ class SpoolRecord:
 class SpoolAppendResult:
     inserted: bool
     evicted: tuple[tuple[str, str, int, str], ...]
+    conflict: bool = False
 
 
 class EncryptedRuntimeSpool:
@@ -138,6 +139,21 @@ class EncryptedRuntimeSpool:
                 self._conn.execute(
                     "UPDATE gap_markers SET expires_at=created_at WHERE expires_at IS NULL"
                 )
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS runtime_clock (
+                    clock_key TEXT PRIMARY KEY
+                        CHECK(clock_key = 'effective_utc'),
+                    high_water_at TEXT NOT NULL
+                )
+                """
+            )
+            self._conn.execute(
+                """
+                INSERT OR IGNORE INTO schema_version(version, applied_at)
+                VALUES (2, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                """
+            )
 
     def append(
         self,
@@ -152,8 +168,6 @@ class EncryptedRuntimeSpool:
         user_scope_id: str | None = None,
         now: datetime | None = None,
     ) -> SpoolAppendResult:
-        now = (now or datetime.now(UTC)).astimezone(UTC)
-        expires_at = now + self.ttl
         spool_id = str(uuid.uuid4())
         routing_metadata = dict(metadata)
         if user_scope_id:
@@ -166,7 +180,9 @@ class EncryptedRuntimeSpool:
             artifact_id=spool_id,
         )
         with self._transaction(immediate=True):
-            self._prune_locked(now)
+            effective_now = self._effective_now_locked(now)
+            expires_at = effective_now + self.ttl
+            self._prune_locked(effective_now)
             cursor = self._conn.execute(
                 """
                 INSERT OR IGNORE INTO raw_observations(
@@ -190,21 +206,53 @@ class EncryptedRuntimeSpool:
                 ),
             )
             if cursor.rowcount == 0:
-                result = SpoolAppendResult(inserted=False, evicted=())
+                existing = self._conn.execute(
+                    "SELECT payload_sha256, metadata_json, observed_at, received_at "
+                    "FROM raw_observations "
+                    "WHERE stream_key=? AND epoch=? AND sequence=?",
+                    (stream_key, epoch, sequence),
+                ).fetchone()
+                if existing is None:
+                    raise RuntimeError("runtime spool duplicate row disappeared")
+                expected_metadata = canonical_json(routing_metadata).decode()
+                result = SpoolAppendResult(
+                    inserted=False,
+                    evicted=(),
+                    conflict=(
+                        not hmac.compare_digest(
+                            existing["payload_sha256"], sealed.sha256
+                        )
+                        or existing["metadata_json"] != expected_metadata
+                        or existing["observed_at"] != self._iso(observed_at)
+                        or existing["received_at"] != self._iso(received_at)
+                    ),
+                )
             else:
-                evicted = self._enforce_size_locked(now)
+                evicted = self._enforce_size_locked(effective_now)
                 result = SpoolAppendResult(inserted=True, evicted=tuple(evicted))
         self._checkpoint_truncate()
         if self._physical_bytes() > self.max_bytes:
             raise RuntimeError("runtime spool exceeded its hard physical byte limit")
         return result
 
+    def discard(self, stream_key: str, epoch: str, sequence: int) -> bool:
+        """Securely remove one exact raw row after a sequence conflict."""
+
+        with self._transaction(immediate=True):
+            cursor = self._conn.execute(
+                "DELETE FROM raw_observations "
+                "WHERE stream_key=? AND epoch=? AND sequence=?",
+                (stream_key, epoch, sequence),
+            )
+        self._checkpoint_truncate()
+        return cursor.rowcount == 1
+
     def get(
         self, stream_key: str, epoch: str, sequence: int, *, now: datetime | None = None
     ) -> SpoolRecord | None:
-        now = (now or datetime.now(UTC)).astimezone(UTC)
         with self._transaction(immediate=True):
-            self._prune_locked(now)
+            effective_now = self._effective_now_locked(now)
+            self._prune_locked(effective_now)
             row = self._conn.execute(
                 "SELECT * FROM raw_observations WHERE stream_key=? AND epoch=? AND sequence=?",
                 (stream_key, epoch, sequence),
@@ -227,11 +275,11 @@ class EncryptedRuntimeSpool:
         coordinates and state payloads remain encrypted.
         """
 
-        now = (now or datetime.now(UTC)).astimezone(UTC)
         if limit < 1 or limit > 1000:
             raise ValueError("recent observation limit must be between 1 and 1000")
         with self._transaction(immediate=True):
-            self._prune_locked(now)
+            effective_now = self._effective_now_locked(now)
+            self._prune_locked(effective_now)
             rows = self._conn.execute(
                 """
                 SELECT * FROM raw_observations
@@ -239,7 +287,7 @@ class EncryptedRuntimeSpool:
                  ORDER BY observed_at DESC, sequence DESC
                  LIMIT ?
                 """,
-                (self._iso(since), self._iso(now), limit),
+                (self._iso(since), self._iso(effective_now), limit),
             ).fetchall()
         records = [self._record_from_row(row) for row in rows]
         return [
@@ -274,12 +322,17 @@ class EncryptedRuntimeSpool:
 
     def prune(self, *, now: datetime | None = None) -> int:
         with self._transaction(immediate=True):
-            removed = self._prune_locked((now or datetime.now(UTC)).astimezone(UTC))
+            effective_now = self._effective_now_locked(now)
+            removed = self._prune_locked(effective_now)
         self._checkpoint_truncate()
         return removed
 
     def delete_for_subjects(
-        self, entity_ids: list[str], user_ids: list[str] | None = None
+        self,
+        entity_ids: list[str],
+        user_ids: list[str] | None = None,
+        *,
+        now: datetime | None = None,
     ) -> int:
         """Immediately remove entity- or HA-user-linked rows during erasure."""
         exact = {value for value in entity_ids if isinstance(value, str) and value}
@@ -292,6 +345,8 @@ class EncryptedRuntimeSpool:
             return 0
         removed = 0
         with self._transaction(immediate=True):
+            effective_now = self._effective_now_locked(now)
+            self._prune_locked(effective_now)
             rows = self._conn.execute(
                 "SELECT spool_id, stream_key, epoch, sequence, metadata_json "
                 "FROM raw_observations"
@@ -315,7 +370,6 @@ class EncryptedRuntimeSpool:
                 # row ownership cannot be proven, privacy wins over retention.
                 targets = list(rows)
             if targets:
-                now = datetime.now(UTC)
                 for row in targets:
                     self._conn.execute(
                         "INSERT OR IGNORE INTO gap_markers("
@@ -327,8 +381,8 @@ class EncryptedRuntimeSpool:
                             row["epoch"],
                             row["sequence"],
                             "privacy_auto_expiry",
-                            self._iso(now),
-                            self._iso(now + self.ttl),
+                            self._iso(effective_now),
+                            self._iso(effective_now + self.ttl),
                         ),
                     )
                 cursor = self._conn.executemany(
@@ -339,10 +393,12 @@ class EncryptedRuntimeSpool:
         self._checkpoint_truncate()
         return removed
 
-    def delete_for_entities(self, entity_ids: list[str]) -> int:
+    def delete_for_entities(
+        self, entity_ids: list[str], *, now: datetime | None = None
+    ) -> int:
         """Compatibility wrapper for pre-user-scope erasure callers."""
 
-        return self.delete_for_subjects(entity_ids)
+        return self.delete_for_subjects(entity_ids, now=now)
 
     def acknowledge_gap_markers(self, marker_ids: list[str]) -> None:
         if not marker_ids:
@@ -437,6 +493,74 @@ class EncryptedRuntimeSpool:
         )
         return removed + max(gap_cursor.rowcount, 0)
 
+    def _effective_now_locked(self, supplied: datetime | None) -> datetime:
+        """Advance and return the persisted effective UTC clock.
+
+        Runtime retention must not move backwards with the host clock. This
+        method is called only while holding the serialized SQLite writer
+        transaction, so competing processes observe one monotonic high-water
+        mark. A forward correction is intentionally allowed to expire raw
+        runtime data early; a rollback can never make it live longer.
+        """
+
+        candidate = supplied or datetime.now(UTC)
+        if candidate.tzinfo is None or candidate.utcoffset() is None:
+            raise ValueError("runtime spool clock must be timezone-aware")
+        candidate = candidate.astimezone(UTC)
+        row = self._conn.execute(
+            "SELECT high_water_at FROM runtime_clock WHERE clock_key='effective_utc'"
+        ).fetchone()
+        if row is None:
+            effective = self._legacy_high_water_locked(candidate)
+            self._conn.execute(
+                "INSERT INTO runtime_clock(clock_key, high_water_at) VALUES (?, ?)",
+                ("effective_utc", self._iso(effective)),
+            )
+            return effective
+        try:
+            high_water = datetime.fromisoformat(row["high_water_at"])
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("runtime spool high-water clock is invalid") from exc
+        if high_water.tzinfo is None or high_water.utcoffset() is None:
+            raise RuntimeError("runtime spool high-water clock is not UTC-aware")
+        high_water = high_water.astimezone(UTC)
+        effective = max(candidate, high_water)
+        if effective > high_water:
+            self._conn.execute(
+                "UPDATE runtime_clock SET high_water_at=? "
+                "WHERE clock_key='effective_utc'",
+                (self._iso(effective),),
+            )
+        return effective
+
+    def _legacy_high_water_locked(self, candidate: datetime) -> datetime:
+        """Bootstrap revision-1 spools without extending existing retention."""
+
+        values = [candidate]
+        raw = self._conn.execute(
+            "SELECT MAX(received_at) AS received_at, "
+            "MAX(expires_at) AS expires_at FROM raw_observations"
+        ).fetchone()
+        gap = self._conn.execute(
+            "SELECT MAX(created_at) AS created_at FROM gap_markers"
+        ).fetchone()
+        for value, subtract_ttl in (
+            (raw["received_at"], False),
+            (raw["expires_at"], True),
+            (gap["created_at"], False),
+        ):
+            if value is None:
+                continue
+            try:
+                parsed = datetime.fromisoformat(value)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("legacy runtime spool clock is invalid") from exc
+            if parsed.tzinfo is None or parsed.utcoffset() is None:
+                raise RuntimeError("legacy runtime spool clock is not UTC-aware")
+            parsed = parsed.astimezone(UTC)
+            values.append(parsed - self.ttl if subtract_ttl else parsed)
+        return max(values)
+
     def _enforce_size_locked(self, now: datetime) -> list[tuple[str, str, int, str]]:
         evicted: list[tuple[str, str, int, str]] = []
         while self._estimated_used_bytes_locked() > self.max_bytes:
@@ -511,19 +635,34 @@ class DisabledRuntimeSpool:
     def close(self) -> None:
         return None
 
-    def prune(self) -> int:
+    def prune(self, *, now: datetime | None = None) -> int:
+        del now
         return 0
 
-    def delete_for_entities(self, _entity_ids: list[str]) -> int:
+    def delete_for_entities(
+        self, _entity_ids: list[str], *, now: datetime | None = None
+    ) -> int:
+        del now
         return 0
 
     def delete_for_subjects(
-        self, _entity_ids: list[str], _user_ids: list[str] | None = None
+        self,
+        _entity_ids: list[str],
+        _user_ids: list[str] | None = None,
+        *,
+        now: datetime | None = None,
     ) -> int:
+        del now
         return 0
 
     def append(self, **_kwargs):
         raise RuntimeError("runtime spool is disabled for this role")
+
+    def get(self, *_args, **_kwargs):
+        raise RuntimeError("runtime spool is disabled for this role")
+
+    def discard(self, *_args, **_kwargs) -> bool:
+        return False
 
     def recent_for_entity(self, *_args, **_kwargs):
         raise RuntimeError("runtime spool is disabled for this role")

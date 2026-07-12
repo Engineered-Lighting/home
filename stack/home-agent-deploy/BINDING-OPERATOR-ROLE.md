@@ -5,8 +5,11 @@ running preflight or replacing Core. On the Home Agent host, run:
 
 ```sh
 cd /opt/home/home-github/stack
-sudo sh home-agent-deploy/add-binding-operator-role-secrets.sh /etc/home-agent/secrets
-sudo sh home-agent-deploy/materialize-secrets.sh /etc/home-agent/secrets
+secrets_root="$(sudo sed -n 's/^HOME_AGENT_SECRETS_DIR=//p' \
+  /srv/home-agent/config/home-agent.env)"
+case "$secrets_root" in /*) ;; *) echo "invalid configured secrets root" >&2; exit 1;; esac
+sudo sh home-agent-deploy/add-binding-operator-role-secrets.sh "$secrets_root"
+sudo sh home-agent-deploy/materialize-secrets.sh "$secrets_root"
 sudo docker compose --env-file /srv/home-agent/config/home-agent.env \
   -f home-agent-compose.yml run --rm provision-roles
 ```

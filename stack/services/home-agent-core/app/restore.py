@@ -40,19 +40,26 @@ class OutboxHealth:
 async def outbox_health(database: Database) -> OutboxHealth:
     try:
         async with database.transaction() as connection:
+            transaction_time = func.transaction_timestamp()
+            strict_erasure = (
+                (schema.outbox.c.topic == "privacy.erasure.completed")
+                & (schema.outbox.c.state != "complete")
+            )
+            due_auto_expiry = (
+                (schema.outbox.c.topic == "privacy.person.auto_expire")
+                & (schema.outbox.c.state != "complete")
+                & (
+                    (schema.outbox.c.state != "pending")
+                    | (schema.outbox.c.available_at <= transaction_time)
+                )
+            )
             row = (
                 (
                     await connection.execute(
                         select(
                             func.count()
                             .filter(
-                                schema.outbox.c.topic.in_(
-                                    [
-                                        "privacy.erasure.completed",
-                                        "privacy.person.auto_expire",
-                                    ]
-                                ),
-                                schema.outbox.c.state != "complete",
+                                strict_erasure | due_auto_expiry,
                             )
                             .label("incomplete_erasure"),
                             func.count()

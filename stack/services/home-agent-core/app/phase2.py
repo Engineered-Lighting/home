@@ -5,7 +5,7 @@ exercises Edge delivery without becoming retained location content.  The
 journey view is deliberately non-discovering: an operator must select both the
 principal and visit IDs, and Core then proves that each selected visit was
 consent-gated, departed, continuously observed, and untouched by a snapshot or
-coverage gap. Controlled journeys are informational in v2 and cannot authorize
+coverage gap. Controlled journeys are informational in v3 and cannot authorize
 live promotion until a separately reviewed pre-canary consent mode exists.
 """
 
@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from . import schema
 from .crypto import sha256_json
 from .db import Database
+from .maintenance import WorkerMaintenanceInspector
 from .models import (
     OnboardingPhase2Blocker,
     Phase2JourneyEvaluation,
@@ -33,7 +34,7 @@ from .models import (
 MINIMUM_OBSERVATION_WINDOW = timedelta(days=7)
 RELEVANT_ENVELOPE_TARGET = 500
 CONTROLLED_JOURNEY_TARGET = 3
-PHASE2_RULE_VERSION = "record-only-envelope-gate-v2"
+PHASE2_RULE_VERSION = "record-only-envelope-worker-gate-v3"
 MINIMUM_JOURNEY_DWELL = timedelta(minutes=10)
 RELEVANT_EVENT_TYPES = ("state_changed", "location_fix")
 RELEVANT_COVERAGES = ("continuous", "recorder_reconstructed")
@@ -161,6 +162,7 @@ def build_phase2_readiness(
     journeys: Iterable[Phase2JourneyEvaluation],
     policy_version: str,
     policy_digest: str,
+    worker_maintenance_status: str,
 ) -> Phase2ReadinessView:
     """Build a stable gate result from already-inspected evidence."""
 
@@ -199,6 +201,8 @@ def build_phase2_readiness(
         blockers.append("minimum_observation_window_not_elapsed")
     if not evidence_met:
         blockers.append("qualifying_redacted_envelope_threshold_not_met")
+    if worker_maintenance_status != "current":
+        blockers.append("worker_maintenance_not_current")
 
     return Phase2ReadinessView(
         rule_version=PHASE2_RULE_VERSION,
@@ -225,6 +229,8 @@ def build_phase2_readiness(
         controlled_journeys=journey_results,
         evidence_requirement_met=evidence_met,
         threshold_path=threshold_path,
+        worker_maintenance_status=worker_maintenance_status,
+        worker_maintenance_current=worker_maintenance_status == "current",
         ready_to_advance=not blockers,
         blockers=blockers,
     )
@@ -245,6 +251,7 @@ class Phase2GateInspector:
         self.rollout_mode = rollout_mode
         self.policy_version = policy_version
         self.policy_digest = policy_digest
+        self.maintenance_inspector = WorkerMaintenanceInspector(database)
 
     async def inspect(
         self,
@@ -262,15 +269,23 @@ class Phase2GateInspector:
                 unique.append(reference)
 
         async with self.database.transaction() as connection:
+            database_now = now
+            if database_now is None:
+                database_now = (
+                    await connection.execute(select(func.transaction_timestamp()))
+                ).scalar_one()
             summary = await self._envelope_summary(
                 connection, include_diagnostics=True
+            )
+            maintenance = await self.maintenance_inspector.inspect_in_transaction(
+                connection
             )
         journey_results = [
             await self._inspect_controlled_journey(reference, summary.started_at)
             for reference in unique
         ]
         return build_phase2_readiness(
-            now=now or datetime.now(UTC),
+            now=database_now,
             rollout_mode=self.rollout_mode,
             envelopes=summary,
             submitted_journey_count=len(submitted),
@@ -278,6 +293,7 @@ class Phase2GateInspector:
             journeys=journey_results,
             policy_version=self.policy_version,
             policy_digest=self.policy_digest,
+            worker_maintenance_status=maintenance.code,
         )
 
     async def inspect_onboarding(
@@ -293,16 +309,21 @@ class Phase2GateInspector:
         the second query asks only whether the 500th qualifying row exists.
         """
 
-        evaluated_at = now or datetime.now(UTC)
-        if evaluated_at.tzinfo is None or evaluated_at.utcoffset() is None:
-            raise ValueError("phase2 evaluation time must be timezone-aware")
-        evaluated_at = evaluated_at.astimezone(UTC)
+        evaluated_at = now
+        if evaluated_at is not None:
+            if evaluated_at.tzinfo is None or evaluated_at.utcoffset() is None:
+                raise ValueError("phase2 evaluation time must be timezone-aware")
+            evaluated_at = evaluated_at.astimezone(UTC)
 
         ordered_evidence = (
             PHASE2_ROLLOUT_EVIDENCE.c.ingested_at,
             PHASE2_ROLLOUT_EVIDENCE.c.envelope_id,
         )
         async with self.database.transaction() as connection:
+            if evaluated_at is None:
+                evaluated_at = (
+                    await connection.execute(select(func.transaction_timestamp()))
+                ).scalar_one()
             started_at = (
                 await connection.execute(
                     select(PHASE2_ROLLOUT_EVIDENCE.c.ingested_at)
@@ -322,6 +343,11 @@ class Phase2GateInspector:
                         .limit(1)
                     )
                 ).scalar_one_or_none() is not None
+            maintenance = await self.maintenance_inspector.inspect_in_transaction(
+                connection
+            )
+
+        assert evaluated_at is not None
 
         blockers: list[OnboardingPhase2Blocker] = []
         if self.rollout_mode != "record_only":
@@ -332,6 +358,8 @@ class Phase2GateInspector:
             blockers.append("minimum_observation_window_not_elapsed")
         if not threshold_met:
             blockers.append("qualifying_redacted_envelope_threshold_not_met")
+        if not maintenance.ready:
+            blockers.append("worker_maintenance_not_current")
         return Phase2OnboardingReadiness(
             ready_to_advance=not blockers,
             blockers=tuple(blockers),
@@ -348,6 +376,9 @@ class Phase2GateInspector:
         summary = await self._envelope_summary(
             connection, include_diagnostics=False
         )
+        maintenance = await self.maintenance_inspector.inspect_in_transaction(
+            connection
+        )
         return build_phase2_readiness(
             now=now,
             rollout_mode=self.rollout_mode,
@@ -357,6 +388,7 @@ class Phase2GateInspector:
             journeys=(),
             policy_version=self.policy_version,
             policy_digest=self.policy_digest,
+            worker_maintenance_status=maintenance.code,
         )
 
     async def _envelope_summary(

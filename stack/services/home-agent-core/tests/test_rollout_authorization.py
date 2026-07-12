@@ -19,6 +19,10 @@ from app.config import Settings
 from app.db import Database
 from app.errors import ConflictError
 from app.main import create_app
+from app.maintenance import (
+    WORKER_MAINTENANCE_KERNEL_VERSION,
+    worker_maintenance_proof_digest,
+)
 from app.models import RolloutAuthorizationRequest, RolloutAuthorizationView
 from app.rollout import (
     RECORD_ONLY_TO_SHADOW,
@@ -116,6 +120,8 @@ def settings_for_role(tmp_path, role: str, mode: str) -> Settings:
 
 
 def receipt(**changes):
+    worker_instance_id = uuid.uuid4()
+    maintenance_succeeded_at = datetime.now(UTC)
     value = {
         "authorization_id": uuid.uuid4(),
         "operator_request_id": uuid.uuid4(),
@@ -125,8 +131,18 @@ def receipt(**changes):
         "policy_version": "home-agent-mvp-v1",
         "policy_digest": POLICY_DIGEST,
         "input_digest": "b" * 64,
-        "readiness_evaluated_at": datetime.now(UTC),
-        "authorized_at": datetime.now(UTC),
+        "worker_instance_id": worker_instance_id,
+        "worker_success_sequence": 1,
+        "worker_kernel_version": WORKER_MAINTENANCE_KERNEL_VERSION,
+        "worker_maintenance_succeeded_at": maintenance_succeeded_at,
+        "worker_proof_digest": worker_maintenance_proof_digest(
+            worker_instance_id=worker_instance_id,
+            success_sequence=1,
+            kernel_version=WORKER_MAINTENANCE_KERNEL_VERSION,
+            maintenance_succeeded_at=maintenance_succeeded_at,
+        ),
+        "readiness_evaluated_at": maintenance_succeeded_at,
+        "authorized_at": maintenance_succeeded_at,
     }
     value.update(changes)
     return value
@@ -232,10 +248,44 @@ async def _seed_ready_evidence(database: Database) -> None:
     stream_id = uuid.uuid4()
     epoch = uuid.uuid4()
     async with database.transaction() as connection:
+        database_started_at, maintenance_time = (
+            await connection.execute(
+                text("SELECT pg_postmaster_start_time(), clock_timestamp()")
+            )
+        ).one()
         await connection.execute(
             text(
                 "TRUNCATE TABLE operations.rollout_authorizations, "
                 "ingest.envelopes, ingest.source_streams CASCADE"
+            )
+        )
+        await connection.execute(delete(schema.worker_maintenance_state))
+        await connection.execute(
+            insert(schema.worker_maintenance_state).values(
+                state_key="durable_worker",
+                worker_instance_id=uuid.uuid4(),
+                database_started_at=database_started_at,
+                kernel_version="worker-maintenance-cycle-v1",
+                state="running",
+                started_at=maintenance_time,
+                heartbeat_at=maintenance_time,
+                heartbeat_sequence=1,
+                maintenance_attempted_at=maintenance_time,
+                maintenance_succeeded_at=maintenance_time,
+                success_sequence=1,
+                consecutive_failures=0,
+                last_error_code=None,
+                stopped_at=None,
+                spool_rows_pruned=0,
+                binding_retention_receipt={
+                    "proposals_expired": 0,
+                    "staged_requests_expired": 0,
+                    "pending_requests_expired": 0,
+                    "requests_expired": 0,
+                    "proposals_purged": 0,
+                    "requests_purged": 0,
+                },
+                updated_at=maintenance_time,
             )
         )
         await connection.execute(
@@ -332,6 +382,8 @@ async def test_old_nonqualifying_header_cannot_age_the_gate(tmp_path) -> None:
         assert not readiness.time_requirement_met
         assert not readiness.ready_to_advance
     finally:
+        async with database.transaction() as connection:
+            await connection.execute(delete(schema.worker_maintenance_state))
         await database.close()
 
 
@@ -371,6 +423,8 @@ async def test_authorization_is_idempotent_and_conflicts_on_drift(tmp_path) -> N
                 settings.model_copy(update={"policy_digest": "c" * 64}),
             ).authorize_shadow(request)
     finally:
+        async with database.transaction() as connection:
+            await connection.execute(delete(schema.worker_maintenance_state))
         await database.close()
 
 
@@ -419,6 +473,8 @@ async def test_concurrent_authorizations_create_one_receipt(tmp_path) -> None:
             ).scalar_one()
         assert count == 1
     finally:
+        async with database.transaction() as connection:
+            await connection.execute(delete(schema.worker_maintenance_state))
         await database.close()
 
 
@@ -478,6 +534,11 @@ async def test_shadow_matches_evidence_and_canary_requires_future_receipt(
                         policy_version="home-agent-mvp-v1",
                         policy_digest=POLICY_DIGEST,
                         input_digest="d" * 64,
+                        worker_instance_id=uuid.uuid4(),
+                        worker_success_sequence=1,
+                        worker_kernel_version="worker-maintenance-cycle-v1",
+                        worker_maintenance_succeeded_at=datetime.now(UTC),
+                        worker_proof_digest="e" * 64,
                         readiness_evaluated_at=datetime.now(UTC),
                         authorized_at=datetime.now(UTC),
                     )
@@ -494,4 +555,6 @@ async def test_shadow_matches_evidence_and_canary_requires_future_receipt(
         assert not stale.authorized
         assert stale.code == "authorization_evidence_stale"
     finally:
+        async with database.transaction() as connection:
+            await connection.execute(delete(schema.worker_maintenance_state))
         await database.close()

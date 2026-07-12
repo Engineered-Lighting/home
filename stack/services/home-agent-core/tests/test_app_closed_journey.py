@@ -28,6 +28,7 @@ from app.models import (
 from app.spool import EncryptedRuntimeSpool
 from app.store import CoreStore
 from tests.binding_helpers import complete_staged_principal_binding
+from tests.maintenance_helpers import seed_current_worker_maintenance
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -142,6 +143,7 @@ async def test_app_closed_edge_restart_reconnect_and_core_replay_are_stable(
         rollout_mode="canary",
     )
     database = Database(settings.async_database_url())
+    await seed_current_worker_maintenance(database)
     runtime_spool = EncryptedRuntimeSpool(
         settings.runtime_spool_path, runtime_key
     )

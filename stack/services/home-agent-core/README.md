@@ -86,8 +86,19 @@ Production role separation uses the same image:
   auto-expiry, and independent erasure-ledger receipts.
 - `all`: local integration/testing only.
 
+The worker registers a fenced random instance and immediately completes a
+database-timed maintenance cycle before its own readiness can pass. The cycle
+prunes the local spool, verifies the erasure-ledger head, and commits binding
+retention plus its content-free success proof atomically. Its singleton state
+is an unlogged PostgreSQL table: schema and constraints are durable, while a
+crash or backup restore cannot resurrect an old success row as live authority.
+API health degrades when the proof is stale; shadow/canary readiness and normal
+mutations fail closed. Record-only ingest continues redacted delivery but does
+not write sensitive raw spool content until maintenance recovers. Cancellation,
+opt-out, forgetting, and erasure remain available.
+
 `/readyz` stays unavailable until the database reports migration
-`0005_principal_binding_proposals`.
+`0006_worker_maintenance_health`.
 
 ## MVP API contract
 
@@ -152,9 +163,12 @@ the inspector verifies explicit location consent predating the visit, a
 departed sufficient visit, a continuous device-tracker root, ten-minute dwell,
 and no overlapping snapshot or coverage gap. The response contains no names,
 coordinates, locators, state payloads, or source event content. Journey results
-are informational only in the v2 contract and never satisfy live readiness.
+are informational only in the v3 contract and never satisfy live readiness.
+The v3 gate also requires the fenced worker-maintenance cycle to be current;
+the response exposes only its categorical state, never the worker instance,
+timestamps, retention counts, or queue content.
 
-When v2 readiness is true, place a JSON object containing a random
+When v3 readiness is true, place a JSON object containing a random
 `operator_request_id` and the response's exact `expected_rule_version`,
 `expected_policy_version`, `expected_policy_digest`, and
 `expected_input_digest` on stdin for the operator-profile one-shot:
@@ -166,9 +180,11 @@ docker compose --env-file /srv/home-agent/config/home-agent.env \
 
 The one-shot receives a dedicated database credential that is never mounted in
 Core API, ingest, worker, BFF, or the Agent origin. It first verifies migration,
-restore-quarantine, and storage gates, then recomputes Phase 2 inside the same
-serializable receipt transaction and stores one content-free `record_only` to
-`shadow` receipt. Input is capped at 4 KiB, strict, duplicate-key rejecting,
+restore-quarantine, and storage gates, then recomputes Phase 2 and snapshots
+the current worker proof inside the same serializable receipt transaction
+before storing one content-free `record_only` to `shadow` receipt. Runtime
+worker freshness is still rechecked after promotion; a historical receipt
+never asserts current liveness. Input is capped at 4 KiB, strict, duplicate-key rejecting,
 and content-free; output is the content-free receipt. The online API role is
 SELECT-only on receipts and has no authorization route.
 

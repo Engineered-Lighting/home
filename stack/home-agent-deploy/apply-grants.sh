@@ -90,6 +90,27 @@ REVOKE UPDATE, DELETE, TRUNCATE ON TABLE identity.confirmation_artifacts
 REVOKE DELETE, TRUNCATE ON TABLE identity.ha_user_bindings
   FROM home_agent_api;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA operations TO home_agent_worker;
+-- A worker may prove maintenance only by calling the fenced database kernels.
+-- Revoke schema-wide/default DML again so no online credential can forge the
+-- singleton row, including the worker credential itself.
+REVOKE ALL ON TABLE operations.worker_maintenance_state
+  FROM PUBLIC, home_agent_api, home_agent_ingest, home_agent_worker,
+  home_agent_erasure, home_agent_rollout, home_agent_binding_operator;
+GRANT SELECT ON TABLE operations.worker_maintenance_state
+  TO home_agent_api, home_agent_ingest, home_agent_worker, home_agent_rollout;
+REVOKE ALL ON FUNCTION operations.register_worker_maintenance(uuid),
+  operations.heartbeat_worker_maintenance(uuid),
+  operations.run_worker_maintenance_cycle(uuid,bigint),
+  operations.fail_worker_maintenance(uuid,character varying),
+  operations.stop_worker_maintenance(uuid)
+  FROM PUBLIC, home_agent_api, home_agent_ingest, home_agent_worker,
+  home_agent_erasure, home_agent_rollout, home_agent_binding_operator;
+GRANT EXECUTE ON FUNCTION operations.register_worker_maintenance(uuid),
+  operations.heartbeat_worker_maintenance(uuid),
+  operations.run_worker_maintenance_cycle(uuid,bigint),
+  operations.fail_worker_maintenance(uuid,character varying),
+  operations.stop_worker_maintenance(uuid)
+  TO home_agent_worker;
 REVOKE INSERT, UPDATE, DELETE ON TABLE operations.rollout_authorizations
   FROM home_agent_worker;
 REVOKE INSERT, UPDATE, DELETE ON TABLE operations.rollout_authorizations
@@ -110,8 +131,8 @@ GRANT UPDATE (state, completed_at) ON TABLE privacy.auto_expiry_schedules
 GRANT SELECT, INSERT ON TABLE privacy.auto_expiry_receipts TO home_agent_worker;
 GRANT EXECUTE ON FUNCTION privacy.apply_person_auto_expiry(uuid)
   TO home_agent_worker;
-GRANT EXECUTE ON FUNCTION privacy.expire_principal_binding_work(timestamptz)
-  TO home_agent_worker;
+REVOKE EXECUTE ON FUNCTION privacy.expire_principal_binding_work(timestamptz)
+  FROM home_agent_worker;
 GRANT EXECUTE ON FUNCTION
   privacy.cancel_principal_binding_work_for_person(uuid,timestamptz)
   TO home_agent_api;

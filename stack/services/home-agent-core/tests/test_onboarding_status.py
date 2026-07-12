@@ -418,6 +418,11 @@ async def test_postgres_onboarding_binding_status_fails_closed(
             )
             if artifact_id is not None:
                 await connection.execute(
+                    delete(schema.artifact_registry).where(
+                        schema.artifact_registry.c.artifact_id == artifact_id
+                    )
+                )
+                await connection.execute(
                     delete(schema.confirmation_artifacts).where(
                         schema.confirmation_artifacts.c.artifact_id == artifact_id
                     )

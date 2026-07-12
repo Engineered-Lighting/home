@@ -29,6 +29,7 @@ async def test_backup_role_has_only_control_and_settings_authority() -> None:
                     text(
                         """
                         SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication,
+                               rolinherit,
                                rolbypassrls,
                                pg_has_role('home_agent_backup', 'pg_read_all_data', 'member')
                                  AS reads_all_data,
@@ -62,6 +63,7 @@ async def test_backup_role_has_only_control_and_settings_authority() -> None:
                 "rolcreatedb": False,
                 "rolcreaterole": False,
                 "rolreplication": False,
+                "rolinherit": True,
                 "rolbypassrls": False,
                 "reads_all_data": False,
                 "reads_settings": True,

@@ -573,6 +573,14 @@ validation="$(
       select '\''listen='\'' || current_setting('\''listen_addresses'\'');
       select '\''recovery='\'' || pg_is_in_recovery()::text;
       select '\''revision='\'' || version_num from public.alembic_version;
+      select '\''worker_maintenance_table='\'' ||
+        case when to_regclass('\''operations.worker_maintenance_state'\'') is null
+             then '\''missing'\'' else '\''present'\'' end;
+      select '\''worker_maintenance_persistence='\'' || relpersistence
+        from pg_class
+       where oid = to_regclass('\''operations.worker_maintenance_state'\'');
+      select '\''worker_maintenance_rows='\'' || count(*)::text
+        from operations.worker_maintenance_state;
       select '\''schemas='\'' || string_agg(nspname, '\'','\'' order by nspname)
         from pg_namespace
        where nspname = any(array[
@@ -582,7 +590,7 @@ validation="$(
     "
   '
 )"
-expected_validation="$(printf 'version=%s\nchecksums=on\nlisten=\nrecovery=false\nrevision=%s\nschemas=%s' \
+expected_validation="$(printf 'version=%s\nchecksums=on\nlisten=\nrecovery=false\nrevision=%s\nworker_maintenance_table=present\nworker_maintenance_persistence=u\nworker_maintenance_rows=0\nschemas=%s' \
   "$expected_version_num" "$HOME_AGENT_EXPECTED_DB_REVISION" "$EXPECTED_SCHEMAS")"
 if [[ "$validation" != "$expected_validation" ]]; then
   printf 'restore drill: expected contract:\n%s\n' "$expected_validation" >&2

@@ -14,7 +14,11 @@ from .auth import (
     require_native_service_identity,
     require_service_identity,
 )
-from .errors import CapabilityDisabledError, ValidationDomainError
+from .errors import (
+    CapabilityDisabledError,
+    ValidationDomainError,
+    WorkerMaintenanceUnavailableError,
+)
 from .models import (
     ConfirmMemoryRequest,
     AgentSnapshot,
@@ -575,6 +579,18 @@ def semantic_router() -> APIRouter:
             from .errors import ConflictError
 
             raise ConflictError("preference path and payload keys differ")
+        # Path-level resource guards keep opt-out available during degradation.
+        # Enabling either private-location capability is not an opt-out and
+        # therefore still requires a live retention/erasure worker.
+        if value.enabled:
+            maintenance = await store.maintenance_inspector.inspect(
+                observed_after=store.maintenance_observed_after,
+            )
+            if not maintenance.ready:
+                raise WorkerMaintenanceUnavailableError(
+                    "preference opt-in requires a current retention worker",
+                    details=maintenance.as_public_dict(),
+                )
         return await store.database.run_serializable(
             lambda: store.set_preference(principal, value)
         )

@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import column
 from sqlalchemy.dialects import postgresql
 
+from app.maintenance import WorkerMaintenanceStatus
 from app.models import Phase2JourneyEvaluation
 from app.phase2 import (
     PHASE2_RULE_VERSION,
@@ -141,6 +142,7 @@ def test_500_events_cannot_bypass_the_seven_day_window() -> None:
         journeys=[],
         policy_version="home-agent-mvp-v1",
         policy_digest="a" * 64,
+        worker_maintenance_status="current",
     )
 
     assert result.evidence_requirement_met
@@ -151,7 +153,7 @@ def test_500_events_cannot_bypass_the_seven_day_window() -> None:
     assert result.relevant_envelopes == 500
     assert result.excluded_snapshot_envelopes == 200
     assert result.excluded_gap_envelopes == 4
-    assert result.contract == "phase2-record-only-gate-v2"
+    assert result.contract == "phase2-record-only-gate-v3"
     assert result.rule_version == PHASE2_RULE_VERSION
     assert result.policy_version == "home-agent-mvp-v1"
     assert result.policy_digest == "a" * 64
@@ -169,6 +171,7 @@ def test_three_selected_journeys_are_informational_and_cannot_advance() -> None:
         journeys=journeys,
         policy_version="home-agent-mvp-v1",
         policy_digest="a" * 64,
+        worker_maintenance_status="current",
     )
 
     assert result.time_requirement_met
@@ -191,6 +194,7 @@ def test_existing_visits_are_never_automatically_treated_as_journeys() -> None:
         journeys=[],
         policy_version="home-agent-mvp-v1",
         policy_digest="a" * 64,
+        worker_maintenance_status="current",
     )
 
     assert result.qualifying_controlled_journeys == 0
@@ -213,6 +217,7 @@ def test_gate_cannot_authorize_advancement_from_a_later_rollout_mode() -> None:
         journeys=[],
         policy_version="home-agent-mvp-v1",
         policy_digest="a" * 64,
+        worker_maintenance_status="current",
     )
 
     assert not result.ready_to_advance
@@ -229,6 +234,7 @@ def test_empty_database_has_explicit_blockers() -> None:
         journeys=[],
         policy_version="home-agent-mvp-v1",
         policy_digest="a" * 64,
+        worker_maintenance_status="current",
     )
 
     assert result.started_at is None
@@ -266,6 +272,11 @@ class _BoundedDatabase:
         yield self.connection
 
 
+class _CurrentMaintenanceInspector:
+    async def inspect_in_transaction(self, _connection, **_kwargs):
+        return WorkerMaintenanceStatus("current")
+
+
 @pytest.mark.asyncio
 async def test_onboarding_inspection_reads_only_two_bounded_evidence_rows(
     monkeypatch,
@@ -276,12 +287,14 @@ async def test_onboarding_inspection_reads_only_two_bounded_evidence_rows(
         raise AssertionError("onboarding must not hash the promotion boundary")
 
     monkeypatch.setattr("app.phase2.phase2_input_digest", digest_must_not_run)
-    result = await Phase2GateInspector(
+    inspector = Phase2GateInspector(
         database,  # type: ignore[arg-type]
         rollout_mode="record_only",
         policy_version="home-agent-mvp-v1",
         policy_digest="a" * 64,
-    ).inspect_onboarding(now=START + timedelta(days=7))
+    )
+    inspector.maintenance_inspector = _CurrentMaintenanceInspector()  # type: ignore[assignment]
+    result = await inspector.inspect_onboarding(now=START + timedelta(days=7))
 
     assert result.ready_to_advance
     assert result.blockers == ()
@@ -351,13 +364,31 @@ async def test_onboarding_inspection_has_only_fixed_coarse_blockers(
     query_count,
 ) -> None:
     database = _BoundedDatabase(values)
-    result = await Phase2GateInspector(
+    inspector = Phase2GateInspector(
         database,  # type: ignore[arg-type]
         rollout_mode=rollout_mode,
         policy_version="home-agent-mvp-v1",
         policy_digest="a" * 64,
-    ).inspect_onboarding(now=now)
+    )
+    inspector.maintenance_inspector = _CurrentMaintenanceInspector()  # type: ignore[assignment]
+    result = await inspector.inspect_onboarding(now=now)
 
     assert result.ready_to_advance is (not expected_blockers)
     assert result.blockers == expected_blockers
     assert len(database.connection.statements) == query_count
+
+
+@pytest.mark.asyncio
+async def test_onboarding_blocks_when_worker_maintenance_is_not_current() -> None:
+    database = _BoundedDatabase([START, uuid.uuid4()])
+    inspector = Phase2GateInspector(
+        database,  # type: ignore[arg-type]
+        rollout_mode="record_only",
+        policy_version="home-agent-mvp-v1",
+        policy_digest="a" * 64,
+    )
+
+    result = await inspector.inspect_onboarding(now=START + timedelta(days=7))
+
+    assert not result.ready_to_advance
+    assert result.blockers == ("worker_maintenance_not_current",)

@@ -45,6 +45,11 @@ def test_rollout_authorization_is_content_free_and_transition_unique() -> None:
         "policy_version",
         "policy_digest",
         "input_digest",
+        "worker_instance_id",
+        "worker_success_sequence",
+        "worker_kernel_version",
+        "worker_maintenance_succeeded_at",
+        "worker_proof_digest",
         "readiness_evaluated_at",
         "authorized_at",
     }

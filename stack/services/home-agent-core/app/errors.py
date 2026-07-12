@@ -39,3 +39,8 @@ class ValidationDomainError(DomainError):
 class CapabilityDisabledError(DomainError):
     status_code = 409
     code = "capability_disabled"
+
+
+class WorkerMaintenanceUnavailableError(DomainError):
+    status_code = 503
+    code = "worker_maintenance_unavailable"

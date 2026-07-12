@@ -1095,6 +1095,140 @@ policy_digests = Table(
 )
 
 
+worker_maintenance_state = Table(
+    "worker_maintenance_state",
+    metadata,
+    Column("state_key", String(32), primary_key=True),
+    Column("worker_instance_id", UUID_PK, nullable=False),
+    Column("database_started_at", DateTime(timezone=True), nullable=False),
+    Column("kernel_version", String(128), nullable=False),
+    Column("state", String(16), nullable=False),
+    Column("started_at", DateTime(timezone=True), nullable=False),
+    Column("heartbeat_at", DateTime(timezone=True), nullable=False),
+    Column("heartbeat_sequence", BigInteger, nullable=False),
+    Column("maintenance_attempted_at", DateTime(timezone=True)),
+    Column("maintenance_succeeded_at", DateTime(timezone=True)),
+    Column("success_sequence", BigInteger, nullable=False),
+    Column("consecutive_failures", Integer, nullable=False),
+    Column("last_error_code", String(64)),
+    Column("stopped_at", DateTime(timezone=True)),
+    Column("spool_rows_pruned", BigInteger),
+    Column("binding_retention_receipt", JSONB),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "state_key = 'durable_worker'", name="singleton"
+    ),
+    CheckConstraint(
+        "substring(worker_instance_id::text from 15 for 1) IN ('4','7') "
+        "AND substring(worker_instance_id::text from 20 for 1) IN "
+        "('8','9','a','b')",
+        name="random_instance",
+    ),
+    CheckConstraint(
+        "kernel_version = 'worker-maintenance-cycle-v1'",
+        name="kernel_version",
+    ),
+    CheckConstraint(
+        "state IN ('starting','running','degraded','stopping')",
+        name="state_value",
+    ),
+    CheckConstraint(
+        "heartbeat_sequence >= 1 AND success_sequence >= 0 "
+        "AND consecutive_failures >= 0",
+        name="sequences",
+    ),
+    CheckConstraint(
+        "database_started_at <= started_at "
+        "AND started_at <= heartbeat_at "
+        "AND heartbeat_at <= updated_at "
+        "AND (maintenance_attempted_at IS NULL "
+        "OR (maintenance_attempted_at >= started_at "
+        "AND maintenance_attempted_at <= updated_at)) "
+        "AND (maintenance_succeeded_at IS NULL "
+        "OR (maintenance_succeeded_at >= started_at "
+        "AND maintenance_succeeded_at <= updated_at)) "
+        "AND (stopped_at IS NULL "
+        "OR (stopped_at >= started_at AND stopped_at <= updated_at))",
+        name="time_order",
+    ),
+    CheckConstraint(
+        "(success_sequence = 0 "
+        "AND maintenance_succeeded_at IS NULL "
+        "AND spool_rows_pruned IS NULL "
+        "AND binding_retention_receipt IS NULL) "
+        "OR (success_sequence > 0 "
+        "AND maintenance_succeeded_at IS NOT NULL "
+        "AND spool_rows_pruned IS NOT NULL "
+        "AND spool_rows_pruned >= 0 "
+        "AND binding_retention_receipt IS NOT NULL)",
+        name="success_shape",
+    ),
+    CheckConstraint(
+        "(consecutive_failures = 0 AND last_error_code IS NULL) "
+        "OR (consecutive_failures > 0 AND last_error_code IN "
+        "('runtime_spool_prune_failed','binding_retention_failed',"
+        "'worker_loop_failed'))",
+        name="failure_shape",
+    ),
+    CheckConstraint(
+        "(state = 'starting' AND success_sequence = 0 "
+        "AND maintenance_attempted_at IS NULL "
+        "AND consecutive_failures = 0 AND stopped_at IS NULL) "
+        "OR (state = 'running' AND success_sequence > 0 "
+        "AND maintenance_attempted_at IS NOT NULL "
+        "AND maintenance_succeeded_at IS NOT NULL "
+        "AND maintenance_attempted_at <= maintenance_succeeded_at "
+        "AND consecutive_failures = 0 AND stopped_at IS NULL) "
+        "OR (state = 'degraded' AND consecutive_failures > 0 "
+        "AND maintenance_attempted_at IS NOT NULL AND stopped_at IS NULL) "
+        "OR (state = 'stopping' AND stopped_at IS NOT NULL)",
+        name="state_shape",
+    ),
+    CheckConstraint(
+        "binding_retention_receipt IS NULL OR ("
+        "jsonb_typeof(binding_retention_receipt) = 'object' "
+        "AND binding_retention_receipt ?& ARRAY["
+        "'proposals_expired','staged_requests_expired',"
+        "'pending_requests_expired','requests_expired',"
+        "'proposals_purged','requests_purged'] "
+        "AND binding_retention_receipt - ARRAY["
+        "'proposals_expired','staged_requests_expired',"
+        "'pending_requests_expired','requests_expired',"
+        "'proposals_purged','requests_purged'] = '{}'::jsonb "
+        "AND jsonb_typeof(binding_retention_receipt->"
+        "'proposals_expired') = 'number' "
+        "AND (binding_retention_receipt->>'proposals_expired') "
+        "~ '^[0-9]+$' "
+        "AND jsonb_typeof(binding_retention_receipt->"
+        "'staged_requests_expired') = 'number' "
+        "AND (binding_retention_receipt->>'staged_requests_expired') "
+        "~ '^[0-9]+$' "
+        "AND jsonb_typeof(binding_retention_receipt->"
+        "'pending_requests_expired') = 'number' "
+        "AND (binding_retention_receipt->>'pending_requests_expired') "
+        "~ '^[0-9]+$' "
+        "AND jsonb_typeof(binding_retention_receipt->"
+        "'requests_expired') = 'number' "
+        "AND (binding_retention_receipt->>'requests_expired') "
+        "~ '^[0-9]+$' "
+        "AND jsonb_typeof(binding_retention_receipt->"
+        "'proposals_purged') = 'number' "
+        "AND (binding_retention_receipt->>'proposals_purged') "
+        "~ '^[0-9]+$' "
+        "AND jsonb_typeof(binding_retention_receipt->"
+        "'requests_purged') = 'number' "
+        "AND (binding_retention_receipt->>'requests_purged') "
+        "~ '^[0-9]+$' "
+        "AND (binding_retention_receipt->>'requests_expired')::numeric = "
+        "(binding_retention_receipt->>'staged_requests_expired')::numeric + "
+        "(binding_retention_receipt->>'pending_requests_expired')::numeric)",
+        name="receipt_shape",
+    ),
+    prefixes=["UNLOGGED"],
+    schema="operations",
+)
+
+
 rollout_authorizations = Table(
     "rollout_authorizations",
     metadata,
@@ -1106,6 +1240,15 @@ rollout_authorizations = Table(
     Column("policy_version", String(128), nullable=False),
     Column("policy_digest", String(64), nullable=False),
     Column("input_digest", String(64), nullable=False),
+    Column("worker_instance_id", UUID_PK, nullable=False),
+    Column("worker_success_sequence", BigInteger, nullable=False),
+    Column("worker_kernel_version", String(128), nullable=False),
+    Column(
+        "worker_maintenance_succeeded_at",
+        DateTime(timezone=True),
+        nullable=False,
+    ),
+    Column("worker_proof_digest", String(64), nullable=False),
     Column("readiness_evaluated_at", DateTime(timezone=True), nullable=False),
     Column("authorized_at", DateTime(timezone=True), nullable=False, server_default=NOW),
     UniqueConstraint("from_mode", "to_mode", name="rollout_transition_once"),
@@ -1120,6 +1263,23 @@ rollout_authorizations = Table(
     CheckConstraint(
         "input_digest ~ '^[0-9a-f]{64}$'",
         name="rollout_input_digest",
+    ),
+    CheckConstraint(
+        "substring(worker_instance_id::text from 15 for 1) IN ('4','7') "
+        "AND substring(worker_instance_id::text from 20 for 1) IN "
+        "('8','9','a','b')",
+        name="worker_random_instance",
+    ),
+    CheckConstraint(
+        "worker_success_sequence > 0 "
+        "AND worker_kernel_version = 'worker-maintenance-cycle-v1' "
+        "AND worker_proof_digest ~ '^[0-9a-f]{64}$'",
+        name="worker_proof_shape",
+    ),
+    CheckConstraint(
+        "worker_maintenance_succeeded_at <= readiness_evaluated_at "
+        "AND readiness_evaluated_at <= authorized_at",
+        name="worker_proof_time",
     ),
     schema="operations",
 )

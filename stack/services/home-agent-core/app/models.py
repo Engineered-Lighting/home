@@ -31,6 +31,20 @@ OnboardingPhase2Blocker = Literal[
     "no_durable_envelopes",
     "minimum_observation_window_not_elapsed",
     "qualifying_redacted_envelope_threshold_not_met",
+    "worker_maintenance_not_current",
+]
+WorkerMaintenanceCode = Literal[
+    "current",
+    "missing",
+    "instance_unobserved",
+    "heartbeat_stale",
+    "maintenance_missing",
+    "maintenance_failed",
+    "maintenance_stale",
+    "stopped",
+    "future",
+    "kernel_mismatch",
+    "unavailable",
 ]
 
 
@@ -219,9 +233,9 @@ class Phase2JourneyEvaluation(StrictModel):
 
 
 class Phase2ReadinessView(StrictModel):
-    contract: Literal["phase2-record-only-gate-v2"] = "phase2-record-only-gate-v2"
-    rule_version: Literal["record-only-envelope-gate-v2"] = (
-        "record-only-envelope-gate-v2"
+    contract: Literal["phase2-record-only-gate-v3"] = "phase2-record-only-gate-v3"
+    rule_version: Literal["record-only-envelope-worker-gate-v3"] = (
+        "record-only-envelope-worker-gate-v3"
     )
     input_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     policy_version: str
@@ -247,6 +261,8 @@ class Phase2ReadinessView(StrictModel):
     controlled_journeys: list[Phase2JourneyEvaluation]
     evidence_requirement_met: bool
     threshold_path: Literal["events", "none"]
+    worker_maintenance_status: WorkerMaintenanceCode
+    worker_maintenance_current: bool
     ready_to_advance: bool
     blockers: list[str]
     qualifying_envelopes_are_redacted: Literal[True] = True
@@ -261,7 +277,7 @@ class Phase2ReadinessView(StrictModel):
 
 class RolloutAuthorizationRequest(StrictModel):
     operator_request_id: uuid.UUID
-    expected_rule_version: Literal["record-only-envelope-gate-v2"]
+    expected_rule_version: Literal["record-only-envelope-worker-gate-v3"]
     expected_policy_version: str = Field(min_length=1, max_length=128)
     expected_policy_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     expected_input_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -275,8 +291,8 @@ class RolloutAuthorizationRequest(StrictModel):
 
 
 class RolloutAuthorizationView(StrictModel):
-    contract: Literal["rollout-authorization-receipt-v1"] = (
-        "rollout-authorization-receipt-v1"
+    contract: Literal["rollout-authorization-receipt-v2"] = (
+        "rollout-authorization-receipt-v2"
     )
     authorization_id: uuid.UUID
     operator_request_id: uuid.UUID
@@ -286,6 +302,9 @@ class RolloutAuthorizationView(StrictModel):
     policy_version: str
     policy_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     input_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    worker_kernel_version: Literal["worker-maintenance-cycle-v1"]
+    worker_success_sequence: int = Field(gt=0)
+    worker_proof_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     readiness_evaluated_at: datetime
     authorized_at: datetime
 
@@ -664,6 +683,7 @@ class HealthView(StrictModel):
     restore_gate: str
     rollout_authorization: str
     outbox: dict[str, Any]
+    worker_maintenance: dict[str, WorkerMaintenanceCode]
     spool: dict[str, Any]
     resources: dict[str, Any]
     policy_version: str

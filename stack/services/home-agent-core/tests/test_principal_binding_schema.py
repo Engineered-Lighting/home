@@ -867,7 +867,7 @@ async def test_partial_uniqueness_state_shapes_rls_and_runtime_grants() -> None:
                 .one()
             )
             assert dict(function_grants) == {
-                "worker_execute": True,
+                "worker_execute": False,
                 "erasure_execute": True,
                 "api_execute": False,
                 "operator_execute": False,
@@ -902,6 +902,7 @@ async def test_worker_expiry_is_content_free_and_preserves_graph_invariants() ->
     cutoff = datetime.now(UTC) - timedelta(seconds=1)
     requested_at = cutoff - timedelta(minutes=16)
     expires_at = cutoff - timedelta(minutes=1)
+    worker_instance_id = uuid.uuid4()
     try:
         async with owner.transaction(binding_operator=True) as connection:
             await connection.execute(
@@ -971,10 +972,28 @@ async def test_worker_expiry_is_content_free_and_preserves_graph_invariants() ->
                 )
             )
         async with worker.transaction() as connection:
+            assert (
+                await connection.execute(
+                    text(
+                        "SELECT operations.register_worker_maintenance(:instance)"
+                    ),
+                    {"instance": worker_instance_id},
+                )
+            ).scalar_one() is True
             receipt = (
                 await connection.execute(
-                    text("SELECT privacy.expire_principal_binding_work(:cutoff)"),
-                    {"cutoff": cutoff},
+                    text(
+                        "SELECT operations.run_worker_maintenance_cycle("
+                        ":instance, 0)"
+                    ),
+                    {"instance": worker_instance_id},
+                )
+            ).scalar_one()
+            maintenance_attempted_at = (
+                await connection.execute(
+                    select(
+                        schema.worker_maintenance_state.c.maintenance_attempted_at
+                    )
                 )
             ).scalar_one()
         assert receipt == {
@@ -998,7 +1017,7 @@ async def test_worker_expiry_is_content_free_and_preserves_graph_invariants() ->
                 )
             ).one()
             assert row.state == "expired"
-            assert row.closed_at == cutoff
+            assert row.closed_at == maintenance_attempted_at
             staged_states = (
                 await connection.execute(
                     select(
@@ -1048,5 +1067,6 @@ async def test_worker_expiry_is_content_free_and_preserves_graph_invariants() ->
                     schema.people.c.person_id == staged_person_id
                 )
             )
+            await connection.execute(delete(schema.worker_maintenance_state))
         await worker.close()
         await owner.close()

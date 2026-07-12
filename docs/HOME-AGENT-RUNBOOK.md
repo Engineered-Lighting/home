@@ -504,15 +504,16 @@ Confirm:
 The read-only operator endpoint
 `GET /v1/operator-rollout/phase2-readiness` is the canonical counter for this
 gate. It requires both the operator bearer and offline bootstrap credential and
-returns the fixed `phase2-record-only-gate-v2` JSON contract. The observation
+returns the fixed `phase2-record-only-gate-v3` JSON contract. The observation
 window begins at the first qualifying redacted transition envelope's database
 ingest time; older conversation, snapshot, or other irrelevant headers cannot
 age the gate. Advancement counts only accepted location-related `state_changed` or
 `location_fix` envelopes with continuous or Recorder-reconstructed coverage
 whose durable header proves identity, HA context, source event ID, and raw
-payload were suppressed. Conversation metadata and raw-retained location never
-advance this gate. Startup snapshots, snapshot-only recovery, coverage gaps,
-unknown coverage, duplicates, and quarantine rows never advance it.
+payload were suppressed. Conversation metadata, raw-retained location, and
+headers suppressed because the retention worker was unavailable never advance
+this gate. Startup snapshots, snapshot-only recovery, coverage gaps, unknown
+coverage, duplicates, and quarantine rows never advance it.
 
 The endpoint never discovers or auto-counts visits. To inspect a controlled
 journey, repeat a paired `controlled_principal_id=<uuid>` and
@@ -535,10 +536,12 @@ An empty journey query therefore reports zero journeys even if visit rows
 exist. A qualifying journey is still informational and never changes
 `ready_to_advance`. This keeps the default-off consent path intact: record-only
 advances only through 500 redacted envelope headers. `ready_to_advance=true`
-requires the seven-day window, the 500-envelope threshold, and the deployment
-still being in `record_only`; the endpoint cannot change rollout mode.
+requires the seven-day window, the 500-envelope threshold, a current fenced
+worker-maintenance proof, and the deployment still being in `record_only`; the
+endpoint cannot change rollout mode. The response exposes only a categorical
+worker status, not its instance ID, timestamps, retention counts, or errors.
 
-After reviewing a ready v2 response, create a JSON object with a new random
+After reviewing a ready v3 response, create a JSON object with a new random
 UUIDv4/UUIDv7 `operator_request_id` and the response's exact values renamed to
 `expected_rule_version`, `expected_policy_version`,
 `expected_policy_digest`, and `expected_input_digest`. Feed that content-free
@@ -554,11 +557,15 @@ The one-shot is the only service that receives the `home_agent_rollout`
 database credential. It has no API, port, API network, bearer, knowledge key,
 spool key, or ledger key; Core API is SELECT-only on receipts. Before writing,
 it verifies the exact migration, independent erasure-ledger head, and normal or
-warning storage budget. It then recomputes readiness inside the serializable
-receipt transaction. An exact retry returns the same receipt, while a reused
+warning storage budget. It then recomputes readiness and snapshots the current
+worker proof inside the serializable receipt transaction. An exact retry
+returns the same receipt, while a reused
 request UUID, policy drift, rule drift, or evidence drift fails closed. The
-receipt stores random IDs, mode transition, policy/rule/input digests, and
-timestamps only—never names, entities, payloads, or coordinates. No online
+public receipt stores random IDs, mode transition, policy/rule/input digests,
+worker kernel version, worker success sequence, worker proof digest, and
+timestamps. The database-only snapshot also retains the random worker instance
+ID and maintenance-success timestamp needed to verify that proof. All fields
+are content-free—never names, entities, payloads, or coordinates. No online
 authorization endpoint exists, and the one-shot never changes
 `HOME_AGENT_ROLLOUT_MODE`.
 

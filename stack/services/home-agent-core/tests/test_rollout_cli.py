@@ -37,7 +37,7 @@ def settings_for(tmp_path) -> Settings:
 def request_payload() -> dict[str, str]:
     return {
         "operator_request_id": str(uuid.uuid4()),
-        "expected_rule_version": "record-only-envelope-gate-v2",
+        "expected_rule_version": "record-only-envelope-worker-gate-v3",
         "expected_policy_version": "home-agent-mvp-v1",
         "expected_policy_digest": POLICY_DIGEST,
         "expected_input_digest": "b" * 64,
@@ -119,7 +119,7 @@ async def test_one_shot_checks_migration_restore_and_disk_before_receipt(
 
         async def migration_revision(self):
             events.append("migration")
-            return "0005_principal_binding_proposals"
+            return "0006_worker_maintenance_health"
 
         async def close(self):
             events.append("close")
@@ -151,6 +151,9 @@ async def test_one_shot_checks_migration_restore_and_disk_before_receipt(
                 policy_version=value.expected_policy_version,
                 policy_digest=value.expected_policy_digest,
                 input_digest=value.expected_input_digest,
+                worker_kernel_version="worker-maintenance-cycle-v1",
+                worker_success_sequence=1,
+                worker_proof_digest="c" * 64,
                 readiness_evaluated_at=now,
                 authorized_at=now,
             )
@@ -177,4 +180,7 @@ async def test_one_shot_checks_migration_restore_and_disk_before_receipt(
         "readiness_evaluated_at",
         "rule_version",
         "to_mode",
+        "worker_kernel_version",
+        "worker_proof_digest",
+        "worker_success_sequence",
     }

@@ -16,6 +16,8 @@ from .auth import (
 )
 from .errors import (
     CapabilityDisabledError,
+    OptionalWorkSuspendedError,
+    StorageReadOnlyDegradedError,
     ValidationDomainError,
     WorkerMaintenanceUnavailableError,
 )
@@ -49,7 +51,6 @@ from .models import (
     OperatorPrincipalBindingRequestsView,
     MemoryInspection,
     OnboardingStatusView,
-    ParentConfirmation,
     ParentPresenceView,
     Phase2ReadinessView,
     PersonCreate,
@@ -72,6 +73,7 @@ from .models import (
     VisitView,
 )
 from .phase2 import ControlledJourneyReference, Phase2GateInspector
+from .resources import inspect_disk_budget
 from .store import CoreStore
 
 
@@ -555,18 +557,6 @@ def semantic_router() -> APIRouter:
         )
         return {"binding_id": binding_id}
 
-    @router.post(
-        "/relationships/parent-confirmations", response_model=MemoryTransactionView
-    )
-    async def confirm_parent(
-        value: ParentConfirmation,
-        principal: Principal,
-        store: Store,
-    ) -> MemoryTransactionView:
-        return await store.database.run_serializable(
-            lambda: store.confirm_parent(principal, value)
-        )
-
     @router.put("/preferences/{key}")
     async def set_preference(
         key: str,
@@ -579,9 +569,37 @@ def semantic_router() -> APIRouter:
 
             raise ConflictError("preference path and payload keys differ")
         # Path-level resource guards keep opt-out available during degradation.
-        # Enabling either private-location capability is not an opt-out and
-        # therefore still requires a live retention/erasure worker.
+        # Enabling either private-location capability is optional work. Recheck
+        # the body-aware branch here because path middleware deliberately lets
+        # the same route through for privacy-essential disable requests.
         if value.enabled:
+            try:
+                disk_state = inspect_disk_budget(
+                    store.settings.storage_monitor_path
+                ).state
+            except Exception:
+                # Resource inspection is a security boundary for opt-in. An
+                # unexpected implementation/runtime failure is unavailable,
+                # never permission to begin retaining private location.
+                disk_state = "unavailable"
+            if disk_state not in {
+                "normal",
+                "warn",
+                "stop_optional",
+                "read_only",
+                "unavailable",
+            }:
+                disk_state = "unavailable"
+            if disk_state == "stop_optional":
+                raise OptionalWorkSuspendedError(
+                    "preference opt-in is suspended by the resource budget",
+                    details={"disk_state": disk_state},
+                )
+            if disk_state in {"read_only", "unavailable"}:
+                raise StorageReadOnlyDegradedError(
+                    "preference opt-in is disabled by the resource budget",
+                    details={"disk_state": disk_state},
+                )
             maintenance = await store.maintenance_inspector.inspect(
                 observed_after=store.maintenance_observed_after,
             )

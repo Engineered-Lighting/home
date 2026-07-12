@@ -470,9 +470,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "persistent_memory": (
                     "operator_and_confirmation_gated"
                     if settings.rollout_mode == "canary"
-                    else settings.rollout_mode
+                    else "disabled"
                 ),
-                "location_visits": "principal_consent_gated",
+                "location_visits": (
+                    "principal_consent_gated"
+                    if settings.rollout_mode == "canary"
+                    else "disabled"
+                ),
+                "location_retention": (
+                    "principal_consent_gated"
+                    if settings.rollout_mode == "canary"
+                    else "disabled"
+                ),
+                "preference_opt_in": (
+                    "principal_consent_gated"
+                    if settings.rollout_mode == "canary"
+                    else "disabled"
+                ),
+                "preference_opt_out": "enabled",
                 "private_initiatives": "disabled",
                 "physical_actions": "disabled",
                 "active_room": "disabled",

@@ -27,7 +27,6 @@ const BROWSER_API_ROUTES = Object.freeze([
   ["POST", /^\/api\/agent\/v1\/memory-transactions$/],
   ["GET", new RegExp(`^/api/agent/v1/memory-transactions/${UUID_PATH}$`, "i")],
   ["POST", new RegExp(`^/api/agent/v1/memory-transactions/${UUID_PATH}/confirm$`, "i")],
-  ["POST", /^\/api\/agent\/v1\/relationships\/parent-confirmations$/i],
   ["PUT", /^\/api\/agent\/v1\/preferences\/(location_memory|travel_greetings)$/],
   ["POST", new RegExp(`^/api/agent/v1/facts/${UUID_PATH}/correction-preview$`, "i")],
   ["POST", new RegExp(`^/api/agent/v1/descriptor-corrections/${UUID_PATH}/confirm$`, "i")],

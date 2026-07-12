@@ -175,6 +175,13 @@ CSRF proof; request/cancel bodies must be `{}`, and confirmation accepts only
 `proposal_digest` plus `confirmation_nonce`. Browser-supplied HA, person,
 principal, or actor identifiers are rejected and never forwarded to Core.
 
+Direct parent confirmation is absent from both browser and native BFF
+allowlists. Explicit parent facts remain disabled until a separate reviewed
+flow stages the exact candidate set server-side, binds a private preview to a
+digest, and commits the complete reviewed set atomically from one authenticated
+confirmation. A client-supplied parent or child UUID is never confirmation
+authority.
+
 All outbound HA and Core fetches set `redirect=error`; access tokens, refresh
 tokens, service credentials, and semantic request bodies are never followed to
 a 3xx destination.

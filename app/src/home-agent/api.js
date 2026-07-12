@@ -136,6 +136,11 @@
         },
       });
     }
+    disablePreference(key) {
+      // Rollback/containment UI uses a direction-fixed method so it cannot
+      // accidentally turn a stale consent back on through toggle logic.
+      return this.setPreference(key, false);
+    }
     proposeMemory(visitId, exactText) {
       if (this.invoke) return this.native("native_agent_propose_memory", { visitId, exactText })
         .then((value) => this.nativePayload(value));

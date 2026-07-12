@@ -97,6 +97,15 @@ mutations fail closed. Record-only ingest continues redacted delivery but does
 not write sensitive raw spool content until maintenance recovers. Cancellation,
 opt-out, forgetting, and erasure remain available.
 
+Rollout mode is independent retention authority. Health reports precise
+location retention and visit projection as disabled in record-only and shadow,
+even when an enabled preference row survived rollback. Authenticated snapshots
+still carry their typed subject and capability envelope, but non-canary reads do
+not query or return visit metadata. Browser and native clients reduce that
+response to the two stored preference booleans plus categorical rollout/opt-out
+state, discarding the subject envelope. Preference opt-out remains enabled in
+every mode, while opt-in is canary-only.
+
 `/readyz` stays unavailable until the database reports migration
 `0006_worker_maintenance_health`.
 
@@ -107,7 +116,7 @@ Edge:
 - `POST /v1/ingest/envelopes`
 - `GET /v1/ingest/privacy-policy`
 
-BFF browser semantic API:
+Core semantic API (the BFF exposes only its narrower explicit allowlist):
 
 - `GET /v1/snapshot`
 - `GET /v1/principal-binding-proposal`
@@ -116,8 +125,7 @@ BFF browser semantic API:
 - `POST /v1/principal-binding-proposal/confirm`
 - `POST /v1/source-entity-bindings`
 - `POST /v1/people/legacy-role-labels`
-- `POST /v1/relationships/parent-confirmations`
-- `PUT /v1/preferences/{key}`
+- `PUT /v1/preferences/{key}` (disable in every rollout; enable only in canary)
 - `POST /v1/places`
 - `POST /v1/visits`
 - `POST /v1/memory-transactions` (typed Itaipava descriptor proposal)
@@ -131,6 +139,11 @@ BFF browser semantic API:
 - `POST /v1/facts/{id}/forget-preview`
 - `POST /v1/erasure-requests/{id}/confirm`
 - `GET /v1/erasure-requests/{id}`
+
+There is no direct parent-confirmation API. Caller-supplied parent/child UUIDs
+cannot create a single relationship edge, even with the Core service bearer.
+Explicit parent facts remain disabled until a future server-staged,
+digest-bound, atomic reviewed two-parent protocol replaces that authority.
 
 Operator-only identity review (never proxied through the BFF):
 
@@ -253,16 +266,17 @@ the four exact BFF routes, while proposal staging uses the separate
 `home_agent_binding_operator` database role and is never BFF-routed. Neither a
 BFF credential nor an arbitrary HA UUID can bootstrap identity authority.
 
-Once a reviewed `device_tracker.*` binding, encrypted locality, and the two
-separate opt-ins exist, the ingest role projects a visit directly from two
+Only in canary, once a reviewed `device_tracker.*` binding, encrypted locality,
+and the two separate opt-ins exist, the ingest role projects a visit from two
 distinct-root, <=50 m fixes over at least ten minutes. It ignores copied
 `person.*` projections, snapshot-only coverage, tracker switches, stale fixes,
 overlapping localities, and locations outside reviewed private localities. Only
 localities explicitly marked `travel_greeting_eligible` can create the single
 private Tauri initiative.
 
-Before that tracker binding and `location_memory` opt-in, precise person,
-tracker, zone, and snapshot payloads are never written to `runtime.sqlite`.
+Outside canary—or before that tracker binding and `location_memory` opt-in—
+precise person, tracker, zone, and snapshot payloads are never written to
+`runtime.sqlite`. A stale enabled preference cannot override rollout mode.
 `do_not_track` and `ignored` directives apply the same fail-closed gate even
 after opt-in. PostgreSQL retains only a sequence/clock header with identity,
 HA context, source lineage, and low-entropy plain digests removed; its payload

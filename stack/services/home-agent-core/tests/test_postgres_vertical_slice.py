@@ -19,7 +19,7 @@ from app.config import Settings
 from app.crypto import canonical_json
 from app.db import Database
 from app.erasure import LineageTraversalError, governed_descendants
-from app.errors import ConflictError, NotFoundError
+from app.errors import CapabilityDisabledError, ConflictError, NotFoundError
 from app.ledger import EncryptedErasureLedger, ErasureLedgerRecord
 from app.models import (
     ConfirmMemoryRequest,
@@ -31,13 +31,14 @@ from app.models import (
     IngestEnvelope,
     InitiativeClaim,
     LegacyRoleImport,
-    ParentConfirmation,
+    LocationAnchor,
     PersonCreate,
     PlaceCreate,
     PlaceLocatorInput,
     PreferenceUpdate,
     ReviewedPersonVerify,
     SourceEntityBindingCreate,
+    VisitCreate,
 )
 from app.restore import RestoreQuarantineGate, RestoreReplay, outbox_health
 from app.spool import DisabledRuntimeSpool, EncryptedRuntimeSpool
@@ -45,6 +46,7 @@ from app.store import CoreStore
 from app.worker import DurableWorker
 from tests.binding_helpers import complete_staged_principal_binding
 from tests.maintenance_helpers import seed_current_worker_maintenance
+from tests.parent_fact_helpers import seed_parent_fact_fixture
 
 
 pytestmark = pytest.mark.skipif(
@@ -253,13 +255,11 @@ async def test_complete_itaipava_commit_and_scoped_forgetting(tmp_path) -> None:
             )
 
         for parent_id in (amelia.person_id, marcelo_sr.person_id):
-            result = await store.confirm_parent(
+            result = await seed_parent_fact_fixture(
+                store,
                 principal,
-                ParentConfirmation(
-                    parent_person_id=parent_id,
-                    child_person_id=marcelo.person_id,
-                    confirmation_artifact_id=uuid.uuid4(),
-                ),
+                parent_person_id=parent_id,
+                child_person_id=marcelo.person_id,
             )
             assert result.state == "committed"
 
@@ -2213,13 +2213,11 @@ async def test_location_quality_switch_and_coverage_gates(tmp_path) -> None:
         newly_confirmed_parent = await store.create_person(
             PersonCreate(display_name="Later Confirmed Parent")
         )
-        await store.confirm_parent(
+        await seed_parent_fact_fixture(
+            store,
             property_principal,
-            ParentConfirmation(
-                parent_person_id=newly_confirmed_parent.person_id,
-                child_person_id=property_principal["person_id"],
-                confirmation_artifact_id=uuid.uuid4(),
-            ),
+            parent_person_id=newly_confirmed_parent.person_id,
+            child_person_id=property_principal["person_id"],
         )
         with pytest.raises(ConflictError, match="parent role resolution changed"):
             await store.confirm_descriptor(
@@ -2573,4 +2571,229 @@ async def test_legacy_imports_are_exactly_idempotent_and_drift_safe() -> None:
         with pytest.raises(ConflictError, match="projection drifted"):
             await store.create_person(person_value)
     finally:
+        await database.close()
+
+
+@pytest.mark.asyncio
+async def test_rollout_rollback_suppresses_stale_location_and_keeps_opt_out(
+    tmp_path,
+) -> None:
+    """A canary consent row cannot authorize retention after containment."""
+
+    runtime_key = base64.urlsafe_b64encode(b"r" * 32).decode().rstrip("=")
+    knowledge_key = base64.urlsafe_b64encode(b"s" * 32).decode().rstrip("=")
+    ledger_key = base64.urlsafe_b64encode(b"t" * 32).decode().rstrip("=")
+    canary_settings = Settings(
+        database_url=SecretStr(os.environ["TEST_DATABASE_URL"]),
+        runtime_spool_path=tmp_path / "rollback-runtime.sqlite",
+        runtime_spool_key=SecretStr(runtime_key),
+        knowledge_encryption_key=SecretStr(knowledge_key),
+        erasure_ledger_path=tmp_path / "rollback-ledger.jsonl",
+        erasure_ledger_head_path=tmp_path / "rollback-ledger.head.json",
+        erasure_ledger_key=SecretStr(ledger_key),
+        edge_token=SecretStr("rollback-edge-token-with-at-least-32-chars"),
+        service_token=SecretStr("rollback-service-token-with-at-least-32-chars"),
+        bootstrap_token=SecretStr("rollback-bootstrap-token-at-least-32-chars"),
+        policy_digest="a" * 64,
+        role="all",
+        rollout_mode="canary",
+    )
+    database = Database(canary_settings.async_database_url())
+    await _reset_test_authority(database)
+    spool = EncryptedRuntimeSpool(canary_settings.runtime_spool_path, b"r" * 32)
+    canary_store = CoreStore(database, spool, canary_settings)
+    record_only_store = CoreStore(
+        database,
+        spool,
+        canary_settings.model_copy(update={"rollout_mode": "record_only"}),
+    )
+    try:
+        person = await canary_store.create_person(
+            PersonCreate(display_name="Rollback Principal")
+        )
+        ha_user_id = f"rollback-{uuid.uuid4().hex}"
+        await complete_staged_principal_binding(
+            canary_store,
+            ha_user_id=ha_user_id,
+            person_id=person.person_id,
+        )
+        principal = await canary_store.resolve_principal(ha_user_id)
+        entity_id = f"device_tracker.rollback_{uuid.uuid4().hex[:8]}"
+        await canary_store.bind_source_entity(
+            principal,
+            SourceEntityBindingCreate(
+                entity_id=entity_id,
+                confirmation_artifact_id=uuid.uuid4(),
+            ),
+        )
+        await canary_store.set_preference(
+            principal,
+            PreferenceUpdate(
+                key="location_memory",
+                enabled=True,
+                confirmation_artifact_id=uuid.uuid4(),
+            ),
+        )
+
+        observed_at = datetime.now(UTC) - timedelta(minutes=1)
+        root_id = uuid.uuid4()
+        edge_instance_id = f"edge-rollback-{uuid.uuid4().hex}"
+        epoch = uuid.uuid4()
+        result = await record_only_store.ingest(
+            IngestBatch(
+                envelopes=[
+                    IngestEnvelope(
+                        edge_instance_id=edge_instance_id,
+                        source_name="home_assistant",
+                        epoch=epoch,
+                        sequence=1,
+                        event_type="location_fix",
+                        entity_id=entity_id,
+                        source_observed_at=observed_at,
+                        edge_received_at=observed_at,
+                        payload={
+                            "observation_kind": "transition",
+                            "new_state": {
+                                "state": "not_home",
+                                "attributes": {
+                                    "latitude": -22.4,
+                                    "longitude": -43.14,
+                                    "gps_accuracy": 20,
+                                },
+                            },
+                        },
+                        root_observation_id=root_id,
+                        evidence_family_id=root_id,
+                        dependency_domain=f"home_assistant.location:{entity_id}",
+                        coverage="continuous",
+                        metadata={
+                            "projection_type": "device_tracker",
+                            "source_platform": "home_assistant",
+                        },
+                    )
+                ]
+            )
+        )
+        assert result.accepted == 1
+        assert spool.get(f"{edge_instance_id}:home_assistant", str(epoch), 1) is None
+        async with database.transaction(
+            principal_id=principal["principal_id"]
+        ) as connection:
+            header = (
+                (
+                    await connection.execute(
+                        select(
+                            schema.envelopes.c.entity_id,
+                            schema.envelopes.c.metadata,
+                        )
+                        .select_from(
+                            schema.envelopes.join(
+                                schema.source_streams,
+                                schema.envelopes.c.stream_id
+                                == schema.source_streams.c.stream_id,
+                            )
+                        )
+                        .where(
+                            schema.source_streams.c.edge_instance_id
+                            == edge_instance_id
+                        )
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            visit_count = (
+                await connection.execute(
+                    select(func.count())
+                    .select_from(schema.visits)
+                    .where(
+                        schema.visits.c.principal_id == principal["principal_id"]
+                    )
+                )
+            ).scalar_one()
+        assert header["entity_id"] is None
+        assert header["metadata"]["raw_payload_status"] == "suppressed_rollout_mode"
+        assert visit_count == 0
+
+        disabled = await record_only_store.set_preference(
+            principal,
+            PreferenceUpdate(
+                key="location_memory",
+                enabled=False,
+                confirmation_artifact_id=uuid.uuid4(),
+            ),
+        )
+        assert disabled == {"key": "location_memory", "enabled": False}
+        with pytest.raises(
+            CapabilityDisabledError, match="requires rollout mode canary"
+        ):
+            await record_only_store.set_preference(
+                principal,
+                PreferenceUpdate(
+                    key="location_memory",
+                    enabled=True,
+                    confirmation_artifact_id=uuid.uuid4(),
+                ),
+            )
+
+        first_root = uuid.uuid4()
+        visit_value = VisitCreate(
+            first_root_observation_id=first_root,
+            observed_from=observed_at - timedelta(minutes=10),
+            observed_to=observed_at,
+            freshness="fresh",
+            coverage="sufficient",
+            anchor=LocationAnchor(
+                latitude=-22.4,
+                longitude=-43.14,
+                radius_m=40,
+                root_observation_ids=[first_root, uuid.uuid4()],
+            ),
+        )
+        with pytest.raises(
+            CapabilityDisabledError, match="requires rollout mode canary"
+        ):
+            await record_only_store.create_visit(principal, visit_value)
+
+        await canary_store.set_preference(
+            principal,
+            PreferenceUpdate(
+                key="location_memory",
+                enabled=True,
+                confirmation_artifact_id=uuid.uuid4(),
+            ),
+        )
+        created_visit = await canary_store.create_visit(principal, visit_value)
+        assert created_visit.principal_id == principal["principal_id"]
+        canary_snapshot = await canary_store.snapshot(principal)
+        assert canary_snapshot.rollout_mode == "canary"
+        assert canary_snapshot.latest_visit is not None
+        assert canary_snapshot.capabilities["location_retention"] == "enabled"
+        assert canary_snapshot.capabilities["location_visits"] == "enabled"
+        assert canary_snapshot.capabilities["preference_opt_in"] == "enabled"
+        assert canary_snapshot.capabilities["preference_opt_out"] == "enabled"
+
+        for contained_mode in ("record_only", "shadow"):
+            contained_store = CoreStore(
+                database,
+                spool,
+                canary_settings.model_copy(update={"rollout_mode": contained_mode}),
+            )
+            contained_snapshot = await contained_store.snapshot(principal)
+            assert contained_snapshot.rollout_mode == contained_mode
+            assert contained_snapshot.preferences == {
+                "location_memory": True,
+                "travel_greetings": False,
+            }
+            assert contained_snapshot.latest_visit is None
+            assert contained_snapshot.pending_initiatives == []
+            assert contained_snapshot.coverage_gaps == []
+            assert contained_snapshot.capabilities["persistent_memory"] == "disabled"
+            assert contained_snapshot.capabilities["location_retention"] == "disabled"
+            assert contained_snapshot.capabilities["location_visits"] == "disabled"
+            assert contained_snapshot.capabilities["preference_opt_in"] == "disabled"
+            assert contained_snapshot.capabilities["preference_opt_out"] == "enabled"
+    finally:
+        await _reset_test_authority(database)
+        spool.close()
         await database.close()

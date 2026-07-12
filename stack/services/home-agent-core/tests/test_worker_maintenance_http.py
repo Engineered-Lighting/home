@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 import pytest
 
+from app import api as api_module
 from app import main as main_module
 from app.api import semantic_router
 from app.auth import (
@@ -54,6 +55,31 @@ class Maintenance:
     async def inspect(self, **kwargs) -> WorkerMaintenanceStatus:
         self.calls.append(kwargs)
         return self.status
+
+
+class PreferenceProbeDatabase:
+    async def run_serializable(self, operation):
+        return await operation()
+
+
+class PreferenceProbeStore:
+    def __init__(self, settings: Settings, maintenance: Maintenance) -> None:
+        self.settings = settings
+        self.database = PreferenceProbeDatabase()
+        self.maintenance_inspector = maintenance
+        self.maintenance_observed_after = NOW
+        self.writes: list[bool] = []
+
+    async def resolve_principal(self, ha_user_id: str) -> dict[str, uuid.UUID]:
+        assert ha_user_id == HA_USER
+        return {
+            "principal_id": uuid.UUID("018f6f42-3a8b-7c11-8123-123456789abc"),
+            "person_id": uuid.UUID("018f6f42-3a8b-7c11-8123-123456789abd"),
+        }
+
+    async def set_preference(self, _principal, value):
+        self.writes.append(value.enabled)
+        return {"key": value.key, "enabled": value.enabled}
 
 
 def _key(byte: bytes) -> str:
@@ -193,6 +219,28 @@ def test_record_only_health_is_categorical_but_missing_worker_does_not_block_rea
     assert ready.json()["worker_maintenance"] == {"status": "missing"}
 
 
+@pytest.mark.parametrize("rollout_mode", ["record_only", "shadow"])
+def test_non_canary_health_reports_location_disabled_but_opt_out_available(
+    tmp_path, monkeypatch, rollout_mode
+) -> None:
+    app = main_module.create_app(
+        _api_settings(tmp_path, rollout_mode=rollout_mode)
+    )
+    _configure_db_less_app(app, monkeypatch, maintenance=Maintenance("current"))
+
+    with TestClient(app) as client:
+        health = client.get("/healthz")
+
+    assert health.status_code == 200
+    assert health.json()["rollout_mode"] == rollout_mode
+    capabilities = health.json()["capabilities"]
+    assert capabilities["persistent_memory"] == "disabled"
+    assert capabilities["location_visits"] == "disabled"
+    assert capabilities["location_retention"] == "disabled"
+    assert capabilities["preference_opt_in"] == "disabled"
+    assert capabilities["preference_opt_out"] == "enabled"
+
+
 def test_canary_health_keeps_private_initiatives_disabled(
     tmp_path, monkeypatch
 ) -> None:
@@ -205,7 +253,13 @@ def test_canary_health_keeps_private_initiatives_disabled(
 
     assert health.status_code == 200
     assert health.json()["rollout_mode"] == "canary"
-    assert health.json()["capabilities"]["private_initiatives"] == "disabled"
+    capabilities = health.json()["capabilities"]
+    assert capabilities["persistent_memory"] == "operator_and_confirmation_gated"
+    assert capabilities["location_visits"] == "principal_consent_gated"
+    assert capabilities["location_retention"] == "principal_consent_gated"
+    assert capabilities["preference_opt_in"] == "principal_consent_gated"
+    assert capabilities["preference_opt_out"] == "enabled"
+    assert capabilities["private_initiatives"] == "disabled"
 
 
 def test_shadow_trusted_mutation_is_gated_but_partial_credentials_keep_401(
@@ -220,7 +274,7 @@ def test_shadow_trusted_mutation_is_gated_but_partial_credentials_keep_401(
     async def mutation_probe():
         return {"mutated": True}
 
-    service_path = "/v1/relationships/parent-confirmations"
+    service_path = "/v1/memory-transactions"
     _replace_post_route(
         app,
         service_path,
@@ -254,6 +308,30 @@ def test_shadow_trusted_mutation_is_gated_but_partial_credentials_keep_401(
     assert missing_subject.status_code == 401
     assert wrong_audience.status_code == 401
     assert len(maintenance.calls) == 1
+
+
+def test_direct_parent_confirmation_route_is_absent_in_every_rollout(
+    tmp_path, monkeypatch
+) -> None:
+    for rollout_mode in ("record_only", "shadow", "canary"):
+        app = main_module.create_app(
+            _api_settings(tmp_path, rollout_mode=rollout_mode)
+        )
+        maintenance = Maintenance("current")
+        _configure_db_less_app(app, monkeypatch, maintenance=maintenance)
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/v1/relationships/parent-confirmations",
+                headers=_service_headers(),
+                json={
+                    "parent_person_id": str(uuid.uuid4()),
+                    "child_person_id": str(uuid.uuid4()),
+                    "confirmation_artifact_id": str(uuid.uuid4()),
+                },
+            )
+
+        assert response.status_code == 404
 
 
 def test_bootstrap_and_native_channel_partial_credentials_preserve_401(
@@ -377,13 +455,21 @@ def test_ingest_route_is_not_blocked_by_worker_maintenance(
 
 
 @pytest.mark.asyncio
-async def test_preference_opt_out_survives_but_opt_in_requires_worker() -> None:
+async def test_preference_opt_out_survives_but_opt_in_requires_worker(
+    tmp_path, monkeypatch
+) -> None:
     route = next(
         route
         for route in semantic_router().routes
         if route.path == "/v1/preferences/{key}" and "PUT" in route.methods
     )
     maintenance = Maintenance("maintenance_stale")
+    settings = _api_settings(tmp_path, rollout_mode="canary")
+    monkeypatch.setattr(
+        api_module,
+        "inspect_disk_budget",
+        lambda _path: DiskBudget("normal", 90.0, 900, 1000),
+    )
 
     class Database:
         async def run_serializable(self, operation):
@@ -395,6 +481,7 @@ async def test_preference_opt_out_survives_but_opt_in_requires_worker() -> None:
         maintenance_observed_after = NOW
 
         def __init__(self) -> None:
+            self.settings = settings
             self.writes = []
 
         async def set_preference(self, _principal, value):
@@ -423,3 +510,128 @@ async def test_preference_opt_out_survives_but_opt_in_requires_worker() -> None:
     assert getattr(blocked.value, "code", None) == "worker_maintenance_unavailable"
     assert store.writes == [False]
     assert maintenance.calls == [{"observed_after": NOW}]
+
+
+def _preference_payload(*, enabled: bool) -> dict[str, object]:
+    return {
+        "key": "location_memory",
+        "enabled": enabled,
+        "confirmation_artifact_id": str(uuid.uuid4()),
+    }
+
+
+def _preference_probe_app(tmp_path, monkeypatch):
+    settings = _api_settings(tmp_path, rollout_mode="canary")
+    app = main_module.create_app(settings)
+    maintenance = Maintenance("current")
+    _configure_db_less_app(app, monkeypatch, maintenance=maintenance)
+    store = PreferenceProbeStore(settings, maintenance)
+    app.state.store = store
+    return app, store, maintenance
+
+
+def test_preference_disable_remains_available_when_storage_is_unavailable(
+    tmp_path, monkeypatch
+) -> None:
+    app, store, maintenance = _preference_probe_app(tmp_path, monkeypatch)
+    unavailable = DiskBudget("unavailable", None, None, None)
+    monkeypatch.setattr(main_module, "inspect_disk_budget", lambda _path: unavailable)
+
+    def opt_in_inspector_must_not_run(_path):
+        raise AssertionError("disable must not enter the optional-work branch")
+
+    monkeypatch.setattr(
+        api_module,
+        "inspect_disk_budget",
+        opt_in_inspector_must_not_run,
+    )
+
+    with TestClient(app) as client:
+        response = client.put(
+            "/v1/preferences/location_memory",
+            headers=_service_headers(),
+            json=_preference_payload(enabled=False),
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"key": "location_memory", "enabled": False}
+    assert store.writes == [False]
+    assert maintenance.calls == []
+
+
+@pytest.mark.parametrize("disk_state", ["normal", "warn"])
+def test_preference_opt_in_remains_available_inside_optional_work_budget(
+    tmp_path, monkeypatch, disk_state: str
+) -> None:
+    app, store, maintenance = _preference_probe_app(tmp_path, monkeypatch)
+    budget = DiskBudget(disk_state, 25.0, 250, 1000)  # type: ignore[arg-type]
+    monkeypatch.setattr(api_module, "inspect_disk_budget", lambda _path: budget)
+
+    with TestClient(app) as client:
+        response = client.put(
+            "/v1/preferences/location_memory",
+            headers=_service_headers(),
+            json=_preference_payload(enabled=True),
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"key": "location_memory", "enabled": True}
+    assert store.writes == [True]
+    assert maintenance.calls == [{"observed_after": NOW}]
+
+
+@pytest.mark.parametrize(
+    ("disk_state", "expected_status", "expected_code", "expected_detail"),
+    [
+        ("stop_optional", 503, "optional_work_suspended", "stop_optional"),
+        ("read_only", 507, "storage_read_only_degraded", "read_only"),
+        ("unavailable", 507, "storage_read_only_degraded", "unavailable"),
+        ("future_unknown", 507, "storage_read_only_degraded", "unavailable"),
+        ("inspection_error", 507, "storage_read_only_degraded", "unavailable"),
+    ],
+)
+def test_preference_opt_in_fails_closed_outside_optional_work_budget(
+    tmp_path,
+    monkeypatch,
+    disk_state: str,
+    expected_status: int,
+    expected_code: str,
+    expected_detail: str,
+) -> None:
+    app, store, maintenance = _preference_probe_app(tmp_path, monkeypatch)
+    if disk_state == "inspection_error":
+        def inspect_failure(_path):
+            raise RuntimeError("synthetic resource inspector failure")
+
+        monkeypatch.setattr(api_module, "inspect_disk_budget", inspect_failure)
+    elif disk_state == "future_unknown":
+        budget = type("UnknownDiskBudget", (), {"state": "future_unknown"})()
+        monkeypatch.setattr(api_module, "inspect_disk_budget", lambda _path: budget)
+    else:
+        budget = DiskBudget(  # type: ignore[arg-type]
+            disk_state,
+            None if disk_state == "unavailable" else 10.0,
+            None if disk_state == "unavailable" else 100,
+            None if disk_state == "unavailable" else 1000,
+        )
+        monkeypatch.setattr(api_module, "inspect_disk_budget", lambda _path: budget)
+
+    with TestClient(app) as client:
+        response = client.put(
+            "/v1/preferences/location_memory",
+            headers=_service_headers(),
+            json=_preference_payload(enabled=True),
+        )
+
+    assert response.status_code == expected_status
+    assert response.json()["error"] == {
+        "code": expected_code,
+        "message": (
+            "preference opt-in is suspended by the resource budget"
+            if expected_code == "optional_work_suspended"
+            else "preference opt-in is disabled by the resource budget"
+        ),
+        "details": {"disk_state": expected_detail},
+    }
+    assert store.writes == []
+    assert maintenance.calls == []

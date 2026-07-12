@@ -36,6 +36,25 @@ function publicNativeInstallationMaterial(session, isNative) {
   });
 }
 
+function fullAgentCapabilityEnabled(snapshot) {
+  return snapshot?.rollout_mode === "canary"
+    && snapshot?.capabilities?.persistent_memory === "enabled";
+}
+
+function containedPreferenceState(snapshot) {
+  // A contained UI intentionally discards principal/person/visit identifiers
+  // and every other snapshot field after extracting the two revocable choices.
+  const rolloutMode = ["record_only", "shadow", "canary"].includes(snapshot?.rollout_mode)
+    ? snapshot.rollout_mode
+    : "unknown";
+  return Object.freeze({
+    rollout_mode: rolloutMode,
+    location_memory: snapshot?.preferences?.location_memory === true,
+    travel_greetings: snapshot?.preferences?.travel_greetings === true,
+    opt_out_enabled: snapshot?.capabilities?.preference_opt_out === "enabled",
+  });
+}
+
 function HomeAgentPanel() {
   const api = useMemo(() => new window.HomeAgentApi(""), []);
   const activeSubject = useRef(null);
@@ -50,6 +69,7 @@ function HomeAgentPanel() {
   const [bindingProposal, setBindingProposal] = useState(null);
   const [bindingBusy, setBindingBusy] = useState(false);
   const [snapshot, setSnapshot] = useState(null);
+  const [containedPreferences, setContainedPreferences] = useState(null);
   const [relationship, setRelationship] = useState(null);
   const [presence, setPresence] = useState(null);
   const [error, setError] = useState("");
@@ -64,6 +84,7 @@ function HomeAgentPanel() {
     setBindingProposal(null);
     setBindingBusy(false);
     setSnapshot(null);
+    setContainedPreferences(null);
     setRelationship(null);
     setPresence(null);
     setTeaching(DEFAULT_DESCRIPTOR_TEXT);
@@ -109,7 +130,7 @@ function HomeAgentPanel() {
       if (!api.invoke) {
         const nextOnboarding = await api.onboardingStatus();
         if (!isCurrent()) return;
-        if (nextOnboarding?.state !== "bound" || nextOnboarding?.rollout_mode !== "canary") {
+        if (nextOnboarding?.state !== "bound") {
           clearPrincipalState();
           setOnboarding(nextOnboarding);
           if (nextOnboarding?.state === "identity_confirmation_required") {
@@ -127,11 +148,13 @@ function HomeAgentPanel() {
       }
       const nextSnapshot = await api.snapshot();
       if (!isCurrent()) return;
-      if (api.invoke && nextSnapshot?.capabilities?.persistent_memory !== "enabled") {
-        clearPrincipalState();
-        setPhase("native_contained");
+      if (!fullAgentCapabilityEnabled(nextSnapshot)) {
+        setSnapshot(null);
+        setContainedPreferences(containedPreferenceState(nextSnapshot));
+        setPhase("rollout_contained");
         return;
       }
+      setContainedPreferences(null);
       setSnapshot(nextSnapshot);
       setPhase("ready");
     } catch (cause) {
@@ -250,16 +273,29 @@ function HomeAgentPanel() {
     }
   };
 
-  const setPreference = async (key, enabled) => {
+  const enablePreference = async (key) => {
     const ticket = beginPrincipalOperation();
     setError("");
     try {
-      await api.setPreference(key, enabled);
+      await api.setPreference(key, true);
       if (!principalOperationCurrent(ticket)) return;
       await refresh();
     } catch (cause) {
       if (!principalOperationCurrent(ticket)) return;
       setError(cause.message || "preference_update_failed");
+    }
+  };
+
+  const disablePreference = async (key) => {
+    const ticket = beginPrincipalOperation();
+    setError("");
+    try {
+      await api.disablePreference(key);
+      if (!principalOperationCurrent(ticket)) return;
+      await refresh();
+    } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
+      setError(cause.message || "preference_opt_out_failed");
     }
   };
 
@@ -354,6 +390,8 @@ function HomeAgentPanel() {
     session,
     Boolean(api.invoke),
   );
+  const preferenceOptInEnabled = snapshot?.capabilities?.preference_opt_in === "enabled";
+  const preferenceOptOutEnabled = snapshot?.capabilities?.preference_opt_out === "enabled";
 
   return (
     <main className="agent-shell">
@@ -407,11 +445,37 @@ function HomeAgentPanel() {
         </section>
       )}
 
-      {phase === "native_contained" && (
+      {phase === "rollout_contained" && (
         <section className="agent-card agent-warning" role="status" aria-live="polite">
           <h2>Identity confirmed / rollout contained</h2>
-          <p>The native Agent is authenticated, but Core has not enabled canary persistent-memory capability.</p>
-          <p>Preferences, teaching, private queries, and initiatives stay unavailable. Location memory and travel greetings remain default-off.</p>
+          <p>Core rollout mode <code>{containedPreferences?.rollout_mode || "unknown"}</code> disables precise-location retention, visit projection, teaching, private queries, and initiatives.</p>
+          <p>Stored preference values remain visible only so you can revoke a choice left enabled before containment. They are not effective location authority.</p>
+          <dl className="agent-grid">
+            <dt>Stored location memory choice</dt>
+            <dd>{containedPreferences?.location_memory ? "on — ineffective" : "off"}</dd>
+            <dt>Stored travel greeting choice</dt>
+            <dd>{containedPreferences?.travel_greetings ? "on — ineffective" : "off"}</dd>
+            <dt>Effective location retention</dt><dd>disabled</dd>
+            <dt>Effective visit projection</dt><dd>disabled</dd>
+          </dl>
+          {containedPreferences?.location_memory && (
+            <button
+              disabled={!containedPreferences.opt_out_enabled}
+              onClick={() => disablePreference("location_memory")}
+            >Disable stored location memory choice</button>
+          )}{" "}
+          {containedPreferences?.travel_greetings && (
+            <button
+              disabled={!containedPreferences.opt_out_enabled}
+              onClick={() => disablePreference("travel_greetings")}
+            >Disable stored travel greeting choice</button>
+          )}
+          {!containedPreferences?.location_memory &&
+            !containedPreferences?.travel_greetings && (
+              <p>No private location opt-in is stored.</p>
+            )}
+          <p>Enabling either choice remains unavailable in this rollout mode.</p>
+          {error && <p className="agent-error" role="alert">{error}</p>}
         </section>
       )}
 
@@ -542,15 +606,26 @@ function HomeAgentPanel() {
           <section className="agent-card">
             <h2>Private location consent</h2>
             <p>Location memory and travel greetings are independent, default-off choices.</p>
-            <button onClick={() => setPreference("location_memory", !snapshot?.preferences?.location_memory)}>
-              Location memory: {snapshot?.preferences?.location_memory ? "on — disable" : "off — enable"}
-            </button>{" "}
-            <button
-              disabled={!snapshot?.preferences?.location_memory && !snapshot?.preferences?.travel_greetings}
-              onClick={() => setPreference("travel_greetings", !snapshot?.preferences?.travel_greetings)}
-            >
-              Travel greetings: {snapshot?.preferences?.travel_greetings ? "on — disable" : "off — enable"}
-            </button>
+            {snapshot?.preferences?.location_memory ? (
+              <button
+                disabled={!preferenceOptOutEnabled}
+                onClick={() => disablePreference("location_memory")}
+              >Location memory: on — disable</button>
+            ) : preferenceOptInEnabled ? (
+              <button onClick={() => enablePreference("location_memory")}>
+                Location memory: off — enable
+              </button>
+            ) : <span>Location memory: off</span>}{" "}
+            {snapshot?.preferences?.travel_greetings ? (
+              <button
+                disabled={!preferenceOptOutEnabled}
+                onClick={() => disablePreference("travel_greetings")}
+              >Travel greetings: on — disable</button>
+            ) : preferenceOptInEnabled && snapshot?.preferences?.location_memory ? (
+              <button onClick={() => enablePreference("travel_greetings")}>
+                Travel greetings: off — enable
+              </button>
+            ) : <span>Travel greetings: off</span>}
           </section>
 
           <section className="agent-card">

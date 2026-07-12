@@ -146,6 +146,7 @@ test("request and route parsers reject generic, native, query-bearing, and ambig
   assert.equal(browserApiRouteAllowed("POST", new URL("http://x/api/agent/v1/principal-binding-proposal/confirm")), true);
   assert.equal(browserApiRouteAllowed("POST", new URL("http://x/api/agent/v1/principal-bindings")), false);
   assert.equal(browserApiRouteAllowed("GET", new URL("http://x/api/agent/v1/people")), false);
+  assert.equal(browserApiRouteAllowed("POST", new URL("http://x/api/agent/v1/relationships/parent-confirmations")), false);
   assert.equal(browserApiRouteAllowed("GET", new URL("http://x/api/agent/v1/principal-binding-proposal?person=x")), false);
   assert.equal(browserApiRouteAllowed("POST", new URL("http://x/api/agent/v1/principal-binding-request?person=x")), false);
   assert.equal(browserApiRouteAllowed("GET", new URL("http://x/api/agent/v1/snapshot?debug=1")), false);
@@ -205,6 +206,7 @@ test("binding workflow proxies only exact browser paths with same-origin writes"
       ["GET", "/api/agent/v1/principal-binding-proposal?person=forged", undefined],
       ["POST", "/api/agent/v1/principal-binding-request?person=forged", PUBLIC_ORIGIN],
       ["POST", "/api/agent/v1/principal-bindings", PUBLIC_ORIGIN],
+      ["POST", "/api/agent/v1/relationships/parent-confirmations", PUBLIC_ORIGIN],
       ["GET", "/api/agent/v1/people", undefined],
     ]) {
       const response = await request(f.originPort, target, { method, origin, body: method === "POST" ? "{}" : "" });

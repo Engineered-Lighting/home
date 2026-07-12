@@ -60,7 +60,6 @@ from .models import (
     LegacyRelationshipCandidateImport,
     MemoryTransactionView,
     MemoryInspection,
-    ParentConfirmation,
     ParentPresencePersonView,
     ParentPresenceView,
     PersonCreate,
@@ -988,6 +987,12 @@ class CoreStore:
         *,
         precise_location: bool,
     ) -> tuple[bool, str, bool]:
+        # Rollout mode is an independent retention authority.  A previously
+        # enabled preference can survive a deliberate rollback, but it must
+        # never keep precise observations flowing while the deployment is in
+        # record-only or shadow operation.
+        if precise_location and self.settings.rollout_mode != "canary":
+            return False, "suppressed_rollout_mode", True
         ha_user_id = str(envelope.ha_context.user_id or "").strip()
         if ha_user_id:
             materialized_user_block = (
@@ -1124,6 +1129,11 @@ class CoreStore:
         not become independent support.
         """
 
+        # Defense in depth for direct callers and rollback races. Projection
+        # remains canary-only even if a stale consent row and raw spool records
+        # already exist from an earlier deployment mode.
+        if self.settings.rollout_mode != "canary":
+            return
         if (
             not envelope.entity_id
             or not envelope.entity_id.startswith("device_tracker.")
@@ -3470,164 +3480,14 @@ class CoreStore:
                 raise ConflictError("legacy relationship candidate projection drifted")
             return existing["candidate_id"]
 
-    async def confirm_parent(
-        self,
-        principal: dict[str, Any],
-        value: ParentConfirmation,
-    ) -> MemoryTransactionView:
-        self._require_rollout("shadow", "parent_confirmation")
-        if principal["person_id"] != value.child_person_id:
-            raise ForbiddenError(
-                "only the child principal may confirm this parent fact"
-            )
-        transaction_id = uuid7()
-        fact_id = uuid7()
-        fact_version_id = uuid7()
-        now = datetime.now(UTC)
-        valid_from = value.valid_from or now
-        candidate = {
-            "subject_person_id": str(value.parent_person_id),
-            "predicate": "parent_of",
-            "object_person_id": str(value.child_person_id),
-        }
-        async with self.database.transaction(
-            principal_id=principal["principal_id"], serializable=True
-        ) as connection:
-            count = int(
-                (
-                    await connection.execute(
-                        select(func.count())
-                        .select_from(schema.people)
-                        .where(
-                            schema.people.c.person_id.in_(
-                                [value.parent_person_id, value.child_person_id]
-                            ),
-                            schema.people.c.status == "active",
-                        )
-                    )
-                ).scalar_one()
-            )
-            if count != 2:
-                raise NotFoundError("parent or child person does not exist")
-            existing = (
-                await connection.execute(
-                    select(schema.fact_versions.c.fact_id).where(
-                        schema.fact_versions.c.subject_id == value.parent_person_id,
-                        schema.fact_versions.c.predicate == "parent_of",
-                        schema.fact_versions.c.object.contains(
-                            {"person_id": str(value.child_person_id)}
-                        ),
-                        func.upper_inf(schema.fact_versions.c.system_range),
-                        schema.fact_versions.c.resolution == "accepted",
-                    )
-                )
-            ).scalar_one_or_none()
-            if existing:
-                raise ConflictError("parent relationship is already confirmed")
-            confirmation_artifact_id = await self._mint_authenticated_confirmation(
-                connection,
-                principal_id=principal["principal_id"],
-                purpose="parent_relationship.confirm",
-                proposal_digest=sha256_json(candidate),
-                client_nonce=value.confirmation_artifact_id,
-            )
-            legacy_labels = (
-                (
-                    await connection.execute(
-                        select(schema.legacy_role_labels.c.label_id).where(
-                            schema.legacy_role_labels.c.person_id
-                            == value.parent_person_id,
-                            schema.legacy_role_labels.c.role_label == "parent",
-                            schema.legacy_role_labels.c.perspective == "unknown",
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            legacy_reason = (
-                "unique_legacy_label_attached"
-                if len(legacy_labels) == 1
-                else "legacy_label_absent"
-                if not legacy_labels
-                else "legacy_label_ambiguous_not_attached"
-            )
-            await connection.execute(
-                insert(schema.memory_transactions).values(
-                    transaction_id=transaction_id,
-                    principal_id=principal["principal_id"],
-                    kind="parent_confirmation",
-                    state="committed",
-                    candidate=candidate,
-                    preview={"confirmed": candidate},
-                    verifier_results=[
-                        {
-                            "rule": "subject_authority",
-                            "outcome": "pass",
-                            "reason_code": "child_confirmed",
-                        },
-                        {
-                            "rule": "legacy_context",
-                            "outcome": "pass" if len(legacy_labels) <= 1 else "defer",
-                            "reason_code": legacy_reason,
-                        },
-                    ],
-                    policy_version=self.settings.policy_version,
-                    policy_digest=self.settings.policy_digest,
-                    confirmation_digest=sha256_json(candidate),
-                    confirmed_at=now,
-                )
-            )
-            await connection.execute(
-                insert(schema.fact_versions).values(
-                    fact_version_id=fact_version_id,
-                    fact_id=fact_id,
-                    version=1,
-                    subject_type="person",
-                    subject_id=value.parent_person_id,
-                    predicate="parent_of",
-                    object={"person_id": str(value.child_person_id)},
-                    perspective_principal_id=principal["principal_id"],
-                    valid_range=Range(valid_from, None, bounds="[)"),
-                    system_range=Range(now, None, bounds="[)"),
-                    authority="explicit_related_party",
-                    support="explicit_authority",
-                    contradiction="none",
-                    freshness="not_applicable",
-                    coverage="not_applicable",
-                    resolution="accepted",
-                    privacy_scope="private",
-                    memory_transaction_id=transaction_id,
-                )
-            )
-            await connection.execute(
-                insert(schema.fact_support).values(
-                    support_id=uuid7(),
-                    fact_version_id=fact_version_id,
-                    artifact_id=confirmation_artifact_id,
-                    support_role="confirmation",
-                )
-            )
-            if len(legacy_labels) == 1:
-                await connection.execute(
-                    insert(schema.fact_support).values(
-                        support_id=uuid7(),
-                        fact_version_id=fact_version_id,
-                        artifact_id=legacy_labels[0],
-                        dependency_domain="legacy_identity_store",
-                        support_role="legacy_context",
-                    )
-                )
-        return MemoryTransactionView(
-            transaction_id=transaction_id,
-            state="committed",
-            fact_id=fact_id,
-        )
-
     async def set_preference(
         self, principal: dict[str, Any], value: PreferenceUpdate
     ) -> dict[str, Any]:
-        self._require_rollout("canary", "principal_preference")
+        # Opt-out is privacy-essential and must remain available during a
+        # rollback or containment event. Only enabling a capability depends on
+        # the canary authorization boundary.
+        if value.enabled:
+            self._require_rollout("canary", "principal_preference_opt_in")
         async with self.database.transaction(
             principal_id=principal["principal_id"], serializable=True
         ) as connection:
@@ -3815,6 +3675,7 @@ class CoreStore:
     async def create_visit(
         self, principal: dict[str, Any], value: VisitCreate
     ) -> VisitView:
+        self._require_rollout("canary", "semantic_visit_write")
         if value.observed_to <= value.observed_from:
             raise ConflictError("visit end must follow visit start")
         if value.observed_to - value.observed_from < timedelta(minutes=10):
@@ -5291,35 +5152,44 @@ class CoreStore:
                     )
                 ).mappings()
             }
-            visit = (
-                (
-                    await connection.execute(
-                        select(
-                            schema.visits.c.visit_id,
-                            schema.visits.c.place_id,
-                            schema.visits.c.state,
-                            schema.visits.c.freshness,
-                            schema.visits.c.coverage,
-                            func.lower(schema.visits.c.observed_range).label(
-                                "observed_from"
-                            ),
-                            func.upper(schema.visits.c.observed_range).label(
-                                "observed_to"
-                            ),
+            visit = None
+            if (
+                self.settings.rollout_mode == "canary"
+                and "do_not_track" not in directives
+            ):
+                visit = (
+                    (
+                        await connection.execute(
+                            select(
+                                schema.visits.c.visit_id,
+                                schema.visits.c.place_id,
+                                schema.visits.c.state,
+                                schema.visits.c.freshness,
+                                schema.visits.c.coverage,
+                                func.lower(schema.visits.c.observed_range).label(
+                                    "observed_from"
+                                ),
+                                func.upper(schema.visits.c.observed_range).label(
+                                    "observed_to"
+                                ),
+                            )
+                            .where(
+                                schema.visits.c.principal_id
+                                == principal["principal_id"]
+                            )
+                            .order_by(
+                                func.upper(schema.visits.c.observed_range).desc()
+                            )
+                            .limit(1)
                         )
-                        .where(
-                            schema.visits.c.principal_id == principal["principal_id"]
-                        )
-                        .order_by(func.upper(schema.visits.c.observed_range).desc())
-                        .limit(1)
                     )
+                    .mappings()
+                    .first()
                 )
-                .mappings()
-                .first()
-            )
-        latest_visit = (
-            None if "do_not_track" in directives else (dict(visit) if visit else None)
-        )
+        # Rollback containment exposes stored preference state so the subject
+        # can revoke it, but it does not expose retained visit metadata while
+        # precise-location capability is disabled.
+        latest_visit = dict(visit) if visit else None
         if latest_visit:
             effective_freshness = freshness_at(latest_visit["observed_to"], now=now)
             latest_visit["freshness"] = effective_freshness
@@ -5327,6 +5197,7 @@ class CoreStore:
                 latest_visit["state"] = "candidate"
         return AgentSnapshot(
             as_of=now,
+            rollout_mode=self.settings.rollout_mode,
             principal_id=principal["principal_id"],
             person_id=principal["person_id"],
             preferences=preferences,
@@ -5341,9 +5212,24 @@ class CoreStore:
                 "persistent_memory": (
                     "enabled" if self.settings.rollout_mode == "canary" else "disabled"
                 ),
-                "location_visits": "enabled"
-                if preferences.get("location_memory", False)
-                else "disabled",
+                "location_visits": (
+                    "enabled"
+                    if self.settings.rollout_mode == "canary"
+                    and preferences.get("location_memory", False)
+                    else "disabled"
+                ),
+                "location_retention": (
+                    "enabled"
+                    if self.settings.rollout_mode == "canary"
+                    and preferences.get("location_memory", False)
+                    else "disabled"
+                ),
+                "preference_opt_in": (
+                    "enabled" if self.settings.rollout_mode == "canary" else "disabled"
+                ),
+                # Authenticated opt-out is privacy-essential and survives a
+                # rollback even when every corresponding capability is off.
+                "preference_opt_out": "enabled",
                 # Installation attestation narrows native transport; it does
                 # not authorize initiative presentation. The store retains
                 # synthetic domain methods for future review, but deployed

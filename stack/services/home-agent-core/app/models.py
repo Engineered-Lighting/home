@@ -458,17 +458,6 @@ class LegacyRoleImport(StrictModel):
     source_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
-class ParentConfirmation(StrictModel):
-    parent_person_id: uuid.UUID
-    child_person_id: uuid.UUID
-    confirmation_artifact_id: uuid.UUID
-    valid_from: datetime | None = None
-
-    _valid_from = field_validator("valid_from")(
-        lambda value: None if value is None else _aware(value)
-    )
-
-
 class LocationAnchor(StrictModel):
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
@@ -707,6 +696,7 @@ class ForgetPreviewRequest(StrictModel):
 
 class AgentSnapshot(StrictModel):
     as_of: datetime
+    rollout_mode: RolloutMode
     principal_id: uuid.UUID
     person_id: uuid.UUID
     preferences: dict[str, bool]

@@ -516,17 +516,29 @@ sudo docker compose --env-file home-agent.env -f home-agent-compose.yml exec cor
   python /operator/provision_identity.py
 ```
 
-The workflow requires exact confirmations for the HA-user-to-Marcelo binding,
-the tracker binding, each explicit parent edge, and the private Itaipava
-locality. Import reviewed stable UUIDs when available. Do not use implicit
-legacy `parent` labels as `parent_of` facts.
+The deployed workflow currently supports only the exact
+HA-user-to-Marcelo binding ceremony. Tracker binding, explicit parent facts,
+and the private Itaipava locality remain disabled pending their separate
+reviewed flows. Import reviewed stable UUIDs when available. Do not use
+implicit legacy `parent` labels as `parent_of` facts.
 
-After binding, sign into `/home-agent/` and enable location memory only if
-Marcelo opts in. Travel greetings remain default-off and have no deployed
-list, claim, or presentation path even after installation attestation; a
-separate reviewed initiative-capability gate is still required. The place
-teaching UI will not propose a descriptor without a current supported visit,
-and commit requires a second explicit preview confirmation.
+In particular, neither browser nor native BFF accepts direct parent
+confirmation. Before either explicit parent fact can be enabled, Core must
+stage the complete exact candidate set, render a private digest-bound preview,
+and commit both reviewed edges atomically from one authenticated confirmation.
+Client-supplied parent/child UUIDs are not authority. Until that flow and its
+adversarial tests are deployed, parent role expansion remains unresolved.
+
+After binding, `/home-agent/` may show the two stored location-preference
+booleans during record-only or shadow operation, but only as a rollback privacy
+surface. Precise-location retention, visit projection, teaching, and both
+opt-ins remain disabled until a separately authorized canary. If an enabled
+value survived a rollback, browser and native clients retain no visit or
+principal identifiers from the snapshot and offer only a direction-fixed
+Disable control. Travel greetings also have no deployed list, claim, or
+presentation path; a separate reviewed initiative-capability gate is still
+required. A later canary place-teaching UI must still require a current
+supported visit and a second explicit preview confirmation.
 
 ## Reviewed legacy Identity Store migration
 
@@ -555,10 +567,13 @@ enrollment, role, and relationship columns. It cannot read notes, preferences,
 generated content, face-crop metadata, change-log snapshots, or pending-write
 payloads.
 
-Apply mode requires `HOME_AGENT_ROLLOUT_MODE=shadow` and fetches Core's fixed authenticated
-`GET /v1/operator-capabilities` contract, requires an exact confirmation for
-the review digest and every item, and calls only the typed People migration
-routes. Stable UUID import requires the reviewed source
+Apply mode requires `HOME_AGENT_ROLLOUT_MODE=shadow`. Before collecting any
+item confirmation or issuing any write, it fetches Core's authenticated
+`GET /v1/operator-rollout` contract and accepts only the exact typed response
+`{mode: shadow, semantic_people_writes: true, persistent_memory_writes: false}`.
+It then fetches the fixed authenticated `GET /v1/operator-capabilities`
+contract, requires an exact confirmation for the review digest and every item,
+and calls only the typed People migration routes. Stable UUID import requires the reviewed source
 digest; a retry is idempotent only when every projected field and provenance
 value match exactly. The profile receives a dedicated operator-audience token
 and bootstrap token, but no BFF service token, database URL, knowledge key,
@@ -570,9 +585,9 @@ and explicit relationship candidates use exact typed endpoints. `ignored` and
 legacy `do_not_identify` import only a suppressed placeholder plus the blocking
 directive; aliases, recognition bindings, and roles are skipped. A legacy
 `parent` classification or relationship remains a non-authoritative candidate
-with unknown perspective; this migration never calls the authoritative
-parent-confirmation endpoint. A safety-critical directive failure stops later
-dependent operations for that person.
+with unknown perspective. No direct parent-confirmation endpoint exists in
+Core or either BFF. A safety-critical directive failure stops later dependent
+operations for that person.
 
 Optional review artifacts contain counts, stable UUIDs, source digests,
 endpoint requirements, and a plan digest only. The tool creates them
@@ -602,7 +617,10 @@ Confirm:
 - duplicates/replays preserve one stable visit identity;
 - gaps and snapshot recovery never manufacture an arrival;
 - exact raw coordinates are absent from PostgreSQL logs and off-host backups;
-- location persistence is absent before opt-in;
+- location persistence and visit projection are absent throughout record-only
+  and shadow, even if a stale enabled preference row survived rollback;
+- authenticated opt-out remains available in every rollout mode, while the
+  clients expose no non-canary enable control;
 - private initiatives are absent from web snapshots and every deployed client;
   no bearer-authenticated list, claim, or presentation route is accepted;
 - a tracker switch opens conflict rather than silently merging evidence;
@@ -684,6 +702,14 @@ alerts above 1,000 location events in 24 hours or 100 MiB of location payloads
 in seven days. These thresholds are deployment policy, not environment-tunable
 model inputs.
 
+Health and authenticated snapshots report effective capability, not merely a
+stored preference. In record-only and shadow, `persistent_memory`,
+`location_retention`, `location_visits`, and `preference_opt_in` are
+`disabled`; `preference_opt_out` remains `enabled`. The authenticated snapshot
+still returns the two stored booleans for revocation, but returns no visit
+metadata. Only canary may report location retention/visits as consent-gated or
+effective.
+
 Only after the receipt is durably committed, stop Core, set
 `HOME_AGENT_ROLLOUT_MODE=shadow`, rerun `preflight.sh`, and restart. Every Core
 role recomputes the stable first-500 evidence digest and refuses startup if the
@@ -695,9 +721,11 @@ schema-disabled until a future reviewed migration opens that transition.
 Shadow is
 the only mode authorized for reviewed People/privacy migration and semantic
 cutover; persistent memory and presentation remain disabled. Confirm Marcelo's
-HA binding and both explicit parent facts, verify each privacy directive across
-ingress/retrieval/initiatives/export, freeze legacy semantic writes, and retain
-the reviewed migration report.
+HA binding, verify each privacy directive across ingress/retrieval/initiatives/
+export, freeze legacy semantic writes, and retain the reviewed migration report.
+Both explicit parent facts remain a later shadow milestone and may proceed only
+through the server-staged, digest-bound, atomic confirmation flow described
+above. The former caller-supplied single-edge Core route has been removed.
 
 Canary remains unavailable in this slice. It requires its own future durable
 `shadow` to `canary` authorization, and no endpoint currently issues that

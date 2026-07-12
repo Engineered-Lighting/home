@@ -331,6 +331,18 @@ function publicNativeInstallationMaterial(session, isNative) {
     })
   });
 }
+function fullAgentCapabilityEnabled(snapshot) {
+  return snapshot?.rollout_mode === "canary" && snapshot?.capabilities?.persistent_memory === "enabled";
+}
+function containedPreferenceState(snapshot) {
+  const rolloutMode = ["record_only", "shadow", "canary"].includes(snapshot?.rollout_mode) ? snapshot.rollout_mode : "unknown";
+  return Object.freeze({
+    rollout_mode: rolloutMode,
+    location_memory: snapshot?.preferences?.location_memory === true,
+    travel_greetings: snapshot?.preferences?.travel_greetings === true,
+    opt_out_enabled: snapshot?.capabilities?.preference_opt_out === "enabled"
+  });
+}
 function HomeAgentPanel() {
   const api = useMemo(() => new window.HomeAgentApi(""), []);
   const activeSubject = useRef(null);
@@ -345,6 +357,7 @@ function HomeAgentPanel() {
   const [bindingProposal, setBindingProposal] = useState(null);
   const [bindingBusy, setBindingBusy] = useState(false);
   const [snapshot, setSnapshot] = useState(null);
+  const [containedPreferences, setContainedPreferences] = useState(null);
   const [relationship, setRelationship] = useState(null);
   const [presence, setPresence] = useState(null);
   const [error, setError] = useState("");
@@ -358,6 +371,7 @@ function HomeAgentPanel() {
     setBindingProposal(null);
     setBindingBusy(false);
     setSnapshot(null);
+    setContainedPreferences(null);
     setRelationship(null);
     setPresence(null);
     setTeaching(DEFAULT_DESCRIPTOR_TEXT);
@@ -392,7 +406,7 @@ function HomeAgentPanel() {
       if (!api.invoke) {
         const nextOnboarding = await api.onboardingStatus();
         if (!isCurrent()) return;
-        if (nextOnboarding?.state !== "bound" || nextOnboarding?.rollout_mode !== "canary") {
+        if (nextOnboarding?.state !== "bound") {
           clearPrincipalState();
           setOnboarding(nextOnboarding);
           if (nextOnboarding?.state === "identity_confirmation_required") {
@@ -410,11 +424,13 @@ function HomeAgentPanel() {
       }
       const nextSnapshot = await api.snapshot();
       if (!isCurrent()) return;
-      if (api.invoke && nextSnapshot?.capabilities?.persistent_memory !== "enabled") {
-        clearPrincipalState();
-        setPhase("native_contained");
+      if (!fullAgentCapabilityEnabled(nextSnapshot)) {
+        setSnapshot(null);
+        setContainedPreferences(containedPreferenceState(nextSnapshot));
+        setPhase("rollout_contained");
         return;
       }
+      setContainedPreferences(null);
       setSnapshot(nextSnapshot);
       setPhase("ready");
     } catch (cause) {
@@ -533,16 +549,28 @@ function HomeAgentPanel() {
       setError(cause.message || "confirmation_failed");
     }
   };
-  const setPreference = async (key, enabled) => {
+  const enablePreference = async key => {
     const ticket = beginPrincipalOperation();
     setError("");
     try {
-      await api.setPreference(key, enabled);
+      await api.setPreference(key, true);
       if (!principalOperationCurrent(ticket)) return;
       await refresh();
     } catch (cause) {
       if (!principalOperationCurrent(ticket)) return;
       setError(cause.message || "preference_update_failed");
+    }
+  };
+  const disablePreference = async key => {
+    const ticket = beginPrincipalOperation();
+    setError("");
+    try {
+      await api.disablePreference(key);
+      if (!principalOperationCurrent(ticket)) return;
+      await refresh();
+    } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
+      setError(cause.message || "preference_opt_out_failed");
     }
   };
   const previewLifecycle = async operation => {
@@ -630,6 +658,8 @@ function HomeAgentPanel() {
     }
   };
   const nativeInstallationMaterial = publicNativeInstallationMaterial(session, Boolean(api.invoke));
+  const preferenceOptInEnabled = snapshot?.capabilities?.preference_opt_in === "enabled";
+  const preferenceOptOutEnabled = snapshot?.capabilities?.preference_opt_out === "enabled";
   return React.createElement("main", {
     className: "agent-shell"
   }, React.createElement("header", {
@@ -679,11 +709,22 @@ function HomeAgentPanel() {
   }, React.createElement("h2", null, "Complete sign-in in your browser"), React.createElement("p", null, "The desktop app is waiting on its loopback OAuth callback. No token is returned to this page.")), phase === "contained" && React.createElement("section", {
     className: "agent-card agent-warning",
     role: "alert"
-  }, React.createElement("h2", null, "Contained / unavailable"), React.createElement("p", null, "Private Agent routes are fail-closed until the BFF, Home Assistant identity, and core are configured."), error && React.createElement("code", null, error)), phase === "native_contained" && React.createElement("section", {
+  }, React.createElement("h2", null, "Contained / unavailable"), React.createElement("p", null, "Private Agent routes are fail-closed until the BFF, Home Assistant identity, and core are configured."), error && React.createElement("code", null, error)), phase === "rollout_contained" && React.createElement("section", {
     className: "agent-card agent-warning",
     role: "status",
     "aria-live": "polite"
-  }, React.createElement("h2", null, "Identity confirmed / rollout contained"), React.createElement("p", null, "The native Agent is authenticated, but Core has not enabled canary persistent-memory capability."), React.createElement("p", null, "Preferences, teaching, private queries, and initiatives stay unavailable. Location memory and travel greetings remain default-off.")), nativeInstallationMaterial && React.createElement("section", {
+  }, React.createElement("h2", null, "Identity confirmed / rollout contained"), React.createElement("p", null, "Core rollout mode ", React.createElement("code", null, containedPreferences?.rollout_mode || "unknown"), " disables precise-location retention, visit projection, teaching, private queries, and initiatives."), React.createElement("p", null, "Stored preference values remain visible only so you can revoke a choice left enabled before containment. They are not effective location authority."), React.createElement("dl", {
+    className: "agent-grid"
+  }, React.createElement("dt", null, "Stored location memory choice"), React.createElement("dd", null, containedPreferences?.location_memory ? "on — ineffective" : "off"), React.createElement("dt", null, "Stored travel greeting choice"), React.createElement("dd", null, containedPreferences?.travel_greetings ? "on — ineffective" : "off"), React.createElement("dt", null, "Effective location retention"), React.createElement("dd", null, "disabled"), React.createElement("dt", null, "Effective visit projection"), React.createElement("dd", null, "disabled")), containedPreferences?.location_memory && React.createElement("button", {
+    disabled: !containedPreferences.opt_out_enabled,
+    onClick: () => disablePreference("location_memory")
+  }, "Disable stored location memory choice"), " ", containedPreferences?.travel_greetings && React.createElement("button", {
+    disabled: !containedPreferences.opt_out_enabled,
+    onClick: () => disablePreference("travel_greetings")
+  }, "Disable stored travel greeting choice"), !containedPreferences?.location_memory && !containedPreferences?.travel_greetings && React.createElement("p", null, "No private location opt-in is stored."), React.createElement("p", null, "Enabling either choice remains unavailable in this rollout mode."), error && React.createElement("p", {
+    className: "agent-error",
+    role: "alert"
+  }, error)), nativeInstallationMaterial && React.createElement("section", {
     className: "agent-card"
   }, React.createElement("h2", null, "Public installation enrollment material"), React.createElement("p", null, "This public key material is not proof that enrollment is complete. A private operator must bind it offline to your exact Home Assistant user UUID."), React.createElement("pre", null, JSON.stringify(nativeInstallationMaterial, null, 2))), phase === "onboarding" && React.createElement("section", {
     className: "agent-card agent-warning",
@@ -726,12 +767,17 @@ function HomeAgentPanel() {
     className: "agent-grid"
   }, React.createElement("dt", null, "HA user"), React.createElement("dd", null, session?.user_id || "unknown"), React.createElement("dt", null, "As of"), React.createElement("dd", null, snapshot?.as_of || "unknown"), React.createElement("dt", null, "Visit"), React.createElement("dd", null, snapshot?.latest_visit?.visit_id || "unknown"), React.createElement("dt", null, "Coverage"), React.createElement("dd", null, snapshot?.latest_visit?.coverage || "unknown"))), React.createElement("section", {
     className: "agent-card"
-  }, React.createElement("h2", null, "Private location consent"), React.createElement("p", null, "Location memory and travel greetings are independent, default-off choices."), React.createElement("button", {
-    onClick: () => setPreference("location_memory", !snapshot?.preferences?.location_memory)
-  }, "Location memory: ", snapshot?.preferences?.location_memory ? "on — disable" : "off — enable"), " ", React.createElement("button", {
-    disabled: !snapshot?.preferences?.location_memory && !snapshot?.preferences?.travel_greetings,
-    onClick: () => setPreference("travel_greetings", !snapshot?.preferences?.travel_greetings)
-  }, "Travel greetings: ", snapshot?.preferences?.travel_greetings ? "on — disable" : "off — enable")), React.createElement("section", {
+  }, React.createElement("h2", null, "Private location consent"), React.createElement("p", null, "Location memory and travel greetings are independent, default-off choices."), snapshot?.preferences?.location_memory ? React.createElement("button", {
+    disabled: !preferenceOptOutEnabled,
+    onClick: () => disablePreference("location_memory")
+  }, "Location memory: on \u2014 disable") : preferenceOptInEnabled ? React.createElement("button", {
+    onClick: () => enablePreference("location_memory")
+  }, "Location memory: off \u2014 enable") : React.createElement("span", null, "Location memory: off"), " ", snapshot?.preferences?.travel_greetings ? React.createElement("button", {
+    disabled: !preferenceOptOutEnabled,
+    onClick: () => disablePreference("travel_greetings")
+  }, "Travel greetings: on \u2014 disable") : preferenceOptInEnabled && snapshot?.preferences?.location_memory ? React.createElement("button", {
+    onClick: () => enablePreference("travel_greetings")
+  }, "Travel greetings: off \u2014 enable") : React.createElement("span", null, "Travel greetings: off")), React.createElement("section", {
     className: "agent-card"
   }, React.createElement("h2", null, "Propose place memory"), React.createElement("p", null, "The model may propose a parse, but only the deterministic verifier and your confirmation can commit it."), React.createElement("textarea", {
     className: "agent-textarea",

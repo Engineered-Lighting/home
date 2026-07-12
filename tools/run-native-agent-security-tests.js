@@ -62,6 +62,7 @@ async function behaviorTest() {
   await api.explainDescriptor("01900000-0000-7000-8000-000000000002");
   await api.queryParentPresence("01900000-0000-7000-8000-000000000002");
   await api.setPreference("location_memory", true);
+  await api.disablePreference("travel_greetings");
   for (const operation of [
     () => api.principalBindingProposal(),
     () => api.requestPrincipalBinding(),
@@ -81,8 +82,12 @@ async function behaviorTest() {
     "native_agent_explain_descriptor",
     "native_agent_query_parent_presence",
     "native_agent_set_preference",
+    "native_agent_set_preference",
     "close_agent_window",
   ].join(","), calls);
+  assert("native rollback opt-out is direction-fixed",
+    calls.find((item) => item.command === "native_agent_set_preference" &&
+      item.args?.key === "travel_greetings")?.args?.enabled === false, calls);
   const methods = Object.getOwnPropertyNames(window.HomeAgentApi.prototype);
   assert("native client exposes typed place queries but no initiative or generic mutation",
     ["explainDescriptor", "queryParentPresence"].every((name) => methods.includes(name)) &&
@@ -147,6 +152,44 @@ async function browserBindingBehaviorTest() {
     !writes.some(({ init }) => /(person_id|ha_user_id|actor_id|principal_id)/.test(init.body)), writes);
 }
 
+async function browserPreferenceOptOutBehaviorTest() {
+  const calls = [];
+  const window = {
+    crypto: { randomUUID: () => "00000000-0000-4000-8000-000000000000" },
+  };
+  const context = vm.createContext({
+    window,
+    globalThis: window,
+    fetch: async (url, init) => {
+      calls.push({ url, init });
+      return { ok: true, status: 200, json: async () => ({ enabled: false }) };
+    },
+    URL,
+    Error,
+    String,
+    Number,
+    Boolean,
+    Promise,
+  });
+  vm.runInContext(read("app/src/home-agent/api.js"), context, {
+    filename: "api-browser-opt-out.js",
+  });
+  const api = new window.HomeAgentApi();
+  api.csrf = "csrf";
+  await api.disablePreference("location_memory");
+
+  assert("browser rollback opt-out is a CSRF-bound direction-fixed PUT",
+    calls.length === 1 &&
+    calls[0].url === "/api/agent/v1/preferences/location_memory" &&
+    calls[0].init.method === "PUT" &&
+    calls[0].init.headers["X-CSRF-Token"] === "csrf" &&
+    JSON.stringify(JSON.parse(calls[0].init.body)) === JSON.stringify({
+      key: "location_memory",
+      enabled: false,
+      confirmation_artifact_id: "00000000-0000-4000-8000-000000000000",
+    }), calls);
+}
+
 function principalOperationBoundaryTest() {
   const prelude = agentPanel.slice(0, agentPanel.indexOf("function HomeAgentPanel"));
   const context = vm.createContext({ React: {} });
@@ -169,6 +212,22 @@ function principalOperationBoundaryTest() {
         installation_id: "01900000-0000-4000-8000-000000000001",
         public_jwk: { kty: "EC", crv: "P-256", x: "x", y: "y", kid: "kid" },
       }, false),
+      contained: containedPreferenceState({
+        rollout_mode: "record_only",
+        principal_id: "private-principal",
+        person_id: "private-person",
+        latest_visit: { visit_id: "private-visit" },
+        preferences: { location_memory: true, travel_greetings: true, other: true },
+        capabilities: { preference_opt_out: "enabled" },
+      }),
+      recordOnlyFull: fullAgentCapabilityEnabled({
+        rollout_mode: "record_only",
+        capabilities: { persistent_memory: "enabled" },
+      }),
+      canaryFull: fullAgentCapabilityEnabled({
+        rollout_mode: "canary",
+        capabilities: { persistent_memory: "enabled" },
+      }),
     };
   })()`, context);
   assert("principal-operation tickets expire on reset, logout, and account switch",
@@ -183,6 +242,14 @@ function principalOperationBoundaryTest() {
     }) && result.browserMaterial === null &&
     agentPanel.includes("Public installation enrollment material") &&
     !agentPanel.includes("navigator.clipboard"), result);
+  assert("contained preference state retains only revocable booleans and rollout status",
+    JSON.stringify(result.contained) === JSON.stringify({
+      rollout_mode: "record_only",
+      location_memory: true,
+      travel_greetings: true,
+      opt_out_enabled: true,
+    }) && result.recordOnlyFull === false && result.canaryFull === true &&
+    !JSON.stringify(result.contained).includes("private-"), result);
 
   const handlers = [
     "requestPrincipalBinding",
@@ -190,7 +257,8 @@ function principalOperationBoundaryTest() {
     "confirmPrincipalBinding",
     "propose",
     "confirm",
-    "setPreference",
+    "enablePreference",
+    "disablePreference",
     "previewLifecycle",
     "confirmLifecycle",
     "queryPlace",
@@ -277,9 +345,15 @@ function principalOperationBoundaryTest() {
     agentPanel.includes("activeSubject.current !== subject") &&
     agentPanel.includes("authorityGeneration.current += 1") &&
     agentPanel.includes("refreshGeneration.current"), principalReset);
-  assert("native panel remains contained without explicit canary memory capability",
-    agentPanel.includes('nextSnapshot?.capabilities?.persistent_memory !== "enabled"') &&
-    agentPanel.includes('setPhase("native_contained")'));
+  assert("browser and native panels retain only disable-only state outside canary",
+    agentPanel.includes("fullAgentCapabilityEnabled(nextSnapshot)") &&
+    agentPanel.includes("containedPreferenceState(nextSnapshot)") &&
+    agentPanel.includes('setPhase("rollout_contained")') &&
+    agentPanel.includes('onClick={() => disablePreference("location_memory")}') &&
+    agentPanel.includes('onClick={() => disablePreference("travel_greetings")}') &&
+    !agentPanel.includes("native_contained") &&
+    !agentPanel.includes("!snapshot?.preferences?.location_memory") &&
+    !agentPanel.includes("!snapshot?.preferences?.travel_greetings"));
   assert("deployed Agent client has no initiative listing, claim, or presentation path",
     !/\b(?:initiatives|claimInitiative)\s*\(/.test(read("app/src/home-agent/api.js")) &&
     !/(native_agent_(?:list|claim)_initiative|Private travel greeting|Present once)/.test(agentSources));
@@ -293,6 +367,7 @@ function principalOperationBoundaryTest() {
   principalOperationBoundaryTest();
   await behaviorTest();
   await browserBindingBehaviorTest();
+  await browserPreferenceOptOutBehaviorTest();
 
   process.stdout.write(`\n${passes} pass · ${fails} fail\n`);
   if (fails) process.exit(1);

@@ -1,6 +1,6 @@
 ---
 title: Gate Home Agent rollout promotion
-target: stack
+target: backend
 type: changed
 ---
 

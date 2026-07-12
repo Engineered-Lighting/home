@@ -34,6 +34,7 @@ SUPPORTED_SCHEMA_VERSION = 1
 PERSON_ENDPOINT = "/v1/people"
 ROLE_ENDPOINT = "/v1/people/legacy-role-labels"
 CAPABILITIES_ENDPOINT = "/v1/operator-capabilities"
+ROLLOUT_ENDPOINT = "/v1/operator-rollout"
 VERIFY_PERSON_ENDPOINT = "/v1/people/verify-reviewed"
 ALIAS_ENDPOINT_TEMPLATE = "/v1/people/{person_id}/aliases"
 RECOGNITION_BINDING_ENDPOINT_TEMPLATE = (
@@ -101,6 +102,11 @@ EXPECTED_CAPABILITY_CONTRACT: Mapping[str, Any] = {
         "source_digest_field": "source_snapshot_sha256",
         "idempotency": "exact-projection-v1",
     },
+}
+EXPECTED_SHADOW_ROLLOUT_CONTRACT: Mapping[str, Any] = {
+    "mode": "shadow",
+    "semantic_people_writes": True,
+    "persistent_memory_writes": False,
 }
 
 REQUIRED_ENDPOINTS = {
@@ -321,6 +327,8 @@ class ApplyResult:
 
 
 class CoreClientProtocol(Protocol):
+    def require_shadow_rollout(self) -> None: ...
+
     def capabilities(self) -> frozenset[tuple[str, str]]: ...
 
     def post(self, path: str, body: Mapping[str, Any]) -> Mapping[str, Any]: ...
@@ -1320,6 +1328,24 @@ class HttpCoreClient:
             }
         )
 
+    def require_shadow_rollout(self) -> None:
+        """Fail before confirmations unless Core exposes the exact apply mode."""
+
+        document = self._request("GET", ROLLOUT_ENDPOINT)
+        exact = (
+            isinstance(document, dict)
+            and set(document) == set(EXPECTED_SHADOW_ROLLOUT_CONTRACT)
+            and type(document.get("mode")) is str
+            and type(document.get("semantic_people_writes")) is bool
+            and type(document.get("persistent_memory_writes")) is bool
+            and document == EXPECTED_SHADOW_ROLLOUT_CONTRACT
+        )
+        if not exact:
+            raise MigrationError(
+                "reviewed apply requires the exact shadow rollout contract; "
+                "no confirmations were collected and no Core writes were sent"
+            )
+
     def post(self, path: str, body: Mapping[str, Any]) -> Mapping[str, Any]:
         allowed = path in {
             PERSON_ENDPOINT,
@@ -1397,6 +1423,7 @@ def main() -> int:
         raise MigrationError("apply review requires a private interactive TTY")
 
     client = HttpCoreClient()
+    client.require_shadow_rollout()
     preparation = prepare_apply(plan, client.capabilities())
     print(f"eligible_operations: {len(preparation.operations)}")
     print(f"blocked_people: {preparation.blocked_people}")

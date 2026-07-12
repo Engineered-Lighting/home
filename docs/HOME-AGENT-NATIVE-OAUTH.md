@@ -161,6 +161,11 @@ confirm. It cannot choose a URL, method, header, principal, or confirmation
 artifact ID. Place creation, parent confirmation, initiatives, cameras,
 models, stack administration, and physical HA actions are absent.
 
+Parent confirmation is also absent from the browser BFF. Explicit parent facts
+require a future server-staged exact candidate set, a private digest-bound
+preview, and one atomic authenticated commit; a client-supplied person UUID is
+never accepted as relationship authority.
+
 At the dedicated HTTPS Agent origin there is no legacy gateway Basic-auth or
 legacy UI/proxy surface. Exact native typed paths use the HA Bearer in
 `Authorization`; the BFF immediately validates it with HA `whoami`, requires a

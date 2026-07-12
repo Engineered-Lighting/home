@@ -1,6 +1,6 @@
 ---
 title: Add an isolated Home Assistant OS restore harness
-target: stack
+target: internal
 type: added
 ---
 

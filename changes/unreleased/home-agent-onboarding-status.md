@@ -1,6 +1,6 @@
 ---
 title: Explain fail-closed Home Agent onboarding
-target: stack
+target: web
 type: added
 ---
 

@@ -44,3 +44,13 @@ class CapabilityDisabledError(DomainError):
 class WorkerMaintenanceUnavailableError(DomainError):
     status_code = 503
     code = "worker_maintenance_unavailable"
+
+
+class OptionalWorkSuspendedError(DomainError):
+    status_code = 503
+    code = "optional_work_suspended"
+
+
+class StorageReadOnlyDegradedError(DomainError):
+    status_code = 507
+    code = "storage_read_only_degraded"

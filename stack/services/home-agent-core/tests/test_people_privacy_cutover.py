@@ -88,6 +88,8 @@ def test_cutover_routes_are_typed_and_relationship_candidates_are_not_facts() ->
         ("POST", "/v1/people/legacy-relationship-candidates"),
     } <= routes
     assert schema.external_recognition_bindings is not schema.source_entity_bindings
+    assert ("POST", "/v1/relationships/parent-confirmations") not in routes
+    assert not hasattr(CoreStore, "confirm_parent")
     assert "global_normalized_alias" in {
         constraint.name for constraint in schema.aliases.constraints
     }

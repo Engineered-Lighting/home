@@ -1,6 +1,6 @@
 ---
 title: Make Home Agent OAuth exchange restart-safe
-target: stack
+target: backend
 type: fixed
 ---
 

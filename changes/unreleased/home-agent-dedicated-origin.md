@@ -1,6 +1,6 @@
 ---
 title: Isolate the Home Agent web and OAuth origin
-target: stack
+target: backend
 type: added
 ---
 

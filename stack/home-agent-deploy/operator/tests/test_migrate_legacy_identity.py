@@ -228,6 +228,9 @@ class FakeCore:
             }
         )
 
+    def require_shadow_rollout(self) -> None:
+        return None
+
     def post(self, path: str, body: dict) -> dict:
         self.posts.append((path, dict(body)))
         return {"ok": True}
@@ -530,6 +533,98 @@ class LegacyIdentityMigrationTests(unittest.TestCase):
             self.assertRaisesRegex(migration.MigrationError, "arguments"),
         ):
             migration.main()
+
+    def test_counts_only_review_never_requires_rollout_or_core(self) -> None:
+        create_legacy_db(self.database)
+        core_client = mock.Mock(side_effect=AssertionError("Core must stay offline"))
+
+        with (
+            mock.patch.object(sys, "argv", ["migrate"]),
+            mock.patch(
+                "builtins.input",
+                side_effect=[str(self.database), "n", "n"],
+            ),
+            mock.patch.object(migration, "HttpCoreClient", core_client),
+        ):
+            self.assertEqual(migration.main(), 0)
+
+        core_client.assert_not_called()
+
+    def test_apply_requires_exact_shadow_before_confirmations_or_writes(self) -> None:
+        create_legacy_db(self.database)
+        rejected = {
+            "record_only": {
+                "mode": "record_only",
+                "semantic_people_writes": False,
+                "persistent_memory_writes": False,
+            },
+            "canary": {
+                "mode": "canary",
+                "semantic_people_writes": True,
+                "persistent_memory_writes": True,
+            },
+            "missing_field": {
+                "mode": "shadow",
+                "semantic_people_writes": True,
+            },
+            "extra_field": {
+                **migration.EXPECTED_SHADOW_ROLLOUT_CONTRACT,
+                "unexpected": False,
+            },
+            "non_boolean": {
+                "mode": "shadow",
+                "semantic_people_writes": 1,
+                "persistent_memory_writes": 0,
+            },
+        }
+
+        for label, response in rejected.items():
+            with self.subTest(label=label):
+                client = object.__new__(migration.HttpCoreClient)
+                client._request = mock.Mock(return_value=response)
+                confirmations = mock.Mock()
+                execute = mock.Mock()
+                with (
+                    mock.patch.object(sys, "argv", ["migrate"]),
+                    mock.patch(
+                        "builtins.input",
+                        side_effect=[str(self.database), "n", "y"],
+                    ),
+                    mock.patch.object(sys.stdin, "isatty", return_value=True),
+                    mock.patch.object(sys.stdout, "isatty", return_value=True),
+                    mock.patch.object(
+                        migration,
+                        "HttpCoreClient",
+                        return_value=client,
+                    ),
+                    mock.patch.object(
+                        migration,
+                        "collect_confirmations",
+                        confirmations,
+                    ),
+                    mock.patch.object(migration, "execute_apply", execute),
+                    self.assertRaisesRegex(
+                        migration.MigrationError,
+                        "exact shadow rollout contract",
+                    ),
+                ):
+                    migration.main()
+
+                client._request.assert_called_once_with(
+                    "GET", migration.ROLLOUT_ENDPOINT
+                )
+                confirmations.assert_not_called()
+                execute.assert_not_called()
+
+    def test_exact_shadow_rollout_contract_allows_apply_preparation(self) -> None:
+        client = object.__new__(migration.HttpCoreClient)
+        client._request = mock.Mock(
+            return_value=dict(migration.EXPECTED_SHADOW_ROLLOUT_CONTRACT)
+        )
+
+        client.require_shadow_rollout()
+
+        client._request.assert_called_once_with("GET", migration.ROLLOUT_ENDPOINT)
 
     def test_core_client_disables_environment_proxy_and_redirects(self) -> None:
         with (

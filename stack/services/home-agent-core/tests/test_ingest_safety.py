@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
+import pytest
+
+from app.errors import CapabilityDisabledError
 from app.models import IngestEnvelope
-from app.store import stable_observation_root
+from app.store import CoreStore, stable_observation_root
 
 
 def _envelope(*, edge_instance_id: str, source_name: str) -> IngestEnvelope:
@@ -34,3 +38,56 @@ def test_fallback_observation_root_is_replay_stable_and_tuple_unambiguous() -> N
     ) == "\x1f".join((second.edge_instance_id, second.source_name))
     assert stable_observation_root(first) == stable_observation_root(first)
     assert stable_observation_root(first) != stable_observation_root(second)
+
+
+class _NeverConnection:
+    async def execute(self, *_args, **_kwargs):
+        raise AssertionError("rollout containment must precede database state")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rollout_mode", ["record_only", "shadow"])
+async def test_non_canary_rollout_hard_suppresses_precise_location_before_consent(
+    rollout_mode: str,
+) -> None:
+    """A stale enabled preference cannot survive as retention authority."""
+
+    store = object.__new__(CoreStore)
+    store.settings = SimpleNamespace(rollout_mode=rollout_mode)
+
+    decision = await store._retention_decision(
+        _NeverConnection(),
+        object(),
+        precise_location=True,
+    )
+
+    assert decision == (False, "suppressed_rollout_mode", True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rollout_mode", ["record_only", "shadow"])
+async def test_non_canary_rollout_hard_suppresses_direct_visit_projection(
+    rollout_mode: str,
+) -> None:
+    """Projection stays fenced even if a caller already has stale raw rows."""
+
+    store = object.__new__(CoreStore)
+    store.settings = SimpleNamespace(rollout_mode=rollout_mode)
+
+    await store._project_location_envelope(
+        _NeverConnection(),
+        object(),
+        stream_id=uuid.uuid4(),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rollout_mode", ["record_only", "shadow"])
+async def test_non_canary_rollout_rejects_direct_visit_creation(
+    rollout_mode: str,
+) -> None:
+    store = object.__new__(CoreStore)
+    store.settings = SimpleNamespace(rollout_mode=rollout_mode)
+
+    with pytest.raises(CapabilityDisabledError, match="requires rollout mode canary"):
+        await store.create_visit({}, object())

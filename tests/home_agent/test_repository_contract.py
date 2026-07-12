@@ -151,6 +151,7 @@ class RepositoryBoundaryTests(unittest.TestCase):
             "/erasure-requests/{request_id}/confirm",
         ):
             self.assertIn(route, api)
+        self.assertNotIn("/relationships/parent-confirmations", api)
         self.assertIn("X-Authenticated-HA-User", bff)
         self.assertNotIn('prefix: "/proxy/intelligence"', bff)
         browser_routes = bff.split("const ROUTES", 1)[1].split("const NATIVE_ROUTES", 1)[0]
@@ -169,6 +170,9 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertNotIn("principal-bindings", origin)
         self.assertNotIn("v1\\/initiatives", browser_routes)
         self.assertNotIn("v1\\/initiatives", native_routes)
+        self.assertNotIn("parent-confirmations", browser_routes)
+        self.assertNotIn("parent-confirmations", native_routes)
+        self.assertNotIn("parent-confirmations", origin)
         self.assertIn("X-Home-Agent-Channel", bff)
 
     def test_agent_surface_uses_typed_descriptor_lifecycle_only(self) -> None:
@@ -193,10 +197,26 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertIn("window.crypto.randomUUID()", panel)
         self.assertNotIn("/api/agent/v1/people", client)
         self.assertNotIn("/api/agent/v1/principal-bindings", client)
+        self.assertNotIn("confirmParent", client)
         self.assertIn("seven-day, 500-event record-only gate", panel)
         self.assertIn("Location memory default: off. Travel greetings default: off.", panel)
-        self.assertIn('nextOnboarding?.rollout_mode !== "canary"', panel)
-        self.assertIn('nextSnapshot?.capabilities?.persistent_memory !== "enabled"', panel)
+        self.assertIn("fullAgentCapabilityEnabled(nextSnapshot)", panel)
+        self.assertIn("containedPreferenceState(nextSnapshot)", panel)
+        self.assertIn('setPhase("rollout_contained")', panel)
+        self.assertIn('snapshot?.rollout_mode === "canary"', panel)
+        self.assertIn(
+            'snapshot?.capabilities?.persistent_memory === "enabled"', panel
+        )
+        self.assertIn("disablePreference", client)
+        self.assertIn(
+            'onClick={() => disablePreference("location_memory")}', panel
+        )
+        self.assertIn(
+            'onClick={() => disablePreference("travel_greetings")}', panel
+        )
+        self.assertNotIn("native_contained", panel)
+        self.assertNotIn("!snapshot?.preferences?.location_memory", panel)
+        self.assertNotIn("!snapshot?.preferences?.travel_greetings", panel)
         self.assertIn("clearPrincipalState", panel)
         self.assertIn("refreshGeneration", panel)
         for operation in (

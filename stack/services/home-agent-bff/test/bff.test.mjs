@@ -565,6 +565,7 @@ test("semantic route allowlist excludes generic proxying", () => {
   assert.equal(routeAllowed("GET", "/api/agent/v1/initiatives"), false);
   assert.equal(routeAllowed("POST", "/api/agent/v1/memory-transactions"), true);
   assert.equal(routeAllowed("POST", "/api/agent/v1/places"), false);
+  assert.equal(routeAllowed("POST", "/api/agent/v1/relationships/parent-confirmations"), false);
   assert.equal(routeAllowed("POST", "/api/agent/v1/operator-rollout/authorizations/shadow"), false);
   assert.equal(routeAllowed("POST", "/api/agent/v1/memory-transactions/01900000-0000-7000-8000-000000000000/confirm"), true);
   assert.equal(routeAllowed("POST", `/api/agent/v1/facts/${factId}/correction-preview`), true);
@@ -1506,6 +1507,42 @@ test("binding routes reject query variants, wrong methods, CSRF, and forged iden
   }
   assert.equal(whoamiCalls, 3, "each exact binding write reaches fresh whoami before body handling");
   assert.equal(coreCalls, 0, "forged identities never reach Core");
+});
+
+test("direct browser parent confirmation is not deployable client authority", async () => {
+  const config = configured({ principalRevalidateMs: 24 * 60 * 60_000 });
+  const store = new SessionStore(config);
+  const session = store.createSession({
+    principal: { userId: "parent-review-user", isAdmin: false, isActive: true },
+    accessToken: "parent-review-access",
+    refreshToken: "parent-review-refresh",
+    expiresIn: 3600,
+  });
+  let upstreamCalls = 0;
+  const fetchImpl = async () => {
+    upstreamCalls += 1;
+    return new Response("{}", { status: 200 });
+  };
+  const base = await listen(createBff(config, { fetchImpl, store }));
+  const response = await fetch(
+    `${base}/api/agent/v1/relationships/parent-confirmations`,
+    {
+      method: "POST",
+      headers: {
+        cookie: `${COOKIE_NAME}=${session.id}`,
+        origin: "https://home.test",
+        "x-csrf-token": session.csrf,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        parent_person_id: crypto.randomUUID(),
+        child_person_id: crypto.randomUUID(),
+        confirmation_artifact_id: crypto.randomUUID(),
+      }),
+    },
+  );
+  assert.equal(response.status, 404);
+  assert.equal(upstreamCalls, 0, "denied parent IDs never reach HA or Core");
 });
 
 test("native Agent routes require per-install proof and emit only server-constructed attestation", async () => {

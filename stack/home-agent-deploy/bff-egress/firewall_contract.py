@@ -412,16 +412,21 @@ def _rule_command(contract: Contract, tail_ip: ipaddress.IPv4Address) -> list[st
 
 def guard_rule_spec(
     contract: Contract, tail_ip: ipaddress.IPv4Address
-) -> tuple[str, str, str]:
-    """Return the canonical first-hop jump, exact allow, and terminal drop."""
+) -> tuple[str, str, str, str]:
+    """Return the canonical jump, return-flow allow, HA allow, and drop."""
 
     jump = f"-A INPUT -i {contract.bridge} -j {GUARD_CHAIN}"
+    established = (
+        f"-A {GUARD_CHAIN} -s {contract.bff_ip}/32 "
+        f"-d {contract.gateway}/32 -p tcp -m tcp --sport 8097 -m conntrack "
+        "--ctstate RELATED,ESTABLISHED -j ACCEPT"
+    )
     allow = (
         f"-A {GUARD_CHAIN} -s {contract.bff_ip}/32 -d {tail_ip}/32 "
         f"-p tcp -m tcp --dport {contract.ha_port} -j ACCEPT"
     )
     deny = f"-A {GUARD_CHAIN} -j DROP"
-    return jump, allow, deny
+    return jump, established, allow, deny
 
 
 def _targets_guard(line: str) -> bool:
@@ -440,17 +445,18 @@ def validate_guard_rules(
 ) -> None:
     """Prove every packet from the BFF bridge meets the exact allow/drop guard.
 
-    The jump must be the first INPUT rule. The private chain has exactly one
-    tuple-specific accept followed by an unconditional drop, so broader accepts
+    The jump must be the first INPUT rule. The private chain first permits only
+    conntrack-confirmed return traffic to the reviewed loopback publication,
+    then the exact HA tuple, and finally drops everything else. Broader accepts
     in UFW, Docker, or a later custom chain are unreachable for this bridge.
     """
 
-    jump, allow, deny = guard_rule_spec(contract, tail_ip)
+    jump, established, allow, deny = guard_rule_spec(contract, tail_ip)
     input_rules = [line for line in input_lines if line.startswith("-A INPUT ")]
     references = [line for line in input_rules if _targets_guard(line)]
     if not input_rules or input_rules[0] != jump or references != [jump]:
         raise ContractError("BFF OAuth guard is not the sole first INPUT jump")
-    if guard_lines != [f"-N {GUARD_CHAIN}", allow, deny]:
+    if guard_lines != [f"-N {GUARD_CHAIN}", established, allow, deny]:
         raise ContractError("BFF OAuth guard chain differs from exact allow/drop policy")
 
 
@@ -490,7 +496,9 @@ def _delete_guard_jump(contract: Contract) -> None:
 
 
 def apply_guard(contract: Contract, tail_ip: ipaddress.IPv4Address) -> None:
-    jump, allow, deny = guard_rule_spec(contract, tail_ip)
+    jump, established, allow, deny = guard_rule_spec(contract, tail_ip)
+    expected_guard = [f"-N {GUARD_CHAIN}", established, allow, deny]
+    legacy_guard = [f"-N {GUARD_CHAIN}", allow, deny]
     input_lines = _input_lines()
     references = [line for line in input_lines if _targets_guard(line)]
     guard_lines = _iptables_chain_lines(GUARD_CHAIN)
@@ -506,6 +514,18 @@ def apply_guard(contract: Contract, tail_ip: ipaddress.IPv4Address) -> None:
                 [
                     "iptables", "-A", GUARD_CHAIN,
                     "-s", f"{contract.bff_ip}/32",
+                    "-d", f"{contract.gateway}/32",
+                    "-p", "tcp", "--sport", "8097",
+                    "-m", "conntrack",
+                    "--ctstate", "RELATED,ESTABLISHED",
+                    "-j", "ACCEPT",
+                ],
+                "BFF loopback established-return guard allow",
+            )
+            _run(
+                [
+                    "iptables", "-A", GUARD_CHAIN,
+                    "-s", f"{contract.bff_ip}/32",
                     "-d", f"{tail_ip}/32",
                     "-p", "tcp", "--dport", str(contract.ha_port),
                     "-j", "ACCEPT",
@@ -516,7 +536,7 @@ def apply_guard(contract: Contract, tail_ip: ipaddress.IPv4Address) -> None:
                 ["iptables", "-A", GUARD_CHAIN, "-j", "DROP"],
                 "BFF OAuth terminal guard drop",
             )
-            guard_lines = [f"-N {GUARD_CHAIN}", allow, deny]
+            guard_lines = expected_guard
         except ContractError:
             if created:
                 subprocess.run(
@@ -532,7 +552,24 @@ def apply_guard(contract: Contract, tail_ip: ipaddress.IPv4Address) -> None:
                     stderr=subprocess.DEVNULL,
                 )
             raise
-    elif guard_lines != [f"-N {GUARD_CHAIN}", allow, deny]:
+    elif guard_lines == legacy_guard:
+        # Upgrade only the exact previously reviewed guard in place. Inserting
+        # the return-flow rule before the existing HA allow/drop pair creates
+        # no fail-open interval and leaves all new BFF-originated flows denied.
+        _run(
+            [
+                "iptables", "-I", GUARD_CHAIN, "1",
+                "-s", f"{contract.bff_ip}/32",
+                "-d", f"{contract.gateway}/32",
+                "-p", "tcp", "--sport", "8097",
+                "-m", "conntrack",
+                "--ctstate", "RELATED,ESTABLISHED",
+                "-j", "ACCEPT",
+            ],
+            "BFF loopback established-return guard migration",
+        )
+        guard_lines = expected_guard
+    elif guard_lines != expected_guard:
         raise ContractError("existing BFF OAuth guard chain is unreviewed")
 
     input_lines = _input_lines()

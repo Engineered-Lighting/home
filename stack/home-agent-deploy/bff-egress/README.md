@@ -16,15 +16,25 @@ the separate internal `home-agent_api-net`; the BFF's loopback publication is
 unchanged.
 
 The helper enforces that tuple twice. Its dedicated `HOME_AGENT_BFF_INPUT`
-chain is reached by the first IPv4 `INPUT` rule, accepts only the tuple above,
-and then drops every other host-directed packet from the BFF bridge. Later UFW,
-Docker, or custom accepts are therefore unreachable for this bridge. An exact
-commented UFW rule remains as the persistent fallback and auditable policy
-record. Reconciliation rejects chain drift, duplicate jumps, and any state in
+chain is reached by the first IPv4 `INPUT` rule. It first accepts only
+conntrack-confirmed `RELATED,ESTABLISHED` return packets from the exact BFF
+address and TCP source port 8097 to the exact Docker bridge gateway used by the
+loopback publisher. This lets a host-local client receive the BFF's SYN-ACK and
+response without permitting the BFF to open a new connection to any host
+service. The next rule accepts only
+the reviewed HA tuple above, and a terminal rule drops every other
+host-directed packet from the BFF bridge. Later UFW, Docker, or custom accepts
+are therefore unreachable for this bridge. An exact commented UFW rule remains
+as the persistent fallback and auditable policy record. Reconciliation rejects
+chain drift, duplicate jumps, a state rule containing `NEW`, and any state in
 which its jump is not first. A reviewed UFW lifecycle hook installs the same
 guard during firewall start, stop, reload, and flush handling, before Docker or
 Tailscale must be online; the BFF is therefore never exposed while waiting for
 the periodic verifier.
+
+`apply` upgrades the exact previous two-rule guard in place by inserting this
+return-flow rule first. Any other legacy or drifted chain still fails closed;
+the migration never removes the terminal drop or creates an unguarded window.
 
 Install the reviewed helper into a root-owned path before using it. Never run a
 root firewall helper from the mutable Git checkout. The final digest comparison
@@ -143,7 +153,8 @@ The command fails closed unless all of the following are exact:
 - UFW is active and host IPv4 input defaults to `DROP`;
 - the exact UFW rule exists;
 - the dedicated guard is the sole first `INPUT` jump, contains exactly one
-  tuple-specific accept followed by a terminal drop, and has no extra rules;
+  source- and bridge-gateway-bound `RELATED,ESTABLISHED` accept, then the
+  tuple-specific HA accept and a terminal drop, and has no extra rules;
   and
 - an anonymous GET from inside the BFF reaches `/auth/token` and receives HA's
   expected `405` rejection.

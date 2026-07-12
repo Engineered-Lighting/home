@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import copy
 import hashlib
 import ipaddress
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 DEPLOY = Path(__file__).resolve().parents[2]
@@ -15,6 +15,7 @@ sys.path.insert(0, str(HELPER))
 from firewall_contract import (  # noqa: E402
     ContractError,
     UFW_HOOK_SHA256,
+    apply_guard,
     contract_from_env,
     guard_rule_spec,
     validate_container,
@@ -210,39 +211,131 @@ class BffEgressFirewallContractTests(unittest.TestCase):
     def test_first_input_guard_makes_later_broad_accepts_unreachable(self) -> None:
         contract = contract_from_env(env())
         tail_ip = ipaddress.IPv4Address("100.87.94.18")
-        jump, allow, deny = guard_rule_spec(contract, tail_ip)
+        jump, established, allow, deny = guard_rule_spec(contract, tail_ip)
         validate_guard_rules(
             ["-P INPUT DROP", jump, "-A INPUT -i ha-bff-egress0 -j ACCEPT"],
-            ["-N HOME_AGENT_BFF_INPUT", allow, deny],
+            ["-N HOME_AGENT_BFF_INPUT", established, allow, deny],
             contract,
             tail_ip,
         )
+        self.assertIn("-s 172.22.0.10/32 -d 172.22.0.1/32", established)
+        self.assertIn("-p tcp -m tcp --sport 8097", established)
+        self.assertIn("-m conntrack --ctstate RELATED,ESTABLISHED", established)
+        self.assertNotIn("NEW", established)
+
+    def test_guard_apply_adds_only_established_loopback_return_before_ha(self) -> None:
+        contract = contract_from_env(env())
+        tail_ip = ipaddress.IPv4Address("100.87.94.18")
+        commands: list[list[str]] = []
+
+        def record(command: list[str], _label: str):
+            commands.append(command)
+            return None
+
+        with (
+            patch("firewall_contract._input_lines", return_value=["-P INPUT DROP"]),
+            patch("firewall_contract._iptables_chain_lines", return_value=None),
+            patch("firewall_contract._run", side_effect=record),
+            patch("firewall_contract.validate_guard_live"),
+        ):
+            apply_guard(contract, tail_ip)
+
+        self.assertEqual(
+            commands,
+            [
+                ["iptables", "-N", "HOME_AGENT_BFF_INPUT"],
+                [
+                    "iptables", "-A", "HOME_AGENT_BFF_INPUT",
+                    "-s", "172.22.0.10/32", "-d", "172.22.0.1/32",
+                    "-p", "tcp", "--sport", "8097",
+                    "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED",
+                    "-j", "ACCEPT",
+                ],
+                [
+                    "iptables", "-A", "HOME_AGENT_BFF_INPUT",
+                    "-s", "172.22.0.10/32", "-d", "100.87.94.18/32",
+                    "-p", "tcp", "--dport", "10000", "-j", "ACCEPT",
+                ],
+                ["iptables", "-A", "HOME_AGENT_BFF_INPUT", "-j", "DROP"],
+                [
+                    "iptables", "-I", "INPUT", "1", "-i", "ha-bff-egress0",
+                    "-j", "HOME_AGENT_BFF_INPUT",
+                ],
+            ],
+        )
+
+    def test_guard_apply_upgrades_only_the_exact_legacy_chain_in_place(self) -> None:
+        contract = contract_from_env(env())
+        tail_ip = ipaddress.IPv4Address("100.87.94.18")
+        jump, established, allow, deny = guard_rule_spec(contract, tail_ip)
+        commands: list[list[str]] = []
+
+        def record(command: list[str], _label: str):
+            commands.append(command)
+            return None
+
+        with (
+            patch("firewall_contract._input_lines", return_value=["-P INPUT DROP", jump]),
+            patch(
+                "firewall_contract._iptables_chain_lines",
+                return_value=["-N HOME_AGENT_BFF_INPUT", allow, deny],
+            ),
+            patch("firewall_contract._run", side_effect=record),
+            patch("firewall_contract.validate_guard_live"),
+        ):
+            apply_guard(contract, tail_ip)
+
+        self.assertEqual(
+            commands,
+            [[
+                "iptables", "-I", "HOME_AGENT_BFF_INPUT", "1",
+                "-s", "172.22.0.10/32", "-d", "172.22.0.1/32",
+                "-p", "tcp", "--sport", "8097",
+                "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED",
+                "-j", "ACCEPT",
+            ]],
+        )
+        self.assertIn("RELATED,ESTABLISHED", established)
 
     def test_guard_rejects_earlier_bypass_duplicate_jump_and_chain_drift(self) -> None:
         contract = contract_from_env(env())
         tail_ip = ipaddress.IPv4Address("100.87.94.18")
-        jump, allow, deny = guard_rule_spec(contract, tail_ip)
+        jump, established, allow, deny = guard_rule_spec(contract, tail_ip)
         cases = (
             (
                 ["-P INPUT DROP", "-A INPUT -i ha-bff-egress0 -j ACCEPT", jump],
-                ["-N HOME_AGENT_BFF_INPUT", allow, deny],
+                ["-N HOME_AGENT_BFF_INPUT", established, allow, deny],
             ),
             (
                 ["-P INPUT DROP", jump, jump],
-                ["-N HOME_AGENT_BFF_INPUT", allow, deny],
+                ["-N HOME_AGENT_BFF_INPUT", established, allow, deny],
             ),
             (
                 ["-P INPUT DROP", jump],
                 [
                     "-N HOME_AGENT_BFF_INPUT",
                     "-A HOME_AGENT_BFF_INPUT -j ACCEPT",
+                    established,
                     allow,
                     deny,
                 ],
             ),
             (
                 ["-P INPUT DROP", jump],
-                ["-N HOME_AGENT_BFF_INPUT", allow],
+                ["-N HOME_AGENT_BFF_INPUT", established, allow],
+            ),
+            (
+                ["-P INPUT DROP", jump],
+                ["-N HOME_AGENT_BFF_INPUT", allow, established, deny],
+            ),
+            (
+                ["-P INPUT DROP", jump],
+                [
+                    "-N HOME_AGENT_BFF_INPUT",
+                    established.replace("RELATED,ESTABLISHED", "NEW,ESTABLISHED"),
+                    allow,
+                    deny,
+                ],
             ),
         )
         for input_lines, guard_lines in cases:

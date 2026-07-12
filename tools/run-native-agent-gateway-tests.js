@@ -329,6 +329,8 @@ async function waitForGateway(port, child) {
       "/api/agent/native/v1/places",
       "/api/agent/native/v1/parent-confirmations",
       "/api/agent/native/v1/relationships/parent-confirmations",
+      "/api/agent/native/v1/operator-rollout/phase3-readiness",
+      "/api/agent/native/v1/operator-rollout/phase3-readiness?debug=1",
       "/api/agent/native/v1/snapshot?url=https://attacker.invalid",
       "/api/agent/native/v1/memory-transactions/not-a-uuid",
     ]) {

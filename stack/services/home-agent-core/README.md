@@ -170,6 +170,7 @@ credential and is never proxied by the BFF):
 
 - `GET /v1/operator-rollout`
 - `GET /v1/operator-rollout/phase2-readiness`
+- `GET /v1/operator-rollout/phase3-readiness`
 
 The Phase 2 readiness response is read-only and deterministic. It reports the
 seven-day window beginning at the first qualifying envelope and counts only accepted, identity-redacted
@@ -186,6 +187,24 @@ are informational only in the v3 contract and never satisfy live readiness.
 The v3 gate also requires the fenced worker-maintenance cycle to be current;
 the response exposes only its categorical state, never the worker instance,
 timestamps, retention counts, or queue content.
+
+The Phase 3 endpoint is a fixed revision-`0006_worker_maintenance_health` gap
+diagnostic, not a rollout gate. It rechecks the actual database revision and
+reports only the configured rollout mode plus a categorical shadow-predecessor
+status. Exact `shadow` mode and rollout-gate code `authorized` are required for
+that predecessor status; a `record_only` code is never accepted as shadow
+authorization. The response performs no identity or fact query, exposes no
+counts, identifiers, names, timestamps, digests, evidence content, or private
+records, and has literal `authoritative=false`, `enables_writes=false`, and
+`ready_to_advance=false`. Query parameters and GET bodies are rejected.
+
+Revision 0006 has no authoritative People migration manifest/completion
+receipt, privacy-cutover attestation, legacy semantic-write freeze attestation,
+unique `me` marker, or staged atomic two-parent confirmation protocol. The
+diagnostic therefore reports those fixed gaps as `unproven`, `not_evaluated`,
+or `capability_disabled`. An authoritative Phase 3 v1 gate requires a future
+reviewed migration and separate implementation; this endpoint cannot enable
+semantic writes or be proxied by the BFF, Agent origin, browser, or native app.
 
 When v3 readiness is true, place a JSON object containing a random
 `operator_request_id` and the response's exact `expected_rule_version`,

@@ -151,6 +151,7 @@ class RepositoryBoundaryTests(unittest.TestCase):
             "/erasure-requests/{request_id}/confirm",
         ):
             self.assertIn(route, api)
+        self.assertIn("/operator-rollout/phase3-readiness", api)
         self.assertNotIn("/relationships/parent-confirmations", api)
         self.assertIn("X-Authenticated-HA-User", bff)
         self.assertNotIn('prefix: "/proxy/intelligence"', bff)
@@ -173,11 +174,15 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertNotIn("parent-confirmations", browser_routes)
         self.assertNotIn("parent-confirmations", native_routes)
         self.assertNotIn("parent-confirmations", origin)
+        self.assertNotIn("phase3-readiness", browser_routes)
+        self.assertNotIn("phase3-readiness", native_routes)
+        self.assertNotIn("phase3-readiness", origin)
         self.assertIn("X-Home-Agent-Channel", bff)
 
     def test_agent_surface_uses_typed_descriptor_lifecycle_only(self) -> None:
         client = read("app/src/home-agent/api.js")
         panel = read("app/src/home-agent/panel.jsx")
+        native = read("app/src-tauri/src/native_auth.rs")
         self.assertIn("onboardingStatus", client)
         for operation in (
             "principalBindingProposal",
@@ -197,6 +202,8 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertIn("window.crypto.randomUUID()", panel)
         self.assertNotIn("/api/agent/v1/people", client)
         self.assertNotIn("/api/agent/v1/principal-bindings", client)
+        self.assertNotIn("phase3-readiness", client)
+        self.assertNotIn("phase3-readiness", native)
         self.assertNotIn("confirmParent", client)
         self.assertIn("seven-day, 500-event record-only gate", panel)
         self.assertIn("Location memory default: off. Travel greetings default: off.", panel)

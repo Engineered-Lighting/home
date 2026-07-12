@@ -52,7 +52,10 @@ from .models import (
     MemoryInspection,
     OnboardingStatusView,
     ParentPresenceView,
+    PHASE3_FIXED_READINESS_BLOCKERS,
     Phase2ReadinessView,
+    Phase3ReadinessBlocker,
+    Phase3ReadinessView,
     PersonCreate,
     PersonView,
     PlaceCreate,
@@ -67,6 +70,7 @@ from .models import (
     ReviewedPrivacyDirectiveImport,
     ReviewedPersonStatusImport,
     ReviewedImportReceipt,
+    RolloutMode,
     RolloutStatus,
     SourceEntityBindingCreate,
     VisitCreate,
@@ -93,6 +97,40 @@ NativeService = Annotated[ServiceIdentity, Depends(require_native_service_identi
 OperatorService = Annotated[None, Depends(require_operator_bearer)]
 Store = Annotated[CoreStore, Depends(store_from)]
 OperatorBindingStore = Annotated[CoreStore, Depends(operator_binding_store_from)]
+
+
+PHASE3_SCHEMA_REVISION = "0006_worker_maintenance_health"
+
+
+def phase3_readiness_diagnostic(
+    *,
+    rollout_mode: RolloutMode,
+    authorization_authorized: bool,
+    authorization_code: str,
+) -> Phase3ReadinessView:
+    """Describe only what revision 0006 can prove without private-state reads."""
+
+    blockers: list[Phase3ReadinessBlocker] = []
+    if rollout_mode != "shadow":
+        predecessor_status = "mode_not_shadow"
+        blockers.append("rollout_mode_not_shadow")
+    elif authorization_authorized and authorization_code == "authorized":
+        predecessor_status = "authorized"
+    elif authorization_code == "authorization_missing":
+        predecessor_status = "missing"
+    elif authorization_code == "authorization_unavailable":
+        predecessor_status = "unavailable"
+    else:
+        predecessor_status = "invalid"
+
+    if predecessor_status != "authorized":
+        blockers.append("shadow_predecessor_not_authorized")
+    blockers.extend(PHASE3_FIXED_READINESS_BLOCKERS)
+    return Phase3ReadinessView(
+        rollout_mode=rollout_mode,
+        shadow_predecessor_status=predecessor_status,
+        blockers=blockers,
+    )
 
 
 async def principal_from(
@@ -352,6 +390,39 @@ def semantic_router() -> APIRouter:
             policy_version=store.settings.policy_version,
             policy_digest=store.settings.policy_digest,
         ).inspect(references)
+
+    @router.get(
+        "/operator-rollout/phase3-readiness",
+        response_model=Phase3ReadinessView,
+    )
+    async def phase3_readiness(
+        request: Request,
+        _service: OperatorService,
+        _bootstrap: None = Depends(require_bootstrap),
+    ) -> Phase3ReadinessView:
+        """Return a fixed, non-authoritative revision-0006 gap diagnostic."""
+
+        if request.query_params:
+            raise ValidationDomainError(
+                "Phase 3 readiness does not accept query parameters"
+            )
+        if await request.body():
+            raise ValidationDomainError("Phase 3 readiness does not accept a body")
+        settings = request.app.state.settings
+        actual_revision = await request.app.state.database.migration_revision()
+        if (
+            settings.readiness_migration != PHASE3_SCHEMA_REVISION
+            or actual_revision != settings.readiness_migration
+        ):
+            raise CapabilityDisabledError(
+                "Phase 3 revision-0006 diagnostic is unavailable"
+            )
+        authorization = await request.app.state.rollout_gate.status(force=True)
+        return phase3_readiness_diagnostic(
+            rollout_mode=settings.rollout_mode,
+            authorization_authorized=authorization.authorized,
+            authorization_code=authorization.code,
+        )
 
     @router.post("/people/verify-reviewed", response_model=PersonView)
     async def verify_reviewed_person(

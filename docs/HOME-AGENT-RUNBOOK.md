@@ -667,6 +667,26 @@ worker-maintenance proof, and the deployment still being in `record_only`; the
 endpoint cannot change rollout mode. The response exposes only a categorical
 worker status, not its instance ID, timestamps, retention counts, or errors.
 
+`GET /v1/operator-rollout/phase3-readiness` is available only to the offline
+operator bearer paired with the bootstrap credential. It is deliberately a
+non-authoritative revision-0006 diagnostic: it rechecks the live database
+revision, accepts no query parameters or request body, reads no identity or
+fact rows, and exposes no names, IDs, timestamps, digests, counts, or private
+content. Its only live checks are the exact configured mode and the existing
+rollout gate's categorical shadow-predecessor result. Only exact `shadow` mode
+with gate code `authorized` reports an authorized predecessor; `record_only`
+does not.
+
+The response always returns `authoritative=false`, `enables_writes=false`, and
+`ready_to_advance=false`. Revision 0006 cannot prove a People migration
+manifest/completion receipt, privacy cutover, legacy semantic-write freeze,
+unique `me` identity, or the staged atomic two-parent confirmation protocol,
+so the corresponding blockers remain fixed. Do not use this diagnostic to
+change rollout configuration or enable semantic writes. An authoritative
+Phase 3 v1 gate requires a future reviewed schema migration and implementation.
+The endpoint is intentionally absent from BFF, Agent-origin, browser, and
+native allowlists.
+
 After reviewing a ready v3 response, create a JSON object with a new random
 UUIDv4/UUIDv7 `operator_request_id` and the response's exact values renamed to
 `expected_rule_version`, `expected_policy_version`,

@@ -46,6 +46,31 @@ WorkerMaintenanceCode = Literal[
     "kernel_mismatch",
     "unavailable",
 ]
+Phase3ShadowPredecessorStatus = Literal[
+    "authorized",
+    "mode_not_shadow",
+    "missing",
+    "invalid",
+    "unavailable",
+]
+Phase3ReadinessBlocker = Literal[
+    "rollout_mode_not_shadow",
+    "shadow_predecessor_not_authorized",
+    "semantic_people_migration_manifest_not_recorded",
+    "semantic_people_migration_completion_not_recorded",
+    "privacy_cutover_not_recorded",
+    "legacy_semantic_write_freeze_not_recorded",
+    "subject_binding_not_evaluated",
+    "parent_confirmation_protocol_capability_disabled",
+]
+PHASE3_FIXED_READINESS_BLOCKERS: tuple[Phase3ReadinessBlocker, ...] = (
+    "semantic_people_migration_manifest_not_recorded",
+    "semantic_people_migration_completion_not_recorded",
+    "privacy_cutover_not_recorded",
+    "legacy_semantic_write_freeze_not_recorded",
+    "subject_binding_not_evaluated",
+    "parent_confirmation_protocol_capability_disabled",
+)
 
 
 class HaContext(StrictModel):
@@ -273,6 +298,50 @@ class Phase2ReadinessView(StrictModel):
     journeys_are_automatically_inferred: Literal[False] = False
 
     _evaluated = field_validator("evaluated_at")(_aware)
+
+
+class Phase3ReadinessView(StrictModel):
+    """Non-authoritative, content-free diagnostic for schema revision 0006."""
+
+    contract: Literal["phase3-readiness-diagnostic-v0"] = (
+        "phase3-readiness-diagnostic-v0"
+    )
+    schema_revision: Literal["0006_worker_maintenance_health"] = (
+        "0006_worker_maintenance_health"
+    )
+    rollout_mode: RolloutMode
+    shadow_predecessor_status: Phase3ShadowPredecessorStatus
+    semantic_people_migration_manifest_status: Literal["unproven"] = "unproven"
+    semantic_people_migration_completion_status: Literal["unproven"] = "unproven"
+    privacy_cutover_status: Literal["unproven"] = "unproven"
+    legacy_semantic_write_freeze_status: Literal["unproven"] = "unproven"
+    subject_binding_status: Literal["not_evaluated"] = "not_evaluated"
+    parent_confirmation_protocol_status: Literal["capability_disabled"] = (
+        "capability_disabled"
+    )
+    evidence_scope: Literal["local_database_only"] = "local_database_only"
+    counts_exposed: Literal[False] = False
+    identity_or_fact_state_evaluated: Literal[False] = False
+    authoritative: Literal[False] = False
+    enables_writes: Literal[False] = False
+    ready_to_advance: Literal[False] = False
+    blockers: list[Phase3ReadinessBlocker]
+
+    @model_validator(mode="after")
+    def _fixed_diagnostic_shape(self) -> "Phase3ReadinessView":
+        expected: list[Phase3ReadinessBlocker] = []
+        if self.rollout_mode != "shadow":
+            if self.shadow_predecessor_status != "mode_not_shadow":
+                raise ValueError("non-shadow rollout cannot claim a shadow predecessor")
+            expected.append("rollout_mode_not_shadow")
+        elif self.shadow_predecessor_status == "mode_not_shadow":
+            raise ValueError("shadow rollout cannot report mode_not_shadow")
+        if self.shadow_predecessor_status != "authorized":
+            expected.append("shadow_predecessor_not_authorized")
+        expected.extend(PHASE3_FIXED_READINESS_BLOCKERS)
+        if self.blockers != expected:
+            raise ValueError("Phase 3 diagnostic blockers are not canonical")
+        return self
 
 
 class RolloutAuthorizationRequest(StrictModel):

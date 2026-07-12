@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import uuid
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import column
 from sqlalchemy.dialects import postgresql
 
@@ -10,6 +12,7 @@ from app.models import Phase2JourneyEvaluation
 from app.phase2 import (
     PHASE2_RULE_VERSION,
     Phase2EnvelopeSummary,
+    Phase2GateInspector,
     build_phase2_readiness,
     consent_precedes_visit,
     half_open_observation_window,
@@ -234,3 +237,127 @@ def test_empty_database_has_explicit_blockers() -> None:
         "no_durable_envelopes",
         "qualifying_redacted_envelope_threshold_not_met",
     ]
+
+
+class _ScalarResult:
+    def __init__(self, value) -> None:
+        self.value = value
+
+    def scalar_one_or_none(self):
+        return self.value
+
+
+class _BoundedConnection:
+    def __init__(self, values) -> None:
+        self.values = iter(values)
+        self.statements = []
+
+    async def execute(self, statement):
+        self.statements.append(statement)
+        return _ScalarResult(next(self.values))
+
+
+class _BoundedDatabase:
+    def __init__(self, values) -> None:
+        self.connection = _BoundedConnection(values)
+
+    @asynccontextmanager
+    async def transaction(self):
+        yield self.connection
+
+
+@pytest.mark.asyncio
+async def test_onboarding_inspection_reads_only_two_bounded_evidence_rows(
+    monkeypatch,
+) -> None:
+    database = _BoundedDatabase([START, uuid.uuid4()])
+
+    def digest_must_not_run(*_args, **_kwargs):
+        raise AssertionError("onboarding must not hash the promotion boundary")
+
+    monkeypatch.setattr("app.phase2.phase2_input_digest", digest_must_not_run)
+    result = await Phase2GateInspector(
+        database,  # type: ignore[arg-type]
+        rollout_mode="record_only",
+        policy_version="home-agent-mvp-v1",
+        policy_digest="a" * 64,
+    ).inspect_onboarding(now=START + timedelta(days=7))
+
+    assert result.ready_to_advance
+    assert result.blockers == ()
+    statements = database.connection.statements
+    assert len(statements) == 2
+    compiled = [
+        str(
+            statement.compile(
+                dialect=postgresql.dialect(),
+                compile_kwargs={"literal_binds": True},
+            )
+        ).lower()
+        for statement in statements
+    ]
+    assert all("operations.phase2_rollout_evidence" in sql for sql in compiled)
+    assert all("limit 1" in sql for sql in compiled)
+    assert "offset 499" not in compiled[0]
+    assert "offset 499" in compiled[1]
+    assert all("count(" not in sql for sql in compiled)
+    assert all("ingest.envelopes" not in sql for sql in compiled)
+    assert all("quarantine" not in sql for sql in compiled)
+    assert all("raw_payload_status" not in sql for sql in compiled)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("values", "rollout_mode", "now", "expected_blockers", "query_count"),
+    [
+        (
+            [None],
+            "record_only",
+            START,
+            (
+                "no_durable_envelopes",
+                "qualifying_redacted_envelope_threshold_not_met",
+            ),
+            1,
+        ),
+        (
+            [START, None],
+            "record_only",
+            START + timedelta(days=8),
+            ("qualifying_redacted_envelope_threshold_not_met",),
+            2,
+        ),
+        (
+            [START, uuid.uuid4()],
+            "record_only",
+            START + timedelta(days=7) - timedelta(microseconds=1),
+            ("minimum_observation_window_not_elapsed",),
+            2,
+        ),
+        (
+            [START, uuid.uuid4()],
+            "shadow",
+            START + timedelta(days=8),
+            ("rollout_mode_not_record_only",),
+            2,
+        ),
+    ],
+)
+async def test_onboarding_inspection_has_only_fixed_coarse_blockers(
+    values,
+    rollout_mode,
+    now,
+    expected_blockers,
+    query_count,
+) -> None:
+    database = _BoundedDatabase(values)
+    result = await Phase2GateInspector(
+        database,  # type: ignore[arg-type]
+        rollout_mode=rollout_mode,
+        policy_version="home-agent-mvp-v1",
+        policy_digest="a" * 64,
+    ).inspect_onboarding(now=now)
+
+    assert result.ready_to_advance is (not expected_blockers)
+    assert result.blockers == expected_blockers
+    assert len(database.connection.statements) == query_count

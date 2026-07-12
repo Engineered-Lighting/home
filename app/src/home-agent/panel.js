@@ -302,38 +302,107 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
 const {
   useEffect,
   useMemo,
+  useRef,
   useState
 } = React;
+const DEFAULT_DESCRIPTOR_TEXT = "This is my parents’ mountain house.";
+function capturePrincipalOperation(subject, generation) {
+  return Object.freeze({
+    subject: subject || null,
+    generation
+  });
+}
+function principalOperationIsCurrent(ticket, subject, generation) {
+  return Boolean(ticket?.subject) && ticket.subject === subject && ticket.generation === generation;
+}
 function HomeAgentPanel() {
   const api = useMemo(() => new window.HomeAgentApi(""), []);
+  const activeSubject = useRef(null);
+  const authorityGeneration = useRef(0);
+  const refreshGeneration = useRef(0);
   const [phase, setPhase] = useState("loading");
   const [session, setSession] = useState(null);
+  const [onboarding, setOnboarding] = useState(null);
   const [snapshot, setSnapshot] = useState(null);
   const [initiatives, setInitiatives] = useState([]);
   const [claimedInitiative, setClaimedInitiative] = useState(null);
   const [relationship, setRelationship] = useState(null);
   const [presence, setPresence] = useState(null);
   const [error, setError] = useState("");
-  const [teaching, setTeaching] = useState("This is my parents’ mountain house.");
+  const [teaching, setTeaching] = useState(DEFAULT_DESCRIPTOR_TEXT);
   const [transaction, setTransaction] = useState(null);
-  const [correctionText, setCorrectionText] = useState("This is my parents’ mountain house.");
+  const [correctionText, setCorrectionText] = useState(DEFAULT_DESCRIPTOR_TEXT);
   const [lifecycle, setLifecycle] = useState(null);
+  const clearPrincipalState = () => {
+    authorityGeneration.current += 1;
+    setOnboarding(null);
+    setSnapshot(null);
+    setInitiatives([]);
+    setClaimedInitiative(null);
+    setRelationship(null);
+    setPresence(null);
+    setTeaching(DEFAULT_DESCRIPTOR_TEXT);
+    setTransaction(null);
+    setCorrectionText(DEFAULT_DESCRIPTOR_TEXT);
+    setLifecycle(null);
+  };
+  const beginPrincipalOperation = () => capturePrincipalOperation(activeSubject.current, authorityGeneration.current);
+  const principalOperationCurrent = ticket => principalOperationIsCurrent(ticket, activeSubject.current, authorityGeneration.current);
   const refresh = async () => {
+    const generation = ++refreshGeneration.current;
+    const isCurrent = () => generation === refreshGeneration.current;
     setError("");
     try {
       const currentSession = await api.session();
+      if (!isCurrent()) return;
+      const subject = currentSession?.authenticated === true ? api.invoke ? "native-credential" : currentSession?.user_id : null;
+      if (currentSession?.authenticated === true && !subject) {
+        throw new Error("authenticated_session_missing_subject");
+      }
+      if (activeSubject.current !== subject) clearPrincipalState();
+      activeSubject.current = subject;
       setSession(currentSession);
       if (currentSession?.authenticated !== true) {
-        setSnapshot(null);
+        clearPrincipalState();
         setPhase("signed_out");
         return;
       }
+      if (!api.invoke) {
+        const nextOnboarding = await api.onboardingStatus();
+        if (!isCurrent()) return;
+        if (nextOnboarding?.state !== "bound" || nextOnboarding?.rollout_mode !== "canary") {
+          clearPrincipalState();
+          setOnboarding(nextOnboarding);
+          setPhase("onboarding");
+          return;
+        }
+        setOnboarding(nextOnboarding);
+      } else {
+        setOnboarding(null);
+      }
       const nextSnapshot = await api.snapshot();
+      if (!isCurrent()) return;
+      if (api.invoke && nextSnapshot?.capabilities?.persistent_memory !== "enabled") {
+        clearPrincipalState();
+        setPhase("native_contained");
+        return;
+      }
       setSnapshot(nextSnapshot);
-      setInitiatives(api.invoke ? await api.initiatives() : []);
+      const nextInitiatives = api.invoke ? await api.initiatives() : [];
+      if (!isCurrent()) return;
+      setInitiatives(nextInitiatives);
       setPhase("ready");
     } catch (cause) {
-      setPhase(cause.status === 401 ? "signed_out" : "contained");
+      if (!isCurrent()) return;
+      clearPrincipalState();
+      activeSubject.current = null;
+      if (cause.status === 401) {
+        setSession(null);
+        setPhase("signed_out");
+        setError("");
+        return;
+      }
+      setPhase("contained");
       setError(cause.message || "agent_unavailable");
     }
   };
@@ -355,64 +424,80 @@ function HomeAgentPanel() {
     };
   }, []);
   const propose = async () => {
+    const ticket = beginPrincipalOperation();
     setError("");
     try {
       const visitId = snapshot?.latest_visit?.visit_id;
       if (!visitId) throw new Error("location_unresolved");
       const value = await api.proposeMemory(visitId, teaching.trim());
+      if (!principalOperationCurrent(ticket)) return;
       setTransaction(value);
     } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
       setError(cause.message || "proposal_failed");
     }
   };
   const confirm = async () => {
+    const ticket = beginPrincipalOperation();
     setError("");
     try {
       const value = await api.confirmMemory(transaction.transaction_id, transaction.preview_digest);
+      if (!principalOperationCurrent(ticket)) return;
       setTransaction(current => ({
         ...current,
         ...value
       }));
     } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
       setError(cause.message || "confirmation_failed");
     }
   };
   const setPreference = async (key, enabled) => {
+    const ticket = beginPrincipalOperation();
     setError("");
     try {
       await api.setPreference(key, enabled);
+      if (!principalOperationCurrent(ticket)) return;
       await refresh();
     } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
       setError(cause.message || "preference_update_failed");
     }
   };
   const previewLifecycle = async operation => {
+    const ticket = beginPrincipalOperation();
     setError("");
     setLifecycle(null);
     const factId = transaction?.fact_id;
     if (!factId) return setError("descriptor_fact_unavailable");
     try {
       const value = operation === "correction" ? await api.previewCorrection(factId, correctionText.trim()) : operation === "retraction" ? await api.previewRetraction(factId) : await api.previewForget(factId);
+      if (!principalOperationCurrent(ticket)) return;
       setLifecycle({
         ...value,
         operation
       });
     } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
       setError(cause.message || `${operation}_preview_failed`);
     }
   };
   const confirmLifecycle = async () => {
+    const ticket = beginPrincipalOperation();
     setError("");
     try {
       let value;
       if (lifecycle.operation === "correction") {
         value = await api.confirmCorrection(lifecycle.transaction_id, lifecycle.preview_digest);
+        if (!principalOperationCurrent(ticket)) return;
         setTransaction(value);
       } else if (lifecycle.operation === "retraction") {
         value = await api.confirmRetraction(lifecycle.transaction_id, lifecycle.preview_digest);
+        if (!principalOperationCurrent(ticket)) return;
         setTransaction(value);
       } else {
         value = await api.confirmForget(lifecycle.erasure_request_id, lifecycle.preview_digest);
+        if (!principalOperationCurrent(ticket)) return;
         setTransaction(current => current ? {
           ...current,
           state: "erased"
@@ -424,27 +509,55 @@ function HomeAgentPanel() {
         confirmed: true
       });
     } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
       setError(cause.message || `${lifecycle?.operation || "lifecycle"}_confirmation_failed`);
     }
   };
   const claimInitiative = async initiativeId => {
+    const ticket = beginPrincipalOperation();
     setError("");
     try {
       const value = await api.claimInitiative(initiativeId);
+      if (!principalOperationCurrent(ticket)) return;
       setClaimedInitiative(value);
       setInitiatives(current => current.filter(item => item.initiative_id !== initiativeId));
     } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
       setError(cause.message || "initiative_claim_failed");
     }
   };
   const queryPlace = async kind => {
+    const ticket = beginPrincipalOperation();
     setError("");
     const placeId = transaction?.place_id || snapshot?.latest_visit?.place_id;
     if (!placeId) return setError("specific_place_unavailable");
     try {
-      if (kind === "relationship") setRelationship(await api.explainDescriptor(placeId));else setPresence(await api.queryParentPresence(placeId));
+      const value = kind === "relationship" ? await api.explainDescriptor(placeId) : await api.queryParentPresence(placeId);
+      if (!principalOperationCurrent(ticket)) return;
+      if (kind === "relationship") setRelationship(value);else setPresence(value);
     } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
       setError(cause.message || `${kind}_query_failed`);
+    }
+  };
+  const signOut = async () => {
+    refreshGeneration.current += 1;
+    clearPrincipalState();
+    activeSubject.current = null;
+    setSession(null);
+    setPhase("signed_out");
+    setError("");
+    try {
+      await api.logout();
+      await refresh();
+    } catch (cause) {
+      const reason = cause.code || cause.message || "logout_revocation_pending";
+      setSession({
+        authenticated: false,
+        login_enabled: false,
+        reason
+      });
+      setError(reason);
     }
   };
   return React.createElement("main", {
@@ -469,14 +582,7 @@ function HomeAgentPanel() {
   }, "Home"), React.createElement("button", {
     onClick: refresh
   }, "Refresh"), session?.authenticated && React.createElement("button", {
-    onClick: async () => {
-      try {
-        await api.logout();
-        await refresh();
-      } catch (cause) {
-        setError(cause.message || String(cause));
-      }
-    }
+    onClick: signOut
   }, "Sign out"))), phase === "signed_out" && React.createElement("section", {
     className: "agent-card"
   }, React.createElement("h2", null, "Authentication required"), React.createElement("p", null, "The Agent surface uses Home Assistant OAuth. No long-lived token is stored in this page."), session?.reason === "native_logout_revocation_pending" ? React.createElement("button", {
@@ -498,11 +604,22 @@ function HomeAgentPanel() {
         setError(cause.message || String(cause));
       }
     }
-  }, "Sign in with Home Assistant"), session?.reason && React.createElement("code", null, session.reason)), phase === "authenticating" && React.createElement("section", {
+  }, "Sign in with Home Assistant"), session?.reason && React.createElement("code", null, session.reason), error && error !== session?.reason && React.createElement("code", null, error)), phase === "authenticating" && React.createElement("section", {
     className: "agent-card"
   }, React.createElement("h2", null, "Complete sign-in in your browser"), React.createElement("p", null, "The desktop app is waiting on its loopback OAuth callback. No token is returned to this page.")), phase === "contained" && React.createElement("section", {
-    className: "agent-card agent-warning"
-  }, React.createElement("h2", null, "Contained / unavailable"), React.createElement("p", null, "Private Agent routes are fail-closed until the BFF, Home Assistant identity, and core are configured."), error && React.createElement("code", null, error)), phase === "ready" && React.createElement(React.Fragment, null, React.createElement("section", {
+    className: "agent-card agent-warning",
+    role: "alert"
+  }, React.createElement("h2", null, "Contained / unavailable"), React.createElement("p", null, "Private Agent routes are fail-closed until the BFF, Home Assistant identity, and core are configured."), error && React.createElement("code", null, error)), phase === "native_contained" && React.createElement("section", {
+    className: "agent-card agent-warning",
+    role: "status",
+    "aria-live": "polite"
+  }, React.createElement("h2", null, "Identity confirmed / rollout contained"), React.createElement("p", null, "The native Agent is authenticated, but Core has not enabled canary persistent-memory capability."), React.createElement("p", null, "Preferences, teaching, private queries, and initiatives stay unavailable. Location memory and travel greetings remain default-off.")), phase === "onboarding" && React.createElement("section", {
+    className: "agent-card agent-warning",
+    role: "status",
+    "aria-live": "polite"
+  }, React.createElement("h2", null, onboarding?.state === "bound" ? "Identity confirmed / rollout contained" : onboarding?.state === "identity_confirmation_required" ? "Identity confirmation required" : onboarding?.state === "contained" ? "Identity is contained" : "Secure setup is still observing"), React.createElement("p", null, onboarding?.state === "bound" ? "Home Assistant sign-in and the semantic identity binding are confirmed, but this rollout mode does not authorize the full private Agent surface." : "Home Assistant sign-in succeeded. Core has not inferred a semantic identity or enabled either private location choice."), React.createElement("dl", {
+    className: "agent-grid"
+  }, React.createElement("dt", null, "Rollout mode"), React.createElement("dd", null, onboarding?.rollout_mode || "unknown"), React.createElement("dt", null, "Minimum observation window"), React.createElement("dd", null, onboarding ? `${onboarding.phase2_observation_days_required} days` : "unknown"), React.createElement("dt", null, "Qualifying redacted-event threshold"), React.createElement("dd", null, onboarding ? onboarding.qualifying_redacted_envelopes_required : "unknown"), React.createElement("dt", null, "Gate ready"), React.createElement("dd", null, onboarding?.phase2_ready ? "yes" : "no")), onboarding?.state === "collecting_evidence" && React.createElement("p", null, "The seven-day, 500-event record-only gate cannot be skipped. Identity confirmation stays disabled until its reviewed evidence receipt is eligible."), onboarding?.state === "identity_confirmation_required" && React.createElement("p", null, "Reviewed People import and a private, explicit account-to-person confirmation are next. No mapping will be inferred from a name, device, or this session."), onboarding?.state === "contained" && React.createElement("p", null, "An existing binding is unavailable under governance or privacy policy. Core will not create a replacement automatically."), onboarding?.state === "bound" && React.createElement("p", null, "The identity binding remains usable for reviewed rollout work; preferences, teaching, and initiatives stay unavailable here until canary authorization."), React.createElement("p", null, "Location memory default: off. Travel greetings default: off."), React.createElement("p", null, "Exact activity counts, timestamps, and evidence content are intentionally omitted from this user-facing status."), React.createElement("code", null, onboarding?.phase2_blockers?.join(", ") || "no gate blockers")), phase === "ready" && React.createElement(React.Fragment, null, React.createElement("section", {
     className: "agent-card"
   }, React.createElement("h2", null, "Current snapshot"), React.createElement("dl", {
     className: "agent-grid"

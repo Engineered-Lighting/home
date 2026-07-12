@@ -1,36 +1,117 @@
-const { useEffect, useMemo, useState } = React;
+const { useEffect, useMemo, useRef, useState } = React;
+
+const DEFAULT_DESCRIPTOR_TEXT = "This is my parents’ mountain house.";
+
+function capturePrincipalOperation(subject, generation) {
+  return Object.freeze({ subject: subject || null, generation });
+}
+
+function principalOperationIsCurrent(ticket, subject, generation) {
+  return Boolean(ticket?.subject)
+    && ticket.subject === subject
+    && ticket.generation === generation;
+}
 
 function HomeAgentPanel() {
   const api = useMemo(() => new window.HomeAgentApi(""), []);
+  const activeSubject = useRef(null);
+  const authorityGeneration = useRef(0);
+  const refreshGeneration = useRef(0);
   const [phase, setPhase] = useState("loading");
   const [session, setSession] = useState(null);
+  const [onboarding, setOnboarding] = useState(null);
   const [snapshot, setSnapshot] = useState(null);
   const [initiatives, setInitiatives] = useState([]);
   const [claimedInitiative, setClaimedInitiative] = useState(null);
   const [relationship, setRelationship] = useState(null);
   const [presence, setPresence] = useState(null);
   const [error, setError] = useState("");
-  const [teaching, setTeaching] = useState("This is my parents’ mountain house.");
+  const [teaching, setTeaching] = useState(DEFAULT_DESCRIPTOR_TEXT);
   const [transaction, setTransaction] = useState(null);
-  const [correctionText, setCorrectionText] = useState("This is my parents’ mountain house.");
+  const [correctionText, setCorrectionText] = useState(DEFAULT_DESCRIPTOR_TEXT);
   const [lifecycle, setLifecycle] = useState(null);
 
+  const clearPrincipalState = () => {
+    authorityGeneration.current += 1;
+    setOnboarding(null);
+    setSnapshot(null);
+    setInitiatives([]);
+    setClaimedInitiative(null);
+    setRelationship(null);
+    setPresence(null);
+    setTeaching(DEFAULT_DESCRIPTOR_TEXT);
+    setTransaction(null);
+    setCorrectionText(DEFAULT_DESCRIPTOR_TEXT);
+    setLifecycle(null);
+  };
+
+  const beginPrincipalOperation = () => capturePrincipalOperation(
+    activeSubject.current,
+    authorityGeneration.current,
+  );
+  const principalOperationCurrent = (ticket) => principalOperationIsCurrent(
+    ticket,
+    activeSubject.current,
+    authorityGeneration.current,
+  );
+
   const refresh = async () => {
+    const generation = ++refreshGeneration.current;
+    const isCurrent = () => generation === refreshGeneration.current;
     setError("");
     try {
       const currentSession = await api.session();
+      if (!isCurrent()) return;
+      const subject = currentSession?.authenticated === true
+        ? (api.invoke ? "native-credential" : currentSession?.user_id)
+        : null;
+      if (currentSession?.authenticated === true && !subject) {
+        throw new Error("authenticated_session_missing_subject");
+      }
+      if (activeSubject.current !== subject) clearPrincipalState();
+      activeSubject.current = subject;
       setSession(currentSession);
       if (currentSession?.authenticated !== true) {
-        setSnapshot(null);
+        clearPrincipalState();
         setPhase("signed_out");
         return;
       }
+      if (!api.invoke) {
+        const nextOnboarding = await api.onboardingStatus();
+        if (!isCurrent()) return;
+        if (nextOnboarding?.state !== "bound" || nextOnboarding?.rollout_mode !== "canary") {
+          clearPrincipalState();
+          setOnboarding(nextOnboarding);
+          setPhase("onboarding");
+          return;
+        }
+        setOnboarding(nextOnboarding);
+      } else {
+        setOnboarding(null);
+      }
       const nextSnapshot = await api.snapshot();
+      if (!isCurrent()) return;
+      if (api.invoke && nextSnapshot?.capabilities?.persistent_memory !== "enabled") {
+        clearPrincipalState();
+        setPhase("native_contained");
+        return;
+      }
       setSnapshot(nextSnapshot);
-      setInitiatives(api.invoke ? await api.initiatives() : []);
+      const nextInitiatives = api.invoke ? await api.initiatives() : [];
+      if (!isCurrent()) return;
+      setInitiatives(nextInitiatives);
       setPhase("ready");
     } catch (cause) {
-      setPhase(cause.status === 401 ? "signed_out" : "contained");
+      if (!isCurrent()) return;
+      clearPrincipalState();
+      activeSubject.current = null;
+      if (cause.status === 401) {
+        setSession(null);
+        setPhase("signed_out");
+        setError("");
+        return;
+      }
+      setPhase("contained");
       setError(cause.message || "agent_unavailable");
     }
   };
@@ -49,38 +130,48 @@ function HomeAgentPanel() {
   }, []);
 
   const propose = async () => {
+    const ticket = beginPrincipalOperation();
     setError("");
     try {
       const visitId = snapshot?.latest_visit?.visit_id;
       if (!visitId) throw new Error("location_unresolved");
       const value = await api.proposeMemory(visitId, teaching.trim());
+      if (!principalOperationCurrent(ticket)) return;
       setTransaction(value);
     } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
       setError(cause.message || "proposal_failed");
     }
   };
 
   const confirm = async () => {
+    const ticket = beginPrincipalOperation();
     setError("");
     try {
       const value = await api.confirmMemory(transaction.transaction_id, transaction.preview_digest);
+      if (!principalOperationCurrent(ticket)) return;
       setTransaction((current) => ({ ...current, ...value }));
     } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
       setError(cause.message || "confirmation_failed");
     }
   };
 
   const setPreference = async (key, enabled) => {
+    const ticket = beginPrincipalOperation();
     setError("");
     try {
       await api.setPreference(key, enabled);
+      if (!principalOperationCurrent(ticket)) return;
       await refresh();
     } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
       setError(cause.message || "preference_update_failed");
     }
   };
 
   const previewLifecycle = async (operation) => {
+    const ticket = beginPrincipalOperation();
     setError("");
     setLifecycle(null);
     const factId = transaction?.fact_id;
@@ -91,52 +182,91 @@ function HomeAgentPanel() {
         : operation === "retraction"
           ? await api.previewRetraction(factId)
           : await api.previewForget(factId);
+      if (!principalOperationCurrent(ticket)) return;
       setLifecycle({ ...value, operation });
     } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
       setError(cause.message || `${operation}_preview_failed`);
     }
   };
 
   const confirmLifecycle = async () => {
+    const ticket = beginPrincipalOperation();
     setError("");
     try {
       let value;
       if (lifecycle.operation === "correction") {
         value = await api.confirmCorrection(lifecycle.transaction_id, lifecycle.preview_digest);
+        if (!principalOperationCurrent(ticket)) return;
         setTransaction(value);
       } else if (lifecycle.operation === "retraction") {
         value = await api.confirmRetraction(lifecycle.transaction_id, lifecycle.preview_digest);
+        if (!principalOperationCurrent(ticket)) return;
         setTransaction(value);
       } else {
         value = await api.confirmForget(lifecycle.erasure_request_id, lifecycle.preview_digest);
+        if (!principalOperationCurrent(ticket)) return;
         setTransaction((current) => current ? { ...current, state: "erased" } : current);
       }
       setLifecycle({ ...value, operation: lifecycle.operation, confirmed: true });
     } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
       setError(cause.message || `${lifecycle?.operation || "lifecycle"}_confirmation_failed`);
     }
   };
 
   const claimInitiative = async (initiativeId) => {
+    const ticket = beginPrincipalOperation();
     setError("");
     try {
       const value = await api.claimInitiative(initiativeId);
+      if (!principalOperationCurrent(ticket)) return;
       setClaimedInitiative(value);
       setInitiatives((current) => current.filter((item) => item.initiative_id !== initiativeId));
     } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
       setError(cause.message || "initiative_claim_failed");
     }
   };
 
   const queryPlace = async (kind) => {
+    const ticket = beginPrincipalOperation();
     setError("");
     const placeId = transaction?.place_id || snapshot?.latest_visit?.place_id;
     if (!placeId) return setError("specific_place_unavailable");
     try {
-      if (kind === "relationship") setRelationship(await api.explainDescriptor(placeId));
-      else setPresence(await api.queryParentPresence(placeId));
+      const value = kind === "relationship"
+        ? await api.explainDescriptor(placeId)
+        : await api.queryParentPresence(placeId);
+      if (!principalOperationCurrent(ticket)) return;
+      if (kind === "relationship") setRelationship(value);
+      else setPresence(value);
     } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
       setError(cause.message || `${kind}_query_failed`);
+    }
+  };
+
+  const signOut = async () => {
+    // Invalidate every in-flight private result before contacting either
+    // logout backend. A pending revocation must never leave private UI live.
+    refreshGeneration.current += 1;
+    clearPrincipalState();
+    activeSubject.current = null;
+    setSession(null);
+    setPhase("signed_out");
+    setError("");
+    try {
+      await api.logout();
+      await refresh();
+    } catch (cause) {
+      const reason = cause.code || cause.message || "logout_revocation_pending";
+      setSession({
+        authenticated: false,
+        login_enabled: false,
+        reason,
+      });
+      setError(reason);
     }
   };
 
@@ -153,10 +283,7 @@ function HomeAgentPanel() {
             catch (cause) { setError(cause.message || String(cause)); }
           }}>Home</button>
           <button onClick={refresh}>Refresh</button>
-          {session?.authenticated && <button onClick={async () => {
-            try { await api.logout(); await refresh(); }
-            catch (cause) { setError(cause.message || String(cause)); }
-          }}>Sign out</button>}
+          {session?.authenticated && <button onClick={signOut}>Sign out</button>}
         </div>
       </header>
 
@@ -176,6 +303,7 @@ function HomeAgentPanel() {
             } catch (cause) { setError(cause.message || String(cause)); }
           }}>Sign in with Home Assistant</button>}
           {session?.reason && <code>{session.reason}</code>}
+          {error && error !== session?.reason && <code>{error}</code>}
         </section>
       )}
 
@@ -187,10 +315,58 @@ function HomeAgentPanel() {
       )}
 
       {phase === "contained" && (
-        <section className="agent-card agent-warning">
+        <section className="agent-card agent-warning" role="alert">
           <h2>Contained / unavailable</h2>
           <p>Private Agent routes are fail-closed until the BFF, Home Assistant identity, and core are configured.</p>
           {error && <code>{error}</code>}
+        </section>
+      )}
+
+      {phase === "native_contained" && (
+        <section className="agent-card agent-warning" role="status" aria-live="polite">
+          <h2>Identity confirmed / rollout contained</h2>
+          <p>The native Agent is authenticated, but Core has not enabled canary persistent-memory capability.</p>
+          <p>Preferences, teaching, private queries, and initiatives stay unavailable. Location memory and travel greetings remain default-off.</p>
+        </section>
+      )}
+
+      {phase === "onboarding" && (
+        <section className="agent-card agent-warning" role="status" aria-live="polite">
+          <h2>{onboarding?.state === "bound"
+            ? "Identity confirmed / rollout contained"
+            : onboarding?.state === "identity_confirmation_required"
+            ? "Identity confirmation required"
+            : onboarding?.state === "contained"
+              ? "Identity is contained"
+              : "Secure setup is still observing"}</h2>
+          <p>{onboarding?.state === "bound"
+            ? "Home Assistant sign-in and the semantic identity binding are confirmed, but this rollout mode does not authorize the full private Agent surface."
+            : "Home Assistant sign-in succeeded. Core has not inferred a semantic identity or enabled either private location choice."}</p>
+          <dl className="agent-grid">
+            <dt>Rollout mode</dt><dd>{onboarding?.rollout_mode || "unknown"}</dd>
+            <dt>Minimum observation window</dt><dd>{onboarding
+              ? `${onboarding.phase2_observation_days_required} days`
+              : "unknown"}</dd>
+            <dt>Qualifying redacted-event threshold</dt><dd>{onboarding
+              ? onboarding.qualifying_redacted_envelopes_required
+              : "unknown"}</dd>
+            <dt>Gate ready</dt><dd>{onboarding?.phase2_ready ? "yes" : "no"}</dd>
+          </dl>
+          {onboarding?.state === "collecting_evidence" && (
+            <p>The seven-day, 500-event record-only gate cannot be skipped. Identity confirmation stays disabled until its reviewed evidence receipt is eligible.</p>
+          )}
+          {onboarding?.state === "identity_confirmation_required" && (
+            <p>Reviewed People import and a private, explicit account-to-person confirmation are next. No mapping will be inferred from a name, device, or this session.</p>
+          )}
+          {onboarding?.state === "contained" && (
+            <p>An existing binding is unavailable under governance or privacy policy. Core will not create a replacement automatically.</p>
+          )}
+          {onboarding?.state === "bound" && (
+            <p>The identity binding remains usable for reviewed rollout work; preferences, teaching, and initiatives stay unavailable here until canary authorization.</p>
+          )}
+          <p>Location memory default: off. Travel greetings default: off.</p>
+          <p>Exact activity counts, timestamps, and evidence content are intentionally omitted from this user-facing status.</p>
+          <code>{onboarding?.phase2_blockers?.join(", ") || "no gate blockers"}</code>
         </section>
       )}
 

@@ -42,6 +42,7 @@ from .models import (
     OperatorCapabilities,
     OperatorImportCapability,
     MemoryInspection,
+    OnboardingStatusView,
     ParentConfirmation,
     ParentPresenceView,
     Phase2ReadinessView,
@@ -161,6 +162,41 @@ def ingest_router() -> APIRouter:
 
 def semantic_router() -> APIRouter:
     router = APIRouter(prefix="/v1", tags=["semantic-core"])
+
+    @router.get("/onboarding/status", response_model=OnboardingStatusView)
+    async def onboarding_status(
+        service: Service,
+        store: Store,
+    ) -> OnboardingStatusView:
+        """Return content-free onboarding progress for the authenticated user."""
+
+        binding_status = await store.onboarding_binding_status(service.ha_user_id)
+        phase2 = await Phase2GateInspector(
+            store.database,
+            # Phase 2 readiness is the record-only evidence gate even after a
+            # deployment has advanced. The actual deployment mode is returned
+            # separately below.
+            rollout_mode="record_only",
+            policy_version=store.settings.policy_version,
+            policy_digest=store.settings.policy_digest,
+        ).inspect_onboarding()
+
+        if binding_status == "bound":
+            state = "bound"
+        elif binding_status == "unavailable":
+            state = "contained"
+        elif store.settings.rollout_mode in {"shadow", "canary"}:
+            state = "identity_confirmation_required"
+        else:
+            state = "collecting_evidence"
+
+        return OnboardingStatusView(
+            state=state,
+            rollout_mode=store.settings.rollout_mode,
+            principal_bound=binding_status == "bound",
+            phase2_ready=phase2.ready_to_advance,
+            phase2_blockers=phase2.blockers,
+        )
 
     @router.post(
         "/people",

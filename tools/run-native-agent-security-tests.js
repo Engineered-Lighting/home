@@ -81,6 +81,59 @@ async function behaviorTest() {
     !methods.some((name) => /(createPlace|confirmParent|generic)/i.test(name)), methods);
 }
 
+function principalOperationBoundaryTest() {
+  const prelude = agentPanel.slice(0, agentPanel.indexOf("function HomeAgentPanel"));
+  const context = vm.createContext({ React: {} });
+  vm.runInContext(prelude, context, { filename: "panel-security-prelude.js" });
+  const result = vm.runInContext(`(() => {
+    const ticket = capturePrincipalOperation("subject-a", 7);
+    return {
+      current: principalOperationIsCurrent(ticket, "subject-a", 7),
+      staleGeneration: principalOperationIsCurrent(ticket, "subject-a", 8),
+      changedSubject: principalOperationIsCurrent(ticket, "subject-b", 7),
+      signedOut: principalOperationIsCurrent(ticket, null, 7),
+    };
+  })()`, context);
+  assert("principal-operation tickets expire on reset, logout, and account switch",
+    result.current === true &&
+    result.staleGeneration === false &&
+    result.changedSubject === false &&
+    result.signedOut === false, result);
+
+  const handlers = [
+    "propose",
+    "confirm",
+    "setPreference",
+    "previewLifecycle",
+    "confirmLifecycle",
+    "claimInitiative",
+    "queryPlace",
+  ];
+  const guarded = handlers.every((name) => {
+    const start = agentPanel.indexOf(`const ${name} = async`);
+    const next = agentPanel.indexOf("\n  const ", start + 10);
+    const end = next < 0 ? agentPanel.indexOf("\n  return (", start) : next;
+    const body = agentPanel.slice(start, end);
+    return start >= 0 &&
+      body.includes("beginPrincipalOperation()") &&
+      body.includes("principalOperationCurrent(ticket)");
+  });
+  assert("every private async panel handler discards stale principal results", guarded, handlers);
+
+  const signOutStart = agentPanel.indexOf("const signOut = async");
+  const signOutEnd = agentPanel.indexOf("\n  return (", signOutStart);
+  const signOut = agentPanel.slice(signOutStart, signOutEnd);
+  const logoutAwait = signOut.indexOf("await api.logout()");
+  assert("sign-out invalidates private authority before network revocation",
+    signOutStart >= 0 &&
+    signOut.indexOf("refreshGeneration.current += 1") >= 0 &&
+    signOut.indexOf("clearPrincipalState()") >= 0 &&
+    signOut.indexOf("activeSubject.current = null") >= 0 &&
+    signOut.indexOf('setPhase("signed_out")') >= 0 &&
+    logoutAwait > signOut.indexOf("clearPrincipalState()") &&
+    logoutAwait > signOut.indexOf('setPhase("signed_out")'), signOut);
+}
+
 (async function mainTest() {
   process.stdout.write("\nnative_agent_desktop_security_test\n");
   assert("broad Tauri HTTP and default core capabilities are removed", !/^\s*tauri-plugin-http\s*=/m.test(cargo) && !/\.plugin\(tauri_plugin_http/m.test(main) && !mainCapability.includes("http:") && !mainCapability.includes("core:default"));
@@ -113,6 +166,28 @@ async function behaviorTest() {
   assert("Agent close hides the fixed authority window and main close destroys it", main.includes("api.prevent_close()") && main.includes("agent.destroy()"));
   assert("native Rust has no generic network command or privileged excluded mutation", !/\b(?:async\s+)?fn native_agent_request\s*\(/.test(main) && !/(CreatePlace|ConfirmParent)/.test(nativeAuth));
   assert("login refuses to overwrite an active refresh credential", nativeAuth.includes("login_credential_gate") && nativeAuth.includes("native_auth_already_authenticated"));
+  const principalReset = agentPanel.slice(
+    agentPanel.indexOf("const clearPrincipalState"),
+    agentPanel.indexOf("const refresh = async"),
+  );
+  assert("logout and account changes clear every principal-private panel state",
+    [
+      "setOnboarding(null)",
+      "setSnapshot(null)",
+      "setInitiatives([])",
+      "setClaimedInitiative(null)",
+      "setRelationship(null)",
+      "setPresence(null)",
+      "setTransaction(null)",
+      "setLifecycle(null)",
+    ].every((value) => principalReset.includes(value)) &&
+    agentPanel.includes("activeSubject.current !== subject") &&
+    agentPanel.includes("authorityGeneration.current += 1") &&
+    agentPanel.includes("refreshGeneration.current"), principalReset);
+  assert("native panel remains contained without explicit canary memory capability",
+    agentPanel.includes('nextSnapshot?.capabilities?.persistent_memory !== "enabled"') &&
+    agentPanel.includes('setPhase("native_contained")'));
+  principalOperationBoundaryTest();
   await behaviorTest();
 
   process.stdout.write(`\n${passes} pass · ${fails} fail\n`);

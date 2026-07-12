@@ -22,7 +22,12 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from . import schema
 from .crypto import sha256_json
 from .db import Database
-from .models import Phase2JourneyEvaluation, Phase2ReadinessView, RolloutMode
+from .models import (
+    OnboardingPhase2Blocker,
+    Phase2JourneyEvaluation,
+    Phase2ReadinessView,
+    RolloutMode,
+)
 
 
 MINIMUM_OBSERVATION_WINDOW = timedelta(days=7)
@@ -65,6 +70,14 @@ class Phase2EnvelopeSummary:
     gaps: int
     quarantined: int
     input_digest: str = "0" * 64
+
+
+@dataclass(frozen=True, slots=True)
+class Phase2OnboardingReadiness:
+    """Coarse, content-free readiness for frequent authenticated refreshes."""
+
+    ready_to_advance: bool
+    blockers: tuple[OnboardingPhase2Blocker, ...]
 
 
 def is_relevant_envelope(
@@ -265,6 +278,63 @@ class Phase2GateInspector:
             journeys=journey_results,
             policy_version=self.policy_version,
             policy_digest=self.policy_digest,
+        )
+
+    async def inspect_onboarding(
+        self,
+        *,
+        now: datetime | None = None,
+    ) -> Phase2OnboardingReadiness:
+        """Inspect only the coarse evidence boundary used by onboarding.
+
+        Unlike the authoritative promotion inspection, this path does not
+        count full tables, inspect quarantine, enumerate journeys, or hash the
+        first 500 evidence rows. Each ordered query returns at most one row;
+        the second query asks only whether the 500th qualifying row exists.
+        """
+
+        evaluated_at = now or datetime.now(UTC)
+        if evaluated_at.tzinfo is None or evaluated_at.utcoffset() is None:
+            raise ValueError("phase2 evaluation time must be timezone-aware")
+        evaluated_at = evaluated_at.astimezone(UTC)
+
+        ordered_evidence = (
+            PHASE2_ROLLOUT_EVIDENCE.c.ingested_at,
+            PHASE2_ROLLOUT_EVIDENCE.c.envelope_id,
+        )
+        async with self.database.transaction() as connection:
+            started_at = (
+                await connection.execute(
+                    select(PHASE2_ROLLOUT_EVIDENCE.c.ingested_at)
+                    .select_from(PHASE2_ROLLOUT_EVIDENCE)
+                    .order_by(*ordered_evidence)
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            threshold_met = False
+            if started_at is not None:
+                threshold_met = (
+                    await connection.execute(
+                        select(PHASE2_ROLLOUT_EVIDENCE.c.envelope_id)
+                        .select_from(PHASE2_ROLLOUT_EVIDENCE)
+                        .order_by(*ordered_evidence)
+                        .offset(RELEVANT_ENVELOPE_TARGET - 1)
+                        .limit(1)
+                    )
+                ).scalar_one_or_none() is not None
+
+        blockers: list[OnboardingPhase2Blocker] = []
+        if self.rollout_mode != "record_only":
+            blockers.append("rollout_mode_not_record_only")
+        if started_at is None:
+            blockers.append("no_durable_envelopes")
+        elif evaluated_at < started_at.astimezone(UTC) + MINIMUM_OBSERVATION_WINDOW:
+            blockers.append("minimum_observation_window_not_elapsed")
+        if not threshold_met:
+            blockers.append("qualifying_redacted_envelope_threshold_not_met")
+        return Phase2OnboardingReadiness(
+            ready_to_advance=not blockers,
+            blockers=tuple(blockers),
         )
 
     async def inspect_evidence_in_transaction(

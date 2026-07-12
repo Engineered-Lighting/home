@@ -255,6 +255,8 @@ test("semantic route allowlist excludes generic proxying", () => {
   const factId = "01900000-0000-7000-8000-000000000001";
   const transactionId = "01900000-0000-7000-8000-000000000002";
 
+  assert.equal(routeAllowed("GET", "/api/agent/v1/onboarding/status"), true);
+  assert.equal(routeAllowed("POST", "/api/agent/v1/onboarding/status"), false);
   assert.equal(routeAllowed("GET", "/api/agent/v1/snapshot"), true);
   assert.equal(routeAllowed("GET", "/api/agent/v1/initiatives"), false);
   assert.equal(routeAllowed("POST", "/api/agent/v1/memory-transactions"), true);

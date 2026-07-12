@@ -82,6 +82,10 @@
       if (this.invoke) return this.native("native_agent_snapshot").then((value) => this.nativePayload(value));
       return this.request("/api/agent/v1/snapshot");
     }
+    onboardingStatus() {
+      if (this.invoke) return Promise.reject(new Error("native_onboarding_status_unavailable"));
+      return this.request("/api/agent/v1/onboarding/status");
+    }
     initiatives() {
       if (!this.invoke) return Promise.reject(new Error("native_transport_required"));
       return this.native("native_agent_list_initiatives")

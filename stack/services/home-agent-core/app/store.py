@@ -6,7 +6,7 @@ import json
 import uuid
 import unicodedata
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from psycopg.types.range import Range
 from sqlalchemy import and_, func, literal, or_, select, update
@@ -2160,6 +2160,93 @@ class CoreStore:
         if row is None:
             raise ForbiddenError("HA user has no available confirmed principal binding")
         return dict(row)
+
+    async def onboarding_binding_status(
+        self, ha_user_id: str
+    ) -> Literal["bound", "missing", "unavailable"]:
+        """Classify a binding without returning identity content.
+
+        A historical, revoked, malformed, privacy-blocked, or otherwise
+        unavailable binding is intentionally distinct from a user who has
+        never completed binding. That distinction keeps onboarding fail-closed
+        without exposing the bound person or principal.
+        """
+
+        async with self.database.transaction() as connection:
+            privacy_blocked = (
+                await connection.execute(
+                    select(schema.edge_privacy_user_blocks.c.block_id).where(
+                        schema.edge_privacy_user_blocks.c.ha_user_id == ha_user_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if privacy_blocked is not None:
+                return "unavailable"
+            row = (
+                (
+                    await connection.execute(
+                        select(
+                            schema.ha_user_bindings.c.principal_id.label(
+                                "binding_principal_id"
+                            ),
+                            schema.ha_user_bindings.c.person_id.label(
+                                "binding_person_id"
+                            ),
+                            schema.ha_user_bindings.c.confirmed_by_principal_id,
+                            schema.ha_user_bindings.c.source_artifact_id,
+                            schema.ha_user_bindings.c.revoked_at,
+                            schema.principals.c.principal_id.label(
+                                "principal_id"
+                            ),
+                            schema.principals.c.person_id.label(
+                                "principal_person_id"
+                            ),
+                            schema.principals.c.kind.label("principal_kind"),
+                            schema.principals.c.status.label("principal_status"),
+                            schema.people.c.person_id.label("person_id"),
+                            schema.people.c.status.label("person_status"),
+                        )
+                        .select_from(
+                            schema.ha_user_bindings.outerjoin(
+                                schema.principals,
+                                schema.ha_user_bindings.c.principal_id
+                                == schema.principals.c.principal_id,
+                            ).outerjoin(
+                                schema.people,
+                                schema.ha_user_bindings.c.person_id
+                                == schema.people.c.person_id,
+                            )
+                        )
+                        .where(schema.ha_user_bindings.c.ha_user_id == ha_user_id)
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None:
+                return "missing"
+
+            binding_principal_id = row["binding_principal_id"]
+            binding_person_id = row["binding_person_id"]
+            available = all(
+                (
+                    row["revoked_at"] is None,
+                    row["source_artifact_id"] is not None,
+                    row["principal_id"] == binding_principal_id,
+                    row["principal_person_id"] == binding_person_id,
+                    row["confirmed_by_principal_id"] == binding_principal_id,
+                    row["principal_kind"] == "ha_user",
+                    row["principal_status"] == "active",
+                    row["person_id"] == binding_person_id,
+                    row["person_status"] == "active",
+                )
+            )
+            if not available:
+                return "unavailable"
+            directives = await self._active_directives(connection, binding_person_id)
+            if directives & {"auto_expire", "do_not_track", "ignored", "silent"}:
+                return "unavailable"
+            return "bound"
 
     async def bind_source_entity(
         self,

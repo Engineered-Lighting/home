@@ -20,6 +20,18 @@ def _aware(value: datetime) -> datetime:
 Freshness = Literal["fresh", "aging", "stale", "not_applicable"]
 Coverage = Literal["sufficient", "partial", "gap", "not_applicable"]
 RolloutMode = Literal["record_only", "shadow", "canary"]
+OnboardingState = Literal[
+    "bound",
+    "collecting_evidence",
+    "identity_confirmation_required",
+    "contained",
+]
+OnboardingPhase2Blocker = Literal[
+    "rollout_mode_not_record_only",
+    "no_durable_envelopes",
+    "minimum_observation_window_not_elapsed",
+    "qualifying_redacted_envelope_threshold_not_met",
+]
 
 
 class HaContext(StrictModel):
@@ -184,6 +196,20 @@ class RolloutStatus(StrictModel):
     semantic_people_writes: bool
     persistent_memory_writes: bool
     ingest_projection: Literal[True] = True
+
+
+class OnboardingStatusView(StrictModel):
+    """Content-free progress for one authenticated HA user."""
+
+    state: OnboardingState
+    rollout_mode: RolloutMode
+    principal_bound: bool
+    phase2_observation_days_required: Literal[7] = 7
+    qualifying_redacted_envelopes_required: Literal[500] = 500
+    phase2_ready: bool
+    phase2_blockers: list[OnboardingPhase2Blocker]
+    location_memory_default_off: Literal[True] = True
+    travel_greetings_default_off: Literal[True] = True
 
 
 class Phase2JourneyEvaluation(StrictModel):

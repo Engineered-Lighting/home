@@ -138,6 +138,7 @@ class RepositoryBoundaryTests(unittest.TestCase):
         bff = read("stack/services/home-agent-bff/src/bff.mjs")
         api = read("stack/services/home-agent-core/app/api.py")
         for route in (
+            "/onboarding/status",
             "/snapshot",
             "/memory-transactions",
             "/memory-transactions/{transaction_id}/confirm",
@@ -149,6 +150,8 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertNotIn('prefix: "/proxy/intelligence"', bff)
         browser_routes = bff.split("const ROUTES", 1)[1].split("const NATIVE_ROUTES", 1)[0]
         native_routes = bff.split("const NATIVE_ROUTES", 1)[1]
+        self.assertIn("onboarding\\/status", browser_routes)
+        self.assertNotIn("onboarding\\/status", native_routes)
         self.assertNotIn("v1\\/initiatives", browser_routes)
         self.assertIn("v1\\/initiatives", native_routes)
         self.assertIn("X-Home-Agent-Channel", bff)
@@ -156,6 +159,13 @@ class RepositoryBoundaryTests(unittest.TestCase):
     def test_agent_surface_uses_typed_descriptor_lifecycle_only(self) -> None:
         client = read("app/src/home-agent/api.js")
         panel = read("app/src/home-agent/panel.jsx")
+        self.assertIn("onboardingStatus", client)
+        self.assertIn("seven-day, 500-event record-only gate", panel)
+        self.assertIn("Location memory default: off. Travel greetings default: off.", panel)
+        self.assertIn('nextOnboarding?.rollout_mode !== "canary"', panel)
+        self.assertIn('nextSnapshot?.capabilities?.persistent_memory !== "enabled"', panel)
+        self.assertIn("clearPrincipalState", panel)
+        self.assertIn("refreshGeneration", panel)
         for operation in (
             "previewCorrection",
             "confirmCorrection",

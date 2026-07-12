@@ -21,6 +21,7 @@ const REVOCATION_RETRY_MAX_MS = 60 * 60_000;
 
 const UUID_PATH = "[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const ROUTES = Object.freeze([
+  ["GET", /^\/api\/agent\/v1\/onboarding\/status$/],
   ["GET", /^\/api\/agent\/v1\/snapshot$/],
   ["POST", /^\/api\/agent\/v1\/memory-transactions$/],
   ["GET", new RegExp(`^/api/agent/v1/memory-transactions/${UUID_PATH}$`, "i")],

@@ -554,27 +554,42 @@ class LegacyIdentityMigrationTests(unittest.TestCase):
         create_legacy_db(self.database)
         rejected = {
             "record_only": {
+                **migration.EXPECTED_SHADOW_ROLLOUT_CONTRACT,
                 "mode": "record_only",
                 "semantic_people_writes": False,
-                "persistent_memory_writes": False,
             },
             "canary": {
+                **migration.EXPECTED_SHADOW_ROLLOUT_CONTRACT,
                 "mode": "canary",
-                "semantic_people_writes": True,
                 "persistent_memory_writes": True,
             },
             "missing_field": {
                 "mode": "shadow",
+                "source": "deployment_policy",
                 "semantic_people_writes": True,
+                "ingest_projection": True,
             },
             "extra_field": {
                 **migration.EXPECTED_SHADOW_ROLLOUT_CONTRACT,
                 "unexpected": False,
             },
             "non_boolean": {
+                **migration.EXPECTED_SHADOW_ROLLOUT_CONTRACT,
                 "mode": "shadow",
                 "semantic_people_writes": 1,
                 "persistent_memory_writes": 0,
+            },
+            "wrong_source": {
+                **migration.EXPECTED_SHADOW_ROLLOUT_CONTRACT,
+                "source": "client_claim",
+            },
+            "projection_disabled": {
+                **migration.EXPECTED_SHADOW_ROLLOUT_CONTRACT,
+                "ingest_projection": False,
+            },
+            "projection_integer": {
+                **migration.EXPECTED_SHADOW_ROLLOUT_CONTRACT,
+                "ingest_projection": 1,
             },
         }
 

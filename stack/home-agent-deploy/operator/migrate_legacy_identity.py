@@ -105,8 +105,10 @@ EXPECTED_CAPABILITY_CONTRACT: Mapping[str, Any] = {
 }
 EXPECTED_SHADOW_ROLLOUT_CONTRACT: Mapping[str, Any] = {
     "mode": "shadow",
+    "source": "deployment_policy",
     "semantic_people_writes": True,
     "persistent_memory_writes": False,
+    "ingest_projection": True,
 }
 
 REQUIRED_ENDPOINTS = {
@@ -1336,8 +1338,10 @@ class HttpCoreClient:
             isinstance(document, dict)
             and set(document) == set(EXPECTED_SHADOW_ROLLOUT_CONTRACT)
             and type(document.get("mode")) is str
+            and type(document.get("source")) is str
             and type(document.get("semantic_people_writes")) is bool
             and type(document.get("persistent_memory_writes")) is bool
+            and type(document.get("ingest_projection")) is bool
             and document == EXPECTED_SHADOW_ROLLOUT_CONTRACT
         )
         if not exact:

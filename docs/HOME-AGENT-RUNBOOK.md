@@ -570,7 +570,8 @@ payloads.
 Apply mode requires `HOME_AGENT_ROLLOUT_MODE=shadow`. Before collecting any
 item confirmation or issuing any write, it fetches Core's authenticated
 `GET /v1/operator-rollout` contract and accepts only the exact typed response
-`{mode: shadow, semantic_people_writes: true, persistent_memory_writes: false}`.
+`{mode: shadow, source: deployment_policy, semantic_people_writes: true,
+persistent_memory_writes: false, ingest_projection: true}`.
 It then fetches the fixed authenticated `GET /v1/operator-capabilities`
 contract, requires an exact confirmation for the review digest and every item,
 and calls only the typed People migration routes. Stable UUID import requires the reviewed source

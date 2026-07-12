@@ -90,9 +90,9 @@ class RepositoryBoundaryTests(unittest.TestCase):
             'readiness_migration: str = "0006_worker_maintenance_health"', config
         )
         self.assertNotIn("0007_phase3_identity_authority", config)
-        revoke = grants.split(
-            "Revision 0007 is an owner-only schema foundation", 1
-        )[1]
+        revoke = grants.split("Revision 0007 is an owner-only schema foundation", 1)[
+            1
+        ].split("Revision 0007 provisions an expired-by-default", 1)[0]
         self.assertGreater(
             grants.index("Revision 0007 is an owner-only schema foundation"),
             grants.index("ALTER DEFAULT PRIVILEGES"),
@@ -107,16 +107,28 @@ class RepositoryBoundaryTests(unittest.TestCase):
             "home_agent_erasure",
             "home_agent_rollout",
             "home_agent_backup",
+            "home_agent_identity_migration",
+            "home_agent_identity_kernel",
         ):
             self.assertIn(role, revoke)
         self.assertNotIn("GRANT", revoke)
 
+        manifest_grants = grants.split("Revision 0008 is manifest-only", 1)[1]
+        self.assertIn(
+            "operations.reviewed_identity_migration_capabilities()",
+            manifest_grants,
+        )
+        self.assertIn(
+            "operations.register_reviewed_identity_migration(jsonb)",
+            manifest_grants,
+        )
+        self.assertIn("TO home_agent_identity_migration", manifest_grants)
+        self.assertNotIn("finalize_reviewed_identity_migration", manifest_grants)
+
     def test_itaipava_golden_manifest_has_exactly_24_verifiable_scenarios(
         self,
     ) -> None:
-        manifest = json.loads(
-            read("tests/home_agent/itaipava_golden_scenarios.json")
-        )
+        manifest = json.loads(read("tests/home_agent/itaipava_golden_scenarios.json"))
         scenarios = manifest["scenarios"]
         expected = list(GOLDEN_SCENARIOS)
         actual = [(item["id"], item["title"]) for item in scenarios]
@@ -138,9 +150,7 @@ class RepositoryBoundaryTests(unittest.TestCase):
             self.assertGreaterEqual(len(parts), 2, node_reference)
             relative, qualified = parts[0], "::".join(parts[1:])
             self.assertTrue((ROOT / relative).is_file(), node_reference)
-            callables = callable_cache.setdefault(
-                relative, python_callables(relative)
-            )
+            callables = callable_cache.setdefault(relative, python_callables(relative))
             self.assertIn(qualified, callables, node_reference)
             return callables[qualified]
 
@@ -177,9 +187,7 @@ class RepositoryBoundaryTests(unittest.TestCase):
                 self.assertTrue(python_evidence, scenario["id"])
                 self.assertNotIn("gap", scenario)
             elif status == "capability_disabled":
-                self.assertEqual(
-                    "capability_disabled", scenario["expected_outcome"]
-                )
+                self.assertEqual("capability_disabled", scenario["expected_outcome"])
                 self.assertTrue(disabled_evidence, scenario["id"])
                 self.assertNotIn("gap", scenario)
             self.assertNotIn("gap", scenario)
@@ -205,7 +213,9 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertNotIn("/relationships/parent-confirmations", api)
         self.assertIn("X-Authenticated-HA-User", bff)
         self.assertNotIn('prefix: "/proxy/intelligence"', bff)
-        browser_routes = bff.split("const ROUTES", 1)[1].split("const NATIVE_ROUTES", 1)[0]
+        browser_routes = bff.split("const ROUTES", 1)[1].split(
+            "const NATIVE_ROUTES", 1
+        )[0]
         native_routes = bff.split("const NATIVE_ROUTES", 1)[1]
         self.assertIn("onboarding\\/status", browser_routes)
         self.assertNotIn("onboarding\\/status", native_routes)
@@ -246,9 +256,7 @@ class RepositoryBoundaryTests(unittest.TestCase):
             "{bindingProposal.confirmation_statement}</p>",
             panel,
         )
-        self.assertIn(
-            "Review code <code>{bindingProposal.review_code}</code>", panel
-        )
+        self.assertIn("Review code <code>{bindingProposal.review_code}</code>", panel)
         self.assertIn("window.crypto.randomUUID()", panel)
         self.assertNotIn("/api/agent/v1/people", client)
         self.assertNotIn("/api/agent/v1/principal-bindings", client)
@@ -256,21 +264,17 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertNotIn("phase3-readiness", native)
         self.assertNotIn("confirmParent", client)
         self.assertIn("seven-day, 500-event record-only gate", panel)
-        self.assertIn("Location memory default: off. Travel greetings default: off.", panel)
+        self.assertIn(
+            "Location memory default: off. Travel greetings default: off.", panel
+        )
         self.assertIn("fullAgentCapabilityEnabled(nextSnapshot)", panel)
         self.assertIn("containedPreferenceState(nextSnapshot)", panel)
         self.assertIn('setPhase("rollout_contained")', panel)
         self.assertIn('snapshot?.rollout_mode === "canary"', panel)
-        self.assertIn(
-            'snapshot?.capabilities?.persistent_memory === "enabled"', panel
-        )
+        self.assertIn('snapshot?.capabilities?.persistent_memory === "enabled"', panel)
         self.assertIn("disablePreference", client)
-        self.assertIn(
-            'onClick={() => disablePreference("location_memory")}', panel
-        )
-        self.assertIn(
-            'onClick={() => disablePreference("travel_greetings")}', panel
-        )
+        self.assertIn('onClick={() => disablePreference("location_memory")}', panel)
+        self.assertIn('onClick={() => disablePreference("travel_greetings")}', panel)
         self.assertNotIn("native_contained", panel)
         self.assertNotIn("!snapshot?.preferences?.location_memory", panel)
         self.assertNotIn("!snapshot?.preferences?.travel_greetings", panel)
@@ -310,14 +314,16 @@ class RepositoryBoundaryTests(unittest.TestCase):
     def test_edge_raw_spool_defaults_outside_ha_backup_roots(self) -> None:
         edge = read("ha-config/home_agent_edge/const.py")
         flow = read("ha-config/home_agent_edge/config_flow.py")
-        self.assertIn('DEFAULT_SPOOL_PATH = "/tmp/home_agent_edge/runtime.sqlite"', edge)
+        self.assertIn(
+            'DEFAULT_SPOOL_PATH = "/tmp/home_agent_edge/runtime.sqlite"', edge
+        )
         for root in ('Path("/config")', 'Path("/backup")', 'Path("/share")'):
             self.assertIn(root, flow)
         self.assertIn("spool_path_must_be_backup_excluded", flow)
         transport = read("ha-config/home_agent_edge/transport.py")
         crypto = read("ha-config/home_agent_edge/crypto.py")
         outbox = read("ha-config/home_agent_edge/outbox.py")
-        self.assertIn('(\"client key\", client_key_file)', transport)
+        self.assertIn('("client key", client_key_file)', transport)
         self.assertIn("must be mode 0600 or stricter", transport)
         self.assertIn("spool key file must be mode 0600 or stricter", crypto)
         self.assertIn("spool directory must be mode 0700 or stricter", outbox)
@@ -325,7 +331,9 @@ class RepositoryBoundaryTests(unittest.TestCase):
 
     def test_dedicated_deployment_keeps_authorities_unpublished(self) -> None:
         compose = read("stack/home-agent-compose.yml")
-        postgres_block = compose.split("  postgres:", 1)[1].split("\n  backup-gate:", 1)[0]
+        postgres_block = compose.split("  postgres:", 1)[1].split(
+            "\n  backup-gate:", 1
+        )[0]
         for name in ("core-api", "core-ingest", "core-worker"):
             match = re.search(
                 rf"(?ms)^  {re.escape(name)}:\n(.*?)(?=^  [a-zA-Z0-9_-]+:|\Z)",
@@ -343,7 +351,9 @@ class RepositoryBoundaryTests(unittest.TestCase):
             "pgbackrest --stanza=home-agent check",
             read("stack/home-agent-deploy/backup-gate.sh"),
         )
-        self.assertIn("ssl_verify_client on", read("stack/home-agent-deploy/nginx-edge.conf"))
+        self.assertIn(
+            "ssl_verify_client on", read("stack/home-agent-deploy/nginx-edge.conf")
+        )
         self.assertIn(
             "/var/cache/nginx:size=16m,mode=0700,uid=101,gid=101",
             compose,
@@ -362,7 +372,9 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertIsNotNone(policy_location)
         policy_block = policy_location.group(1)
         self.assertIn("$request_method != GET", policy_block)
-        self.assertIn("proxy_set_header Authorization $http_authorization", policy_block)
+        self.assertIn(
+            "proxy_set_header Authorization $http_authorization", policy_block
+        )
         self.assertIn("proxy_pass http://core-ingest:8104", policy_block)
 
         envelope_location = re.search(
@@ -491,7 +503,7 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertIn('target="$master_root/rollout"', additive)
         self.assertIn("mv -T --no-clobber", additive)
         self.assertIn("refusing to overwrite", additive)
-        self.assertNotIn("echo \"$password\"", additive)
+        self.assertNotIn('echo "$password"', additive)
         materializer = read("stack/home-agent-deploy/materialize-secrets.sh")
         self.assertIn("rollout/postgres_rollout_password", materializer)
         self.assertIn("rollout/database_url_rollout", materializer)
@@ -578,6 +590,7 @@ class RepositoryBoundaryTests(unittest.TestCase):
             "home_agent_worker",
             "home_agent_erasure",
             "home_agent_rollout",
+            "home_agent_identity_migration",
         ):
             self.assertRegex(
                 roles,
@@ -587,9 +600,9 @@ class RepositoryBoundaryTests(unittest.TestCase):
             roles,
             r"ALTER ROLE home_agent_backup PASSWORD[^;]*INHERIT NOBYPASSRLS",
         )
-        membership_scope = roles.split(
-            "FROM pg_auth_members AS membership", 1
-        )[1].split("\\gexec", 1)[0]
+        membership_scope = roles.split("FROM pg_auth_members AS membership", 1)[
+            1
+        ].split("\\gexec", 1)[0]
         for role in (
             "home_agent_api",
             "home_agent_binding_operator",
@@ -598,6 +611,8 @@ class RepositoryBoundaryTests(unittest.TestCase):
             "home_agent_erasure",
             "home_agent_rollout",
             "home_agent_backup",
+            "home_agent_identity_migration",
+            "home_agent_identity_kernel",
         ):
             self.assertIn(role, membership_scope)
 
@@ -617,16 +632,38 @@ class RepositoryBoundaryTests(unittest.TestCase):
             self.assertIn("HOME_AGENT_ERASURE_LEDGER_ROOT", block)
             self.assertIn("target: /erasure-ledger", block)
             self.assertIn("read_only: true", block)
-            self.assertNotIn("source: \"${HOME_AGENT_ERASURE_LEDGER_ROOT}/ledger.head.json\"", block)
+            self.assertNotIn(
+                'source: "${HOME_AGENT_ERASURE_LEDGER_ROOT}/ledger.head.json"', block
+            )
             self.assertIn("source: /dev/null", block)
             self.assertIn("target: /erasure-ledger/ledger.jsonl", block)
-        self.assertNotIn("read_only: true", service_block("core-worker").split("target: /erasure-ledger", 1)[-1][:80])
+        self.assertNotIn(
+            "read_only: true",
+            service_block("core-worker").split("target: /erasure-ledger", 1)[-1][:80],
+        )
         self.assertIn("network_mode: none", service_block("ledger-init"))
-        self.assertIn("operator_token_identity_migration", service_block("identity-migration"))
-        self.assertNotIn("service_token_identity_migration", service_block("identity-migration"))
+        identity_migration = service_block("identity-migration")
+        self.assertIn(
+            "database_url_identity_migration_identity_migration",
+            identity_migration,
+        )
+        self.assertIn("networks: [postgres-net]", identity_migration)
+        self.assertNotIn("api-net", identity_migration)
+        for forbidden in (
+            "operator_token",
+            "bootstrap_token",
+            "service_token",
+            "knowledge_encryption_key",
+            "runtime_spool_key",
+            "erasure_ledger_key",
+        ):
+            self.assertNotIn(forbidden, identity_migration)
 
         preflight = read("stack/home-agent-deploy/preflight.sh")
-        self.assertIn("explicit operator init required", read("stack/services/home-agent-core/app/ledger.py"))
+        self.assertIn(
+            "explicit operator init required",
+            read("stack/services/home-agent-core/app/ledger.py"),
+        )
         self.assertIn("one-time ledger-init profile", preflight)
         self.assertIn("assert_separate_roots", preflight)
 
@@ -642,7 +679,9 @@ class RepositoryBoundaryTests(unittest.TestCase):
             self.assertEqual((root / "ledger.head.json").read_text(), "new")
 
     def test_locked_policy_disables_expansive_capabilities(self) -> None:
-        policy = json.loads(read("stack/home-agent-deploy/policy/home-agent-mvp-v1.json"))
+        policy = json.loads(
+            read("stack/home-agent-deploy/policy/home-agent-mvp-v1.json")
+        )
         self.assertFalse(policy["location_memory_default"])
         self.assertFalse(policy["travel_greetings_default"])
         self.assertFalse(policy["model_physical_actions"])
@@ -663,7 +702,9 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertIn("DISK_READ_ONLY_FREE_PERCENT = 10.0", resources)
         self.assertIn("INGEST_DAILY_EVENT_ALERT = 1_000", resources)
         self.assertIn("INGEST_WEEKLY_BYTE_ALERT = 100 * 1024 * 1024", resources)
-        self.assertIn("HOME_AGENT_STORAGE_MONITOR_PATH: /storage-monitor/durable", compose)
+        self.assertIn(
+            "HOME_AGENT_STORAGE_MONITOR_PATH: /storage-monitor/durable", compose
+        )
         self.assertIn("target: /storage-monitor/durable", compose)
 
     def test_stale_host_env_cannot_reenable_legacy_content_capture(self) -> None:
@@ -685,7 +726,9 @@ class RepositoryBoundaryTests(unittest.TestCase):
 
         metrics_source = read("stack/services/metrics-sidecar/main.py")
         self.assertIn("CONVERSATION_CONTENT_ENABLED = False", metrics_source)
-        self.assertNotIn('os.environ.get("METRICS_CONVERSATION_CONTENT_ENABLED"', metrics_source)
+        self.assertNotIn(
+            'os.environ.get("METRICS_CONVERSATION_CONTENT_ENABLED"', metrics_source
+        )
         self.assertNotIn("_recent_completions", metrics_source)
         self.assertNotIn("_broadcast_completion", metrics_source)
         self.assertNotIn("full_content", metrics_source)
@@ -715,7 +758,9 @@ class RepositoryBoundaryTests(unittest.TestCase):
             path.read_text(encoding="utf-8")
             for path in (ROOT / "stack/services/home-agent-core/app").glob("*.py")
         )
-        self.assertNotRegex(core_sources, re.compile(r"hav[-_]intelligence|intelligence\.sqlite", re.I))
+        self.assertNotRegex(
+            core_sources, re.compile(r"hav[-_]intelligence|intelligence\.sqlite", re.I)
+        )
 
 
 if __name__ == "__main__":

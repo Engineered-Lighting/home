@@ -43,6 +43,73 @@ install_secret() {
   mv -f "$temporary_path" "$target_path"
 }
 
+# Identity migration previously received two bearer-token copies. Publish its
+# replacement runtime directory as one exact unit so neither token can survive
+# a rematerialization. Only ordinary files are accepted in the retired derived
+# directory; any symlink or nested entry fails closed before a move or delete.
+install_exact_single_secret_service() {
+  service="$1"
+  source_name="$2"
+  target_name="$3"
+  owner_uid="$4"
+  owner_gid="$5"
+  source_path="$master_root/$source_name"
+  service_dir="$runtime_root/$service"
+  temporary_dir="$runtime_root/.$service.new.$$"
+  previous_dir="$runtime_root/.$service.previous.$$"
+
+  [ -s "$source_path" ] && [ ! -L "$source_path" ] || {
+    echo "missing or unsafe master secret: $source_path" >&2
+    exit 78
+  }
+  [ ! -e "$temporary_dir" ] && [ ! -L "$temporary_dir" ] &&
+    [ ! -e "$previous_dir" ] && [ ! -L "$previous_dir" ] || {
+    echo "identity migration runtime publication path already exists" >&2
+    exit 73
+  }
+  install -d -m 0700 -o root -g root "$temporary_dir"
+  if ! install -m 0400 -o "$owner_uid" -g "$owner_gid" \
+    "$source_path" "$temporary_dir/$target_name"; then
+    rm -f "$temporary_dir/$target_name"
+    rmdir "$temporary_dir" 2>/dev/null || true
+    exit 78
+  fi
+
+  if [ -e "$service_dir" ] || [ -L "$service_dir" ]; then
+    [ -d "$service_dir" ] && [ ! -L "$service_dir" ] || {
+      rm -f "$temporary_dir/$target_name"
+      rmdir "$temporary_dir"
+      echo "identity migration runtime path is not a safe directory" >&2
+      exit 78
+    }
+    unsafe_entry="$(find "$service_dir" -mindepth 1 -maxdepth 1 ! -type f -print -quit)"
+    [ -z "$unsafe_entry" ] || {
+      rm -f "$temporary_dir/$target_name"
+      rmdir "$temporary_dir"
+      echo "identity migration runtime directory contains an unsafe entry" >&2
+      exit 78
+    }
+    if ! mv -T --no-clobber "$service_dir" "$previous_dir"; then
+      rm -f "$temporary_dir/$target_name"
+      rmdir "$temporary_dir"
+      echo "identity migration runtime retirement failed" >&2
+      exit 73
+    fi
+  fi
+
+  if ! mv -T --no-clobber "$temporary_dir" "$service_dir"; then
+    [ ! -d "$previous_dir" ] || mv -T --no-clobber "$previous_dir" "$service_dir"
+    rm -f "$temporary_dir/$target_name"
+    rmdir "$temporary_dir" 2>/dev/null || true
+    echo "identity migration runtime publication failed" >&2
+    exit 73
+  fi
+  if [ -d "$previous_dir" ]; then
+    find "$previous_dir" -mindepth 1 -maxdepth 1 -type f -delete
+    rmdir "$previous_dir"
+  fi
+}
+
 # The official postgres entrypoint re-executes as UID/GID 999 before reading
 # POSTGRES_PASSWORD_FILE, so this copy must be readable only by that account.
 install_secret postgres postgres_owner_password postgres_owner_password 999 999
@@ -62,6 +129,8 @@ install_secret provision-roles rollout/postgres_rollout_password \
   postgres_rollout_password 0 0
 install_secret provision-roles binding-operator/postgres_binding_operator_password \
   postgres_binding_operator_password 0 0
+install_secret provision-roles identity-migration/postgres_identity_migration_password \
+  postgres_identity_migration_password 0 0
 install_secret grant-runtime postgres_owner_password postgres_owner_password 0 0
 
 # pgBackRest authenticates as a dedicated non-superuser over the shared Unix
@@ -94,8 +163,9 @@ install_secret bff service_token service_token 1000 1000
 install_secret bff session_encryption_key session_encryption_key 1000 1000
 install_secret bff native_installations.json native_installations 1000 1000
 
-# One-shot reviewed migration profile: no database URL or knowledge/spool key.
-install_secret identity-migration operator_token operator_token 10001 10001
-install_secret identity-migration bootstrap_token bootstrap_token 10001 10001
+# Dormant reviewed-migration profile. The persisted URL targets a login that
+# provisioning always expires, so merely starting the profile cannot connect.
+install_exact_single_secret_service identity-migration \
+  identity-migration/database_url_identity_migration database_url 10001 10001
 
 echo "materialized least-privilege Home Agent service secrets"

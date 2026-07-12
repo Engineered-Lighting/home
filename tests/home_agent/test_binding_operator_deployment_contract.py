@@ -37,7 +37,8 @@ class BindingOperatorDeploymentContractTests(unittest.TestCase):
         )
         self.assertRegex(
             roles,
-            r"GRANT CONNECT ON DATABASE home_agent TO[\s\S]*home_agent_binding_operator;",
+            r"GRANT CONNECT ON DATABASE home_agent TO[\s\S]*"
+            r"home_agent_binding_operator(?:,|;)",
         )
         self.assertNotRegex(
             roles,
@@ -70,9 +71,7 @@ class BindingOperatorDeploymentContractTests(unittest.TestCase):
             r"install_secret (?!core-api\b)[^\n]*database_url_binding_operator",
         )
 
-        additive = read(
-            "stack/home-agent-deploy/add-binding-operator-role-secrets.sh"
-        )
+        additive = read("stack/home-agent-deploy/add-binding-operator-role-secrets.sh")
         self.assertIn('target="$master_root/binding-operator"', additive)
         self.assertIn("openssl rand -hex 32", additive)
         self.assertIn("mv -T --no-clobber", additive)
@@ -113,7 +112,7 @@ class BindingOperatorDeploymentContractTests(unittest.TestCase):
     def test_entrypoint_and_preflight_fail_closed_around_operator_secret(self) -> None:
         entrypoint = read("stack/services/home-agent-core/docker-entrypoint.sh")
         self.assertIn(
-            'load_secret HOME_AGENT_OPERATOR_DATABASE_URL '
+            "load_secret HOME_AGENT_OPERATOR_DATABASE_URL "
             '"${HOME_AGENT_OPERATOR_DATABASE_URL_FILE:-}" '
             '"${HOME_AGENT_OPERATOR_DATABASE_URL:-}"',
             entrypoint,

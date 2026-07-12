@@ -290,7 +290,56 @@ esac
   echo "binding operator password must be independent from every other database role" >&2
   exit 78
 }
+
+identity_migration_master="$HOME_AGENT_SECRETS_DIR/master/identity-migration"
+[ -d "$identity_migration_master" ] && [ ! -L "$identity_migration_master" ] &&
+  [ "$(stat -c '%u:%g:%a' "$identity_migration_master")" = "0:0:700" ] || {
+  echo "identity migration master secret directory is absent or unsafe" >&2
+  exit 78
+}
+[ "$(find "$identity_migration_master" -mindepth 1 -maxdepth 1 | wc -l)" -eq 2 ] || {
+  echo "identity migration master secret directory must contain exactly two files" >&2
+  exit 78
+}
+for name in postgres_identity_migration_password database_url_identity_migration; do
+  path="$identity_migration_master/$name"
+  [ -f "$path" ] && [ ! -L "$path" ] && [ -s "$path" ] &&
+    [ "$(stat -c '%u:%g:%a' "$path")" = "0:0:600" ] || {
+    echo "identity migration master secret is absent or unsafe: $path" >&2
+    exit 78
+  }
+done
+identity_migration_password="$(tr -d '\r\n' < "$identity_migration_master/postgres_identity_migration_password")"
+identity_migration_url="$(tr -d '\r\n' < "$identity_migration_master/database_url_identity_migration")"
+case "$identity_migration_password" in
+  *[!0-9a-f]*|'') echo "identity migration password is not lowercase hex" >&2; exit 78 ;;
+esac
+[ "${#identity_migration_password}" -eq 64 ] || {
+  echo "identity migration password has the wrong length" >&2
+  exit 78
+}
+[ "$identity_migration_url" = "postgresql+psycopg://home_agent_identity_migration:${identity_migration_password}@postgres:5432/home_agent" ] || {
+  echo "identity migration database URL does not match the isolated role" >&2
+  exit 78
+}
+for other_path in \
+  "$HOME_AGENT_SECRETS_DIR/master/postgres_owner_password" \
+  "$HOME_AGENT_SECRETS_DIR/master/postgres_api_password" \
+  "$HOME_AGENT_SECRETS_DIR/master/postgres_ingest_password" \
+  "$HOME_AGENT_SECRETS_DIR/master/postgres_worker_password" \
+  "$HOME_AGENT_SECRETS_DIR/master/postgres_erasure_password" \
+  "$HOME_AGENT_SECRETS_DIR/master/postgres_backup_password" \
+  "$binding_operator_master/postgres_binding_operator_password" \
+  "$rollout_master/postgres_rollout_password"
+do
+  other_password="$(tr -d '\r\n' < "$other_path")"
+  [ "$identity_migration_password" != "$other_password" ] || {
+    echo "identity migration password must differ from every database role" >&2
+    exit 78
+  }
+done
 unset binding_operator_password rollout_password rollout_url
+unset identity_migration_password identity_migration_url other_password other_path
 
 deploy_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 printf '%s\n' '{"action":"validate"}' |
@@ -309,7 +358,7 @@ verify_secret() {
 }
 
 verify_secret 999:999:400 "$HOME_AGENT_SECRETS_DIR/runtime/postgres/postgres_owner_password"
-for name in postgres_owner_password postgres_api_password postgres_binding_operator_password postgres_ingest_password postgres_worker_password postgres_erasure_password postgres_rollout_password postgres_backup_password; do
+for name in postgres_owner_password postgres_api_password postgres_binding_operator_password postgres_identity_migration_password postgres_ingest_password postgres_worker_password postgres_erasure_password postgres_rollout_password postgres_backup_password; do
   verify_secret 0:0:400 "$HOME_AGENT_SECRETS_DIR/runtime/provision-roles/$name"
 done
 verify_secret 0:0:400 "$HOME_AGENT_SECRETS_DIR/runtime/grant-runtime/postgres_owner_password"
@@ -339,8 +388,32 @@ done
 verify_secret 1000:1000:400 "$HOME_AGENT_SECRETS_DIR/runtime/bff/service_token"
 verify_secret 1000:1000:400 "$HOME_AGENT_SECRETS_DIR/runtime/bff/session_encryption_key"
 verify_secret 1000:1000:400 "$HOME_AGENT_SECRETS_DIR/runtime/bff/native_installations"
-verify_secret 10001:10001:400 "$HOME_AGENT_SECRETS_DIR/runtime/identity-migration/operator_token"
-verify_secret 10001:10001:400 "$HOME_AGENT_SECRETS_DIR/runtime/identity-migration/bootstrap_token"
+identity_migration_runtime="$HOME_AGENT_SECRETS_DIR/runtime/identity-migration"
+stale_identity_runtime="$(find "$HOME_AGENT_SECRETS_DIR/runtime" \
+  -mindepth 1 -maxdepth 1 -type d \
+  \( -name '.identity-migration.new.*' -o \
+     -name '.identity-migration.previous.*' \) -print -quit)"
+[ -z "$stale_identity_runtime" ] || {
+  echo "stale identity migration runtime publication exists: $stale_identity_runtime" >&2
+  exit 78
+}
+[ -d "$identity_migration_runtime" ] && [ ! -L "$identity_migration_runtime" ] &&
+  [ "$(stat -c '%u:%g:%a' "$identity_migration_runtime")" = "0:0:700" ] || {
+  echo "identity migration runtime secret directory is absent or unsafe" >&2
+  exit 78
+}
+[ "$(find "$identity_migration_runtime" -mindepth 1 -maxdepth 1 | wc -l)" -eq 1 ] &&
+  [ -f "$identity_migration_runtime/database_url" ] &&
+  [ ! -L "$identity_migration_runtime/database_url" ] || {
+  echo "identity migration runtime secret directory must contain only database_url" >&2
+  exit 78
+}
+verify_secret 10001:10001:400 "$identity_migration_runtime/database_url"
+cmp -s "$identity_migration_runtime/database_url" \
+  "$identity_migration_master/database_url_identity_migration" || {
+  echo "identity migration runtime database URL does not match its master" >&2
+  exit 78
+}
 
 for name in server.crt server.key client-ca.crt; do
   path="$HOME_AGENT_TLS_DIR/$name"

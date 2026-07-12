@@ -183,5 +183,381 @@ REVOKE ALL PRIVILEGES ON TABLE
   operations.semantic_authority_cutovers,
   operations.reviewed_identity_migration_erasure_impacts
 FROM PUBLIC, home_agent_api, home_agent_binding_operator, home_agent_ingest,
-  home_agent_worker, home_agent_erasure, home_agent_rollout, home_agent_backup;
+  home_agent_worker, home_agent_erasure, home_agent_rollout, home_agent_backup,
+  home_agent_identity_migration, home_agent_identity_kernel;
+
+-- Revision 0007 provisions an expired-by-default dormant identity-migration
+-- login before any future database kernel exists. It receives no schema,
+-- base-table, sequence, default-privilege, or function authority. With no
+-- application-schema USAGE, and with exact 0008 function ACLs replayed below,
+-- it cannot reach unrelated application functions.
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public, ingest, identity,
+  knowledge, engagement, privacy, operations
+  FROM home_agent_identity_migration, home_agent_identity_kernel;
+REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public, ingest, identity,
+  knowledge, engagement, privacy, operations
+  FROM home_agent_identity_migration, home_agent_identity_kernel;
+REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA ingest, identity, knowledge,
+  engagement, privacy, operations
+  FROM home_agent_identity_migration, home_agent_identity_kernel;
+REVOKE USAGE, CREATE ON SCHEMA public, ingest, identity, knowledge, engagement,
+  privacy, operations
+  FROM home_agent_identity_migration, home_agent_identity_kernel;
+REVOKE UPDATE (expires_at) ON TABLE
+  operations.reviewed_identity_migration_runs
+  FROM home_agent_identity_migration, home_agent_identity_kernel;
+REVOKE SELECT (
+  authorization_id, from_mode, to_mode, rule_version, policy_version,
+  policy_digest, authorized_at
+) ON TABLE operations.rollout_authorizations
+  FROM home_agent_identity_migration, home_agent_identity_kernel;
+
+-- Revision 0008 is manifest-only. Reapply its two callable capabilities and
+-- non-callable erasure replay-guard trigger only when the exact three-function
+-- owner-kernel contract exists; schema 0006/0007 therefore leaves both roles
+-- inert. There is deliberately no finalizer, semantic projection, or generic
+-- function grant.
+--
+-- Quarantine each exact signature in its own committed statement before
+-- validating the set. A partial/tampered 0008 therefore loses PUBLIC and
+-- online-role execution even though the following validation aborts replay.
+DO $$
+BEGIN
+  IF to_regprocedure(
+       'operations.reviewed_identity_migration_capabilities()'
+     ) IS NOT NULL THEN
+    EXECUTE 'REVOKE ALL ON FUNCTION '
+      'operations.reviewed_identity_migration_capabilities() '
+      'FROM PUBLIC, home_agent_api, home_agent_binding_operator, '
+      'home_agent_ingest, home_agent_worker, home_agent_erasure, '
+      'home_agent_rollout, home_agent_backup, home_agent_identity_kernel, '
+      'home_agent_identity_migration';
+  END IF;
+  IF to_regprocedure(
+       'operations.register_reviewed_identity_migration(jsonb)'
+     ) IS NOT NULL THEN
+    EXECUTE 'REVOKE ALL ON FUNCTION '
+      'operations.register_reviewed_identity_migration(jsonb) '
+      'FROM PUBLIC, home_agent_api, home_agent_binding_operator, '
+      'home_agent_ingest, home_agent_worker, home_agent_erasure, '
+      'home_agent_rollout, home_agent_backup, home_agent_identity_kernel, '
+      'home_agent_identity_migration';
+  END IF;
+  IF to_regprocedure(
+       'operations.bump_reviewed_identity_migration_replay_guard()'
+     ) IS NOT NULL THEN
+    EXECUTE 'REVOKE ALL ON FUNCTION '
+      'operations.bump_reviewed_identity_migration_replay_guard() '
+      'FROM PUBLIC, home_agent_api, home_agent_binding_operator, '
+      'home_agent_ingest, home_agent_worker, home_agent_erasure, '
+      'home_agent_rollout, home_agent_backup, home_agent_identity_kernel, '
+      'home_agent_identity_migration';
+  END IF;
+END
+$$;
+
+DO $$
+DECLARE
+  reviewed_kernel_count integer;
+  reviewed_capabilities regprocedure;
+  reviewed_registration regprocedure;
+  reviewed_replay_guard regprocedure;
+  kernel_oid oid;
+  caller_oid oid;
+  database_oid oid;
+  evidence_table regclass;
+BEGIN
+  reviewed_capabilities := to_regprocedure(
+    'operations.reviewed_identity_migration_capabilities()'
+  );
+  reviewed_registration := to_regprocedure(
+    'operations.register_reviewed_identity_migration(jsonb)'
+  );
+  reviewed_replay_guard := to_regprocedure(
+    'operations.bump_reviewed_identity_migration_replay_guard()'
+  );
+  IF num_nonnulls(
+       reviewed_capabilities,
+       reviewed_registration,
+       reviewed_replay_guard
+     ) IN (1, 2) THEN
+    RAISE EXCEPTION 'partial identity migration kernel function set'
+      USING ERRCODE = '42501';
+  END IF;
+  IF reviewed_capabilities IS NOT NULL THEN
+    SELECT count(*)
+      INTO reviewed_kernel_count
+      FROM pg_proc AS procedure
+      JOIN pg_roles AS owner ON owner.oid = procedure.proowner
+     WHERE procedure.oid IN (
+       reviewed_capabilities,
+       reviewed_registration,
+       reviewed_replay_guard
+     )
+       AND owner.rolname = 'home_agent_identity_kernel'
+       AND procedure.prosecdef
+       AND procedure.proconfig = ARRAY['search_path=pg_catalog, pg_temp']::text[]
+       AND procedure.proacl IS NOT NULL
+       AND encode(
+             pg_catalog.sha256(
+               pg_catalog.convert_to(procedure.prosrc, 'UTF8')
+             ),
+             'hex'
+           ) = CASE procedure.oid
+             WHEN reviewed_capabilities THEN
+               '1b26f6a57891eb6b35fc2c822ba4d92148c76c3f89eeff0b77b702225c6c1db2'
+             WHEN reviewed_registration THEN
+               '07a9d2d776de63360d8c473e674e7feb24c057b5cb308f56f57e2e7758eaf2a7'
+             WHEN reviewed_replay_guard THEN
+               '627bb84f83baa6183144de5d94ddcc4f0da56dc02e64c544b4b679b5ed3c316b'
+           END
+       AND NOT EXISTS (
+         SELECT 1
+           FROM aclexplode(procedure.proacl) AS function_acl
+          WHERE function_acl.privilege_type = 'EXECUTE'
+       );
+    IF reviewed_kernel_count <> 3 THEN
+      RAISE EXCEPTION 'identity migration kernel ownership contract mismatch'
+        USING ERRCODE = '42501';
+    END IF;
+    SELECT oid INTO STRICT kernel_oid
+      FROM pg_roles WHERE rolname = 'home_agent_identity_kernel';
+    SELECT oid INTO STRICT caller_oid
+      FROM pg_roles WHERE rolname = 'home_agent_identity_migration';
+    SELECT oid INTO STRICT database_oid
+      FROM pg_database WHERE datname = current_database();
+    IF EXISTS (
+         SELECT 1 FROM pg_shdepend AS caller_ownership
+          WHERE caller_ownership.refobjid = caller_oid
+            AND caller_ownership.deptype = 'o'
+       )
+       OR (
+         SELECT count(*) FROM pg_shdepend AS kernel_ownership
+          WHERE kernel_ownership.refobjid = kernel_oid
+            AND kernel_ownership.deptype = 'o'
+       ) <> 3
+       OR EXISTS (
+         SELECT 1 FROM pg_shdepend AS kernel_ownership
+          WHERE kernel_ownership.refobjid = kernel_oid
+            AND kernel_ownership.deptype = 'o'
+            AND NOT (
+              kernel_ownership.dbid = database_oid
+              AND kernel_ownership.classid = 'pg_proc'::regclass
+              AND kernel_ownership.objid IN (
+                reviewed_capabilities,
+                reviewed_registration,
+                reviewed_replay_guard
+              )
+              AND kernel_ownership.objsubid = 0
+            )
+       ) THEN
+      RAISE EXCEPTION 'identity migration kernel ownership dependency mismatch'
+        USING ERRCODE = '42501';
+    END IF;
+    IF NOT EXISTS (
+      SELECT 1
+        FROM pg_trigger AS guard_trigger
+       WHERE guard_trigger.tgrelid =
+             'operations.reviewed_identity_migration_erasure_impacts'::regclass
+         AND guard_trigger.tgname =
+             'reviewed_identity_migration_erasure_replay_guard'
+         AND guard_trigger.tgfoid = reviewed_replay_guard
+         AND guard_trigger.tgenabled = 'O'
+         AND guard_trigger.tgisinternal = false
+         AND guard_trigger.tgtype = 7
+         AND guard_trigger.tgnargs = 0
+    ) THEN
+      RAISE EXCEPTION 'identity migration replay guard trigger mismatch'
+        USING ERRCODE = '42501';
+    END IF;
+
+    -- Reassert the exact FORCE-RLS boundary before restoring any kernel ACL.
+    FOREACH evidence_table IN ARRAY ARRAY[
+      'operations.reviewed_identity_migration_runs'::regclass,
+      'operations.reviewed_identity_migration_source_items'::regclass,
+      'operations.reviewed_identity_migration_decisions'::regclass,
+      'operations.reviewed_identity_migration_item_receipts'::regclass,
+      'operations.reviewed_identity_migration_finalizations'::regclass,
+      'operations.legacy_identity_writer_evidence'::regclass,
+      'operations.privacy_cutover_check_receipts'::regclass,
+      'operations.semantic_authority_cutovers'::regclass,
+      'operations.reviewed_identity_migration_erasure_impacts'::regclass
+    ] LOOP
+      EXECUTE format('ALTER TABLE %s ENABLE ROW LEVEL SECURITY', evidence_table);
+      EXECUTE format('ALTER TABLE %s FORCE ROW LEVEL SECURITY', evidence_table);
+    END LOOP;
+
+    EXECUTE 'DROP POLICY IF EXISTS '
+      'reviewed_identity_migration_runs_manifest_kernel_select ON '
+      'operations.reviewed_identity_migration_runs';
+    EXECUTE 'CREATE POLICY '
+      'reviewed_identity_migration_runs_manifest_kernel_select ON '
+      'operations.reviewed_identity_migration_runs FOR SELECT '
+      'TO home_agent_identity_kernel USING ('
+      'session_user = ''home_agent_identity_migration'' AND '
+      'current_user = ''home_agent_identity_kernel'' AND NOT '
+      'pg_catalog.pg_has_role(session_user, '
+      '''home_agent_identity_kernel'', ''SET''))';
+    EXECUTE 'DROP POLICY IF EXISTS '
+      'reviewed_identity_migration_runs_manifest_kernel_insert ON '
+      'operations.reviewed_identity_migration_runs';
+    EXECUTE 'CREATE POLICY '
+      'reviewed_identity_migration_runs_manifest_kernel_insert ON '
+      'operations.reviewed_identity_migration_runs FOR INSERT '
+      'TO home_agent_identity_kernel WITH CHECK ('
+      'session_user = ''home_agent_identity_migration'' AND '
+      'current_user = ''home_agent_identity_kernel'' AND NOT '
+      'pg_catalog.pg_has_role(session_user, '
+      '''home_agent_identity_kernel'', ''SET''))';
+    EXECUTE 'DROP POLICY IF EXISTS '
+      'reviewed_identity_migration_source_items_manifest_kernel_select ON '
+      'operations.reviewed_identity_migration_source_items';
+    EXECUTE 'CREATE POLICY '
+      'reviewed_identity_migration_source_items_manifest_kernel_select ON '
+      'operations.reviewed_identity_migration_source_items FOR SELECT '
+      'TO home_agent_identity_kernel USING ('
+      'session_user = ''home_agent_identity_migration'' AND '
+      'current_user = ''home_agent_identity_kernel'' AND NOT '
+      'pg_catalog.pg_has_role(session_user, '
+      '''home_agent_identity_kernel'', ''SET''))';
+    EXECUTE 'DROP POLICY IF EXISTS '
+      'reviewed_identity_migration_source_items_manifest_kernel_insert ON '
+      'operations.reviewed_identity_migration_source_items';
+    EXECUTE 'CREATE POLICY '
+      'reviewed_identity_migration_source_items_manifest_kernel_insert ON '
+      'operations.reviewed_identity_migration_source_items FOR INSERT '
+      'TO home_agent_identity_kernel WITH CHECK ('
+      'session_user = ''home_agent_identity_migration'' AND '
+      'current_user = ''home_agent_identity_kernel'' AND NOT '
+      'pg_catalog.pg_has_role(session_user, '
+      '''home_agent_identity_kernel'', ''SET''))';
+    EXECUTE 'DROP POLICY IF EXISTS '
+      'reviewed_identity_migration_decisions_manifest_kernel_select ON '
+      'operations.reviewed_identity_migration_decisions';
+    EXECUTE 'CREATE POLICY '
+      'reviewed_identity_migration_decisions_manifest_kernel_select ON '
+      'operations.reviewed_identity_migration_decisions FOR SELECT '
+      'TO home_agent_identity_kernel USING ('
+      'session_user = ''home_agent_identity_migration'' AND '
+      'current_user = ''home_agent_identity_kernel'' AND NOT '
+      'pg_catalog.pg_has_role(session_user, '
+      '''home_agent_identity_kernel'', ''SET''))';
+    EXECUTE 'DROP POLICY IF EXISTS '
+      'reviewed_identity_migration_decisions_manifest_kernel_insert ON '
+      'operations.reviewed_identity_migration_decisions';
+    EXECUTE 'CREATE POLICY '
+      'reviewed_identity_migration_decisions_manifest_kernel_insert ON '
+      'operations.reviewed_identity_migration_decisions FOR INSERT '
+      'TO home_agent_identity_kernel WITH CHECK ('
+      'session_user = ''home_agent_identity_migration'' AND '
+      'current_user = ''home_agent_identity_kernel'' AND NOT '
+      'pg_catalog.pg_has_role(session_user, '
+      '''home_agent_identity_kernel'', ''SET''))';
+    EXECUTE 'DROP POLICY IF EXISTS '
+      'identity_migration_erasure_impacts_manifest_kernel_select ON '
+      'operations.reviewed_identity_migration_erasure_impacts';
+    EXECUTE 'CREATE POLICY '
+      'identity_migration_erasure_impacts_manifest_kernel_select ON '
+      'operations.reviewed_identity_migration_erasure_impacts FOR SELECT '
+      'TO home_agent_identity_kernel USING ('
+      'session_user = ''home_agent_identity_migration'' AND '
+      'current_user = ''home_agent_identity_kernel'' AND NOT '
+      'pg_catalog.pg_has_role(session_user, '
+      '''home_agent_identity_kernel'', ''SET''))';
+    EXECUTE 'DROP POLICY IF EXISTS '
+      'reviewed_identity_migration_runs_replay_guard_trigger_select ON '
+      'operations.reviewed_identity_migration_runs';
+    EXECUTE 'CREATE POLICY '
+      'reviewed_identity_migration_runs_replay_guard_trigger_select ON '
+      'operations.reviewed_identity_migration_runs FOR SELECT '
+      'TO home_agent_identity_kernel USING ('
+      'current_user = ''home_agent_identity_kernel'' AND '
+      'session_user IN (''home_agent_owner'', ''home_agent_erasure'') AND '
+      'pg_catalog.pg_trigger_depth() = 1)';
+    EXECUTE 'DROP POLICY IF EXISTS '
+      'reviewed_identity_migration_runs_replay_guard_update ON '
+      'operations.reviewed_identity_migration_runs';
+    EXECUTE 'CREATE POLICY '
+      'reviewed_identity_migration_runs_replay_guard_update ON '
+      'operations.reviewed_identity_migration_runs FOR UPDATE '
+      'TO home_agent_identity_kernel USING ('
+      'current_user = ''home_agent_identity_kernel'' AND ('
+      '(session_user = ''home_agent_identity_migration'' AND NOT '
+      'pg_catalog.pg_has_role(session_user, '
+      '''home_agent_identity_kernel'', ''SET'')) OR '
+      '(session_user IN (''home_agent_owner'', ''home_agent_erasure'') AND '
+      'pg_catalog.pg_trigger_depth() = 1))) WITH CHECK ('
+      'current_user = ''home_agent_identity_kernel'' AND ('
+      '(session_user = ''home_agent_identity_migration'' AND NOT '
+      'pg_catalog.pg_has_role(session_user, '
+      '''home_agent_identity_kernel'', ''SET'')) OR '
+      '(session_user IN (''home_agent_owner'', ''home_agent_erasure'') AND '
+      'pg_catalog.pg_trigger_depth() = 1)))';
+
+    EXECUTE 'REVOKE ALL ON FUNCTION '
+      'operations.reviewed_identity_migration_capabilities(), '
+      'operations.register_reviewed_identity_migration(jsonb) '
+      'FROM PUBLIC, home_agent_api, home_agent_binding_operator, '
+      'home_agent_ingest, home_agent_worker, home_agent_erasure, '
+      'home_agent_rollout, home_agent_backup, home_agent_identity_kernel, '
+      'home_agent_identity_migration';
+    EXECUTE 'GRANT USAGE ON SCHEMA operations '
+      'TO home_agent_identity_migration, home_agent_identity_kernel';
+    EXECUTE 'GRANT SELECT, INSERT ON TABLE '
+      'operations.reviewed_identity_migration_runs, '
+      'operations.reviewed_identity_migration_source_items, '
+      'operations.reviewed_identity_migration_decisions '
+      'TO home_agent_identity_kernel';
+    EXECUTE 'GRANT SELECT ('
+      'authorization_id, from_mode, to_mode, rule_version, policy_version, '
+      'policy_digest, authorized_at) '
+      'ON TABLE operations.rollout_authorizations '
+      'TO home_agent_identity_kernel';
+    EXECUTE 'GRANT SELECT ON TABLE '
+      'operations.reviewed_identity_migration_erasure_impacts '
+      'TO home_agent_identity_kernel';
+    EXECUTE 'GRANT UPDATE (expires_at) ON TABLE '
+      'operations.reviewed_identity_migration_runs '
+      'TO home_agent_identity_kernel';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION '
+      'operations.reviewed_identity_migration_capabilities(), '
+      'operations.register_reviewed_identity_migration(jsonb) '
+      'TO home_agent_identity_migration';
+
+    IF NOT has_function_privilege(
+         caller_oid, reviewed_capabilities, 'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+         caller_oid, reviewed_registration, 'EXECUTE'
+       )
+       OR has_function_privilege(
+         caller_oid, reviewed_replay_guard, 'EXECUTE'
+       )
+       OR has_table_privilege(
+         'home_agent_identity_migration',
+         'operations.reviewed_identity_migration_runs',
+         'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'
+       )
+       OR NOT has_table_privilege(
+         'home_agent_identity_kernel',
+         'operations.reviewed_identity_migration_erasure_impacts',
+         'SELECT'
+       )
+       OR has_table_privilege(
+         'home_agent_identity_kernel',
+         'operations.reviewed_identity_migration_erasure_impacts',
+         'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'
+       )
+       OR NOT has_column_privilege(
+         'home_agent_identity_kernel',
+         'operations.reviewed_identity_migration_runs',
+         'expires_at',
+         'UPDATE'
+       ) THEN
+      RAISE EXCEPTION 'identity migration kernel ACL contract mismatch'
+        USING ERRCODE = '42501';
+    END IF;
+  END IF;
+END
+$$;
 SQL

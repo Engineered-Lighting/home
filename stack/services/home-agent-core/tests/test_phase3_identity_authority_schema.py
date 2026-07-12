@@ -326,8 +326,10 @@ def test_migration_is_owner_only_force_rls_and_refuses_evidence_downgrade() -> N
 def test_apply_grants_revoke_runs_after_broad_and_default_api_grants() -> None:
     source = GRANTS.read_text(encoding="utf-8")
     marker = "Revision 0007 is an owner-only schema foundation"
+    next_marker = "Revision 0007 provisions an expired-by-default dormant"
     assert marker in source
-    revoke = source.split(marker, 1)[1]
+    assert next_marker in source
+    revoke = source.split(marker, 1)[1].split(next_marker, 1)[0]
     assert source.index(marker) > source.index("ALTER DEFAULT PRIVILEGES")
     assert "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO home_agent_api" in source
     assert "REVOKE ALL PRIVILEGES ON TABLE" in revoke

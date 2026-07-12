@@ -138,10 +138,86 @@ test("request and route parsers reject generic, native, query-bearing, and ambig
   assert.equal(browserApiRouteAllowed("GET", new URL("http://x/api/agent/v1/onboarding/status")), true);
   assert.equal(browserApiRouteAllowed("POST", new URL("http://x/api/agent/v1/onboarding/status")), false);
   assert.equal(browserApiRouteAllowed("GET", new URL("http://x/api/agent/v1/onboarding/status?debug=1")), false);
+  assert.equal(browserApiRouteAllowed("GET", new URL("http://x/api/agent/v1/principal-binding-proposal")), true);
+  assert.equal(browserApiRouteAllowed("POST", new URL("http://x/api/agent/v1/principal-binding-proposal")), false);
+  assert.equal(browserApiRouteAllowed("POST", new URL("http://x/api/agent/v1/principal-binding-request")), true);
+  assert.equal(browserApiRouteAllowed("GET", new URL("http://x/api/agent/v1/principal-binding-request")), false);
+  assert.equal(browserApiRouteAllowed("POST", new URL("http://x/api/agent/v1/principal-binding-request/cancel")), true);
+  assert.equal(browserApiRouteAllowed("POST", new URL("http://x/api/agent/v1/principal-binding-proposal/confirm")), true);
+  assert.equal(browserApiRouteAllowed("POST", new URL("http://x/api/agent/v1/principal-bindings")), false);
+  assert.equal(browserApiRouteAllowed("GET", new URL("http://x/api/agent/v1/people")), false);
+  assert.equal(browserApiRouteAllowed("GET", new URL("http://x/api/agent/v1/principal-binding-proposal?person=x")), false);
+  assert.equal(browserApiRouteAllowed("POST", new URL("http://x/api/agent/v1/principal-binding-request?person=x")), false);
   assert.equal(browserApiRouteAllowed("GET", new URL("http://x/api/agent/v1/snapshot?debug=1")), false);
   assert.equal(browserApiRouteAllowed("GET", new URL("http://x/api/agent/native/v1/snapshot")), false);
   assert.equal(browserApiRouteAllowed("POST", new URL(`http://x/api/agent/v1/memory-transactions/${UUID}/confirm`)), true);
   assert.equal(browserApiRouteAllowed("GET", new URL("http://x/api/agent/auth/callback?code=x&state=y")), true);
+});
+
+test("binding workflow proxies only exact browser paths with same-origin writes", async () => {
+  const f = await fixture((req, res, seen) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      seen.push({ method: req.method, url: req.url, headers: req.headers, body: Buffer.concat(chunks).toString() });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end('{"ok":true}');
+    });
+  });
+  try {
+    const requests = [
+      ["GET", "/api/agent/v1/principal-binding-proposal", ""],
+      ["POST", "/api/agent/v1/principal-binding-request", "{}"],
+      ["POST", "/api/agent/v1/principal-binding-request/cancel", "{}"],
+      ["POST", "/api/agent/v1/principal-binding-proposal/confirm", JSON.stringify({
+        proposal_digest: "a".repeat(64),
+        confirmation_nonce: UUID,
+      })],
+    ];
+    for (const [method, target, body] of requests) {
+      const response = await request(f.originPort, target, {
+        method,
+        origin: method === "POST" ? PUBLIC_ORIGIN : undefined,
+        headers: {
+          Cookie: "legacy=drop; __Host-home_agent=session",
+          "Content-Type": "application/json",
+          "X-CSRF-Token": "csrf",
+          "X-Authenticated-HA-User": "forged",
+          "X-Home-Agent-Principal": "forged",
+        },
+        body,
+      });
+      assert.equal(response.status, 200);
+    }
+    assert.deepEqual(f.seen.map(({ method, url }) => ({ method, url })), requests.map(
+      ([method, url]) => ({ method, url }),
+    ));
+    for (const item of f.seen) {
+      assert.equal(item.headers.cookie, "__Host-home_agent=session");
+      assert.equal(item.headers["x-authenticated-ha-user"], undefined);
+      assert.equal(item.headers["x-home-agent-principal"], undefined);
+    }
+
+    const seenBeforeDenials = f.seen.length;
+    for (const [method, target, origin] of [
+      ["POST", "/api/agent/v1/principal-binding-proposal", PUBLIC_ORIGIN],
+      ["GET", "/api/agent/v1/principal-binding-request", undefined],
+      ["GET", "/api/agent/v1/principal-binding-proposal?person=forged", undefined],
+      ["POST", "/api/agent/v1/principal-binding-request?person=forged", PUBLIC_ORIGIN],
+      ["POST", "/api/agent/v1/principal-bindings", PUBLIC_ORIGIN],
+      ["GET", "/api/agent/v1/people", undefined],
+    ]) {
+      const response = await request(f.originPort, target, { method, origin, body: method === "POST" ? "{}" : "" });
+      assert.equal(response.status, 404);
+    }
+    const missingOrigin = await request(f.originPort, "/api/agent/v1/principal-binding-request", {
+      method: "POST", body: "{}",
+    });
+    assert.equal(missingOrigin.status, 403);
+    assert.equal(f.seen.length, seenBeforeDenials);
+  } finally {
+    await f.cleanup();
+  }
 });
 
 test("onboarding status proxies only the exact authenticated GET path", async () => {

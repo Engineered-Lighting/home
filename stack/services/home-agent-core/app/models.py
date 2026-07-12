@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class StrictModel(BaseModel):
@@ -293,18 +293,134 @@ class RolloutAuthorizationView(StrictModel):
     _authorized = field_validator("authorized_at")(_aware)
 
 
-class PrincipalBindingCreate(StrictModel):
-    ha_user_id: str = Field(min_length=1, max_length=64)
-    person_id: uuid.UUID
-    display_label: str = Field(min_length=1, max_length=255)
-    confirmation_artifact_id: uuid.UUID
-
-
 class PrincipalView(StrictModel):
     principal_id: uuid.UUID
     person_id: uuid.UUID
     ha_user_id: str
     status: str
+
+
+PrincipalBindingSubjectState = Literal[
+    "not_requested",
+    "awaiting_operator_review",
+    "ready_for_confirmation",
+    "bound",
+    "unavailable",
+]
+
+
+class PrincipalBindingRequestAction(StrictModel):
+    """An intentionally empty, strict body for subject-authenticated actions."""
+
+
+class PrincipalBindingProposalView(StrictModel):
+    state: PrincipalBindingSubjectState
+    review_code: str | None = Field(
+        default=None, pattern=r"^[A-HJ-NP-Z2-9]{16}$"
+    )
+    reviewed_display_label: str | None = Field(default=None, max_length=255)
+    confirmation_statement: str | None = Field(default=None, max_length=384)
+    proposal_digest: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$"
+    )
+    expires_at: datetime | None = None
+    location_memory_default_off: Literal[True] = True
+    travel_greetings_default_off: Literal[True] = True
+
+    @field_validator("expires_at")
+    @classmethod
+    def _optional_expiry_aware(cls, value: datetime | None) -> datetime | None:
+        return _aware(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def _ready_shape(self) -> "PrincipalBindingProposalView":
+        ready_values = (
+            self.reviewed_display_label,
+            self.confirmation_statement,
+            self.proposal_digest,
+            self.expires_at,
+        )
+        if self.state == "ready_for_confirmation":
+            if any(value is None for value in ready_values):
+                raise ValueError("ready binding proposal is incomplete")
+            expected = (
+                "Bind this authenticated Home Assistant account to "
+                f"{self.reviewed_display_label}."
+            )
+            if self.confirmation_statement != expected:
+                raise ValueError("binding confirmation statement is not canonical")
+        elif any(value is not None for value in ready_values):
+            raise ValueError("non-ready binding state cannot expose proposal content")
+        if self.state == "awaiting_operator_review":
+            if self.review_code is None:
+                raise ValueError("awaiting binding request requires a review code")
+        elif self.review_code is not None:
+            raise ValueError("only an awaiting binding request exposes a review code")
+        return self
+
+
+class PrincipalBindingConfirmation(StrictModel):
+    proposal_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    confirmation_nonce: uuid.UUID
+
+    @field_validator("confirmation_nonce")
+    @classmethod
+    def _random_nonce(cls, value: uuid.UUID) -> uuid.UUID:
+        if value.version not in {4, 7}:
+            raise ValueError("confirmation nonce must be a random UUIDv4 or UUIDv7")
+        return value
+
+
+class PrincipalBindingConfirmationView(StrictModel):
+    state: Literal["bound"] = "bound"
+    confirmed_at: datetime
+    location_memory_enabled: Literal[False] = False
+    travel_greetings_enabled: Literal[False] = False
+
+    _confirmed_at = field_validator("confirmed_at")(_aware)
+
+
+class OperatorPrincipalBindingRequestView(StrictModel):
+    request_id: uuid.UUID
+    review_code: str = Field(pattern=r"^[A-HJ-NP-Z2-9]{16}$")
+    state: Literal["pending"]
+    requested_at: datetime
+    expires_at: datetime
+
+    _requested_at = field_validator("requested_at")(_aware)
+    _expires_at = field_validator("expires_at")(_aware)
+
+
+class OperatorPrincipalBindingRequestsView(StrictModel):
+    requests: list[OperatorPrincipalBindingRequestView] = Field(max_length=100)
+
+
+class OperatorPrincipalBindingProposalStage(StrictModel):
+    request_id: uuid.UUID
+    review_code: str = Field(pattern=r"^[A-HJ-NP-Z2-9]{16}$")
+    person_id: uuid.UUID
+    operator_request_id: uuid.UUID
+
+    @field_validator("operator_request_id")
+    @classmethod
+    def _random_operator_request(cls, value: uuid.UUID) -> uuid.UUID:
+        if value.version not in {4, 7}:
+            raise ValueError("operator request ID must be a random UUIDv4 or UUIDv7")
+        return value
+
+
+class OperatorPrincipalBindingProposalView(StrictModel):
+    proposal_id: uuid.UUID
+    request_id: uuid.UUID
+    person_id: uuid.UUID
+    reviewed_display_label: str = Field(min_length=1, max_length=255)
+    state: Literal["ready"]
+    stage_receipt_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    staged_at: datetime
+    expires_at: datetime
+
+    _staged_at = field_validator("staged_at")(_aware)
+    _expires_at = field_validator("expires_at")(_aware)
 
 
 class SourceEntityBindingCreate(StrictModel):

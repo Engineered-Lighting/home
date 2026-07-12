@@ -105,6 +105,15 @@ parent-presence queries. It has no generic URL/method/header command and no
 place mutation, parent confirmation, stack, camera, model, or physical-action
 route.
 
+The staged principal-binding workflow is browser-only. Its four fixed routes
+allow a subject to request/cancel review, read only their own opaque review
+status, and confirm only a reviewed proposal digest with a fresh UUID nonce.
+Every one of those routes forces a current HA `whoami` check regardless of the
+normal session revalidation interval. Write routes require exact Origin and
+CSRF proof; request/cancel bodies must be `{}`, and confirmation accepts only
+`proposal_digest` plus `confirmation_nonce`. Browser-supplied HA, person,
+principal, or actor identifiers are rejected and never forwarded to Core.
+
 All outbound HA and Core fetches set `redirect=error`; access tokens, refresh
 tokens, service credentials, and semantic request bodies are never followed to
 a 3xx destination.

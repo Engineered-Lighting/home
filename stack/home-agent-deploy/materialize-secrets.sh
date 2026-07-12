@@ -60,6 +60,8 @@ do
 done
 install_secret provision-roles rollout/postgres_rollout_password \
   postgres_rollout_password 0 0
+install_secret provision-roles binding-operator/postgres_binding_operator_password \
+  postgres_binding_operator_password 0 0
 install_secret grant-runtime postgres_owner_password postgres_owner_password 0 0
 
 # pgBackRest authenticates as a dedicated non-superuser over the shared Unix
@@ -69,6 +71,8 @@ install_secret backup-gate postgres_backup_password postgres_backup_password 999
 # Core runs as the fixed homeagent UID/GID 10001.
 install_secret migrate database_url_owner database_url 10001 10001
 install_secret core-api database_url_api database_url 10001 10001
+install_secret core-api binding-operator/database_url_binding_operator \
+  operator_database_url 10001 10001
 install_secret core-api knowledge_encryption_key knowledge_encryption_key 10001 10001
 install_secret core-api service_token service_token 10001 10001
 install_secret core-api operator_token operator_token 10001 10001

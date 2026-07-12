@@ -36,7 +36,6 @@ from app.models import (
     PlaceCreate,
     PlaceLocatorInput,
     PreferenceUpdate,
-    PrincipalBindingCreate,
     ReviewedPersonVerify,
     SourceEntityBindingCreate,
 )
@@ -44,6 +43,7 @@ from app.restore import RestoreQuarantineGate, RestoreReplay, outbox_health
 from app.spool import DisabledRuntimeSpool, EncryptedRuntimeSpool
 from app.store import CoreStore
 from app.worker import DurableWorker
+from tests.binding_helpers import complete_staged_principal_binding
 
 
 pytestmark = pytest.mark.skipif(
@@ -166,14 +166,10 @@ async def test_complete_itaipava_commit_and_scoped_forgetting(tmp_path) -> None:
         marcelo = await store.create_person(PersonCreate(display_name="Marcelo"))
         amelia = await store.create_person(PersonCreate(display_name="Amelia"))
         marcelo_sr = await store.create_person(PersonCreate(display_name="Marcelo Sr."))
-        binding = await store.bind_principal(
-            "ha-user-marcelo",
-            PrincipalBindingCreate(
-                ha_user_id="ha-user-marcelo",
-                person_id=marcelo.person_id,
-                display_label="Marcelo",
-                confirmation_artifact_id=uuid.uuid4(),
-            ),
+        binding = await complete_staged_principal_binding(
+            store,
+            ha_user_id="ha-user-marcelo",
+            person_id=marcelo.person_id,
         )
         principal = await store.resolve_principal("ha-user-marcelo")
         assert principal["principal_id"] == binding.principal_id
@@ -1869,14 +1865,10 @@ async def test_location_quality_switch_and_coverage_gates(tmp_path) -> None:
     async def bootstrap(label: str, *entities: str):
         person = await store.create_person(PersonCreate(display_name=label))
         ha_user_id = f"ha-{label.lower().replace(' ', '-')}-{uuid.uuid4().hex[:8]}"
-        await store.bind_principal(
-            ha_user_id,
-            PrincipalBindingCreate(
-                ha_user_id=ha_user_id,
-                person_id=person.person_id,
-                display_label=label,
-                confirmation_artifact_id=uuid.uuid4(),
-            ),
+        await complete_staged_principal_binding(
+            store,
+            ha_user_id=ha_user_id,
+            person_id=person.person_id,
         )
         principal = await store.resolve_principal(ha_user_id)
         for entity in entities:

@@ -320,9 +320,14 @@ function HomeAgentPanel() {
   const activeSubject = useRef(null);
   const authorityGeneration = useRef(0);
   const refreshGeneration = useRef(0);
+  const onboardingStatusRef = useRef(null);
+  const bindingStatusRef = useRef(null);
+  const bindingFocusPending = useRef(false);
   const [phase, setPhase] = useState("loading");
   const [session, setSession] = useState(null);
   const [onboarding, setOnboarding] = useState(null);
+  const [bindingProposal, setBindingProposal] = useState(null);
+  const [bindingBusy, setBindingBusy] = useState(false);
   const [snapshot, setSnapshot] = useState(null);
   const [initiatives, setInitiatives] = useState([]);
   const [claimedInitiative, setClaimedInitiative] = useState(null);
@@ -336,6 +341,8 @@ function HomeAgentPanel() {
   const clearPrincipalState = () => {
     authorityGeneration.current += 1;
     setOnboarding(null);
+    setBindingProposal(null);
+    setBindingBusy(false);
     setSnapshot(null);
     setInitiatives([]);
     setClaimedInitiative(null);
@@ -359,7 +366,10 @@ function HomeAgentPanel() {
       if (currentSession?.authenticated === true && !subject) {
         throw new Error("authenticated_session_missing_subject");
       }
-      if (activeSubject.current !== subject) clearPrincipalState();
+      if (activeSubject.current !== subject) {
+        bindingFocusPending.current = false;
+        clearPrincipalState();
+      }
       activeSubject.current = subject;
       setSession(currentSession);
       if (currentSession?.authenticated !== true) {
@@ -373,6 +383,12 @@ function HomeAgentPanel() {
         if (nextOnboarding?.state !== "bound" || nextOnboarding?.rollout_mode !== "canary") {
           clearPrincipalState();
           setOnboarding(nextOnboarding);
+          if (nextOnboarding?.state === "identity_confirmation_required") {
+            const ticket = beginPrincipalOperation();
+            const nextBindingProposal = await api.principalBindingProposal();
+            if (!isCurrent() || !principalOperationCurrent(ticket)) return;
+            setBindingProposal(nextBindingProposal);
+          }
           setPhase("onboarding");
           return;
         }
@@ -403,6 +419,7 @@ function HomeAgentPanel() {
         return;
       }
       setPhase("contained");
+      bindingFocusPending.current = false;
       setError(cause.message || "agent_unavailable");
     }
   };
@@ -423,6 +440,61 @@ function HomeAgentPanel() {
       unlisten?.();
     };
   }, []);
+  useEffect(() => {
+    if (!bindingFocusPending.current || phase !== "onboarding") return;
+    if (onboarding?.state === "identity_confirmation_required" && !bindingProposal?.state) return;
+    const target = bindingStatusRef.current || onboardingStatusRef.current;
+    if (!target) return;
+    bindingFocusPending.current = false;
+    target.focus();
+  }, [phase, onboarding?.state, bindingProposal?.state]);
+  const requestPrincipalBinding = async () => {
+    const ticket = beginPrincipalOperation();
+    setBindingBusy(true);
+    setError("");
+    try {
+      await api.requestPrincipalBinding();
+      if (!principalOperationCurrent(ticket)) return;
+      bindingFocusPending.current = true;
+      await refresh();
+    } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
+      setBindingBusy(false);
+      setError(cause.message || "principal_binding_request_failed");
+    }
+  };
+  const cancelPrincipalBindingRequest = async () => {
+    const ticket = beginPrincipalOperation();
+    setBindingBusy(true);
+    setError("");
+    try {
+      await api.cancelPrincipalBindingRequest();
+      if (!principalOperationCurrent(ticket)) return;
+      bindingFocusPending.current = true;
+      await refresh();
+    } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
+      setBindingBusy(false);
+      setError(cause.message || "principal_binding_cancel_failed");
+    }
+  };
+  const confirmPrincipalBinding = async () => {
+    const ticket = beginPrincipalOperation();
+    setBindingBusy(true);
+    setError("");
+    try {
+      if (!bindingProposal?.proposal_digest) throw new Error("binding_proposal_unavailable");
+      const confirmationNonce = window.crypto.randomUUID();
+      await api.confirmPrincipalBinding(bindingProposal.proposal_digest, confirmationNonce);
+      if (!principalOperationCurrent(ticket)) return;
+      bindingFocusPending.current = true;
+      await refresh();
+    } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
+      setBindingBusy(false);
+      setError(cause.message || "principal_binding_confirmation_failed");
+    }
+  };
   const propose = async () => {
     const ticket = beginPrincipalOperation();
     setError("");
@@ -542,6 +614,7 @@ function HomeAgentPanel() {
   };
   const signOut = async () => {
     refreshGeneration.current += 1;
+    bindingFocusPending.current = false;
     clearPrincipalState();
     activeSubject.current = null;
     setSession(null);
@@ -615,11 +688,40 @@ function HomeAgentPanel() {
     "aria-live": "polite"
   }, React.createElement("h2", null, "Identity confirmed / rollout contained"), React.createElement("p", null, "The native Agent is authenticated, but Core has not enabled canary persistent-memory capability."), React.createElement("p", null, "Preferences, teaching, private queries, and initiatives stay unavailable. Location memory and travel greetings remain default-off.")), phase === "onboarding" && React.createElement("section", {
     className: "agent-card agent-warning",
+    ref: onboardingStatusRef,
+    tabIndex: "-1",
     role: "status",
     "aria-live": "polite"
   }, React.createElement("h2", null, onboarding?.state === "bound" ? "Identity confirmed / rollout contained" : onboarding?.state === "identity_confirmation_required" ? "Identity confirmation required" : onboarding?.state === "contained" ? "Identity is contained" : "Secure setup is still observing"), React.createElement("p", null, onboarding?.state === "bound" ? "Home Assistant sign-in and the semantic identity binding are confirmed, but this rollout mode does not authorize the full private Agent surface." : "Home Assistant sign-in succeeded. Core has not inferred a semantic identity or enabled either private location choice."), React.createElement("dl", {
     className: "agent-grid"
-  }, React.createElement("dt", null, "Rollout mode"), React.createElement("dd", null, onboarding?.rollout_mode || "unknown"), React.createElement("dt", null, "Minimum observation window"), React.createElement("dd", null, onboarding ? `${onboarding.phase2_observation_days_required} days` : "unknown"), React.createElement("dt", null, "Qualifying redacted-event threshold"), React.createElement("dd", null, onboarding ? onboarding.qualifying_redacted_envelopes_required : "unknown"), React.createElement("dt", null, "Gate ready"), React.createElement("dd", null, onboarding?.phase2_ready ? "yes" : "no")), onboarding?.state === "collecting_evidence" && React.createElement("p", null, "The seven-day, 500-event record-only gate cannot be skipped. Identity confirmation stays disabled until its reviewed evidence receipt is eligible."), onboarding?.state === "identity_confirmation_required" && React.createElement("p", null, "Reviewed People import and a private, explicit account-to-person confirmation are next. No mapping will be inferred from a name, device, or this session."), onboarding?.state === "contained" && React.createElement("p", null, "An existing binding is unavailable under governance or privacy policy. Core will not create a replacement automatically."), onboarding?.state === "bound" && React.createElement("p", null, "The identity binding remains usable for reviewed rollout work; preferences, teaching, and initiatives stay unavailable here until canary authorization."), React.createElement("p", null, "Location memory default: off. Travel greetings default: off."), React.createElement("p", null, "Exact activity counts, timestamps, and evidence content are intentionally omitted from this user-facing status."), React.createElement("code", null, onboarding?.phase2_blockers?.join(", ") || "no gate blockers")), phase === "ready" && React.createElement(React.Fragment, null, React.createElement("section", {
+  }, React.createElement("dt", null, "Rollout mode"), React.createElement("dd", null, onboarding?.rollout_mode || "unknown"), React.createElement("dt", null, "Minimum observation window"), React.createElement("dd", null, onboarding ? `${onboarding.phase2_observation_days_required} days` : "unknown"), React.createElement("dt", null, "Qualifying redacted-event threshold"), React.createElement("dd", null, onboarding ? onboarding.qualifying_redacted_envelopes_required : "unknown"), React.createElement("dt", null, "Gate ready"), React.createElement("dd", null, onboarding?.phase2_ready ? "yes" : "no")), onboarding?.state === "collecting_evidence" && React.createElement("p", null, "The seven-day, 500-event record-only gate cannot be skipped. Identity confirmation stays disabled until its reviewed evidence receipt is eligible."), onboarding?.state === "identity_confirmation_required" && React.createElement(React.Fragment, null, React.createElement("p", null, "Reviewed People import and a private, explicit account-to-person confirmation are next. No mapping will be inferred from a name, device, or this session."), React.createElement("div", {
+    className: "agent-binding-status",
+    ref: bindingStatusRef,
+    tabIndex: "-1",
+    "aria-live": "polite",
+    "aria-atomic": "true",
+    "aria-busy": bindingBusy
+  }, bindingProposal?.state === "not_requested" && React.createElement(React.Fragment, null, React.createElement("h3", null, "Identity review has not been requested"), React.createElement("p", null, "Request a private operator review. This sends no person choice from the browser and creates no binding."), React.createElement("button", {
+    disabled: bindingBusy,
+    onClick: requestPrincipalBinding
+  }, bindingBusy ? "Requesting review…" : "Request identity review")), bindingProposal?.state === "awaiting_operator_review" && React.createElement(React.Fragment, null, React.createElement("h3", null, "Awaiting private operator review"), React.createElement("p", null, "No identity is selected or bound yet. Return here after the reviewed candidate is staged."), React.createElement("p", null, "Review code ", React.createElement("code", null, bindingProposal.review_code)), React.createElement("button", {
+    disabled: bindingBusy,
+    onClick: cancelPrincipalBindingRequest
+  }, bindingBusy ? "Cancelling request…" : "Cancel identity review request")), bindingProposal?.state === "ready_for_confirmation" && React.createElement(React.Fragment, null, React.createElement("h3", null, "Confirm the reviewed identity"), React.createElement("p", {
+    id: "principal-binding-preview"
+  }, bindingProposal.confirmation_statement), React.createElement("dl", {
+    className: "agent-grid"
+  }, React.createElement("dt", null, "Confirmation expires"), React.createElement("dd", null, bindingProposal.expires_at || "unavailable")), React.createElement("p", null, "This confirmation binds only this signed-in account to the reviewed person. It does not enable either location choice."), React.createElement("button", {
+    disabled: bindingBusy,
+    "aria-describedby": "principal-binding-preview",
+    onClick: confirmPrincipalBinding
+  }, bindingBusy ? "Confirming identity…" : "Confirm this identity binding"), " ", React.createElement("button", {
+    disabled: bindingBusy,
+    onClick: cancelPrincipalBindingRequest
+  }, "Cancel identity review request")), bindingProposal?.state === "unavailable" && React.createElement(React.Fragment, null, React.createElement("h3", null, "Identity review unavailable"), React.createElement("p", null, "Core cannot safely offer or confirm a reviewed identity for this account. No replacement mapping will be inferred.")), !new Set(["not_requested", "awaiting_operator_review", "ready_for_confirmation", "unavailable"]).has(bindingProposal?.state) && React.createElement(React.Fragment, null, React.createElement("h3", null, "Identity review unavailable"), React.createElement("p", null, "The binding workflow failed closed because its status was not recognized.")))), onboarding?.state === "contained" && React.createElement("p", null, "An existing binding is unavailable under governance or privacy policy. Core will not create a replacement automatically."), onboarding?.state === "bound" && React.createElement("p", null, "The identity binding remains usable for reviewed rollout work; preferences, teaching, and initiatives stay unavailable here until canary authorization."), React.createElement("p", null, "Location memory default: off. Travel greetings default: off."), React.createElement("p", null, "Exact activity counts, timestamps, and evidence content are intentionally omitted from this user-facing status."), React.createElement("code", null, onboarding?.phase2_blockers?.join(", ") || "no gate blockers"), error && React.createElement("p", {
+    className: "agent-error",
+    role: "alert"
+  }, error)), phase === "ready" && React.createElement(React.Fragment, null, React.createElement("section", {
     className: "agent-card"
   }, React.createElement("h2", null, "Current snapshot"), React.createElement("dl", {
     className: "agent-grid"

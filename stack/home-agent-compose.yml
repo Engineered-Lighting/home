@@ -155,6 +155,8 @@ services:
         target: postgres_owner_password
       - source: postgres_api_password_provision
         target: postgres_api_password
+      - source: postgres_binding_operator_password_provision
+        target: postgres_binding_operator_password
       - source: postgres_ingest_password_provision
         target: postgres_ingest_password
       - source: postgres_worker_password_provision
@@ -211,12 +213,15 @@ services:
       <<: *core-environment
       HOME_AGENT_ROLE: api
       HOME_AGENT_KNOWLEDGE_ENCRYPTION_KEY_FILE: /run/secrets/knowledge_encryption_key
+      HOME_AGENT_OPERATOR_DATABASE_URL_FILE: /run/secrets/operator_database_url
       HOME_AGENT_SERVICE_TOKEN_FILE: /run/secrets/service_token
       HOME_AGENT_OPERATOR_TOKEN_FILE: /run/secrets/operator_token
       HOME_AGENT_BOOTSTRAP_TOKEN_FILE: /run/secrets/bootstrap_token
     secrets:
       - source: database_url_api_core_api
         target: database_url
+      - source: database_url_binding_operator_core_api
+        target: operator_database_url
       - source: knowledge_encryption_key_core_api
         target: knowledge_encryption_key
       - source: service_token_core_api
@@ -508,6 +513,7 @@ secrets:
   postgres_owner_password_postgres: {file: "${HOME_AGENT_SECRETS_DIR:?set secrets directory}/runtime/postgres/postgres_owner_password"}
   postgres_owner_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_owner_password"}
   postgres_api_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_api_password"}
+  postgres_binding_operator_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_binding_operator_password"}
   postgres_ingest_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_ingest_password"}
   postgres_worker_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_worker_password"}
   postgres_erasure_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_erasure_password"}
@@ -517,6 +523,7 @@ secrets:
   postgres_owner_password_grant: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/grant-runtime/postgres_owner_password"}
   database_url_owner_migrate: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/migrate/database_url"}
   database_url_api_core_api: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-api/database_url"}
+  database_url_binding_operator_core_api: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-api/operator_database_url"}
   knowledge_encryption_key_core_api: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-api/knowledge_encryption_key"}
   service_token_core_api: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-api/service_token"}
   operator_token_core_api: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-api/operator_token"}

@@ -17,9 +17,14 @@ function HomeAgentPanel() {
   const activeSubject = useRef(null);
   const authorityGeneration = useRef(0);
   const refreshGeneration = useRef(0);
+  const onboardingStatusRef = useRef(null);
+  const bindingStatusRef = useRef(null);
+  const bindingFocusPending = useRef(false);
   const [phase, setPhase] = useState("loading");
   const [session, setSession] = useState(null);
   const [onboarding, setOnboarding] = useState(null);
+  const [bindingProposal, setBindingProposal] = useState(null);
+  const [bindingBusy, setBindingBusy] = useState(false);
   const [snapshot, setSnapshot] = useState(null);
   const [initiatives, setInitiatives] = useState([]);
   const [claimedInitiative, setClaimedInitiative] = useState(null);
@@ -34,6 +39,8 @@ function HomeAgentPanel() {
   const clearPrincipalState = () => {
     authorityGeneration.current += 1;
     setOnboarding(null);
+    setBindingProposal(null);
+    setBindingBusy(false);
     setSnapshot(null);
     setInitiatives([]);
     setClaimedInitiative(null);
@@ -68,7 +75,10 @@ function HomeAgentPanel() {
       if (currentSession?.authenticated === true && !subject) {
         throw new Error("authenticated_session_missing_subject");
       }
-      if (activeSubject.current !== subject) clearPrincipalState();
+      if (activeSubject.current !== subject) {
+        bindingFocusPending.current = false;
+        clearPrincipalState();
+      }
       activeSubject.current = subject;
       setSession(currentSession);
       if (currentSession?.authenticated !== true) {
@@ -82,6 +92,12 @@ function HomeAgentPanel() {
         if (nextOnboarding?.state !== "bound" || nextOnboarding?.rollout_mode !== "canary") {
           clearPrincipalState();
           setOnboarding(nextOnboarding);
+          if (nextOnboarding?.state === "identity_confirmation_required") {
+            const ticket = beginPrincipalOperation();
+            const nextBindingProposal = await api.principalBindingProposal();
+            if (!isCurrent() || !principalOperationCurrent(ticket)) return;
+            setBindingProposal(nextBindingProposal);
+          }
           setPhase("onboarding");
           return;
         }
@@ -112,6 +128,7 @@ function HomeAgentPanel() {
         return;
       }
       setPhase("contained");
+      bindingFocusPending.current = false;
       setError(cause.message || "agent_unavailable");
     }
   };
@@ -128,6 +145,65 @@ function HomeAgentPanel() {
     }
     return () => { disposed = true; unlisten?.(); };
   }, []);
+
+  useEffect(() => {
+    if (!bindingFocusPending.current || phase !== "onboarding") return;
+    if (onboarding?.state === "identity_confirmation_required" && !bindingProposal?.state) return;
+    const target = bindingStatusRef.current || onboardingStatusRef.current;
+    if (!target) return;
+    bindingFocusPending.current = false;
+    target.focus();
+  }, [phase, onboarding?.state, bindingProposal?.state]);
+
+  const requestPrincipalBinding = async () => {
+    const ticket = beginPrincipalOperation();
+    setBindingBusy(true);
+    setError("");
+    try {
+      await api.requestPrincipalBinding();
+      if (!principalOperationCurrent(ticket)) return;
+      bindingFocusPending.current = true;
+      await refresh();
+    } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
+      setBindingBusy(false);
+      setError(cause.message || "principal_binding_request_failed");
+    }
+  };
+
+  const cancelPrincipalBindingRequest = async () => {
+    const ticket = beginPrincipalOperation();
+    setBindingBusy(true);
+    setError("");
+    try {
+      await api.cancelPrincipalBindingRequest();
+      if (!principalOperationCurrent(ticket)) return;
+      bindingFocusPending.current = true;
+      await refresh();
+    } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
+      setBindingBusy(false);
+      setError(cause.message || "principal_binding_cancel_failed");
+    }
+  };
+
+  const confirmPrincipalBinding = async () => {
+    const ticket = beginPrincipalOperation();
+    setBindingBusy(true);
+    setError("");
+    try {
+      if (!bindingProposal?.proposal_digest) throw new Error("binding_proposal_unavailable");
+      const confirmationNonce = window.crypto.randomUUID();
+      await api.confirmPrincipalBinding(bindingProposal.proposal_digest, confirmationNonce);
+      if (!principalOperationCurrent(ticket)) return;
+      bindingFocusPending.current = true;
+      await refresh();
+    } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
+      setBindingBusy(false);
+      setError(cause.message || "principal_binding_confirmation_failed");
+    }
+  };
 
   const propose = async () => {
     const ticket = beginPrincipalOperation();
@@ -251,6 +327,7 @@ function HomeAgentPanel() {
     // Invalidate every in-flight private result before contacting either
     // logout backend. A pending revocation must never leave private UI live.
     refreshGeneration.current += 1;
+    bindingFocusPending.current = false;
     clearPrincipalState();
     activeSubject.current = null;
     setSession(null);
@@ -331,7 +408,13 @@ function HomeAgentPanel() {
       )}
 
       {phase === "onboarding" && (
-        <section className="agent-card agent-warning" role="status" aria-live="polite">
+        <section
+          className="agent-card agent-warning"
+          ref={onboardingStatusRef}
+          tabIndex="-1"
+          role="status"
+          aria-live="polite"
+        >
           <h2>{onboarding?.state === "bound"
             ? "Identity confirmed / rollout contained"
             : onboarding?.state === "identity_confirmation_required"
@@ -356,7 +439,64 @@ function HomeAgentPanel() {
             <p>The seven-day, 500-event record-only gate cannot be skipped. Identity confirmation stays disabled until its reviewed evidence receipt is eligible.</p>
           )}
           {onboarding?.state === "identity_confirmation_required" && (
-            <p>Reviewed People import and a private, explicit account-to-person confirmation are next. No mapping will be inferred from a name, device, or this session.</p>
+            <>
+              <p>Reviewed People import and a private, explicit account-to-person confirmation are next. No mapping will be inferred from a name, device, or this session.</p>
+              <div
+                className="agent-binding-status"
+                ref={bindingStatusRef}
+                tabIndex="-1"
+                aria-live="polite"
+                aria-atomic="true"
+                aria-busy={bindingBusy}
+              >
+                {bindingProposal?.state === "not_requested" && <>
+                  <h3>Identity review has not been requested</h3>
+                  <p>Request a private operator review. This sends no person choice from the browser and creates no binding.</p>
+                  <button disabled={bindingBusy} onClick={requestPrincipalBinding}>
+                    {bindingBusy ? "Requesting review…" : "Request identity review"}
+                  </button>
+                </>}
+                {bindingProposal?.state === "awaiting_operator_review" && <>
+                  <h3>Awaiting private operator review</h3>
+                  <p>No identity is selected or bound yet. Return here after the reviewed candidate is staged.</p>
+                  <p>Review code <code>{bindingProposal.review_code}</code></p>
+                  <button disabled={bindingBusy} onClick={cancelPrincipalBindingRequest}>
+                    {bindingBusy ? "Cancelling request…" : "Cancel identity review request"}
+                  </button>
+                </>}
+                {bindingProposal?.state === "ready_for_confirmation" && <>
+                  <h3>Confirm the reviewed identity</h3>
+                  <p id="principal-binding-preview">{bindingProposal.confirmation_statement}</p>
+                  <dl className="agent-grid">
+                    <dt>Confirmation expires</dt><dd>{bindingProposal.expires_at || "unavailable"}</dd>
+                  </dl>
+                  <p>This confirmation binds only this signed-in account to the reviewed person. It does not enable either location choice.</p>
+                  <button
+                    disabled={bindingBusy}
+                    aria-describedby="principal-binding-preview"
+                    onClick={confirmPrincipalBinding}
+                  >
+                    {bindingBusy ? "Confirming identity…" : "Confirm this identity binding"}
+                  </button>{" "}
+                  <button disabled={bindingBusy} onClick={cancelPrincipalBindingRequest}>
+                    Cancel identity review request
+                  </button>
+                </>}
+                {bindingProposal?.state === "unavailable" && <>
+                  <h3>Identity review unavailable</h3>
+                  <p>Core cannot safely offer or confirm a reviewed identity for this account. No replacement mapping will be inferred.</p>
+                </>}
+                {!new Set([
+                  "not_requested",
+                  "awaiting_operator_review",
+                  "ready_for_confirmation",
+                  "unavailable",
+                ]).has(bindingProposal?.state) && <>
+                  <h3>Identity review unavailable</h3>
+                  <p>The binding workflow failed closed because its status was not recognized.</p>
+                </>}
+              </div>
+            </>
           )}
           {onboarding?.state === "contained" && (
             <p>An existing binding is unavailable under governance or privacy policy. Core will not create a replacement automatically.</p>
@@ -367,6 +507,7 @@ function HomeAgentPanel() {
           <p>Location memory default: off. Travel greetings default: off.</p>
           <p>Exact activity counts, timestamps, and evidence content are intentionally omitted from this user-facing status.</p>
           <code>{onboarding?.phase2_blockers?.join(", ") || "no gate blockers"}</code>
+          {error && <p className="agent-error" role="alert">{error}</p>}
         </section>
       )}
 

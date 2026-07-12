@@ -3,24 +3,25 @@ from __future__ import annotations
 import base64
 import os
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Literal
 
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
-from sqlalchemy import delete, insert, update
+from sqlalchemy import delete, insert, select, update
 
 from app import schema
 from app.config import Settings
 from app.db import Database
 from app.main import create_app
-from app.models import OnboardingStatusView
+from app.models import OnboardingStatusView, PersonCreate
 from app.phase2 import Phase2OnboardingReadiness
 from app.restore import RestoreGateStatus
 from app.rollout import RolloutAuthorizationStatus
 from app.spool import DisabledRuntimeSpool
 from app.store import CoreStore
+from tests.binding_helpers import complete_staged_principal_binding
 
 
 class CurrentRestoreGate:
@@ -321,56 +322,41 @@ async def test_postgres_onboarding_binding_status_fails_closed(
     store = CoreStore(database, DisabledRuntimeSpool(), settings)
     suffix = uuid.uuid4().hex
     ha_user_id = f"onboarding-{suffix}"
-    person_id = uuid.uuid4()
-    principal_id = uuid.uuid4()
-    binding_id = uuid.uuid4()
-    artifact_id = uuid.uuid4()
     block_id = uuid.uuid4()
     silent_directive_id = uuid.uuid4()
-    now = datetime.now(UTC)
+    person_id = None
+    principal_id = None
+    binding_id = None
+    artifact_id = None
     try:
         assert await store.onboarding_binding_status(ha_user_id) == "missing"
+        person = await store.create_person(
+            PersonCreate(display_name="Onboarding integration fixture")
+        )
+        bound = await complete_staged_principal_binding(
+            store,
+            ha_user_id=ha_user_id,
+            person_id=person.person_id,
+        )
+        person_id = bound.person_id
+        principal_id = bound.principal_id
         async with database.transaction() as connection:
-            await connection.execute(
-                insert(schema.people).values(
-                    person_id=person_id,
-                    display_name="Onboarding integration fixture",
-                    status="active",
-                    privacy_scope="private",
+            binding_row = (
+                (
+                    await connection.execute(
+                        select(
+                            schema.ha_user_bindings.c.binding_id,
+                            schema.ha_user_bindings.c.source_artifact_id,
+                        ).where(
+                            schema.ha_user_bindings.c.ha_user_id == ha_user_id
+                        )
+                    )
                 )
+                .mappings()
+                .one()
             )
-            await connection.execute(
-                insert(schema.principals).values(
-                    principal_id=principal_id,
-                    person_id=person_id,
-                    kind="ha_user",
-                    display_label="Onboarding integration fixture",
-                    status="active",
-                )
-            )
-            await connection.execute(
-                insert(schema.confirmation_artifacts).values(
-                    artifact_id=artifact_id,
-                    principal_id=principal_id,
-                    purpose="ha_user_person_binding.confirm",
-                    proposal_digest="a" * 64,
-                    client_nonce_sha256="b" * 64,
-                    issued_at=now,
-                    expires_at=now + timedelta(minutes=5),
-                    consumed_at=now,
-                )
-            )
-            await connection.execute(
-                insert(schema.ha_user_bindings).values(
-                    binding_id=binding_id,
-                    ha_user_id=ha_user_id,
-                    principal_id=principal_id,
-                    person_id=person_id,
-                    confirmed_by_principal_id=principal_id,
-                    confirmed_at=now,
-                    source_artifact_id=artifact_id,
-                )
-            )
+        binding_id = binding_row["binding_id"]
+        artifact_id = binding_row["source_artifact_id"]
 
         assert await store.onboarding_binding_status(ha_user_id) == "bound"
         async with database.transaction() as connection:
@@ -426,21 +412,24 @@ async def test_postgres_onboarding_binding_status_fails_closed(
                 )
             )
             await connection.execute(
-                delete(schema.ha_user_bindings).where(
-                    schema.ha_user_bindings.c.ha_user_id == ha_user_id
+                delete(schema.principal_binding_requests).where(
+                    schema.principal_binding_requests.c.ha_user_id == ha_user_id
                 )
             )
-            await connection.execute(
-                delete(schema.confirmation_artifacts).where(
-                    schema.confirmation_artifacts.c.artifact_id == artifact_id
+            if artifact_id is not None:
+                await connection.execute(
+                    delete(schema.confirmation_artifacts).where(
+                        schema.confirmation_artifacts.c.artifact_id == artifact_id
+                    )
                 )
-            )
-            await connection.execute(
-                delete(schema.principals).where(
-                    schema.principals.c.principal_id == principal_id
+            if principal_id is not None:
+                await connection.execute(
+                    delete(schema.principals).where(
+                        schema.principals.c.principal_id == principal_id
+                    )
                 )
-            )
-            await connection.execute(
-                delete(schema.people).where(schema.people.c.person_id == person_id)
-            )
+            if person_id is not None:
+                await connection.execute(
+                    delete(schema.people).where(schema.people.c.person_id == person_id)
+                )
         await database.close()

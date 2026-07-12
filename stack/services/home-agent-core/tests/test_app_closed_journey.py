@@ -23,11 +23,11 @@ from app.models import (
     PlaceCreate,
     PlaceLocatorInput,
     PreferenceUpdate,
-    PrincipalBindingCreate,
     SourceEntityBindingCreate,
 )
 from app.spool import EncryptedRuntimeSpool
 from app.store import CoreStore
+from tests.binding_helpers import complete_staged_principal_binding
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -155,14 +155,10 @@ async def test_app_closed_edge_restart_reconnect_and_core_replay_are_stable(
         person = await store.create_person(
             PersonCreate(display_name=f"App Closed {suffix}")
         )
-        await store.bind_principal(
-            ha_user_id,
-            PrincipalBindingCreate(
-                ha_user_id=ha_user_id,
-                person_id=person.person_id,
-                display_label="App Closed Principal",
-                confirmation_artifact_id=uuid.uuid4(),
-            ),
+        await complete_staged_principal_binding(
+            store,
+            ha_user_id=ha_user_id,
+            person_id=person.person_id,
         )
         principal = await store.resolve_principal(ha_user_id)
         await store.bind_source_entity(

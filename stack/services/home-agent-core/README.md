@@ -87,7 +87,7 @@ Production role separation uses the same image:
 - `all`: local integration/testing only.
 
 `/readyz` stays unavailable until the database reports migration
-`0002_people_privacy_cutover`.
+`0005_principal_binding_proposals`.
 
 ## MVP API contract
 
@@ -99,8 +99,10 @@ Edge:
 BFF browser semantic API:
 
 - `GET /v1/snapshot`
-- `POST /v1/people`
-- `POST /v1/principal-bindings`
+- `GET /v1/principal-binding-proposal`
+- `POST /v1/principal-binding-request`
+- `POST /v1/principal-binding-request/cancel`
+- `POST /v1/principal-binding-proposal/confirm`
 - `POST /v1/source-entity-bindings`
 - `POST /v1/people/legacy-role-labels`
 - `POST /v1/relationships/parent-confirmations`
@@ -118,6 +120,11 @@ BFF browser semantic API:
 - `POST /v1/facts/{id}/forget-preview`
 - `POST /v1/erasure-requests/{id}/confirm`
 - `GET /v1/erasure-requests/{id}`
+
+Operator-only identity review (never proxied through the BFF):
+
+- `GET /v1/operator/principal-binding-requests`
+- `POST /v1/operator/principal-binding-proposals`
 
 Private native-only API (requires the BFF-created
 `X-Home-Agent-Channel: private_tauri` attestation in addition to the service
@@ -216,11 +223,13 @@ An insufficient property anchor keeps its teaching transaction in
 encrypted-locator retention summary covered by its digest, but confirmation is
 blocked until the client obtains precise evidence and creates a fresh preview.
 
-The people-create, principal-binding, source-entity-binding, direct place, direct
-visit, and legacy-role import routes are not BFF routes. They require both the normal service bearer and
-`X-Home-Agent-Bootstrap: <HOME_AGENT_BOOTSTRAP_TOKEN>` from an offline
-operator/migration client. A BFF credential and arbitrary HA UUID cannot
-bootstrap identity authority.
+People creation, source-entity binding, direct place/visit creation, and legacy
+imports are not BFF routes. They require the appropriate reviewed offline
+operator/migration workflow. Direct principal binding no longer exists:
+authenticated subjects can only request, inspect, cancel, and confirm through
+the four exact BFF routes, while proposal staging uses the separate
+`home_agent_binding_operator` database role and is never BFF-routed. Neither a
+BFF credential nor an arbitrary HA UUID can bootstrap identity authority.
 
 Once a reviewed `device_tracker.*` binding, encrypted locality, and the two
 separate opt-ins exist, the ingest role projects a visit directly from two

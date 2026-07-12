@@ -1252,11 +1252,7 @@ def _read_secret(name: str) -> str:
 
 
 class HttpCoreClient:
-    def __init__(self, ha_user_id: str) -> None:
-        try:
-            self._ha_user_id = str(uuid.UUID(ha_user_id))
-        except (ValueError, TypeError, AttributeError) as error:
-            raise MigrationError("authenticated operator HA user UUID is invalid") from error
+    def __init__(self) -> None:
         self._core_base = os.environ.get(
             "HOME_AGENT_MIGRATION_CORE_URL", "http://127.0.0.1:8104"
         ).rstrip("/")
@@ -1400,8 +1396,7 @@ def main() -> int:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise MigrationError("apply review requires a private interactive TTY")
 
-    ha_user_id = input("Authenticated operator HA user UUID: ").strip()
-    client = HttpCoreClient(ha_user_id)
+    client = HttpCoreClient()
     preparation = prepare_apply(plan, client.capabilities())
     print(f"eligible_operations: {len(preparation.operations)}")
     print(f"blocked_people: {preparation.blocked_people}")

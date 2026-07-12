@@ -26,20 +26,53 @@ class Database:
         self,
         *,
         principal_id: uuid.UUID | None = None,
+        ha_user_id: str | None = None,
+        binding_operator: bool = False,
         serializable: bool = False,
     ) -> AsyncIterator[AsyncConnection]:
+        if binding_operator and (ha_user_id is not None or principal_id is not None):
+            raise ValueError(
+                "subject and binding-operator database scopes are mutually exclusive"
+            )
         async with self.engine.connect() as connection:
             if serializable:
                 connection = await connection.execution_options(
                     isolation_level="SERIALIZABLE"
                 )
             async with connection.begin():
+                if binding_operator:
+                    # Custom GUCs are caller-controlled and therefore cannot grant
+                    # operator authority.  session_user is the authenticated login
+                    # role and is not changed by SECURITY DEFINER functions.  The
+                    # owner exception exists only for migrations and integration
+                    # tests; production API configuration supplies the isolated
+                    # home_agent_binding_operator credential.
+                    session_user = (
+                        await connection.execute(text("SELECT session_user"))
+                    ).scalar_one()
+                    if session_user not in {
+                        "home_agent_binding_operator",
+                        "home_agent_owner",
+                    }:
+                        raise PermissionError(
+                            "database session is not the principal-binding operator"
+                        )
                 if principal_id is not None:
                     await connection.execute(
                         text(
                             "SELECT set_config('app.principal_id', :principal_id, true)"
                         ),
                         {"principal_id": str(principal_id)},
+                    )
+                if ha_user_id is not None:
+                    if (
+                        not 1 <= len(ha_user_id) <= 64
+                        or any(ord(character) < 32 for character in ha_user_id)
+                    ):
+                        raise ValueError("HA user ID is invalid for transaction scope")
+                    await connection.execute(
+                        text("SELECT set_config('app.ha_user_id', :ha_user_id, true)"),
+                        {"ha_user_id": ha_user_id},
                     )
                 yield connection
 

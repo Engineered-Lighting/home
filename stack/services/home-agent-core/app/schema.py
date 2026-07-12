@@ -8,6 +8,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     LargeBinary,
@@ -193,6 +194,9 @@ principals = Table(
     CheckConstraint(
         "kind IN ('ha_user','voice_unknown','service')", name="principal_kind"
     ),
+    UniqueConstraint(
+        "principal_id", "person_id", name="principal_person_identity"
+    ),
     schema="identity",
 )
 
@@ -231,7 +235,16 @@ ha_user_bindings = Table(
     "ha_user_bindings",
     metadata,
     Column("binding_id", UUID_PK, primary_key=True),
-    Column("ha_user_id", String(64), nullable=False, unique=True),
+    Column(
+        "proposal_id",
+        UUID_PK,
+        ForeignKey(
+            "identity.principal_binding_proposals.proposal_id", ondelete="CASCADE"
+        ),
+        nullable=False,
+        unique=True,
+    ),
+    Column("ha_user_id", String(64), nullable=False),
     Column(
         "principal_id",
         UUID_PK,
@@ -249,8 +262,179 @@ ha_user_bindings = Table(
     ),
     Column("confirmed_at", DateTime(timezone=True), nullable=False),
     Column("revoked_at", DateTime(timezone=True)),
-    Column("source_artifact_id", UUID_PK),
+    Column(
+        "source_artifact_id",
+        UUID_PK,
+        ForeignKey("identity.confirmation_artifacts.artifact_id"),
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "person_id"],
+        ["identity.principals.principal_id", "identity.principals.person_id"],
+        name="ha_binding_principal_person",
+    ),
+    CheckConstraint(
+        "confirmed_by_principal_id = principal_id",
+        name="ha_binding_self_confirmation",
+    ),
+    CheckConstraint(
+        "revoked_at IS NOT NULL OR source_artifact_id IS NOT NULL",
+        name="ha_binding_active_artifact",
+    ),
     schema="identity",
+)
+Index(
+    "uq_ha_user_bindings_active_ha_user",
+    ha_user_bindings.c.ha_user_id,
+    unique=True,
+    postgresql_where=ha_user_bindings.c.revoked_at.is_(None),
+)
+Index(
+    "uq_ha_user_bindings_active_person",
+    ha_user_bindings.c.person_id,
+    unique=True,
+    postgresql_where=ha_user_bindings.c.revoked_at.is_(None),
+)
+
+principal_binding_requests = Table(
+    "principal_binding_requests",
+    metadata,
+    Column("request_id", UUID_PK, primary_key=True),
+    Column("ha_user_id", String(64), nullable=False),
+    Column("review_code", String(16), nullable=False, unique=True),
+    Column("state", String(32), nullable=False, server_default="pending"),
+    Column("requested_at", DateTime(timezone=True), nullable=False, server_default=NOW),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("staged_at", DateTime(timezone=True)),
+    Column("closed_at", DateTime(timezone=True)),
+    UniqueConstraint(
+        "request_id", "ha_user_id", name="binding_request_user_identity"
+    ),
+    CheckConstraint(
+        "state IN ('pending','staged','consumed','cancelled','expired')",
+        name="binding_request_state",
+    ),
+    CheckConstraint(
+        "review_code ~ '^[A-HJ-NP-Z2-9]{16}$'",
+        name="binding_request_review_code",
+    ),
+    CheckConstraint(
+        "expires_at > requested_at AND "
+        "(staged_at IS NULL OR "
+        "(staged_at >= requested_at AND staged_at < expires_at)) AND "
+        "(closed_at IS NULL OR closed_at >= requested_at)",
+        name="binding_request_temporal_order",
+    ),
+    CheckConstraint(
+        "(state = 'pending' AND staged_at IS NULL AND closed_at IS NULL) OR "
+        "(state = 'staged' AND staged_at IS NOT NULL AND closed_at IS NULL) OR "
+        "(state = 'consumed' AND staged_at IS NOT NULL AND "
+        "closed_at IS NOT NULL AND closed_at <= expires_at) OR "
+        "(state = 'cancelled' AND closed_at IS NOT NULL) OR "
+        "(state = 'expired' AND closed_at IS NOT NULL AND closed_at >= expires_at)",
+        name="binding_request_state_shape",
+    ),
+    schema="identity",
+)
+Index(
+    "uq_principal_binding_requests_active_user",
+    principal_binding_requests.c.ha_user_id,
+    unique=True,
+    postgresql_where=principal_binding_requests.c.state.in_(("pending", "staged")),
+)
+
+principal_binding_proposals = Table(
+    "principal_binding_proposals",
+    metadata,
+    Column("proposal_id", UUID_PK, primary_key=True),
+    Column("operator_request_id", UUID_PK, nullable=False, unique=True),
+    Column(
+        "request_id",
+        UUID_PK,
+        ForeignKey(
+            "identity.principal_binding_requests.request_id", ondelete="CASCADE"
+        ),
+        nullable=False,
+    ),
+    Column("ha_user_id", String(64), nullable=False),
+    Column(
+        "person_id",
+        UUID_PK,
+        ForeignKey("identity.people.person_id"),
+        nullable=False,
+    ),
+    Column("reviewed_display_label", String(255), nullable=False),
+    Column("person_snapshot_digest", String(64), nullable=False),
+    Column("proposal_digest", String(64), nullable=False, unique=True),
+    Column("state", String(32), nullable=False, server_default="ready"),
+    Column("stage_receipt_digest", String(64), nullable=False),
+    Column("staged_at", DateTime(timezone=True), nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("consumed_at", DateTime(timezone=True)),
+    Column(
+        "result_principal_id",
+        UUID_PK,
+        ForeignKey("identity.principals.principal_id"),
+    ),
+    Column(
+        "confirmation_artifact_id",
+        UUID_PK,
+        ForeignKey("identity.confirmation_artifacts.artifact_id"),
+    ),
+    UniqueConstraint("request_id", name="binding_proposal_request_once"),
+    UniqueConstraint(
+        "confirmation_artifact_id", name="binding_proposal_confirmation_once"
+    ),
+    ForeignKeyConstraint(
+        ["request_id", "ha_user_id"],
+        [
+            "identity.principal_binding_requests.request_id",
+            "identity.principal_binding_requests.ha_user_id",
+        ],
+        name="binding_proposal_request_user",
+        ondelete="CASCADE",
+    ),
+    CheckConstraint(
+        "proposal_digest ~ '^[0-9a-f]{64}$' AND "
+        "person_snapshot_digest ~ '^[0-9a-f]{64}$' AND "
+        "stage_receipt_digest ~ '^[0-9a-f]{64}$'",
+        name="binding_proposal_digests",
+    ),
+    CheckConstraint(
+        "btrim(reviewed_display_label) <> ''",
+        name="binding_proposal_reviewed_label",
+    ),
+    CheckConstraint(
+        "state IN ('ready','consumed','cancelled','expired')",
+        name="binding_proposal_state",
+    ),
+    CheckConstraint(
+        "expires_at > staged_at AND "
+        "(consumed_at IS NULL OR "
+        "(consumed_at >= staged_at AND consumed_at <= expires_at))",
+        name="binding_proposal_temporal_order",
+    ),
+    CheckConstraint(
+        "(state = 'ready' AND consumed_at IS NULL AND "
+        "result_principal_id IS NULL AND confirmation_artifact_id IS NULL) OR "
+        "(state = 'consumed' AND consumed_at IS NOT NULL AND "
+        "result_principal_id IS NOT NULL AND confirmation_artifact_id IS NOT NULL) OR "
+        "(state IN ('cancelled','expired') AND consumed_at IS NULL AND "
+        "result_principal_id IS NULL AND confirmation_artifact_id IS NULL)",
+        name="binding_proposal_state_shape",
+    ),
+    schema="identity",
+)
+Index(
+    "uq_principal_binding_proposals_ready_user",
+    principal_binding_proposals.c.ha_user_id,
+    unique=True,
+    postgresql_where=principal_binding_proposals.c.state == "ready",
+)
+Index(
+    "uq_principal_binding_proposals_ready_person",
+    principal_binding_proposals.c.person_id,
+    unique=True,
+    postgresql_where=principal_binding_proposals.c.state == "ready",
 )
 
 source_entity_bindings = Table(

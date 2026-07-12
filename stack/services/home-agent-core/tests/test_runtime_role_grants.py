@@ -50,6 +50,9 @@ async def test_ingest_readiness_conflict_depart_and_erasure_restore_grants(
     initiative_id = uuid.uuid4()
     privacy_directive_id = uuid.uuid4()
     ha_binding_id = uuid.uuid4()
+    binding_request_id = uuid.uuid4()
+    binding_proposal_id = uuid.uuid4()
+    binding_artifact_id = uuid.uuid4()
     ha_user_id = f"role-grant-user-{uuid.uuid4()}"
     worker_request_id = uuid.uuid4()
     worker_fact_id = uuid.uuid4()
@@ -87,13 +90,58 @@ async def test_ingest_readiness_conflict_depart_and_erasure_restore_grants(
                 )
             )
             await connection.execute(
+                insert(schema.confirmation_artifacts).values(
+                    artifact_id=binding_artifact_id,
+                    principal_id=principal_id,
+                    purpose="ha_user_person_binding.confirm",
+                    proposal_digest="c" * 64,
+                    client_nonce_sha256="d" * 64,
+                    issued_at=now,
+                    expires_at=now + timedelta(minutes=5),
+                    consumed_at=now,
+                )
+            )
+            await connection.execute(
+                insert(schema.principal_binding_requests).values(
+                    request_id=binding_request_id,
+                    ha_user_id=ha_user_id,
+                    review_code="ABCDEFGHJKLMNPQ2",
+                    state="consumed",
+                    requested_at=now - timedelta(minutes=1),
+                    expires_at=now + timedelta(minutes=5),
+                    staged_at=now,
+                    closed_at=now,
+                )
+            )
+            await connection.execute(
+                insert(schema.principal_binding_proposals).values(
+                    proposal_id=binding_proposal_id,
+                    operator_request_id=uuid.uuid4(),
+                    request_id=binding_request_id,
+                    ha_user_id=ha_user_id,
+                    person_id=person_id,
+                    reviewed_display_label="Role Grant Person",
+                    person_snapshot_digest="e" * 64,
+                    proposal_digest="c" * 64,
+                    state="consumed",
+                    stage_receipt_digest="f" * 64,
+                    staged_at=now,
+                    expires_at=now + timedelta(minutes=5),
+                    consumed_at=now,
+                    result_principal_id=principal_id,
+                    confirmation_artifact_id=binding_artifact_id,
+                )
+            )
+            await connection.execute(
                 insert(schema.ha_user_bindings).values(
                     binding_id=ha_binding_id,
+                    proposal_id=binding_proposal_id,
                     ha_user_id=ha_user_id,
                     principal_id=principal_id,
                     person_id=person_id,
                     confirmed_by_principal_id=principal_id,
                     confirmed_at=now,
+                    source_artifact_id=binding_artifact_id,
                 )
             )
             await connection.execute(
@@ -394,6 +442,18 @@ async def test_ingest_readiness_conflict_depart_and_erasure_restore_grants(
             await connection.execute(
                 delete(schema.ha_user_bindings).where(
                     schema.ha_user_bindings.c.binding_id == ha_binding_id
+                )
+            )
+            await connection.execute(
+                delete(schema.principal_binding_requests).where(
+                    schema.principal_binding_requests.c.request_id
+                    == binding_request_id
+                )
+            )
+            await connection.execute(
+                delete(schema.confirmation_artifacts).where(
+                    schema.confirmation_artifacts.c.artifact_id
+                    == binding_artifact_id
                 )
             )
             await connection.execute(

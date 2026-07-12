@@ -14,6 +14,7 @@ import {
   createBff,
   isAllowedOrigin,
   nativeRouteAllowed,
+  normalizePrincipalBindingBody,
   parseCookies,
   randomToken,
   routeAllowed,
@@ -257,6 +258,14 @@ test("semantic route allowlist excludes generic proxying", () => {
 
   assert.equal(routeAllowed("GET", "/api/agent/v1/onboarding/status"), true);
   assert.equal(routeAllowed("POST", "/api/agent/v1/onboarding/status"), false);
+  assert.equal(routeAllowed("GET", "/api/agent/v1/principal-binding-proposal"), true);
+  assert.equal(routeAllowed("POST", "/api/agent/v1/principal-binding-proposal"), false);
+  assert.equal(routeAllowed("POST", "/api/agent/v1/principal-binding-request"), true);
+  assert.equal(routeAllowed("GET", "/api/agent/v1/principal-binding-request"), false);
+  assert.equal(routeAllowed("POST", "/api/agent/v1/principal-binding-request/cancel"), true);
+  assert.equal(routeAllowed("POST", "/api/agent/v1/principal-binding-proposal/confirm"), true);
+  assert.equal(routeAllowed("POST", "/api/agent/v1/principal-bindings"), false);
+  assert.equal(routeAllowed("GET", "/api/agent/v1/people"), false);
   assert.equal(routeAllowed("GET", "/api/agent/v1/snapshot"), true);
   assert.equal(routeAllowed("GET", "/api/agent/v1/initiatives"), false);
   assert.equal(routeAllowed("POST", "/api/agent/v1/memory-transactions"), true);
@@ -287,10 +296,54 @@ test("semantic route allowlist excludes generic proxying", () => {
   assert.equal(nativeRouteAllowed("POST", "/api/agent/native/v1/memory-transactions"), true);
   assert.equal(nativeRouteAllowed("POST", "/api/agent/native/v1/places"), false);
   assert.equal(nativeRouteAllowed("POST", "/api/agent/native/v1/relationships/parent-confirmations"), false);
+  assert.equal(nativeRouteAllowed("GET", "/api/agent/native/v1/principal-binding-proposal"), false);
+  assert.equal(nativeRouteAllowed("POST", "/api/agent/native/v1/principal-binding-request"), false);
+  assert.equal(nativeRouteAllowed("POST", "/api/agent/native/v1/principal-binding-proposal/confirm"), false);
   assert.equal(nativeRouteAllowed("POST", "/api/agent/native/v1/operator-rollout/authorizations/shadow"), false);
   assert.equal(nativeRouteAllowed("POST", "/api/agent/native/v1/forget-preview"), false);
   assert.equal(nativeRouteAllowed("GET", "/api/agent/native/v1/erasure-requests/01900000-0000-7000-8000-000000000000"), false);
   assert.equal(nativeRouteAllowed("GET", "/api/agent/native/v1/memory-transactions/------------------------------------"), false);
+});
+
+test("principal binding bodies contain no browser-supplied identity authority", () => {
+  const empty = Buffer.from("{}");
+  assert.equal(
+    normalizePrincipalBindingBody("/api/agent/v1/principal-binding-request", empty).toString(),
+    "{}",
+  );
+  assert.equal(
+    normalizePrincipalBindingBody("/api/agent/v1/principal-binding-request/cancel", empty).toString(),
+    "{}",
+  );
+  const digest = "a".repeat(64);
+  const nonce = "018f6f42-3a8b-4c11-8123-123456789abc";
+  assert.deepEqual(
+    JSON.parse(normalizePrincipalBindingBody(
+      "/api/agent/v1/principal-binding-proposal/confirm",
+      Buffer.from(JSON.stringify({ proposal_digest: digest, confirmation_nonce: nonce })),
+    ).toString()),
+    { proposal_digest: digest, confirmation_nonce: nonce },
+  );
+  for (const [path, value] of [
+    ["/api/agent/v1/principal-binding-request", { person_id: "forged" }],
+    ["/api/agent/v1/principal-binding-request/cancel", { ha_user_id: "forged" }],
+    ["/api/agent/v1/principal-binding-proposal/confirm", {
+      proposal_digest: digest,
+      confirmation_nonce: nonce,
+      actor_id: "forged",
+    }],
+    ["/api/agent/v1/principal-binding-proposal/confirm", {
+      proposal_digest: "not-a-digest",
+      confirmation_nonce: nonce,
+    }],
+    ["/api/agent/v1/principal-binding-proposal/confirm", {
+      proposal_digest: [digest],
+      confirmation_nonce: [nonce],
+    }],
+  ]) assert.throws(
+    () => normalizePrincipalBindingBody(path, Buffer.from(JSON.stringify(value))),
+    /principal binding/i,
+  );
 });
 
 test("Core responses are byte-bounded before BFF Buffer copies", async () => {
@@ -926,6 +979,218 @@ test("BFF constructs trusted upstream headers instead of forwarding actor header
   assert.equal(observed.init.headers["X-Home-Agent-Principal"], undefined);
   assert.equal(observed.init.headers["X-Home-Agent-Admin"], undefined);
   assert.equal(observed.init.headers["X-Home-Agent-Channel"], undefined);
+});
+
+test("every binding operation force-revalidates HA and reconstructs authority headers", async () => {
+  const config = configured({ principalRevalidateMs: 24 * 60 * 60_000 });
+  const store = new SessionStore(config);
+  const session = store.createSession({
+    principal: { userId: "confirmed-ha-user", isAdmin: false, isActive: true },
+    accessToken: "fresh-check-access-token",
+    refreshToken: "fresh-check-refresh-token",
+    expiresIn: 3600,
+  });
+  let whoamiCalls = 0;
+  let coreCalls = 0;
+  const digest = "a".repeat(64);
+  const nonce = "018f6f42-3a8b-4c11-8123-123456789abc";
+  const fetchImpl = async (url, init = {}) => {
+    if (String(url).endsWith("/api/home_agent_edge/whoami")) {
+      whoamiCalls += 1;
+      assert.equal(init.headers.get("authorization"), "Bearer fresh-check-access-token");
+      return new Response(JSON.stringify({
+        user_id: "confirmed-ha-user", is_admin: false, is_active: true,
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    const expectedCorePaths = [
+      "/v1/principal-binding-proposal",
+      "/v1/principal-binding-request",
+      "/v1/principal-binding-request/cancel",
+      "/v1/principal-binding-proposal/confirm",
+    ];
+    assert.equal(String(url), `http://core.internal:8096${expectedCorePaths[coreCalls]}`);
+    coreCalls += 1;
+    assert.equal(init.headers["X-Authenticated-HA-User"], "confirmed-ha-user");
+    assert.equal(init.headers["X-Home-Agent-Principal"], undefined);
+    assert.equal(init.headers["X-Authenticated-Person"], undefined);
+    if (coreCalls === 1) assert.equal(init.body, undefined);
+    else if (coreCalls < 4) assert.deepEqual(JSON.parse(init.body.toString()), {});
+    else assert.deepEqual(JSON.parse(init.body.toString()), {
+        proposal_digest: digest,
+        confirmation_nonce: nonce,
+      });
+    return new Response('{"state":"bound"}', {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const base = await listen(createBff(config, { fetchImpl, store }));
+  const sharedHeaders = {
+    cookie: `${COOKIE_NAME}=${session.id}`,
+    origin: "https://home.test",
+    "x-csrf-token": session.csrf,
+    "content-type": "application/json",
+  };
+  const proposal = await fetch(`${base}/api/agent/v1/principal-binding-proposal`, {
+    headers: { cookie: sharedHeaders.cookie },
+  });
+  assert.equal(proposal.status, 200);
+  for (const path of ["principal-binding-request", "principal-binding-request/cancel"]) {
+    const response = await fetch(`${base}/api/agent/v1/${path}`, {
+      method: "POST", headers: sharedHeaders, body: "{}",
+    });
+    assert.equal(response.status, 200);
+  }
+  const response = await fetch(`${base}/api/agent/v1/principal-binding-proposal/confirm`, {
+    method: "POST",
+    headers: {
+      ...sharedHeaders,
+      "x-authenticated-ha-user": "forged-ha-user",
+      "x-home-agent-principal": "forged-principal",
+      "x-authenticated-person": "forged-person",
+    },
+    body: JSON.stringify({ proposal_digest: digest, confirmation_nonce: nonce }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal(whoamiCalls, 4, "a recent session receives a fresh check for every binding operation");
+  assert.equal(coreCalls, 4);
+});
+
+test("changed or revoked HA users fail every binding operation before Core", async () => {
+  const config = configured({ principalRevalidateMs: 24 * 60 * 60_000 });
+  const store = new SessionStore(config);
+  const operations = [
+    ["GET", "principal-binding-proposal"],
+    ["POST", "principal-binding-request"],
+    ["POST", "principal-binding-request/cancel"],
+    ["POST", "principal-binding-proposal/confirm"],
+  ];
+  const attempts = [];
+  for (const kind of ["changed", "revoked"]) {
+    for (let index = 0; index < operations.length; index += 1) {
+      const userId = `${kind}-binding-user-${index}`;
+      attempts.push({
+        kind,
+        userId,
+        operation: operations[index],
+        session: store.createSession({
+          principal: { userId, isAdmin: false, isActive: true },
+          accessToken: `${userId}-access`,
+          refreshToken: `${userId}-refresh`,
+          expiresIn: 3600,
+        }),
+      });
+    }
+  }
+  let coreCalls = 0;
+  let whoamiCalls = 0;
+  const fetchImpl = async (url, init = {}) => {
+    if (String(url).endsWith("/api/home_agent_edge/whoami")) {
+      whoamiCalls += 1;
+      const authorization = init.headers.get("authorization");
+      const attempt = attempts.find(({ userId }) => authorization === `Bearer ${userId}-access`);
+      assert.ok(attempt);
+      if (attempt.kind === "changed") {
+        return new Response(JSON.stringify({
+          user_id: "different-user", is_admin: false, is_active: true,
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({
+        user_id: attempt.userId, is_admin: false, is_active: false,
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    coreCalls += 1;
+    return new Response("{}", { status: 200 });
+  };
+  const base = await listen(createBff(config, { fetchImpl, store }));
+  for (const { operation: [method, path], session } of attempts) {
+    const headers = { cookie: `${COOKIE_NAME}=${session.id}` };
+    let body;
+    if (method === "POST") {
+      headers.origin = "https://home.test";
+      headers["x-csrf-token"] = session.csrf;
+      headers["content-type"] = "application/json";
+      body = path.endsWith("/confirm")
+        ? JSON.stringify({
+          proposal_digest: "b".repeat(64),
+          confirmation_nonce: crypto.randomUUID(),
+        })
+        : "{}";
+    }
+    const response = await fetch(`${base}/api/agent/v1/${path}`, { method, headers, body });
+    assert.equal(response.status, 401);
+    assert.equal((await response.json()).error, "authentication_revoked");
+  }
+  assert.equal(whoamiCalls, attempts.length);
+  assert.equal(coreCalls, 0);
+});
+
+test("binding routes reject query variants, wrong methods, CSRF, and forged identity bodies", async () => {
+  const config = configured({ principalRevalidateMs: 24 * 60 * 60_000 });
+  const store = new SessionStore(config);
+  const session = store.createSession({
+    principal: { userId: "binding-user", isAdmin: false, isActive: true },
+    accessToken: "binding-user-access",
+    refreshToken: "binding-user-refresh",
+    expiresIn: 3600,
+  });
+  let whoamiCalls = 0;
+  let coreCalls = 0;
+  const fetchImpl = async (url) => {
+    if (String(url).endsWith("/api/home_agent_edge/whoami")) {
+      whoamiCalls += 1;
+      return new Response(JSON.stringify({
+        user_id: "binding-user", is_admin: false, is_active: true,
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    coreCalls += 1;
+    return new Response("{}", { status: 200 });
+  };
+  const base = await listen(createBff(config, { fetchImpl, store }));
+  const common = {
+    cookie: `${COOKIE_NAME}=${session.id}`,
+    origin: "https://home.test",
+    "x-csrf-token": session.csrf,
+    "content-type": "application/json",
+  };
+  const denied = [
+    await fetch(`${base}/api/agent/v1/principal-binding-proposal?person_id=forged`, {
+      headers: { cookie: common.cookie },
+    }),
+    await fetch(`${base}/api/agent/v1/principal-binding-proposal/confirm`, {
+      headers: { cookie: common.cookie },
+    }),
+    await fetch(`${base}/api/agent/v1/principal-binding-request`, {
+      method: "POST", headers: { ...common, origin: "https://evil.test" }, body: "{}",
+    }),
+    await fetch(`${base}/api/agent/v1/principal-binding-proposal/confirm`, {
+      method: "POST",
+      headers: { ...common, "x-csrf-token": "forged-csrf" },
+      body: JSON.stringify({
+        proposal_digest: "c".repeat(64), confirmation_nonce: crypto.randomUUID(),
+      }),
+    }),
+  ];
+  assert.deepEqual(denied.map((response) => response.status), [404, 404, 403, 403]);
+  assert.equal(whoamiCalls, 0, "invalid routes and same-origin proof cannot trigger fresh checks");
+
+  for (const [path, body] of [
+    ["principal-binding-request", { person_id: "forged-person" }],
+    ["principal-binding-request/cancel", { ha_user_id: "forged-user" }],
+    ["principal-binding-proposal/confirm", {
+      proposal_digest: "d".repeat(64),
+      confirmation_nonce: crypto.randomUUID(),
+      actor_id: "forged-actor",
+    }],
+  ]) {
+    const response = await fetch(`${base}/api/agent/v1/${path}`, {
+      method: "POST", headers: common, body: JSON.stringify(body),
+    });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error, "invalid_request_body");
+  }
+  assert.equal(whoamiCalls, 3, "each exact binding write reaches fresh whoami before body handling");
+  assert.equal(coreCalls, 0, "forged identities never reach Core");
 });
 
 test("native Agent routes authenticate the HA bearer and expose only typed private queries", async () => {

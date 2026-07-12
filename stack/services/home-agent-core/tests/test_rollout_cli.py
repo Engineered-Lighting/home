@@ -119,7 +119,7 @@ async def test_one_shot_checks_migration_restore_and_disk_before_receipt(
 
         async def migration_revision(self):
             events.append("migration")
-            return "0004_rollout_authorizations"
+            return "0005_principal_binding_proposals"
 
         async def close(self):
             events.append("close")

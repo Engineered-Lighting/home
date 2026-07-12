@@ -37,6 +37,10 @@ def settings_for(
     tmp_path, mode: str, *, policy_digest: str = POLICY_DIGEST
 ) -> Settings:
     knowledge_key = base64.urlsafe_b64encode(b"k" * 32).decode().rstrip("=")
+    operator_url = (
+        "postgresql+psycopg://home_agent_binding_operator:"
+        f"{'d' * 64}@postgres:5432/home_agent"
+    )
     return Settings(
         database_url=SecretStr(
             os.getenv(
@@ -44,6 +48,7 @@ def settings_for(
                 "postgresql+psycopg://unused:unused@127.0.0.1:1/unused",
             )
         ),
+        operator_database_url=SecretStr(operator_url),
         runtime_spool_path=tmp_path / "runtime.sqlite",
         storage_monitor_path=tmp_path,
         knowledge_encryption_key=SecretStr(knowledge_key),
@@ -101,6 +106,11 @@ def settings_for_role(tmp_path, role: str, mode: str) -> Settings:
                     "bootstrap-token-with-at-least-32-chars"
                 ),
             }
+        )
+    if role == "api":
+        common["operator_database_url"] = SecretStr(
+            "postgresql+psycopg://home_agent_binding_operator:"
+            f"{'d' * 64}@postgres:5432/home_agent"
         )
     return Settings(**common)
 

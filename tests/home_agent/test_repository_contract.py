@@ -140,6 +140,10 @@ class RepositoryBoundaryTests(unittest.TestCase):
         api = read("stack/services/home-agent-core/app/api.py")
         for route in (
             "/onboarding/status",
+            "/principal-binding-proposal",
+            "/principal-binding-request",
+            "/principal-binding-request/cancel",
+            "/principal-binding-proposal/confirm",
             "/snapshot",
             "/memory-transactions",
             "/memory-transactions/{transaction_id}/confirm",
@@ -154,6 +158,15 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertIn("onboarding\\/status", browser_routes)
         self.assertNotIn("onboarding\\/status", native_routes)
         self.assertIn("onboarding\\/status", origin)
+        for route in (
+            "principal-binding-proposal",
+            "principal-binding-request",
+        ):
+            self.assertIn(route, browser_routes)
+            self.assertIn(route, origin)
+            self.assertNotIn(route, native_routes)
+        self.assertNotIn("principal-bindings", browser_routes)
+        self.assertNotIn("principal-bindings", origin)
         self.assertNotIn("v1\\/initiatives", browser_routes)
         self.assertIn("v1\\/initiatives", native_routes)
         self.assertIn("X-Home-Agent-Channel", bff)
@@ -162,6 +175,24 @@ class RepositoryBoundaryTests(unittest.TestCase):
         client = read("app/src/home-agent/api.js")
         panel = read("app/src/home-agent/panel.jsx")
         self.assertIn("onboardingStatus", client)
+        for operation in (
+            "principalBindingProposal",
+            "requestPrincipalBinding",
+            "cancelPrincipalBindingRequest",
+            "confirmPrincipalBinding",
+        ):
+            self.assertIn(operation, client)
+        self.assertIn(
+            'id="principal-binding-preview">'
+            "{bindingProposal.confirmation_statement}</p>",
+            panel,
+        )
+        self.assertIn(
+            "Review code <code>{bindingProposal.review_code}</code>", panel
+        )
+        self.assertIn("window.crypto.randomUUID()", panel)
+        self.assertNotIn("/api/agent/v1/people", client)
+        self.assertNotIn("/api/agent/v1/principal-bindings", client)
         self.assertIn("seven-day, 500-event record-only gate", panel)
         self.assertIn("Location memory default: off. Travel greetings default: off.", panel)
         self.assertIn('nextOnboarding?.rollout_mode !== "canary"', panel)
@@ -356,7 +387,7 @@ class RepositoryBoundaryTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, rollout_block)
         self.assertIn(
-            "HOME_AGENT_EXPECTED_DB_REVISION=0004_rollout_authorizations",
+            "HOME_AGENT_EXPECTED_DB_REVISION=0005_principal_binding_proposals",
             read("stack/home-agent.env.example"),
         )
         migration = read(

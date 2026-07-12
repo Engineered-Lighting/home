@@ -63,6 +63,17 @@ async function behaviorTest() {
   await api.explainDescriptor("01900000-0000-7000-8000-000000000002");
   await api.queryParentPresence("01900000-0000-7000-8000-000000000002");
   await api.setPreference("location_memory", true);
+  for (const operation of [
+    () => api.principalBindingProposal(),
+    () => api.requestPrincipalBinding(),
+    () => api.cancelPrincipalBindingRequest(),
+    () => api.confirmPrincipalBinding("a".repeat(64), "00000000-0000-4000-8000-000000000000"),
+  ]) {
+    let rejected = false;
+    try { await operation(); }
+    catch (error) { rejected = error.message === "native_principal_binding_unavailable"; }
+    assert("native client rejects browser-only principal binding authority", rejected);
+  }
   await api.returnHome();
   assert("native webview uses typed Rust invokes and never fetch", calls.map((item) => item.command).join(",") === [
     "native_auth_status",
@@ -79,6 +90,63 @@ async function behaviorTest() {
   assert("native client exposes only typed initiative/place queries and no generic mutation",
     ["initiatives", "claimInitiative", "explainDescriptor", "queryParentPresence"].every((name) => methods.includes(name)) &&
     !methods.some((name) => /(createPlace|confirmParent|generic)/i.test(name)), methods);
+}
+
+async function browserBindingBehaviorTest() {
+  const calls = [];
+  const responses = new Map([
+    ["/api/agent/auth/session", { authenticated: true, user_id: "opaque-subject", csrf_token: "csrf" }],
+    ["/api/agent/v1/principal-binding-proposal", { state: "not_requested" }],
+    ["/api/agent/v1/principal-binding-request", { state: "awaiting_operator_review" }],
+    ["/api/agent/v1/principal-binding-request/cancel", { state: "not_requested" }],
+    ["/api/agent/v1/principal-binding-proposal/confirm", { state: "bound" }],
+  ]);
+  const window = {
+    location: { assign: () => { throw new Error("binding API attempted navigation"); } },
+    crypto: { randomUUID: () => "00000000-0000-4000-8000-000000000000" },
+  };
+  const context = vm.createContext({
+    window,
+    globalThis: window,
+    fetch: async (url, init) => {
+      calls.push({ url, init });
+      return { ok: true, status: 200, json: async () => responses.get(url) || {} };
+    },
+    URL,
+    Error,
+    String,
+    Number,
+    Boolean,
+    Promise,
+  });
+  vm.runInContext(read("app/src/home-agent/api.js"), context, { filename: "api-browser.js" });
+  const api = new window.HomeAgentApi();
+  await api.session();
+  await api.principalBindingProposal();
+  await api.requestPrincipalBinding();
+  await api.cancelPrincipalBindingRequest();
+  await api.confirmPrincipalBinding(
+    "a".repeat(64),
+    "018f6f42-3a8b-4c11-8123-123456789abc",
+  );
+  assert("browser binding API uses only the four exact semantic routes",
+    calls.map(({ url }) => url).join(",") === [
+      "/api/agent/auth/session",
+      "/api/agent/v1/principal-binding-proposal",
+      "/api/agent/v1/principal-binding-request",
+      "/api/agent/v1/principal-binding-request/cancel",
+      "/api/agent/v1/principal-binding-proposal/confirm",
+    ].join(","), calls);
+  const writes = calls.slice(2);
+  assert("browser binding writes carry CSRF and no client-supplied identity IDs",
+    writes.every(({ init }) => init.method === "POST" && init.headers["X-CSRF-Token"] === "csrf") &&
+    writes[0].init.body === "{}" &&
+    writes[1].init.body === "{}" &&
+    JSON.stringify(JSON.parse(writes[2].init.body)) === JSON.stringify({
+      proposal_digest: "a".repeat(64),
+      confirmation_nonce: "018f6f42-3a8b-4c11-8123-123456789abc",
+    }) &&
+    !writes.some(({ init }) => /(person_id|ha_user_id|actor_id|principal_id)/.test(init.body)), writes);
 }
 
 function principalOperationBoundaryTest() {
@@ -101,6 +169,9 @@ function principalOperationBoundaryTest() {
     result.signedOut === false, result);
 
   const handlers = [
+    "requestPrincipalBinding",
+    "cancelPrincipalBindingRequest",
+    "confirmPrincipalBinding",
     "propose",
     "confirm",
     "setPreference",
@@ -173,6 +244,8 @@ function principalOperationBoundaryTest() {
   assert("logout and account changes clear every principal-private panel state",
     [
       "setOnboarding(null)",
+      "setBindingProposal(null)",
+      "setBindingBusy(false)",
       "setSnapshot(null)",
       "setInitiatives([])",
       "setClaimedInitiative(null)",
@@ -187,8 +260,16 @@ function principalOperationBoundaryTest() {
   assert("native panel remains contained without explicit canary memory capability",
     agentPanel.includes('nextSnapshot?.capabilities?.persistent_memory !== "enabled"') &&
     agentPanel.includes('setPhase("native_contained")'));
+  assert("browser identity preview is fixed, explicit, and keeps location choices off",
+    agentPanel.includes('id="principal-binding-preview">{bindingProposal.confirmation_statement}</p>') &&
+    agentPanel.includes("Review code <code>{bindingProposal.review_code}</code>") &&
+    agentPanel.includes("Location memory default: off. Travel greetings default: off.") &&
+    agentPanel.includes("window.crypto.randomUUID()") &&
+    !read("app/src/home-agent/api.js").includes("/api/agent/v1/people") &&
+    !read("app/src/home-agent/api.js").includes("/api/agent/v1/principal-bindings"));
   principalOperationBoundaryTest();
   await behaviorTest();
+  await browserBindingBehaviorTest();
 
   process.stdout.write(`\n${passes} pass · ${fails} fail\n`);
   if (fails) process.exit(1);

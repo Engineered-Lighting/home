@@ -24,7 +24,6 @@ from app.models import (
     IngestBatch,
     IngestEnvelope,
     PersonCreate,
-    PrincipalBindingCreate,
     ReviewedPrivacyDirectiveImport,
     SourceEntityBindingCreate,
 )
@@ -32,6 +31,7 @@ from app.spool import DisabledRuntimeSpool, EncryptedRuntimeSpool
 from app.store import CoreStore
 from app.db import Database
 from app.worker import DurableWorker, OutboxClaim
+from tests.binding_helpers import complete_staged_principal_binding
 
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
@@ -259,14 +259,10 @@ async def test_postgres_reviewed_people_cutover_is_exact_and_collision_safe() ->
             ),
         )
         with pytest.raises(ForbiddenError, match="unavailable"):
-            await store.bind_principal(
-                "ignored-ha-user",
-                PrincipalBindingCreate(
-                    ha_user_id="ignored-ha-user",
-                    person_id=ignored_id,
-                    display_label="Must Not Bind",
-                    confirmation_artifact_id=uuid.uuid4(),
-                ),
+            await complete_staged_principal_binding(
+                store,
+                ha_user_id="ignored-ha-user",
+                person_id=ignored_id,
             )
         async with database.transaction() as connection:
             assert (
@@ -357,14 +353,10 @@ async def test_postgres_auto_expiry_blocks_ingress_scrubs_places_and_replays_pre
             PersonCreate(display_name="Auto Expiry Integration Subject")
         )
         ha_user_id = f"ha-auto-expiry-{uuid.uuid4()}"
-        principal_view = await store.bind_principal(
-            ha_user_id,
-            PrincipalBindingCreate(
-                ha_user_id=ha_user_id,
-                person_id=person.person_id,
-                display_label="Auto Expiry Subject",
-                confirmation_artifact_id=uuid.uuid4(),
-            ),
+        principal_view = await complete_staged_principal_binding(
+            store,
+            ha_user_id=ha_user_id,
+            person_id=person.person_id,
         )
         principal = await store.resolve_principal(ha_user_id)
         entity_id = f"device_tracker.auto_expiry_{uuid.uuid4().hex}"
@@ -597,6 +589,9 @@ async def test_postgres_auto_expiry_blocks_ingress_scrubs_places_and_replays_pre
         assert receipt["cascade_counts"]["places"] == 1
         assert receipt["cascade_counts"]["place_locators"] == 1
         assert "delete_private_place_locators" in receipt["operation_codes"]
+        assert "delete_principal_binding_requests" in receipt["operation_codes"]
+        assert "delete_principal_binding_proposals" in receipt["operation_codes"]
+        assert "delete_ha_user_bindings" in receipt["operation_codes"]
         assert ha_user_id not in str(receipt["cascade_counts"])
         async with database.transaction() as connection:
             assert (
@@ -682,14 +677,10 @@ async def test_postgres_auto_expiry_blocks_ingress_scrubs_places_and_replays_pre
             PersonCreate(display_name="Pre-schedule Restored Subject")
         )
         restored_user = f"ha-restored-{uuid.uuid4()}"
-        restored_principal = await store.bind_principal(
-            restored_user,
-            PrincipalBindingCreate(
-                ha_user_id=restored_user,
-                person_id=restored.person_id,
-                display_label="Restored Subject",
-                confirmation_artifact_id=uuid.uuid4(),
-            ),
+        restored_principal = await complete_staged_principal_binding(
+            store,
+            ha_user_id=restored_user,
+            person_id=restored.person_id,
         )
         restored_place = uuid.uuid4()
         restored_locator = uuid.uuid4()

@@ -61,11 +61,22 @@ class DurableWorker:
 
     async def run(self, stop: asyncio.Event) -> None:
         next_prune = datetime.now(UTC)
+        next_binding_expiry = next_prune
         while not stop.is_set():
             now = datetime.now(UTC)
             if now >= next_prune:
                 await asyncio.to_thread(self.spool.prune)
                 next_prune = now + timedelta(minutes=1)
+            if now >= next_binding_expiry:
+                try:
+                    await self._expire_principal_binding_work(now)
+                except Exception as exc:
+                    LOGGER.error(
+                        "binding retention failed "
+                        "code=principal_binding_retention_failed error_class=%s",
+                        type(exc).__name__,
+                    )
+                next_binding_expiry = now + timedelta(minutes=1)
             processed = await self.run_once(now=now)
             if processed:
                 continue
@@ -73,6 +84,20 @@ class DurableWorker:
                 await asyncio.wait_for(stop.wait(), timeout=self.poll_seconds)
             except TimeoutError:
                 continue
+
+    async def _expire_principal_binding_work(self, now: datetime) -> None:
+        """Run the database-owned binding retention kernel.
+
+        Keeping this in the durable worker ensures abandoned requests and
+        proposals expire even when neither the subject nor an operator returns.
+        The SECURITY DEFINER function is deliberately executable by the worker
+        role but not by the browser-facing API role.
+        """
+
+        async with self.database.transaction() as connection:
+            await connection.execute(
+                select(func.privacy.expire_principal_binding_work(now))
+            )
 
     async def run_once(self, *, now: datetime | None = None) -> bool:
         now = (now or datetime.now(UTC)).astimezone(UTC)
@@ -362,6 +387,9 @@ class DurableWorker:
                     "scrub_person_content",
                     "delete_identity_aliases",
                     "delete_recognition_bindings",
+                    "delete_principal_binding_requests",
+                    "delete_principal_binding_proposals",
+                    "delete_ha_user_bindings",
                     "revoke_source_bindings",
                     "suppress_principal_initiatives",
                     "scrub_identity_ingest_headers",

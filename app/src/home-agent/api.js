@@ -86,6 +86,34 @@
       if (this.invoke) return Promise.reject(new Error("native_onboarding_status_unavailable"));
       return this.request("/api/agent/v1/onboarding/status");
     }
+    principalBindingProposal() {
+      if (this.invoke) return Promise.reject(new Error("native_principal_binding_unavailable"));
+      return this.request("/api/agent/v1/principal-binding-proposal");
+    }
+    requestPrincipalBinding() {
+      if (this.invoke) return Promise.reject(new Error("native_principal_binding_unavailable"));
+      return this.request("/api/agent/v1/principal-binding-request", {
+        method: "POST",
+        body: {},
+      });
+    }
+    cancelPrincipalBindingRequest() {
+      if (this.invoke) return Promise.reject(new Error("native_principal_binding_unavailable"));
+      return this.request("/api/agent/v1/principal-binding-request/cancel", {
+        method: "POST",
+        body: {},
+      });
+    }
+    confirmPrincipalBinding(proposalDigest, confirmationNonce) {
+      if (this.invoke) return Promise.reject(new Error("native_principal_binding_unavailable"));
+      return this.request("/api/agent/v1/principal-binding-proposal/confirm", {
+        method: "POST",
+        body: {
+          proposal_digest: proposalDigest,
+          confirmation_nonce: confirmationNonce,
+        },
+      });
+    }
     initiatives() {
       if (!this.invoke) return Promise.reject(new Error("native_transport_required"));
       return this.native("native_agent_list_initiatives")

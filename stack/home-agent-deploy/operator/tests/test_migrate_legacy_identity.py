@@ -522,7 +522,7 @@ class LegacyIdentityMigrationTests(unittest.TestCase):
             mock.patch.object(migration, "_read_secret", return_value="not-used"),
             self.assertRaisesRegex(migration.MigrationError, "allowlisted"),
         ):
-            migration.HttpCoreClient("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+            migration.HttpCoreClient()
 
     def test_cli_rejects_all_arguments_before_prompting(self) -> None:
         with (
@@ -542,9 +542,7 @@ class LegacyIdentityMigrationTests(unittest.TestCase):
             ),
             mock.patch.object(migration, "_read_secret", return_value="test-secret"),
         ):
-            client = migration.HttpCoreClient(
-                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-            )
+            client = migration.HttpCoreClient()
 
         self.assertTrue(
             any(
@@ -558,6 +556,11 @@ class LegacyIdentityMigrationTests(unittest.TestCase):
                 for handler in client._opener.handlers
             )
         )
+
+    def test_migration_never_requests_or_stores_an_ha_user_identity(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        self.assertNotIn("Authenticated operator HA user UUID", source)
+        self.assertNotIn("self._ha_user_id", source)
 
     def test_capability_contract_is_fixed_and_does_not_use_public_openapi(self) -> None:
         client = object.__new__(migration.HttpCoreClient)

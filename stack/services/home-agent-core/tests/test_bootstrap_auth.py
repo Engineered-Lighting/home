@@ -9,7 +9,6 @@ from pydantic import SecretStr, ValidationError
 
 from app.config import Settings
 from app.main import create_app
-from app.models import PrincipalBindingCreate
 from app.restore import RestoreGateStatus
 from app.rollout import RolloutAuthorizationStatus
 
@@ -26,8 +25,13 @@ class CurrentRolloutGate:
 
 def settings_for(tmp_path) -> Settings:
     knowledge_key = base64.urlsafe_b64encode(b"k" * 32).decode().rstrip("=")
+    operator_url = (
+        "postgresql+psycopg://home_agent_binding_operator:"
+        f"{'d' * 64}@postgres:5432/home_agent"
+    )
     return Settings(
         database_url=SecretStr("postgresql+psycopg://unused:unused@127.0.0.1:1/unused"),
+        operator_database_url=SecretStr(operator_url),
         runtime_spool_path=tmp_path / "runtime.sqlite",
         storage_monitor_path=tmp_path,
         knowledge_encryption_key=SecretStr(knowledge_key),
@@ -74,13 +78,12 @@ def test_bff_service_credential_cannot_bootstrap_people(tmp_path) -> None:
     assert valid_bootstrap_wrong_audience.status_code == 401
 
 
-def test_principal_binding_requires_confirmation_artifact() -> None:
-    with pytest.raises(ValidationError):
-        PrincipalBindingCreate(
-            ha_user_id="ha-user",
-            person_id=uuid.uuid4(),
-            display_label="Marcelo",
-        )
+def test_direct_principal_binding_route_and_store_method_are_absent(tmp_path) -> None:
+    app = create_app(settings_for(tmp_path))
+    assert not hasattr(app.state.store, "bind_principal")
+    assert "/v1/principal-bindings" not in {
+        getattr(route, "path", None) for route in app.routes
+    }
 
 
 def test_private_initiatives_require_native_channel_attestation(tmp_path) -> None:
@@ -179,6 +182,71 @@ def test_fixed_operator_capability_contract_requires_bootstrap(tmp_path) -> None
         },
     }
     assert openapi.status_code == 404
+
+
+def test_binding_operator_routes_fail_closed_without_database_role(tmp_path) -> None:
+    app = create_app(
+        settings_for(tmp_path).model_copy(
+            update={"rollout_mode": "shadow", "operator_database_url": None}
+        )
+    )
+    app.state.restore_gate = CurrentRestoreGate()
+    app.state.rollout_gate = CurrentRolloutGate()
+    with TestClient(app) as client:
+        response = client.get(
+            "/v1/operator/principal-binding-requests",
+            headers={
+                "Authorization": "Bearer operator-token-with-at-least-32-chars",
+                "X-Home-Agent-Bootstrap": (
+                    "bootstrap-token-with-at-least-32-chars"
+                ),
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "capability_disabled"
+
+
+def test_stale_binding_operator_database_blocks_api_startup(tmp_path) -> None:
+    operator_url = (
+        "postgresql+psycopg://home_agent_binding_operator:"
+        f"{'f' * 64}@postgres:5432/home_agent"
+    )
+    settings = settings_for(tmp_path).model_copy(
+        update={"operator_database_url": SecretStr(operator_url)}
+    )
+    app = create_app(settings)
+    app.state.restore_gate = CurrentRestoreGate()
+    app.state.rollout_gate = CurrentRolloutGate()
+
+    async def stale_revision() -> str:
+        return "0004_rollout_authorizations"
+
+    app.state.operator_database.migration_revision = stale_revision
+    with pytest.raises(RuntimeError, match="operator database migration mismatch"):
+        with TestClient(app):
+            pass
+
+
+def test_api_accepts_only_isolated_binding_operator_database_role(tmp_path) -> None:
+    values = settings_for(tmp_path).model_dump()
+    values["operator_database_url"] = SecretStr(
+        "postgresql+psycopg://home_agent_binding_operator:"
+        f"{'e' * 64}@postgres:5432/home_agent"
+    )
+    settings = Settings(**values)
+    assert "home_agent_binding_operator" in settings.async_operator_database_url()
+
+    values["operator_database_url"] = SecretStr(
+        "postgresql+psycopg://home_agent_api:"
+        f"{'e' * 64}@postgres:5432/home_agent"
+    )
+    with pytest.raises(ValidationError, match="isolated binding operator role"):
+        Settings(**values)
+
+    values["operator_database_url"] = None
+    with pytest.raises(ValidationError, match="must be configured together"):
+        Settings(**values)
 
 
 def test_rollout_policy_defaults_record_only_and_has_no_mutation_route(tmp_path) -> None:

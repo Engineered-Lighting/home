@@ -149,7 +149,10 @@ chmod 0600 "$ledger_path" "$ledger_head_path"
 required_secrets="postgres_owner_password postgres_api_password postgres_ingest_password postgres_worker_password postgres_erasure_password postgres_backup_password database_url_owner database_url_api database_url_ingest database_url_worker database_url_erasure runtime_spool_key knowledge_encryption_key erasure_ledger_key edge_token service_token operator_token bootstrap_token session_encryption_key"
 for name in $required_secrets; do
   path="$HOME_AGENT_SECRETS_DIR/master/$name"
-  [ -s "$path" ] || { echo "missing secret file: $path" >&2; exit 78; }
+  [ -f "$path" ] && [ ! -L "$path" ] && [ -s "$path" ] || {
+    echo "missing or unsafe secret file: $path" >&2
+    exit 78
+  }
   chown root:root "$path"
   chmod 0600 "$path"
   [ ! -e "$HOME_AGENT_SECRETS_DIR/$name" ] || {
@@ -157,6 +160,53 @@ for name in $required_secrets; do
     exit 78
   }
 done
+
+binding_operator_master="$HOME_AGENT_SECRETS_DIR/master/binding-operator"
+[ -d "$binding_operator_master" ] && [ ! -L "$binding_operator_master" ] &&
+  [ "$(stat -c '%u:%g:%a' "$binding_operator_master")" = "0:0:700" ] || {
+  echo "binding operator master secret directory is absent or unsafe" >&2
+  exit 78
+}
+[ "$(find "$binding_operator_master" -mindepth 1 -maxdepth 1 | wc -l)" -eq 2 ] || {
+  echo "binding operator master secret directory must contain exactly two files" >&2
+  exit 78
+}
+for name in postgres_binding_operator_password database_url_binding_operator; do
+  path="$binding_operator_master/$name"
+  [ -f "$path" ] && [ ! -L "$path" ] && [ -s "$path" ] &&
+    [ "$(stat -c '%u:%g:%a' "$path")" = "0:0:600" ] || {
+    echo "binding operator master secret is absent or unsafe: $path" >&2
+    exit 78
+  }
+done
+binding_operator_password="$(tr -d '\r\n' < "$binding_operator_master/postgres_binding_operator_password")"
+binding_operator_url="$(tr -d '\r\n' < "$binding_operator_master/database_url_binding_operator")"
+case "$binding_operator_password" in
+  *[!0-9a-f]*|'') echo "binding operator password is not lowercase hex" >&2; exit 78 ;;
+esac
+[ "${#binding_operator_password}" -eq 64 ] || {
+  echo "binding operator password has the wrong length" >&2
+  exit 78
+}
+[ "$binding_operator_url" = "postgresql+psycopg://home_agent_binding_operator:${binding_operator_password}@postgres:5432/home_agent" ] || {
+  echo "binding operator database URL does not match the isolated role" >&2
+  exit 78
+}
+for other_name in \
+  postgres_owner_password \
+  postgres_api_password \
+  postgres_ingest_password \
+  postgres_worker_password \
+  postgres_erasure_password \
+  postgres_backup_password
+do
+  other_password="$(tr -d '\r\n' < "$HOME_AGENT_SECRETS_DIR/master/$other_name")"
+  [ "$binding_operator_password" != "$other_password" ] || {
+    echo "binding operator password must be independent from every other database role" >&2
+    exit 78
+  }
+done
+unset binding_operator_url other_password other_name
 
 rollout_master="$HOME_AGENT_SECRETS_DIR/master/rollout"
 [ -d "$rollout_master" ] && [ ! -L "$rollout_master" ] &&
@@ -189,7 +239,11 @@ esac
   echo "rollout database URL does not match the isolated rollout role" >&2
   exit 78
 }
-unset rollout_password rollout_url
+[ "$binding_operator_password" != "$rollout_password" ] || {
+  echo "binding operator password must be independent from every other database role" >&2
+  exit 78
+}
+unset binding_operator_password rollout_password rollout_url
 
 deploy_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 sh "$deploy_dir/materialize-secrets.sh" "$HOME_AGENT_SECRETS_DIR"
@@ -205,15 +259,22 @@ verify_secret() {
 }
 
 verify_secret 999:999:400 "$HOME_AGENT_SECRETS_DIR/runtime/postgres/postgres_owner_password"
-for name in postgres_owner_password postgres_api_password postgres_ingest_password postgres_worker_password postgres_erasure_password postgres_rollout_password postgres_backup_password; do
+for name in postgres_owner_password postgres_api_password postgres_binding_operator_password postgres_ingest_password postgres_worker_password postgres_erasure_password postgres_rollout_password postgres_backup_password; do
   verify_secret 0:0:400 "$HOME_AGENT_SECRETS_DIR/runtime/provision-roles/$name"
 done
 verify_secret 0:0:400 "$HOME_AGENT_SECRETS_DIR/runtime/grant-runtime/postgres_owner_password"
 verify_secret 999:999:400 "$HOME_AGENT_SECRETS_DIR/runtime/backup-gate/postgres_backup_password"
 verify_secret 10001:10001:400 "$HOME_AGENT_SECRETS_DIR/runtime/migrate/database_url"
-for name in database_url knowledge_encryption_key service_token operator_token bootstrap_token; do
+for name in database_url operator_database_url knowledge_encryption_key service_token operator_token bootstrap_token; do
   verify_secret 10001:10001:400 "$HOME_AGENT_SECRETS_DIR/runtime/core-api/$name"
 done
+unexpected_operator_secret="$(find "$HOME_AGENT_SECRETS_DIR/runtime" -mindepth 2 -maxdepth 2 \
+  -type f -name operator_database_url \
+  ! -path "$HOME_AGENT_SECRETS_DIR/runtime/core-api/operator_database_url" -print -quit)"
+[ -z "$unexpected_operator_secret" ] || {
+  echo "binding operator database URL was materialized outside core-api: $unexpected_operator_secret" >&2
+  exit 78
+}
 for name in database_url runtime_spool_key knowledge_encryption_key edge_token; do
   verify_secret 10001:10001:400 "$HOME_AGENT_SECRETS_DIR/runtime/core-ingest/$name"
 done

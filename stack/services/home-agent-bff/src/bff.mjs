@@ -18,10 +18,26 @@ const DEFAULT_CLEANUP_INTERVAL_MS = 60_000;
 const DEFAULT_CLEANUP_BATCH_SIZE = 10;
 const REVOCATION_RETRY_BASE_MS = 30_000;
 const REVOCATION_RETRY_MAX_MS = 60 * 60_000;
+const PRINCIPAL_BINDING_CONFIRM_PATH = "/api/agent/v1/principal-binding-proposal/confirm";
+const PRINCIPAL_BINDING_WRITE_PATHS = new Set([
+  "/api/agent/v1/principal-binding-request",
+  "/api/agent/v1/principal-binding-request/cancel",
+  PRINCIPAL_BINDING_CONFIRM_PATH,
+]);
+const PRINCIPAL_BINDING_FRESH_AUTH_ROUTES = new Set([
+  "GET /api/agent/v1/principal-binding-proposal",
+  "POST /api/agent/v1/principal-binding-request",
+  "POST /api/agent/v1/principal-binding-request/cancel",
+  `POST ${PRINCIPAL_BINDING_CONFIRM_PATH}`,
+]);
 
 const UUID_PATH = "[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const ROUTES = Object.freeze([
   ["GET", /^\/api\/agent\/v1\/onboarding\/status$/],
+  ["GET", /^\/api\/agent\/v1\/principal-binding-proposal$/],
+  ["POST", /^\/api\/agent\/v1\/principal-binding-request$/],
+  ["POST", /^\/api\/agent\/v1\/principal-binding-request\/cancel$/],
+  ["POST", /^\/api\/agent\/v1\/principal-binding-proposal\/confirm$/],
   ["GET", /^\/api\/agent\/v1\/snapshot$/],
   ["POST", /^\/api\/agent\/v1\/memory-transactions$/],
   ["GET", new RegExp(`^/api/agent/v1/memory-transactions/${UUID_PATH}$`, "i")],
@@ -146,6 +162,53 @@ function nativeRouteAllowed(method, pathname) {
   const browserPath = pathname.replace(/^\/api\/agent\/native/, "/api/agent");
   return browserPath !== pathname && NATIVE_ROUTES.some(([allowedMethod, pattern]) =>
     method === allowedMethod && pattern.test(browserPath));
+}
+
+function normalizePrincipalBindingBody(pathname, body) {
+  if (!PRINCIPAL_BINDING_WRITE_PATHS.has(pathname)) return body;
+  let value;
+  try {
+    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
+  } catch {
+    const error = new Error("invalid principal binding request body");
+    error.status = 400;
+    error.code = "invalid_request_body";
+    throw error;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    const error = new Error("invalid principal binding request body");
+    error.status = 400;
+    error.code = "invalid_request_body";
+    throw error;
+  }
+  const keys = Object.keys(value).sort();
+  if (pathname !== PRINCIPAL_BINDING_CONFIRM_PATH) {
+    if (keys.length !== 0) {
+      const error = new Error("principal binding request accepts no identity fields");
+      error.status = 400;
+      error.code = "invalid_request_body";
+      throw error;
+    }
+    return Buffer.from("{}");
+  }
+  if (
+    keys.length !== 2 || keys[0] !== "confirmation_nonce" || keys[1] !== "proposal_digest" ||
+    typeof value.proposal_digest !== "string" ||
+    typeof value.confirmation_nonce !== "string" ||
+    !/^[0-9a-f]{64}$/.test(value.proposal_digest) ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+      value.confirmation_nonce,
+    )
+  ) {
+    const error = new Error("invalid principal binding confirmation body");
+    error.status = 400;
+    error.code = "invalid_request_body";
+    throw error;
+  }
+  return Buffer.from(JSON.stringify({
+    proposal_digest: value.proposal_digest,
+    confirmation_nonce: value.confirmation_nonce,
+  }));
 }
 
 function nativeBearer(header) {
@@ -757,9 +820,16 @@ class SessionStore {
     destroyEnvelope(previous);
   }
 
-  async revalidate(config, id, session, fetchImpl, now = Date.now()) {
+  async revalidate(
+    config,
+    id,
+    session,
+    fetchImpl,
+    now = Date.now(),
+    { forcePrincipalCheck = false } = {},
+  ) {
     const shouldRefresh = session.accessExpiresAt <= now + 60_000;
-    const shouldCheckPrincipal = shouldRefresh ||
+    const shouldCheckPrincipal = forcePrincipalCheck || shouldRefresh ||
       now - session.principalCheckedAt >= Math.max(0, config.principalRevalidateMs || 0);
     if (!shouldCheckPrincipal) return session;
 
@@ -1093,8 +1163,13 @@ async function proxyCoreRequest(
   publicPrefix,
   channel = null,
 ) {
+  let rawBody;
+  let body;
   try {
-    const body = req.method === "GET" ? undefined : await readBody(req);
+    rawBody = req.method === "GET" ? undefined : await readBody(req);
+    body = rawBody === undefined
+      ? undefined
+      : normalizePrincipalBindingBody(url.pathname, rawBody);
     const corePath = url.pathname.replace(publicPrefix, "");
     const headers = {
       Authorization: `Bearer ${config.coreToken}`,
@@ -1126,6 +1201,9 @@ async function proxyCoreRequest(
       error: error.code || (error.status === 413 ? "body_too_large" : "agent_upstream_unavailable"),
       request_id: requestId,
     });
+  } finally {
+    if (Buffer.isBuffer(rawBody)) rawBody.fill(0);
+    if (Buffer.isBuffer(body) && body !== rawBody) body.fill(0);
   }
 }
 
@@ -1272,7 +1350,7 @@ function createBff(config, { fetchImpl = fetch, store } = {}) {
     }
 
     if (url.pathname.startsWith("/api/agent/native/")) {
-      if (!nativeRouteAllowed(req.method, url.pathname)) {
+      if (url.search || !nativeRouteAllowed(req.method, url.pathname)) {
         return json(res, 404, { error: "route_not_allowed", request_id: requestId });
       }
       const bearer = nativeBearer(req.headers.authorization);
@@ -1333,8 +1411,22 @@ function createBff(config, { fetchImpl = fetch, store } = {}) {
       { error: "authentication_required" },
       { "Set-Cookie": clearSessionCookie(config.secureCookie) },
     );
+    const isPrincipalBindingRoute = (
+      !url.search && PRINCIPAL_BINDING_FRESH_AUTH_ROUTES.has(`${req.method} ${url.pathname}`)
+    );
+    if (
+      isPrincipalBindingRoute && req.method !== "GET" &&
+      (!requireOrigin(req, config, res) || !requireCsrf(req, session, res))
+    ) return;
     try {
-      await sessions.revalidate(config, sessionId, session, fetchImpl);
+      await sessions.revalidate(
+        config,
+        sessionId,
+        session,
+        fetchImpl,
+        Date.now(),
+        { forcePrincipalCheck: isPrincipalBindingRoute },
+      );
     } catch {
       sessions.scheduleRevocation(sessionId, session, "authentication_revoked");
       return json(
@@ -1354,10 +1446,10 @@ function createBff(config, { fetchImpl = fetch, store } = {}) {
       });
     }
 
-    if (!routeAllowed(req.method, url.pathname)) {
+    if (url.search || !routeAllowed(req.method, url.pathname)) {
       return json(res, 404, { error: "route_not_allowed", request_id: requestId });
     }
-    if (req.method !== "GET") {
+    if (req.method !== "GET" && !isPrincipalBindingRoute) {
       if (!requireOrigin(req, config, res) || !requireCsrf(req, session, res)) return;
     }
 
@@ -1391,6 +1483,7 @@ export {
   createBff,
   isAllowedOrigin,
   nativeRouteAllowed,
+  normalizePrincipalBindingBody,
   parseCookies,
   randomToken,
   routeAllowed,

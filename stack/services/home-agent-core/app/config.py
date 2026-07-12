@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     role: Literal["api", "ingest", "worker", "restore", "rollout", "all"] = "api"
     port: int = Field(default=8104, ge=1, le=65535)
     database_url: SecretStr
+    operator_database_url: SecretStr | None = None
     runtime_spool_path: Path = Path("/runtime/runtime.sqlite")
     storage_monitor_path: Path = Path("/storage-monitor/durable")
     runtime_spool_key: SecretStr | None = None
@@ -42,7 +43,7 @@ class Settings(BaseSettings):
     )
     policy_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     rollout_mode: Literal["record_only", "shadow", "canary"] = "record_only"
-    readiness_migration: str = "0004_rollout_authorizations"
+    readiness_migration: str = "0005_principal_binding_proposals"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
     @field_validator(
@@ -61,9 +62,11 @@ class Settings(BaseSettings):
             raise ValueError("must decode to exactly 32 bytes")
         return value
 
-    @field_validator("database_url")
+    @field_validator("database_url", "operator_database_url")
     @classmethod
-    def validate_database_url(cls, value: SecretStr) -> SecretStr:
+    def validate_database_url(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is None:
+            return None
         url = value.get_secret_value()
         if not url.startswith(("postgresql+psycopg://", "postgresql://")):
             raise ValueError("PostgreSQL with psycopg is the only supported authority")
@@ -89,6 +92,14 @@ class Settings(BaseSettings):
 
     def async_database_url(self) -> str:
         url = self.database_url.get_secret_value()
+        if url.startswith("postgresql://"):
+            return "postgresql+psycopg://" + url.removeprefix("postgresql://")
+        return url
+
+    def async_operator_database_url(self) -> str:
+        if self.operator_database_url is None:
+            raise ValueError("binding operator database role is disabled")
+        url = self.operator_database_url.get_secret_value()
         if url.startswith("postgresql://"):
             return "postgresql+psycopg://" + url.removeprefix("postgresql://")
         return url
@@ -123,6 +134,54 @@ class Settings(BaseSettings):
             or self.edge_token is not None
         ):
             raise ValueError("api role may not receive spool, ledger, or edge secrets")
+        if self.role not in {"api", "all"} and self.operator_database_url is not None:
+            raise ValueError("only the api role may receive the operator database URL")
+        if self.role == "api" and any(
+            value is not None
+            for value in (
+                self.operator_database_url,
+                self.operator_token,
+                self.bootstrap_token,
+            )
+        ) and any(
+            value is None
+            for value in (
+                self.operator_database_url,
+                self.operator_token,
+                self.bootstrap_token,
+            )
+        ):
+            raise ValueError(
+                "api binding-operator database, bearer, and bootstrap credentials "
+                "must be configured together"
+            )
+        if self.role == "api" and self.operator_database_url is not None:
+            raw_operator_url = self.operator_database_url.get_secret_value()
+            try:
+                parsed_operator = urlsplit(raw_operator_url)
+                operator_port = parsed_operator.port
+            except ValueError as exc:
+                raise ValueError("operator database URL is invalid") from exc
+            operator_password = parsed_operator.password or ""
+            expected_operator_url = (
+                "postgresql+psycopg://home_agent_binding_operator:"
+                f"{operator_password}@postgres:5432/home_agent"
+            )
+            if (
+                parsed_operator.scheme != "postgresql+psycopg"
+                or parsed_operator.username != "home_agent_binding_operator"
+                or parsed_operator.hostname != "postgres"
+                or operator_port != 5432
+                or parsed_operator.path != "/home_agent"
+                or parsed_operator.query
+                or parsed_operator.fragment
+                or not re.fullmatch(r"[0-9a-f]{64}", operator_password)
+                or raw_operator_url != expected_operator_url
+            ):
+                raise ValueError(
+                    "operator database URL must name only the isolated binding "
+                    "operator role"
+                )
         if self.role == "ingest" and (
             self.erasure_ledger_key is not None
             or self.service_token is not None

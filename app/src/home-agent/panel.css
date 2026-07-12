@@ -25,6 +25,10 @@ textarea {
 }
 
 button { cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: .65; }
+button:focus-visible,
+textarea:focus-visible,
+[tabindex="-1"]:focus-visible { outline: 2px solid #f0c75e; outline-offset: 3px; }
 
 .agent-shell {
   max-width: 880px;
@@ -56,6 +60,8 @@ button { cursor: pointer; }
 .agent-textarea { width: 100%; box-sizing: border-box; }
 .agent-card { margin-top: 20px; padding: 18px; border: 1px solid var(--hg-border); border-radius: 12px; background: var(--hg-bg-1); }
 .agent-warning { border-color: #9d7422; }
+.agent-binding-status { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--hg-border); }
+.agent-binding-status h3 { margin-top: 0; }
 .agent-grid { display: grid; grid-template-columns: 140px 1fr; gap: 8px 12px; }
 .agent-grid dt { color: var(--hg-fg-4); }
 .agent-grid dd { margin: 0; }

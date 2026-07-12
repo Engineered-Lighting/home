@@ -33,6 +33,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     database = Database(settings.async_database_url())
+    operator_database = (
+        Database(settings.async_operator_database_url())
+        if settings.operator_database_url is not None
+        and settings.role in {"api", "all"}
+        else None
+    )
     spool = (
         EncryptedRuntimeSpool(
             settings.runtime_spool_path,
@@ -47,6 +53,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     store = (
         CoreStore(database, spool, settings)
         if settings.knowledge_encryption_key is not None
+        else None
+    )
+    operator_store = (
+        CoreStore(operator_database, spool, settings)
+        if operator_database is not None
+        and settings.knowledge_encryption_key is not None
         else None
     )
     ledger = (
@@ -80,11 +92,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(application: FastAPI):
         stop = asyncio.Event()
         task: asyncio.Task | None = None
+        revision = await application.state.database.migration_revision()
+        if revision != settings.readiness_migration:
+            try:
+                spool.close()
+            finally:
+                if operator_database is not None:
+                    await operator_database.close()
+                await database.close()
+            raise RuntimeError(
+                "database migration mismatch: expected "
+                f"{settings.readiness_migration}, received {revision or 'unknown'}"
+            )
+        if operator_database is not None:
+            operator_revision = await operator_database.migration_revision()
+            if operator_revision != settings.readiness_migration:
+                try:
+                    spool.close()
+                finally:
+                    await operator_database.close()
+                    await database.close()
+                raise RuntimeError(
+                    "operator database migration mismatch: expected "
+                    f"{settings.readiness_migration}, received "
+                    f"{operator_revision or 'unknown'}"
+                )
         rollout_status = await application.state.rollout_gate.status(force=True)
         if not rollout_status.authorized:
             try:
                 spool.close()
             finally:
+                if operator_database is not None:
+                    await operator_database.close()
                 await database.close()
             raise RuntimeError(
                 "rollout authorization rejected: " + rollout_status.code
@@ -100,6 +139,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 with suppress(asyncio.CancelledError):
                     await task
             spool.close()
+            if operator_database is not None:
+                await operator_database.close()
             await database.close()
 
     application = FastAPI(
@@ -112,8 +153,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     application.state.settings = settings
     application.state.database = database
+    application.state.operator_database = operator_database
     application.state.spool = spool
     application.state.store = store
+    application.state.operator_store = operator_store
     application.state.ledger = ledger
     application.state.restore_gate = restore_gate
     application.state.rollout_gate = rollout_gate
@@ -189,6 +232,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def health() -> HealthView:
         database_ok = await database.ping()
         revision = await database.migration_revision()
+        if operator_database is not None:
+            database_ok = database_ok and await operator_database.ping()
+            operator_revision = await operator_database.migration_revision()
+        else:
+            operator_revision = settings.readiness_migration
         gate_status = await application.state.restore_gate.status()
         rollout_status = await application.state.rollout_gate.status()
         outbox_status = await outbox_health(database)
@@ -197,7 +245,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             monitor_path=settings.storage_monitor_path,
             include_ingest_metrics=settings.role in {"api", "ingest", "all"},
         )
-        migration_ok = revision == settings.readiness_migration
+        migration_ok = (
+            revision == settings.readiness_migration
+            and operator_revision == settings.readiness_migration
+        )
         return HealthView(
             status=(
                 "ok"
@@ -245,6 +296,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def ready() -> JSONResponse:
         database_ok = await database.ping()
         revision = await database.migration_revision()
+        if operator_database is not None:
+            database_ok = database_ok and await operator_database.ping()
+            operator_revision = await operator_database.migration_revision()
+        else:
+            operator_revision = settings.readiness_migration
         gate_status = await application.state.restore_gate.status(force=True)
         rollout_status = await application.state.rollout_gate.status(force=True)
         outbox_status = await outbox_health(database)
@@ -256,6 +312,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ready_state = (
             database_ok
             and revision == settings.readiness_migration
+            and operator_revision == settings.readiness_migration
             and gate_status.current
             and rollout_status.authorized
             and outbox_status.ready

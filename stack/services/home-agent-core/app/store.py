@@ -3,14 +3,16 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import secrets
 import uuid
 import unicodedata
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
 from psycopg.types.range import Range
 from sqlalchemy import and_, func, literal, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import IntegrityError
 
 from . import schema
 from .config import Settings
@@ -63,8 +65,13 @@ from .models import (
     PersonView,
     PlaceCreate,
     PreferenceUpdate,
-    PrincipalBindingCreate,
-    PrincipalView,
+    PrincipalBindingConfirmation,
+    PrincipalBindingConfirmationView,
+    PrincipalBindingProposalView,
+    OperatorPrincipalBindingProposalStage,
+    OperatorPrincipalBindingProposalView,
+    OperatorPrincipalBindingRequestsView,
+    OperatorPrincipalBindingRequestView,
     ReviewedPersonVerify,
     ResolvedPersonView,
     ReviewedAliasImport,
@@ -93,6 +100,78 @@ SAFE_METADATA_KEYS = {
     "derived_from_entity",
     "tracking_type",
 }
+
+BINDING_REQUEST_TTL = timedelta(hours=24)
+BINDING_PROPOSAL_TTL = timedelta(minutes=15)
+BINDING_REVIEW_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+BINDING_PROPOSAL_CONTRACT = "principal-binding-proposal-v1"
+
+
+def binding_person_snapshot_digest(person: Mapping[str, Any]) -> str:
+    """Bind operator review to the exact non-secret semantic person record."""
+
+    return sha256_json(
+        {
+            "contract": "principal-binding-person-snapshot-v1",
+            "person_id": str(person["person_id"]),
+            "display_name": person["display_name"],
+            "status": person["status"],
+            "privacy_scope": person["privacy_scope"],
+            "legacy_source_sha256": person["legacy_source_sha256"],
+            "status_source_sha256": person["status_source_sha256"],
+        }
+    )
+
+
+def _canonical_binding_timestamp(value: datetime) -> str:
+    """Normalize a proposal timestamp before hashing it into the typed intent."""
+
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("principal-binding proposal timestamps must be timezone-aware")
+    return value.astimezone(UTC).isoformat(timespec="microseconds").replace(
+        "+00:00", "Z"
+    )
+
+
+def binding_proposal_digest(
+    *,
+    request_id: uuid.UUID,
+    review_code: str,
+    ha_user_id: str,
+    person_id: uuid.UUID,
+    reviewed_display_label: str,
+    person_snapshot_digest: str,
+    operator_request_id: uuid.UUID,
+    stage_receipt_digest: str,
+    staged_at: datetime,
+    expires_at: datetime,
+    policy_version: str,
+    policy_digest: str,
+) -> str:
+    """Digest the complete, typed operator proposal shown to the HA subject.
+
+    The digest is an intent commitment, not a bearer credential. Subject access is
+    still authenticated and HA-user scoped; changing policy invalidates any
+    outstanding 15-minute proposal rather than silently confirming old policy.
+    """
+
+    return sha256_json(
+        {
+            "contract": BINDING_PROPOSAL_CONTRACT,
+            "request_id": str(request_id),
+            "review_code": review_code,
+            "ha_user_id": ha_user_id,
+            "person_id": str(person_id),
+            "reviewed_display_label": reviewed_display_label,
+            "person_snapshot_digest": person_snapshot_digest,
+            "operator_request_id": str(operator_request_id),
+            "stage_receipt_digest": stage_receipt_digest,
+            "staged_at": _canonical_binding_timestamp(staged_at),
+            "expires_at": _canonical_binding_timestamp(expires_at),
+            "policy_version": policy_version,
+            "policy_digest": policy_digest,
+        }
+    )
 
 
 class CoreStore:
@@ -1854,6 +1933,36 @@ class CoreStore:
                 binding_id = existing["binding_id"]
         return ReviewedImportReceipt(record_id=binding_id, state=value.status)
 
+    @staticmethod
+    async def _cancel_ready_binding_proposals_for_person(
+        connection,
+        *,
+        person_id: uuid.UUID,
+        now: datetime,
+    ) -> None:
+        """Close unsafe review work through the denial-only privacy kernel."""
+
+        receipt = (
+            await connection.execute(
+                select(
+                    func.privacy.cancel_principal_binding_work_for_person(
+                        person_id, now
+                    )
+                )
+            )
+        ).scalar_one()
+        if (
+            not isinstance(receipt, dict)
+            or set(receipt)
+            != {"proposals_cancelled", "requests_cancelled"}
+            or not all(
+                isinstance(receipt[key], int) and receipt[key] >= 0
+                for key in receipt
+            )
+            or receipt["proposals_cancelled"] != receipt["requests_cancelled"]
+        ):
+            raise RuntimeError("principal binding cancellation receipt is invalid")
+
     async def import_reviewed_privacy_directive(
         self,
         person_id: uuid.UUID,
@@ -1865,13 +1974,28 @@ class CoreStore:
                 "auto_expire requires an expiry and other directives prohibit one"
             )
         directive_id = uuid7()
+        now = datetime.now(UTC)
+        blocks_ready_binding = value.directive in {
+            "do_not_track",
+            "ignored",
+            "silent",
+            "auto_expire",
+        }
         async with self.database.transaction(serializable=True) as connection:
+            if blocks_ready_binding:
+                await self._cancel_ready_binding_proposals_for_person(
+                    connection,
+                    person_id=person_id,
+                    now=now,
+                )
             if (
                 await connection.execute(
-                    select(schema.people.c.person_id).where(
+                    select(schema.people.c.person_id)
+                    .where(
                         schema.people.c.person_id == person_id,
                         schema.people.c.status != "erased",
                     )
+                    .with_for_update()
                 )
             ).scalar_one_or_none() is None:
                 raise NotFoundError("reviewed person does not exist")
@@ -1994,7 +2118,7 @@ class CoreStore:
                         schema.source_entity_bindings.c.person_id == person_id,
                         schema.source_entity_bindings.c.revoked_at.is_(None),
                     )
-                    .values(revoked_at=datetime.now(UTC))
+                    .values(revoked_at=now)
                 )
         return ReviewedImportReceipt(
             record_id=directive_id,
@@ -2005,7 +2129,14 @@ class CoreStore:
         self, person_id: uuid.UUID, value: ReviewedPersonStatusImport
     ) -> ReviewedImportReceipt:
         self._require_rollout("shadow", "semantic_people_write")
+        now = datetime.now(UTC)
         async with self.database.transaction(serializable=True) as connection:
+            if value.status != "active":
+                await self._cancel_ready_binding_proposals_for_person(
+                    connection,
+                    person_id=person_id,
+                    now=now,
+                )
             row = (
                 (
                     await connection.execute(
@@ -2039,95 +2170,930 @@ class CoreStore:
                         status_source_ref=value.source_ref,
                         status_source_version=value.source_version,
                         status_source_sha256=value.source_snapshot_sha256,
-                        updated_at=datetime.now(UTC),
+                        updated_at=now,
                     )
                 )
         return ReviewedImportReceipt(record_id=person_id, state="archived")
 
-    async def bind_principal(
+    async def _expire_principal_binding_work(
         self,
-        authenticated_ha_user: str,
-        value: PrincipalBindingCreate,
-    ) -> PrincipalView:
-        self._require_rollout("shadow", "principal_binding")
-        if authenticated_ha_user != value.ha_user_id:
-            raise ForbiddenError(
-                "a principal may bootstrap only its own HA user binding"
+        connection,
+        *,
+        now: datetime,
+        ha_user_id: str | None = None,
+    ) -> None:
+        proposal_where = [
+            schema.principal_binding_proposals.c.state == "ready",
+            schema.principal_binding_proposals.c.expires_at <= now,
+        ]
+        if ha_user_id is not None:
+            proposal_where.append(
+                schema.principal_binding_proposals.c.ha_user_id == ha_user_id
             )
-        principal_id = uuid7()
-        now = datetime.now(UTC)
-        async with self.database.transaction(
-            principal_id=principal_id, serializable=True
-        ) as connection:
-            person = (
-                (
-                    await connection.execute(
-                        select(schema.people)
-                        .where(schema.people.c.person_id == value.person_id)
-                        .with_for_update()
-                    )
-                )
-                .mappings()
-                .first()
-            )
-            if person is None:
-                raise NotFoundError("person does not exist")
-            if person["status"] != "active":
-                raise ForbiddenError("person is unavailable for principal binding")
-            directives = await self._active_directives(connection, value.person_id)
-            if directives & {"auto_expire", "do_not_track", "ignored"}:
-                raise ForbiddenError("person is unavailable for principal binding")
-            existing = (
+        expired_request_ids = list(
+            (
                 await connection.execute(
-                    select(schema.ha_user_bindings.c.binding_id).where(
-                        schema.ha_user_bindings.c.ha_user_id == value.ha_user_id,
+                    update(schema.principal_binding_proposals)
+                    .where(*proposal_where)
+                    .values(state="expired")
+                    .returning(schema.principal_binding_proposals.c.request_id)
+                )
+            ).scalars()
+        )
+        request_where = [
+            schema.principal_binding_requests.c.state.in_(("pending", "staged"))
+        ]
+        if ha_user_id is not None:
+            request_where.append(
+                schema.principal_binding_requests.c.ha_user_id == ha_user_id
+            )
+        expiry_reason = schema.principal_binding_requests.c.expires_at <= now
+        if expired_request_ids:
+            expiry_reason = or_(
+                expiry_reason,
+                schema.principal_binding_requests.c.request_id.in_(
+                    expired_request_ids
+                ),
+            )
+        await connection.execute(
+            update(schema.principal_binding_requests)
+            .where(*request_where, expiry_reason)
+            .values(state="expired", closed_at=now)
+        )
+
+    async def _binding_status_in_transaction(
+        self,
+        connection,
+        ha_user_id: str,
+    ) -> Literal["bound", "missing", "unavailable"]:
+        privacy_blocked = (
+            await connection.execute(
+                select(schema.edge_privacy_user_blocks.c.block_id).where(
+                    schema.edge_privacy_user_blocks.c.ha_user_id == ha_user_id
+                )
+            )
+        ).scalar_one_or_none()
+        if privacy_blocked is not None:
+            return "unavailable"
+        active = (
+            (
+                await connection.execute(
+                    select(
+                        schema.ha_user_bindings.c.principal_id.label(
+                            "binding_principal_id"
+                        ),
+                        schema.ha_user_bindings.c.person_id.label(
+                            "binding_person_id"
+                        ),
+                        schema.ha_user_bindings.c.confirmed_by_principal_id,
+                        schema.ha_user_bindings.c.source_artifact_id,
+                        schema.ha_user_bindings.c.proposal_id,
+                        schema.principals.c.principal_id.label("principal_id"),
+                        schema.principals.c.person_id.label("principal_person_id"),
+                        schema.principals.c.kind.label("principal_kind"),
+                        schema.principals.c.status.label("principal_status"),
+                        schema.people.c.person_id.label("person_id"),
+                        schema.people.c.status.label("person_status"),
+                        schema.principal_binding_proposals.c.state.label(
+                            "proposal_state"
+                        ),
+                        schema.principal_binding_proposals.c.result_principal_id,
+                        schema.principal_binding_proposals.c.confirmation_artifact_id,
+                    )
+                    .select_from(
+                        schema.ha_user_bindings.outerjoin(
+                            schema.principals,
+                            schema.ha_user_bindings.c.principal_id
+                            == schema.principals.c.principal_id,
+                        )
+                        .outerjoin(
+                            schema.people,
+                            schema.ha_user_bindings.c.person_id
+                            == schema.people.c.person_id,
+                        )
+                        .outerjoin(
+                            schema.principal_binding_proposals,
+                            schema.ha_user_bindings.c.proposal_id
+                            == schema.principal_binding_proposals.c.proposal_id,
+                        )
+                    )
+                    .where(
+                        schema.ha_user_bindings.c.ha_user_id == ha_user_id,
                         schema.ha_user_bindings.c.revoked_at.is_(None),
                     )
                 )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if active is None:
+            historical = (
+                await connection.execute(
+                    select(schema.ha_user_bindings.c.binding_id)
+                    .where(schema.ha_user_bindings.c.ha_user_id == ha_user_id)
+                    .limit(1)
+                )
             ).scalar_one_or_none()
-            if existing:
-                raise ConflictError("HA user is already bound")
-            await connection.execute(
-                insert(schema.principals).values(
-                    principal_id=principal_id,
-                    person_id=value.person_id,
-                    kind="ha_user",
-                    display_label=value.display_label,
+            return "unavailable" if historical is not None else "missing"
+        principal_id = active["binding_principal_id"]
+        person_id = active["binding_person_id"]
+        available = all(
+            (
+                active["source_artifact_id"] is not None,
+                active["proposal_id"] is not None,
+                active["principal_id"] == principal_id,
+                active["principal_person_id"] == person_id,
+                active["confirmed_by_principal_id"] == principal_id,
+                active["principal_kind"] == "ha_user",
+                active["principal_status"] == "active",
+                active["person_id"] == person_id,
+                active["person_status"] == "active",
+                active["proposal_state"] == "consumed",
+                active["result_principal_id"] == principal_id,
+                active["confirmation_artifact_id"]
+                == active["source_artifact_id"],
+            )
+        )
+        if not available:
+            return "unavailable"
+        directives = await self._binding_blocking_directives(connection, person_id)
+        if directives & {"auto_expire", "do_not_track", "ignored", "silent"}:
+            return "unavailable"
+        return "bound"
+
+    async def _principal_binding_proposal_view(
+        self,
+        connection,
+        *,
+        ha_user_id: str,
+        now: datetime,
+    ) -> PrincipalBindingProposalView:
+        binding_status = await self._binding_status_in_transaction(
+            connection, ha_user_id
+        )
+        if binding_status == "bound":
+            return PrincipalBindingProposalView(state="bound")
+        if binding_status == "unavailable":
+            return PrincipalBindingProposalView(state="unavailable")
+        await self._expire_principal_binding_work(
+            connection, now=now, ha_user_id=ha_user_id
+        )
+        row = (
+            (
+                await connection.execute(
+                    select(
+                        schema.principal_binding_requests.c.request_id,
+                        schema.principal_binding_requests.c.state.label(
+                            "request_state"
+                        ),
+                        schema.principal_binding_requests.c.review_code,
+                        schema.principal_binding_proposals.c.state.label(
+                            "proposal_state"
+                        ),
+                        schema.principal_binding_proposals.c.proposal_digest,
+                        schema.principal_binding_proposals.c.expires_at,
+                        schema.principal_binding_proposals.c.ha_user_id.label(
+                            "proposal_ha_user_id"
+                        ),
+                        schema.principal_binding_proposals.c.person_id,
+                        schema.principal_binding_proposals.c.operator_request_id,
+                        schema.principal_binding_proposals.c.reviewed_display_label,
+                        schema.principal_binding_proposals.c.person_snapshot_digest,
+                        schema.principal_binding_proposals.c.stage_receipt_digest,
+                        schema.principal_binding_proposals.c.staged_at,
+                        schema.people.c.display_name.label("current_display_name"),
+                        schema.people.c.status.label("person_status"),
+                        schema.people.c.privacy_scope,
+                        schema.people.c.legacy_source_sha256,
+                        schema.people.c.status_source_sha256,
+                    )
+                    .select_from(
+                        schema.principal_binding_requests.outerjoin(
+                            schema.principal_binding_proposals,
+                            schema.principal_binding_requests.c.request_id
+                            == schema.principal_binding_proposals.c.request_id,
+                        ).outerjoin(
+                            schema.people,
+                            schema.principal_binding_proposals.c.person_id
+                            == schema.people.c.person_id,
+                        )
+                    )
+                    .where(
+                        schema.principal_binding_requests.c.ha_user_id == ha_user_id,
+                        schema.principal_binding_requests.c.state.in_(
+                            ("pending", "staged")
+                        ),
+                    )
+                    .order_by(
+                        schema.principal_binding_requests.c.requested_at.desc()
+                    )
+                    .limit(1)
                 )
             )
-            confirmation_artifact_id = await self._mint_authenticated_confirmation(
-                connection,
-                principal_id=principal_id,
-                purpose="ha_user_person_binding.confirm",
-                proposal_digest=sha256_json(
-                    {
-                        "ha_user_id": value.ha_user_id,
-                        "person_id": str(value.person_id),
-                        "display_label": value.display_label,
-                    }
-                ),
-                client_nonce=value.confirmation_artifact_id,
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            return PrincipalBindingProposalView(state="not_requested")
+        if row["request_state"] == "pending":
+            return PrincipalBindingProposalView(
+                state="awaiting_operator_review",
+                review_code=row["review_code"],
             )
-            await connection.execute(
-                insert(schema.ha_user_bindings).values(
-                    binding_id=uuid7(),
-                    ha_user_id=value.ha_user_id,
-                    principal_id=principal_id,
-                    person_id=value.person_id,
-                    confirmed_by_principal_id=principal_id,
-                    confirmed_at=now,
-                    source_artifact_id=confirmation_artifact_id,
-                )
+        if any(
+            (
+                row["proposal_state"] != "ready",
+                row["person_status"] != "active",
+                row["proposal_digest"] is None,
+                row["expires_at"] is None,
+                row["reviewed_display_label"] is None,
+                row["person_snapshot_digest"] is None,
+                row["proposal_ha_user_id"] is None,
+                row["operator_request_id"] is None,
+                row["stage_receipt_digest"] is None,
+                row["staged_at"] is None,
             )
-        return PrincipalView(
-            principal_id=principal_id,
-            person_id=value.person_id,
-            ha_user_id=value.ha_user_id,
-            status="active",
+        ):
+            return PrincipalBindingProposalView(state="unavailable")
+        expected_proposal_digest = binding_proposal_digest(
+            request_id=row["request_id"],
+            review_code=row["review_code"],
+            ha_user_id=row["proposal_ha_user_id"],
+            person_id=row["person_id"],
+            reviewed_display_label=row["reviewed_display_label"],
+            person_snapshot_digest=row["person_snapshot_digest"],
+            operator_request_id=row["operator_request_id"],
+            stage_receipt_digest=row["stage_receipt_digest"],
+            staged_at=row["staged_at"],
+            expires_at=row["expires_at"],
+            policy_version=self.settings.policy_version,
+            policy_digest=self.settings.policy_digest,
+        )
+        if not hmac.compare_digest(
+            expected_proposal_digest, row["proposal_digest"]
+        ):
+            return PrincipalBindingProposalView(state="unavailable")
+        current_person_snapshot = binding_person_snapshot_digest(
+            {
+                "person_id": row["person_id"],
+                "display_name": row["current_display_name"],
+                "status": row["person_status"],
+                "privacy_scope": row["privacy_scope"],
+                "legacy_source_sha256": row["legacy_source_sha256"],
+                "status_source_sha256": row["status_source_sha256"],
+            }
+        )
+        if not hmac.compare_digest(
+            current_person_snapshot, row["person_snapshot_digest"]
+        ):
+            return PrincipalBindingProposalView(state="unavailable")
+        directives = await self._binding_blocking_directives(
+            connection, row["person_id"]
+        )
+        if directives & {"auto_expire", "do_not_track", "ignored", "silent"}:
+            return PrincipalBindingProposalView(state="unavailable")
+        label = row["reviewed_display_label"]
+        return PrincipalBindingProposalView(
+            state="ready_for_confirmation",
+            reviewed_display_label=label,
+            confirmation_statement=(
+                "Bind this authenticated Home Assistant account to " f"{label}."
+            ),
+            proposal_digest=row["proposal_digest"],
+            expires_at=row["expires_at"],
         )
 
+    async def principal_binding_proposal_status(
+        self, ha_user_id: str
+    ) -> PrincipalBindingProposalView:
+        self._require_rollout("shadow", "principal_binding_request")
+        async with self.database.transaction(ha_user_id=ha_user_id) as connection:
+            return await self._principal_binding_proposal_view(
+                connection, ha_user_id=ha_user_id, now=datetime.now(UTC)
+            )
+
+    async def request_principal_binding(
+        self, ha_user_id: str
+    ) -> PrincipalBindingProposalView:
+        self._require_rollout("shadow", "principal_binding_request")
+        now = datetime.now(UTC)
+        for attempt in range(3):
+            review_code = "".join(
+                secrets.choice(BINDING_REVIEW_CODE_ALPHABET) for _ in range(16)
+            )
+            try:
+                async with self.database.transaction(
+                    ha_user_id=ha_user_id, serializable=True
+                ) as connection:
+                    current = await self._principal_binding_proposal_view(
+                        connection, ha_user_id=ha_user_id, now=now
+                    )
+                    if current.state != "not_requested":
+                        return current
+                    await connection.execute(
+                        insert(schema.principal_binding_requests).values(
+                            request_id=uuid7(),
+                            ha_user_id=ha_user_id,
+                            review_code=review_code,
+                            state="pending",
+                            requested_at=now,
+                            expires_at=now + BINDING_REQUEST_TTL,
+                        )
+                    )
+                return PrincipalBindingProposalView(
+                    state="awaiting_operator_review",
+                    review_code=review_code,
+                )
+            except IntegrityError as exc:
+                current = await self.principal_binding_proposal_status(ha_user_id)
+                if current.state != "not_requested":
+                    return current
+                if attempt == 2:
+                    raise ConflictError(
+                        "could not allocate an opaque binding review code"
+                    ) from exc
+        raise RuntimeError("unreachable binding review-code retry state")
+
+    async def cancel_principal_binding_request(
+        self, ha_user_id: str
+    ) -> PrincipalBindingProposalView:
+        self._require_rollout("shadow", "principal_binding_request")
+        now = datetime.now(UTC)
+        async with self.database.transaction(
+            ha_user_id=ha_user_id, serializable=True
+        ) as connection:
+            await self._expire_principal_binding_work(
+                connection, now=now, ha_user_id=ha_user_id
+            )
+            request_id = (
+                await connection.execute(
+                    select(schema.principal_binding_requests.c.request_id)
+                    .where(
+                        schema.principal_binding_requests.c.ha_user_id == ha_user_id,
+                        schema.principal_binding_requests.c.state.in_(
+                            ("pending", "staged")
+                        ),
+                    )
+                )
+            ).scalar_one_or_none()
+            if request_id is None:
+                return PrincipalBindingProposalView(state="not_requested")
+            # Match the proposal -> request lock order used by confirmation,
+            # expiry, and privacy/person-state cancellation.
+            list(
+                (
+                    await connection.execute(
+                        select(schema.principal_binding_proposals.c.proposal_id)
+                        .where(
+                            schema.principal_binding_proposals.c.request_id
+                            == request_id,
+                            schema.principal_binding_proposals.c.state == "ready",
+                        )
+                        .order_by(schema.principal_binding_proposals.c.proposal_id)
+                        .with_for_update()
+                    )
+                ).scalars()
+            )
+            await connection.execute(
+                update(schema.principal_binding_proposals)
+                .where(
+                    schema.principal_binding_proposals.c.request_id == request_id,
+                    schema.principal_binding_proposals.c.state == "ready",
+                )
+                .values(state="cancelled")
+            )
+            locked_request_id = (
+                await connection.execute(
+                    select(schema.principal_binding_requests.c.request_id)
+                    .where(
+                        schema.principal_binding_requests.c.request_id == request_id,
+                        schema.principal_binding_requests.c.state.in_(
+                            ("pending", "staged")
+                        ),
+                    )
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if locked_request_id is None:
+                return PrincipalBindingProposalView(state="not_requested")
+            await connection.execute(
+                update(schema.principal_binding_requests)
+                .where(
+                    schema.principal_binding_requests.c.request_id
+                    == locked_request_id
+                )
+                .values(state="cancelled", closed_at=now)
+            )
+        return PrincipalBindingProposalView(state="not_requested")
+
+    async def list_pending_principal_binding_requests(
+        self,
+    ) -> OperatorPrincipalBindingRequestsView:
+        self._require_rollout("shadow", "principal_binding_operator_review")
+        now = datetime.now(UTC)
+        async with self.database.transaction(binding_operator=True) as connection:
+            await self._expire_principal_binding_work(connection, now=now)
+            rows = (
+                (
+                    await connection.execute(
+                        select(
+                            schema.principal_binding_requests.c.request_id,
+                            schema.principal_binding_requests.c.review_code,
+                            schema.principal_binding_requests.c.state,
+                            schema.principal_binding_requests.c.requested_at,
+                            schema.principal_binding_requests.c.expires_at,
+                        )
+                        .where(
+                            schema.principal_binding_requests.c.state == "pending"
+                        )
+                        .order_by(
+                            schema.principal_binding_requests.c.requested_at
+                        )
+                        .limit(100)
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        return OperatorPrincipalBindingRequestsView(
+            requests=[OperatorPrincipalBindingRequestView(**row) for row in rows]
+        )
+
+    async def stage_principal_binding_proposal(
+        self, value: OperatorPrincipalBindingProposalStage
+    ) -> OperatorPrincipalBindingProposalView:
+        self._require_rollout("shadow", "principal_binding_operator_review")
+        now = datetime.now(UTC)
+        proposal_id = uuid7()
+        try:
+            async with self.database.transaction(
+                binding_operator=True, serializable=True
+            ) as connection:
+                prior = (
+                    (
+                        await connection.execute(
+                            select(
+                                schema.principal_binding_proposals,
+                                schema.principal_binding_requests.c.review_code.label(
+                                    "request_review_code"
+                                ),
+                            )
+                            .join(
+                                schema.principal_binding_requests,
+                                schema.principal_binding_proposals.c.request_id
+                                == schema.principal_binding_requests.c.request_id,
+                            )
+                            .where(
+                                schema.principal_binding_proposals.c.operator_request_id
+                                == value.operator_request_id
+                            )
+                            .with_for_update(
+                                of=schema.principal_binding_proposals
+                            )
+                        )
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                if prior is not None:
+                    expected_digest = binding_proposal_digest(
+                        request_id=prior["request_id"],
+                        review_code=prior["request_review_code"],
+                        ha_user_id=prior["ha_user_id"],
+                        person_id=prior["person_id"],
+                        reviewed_display_label=prior["reviewed_display_label"],
+                        person_snapshot_digest=prior["person_snapshot_digest"],
+                        operator_request_id=prior["operator_request_id"],
+                        stage_receipt_digest=prior["stage_receipt_digest"],
+                        staged_at=prior["staged_at"],
+                        expires_at=prior["expires_at"],
+                        policy_version=self.settings.policy_version,
+                        policy_digest=self.settings.policy_digest,
+                    )
+                    if any(
+                        (
+                            prior["request_id"] != value.request_id,
+                            prior["request_review_code"] != value.review_code,
+                            prior["person_id"] != value.person_id,
+                            prior["state"] != "ready",
+                            not hmac.compare_digest(
+                                prior["proposal_digest"], expected_digest
+                            ),
+                        )
+                    ):
+                        raise ConflictError("operator request was already consumed")
+                    return OperatorPrincipalBindingProposalView(
+                        proposal_id=prior["proposal_id"],
+                        request_id=prior["request_id"],
+                        person_id=prior["person_id"],
+                        reviewed_display_label=prior["reviewed_display_label"],
+                        state="ready",
+                        stage_receipt_digest=prior["stage_receipt_digest"],
+                        staged_at=prior["staged_at"],
+                        expires_at=prior["expires_at"],
+                    )
+                await self._expire_principal_binding_work(connection, now=now)
+                request = (
+                    (
+                        await connection.execute(
+                            select(schema.principal_binding_requests)
+                            .where(
+                                schema.principal_binding_requests.c.request_id
+                                == value.request_id,
+                                schema.principal_binding_requests.c.review_code
+                                == value.review_code,
+                            )
+                            .with_for_update()
+                        )
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                if request is None:
+                    raise NotFoundError("pending binding request does not exist")
+                if request["state"] != "pending" or request["expires_at"] <= now:
+                    raise ConflictError("binding request is not pending")
+                if (
+                    await self._binding_status_in_transaction(
+                        connection, request["ha_user_id"]
+                    )
+                ) != "missing":
+                    raise ForbiddenError("HA user is unavailable for binding")
+                person = (
+                    (
+                        await connection.execute(
+                            select(schema.people)
+                            .where(schema.people.c.person_id == value.person_id)
+                            .with_for_update()
+                        )
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                if person is None or person["status"] != "active":
+                    raise ForbiddenError("reviewed person is unavailable for binding")
+                directives = await self._binding_blocking_directives(
+                    connection, value.person_id
+                )
+                if directives & {
+                    "auto_expire",
+                    "do_not_track",
+                    "ignored",
+                    "silent",
+                }:
+                    raise ForbiddenError("reviewed person is unavailable for binding")
+                bound_person = (
+                    await connection.execute(
+                        select(schema.ha_user_bindings.c.binding_id).where(
+                            schema.ha_user_bindings.c.person_id == value.person_id,
+                            schema.ha_user_bindings.c.revoked_at.is_(None),
+                        )
+                    )
+                ).scalar_one_or_none()
+                if bound_person is not None:
+                    raise ConflictError("reviewed person is already bound")
+                person_snapshot_digest = binding_person_snapshot_digest(person)
+                reviewed_display_label = person["display_name"]
+                expires_at = min(
+                    request["expires_at"], now + BINDING_PROPOSAL_TTL
+                )
+                stage_receipt_digest = sha256_json(
+                    {
+                        "contract": "principal-binding-stage-v1",
+                        "request_id": str(value.request_id),
+                        "review_code": value.review_code,
+                        "ha_user_id": request["ha_user_id"],
+                        "person_id": str(value.person_id),
+                        "reviewed_display_label": reviewed_display_label,
+                        "person_snapshot_digest": person_snapshot_digest,
+                        "operator_request_id": str(value.operator_request_id),
+                        "policy_version": self.settings.policy_version,
+                        "policy_digest": self.settings.policy_digest,
+                    }
+                )
+                proposal_digest = binding_proposal_digest(
+                    request_id=value.request_id,
+                    review_code=value.review_code,
+                    ha_user_id=request["ha_user_id"],
+                    person_id=value.person_id,
+                    reviewed_display_label=reviewed_display_label,
+                    person_snapshot_digest=person_snapshot_digest,
+                    operator_request_id=value.operator_request_id,
+                    stage_receipt_digest=stage_receipt_digest,
+                    staged_at=now,
+                    expires_at=expires_at,
+                    policy_version=self.settings.policy_version,
+                    policy_digest=self.settings.policy_digest,
+                )
+                await connection.execute(
+                    insert(schema.principal_binding_proposals).values(
+                        proposal_id=proposal_id,
+                        request_id=value.request_id,
+                        ha_user_id=request["ha_user_id"],
+                        person_id=value.person_id,
+                        operator_request_id=value.operator_request_id,
+                        reviewed_display_label=reviewed_display_label,
+                        person_snapshot_digest=person_snapshot_digest,
+                        proposal_digest=proposal_digest,
+                        state="ready",
+                        stage_receipt_digest=stage_receipt_digest,
+                        staged_at=now,
+                        expires_at=expires_at,
+                    )
+                )
+                await connection.execute(
+                    update(schema.principal_binding_requests)
+                    .where(
+                        schema.principal_binding_requests.c.request_id
+                        == value.request_id,
+                        schema.principal_binding_requests.c.state == "pending",
+                    )
+                    .values(
+                        state="staged",
+                        staged_at=now,
+                        expires_at=expires_at,
+                    )
+                )
+            return OperatorPrincipalBindingProposalView(
+                proposal_id=proposal_id,
+                request_id=value.request_id,
+                person_id=value.person_id,
+                reviewed_display_label=reviewed_display_label,
+                state="ready",
+                stage_receipt_digest=stage_receipt_digest,
+                staged_at=now,
+                expires_at=expires_at,
+            )
+        except IntegrityError as exc:
+            raise ConflictError("binding proposal conflicts with active state") from exc
+
+    async def confirm_principal_binding_proposal(
+        self,
+        ha_user_id: str,
+        value: PrincipalBindingConfirmation,
+    ) -> PrincipalBindingConfirmationView:
+        self._require_rollout("shadow", "principal_binding_confirmation")
+        now = datetime.now(UTC)
+        principal_id = uuid7()
+        expired = False
+        result: PrincipalBindingConfirmationView | None = None
+        try:
+            async with self.database.transaction(
+                principal_id=principal_id,
+                ha_user_id=ha_user_id,
+                serializable=True,
+            ) as connection:
+                proposal_row = (
+                    (
+                        await connection.execute(
+                            select(schema.principal_binding_proposals)
+                            .where(
+                                schema.principal_binding_proposals.c.ha_user_id
+                                == ha_user_id,
+                                schema.principal_binding_proposals.c.proposal_digest
+                                == value.proposal_digest,
+                            )
+                            .with_for_update()
+                        )
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                if proposal_row is None:
+                    raise NotFoundError("binding proposal does not exist")
+                if not hmac.compare_digest(
+                    proposal_row["proposal_digest"], value.proposal_digest
+                ):
+                    raise NotFoundError("binding proposal does not exist")
+                request = (
+                    (
+                        await connection.execute(
+                            select(schema.principal_binding_requests)
+                            .where(
+                                schema.principal_binding_requests.c.request_id
+                                == proposal_row["request_id"],
+                                schema.principal_binding_requests.c.ha_user_id
+                                == ha_user_id,
+                            )
+                            .with_for_update()
+                        )
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                person = (
+                    (
+                        await connection.execute(
+                            select(schema.people)
+                            .where(
+                                schema.people.c.person_id
+                                == proposal_row["person_id"]
+                            )
+                            .with_for_update()
+                        )
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                if request is None or person is None:
+                    raise ConflictError("binding proposal graph is malformed")
+                proposal = {
+                    **proposal_row,
+                    "request_state": request["state"],
+                    "request_review_code": request["review_code"],
+                    "current_display_name": person["display_name"],
+                    "person_status": person["status"],
+                    "privacy_scope": person["privacy_scope"],
+                    "legacy_source_sha256": person["legacy_source_sha256"],
+                    "status_source_sha256": person["status_source_sha256"],
+                }
+                expected_proposal_digest = binding_proposal_digest(
+                    request_id=proposal["request_id"],
+                    review_code=proposal["request_review_code"],
+                    ha_user_id=proposal["ha_user_id"],
+                    person_id=proposal["person_id"],
+                    reviewed_display_label=proposal["reviewed_display_label"],
+                    person_snapshot_digest=proposal["person_snapshot_digest"],
+                    operator_request_id=proposal["operator_request_id"],
+                    stage_receipt_digest=proposal["stage_receipt_digest"],
+                    staged_at=proposal["staged_at"],
+                    expires_at=proposal["expires_at"],
+                    policy_version=self.settings.policy_version,
+                    policy_digest=self.settings.policy_digest,
+                )
+                if not hmac.compare_digest(
+                    proposal["proposal_digest"], expected_proposal_digest
+                ):
+                    raise ConflictError("binding proposal integrity check failed")
+                if proposal["state"] == "consumed":
+                    if proposal["consumed_at"] is None:
+                        raise ConflictError("consumed binding proposal is malformed")
+                    if (
+                        await self._binding_status_in_transaction(
+                            connection, ha_user_id
+                        )
+                    ) != "bound":
+                        raise ConflictError(
+                            "consumed binding proposal has no available binding"
+                        )
+                    return PrincipalBindingConfirmationView(
+                        confirmed_at=proposal["consumed_at"]
+                    )
+                if (
+                    proposal["state"] != "ready"
+                    or proposal["request_state"] != "staged"
+                ):
+                    raise ConflictError("binding proposal is not confirmable")
+                if proposal["expires_at"] <= now:
+                    await connection.execute(
+                        update(schema.principal_binding_proposals)
+                        .where(
+                            schema.principal_binding_proposals.c.proposal_id
+                            == proposal["proposal_id"]
+                        )
+                        .values(state="expired")
+                    )
+                    await connection.execute(
+                        update(schema.principal_binding_requests)
+                        .where(
+                            schema.principal_binding_requests.c.request_id
+                            == proposal["request_id"]
+                        )
+                        .values(state="expired", closed_at=now)
+                    )
+                    expired = True
+                else:
+                    if proposal["person_status"] != "active":
+                        raise ForbiddenError("reviewed person is unavailable")
+                    current_person_snapshot = binding_person_snapshot_digest(
+                        {
+                            "person_id": proposal["person_id"],
+                            "display_name": proposal["current_display_name"],
+                            "status": proposal["person_status"],
+                            "privacy_scope": proposal["privacy_scope"],
+                            "legacy_source_sha256": proposal[
+                                "legacy_source_sha256"
+                            ],
+                            "status_source_sha256": proposal[
+                                "status_source_sha256"
+                            ],
+                        }
+                    )
+                    if not hmac.compare_digest(
+                        current_person_snapshot,
+                        proposal["person_snapshot_digest"],
+                    ):
+                        raise ConflictError(
+                            "reviewed person changed after operator staging"
+                        )
+                    blocked = (
+                        await connection.execute(
+                            select(schema.edge_privacy_user_blocks.c.block_id).where(
+                                schema.edge_privacy_user_blocks.c.ha_user_id
+                                == ha_user_id
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    directives = await self._binding_blocking_directives(
+                        connection, proposal["person_id"]
+                    )
+                    if blocked is not None or directives & {
+                        "auto_expire",
+                        "do_not_track",
+                        "ignored",
+                        "silent",
+                    }:
+                        raise ForbiddenError("binding is prohibited by privacy policy")
+                    existing = (
+                        await connection.execute(
+                            select(schema.ha_user_bindings.c.binding_id)
+                            .where(
+                                schema.ha_user_bindings.c.revoked_at.is_(None),
+                                or_(
+                                    schema.ha_user_bindings.c.ha_user_id
+                                    == ha_user_id,
+                                    schema.ha_user_bindings.c.person_id
+                                    == proposal["person_id"],
+                                ),
+                            )
+                            .limit(1)
+                            .with_for_update()
+                        )
+                    ).scalar_one_or_none()
+                    if existing is not None:
+                        raise ConflictError("HA user or person is already bound")
+                    await connection.execute(
+                        insert(schema.principals).values(
+                            principal_id=principal_id,
+                            person_id=proposal["person_id"],
+                            kind="ha_user",
+                            display_label=proposal["reviewed_display_label"],
+                            status="active",
+                        )
+                    )
+                    confirmation_artifact_id = (
+                        await self._mint_authenticated_confirmation(
+                            connection,
+                            principal_id=principal_id,
+                            purpose="ha_user_person_binding.confirm",
+                            proposal_digest=proposal["proposal_digest"],
+                            client_nonce=value.confirmation_nonce,
+                        )
+                    )
+                    binding_id = uuid7()
+                    await connection.execute(
+                        insert(schema.ha_user_bindings).values(
+                            binding_id=binding_id,
+                            ha_user_id=ha_user_id,
+                            principal_id=principal_id,
+                            person_id=proposal["person_id"],
+                            confirmed_by_principal_id=principal_id,
+                            confirmed_at=now,
+                            source_artifact_id=confirmation_artifact_id,
+                            proposal_id=proposal["proposal_id"],
+                        )
+                    )
+                    await connection.execute(
+                        update(schema.principal_binding_proposals)
+                        .where(
+                            schema.principal_binding_proposals.c.proposal_id
+                            == proposal["proposal_id"],
+                            schema.principal_binding_proposals.c.state == "ready",
+                        )
+                        .values(
+                            state="consumed",
+                            consumed_at=now,
+                            result_principal_id=principal_id,
+                            confirmation_artifact_id=confirmation_artifact_id,
+                        )
+                    )
+                    await connection.execute(
+                        update(schema.principal_binding_requests)
+                        .where(
+                            schema.principal_binding_requests.c.request_id
+                            == proposal["request_id"],
+                            schema.principal_binding_requests.c.state == "staged",
+                        )
+                        .values(state="consumed", closed_at=now)
+                    )
+                    result = PrincipalBindingConfirmationView(confirmed_at=now)
+        except IntegrityError as exc:
+            raise ConflictError("binding confirmation conflicts with active state") from exc
+        if expired:
+            raise ConflictError("binding proposal expired")
+        if result is None:
+            raise ConflictError("binding confirmation did not commit")
+        return result
+
     async def resolve_principal(self, ha_user_id: str) -> dict[str, Any]:
-        async with self.database.transaction() as connection:
+        async with self.database.transaction(ha_user_id=ha_user_id) as connection:
+            if (
+                await self._binding_status_in_transaction(connection, ha_user_id)
+                != "bound"
+            ):
+                raise ForbiddenError(
+                    "HA user has no available confirmed principal binding"
+                )
             row = (
                 (
                     await connection.execute(
@@ -2141,22 +3107,23 @@ class CoreStore:
                                 schema.principals,
                                 schema.ha_user_bindings.c.principal_id
                                 == schema.principals.c.principal_id,
+                            ).join(
+                                schema.people,
+                                schema.ha_user_bindings.c.person_id
+                                == schema.people.c.person_id,
                             )
                         )
                         .where(
                             schema.ha_user_bindings.c.ha_user_id == ha_user_id,
                             schema.ha_user_bindings.c.revoked_at.is_(None),
                             schema.principals.c.status == "active",
+                            schema.people.c.status == "active",
                         )
                     )
                 )
                 .mappings()
-                .first()
+                .one_or_none()
             )
-            if row is not None:
-                directives = await self._active_directives(connection, row["person_id"])
-                if directives & {"auto_expire", "do_not_track", "ignored"}:
-                    row = None
         if row is None:
             raise ForbiddenError("HA user has no available confirmed principal binding")
         return dict(row)
@@ -2172,81 +3139,8 @@ class CoreStore:
         without exposing the bound person or principal.
         """
 
-        async with self.database.transaction() as connection:
-            privacy_blocked = (
-                await connection.execute(
-                    select(schema.edge_privacy_user_blocks.c.block_id).where(
-                        schema.edge_privacy_user_blocks.c.ha_user_id == ha_user_id
-                    )
-                )
-            ).scalar_one_or_none()
-            if privacy_blocked is not None:
-                return "unavailable"
-            row = (
-                (
-                    await connection.execute(
-                        select(
-                            schema.ha_user_bindings.c.principal_id.label(
-                                "binding_principal_id"
-                            ),
-                            schema.ha_user_bindings.c.person_id.label(
-                                "binding_person_id"
-                            ),
-                            schema.ha_user_bindings.c.confirmed_by_principal_id,
-                            schema.ha_user_bindings.c.source_artifact_id,
-                            schema.ha_user_bindings.c.revoked_at,
-                            schema.principals.c.principal_id.label(
-                                "principal_id"
-                            ),
-                            schema.principals.c.person_id.label(
-                                "principal_person_id"
-                            ),
-                            schema.principals.c.kind.label("principal_kind"),
-                            schema.principals.c.status.label("principal_status"),
-                            schema.people.c.person_id.label("person_id"),
-                            schema.people.c.status.label("person_status"),
-                        )
-                        .select_from(
-                            schema.ha_user_bindings.outerjoin(
-                                schema.principals,
-                                schema.ha_user_bindings.c.principal_id
-                                == schema.principals.c.principal_id,
-                            ).outerjoin(
-                                schema.people,
-                                schema.ha_user_bindings.c.person_id
-                                == schema.people.c.person_id,
-                            )
-                        )
-                        .where(schema.ha_user_bindings.c.ha_user_id == ha_user_id)
-                    )
-                )
-                .mappings()
-                .one_or_none()
-            )
-            if row is None:
-                return "missing"
-
-            binding_principal_id = row["binding_principal_id"]
-            binding_person_id = row["binding_person_id"]
-            available = all(
-                (
-                    row["revoked_at"] is None,
-                    row["source_artifact_id"] is not None,
-                    row["principal_id"] == binding_principal_id,
-                    row["principal_person_id"] == binding_person_id,
-                    row["confirmed_by_principal_id"] == binding_principal_id,
-                    row["principal_kind"] == "ha_user",
-                    row["principal_status"] == "active",
-                    row["person_id"] == binding_person_id,
-                    row["person_status"] == "active",
-                )
-            )
-            if not available:
-                return "unavailable"
-            directives = await self._active_directives(connection, binding_person_id)
-            if directives & {"auto_expire", "do_not_track", "ignored", "silent"}:
-                return "unavailable"
-            return "bound"
+        async with self.database.transaction(ha_user_id=ha_user_id) as connection:
+            return await self._binding_status_in_transaction(connection, ha_user_id)
 
     async def bind_source_entity(
         self,
@@ -5297,6 +6191,34 @@ class CoreStore:
                                     schema.privacy_directives.c.expires_at > now,
                                 ),
                             ),
+                        ),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return set(values)
+
+    @staticmethod
+    async def _binding_blocking_directives(
+        connection, person_id: uuid.UUID
+    ) -> set[str]:
+        """Return binding blockers, including scheduled future auto-expiry.
+
+        A scheduled erasure is an immediate fail-closed identity directive for
+        account binding even though other time-aware projections may remain
+        usable until the due time.
+        """
+
+        values = (
+            (
+                await connection.execute(
+                    select(schema.privacy_directives.c.directive).where(
+                        schema.privacy_directives.c.person_id == person_id,
+                        schema.privacy_directives.c.enabled.is_(True),
+                        schema.privacy_directives.c.directive.in_(
+                            ("auto_expire", "do_not_track", "ignored", "silent")
                         ),
                     )
                 )

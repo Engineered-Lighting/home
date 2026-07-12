@@ -41,6 +41,9 @@ from .models import (
     MemoryTransactionView,
     OperatorCapabilities,
     OperatorImportCapability,
+    OperatorPrincipalBindingProposalStage,
+    OperatorPrincipalBindingProposalView,
+    OperatorPrincipalBindingRequestsView,
     MemoryInspection,
     OnboardingStatusView,
     ParentConfirmation,
@@ -50,8 +53,10 @@ from .models import (
     PersonView,
     PlaceCreate,
     PreferenceUpdate,
-    PrincipalBindingCreate,
-    PrincipalView,
+    PrincipalBindingConfirmation,
+    PrincipalBindingConfirmationView,
+    PrincipalBindingProposalView,
+    PrincipalBindingRequestAction,
     ReviewedPersonVerify,
     ReviewedAliasImport,
     ReviewedRecognitionBindingImport,
@@ -71,10 +76,18 @@ def store_from(request: Request) -> CoreStore:
     return request.app.state.store
 
 
+def operator_binding_store_from(request: Request) -> CoreStore:
+    store = request.app.state.operator_store
+    if store is None:
+        raise CapabilityDisabledError("binding operator database role is unavailable")
+    return store
+
+
 Service = Annotated[ServiceIdentity, Depends(require_service_identity)]
 NativeService = Annotated[ServiceIdentity, Depends(require_native_service_identity)]
 OperatorService = Annotated[None, Depends(require_operator_bearer)]
 Store = Annotated[CoreStore, Depends(store_from)]
+OperatorBindingStore = Annotated[CoreStore, Depends(operator_binding_store_from)]
 
 
 async def principal_from(
@@ -414,19 +427,85 @@ def semantic_router() -> APIRouter:
             lambda: store.import_reviewed_person_status(person_id, value)
         )
 
+    @router.get(
+        "/operator/principal-binding-requests",
+        response_model=OperatorPrincipalBindingRequestsView,
+    )
+    async def list_principal_binding_requests(
+        _service: OperatorService,
+        store: OperatorBindingStore,
+        _bootstrap: None = Depends(require_bootstrap),
+    ) -> OperatorPrincipalBindingRequestsView:
+        return await store.list_pending_principal_binding_requests()
+
     @router.post(
-        "/principal-bindings",
-        response_model=PrincipalView,
+        "/operator/principal-binding-proposals",
+        response_model=OperatorPrincipalBindingProposalView,
         status_code=status.HTTP_201_CREATED,
     )
-    async def bind_principal(
-        value: PrincipalBindingCreate,
+    async def stage_principal_binding_proposal(
+        value: OperatorPrincipalBindingProposalStage,
+        _service: OperatorService,
+        store: OperatorBindingStore,
+        _bootstrap: None = Depends(require_bootstrap),
+    ) -> OperatorPrincipalBindingProposalView:
+        return await store.database.run_serializable(
+            lambda: store.stage_principal_binding_proposal(value)
+        )
+
+    @router.get(
+        "/principal-binding-proposal",
+        response_model=PrincipalBindingProposalView,
+        response_model_exclude_none=True,
+    )
+    async def principal_binding_proposal(
         service: Service,
         store: Store,
-        _bootstrap: None = Depends(require_bootstrap),
-    ) -> PrincipalView:
+    ) -> PrincipalBindingProposalView:
+        return await store.principal_binding_proposal_status(service.ha_user_id)
+
+    @router.post(
+        "/principal-binding-request",
+        response_model=PrincipalBindingProposalView,
+        response_model_exclude_none=True,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def request_principal_binding(
+        _value: PrincipalBindingRequestAction,
+        service: Service,
+        store: Store,
+    ) -> PrincipalBindingProposalView:
         return await store.database.run_serializable(
-            lambda: store.bind_principal(service.ha_user_id, value)
+            lambda: store.request_principal_binding(service.ha_user_id)
+        )
+
+    @router.post(
+        "/principal-binding-request/cancel",
+        response_model=PrincipalBindingProposalView,
+        response_model_exclude_none=True,
+    )
+    async def cancel_principal_binding_request(
+        _value: PrincipalBindingRequestAction,
+        service: Service,
+        store: Store,
+    ) -> PrincipalBindingProposalView:
+        return await store.database.run_serializable(
+            lambda: store.cancel_principal_binding_request(service.ha_user_id)
+        )
+
+    @router.post(
+        "/principal-binding-proposal/confirm",
+        response_model=PrincipalBindingConfirmationView,
+    )
+    async def confirm_principal_binding_proposal(
+        value: PrincipalBindingConfirmation,
+        service: Service,
+        store: Store,
+    ) -> PrincipalBindingConfirmationView:
+        return await store.database.run_serializable(
+            lambda: store.confirm_principal_binding_proposal(
+                service.ha_user_id, value
+            )
         )
 
     @router.post(

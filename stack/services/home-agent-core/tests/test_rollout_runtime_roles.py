@@ -149,6 +149,31 @@ async def test_one_shot_role_is_the_only_writer_and_every_gate_reads_receipt() -
                 )
             ).scalar_one()
             assert updatable == "NO"
+            view_privileges = (
+                await connection.execute(
+                    text(
+                        "SELECT "
+                        "has_table_privilege('home_agent_rollout', "
+                        "'operations.phase2_rollout_evidence', 'SELECT') "
+                        "AS can_select, "
+                        "has_table_privilege('home_agent_rollout', "
+                        "'operations.phase2_rollout_evidence', 'INSERT') "
+                        "AS can_insert, "
+                        "has_table_privilege('home_agent_rollout', "
+                        "'operations.phase2_rollout_evidence', 'UPDATE') "
+                        "AS can_update, "
+                        "has_table_privilege('home_agent_rollout', "
+                        "'operations.phase2_rollout_evidence', 'DELETE') "
+                        "AS can_delete"
+                    )
+                )
+            ).mappings().one()
+            assert dict(view_privileges) == {
+                "can_select": True,
+                "can_insert": False,
+                "can_update": False,
+                "can_delete": False,
+            }
         readiness = await Phase2GateInspector(
             api,
             rollout_mode="record_only",
@@ -225,7 +250,9 @@ async def test_one_shot_role_is_the_only_writer_and_every_gate_reads_receipt() -
         await assert_denied(rollout_delete)
         await assert_denied(rollout_canary_insert, "23514")
         await assert_denied(rollout_base_read)
-        await assert_denied(rollout_view_insert)
+        # PostgreSQL reports the security-barrier view's intentional
+        # non-updatability before its absent INSERT ACL. Both are asserted.
+        await assert_denied(rollout_view_insert, "55000")
     finally:
         try:
             async with owner.transaction() as connection:

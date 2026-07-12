@@ -104,6 +104,17 @@ PROJECTION_KEYS = frozenset(
         "record",
     }
 )
+FINALIZATION_ENVELOPE_KEYS = frozenset(
+    {
+        "contract_version",
+        "finalization_id",
+        "finalization_commitment",
+        "signature_algorithm",
+        "signing_key_fingerprint",
+        "signature_scope",
+        "finalization_signature",
+    }
+)
 SOURCE_RECORD_KEYS = frozenset(
     {"source_item_id", "source_table_kind", "row_key", "allowed_projection"}
 )
@@ -146,6 +157,8 @@ class VerificationError(RuntimeError):
 class VerificationPolicy:
     review_public_key: Ed25519PublicKey
     review_key_fingerprint: str
+    finalization_public_key: Ed25519PublicKey
+    finalization_key_fingerprint: str
     commitment_key: bytes
     commitment_key_epoch: int
     commitment_key_fingerprint: str
@@ -160,6 +173,8 @@ class VerificationPolicy:
     shadow_authorization_id: uuid.UUID
     review_key_purpose: str = "identity_migration_review"
     review_key_revoked: bool = False
+    finalization_key_purpose: str = "identity_migration_finalization"
+    finalization_key_revoked: bool = False
     now: Callable[[], datetime] = lambda: datetime.now(UTC)
 
     def __post_init__(self) -> None:
@@ -167,12 +182,17 @@ class VerificationPolicy:
             raise ValueError("review public key has the wrong purpose")
         if self.review_key_revoked:
             raise ValueError("review public key is revoked")
+        if self.finalization_key_purpose != "identity_migration_finalization":
+            raise ValueError("finalization public key has the wrong purpose")
+        if self.finalization_key_revoked:
+            raise ValueError("finalization public key is revoked")
         if not self.commitment_key or len(self.commitment_key) < 32:
             raise ValueError("commitment key must contain at least 256 bits")
         if self.commitment_key_epoch <= 0:
             raise ValueError("commitment key epoch must be positive")
         for value in (
             self.review_key_fingerprint,
+            self.finalization_key_fingerprint,
             self.commitment_key_fingerprint,
             self.policy_digest,
             self.source_projection_contract_digest,
@@ -194,6 +214,17 @@ class VerificationPolicy:
             hashlib.sha256(raw_public).hexdigest(), self.review_key_fingerprint
         ):
             raise ValueError("review public key fingerprint mismatch")
+        raw_finalization_public = self.finalization_public_key.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        if not hmac.compare_digest(
+            hashlib.sha256(raw_finalization_public).hexdigest(),
+            self.finalization_key_fingerprint,
+        ):
+            raise ValueError("finalization public key fingerprint mismatch")
+        if hmac.compare_digest(raw_public, raw_finalization_public):
+            raise ValueError("review and finalization public keys must be distinct")
         if not hmac.compare_digest(
             hashlib.sha256(self.commitment_key).hexdigest(),
             self.commitment_key_fingerprint,
@@ -204,9 +235,10 @@ class VerificationPolicy:
 @dataclass(frozen=True, slots=True)
 class VerifiedProjectionBundle:
     run_id: uuid.UUID
-    review_receipt_commitment: str
-    projection_manifest_commitment: str
+    review_expires_at: datetime
+    review_expired: bool
     _projections_canonical: bytes
+    _finalization_proposal_canonical: bytes
     verified_at: datetime
 
     @property
@@ -218,20 +250,57 @@ class VerifiedProjectionBundle:
             raise AssertionError("verified projection storage is malformed")
         return tuple(parsed)
 
-    def finalizer_document(self) -> dict[str, Any]:
-        """Return the private, bounded input for a future atomic DB finalizer.
+    @property
+    def finalization_proposal(self) -> Mapping[str, Any]:
+        """Return a fresh parse of the unsigned, non-authoritative proposal."""
 
-        This result intentionally contains no raw legacy source record and no
-        caller-supplied authority or cutover flag.
-        """
+        parsed = parse_canonical_json(
+            self._finalization_proposal_canonical, maximum=MAX_CANONICAL_BYTES
+        )
+        if not isinstance(parsed, dict):  # constructor-owned invariant
+            raise AssertionError("verified finalization proposal is malformed")
+        return parsed
 
-        return {
-            "contract_version": "reviewed-identity-semantic-finalizer-input-v1",
-            "run_id": str(self.run_id),
-            "review_receipt_commitment": self.review_receipt_commitment,
-            "projection_manifest_commitment": self.projection_manifest_commitment,
-            "projections": [dict(item) for item in self.projections],
-        }
+    def _finalization_signing_payload_unchecked(self) -> bytes:
+        return canonical_bytes(
+            {
+                "domain": "reviewed-identity-migration-finalization-v1",
+                "finalization": self.finalization_proposal,
+            }
+        )
+
+    def finalization_signing_payload(self, *, now: datetime) -> bytes:
+        """Return signing bytes only while the reviewed admission is live."""
+
+        if now.tzinfo is None:
+            raise ValueError("finalization signing clock must be aware")
+        if self.review_expired or self.review_expires_at <= now.astimezone(UTC):
+            raise VerificationError("reviewed projection bundle is expired")
+        return self._finalization_signing_payload_unchecked()
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedFinalizerDocument:
+    """Immutable holder for finalizer input authenticated by both signatures."""
+
+    run_id: uuid.UUID
+    finalization_id: uuid.UUID
+    _document_canonical: bytes
+    verified_at: datetime
+    review_expired: bool
+    auto_expiry_elapsed: bool
+
+    @property
+    def document(self) -> Mapping[str, Any]:
+        parsed = parse_canonical_json(
+            self._document_canonical, maximum=MAX_CANONICAL_BYTES
+        )
+        if not isinstance(parsed, dict):  # constructor-owned invariant
+            raise AssertionError("verified finalizer document is malformed")
+        return parsed
+
+    def canonical_document(self) -> bytes:
+        return bytes(self._document_canonical)
 
 
 def _pairs_without_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -374,7 +443,13 @@ def _require_exact_keys(record: Mapping[str, Any], keys: set[str], label: str) -
         raise VerificationError(f"{label} record shape is invalid")
 
 
-def _validate_projection_record(kind: str, decision_id: str, value: Any) -> None:
+def _validate_projection_record(
+    kind: str,
+    decision_id: str,
+    value: Any,
+    *,
+    verified_at: datetime | None = None,
+) -> None:
     if not isinstance(value, dict):
         raise VerificationError("projection record is invalid")
     if kind == "person":
@@ -443,7 +518,9 @@ def _validate_projection_record(kind: str, decision_id: str, value: Any) -> None
         ):
             raise VerificationError("privacy directive is invalid")
         if value["directive"] == "auto_expire":
-            _canonical_time(value["expires_at"], "auto expiry")
+            auto_expiry = _canonical_time(value["expires_at"], "auto expiry")
+            if verified_at is not None and auto_expiry <= verified_at:
+                raise VerificationError("auto expiry is not strictly future")
         elif value["expires_at"] is not None:
             raise VerificationError("non-expiring privacy directive has an expiry")
         _validate_source_fields(value)
@@ -585,11 +662,279 @@ def _constant_equal(actual: Any, expected: str, label: str) -> None:
         raise VerificationError(f"{label} does not match deployment policy")
 
 
-def verify_projection_bundle(
+def _projection_id(kind: str, record: Mapping[str, Any]) -> str:
+    field = {
+        "person": "person_id",
+        "person_status": "person_id",
+        "privacy_directive": "directive_id",
+        "alias": "alias_id",
+        "recognition_binding": "binding_id",
+        "legacy_role_candidate": "label_id",
+        "legacy_relationship_candidate": "candidate_id",
+    }.get(kind)
+    if field is None:  # verified decision-kind invariant
+        raise AssertionError("unsupported projection kind")
+    return str(_canonical_uuid(record[field], "projection"))
+
+
+def _projection_subjects(kind: str, record: Mapping[str, Any]) -> list[dict[str, str]]:
+    if kind == "legacy_relationship_candidate":
+        return [
+            {"person_id": record["from_person_id"], "subject_role": "from"},
+            {"person_id": record["to_person_id"], "subject_role": "to"},
+        ]
+    return [{"person_id": record["person_id"], "subject_role": "primary"}]
+
+
+def _validate_projection_closure(
+    projections: Sequence[Mapping[str, Any]],
+) -> None:
+    people: dict[str, Mapping[str, Any]] = {}
+    person_statuses: set[str] = set()
+    directive_kinds: set[tuple[str, str]] = set()
+    for projection in projections:
+        kind = projection["decision_kind"]
+        record = projection["record"]
+        if kind == "person_status":
+            if record["person_id"] in person_statuses:
+                raise VerificationError("person has duplicate status projections")
+            person_statuses.add(record["person_id"])
+            continue
+        if kind == "privacy_directive":
+            identity = (record["person_id"], record["directive"])
+            if identity in directive_kinds:
+                raise VerificationError("person has a duplicate privacy directive")
+            directive_kinds.add(identity)
+            continue
+        if kind != "person":
+            continue
+        person_id = record["person_id"]
+        if person_id in people:
+            raise VerificationError("projection set contains a duplicate person")
+        people[person_id] = record
+
+    ignored_people = {
+        projection["record"]["person_id"]
+        for projection in projections
+        if projection["decision_kind"] == "privacy_directive"
+        and projection["record"]["directive"] == "ignored"
+    }
+    do_not_track_people = {
+        projection["record"]["person_id"]
+        for projection in projections
+        if projection["decision_kind"] == "privacy_directive"
+        and projection["record"]["directive"] == "do_not_track"
+    }
+    blocked_people = ignored_people | do_not_track_people
+
+    for person_id in ignored_people:
+        person = people.get(person_id)
+        if person is None or person["display_name"] != "Suppressed legacy identity":
+            raise VerificationError("ignored identity is not a suppressed tombstone")
+        if person["pronouns"] is not None:
+            raise VerificationError("ignored identity is not a suppressed tombstone")
+
+    ignored_forbidden_kinds = {
+        "alias",
+        "recognition_binding",
+        "legacy_role_candidate",
+        "legacy_relationship_candidate",
+    }
+    for projection in projections:
+        kind = projection["decision_kind"]
+        record = projection["record"]
+        subjects = _projection_subjects(kind, record)
+        if any(subject["person_id"] not in people for subject in subjects):
+            raise VerificationError("projection subject is not a same-run person")
+        if kind in ignored_forbidden_kinds and any(
+            subject["person_id"] in ignored_people for subject in subjects
+        ):
+            raise VerificationError("ignored identity has a prohibited projection")
+        if (
+            kind == "recognition_binding"
+            and record["status"] == "active"
+            and record["person_id"] in blocked_people
+        ):
+            raise VerificationError(
+                "blocked identity has an active recognition binding"
+            )
+
+
+def _compile_finalization_proposal(
+    *,
+    run: Mapping[str, Any],
+    sources: Sequence[Mapping[str, Any]],
+    decisions: Sequence[Mapping[str, Any]],
+    projections: Sequence[Mapping[str, Any]],
+    policy: VerificationPolicy,
+) -> bytes:
+    run_id = run["run_id"]
+    decision_manifest_commitment = keyed_commitment(
+        policy.commitment_key,
+        "identity-decision-manifest-v1",
+        decisions,
+    )
+    receipt_set = [
+        {
+            "receipt_id": projection["receipt_id"],
+            "decision_id": projection["decision_id"],
+            "receipt_commitment": projection["receipt_commitment"],
+            "projection_ref_commitment": projection["projection_ref_commitment"],
+            "projection_commitment": projection["projection_commitment"],
+        }
+        for projection in projections
+    ]
+    receipt_set_commitment = keyed_commitment(
+        policy.commitment_key,
+        "identity-projection-receipt-set-v1",
+        receipt_set,
+    )
+    compiled_projections: list[dict[str, Any]] = []
+    for projection in projections:
+        kind = projection["decision_kind"]
+        projection_id = _projection_id(kind, projection["record"])
+        subjects = _projection_subjects(kind, projection["record"])
+        lineage = {
+            "lineage_id": projection["receipt_id"],
+            "run_id": run_id,
+            "receipt_id": projection["receipt_id"],
+            "decision_id": projection["decision_id"],
+            "decision_kind": kind,
+            "projection_table_kind": projection["projection_table_kind"],
+            "projection_id": projection_id,
+            "projection_ref_commitment": projection["projection_ref_commitment"],
+            "subjects": subjects,
+        }
+        lineage["lineage_commitment"] = keyed_commitment(
+            policy.commitment_key,
+            "identity-projection-lineage-v1",
+            lineage,
+        )
+        compiled = dict(projection)
+        compiled["lineage"] = lineage
+        compiled_projections.append(compiled)
+
+    lineage_set_commitment = keyed_commitment(
+        policy.commitment_key,
+        "identity-projection-lineage-set-v1",
+        [projection["lineage"] for projection in compiled_projections],
+    )
+    directives_by_person: dict[str, list[dict[str, Any]]] = {}
+    auto_expiry_effects: list[dict[str, Any]] = []
+    for projection in compiled_projections:
+        if projection["decision_kind"] != "privacy_directive":
+            continue
+        record = projection["record"]
+        directive = {
+            "directive_id": record["directive_id"],
+            "decision_id": projection["decision_id"],
+            "receipt_id": projection["receipt_id"],
+            "directive": record["directive"],
+            "enabled": record["enabled"],
+            "expires_at": record["expires_at"],
+            "projection_ref_commitment": projection["projection_ref_commitment"],
+        }
+        directives_by_person.setdefault(record["person_id"], []).append(directive)
+        if record["directive"] == "auto_expire":
+            effect = {
+                "schedule_id": record["directive_id"],
+                "outbox_id": projection["receipt_id"],
+                "person_id": record["person_id"],
+                "directive_id": record["directive_id"],
+                "topic": "privacy.person.auto_expire",
+                "due_at": record["expires_at"],
+                "source_receipt_commitment": projection["receipt_commitment"],
+            }
+            effect["effect_commitment"] = keyed_commitment(
+                policy.commitment_key,
+                "identity-auto-expiry-effect-v1",
+                effect,
+            )
+            auto_expiry_effects.append(effect)
+
+    privacy_closures: list[dict[str, Any]] = []
+    for projection in compiled_projections:
+        if projection["decision_kind"] != "person":
+            continue
+        person_id = projection["record"]["person_id"]
+        directives = directives_by_person.get(person_id, [])
+        closure = {
+            "person_id": person_id,
+            "person_decision_id": projection["decision_id"],
+            "person_receipt_id": projection["receipt_id"],
+            "ignored": any(item["directive"] == "ignored" for item in directives),
+            "do_not_track": any(
+                item["directive"] == "do_not_track" for item in directives
+            ),
+            "directives": directives,
+        }
+        closure["privacy_closure_commitment"] = keyed_commitment(
+            policy.commitment_key,
+            "identity-privacy-closure-v1",
+            closure,
+        )
+        privacy_closures.append(closure)
+    privacy_closure_set_commitment = keyed_commitment(
+        policy.commitment_key,
+        "identity-privacy-closure-set-v1",
+        privacy_closures,
+    )
+    auto_expiry_effect_set_commitment = keyed_commitment(
+        policy.commitment_key,
+        "identity-auto-expiry-effect-set-v1",
+        auto_expiry_effects,
+    )
+
+    proposal_core = {
+        "contract_version": "reviewed-identity-migration-finalization-v1",
+        "finalization_id": run_id,
+        "run_id": run_id,
+        "verification_status": "candidate_unverified",
+        "authoritative": False,
+        "source_item_count": len(sources),
+        "decision_count": len(decisions),
+        "apply_decision_count": len(projections),
+        "receipt_count": len(projections),
+        "source_manifest_commitment": run["logical_source_manifest_commitment"],
+        "projection_manifest_commitment": run["projection_manifest_commitment"],
+        "decision_manifest_commitment": decision_manifest_commitment,
+        "receipt_set_commitment": receipt_set_commitment,
+        "lineage_set_commitment": lineage_set_commitment,
+        "privacy_closure_set_commitment": privacy_closure_set_commitment,
+        "auto_expiry_effect_set_commitment": auto_expiry_effect_set_commitment,
+        "review_receipt_commitment": run["review_receipt_commitment"],
+        "review_expires_at": run["expires_at"],
+        "review_attestation": {
+            "signature_algorithm": run["signature_algorithm"],
+            "signing_key_fingerprint": run["signing_key_fingerprint"],
+            "signature_scope": "reviewed-identity-migration-review-v1",
+            "review_signature": run["review_signature"],
+        },
+        "finalization_signing": {
+            "signature_algorithm": "ed25519",
+            "signing_key_fingerprint": policy.finalization_key_fingerprint,
+            "signature_scope": "reviewed-identity-migration-finalization-v1",
+        },
+        "privacy_closures": privacy_closures,
+        "auto_expiry_effects": auto_expiry_effects,
+        "projections": compiled_projections,
+    }
+    finalization_commitment = keyed_commitment(
+        policy.commitment_key,
+        "identity-migration-finalization-v1",
+        proposal_core,
+    )
+    return canonical_bytes(
+        {**proposal_core, "finalization_commitment": finalization_commitment}
+    )
+
+
+def _verify_projection_bundle(
     raw_bundle: bytes,
     *,
     source_records: Sequence[Mapping[str, Any]],
     policy: VerificationPolicy,
+    allow_expired_review: bool,
 ) -> VerifiedProjectionBundle:
     bundle = parse_canonical_json(raw_bundle)
     _exact_object(
@@ -646,7 +991,8 @@ def verify_projection_bundle(
     if verified_at.tzinfo is None:
         raise ValueError("verification policy clock must return an aware timestamp")
     verified_at = verified_at.astimezone(UTC)
-    if expiry <= verified_at:
+    review_expired = expiry <= verified_at
+    if review_expired and not allow_expired_review:
         raise VerificationError("reviewed projection bundle is expired")
     _constant_equal(run["policy_version"], policy.policy_version, "policy version")
     for key, expected in (
@@ -837,7 +1183,12 @@ def verify_projection_bundle(
             )
         ):
             raise VerificationError("projection classification does not match decision")
-        _validate_projection_record(kind, decision_id, projection["record"])
+        _validate_projection_record(
+            kind,
+            decision_id,
+            projection["record"],
+            verified_at=None if allow_expired_review else verified_at,
+        )
         expected_candidate = keyed_commitment(
             policy.commitment_key,
             "identity-candidate-v1",
@@ -900,6 +1251,7 @@ def verify_projection_bundle(
         raise VerificationError("projection set is incomplete")
     if list(projection_by_decision) != list(apply_decisions):
         raise VerificationError("projection set is not in reviewed decision order")
+    _validate_projection_closure(verified_projections)
 
     decisions_by_source: dict[str, list[Mapping[str, Any]]] = {
         source_id: [] for source_id in source_by_id
@@ -986,12 +1338,182 @@ def verify_projection_bundle(
         policy.review_public_key.verify(bytes.fromhex(signature_hex), signed_document)
     except (InvalidSignature, ValueError) as error:
         raise VerificationError("review signature verification failed") from error
+    finalization_proposal = _compile_finalization_proposal(
+        run=run,
+        sources=sources,
+        decisions=decisions,
+        projections=verified_projections,
+        policy=policy,
+    )
+    if len(finalization_proposal) > MAX_CANONICAL_BYTES:
+        raise VerificationError("finalization proposal is oversized")
     return VerifiedProjectionBundle(
         run_id=run_id,
-        review_receipt_commitment=run["review_receipt_commitment"],
-        projection_manifest_commitment=run["projection_manifest_commitment"],
+        review_expires_at=expiry,
+        review_expired=review_expired,
         _projections_canonical=canonical_bytes(verified_projections),
+        _finalization_proposal_canonical=finalization_proposal,
         verified_at=verified_at,
+    )
+
+
+def verify_projection_bundle(
+    raw_bundle: bytes,
+    *,
+    source_records: Sequence[Mapping[str, Any]],
+    policy: VerificationPolicy,
+) -> VerifiedProjectionBundle:
+    """Verify a live reviewed bundle and compile its unsigned proposal."""
+
+    return _verify_projection_bundle(
+        raw_bundle,
+        source_records=source_records,
+        policy=policy,
+        allow_expired_review=False,
+    )
+
+
+def verify_projection_bundle_for_exact_replay(
+    raw_bundle: bytes,
+    *,
+    source_records: Sequence[Mapping[str, Any]],
+    policy: VerificationPolicy,
+) -> VerifiedProjectionBundle:
+    """Reconstruct a verified bundle after expiry for lost-response replay.
+
+    A bundle reconstructed after expiry is permanently unable to return public
+    signing bytes. It may only be paired with an already signed envelope.
+    """
+
+    return _verify_projection_bundle(
+        raw_bundle,
+        source_records=source_records,
+        policy=policy,
+        allow_expired_review=True,
+    )
+
+
+def verify_finalization_envelope(
+    bundle: VerifiedProjectionBundle,
+    raw_envelope: bytes,
+    *,
+    policy: VerificationPolicy,
+    allow_expired_for_exact_replay: bool = False,
+) -> VerifiedFinalizerDocument:
+    """Authenticate a distinct finalization signature over compiler-owned bytes.
+
+    The envelope contains no proposal fields that a caller could substitute.  Its
+    signature is checked against the exact canonical payload returned by
+    ``bundle.finalization_signing_payload()`` and a finalization-only public key.
+    """
+
+    envelope = _exact_object(
+        parse_canonical_json(raw_envelope),
+        FINALIZATION_ENVELOPE_KEYS,
+        "finalization envelope",
+    )
+    if envelope["contract_version"] != "reviewed-identity-finalization-envelope-v1":
+        raise VerificationError("finalization envelope contract is unsupported")
+    finalization_id = _canonical_uuid(
+        envelope["finalization_id"], "finalization", require_v7=True
+    )
+    if finalization_id != bundle.run_id:
+        raise VerificationError("finalization does not match the reviewed run")
+    proposal = bundle.finalization_proposal
+    if not hmac.compare_digest(
+        _hex64(envelope["finalization_commitment"], "finalization"),
+        proposal["finalization_commitment"],
+    ):
+        raise VerificationError("finalization commitment mismatch")
+    if envelope["signature_algorithm"] != "ed25519":
+        raise VerificationError("finalization signature algorithm is invalid")
+    _constant_equal(
+        envelope["signing_key_fingerprint"],
+        policy.finalization_key_fingerprint,
+        "finalization signing_key_fingerprint",
+    )
+    if envelope["signature_scope"] != "reviewed-identity-migration-finalization-v1":
+        raise VerificationError("finalization signature scope is invalid")
+    if proposal["finalization_signing"] != {
+        "signature_algorithm": envelope["signature_algorithm"],
+        "signing_key_fingerprint": envelope["signing_key_fingerprint"],
+        "signature_scope": envelope["signature_scope"],
+    }:
+        raise VerificationError("finalization signing policy drifted")
+    signature_hex = envelope["finalization_signature"]
+    if not isinstance(signature_hex, str) or not HEX128.fullmatch(signature_hex):
+        raise VerificationError("finalization signature is invalid")
+
+    verified_at = policy.now()
+    if verified_at.tzinfo is None:
+        raise ValueError("verification policy clock must return an aware timestamp")
+    verified_at = verified_at.astimezone(UTC)
+    review_expired = bundle.review_expires_at <= verified_at
+    if review_expired and not allow_expired_for_exact_replay:
+        raise VerificationError("reviewed projection bundle is expired")
+    auto_expiry_elapsed = False
+    for projection in proposal["projections"]:
+        record = projection["record"]
+        if (
+            projection["decision_kind"] == "privacy_directive"
+            and record["directive"] == "auto_expire"
+            and _canonical_time(record["expires_at"], "auto expiry") <= verified_at
+        ):
+            auto_expiry_elapsed = True
+    if auto_expiry_elapsed and not allow_expired_for_exact_replay:
+        raise VerificationError("auto expiry is not strictly future")
+    try:
+        policy.finalization_public_key.verify(
+            bytes.fromhex(signature_hex),
+            bundle._finalization_signing_payload_unchecked(),
+        )
+    except (InvalidSignature, ValueError) as error:
+        raise VerificationError("finalization signature verification failed") from error
+
+    document = dict(proposal)
+    document["finalization_attestation"] = {
+        "signature_algorithm": envelope["signature_algorithm"],
+        "signing_key_fingerprint": envelope["signing_key_fingerprint"],
+        "signature_scope": envelope["signature_scope"],
+        "finalization_signature": signature_hex,
+    }
+    document_canonical = canonical_bytes(document)
+    if len(document_canonical) > MAX_CANONICAL_BYTES:
+        raise VerificationError("finalizer document is oversized")
+    return VerifiedFinalizerDocument(
+        run_id=bundle.run_id,
+        finalization_id=finalization_id,
+        _document_canonical=document_canonical,
+        verified_at=verified_at,
+        review_expired=review_expired,
+        auto_expiry_elapsed=auto_expiry_elapsed,
+    )
+
+
+def verify_expired_finalization_replay(
+    raw_bundle: bytes,
+    raw_envelope: bytes,
+    *,
+    source_records: Sequence[Mapping[str, Any]],
+    policy: VerificationPolicy,
+) -> VerifiedFinalizerDocument:
+    """Verify an expired, already-signed envelope for exact DB replay only.
+
+    The expired unsigned proposal is never returned. Both the original review
+    signature and the distinct finalization signature must verify before this
+    function yields a document marked with its temporal state.
+    """
+
+    bundle = verify_projection_bundle_for_exact_replay(
+        raw_bundle,
+        source_records=source_records,
+        policy=policy,
+    )
+    return verify_finalization_envelope(
+        bundle,
+        raw_envelope,
+        policy=policy,
+        allow_expired_for_exact_replay=True,
     )
 
 

@@ -60,13 +60,52 @@ Tests pin a deterministic HMAC vector and an Ed25519 vector so a change in
 canonical bytes, length framing, domain separation, or signing behavior fails
 across runtimes.
 
-## Allowed output
+## Finalization compilation and signature
 
-The verifier can emit only a `reviewed-identity-semantic-finalizer-input-v1`
-document containing the run ID, review/projection root commitments, and the
-verified typed projection set. It never emits raw source rows or accepts actor,
-principal, authority, cutover, parent-fact, memory, place, initiative, action,
-or model fields.
+Successful review verification compiles an immutable, unsigned
+`reviewed-identity-migration-finalization-v1` proposal. It deterministically
+uses `finalization_id=run_id` and `lineage_id=receipt_id`, derives projection
+subject roles, and HMAC-binds the decision manifest, receipt set, lineage set,
+privacy-closure set, auto-expiry-effect set, and complete proposal. The proposal
+remains `verification_status=candidate_unverified` and `authoritative=false`.
+
+The original review signature is retained as an attestation explicitly scoped
+to `reviewed-identity-migration-review-v1`; it is never relabelled as a
+finalization signature. A distinct, purpose-pinned Ed25519 finalization key must
+sign the canonical payload:
+
+```json
+{
+  "domain": "reviewed-identity-migration-finalization-v1",
+  "finalization": "the exact compiler-owned proposal"
+}
+```
+
+Only `verify_finalization_envelope` can add the separately verified finalization
+attestation and yield database-bound input. The envelope cannot substitute any
+proposal field. The module has no signing private key and no database or network
+client.
+
+The compiler emits one privacy closure per person in person-projection order.
+Ignored people must be content-suppressed tombstones and cannot have aliases,
+recognition bindings, role candidates, or relationship candidates. Ignored or
+do-not-track people cannot have an active recognition binding. All projection
+subjects must be people inserted by the same run; status and directive kinds are
+unique per person. Auto-expiry must be strictly future and creates a deterministic
+effect with `schedule_id=directive_id`, `outbox_id=receipt_id`, topic
+`privacy.person.auto_expire`, due time, and its own keyed commitment.
+
+An exact signed envelope may be cryptographically checked after review expiry
+only through `verify_projection_bundle_for_exact_replay` followed by
+`verify_finalization_envelope(..., allow_expired_for_exact_replay=True)`, or the
+combined `verify_expired_finalization_replay` helper. The reconstructed bundle
+and final document report temporal expiry, and an expired bundle cannot emit
+signing bytes even when given a backdated clock. These modes are solely for a
+database kernel to compare against an already committed finalization after a
+lost response. First admission remains fail-closed after expiry.
+
+The output never emits raw source rows or accepts actor, principal, authority,
+cutover, parent-fact, memory, place, initiative, action, or model fields.
 
 Allowed typed semantic targets are:
 
@@ -85,8 +124,8 @@ cannot alter the later finalizer document.
 
 ## Still disabled
 
-This verifier does not make 0008 finalization callable. The future database
-kernel requires its own expired-by-default login/NOLOGIN owner pair, normalized
-receipt-to-target and affected-person lineage, complete erasure handling, and
-atomic `SERIALIZABLE` PostgreSQL 17 tests. Until then, the production revision
-remains 0006 and 0008 continues to report `finalization_enabled=false`.
+This verifier does not make finalization callable. Revision 0009 provides only
+the expired-by-default login/NOLOGIN owner pair and normalized lineage
+foundation. A future database kernel still requires complete erasure handling
+and atomic `SERIALIZABLE` PostgreSQL 17 tests. Production remains pinned to 0006
+and the dormant capability continues to report `finalization_enabled=false`.

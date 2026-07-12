@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import hashlib
 import importlib.util
@@ -48,10 +49,20 @@ class BundleFixture:
             encoding=serialization.Encoding.Raw,
             format=serialization.PublicFormat.Raw,
         )
+        self.finalization_private = Ed25519PrivateKey.generate()
+        finalization_public = self.finalization_private.public_key()
+        finalization_public_bytes = finalization_public.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
         self.commitment_key = bytes(range(32))
         self.policy = verifier.VerificationPolicy(
             review_public_key=public,
             review_key_fingerprint=hashlib.sha256(public_bytes).hexdigest(),
+            finalization_public_key=finalization_public,
+            finalization_key_fingerprint=hashlib.sha256(
+                finalization_public_bytes
+            ).hexdigest(),
             commitment_key=self.commitment_key,
             commitment_key_epoch=7,
             commitment_key_fingerprint=hashlib.sha256(self.commitment_key).hexdigest(),
@@ -276,33 +287,278 @@ class ReviewedIdentityPayloadTests(unittest.TestCase):
     def setUp(self) -> None:
         self.fixture = BundleFixture()
 
-    def test_valid_bundle_returns_only_finalizer_safe_content(self) -> None:
+    def _finalization_envelope(
+        self, result: verifier.VerifiedProjectionBundle
+    ) -> bytes:
+        proposal = result.finalization_proposal
+        return canonical(
+            {
+                "contract_version": "reviewed-identity-finalization-envelope-v1",
+                "finalization_id": RUN_ID,
+                "finalization_commitment": proposal["finalization_commitment"],
+                "signature_algorithm": "ed25519",
+                "signing_key_fingerprint": (
+                    self.fixture.policy.finalization_key_fingerprint
+                ),
+                "signature_scope": ("reviewed-identity-migration-finalization-v1"),
+                "finalization_signature": self.fixture.finalization_private.sign(
+                    result.finalization_signing_payload(now=NOW)
+                ).hex(),
+            }
+        )
+
+    def test_valid_bundle_requires_distinct_finalization_signature(self) -> None:
         raw, sources = self.fixture.build()
         result = verifier.verify_projection_bundle(
             raw, source_records=sources, policy=self.fixture.policy
         )
         self.assertEqual(str(result.run_id), RUN_ID)
-        document = result.finalizer_document()
+        proposal = result.finalization_proposal
         self.assertEqual(
-            set(document),
+            set(proposal),
             {
                 "contract_version",
+                "finalization_id",
                 "run_id",
+                "verification_status",
+                "authoritative",
+                "source_item_count",
+                "decision_count",
+                "apply_decision_count",
+                "receipt_count",
+                "source_manifest_commitment",
                 "review_receipt_commitment",
                 "projection_manifest_commitment",
+                "decision_manifest_commitment",
+                "receipt_set_commitment",
+                "lineage_set_commitment",
+                "privacy_closure_set_commitment",
+                "auto_expiry_effect_set_commitment",
+                "finalization_commitment",
+                "review_expires_at",
+                "review_attestation",
+                "finalization_signing",
+                "privacy_closures",
+                "auto_expiry_effects",
                 "projections",
             },
         )
-        self.assertNotIn("source_items", document)
-        self.assertNotIn("row_key", json.dumps(document))
-        self.assertNotIn("authoritative", document)
-        self.assertNotIn("parent_of", json.dumps(document))
+        self.assertEqual(proposal["finalization_id"], RUN_ID)
+        self.assertEqual(proposal["verification_status"], "candidate_unverified")
+        self.assertIs(proposal["authoritative"], False)
+        self.assertEqual(
+            proposal["review_attestation"]["signature_scope"],
+            "reviewed-identity-migration-review-v1",
+        )
+        self.assertEqual(
+            proposal["finalization_signing"]["signature_scope"],
+            "reviewed-identity-migration-finalization-v1",
+        )
+        self.assertNotIn("source_items", proposal)
+        self.assertNotIn("row_key", json.dumps(proposal))
+        self.assertNotIn("parent_of", json.dumps(proposal))
+        self.assertEqual(
+            proposal["projections"][0]["lineage"]["lineage_id"], RECEIPT_ID
+        )
+        self.assertEqual(
+            proposal["projections"][0]["lineage"]["subjects"],
+            [{"person_id": PERSON_ID, "subject_role": "primary"}],
+        )
+
+        verified = verifier.verify_finalization_envelope(
+            result,
+            self._finalization_envelope(result),
+            policy=self.fixture.policy,
+        )
+        document = verified.document
+        self.assertEqual(str(verified.finalization_id), RUN_ID)
+        self.assertEqual(
+            document["finalization_attestation"]["signature_scope"],
+            "reviewed-identity-migration-finalization-v1",
+        )
         mutable_copy = result.projections
         mutable_copy[0]["record"]["display_name"] = "Tampered after verification"
         self.assertEqual(
-            result.finalizer_document()["projections"][0]["record"]["display_name"],
+            result.finalization_proposal["projections"][0]["record"]["display_name"],
             "Marcelo",
         )
+        mutable_document = verified.document
+        mutable_document["projections"][0]["record"]["display_name"] = "Changed"
+        self.assertEqual(
+            verified.document["projections"][0]["record"]["display_name"],
+            "Marcelo",
+        )
+
+    def test_finalization_signature_cannot_be_replaced_by_review_signature(
+        self,
+    ) -> None:
+        raw, sources = self.fixture.build()
+        result = verifier.verify_projection_bundle(
+            raw, source_records=sources, policy=self.fixture.policy
+        )
+        envelope = json.loads(self._finalization_envelope(result))
+        envelope["finalization_signature"] = self.fixture.review_private.sign(
+            result.finalization_signing_payload(now=NOW)
+        ).hex()
+        with self.assertRaisesRegex(
+            verifier.VerificationError, "finalization signature verification"
+        ):
+            verifier.verify_finalization_envelope(
+                result, canonical(envelope), policy=self.fixture.policy
+            )
+        envelope = json.loads(self._finalization_envelope(result))
+        envelope["finalization_commitment"] = digest("tampered-finalization")
+        with self.assertRaisesRegex(
+            verifier.VerificationError, "finalization commitment mismatch"
+        ):
+            verifier.verify_finalization_envelope(
+                result, canonical(envelope), policy=self.fixture.policy
+            )
+
+    def test_exact_signed_envelope_can_be_verified_for_expired_replay(self) -> None:
+        raw, sources = self.fixture.build()
+        result = verifier.verify_projection_bundle(
+            raw, source_records=sources, policy=self.fixture.policy
+        )
+        envelope = self._finalization_envelope(result)
+        expired_policy = replace(
+            self.fixture.policy, now=lambda: NOW + timedelta(minutes=6)
+        )
+        with self.assertRaisesRegex(verifier.VerificationError, "expired"):
+            verifier.verify_finalization_envelope(
+                result, envelope, policy=expired_policy
+            )
+        replay = verifier.verify_finalization_envelope(
+            result,
+            envelope,
+            policy=expired_policy,
+            allow_expired_for_exact_replay=True,
+        )
+        self.assertTrue(replay.review_expired)
+        self.assertFalse(replay.auto_expiry_elapsed)
+        replay_bundle = verifier.verify_projection_bundle_for_exact_replay(
+            raw,
+            source_records=sources,
+            policy=expired_policy,
+        )
+        self.assertTrue(replay_bundle.review_expired)
+        with self.assertRaisesRegex(verifier.VerificationError, "expired"):
+            replay_bundle.finalization_signing_payload(now=NOW)
+        reconstructed = verifier.verify_finalization_envelope(
+            replay_bundle,
+            envelope,
+            policy=expired_policy,
+            allow_expired_for_exact_replay=True,
+        )
+        self.assertTrue(reconstructed.review_expired)
+        restarted_replay = verifier.verify_expired_finalization_replay(
+            raw,
+            envelope,
+            source_records=sources,
+            policy=expired_policy,
+        )
+        self.assertTrue(restarted_replay.review_expired)
+        tampered = json.loads(envelope)
+        tampered["finalization_signature"] = "0" * 128
+        with self.assertRaisesRegex(verifier.VerificationError, "signature"):
+            verifier.verify_expired_finalization_replay(
+                raw,
+                canonical(tampered),
+                source_records=sources,
+                policy=expired_policy,
+            )
+        with self.assertRaisesRegex(verifier.VerificationError, "expired"):
+            result.finalization_signing_payload(now=NOW + timedelta(minutes=6))
+
+    def test_closure_rules_and_future_auto_expiry_fail_closed(self) -> None:
+        person = {
+            "decision_kind": "person",
+            "record": {
+                "person_id": PERSON_ID,
+                "display_name": "Marcelo",
+                "pronouns": None,
+            },
+        }
+        status = {
+            "decision_kind": "person_status",
+            "record": {"person_id": PERSON_ID},
+        }
+        with self.assertRaisesRegex(verifier.VerificationError, "duplicate status"):
+            verifier._validate_projection_closure([person, status, status])
+
+        expiry_record = {
+            "directive_id": DECISION_ID,
+            "person_id": PERSON_ID,
+            "directive": "auto_expire",
+            "enabled": True,
+            "expires_at": NOW.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            "source_ref": "legacy-identity-store:v1:privacy:person:auto_expire",
+            "source_version": 1,
+            "source_snapshot_sha256": digest("auto-expire"),
+        }
+        with self.assertRaisesRegex(verifier.VerificationError, "strictly future"):
+            verifier._validate_projection_record(
+                "privacy_directive",
+                DECISION_ID,
+                expiry_record,
+                verified_at=NOW,
+            )
+
+    def test_compiler_emits_deterministic_privacy_and_auto_expiry_effects(self) -> None:
+        raw, _sources = self.fixture.build()
+        signed = json.loads(raw)
+        projection = copy.deepcopy(signed["projections"][0])
+        directive_id = "00000000-0000-7000-8000-000000000907"
+        receipt_id = "00000000-0000-7000-8000-000000000908"
+        expiry = (NOW + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        directive_projection = {
+            "decision_id": directive_id,
+            "decision_kind": "privacy_directive",
+            "candidate_commitment": digest("auto-candidate"),
+            "projection_table_kind": "identity.privacy_directives",
+            "projection_ref_commitment": digest("auto-reference"),
+            "projection_commitment": digest("auto-projection"),
+            "receipt_id": receipt_id,
+            "receipt_commitment": digest("auto-receipt"),
+            "record": {
+                "directive_id": directive_id,
+                "person_id": PERSON_ID,
+                "directive": "auto_expire",
+                "enabled": True,
+                "expires_at": expiry,
+                "source_ref": "legacy-identity-store:v1:privacy:person:auto_expire",
+                "source_version": 1,
+                "source_snapshot_sha256": digest("auto-source"),
+            },
+        }
+        compiled = verifier.parse_canonical_json(
+            verifier._compile_finalization_proposal(
+                run=signed["manifest"]["run"],
+                sources=signed["manifest"]["source_items"],
+                decisions=[
+                    *signed["manifest"]["decisions"],
+                    {"decision_id": directive_id},
+                ],
+                projections=[projection, directive_projection],
+                policy=self.fixture.policy,
+            )
+        )
+        effect = compiled["auto_expiry_effects"][0]
+        self.assertEqual(effect["schedule_id"], directive_id)
+        self.assertEqual(effect["outbox_id"], receipt_id)
+        self.assertEqual(effect["topic"], "privacy.person.auto_expire")
+        self.assertEqual(effect["due_at"], expiry)
+        self.assertRegex(effect["effect_commitment"], r"^[0-9a-f]{64}$")
+        self.assertEqual(
+            compiled["privacy_closures"][0]["directives"][0]["directive"],
+            "auto_expire",
+        )
+        for field in (
+            "lineage_set_commitment",
+            "privacy_closure_set_commitment",
+            "auto_expiry_effect_set_commitment",
+        ):
+            self.assertRegex(compiled[field], r"^[0-9a-f]{64}$")
 
     def test_noncanonical_and_ambiguous_json_fail_before_verification(self) -> None:
         raw, sources = self.fixture.build()
@@ -417,6 +673,10 @@ class ReviewedIdentityPayloadTests(unittest.TestCase):
             verifier.VerificationPolicy(
                 review_public_key=self.fixture.policy.review_public_key,
                 review_key_fingerprint="0" * 64,
+                finalization_public_key=(self.fixture.policy.finalization_public_key),
+                finalization_key_fingerprint=(
+                    self.fixture.policy.finalization_key_fingerprint
+                ),
                 commitment_key=self.fixture.policy.commitment_key,
                 commitment_key_epoch=7,
                 commitment_key_fingerprint=self.fixture.policy.commitment_key_fingerprint,
@@ -439,6 +699,8 @@ class ReviewedIdentityPayloadTests(unittest.TestCase):
             verifier.VerificationPolicy(
                 review_public_key=policy.review_public_key,
                 review_key_fingerprint=policy.review_key_fingerprint,
+                finalization_public_key=policy.finalization_public_key,
+                finalization_key_fingerprint=policy.finalization_key_fingerprint,
                 commitment_key=policy.commitment_key,
                 commitment_key_epoch=policy.commitment_key_epoch,
                 commitment_key_fingerprint=policy.commitment_key_fingerprint,
@@ -452,6 +714,28 @@ class ReviewedIdentityPayloadTests(unittest.TestCase):
                 core_capability_digest=policy.core_capability_digest,
                 shadow_authorization_id=SHADOW_ID,
                 review_key_purpose="general_signing",
+            )
+
+        with self.assertRaisesRegex(ValueError, "must be distinct"):
+            verifier.VerificationPolicy(
+                review_public_key=policy.review_public_key,
+                review_key_fingerprint=policy.review_key_fingerprint,
+                finalization_public_key=policy.review_public_key,
+                finalization_key_fingerprint=policy.review_key_fingerprint,
+                commitment_key=policy.commitment_key,
+                commitment_key_epoch=policy.commitment_key_epoch,
+                commitment_key_fingerprint=policy.commitment_key_fingerprint,
+                policy_version=policy.policy_version,
+                policy_digest=policy.policy_digest,
+                source_projection_contract_digest=(
+                    policy.source_projection_contract_digest
+                ),
+                release_manifest_digest=policy.release_manifest_digest,
+                migration_tool_bundle_digest=policy.migration_tool_bundle_digest,
+                core_oci_manifest_digest=policy.core_oci_manifest_digest,
+                core_schema_digest=policy.core_schema_digest,
+                core_capability_digest=policy.core_capability_digest,
+                shadow_authorization_id=SHADOW_ID,
             )
 
     def test_legacy_relationship_and_alias_cannot_widen_semantics(self) -> None:

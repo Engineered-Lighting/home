@@ -166,4 +166,22 @@ ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA ingest
 ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity, knowledge,
   engagement, privacy, operations
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO home_agent_api;
+
+-- Revision 0007 is an owner-only schema foundation. Repeat this exact revoke
+-- after both schema-wide and default API grants so a grant-runtime replay
+-- cannot accidentally expose candidate migration authority to any online,
+-- operator, erasure, rollout, or SQL-backup credential. A later reviewed
+-- migration must introduce a dedicated writer and its narrow API atomically.
+REVOKE ALL PRIVILEGES ON TABLE
+  operations.reviewed_identity_migration_runs,
+  operations.reviewed_identity_migration_source_items,
+  operations.reviewed_identity_migration_decisions,
+  operations.reviewed_identity_migration_item_receipts,
+  operations.reviewed_identity_migration_finalizations,
+  operations.legacy_identity_writer_evidence,
+  operations.privacy_cutover_check_receipts,
+  operations.semantic_authority_cutovers,
+  operations.reviewed_identity_migration_erasure_impacts
+FROM PUBLIC, home_agent_api, home_agent_binding_operator, home_agent_ingest,
+  home_agent_worker, home_agent_erasure, home_agent_rollout, home_agent_backup;
 SQL

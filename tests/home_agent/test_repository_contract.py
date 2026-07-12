@@ -61,6 +61,56 @@ def python_callables(relative: str) -> dict[str, ast.AST]:
 
 
 class RepositoryBoundaryTests(unittest.TestCase):
+    def test_phase3_identity_authority_foundation_remains_owner_only(self) -> None:
+        migration = read(
+            "stack/services/home-agent-core/alembic/versions/"
+            "0007_phase3_identity_authority_foundation.py"
+        )
+        grants = read("stack/home-agent-deploy/apply-grants.sh")
+        config = read("stack/services/home-agent-core/app/config.py")
+        table_names = (
+            "reviewed_identity_migration_runs",
+            "reviewed_identity_migration_source_items",
+            "reviewed_identity_migration_decisions",
+            "reviewed_identity_migration_item_receipts",
+            "reviewed_identity_migration_finalizations",
+            "legacy_identity_writer_evidence",
+            "privacy_cutover_check_receipts",
+            "semantic_authority_cutovers",
+            "reviewed_identity_migration_erasure_impacts",
+        )
+        self.assertIn("FORCE ROW LEVEL SECURITY", migration)
+        self.assertIn("TO home_agent_owner", migration)
+        self.assertNotIn("home_agent_migration_operator", migration)
+        self.assertNotIn("parent_confirmation", migration)
+        self.assertIn(
+            "runtime migration pin intentionally remains revision 0006", migration
+        )
+        self.assertIn(
+            'readiness_migration: str = "0006_worker_maintenance_health"', config
+        )
+        self.assertNotIn("0007_phase3_identity_authority", config)
+        revoke = grants.split(
+            "Revision 0007 is an owner-only schema foundation", 1
+        )[1]
+        self.assertGreater(
+            grants.index("Revision 0007 is an owner-only schema foundation"),
+            grants.index("ALTER DEFAULT PRIVILEGES"),
+        )
+        for table_name in table_names:
+            self.assertIn(f"operations.{table_name}", revoke)
+        for role in (
+            "home_agent_api",
+            "home_agent_binding_operator",
+            "home_agent_ingest",
+            "home_agent_worker",
+            "home_agent_erasure",
+            "home_agent_rollout",
+            "home_agent_backup",
+        ):
+            self.assertIn(role, revoke)
+        self.assertNotIn("GRANT", revoke)
+
     def test_itaipava_golden_manifest_has_exactly_24_verifiable_scenarios(
         self,
     ) -> None:

@@ -33,6 +33,18 @@ metadata = MetaData(naming_convention=NAMING_CONVENTION)
 UUID_PK = UUID(as_uuid=True)
 NOW = text("timezone('utc', now())")
 
+
+def _uuidv7_shape(column: str) -> str:
+    return (
+        f"substring({column}::text from 15 for 1) = '7' AND "
+        f"substring({column}::text from 20 for 1) IN ('8','9','a','b')"
+    )
+
+
+def _hex64(*columns: str) -> str:
+    return " AND ".join(f"{column} ~ '^[0-9a-f]{{64}}$'" for column in columns)
+
+
 source_streams = Table(
     "source_streams",
     metadata,
@@ -194,9 +206,7 @@ principals = Table(
     CheckConstraint(
         "kind IN ('ha_user','voice_unknown','service')", name="principal_kind"
     ),
-    UniqueConstraint(
-        "principal_id", "person_id", name="principal_person_identity"
-    ),
+    UniqueConstraint("principal_id", "person_id", name="principal_person_identity"),
     schema="identity",
 )
 
@@ -306,9 +316,7 @@ principal_binding_requests = Table(
     Column("expires_at", DateTime(timezone=True), nullable=False),
     Column("staged_at", DateTime(timezone=True)),
     Column("closed_at", DateTime(timezone=True)),
-    UniqueConstraint(
-        "request_id", "ha_user_id", name="binding_request_user_identity"
-    ),
+    UniqueConstraint("request_id", "ha_user_id", name="binding_request_user_identity"),
     CheckConstraint(
         "state IN ('pending','staged','consumed','cancelled','expired')",
         name="binding_request_state",
@@ -472,7 +480,9 @@ edge_privacy_blocks = Table(
     Column("source_system", String(64), nullable=False),
     Column("entity_id", String(255), nullable=False),
     Column("reason_code", String(64), nullable=False),
-    Column("person_id", UUID_PK, ForeignKey("identity.people.person_id"), nullable=False),
+    Column(
+        "person_id", UUID_PK, ForeignKey("identity.people.person_id"), nullable=False
+    ),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=NOW),
     UniqueConstraint("source_system", "entity_id", name="edge_privacy_block_entity"),
     CheckConstraint(
@@ -488,7 +498,9 @@ edge_privacy_user_blocks = Table(
     Column("block_id", UUID_PK, primary_key=True),
     Column("ha_user_id", String(64), nullable=False, unique=True),
     Column("reason_code", String(64), nullable=False),
-    Column("person_id", UUID_PK, ForeignKey("identity.people.person_id"), nullable=False),
+    Column(
+        "person_id", UUID_PK, ForeignKey("identity.people.person_id"), nullable=False
+    ),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=NOW),
     CheckConstraint(
         "reason_code IN ('do_not_track','ignored','auto_expired')",
@@ -601,7 +613,10 @@ legacy_relationship_candidates = Table(
     metadata,
     Column("candidate_id", UUID_PK, primary_key=True),
     Column(
-        "from_person_id", UUID_PK, ForeignKey("identity.people.person_id"), nullable=False
+        "from_person_id",
+        UUID_PK,
+        ForeignKey("identity.people.person_id"),
+        nullable=False,
     ),
     Column(
         "to_person_id", UUID_PK, ForeignKey("identity.people.person_id"), nullable=False
@@ -613,7 +628,9 @@ legacy_relationship_candidates = Table(
     Column("source_ref", String(255), nullable=False, unique=True),
     Column("source_snapshot_sha256", String(64), nullable=False),
     Column("imported_at", DateTime(timezone=True), nullable=False, server_default=NOW),
-    CheckConstraint("from_person_id <> to_person_id", name="legacy_relationship_not_self"),
+    CheckConstraint(
+        "from_person_id <> to_person_id", name="legacy_relationship_not_self"
+    ),
     CheckConstraint(
         "relationship_status IN ('active','ended','paused')",
         name="legacy_relationship_status",
@@ -1032,7 +1049,9 @@ auto_expiry_receipts = Table(
     Column("residual_codes", ARRAY(String(64)), nullable=False),
     Column("receipt_sha256", String(64), nullable=False),
     Column("completed_at", DateTime(timezone=True), nullable=False),
-    CheckConstraint("receipt_sha256 ~ '^[0-9a-f]{64}$'", name="auto_expiry_receipt_sha256"),
+    CheckConstraint(
+        "receipt_sha256 ~ '^[0-9a-f]{64}$'", name="auto_expiry_receipt_sha256"
+    ),
     schema="privacy",
 )
 
@@ -1115,9 +1134,7 @@ worker_maintenance_state = Table(
     Column("spool_rows_pruned", BigInteger),
     Column("binding_retention_receipt", JSONB),
     Column("updated_at", DateTime(timezone=True), nullable=False),
-    CheckConstraint(
-        "state_key = 'durable_worker'", name="singleton"
-    ),
+    CheckConstraint("state_key = 'durable_worker'", name="singleton"),
     CheckConstraint(
         "substring(worker_instance_id::text from 15 for 1) IN ('4','7') "
         "AND substring(worker_instance_id::text from 20 for 1) IN "
@@ -1250,7 +1267,9 @@ rollout_authorizations = Table(
     ),
     Column("worker_proof_digest", String(64), nullable=False),
     Column("readiness_evaluated_at", DateTime(timezone=True), nullable=False),
-    Column("authorized_at", DateTime(timezone=True), nullable=False, server_default=NOW),
+    Column(
+        "authorized_at", DateTime(timezone=True), nullable=False, server_default=NOW
+    ),
     UniqueConstraint("from_mode", "to_mode", name="rollout_transition_once"),
     CheckConstraint(
         "from_mode = 'record_only' AND to_mode = 'shadow'",
@@ -1280,6 +1299,773 @@ rollout_authorizations = Table(
         "worker_maintenance_succeeded_at <= readiness_evaluated_at "
         "AND readiness_evaluated_at <= authorized_at",
         name="worker_proof_time",
+    ),
+    schema="operations",
+)
+
+
+# Phase 3 identity-migration authority foundation. Commitments below are
+# domain-separated keyed HMACs, never plain hashes of private source values.
+# No table provides an adoption path for pre-0007 legacy-source projections.
+reviewed_identity_migration_runs = Table(
+    "reviewed_identity_migration_runs",
+    metadata,
+    Column("run_id", UUID_PK, primary_key=True),
+    Column("operator_request_id", UUID_PK, nullable=False, unique=True),
+    Column("contract_version", String(64), nullable=False),
+    Column("source_schema_version", Integer, nullable=False),
+    Column("source_projection_contract_version", String(64), nullable=False),
+    Column("importer_version", String(64), nullable=False),
+    Column("canonicalization_version", String(64), nullable=False),
+    Column("projection_version", String(64), nullable=False),
+    Column("shadow_rule_version", String(128), nullable=False),
+    Column("commitment_algorithm", String(32), nullable=False),
+    Column("commitment_key_fingerprint", String(64), nullable=False),
+    Column("commitment_key_epoch", BigInteger, nullable=False),
+    Column("source_item_count", Integer, nullable=False),
+    Column("decision_count", Integer, nullable=False),
+    Column("logical_source_manifest_commitment", String(64), nullable=False),
+    Column("projection_manifest_commitment", String(64), nullable=False),
+    Column("source_projection_contract_digest", String(64), nullable=False),
+    Column("review_receipt_commitment", String(64), nullable=False, unique=True),
+    Column("policy_version", String(128), nullable=False),
+    Column("policy_digest", String(64), nullable=False),
+    Column(
+        "shadow_authorization_id",
+        UUID_PK,
+        ForeignKey(
+            "operations.rollout_authorizations.authorization_id",
+            name="fk_identity_migration_run_shadow_authorization",
+        ),
+        nullable=False,
+    ),
+    Column("release_manifest_digest", String(64), nullable=False),
+    Column("migration_tool_bundle_digest", String(64), nullable=False),
+    Column("core_oci_manifest_digest", String(64), nullable=False),
+    Column("core_schema_digest", String(64), nullable=False),
+    Column("core_capability_digest", String(64), nullable=False),
+    Column("signature_algorithm", String(16), nullable=False),
+    Column("signing_key_fingerprint", String(64), nullable=False),
+    Column("review_signature", String(128), nullable=False),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("transaction_timestamp()"),
+    ),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        f"{_uuidv7_shape('run_id')} AND {_uuidv7_shape('operator_request_id')}",
+        name="uuidv7_ids",
+    ),
+    CheckConstraint(
+        "contract_version = 'reviewed-identity-migration-run-v1' "
+        "AND source_schema_version = 1 "
+        "AND source_projection_contract_version = "
+        "'legacy-identity-source-projection-v1' "
+        "AND importer_version = 'legacy-identity-importer-v1' "
+        "AND canonicalization_version = 'identity-canonicalization-v1' "
+        "AND projection_version = 'semantic-people-projection-v1' "
+        "AND shadow_rule_version = 'record-only-envelope-worker-gate-v3' "
+        "AND commitment_algorithm = 'hmac-sha256-v1'",
+        name="fixed_contract_versions",
+    ),
+    CheckConstraint(
+        "source_item_count BETWEEN 1 AND 10000 "
+        "AND decision_count BETWEEN 1 AND 10000",
+        name="admission_caps",
+    ),
+    CheckConstraint(
+        _hex64(
+            "logical_source_manifest_commitment",
+            "projection_manifest_commitment",
+            "source_projection_contract_digest",
+            "review_receipt_commitment",
+            "commitment_key_fingerprint",
+            "policy_digest",
+            "release_manifest_digest",
+            "migration_tool_bundle_digest",
+            "core_oci_manifest_digest",
+            "core_schema_digest",
+            "core_capability_digest",
+            "signing_key_fingerprint",
+        )
+        + " AND review_signature ~ '^[0-9a-f]{128}$'",
+        name="signed_commitment_shape",
+    ),
+    CheckConstraint(
+        "signature_algorithm = 'ed25519' "
+        "AND commitment_key_epoch > 0 "
+        "AND policy_version ~ '^[a-z0-9][a-z0-9._-]{0,127}$'",
+        name="signature_and_policy_shape",
+    ),
+    CheckConstraint(
+        "expires_at > created_at " "AND expires_at <= created_at + interval '24 hours'",
+        name="database_expiry",
+    ),
+    schema="operations",
+)
+
+reviewed_identity_migration_source_items = Table(
+    "reviewed_identity_migration_source_items",
+    metadata,
+    Column("source_item_id", UUID_PK, primary_key=True),
+    Column("run_id", UUID_PK, nullable=False),
+    Column("ordinal", Integer, nullable=False),
+    Column("source_table_kind", String(32), nullable=False),
+    Column("row_key_commitment", String(64), nullable=False),
+    Column("allowed_projection_commitment", String(64), nullable=False),
+    Column(
+        "recorded_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("transaction_timestamp()"),
+    ),
+    ForeignKeyConstraint(
+        ["run_id"],
+        ["operations.reviewed_identity_migration_runs.run_id"],
+        name="fk_identity_migration_source_item_run",
+    ),
+    UniqueConstraint("run_id", "ordinal", name="identity_source_item_ordinal"),
+    UniqueConstraint("run_id", "source_item_id", name="identity_source_item_id"),
+    UniqueConstraint("run_id", "row_key_commitment", name="identity_source_row_key"),
+    CheckConstraint(_uuidv7_shape("source_item_id"), name="uuidv7_id"),
+    CheckConstraint("ordinal BETWEEN 0 AND 9999", name="ordinal_cap"),
+    CheckConstraint(
+        "source_table_kind IN ('schema_meta','identities','identity_aliases',"
+        "'enrollments','relationships')",
+        name="source_table_kind",
+    ),
+    CheckConstraint(
+        _hex64("row_key_commitment", "allowed_projection_commitment"),
+        name="commitment_shape",
+    ),
+    schema="operations",
+)
+
+reviewed_identity_migration_decisions = Table(
+    "reviewed_identity_migration_decisions",
+    metadata,
+    Column("decision_id", UUID_PK, primary_key=True),
+    Column("run_id", UUID_PK, nullable=False),
+    Column("source_item_id", UUID_PK, nullable=False),
+    Column("ordinal", Integer, nullable=False),
+    Column("decision_kind", String(48), nullable=False),
+    Column("disposition", String(32), nullable=False),
+    Column("candidate_commitment", String(64)),
+    Column("canonical_apply_decision_id", UUID_PK),
+    Column("canonical_apply_disposition", String(32)),
+    Column("decision_commitment", String(64), nullable=False, unique=True),
+    Column(
+        "recorded_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("transaction_timestamp()"),
+    ),
+    ForeignKeyConstraint(
+        ["run_id", "source_item_id"],
+        [
+            "operations.reviewed_identity_migration_source_items.run_id",
+            "operations.reviewed_identity_migration_source_items.source_item_id",
+        ],
+        name="fk_identity_migration_decision_source_item",
+    ),
+    UniqueConstraint("run_id", "ordinal", name="identity_decision_ordinal"),
+    UniqueConstraint("run_id", "decision_id", name="identity_decision_id"),
+    UniqueConstraint(
+        "run_id",
+        "decision_id",
+        "decision_kind",
+        "disposition",
+        "candidate_commitment",
+        name="identity_decision_exact",
+    ),
+    ForeignKeyConstraint(
+        [
+            "run_id",
+            "canonical_apply_decision_id",
+            "decision_kind",
+            "canonical_apply_disposition",
+            "candidate_commitment",
+        ],
+        [
+            "operations.reviewed_identity_migration_decisions.run_id",
+            "operations.reviewed_identity_migration_decisions.decision_id",
+            "operations.reviewed_identity_migration_decisions.decision_kind",
+            "operations.reviewed_identity_migration_decisions.disposition",
+            "operations.reviewed_identity_migration_decisions.candidate_commitment",
+        ],
+        name="fk_identity_decision_canonical_apply",
+    ),
+    CheckConstraint(_uuidv7_shape("decision_id"), name="uuidv7_id"),
+    CheckConstraint("ordinal BETWEEN 0 AND 9999", name="ordinal_cap"),
+    CheckConstraint(
+        "decision_kind IN ('person','privacy_directive','person_status','alias',"
+        "'recognition_binding','legacy_role_candidate',"
+        "'legacy_relationship_candidate','explicit_omission')",
+        name="decision_kind",
+    ),
+    CheckConstraint(
+        "disposition IN ('apply','privacy_suppressed','out_of_scope_by_rule',"
+        "'coalesced_duplicate')",
+        name="disposition",
+    ),
+    CheckConstraint(
+        "decision_commitment ~ '^[0-9a-f]{64}$' "
+        "AND (candidate_commitment IS NULL "
+        "OR candidate_commitment ~ '^[0-9a-f]{64}$')",
+        name="commitment_shape",
+    ),
+    CheckConstraint(
+        "(disposition = 'apply' AND decision_kind <> 'explicit_omission' "
+        "AND candidate_commitment IS NOT NULL "
+        "AND canonical_apply_decision_id IS NULL "
+        "AND canonical_apply_disposition IS NULL) "
+        "OR (disposition IN ('privacy_suppressed','out_of_scope_by_rule') "
+        "AND decision_kind = 'explicit_omission' "
+        "AND candidate_commitment IS NULL "
+        "AND canonical_apply_decision_id IS NULL "
+        "AND canonical_apply_disposition IS NULL) "
+        "OR (disposition = 'coalesced_duplicate' "
+        "AND decision_kind <> 'explicit_omission' "
+        "AND candidate_commitment IS NOT NULL "
+        "AND canonical_apply_decision_id IS NOT NULL "
+        "AND canonical_apply_decision_id <> decision_id "
+        "AND canonical_apply_disposition = 'apply')",
+        name="decision_shape",
+    ),
+    schema="operations",
+)
+
+reviewed_identity_migration_item_receipts = Table(
+    "reviewed_identity_migration_item_receipts",
+    metadata,
+    Column("receipt_id", UUID_PK, primary_key=True),
+    Column("run_id", UUID_PK, nullable=False),
+    Column("decision_id", UUID_PK, nullable=False),
+    Column("decision_kind", String(48), nullable=False),
+    Column("decision_disposition", String(32), nullable=False),
+    Column("candidate_commitment", String(64), nullable=False),
+    Column("outcome", String(32), nullable=False),
+    Column("projection_table_kind", String(64), nullable=False),
+    Column("projection_ref_commitment", String(64), nullable=False),
+    Column("projection_commitment", String(64), nullable=False),
+    Column("receipt_commitment", String(64), nullable=False, unique=True),
+    Column("database_transaction_id", BigInteger, nullable=False),
+    Column(
+        "applied_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("transaction_timestamp()"),
+    ),
+    ForeignKeyConstraint(
+        [
+            "run_id",
+            "decision_id",
+            "decision_kind",
+            "decision_disposition",
+            "candidate_commitment",
+        ],
+        [
+            "operations.reviewed_identity_migration_decisions.run_id",
+            "operations.reviewed_identity_migration_decisions.decision_id",
+            "operations.reviewed_identity_migration_decisions.decision_kind",
+            "operations.reviewed_identity_migration_decisions.disposition",
+            "operations.reviewed_identity_migration_decisions.candidate_commitment",
+        ],
+        name="fk_identity_migration_receipt_apply_decision",
+    ),
+    UniqueConstraint("run_id", "decision_id", name="identity_receipt_decision"),
+    UniqueConstraint("run_id", "receipt_id", name="identity_receipt_id"),
+    UniqueConstraint(
+        "run_id",
+        "decision_kind",
+        "projection_ref_commitment",
+        name="identity_receipt_projection_ref",
+    ),
+    CheckConstraint(_uuidv7_shape("receipt_id"), name="uuidv7_id"),
+    CheckConstraint(
+        "decision_disposition = 'apply' "
+        "AND outcome IN ('inserted_exact','replayed_exact')",
+        name="apply_outcome",
+    ),
+    CheckConstraint(
+        _hex64(
+            "candidate_commitment",
+            "projection_ref_commitment",
+            "projection_commitment",
+            "receipt_commitment",
+        ),
+        name="commitment_shape",
+    ),
+    CheckConstraint("database_transaction_id > 0", name="transaction_marker"),
+    CheckConstraint(
+        "(decision_kind IN ('person','person_status') "
+        "AND projection_table_kind = 'identity.people') "
+        "OR (decision_kind = 'alias' "
+        "AND projection_table_kind = 'identity.aliases') "
+        "OR (decision_kind = 'recognition_binding' "
+        "AND projection_table_kind = 'identity.external_recognition_bindings') "
+        "OR (decision_kind = 'privacy_directive' "
+        "AND projection_table_kind = 'identity.privacy_directives') "
+        "OR (decision_kind = 'legacy_role_candidate' "
+        "AND projection_table_kind = 'identity.legacy_role_labels') "
+        "OR (decision_kind = 'legacy_relationship_candidate' "
+        "AND projection_table_kind = 'identity.legacy_relationship_candidates')",
+        name="projection_table_for_kind",
+    ),
+    schema="operations",
+)
+
+reviewed_identity_migration_finalizations = Table(
+    "reviewed_identity_migration_finalizations",
+    metadata,
+    Column("finalization_id", UUID_PK, primary_key=True),
+    Column("run_id", UUID_PK, nullable=False, unique=True),
+    Column("contract_version", String(64), nullable=False),
+    Column("verification_status", String(32), nullable=False),
+    Column("authoritative", Boolean, nullable=False, server_default=text("false")),
+    Column("source_item_count", Integer, nullable=False),
+    Column("decision_count", Integer, nullable=False),
+    Column("apply_decision_count", Integer, nullable=False),
+    Column("receipt_count", Integer, nullable=False),
+    Column("source_manifest_commitment", String(64), nullable=False),
+    Column("projection_manifest_commitment", String(64), nullable=False),
+    Column("decision_manifest_commitment", String(64), nullable=False),
+    Column("receipt_set_commitment", String(64), nullable=False),
+    Column("finalization_commitment", String(64), nullable=False, unique=True),
+    Column("database_transaction_id", BigInteger, nullable=False),
+    Column("signature_algorithm", String(16), nullable=False),
+    Column("signing_key_fingerprint", String(64), nullable=False),
+    Column("finalization_signature", String(128), nullable=False),
+    Column(
+        "finalized_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("transaction_timestamp()"),
+    ),
+    ForeignKeyConstraint(
+        ["run_id"],
+        ["operations.reviewed_identity_migration_runs.run_id"],
+        name="fk_identity_migration_finalization_run",
+    ),
+    UniqueConstraint(
+        "run_id", "finalization_id", name="identity_finalization_identity"
+    ),
+    CheckConstraint(_uuidv7_shape("finalization_id"), name="uuidv7_id"),
+    CheckConstraint(
+        "contract_version = 'reviewed-identity-migration-finalization-v1' "
+        "AND verification_status = 'candidate_unverified' "
+        "AND authoritative = false",
+        name="non_authoritative_contract",
+    ),
+    CheckConstraint(
+        "source_item_count BETWEEN 1 AND 10000 "
+        "AND decision_count BETWEEN 1 AND 10000 "
+        "AND apply_decision_count BETWEEN 0 AND decision_count "
+        "AND receipt_count = apply_decision_count",
+        name="bounded_counts",
+    ),
+    CheckConstraint(
+        _hex64(
+            "source_manifest_commitment",
+            "projection_manifest_commitment",
+            "decision_manifest_commitment",
+            "receipt_set_commitment",
+            "finalization_commitment",
+            "signing_key_fingerprint",
+        )
+        + " AND finalization_signature ~ '^[0-9a-f]{128}$'",
+        name="signed_commitment_shape",
+    ),
+    CheckConstraint(
+        "database_transaction_id > 0 AND signature_algorithm = 'ed25519'",
+        name="transaction_and_signature",
+    ),
+    schema="operations",
+)
+
+# This is point-in-time evidence only. Revision 0007 deliberately has no
+# physically-frozen/enforced-offline strength and cannot authorize cutover.
+legacy_identity_writer_evidence = Table(
+    "legacy_identity_writer_evidence",
+    metadata,
+    Column("evidence_id", UUID_PK, primary_key=True),
+    Column("run_id", UUID_PK, nullable=False),
+    Column("source_installation_id", UUID_PK, nullable=False),
+    Column("semantic_generation", BigInteger, nullable=False),
+    Column("source_projection_commitment", String(64), nullable=False),
+    Column("evidence_strength", String(32), nullable=False),
+    Column("integrity_result", String(24), nullable=False),
+    Column("checkpoint_result", String(24), nullable=False),
+    Column("journal_result", String(24), nullable=False),
+    Column("legacy_context_cutoff_status", String(32), nullable=False),
+    Column("release_manifest_digest", String(64), nullable=False),
+    Column("freeze_kernel_build_digest", String(64), nullable=False),
+    Column("evidence_commitment", String(64), nullable=False, unique=True),
+    Column("signature_algorithm", String(16), nullable=False),
+    Column("signing_key_fingerprint", String(64), nullable=False),
+    Column("evidence_signature", String(128), nullable=False),
+    Column("observed_at", DateTime(timezone=True), nullable=False),
+    Column(
+        "recorded_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("transaction_timestamp()"),
+    ),
+    ForeignKeyConstraint(
+        ["run_id"],
+        ["operations.reviewed_identity_migration_runs.run_id"],
+        name="fk_legacy_identity_writer_evidence_run",
+    ),
+    UniqueConstraint("run_id", "evidence_id", name="legacy_writer_evidence_id"),
+    CheckConstraint(
+        f"{_uuidv7_shape('evidence_id')} AND "
+        f"{_uuidv7_shape('source_installation_id')}",
+        name="uuidv7_ids",
+    ),
+    CheckConstraint(
+        "evidence_strength IN ('observed_stopped','operator_attested') "
+        "AND integrity_result IN ('passed','failed','not_observed') "
+        "AND checkpoint_result IN ('complete','incomplete','not_observed') "
+        "AND journal_result IN ('clean','pending','not_observed') "
+        "AND legacy_context_cutoff_status IN "
+        "('observed_cutoff','operator_attested_cutoff','not_observed')",
+        name="categorical_results",
+    ),
+    CheckConstraint(
+        _hex64(
+            "release_manifest_digest",
+            "freeze_kernel_build_digest",
+            "source_projection_commitment",
+            "evidence_commitment",
+            "signing_key_fingerprint",
+        )
+        + " AND evidence_signature ~ '^[0-9a-f]{128}$'",
+        name="signed_commitment_shape",
+    ),
+    CheckConstraint(
+        "semantic_generation > 0 AND signature_algorithm = 'ed25519' "
+        "AND observed_at <= recorded_at",
+        name="signature_and_time",
+    ),
+    schema="operations",
+)
+
+privacy_cutover_check_receipts = Table(
+    "privacy_cutover_check_receipts",
+    metadata,
+    Column("check_id", UUID_PK, primary_key=True),
+    Column("run_id", UUID_PK, nullable=False),
+    Column("finalization_id", UUID_PK, nullable=False),
+    Column("check_category", String(24), nullable=False),
+    Column("check_result", String(16), nullable=False),
+    Column("residual_code", String(32), nullable=False),
+    Column("check_commitment", String(64), nullable=False, unique=True),
+    Column("receipt_commitment", String(64), nullable=False, unique=True),
+    Column("policy_digest", String(64), nullable=False),
+    Column(
+        "checked_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("transaction_timestamp()"),
+    ),
+    ForeignKeyConstraint(
+        ["run_id", "finalization_id"],
+        [
+            "operations.reviewed_identity_migration_finalizations.run_id",
+            "operations.reviewed_identity_migration_finalizations.finalization_id",
+        ],
+        name="fk_privacy_check_identity_finalization",
+    ),
+    UniqueConstraint("run_id", "check_category", name="privacy_check_category"),
+    UniqueConstraint(
+        "run_id", "check_id", "check_category", name="privacy_check_identity"
+    ),
+    UniqueConstraint(
+        "run_id",
+        "check_id",
+        "check_category",
+        "check_result",
+        "residual_code",
+        name="privacy_check_exact_identity",
+    ),
+    CheckConstraint(_uuidv7_shape("check_id"), name="uuidv7_id"),
+    CheckConstraint(
+        "check_category IN "
+        "('ingress','retrieval','prompt','initiative','export','edge_block')",
+        name="check_category",
+    ),
+    CheckConstraint(
+        "check_result IN ('passed','blocked') "
+        "AND residual_code IN ('none','legacy_untracked',"
+        "'backup_expiry_pending','external_deletion_pending',"
+        "'coverage_unproven')",
+        name="result_codes",
+    ),
+    CheckConstraint(
+        "(check_result = 'passed' AND residual_code = 'none') "
+        "OR (check_result = 'blocked' AND residual_code <> 'none')",
+        name="result_residual_shape",
+    ),
+    CheckConstraint(
+        _hex64(
+            "check_commitment",
+            "receipt_commitment",
+            "policy_digest",
+        ),
+        name="commitment_shape",
+    ),
+    schema="operations",
+)
+
+semantic_authority_cutovers = Table(
+    "semantic_authority_cutovers",
+    metadata,
+    Column("cutover_id", UUID_PK, primary_key=True),
+    Column("run_id", UUID_PK, nullable=False, unique=True),
+    Column("finalization_id", UUID_PK, nullable=False, unique=True),
+    Column("writer_evidence_id", UUID_PK, nullable=False),
+    Column("contract_version", String(64), nullable=False),
+    Column("authority_status", String(32), nullable=False),
+    Column("authoritative", Boolean, nullable=False, server_default=text("false")),
+    Column("ingress_check_id", UUID_PK, nullable=False),
+    Column("ingress_check_category", String(24), nullable=False),
+    Column("retrieval_check_id", UUID_PK, nullable=False),
+    Column("retrieval_check_category", String(24), nullable=False),
+    Column("prompt_check_id", UUID_PK, nullable=False),
+    Column("prompt_check_category", String(24), nullable=False),
+    Column("initiative_check_id", UUID_PK, nullable=False),
+    Column("initiative_check_category", String(24), nullable=False),
+    Column("export_check_id", UUID_PK, nullable=False),
+    Column("export_check_category", String(24), nullable=False),
+    Column("edge_block_check_id", UUID_PK, nullable=False),
+    Column("edge_block_check_category", String(24), nullable=False),
+    Column("required_privacy_check_result", String(16), nullable=False),
+    Column("required_privacy_residual_code", String(32), nullable=False),
+    Column("privacy_check_set_commitment", String(64), nullable=False),
+    Column("cutover_commitment", String(64), nullable=False, unique=True),
+    Column("policy_digest", String(64), nullable=False),
+    Column("signature_algorithm", String(16), nullable=False),
+    Column("signing_key_fingerprint", String(64), nullable=False),
+    Column("cutover_signature", String(128), nullable=False),
+    Column(
+        "attested_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("transaction_timestamp()"),
+    ),
+    ForeignKeyConstraint(
+        ["run_id", "finalization_id"],
+        [
+            "operations.reviewed_identity_migration_finalizations.run_id",
+            "operations.reviewed_identity_migration_finalizations.finalization_id",
+        ],
+        name="fk_semantic_cutover_identity_finalization",
+    ),
+    ForeignKeyConstraint(
+        ["run_id", "writer_evidence_id"],
+        [
+            "operations.legacy_identity_writer_evidence.run_id",
+            "operations.legacy_identity_writer_evidence.evidence_id",
+        ],
+        name="fk_semantic_cutover_writer_evidence",
+    ),
+    ForeignKeyConstraint(
+        [
+            "run_id",
+            "ingress_check_id",
+            "ingress_check_category",
+            "required_privacy_check_result",
+            "required_privacy_residual_code",
+        ],
+        [
+            "operations.privacy_cutover_check_receipts.run_id",
+            "operations.privacy_cutover_check_receipts.check_id",
+            "operations.privacy_cutover_check_receipts.check_category",
+            "operations.privacy_cutover_check_receipts.check_result",
+            "operations.privacy_cutover_check_receipts.residual_code",
+        ],
+        name="fk_semantic_cutover_ingress_check",
+    ),
+    ForeignKeyConstraint(
+        [
+            "run_id",
+            "retrieval_check_id",
+            "retrieval_check_category",
+            "required_privacy_check_result",
+            "required_privacy_residual_code",
+        ],
+        [
+            "operations.privacy_cutover_check_receipts.run_id",
+            "operations.privacy_cutover_check_receipts.check_id",
+            "operations.privacy_cutover_check_receipts.check_category",
+            "operations.privacy_cutover_check_receipts.check_result",
+            "operations.privacy_cutover_check_receipts.residual_code",
+        ],
+        name="fk_semantic_cutover_retrieval_check",
+    ),
+    ForeignKeyConstraint(
+        [
+            "run_id",
+            "prompt_check_id",
+            "prompt_check_category",
+            "required_privacy_check_result",
+            "required_privacy_residual_code",
+        ],
+        [
+            "operations.privacy_cutover_check_receipts.run_id",
+            "operations.privacy_cutover_check_receipts.check_id",
+            "operations.privacy_cutover_check_receipts.check_category",
+            "operations.privacy_cutover_check_receipts.check_result",
+            "operations.privacy_cutover_check_receipts.residual_code",
+        ],
+        name="fk_semantic_cutover_prompt_check",
+    ),
+    ForeignKeyConstraint(
+        [
+            "run_id",
+            "initiative_check_id",
+            "initiative_check_category",
+            "required_privacy_check_result",
+            "required_privacy_residual_code",
+        ],
+        [
+            "operations.privacy_cutover_check_receipts.run_id",
+            "operations.privacy_cutover_check_receipts.check_id",
+            "operations.privacy_cutover_check_receipts.check_category",
+            "operations.privacy_cutover_check_receipts.check_result",
+            "operations.privacy_cutover_check_receipts.residual_code",
+        ],
+        name="fk_semantic_cutover_initiative_check",
+    ),
+    ForeignKeyConstraint(
+        [
+            "run_id",
+            "export_check_id",
+            "export_check_category",
+            "required_privacy_check_result",
+            "required_privacy_residual_code",
+        ],
+        [
+            "operations.privacy_cutover_check_receipts.run_id",
+            "operations.privacy_cutover_check_receipts.check_id",
+            "operations.privacy_cutover_check_receipts.check_category",
+            "operations.privacy_cutover_check_receipts.check_result",
+            "operations.privacy_cutover_check_receipts.residual_code",
+        ],
+        name="fk_semantic_cutover_export_check",
+    ),
+    ForeignKeyConstraint(
+        [
+            "run_id",
+            "edge_block_check_id",
+            "edge_block_check_category",
+            "required_privacy_check_result",
+            "required_privacy_residual_code",
+        ],
+        [
+            "operations.privacy_cutover_check_receipts.run_id",
+            "operations.privacy_cutover_check_receipts.check_id",
+            "operations.privacy_cutover_check_receipts.check_category",
+            "operations.privacy_cutover_check_receipts.check_result",
+            "operations.privacy_cutover_check_receipts.residual_code",
+        ],
+        name="fk_semantic_cutover_edge_block_check",
+    ),
+    CheckConstraint(_uuidv7_shape("cutover_id"), name="uuidv7_id"),
+    CheckConstraint(
+        "contract_version = 'semantic-authority-cutover-candidate-v1' "
+        "AND authority_status = 'candidate_unenforced' "
+        "AND authoritative = false",
+        name="non_authoritative_contract",
+    ),
+    CheckConstraint(
+        "ingress_check_category = 'ingress' "
+        "AND retrieval_check_category = 'retrieval' "
+        "AND prompt_check_category = 'prompt' "
+        "AND initiative_check_category = 'initiative' "
+        "AND export_check_category = 'export' "
+        "AND edge_block_check_category = 'edge_block' "
+        "AND required_privacy_check_result = 'passed' "
+        "AND required_privacy_residual_code = 'none'",
+        name="privacy_check_categories",
+    ),
+    CheckConstraint(
+        _hex64(
+            "privacy_check_set_commitment",
+            "cutover_commitment",
+            "policy_digest",
+            "signing_key_fingerprint",
+        )
+        + " AND cutover_signature ~ '^[0-9a-f]{128}$'",
+        name="signed_commitment_shape",
+    ),
+    CheckConstraint(
+        "signature_algorithm = 'ed25519'",
+        name="signature_algorithm",
+    ),
+    schema="operations",
+)
+
+# The future erasure kernel must physically remove linkable pseudonymous leaf
+# commitments first, then append only this run-level impact. There is
+# intentionally no FK back to a decision or receipt that would retain a leaf.
+reviewed_identity_migration_erasure_impacts = Table(
+    "reviewed_identity_migration_erasure_impacts",
+    metadata,
+    Column("impact_id", UUID_PK, primary_key=True),
+    Column("run_id", UUID_PK, nullable=False),
+    Column("erasure_request_id", UUID_PK, nullable=False),
+    Column("impact_code", String(32), nullable=False),
+    Column("readiness_suspension", String(16), nullable=False),
+    Column("removed_leaf_commitment_count", Integer, nullable=False),
+    Column("unlinked_projection_count", Integer, nullable=False),
+    Column("impact_commitment", String(64), nullable=False, unique=True),
+    Column(
+        "recorded_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("transaction_timestamp()"),
+    ),
+    ForeignKeyConstraint(
+        ["run_id"],
+        ["operations.reviewed_identity_migration_runs.run_id"],
+        name="fk_identity_migration_erasure_impact_run",
+    ),
+    ForeignKeyConstraint(
+        ["erasure_request_id"],
+        ["privacy.erasure_requests.erasure_request_id"],
+        name="fk_identity_migration_erasure_request",
+    ),
+    UniqueConstraint(
+        "run_id", "erasure_request_id", name="identity_erasure_impact_request"
+    ),
+    CheckConstraint(
+        f"{_uuidv7_shape('impact_id')} AND " f"{_uuidv7_shape('erasure_request_id')}",
+        name="uuidv7_ids",
+    ),
+    CheckConstraint(
+        "impact_code IN ('leaf_commitments_removed','linkage_unavailable') "
+        "AND readiness_suspension = 'required'",
+        name="impact_shape",
+    ),
+    CheckConstraint(
+        "removed_leaf_commitment_count BETWEEN 0 AND 30000 "
+        "AND unlinked_projection_count BETWEEN 0 AND 10000",
+        name="impact_caps",
+    ),
+    CheckConstraint(
+        "(impact_code = 'leaf_commitments_removed' "
+        "AND removed_leaf_commitment_count > 0 "
+        "AND unlinked_projection_count = 0) "
+        "OR (impact_code = 'linkage_unavailable' "
+        "AND unlinked_projection_count > 0)",
+        name="impact_count_shape",
+    ),
+    CheckConstraint(
+        "impact_commitment ~ '^[0-9a-f]{64}$'",
+        name="commitment_shape",
     ),
     schema="operations",
 )

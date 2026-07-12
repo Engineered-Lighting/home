@@ -18,6 +18,16 @@ const DEFAULT_CLEANUP_INTERVAL_MS = 60_000;
 const DEFAULT_CLEANUP_BATCH_SIZE = 10;
 const REVOCATION_RETRY_BASE_MS = 30_000;
 const REVOCATION_RETRY_MAX_MS = 60 * 60_000;
+const NATIVE_CHALLENGE_PATH = "/api/agent/native/v1/attestation/challenge";
+const NATIVE_PROOF_TYPE = "home-agent-native+jwt";
+const NATIVE_ATTESTED_CHANNEL = "private_tauri_attested_v1";
+const NATIVE_CHALLENGE_TTL_SECONDS = 60;
+const MAX_NATIVE_PROOF_BYTES = 8 * 1024;
+const MAX_NATIVE_REGISTRY_BYTES = 256 * 1024;
+const MAX_NATIVE_CHALLENGES = 1_024;
+const MAX_NATIVE_CHALLENGES_PER_INSTALLATION = 16;
+const MAX_NATIVE_USED_JTIS = 4_096;
+const EMPTY_BODY_SHA256 = crypto.createHash("sha256").update(Buffer.alloc(0)).digest("base64url");
 const PRINCIPAL_BINDING_CONFIRM_PATH = "/api/agent/v1/principal-binding-proposal/confirm";
 const PRINCIPAL_BINDING_WRITE_PATHS = new Set([
   "/api/agent/v1/principal-binding-request",
@@ -60,8 +70,6 @@ const ROUTES = Object.freeze([
 // NATIVE_AGENT_ROUTES through contract tests.
 const NATIVE_ROUTES = Object.freeze([
   ["GET", /^\/api\/agent\/v1\/snapshot$/],
-  ["GET", /^\/api\/agent\/v1\/initiatives$/],
-  ["POST", new RegExp(`^/api/agent/v1/initiatives/${UUID_PATH}/claim$`, "i")],
   ["GET", new RegExp(`^/api/agent/v1/places/${UUID_PATH}/descriptor-relationship$`, "i")],
   ["GET", new RegExp(`^/api/agent/v1/places/${UUID_PATH}/parents/current-presence$`, "i")],
   ["POST", /^\/api\/agent\/v1\/memory-transactions$/],
@@ -216,6 +224,394 @@ function nativeBearer(header) {
   return match?.[1] || "";
 }
 
+function exactObjectKeys(value, expected) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const actual = Object.keys(value).sort();
+  const wanted = [...expected].sort();
+  return actual.length === wanted.length && actual.every((key, index) => key === wanted[index]);
+}
+
+function canonicalBase64url(value, bytes) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) return false;
+  try {
+    const decoded = Buffer.from(value, "base64url");
+    return decoded.length === bytes && decoded.toString("base64url") === value;
+  } catch {
+    return false;
+  }
+}
+
+function installationIdValid(value) {
+  return typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
+}
+
+function haUserIdValid(value) {
+  return typeof value === "string" && value.length >= 1 && value.length <= 64 &&
+    !/[\u0000-\u001f\u007f]/.test(value);
+}
+
+function jsonHasDuplicateObjectKeys(raw) {
+  let index = 0;
+  let duplicate = false;
+  const whitespace = () => {
+    while (/[\t\n\r ]/.test(raw[index] || "")) index += 1;
+  };
+  const stringToken = () => {
+    const start = index;
+    index += 1;
+    while (index < raw.length) {
+      if (raw[index] === "\\") {
+        index += 2;
+      } else if (raw[index] === '"') {
+        index += 1;
+        return raw.slice(start, index);
+      } else {
+        index += 1;
+      }
+    }
+    throw new Error("unterminated JSON string");
+  };
+  const value = () => {
+    whitespace();
+    if (raw[index] === "{") {
+      index += 1;
+      whitespace();
+      const keys = new Set();
+      if (raw[index] === "}") { index += 1; return; }
+      while (index < raw.length) {
+        whitespace();
+        if (raw[index] !== '"') throw new Error("invalid JSON object key");
+        const key = JSON.parse(stringToken());
+        if (keys.has(key)) duplicate = true;
+        keys.add(key);
+        whitespace();
+        if (raw[index] !== ":") throw new Error("invalid JSON object separator");
+        index += 1;
+        value();
+        whitespace();
+        if (raw[index] === "}") { index += 1; return; }
+        if (raw[index] !== ",") throw new Error("invalid JSON object delimiter");
+        index += 1;
+      }
+      throw new Error("unterminated JSON object");
+    }
+    if (raw[index] === "[") {
+      index += 1;
+      whitespace();
+      if (raw[index] === "]") { index += 1; return; }
+      while (index < raw.length) {
+        value();
+        whitespace();
+        if (raw[index] === "]") { index += 1; return; }
+        if (raw[index] !== ",") throw new Error("invalid JSON array delimiter");
+        index += 1;
+      }
+      throw new Error("unterminated JSON array");
+    }
+    if (raw[index] === '"') {
+      stringToken();
+      return;
+    }
+    while (index < raw.length && !/[\t\n\r ,\]}]/.test(raw[index])) index += 1;
+  };
+  try {
+    value();
+    whitespace();
+    return index !== raw.length || duplicate;
+  } catch {
+    return true;
+  }
+}
+
+function loadNativeInstallationRegistry(filePath) {
+  const candidate = String(filePath || "").trim();
+  if (!candidate || !path.isAbsolute(candidate)) return null;
+  let raw;
+  let encoded;
+  try {
+    const stat = fs.lstatSync(candidate);
+    if (
+      stat.isSymbolicLink() || !stat.isFile() || stat.size <= 0 ||
+      stat.size > MAX_NATIVE_REGISTRY_BYTES
+    ) return null;
+    encoded = fs.readFileSync(candidate);
+    raw = new TextDecoder("utf-8", { fatal: true }).decode(encoded);
+  } catch {
+    return null;
+  } finally {
+    encoded?.fill(0);
+  }
+  let value;
+  try { value = JSON.parse(raw); }
+  catch { return null; }
+  if (jsonHasDuplicateObjectKeys(raw)) return null;
+  if (
+    !exactObjectKeys(value, ["schema_version", "installations"]) ||
+    value.schema_version !== 1 || !Array.isArray(value.installations) ||
+    value.installations.length > 1_024
+  ) return null;
+
+  const installations = new Map();
+  const publicPoints = new Set();
+  for (const item of value.installations) {
+    if (!exactObjectKeys(item, [
+      "installation_id", "ha_user_id", "status", "public_key_jwk",
+    ])) return null;
+    if (
+      !installationIdValid(item.installation_id) || !haUserIdValid(item.ha_user_id) ||
+      !["active", "revoked"].includes(item.status) ||
+      installations.has(item.installation_id)
+    ) return null;
+    const jwk = item.public_key_jwk;
+    if (
+      !exactObjectKeys(jwk, ["kty", "crv", "x", "y", "kid"]) ||
+      jwk.kty !== "EC" || jwk.crv !== "P-256" || jwk.kid !== item.installation_id ||
+      !canonicalBase64url(jwk.x, 32) || !canonicalBase64url(jwk.y, 32)
+    ) return null;
+    const publicPoint = `${jwk.x}.${jwk.y}`;
+    if (publicPoints.has(publicPoint)) return null;
+    let publicKey;
+    try {
+      publicKey = crypto.createPublicKey({ key: jwk, format: "jwk" });
+      if (
+        publicKey.asymmetricKeyType !== "ec" ||
+        publicKey.asymmetricKeyDetails?.namedCurve !== "prime256v1"
+      ) return null;
+    } catch {
+      return null;
+    }
+    installations.set(item.installation_id, Object.freeze({
+      installationId: item.installation_id,
+      haUserId: item.ha_user_id,
+      status: item.status,
+      publicKey,
+    }));
+    publicPoints.add(publicPoint);
+  }
+  return installations;
+}
+
+function nativeAttestationError(code, status = 401) {
+  return Object.assign(new Error(code), { code, status });
+}
+
+function requestBodySha256(body) {
+  return crypto.createHash("sha256").update(body).digest("base64url");
+}
+
+function parseNativeChallengeBody(body, clientId) {
+  let value;
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(body);
+    value = JSON.parse(text);
+    if (jsonHasDuplicateObjectKeys(text)) throw new Error("duplicate challenge field");
+  } catch {
+    throw nativeAttestationError("native_challenge_invalid", 400);
+  }
+  if (!exactObjectKeys(value, [
+    "installation_id", "method", "path", "htu", "body_sha256",
+  ])) {
+    throw nativeAttestationError("native_challenge_invalid", 400);
+  }
+  if (
+    !installationIdValid(value.installation_id) ||
+    !["GET", "POST", "PUT"].includes(value.method) ||
+    typeof value.path !== "string" || value.path.includes("?") || value.path.includes("#") ||
+    !nativeRouteAllowed(value.method, value.path) ||
+    typeof value.htu !== "string" || value.htu !== `${clientId}${value.path}` ||
+    !canonicalBase64url(value.body_sha256, 32) ||
+    (value.method === "GET" && value.body_sha256 !== EMPTY_BODY_SHA256)
+  ) throw nativeAttestationError("native_challenge_invalid", 400);
+  return value;
+}
+
+function decodeCanonicalJwsJson(segment, maximumBytes) {
+  if (typeof segment !== "string" || !/^[A-Za-z0-9_-]+$/.test(segment)) {
+    throw nativeAttestationError("native_attestation_invalid");
+  }
+  let bytes;
+  let text;
+  let value;
+  try {
+    bytes = Buffer.from(segment, "base64url");
+    if (
+      bytes.length === 0 || bytes.length > maximumBytes ||
+      bytes.toString("base64url") !== segment
+    ) throw new Error("non-canonical segment");
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    value = JSON.parse(text);
+    // Compact canonical JSON makes duplicate properties and alternate parser
+    // representations fail closed before any attacker-controlled key lookup.
+    if (JSON.stringify(value) !== text) throw new Error("non-canonical JSON");
+    return value;
+  } catch {
+    throw nativeAttestationError("native_attestation_invalid");
+  } finally {
+    bytes?.fill(0);
+  }
+}
+
+function parseNativeProof(proof) {
+  if (typeof proof !== "string" || proof.length === 0) {
+    throw nativeAttestationError("native_attestation_required");
+  }
+  if (Buffer.byteLength(proof) > MAX_NATIVE_PROOF_BYTES) {
+    throw nativeAttestationError("native_attestation_invalid");
+  }
+  const segments = proof.split(".");
+  if (segments.length !== 3 || segments.some((segment) => !segment)) {
+    throw nativeAttestationError("native_attestation_invalid");
+  }
+  const header = decodeCanonicalJwsJson(segments[0], 1_024);
+  const claims = decodeCanonicalJwsJson(segments[1], 4_096);
+  if (
+    !exactObjectKeys(header, ["alg", "typ", "kid"]) ||
+    header.alg !== "ES256" || header.typ !== NATIVE_PROOF_TYPE ||
+    !installationIdValid(header.kid)
+  ) throw nativeAttestationError("native_attestation_invalid");
+  if (!exactObjectKeys(claims, [
+    "v", "jti", "nonce", "iat", "exp", "htm", "htu", "path", "body_sha256", "ath",
+  ])) throw nativeAttestationError("native_attestation_invalid");
+  if (
+    claims.v !== 1 || !installationIdValid(claims.jti) ||
+    !canonicalBase64url(claims.nonce, 32) ||
+    !Number.isSafeInteger(claims.iat) || !Number.isSafeInteger(claims.exp) ||
+    !["GET", "POST", "PUT"].includes(claims.htm) ||
+    typeof claims.htu !== "string" || typeof claims.path !== "string" ||
+    !canonicalBase64url(claims.body_sha256, 32) ||
+    !canonicalBase64url(claims.ath, 32)
+  ) throw nativeAttestationError("native_attestation_invalid");
+  let signature;
+  try {
+    signature = Buffer.from(segments[2], "base64url");
+    if (signature.length !== 64 || signature.toString("base64url") !== segments[2]) {
+      throw new Error("invalid ES256 signature encoding");
+    }
+  } catch {
+    signature?.fill(0);
+    throw nativeAttestationError("native_attestation_invalid");
+  }
+  return {
+    header,
+    claims,
+    signingInput: Buffer.from(`${segments[0]}.${segments[1]}`),
+    signature,
+  };
+}
+
+class NativeAttestationStore {
+  constructor(installations, {
+    now = () => Date.now(),
+    maxChallenges = MAX_NATIVE_CHALLENGES,
+    maxUsedJtis = MAX_NATIVE_USED_JTIS,
+  } = {}) {
+    this.installations = installations instanceof Map ? installations : null;
+    this.now = now;
+    this.maxChallenges = maxChallenges;
+    this.maxUsedJtis = maxUsedJtis;
+    this.challenges = new Map();
+    this.usedJtis = new Map();
+  }
+
+  get configured() { return this.installations !== null; }
+
+  #purge(nowSeconds) {
+    for (const [nonce, challenge] of this.challenges) {
+      if (challenge.expiresAt <= nowSeconds) this.challenges.delete(nonce);
+    }
+    for (const [jti, expiresAt] of this.usedJtis) {
+      if (expiresAt <= nowSeconds) this.usedJtis.delete(jti);
+    }
+  }
+
+  #installation(installationId, principal) {
+    if (!this.configured) throw nativeAttestationError("native_attestation_unavailable", 503);
+    const installation = this.installations.get(installationId);
+    if (
+      !installation || installation.status !== "active" ||
+      installation.haUserId !== principal.userId
+    ) throw nativeAttestationError("native_attestation_invalid");
+    return installation;
+  }
+
+  issue(value, principal, accessToken) {
+    this.#installation(value.installation_id, principal);
+    const nowSeconds = Math.floor(this.now() / 1_000);
+    this.#purge(nowSeconds);
+    if (this.challenges.size >= this.maxChallenges) {
+      throw nativeAttestationError("native_attestation_capacity", 503);
+    }
+    let installationChallengeCount = 0;
+    for (const challenge of this.challenges.values()) {
+      if (challenge.installationId === value.installation_id) installationChallengeCount += 1;
+    }
+    if (installationChallengeCount >= MAX_NATIVE_CHALLENGES_PER_INSTALLATION) {
+      throw nativeAttestationError("native_attestation_capacity", 429);
+    }
+    let nonce = randomToken(32);
+    while (this.challenges.has(nonce)) nonce = randomToken(32);
+    const expiresAt = nowSeconds + NATIVE_CHALLENGE_TTL_SECONDS;
+    this.challenges.set(nonce, Object.freeze({
+      installationId: value.installation_id,
+      haUserId: principal.userId,
+      method: value.method,
+      path: value.path,
+      htu: value.htu,
+      bodySha256: value.body_sha256,
+      accessTokenSha256: requestBodySha256(accessToken),
+      issuedAt: nowSeconds,
+      expiresAt,
+    }));
+    return { nonce, issued_at: nowSeconds, expires_at: expiresAt };
+  }
+
+  verify({ proof, principal, accessToken, method, pathname, htu, body }) {
+    const parsed = parseNativeProof(proof);
+    try {
+      const installation = this.#installation(parsed.header.kid, principal);
+      const nowSeconds = Math.floor(this.now() / 1_000);
+      this.#purge(nowSeconds);
+      const challenge = this.challenges.get(parsed.claims.nonce);
+      const bodySha256 = requestBodySha256(body);
+      const accessTokenSha256 = requestBodySha256(accessToken);
+      if (
+        !challenge || challenge.expiresAt <= nowSeconds || challenge.issuedAt > nowSeconds + 1 ||
+        challenge.installationId !== installation.installationId ||
+        challenge.haUserId !== principal.userId || challenge.method !== method ||
+        challenge.path !== pathname || challenge.htu !== htu ||
+        !timingSafeEqual(challenge.bodySha256, bodySha256) ||
+        !timingSafeEqual(challenge.accessTokenSha256, accessTokenSha256) ||
+        parsed.claims.iat !== challenge.issuedAt || parsed.claims.exp !== challenge.expiresAt ||
+        parsed.claims.exp <= parsed.claims.iat || parsed.claims.htm !== method ||
+        parsed.claims.htu !== htu || parsed.claims.path !== pathname ||
+        !timingSafeEqual(parsed.claims.body_sha256, bodySha256) ||
+        !timingSafeEqual(parsed.claims.ath, accessTokenSha256) ||
+        this.usedJtis.has(parsed.claims.jti)
+      ) throw nativeAttestationError("native_attestation_invalid");
+      const verified = crypto.verify(
+        "sha256",
+        parsed.signingInput,
+        { key: installation.publicKey, dsaEncoding: "ieee-p1363" },
+        parsed.signature,
+      );
+      if (!verified) throw nativeAttestationError("native_attestation_invalid");
+      if (this.usedJtis.size >= this.maxUsedJtis) {
+        throw nativeAttestationError("native_attestation_capacity", 503);
+      }
+      // No await occurs between the replay check and these writes. A nonce
+      // and jti therefore have exactly one successful consumer per process.
+      this.challenges.delete(parsed.claims.nonce);
+      this.usedJtis.set(parsed.claims.jti, challenge.expiresAt);
+      return installation.installationId;
+    } finally {
+      parsed.signingInput.fill(0);
+      parsed.signature.fill(0);
+    }
+  }
+}
+
 function secretFromEnv(env, name) {
   const direct = String(env[name] || "").trim();
   if (direct) return direct;
@@ -333,6 +729,20 @@ function oauthRedirect(value, allowedOrigins, { allowInsecure = false } = {}) {
   }
 }
 
+function exactNativePublicOrigin(value) {
+  try {
+    const parsed = new URL(String(value || ""));
+    if (
+      parsed.protocol !== "https:" || parsed.username || parsed.password ||
+      parsed.pathname !== "/" || parsed.search || parsed.hash ||
+      String(value) !== parsed.origin
+    ) return null;
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
 function endpointConfigurationValid(config) {
   const allowInsecure = config.allowInsecureTestUrls === true;
   const origins = config.allowedOrigins instanceof Set
@@ -355,6 +765,9 @@ function configFromEnv(env = process.env) {
   const sessionDbPath = String(env.HOME_AGENT_SESSION_DB_PATH || "").trim();
   const allowInMemorySessions = env.NODE_ENV === "test" &&
     env.HOME_AGENT_ALLOW_IN_MEMORY_SESSIONS === "1";
+  const nativeInstallationsFile = String(env.HOME_AGENT_NATIVE_INSTALLATIONS_FILE || "").trim();
+  const nativeInstallations = loadNativeInstallationRegistry(nativeInstallationsFile);
+  const nativePublicOrigin = exactNativePublicOrigin(env.HOME_AGENT_NATIVE_PUBLIC_ORIGIN);
   const config = {
     bindHost: env.HOME_AGENT_BFF_HOST || "127.0.0.1",
     port: Number(env.HOME_AGENT_BFF_PORT || 8097),
@@ -378,6 +791,14 @@ function configFromEnv(env = process.env) {
     sessionEncryptionKey: sessionEncryptionKeyFromEnv(env),
     sessionDbPath,
     allowInMemorySessions,
+    nativeInstallationsFile,
+    // Native attestation is an independently fail-closed boundary. A missing
+    // or malformed offline registry or dedicated public audience disables
+    // native semantic routes without taking browser OAuth or record-only
+    // ingest offline.
+    nativeInstallations,
+    nativePublicOrigin,
+    nativeAttestationConfigured: nativeInstallations !== null && nativePublicOrigin !== null,
     allowInsecureTestUrls,
     secureCookie: env.HOME_AGENT_INSECURE_TEST_COOKIE !== "1",
     idleTtlMs: boundedIntegerFromEnv(
@@ -403,6 +824,11 @@ function configFromEnv(env = process.env) {
   const sessionPersistenceReady = (
     sessionDbPath && path.isAbsolute(sessionDbPath) && sessionDbPath !== ":memory:"
   ) || allowInMemorySessions;
+  config.nativeAttestationConfigured = Boolean(
+    config.nativeAttestationConfigured && config.clientId &&
+    config.nativePublicOrigin !== config.clientId &&
+    !config.allowedOrigins.has(config.nativePublicOrigin)
+  );
   config.ready = Boolean(
     config.allowedOrigins.size && config.haUrl && config.clientId &&
     config.redirectUri && config.postLoginRedirect && config.coreUrl && config.coreToken &&
@@ -1161,12 +1587,14 @@ async function proxyCoreRequest(
   fetchImpl,
   requestId,
   publicPrefix,
-  channel = null,
+  { rawBody: providedRawBody, nativeInstallationId = null } = {},
 ) {
   let rawBody;
   let body;
   try {
-    rawBody = req.method === "GET" ? undefined : await readBody(req);
+    rawBody = providedRawBody === undefined
+      ? (req.method === "GET" ? undefined : await readBody(req))
+      : providedRawBody;
     body = rawBody === undefined
       ? undefined
       : normalizePrincipalBindingBody(url.pathname, rawBody);
@@ -1178,8 +1606,9 @@ async function proxyCoreRequest(
       "X-Authenticated-HA-User": principal.userId,
       "X-Request-Id": requestId,
     };
-    if (channel === "private_tauri") {
-      headers["X-Home-Agent-Channel"] = "private_tauri";
+    if (nativeInstallationId) {
+      headers["X-Home-Agent-Channel"] = NATIVE_ATTESTED_CHANNEL;
+      headers["X-Home-Agent-Installation"] = nativeInstallationId;
     }
     const upstream = await fetchImpl(`${config.coreUrl}${corePath}${url.search}`, {
       method: req.method,
@@ -1249,7 +1678,7 @@ async function readBoundedCoreResponse(response) {
   }
 }
 
-function createBff(config, { fetchImpl = fetch, store } = {}) {
+function createBff(config, { fetchImpl = fetch, store, attestationStore } = {}) {
   const persistenceReady = (
     config.sessionDbPath && path.isAbsolute(config.sessionDbPath) &&
     config.sessionDbPath !== ":memory:"
@@ -1268,8 +1697,27 @@ function createBff(config, { fetchImpl = fetch, store } = {}) {
   ) throw new Error("BFF cannot start ready without sealed persistent sessions");
   const ownsStore = !store;
   const sessions = store || (config.ready ? new SessionStore(config) : null);
+  const nativeAttestations = attestationStore || new NativeAttestationStore(
+    config.nativeAttestationConfigured === true ? config.nativeInstallations : null,
+  );
+  const nativeBoundaryConfigured = config.nativeAttestationConfigured === true &&
+    exactNativePublicOrigin(config.nativePublicOrigin) === config.nativePublicOrigin &&
+    config.nativePublicOrigin !== config.clientId &&
+    config.allowedOrigins instanceof Set &&
+    !config.allowedOrigins.has(config.nativePublicOrigin) &&
+    nativeAttestations.configured;
   if (sessions && config.ready) sessions.startCleanup(config, fetchImpl);
-  const server = http.createServer(async (req, res) => {
+  const server = http.createServer({
+    // Bound the unauthenticated and bearer-authenticated ingress before a
+    // route handler can wait on readBody. In particular, a slow challenge body
+    // cannot hold a BFF socket indefinitely by dripping bytes.
+    requestTimeout: REQUEST_TIMEOUT_MS,
+    headersTimeout: REQUEST_TIMEOUT_MS,
+    keepAliveTimeout: Math.floor(REQUEST_TIMEOUT_MS / 2),
+    connectionsCheckingInterval: 1_000,
+    maxHeaderSize: 16 * 1024,
+    requireHostHeader: true,
+  }, async (req, res) => {
     const requestId = randomToken(12);
     res.setHeader("X-Request-Id", requestId);
     let url;
@@ -1281,6 +1729,7 @@ function createBff(config, { fetchImpl = fetch, store } = {}) {
         ok: config.ready,
         configured: config.ready,
         service: "home-agent-bff",
+        native_attestation_configured: nativeBoundaryConfigured,
       });
     }
     if (!config.ready) return json(res, 503, { error: "bff_unconfigured", request_id: requestId });
@@ -1350,30 +1799,62 @@ function createBff(config, { fetchImpl = fetch, store } = {}) {
     }
 
     if (url.pathname.startsWith("/api/agent/native/")) {
-      if (url.search || !nativeRouteAllowed(req.method, url.pathname)) {
+      if (req.headers.origin || req.headers.cookie) {
+        return json(res, 403, { error: "native_transport_denied", request_id: requestId });
+      }
+      const isChallenge = url.pathname === NATIVE_CHALLENGE_PATH && req.method === "POST";
+      if (url.search || (!isChallenge && !nativeRouteAllowed(req.method, url.pathname))) {
         return json(res, 404, { error: "route_not_allowed", request_id: requestId });
+      }
+      if (!nativeBoundaryConfigured) {
+        return json(res, 503, { error: "native_attestation_unavailable", request_id: requestId });
       }
       const bearer = nativeBearer(req.headers.authorization);
       if (!bearer) return json(res, 401, { error: "native_authentication_required" });
       const accessToken = Buffer.from(bearer);
       let principal;
-      try { principal = await fetchWhoami(config, accessToken, fetchImpl); }
-      catch {
-        return json(res, 401, { error: "native_authentication_revoked" });
+      let rawBody;
+      try {
+        try { principal = await fetchWhoami(config, accessToken, fetchImpl); }
+        catch {
+          return json(res, 401, { error: "native_authentication_revoked" });
+        }
+        rawBody = await readBody(req);
+        if (isChallenge) {
+          const challengeRequest = parseNativeChallengeBody(rawBody, config.nativePublicOrigin);
+          const challenge = nativeAttestations.issue(challengeRequest, principal, accessToken);
+          return json(res, 200, challenge);
+        }
+        const nativeInstallationId = nativeAttestations.verify({
+          proof: req.headers.dpop,
+          principal,
+          accessToken,
+          method: req.method,
+          pathname: url.pathname,
+          htu: `${config.nativePublicOrigin}${url.pathname}`,
+          body: rawBody,
+        });
+        await proxyCoreRequest(
+          config,
+          req,
+          res,
+          url,
+          principal,
+          fetchImpl,
+          requestId,
+          /^\/api\/agent\/native/,
+          { rawBody, nativeInstallationId },
+        );
+        return;
+      } catch (error) {
+        return json(res, error.status || 502, {
+          error: error.code || (error.status === 413 ? "body_too_large" : "native_attestation_invalid"),
+          request_id: requestId,
+        });
       } finally {
+        rawBody?.fill(0);
         accessToken.fill(0);
       }
-      return proxyCoreRequest(
-        config,
-        req,
-        res,
-        url,
-        principal,
-        fetchImpl,
-        requestId,
-        /^\/api\/agent\/native/,
-        "private_tauri",
-      );
     }
 
     const sessionId = parseCookies(req.headers.cookie)[COOKIE_NAME];
@@ -1464,6 +1945,9 @@ function createBff(config, { fetchImpl = fetch, store } = {}) {
       /^\/api\/agent/,
     );
   });
+  server.maxHeadersCount = 64;
+  server.maxRequestsPerSocket = 100;
+  server.setTimeout(REQUEST_TIMEOUT_MS);
   server.on("close", () => {
     sessions?.stopCleanup();
     if (ownsStore) sessions?.close();
@@ -1473,15 +1957,22 @@ function createBff(config, { fetchImpl = fetch, store } = {}) {
 
 export {
   COOKIE_NAME,
+  EMPTY_BODY_SHA256,
   OAUTH_COOKIE_NAME,
   MAX_BODY_BYTES,
   MAX_CORE_RESPONSE_BYTES,
+  REQUEST_TIMEOUT_MS,
+  NATIVE_ATTESTED_CHANNEL,
+  NATIVE_CHALLENGE_PATH,
+  NATIVE_PROOF_TYPE,
   NATIVE_ROUTES,
   ROUTES,
+  NativeAttestationStore,
   SessionStore,
   configFromEnv,
   createBff,
   isAllowedOrigin,
+  loadNativeInstallationRegistry,
   nativeRouteAllowed,
   normalizePrincipalBindingBody,
   parseCookies,

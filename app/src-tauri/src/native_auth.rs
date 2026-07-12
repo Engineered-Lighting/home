@@ -1,7 +1,9 @@
+use crate::native_attestation::{sha256_urlsafe, InstallationAttestation, PublicJwk};
 use crate::windows_credentials;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use reqwest::blocking::Client;
 use reqwest::{Method, StatusCode};
+use serde::de::{Deserializer, Visitor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -10,6 +12,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use std::{fmt, mem};
 use tauri::{AppHandle, Emitter};
 use url::Url;
 use zeroize::{Zeroize, Zeroizing};
@@ -20,7 +23,9 @@ const MAX_CALLBACK_BYTES: usize = 8 * 1024;
 const MAX_METADATA_BYTES: u64 = 10 * 1024;
 const MAX_TOKEN_RESPONSE_BYTES: u64 = 64 * 1024;
 const MAX_AGENT_RESPONSE_BYTES: u64 = 1024 * 1024;
+const MAX_ATTESTATION_RESPONSE_BYTES: u64 = 8 * 1024;
 const LOCKED_CALLBACK_PORT: u16 = 43_821;
+const ATTESTATION_CHALLENGE_PATH: &str = "/api/agent/native/v1/attestation/challenge";
 
 #[derive(Clone)]
 struct NativeConfig {
@@ -49,7 +54,7 @@ impl NativeConfig {
         redirect_uri: &str,
     ) -> Result<Self, String> {
         let ha_url = secure_origin(ha_url, "native_ha_url_invalid")?;
-        let agent_bff_url = secure_origin(agent_bff_url, "native_agent_bff_url_invalid")?;
+        let agent_bff_url = secure_agent_origin(agent_bff_url)?;
         let client_id = secure_client_id(client_id)?;
         let redirect_uri = native_redirect(redirect_uri)?;
         let mut digest = Sha256::new();
@@ -101,6 +106,14 @@ fn secure_client_id(input: &str) -> Result<Url, String> {
     Ok(value)
 }
 
+fn secure_agent_origin(input: &str) -> Result<Url, String> {
+    let value = secure_origin(input, "native_agent_bff_url_invalid")?;
+    if value.path() != "/" {
+        return Err("native_agent_bff_url_invalid".to_string());
+    }
+    Ok(value)
+}
+
 fn native_redirect(input: &str) -> Result<Url, String> {
     let value = Url::parse(input).map_err(|_| "native_oauth_redirect_invalid".to_string())?;
     if value.scheme() != "http"
@@ -125,10 +138,47 @@ struct AccessSlot {
 
 #[derive(Deserialize)]
 struct TokenResponse {
-    access_token: String,
-    #[serde(default)]
-    refresh_token: String,
+    #[serde(deserialize_with = "deserialize_zeroizing_string")]
+    access_token: Zeroizing<String>,
+    #[serde(
+        default = "empty_zeroizing_string",
+        deserialize_with = "deserialize_zeroizing_string"
+    )]
+    refresh_token: Zeroizing<String>,
     expires_in: u64,
+}
+
+fn empty_zeroizing_string() -> Zeroizing<String> {
+    Zeroizing::new(String::new())
+}
+
+fn deserialize_zeroizing_string<'de, D>(deserializer: D) -> Result<Zeroizing<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct ZeroizingStringVisitor;
+
+    impl<'de> Visitor<'de> for ZeroizingStringVisitor {
+        type Value = Zeroizing<String>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a string held in zeroizing native memory")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+            Ok(Zeroizing::new(value.to_owned()))
+        }
+
+        fn visit_borrowed_str<E>(self, value: &'de str) -> Result<Self::Value, E> {
+            Ok(Zeroizing::new(value.to_owned()))
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+            Ok(Zeroizing::new(value))
+        }
+    }
+
+    deserializer.deserialize_string(ZeroizingStringVisitor)
 }
 
 fn decode_token_response(
@@ -165,6 +215,8 @@ pub struct NativeAuthStatus {
     pub authenticated: bool,
     pub login_in_progress: bool,
     pub reason: Option<String>,
+    pub installation_id: Option<String>,
+    pub public_jwk: Option<PublicJwk>,
 }
 
 #[derive(Clone, Serialize)]
@@ -186,11 +238,6 @@ pub struct NativeAgentResponse {
 
 pub enum AgentOperation {
     Snapshot,
-    ListInitiatives,
-    ClaimInitiative {
-        initiative_id: String,
-        session_id: String,
-    },
     ExplainDescriptor {
         place_id: String,
     },
@@ -245,18 +292,6 @@ impl AgentOperation {
         use serde_json::json;
         match self {
             Self::Snapshot => (Method::GET, "/api/agent/native/v1/snapshot".into(), None),
-            Self::ListInitiatives => (Method::GET, "/api/agent/native/v1/initiatives".into(), None),
-            Self::ClaimInitiative {
-                initiative_id,
-                session_id,
-            } => (
-                Method::POST,
-                format!("/api/agent/native/v1/initiatives/{initiative_id}/claim"),
-                Some(json!({
-                    "session_id": session_id,
-                    "surface": "private_tauri",
-                })),
-            ),
             Self::ExplainDescriptor { place_id } => (
                 Method::GET,
                 format!("/api/agent/native/v1/places/{place_id}/descriptor-relationship"),
@@ -359,10 +394,34 @@ impl AgentOperation {
     }
 }
 
+#[derive(Serialize)]
+struct AttestationChallengeRequest<'a> {
+    installation_id: &'a str,
+    method: &'a str,
+    htu: &'a str,
+    path: &'a str,
+    body_sha256: &'a str,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AttestationChallenge {
+    #[serde(deserialize_with = "deserialize_zeroizing_string")]
+    nonce: Zeroizing<String>,
+    issued_at: u64,
+    expires_at: u64,
+}
+
+enum ChallengeOutcome {
+    Ready(AttestationChallenge),
+    Rejected(u16),
+}
+
 pub struct NativeAuthState {
     config: Option<NativeConfig>,
     configuration_reason: Option<String>,
     client: Option<Client>,
+    attestation: Option<InstallationAttestation>,
     access: Mutex<AccessSlot>,
     logout_lock: Mutex<()>,
     login_in_progress: AtomicBool,
@@ -386,10 +445,15 @@ impl NativeAuthState {
             Ok(value) => value,
             Err(_) => return Self::unconfigured("native_http_unavailable"),
         };
+        let attestation = match InstallationAttestation::load_or_create(&config.agent_bff_url) {
+            Ok(value) => value,
+            Err(_) => return Self::unconfigured("native_attestation_unavailable"),
+        };
         Self {
             config: Some(config),
             configuration_reason: None,
             client: Some(client),
+            attestation: Some(attestation),
             access: Mutex::new(AccessSlot::default()),
             logout_lock: Mutex::new(()),
             login_in_progress: AtomicBool::new(false),
@@ -401,6 +465,7 @@ impl NativeAuthState {
             config: None,
             configuration_reason: Some(reason.to_string()),
             client: None,
+            attestation: None,
             access: Mutex::new(AccessSlot::default()),
             logout_lock: Mutex::new(()),
             login_in_progress: AtomicBool::new(false),
@@ -415,6 +480,15 @@ impl NativeAuthState {
                 .clone()
                 .unwrap_or_else(|| "native_auth_unconfigured".to_string())),
         }
+    }
+
+    fn ready_agent(&self) -> Result<(&NativeConfig, &Client, &InstallationAttestation), String> {
+        let (config, client) = self.ready()?;
+        let attestation = self
+            .attestation
+            .as_ref()
+            .ok_or_else(|| "native_attestation_unavailable".to_string())?;
+        Ok((config, client, attestation))
     }
 
     pub fn status(&self) -> NativeAuthStatus {
@@ -442,6 +516,14 @@ impl NativeAuthState {
             } else {
                 self.configuration_reason.clone()
             },
+            installation_id: self
+                .attestation
+                .as_ref()
+                .map(InstallationAttestation::installation_id),
+            public_jwk: self
+                .attestation
+                .as_ref()
+                .map(InstallationAttestation::public_jwk),
         }
     }
 
@@ -552,8 +634,8 @@ impl NativeAuthState {
             return Err("native_token_exchange_failed".to_string());
         }
         let mut payload = decode_token_response(response, "native_token_exchange_failed")?;
-        let access = Zeroizing::new(std::mem::take(&mut payload.access_token));
-        let refresh = Zeroizing::new(std::mem::take(&mut payload.refresh_token));
+        let access = mem::replace(&mut payload.access_token, empty_zeroizing_string());
+        let refresh = mem::replace(&mut payload.refresh_token, empty_zeroizing_string());
         if access.is_empty() || refresh.is_empty() || access.len() > 16_384 || refresh.len() > 2_560
         {
             return Err("native_token_exchange_failed".to_string());
@@ -626,8 +708,8 @@ impl NativeAuthState {
             return Err("native_token_refresh_failed".to_string());
         }
         let mut payload = decode_token_response(response, "native_token_refresh_failed")?;
-        let new_access = Zeroizing::new(std::mem::take(&mut payload.access_token));
-        let rotated_refresh = Zeroizing::new(std::mem::take(&mut payload.refresh_token));
+        let new_access = mem::replace(&mut payload.access_token, empty_zeroizing_string());
+        let rotated_refresh = mem::replace(&mut payload.refresh_token, empty_zeroizing_string());
         if new_access.is_empty() || new_access.len() > 16_384 {
             return Err("native_token_refresh_failed".to_string());
         }
@@ -747,42 +829,161 @@ impl NativeAuthState {
         body: Option<&Value>,
         access: &str,
     ) -> Result<NativeAgentResponse, String> {
-        let (config, client) = self.ready()?;
+        let (config, client, attestation) = self.ready_agent()?;
         if !path.starts_with("/api/agent/native/v1/") || path.contains('?') || path.contains('#') {
             return Err("native_agent_route_invalid".to_string());
         }
-        let url = config
-            .agent_bff_url
-            .join(path)
-            .map_err(|_| "native_agent_route_invalid".to_string())?;
+        let request_url = native_request_url(config, path)?;
+        let body_bytes = serialize_agent_body(body)?;
+        let body_sha256 = sha256_urlsafe(&body_bytes);
+        let challenge = match self.acquire_attestation_challenge(
+            method,
+            path,
+            &request_url,
+            &body_sha256,
+            access,
+        )? {
+            ChallengeOutcome::Ready(challenge) => challenge,
+            ChallengeOutcome::Rejected(status) => {
+                return Ok(NativeAgentResponse {
+                    status,
+                    payload: serde_json::json!({ "error": "native_attestation_rejected" }),
+                })
+            }
+        };
+        let proof = attestation.sign_request_proof(
+            method.as_str(),
+            path,
+            &request_url,
+            &body_sha256,
+            access,
+            challenge.nonce.as_str(),
+            challenge.issued_at,
+            challenge.expires_at,
+        )?;
         let mut request = client
-            .request(method.clone(), url)
+            .request(method.clone(), request_url)
             .bearer_auth(access)
-            .header("Accept", "application/json");
-        if let Some(value) = body {
-            request = request.json(value);
+            .header("Accept", "application/json")
+            .header("DPoP", proof.as_str());
+        if body.is_some() {
+            request = request
+                .header("Content-Type", "application/json")
+                .body(body_bytes.to_vec());
         }
         let response = request
             .send()
             .map_err(|_| "native_agent_unavailable".to_string())?;
-        let status = response.status().as_u16();
-        let mut bytes = Vec::new();
-        response
-            .take(MAX_AGENT_RESPONSE_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| "native_agent_unavailable".to_string())?;
-        if bytes.len() as u64 > MAX_AGENT_RESPONSE_BYTES {
-            bytes.zeroize();
-            return Err("native_agent_response_too_large".to_string());
-        }
-        let payload =
-            serde_json::from_slice(&bytes).map_err(|_| "native_agent_response_invalid".to_string());
-        bytes.zeroize();
-        Ok(NativeAgentResponse {
-            status,
-            payload: payload?,
-        })
+        read_agent_response(
+            response,
+            MAX_AGENT_RESPONSE_BYTES,
+            "native_agent_response_invalid",
+        )
     }
+
+    fn acquire_attestation_challenge(
+        &self,
+        method: &Method,
+        path: &str,
+        request_url: &Url,
+        body_sha256: &str,
+        access: &str,
+    ) -> Result<ChallengeOutcome, String> {
+        let (config, client, attestation) = self.ready_agent()?;
+        let installation_id = attestation.installation_id();
+        let challenge_body = serde_json::to_vec(&AttestationChallengeRequest {
+            installation_id: &installation_id,
+            method: method.as_str(),
+            htu: request_url.as_str(),
+            path,
+            body_sha256,
+        })
+        .map_err(|_| "native_attestation_challenge_failed".to_string())?;
+        let url = config
+            .agent_bff_url
+            .join(ATTESTATION_CHALLENGE_PATH)
+            .map_err(|_| "native_attestation_challenge_failed".to_string())?;
+        let response = client
+            .post(url)
+            .bearer_auth(access)
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/json")
+            .body(challenge_body)
+            .send()
+            .map_err(|_| "native_attestation_challenge_failed".to_string())?;
+        let status = response.status();
+        let mut bytes = read_bounded_response(
+            response,
+            MAX_ATTESTATION_RESPONSE_BYTES,
+            "native_attestation_challenge_invalid",
+        )?;
+        if !status.is_success() {
+            bytes.zeroize();
+            return Ok(ChallengeOutcome::Rejected(status.as_u16()));
+        }
+        let challenge = decode_attestation_challenge(&bytes)?;
+        bytes.zeroize();
+        Ok(ChallengeOutcome::Ready(challenge))
+    }
+}
+
+fn native_request_url(config: &NativeConfig, path: &str) -> Result<Url, String> {
+    if !path.starts_with("/api/agent/native/v1/") || path.contains('?') || path.contains('#') {
+        return Err("native_agent_route_invalid".to_string());
+    }
+    let url = config
+        .agent_bff_url
+        .join(path)
+        .map_err(|_| "native_agent_route_invalid".to_string())?;
+    if url.origin() != config.agent_bff_url.origin()
+        || url.path() != path
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err("native_agent_route_invalid".to_string());
+    }
+    Ok(url)
+}
+
+fn serialize_agent_body(body: Option<&Value>) -> Result<Zeroizing<Vec<u8>>, String> {
+    match body {
+        Some(value) => serde_json::to_vec(value)
+            .map(Zeroizing::new)
+            .map_err(|_| "native_agent_request_invalid".to_string()),
+        None => Ok(Zeroizing::new(Vec::new())),
+    }
+}
+
+fn decode_attestation_challenge(bytes: &[u8]) -> Result<AttestationChallenge, String> {
+    serde_json::from_slice(bytes).map_err(|_| "native_attestation_challenge_invalid".to_string())
+}
+
+fn read_bounded_response(
+    response: reqwest::blocking::Response,
+    maximum: u64,
+    error: &str,
+) -> Result<Zeroizing<Vec<u8>>, String> {
+    let mut bytes = Zeroizing::new(Vec::new());
+    response
+        .take(maximum + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| error.to_string())?;
+    if bytes.len() as u64 > maximum {
+        return Err(error.to_string());
+    }
+    Ok(bytes)
+}
+
+fn read_agent_response(
+    response: reqwest::blocking::Response,
+    maximum: u64,
+    error: &str,
+) -> Result<NativeAgentResponse, String> {
+    let status = response.status().as_u16();
+    let mut bytes = read_bounded_response(response, maximum, error)?;
+    let payload = serde_json::from_slice(&bytes).map_err(|_| error.to_string())?;
+    bytes.zeroize();
+    Ok(NativeAgentResponse { status, payload })
 }
 
 impl Default for NativeAuthState {
@@ -1095,6 +1296,13 @@ mod tests {
             "http://127.0.0.1:43821/oauth/callback",
         )
         .is_ok());
+        assert!(NativeConfig::from_values(
+            "https://ha.test",
+            "https://agent.test/relay-base",
+            "https://client.test",
+            "http://127.0.0.1:43821/oauth/callback",
+        )
+        .is_err());
     }
 
     #[test]
@@ -1178,5 +1386,76 @@ mod tests {
         .into_request();
         assert_eq!(path, "/api/agent/native/v1/facts/id/forget-preview");
         assert!(!path.contains("initiatives"));
+    }
+
+    #[test]
+    fn challenge_request_and_actual_body_share_the_exact_digest_contract() {
+        let empty = serialize_agent_body(None).unwrap();
+        assert_eq!(
+            sha256_urlsafe(&empty),
+            "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU"
+        );
+        let body = serde_json::json!({ "enabled": true, "key": "location_memory" });
+        let body = serialize_agent_body(Some(&body)).unwrap();
+        let body_sha256 = sha256_urlsafe(&body);
+        let config = NativeConfig::from_values(
+            "https://ha.test",
+            "https://agent.test",
+            "https://client.test",
+            "http://127.0.0.1:43821/oauth/callback",
+        )
+        .unwrap();
+        let request_url =
+            native_request_url(&config, "/api/agent/native/v1/preferences/location_memory")
+                .unwrap();
+        let challenge = serde_json::to_string(&AttestationChallengeRequest {
+            installation_id: "00000000-0000-4000-8000-000000000001",
+            method: "PUT",
+            htu: request_url.as_str(),
+            path: "/api/agent/native/v1/preferences/location_memory",
+            body_sha256: &body_sha256,
+        })
+        .unwrap();
+        assert_eq!(
+            challenge,
+            format!(
+                "{{\"installation_id\":\"00000000-0000-4000-8000-000000000001\",\"method\":\"PUT\",\"htu\":\"https://agent.test/api/agent/native/v1/preferences/location_memory\",\"path\":\"/api/agent/native/v1/preferences/location_memory\",\"body_sha256\":\"{body_sha256}\"}}"
+            )
+        );
+    }
+
+    #[test]
+    fn challenge_response_requires_only_the_three_server_time_fields() {
+        let valid = r#"{"nonce":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","issued_at":1700000000,"expires_at":1700000060}"#;
+        let parsed = decode_attestation_challenge(valid.as_bytes()).unwrap();
+        assert_eq!(parsed.issued_at, 1_700_000_000);
+        assert_eq!(parsed.expires_at, 1_700_000_060);
+        let unknown = r#"{"nonce":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","issued_at":1700000000,"expires_at":1700000060,"proof":"must-not-cross"}"#;
+        assert!(decode_attestation_challenge(unknown.as_bytes()).is_err());
+        let server_audience = r#"{"nonce":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","issued_at":1700000000,"expires_at":1700000060,"htu":"https://relay.test/api/agent/native/v1/snapshot"}"#;
+        assert!(decode_attestation_challenge(server_audience.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn native_request_target_cannot_escape_the_configured_bff_origin() {
+        let config = NativeConfig::from_values(
+            "https://ha.test",
+            "https://agent.test",
+            "https://client.test",
+            "http://127.0.0.1:43821/oauth/callback",
+        )
+        .unwrap();
+        assert_eq!(
+            native_request_url(&config, "/api/agent/native/v1/snapshot")
+                .unwrap()
+                .as_str(),
+            "https://agent.test/api/agent/native/v1/snapshot"
+        );
+        for wrong_origin in [
+            "https://relay.test/api/agent/native/v1/snapshot",
+            "//relay.test/api/agent/native/v1/snapshot",
+        ] {
+            assert!(native_request_url(&config, wrong_origin).is_err());
+        }
     }
 }

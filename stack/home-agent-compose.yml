@@ -438,10 +438,12 @@ services:
       HOME_AGENT_HA_URL: "${HOME_AGENT_HA_URL:?set Home Assistant base URL}"
       HOME_AGENT_OAUTH_CLIENT_ID: "${HOME_AGENT_OAUTH_CLIENT_ID:?set registered HA client ID}"
       HOME_AGENT_OAUTH_REDIRECT_URI: "${HOME_AGENT_OAUTH_REDIRECT_URI:?set /api/agent/auth/callback URL}"
+      HOME_AGENT_NATIVE_PUBLIC_ORIGIN: "${HOME_AGENT_NATIVE_PUBLIC_ORIGIN:?set exact dedicated native HTTPS origin}"
       HOME_AGENT_POST_LOGIN_REDIRECT: /home-agent/index.html
       HOME_AGENT_CORE_URL: http://core-api:8104
       HOME_AGENT_CORE_TOKEN_FILE: /run/secrets/service_token
       HOME_AGENT_SESSION_ENCRYPTION_KEY_FILE: /run/secrets/session_encryption_key
+      HOME_AGENT_NATIVE_INSTALLATIONS_FILE: /run/secrets/native_installations
       HOME_AGENT_SESSION_DB_PATH: /sessions/sessions.sqlite
       HOME_AGENT_PRINCIPAL_REVALIDATE_MS: "0"
     secrets:
@@ -449,6 +451,8 @@ services:
         target: service_token
       - source: session_encryption_key_bff
         target: session_encryption_key
+      - source: native_installations_bff
+        target: native_installations
     volumes:
       - type: bind
         source: "${HOME_AGENT_SESSION_ROOT:?set to encrypted, backup-excluded BFF session directory}"
@@ -541,6 +545,7 @@ secrets:
   database_url_rollout_rollout_authorize: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/rollout-authorize/database_url"}
   service_token_bff: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/bff/service_token"}
   session_encryption_key_bff: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/bff/session_encryption_key"}
+  native_installations_bff: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/bff/native_installations"}
   operator_token_identity_migration: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/identity-migration/operator_token"}
   bootstrap_token_identity_migration: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/identity-migration/bootstrap_token"}
   tls_server_crt: {file: "${HOME_AGENT_TLS_DIR:?mount server.crt server.key and client-ca.crt}/server.crt"}

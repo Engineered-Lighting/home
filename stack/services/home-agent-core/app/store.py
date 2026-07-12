@@ -5344,18 +5344,11 @@ class CoreStore:
                 "location_visits": "enabled"
                 if preferences.get("location_memory", False)
                 else "disabled",
-                # The browser snapshot never includes initiative content; this
-                # flag only reports whether the separately attested native
-                # channel may perform a fully revalidated claim.
-                "private_initiatives": (
-                    "enabled"
-                    if self.settings.rollout_mode == "canary"
-                    and preferences.get("location_memory", False)
-                    and preferences.get("travel_greetings", False)
-                    and not directives
-                    & {"ignored", "silent", "private", "do_not_track"}
-                    else "disabled"
-                ),
+                # Installation attestation narrows native transport; it does
+                # not authorize initiative presentation. The store retains
+                # synthetic domain methods for future review, but deployed
+                # API routes and capability discovery stay locked off.
+                "private_initiatives": "disabled",
                 "physical_actions": "disabled",
                 "active_room": "disabled",
                 "learning": "disabled",

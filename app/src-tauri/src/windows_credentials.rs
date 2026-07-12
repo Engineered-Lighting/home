@@ -4,11 +4,27 @@ use zeroize::Zeroizing;
 mod platform {
     use super::*;
     use std::ptr::{null, null_mut};
-    use windows_sys::Win32::Foundation::{GetLastError, ERROR_NOT_FOUND};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GetLastError, ERROR_NOT_FOUND, WAIT_ABANDONED, WAIT_OBJECT_0,
+    };
     use windows_sys::Win32::Security::Credentials::{
         CredDeleteW, CredFree, CredReadW, CredWriteW, CREDENTIALW, CRED_MAX_CREDENTIAL_BLOB_SIZE,
         CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC,
     };
+    use windows_sys::Win32::System::Threading::{CreateMutexW, ReleaseMutex, WaitForSingleObject};
+
+    const INSTALLATION_LOCK_TIMEOUT_MS: u32 = 10_000;
+
+    struct InstallationLock(*mut core::ffi::c_void);
+
+    impl Drop for InstallationLock {
+        fn drop(&mut self) {
+            unsafe {
+                ReleaseMutex(self.0);
+                CloseHandle(self.0);
+            }
+        }
+    }
 
     fn wide(value: &str) -> Vec<u16> {
         value.encode_utf16().chain(std::iter::once(0)).collect()
@@ -90,6 +106,26 @@ mod platform {
         Ok(read(target)?.is_some())
     }
 
+    pub fn with_installation_lock<T>(
+        operation: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut name = wide("Global\\EngineeredLighting.HomeAgent.InstallationAttestation.v1");
+        let handle = unsafe { CreateMutexW(null(), 0, name.as_ptr()) };
+        name.fill(0);
+        if handle.is_null() {
+            return Err(format!("native_attestation_lock_failed:{}", unsafe {
+                GetLastError()
+            }));
+        }
+        let acquired = unsafe { WaitForSingleObject(handle, INSTALLATION_LOCK_TIMEOUT_MS) };
+        if acquired != WAIT_OBJECT_0 && acquired != WAIT_ABANDONED {
+            unsafe { CloseHandle(handle) };
+            return Err("native_attestation_lock_failed".to_string());
+        }
+        let _guard = InstallationLock(handle);
+        operation()
+    }
+
     pub fn open_external(url: &str) -> Result<(), String> {
         use windows_sys::Win32::UI::Shell::ShellExecuteW;
         use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -131,9 +167,14 @@ mod platform {
     pub fn exists(_target: &str) -> Result<bool, String> {
         Ok(false)
     }
+    pub fn with_installation_lock<T>(
+        _operation: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        Err("native_auth_unsupported".to_string())
+    }
     pub fn open_external(_url: &str) -> Result<(), String> {
         Err("native_auth_unsupported".to_string())
     }
 }
 
-pub use platform::{delete, exists, open_external, read, write};
+pub use platform::{delete, exists, open_external, read, with_installation_lock, write};

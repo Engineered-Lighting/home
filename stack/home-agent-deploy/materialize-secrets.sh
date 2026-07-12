@@ -92,6 +92,7 @@ install_secret rollout-authorize rollout/database_url_rollout database_url 10001
 # The official Node Alpine image's node account is fixed at UID/GID 1000.
 install_secret bff service_token service_token 1000 1000
 install_secret bff session_encryption_key session_encryption_key 1000 1000
+install_secret bff native_installations.json native_installations 1000 1000
 
 # One-shot reviewed migration profile: no database URL or knowledge/spool key.
 install_secret identity-migration operator_token operator_token 10001 10001

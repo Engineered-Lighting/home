@@ -193,6 +193,21 @@ def test_record_only_health_is_categorical_but_missing_worker_does_not_block_rea
     assert ready.json()["worker_maintenance"] == {"status": "missing"}
 
 
+def test_canary_health_keeps_private_initiatives_disabled(
+    tmp_path, monkeypatch
+) -> None:
+    app = main_module.create_app(_api_settings(tmp_path, rollout_mode="canary"))
+    maintenance = Maintenance("current")
+    _configure_db_less_app(app, monkeypatch, maintenance=maintenance)
+
+    with TestClient(app) as client:
+        health = client.get("/healthz")
+
+    assert health.status_code == 200
+    assert health.json()["rollout_mode"] == "canary"
+    assert health.json()["capabilities"]["private_initiatives"] == "disabled"
+
+
 def test_shadow_trusted_mutation_is_gated_but_partial_credentials_keep_401(
     tmp_path, monkeypatch
 ) -> None:
@@ -285,7 +300,14 @@ def test_bootstrap_and_native_channel_partial_credentials_preserve_401(
         channel_missing = client.post(initiative_path, headers=_service_headers())
         channel_trusted = client.post(
             initiative_path,
-            headers=_service_headers(**{"X-Home-Agent-Channel": "private_tauri"}),
+            headers=_service_headers(
+                **{
+                    "X-Home-Agent-Channel": "private_tauri_attested_v1",
+                    "X-Home-Agent-Installation": (
+                        "018f6f42-3a8b-4c11-8123-123456789abc"
+                    ),
+                }
+            ),
         )
         operator_trusted = client.post(
             "/v1/people",

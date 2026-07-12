@@ -9,6 +9,7 @@ const repo = path.resolve(__dirname, "..");
 const read = (name) => fs.readFileSync(path.join(repo, name), "utf8");
 const main = read("app/src-tauri/src/main.rs");
 const nativeAuth = read("app/src-tauri/src/native_auth.rs");
+const nativeAttestation = read("app/src-tauri/src/native_attestation.rs");
 const credentials = read("app/src-tauri/src/windows_credentials.rs");
 const cargo = read("app/src-tauri/Cargo.toml");
 const tauri = JSON.parse(read("app/src-tauri/tauri.conf.json"));
@@ -58,8 +59,6 @@ async function behaviorTest() {
   await api.session();
   await api.login();
   await api.snapshot();
-  await api.initiatives();
-  await api.claimInitiative("01900000-0000-7000-8000-000000000001");
   await api.explainDescriptor("01900000-0000-7000-8000-000000000002");
   await api.queryParentPresence("01900000-0000-7000-8000-000000000002");
   await api.setPreference("location_memory", true);
@@ -79,16 +78,15 @@ async function behaviorTest() {
     "native_auth_status",
     "native_auth_login",
     "native_agent_snapshot",
-    "native_agent_list_initiatives",
-    "native_agent_claim_initiative",
     "native_agent_explain_descriptor",
     "native_agent_query_parent_presence",
     "native_agent_set_preference",
     "close_agent_window",
   ].join(","), calls);
   const methods = Object.getOwnPropertyNames(window.HomeAgentApi.prototype);
-  assert("native client exposes only typed initiative/place queries and no generic mutation",
-    ["initiatives", "claimInitiative", "explainDescriptor", "queryParentPresence"].every((name) => methods.includes(name)) &&
+  assert("native client exposes typed place queries but no initiative or generic mutation",
+    ["explainDescriptor", "queryParentPresence"].every((name) => methods.includes(name)) &&
+    !["initiatives", "claimInitiative"].some((name) => methods.includes(name)) &&
     !methods.some((name) => /(createPlace|confirmParent|generic)/i.test(name)), methods);
 }
 
@@ -155,11 +153,22 @@ function principalOperationBoundaryTest() {
   vm.runInContext(prelude, context, { filename: "panel-security-prelude.js" });
   const result = vm.runInContext(`(() => {
     const ticket = capturePrincipalOperation("subject-a", 7);
+    const material = publicNativeInstallationMaterial({
+      installation_id: "01900000-0000-4000-8000-000000000001",
+      public_jwk: { kty: "EC", crv: "P-256", x: "x", y: "y", kid: "kid", private_key: "forbidden" },
+      access_token: "forbidden",
+      nonce: "forbidden",
+    }, true);
     return {
       current: principalOperationIsCurrent(ticket, "subject-a", 7),
       staleGeneration: principalOperationIsCurrent(ticket, "subject-a", 8),
       changedSubject: principalOperationIsCurrent(ticket, "subject-b", 7),
       signedOut: principalOperationIsCurrent(ticket, null, 7),
+      material: JSON.stringify(material),
+      browserMaterial: publicNativeInstallationMaterial({
+        installation_id: "01900000-0000-4000-8000-000000000001",
+        public_jwk: { kty: "EC", crv: "P-256", x: "x", y: "y", kid: "kid" },
+      }, false),
     };
   })()`, context);
   assert("principal-operation tickets expire on reset, logout, and account switch",
@@ -167,6 +176,13 @@ function principalOperationBoundaryTest() {
     result.staleGeneration === false &&
     result.changedSubject === false &&
     result.signedOut === false, result);
+  assert("enrollment card selects only public native material and stays hidden in browsers",
+    result.material === JSON.stringify({
+      installation_id: "01900000-0000-4000-8000-000000000001",
+      public_jwk: { kty: "EC", crv: "P-256", x: "x", y: "y", kid: "kid" },
+    }) && result.browserMaterial === null &&
+    agentPanel.includes("Public installation enrollment material") &&
+    !agentPanel.includes("navigator.clipboard"), result);
 
   const handlers = [
     "requestPrincipalBinding",
@@ -177,7 +193,6 @@ function principalOperationBoundaryTest() {
     "setPreference",
     "previewLifecycle",
     "confirmLifecycle",
-    "claimInitiative",
     "queryPlace",
   ];
   const guarded = handlers.every((name) => {
@@ -209,6 +224,13 @@ function principalOperationBoundaryTest() {
   process.stdout.write("\nnative_agent_desktop_security_test\n");
   assert("broad Tauri HTTP and default core capabilities are removed", !/^\s*tauri-plugin-http\s*=/m.test(cargo) && !/\.plugin\(tauri_plugin_http/m.test(main) && !mainCapability.includes("http:") && !mainCapability.includes("core:default"));
   assert("refresh tokens use Windows Credential Manager", ["CredWriteW", "CredReadW", "CredDeleteW", "CRED_PERSIST_LOCAL_MACHINE"].every((value) => credentials.includes(value)));
+  assert("per-install ES256 key is generated natively and persisted only through Credential Manager",
+    cargo.includes('p256 = { version = "0.13", features = ["ecdsa"] }') &&
+    nativeAttestation.includes("SigningKey::random(&mut OsRng)") &&
+    nativeAttestation.includes("windows_credentials::write") &&
+    nativeAttestation.includes("installation-attestation/v1") &&
+    nativeAttestation.includes("Zeroizing") &&
+    !nativeAttestation.includes("pub fn sign_request_proof"));
   assert("access tokens are kept in zeroizing Rust memory", nativeAuth.includes("Option<Zeroizing<String>>") && nativeAuth.includes("bytes.zeroize()"));
   assert("OAuth uses exact metadata and one-time loopback binding without ignored PKCE parameters",
     !nativeAuth.includes('append_pair("code_challenge"') &&
@@ -224,7 +246,7 @@ function principalOperationBoundaryTest() {
   assert("off-Windows and missing configuration fail closed", nativeAuth.includes('return Self::unconfigured("native_auth_unsupported")') && nativeAuth.includes("NativeConfig::from_env"));
   assert("main legacy window is explicitly denied native authority", main.includes('assert!(!native_authority_window("main"))') && main.includes('label == AGENT_WINDOW_LABEL'));
   const guardCount = (main.match(/require_agent_window\(&window\)\?;/g) || []).length;
-  assert("every auth/mutation command is guarded by caller window label", guardCount >= 19, guardCount);
+  assert("every remaining auth/mutation command is guarded by caller window label", guardCount >= 17, guardCount);
   assert("Tauri creates a separate hidden local Agent window", tauri.app.windows.length === 2 && tauri.app.windows[1].label === "agent" && tauri.app.windows[1].url === "home-agent/index.html" && tauri.app.windows[1].visible === false, tauri.app.windows);
   assert("Agent capability is scoped only to local auth-event observation", agentCapability.windows?.length === 1 && agentCapability.windows[0] === "agent" && JSON.stringify(agentCapability.permissions) === JSON.stringify(["core:event:allow-listen", "core:event:allow-unlisten"]));
   assert("Agent document has a script-strict local CSP", agentHtml.includes("default-src 'none'") && agentHtml.includes("script-src 'self'") && !agentHtml.includes("unsafe-inline") && !agentHtml.includes("unsafe-eval"));
@@ -247,8 +269,6 @@ function principalOperationBoundaryTest() {
       "setBindingProposal(null)",
       "setBindingBusy(false)",
       "setSnapshot(null)",
-      "setInitiatives([])",
-      "setClaimedInitiative(null)",
       "setRelationship(null)",
       "setPresence(null)",
       "setTransaction(null)",
@@ -260,6 +280,9 @@ function principalOperationBoundaryTest() {
   assert("native panel remains contained without explicit canary memory capability",
     agentPanel.includes('nextSnapshot?.capabilities?.persistent_memory !== "enabled"') &&
     agentPanel.includes('setPhase("native_contained")'));
+  assert("deployed Agent client has no initiative listing, claim, or presentation path",
+    !/\b(?:initiatives|claimInitiative)\s*\(/.test(read("app/src/home-agent/api.js")) &&
+    !/(native_agent_(?:list|claim)_initiative|Private travel greeting|Present once)/.test(agentSources));
   assert("browser identity preview is fixed, explicit, and keeps location choices off",
     agentPanel.includes('id="principal-binding-preview">{bindingProposal.confirmation_statement}</p>') &&
     agentPanel.includes("Review code <code>{bindingProposal.review_code}</code>") &&

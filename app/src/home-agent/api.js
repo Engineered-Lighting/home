@@ -114,16 +114,6 @@
         },
       });
     }
-    initiatives() {
-      if (!this.invoke) return Promise.reject(new Error("native_transport_required"));
-      return this.native("native_agent_list_initiatives")
-        .then((value) => this.nativePayload(value));
-    }
-    claimInitiative(initiativeId) {
-      if (!this.invoke) return Promise.reject(new Error("native_transport_required"));
-      return this.native("native_agent_claim_initiative", { initiativeId })
-        .then((value) => this.nativePayload(value));
-    }
     explainDescriptor(placeId) {
       if (!this.invoke) return Promise.reject(new Error("native_transport_required"));
       return this.native("native_agent_explain_descriptor", { placeId })

@@ -29,13 +29,31 @@ const AUTH_FILE = path.resolve(
 );
 const AUTH_COOKIE = "home_web_auth";
 const PASSWORD_MIN_LENGTH = 12;
+const allowInsecureAgentOrigins = process.env.NODE_ENV === "test" &&
+  process.env.HOME_WEB_ALLOW_INSECURE_TEST_AGENT_ORIGINS === "1";
 const agentOriginBoundary = parseAgentOriginBoundary(process.env.HOME_WEB_AGENT_ORIGINS, {
-  allowInsecure: process.env.NODE_ENV === "test" &&
-    process.env.HOME_WEB_ALLOW_INSECURE_TEST_AGENT_ORIGINS === "1",
+  allowInsecure: allowInsecureAgentOrigins,
 });
+const parsedNativeAgentOriginBoundary = parseAgentOriginBoundary(
+  process.env.HOME_WEB_NATIVE_AGENT_ORIGIN,
+  { allowInsecure: allowInsecureAgentOrigins },
+);
+const nativeAgentOriginBoundary = parsedNativeAgentOriginBoundary.valid &&
+  parsedNativeAgentOriginBoundary.origins.length === 1
+  ? parsedNativeAgentOriginBoundary
+  : {
+      configured: parsedNativeAgentOriginBoundary.configured,
+      valid: false,
+      origins: [],
+      byHost: new Map(),
+      error: parsedNativeAgentOriginBoundary.error || "multiple_origins",
+    };
 const PRIMARY_AGENT_ORIGIN = agentOriginBoundary.valid ? agentOriginBoundary.origins[0] : "";
 if (!agentOriginBoundary.valid) {
   console.warn("[agent-origin] HOME_WEB_AGENT_ORIGINS is missing or invalid; browser Agent routes are disabled");
+}
+if (!nativeAgentOriginBoundary.valid) {
+  console.warn("[agent-origin] HOME_WEB_NATIVE_AGENT_ORIGIN is missing or invalid; native Agent routes are disabled");
 }
 const PACKAGE_JSON = (() => {
   try {
@@ -68,6 +86,10 @@ const STACK_TOKEN_PROXY_MARKER = "__home_web_gateway_stack_token__";
 const DEFAULT_STACK_TOKEN_FILE = "/opt/home-ai-voice/.env";
 const NATIVE_OAUTH_REDIRECT_URI = "http://127.0.0.1:43821/oauth/callback";
 const NATIVE_OAUTH_CLIENT_METADATA = `<!doctype html><html><head><meta charset="utf-8"><link rel="redirect_uri" href="${NATIVE_OAUTH_REDIRECT_URI}"></head><body>Home Agent native OAuth client metadata.</body></html>`;
+const NATIVE_AGENT_MAX_BODY_BYTES = 64 * 1024;
+const NATIVE_AGENT_REQUEST_TIMEOUT_MS = 10_000;
+const GATEWAY_HEADER_TIMEOUT_MS = 10_000;
+const GATEWAY_REQUEST_TIMEOUT_MS = 120_000;
 
 const MIME = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -147,9 +169,8 @@ function rx(pattern) {
 
 const UUID_PATH = "[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const NATIVE_AGENT_ROUTES = Object.freeze([
+  ["POST", /^\/native\/v1\/attestation\/challenge$/],
   ["GET", /^\/native\/v1\/snapshot$/],
-  ["GET", /^\/native\/v1\/initiatives$/],
-  ["POST", new RegExp(`^/native/v1/initiatives/${UUID_PATH}/claim$`, "i")],
   ["GET", new RegExp(`^/native/v1/places/${UUID_PATH}/descriptor-relationship$`, "i")],
   ["GET", new RegExp(`^/native/v1/places/${UUID_PATH}/parents/current-presence$`, "i")],
   ["POST", /^\/native\/v1\/memory-transactions$/],
@@ -300,6 +321,11 @@ function gatewayHealth() {
       configured: agentOriginBoundary.configured,
       valid: agentOriginBoundary.valid,
       count: agentOriginBoundary.origins.length,
+    },
+    nativeAgentOriginBoundary: {
+      configured: nativeAgentOriginBoundary.configured,
+      valid: nativeAgentOriginBoundary.valid,
+      count: nativeAgentOriginBoundary.origins.length,
     },
     apartmentAssetsDir: APARTMENT_ASSETS_DIR,
     routes: routeSummary(),
@@ -834,7 +860,13 @@ function proxyHeaders(reqHeaders, route, suffix) {
     if (/^Bearer\s/.test(String(reqHeaders.authorization || ""))) {
       headers.authorization = reqHeaders.authorization;
     }
-    for (const name of ["accept", "content-type", "content-length", "user-agent"]) {
+    for (const name of [
+      "accept",
+      "content-type",
+      "content-length",
+      "dpop",
+      "user-agent",
+    ]) {
       if (reqHeaders[name] !== undefined) headers[name] = reqHeaders[name];
     }
     return headers;
@@ -1064,6 +1096,139 @@ function serveStatic(req, res) {
   serveFile(req, res, filePath, { cache: appStaticCache(pathname, parsed) });
 }
 
+function nativeIngressError(status, code) {
+  return Object.assign(new Error(code), { status, code });
+}
+
+function readNativeAgentBody(req) {
+  const declared = req.headers["content-length"];
+  if (declared !== undefined) {
+    const text = String(declared);
+    if (!/^(0|[1-9][0-9]*)$/.test(text)) {
+      return Promise.reject(nativeIngressError(400, "native_body_length_invalid"));
+    }
+    if (Number(text) > NATIVE_AGENT_MAX_BODY_BYTES) {
+      return Promise.reject(nativeIngressError(413, "native_body_too_large"));
+    }
+  }
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    let settled = false;
+    const wipe = () => {
+      for (const chunk of chunks) chunk.fill(0);
+      chunks.length = 0;
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      req.off("data", onData);
+      req.off("end", onEnd);
+      req.off("aborted", onAborted);
+      req.off("error", onError);
+    };
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      req.pause();
+      wipe();
+      reject(error);
+    };
+    const onData = (chunk) => {
+      size += chunk.length;
+      if (size > NATIVE_AGENT_MAX_BODY_BYTES) {
+        fail(nativeIngressError(413, "native_body_too_large"));
+        return;
+      }
+      chunks.push(Buffer.from(chunk));
+    };
+    const onEnd = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      const body = Buffer.concat(chunks, size);
+      wipe();
+      resolve(body);
+    };
+    const onAborted = () => fail(nativeIngressError(400, "native_request_aborted"));
+    const onError = () => fail(nativeIngressError(400, "native_request_invalid"));
+    const timer = setTimeout(
+      () => fail(nativeIngressError(408, "native_request_timeout")),
+      NATIVE_AGENT_REQUEST_TIMEOUT_MS,
+    );
+    timer.unref();
+    req.on("data", onData);
+    req.on("end", onEnd);
+    req.on("aborted", onAborted);
+    req.on("error", onError);
+  });
+}
+
+function rejectNativeIngress(req, res, error) {
+  if (res.headersSent || res.destroyed) {
+    res.destroy();
+    return;
+  }
+  res.shouldKeepAlive = false;
+  res.setHeader("Connection", "close");
+  sendJson(res, error.status || 400, {
+    ok: false,
+    error: error.code || "native_request_invalid",
+  });
+  res.once("finish", () => {
+    if (!req.destroyed) req.destroy();
+  });
+}
+
+async function proxyNativeHttp(req, res, route, suffix, targetUrl) {
+  let body;
+  try {
+    body = await readNativeAgentBody(req);
+  } catch (error) {
+    rejectNativeIngress(req, res, error);
+    return;
+  }
+  const client = targetUrl.protocol === "https:" ? https : http;
+  const headers = proxyHeaders(req.headers, route, suffix);
+  headers["content-length"] = String(body.length);
+  let bodyWiped = false;
+  const wipeBody = () => {
+    if (bodyWiped) return;
+    bodyWiped = true;
+    body.fill(0);
+  };
+  const upstream = client.request(targetUrl, {
+    method: req.method,
+    headers,
+  }, (upstreamRes) => {
+    const responseHeaders = { ...upstreamRes.headers };
+    delete responseHeaders["content-security-policy"];
+    delete responseHeaders["set-cookie"];
+    delete responseHeaders.location;
+    if ((upstreamRes.statusCode || 0) >= 300 && (upstreamRes.statusCode || 0) < 400) {
+      upstreamRes.resume();
+      sendJson(res, 502, { ok: false, error: "native_upstream_redirect_denied" });
+      return;
+    }
+    res.writeHead(upstreamRes.statusCode || 502, responseHeaders);
+    upstreamRes.pipe(res);
+  });
+  upstream.setTimeout(NATIVE_AGENT_REQUEST_TIMEOUT_MS, () => {
+    upstream.destroy(new Error("native upstream timeout"));
+  });
+  upstream.once("finish", wipeBody);
+  upstream.once("close", wipeBody);
+  upstream.on("error", () => {
+    wipeBody();
+    if (res.headersSent || res.destroyed) {
+      res.destroy();
+      return;
+    }
+    sendJson(res, 502, { ok: false, error: "native_upstream_unavailable" });
+  });
+  upstream.end(body);
+}
+
 function proxyHttp(req, res, route) {
   const suffix = routeSuffix(route, req.url);
   if (!route.allow(suffix, req.method)) {
@@ -1074,6 +1239,10 @@ function proxyHttp(req, res, route) {
 
   const targetUrl = buildTargetUrl(route, suffix);
   const nativeAgentRequest = route.prefix === "/api/agent" && isNativeAgentRoute(req.method, suffix);
+  if (nativeAgentRequest) {
+    void proxyNativeHttp(req, res, route, suffix, targetUrl);
+    return;
+  }
   const client = targetUrl.protocol === "https:" ? https : http;
   const upstream = client.request(targetUrl, {
     method: req.method,
@@ -1081,15 +1250,6 @@ function proxyHttp(req, res, route) {
   }, (upstreamRes) => {
     const headers = { ...upstreamRes.headers };
     delete headers["content-security-policy"];
-    if (nativeAgentRequest) {
-      delete headers["set-cookie"];
-      delete headers.location;
-      if ((upstreamRes.statusCode || 0) >= 300 && (upstreamRes.statusCode || 0) < 400) {
-        upstreamRes.resume();
-        sendJson(res, 502, { ok: false, error: "native_upstream_redirect_denied" });
-        return;
-      }
-    }
     res.writeHead(upstreamRes.statusCode || 502, headers);
     upstreamRes.pipe(res);
   });
@@ -1163,6 +1323,11 @@ function checkConfig() {
       valid: agentOriginBoundary.valid,
       origins: agentOriginBoundary.origins,
     },
+    nativeAgentOriginBoundary: {
+      configured: nativeAgentOriginBoundary.configured,
+      valid: nativeAgentOriginBoundary.valid,
+      origins: nativeAgentOriginBoundary.origins,
+    },
     routes: routeSummary(),
   };
   console.log(JSON.stringify(summary, null, 2));
@@ -1173,20 +1338,46 @@ if (process.argv.includes("--check")) {
   process.exit(checkConfig() ? 0 : 1);
 }
 
-const server = http.createServer(async (req, res) => {
+const server = http.createServer({
+  headersTimeout: GATEWAY_HEADER_TIMEOUT_MS,
+  requestTimeout: GATEWAY_REQUEST_TIMEOUT_MS,
+  keepAliveTimeout: 5_000,
+  connectionsCheckingInterval: 1_000,
+  maxHeaderSize: 16 * 1024,
+  requireHostHeader: true,
+}, async (req, res) => {
   const parsed = new URL(req.url, "http://home.local");
   const agentContext = classifyAgentOrigin(req.headers, agentOriginBoundary);
+  const nativeAgentContext = classifyAgentOrigin(req.headers, nativeAgentOriginBoundary);
   const route = findRoute(parsed.pathname);
   const nativeAgentRequest = route?.prefix === "/api/agent" &&
     isNativeAgentRoute(req.method, routeSuffix(route, req.url));
 
-  if (agentContext.agentHost) {
-    if (!agentContext.originAllowed) {
-      sendJson(res, 403, { ok: false, error: "agent_origin_mismatch" });
+  if (nativeAgentContext.agentHost) {
+    if (!nativeAgentContext.originAllowed) {
+      sendJson(res, 403, { ok: false, error: "native_agent_origin_mismatch" });
       return;
     }
     if (parsed.pathname === "/native-oauth-client" && !parsed.search) {
       sendNativeOauthClientMetadata(req, res);
+      return;
+    }
+    if (nativeAgentRequest) {
+      proxyHttp(req, res, route);
+      return;
+    }
+    sendJson(res, 404, { ok: false, error: "native_agent_origin_route_denied" });
+    return;
+  }
+
+  if (nativeAgentRequest) {
+    sendJson(res, 404, { ok: false, error: "native_agent_origin_required" });
+    return;
+  }
+
+  if (agentContext.agentHost) {
+    if (!agentContext.originAllowed) {
+      sendJson(res, 403, { ok: false, error: "agent_origin_mismatch" });
       return;
     }
     if (parsed.pathname === "/home-agent/" || parsed.pathname.startsWith("/home-agent/")) {
@@ -1198,13 +1389,6 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     sendJson(res, 404, { ok: false, error: "agent_origin_route_denied" });
-    return;
-  }
-
-  if (nativeAgentRequest) {
-    // Preserve the typed native bearer channel during origin migration. It
-    // has no browser cookie/session semantics and the BFF validates whoami.
-    proxyHttp(req, res, route);
     return;
   }
 
@@ -1229,6 +1413,10 @@ const server = http.createServer(async (req, res) => {
   } else if (route) proxyHttp(req, res, route);
   else serveStatic(req, res);
 });
+
+server.maxHeadersCount = 64;
+server.maxRequestsPerSocket = 100;
+server.setTimeout(GATEWAY_REQUEST_TIMEOUT_MS);
 
 server.on("upgrade", (req, socket, head) => {
   if (classifyAgentOrigin(req.headers, agentOriginBoundary).agentHost) {

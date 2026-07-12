@@ -58,6 +58,9 @@ write_new service_token "$(hex_secret 32)"
 write_new operator_token "$(hex_secret 32)"
 write_new bootstrap_token "$(hex_secret 32)"
 write_new session_encryption_key "$(base64url_key)"
+# Public installation keys are identity-sensitive policy, so the empty
+# fail-closed registry shares the encrypted root-only master directory.
+write_new native_installations.json '{"installations":[],"schema_version":1}'
 
 sh "$script_dir/materialize-secrets.sh" "$destination"
 

@@ -14,6 +14,8 @@ from starlette.routing import Match
 from . import __version__
 from .api import ingest_router, semantic_router
 from .auth import (
+    ATTESTED_NATIVE_CHANNEL,
+    native_installation_id_valid,
     require_bootstrap,
     require_native_service_identity,
     require_operator_bearer,
@@ -121,7 +123,11 @@ def trusted_maintenance_gated_caller(request: Request, settings: Settings) -> bo
         if audience == "native_service":
             if not hmac.compare_digest(
                 request.headers.get("x-home-agent-channel", ""),
-                "private_tauri",
+                ATTESTED_NATIVE_CHANNEL,
+            ):
+                return False
+            if not native_installation_id_valid(
+                request.headers.get("x-home-agent-installation")
             ):
                 return False
         return True
@@ -467,9 +473,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     else settings.rollout_mode
                 ),
                 "location_visits": "principal_consent_gated",
-                "private_initiatives": (
-                    "enabled" if settings.rollout_mode == "canary" else "disabled"
-                ),
+                "private_initiatives": "disabled",
                 "physical_actions": "disabled",
                 "active_room": "disabled",
                 "learning": "disabled",

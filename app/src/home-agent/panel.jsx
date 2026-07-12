@@ -12,6 +12,30 @@ function principalOperationIsCurrent(ticket, subject, generation) {
     && ticket.generation === generation;
 }
 
+function publicNativeInstallationMaterial(session, isNative) {
+  const jwk = session?.public_jwk;
+  if (!isNative || !session?.installation_id || !jwk) return null;
+  const values = [
+    session.installation_id,
+    jwk.kty,
+    jwk.crv,
+    jwk.x,
+    jwk.y,
+    jwk.kid,
+  ];
+  if (!values.every((value) => typeof value === "string" && value.length > 0)) return null;
+  return Object.freeze({
+    installation_id: session.installation_id,
+    public_jwk: Object.freeze({
+      kty: jwk.kty,
+      crv: jwk.crv,
+      x: jwk.x,
+      y: jwk.y,
+      kid: jwk.kid,
+    }),
+  });
+}
+
 function HomeAgentPanel() {
   const api = useMemo(() => new window.HomeAgentApi(""), []);
   const activeSubject = useRef(null);
@@ -26,8 +50,6 @@ function HomeAgentPanel() {
   const [bindingProposal, setBindingProposal] = useState(null);
   const [bindingBusy, setBindingBusy] = useState(false);
   const [snapshot, setSnapshot] = useState(null);
-  const [initiatives, setInitiatives] = useState([]);
-  const [claimedInitiative, setClaimedInitiative] = useState(null);
   const [relationship, setRelationship] = useState(null);
   const [presence, setPresence] = useState(null);
   const [error, setError] = useState("");
@@ -42,8 +64,6 @@ function HomeAgentPanel() {
     setBindingProposal(null);
     setBindingBusy(false);
     setSnapshot(null);
-    setInitiatives([]);
-    setClaimedInitiative(null);
     setRelationship(null);
     setPresence(null);
     setTeaching(DEFAULT_DESCRIPTOR_TEXT);
@@ -113,9 +133,6 @@ function HomeAgentPanel() {
         return;
       }
       setSnapshot(nextSnapshot);
-      const nextInitiatives = api.invoke ? await api.initiatives() : [];
-      if (!isCurrent()) return;
-      setInitiatives(nextInitiatives);
       setPhase("ready");
     } catch (cause) {
       if (!isCurrent()) return;
@@ -291,20 +308,6 @@ function HomeAgentPanel() {
     }
   };
 
-  const claimInitiative = async (initiativeId) => {
-    const ticket = beginPrincipalOperation();
-    setError("");
-    try {
-      const value = await api.claimInitiative(initiativeId);
-      if (!principalOperationCurrent(ticket)) return;
-      setClaimedInitiative(value);
-      setInitiatives((current) => current.filter((item) => item.initiative_id !== initiativeId));
-    } catch (cause) {
-      if (!principalOperationCurrent(ticket)) return;
-      setError(cause.message || "initiative_claim_failed");
-    }
-  };
-
   const queryPlace = async (kind) => {
     const ticket = beginPrincipalOperation();
     setError("");
@@ -346,6 +349,11 @@ function HomeAgentPanel() {
       setError(reason);
     }
   };
+
+  const nativeInstallationMaterial = publicNativeInstallationMaterial(
+    session,
+    Boolean(api.invoke),
+  );
 
   return (
     <main className="agent-shell">
@@ -404,6 +412,14 @@ function HomeAgentPanel() {
           <h2>Identity confirmed / rollout contained</h2>
           <p>The native Agent is authenticated, but Core has not enabled canary persistent-memory capability.</p>
           <p>Preferences, teaching, private queries, and initiatives stay unavailable. Location memory and travel greetings remain default-off.</p>
+        </section>
+      )}
+
+      {nativeInstallationMaterial && (
+        <section className="agent-card">
+          <h2>Public installation enrollment material</h2>
+          <p>This public key material is not proof that enrollment is complete. A private operator must bind it offline to your exact Home Assistant user UUID.</p>
+          <pre>{JSON.stringify(nativeInstallationMaterial, null, 2)}</pre>
         </section>
       )}
 
@@ -562,21 +578,6 @@ function HomeAgentPanel() {
               <button onClick={confirm}>Confirm exact preview</button>
             )}
           </section>
-
-          {api.invoke && (
-            <section className="agent-card">
-              <h2>Private travel greeting</h2>
-              <p>Only a fresh, conflict-free, specifically matched visit can be claimed. The wording is rendered from the confirmed descriptor without a model.</p>
-              {initiatives.length === 0 && !claimedInitiative && <p>No eligible greeting.</p>}
-              {initiatives.map((initiative) => (
-                <div key={initiative.initiative_id}>
-                  <p>An eligible private greeting is ready. Its location wording is released only by the atomic one-time claim.</p>
-                  <button onClick={() => claimInitiative(initiative.initiative_id)}>Present once</button>
-                </div>
-              ))}
-              {claimedInitiative && <p>{claimedInitiative.message}</p>}
-            </section>
-          )}
 
           {api.invoke && (transaction?.place_id || snapshot?.latest_visit?.place_id) && (
             <section className="agent-card">

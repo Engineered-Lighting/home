@@ -13,6 +13,8 @@ const BASIC = `Basic ${Buffer.from("operator:correct horse battery staple").toSt
 const BEARER = "Bearer native-ha-access-test-token";
 const AGENT_ORIGIN = "https://agent.home.test";
 const AGENT_HOST = "agent.home.test";
+const NATIVE_ORIGIN = "https://native-agent.home.test";
+const NATIVE_HOST = "native-agent.home.test";
 let passes = 0;
 let fails = 0;
 
@@ -47,7 +49,12 @@ function reservePort() {
 
 function request(port, pathname, { method = "GET", headers = {}, body } = {}) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host: "127.0.0.1", port, path: pathname, method, headers }, (res) => {
+    const requestHeaders = pathname.startsWith("/api/agent/native/") && headers.Host === undefined
+      ? { ...headers, Host: NATIVE_HOST }
+      : headers;
+    const req = http.request({
+      host: "127.0.0.1", port, path: pathname, method, headers: requestHeaders,
+    }, (res) => {
       let value = "";
       res.setEncoding("utf8");
       res.on("data", (chunk) => { value += chunk; });
@@ -73,17 +80,32 @@ async function waitForGateway(port, child) {
 
 (async function main() {
   process.stdout.write("\nnative_agent_gateway_security_test\n");
+  const gatewaySource = fs.readFileSync(SERVER, "utf8");
+  assert(
+    "gateway bounds native bodies and global header/socket resources",
+    [
+      "NATIVE_AGENT_MAX_BODY_BYTES",
+      "NATIVE_AGENT_REQUEST_TIMEOUT_MS",
+      "headersTimeout: GATEWAY_HEADER_TIMEOUT_MS",
+      "maxHeaderSize: 16 * 1024",
+      "server.maxHeadersCount = 64",
+      "server.maxRequestsPerSocket = 100",
+    ].every((token) => gatewaySource.includes(token)),
+  );
   const upstreamRequests = [];
   const upstream = http.createServer((req, res) => {
     upstreamRequests.push({
       method: req.method,
       url: req.url,
       authorization: req.headers.authorization || "",
+      dpop: req.headers.dpop || "",
       cookie: req.headers.cookie || "",
       actor: req.headers["x-actor-id"] || "",
       principal: req.headers["x-principal-id"] || "",
       haUser: req.headers["x-authenticated-ha-user"] || "",
       forwardedUser: req.headers["x-forwarded-user"] || "",
+      channel: req.headers["x-home-agent-channel"] || "",
+      installation: req.headers["x-home-agent-installation"] || "",
     });
     const native = req.url.startsWith("/api/agent/native/");
     const authorized = req.headers.authorization === BEARER;
@@ -115,6 +137,7 @@ async function waitForGateway(port, child) {
         HOME_WEB_AUTH_REQUIRED: "1",
         HOME_WEB_BASIC_AUTH: "operator:correct horse battery staple",
         HOME_WEB_AGENT_ORIGINS: AGENT_ORIGIN,
+        HOME_WEB_NATIVE_AGENT_ORIGIN: NATIVE_ORIGIN,
         HOME_WEB_AUTH_FILE: path.join(tempDir, "missing-auth.json"),
         HOME_WEB_AGENT_BFF_TARGET: `http://127.0.0.1:${upstreamPort}/api/agent`,
         // A stale target must not reactivate the quarantined broad HA proxy.
@@ -141,7 +164,7 @@ async function waitForGateway(port, child) {
       { status: quarantinedLegacyUi.status, body: quarantinedLegacyUi.body.slice(0, 160) });
 
     const metadata = await request(gatewayPort, "/native-oauth-client", {
-      headers: { Host: AGENT_HOST },
+      headers: { Host: NATIVE_HOST },
     });
     assert("OAuth client metadata is public and small", metadata.status === 200 && Buffer.byteLength(metadata.body) < 10 * 1024, metadata.status);
     assert("metadata contains the exact locked redirect link", metadata.body.includes('<link rel="redirect_uri" href="http://127.0.0.1:43821/oauth/callback">'));
@@ -191,10 +214,16 @@ async function waitForGateway(port, child) {
     });
     assert("legacy-origin XSS is rejected before BFF even on the Agent host", crossOriginAgent.status === 403 && upstreamRequests.length === 0, { status: crossOriginAgent.status, upstreamRequests });
 
-    for (const denied of ["/", "/auth", "/healthz", "/proxy/ha/api/states"]) {
+    for (const denied of ["/", "/auth", "/healthz", "/native-oauth-client", "/proxy/ha/api/states"]) {
       upstreamRequests.length = 0;
       const response = await request(gatewayPort, denied, { headers: { Host: AGENT_HOST } });
       assert(`Agent origin denies legacy surface: ${denied}`, response.status === 404 && upstreamRequests.length === 0, { status: response.status, upstreamRequests });
+    }
+
+    for (const denied of ["/", "/home-agent/index.html", "/api/agent/auth/session"]) {
+      upstreamRequests.length = 0;
+      const response = await request(gatewayPort, denied, { headers: { Host: NATIVE_HOST } });
+      assert(`native origin denies browser/legacy surface: ${denied}`, response.status === 404 && upstreamRequests.length === 0, { status: response.status, upstreamRequests });
     }
 
     for (const denied of ["/home-agent/index.html", "/api/agent/auth/session", "/api/agent/v1/snapshot"]) {
@@ -211,20 +240,23 @@ async function waitForGateway(port, child) {
     upstreamRequests.length = 0;
     const nativeBearer = await request(gatewayPort, "/api/agent/native/v1/snapshot", { headers: {
       Authorization: BEARER,
+      DPoP: "attestation-proof",
       Cookie: "home_web_auth=forged; private=forged",
       "X-Actor-ID": "forged-actor",
       "X-Principal-ID": "forged-principal",
       "X-Authenticated-HA-User": "forged-ha-user",
       "X-Forwarded-User": "forged-forwarded-user",
+      "X-Home-Agent-Channel": "private_tauri_attested_v1",
+      "X-Home-Agent-Installation": "018f6f42-3a8b-4c11-8123-123456789abc",
     } });
     assert("exact native route accepts HA bearer", nativeBearer.status === 200, nativeBearer.status);
     assert("gateway preserves native HA bearer", upstreamRequests[0]?.authorization === BEARER, upstreamRequests[0]);
-    assert("native ingress strips cookies and all client identity assertions", upstreamRequests[0]?.cookie === "" && upstreamRequests[0]?.actor === "" && upstreamRequests[0]?.principal === "" && upstreamRequests[0]?.haUser === "" && upstreamRequests[0]?.forwardedUser === "", upstreamRequests[0]);
+    assert("gateway preserves only the native proof header needed by the BFF", upstreamRequests[0]?.dpop === "attestation-proof", upstreamRequests[0]);
+    assert("native ingress strips cookies and all client identity assertions", upstreamRequests[0]?.cookie === "" && upstreamRequests[0]?.actor === "" && upstreamRequests[0]?.principal === "" && upstreamRequests[0]?.haUser === "" && upstreamRequests[0]?.forwardedUser === "" && upstreamRequests[0]?.channel === "" && upstreamRequests[0]?.installation === "", upstreamRequests[0]);
     assert("native responses cannot set browser cookies", nativeBearer.headers["set-cookie"] === undefined, nativeBearer.headers);
 
     for (const allowed of [
-      ["GET", "/api/agent/native/v1/initiatives"],
-      ["POST", "/api/agent/native/v1/initiatives/01900000-0000-7000-8000-000000000001/claim"],
+      ["POST", "/api/agent/native/v1/attestation/challenge"],
       ["GET", "/api/agent/native/v1/places/01900000-0000-7000-8000-000000000002/descriptor-relationship"],
       ["GET", "/api/agent/native/v1/places/01900000-0000-7000-8000-000000000002/parents/current-presence"],
     ]) {
@@ -243,7 +275,25 @@ async function waitForGateway(port, child) {
     const nativeOnAgentHost = await request(gatewayPort, "/api/agent/native/v1/snapshot", {
       headers: { Host: AGENT_HOST, Authorization: BEARER },
     });
-    assert("typed native bearer route also works on the dedicated Agent host", nativeOnAgentHost.status === 200 && upstreamRequests[0]?.authorization === BEARER, { status: nativeOnAgentHost.status, upstream: upstreamRequests[0] });
+    assert("browser Agent host cannot relay a native proof", nativeOnAgentHost.status === 404 && upstreamRequests.length === 0, { status: nativeOnAgentHost.status, upstream: upstreamRequests[0] });
+
+    upstreamRequests.length = 0;
+    const nativeOnAlias = await request(gatewayPort, "/api/agent/native/v1/snapshot", {
+      headers: { Host: "alias.home.test", Authorization: BEARER },
+    });
+    assert("native proof cannot traverse a noncanonical gateway alias", nativeOnAlias.status === 404 && upstreamRequests.length === 0, { status: nativeOnAlias.status, upstreamRequests });
+
+    upstreamRequests.length = 0;
+    const oversizedNativeBody = await request(
+      gatewayPort,
+      "/api/agent/native/v1/attestation/challenge",
+      {
+        method: "POST",
+        headers: { Authorization: BEARER, "Content-Type": "application/json" },
+        body: "x".repeat((64 * 1024) + 1),
+      },
+    );
+    assert("native ingress rejects an oversized body before the BFF", oversizedNativeBody.status === 413 && upstreamRequests.length === 0, { status: oversizedNativeBody.status, upstreamRequests });
 
     upstreamRequests.length = 0;
     const nativeBasic = await request(gatewayPort, "/api/agent/native/v1/snapshot", { headers: {
@@ -274,6 +324,8 @@ async function waitForGateway(port, child) {
 
     for (const forbidden of [
       "/api/agent/native/v1/initiatives/claim",
+      "/api/agent/native/v1/initiatives",
+      "/api/agent/native/v1/initiatives/01900000-0000-7000-8000-000000000001/claim",
       "/api/agent/native/v1/places",
       "/api/agent/native/v1/parent-confirmations",
       "/api/agent/native/v1/snapshot?url=https://attacker.invalid",

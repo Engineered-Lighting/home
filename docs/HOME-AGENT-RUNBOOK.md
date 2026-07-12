@@ -27,9 +27,9 @@ adding broad proxy routes or mounting legacy databases.
 - A separate `/home-agent/` surface for consent, typed preview, explicit commit,
   and status, plus a Windows-native authorization-code transport with a
   pre-bound, one-time-state loopback callback isolated in its own Tauri window.
-  Private travel initiatives use native-only exact routes: list
-  responses are opaque, while the atomic claim alone releases deterministic
-  greeting text after fresh evidence and consent revalidation.
+  The deployed browser and native clients contain no initiative list, claim,
+  or presentation path. Initiative domain logic remains isolated future work,
+  not an exposed capability.
 - Legacy containment: browser secrets/history are purged, model action tools
   are recursively denied, Intelligence is loopback/read-only with generated
   memory and capture off, and contentful metrics tracing is off.
@@ -342,6 +342,16 @@ the browser BFF. Configure the non-secret native endpoints in the Windows
 process environment exactly as documented in
 `docs/HOME-AGENT-NATIVE-OAUTH.md`. The `HOME_NATIVE_AGENT_BFF_URL` value is the
 private HTTPS web-gateway origin, never the deployment's loopback HTTP BFF.
+Set `HOME_AGENT_NATIVE_PUBLIC_ORIGIN` in the Ubuntu deployment environment to
+that exact same origin. It must also match the dedicated web-gateway
+`HOME_WEB_NATIVE_AGENT_ORIGIN` entry. Do not copy the browser
+`HOME_WEB_AGENT_ORIGINS`, the browser
+`HOME_AGENT_OAUTH_CLIENT_ID` or the separate Agent-web
+`HOME_AGENT_WEB_PUBLIC_ORIGIN`: native proofs use a distinct audience, and the
+deployment preflight rejects a missing, non-canonical, non-HTTPS, or browser-
+equal native origin. It also rejects the native origin if it appears anywhere
+in the browser `HOME_AGENT_ALLOWED_ORIGINS` set, including as a secondary
+origin.
 
 The native flow is not PKCE-protected because HA ignores verifier parameters.
 Its supported boundary pre-binds the exact loopback listener before opening the
@@ -359,6 +369,102 @@ The bearer is preserved to the BFF, which immediately validates HA `whoami`.
 Native typed routes remain usable during origin migration, but they never gain
 browser cookie/session semantics. Non-Agent routes on the Agent host are
 denied, and browser Agent routes on legacy hosts are denied.
+
+### Native installation registry
+
+Native OAuth proves the HA user, but the BFF also requires an independently
+enrolled Windows installation for every native semantic request. The registry
+authority is the root-owned mode-`0600`
+`$HOME_AGENT_SECRETS_DIR/master/native_installations.json` file on the verified
+encrypted mapper. A missing, malformed, empty, revoked, key-mismatched, or
+HA-user-mismatched record contains native semantics while leaving browser OAuth
+and record-only ingest available.
+
+Use the configured deployment environment and fixed operator tool; never edit
+the registry directly:
+
+```sh
+cd /opt/home/home-github/stack
+ENV_FILE=/srv/home-agent/config/home-agent.env
+set -a
+. "$ENV_FILE"
+set +a
+REGISTRY="${HOME_AGENT_SECRETS_DIR:?}/master/native_installations.json"
+```
+
+Fresh deployments created by `bootstrap-secrets.sh` already contain an empty
+schema-v1 registry and must not run this command. On an existing deployment
+that predates native attestation, run this one-time initialization only when
+the registry is absent, then continue to preflight:
+
+```sh
+printf '%s\n' '{"action":"initialize"}' | \
+  sudo python3 home-agent-deploy/operator/manage_native_installations.py "$REGISTRY"
+```
+
+On the trusted Windows client, copy only `installation_id` and `public_jwk` from
+the native-only **Public installation enrollment material** card backed by
+`native_auth_status`; the private installation key remains in Windows
+Credential Manager. The selectable card has no clipboard API or enrollment
+network action, never appears in browser sessions, and does not mean enrollment
+is complete. Independently verify the exact HA user UUID through authenticated
+HA `whoami`. Then start the writer without putting reviewed identity material
+in the command line, shell history, or a temporary file:
+
+```sh
+sudo python3 home-agent-deploy/operator/manage_native_installations.py "$REGISTRY"
+```
+
+Paste one bounded JSON object on stdin, then send EOF. Field names and values
+must have this exact shape; `kid` must equal `installation_id`, and `x`/`y` are
+the 32-byte base64url P-256 coordinates returned by `native_auth_status`:
+
+```json
+{"action":"enroll","installation":{"installation_id":"<uuid-v4>","ha_user_id":"<verified-ha-user-uuid>","status":"active","public_key_jwk":{"kty":"EC","crv":"P-256","x":"<x>","y":"<y>","kid":"<same-uuid-v4>"}}}
+```
+
+To revoke an installation, run the same writer and provide this object on
+stdin, then EOF:
+
+```json
+{"action":"revoke","installation_id":"<enrolled-uuid-v4>"}
+```
+
+Enrollment is idempotent only for the exact existing record. A UUID cannot be
+rebound, and a revoked record cannot be reactivated. Revoke a lost, reinstalled,
+reassigned, or replaced client and enroll its newly generated UUID/key instead.
+
+If the Windows installation credential is corrupt or lost, complete this exact
+recovery order:
+
+1. Revoke the old registry UUID and force-recreate the BFF container as below.
+2. Explicitly delete the Windows Credential Manager target
+   `EngineeredLighting.HomeAgent/installation-attestation/v1`.
+3. Restart the signed app so it generates a new installation UUID and key.
+4. Verify the new public card and enroll its UUID/JWK offline for the exact HA
+   user UUID, then force-recreate the BFF container again.
+
+There is no automatic key rotation, re-enrollment, reactivation, or registry
+replacement path.
+
+On the first initialization, continue through the normal preflight and initial
+Compose startup below. After any registry change on a running deployment,
+rematerialize the unprivileged read-only BFF copy and recreate the BFF so it
+reads the new registry at process startup:
+
+```sh
+sudo sh home-agent-deploy/preflight.sh "$ENV_FILE"
+sudo docker compose --env-file "$ENV_FILE" -f home-agent-compose.yml \
+  up -d --no-deps --force-recreate bff
+curl -fsS "http://127.0.0.1:${HOME_AGENT_BFF_PORT:-8097}/healthz"
+```
+
+Require `native_attestation_configured:true` and a healthy BFF without printing
+the registry. An initialized empty registry satisfies configuration health but
+correctly authorizes no native installation. Revocation takes effect only after
+the BFF container is force-recreated; a plain restart retains the old
+bind-mounted inode and is insufficient. Treat container replacement as part of
+the revocation transaction.
 
 ## HA Edge
 
@@ -416,10 +522,11 @@ locality. Import reviewed stable UUIDs when available. Do not use implicit
 legacy `parent` labels as `parent_of` facts.
 
 After binding, sign into `/home-agent/` and enable location memory only if
-Marcelo opts in. Travel greetings are a separate choice and remain operationally
-shadow-only until the native attestation channel exists. The place teaching UI
-will not propose a descriptor without a current supported visit, and commit
-requires a second explicit preview confirmation.
+Marcelo opts in. Travel greetings remain default-off and have no deployed
+list, claim, or presentation path even after installation attestation; a
+separate reviewed initiative-capability gate is still required. The place
+teaching UI will not propose a descriptor without a current supported visit,
+and commit requires a second explicit preview confirmation.
 
 ## Reviewed legacy Identity Store migration
 
@@ -496,8 +603,8 @@ Confirm:
 - gaps and snapshot recovery never manufacture an arrival;
 - exact raw coordinates are absent from PostgreSQL logs and off-host backups;
 - location persistence is absent before opt-in;
-- private initiatives are absent from web snapshots; before canary they remain
-  shadow-only, and canary presentation uses the one-time native claim only;
+- private initiatives are absent from web snapshots and every deployed client;
+  no bearer-authenticated list, claim, or presentation route is accepted;
 - a tracker switch opens conflict rather than silently merging evidence;
 - stale or insufficient fixes never create a specific property anchor.
 
@@ -599,13 +706,12 @@ startup. A later separately reviewed canary-authorization design must bind the
 shadow acceptance evidence without weakening this gate. Return to `shadow` or
 `record_only` on any failed gate; never reactivate legacy semantic authority.
 
-For the supervised canary, verify two simultaneously authenticated desktop
-clients can list only the same opaque initiative ID and expiry, exactly one
-claim succeeds, and exactly one presentation attempt is recorded. At claim
-time Core must reject or suppress stale (>15 minute), departed, conflicted,
-partial-coverage, consent-disabled, descriptor-changed, and locator-mismatched
-visits. The returned sentence is the fixed `travel_arrival_v1` rendering of the
-active encrypted descriptor; no model participates.
+Initiative presentation is not part of the supervised canary. Per-install
+attestation narrows the remaining native typed calls but does not authorize a
+new initiative capability or its presentation policy. Deployed browser/native
+clients have no list or claim method and the BFF accepts no initiative route.
+Core may retain isolated future-domain tests for freshness, deduplication, and
+one-time claims; those tests are not deployment authority.
 
 An unresolved teaching anchor remains `needs_confirmation` with
 `location_unresolved`. The private preview shows the complete digest-bound
@@ -667,10 +773,10 @@ Never initialize a replacement ledger during recovery or bypass this gate.
   Credential Manager login-refresh-restart-logout test, and the operator's
   private HTTPS gateway configuration, plus explicit verification that the
   deployed HA authorization-code behavior still matches the documented
-  no-PKCE limitation and the native-machine threat model is acceptable. Typed
-  initiative list/claim and semantic
-  relationship/presence query routes are implemented only on the native
-  allowlist and are still disabled outside canary rollout.
+  no-PKCE limitation and the native-machine threat model is acceptable.
+  Semantic relationship/presence query routes remain on the exact native
+  allowlist. Initiative list/claim methods are absent from the deployed client
+  and BFF pending a separate initiative-capability and rollout review.
 - Live credential rotation, firewall application, LUKS/key provisioning, HA
   OAuth registration, certificates, off-host repository credentials, seven-day
   observation, and human confirmations are operator work, not source changes.

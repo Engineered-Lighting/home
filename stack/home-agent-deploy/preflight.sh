@@ -13,7 +13,7 @@ require_absolute() {
   esac
 }
 
-for command in docker openssl dirname find findmnt grep sha256sum install stat readlink ssh-keygen tr wc; do
+for command in docker openssl dirname find findmnt grep sha256sum install python3 stat readlink ssh-keygen tr wc; do
   command -v "$command" >/dev/null 2>&1 || { echo "missing command: $command" >&2; exit 69; }
 done
 
@@ -33,6 +33,40 @@ done
 : "${HOME_AGENT_EDGE_BIND_ADDR:?missing HOME_AGENT_EDGE_BIND_ADDR}"
 : "${HOME_AGENT_POLICY_DIGEST:?missing HOME_AGENT_POLICY_DIGEST}"
 : "${HOME_AGENT_ROLLOUT_MODE:?missing HOME_AGENT_ROLLOUT_MODE}"
+: "${HOME_AGENT_NATIVE_PUBLIC_ORIGIN:?missing HOME_AGENT_NATIVE_PUBLIC_ORIGIN}"
+
+python3 - "$HOME_AGENT_NATIVE_PUBLIC_ORIGIN" "${HOME_AGENT_OAUTH_CLIENT_ID:-}" \
+  "${HOME_AGENT_ALLOWED_ORIGINS:-}" <<'PY'
+import sys
+from urllib.parse import urlsplit
+
+native, browser, browser_origins = sys.argv[1:]
+try:
+    parsed = urlsplit(native)
+    port = parsed.port
+    host = parsed.hostname or ""
+    host.encode("ascii")
+except (UnicodeError, ValueError):
+    raise SystemExit("HOME_AGENT_NATIVE_PUBLIC_ORIGIN must be one exact HTTPS origin")
+if (
+    parsed.scheme != "https"
+    or parsed.username is not None
+    or parsed.password is not None
+    or not host
+    or parsed.path
+    or parsed.query
+    or parsed.fragment
+):
+    raise SystemExit("HOME_AGENT_NATIVE_PUBLIC_ORIGIN must be one exact HTTPS origin")
+host_text = f"[{host}]" if ":" in host else host
+canonical = f"https://{host_text}" + (f":{port}" if port not in (None, 443) else "")
+if native != canonical:
+    raise SystemExit("HOME_AGENT_NATIVE_PUBLIC_ORIGIN must use its canonical HTTPS spelling")
+if browser and native == browser:
+    raise SystemExit("native and browser OAuth origins must remain separate")
+if native in {value.strip() for value in browser_origins.split(",") if value.strip()}:
+    raise SystemExit("native origin may not appear in the browser allowed-origins set")
+PY
 
 case "$HOME_AGENT_ROLLOUT_MODE" in
   record_only|shadow|canary) ;;
@@ -161,6 +195,19 @@ for name in $required_secrets; do
   }
 done
 
+native_installations_master="$HOME_AGENT_SECRETS_DIR/master/native_installations.json"
+[ -f "$native_installations_master" ] && [ ! -L "$native_installations_master" ] &&
+  [ -s "$native_installations_master" ] || {
+  echo "missing or unsafe native installation registry: $native_installations_master" >&2
+  exit 78
+}
+chown root:root "$native_installations_master"
+chmod 0600 "$native_installations_master"
+case "$(findmnt -n -o SOURCE -T "$native_installations_master" || true)" in
+  /dev/mapper/*) ;;
+  *) echo "$native_installations_master is not on a verified /dev/mapper encrypted mount" >&2; exit 78 ;;
+esac
+
 binding_operator_master="$HOME_AGENT_SECRETS_DIR/master/binding-operator"
 [ -d "$binding_operator_master" ] && [ ! -L "$binding_operator_master" ] &&
   [ "$(stat -c '%u:%g:%a' "$binding_operator_master")" = "0:0:700" ] || {
@@ -246,6 +293,9 @@ esac
 unset binding_operator_password rollout_password rollout_url
 
 deploy_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+printf '%s\n' '{"action":"validate"}' |
+  python3 "$deploy_dir/operator/manage_native_installations.py" \
+    "$native_installations_master" >/dev/null
 sh "$deploy_dir/materialize-secrets.sh" "$HOME_AGENT_SECRETS_DIR"
 
 verify_secret() {
@@ -288,6 +338,7 @@ for name in database_url erasure_ledger_key; do
 done
 verify_secret 1000:1000:400 "$HOME_AGENT_SECRETS_DIR/runtime/bff/service_token"
 verify_secret 1000:1000:400 "$HOME_AGENT_SECRETS_DIR/runtime/bff/session_encryption_key"
+verify_secret 1000:1000:400 "$HOME_AGENT_SECRETS_DIR/runtime/bff/native_installations"
 verify_secret 10001:10001:400 "$HOME_AGENT_SECRETS_DIR/runtime/identity-migration/operator_token"
 verify_secret 10001:10001:400 "$HOME_AGENT_SECRETS_DIR/runtime/identity-migration/bootstrap_token"
 

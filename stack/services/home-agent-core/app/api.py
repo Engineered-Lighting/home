@@ -37,7 +37,6 @@ from .models import (
     IngestEnvelope,
     IngestResult,
     EdgePrivacyPolicyView,
-    InitiativeClaim,
     InitiativeSummaryView,
     InitiativeView,
     LegacyRoleImport,
@@ -626,10 +625,11 @@ def semantic_router() -> APIRouter:
 
     @router.get("/initiatives", response_model=list[InitiativeSummaryView])
     async def list_initiatives(
-        principal: NativePrincipal,
-        store: Store,
+        _service: NativeService,
     ) -> list[InitiativeSummaryView]:
-        return await store.list_initiatives(principal)
+        raise CapabilityDisabledError(
+            "private initiative presentation requires a separate reviewed gate"
+        )
 
     @router.get(
         "/places/{place_id}/descriptor-relationship",
@@ -767,12 +767,11 @@ def semantic_router() -> APIRouter:
     @router.post("/initiatives/{initiative_id}/claim", response_model=InitiativeView)
     async def claim_initiative(
         initiative_id: uuid.UUID,
-        value: InitiativeClaim,
-        principal: NativePrincipal,
-        store: Store,
+        _service: NativeService,
     ) -> InitiativeView:
-        return await store.database.run_serializable(
-            lambda: store.claim_initiative(principal, initiative_id, value)
+        del initiative_id
+        raise CapabilityDisabledError(
+            "private initiative presentation requires a separate reviewed gate"
         )
 
     @router.post("/facts/{fact_id}/forget-preview", response_model=ForgetPreview)

@@ -168,7 +168,7 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertNotIn("principal-bindings", browser_routes)
         self.assertNotIn("principal-bindings", origin)
         self.assertNotIn("v1\\/initiatives", browser_routes)
-        self.assertIn("v1\\/initiatives", native_routes)
+        self.assertNotIn("v1\\/initiatives", native_routes)
         self.assertIn("X-Home-Agent-Channel", bff)
 
     def test_agent_surface_uses_typed_descriptor_lifecycle_only(self) -> None:
@@ -209,7 +209,13 @@ class RepositoryBoundaryTests(unittest.TestCase):
         ):
             self.assertIn(operation, client)
         self.assertNotIn("/actions", client)
-        self.assertIn("claimInitiative", client)
+        self.assertNotIn("initiatives()", client)
+        self.assertNotIn("claimInitiative", client)
+        self.assertNotIn("Private travel greeting", panel)
+        self.assertNotIn("Present once", panel)
+        self.assertIn("Public installation enrollment material", panel)
+        self.assertIn("publicNativeInstallationMaterial", panel)
+        self.assertNotIn("navigator.clipboard", panel)
         self.assertIn("queryParentPresence", client)
         self.assertNotIn('request("/api/agent/v1/initiatives', client)
         self.assertIn("descriptor-only forgetting", panel)

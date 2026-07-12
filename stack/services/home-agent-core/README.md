@@ -138,13 +138,19 @@ Operator-only identity review (never proxied through the BFF):
 - `POST /v1/operator/principal-binding-proposals`
 
 Private native-only API (requires the BFF-created
-`X-Home-Agent-Channel: private_tauri` attestation in addition to the service
-credential and authenticated HA UUID):
+`X-Home-Agent-Channel: private_tauri_attested_v1` and validated installation
+UUID in addition to the service credential and authenticated HA UUID):
 
 - `GET /v1/initiatives` (opaque eligible IDs and expiry only)
 - `POST /v1/initiatives/{id}/claim` (the only response containing greeting text)
 - `GET /v1/places/{id}/descriptor-relationship`
 - `GET /v1/places/{id}/parents/current-presence`
+
+The initiative routes return deterministic `capability_disabled`; their store
+methods remain isolated future-domain evidence for synthetic tests. The
+deployed BFF, Rust commands, and Agent UI also expose no list, claim, or
+presentation capability. Re-admitting them requires a separate reviewed
+initiative-capability and rollout gate.
 
 Offline operator-only API (requires the operator bearer plus bootstrap
 credential and is never proxied by the BFF):

@@ -17,6 +17,21 @@ The service is not ready until all of these are supplied:
 - `HOME_AGENT_SESSION_DB_PATH` (an absolute path on encrypted,
   backup-excluded storage)
 
+Native semantic requests are separately disabled unless
+`HOME_AGENT_NATIVE_INSTALLATIONS_FILE` names an absolute, root-managed offline
+registry and `HOME_AGENT_NATIVE_PUBLIC_ORIGIN` is the exact HTTPS origin used
+by `HOME_NATIVE_AGENT_BFF_URL` in the Windows process. This is the dedicated
+native web-gateway origin, not the browser OAuth client ID. A missing or
+malformed registry or native origin, or an origin equal to the browser client,
+does not take browser OAuth down; it makes
+every otherwise-allowed native route return
+`native_attestation_unavailable`. Registry changes take effect only after the
+BFF container is force-recreated; a plain restart retains the old bind-mounted
+inode and is insufficient. There is deliberately no enrollment endpoint and no unattested
+compatibility switch.
+The native origin must also be absent from the entire
+`HOME_AGENT_ALLOWED_ORIGINS` browser set, including secondary origins.
+
 `HOME_AGENT_ALLOWED_ORIGINS` must contain only exact HTTPS Agent origins; do
 not include the legacy Home UI origin. The OAuth client ID is that Agent
 origin, and the redirect must be exactly
@@ -92,18 +107,64 @@ or observed response is cancelled and returned as
 `agent_upstream_response_too_large`; the BFF never calls `arrayBuffer()` on an
 unbounded Core response.
 
+Inbound HTTP headers and complete requests have a 10-second deadline, idle
+sockets have the same bound, keepalive is 5 seconds, headers are limited to 64
+and 16 KiB, and one connection may carry at most 100 requests. Request bodies
+remain capped at 64 KiB. These limits apply before authentication so a slow or
+oversized challenge cannot retain BFF resources indefinitely.
+
 The browser semantic allowlist does not include place creation or initiative
 claiming. A separate `/api/agent/native/v1/*` allowlist exists for the Windows
-client. Every native request must carry a current HA OAuth access token; the
-BFF validates it immediately through authenticated HA `whoami`, discards the
-bearer copy, and forwards only the trusted HA UUID plus its server-held Core
-credential. It also constructs `X-Home-Agent-Channel: private_tauri`; browser
-requests can never supply that Core attestation. The native allowlist contains
-only snapshot/consent/typed memory lifecycle operations, opaque initiative
-listing plus one-time claim, and the two typed descriptor-relationship/current-
-parent-presence queries. It has no generic URL/method/header command and no
-place mutation, parent confirmation, stack, camera, model, or physical-action
-route.
+client. Initiative listing and claiming are intentionally absent too. Every
+native request must carry a current HA OAuth access token and a per-request
+installation proof. The BFF validates the bearer through authenticated HA
+`whoami` both when issuing a challenge and when consuming the proof. It then
+discards the bearer/proof copies and forwards only the trusted HA UUID, the
+offline-authorized installation UUID, and its server-held Core credential.
+
+The offline registry is strict JSON with this schema (whitespace and object-key
+order are insignificant; duplicate or unknown keys fail the whole registry):
+
+```json
+{"schema_version":1,"installations":[{"installation_id":"01234567-89ab-4cde-8fab-0123456789ab","ha_user_id":"exact-whoami-user-id","status":"active","public_key_jwk":{"kty":"EC","crv":"P-256","x":"base64url-x","y":"base64url-y","kid":"01234567-89ab-4cde-8fab-0123456789ab"}}]}
+```
+
+Installation IDs and JWK `kid` values are the same lowercase UUIDv4. Coordinates
+are canonical unpadded base64url encodings of 32 bytes and must form a valid
+P-256 public point. `ha_user_id` is compared byte-for-byte with authenticated
+`whoami`; `status: "revoked"`, an unknown install, a different user, or any
+registry ambiguity fails closed.
+Each canonical P-256 `(x,y)` point may appear under only one installation UUID;
+duplicating a key across installations or users fails the entire registry.
+
+The client first posts strict JSON
+`{installation_id,method,path,htu,body_sha256}` to
+`/api/agent/native/v1/attestation/challenge`. The BFF returns a 32-byte random
+`nonce` plus server `issued_at` and `expires_at` epochs, with a maximum lifetime
+of 60 seconds. The target request carries a compact `DPoP` ES256 JWS whose
+protected header is exactly `{alg:"ES256",typ:"home-agent-native+jwt",kid}` and
+whose claims are exactly
+`{v,jti,nonce,iat,exp,htm,htu,path,body_sha256,ath}`. `htu` is the canonical
+external Agent target, constructed as `HOME_AGENT_NATIVE_PUBLIC_ORIGIN` plus
+the exact native path. It is never derived from the browser
+`HOME_AGENT_OAUTH_CLIENT_ID`. It is checked in the challenge, retained with the
+nonce, and checked again against the proof and actual BFF route. A proof issued
+for a staging, alias, default-port, or malicious origin therefore cannot relay
+to this BFF even if installations and service credentials overlap. `ath` is the unpadded base64url
+SHA-256 of the exact HA access-token bytes; the body digest covers the exact
+request bytes. Nonces and UUIDv4 `jti` values have one successful consumer,
+expired challenges are rejected, and a BFF restart invalidates all outstanding
+challenges.
+
+Only after verification does the BFF construct
+`X-Home-Agent-Channel: private_tauri_attested_v1` and
+`X-Home-Agent-Installation`. Client-supplied channel, installation, principal,
+actor, DPoP, or bearer headers are never copied to Core. Native requests with an
+Origin or Cookie are rejected and neither HA nor Core redirects are followed.
+The allowlist otherwise contains only snapshot/consent/typed memory lifecycle
+operations and the two typed descriptor-relationship/current-parent-presence
+queries. It has no generic URL/method/header command and no initiative, place
+mutation, parent confirmation, stack, camera, model, or physical-action route.
 
 The staged principal-binding workflow is browser-only. Its four fixed routes
 allow a subject to request/cancel review, read only their own opaque review

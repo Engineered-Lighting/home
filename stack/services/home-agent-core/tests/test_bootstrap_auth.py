@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+from types import SimpleNamespace
 import uuid
 
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
 
 from app.config import Settings
+from app.auth import ATTESTED_NATIVE_CHANNEL, require_native_service_identity
+from app.errors import AuthenticationError
 from app.main import create_app
 from app.restore import RestoreGateStatus
 from app.rollout import RolloutAuthorizationStatus
@@ -98,9 +103,75 @@ def test_private_initiatives_require_native_channel_attestation(tmp_path) -> Non
                 "X-Authenticated-HA-User": "marcelo-ha-user",
             },
         )
+        contained = client.get(
+            "/v1/initiatives",
+            headers={
+                "Authorization": "Bearer service-token-with-at-least-32-chars",
+                "X-Authenticated-HA-User": "marcelo-ha-user",
+                "X-Home-Agent-Channel": ATTESTED_NATIVE_CHANNEL,
+                "X-Home-Agent-Installation": (
+                    "018f6f42-3a8b-4c11-8123-123456789abc"
+                ),
+            },
+        )
 
     assert response.status_code == 401
     assert response.json()["error"]["message"] == "private native channel is required"
+    assert contained.status_code == 409
+    assert contained.json()["error"]["code"] == "capability_disabled"
+
+
+def test_core_accepts_only_versioned_attested_native_channel() -> None:
+    request = Request(
+        {
+            "type": "http",
+            "app": SimpleNamespace(
+                state=SimpleNamespace(
+                    settings=SimpleNamespace(
+                        service_token=SecretStr(
+                            "service-token-with-at-least-32-chars"
+                        )
+                    )
+                )
+            ),
+        }
+    )
+
+    with pytest.raises(AuthenticationError, match="private native channel"):
+        asyncio.run(
+            require_native_service_identity(
+                request,
+                authorization="Bearer service-token-with-at-least-32-chars",
+                x_authenticated_ha_user="marcelo-ha-user",
+                x_home_agent_channel="private_tauri",
+                x_home_agent_installation=(
+                    "018f6f42-3a8b-4c11-8123-123456789abc"
+                ),
+            )
+        )
+
+    with pytest.raises(AuthenticationError, match="attested native installation"):
+        asyncio.run(
+            require_native_service_identity(
+                request,
+                authorization="Bearer service-token-with-at-least-32-chars",
+                x_authenticated_ha_user="marcelo-ha-user",
+                x_home_agent_channel=ATTESTED_NATIVE_CHANNEL,
+            )
+        )
+
+    identity = asyncio.run(
+        require_native_service_identity(
+            request,
+            authorization="Bearer service-token-with-at-least-32-chars",
+            x_authenticated_ha_user="marcelo-ha-user",
+            x_home_agent_channel=ATTESTED_NATIVE_CHANNEL,
+            x_home_agent_installation=(
+                "018f6f42-3a8b-4c11-8123-123456789abc"
+            ),
+        )
+    )
+    assert identity.ha_user_id == "marcelo-ha-user"
 
 
 def test_fixed_operator_capability_contract_requires_bootstrap(tmp_path) -> None:

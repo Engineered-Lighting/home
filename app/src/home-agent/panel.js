@@ -315,6 +315,22 @@ function capturePrincipalOperation(subject, generation) {
 function principalOperationIsCurrent(ticket, subject, generation) {
   return Boolean(ticket?.subject) && ticket.subject === subject && ticket.generation === generation;
 }
+function publicNativeInstallationMaterial(session, isNative) {
+  const jwk = session?.public_jwk;
+  if (!isNative || !session?.installation_id || !jwk) return null;
+  const values = [session.installation_id, jwk.kty, jwk.crv, jwk.x, jwk.y, jwk.kid];
+  if (!values.every(value => typeof value === "string" && value.length > 0)) return null;
+  return Object.freeze({
+    installation_id: session.installation_id,
+    public_jwk: Object.freeze({
+      kty: jwk.kty,
+      crv: jwk.crv,
+      x: jwk.x,
+      y: jwk.y,
+      kid: jwk.kid
+    })
+  });
+}
 function HomeAgentPanel() {
   const api = useMemo(() => new window.HomeAgentApi(""), []);
   const activeSubject = useRef(null);
@@ -329,8 +345,6 @@ function HomeAgentPanel() {
   const [bindingProposal, setBindingProposal] = useState(null);
   const [bindingBusy, setBindingBusy] = useState(false);
   const [snapshot, setSnapshot] = useState(null);
-  const [initiatives, setInitiatives] = useState([]);
-  const [claimedInitiative, setClaimedInitiative] = useState(null);
   const [relationship, setRelationship] = useState(null);
   const [presence, setPresence] = useState(null);
   const [error, setError] = useState("");
@@ -344,8 +358,6 @@ function HomeAgentPanel() {
     setBindingProposal(null);
     setBindingBusy(false);
     setSnapshot(null);
-    setInitiatives([]);
-    setClaimedInitiative(null);
     setRelationship(null);
     setPresence(null);
     setTeaching(DEFAULT_DESCRIPTOR_TEXT);
@@ -404,9 +416,6 @@ function HomeAgentPanel() {
         return;
       }
       setSnapshot(nextSnapshot);
-      const nextInitiatives = api.invoke ? await api.initiatives() : [];
-      if (!isCurrent()) return;
-      setInitiatives(nextInitiatives);
       setPhase("ready");
     } catch (cause) {
       if (!isCurrent()) return;
@@ -585,19 +594,6 @@ function HomeAgentPanel() {
       setError(cause.message || `${lifecycle?.operation || "lifecycle"}_confirmation_failed`);
     }
   };
-  const claimInitiative = async initiativeId => {
-    const ticket = beginPrincipalOperation();
-    setError("");
-    try {
-      const value = await api.claimInitiative(initiativeId);
-      if (!principalOperationCurrent(ticket)) return;
-      setClaimedInitiative(value);
-      setInitiatives(current => current.filter(item => item.initiative_id !== initiativeId));
-    } catch (cause) {
-      if (!principalOperationCurrent(ticket)) return;
-      setError(cause.message || "initiative_claim_failed");
-    }
-  };
   const queryPlace = async kind => {
     const ticket = beginPrincipalOperation();
     setError("");
@@ -633,6 +629,7 @@ function HomeAgentPanel() {
       setError(reason);
     }
   };
+  const nativeInstallationMaterial = publicNativeInstallationMaterial(session, Boolean(api.invoke));
   return React.createElement("main", {
     className: "agent-shell"
   }, React.createElement("header", {
@@ -686,7 +683,9 @@ function HomeAgentPanel() {
     className: "agent-card agent-warning",
     role: "status",
     "aria-live": "polite"
-  }, React.createElement("h2", null, "Identity confirmed / rollout contained"), React.createElement("p", null, "The native Agent is authenticated, but Core has not enabled canary persistent-memory capability."), React.createElement("p", null, "Preferences, teaching, private queries, and initiatives stay unavailable. Location memory and travel greetings remain default-off.")), phase === "onboarding" && React.createElement("section", {
+  }, React.createElement("h2", null, "Identity confirmed / rollout contained"), React.createElement("p", null, "The native Agent is authenticated, but Core has not enabled canary persistent-memory capability."), React.createElement("p", null, "Preferences, teaching, private queries, and initiatives stay unavailable. Location memory and travel greetings remain default-off.")), nativeInstallationMaterial && React.createElement("section", {
+    className: "agent-card"
+  }, React.createElement("h2", null, "Public installation enrollment material"), React.createElement("p", null, "This public key material is not proof that enrollment is complete. A private operator must bind it offline to your exact Home Assistant user UUID."), React.createElement("pre", null, JSON.stringify(nativeInstallationMaterial, null, 2))), phase === "onboarding" && React.createElement("section", {
     className: "agent-card agent-warning",
     ref: onboardingStatusRef,
     tabIndex: "-1",
@@ -748,13 +747,7 @@ function HomeAgentPanel() {
     className: "agent-warning"
   }, "Location unresolved. Keep the transaction for review, wait for at least two accurate fixes, then create a new preview. Core will not guess or create a property from this preview."), transaction?.state === "needs_confirmation" && transaction?.preview_digest && transaction?.locator?.resolution === "specific" && transaction?.locator?.specific_locator_retention === "will_retain_on_confirmation" && React.createElement("button", {
     onClick: confirm
-  }, "Confirm exact preview")), api.invoke && React.createElement("section", {
-    className: "agent-card"
-  }, React.createElement("h2", null, "Private travel greeting"), React.createElement("p", null, "Only a fresh, conflict-free, specifically matched visit can be claimed. The wording is rendered from the confirmed descriptor without a model."), initiatives.length === 0 && !claimedInitiative && React.createElement("p", null, "No eligible greeting."), initiatives.map(initiative => React.createElement("div", {
-    key: initiative.initiative_id
-  }, React.createElement("p", null, "An eligible private greeting is ready. Its location wording is released only by the atomic one-time claim."), React.createElement("button", {
-    onClick: () => claimInitiative(initiative.initiative_id)
-  }, "Present once"))), claimedInitiative && React.createElement("p", null, claimedInitiative.message)), api.invoke && (transaction?.place_id || snapshot?.latest_visit?.place_id) && React.createElement("section", {
+  }, "Confirm exact preview")), api.invoke && (transaction?.place_id || snapshot?.latest_visit?.place_id) && React.createElement("section", {
     className: "agent-card"
   }, React.createElement("h2", null, "Typed place queries"), React.createElement("button", {
     onClick: () => queryPlace("relationship")

@@ -1,11 +1,25 @@
 from __future__ import annotations
 
 import hmac
+import re
 from dataclasses import dataclass
 
 from fastapi import Header, Request
 
 from .errors import AuthenticationError
+
+
+ATTESTED_NATIVE_CHANNEL = "private_tauri_attested_v1"
+_NATIVE_INSTALLATION_ID = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
+
+
+def native_installation_id_valid(value: str | None) -> bool:
+    return (
+        isinstance(value, str)
+        and _NATIVE_INSTALLATION_ID.fullmatch(value) is not None
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +55,7 @@ async def require_native_service_identity(
     authorization: str | None = Header(default=None),
     x_authenticated_ha_user: str | None = Header(default=None),
     x_home_agent_channel: str | None = Header(default=None),
+    x_home_agent_installation: str | None = Header(default=None),
 ) -> ServiceIdentity:
     """Require the BFF's narrow, authenticated native channel.
 
@@ -57,9 +72,11 @@ async def require_native_service_identity(
     )
     if not x_home_agent_channel or not hmac.compare_digest(
         x_home_agent_channel,
-        "private_tauri",
+        ATTESTED_NATIVE_CHANNEL,
     ):
         raise AuthenticationError("private native channel is required")
+    if not native_installation_id_valid(x_home_agent_installation):
+        raise AuthenticationError("attested native installation is required")
     return identity
 
 

@@ -1,6 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod native_attestation;
 mod native_auth;
 mod windows_credentials;
 
@@ -132,32 +133,6 @@ async fn native_agent_snapshot(
 ) -> Result<NativeAgentResponse, String> {
     require_agent_window(&window)?;
     run_agent(Arc::clone(state.inner()), AgentOperation::Snapshot).await
-}
-
-#[tauri::command]
-async fn native_agent_list_initiatives(
-    window: tauri::WebviewWindow,
-    state: tauri::State<'_, Arc<NativeAuthState>>,
-) -> Result<NativeAgentResponse, String> {
-    require_agent_window(&window)?;
-    run_agent(Arc::clone(state.inner()), AgentOperation::ListInitiatives).await
-}
-
-#[tauri::command]
-async fn native_agent_claim_initiative(
-    window: tauri::WebviewWindow,
-    state: tauri::State<'_, Arc<NativeAuthState>>,
-    initiative_id: String,
-) -> Result<NativeAgentResponse, String> {
-    require_agent_window(&window)?;
-    run_agent(
-        Arc::clone(state.inner()),
-        AgentOperation::ClaimInitiative {
-            initiative_id: validated_uuid(initiative_id)?,
-            session_id: Uuid::new_v4().to_string(),
-        },
-    )
-    .await
 }
 
 #[tauri::command]
@@ -416,8 +391,6 @@ fn main() {
             native_auth_login,
             native_auth_logout,
             native_agent_snapshot,
-            native_agent_list_initiatives,
-            native_agent_claim_initiative,
             native_agent_explain_descriptor,
             native_agent_query_parent_presence,
             native_agent_set_preference,
@@ -441,6 +414,7 @@ mod tests {
     use serde_json::Value;
 
     const MAIN_RS: &str = include_str!("main.rs");
+    const NATIVE_ATTESTATION_RS: &str = include_str!("native_attestation.rs");
     const NATIVE_AUTH_RS: &str = include_str!("native_auth.rs");
     const WINDOWS_CREDENTIALS_RS: &str = include_str!("windows_credentials.rs");
     const CARGO_TOML: &str = include_str!("../Cargo.toml");
@@ -463,8 +437,6 @@ mod tests {
             "native_auth_login",
             "native_auth_logout",
             "native_agent_snapshot",
-            "native_agent_list_initiatives",
-            "native_agent_claim_initiative",
             "native_agent_explain_descriptor",
             "native_agent_query_parent_presence",
             "native_agent_set_preference",
@@ -481,7 +453,8 @@ mod tests {
             assert!(MAIN_RS.contains(command), "missing {command}");
         }
         assert!(!MAIN_RS.contains(&["fn native_agent_", "request"].concat()));
-        assert!(MAIN_RS.contains(&["native_agent_claim_", "initiative"].concat()));
+        assert!(!MAIN_RS.contains(&["native_agent_list_", "initiatives"].concat()));
+        assert!(!MAIN_RS.contains(&["native_agent_claim_", "initiative"].concat()));
     }
 
     #[test]
@@ -491,8 +464,16 @@ mod tests {
         assert!(WINDOWS_CREDENTIALS_RS.contains("CredWriteW"));
         assert!(WINDOWS_CREDENTIALS_RS.contains("CredReadW"));
         assert!(WINDOWS_CREDENTIALS_RS.contains("CredDeleteW"));
+        assert!(WINDOWS_CREDENTIALS_RS
+            .contains("Global\\\\EngineeredLighting.HomeAgent.InstallationAttestation.v1"));
         assert!(!MAIN_RS.contains(&["access_", "token"].concat()));
         assert!(!MAIN_RS.contains(&["refresh_", "token"].concat()));
+        assert!(!MAIN_RS.contains("DPoP"));
+        assert!(!MAIN_RS.contains("private_key"));
+        assert!(NATIVE_ATTESTATION_RS.contains("InstallationAttestation"));
+        assert!(NATIVE_ATTESTATION_RS.contains("windows_credentials::write"));
+        assert!(NATIVE_ATTESTATION_RS.contains("Zeroizing<String>"));
+        assert!(!NATIVE_ATTESTATION_RS.contains("pub fn sign_request_proof"));
     }
 
     #[test]

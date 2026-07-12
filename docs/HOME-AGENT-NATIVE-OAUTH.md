@@ -34,8 +34,8 @@ Set these non-secret values for the packaged `Home` process:
 
 ```text
 HOME_NATIVE_HA_URL=https://homeassistant.example.internal
-HOME_NATIVE_AGENT_BFF_URL=https://agent.home.example.internal
-HOME_NATIVE_OAUTH_CLIENT_ID=https://agent.home.example.internal/native-oauth-client
+HOME_NATIVE_AGENT_BFF_URL=https://native-agent.home.example.internal
+HOME_NATIVE_OAUTH_CLIENT_ID=https://native-agent.home.example.internal/native-oauth-client
 HOME_NATIVE_OAUTH_REDIRECT_URI=http://127.0.0.1:43821/oauth/callback
 ```
 
@@ -50,6 +50,16 @@ are not supported.
 `HOME_NATIVE_AGENT_BFF_URL` is the private HTTPS web-gateway origin. Do not use
 the loopback `http://127.0.0.1:8097` deployment BFF: the native client rejects
 HTTP, and the BFF is intentionally not exposed from the Ubuntu host.
+
+The Ubuntu BFF deployment must independently set
+`HOME_AGENT_NATIVE_PUBLIC_ORIGIN` to the exact
+`HOME_NATIVE_AGENT_BFF_URL` value above. The dedicated web gateway's
+`HOME_WEB_NATIVE_AGENT_ORIGIN` value must match it too. This native proof
+audience is not `HOME_WEB_AGENT_ORIGINS` or the browser
+`HOME_AGENT_OAUTH_CLIENT_ID`; using a browser origin causes the challenge to
+fail closed before Core. Production preflight requires the canonical HTTPS
+native origin and rejects equality with the browser OAuth origin.
+It also rejects membership anywhere in the browser allowed-origins set.
 
 The dedicated Agent origin serves `GET /native-oauth-client` without Basic authentication so
 HA can inspect it. The page is a fixed, deny-all-CSP document under 10 KiB and
@@ -89,6 +99,50 @@ Never manually delete a revocation-pending credential to make login work.
 Restore HA connectivity and retry sign-out, or revoke that refresh-token
 authority from HA before removing the local pending record.
 
+## Native installation enrollment
+
+OAuth user authority and native installation authority are independent. On
+first startup, Rust creates one random installation UUID and P-256 signing key
+under the Windows Credential Manager target
+`EngineeredLighting.HomeAgent/installation-attestation/v1`. The private key is
+never returned. `native_auth_status` returns only `installation_id` and its
+public `public_jwk`, in addition to the existing categorical auth status, so a
+trusted local operator can perform offline enrollment. It does not return an
+HA token, private key, proof, nonce, or registry state.
+
+The native-only Agent surface renders those two fields in a selectable
+**Public installation enrollment material** card. It provides no clipboard API
+or enrollment action and never appears in a browser session. Independently
+obtain the exact HA user UUID from an authenticated HA `whoami` result; do not
+infer it from a display name or accept a client-supplied actor value. Transfer
+only the installation UUID, public JWK, and reviewed HA user UUID to the Ubuntu
+operator. There is intentionally no online enrollment endpoint, and seeing the
+card does not mean the installation is enrolled.
+
+The authoritative schema-v1 registry is
+`$HOME_AGENT_SECRETS_DIR/master/native_installations.json` on the encrypted
+Home Agent volume. It is root-owned mode `0600`; the BFF receives a separate
+read-only materialized copy. Fresh `bootstrap-secrets.sh` runs create the empty
+registry; existing deployments that predate attestation initialize it once
+with `manage_native_installations.py`. Enroll and revoke only with that same
+tool, using bounded JSON on stdin. The exact operator procedure is in
+`docs/HOME-AGENT-RUNBOOK.md`.
+An empty or missing enrollment keeps native semantic routes fail-closed without
+disabling browser OAuth.
+
+The registry binds one installation UUID and public key to one exact HA user
+UUID. Existing bindings cannot be replaced or reactivated. After credential
+loss, reinstall, account reassignment, or key change, revoke the old UUID and
+enroll the newly generated installation. Registry changes are not hot-reloaded:
+rematerialize the BFF copy and force-recreate the BFF container after every
+change. A plain restart retains the old bind-mounted inode and is insufficient.
+
+For a corrupt or lost Windows installation credential, revoke the old registry
+binding first. Then explicitly delete the Windows Credential Manager target
+`EngineeredLighting.HomeAgent/installation-attestation/v1`, restart the signed
+app so it generates a new UUID/key, and enroll the new public JWK offline. There
+is no automatic key rotation, re-enrollment, or reactivation path.
+
 ## Window and network boundary
 
 `/home-agent/` loads in a dedicated hidden-until-open `agent` WebviewWindow.
@@ -109,9 +163,10 @@ models, stack administration, and physical HA actions are absent.
 
 At the dedicated HTTPS Agent origin there is no legacy gateway Basic-auth or
 legacy UI/proxy surface. Exact native typed paths use the HA Bearer in
-`Authorization`; the BFF immediately validates it with HA `whoami` and forwards
-a trusted HA UUID using its server-held Core credential. Native ingress is an
-explicit header allowlist: cookies,
+`Authorization`; the BFF immediately validates it with HA `whoami`, requires a
+single-use challenge-bound ES256 proof from the enrolled installation, and
+forwards a trusted HA UUID plus a server-constructed attested channel using its
+server-held Core credential. Native ingress is an explicit header allowlist: cookies,
 Basic credentials, client actor/principal/forwarding headers, and client
 request IDs are discarded. Native responses cannot set cookies or redirect;
 an upstream 3xx is converted to a contained 502, and the Rust HTTP client also
@@ -120,10 +175,21 @@ Agent-origin routing. Browser Agent session routes exist only on the exact
 dedicated host, while native typed bearer routes remain available during host
 migration without acquiring browser cookie semantics.
 
-Initiatives remain disabled. A valid HA user bearer identifies a principal;
-it does not prove a particular reviewed application installation. Do not add
-initiative read/claim routes until a separate per-install attestation design is
-reviewed and implemented.
+The challenge and signed claims include an exact canonical `htu` built by Rust
+from its configured HTTPS BFF origin plus the typed path. The BFF independently
+requires that value to match its configured public origin and the actual
+request. Rust never signs an audience supplied by a challenge response, which
+prevents a staging or malicious BFF from relaying a production nonce/proof.
+
+Initiatives remain disabled. Installation attestation narrows the remaining
+native typed calls; it does not authorize a new initiative capability or its
+presentation policy. Do not add initiative read/claim routes until a separate
+initiative-capability and rollout review explicitly admits them.
+
+The deployed browser/native client mirrors that boundary: `api.js`, the Agent
+panel source, and its generated bundle contain no initiative list, claim, or
+presentation path. Core may retain isolated initiative domain logic and tests
+as future design evidence; that does not expose the capability to a client.
 
 ## Verification
 

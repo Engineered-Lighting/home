@@ -482,35 +482,23 @@ services:
   identity-migration:
     image: engineered-lighting/home-agent-core:local
     profiles: [operator]
-    # provision-roles re-expires this login on every replay. Until a later
-    # root-only activation mechanism exists, starting this profile cannot
-    # establish PostgreSQL or complete a database-backed review.
+    # The sequential HTTP apply path is retired. Keep the separately
+    # provisioned role/secret surface expired for the manifest kernel, but
+    # never mount its URL or the legacy database into this obsolete service.
     restart: "no"
     user: "10001:10001"
     read_only: true
     init: true
     stdin_open: true
     tty: true
-    entrypoint: ["python", "/operator/migrate_legacy_identity.py"]
-    environment:
-      HOME_AGENT_MIGRATION_DATABASE_URL_FILE: /run/secrets/database_url
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["echo 'sequential identity migration is retired; use the reviewed atomic finalizer' >&2; exit 78"]
     security_opt:
       - no-new-privileges:true
     cap_drop: [ALL]
-    secrets:
-      - source: database_url_identity_migration_identity_migration
-        target: database_url
-    volumes:
-      - ./home-agent-deploy/operator:/operator:ro
-      - type: bind
-        source: "${HOME_AGENT_LEGACY_IDENTITY_DB:-/dev/null}"
-        target: /legacy/identity.sqlite
-        read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777
-    networks: [postgres-net]
-    depends_on:
-      grant-runtime: {condition: service_completed_successfully}
+    network_mode: none
     mem_limit: 256m
     logging:
       driver: none

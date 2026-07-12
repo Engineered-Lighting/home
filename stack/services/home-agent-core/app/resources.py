@@ -16,6 +16,18 @@ DISK_READ_ONLY_FREE_PERCENT = 10.0
 INGEST_DAILY_EVENT_ALERT = 1_000
 INGEST_WEEKLY_BYTE_ALERT = 100 * 1024 * 1024
 
+_RETIRED_LEGACY_IDENTITY_IMPORT_EXACT_PATHS = frozenset(
+    {
+        "/v1/people",
+        "/v1/people/verify-reviewed",
+        "/v1/people/legacy-role-labels",
+        "/v1/people/legacy-relationship-candidates",
+    }
+)
+_RETIRED_LEGACY_IDENTITY_IMPORT_PERSON_SUFFIXES = frozenset(
+    {"aliases", "recognition-bindings", "privacy-directives", "status-import"}
+)
+
 
 @dataclass(frozen=True, slots=True)
 class DiskBudget:
@@ -135,8 +147,21 @@ def is_privacy_essential_write(path: str) -> bool:
     return (
         path.startswith("/v1/erasure-requests/")
         or path.startswith("/v1/preferences/")
-        or (path.startswith("/v1/people/") and path.endswith("/privacy-directives"))
         or path == "/v1/principal-binding-request/cancel"
         or path == "/v1/forget-preview"
         or (path.startswith("/v1/facts/") and path.endswith("/forget-preview"))
+    )
+
+
+def is_retired_legacy_identity_import(path: str) -> bool:
+    """Identify exact no-write tombstones without widening a middleware bypass."""
+
+    if path in _RETIRED_LEGACY_IDENTITY_IMPORT_EXACT_PATHS:
+        return True
+    parts = path.split("/")
+    return (
+        len(parts) == 5
+        and parts[:3] == ["", "v1", "people"]
+        and bool(parts[3])
+        and parts[4] in _RETIRED_LEGACY_IDENTITY_IMPORT_PERSON_SUFFIXES
     )

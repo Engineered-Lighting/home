@@ -124,7 +124,6 @@ Core semantic API (the BFF exposes only its narrower explicit allowlist):
 - `POST /v1/principal-binding-request/cancel`
 - `POST /v1/principal-binding-proposal/confirm`
 - `POST /v1/source-entity-bindings`
-- `POST /v1/people/legacy-role-labels`
 - `PUT /v1/preferences/{key}` (disable in every rollout; enable only in canary)
 - `POST /v1/places`
 - `POST /v1/visits`
@@ -139,6 +138,11 @@ Core semantic API (the BFF exposes only its narrower explicit allowlist):
 - `POST /v1/facts/{id}/forget-preview`
 - `POST /v1/erasure-requests/{id}/confirm`
 - `GET /v1/erasure-requests/{id}`
+
+The former per-item legacy People import endpoints remain authenticated
+tombstones and always return `capability_disabled`. They never parse submitted
+identity content or open a database transaction. Reviewed migration can proceed
+only through the separate atomic finalizer after its rollout gates are met.
 
 There is no direct parent-confirmation API. Caller-supplied parent/child UUIDs
 cannot create a single relationship edge, even with the Core service bearer.

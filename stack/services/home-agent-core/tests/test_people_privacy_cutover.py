@@ -74,19 +74,26 @@ def test_rollout_default_blocks_people_and_memory_without_mutable_api() -> None:
         shadow._require_rollout("canary", "persistent_memory")
 
 
-def test_cutover_routes_are_typed_and_relationship_candidates_are_not_facts() -> None:
+def test_legacy_import_routes_are_tombstones_and_relationships_are_not_facts() -> None:
     routes = {
-        (method, route.path)
+        (method, route.path): route.endpoint.__name__
         for route in semantic_router().routes
         for method in route.methods or set()
     }
-    assert {
+    retired = {
+        ("POST", "/v1/people"),
+        ("POST", "/v1/people/verify-reviewed"),
         ("POST", "/v1/people/{person_id}/aliases"),
         ("POST", "/v1/people/{person_id}/recognition-bindings"),
         ("POST", "/v1/people/{person_id}/privacy-directives"),
         ("POST", "/v1/people/{person_id}/status-import"),
+        ("POST", "/v1/people/legacy-role-labels"),
         ("POST", "/v1/people/legacy-relationship-candidates"),
-    } <= routes
+    }
+    assert all(routes[item] == "retired_legacy_identity_import" for item in retired)
+    assert routes[("GET", "/v1/operator-capabilities")] == (
+        "retired_legacy_identity_import"
+    )
     assert schema.external_recognition_bindings is not schema.source_entity_bindings
     assert ("POST", "/v1/relationships/parent-confirmations") not in routes
     assert not hasattr(CoreStore, "confirm_parent")

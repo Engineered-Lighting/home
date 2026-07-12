@@ -199,33 +199,35 @@ class IdentityMigrationRoleDeploymentContractTests(unittest.TestCase):
             preflight,
         )
 
-    def test_compose_profile_has_only_dormant_database_credential(self) -> None:
+    def test_compose_profile_is_a_networkless_retired_tombstone(self) -> None:
         compose = read("stack/home-agent-compose.yml")
         service = compose_service(compose, "identity-migration")
         self.assertIn("profiles: [operator]", service)
-        self.assertIn(
-            "HOME_AGENT_MIGRATION_DATABASE_URL_FILE: /run/secrets/database_url",
-            service,
-        )
-        self.assertIn(
-            "database_url_identity_migration_identity_migration",
-            service,
-        )
-        self.assertIn("networks: [postgres-net]", service)
-        self.assertIn(
-            "grant-runtime: {condition: service_completed_successfully}",
-            service,
-        )
+        self.assertIn("network_mode: none", service)
         self.assertIn("driver: none", service)
         self.assertIn("read_only: true", service)
-        self.assertIn("HOME_AGENT_LEGACY_IDENTITY_DB", service)
         self.assertIn(
-            "read_only: true", service.split("HOME_AGENT_LEGACY_IDENTITY_DB", 1)[1]
+            "sequential identity migration is retired; use the reviewed atomic finalizer",
+            service,
         )
+        self.assertIn("exit 78", service)
+        self.assertNotIn(
+            'entrypoint: ["python", "/operator/migrate_legacy_identity.py"]',
+            service,
+        )
+        self.assertNotIn("HOME_AGENT_LEGACY_IDENTITY_DB", service)
+        self.assertNotIn("database_url", service)
+        self.assertNotIn("/operator", service)
+        self.assertNotIn("/legacy", service)
+        self.assertNotIn("depends_on:", service)
+        self.assertNotIn("secrets:", service)
+        self.assertNotIn("volumes:", service)
+        self.assertNotIn("networks:", service)
         self.assertNotIn("api-net", service)
         self.assertNotRegex(service, r"(?m)^\s+ports:")
         self.assertNotIn("HOME_AGENT_MIGRATION_CORE_URL", service)
         for forbidden in (
+            "postgres-net",
             "operator_token",
             "bootstrap_token",
             "service_token",

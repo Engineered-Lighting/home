@@ -61,6 +61,27 @@ def python_callables(relative: str) -> dict[str, ast.AST]:
 
 
 class RepositoryBoundaryTests(unittest.TestCase):
+    def test_phase3_erasure_operation_foundation_remains_owner_only(self) -> None:
+        migration = read(
+            "stack/services/home-agent-core/alembic/versions/"
+            "0010_identity_erasure_operation_foundation.py"
+        )
+        grants = read("stack/home-agent-deploy/apply-grants.sh")
+        config = read("stack/services/home-agent-core/app/config.py")
+        table_name = "reviewed_identity_migration_erasure_operations"
+        self.assertIn(table_name, migration)
+        self.assertIn("FORCE ROW LEVEL SECURITY", migration)
+        self.assertIn("TO home_agent_owner", migration)
+        self.assertIn("home_agent_identity_finalizer", migration)
+        self.assertNotIn("CREATE FUNCTION", migration)
+        self.assertNotIn("finalize_reviewed_identity_migration", migration)
+        self.assertIn(f"operations.{table_name}", grants)
+        self.assertIn("pg_catalog.to_regclass", grants)
+        self.assertIn(
+            'readiness_migration: str = "0006_worker_maintenance_health"',
+            config,
+        )
+
     def test_phase3_identity_authority_foundation_remains_owner_only(self) -> None:
         migration = read(
             "stack/services/home-agent-core/alembic/versions/"
@@ -643,11 +664,12 @@ class RepositoryBoundaryTests(unittest.TestCase):
         )
         self.assertIn("network_mode: none", service_block("ledger-init"))
         identity_migration = service_block("identity-migration")
-        self.assertIn(
+        self.assertNotIn(
             "database_url_identity_migration_identity_migration",
             identity_migration,
         )
-        self.assertIn("networks: [postgres-net]", identity_migration)
+        self.assertIn("network_mode: none", identity_migration)
+        self.assertNotIn("postgres-net", identity_migration)
         self.assertNotIn("api-net", identity_migration)
         for forbidden in (
             "operator_token",

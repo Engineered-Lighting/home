@@ -174,7 +174,9 @@ def test_core_accepts_only_versioned_attested_native_channel() -> None:
     assert identity.ha_user_id == "marcelo-ha-user"
 
 
-def test_fixed_operator_capability_contract_requires_bootstrap(tmp_path) -> None:
+def test_legacy_identity_import_surface_is_authenticated_and_tombstoned(
+    tmp_path,
+) -> None:
     app = create_app(settings_for(tmp_path))
     app.state.restore_gate = CurrentRestoreGate()
     app.state.rollout_gate = CurrentRolloutGate()
@@ -183,75 +185,58 @@ def test_fixed_operator_capability_contract_requires_bootstrap(tmp_path) -> None
     }
     with TestClient(app) as client:
         denied = client.get("/v1/operator-capabilities", headers=operator_headers)
-        accepted = client.get(
-            "/v1/operator-capabilities",
-            headers={
-                **operator_headers,
-                "X-Home-Agent-Bootstrap": "bootstrap-token-with-at-least-32-chars",
-            },
+        denied_post = client.post(
+            "/v1/people",
+            headers={**operator_headers, "Content-Type": "application/json"},
+            content=b'{"private":',
         )
+        authenticated_headers = {
+            **operator_headers,
+            "X-Home-Agent-Bootstrap": "bootstrap-token-with-at-least-32-chars",
+            "Content-Type": "application/json",
+        }
+        capability = client.get(
+            "/v1/operator-capabilities",
+            headers=authenticated_headers,
+        )
+        # If a tombstone accidentally regains Store injection, this object
+        # turns the regression into an immediate test failure.
+        app.state.store = object()
+        retired = {
+            path: client.post(
+                path, headers=authenticated_headers, content=b'{"private":'
+            )
+            for path in (
+                "/v1/people",
+                "/v1/people/verify-reviewed",
+                "/v1/people/00000000-0000-4000-8000-000000000001/aliases",
+                "/v1/people/00000000-0000-4000-8000-000000000001/recognition-bindings",
+                "/v1/people/00000000-0000-4000-8000-000000000001/privacy-directives",
+                "/v1/people/00000000-0000-4000-8000-000000000001/status-import",
+                "/v1/people/legacy-role-labels",
+                "/v1/people/legacy-relationship-candidates",
+            )
+        }
         openapi = client.get("/openapi.json")
 
     assert denied.status_code == 401
-    assert accepted.status_code == 200
-    assert accepted.json() == {
-        "contract": "legacy-identity-migration-v1",
-        "audience": "operator-bootstrap",
-        "person_import": {
-            "method": "POST",
-            "path": "/v1/people",
-            "schema": "PersonCreate.v2",
-            "source_digest_field": "legacy_source_sha256",
-            "idempotency": "exact-projection-v1",
-        },
-        "role_import": {
-            "method": "POST",
-            "path": "/v1/people/legacy-role-labels",
-            "schema": "LegacyRoleImport.v1",
-            "source_digest_field": "source_snapshot_sha256",
-            "idempotency": "exact-projection-v1",
-        },
-        "person_verify": {
-            "method": "POST",
-            "path": "/v1/people/verify-reviewed",
-            "schema": "ReviewedPersonVerify.v1",
-        },
-        "alias_import": {
-            "method": "POST",
-            "path": "/v1/people/{person_id}/aliases",
-            "schema": "ReviewedAliasImport.v1",
-            "source_digest_field": "source_snapshot_sha256",
-            "idempotency": "exact-projection-v1",
-        },
-        "recognition_binding_import": {
-            "method": "POST",
-            "path": "/v1/people/{person_id}/recognition-bindings",
-            "schema": "ReviewedRecognitionBindingImport.v1",
-            "source_digest_field": "source_snapshot_sha256",
-            "idempotency": "exact-projection-v1",
-        },
-        "privacy_directive_import": {
-            "method": "POST",
-            "path": "/v1/people/{person_id}/privacy-directives",
-            "schema": "ReviewedPrivacyDirectiveImport.v1",
-            "source_digest_field": "source_snapshot_sha256",
-            "idempotency": "exact-projection-v1",
-        },
-        "person_status_import": {
-            "method": "POST",
-            "path": "/v1/people/{person_id}/status-import",
-            "schema": "ReviewedPersonStatusImport.v1",
-            "source_digest_field": "source_snapshot_sha256",
-            "idempotency": "exact-projection-v1",
-        },
-        "relationship_candidate_import": {
-            "method": "POST",
-            "path": "/v1/people/legacy-relationship-candidates",
-            "schema": "LegacyRelationshipCandidateImport.v1",
-            "source_digest_field": "source_snapshot_sha256",
-            "idempotency": "exact-projection-v1",
-        },
+    assert denied_post.status_code == 401
+    expected_error = {
+        "error": {
+            "code": "capability_disabled",
+            "message": (
+                "sequential legacy identity import is retired; use the reviewed "
+                "atomic identity finalizer"
+            ),
+            "details": {},
+        }
     }
+    assert capability.status_code == 409
+    assert capability.json() == expected_error
+    assert {path: response.status_code for path, response in retired.items()} == {
+        path: 409 for path in retired
+    }
+    assert all(response.json() == expected_error for response in retired.values())
     assert openapi.status_code == 404
 
 

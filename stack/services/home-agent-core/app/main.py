@@ -31,6 +31,7 @@ from .restore import RestoreQuarantineGate, outbox_health
 from .resources import (
     inspect_disk_budget,
     is_privacy_essential_write,
+    is_retired_legacy_identity_import,
     resource_budget_snapshot,
 )
 from .rollout import RolloutAuthorizationGate
@@ -311,6 +312,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if (
             request.method not in {"GET", "HEAD", "OPTIONS"}
             and request.url.path not in {"/healthz", "/readyz"}
+            and not is_retired_legacy_identity_import(request.url.path)
             and settings.role in {"api", "ingest", "all"}
         ):
             disk = inspect_disk_budget(settings.storage_monitor_path)
@@ -373,6 +375,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             and settings.role in {"api", "all"}
             and request.method not in {"GET", "HEAD", "OPTIONS"}
             and request.url.path != "/v1/ingest/envelopes"
+            and not is_retired_legacy_identity_import(request.url.path)
             and not is_privacy_essential_write(request.url.path)
         )
         # Preserve endpoint authentication semantics: an invalid or missing

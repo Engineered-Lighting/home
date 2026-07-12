@@ -507,20 +507,14 @@ access token:
 GET /api/home_agent_edge/whoami
 ```
 
-Then run the container-local interactive bootstrap. It reads the route-scoped
-service and operator bearers plus the bootstrap secret from mounted files,
-never prints them or coordinates, and does not enable either location opt-in:
-
-```sh
-sudo docker compose --env-file home-agent.env -f home-agent-compose.yml exec core-api \
-  python /operator/provision_identity.py
-```
-
-The deployed workflow currently supports only the exact
-HA-user-to-Marcelo binding ceremony. Tracker binding, explicit parent facts,
-and the private Itaipava locality remain disabled pending their separate
-reviewed flows. Import reviewed stable UUIDs when available. Do not use
-implicit legacy `parent` labels as `parent_of` facts.
+The former container-local bootstrap used the retired per-item People verifier
+and is disabled with the rest of that protocol. Do not run
+`operator/provision_identity.py` as a workaround. HA-user-to-person binding
+remains unavailable until the atomic finalizer has committed reviewed People
+and the binding ceremony has a replacement read-only, receipt-bound lookup.
+Tracker binding, explicit parent facts, and the private Itaipava locality also
+remain disabled pending their separate reviewed flows. Do not use implicit
+legacy `parent` labels as `parent_of` facts.
 
 In particular, neither browser nor native BFF accepts direct parent
 confirmation. Before either explicit parent fact can be enabled, Core must
@@ -542,68 +536,24 @@ supported visit and a second explicit preview confirmation.
 
 ## Reviewed legacy Identity Store migration
 
-Use the one-shot `identity-migration` Compose profile only after the legacy
-Identity Store writer is stopped and its SQLite WAL has been checkpointed.
-Verify that neither `<database>-wal` nor `<database>-journal` exists; the tool
-also refuses to open a source with either sidecar present. Do not copy the
-legacy database into Core, the repository, or a backed-up directory.
+Do not run the `identity-migration` Compose profile. Its sequential per-item
+HTTP apply path is retired and the service exits with status 78 before reading
+its database credential or mounted legacy database. Core keeps the former
+operator capability and mutation paths only as authenticated tombstones; they
+return `capability_disabled` without parsing submitted identity content or
+opening a database transaction.
 
-Grant the fixed migration UID read access to the stopped source file without
-making it group/world-readable, then start the profile with an absolute source
-path:
+The legacy SQLite Identity Store remains read-only semantic evidence. Its
+separate operational Frigate enrollment bridge may continue to maintain
+unreviewed recognition mappings, but those mappings are not semantic People or
+relationship authority. Do not copy legacy data into Core, restore the old
+writer, or use the retired HTTP endpoints as a migration workaround.
 
-```sh
-sudo setfacl -m u:10001:r-- /private/path/identity.sqlite
-sudo env HOME_AGENT_LEGACY_IDENTITY_DB=/private/path/identity.sqlite \
-  docker compose --env-file home-agent.env -f home-agent-compose.yml \
-  --profile operator run --rm identity-migration
-```
-
-At the prompt, enter `/legacy/identity.sqlite`. With the default answers the
-tool performs a counts-and-digests-only review and sends no Core writes. It
-opens SQLite with `mode=ro` and `query_only`, validates schema version 1, and
-installs a SQLite authorizer that permits only the selected identity, alias,
-enrollment, role, and relationship columns. It cannot read notes, preferences,
-generated content, face-crop metadata, change-log snapshots, or pending-write
-payloads.
-
-Apply mode requires `HOME_AGENT_ROLLOUT_MODE=shadow`. Before collecting any
-item confirmation or issuing any write, it fetches Core's authenticated
-`GET /v1/operator-rollout` contract and accepts only the exact typed response
-`{mode: shadow, source: deployment_policy, semantic_people_writes: true,
-persistent_memory_writes: false, ingest_projection: true}`.
-It then fetches the fixed authenticated `GET /v1/operator-capabilities`
-contract, requires an exact confirmation for the review digest and every item,
-and calls only the typed People migration routes. Stable UUID import requires the reviewed source
-digest; a retry is idempotent only when every projected field and provenance
-value match exactly. The profile receives a dedicated operator-audience token
-and bootstrap token, but no BFF service token, database URL, knowledge key,
-runtime spool key, or PostgreSQL network. It mounts the legacy database
-read-only, requires a private TTY, and uses Docker logging driver `none`.
-
-Aliases, Frigate recognition bindings, privacy directives, archived status,
-and explicit relationship candidates use exact typed endpoints. `ignored` and
-legacy `do_not_identify` import only a suppressed placeholder plus the blocking
-directive; aliases, recognition bindings, and roles are skipped. A legacy
-`parent` classification or relationship remains a non-authoritative candidate
-with unknown perspective. No direct parent-confirmation endpoint exists in
-Core or either BFF. A safety-critical directive failure stops later dependent
-operations for that person.
-
-Optional review artifacts contain counts, stable UUIDs, source digests,
-endpoint requirements, and a plan digest only. The tool creates them
-exclusively on POSIX storage with mode 0600 and refuses an existing path.
-Remove the temporary source ACL after review:
-
-```sh
-sudo setfacl -x u:10001 /private/path/identity.sqlite
-```
-
-Run the synthetic safety suite before live review:
-
-```sh
-python -m unittest discover -s stack/home-agent-deploy/operator/tests -v
-```
+Reviewed People, aliases, privacy directives, recognition bindings, status,
+and legacy relationship candidates may enter Core only through the atomic
+`SERIALIZABLE` finalizer after its writer-freeze, erasure, rollout, and operator
+review gates are deployed. Until then, keep the finalizer dormant and the live
+deployment pinned to record-only revision 0006.
 
 ## Record-only, shadow, and canary gates
 

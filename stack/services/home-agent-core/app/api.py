@@ -41,11 +41,7 @@ from .models import (
     EdgePrivacyPolicyView,
     InitiativeSummaryView,
     InitiativeView,
-    LegacyRoleImport,
-    LegacyRelationshipCandidateImport,
     MemoryTransactionView,
-    OperatorCapabilities,
-    OperatorImportCapability,
     OperatorPrincipalBindingProposalStage,
     OperatorPrincipalBindingProposalView,
     OperatorPrincipalBindingRequestsView,
@@ -56,20 +52,12 @@ from .models import (
     Phase2ReadinessView,
     Phase3ReadinessBlocker,
     Phase3ReadinessView,
-    PersonCreate,
-    PersonView,
     PlaceCreate,
     PreferenceUpdate,
     PrincipalBindingConfirmation,
     PrincipalBindingConfirmationView,
     PrincipalBindingProposalView,
     PrincipalBindingRequestAction,
-    ReviewedPersonVerify,
-    ReviewedAliasImport,
-    ReviewedRecognitionBindingImport,
-    ReviewedPrivacyDirectiveImport,
-    ReviewedPersonStatusImport,
-    ReviewedImportReceipt,
     RolloutMode,
     RolloutStatus,
     SourceEntityBindingCreate,
@@ -100,6 +88,10 @@ OperatorBindingStore = Annotated[CoreStore, Depends(operator_binding_store_from)
 
 
 PHASE3_SCHEMA_REVISION = "0006_worker_maintenance_health"
+LEGACY_IDENTITY_IMPORT_RETIRED = (
+    "sequential legacy identity import is retired; use the reviewed atomic "
+    "identity finalizer"
+)
 
 
 def phase3_readiness_diagnostic(
@@ -254,87 +246,23 @@ def semantic_router() -> APIRouter:
             phase2_blockers=phase2.blockers,
         )
 
-    @router.post(
-        "/people",
-        response_model=PersonView,
-        status_code=status.HTTP_201_CREATED,
-        openapi_extra={"x-home-agent-idempotency": "exact-legacy-projection-v1"},
-    )
-    async def create_person(
-        value: PersonCreate,
-        _service: OperatorService,
-        store: Store,
-        _bootstrap: None = Depends(require_bootstrap),
-    ) -> PersonView:
-        return await store.database.run_serializable(lambda: store.create_person(value))
-
-    @router.get(
-        "/operator-capabilities",
-        response_model=OperatorCapabilities,
-        response_model_exclude_none=True,
-    )
-    async def operator_capabilities(
+    @router.get("/operator-capabilities")
+    @router.post("/people")
+    @router.post("/people/verify-reviewed")
+    @router.post("/people/{person_id}/aliases")
+    @router.post("/people/{person_id}/recognition-bindings")
+    @router.post("/people/{person_id}/privacy-directives")
+    @router.post("/people/{person_id}/status-import")
+    @router.post("/people/legacy-role-labels")
+    @router.post("/people/legacy-relationship-candidates")
+    async def retired_legacy_identity_import(
         _service: OperatorService,
         _bootstrap: None = Depends(require_bootstrap),
-    ) -> OperatorCapabilities:
-        return OperatorCapabilities(
-            contract="legacy-identity-migration-v1",
-            audience="operator-bootstrap",
-            person_import=OperatorImportCapability(
-                method="POST",
-                path="/v1/people",
-                schema="PersonCreate.v2",
-                source_digest_field="legacy_source_sha256",
-                idempotency="exact-projection-v1",
-            ),
-            role_import=OperatorImportCapability(
-                method="POST",
-                path="/v1/people/legacy-role-labels",
-                schema="LegacyRoleImport.v1",
-                source_digest_field="source_snapshot_sha256",
-                idempotency="exact-projection-v1",
-            ),
-            person_verify=OperatorImportCapability(
-                method="POST",
-                path="/v1/people/verify-reviewed",
-                schema="ReviewedPersonVerify.v1",
-            ),
-            alias_import=OperatorImportCapability(
-                method="POST",
-                path="/v1/people/{person_id}/aliases",
-                schema="ReviewedAliasImport.v1",
-                source_digest_field="source_snapshot_sha256",
-                idempotency="exact-projection-v1",
-            ),
-            recognition_binding_import=OperatorImportCapability(
-                method="POST",
-                path="/v1/people/{person_id}/recognition-bindings",
-                schema="ReviewedRecognitionBindingImport.v1",
-                source_digest_field="source_snapshot_sha256",
-                idempotency="exact-projection-v1",
-            ),
-            privacy_directive_import=OperatorImportCapability(
-                method="POST",
-                path="/v1/people/{person_id}/privacy-directives",
-                schema="ReviewedPrivacyDirectiveImport.v1",
-                source_digest_field="source_snapshot_sha256",
-                idempotency="exact-projection-v1",
-            ),
-            person_status_import=OperatorImportCapability(
-                method="POST",
-                path="/v1/people/{person_id}/status-import",
-                schema="ReviewedPersonStatusImport.v1",
-                source_digest_field="source_snapshot_sha256",
-                idempotency="exact-projection-v1",
-            ),
-            relationship_candidate_import=OperatorImportCapability(
-                method="POST",
-                path="/v1/people/legacy-relationship-candidates",
-                schema="LegacyRelationshipCandidateImport.v1",
-                source_digest_field="source_snapshot_sha256",
-                idempotency="exact-projection-v1",
-            ),
-        )
+    ) -> None:
+        # Deliberately accept no body or database dependency. Authenticated
+        # callers receive the same tombstone even for malformed/private input,
+        # and submitted identity content is never parsed or reflected.
+        raise CapabilityDisabledError(LEGACY_IDENTITY_IMPORT_RETIRED)
 
     @router.get("/operator-rollout", response_model=RolloutStatus)
     async def operator_rollout(
@@ -424,85 +352,6 @@ def semantic_router() -> APIRouter:
             authorization_code=authorization.code,
         )
 
-    @router.post("/people/verify-reviewed", response_model=PersonView)
-    async def verify_reviewed_person(
-        value: ReviewedPersonVerify,
-        _service: OperatorService,
-        store: Store,
-        _bootstrap: None = Depends(require_bootstrap),
-    ) -> PersonView:
-        return await store.database.run_serializable(
-            lambda: store.verify_reviewed_person(value)
-        )
-
-    @router.post(
-        "/people/{person_id}/aliases",
-        response_model=ReviewedImportReceipt,
-        status_code=status.HTTP_201_CREATED,
-        openapi_extra={"x-home-agent-idempotency": "exact-legacy-projection-v1"},
-    )
-    async def import_reviewed_alias(
-        person_id: uuid.UUID,
-        value: ReviewedAliasImport,
-        _service: OperatorService,
-        store: Store,
-        _bootstrap: None = Depends(require_bootstrap),
-    ) -> ReviewedImportReceipt:
-        return await store.database.run_serializable(
-            lambda: store.import_reviewed_alias(person_id, value)
-        )
-
-    @router.post(
-        "/people/{person_id}/recognition-bindings",
-        response_model=ReviewedImportReceipt,
-        status_code=status.HTTP_201_CREATED,
-        openapi_extra={"x-home-agent-idempotency": "exact-legacy-projection-v1"},
-    )
-    async def import_reviewed_recognition_binding(
-        person_id: uuid.UUID,
-        value: ReviewedRecognitionBindingImport,
-        _service: OperatorService,
-        store: Store,
-        _bootstrap: None = Depends(require_bootstrap),
-    ) -> ReviewedImportReceipt:
-        return await store.database.run_serializable(
-            lambda: store.import_reviewed_recognition_binding(person_id, value)
-        )
-
-    @router.post(
-        "/people/{person_id}/privacy-directives",
-        response_model=ReviewedImportReceipt,
-        status_code=status.HTTP_201_CREATED,
-        openapi_extra={"x-home-agent-idempotency": "exact-legacy-projection-v1"},
-    )
-    async def import_reviewed_privacy_directive(
-        person_id: uuid.UUID,
-        value: ReviewedPrivacyDirectiveImport,
-        _service: OperatorService,
-        store: Store,
-        _bootstrap: None = Depends(require_bootstrap),
-    ) -> ReviewedImportReceipt:
-        return await store.database.run_serializable(
-            lambda: store.import_reviewed_privacy_directive(person_id, value)
-        )
-
-    @router.post(
-        "/people/{person_id}/status-import",
-        response_model=ReviewedImportReceipt,
-        status_code=status.HTTP_201_CREATED,
-        openapi_extra={"x-home-agent-idempotency": "exact-legacy-projection-v1"},
-    )
-    async def import_reviewed_person_status(
-        person_id: uuid.UUID,
-        value: ReviewedPersonStatusImport,
-        _service: OperatorService,
-        store: Store,
-        _bootstrap: None = Depends(require_bootstrap),
-    ) -> ReviewedImportReceipt:
-        return await store.database.run_serializable(
-            lambda: store.import_reviewed_person_status(person_id, value)
-        )
-
     @router.get(
         "/operator/principal-binding-requests",
         response_model=OperatorPrincipalBindingRequestsView,
@@ -583,38 +432,6 @@ def semantic_router() -> APIRouter:
                 service.ha_user_id, value
             )
         )
-
-    @router.post(
-        "/people/legacy-role-labels",
-        status_code=status.HTTP_201_CREATED,
-        openapi_extra={"x-home-agent-idempotency": "exact-legacy-projection-v1"},
-    )
-    async def import_legacy_role(
-        value: LegacyRoleImport,
-        _service: OperatorService,
-        store: Store,
-        _bootstrap: None = Depends(require_bootstrap),
-    ) -> dict[str, uuid.UUID]:
-        label_id = await store.database.run_serializable(
-            lambda: store.import_legacy_role(value)
-        )
-        return {"label_id": label_id}
-
-    @router.post(
-        "/people/legacy-relationship-candidates",
-        status_code=status.HTTP_201_CREATED,
-        openapi_extra={"x-home-agent-idempotency": "exact-legacy-projection-v1"},
-    )
-    async def import_legacy_relationship_candidate(
-        value: LegacyRelationshipCandidateImport,
-        _service: OperatorService,
-        store: Store,
-        _bootstrap: None = Depends(require_bootstrap),
-    ) -> dict[str, uuid.UUID]:
-        candidate_id = await store.database.run_serializable(
-            lambda: store.import_legacy_relationship_candidate(value)
-        )
-        return {"candidate_id": candidate_id}
 
     @router.post("/source-entity-bindings", status_code=status.HTTP_201_CREATED)
     async def bind_source_entity(

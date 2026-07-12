@@ -124,6 +124,7 @@ class IsolatedRestoreDrillContractTests(unittest.TestCase):
             "data_checksums",
             "public.alembic_version",
             "operations.worker_maintenance_state",
+            "relpersistence::text",
             "worker_maintenance_persistence=u",
             "worker_maintenance_rows=0",
             "pg_dump",

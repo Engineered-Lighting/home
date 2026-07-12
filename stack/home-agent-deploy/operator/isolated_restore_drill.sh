@@ -576,7 +576,7 @@ validation="$(
       select '\''worker_maintenance_table='\'' ||
         case when to_regclass('\''operations.worker_maintenance_state'\'') is null
              then '\''missing'\'' else '\''present'\'' end;
-      select '\''worker_maintenance_persistence='\'' || relpersistence
+      select '\''worker_maintenance_persistence='\'' || relpersistence::text
         from pg_class
        where oid = to_regclass('\''operations.worker_maintenance_state'\'');
       select '\''worker_maintenance_rows='\'' || count(*)::text

@@ -1,0 +1,34 @@
+[Unit]
+Description=Monthly isolated Home Agent PostgreSQL restore drill
+Requires=docker.service srv-home\x2dagent.mount
+After=docker.service srv-home\x2dagent.mount network-online.target
+Wants=network-online.target
+ConditionPathIsMountPoint=/srv/home-agent
+ConditionPathExists=/srv/home-agent/config/home-agent.env
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Environment=HOME_AGENT_CHECKOUT=/opt/home/home-github
+ExecStart=/usr/local/sbin/home-agent-monthly-restore-drill /srv/home-agent/config/home-agent.env
+TimeoutStartSec=2h
+UMask=0077
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/srv/home-agent/restore-drills
+ReadWritePaths=/run/lock
+ReadWritePaths=/var/run/docker.sock
+

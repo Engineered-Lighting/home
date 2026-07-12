@@ -102,3 +102,16 @@ HOME_AGENT_RESTORE_MIN_FREE_KIB=2097152
 
 This database drill does not replace the independent erasure-ledger replay gate
 or a full isolated Home Assistant application restore.
+
+## Monthly execution
+
+After one supervised drill passes, install `monthly_restore_drill.sh` and the
+matching service/timer templates from `operator/systemd`. The selector queries
+pgBackRest for the newest *completed full* backup, validates its immutable
+label, writes that label to the service journal, and invokes this same guarded
+operator. It never passes `latest` to a restore command.
+
+The timer runs on the first Sunday of each month after the normal daily backup
+window. A failed drill remains a failed systemd unit and must be investigated;
+the timer does not weaken cleanup, networking, checksum, or erasure-replay
+requirements.

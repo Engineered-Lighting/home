@@ -277,7 +277,7 @@ class BffEgressFirewallContractTests(unittest.TestCase):
         )
         self.assertIn(
             "ExecStart=/usr/bin/python3 -I "
-            "/usr/local/libexec/home-agent-bff-egress/firewall_contract.py apply",
+            "/usr/local/libexec/home-agent-bff-egress/firewall_contract.py verify",
             service,
         )
         self.assertNotIn("/opt/home/home-github", service)

@@ -41,6 +41,7 @@ TRUSTED_INSTALL = Path(
 )
 UFW_HOOK = Path("/etc/ufw/after.init")
 UFW_HOOK_SHA256 = "530be4a84d913d9cbe9dc1b50bb0f04220490cd7a9f7937197f3988adfa38de8"
+UFW_CONFIG = Path("/etc/ufw/ufw.conf")
 TRUSTED_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 
 
@@ -579,9 +580,15 @@ def rule_present(contract: Contract, tail_ip: ipaddress.IPv4Address) -> bool:
 
 
 def validate_default_deny() -> None:
-    status = _run(["ufw", "status"], "UFW inspection").stdout
-    if "Status: active" not in status:
-        raise ContractError("UFW is not active")
+    config = validate_root_config(UFW_CONFIG).read_text(encoding="utf-8")
+    enabled = {
+        line.strip().upper()
+        for line in config.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    if "ENABLED=YES" not in enabled:
+        raise ContractError("UFW is not enabled")
+    _run(["iptables", "-S", "ufw-user-input"], "UFW input-chain inspection")
     policy = _run(["iptables", "-S", "INPUT"], "host input-policy inspection").stdout
     if "-P INPUT DROP" not in policy.splitlines():
         raise ContractError("host IPv4 input policy is not default-deny")

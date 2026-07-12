@@ -13,7 +13,7 @@ require_absolute() {
   esac
 }
 
-for command in docker openssl dirname findmnt grep sha256sum install stat readlink ssh-keygen; do
+for command in docker openssl dirname find findmnt grep sha256sum install stat readlink ssh-keygen tr wc; do
   command -v "$command" >/dev/null 2>&1 || { echo "missing command: $command" >&2; exit 69; }
 done
 
@@ -158,6 +158,39 @@ for name in $required_secrets; do
   }
 done
 
+rollout_master="$HOME_AGENT_SECRETS_DIR/master/rollout"
+[ -d "$rollout_master" ] && [ ! -L "$rollout_master" ] &&
+  [ "$(stat -c '%u:%g:%a' "$rollout_master")" = "0:0:700" ] || {
+  echo "rollout master secret directory is absent or unsafe" >&2
+  exit 78
+}
+[ "$(find "$rollout_master" -mindepth 1 -maxdepth 1 | wc -l)" -eq 2 ] || {
+  echo "rollout master secret directory must contain exactly two files" >&2
+  exit 78
+}
+for name in postgres_rollout_password database_url_rollout; do
+  path="$rollout_master/$name"
+  [ -f "$path" ] && [ ! -L "$path" ] && [ -s "$path" ] &&
+    [ "$(stat -c '%u:%g:%a' "$path")" = "0:0:600" ] || {
+    echo "rollout master secret is absent or unsafe: $path" >&2
+    exit 78
+  }
+done
+rollout_password="$(tr -d '\r\n' < "$rollout_master/postgres_rollout_password")"
+rollout_url="$(tr -d '\r\n' < "$rollout_master/database_url_rollout")"
+case "$rollout_password" in
+  *[!0-9a-f]*|'') echo "rollout password is not lowercase hex" >&2; exit 78 ;;
+esac
+[ "${#rollout_password}" -eq 64 ] || {
+  echo "rollout password has the wrong length" >&2
+  exit 78
+}
+[ "$rollout_url" = "postgresql+psycopg://home_agent_rollout:${rollout_password}@postgres:5432/home_agent" ] || {
+  echo "rollout database URL does not match the isolated rollout role" >&2
+  exit 78
+}
+unset rollout_password rollout_url
+
 deploy_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 sh "$deploy_dir/materialize-secrets.sh" "$HOME_AGENT_SECRETS_DIR"
 
@@ -172,7 +205,7 @@ verify_secret() {
 }
 
 verify_secret 999:999:400 "$HOME_AGENT_SECRETS_DIR/runtime/postgres/postgres_owner_password"
-for name in postgres_owner_password postgres_api_password postgres_ingest_password postgres_worker_password postgres_erasure_password postgres_backup_password; do
+for name in postgres_owner_password postgres_api_password postgres_ingest_password postgres_worker_password postgres_erasure_password postgres_rollout_password postgres_backup_password; do
   verify_secret 0:0:400 "$HOME_AGENT_SECRETS_DIR/runtime/provision-roles/$name"
 done
 verify_secret 0:0:400 "$HOME_AGENT_SECRETS_DIR/runtime/grant-runtime/postgres_owner_password"
@@ -188,6 +221,7 @@ for name in database_url runtime_spool_key erasure_ledger_key; do
   verify_secret 10001:10001:400 "$HOME_AGENT_SECRETS_DIR/runtime/core-worker/$name"
 done
 verify_secret 10001:10001:400 "$HOME_AGENT_SECRETS_DIR/runtime/ledger-init/erasure_ledger_key"
+verify_secret 10001:10001:400 "$HOME_AGENT_SECRETS_DIR/runtime/rollout-authorize/database_url"
 for name in database_url erasure_ledger_key; do
   verify_secret 10001:10001:400 "$HOME_AGENT_SECRETS_DIR/runtime/restore-replay/$name"
 done

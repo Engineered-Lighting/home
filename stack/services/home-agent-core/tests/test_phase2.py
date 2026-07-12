@@ -8,11 +8,13 @@ from sqlalchemy.dialects import postgresql
 
 from app.models import Phase2JourneyEvaluation
 from app.phase2 import (
+    PHASE2_RULE_VERSION,
     Phase2EnvelopeSummary,
     build_phase2_readiness,
     consent_precedes_visit,
     half_open_observation_window,
     is_relevant_envelope,
+    phase2_input_digest,
 )
 
 
@@ -39,12 +41,58 @@ def qualifying_journey() -> Phase2JourneyEvaluation:
 
 
 def test_only_real_transition_envelopes_advance_the_event_path() -> None:
-    assert is_relevant_envelope("location_fix", "continuous")
-    assert is_relevant_envelope("state_changed", "recorder_reconstructed")
-    assert not is_relevant_envelope("conversation_turn", "continuous")
-    assert not is_relevant_envelope("snapshot", "snapshot_only")
-    assert not is_relevant_envelope("coverage_gap", "gap")
-    assert not is_relevant_envelope("location_fix", "unknown")
+    assert is_relevant_envelope(
+        "location_fix", "continuous", redacted_precise_location=True
+    )
+    assert is_relevant_envelope(
+        "state_changed", "recorder_reconstructed", redacted_precise_location=True
+    )
+    assert not is_relevant_envelope(
+        "location_fix", "continuous", redacted_precise_location=False
+    )
+    assert not is_relevant_envelope(
+        "conversation_turn", "continuous", redacted_precise_location=True
+    )
+    assert not is_relevant_envelope(
+        "snapshot", "snapshot_only", redacted_precise_location=True
+    )
+    assert not is_relevant_envelope(
+        "coverage_gap", "gap", redacted_precise_location=True
+    )
+    assert not is_relevant_envelope(
+        "location_fix", "unknown", redacted_precise_location=True
+    )
+
+
+def test_input_digest_has_a_stable_first_500_boundary() -> None:
+    ids = [uuid.uuid4() for _ in range(501)]
+    stream_id = uuid.uuid4()
+
+    def boundary(values):
+        return [
+            {
+                "envelope_id": value,
+                "stream_id": stream_id,
+                "sequence": sequence,
+                "event_type": "location_fix",
+                "coverage": "continuous",
+                "ingested_at": START + timedelta(seconds=sequence),
+                "dependency_domain": "suppressed.precise_location",
+                "raw_payload_status": "suppressed_unbound_location",
+            }
+            for sequence, value in enumerate(values, start=1)
+        ]
+
+    first = phase2_input_digest(START, boundary(ids[:500]))
+
+    assert first == phase2_input_digest(START, boundary(ids[:500]))
+    assert first != phase2_input_digest(START, boundary(ids[1:501]))
+    assert first != phase2_input_digest(
+        START + timedelta(seconds=1), boundary(ids[:500])
+    )
+    changed = boundary(ids[:500])
+    changed[0] = {**changed[0], "coverage": "recorder_reconstructed"}
+    assert first != phase2_input_digest(START, changed)
 
 
 def test_current_consent_cannot_retroactively_qualify_an_old_visit() -> None:
@@ -88,6 +136,8 @@ def test_500_events_cannot_bypass_the_seven_day_window() -> None:
         submitted_journey_count=0,
         unique_journey_count=0,
         journeys=[],
+        policy_version="home-agent-mvp-v1",
+        policy_digest="a" * 64,
     )
 
     assert result.evidence_requirement_met
@@ -98,9 +148,14 @@ def test_500_events_cannot_bypass_the_seven_day_window() -> None:
     assert result.relevant_envelopes == 500
     assert result.excluded_snapshot_envelopes == 200
     assert result.excluded_gap_envelopes == 4
+    assert result.contract == "phase2-record-only-gate-v2"
+    assert result.rule_version == PHASE2_RULE_VERSION
+    assert result.policy_version == "home-agent-mvp-v1"
+    assert result.policy_digest == "a" * 64
+    assert result.controlled_journeys_authoritative is False
 
 
-def test_three_explicitly_selected_journeys_can_satisfy_evidence_path() -> None:
+def test_three_selected_journeys_are_informational_and_cannot_advance() -> None:
     journeys = [qualifying_journey() for _ in range(3)]
     result = build_phase2_readiness(
         now=START + timedelta(days=7),
@@ -109,14 +164,18 @@ def test_three_explicitly_selected_journeys_can_satisfy_evidence_path() -> None:
         submitted_journey_count=3,
         unique_journey_count=3,
         journeys=journeys,
+        policy_version="home-agent-mvp-v1",
+        policy_digest="a" * 64,
     )
 
     assert result.time_requirement_met
-    assert result.evidence_requirement_met
-    assert result.threshold_path == "journeys"
+    assert not result.evidence_requirement_met
+    assert result.threshold_path == "none"
     assert result.qualifying_controlled_journeys == 3
-    assert result.ready_to_advance
-    assert result.blockers == []
+    assert not result.ready_to_advance
+    assert result.blockers == [
+        "qualifying_redacted_envelope_threshold_not_met"
+    ]
 
 
 def test_existing_visits_are_never_automatically_treated_as_journeys() -> None:
@@ -127,13 +186,17 @@ def test_existing_visits_are_never_automatically_treated_as_journeys() -> None:
         submitted_journey_count=0,
         unique_journey_count=0,
         journeys=[],
+        policy_version="home-agent-mvp-v1",
+        policy_digest="a" * 64,
     )
 
     assert result.qualifying_controlled_journeys == 0
     assert result.threshold_path == "none"
     assert not result.evidence_requirement_met
     assert not result.ready_to_advance
-    assert result.blockers == ["evidence_threshold_not_met"]
+    assert result.blockers == [
+        "qualifying_redacted_envelope_threshold_not_met"
+    ]
     assert result.journeys_are_automatically_inferred is False
 
 
@@ -145,6 +208,8 @@ def test_gate_cannot_authorize_advancement_from_a_later_rollout_mode() -> None:
         submitted_journey_count=0,
         unique_journey_count=0,
         journeys=[],
+        policy_version="home-agent-mvp-v1",
+        policy_digest="a" * 64,
     )
 
     assert not result.ready_to_advance
@@ -159,11 +224,13 @@ def test_empty_database_has_explicit_blockers() -> None:
         submitted_journey_count=0,
         unique_journey_count=0,
         journeys=[],
+        policy_version="home-agent-mvp-v1",
+        policy_digest="a" * 64,
     )
 
     assert result.started_at is None
     assert result.eligible_at is None
     assert result.blockers == [
         "no_durable_envelopes",
-        "evidence_threshold_not_met",
+        "qualifying_redacted_envelope_threshold_not_met",
     ]

@@ -20,6 +20,7 @@ from .resources import (
     is_privacy_essential_write,
     resource_budget_snapshot,
 )
+from .rollout import RolloutAuthorizationGate
 from .spool import DisabledRuntimeSpool, EncryptedRuntimeSpool
 from .store import CoreStore
 from .worker import DurableWorker
@@ -73,11 +74,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         settings.erasure_ledger_head_path,
         cache_seconds=settings.restore_gate_cache_seconds,
     )
+    rollout_gate = RolloutAuthorizationGate(database, settings)
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         stop = asyncio.Event()
         task: asyncio.Task | None = None
+        rollout_status = await application.state.rollout_gate.status(force=True)
+        if not rollout_status.authorized:
+            try:
+                spool.close()
+            finally:
+                await database.close()
+            raise RuntimeError(
+                "rollout authorization rejected: " + rollout_status.code
+            )
         if worker is not None:
             task = asyncio.create_task(worker.run(stop))
         try:
@@ -105,6 +116,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.store = store
     application.state.ledger = ledger
     application.state.restore_gate = restore_gate
+    application.state.rollout_gate = rollout_gate
 
     @application.middleware("http")
     async def resource_budget_guard(request: Request, call_next):
@@ -178,6 +190,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         database_ok = await database.ping()
         revision = await database.migration_revision()
         gate_status = await application.state.restore_gate.status()
+        rollout_status = await application.state.rollout_gate.status()
         outbox_status = await outbox_health(database)
         resources = await resource_budget_snapshot(
             database,
@@ -191,6 +204,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if database_ok
                 and migration_ok
                 and gate_status.current
+                and rollout_status.authorized
                 and outbox_status.code == "current"
                 and resources["status"] == "ok"
                 else "degraded"
@@ -199,6 +213,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             database="ok" if database_ok else "unavailable",
             migration=revision or "unknown",
             restore_gate=gate_status.code,
+            rollout_authorization=rollout_status.code,
             outbox={
                 "status": outbox_status.code,
                 "incomplete_erasure": outbox_status.incomplete_erasure,
@@ -231,6 +246,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         database_ok = await database.ping()
         revision = await database.migration_revision()
         gate_status = await application.state.restore_gate.status(force=True)
+        rollout_status = await application.state.rollout_gate.status(force=True)
         outbox_status = await outbox_health(database)
         resources = await resource_budget_snapshot(
             database,
@@ -241,6 +257,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             database_ok
             and revision == settings.readiness_migration
             and gate_status.current
+            and rollout_status.authorized
             and outbox_status.ready
             and resources["ready"]
         )
@@ -252,6 +269,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "migration": revision,
                 "expected_migration": settings.readiness_migration,
                 "restore_gate": gate_status.code,
+                "rollout_authorization": rollout_status.code,
                 "ledger_epoch": gate_status.ledger_epoch,
                 "database_epoch": gate_status.database_epoch,
                 "outbox": outbox_status.code,

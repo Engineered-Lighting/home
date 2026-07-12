@@ -193,7 +193,13 @@ class Phase2JourneyEvaluation(StrictModel):
 
 
 class Phase2ReadinessView(StrictModel):
-    contract: Literal["phase2-record-only-gate-v1"] = "phase2-record-only-gate-v1"
+    contract: Literal["phase2-record-only-gate-v2"] = "phase2-record-only-gate-v2"
+    rule_version: Literal["record-only-envelope-gate-v2"] = (
+        "record-only-envelope-gate-v2"
+    )
+    input_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    policy_version: str
+    policy_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     evaluated_at: datetime
     rollout_mode: RolloutMode
     started_at: datetime | None
@@ -211,19 +217,54 @@ class Phase2ReadinessView(StrictModel):
     submitted_controlled_journeys: int = Field(ge=0)
     unique_controlled_journeys: int = Field(ge=0)
     qualifying_controlled_journeys: int = Field(ge=0)
-    controlled_journeys_required: Literal[3] = 3
-    controlled_journeys_remaining: int = Field(ge=0)
+    informational_controlled_journeys_target: Literal[3] = 3
     controlled_journeys: list[Phase2JourneyEvaluation]
     evidence_requirement_met: bool
-    threshold_path: Literal["events", "journeys", "both", "none"]
+    threshold_path: Literal["events", "none"]
     ready_to_advance: bool
     blockers: list[str]
+    qualifying_envelopes_are_redacted: Literal[True] = True
+    controlled_journeys_authoritative: Literal[False] = False
     location_consent_default_off: Literal[True] = True
     snapshots_count_as_events: Literal[False] = False
     gaps_count_as_events: Literal[False] = False
     journeys_are_automatically_inferred: Literal[False] = False
 
     _evaluated = field_validator("evaluated_at")(_aware)
+
+
+class RolloutAuthorizationRequest(StrictModel):
+    operator_request_id: uuid.UUID
+    expected_rule_version: Literal["record-only-envelope-gate-v2"]
+    expected_policy_version: str = Field(min_length=1, max_length=128)
+    expected_policy_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    expected_input_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("operator_request_id")
+    @classmethod
+    def random_request_uuid(cls, value: uuid.UUID) -> uuid.UUID:
+        if value.version not in {4, 7}:
+            raise ValueError("operator request ID must be a random UUIDv4 or UUIDv7")
+        return value
+
+
+class RolloutAuthorizationView(StrictModel):
+    contract: Literal["rollout-authorization-receipt-v1"] = (
+        "rollout-authorization-receipt-v1"
+    )
+    authorization_id: uuid.UUID
+    operator_request_id: uuid.UUID
+    from_mode: Literal["record_only", "shadow"]
+    to_mode: Literal["shadow", "canary"]
+    rule_version: str
+    policy_version: str
+    policy_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    input_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    readiness_evaluated_at: datetime
+    authorized_at: datetime
+
+    _readiness_evaluated = field_validator("readiness_evaluated_at")(_aware)
+    _authorized = field_validator("authorized_at")(_aware)
 
 
 class PrincipalBindingCreate(StrictModel):
@@ -479,6 +520,7 @@ class HealthView(StrictModel):
     database: str
     migration: str
     restore_gate: str
+    rollout_authorization: str
     outbox: dict[str, Any]
     spool: dict[str, Any]
     resources: dict[str, Any]

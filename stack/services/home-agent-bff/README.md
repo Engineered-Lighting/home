@@ -108,3 +108,11 @@ route.
 All outbound HA and Core fetches set `redirect=error`; access tokens, refresh
 tokens, service credentials, and semantic request bodies are never followed to
 a 3xx destination.
+
+In the production Docker deployment, HA requests leave through the dedicated
+`home-agent_bff-public` network from one pinned source address. The host's
+default-deny input firewall must admit only that address and bridge to this
+node's local Tailscale HTTPS listener for `HOME_AGENT_HA_URL`. Apply and verify
+the complete live boundary with
+`stack/home-agent-deploy/bff-egress/firewall_contract.py`; do not broadly allow
+the Docker subnet or bypass TLS with the HA LAN HTTP endpoint.

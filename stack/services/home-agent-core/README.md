@@ -135,15 +135,44 @@ credential and is never proxied by the BFF):
 - `GET /v1/operator-rollout/phase2-readiness`
 
 The Phase 2 readiness response is read-only and deterministic. It reports the
-seven-day observation window and counts only accepted continuous transition
-location envelopes toward the 500-event threshold. Conversation metadata,
-snapshots, and gaps are reported or ignored but never counted. Controlled
-journeys are never enumerated automatically: the
+seven-day window beginning at the first qualifying envelope and counts only accepted, identity-redacted
+precise-location transition headers toward the 500-event threshold.
+Conversation metadata, raw-retained location, snapshots, and gaps are reported
+or ignored but never counted. Controlled journeys are never enumerated
+automatically: the
 operator must supply paired principal/visit UUID query parameters, after which
 the inspector verifies explicit location consent predating the visit, a
 departed sufficient visit, a continuous device-tracker root, ten-minute dwell,
 and no overlapping snapshot or coverage gap. The response contains no names,
-coordinates, locators, state payloads, or source event content.
+coordinates, locators, state payloads, or source event content. Journey results
+are informational only in the v2 contract and never satisfy live readiness.
+
+When v2 readiness is true, place a JSON object containing a random
+`operator_request_id` and the response's exact `expected_rule_version`,
+`expected_policy_version`, `expected_policy_digest`, and
+`expected_input_digest` on stdin for the operator-profile one-shot:
+
+```sh
+docker compose --env-file /srv/home-agent/config/home-agent.env \
+  --profile operator run --rm -T rollout-authorize < /root/shadow-request.json
+```
+
+The one-shot receives a dedicated database credential that is never mounted in
+Core API, ingest, worker, BFF, or the Agent origin. It first verifies migration,
+restore-quarantine, and storage gates, then recomputes Phase 2 inside the same
+serializable receipt transaction and stores one content-free `record_only` to
+`shadow` receipt. Input is capped at 4 KiB, strict, duplicate-key rejecting,
+and content-free; output is the content-free receipt. The online API role is
+SELECT-only on receipts and has no authorization route.
+
+Every Core role configured as shadow validates the receipt's policy, rule, and
+immutable first-500-envelope evidence boundary before startup. Envelope rows
+are append-only to the online ingest role and guarded against update/delete at
+the database boundary; the separate erasure role retains governed deletion
+authority. Canary requires a separate future receipt and a schema migration
+that opens that transition. No rollout operation changes deployment
+configuration, and no authorization route is present in Core API, BFF, or
+native allowlists.
 
 The proposal route accepts only the typed `place_social_descriptor` MVP shape;
 there is no generic predicate/object write API.

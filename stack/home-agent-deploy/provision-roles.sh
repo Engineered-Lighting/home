@@ -13,6 +13,7 @@ api_password="$(read_secret /run/secrets/postgres_api_password)"
 ingest_password="$(read_secret /run/secrets/postgres_ingest_password)"
 worker_password="$(read_secret /run/secrets/postgres_worker_password)"
 erasure_password="$(read_secret /run/secrets/postgres_erasure_password)"
+rollout_password="$(read_secret /run/secrets/postgres_rollout_password)"
 backup_password="$(read_secret /run/secrets/postgres_backup_password)"
 
 psql -v ON_ERROR_STOP=1 \
@@ -20,6 +21,7 @@ psql -v ON_ERROR_STOP=1 \
   -v ingest_password="$ingest_password" \
   -v worker_password="$worker_password" \
   -v erasure_password="$erasure_password" \
+  -v rollout_password="$rollout_password" \
   -v backup_password="$backup_password" <<'SQL'
 SELECT 'CREATE ROLE home_agent_api LOGIN' WHERE NOT EXISTS
   (SELECT 1 FROM pg_roles WHERE rolname='home_agent_api') \gexec
@@ -29,23 +31,34 @@ SELECT 'CREATE ROLE home_agent_worker LOGIN' WHERE NOT EXISTS
   (SELECT 1 FROM pg_roles WHERE rolname='home_agent_worker') \gexec
 SELECT 'CREATE ROLE home_agent_erasure LOGIN' WHERE NOT EXISTS
   (SELECT 1 FROM pg_roles WHERE rolname='home_agent_erasure') \gexec
+SELECT 'CREATE ROLE home_agent_rollout LOGIN' WHERE NOT EXISTS
+  (SELECT 1 FROM pg_roles WHERE rolname='home_agent_rollout') \gexec
 SELECT 'CREATE ROLE home_agent_backup LOGIN' WHERE NOT EXISTS
   (SELECT 1 FROM pg_roles WHERE rolname='home_agent_backup') \gexec
+
+SELECT format('REVOKE %I FROM home_agent_rollout', parent.rolname)
+FROM pg_auth_members AS membership
+JOIN pg_roles AS parent ON parent.oid = membership.roleid
+JOIN pg_roles AS member ON member.oid = membership.member
+WHERE member.rolname = 'home_agent_rollout' \gexec
 
 ALTER ROLE home_agent_api PASSWORD :'api_password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
 ALTER ROLE home_agent_ingest PASSWORD :'ingest_password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
 ALTER ROLE home_agent_worker PASSWORD :'worker_password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
 ALTER ROLE home_agent_erasure PASSWORD :'erasure_password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
+ALTER ROLE home_agent_rollout PASSWORD :'rollout_password' NOSUPERUSER
+  NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS CONNECTION LIMIT 1;
 ALTER ROLE home_agent_backup PASSWORD :'backup_password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 
 ALTER ROLE home_agent_api SET statement_timeout = '15s';
 ALTER ROLE home_agent_ingest SET statement_timeout = '20s';
 ALTER ROLE home_agent_worker SET statement_timeout = '60s';
 ALTER ROLE home_agent_erasure SET statement_timeout = '60s';
+ALTER ROLE home_agent_rollout SET statement_timeout = '30s';
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 REVOKE ALL ON DATABASE home_agent FROM PUBLIC;
 GRANT CONNECT ON DATABASE home_agent TO home_agent_api, home_agent_ingest,
-  home_agent_worker, home_agent_erasure, home_agent_backup;
+  home_agent_worker, home_agent_erasure, home_agent_rollout, home_agent_backup;
 
 -- pgBackRest copies cluster files as the unprivileged postgres OS account; it
 -- does not need SQL access to application rows. PostgreSQL 17 documents these
@@ -58,7 +71,7 @@ REVOKE pg_monitor, pg_read_all_settings, pg_read_all_stats,
   pg_stat_scan_tables, pg_read_all_data, pg_write_all_data,
   pg_read_server_files, pg_write_server_files, pg_execute_server_program,
   pg_checkpoint, pg_maintain, pg_signal_backend
-  FROM home_agent_backup;
+  FROM home_agent_backup, home_agent_rollout;
 GRANT pg_read_all_settings TO home_agent_backup;
 GRANT EXECUTE ON FUNCTION pg_catalog.pg_backup_start(text, boolean)
   TO home_agent_backup;

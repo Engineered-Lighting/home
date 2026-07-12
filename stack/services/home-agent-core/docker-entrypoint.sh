@@ -57,6 +57,11 @@ case "$role" in
     export HOME_AGENT_ROLE=restore
     exec python -m app.cli "$role"
     ;;
+  authorize-shadow)
+    export HOME_AGENT_ROLE=rollout
+    shift
+    exec python -m app.cli authorize-shadow "$@"
+    ;;
   *)
     echo "unsupported HOME_AGENT_ROLE: $role" >&2
     exit 64

@@ -1,0 +1,24 @@
+# Copy to a root-owned mode-0600 file and edit only values, never this template.
+# Values use a deliberately closed grammar: no quotes, whitespace, or expansion.
+HAOS_IMAGE_XZ=/var/lib/home-agent-haos-restore/cache/haos_ova-18.1.qcow2.xz
+HAOS_BACKUP_TAR=/var/lib/home-agent-haos-restore/cache/7259fb6d.tar
+HAOS_SCRATCH_PARENT=/var/lib/home-agent-haos-restore
+HAOS_SCRATCH_FILE=/var/lib/home-agent-haos-restore/haos-restore-7259fb6d.luks
+HAOS_MOUNT=/mnt/home-agent-haos-restore
+HAOS_REPORT_DIR=/var/log/home-agent-haos-restore
+HAOS_MAPPER=home-agent-haos-restore
+HAOS_VM_USER=home-agent-haos-restore
+HAOS_UPLINK=enp4s0
+HAOS_UPSTREAM_DNS=1.1.1.1
+HAOS_OVMF_CODE=/usr/share/OVMF/OVMF_CODE_4M.fd
+HAOS_OVMF_VARS=/usr/share/OVMF/OVMF_VARS_4M.fd
+HAOS_RELAY_PORT=18123
+HAOS_VM_MEMORY_MIB=8192
+HAOS_VM_CPUS=4
+HAOS_SCRATCH_SIZE_GIB=176
+HAOS_VM_DISK_GIB=160
+HAOS_MIN_HOST_FREE_AFTER_MAX_GIB=200
+HAOS_NETNS=haos-restore
+HAOS_TAP=haosdrill0
+HAOS_EGRESS_TAP=haos-egress0
+HAOS_UI_SCHEME=http

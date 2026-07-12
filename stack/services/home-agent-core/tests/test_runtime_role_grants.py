@@ -8,12 +8,14 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from psycopg.types.range import Range
 from pydantic import SecretStr
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import delete, func, insert, select, text, update
+from sqlalchemy.exc import DBAPIError
 
 from app import schema
 from app.config import Settings
 from app.db import Database
 from app.ledger import EncryptedErasureLedger, ErasureLedgerRecord
+from app.phase2 import PHASE2_ROLLOUT_EVIDENCE
 from app.restore import RestoreQuarantineGate, RestoreReplay, outbox_health
 from app.spool import DisabledRuntimeSpool
 from app.store import CoreStore
@@ -219,6 +221,113 @@ async def test_ingest_readiness_conflict_depart_and_erasure_restore_grants(
         )
         worker = DurableWorker(worker_database, worker_ledger, DisabledRuntimeSpool())
         assert await worker.run_once(now=now + timedelta(seconds=1)) is True
+        # Every promoted Core role evaluates the same content-free rollout
+        # boundary at startup. Worker sees only the security-barrier evidence
+        # view, not identity-linked base ingest headers.
+        async with worker_database.transaction() as connection:
+            await connection.execute(
+                select(PHASE2_ROLLOUT_EVIDENCE.c.envelope_id).limit(1)
+            )
+            await connection.execute(
+                select(schema.rollout_authorizations.c.authorization_id).limit(1)
+            )
+        async with ingest.transaction() as connection:
+            await connection.execute(
+                select(schema.rollout_authorizations.c.authorization_id).limit(1)
+            )
+        async with owner.transaction() as connection:
+            rollout_grants = (
+                await connection.execute(
+                    select(
+                        *[
+                            func.has_table_privilege(
+                                role,
+                                "operations.rollout_authorizations",
+                                privilege,
+                            ).label(
+                                f"{role}_{privilege.lower()}"
+                            )
+                            for role in ("home_agent_ingest", "home_agent_worker")
+                            for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE")
+                        ]
+                    )
+                )
+            ).mappings().one()
+            assert dict(rollout_grants) == {
+                "home_agent_ingest_select": True,
+                "home_agent_ingest_insert": False,
+                "home_agent_ingest_update": False,
+                "home_agent_ingest_delete": False,
+                "home_agent_worker_select": True,
+                "home_agent_worker_insert": False,
+                "home_agent_worker_update": False,
+                "home_agent_worker_delete": False,
+            }
+            envelope_grants = (
+                await connection.execute(
+                    select(
+                        *[
+                            func.has_table_privilege(
+                                "home_agent_ingest",
+                                "ingest.envelopes",
+                                privilege,
+                            ).label(privilege.lower())
+                            for privilege in (
+                                "SELECT",
+                                "INSERT",
+                                "UPDATE",
+                                "DELETE",
+                                "TRUNCATE",
+                            )
+                        ]
+                    )
+                )
+            ).mappings().one()
+            assert dict(envelope_grants) == {
+                "select": True,
+                "insert": False,
+                "update": False,
+                "delete": False,
+                "truncate": False,
+            }
+            envelope_column_grants = (
+                await connection.execute(
+                    select(
+                        func.has_column_privilege(
+                            "home_agent_ingest",
+                            "ingest.envelopes",
+                            "envelope_id",
+                            "INSERT",
+                        ).label("envelope_id_insert"),
+                        func.has_column_privilege(
+                            "home_agent_ingest",
+                            "ingest.envelopes",
+                            "metadata",
+                            "INSERT",
+                        ).label("metadata_insert"),
+                        func.has_column_privilege(
+                            "home_agent_ingest",
+                            "ingest.envelopes",
+                            "ingested_at",
+                            "INSERT",
+                        ).label("ingested_at_insert"),
+                    )
+                )
+            ).mappings().one()
+            assert dict(envelope_column_grants) == {
+                "envelope_id_insert": True,
+                "metadata_insert": True,
+                "ingested_at_insert": False,
+            }
+        with pytest.raises(DBAPIError) as blocked_backdate:
+            async with ingest.transaction() as connection:
+                await connection.execute(
+                    text(
+                        "INSERT INTO ingest.envelopes (ingested_at) "
+                        "VALUES (transaction_timestamp() - interval '8 days')"
+                    )
+                )
+        assert getattr(blocked_backdate.value.orig, "sqlstate", None) == "42501"
         async with owner.transaction() as connection:
             assert (
                 await connection.execute(

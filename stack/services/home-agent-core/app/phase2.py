@@ -1,11 +1,12 @@
-"""Deterministic, read-only observability for the Phase 2 record-only gate.
+"""Deterministic observability for the Phase 2 record-only gate.
 
 The event path uses durable envelope headers, so suppressed raw location still
 exercises Edge delivery without becoming retained location content.  The
-journey path is deliberately non-discovering: an operator must select both the
+journey view is deliberately non-discovering: an operator must select both the
 principal and visit IDs, and Core then proves that each selected visit was
 consent-gated, departed, continuously observed, and untouched by a snapshot or
-coverage gap.  Merely having a visit row never counts as a controlled journey.
+coverage gap. Controlled journeys are informational in v2 and cannot authorize
+live promotion until a separately reviewed pre-canary consent mode exists.
 """
 
 from __future__ import annotations
@@ -13,11 +14,13 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Iterable
+from typing import Any, Iterable, Mapping
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, column, func, or_, select, table
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 from . import schema
+from .crypto import sha256_json
 from .db import Database
 from .models import Phase2JourneyEvaluation, Phase2ReadinessView, RolloutMode
 
@@ -25,9 +28,23 @@ from .models import Phase2JourneyEvaluation, Phase2ReadinessView, RolloutMode
 MINIMUM_OBSERVATION_WINDOW = timedelta(days=7)
 RELEVANT_ENVELOPE_TARGET = 500
 CONTROLLED_JOURNEY_TARGET = 3
+PHASE2_RULE_VERSION = "record-only-envelope-gate-v2"
 MINIMUM_JOURNEY_DWELL = timedelta(minutes=10)
 RELEVANT_EVENT_TYPES = ("state_changed", "location_fix")
 RELEVANT_COVERAGES = ("continuous", "recorder_reconstructed")
+
+PHASE2_ROLLOUT_EVIDENCE = table(
+    "phase2_rollout_evidence",
+    column("envelope_id"),
+    column("stream_id"),
+    column("sequence"),
+    column("event_type"),
+    column("coverage"),
+    column("ingested_at"),
+    column("dependency_domain"),
+    column("raw_payload_status"),
+    schema="operations",
+)
 DISQUALIFYING_COVERAGES = ("snapshot_only", "gap", "unknown")
 
 
@@ -47,12 +64,57 @@ class Phase2EnvelopeSummary:
     snapshots: int
     gaps: int
     quarantined: int
+    input_digest: str = "0" * 64
 
 
-def is_relevant_envelope(event_type: str, coverage: str) -> bool:
-    """Return whether one accepted envelope advances the 500-event path."""
+def is_relevant_envelope(
+    event_type: str,
+    coverage: str,
+    *,
+    redacted_precise_location: bool,
+) -> bool:
+    """Return whether one redacted location transition advances the gate."""
 
-    return event_type in RELEVANT_EVENT_TYPES and coverage in RELEVANT_COVERAGES
+    return bool(
+        redacted_precise_location
+        and event_type in RELEVANT_EVENT_TYPES
+        and coverage in RELEVANT_COVERAGES
+    )
+
+
+def phase2_input_digest(
+    started_at: datetime | None,
+    boundary_envelopes: Iterable[Mapping[str, Any]],
+) -> str:
+    """Digest the immutable evidence boundary without retaining event content."""
+
+    return sha256_json(
+        {
+            "rule_version": PHASE2_RULE_VERSION,
+            "minimum_observation_seconds": int(
+                MINIMUM_OBSERVATION_WINDOW.total_seconds()
+            ),
+            "qualifying_envelope_target": RELEVANT_ENVELOPE_TARGET,
+            "started_at": (
+                started_at.astimezone(UTC).isoformat()
+                if started_at is not None
+                else None
+            ),
+            "boundary_envelopes": [
+                {
+                    "envelope_id": str(value["envelope_id"]),
+                    "stream_id": str(value["stream_id"]),
+                    "sequence": int(value["sequence"]),
+                    "event_type": str(value["event_type"]),
+                    "coverage": str(value["coverage"]),
+                    "ingested_at": value["ingested_at"].astimezone(UTC).isoformat(),
+                    "dependency_domain": str(value["dependency_domain"]),
+                    "raw_payload_status": str(value["raw_payload_status"]),
+                }
+                for value in boundary_envelopes
+            ],
+        }
+    )
 
 
 def consent_precedes_visit(
@@ -84,6 +146,8 @@ def build_phase2_readiness(
     submitted_journey_count: int,
     unique_journey_count: int,
     journeys: Iterable[Phase2JourneyEvaluation],
+    policy_version: str,
+    policy_digest: str,
 ) -> Phase2ReadinessView:
     """Build a stable gate result from already-inspected evidence."""
 
@@ -110,17 +174,8 @@ def build_phase2_readiness(
     journey_results = list(journeys)
     qualifying_journeys = sum(item.qualifies for item in journey_results)
     events_met = envelopes.relevant >= RELEVANT_ENVELOPE_TARGET
-    journeys_met = qualifying_journeys >= CONTROLLED_JOURNEY_TARGET
-    evidence_met = events_met or journeys_met
-    threshold_path = (
-        "both"
-        if events_met and journeys_met
-        else "events"
-        if events_met
-        else "journeys"
-        if journeys_met
-        else "none"
-    )
+    evidence_met = events_met
+    threshold_path = "events" if events_met else "none"
 
     blockers: list[str] = []
     if rollout_mode != "record_only":
@@ -130,9 +185,13 @@ def build_phase2_readiness(
     elif not time_met:
         blockers.append("minimum_observation_window_not_elapsed")
     if not evidence_met:
-        blockers.append("evidence_threshold_not_met")
+        blockers.append("qualifying_redacted_envelope_threshold_not_met")
 
     return Phase2ReadinessView(
+        rule_version=PHASE2_RULE_VERSION,
+        input_digest=envelopes.input_digest,
+        policy_version=policy_version,
+        policy_digest=policy_digest,
         evaluated_at=evaluated_at,
         rollout_mode=rollout_mode,
         started_at=started_at,
@@ -150,9 +209,6 @@ def build_phase2_readiness(
         submitted_controlled_journeys=submitted_journey_count,
         unique_controlled_journeys=unique_journey_count,
         qualifying_controlled_journeys=qualifying_journeys,
-        controlled_journeys_remaining=max(
-            0, CONTROLLED_JOURNEY_TARGET - qualifying_journeys
-        ),
         controlled_journeys=journey_results,
         evidence_requirement_met=evidence_met,
         threshold_path=threshold_path,
@@ -164,9 +220,18 @@ def build_phase2_readiness(
 class Phase2GateInspector:
     """Read only the metadata required to evaluate the Phase 2 gate."""
 
-    def __init__(self, database: Database, *, rollout_mode: RolloutMode) -> None:
+    def __init__(
+        self,
+        database: Database,
+        *,
+        rollout_mode: RolloutMode,
+        policy_version: str,
+        policy_digest: str,
+    ) -> None:
         self.database = database
         self.rollout_mode = rollout_mode
+        self.policy_version = policy_version
+        self.policy_digest = policy_digest
 
     async def inspect(
         self,
@@ -183,7 +248,10 @@ class Phase2GateInspector:
                 seen.add(key)
                 unique.append(reference)
 
-        summary = await self._envelope_summary()
+        async with self.database.transaction() as connection:
+            summary = await self._envelope_summary(
+                connection, include_diagnostics=True
+            )
         journey_results = [
             await self._inspect_controlled_journey(reference, summary.started_at)
             for reference in unique
@@ -195,13 +263,38 @@ class Phase2GateInspector:
             submitted_journey_count=len(submitted),
             unique_journey_count=len(unique),
             journeys=journey_results,
+            policy_version=self.policy_version,
+            policy_digest=self.policy_digest,
         )
 
-    async def _envelope_summary(self) -> Phase2EnvelopeSummary:
-        relevant = and_(
-            schema.envelopes.c.event_type.in_(RELEVANT_EVENT_TYPES),
-            schema.envelopes.c.coverage.in_(RELEVANT_COVERAGES),
+    async def inspect_evidence_in_transaction(
+        self,
+        connection: AsyncConnection,
+        *,
+        now: datetime,
+    ) -> Phase2ReadinessView:
+        """Recompute authoritative event evidence inside the caller transaction."""
+
+        summary = await self._envelope_summary(
+            connection, include_diagnostics=False
         )
+        return build_phase2_readiness(
+            now=now,
+            rollout_mode=self.rollout_mode,
+            envelopes=summary,
+            submitted_journey_count=0,
+            unique_journey_count=0,
+            journeys=(),
+            policy_version=self.policy_version,
+            policy_digest=self.policy_digest,
+        )
+
+    async def _envelope_summary(
+        self,
+        connection: AsyncConnection,
+        *,
+        include_diagnostics: bool,
+    ) -> Phase2EnvelopeSummary:
         snapshot = or_(
             schema.envelopes.c.event_type == "snapshot",
             schema.envelopes.c.coverage == "snapshot_only",
@@ -210,13 +303,21 @@ class Phase2GateInspector:
             schema.envelopes.c.event_type == "coverage_gap",
             schema.envelopes.c.coverage.in_(("gap", "unknown")),
         )
-        async with self.database.transaction() as connection:
-            row = (
+        evidence_row = (
+            await connection.execute(
+                select(
+                    func.min(PHASE2_ROLLOUT_EVIDENCE.c.ingested_at).label(
+                        "started_at"
+                    ),
+                    func.count().label("relevant"),
+                ).select_from(PHASE2_ROLLOUT_EVIDENCE)
+            )
+        ).mappings().one()
+        if include_diagnostics:
+            diagnostic_row = (
                 await connection.execute(
                     select(
-                        func.min(schema.envelopes.c.ingested_at).label("started_at"),
                         func.count().label("total"),
-                        func.count().filter(relevant).label("relevant"),
                         func.count().filter(snapshot).label("snapshots"),
                         func.count().filter(gap).label("gaps"),
                     ).select_from(schema.envelopes)
@@ -227,13 +328,47 @@ class Phase2GateInspector:
                     select(func.count()).select_from(schema.quarantine)
                 )
             ).scalar_one()
+        else:
+            diagnostic_row = {
+                "total": evidence_row["relevant"],
+                "snapshots": 0,
+                "gaps": 0,
+            }
+            quarantined = 0
+        boundary_envelopes = (
+            (
+                await connection.execute(
+                    select(
+                        PHASE2_ROLLOUT_EVIDENCE.c.envelope_id,
+                        PHASE2_ROLLOUT_EVIDENCE.c.stream_id,
+                        PHASE2_ROLLOUT_EVIDENCE.c.sequence,
+                        PHASE2_ROLLOUT_EVIDENCE.c.event_type,
+                        PHASE2_ROLLOUT_EVIDENCE.c.coverage,
+                        PHASE2_ROLLOUT_EVIDENCE.c.ingested_at,
+                        PHASE2_ROLLOUT_EVIDENCE.c.dependency_domain,
+                        PHASE2_ROLLOUT_EVIDENCE.c.raw_payload_status,
+                    )
+                    .select_from(PHASE2_ROLLOUT_EVIDENCE)
+                    .order_by(
+                        PHASE2_ROLLOUT_EVIDENCE.c.ingested_at,
+                        PHASE2_ROLLOUT_EVIDENCE.c.envelope_id,
+                    )
+                    .limit(RELEVANT_ENVELOPE_TARGET)
+                )
+            )
+            .mappings()
+            .all()
+        )
         return Phase2EnvelopeSummary(
-            started_at=row["started_at"],
-            total=int(row["total"]),
-            relevant=int(row["relevant"]),
-            snapshots=int(row["snapshots"]),
-            gaps=int(row["gaps"]),
+            started_at=evidence_row["started_at"],
+            total=int(diagnostic_row["total"]),
+            relevant=int(evidence_row["relevant"]),
+            snapshots=int(diagnostic_row["snapshots"]),
+            gaps=int(diagnostic_row["gaps"]),
             quarantined=int(quarantined),
+            input_digest=phase2_input_digest(
+                evidence_row["started_at"], boundary_envelopes
+            ),
         )
 
     async def _inspect_controlled_journey(

@@ -270,9 +270,10 @@ def semantic_router() -> APIRouter:
     ) -> Phase2ReadinessView:
         """Evaluate the record-only gate without discovering private visits.
 
-        A journey counts only when the operator supplies a paired principal and
-        visit UUID. The inspector validates the selected visit through RLS and
-        returns no names, states, coordinates, locators, or source payloads.
+        A journey is inspected only when the operator supplies a paired
+        principal and visit UUID. It remains informational and cannot authorize
+        live promotion. The inspector validates through RLS and returns no
+        names, states, coordinates, locators, or source payloads.
         """
 
         principal_ids = controlled_principal_id or []
@@ -294,6 +295,8 @@ def semantic_router() -> APIRouter:
         return await Phase2GateInspector(
             store.database,
             rollout_mode=store.settings.rollout_mode,
+            policy_version=store.settings.policy_version,
+            policy_digest=store.settings.policy_digest,
         ).inspect(references)
 
     @router.post("/people/verify-reviewed", response_model=PersonView)

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import base64
 import binascii
+import re
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -16,7 +18,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    role: Literal["api", "ingest", "worker", "restore", "all"] = "api"
+    role: Literal["api", "ingest", "worker", "restore", "rollout", "all"] = "api"
     port: int = Field(default=8104, ge=1, le=65535)
     database_url: SecretStr
     runtime_spool_path: Path = Path("/runtime/runtime.sqlite")
@@ -40,7 +42,7 @@ class Settings(BaseSettings):
     )
     policy_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     rollout_mode: Literal["record_only", "shadow", "canary"] = "record_only"
-    readiness_migration: str = "0003_resource_budgets"
+    readiness_migration: str = "0004_rollout_authorizations"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
     @field_validator(
@@ -150,6 +152,47 @@ class Settings(BaseSettings):
             raise ValueError(
                 "restore role may receive only database and ledger secrets"
             )
+        if self.role == "rollout" and any(
+            value is not None
+            for value in (
+                self.runtime_spool_key,
+                self.knowledge_encryption_key,
+                self.erasure_ledger_key,
+                self.edge_token,
+                self.service_token,
+                self.operator_token,
+                self.bootstrap_token,
+            )
+        ):
+            raise ValueError(
+                "rollout role may receive only its database credential"
+            )
+        if self.role == "rollout":
+            raw_url = self.database_url.get_secret_value()
+            try:
+                parsed = urlsplit(raw_url)
+                port = parsed.port
+            except ValueError as exc:
+                raise ValueError("rollout database URL is invalid") from exc
+            password = parsed.password or ""
+            expected = (
+                "postgresql+psycopg://home_agent_rollout:"
+                f"{password}@postgres:5432/home_agent"
+            )
+            if (
+                parsed.scheme != "postgresql+psycopg"
+                or parsed.username != "home_agent_rollout"
+                or parsed.hostname != "postgres"
+                or port != 5432
+                or parsed.path != "/home_agent"
+                or parsed.query
+                or parsed.fragment
+                or not re.fullmatch(r"[0-9a-f]{64}", password)
+                or raw_url != expected
+            ):
+                raise ValueError(
+                    "rollout database URL must name only the isolated rollout role"
+                )
         all_secrets = [
             value
             for value in (

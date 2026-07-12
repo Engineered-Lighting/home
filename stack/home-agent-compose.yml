@@ -161,6 +161,8 @@ services:
         target: postgres_worker_password
       - source: postgres_erasure_password_provision
         target: postgres_erasure_password
+      - source: postgres_rollout_password_provision
+        target: postgres_rollout_password
       - source: postgres_backup_password_provision
         target: postgres_backup_password
     volumes:
@@ -233,6 +235,10 @@ services:
         source: "${HOME_AGENT_ERASURE_LEDGER_ROOT:?set independent encrypted ledger directory}"
         target: /erasure-ledger
         read_only: true
+      - type: bind
+        source: /dev/null
+        target: /erasure-ledger/ledger.jsonl
+        read_only: true
     networks: [postgres-net, api-net]
     depends_on:
       grant-runtime: {condition: service_completed_successfully}
@@ -266,6 +272,10 @@ services:
       - type: bind
         source: "${HOME_AGENT_ERASURE_LEDGER_ROOT}"
         target: /erasure-ledger
+        read_only: true
+      - type: bind
+        source: /dev/null
+        target: /erasure-ledger/ledger.jsonl
         read_only: true
     networks: [postgres-net, ingest-net]
     depends_on:
@@ -347,6 +357,38 @@ services:
       grant-runtime: {condition: service_completed_successfully}
     healthcheck: {disable: true}
 
+  rollout-authorize:
+    <<: *core-service
+    profiles: [operator]
+    restart: "no"
+    command: ["authorize-shadow"]
+    stdin_open: true
+    environment:
+      <<: *core-environment
+      HOME_AGENT_ROLE: rollout
+    secrets:
+      - source: database_url_rollout_rollout_authorize
+        target: database_url
+    volumes:
+      - type: bind
+        source: "${HOME_AGENT_DATA_ROOT}/resource-monitor"
+        target: /storage-monitor/durable
+        read_only: true
+      - type: bind
+        source: "${HOME_AGENT_ERASURE_LEDGER_ROOT}"
+        target: /erasure-ledger
+        read_only: true
+      - type: bind
+        source: /dev/null
+        target: /erasure-ledger/ledger.jsonl
+        read_only: true
+    networks: [postgres-net]
+    depends_on:
+      grant-runtime: {condition: service_completed_successfully}
+    healthcheck: {disable: true}
+    logging:
+      driver: none
+
   edge-ingress:
     image: "${HOME_AGENT_NGINX_IMAGE:-nginxinc/nginx-unprivileged:1.29-alpine}"
     restart: unless-stopped
@@ -408,7 +450,13 @@ services:
         target: /sessions
     ports:
       - "${HOME_AGENT_BFF_BIND_ADDR:-127.0.0.1}:${HOME_AGENT_BFF_PORT:-8097}:8097"
-    networks: [api-net, bff-public]
+    networks:
+      api-net: {}
+      bff-public:
+        # This fixed source address is the only container address admitted to
+        # the host's local Tailscale HA OAuth listener. Keep it outside the
+        # internal API network so OAuth egress cannot widen Core reachability.
+        ipv4_address: "${HOME_AGENT_BFF_EGRESS_IP:-172.22.0.10}"
     depends_on:
       core-api: {condition: service_healthy}
     mem_limit: 256m
@@ -463,6 +511,7 @@ secrets:
   postgres_ingest_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_ingest_password"}
   postgres_worker_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_worker_password"}
   postgres_erasure_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_erasure_password"}
+  postgres_rollout_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_rollout_password"}
   postgres_backup_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_backup_password"}
   postgres_backup_password_backup_gate: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/backup-gate/postgres_backup_password"}
   postgres_owner_password_grant: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/grant-runtime/postgres_owner_password"}
@@ -482,6 +531,7 @@ secrets:
   erasure_ledger_key_ledger_init: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/ledger-init/erasure_ledger_key"}
   database_url_erasure_restore_replay: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/restore-replay/database_url"}
   erasure_ledger_key_restore_replay: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/restore-replay/erasure_ledger_key"}
+  database_url_rollout_rollout_authorize: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/rollout-authorize/database_url"}
   service_token_bff: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/bff/service_token"}
   session_encryption_key_bff: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/bff/session_encryption_key"}
   operator_token_identity_migration: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/identity-migration/operator_token"}
@@ -503,7 +553,19 @@ networks:
           gateway: "${HOME_AGENT_API_GATEWAY:-172.23.0.1}"
   ingest-net: {internal: true}
   edge-public: {}
-  bff-public: {}
+  bff-public:
+    name: home-agent_bff-public
+    internal: false
+    enable_ipv4: true
+    enable_ipv6: false
+    driver_opts:
+      # A stable interface name makes the host firewall rule survive Docker
+      # network/container recreation without admitting the whole Docker pool.
+      com.docker.network.bridge.name: "${HOME_AGENT_BFF_EGRESS_BRIDGE:-ha-bff-egress0}"
+    ipam:
+      config:
+        - subnet: "${HOME_AGENT_BFF_EGRESS_SUBNET:-172.22.0.0/24}"
+          gateway: "${HOME_AGENT_BFF_EGRESS_GATEWAY:-172.22.0.1}"
   backup-egress: {}
 
 volumes:

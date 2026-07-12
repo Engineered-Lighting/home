@@ -34,6 +34,46 @@ def test_no_raw_payload_or_plaintext_locator_in_postgres_schema() -> None:
     } <= transaction_columns
 
 
+def test_rollout_authorization_is_content_free_and_transition_unique() -> None:
+    columns = set(schema.rollout_authorizations.c.keys())
+    assert columns == {
+        "authorization_id",
+        "operator_request_id",
+        "from_mode",
+        "to_mode",
+        "rule_version",
+        "policy_version",
+        "policy_digest",
+        "input_digest",
+        "readiness_evaluated_at",
+        "authorized_at",
+    }
+    assert not columns & {
+        "person_id",
+        "principal_id",
+        "entity_id",
+        "latitude",
+        "longitude",
+        "payload",
+        "name",
+    }
+    unique_names = {
+        constraint.name
+        for constraint in schema.rollout_authorizations.constraints
+        if getattr(constraint, "name", None)
+    }
+    assert any(name.endswith("rollout_transition_once") for name in unique_names)
+    transition = next(
+        constraint
+        for constraint in schema.rollout_authorizations.constraints
+        if isinstance(constraint, CheckConstraint)
+        and constraint.name.endswith("rollout_forward_transition")
+    )
+    expression = str(transition.sqltext)
+    assert "record_only" in expression and "shadow" in expression
+    assert "canary" not in expression
+
+
 def test_descriptor_lifecycle_is_typed_and_dependents_are_version_linked() -> None:
     assert "source_fact_version_id" in schema.initiatives.c
     routes = {

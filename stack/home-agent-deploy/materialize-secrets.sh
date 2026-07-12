@@ -58,6 +58,8 @@ for name in \
 do
   install_secret provision-roles "$name" "$name" 0 0
 done
+install_secret provision-roles rollout/postgres_rollout_password \
+  postgres_rollout_password 0 0
 install_secret grant-runtime postgres_owner_password postgres_owner_password 0 0
 
 # pgBackRest authenticates as a dedicated non-superuser over the shared Unix
@@ -81,6 +83,7 @@ install_secret core-worker erasure_ledger_key erasure_ledger_key 10001 10001
 install_secret ledger-init erasure_ledger_key erasure_ledger_key 10001 10001
 install_secret restore-replay database_url_erasure database_url 10001 10001
 install_secret restore-replay erasure_ledger_key erasure_ledger_key 10001 10001
+install_secret rollout-authorize rollout/database_url_rollout database_url 10001 10001
 
 # The official Node Alpine image's node account is fixed at UID/GID 1000.
 install_secret bff service_token service_token 1000 1000

@@ -909,3 +909,33 @@ policy_digests = Table(
     Column("activated_at", DateTime(timezone=True), nullable=False, server_default=NOW),
     schema="operations",
 )
+
+
+rollout_authorizations = Table(
+    "rollout_authorizations",
+    metadata,
+    Column("authorization_id", UUID_PK, primary_key=True),
+    Column("operator_request_id", UUID_PK, nullable=False, unique=True),
+    Column("from_mode", String(32), nullable=False),
+    Column("to_mode", String(32), nullable=False),
+    Column("rule_version", String(128), nullable=False),
+    Column("policy_version", String(128), nullable=False),
+    Column("policy_digest", String(64), nullable=False),
+    Column("input_digest", String(64), nullable=False),
+    Column("readiness_evaluated_at", DateTime(timezone=True), nullable=False),
+    Column("authorized_at", DateTime(timezone=True), nullable=False, server_default=NOW),
+    UniqueConstraint("from_mode", "to_mode", name="rollout_transition_once"),
+    CheckConstraint(
+        "from_mode = 'record_only' AND to_mode = 'shadow'",
+        name="rollout_forward_transition",
+    ),
+    CheckConstraint(
+        "policy_digest ~ '^[0-9a-f]{64}$'",
+        name="rollout_policy_digest",
+    ),
+    CheckConstraint(
+        "input_digest ~ '^[0-9a-f]{64}$'",
+        name="rollout_input_digest",
+    ),
+    schema="operations",
+)

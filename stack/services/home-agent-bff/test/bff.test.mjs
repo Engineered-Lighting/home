@@ -259,6 +259,7 @@ test("semantic route allowlist excludes generic proxying", () => {
   assert.equal(routeAllowed("GET", "/api/agent/v1/initiatives"), false);
   assert.equal(routeAllowed("POST", "/api/agent/v1/memory-transactions"), true);
   assert.equal(routeAllowed("POST", "/api/agent/v1/places"), false);
+  assert.equal(routeAllowed("POST", "/api/agent/v1/operator-rollout/authorizations/shadow"), false);
   assert.equal(routeAllowed("POST", "/api/agent/v1/memory-transactions/01900000-0000-7000-8000-000000000000/confirm"), true);
   assert.equal(routeAllowed("POST", `/api/agent/v1/facts/${factId}/correction-preview`), true);
   assert.equal(routeAllowed("POST", `/api/agent/v1/descriptor-corrections/${transactionId}/confirm`), true);
@@ -284,6 +285,7 @@ test("semantic route allowlist excludes generic proxying", () => {
   assert.equal(nativeRouteAllowed("POST", "/api/agent/native/v1/memory-transactions"), true);
   assert.equal(nativeRouteAllowed("POST", "/api/agent/native/v1/places"), false);
   assert.equal(nativeRouteAllowed("POST", "/api/agent/native/v1/relationships/parent-confirmations"), false);
+  assert.equal(nativeRouteAllowed("POST", "/api/agent/native/v1/operator-rollout/authorizations/shadow"), false);
   assert.equal(nativeRouteAllowed("POST", "/api/agent/native/v1/forget-preview"), false);
   assert.equal(nativeRouteAllowed("GET", "/api/agent/native/v1/erasure-requests/01900000-0000-7000-8000-000000000000"), false);
   assert.equal(nativeRouteAllowed("GET", "/api/agent/native/v1/memory-transactions/------------------------------------"), false);

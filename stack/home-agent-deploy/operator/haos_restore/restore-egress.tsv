@@ -1,0 +1,9 @@
+# Exact FQDN<TAB>protocol<TAB>port<TAB>purpose-code
+# Fail closed if Supervisor needs anything else; review before changing this file.
+auth.docker.io	tcp	443	docker-registry-auth
+ghcr.io	tcp	443	github-container-registry
+pkg-containers.githubusercontent.com	tcp	443	github-container-layers
+production.cloudflare.docker.com	tcp	443	docker-container-layers
+registry-1.docker.io	tcp	443	docker-container-registry
+version.home-assistant.io	tcp	443	haos-version-manifest
+time.cloudflare.com	udp	123	time-synchronization

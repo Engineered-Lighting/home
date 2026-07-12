@@ -11,11 +11,17 @@ from app.config import Settings
 from app.main import create_app
 from app.models import PrincipalBindingCreate
 from app.restore import RestoreGateStatus
+from app.rollout import RolloutAuthorizationStatus
 
 
 class CurrentRestoreGate:
     async def status(self, *, force: bool = False) -> RestoreGateStatus:
         return RestoreGateStatus(True, "current", 0, 0)
+
+
+class CurrentRolloutGate:
+    async def status(self, *, force: bool = False) -> RolloutAuthorizationStatus:
+        return RolloutAuthorizationStatus(True, "authorized")
 
 
 def settings_for(tmp_path) -> Settings:
@@ -39,6 +45,7 @@ def test_bff_service_credential_cannot_bootstrap_people(tmp_path) -> None:
         settings_for(tmp_path).model_copy(update={"rollout_mode": "record_only"})
     )
     app.state.restore_gate = CurrentRestoreGate()
+    app.state.rollout_gate = CurrentRolloutGate()
     headers = {
         "Authorization": "Bearer service-token-with-at-least-32-chars",
         "X-Authenticated-HA-User": "attacker-ha-user",
@@ -79,6 +86,7 @@ def test_principal_binding_requires_confirmation_artifact() -> None:
 def test_private_initiatives_require_native_channel_attestation(tmp_path) -> None:
     app = create_app(settings_for(tmp_path).model_copy(update={"rollout_mode": "canary"}))
     app.state.restore_gate = CurrentRestoreGate()
+    app.state.rollout_gate = CurrentRolloutGate()
     with TestClient(app) as client:
         response = client.get(
             "/v1/initiatives",
@@ -95,6 +103,7 @@ def test_private_initiatives_require_native_channel_attestation(tmp_path) -> Non
 def test_fixed_operator_capability_contract_requires_bootstrap(tmp_path) -> None:
     app = create_app(settings_for(tmp_path))
     app.state.restore_gate = CurrentRestoreGate()
+    app.state.rollout_gate = CurrentRolloutGate()
     operator_headers = {
         "Authorization": "Bearer operator-token-with-at-least-32-chars",
     }
@@ -177,6 +186,7 @@ def test_rollout_policy_defaults_record_only_and_has_no_mutation_route(tmp_path)
         settings_for(tmp_path).model_copy(update={"rollout_mode": "record_only"})
     )
     app.state.restore_gate = CurrentRestoreGate()
+    app.state.rollout_gate = CurrentRolloutGate()
     headers = {
         "Authorization": "Bearer operator-token-with-at-least-32-chars",
         "X-Home-Agent-Bootstrap": "bootstrap-token-with-at-least-32-chars",
@@ -203,6 +213,7 @@ def test_phase2_readiness_is_operator_only_and_requires_paired_ids(tmp_path) -> 
         settings_for(tmp_path).model_copy(update={"rollout_mode": "record_only"})
     )
     app.state.restore_gate = CurrentRestoreGate()
+    app.state.rollout_gate = CurrentRolloutGate()
     operator_headers = {
         "Authorization": "Bearer operator-token-with-at-least-32-chars",
     }
@@ -224,6 +235,27 @@ def test_phase2_readiness_is_operator_only_and_requires_paired_ids(tmp_path) -> 
     assert unpaired.json()["error"]["message"] == (
         "controlled principal and journey IDs must be paired"
     )
+
+
+def test_shadow_authorization_has_no_online_api_route(tmp_path) -> None:
+    app = create_app(
+        settings_for(tmp_path).model_copy(update={"rollout_mode": "record_only"})
+    )
+    app.state.restore_gate = CurrentRestoreGate()
+    app.state.rollout_gate = CurrentRolloutGate()
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/operator-rollout/authorizations/shadow",
+            headers={
+                "Authorization": "Bearer operator-token-with-at-least-32-chars",
+                "X-Home-Agent-Bootstrap": (
+                    "bootstrap-token-with-at-least-32-chars"
+                ),
+            },
+            json={},
+        )
+
+    assert response.status_code == 404
 
 
 def test_credentials_are_role_scoped_and_bootstrap_is_optional(tmp_path) -> None:

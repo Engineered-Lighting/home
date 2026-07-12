@@ -1,0 +1,16 @@
+# Exact FQDN<TAB>protocol<TAB>port<TAB>purpose-code
+# This broader policy is used only before any production backup is restored.
+api.github.com	tcp	443	addon-repository-api
+auth.docker.io	tcp	443	docker-registry-auth
+checkonline.home-assistant.io	tcp	443	haos-connectivity-check
+ghcr.io	tcp	443	github-container-registry
+github.com	tcp	443	addon-repository-git
+objects.githubusercontent.com	tcp	443	github-object-storage
+pkg-containers.githubusercontent.com	tcp	443	github-container-layers
+production.cloudflare.docker.com	tcp	443	docker-container-layers
+raw.githubusercontent.com	tcp	443	addon-repository-metadata
+registry-1.docker.io	tcp	443	docker-container-registry
+release-assets.githubusercontent.com	tcp	443	github-release-assets
+supervisor.home-assistant.io	tcp	443	supervisor-metadata
+version.home-assistant.io	tcp	443	haos-version-manifest
+time.cloudflare.com	udp	123	time-synchronization

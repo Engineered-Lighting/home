@@ -1,0 +1,14 @@
+[Unit]
+Description=Reconcile Home Agent BFF to local HA OAuth boundary
+After=docker.service tailscaled.service ufw.service
+Requires=docker.service tailscaled.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/bin/python3 -I /usr/local/libexec/home-agent-bff-egress/firewall_contract.py apply --env /srv/home-agent/config/home-agent.env
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict

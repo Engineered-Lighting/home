@@ -273,6 +273,114 @@ class RepositoryBoundaryTests(unittest.TestCase):
         grants = read("stack/home-agent-deploy/apply-grants.sh")
         self.assertIn("identity.privacy_directives", grants)
 
+    def test_rollout_receipt_grants_are_least_privilege(self) -> None:
+        grants = read("stack/home-agent-deploy/apply-grants.sh")
+        self.assertIn(
+            "GRANT SELECT ON TABLE operations.rollout_authorizations TO home_agent_ingest",
+            grants,
+        )
+        self.assertNotIn(
+            "ingest.envelopes, ingest.quarantine TO home_agent_rollout",
+            grants,
+        )
+        self.assertIn(
+            "REVOKE UPDATE, DELETE, TRUNCATE ON TABLE ingest.envelopes FROM home_agent_ingest",
+            grants,
+        )
+        self.assertIn(
+            "REVOKE INSERT ON TABLE ingest.envelopes FROM home_agent_ingest",
+            grants,
+        )
+        self.assertIn(
+            ") ON ingest.envelopes TO home_agent_ingest",
+            grants,
+        )
+        envelope_insert_columns = grants.split("GRANT INSERT (", 1)[1].split(
+            ") ON ingest.envelopes", 1
+        )[0]
+        self.assertNotIn("ingested_at", envelope_insert_columns)
+        self.assertIn(
+            "REVOKE INSERT, UPDATE, DELETE ON TABLE operations.rollout_authorizations",
+            grants,
+        )
+        self.assertIn(
+            "GRANT SELECT ON TABLE operations.rollout_authorizations TO home_agent_api",
+            grants,
+        )
+        self.assertNotIn(
+            "GRANT SELECT, INSERT ON TABLE operations.rollout_authorizations TO home_agent_api",
+            grants,
+        )
+        self.assertIn(
+            "GRANT SELECT, INSERT ON TABLE operations.rollout_authorizations\n"
+            "  TO home_agent_rollout",
+            grants,
+        )
+        self.assertNotIn(
+            "operations.rollout_authorizations TO home_agent_api,",
+            grants,
+        )
+        compose = read("stack/home-agent-compose.yml")
+        rollout = re.search(
+            r"(?ms)^  rollout-authorize:\n(.*?)(?=^  [a-zA-Z0-9_-]+:|\Z)",
+            compose,
+        )
+        self.assertIsNotNone(rollout)
+        rollout_block = rollout.group(1)
+        self.assertIn("database_url_rollout_rollout_authorize", rollout_block)
+        self.assertIn("networks: [postgres-net]", rollout_block)
+        self.assertIn("driver: none", rollout_block)
+        self.assertNotIn("api-net", rollout_block)
+        self.assertIn('source: "${HOME_AGENT_ERASURE_LEDGER_ROOT}"', rollout_block)
+        self.assertIn("target: /erasure-ledger", rollout_block)
+        self.assertIn("source: /dev/null", rollout_block)
+        self.assertIn("target: /erasure-ledger/ledger.jsonl", rollout_block)
+        for forbidden in (
+            "operator_token",
+            "bootstrap_token",
+            "knowledge_encryption_key",
+            "runtime_spool_key",
+            "erasure_ledger_key",
+        ):
+            self.assertNotIn(forbidden, rollout_block)
+        self.assertIn(
+            "HOME_AGENT_EXPECTED_DB_REVISION=0004_rollout_authorizations",
+            read("stack/home-agent.env.example"),
+        )
+        migration = read(
+            "stack/services/home-agent-core/alembic/versions/0004_rollout_authorizations.py"
+        )
+        self.assertIn("guard_envelope_immutability", migration)
+        self.assertIn("BEFORE UPDATE OR DELETE ON ingest.envelopes", migration)
+        self.assertIn("home_agent_erasure", migration)
+        self.assertIn("WITH (security_barrier = true)", migration)
+        self.assertIn("OFFSET 0", migration)
+        self.assertIn("operations.phase2_rollout_evidence", migration)
+        self.assertIn(
+            "GRANT SELECT ON TABLE operations.phase2_rollout_evidence",
+            grants,
+        )
+        additive = read("stack/home-agent-deploy/add-rollout-role-secrets.sh")
+        self.assertIn("openssl rand -hex 32", additive)
+        self.assertIn('target="$master_root/rollout"', additive)
+        self.assertIn("mv -T --no-clobber", additive)
+        self.assertIn("refusing to overwrite", additive)
+        self.assertNotIn("echo \"$password\"", additive)
+        materializer = read("stack/home-agent-deploy/materialize-secrets.sh")
+        self.assertIn("rollout/postgres_rollout_password", materializer)
+        self.assertIn("rollout/database_url_rollout", materializer)
+        roles = read("stack/home-agent-deploy/provision-roles.sh")
+        self.assertIn("CREATE ROLE home_agent_rollout LOGIN", roles)
+        self.assertIn("NOINHERIT NOBYPASSRLS CONNECTION LIMIT 1", roles)
+        self.assertIn("FROM home_agent_backup, home_agent_rollout", roles)
+        preflight = read("stack/home-agent-deploy/preflight.sh")
+        self.assertIn("rollout password is not lowercase hex", preflight)
+        self.assertIn(
+            "postgresql+psycopg://home_agent_rollout:${rollout_password}"
+            "@postgres:5432/home_agent",
+            preflight,
+        )
+
     def test_backup_gate_cannot_impersonate_database_owner(self) -> None:
         compose = read("stack/home-agent-compose.yml")
 
@@ -352,6 +460,8 @@ class RepositoryBoundaryTests(unittest.TestCase):
             self.assertIn("target: /erasure-ledger", block)
             self.assertIn("read_only: true", block)
             self.assertNotIn("source: \"${HOME_AGENT_ERASURE_LEDGER_ROOT}/ledger.head.json\"", block)
+            self.assertIn("source: /dev/null", block)
+            self.assertIn("target: /erasure-ledger/ledger.jsonl", block)
         self.assertNotIn("read_only: true", service_block("core-worker").split("target: /erasure-ledger", 1)[-1][:80])
         self.assertIn("network_mode: none", service_block("ledger-init"))
         self.assertIn("operator_token_identity_migration", service_block("identity-migration"))

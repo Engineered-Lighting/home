@@ -184,7 +184,8 @@ REVOKE ALL PRIVILEGES ON TABLE
   operations.reviewed_identity_migration_erasure_impacts
 FROM PUBLIC, home_agent_api, home_agent_binding_operator, home_agent_ingest,
   home_agent_worker, home_agent_erasure, home_agent_rollout, home_agent_backup,
-  home_agent_identity_migration, home_agent_identity_kernel;
+  home_agent_identity_migration, home_agent_identity_kernel,
+  home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
 
 -- Revision 0007 provisions an expired-by-default dormant identity-migration
 -- login before any future database kernel exists. It receives no schema,
@@ -194,29 +195,77 @@ FROM PUBLIC, home_agent_api, home_agent_binding_operator, home_agent_ingest,
 REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public, ingest, identity,
   knowledge, engagement, privacy, operations
   FROM home_agent_identity_migration, home_agent_identity_kernel;
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public, ingest, identity,
+  knowledge, engagement, privacy, operations
+  FROM home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
 REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public, ingest, identity,
   knowledge, engagement, privacy, operations
-  FROM home_agent_identity_migration, home_agent_identity_kernel;
+  FROM home_agent_identity_migration, home_agent_identity_kernel,
+  home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
 REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA ingest, identity, knowledge,
   engagement, privacy, operations
-  FROM home_agent_identity_migration, home_agent_identity_kernel;
+  FROM home_agent_identity_migration, home_agent_identity_kernel,
+  home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
+DO $type_acl$
+DECLARE
+  type_entry record;
+BEGIN
+  FOR type_entry IN
+    SELECT type_namespace.nspname, candidate_type.typname
+      FROM pg_catalog.pg_type AS candidate_type
+      JOIN pg_catalog.pg_namespace AS type_namespace
+        ON type_namespace.oid = candidate_type.typnamespace
+     WHERE type_namespace.nspname IN (
+       'public','ingest','identity','knowledge','engagement','privacy','operations'
+     )
+       AND candidate_type.typisdefined
+       AND candidate_type.typrelid = 0
+       AND candidate_type.typelem = 0
+  LOOP
+    EXECUTE pg_catalog.format(
+      'REVOKE USAGE ON TYPE %I.%I FROM home_agent_identity_finalizer, '
+      'home_agent_identity_finalizer_kernel',
+      type_entry.nspname,
+      type_entry.typname
+    );
+  END LOOP;
+END
+$type_acl$;
 REVOKE USAGE, CREATE ON SCHEMA public, ingest, identity, knowledge, engagement,
   privacy, operations
-  FROM home_agent_identity_migration, home_agent_identity_kernel;
+  FROM home_agent_identity_migration, home_agent_identity_kernel,
+  home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
+ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA public, ingest,
+  identity, knowledge, engagement, privacy, operations
+  REVOKE ALL PRIVILEGES ON TABLES
+  FROM home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
+ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA public, ingest,
+  identity, knowledge, engagement, privacy, operations
+  REVOKE ALL PRIVILEGES ON SEQUENCES
+  FROM home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
+ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA ingest, identity,
+  knowledge, engagement, privacy, operations
+  REVOKE ALL PRIVILEGES ON FUNCTIONS
+  FROM home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
+ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA public, ingest,
+  identity, knowledge, engagement, privacy, operations
+  REVOKE ALL PRIVILEGES ON TYPES
+  FROM home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
 REVOKE UPDATE (expires_at) ON TABLE
   operations.reviewed_identity_migration_runs
-  FROM home_agent_identity_migration, home_agent_identity_kernel;
+  FROM home_agent_identity_migration, home_agent_identity_kernel,
+  home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
 REVOKE SELECT (
   authorization_id, from_mode, to_mode, rule_version, policy_version,
   policy_digest, authorized_at
 ) ON TABLE operations.rollout_authorizations
-  FROM home_agent_identity_migration, home_agent_identity_kernel;
-
+  FROM home_agent_identity_migration, home_agent_identity_kernel,
+  home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
 -- Revision 0008 is manifest-only. Reapply its two callable capabilities and
 -- non-callable erasure replay-guard trigger only when the exact three-function
 -- owner-kernel contract exists; schema 0006/0007 therefore leaves both roles
--- inert. There is deliberately no finalizer, semantic projection, or generic
--- function grant.
+-- inert. There is deliberately no finalization function, semantic projection,
+-- or generic function grant.
 --
 -- Quarantine each exact signature in its own committed statement before
 -- validating the set. A partial/tampered 0008 therefore loses PUBLIC and
@@ -231,7 +280,8 @@ BEGIN
       'FROM PUBLIC, home_agent_api, home_agent_binding_operator, '
       'home_agent_ingest, home_agent_worker, home_agent_erasure, '
       'home_agent_rollout, home_agent_backup, home_agent_identity_kernel, '
-      'home_agent_identity_migration';
+      'home_agent_identity_migration, home_agent_identity_finalizer, '
+      'home_agent_identity_finalizer_kernel';
   END IF;
   IF to_regprocedure(
        'operations.register_reviewed_identity_migration(jsonb)'
@@ -241,7 +291,8 @@ BEGIN
       'FROM PUBLIC, home_agent_api, home_agent_binding_operator, '
       'home_agent_ingest, home_agent_worker, home_agent_erasure, '
       'home_agent_rollout, home_agent_backup, home_agent_identity_kernel, '
-      'home_agent_identity_migration';
+      'home_agent_identity_migration, home_agent_identity_finalizer, '
+      'home_agent_identity_finalizer_kernel';
   END IF;
   IF to_regprocedure(
        'operations.bump_reviewed_identity_migration_replay_guard()'
@@ -251,7 +302,8 @@ BEGIN
       'FROM PUBLIC, home_agent_api, home_agent_binding_operator, '
       'home_agent_ingest, home_agent_worker, home_agent_erasure, '
       'home_agent_rollout, home_agent_backup, home_agent_identity_kernel, '
-      'home_agent_identity_migration';
+      'home_agent_identity_migration, home_agent_identity_finalizer, '
+      'home_agent_identity_finalizer_kernel';
   END IF;
 END
 $$;
@@ -500,7 +552,8 @@ BEGIN
       'FROM PUBLIC, home_agent_api, home_agent_binding_operator, '
       'home_agent_ingest, home_agent_worker, home_agent_erasure, '
       'home_agent_rollout, home_agent_backup, home_agent_identity_kernel, '
-      'home_agent_identity_migration';
+      'home_agent_identity_migration, home_agent_identity_finalizer, '
+      'home_agent_identity_finalizer_kernel';
     EXECUTE 'GRANT USAGE ON SCHEMA operations '
       'TO home_agent_identity_migration, home_agent_identity_kernel';
     EXECUTE 'GRANT SELECT, INSERT ON TABLE '

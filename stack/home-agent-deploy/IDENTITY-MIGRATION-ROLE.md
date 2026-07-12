@@ -20,12 +20,15 @@ build and policy values, and domain-separated keyed commitments for the source,
 decision, projection, and review roots. Its output omits raw legacy rows and
 cannot connect to PostgreSQL or the network.
 
-That component does **not** enable semantic finalization. A later migration
-must add a distinct expired-by-default finalizer login/kernel, row-addressable
-erasure lineage, and one atomic `SERIALIZABLE` projection function. Until those
-pieces and their PostgreSQL 17 tests exist, the 0008 capability must continue
-to report `finalization_enabled=false`; the sequential legacy HTTP apply path
-is not an authority or a substitute for the finalizer.
+That component does **not** enable semantic finalization. The deployment now
+contains only the dormant, expired-by-default finalizer login/kernel foundation
+described in `IDENTITY-FINALIZER-ROLE.md`. Revision 0009 adds owner-only,
+row-addressable receipt-to-target and affected-person lineage, but no writer.
+A later migration must integrate that lineage with governed erasure and add one
+atomic `SERIALIZABLE` projection function. Until those pieces and their
+PostgreSQL 17 tests exist, the 0008 capability must continue to report
+`finalization_enabled=false`; the sequential legacy HTTP apply path is not an
+authority or a substitute for the finalizer.
 
 Provisioning always sets the migration login's `VALID UNTIL` to a timestamp in
 the past. The persisted URL therefore cannot connect in the deployment's

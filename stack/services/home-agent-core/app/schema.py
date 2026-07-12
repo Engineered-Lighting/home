@@ -1579,6 +1579,15 @@ reviewed_identity_migration_item_receipts = Table(
     UniqueConstraint("run_id", "receipt_id", name="identity_receipt_id"),
     UniqueConstraint(
         "run_id",
+        "receipt_id",
+        "decision_id",
+        "decision_kind",
+        "projection_table_kind",
+        "projection_ref_commitment",
+        name="lineage_identity",
+    ),
+    UniqueConstraint(
+        "run_id",
         "decision_kind",
         "projection_ref_commitment",
         name="identity_receipt_projection_ref",
@@ -1614,6 +1623,101 @@ reviewed_identity_migration_item_receipts = Table(
         "AND projection_table_kind = 'identity.legacy_relationship_candidates')",
         name="projection_table_for_kind",
     ),
+    schema="operations",
+)
+
+# Dormant Phase 3 finalizer-lineage foundation. These normalized rows contain
+# identifiers and keyed commitments only: no names, aliases, source refs,
+# external identifiers, utterances, or relationship assertions. Revision 0009
+# installs no writer and grants the finalizer roles no table privileges.
+reviewed_identity_migration_projection_lineage = Table(
+    "reviewed_identity_migration_projection_lineage",
+    metadata,
+    Column("lineage_id", UUID_PK, primary_key=True),
+    Column("run_id", UUID_PK, nullable=False),
+    Column("receipt_id", UUID_PK, nullable=False),
+    Column("decision_id", UUID_PK, nullable=False),
+    Column("decision_kind", String(48), nullable=False),
+    Column("projection_table_kind", String(64), nullable=False),
+    Column("projection_id", UUID_PK, nullable=False),
+    Column("projection_ref_commitment", String(64), nullable=False),
+    Column("lineage_commitment", String(64), nullable=False, unique=True),
+    Column(
+        "linked_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("transaction_timestamp()"),
+    ),
+    ForeignKeyConstraint(
+        [
+            "run_id",
+            "receipt_id",
+            "decision_id",
+            "decision_kind",
+            "projection_table_kind",
+            "projection_ref_commitment",
+        ],
+        [
+            "operations.reviewed_identity_migration_item_receipts.run_id",
+            "operations.reviewed_identity_migration_item_receipts.receipt_id",
+            "operations.reviewed_identity_migration_item_receipts.decision_id",
+            "operations.reviewed_identity_migration_item_receipts.decision_kind",
+            "operations.reviewed_identity_migration_item_receipts.projection_table_kind",
+            "operations.reviewed_identity_migration_item_receipts.projection_ref_commitment",
+        ],
+        name="fk_identity_projection_lineage_exact_receipt",
+    ),
+    UniqueConstraint(
+        "run_id", "receipt_id", name="identity_projection_lineage_receipt"
+    ),
+    UniqueConstraint(
+        "run_id", "lineage_id", name="identity_projection_lineage_identity"
+    ),
+    CheckConstraint(_uuidv7_shape("lineage_id"), name="uuidv7_id"),
+    CheckConstraint(
+        _hex64("projection_ref_commitment", "lineage_commitment"),
+        name="commitment_shape",
+    ),
+    CheckConstraint(
+        "(decision_kind IN ('person','person_status') "
+        "AND projection_table_kind = 'identity.people') "
+        "OR (decision_kind = 'alias' "
+        "AND projection_table_kind = 'identity.aliases') "
+        "OR (decision_kind = 'recognition_binding' "
+        "AND projection_table_kind = 'identity.external_recognition_bindings') "
+        "OR (decision_kind = 'privacy_directive' "
+        "AND projection_table_kind = 'identity.privacy_directives') "
+        "OR (decision_kind = 'legacy_role_candidate' "
+        "AND projection_table_kind = 'identity.legacy_role_labels') "
+        "OR (decision_kind = 'legacy_relationship_candidate' "
+        "AND projection_table_kind = 'identity.legacy_relationship_candidates')",
+        name="projection_table_for_kind",
+    ),
+    schema="operations",
+)
+
+reviewed_identity_migration_projection_subjects = Table(
+    "reviewed_identity_migration_projection_subjects",
+    metadata,
+    Column(
+        "lineage_id",
+        UUID_PK,
+        ForeignKey(
+            "operations.reviewed_identity_migration_projection_lineage.lineage_id"
+        ),
+        primary_key=True,
+    ),
+    Column(
+        "person_id",
+        UUID_PK,
+        ForeignKey("identity.people.person_id"),
+        primary_key=True,
+    ),
+    Column("subject_role", String(16), primary_key=True),
+    UniqueConstraint(
+        "lineage_id", "subject_role", name="identity_projection_subject_role"
+    ),
+    CheckConstraint("subject_role IN ('primary','from','to')", name="subject_role"),
     schema="operations",
 )
 

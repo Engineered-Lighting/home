@@ -317,6 +317,41 @@ class ReviewedIdentityPayloadTests(unittest.TestCase):
         with self.assertRaisesRegex(verifier.VerificationError, "control"):
             verifier.parse_canonical_json(b'{"a":"\\u0000"}')
 
+    def test_cross_runtime_golden_commitment_and_ed25519_vectors(self) -> None:
+        value = {
+            "run_id": RUN_ID,
+            "source_item_id": SOURCE_ID,
+            "source_table_kind": "identities",
+            "row_key": {"uuid": PERSON_ID},
+        }
+        self.assertEqual(
+            verifier.keyed_commitment(
+                bytes(range(32)), "identity-source-row-key-v1", value
+            ),
+            "2c2f66c469434c8a6cfb40e171056bbe441528267b95496c80d3248fcde3f48c",
+        )
+        private = Ed25519PrivateKey.from_private_bytes(bytes(range(32, 64)))
+        public = private.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        self.assertEqual(
+            public.hex(),
+            "29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7",
+        )
+        self.assertEqual(
+            hashlib.sha256(public).hexdigest(),
+            "24f6ed6acbfe1009c030d7ca567c33ca4830911498236b5561a6c82abec5de28",
+        )
+        signed = canonical(
+            {"domain": "reviewed-identity-migration-review-v1", "value": "golden"}
+        )
+        self.assertEqual(
+            private.sign(signed).hex(),
+            "0be916da46dc025a1efcb3f84da336cba957da15128e6aaadb441cc9afcb85d"
+            "fab74ecb1d79d65a0c3c264631200563b4da25e686584295c197ff4f0b185df0c",
+        )
+
     def test_source_drift_commitment_fails_without_echoing_content(self) -> None:
         raw, sources = self.fixture.build()
         sources[0]["allowed_projection"]["display_name"] = "Changed"

@@ -159,6 +159,8 @@ services:
         target: postgres_binding_operator_password
       - source: postgres_identity_migration_password_provision
         target: postgres_identity_migration_password
+      - source: postgres_identity_finalizer_password_provision
+        target: postgres_identity_finalizer_password
       - source: postgres_ingest_password_provision
         target: postgres_ingest_password
       - source: postgres_worker_password_provision
@@ -513,6 +515,35 @@ services:
     logging:
       driver: none
 
+  identity-finalizer:
+    image: engineered-lighting/home-agent-core:local
+    profiles: [operator]
+    # This deployment surface is deliberately non-callable. Provisioning
+    # always expires its login, no finalization function exists, and this
+    # entrypoint exits before opening the persisted database URL.
+    restart: "no"
+    user: "10001:10001"
+    read_only: true
+    init: true
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["echo 'identity finalizer capability is not implemented' >&2; exit 78"]
+    environment:
+      HOME_AGENT_FINALIZER_DATABASE_URL_FILE: /run/secrets/database_url
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    secrets:
+      - source: database_url_identity_finalizer_identity_finalizer
+        target: database_url
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    networks: [postgres-net]
+    depends_on:
+      grant-runtime: {condition: service_completed_successfully}
+    mem_limit: 128m
+    logging:
+      driver: none
+
 secrets:
   # Docker Compose file-backed secrets preserve source ownership. Each source
   # below is therefore a distinct per-service copy materialized by preflight.
@@ -522,6 +553,7 @@ secrets:
   postgres_api_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_api_password"}
   postgres_binding_operator_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_binding_operator_password"}
   postgres_identity_migration_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_identity_migration_password"}
+  postgres_identity_finalizer_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_identity_finalizer_password"}
   postgres_ingest_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_ingest_password"}
   postgres_worker_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_worker_password"}
   postgres_erasure_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_erasure_password"}
@@ -551,6 +583,7 @@ secrets:
   session_encryption_key_bff: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/bff/session_encryption_key"}
   native_installations_bff: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/bff/native_installations"}
   database_url_identity_migration_identity_migration: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/identity-migration/database_url"}
+  database_url_identity_finalizer_identity_finalizer: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/identity-finalizer/database_url"}
   tls_server_crt: {file: "${HOME_AGENT_TLS_DIR:?mount server.crt server.key and client-ca.crt}/server.crt"}
   tls_server_key: {file: "${HOME_AGENT_TLS_DIR}/server.key"}
   tls_client_ca: {file: "${HOME_AGENT_TLS_DIR}/client-ca.crt"}

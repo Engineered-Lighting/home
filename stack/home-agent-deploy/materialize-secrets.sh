@@ -43,16 +43,17 @@ install_secret() {
   mv -f "$temporary_path" "$target_path"
 }
 
-# Identity migration previously received two bearer-token copies. Publish its
-# replacement runtime directory as one exact unit so neither token can survive
-# a rematerialization. Only ordinary files are accepted in the retired derived
-# directory; any symlink or nested entry fails closed before a move or delete.
+# Dormant operator roles receive exact one-file runtime directories. Identity
+# migration previously received two bearer-token copies, so atomic replacement
+# also ensures those files cannot survive rematerialization. Only ordinary
+# files are accepted in a retired directory; symlinks and nesting fail closed.
 install_exact_single_secret_service() {
   service="$1"
   source_name="$2"
   target_name="$3"
   owner_uid="$4"
   owner_gid="$5"
+  service_label="$6"
   source_path="$master_root/$source_name"
   service_dir="$runtime_root/$service"
   temporary_dir="$runtime_root/.$service.new.$$"
@@ -64,7 +65,7 @@ install_exact_single_secret_service() {
   }
   [ ! -e "$temporary_dir" ] && [ ! -L "$temporary_dir" ] &&
     [ ! -e "$previous_dir" ] && [ ! -L "$previous_dir" ] || {
-    echo "identity migration runtime publication path already exists" >&2
+    echo "$service_label runtime publication path already exists" >&2
     exit 73
   }
   install -d -m 0700 -o root -g root "$temporary_dir"
@@ -79,20 +80,20 @@ install_exact_single_secret_service() {
     [ -d "$service_dir" ] && [ ! -L "$service_dir" ] || {
       rm -f "$temporary_dir/$target_name"
       rmdir "$temporary_dir"
-      echo "identity migration runtime path is not a safe directory" >&2
+      echo "$service_label runtime path is not a safe directory" >&2
       exit 78
     }
     unsafe_entry="$(find "$service_dir" -mindepth 1 -maxdepth 1 ! -type f -print -quit)"
     [ -z "$unsafe_entry" ] || {
       rm -f "$temporary_dir/$target_name"
       rmdir "$temporary_dir"
-      echo "identity migration runtime directory contains an unsafe entry" >&2
+      echo "$service_label runtime directory contains an unsafe entry" >&2
       exit 78
     }
     if ! mv -T --no-clobber "$service_dir" "$previous_dir"; then
       rm -f "$temporary_dir/$target_name"
       rmdir "$temporary_dir"
-      echo "identity migration runtime retirement failed" >&2
+      echo "$service_label runtime retirement failed" >&2
       exit 73
     fi
   fi
@@ -101,7 +102,7 @@ install_exact_single_secret_service() {
     [ ! -d "$previous_dir" ] || mv -T --no-clobber "$previous_dir" "$service_dir"
     rm -f "$temporary_dir/$target_name"
     rmdir "$temporary_dir" 2>/dev/null || true
-    echo "identity migration runtime publication failed" >&2
+    echo "$service_label runtime publication failed" >&2
     exit 73
   fi
   if [ -d "$previous_dir" ]; then
@@ -131,6 +132,15 @@ install_secret provision-roles binding-operator/postgres_binding_operator_passwo
   postgres_binding_operator_password 0 0
 install_secret provision-roles identity-migration/postgres_identity_migration_password \
   postgres_identity_migration_password 0 0
+identity_finalizer_master="$master_root/identity-finalizer"
+if [ -e "$identity_finalizer_master" ] || [ -L "$identity_finalizer_master" ]; then
+  [ -d "$identity_finalizer_master" ] && [ ! -L "$identity_finalizer_master" ] || {
+    echo "identity finalizer master path is not a safe directory" >&2
+    exit 78
+  }
+  install_secret provision-roles identity-finalizer/postgres_identity_finalizer_password \
+    postgres_identity_finalizer_password 0 0
+fi
 install_secret grant-runtime postgres_owner_password postgres_owner_password 0 0
 
 # pgBackRest authenticates as a dedicated non-superuser over the shared Unix
@@ -166,6 +176,12 @@ install_secret bff native_installations.json native_installations 1000 1000
 # Dormant reviewed-migration profile. The persisted URL targets a login that
 # provisioning always expires, so merely starting the profile cannot connect.
 install_exact_single_secret_service identity-migration \
-  identity-migration/database_url_identity_migration database_url 10001 10001
+  identity-migration/database_url_identity_migration database_url 10001 10001 \
+  "identity migration"
+if [ -e "$identity_finalizer_master" ] || [ -L "$identity_finalizer_master" ]; then
+  install_exact_single_secret_service identity-finalizer \
+    identity-finalizer/database_url_identity_finalizer database_url 10001 10001 \
+    "identity finalizer"
+fi
 
 echo "materialized least-privilege Home Agent service secrets"

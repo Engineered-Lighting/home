@@ -200,6 +200,11 @@ class IdentityFinalizerFoundationDeploymentContractTests(unittest.TestCase):
             "REVOKE ALL PRIVILEGES ON TYPES\n" f"  FROM {LOGIN_ROLE}, {KERNEL_ROLE};",
             grants,
         )
+        self.assertIn(
+            "operations.reviewed_identity_migration_erasure_operations",
+            grants,
+        )
+        self.assertIn("pg_catalog.to_regclass", grants)
 
     def test_foundation_migration_exposes_no_callable_finalizer(self) -> None:
         migration = read(

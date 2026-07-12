@@ -2112,15 +2112,73 @@ semantic_authority_cutovers = Table(
     schema="operations",
 )
 
+reviewed_identity_migration_erasure_operations = Table(
+    "reviewed_identity_migration_erasure_operations",
+    metadata,
+    Column("operation_id", UUID_PK, primary_key=True),
+    Column("source_kind", String(32), nullable=False),
+    Column("erasure_request_id", UUID_PK),
+    Column("auto_expiry_schedule_id", UUID_PK),
+    Column("operation_commitment", String(64), nullable=False),
+    Column(
+        "recorded_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("transaction_timestamp()"),
+    ),
+    ForeignKeyConstraint(
+        ["erasure_request_id"],
+        ["privacy.erasure_requests.erasure_request_id"],
+        name="fk_identity_erasure_operation_request",
+    ),
+    ForeignKeyConstraint(
+        ["auto_expiry_schedule_id"],
+        ["privacy.auto_expiry_schedules.schedule_id"],
+        name="fk_identity_erasure_operation_auto_expiry",
+    ),
+    UniqueConstraint(
+        "erasure_request_id", name="identity_erasure_operation_request"
+    ),
+    UniqueConstraint(
+        "auto_expiry_schedule_id", name="identity_erasure_operation_auto_expiry"
+    ),
+    UniqueConstraint(
+        "operation_commitment", name="identity_erasure_operation_commitment"
+    ),
+    CheckConstraint(
+        "(source_kind = 'erasure_request' "
+        "AND erasure_request_id IS NOT NULL "
+        "AND auto_expiry_schedule_id IS NULL) "
+        "OR (source_kind = 'auto_expiry_schedule' "
+        "AND erasure_request_id IS NULL "
+        "AND auto_expiry_schedule_id IS NOT NULL)",
+        name="exact_source",
+    ),
+    CheckConstraint(
+        f"{_uuidv7_shape('operation_id')} AND "
+        f"(erasure_request_id IS NULL OR ({_uuidv7_shape('erasure_request_id')})) "
+        f"AND (auto_expiry_schedule_id IS NULL OR "
+        f"({_uuidv7_shape('auto_expiry_schedule_id')}))",
+        name="uuidv7_ids",
+    ),
+    CheckConstraint(
+        "operation_commitment ~ '^[0-9a-f]{64}$'",
+        name="commitment_shape",
+    ),
+    schema="operations",
+)
+
 # The future erasure kernel must physically remove linkable pseudonymous leaf
 # commitments first, then append only this run-level impact. There is
 # intentionally no FK back to a decision or receipt that would retain a leaf.
+# The operation source can be a principal-authorized erasure request or an
+# imported-person auto-expiry schedule; neither source is inferred here.
 reviewed_identity_migration_erasure_impacts = Table(
     "reviewed_identity_migration_erasure_impacts",
     metadata,
     Column("impact_id", UUID_PK, primary_key=True),
     Column("run_id", UUID_PK, nullable=False),
-    Column("erasure_request_id", UUID_PK, nullable=False),
+    Column("operation_id", UUID_PK, nullable=False),
     Column("impact_code", String(32), nullable=False),
     Column("readiness_suspension", String(16), nullable=False),
     Column("removed_leaf_commitment_count", Integer, nullable=False),
@@ -2138,15 +2196,17 @@ reviewed_identity_migration_erasure_impacts = Table(
         name="fk_identity_migration_erasure_impact_run",
     ),
     ForeignKeyConstraint(
-        ["erasure_request_id"],
-        ["privacy.erasure_requests.erasure_request_id"],
-        name="fk_identity_migration_erasure_request",
+        ["operation_id"],
+        [
+            "operations.reviewed_identity_migration_erasure_operations.operation_id"
+        ],
+        name="fk_identity_migration_erasure_operation",
     ),
     UniqueConstraint(
-        "run_id", "erasure_request_id", name="identity_erasure_impact_request"
+        "run_id", "operation_id", name="identity_erasure_impact_operation"
     ),
     CheckConstraint(
-        f"{_uuidv7_shape('impact_id')} AND " f"{_uuidv7_shape('erasure_request_id')}",
+        f"{_uuidv7_shape('impact_id')} AND " f"{_uuidv7_shape('operation_id')}",
         name="uuidv7_ids",
     ),
     CheckConstraint(

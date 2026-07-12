@@ -287,10 +287,27 @@ def test_candidate_finalization_writer_privacy_cutover_and_erasure_are_honest() 
             ),
         ) in cutover_fks
 
-    erasure_fks = _foreign_keys("reviewed_identity_migration_erasure_impacts")
+    operation_fks = _foreign_keys(
+        "reviewed_identity_migration_erasure_operations"
+    )
     assert any(
         local == ("erasure_request_id",)
         and remote == ("privacy.erasure_requests.erasure_request_id",)
+        for local, remote in operation_fks
+    )
+    assert any(
+        local == ("auto_expiry_schedule_id",)
+        and remote == ("privacy.auto_expiry_schedules.schedule_id",)
+        for local, remote in operation_fks
+    )
+    erasure_fks = _foreign_keys("reviewed_identity_migration_erasure_impacts")
+    assert any(
+        local == ("operation_id",)
+        and remote
+        == (
+            "operations."
+            "reviewed_identity_migration_erasure_operations.operation_id",
+        )
         for local, remote in erasure_fks
     )
     assert all("decision" not in " ".join(remote) for _local, remote in erasure_fks)

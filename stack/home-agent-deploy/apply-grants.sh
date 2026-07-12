@@ -187,6 +187,25 @@ FROM PUBLIC, home_agent_api, home_agent_binding_operator, home_agent_ingest,
   home_agent_identity_migration, home_agent_identity_kernel,
   home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
 
+-- Revision 0010 may be absent while production remains pinned to 0006. If
+-- its dormant erasure-operation table exists, grant replay must nevertheless
+-- restore the owner-only boundary without making the older pin undeployable.
+DO $identity_erasure_operation_acl$
+BEGIN
+  IF pg_catalog.to_regclass(
+       'operations.reviewed_identity_migration_erasure_operations'
+     ) IS NOT NULL THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON TABLE '
+      'operations.reviewed_identity_migration_erasure_operations '
+      'FROM PUBLIC, home_agent_api, home_agent_binding_operator, '
+      'home_agent_ingest, home_agent_worker, home_agent_erasure, '
+      'home_agent_rollout, home_agent_backup, '
+      'home_agent_identity_migration, home_agent_identity_kernel, '
+      'home_agent_identity_finalizer, home_agent_identity_finalizer_kernel';
+  END IF;
+END
+$identity_erasure_operation_acl$;
+
 -- Revision 0007 provisions an expired-by-default dormant identity-migration
 -- login before any future database kernel exists. It receives no schema,
 -- base-table, sequence, default-privilege, or function authority. With no

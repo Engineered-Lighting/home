@@ -136,6 +136,7 @@ class RepositoryBoundaryTests(unittest.TestCase):
 
     def test_bff_and_core_share_only_typed_web_contracts(self) -> None:
         bff = read("stack/services/home-agent-bff/src/bff.mjs")
+        origin = read("stack/services/home-agent-origin/src/origin.mjs")
         api = read("stack/services/home-agent-core/app/api.py")
         for route in (
             "/onboarding/status",
@@ -152,6 +153,7 @@ class RepositoryBoundaryTests(unittest.TestCase):
         native_routes = bff.split("const NATIVE_ROUTES", 1)[1]
         self.assertIn("onboarding\\/status", browser_routes)
         self.assertNotIn("onboarding\\/status", native_routes)
+        self.assertIn("onboarding\\/status", origin)
         self.assertNotIn("v1\\/initiatives", browser_routes)
         self.assertIn("v1\\/initiatives", native_routes)
         self.assertIn("X-Home-Agent-Channel", bff)

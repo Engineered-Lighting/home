@@ -18,6 +18,7 @@ const BROWSER_API_ROUTES = Object.freeze([
   ["GET", /^\/api\/agent\/auth\/callback$/],
   ["GET", /^\/api\/agent\/auth\/session$/],
   ["POST", /^\/api\/agent\/auth\/logout$/],
+  ["GET", /^\/api\/agent\/v1\/onboarding\/status$/],
   ["GET", /^\/api\/agent\/v1\/snapshot$/],
   ["POST", /^\/api\/agent\/v1\/memory-transactions$/],
   ["GET", new RegExp(`^/api/agent/v1/memory-transactions/${UUID_PATH}$`, "i")],

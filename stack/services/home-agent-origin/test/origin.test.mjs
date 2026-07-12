@@ -135,10 +135,47 @@ test("request and route parsers reject generic, native, query-bearing, and ambig
   assert.equal(safeRequestTarget("/home-agent\\..\\secret"), null);
   assert.equal(safeRequestTarget("/api/agent/v1/snapshot#hidden"), null);
   assert.equal(browserApiRouteAllowed("GET", new URL("http://x/api/agent/v1/snapshot")), true);
+  assert.equal(browserApiRouteAllowed("GET", new URL("http://x/api/agent/v1/onboarding/status")), true);
+  assert.equal(browserApiRouteAllowed("POST", new URL("http://x/api/agent/v1/onboarding/status")), false);
+  assert.equal(browserApiRouteAllowed("GET", new URL("http://x/api/agent/v1/onboarding/status?debug=1")), false);
   assert.equal(browserApiRouteAllowed("GET", new URL("http://x/api/agent/v1/snapshot?debug=1")), false);
   assert.equal(browserApiRouteAllowed("GET", new URL("http://x/api/agent/native/v1/snapshot")), false);
   assert.equal(browserApiRouteAllowed("POST", new URL(`http://x/api/agent/v1/memory-transactions/${UUID}/confirm`)), true);
   assert.equal(browserApiRouteAllowed("GET", new URL("http://x/api/agent/auth/callback?code=x&state=y")), true);
+});
+
+test("onboarding status proxies only the exact authenticated GET path", async () => {
+  const f = await fixture((req, res, seen) => {
+    seen.push({ method: req.method, url: req.url, cookie: req.headers.cookie });
+    res.writeHead(401, { "Content-Type": "application/json" });
+    res.end('{"error":"authentication_required"}');
+  });
+  try {
+    const allowed = await request(f.originPort, "/api/agent/v1/onboarding/status", {
+      headers: { Cookie: "legacy=drop; __Host-home_agent=session" },
+    });
+    assert.equal(allowed.status, 401);
+    assert.deepEqual(f.seen, [{
+      method: "GET",
+      url: "/api/agent/v1/onboarding/status",
+      cookie: "__Host-home_agent=session",
+    }]);
+
+    const wrongMethod = await request(
+      f.originPort,
+      "/api/agent/v1/onboarding/status",
+      { method: "POST", origin: PUBLIC_ORIGIN },
+    );
+    const queryBearing = await request(
+      f.originPort,
+      "/api/agent/v1/onboarding/status?debug=1",
+    );
+    assert.equal(wrongMethod.status, 404);
+    assert.equal(queryBearing.status, 404);
+    assert.equal(f.seen.length, 1);
+  } finally {
+    await f.cleanup();
+  }
 });
 
 test("cookie filtering forwards only unambiguous Home Agent cookies", () => {

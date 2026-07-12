@@ -12,6 +12,10 @@ import {
   filteredAgentCookies,
   safeRequestTarget,
 } from "../src/origin.mjs";
+import {
+  hasDefaultIpv4Route,
+  isUnreachableErrorCode,
+} from "../src/network-proof.mjs";
 
 const PUBLIC_ORIGIN = "https://agent.test:8443";
 const PUBLIC_HOST = "agent.test:8443";
@@ -167,17 +171,14 @@ test("origin serves only the four built Agent assets with hardened headers", asy
   }
 });
 
-test("deployment has loopback ingress and no non-internal egress network", () => {
+test("deployment has pinned internal ingress and no host port or egress network", () => {
   const composePath = new URL(
     "../../../home-agent-deploy/agent-origin/compose.yml",
     import.meta.url,
   );
   const compose = fs.readFileSync(composePath, "utf8");
-  assert.match(
-    compose,
-    /HOME_AGENT_WEB_BIND_ADDR:-127\.0\.0\.1[^\n]*:.*8096/,
-  );
-  assert.match(compose, /networks:\s*\n\s*- core-api/);
+  assert.doesNotMatch(compose, /^\s+ports:/m);
+  assert.match(compose, /core-api:\s*\n\s*ipv4_address:.*HOME_AGENT_WEB_INTERNAL_IP/);
   assert.doesNotMatch(compose, /origin-public|bff-public|default:/);
   assert.match(compose, /external:\s*true\s*\n\s*name:.*home-agent_api-net/);
   assert.match(compose, /additional_contexts:\s*\n\s*agent_assets:/);
@@ -196,6 +197,21 @@ test("runtime logging is fixed text and cannot interpolate request targets", () 
   assert.equal(logCalls.length, 4);
   for (const call of logCalls) {
     assert.match(call, /^console\.(?:log|error)\("\[home-agent-origin\] [a-z_]+"\);$/);
+  }
+});
+
+test("network proof rejects default routes and reachable or ambiguous failures", () => {
+  const isolated = [
+    "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT",
+    "eth0\t000017AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0",
+  ].join("\n");
+  const routed = `${isolated}\neth0\t00000000\t010017AC\t0003\t0\t0\t0\t00000000\t0\t0\t0`;
+  assert.equal(hasDefaultIpv4Route(isolated), false);
+  assert.equal(hasDefaultIpv4Route(routed), true);
+  assert.equal(isUnreachableErrorCode("ENETUNREACH"), true);
+  assert.equal(isUnreachableErrorCode("EHOSTUNREACH"), true);
+  for (const code of ["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "CONNECTED", ""]) {
+    assert.equal(isUnreachableErrorCode(code), false, code);
   }
 });
 

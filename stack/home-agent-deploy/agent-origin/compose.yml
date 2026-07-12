@@ -20,10 +20,9 @@ services:
       HOME_AGENT_WEB_PUBLIC_ORIGIN: "${HOME_AGENT_WEB_PUBLIC_ORIGIN:?set exact tailnet-only HTTPS origin}"
       HOME_AGENT_WEB_BFF_URL: http://bff:8097
       HOME_AGENT_WEB_ASSET_ROOT: /srv/home-agent
-    ports:
-      - "${HOME_AGENT_WEB_BIND_ADDR:-127.0.0.1}:${HOME_AGENT_WEB_PUBLISHED_PORT:-8096}:8096"
     networks:
-      - core-api
+      core-api:
+        ipv4_address: "${HOME_AGENT_WEB_INTERNAL_IP:?set reviewed static address outside the dynamic IP range}"
     mem_limit: 128m
     pids_limit: 64
     tmpfs:

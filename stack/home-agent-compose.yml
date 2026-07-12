@@ -492,7 +492,15 @@ secrets:
 
 networks:
   postgres-net: {internal: true}
-  api-net: {internal: true}
+  api-net:
+    internal: true
+    enable_ipv4: true
+    enable_ipv6: false
+    ipam:
+      config:
+        - subnet: "${HOME_AGENT_API_SUBNET:-172.23.0.0/16}"
+          ip_range: "${HOME_AGENT_API_DYNAMIC_RANGE:-172.23.128.0/17}"
+          gateway: "${HOME_AGENT_API_GATEWAY:-172.23.0.1}"
   ingest-net: {internal: true}
   edge-public: {}
   bff-public: {}

@@ -250,8 +250,9 @@ Do not serve this origin from `web-gateway`, even through its hostname boundary.
 Deploy the separate fail-closed service in
 `stack/home-agent-deploy/agent-origin/compose.yml`. Its immutable image copies
 only the four built Agent assets, reaches `bff:8097` only through the existing
-internal Core API network, and publishes only to `127.0.0.1:8096`. Tailscale Serve terminates
-TLS for the dedicated origin and is the only permitted ingress. The BFF remains
+IPv4-only internal Core API network, and has no Docker host port or external
+route. Tailscale Serve terminates TLS and targets the origin's reviewed static
+internal address; it is the only permitted ingress. The BFF remains
 loopback-only for native compatibility; never change its bind to a LAN or
 wildcard host address.
 

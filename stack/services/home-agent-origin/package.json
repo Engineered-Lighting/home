@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
-    "check": "node --check server.mjs && node --check src/origin.mjs",
+    "check": "node --check server.mjs && node --check src/origin.mjs && node --check src/network-proof.mjs",
+    "verify-network": "node src/network-proof.mjs",
     "test": "node --test test/*.test.mjs"
   }
 }

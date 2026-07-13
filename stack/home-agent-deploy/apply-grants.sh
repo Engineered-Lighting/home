@@ -14,9 +14,52 @@ psql -v ON_ERROR_STOP=1 <<'SQL'
 -- First committed statement: remove any stale identity authority before any
 -- other grant work can fail. The separate exact ACL file only adds reviewed
 -- capabilities after this fail-closed reset succeeds.
-REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA identity FROM home_agent_api;
+DO $identity_api_acl_reset$
+DECLARE
+  target_table record;
+  target_role text;
+BEGIN
+  FOR target_table IN
+    SELECT candidate_table.relname,
+           pg_catalog.string_agg(
+             pg_catalog.quote_ident(attribute.attname), ', '
+             ORDER BY attribute.attnum
+           ) AS column_list
+      FROM pg_catalog.pg_class AS candidate_table
+      JOIN pg_catalog.pg_namespace AS table_namespace
+        ON table_namespace.oid = candidate_table.relnamespace
+      JOIN pg_catalog.pg_attribute AS attribute
+        ON attribute.attrelid = candidate_table.oid
+       AND attribute.attnum > 0
+       AND NOT attribute.attisdropped
+     WHERE table_namespace.nspname = 'identity'
+       AND candidate_table.relkind IN ('r','p','v','m','f')
+     GROUP BY candidate_table.relname
+  LOOP
+    FOREACH target_role IN ARRAY ARRAY['home_agent_api','PUBLIC']::text[]
+    LOOP
+      EXECUTE pg_catalog.format(
+        'REVOKE ALL PRIVILEGES ON TABLE identity.%I FROM %s',
+        target_table.relname,
+        CASE WHEN target_role = 'PUBLIC'
+          THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END
+      );
+      EXECUTE pg_catalog.format(
+        'REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s), '
+        'REFERENCES (%1$s) ON TABLE identity.%2$I FROM %3$s',
+        target_table.column_list,
+        target_table.relname,
+        CASE WHEN target_role = 'PUBLIC'
+          THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END
+      );
+    END LOOP;
+  END LOOP;
+END
+$identity_api_acl_reset$;
 ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity
   REVOKE ALL PRIVILEGES ON TABLES FROM home_agent_api;
+ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity
+  REVOKE ALL PRIVILEGES ON TABLES FROM PUBLIC;
 
 GRANT USAGE ON SCHEMA ingest TO home_agent_ingest, home_agent_api,
   home_agent_worker, home_agent_erasure;
@@ -626,6 +669,333 @@ BEGIN
   END IF;
 END
 $$;
+
+-- When E1 exists, undo the schema-wide privacy grants above for its dormant
+-- authority tables and for the request's whole-person commitment column.
+-- Existing descriptor erasure keeps only its original typed columns.
+DO $identity_erasure_e1_acl$
+DECLARE
+  column_list text;
+  target_table text;
+  target_role text;
+  grantee_sql text;
+BEGIN
+  -- Remove direct semantic-authority mutation from every non-owner grantee,
+  -- including independently granted column privileges.
+  FOREACH target_table IN ARRAY ARRAY[
+    'identity.principals','identity.ha_user_bindings',
+    'identity.confirmation_artifacts'
+  ]::text[]
+  LOOP
+    SELECT pg_catalog.string_agg(
+             pg_catalog.quote_ident(attribute.attname), ', '
+             ORDER BY attribute.attnum
+           )
+      INTO STRICT column_list
+      FROM pg_catalog.pg_attribute AS attribute
+     WHERE attribute.attrelid = target_table::regclass
+       AND attribute.attnum > 0
+       AND NOT attribute.attisdropped;
+    FOR target_role IN
+      SELECT role_row.rolname FROM pg_catalog.pg_roles AS role_row
+       WHERE role_row.rolname <> 'home_agent_owner'
+      UNION ALL SELECT 'PUBLIC'
+    LOOP
+      grantee_sql := CASE WHEN target_role = 'PUBLIC'
+        THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END;
+      EXECUTE pg_catalog.format(
+        'REVOKE ALL PRIVILEGES ON TABLE %s FROM %s',
+        target_table, grantee_sql
+      );
+      EXECUTE pg_catalog.format(
+        'REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s), '
+        'REFERENCES (%1$s) ON TABLE %2$s FROM %3$s',
+        column_list, target_table, grantee_sql
+      );
+    END LOOP;
+  END LOOP;
+
+  SELECT pg_catalog.string_agg(
+           pg_catalog.quote_ident(attribute.attname), ', '
+           ORDER BY attribute.attnum
+         )
+    INTO STRICT column_list
+    FROM pg_catalog.pg_attribute AS attribute
+   WHERE attribute.attrelid = 'identity.ha_user_bindings'::regclass
+     AND attribute.attnum > 0
+     AND NOT attribute.attisdropped;
+  FOR target_role IN
+    SELECT role_row.rolname FROM pg_catalog.pg_roles AS role_row
+     WHERE role_row.rolname <> 'home_agent_owner'
+    UNION ALL SELECT 'PUBLIC'
+  LOOP
+    grantee_sql := CASE WHEN target_role = 'PUBLIC'
+      THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END;
+    EXECUTE pg_catalog.format(
+      'REVOKE SELECT ON TABLE identity.ha_user_bindings FROM %s', grantee_sql
+    );
+    EXECUTE pg_catalog.format(
+      'REVOKE SELECT (%s) ON TABLE identity.ha_user_bindings FROM %s',
+      column_list, grantee_sql
+    );
+  END LOOP;
+  GRANT SELECT ON TABLE identity.principals
+    TO home_agent_binding_operator, home_agent_erasure;
+  GRANT SELECT (
+    binding_id, proposal_id, ha_user_id, principal_id, person_id,
+    confirmed_by_principal_id, confirmed_at, revoked_at, source_artifact_id
+  ) ON TABLE identity.ha_user_bindings
+    TO home_agent_binding_operator, home_agent_ingest, home_agent_erasure;
+
+  IF pg_catalog.to_regclass('privacy.person_erasure_scopes') IS NOT NULL THEN
+    FOREACH target_table IN ARRAY ARRAY[
+      'privacy.person_erasure_scopes',
+      'privacy.subject_retrieval_blocks',
+      'operations.reviewed_identity_migration_erasure_receipts'
+    ]::text[]
+    LOOP
+      SELECT pg_catalog.string_agg(
+               pg_catalog.quote_ident(attribute.attname), ', '
+               ORDER BY attribute.attnum
+             )
+        INTO STRICT column_list
+        FROM pg_catalog.pg_attribute AS attribute
+       WHERE attribute.attrelid = target_table::regclass
+         AND attribute.attnum > 0
+         AND NOT attribute.attisdropped;
+      FOR target_role IN
+        SELECT role_row.rolname FROM pg_catalog.pg_roles AS role_row
+         WHERE role_row.rolname <> 'home_agent_owner'
+        UNION ALL SELECT 'PUBLIC'
+      LOOP
+        grantee_sql := CASE WHEN target_role = 'PUBLIC'
+          THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END;
+        EXECUTE pg_catalog.format(
+          'REVOKE ALL PRIVILEGES ON TABLE %s FROM %s',
+          target_table, grantee_sql
+        );
+        EXECUTE pg_catalog.format(
+          'REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s), '
+          'REFERENCES (%1$s) ON TABLE %2$s FROM %3$s',
+          column_list, target_table, grantee_sql
+        );
+      END LOOP;
+    END LOOP;
+    EXECUTE 'GRANT SELECT, INSERT ON TABLE '
+      'privacy.person_erasure_scopes, '
+      'privacy.subject_retrieval_blocks, '
+      'operations.reviewed_identity_migration_erasure_receipts '
+      'TO home_agent_owner';
+  END IF;
+
+  SELECT pg_catalog.string_agg(
+           pg_catalog.quote_ident(attribute.attname), ', '
+           ORDER BY attribute.attnum
+         )
+    INTO STRICT column_list
+    FROM pg_catalog.pg_attribute AS attribute
+   WHERE attribute.attrelid = 'privacy.erasure_requests'::regclass
+     AND attribute.attnum > 0
+     AND NOT attribute.attisdropped;
+  FOR target_role IN
+    SELECT role_row.rolname FROM pg_catalog.pg_roles AS role_row
+     WHERE role_row.rolname <> 'home_agent_owner'
+    UNION ALL SELECT 'PUBLIC'
+  LOOP
+    grantee_sql := CASE WHEN target_role = 'PUBLIC'
+      THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END;
+    EXECUTE pg_catalog.format(
+      'REVOKE ALL PRIVILEGES ON TABLE privacy.erasure_requests FROM %s',
+      grantee_sql
+    );
+    EXECUTE pg_catalog.format(
+      'REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s), '
+      'REFERENCES (%1$s) ON TABLE privacy.erasure_requests FROM %2$s',
+      column_list, grantee_sql
+    );
+  END LOOP;
+  EXECUTE 'GRANT SELECT ('
+    'erasure_request_id, principal_id, scope, state, policy_digest, '
+    'created_at, completed_at) ON TABLE privacy.erasure_requests '
+    'TO home_agent_api, home_agent_worker, home_agent_erasure';
+  EXECUTE 'GRANT INSERT ('
+    'erasure_request_id, principal_id, scope, state, policy_digest) '
+    'ON TABLE privacy.erasure_requests TO home_agent_api';
+  EXECUTE 'GRANT INSERT ('
+    'erasure_request_id, principal_id, scope, state, policy_digest, '
+    'completed_at) ON TABLE privacy.erasure_requests '
+    'TO home_agent_erasure';
+  EXECUTE 'GRANT UPDATE (state, completed_at) '
+    'ON TABLE privacy.erasure_requests '
+    'TO home_agent_api, home_agent_worker, home_agent_erasure';
+
+  -- Keep compatibility grants only on objects that already exist. New
+  -- identity/privacy/operations tables must fail closed until an explicit
+  -- post-migration grant is reviewed. Scrub arbitrary and PUBLIC owner
+  -- defaults, including PostgreSQL 17 MAINTAIN, from every grantee.
+  FOREACH target_table IN ARRAY ARRAY[
+    'identity','privacy','operations'
+  ]::text[]
+  LOOP
+    FOR target_role IN
+      SELECT role_row.rolname FROM pg_catalog.pg_roles AS role_row
+       WHERE role_row.rolname <> 'home_agent_owner'
+      UNION ALL SELECT 'PUBLIC'
+    LOOP
+      grantee_sql := CASE WHEN target_role = 'PUBLIC'
+        THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END;
+      EXECUTE pg_catalog.format(
+        'ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA %I '
+        'REVOKE ALL PRIVILEGES ON TABLES FROM %s',
+        target_table, grantee_sql
+      );
+    END LOOP;
+  END LOOP;
+END
+$identity_erasure_e1_acl$;
+
+-- E1 reserves a NOLOGIN owner for a later erasure SECURITY DEFINER kernel.
+-- Grant replay must restore its global quarantine even after the one-time
+-- migration has run. Keep this as the final in-database ACL operation so no
+-- broad grant below can accidentally reauthorize the dormant role.
+DO $identity_erasure_kernel_quarantine$
+DECLARE
+  type_entry record;
+  table_entry record;
+  kernel_oid oid;
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_roles
+     WHERE rolname = 'home_agent_identity_erasure_kernel'
+  ) THEN
+    SELECT oid INTO STRICT kernel_oid
+      FROM pg_catalog.pg_roles
+     WHERE rolname = 'home_agent_identity_erasure_kernel';
+    EXECUTE pg_catalog.format(
+      'REVOKE ALL PRIVILEGES ON DATABASE %I '
+      'FROM home_agent_identity_erasure_kernel',
+      pg_catalog.current_database()
+    );
+    REVOKE USAGE, CREATE ON SCHEMA public, ingest, identity, knowledge,
+      engagement, privacy, operations, media
+      FROM home_agent_identity_erasure_kernel;
+    REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public, ingest, identity,
+      knowledge, engagement, privacy, operations, media
+      FROM home_agent_identity_erasure_kernel;
+    FOR table_entry IN
+      SELECT table_namespace.nspname,
+             candidate_table.relname,
+             pg_catalog.string_agg(
+               pg_catalog.quote_ident(attribute.attname), ', '
+               ORDER BY attribute.attnum
+             ) AS column_list
+        FROM pg_catalog.pg_class AS candidate_table
+        JOIN pg_catalog.pg_namespace AS table_namespace
+          ON table_namespace.oid = candidate_table.relnamespace
+        JOIN pg_catalog.pg_attribute AS attribute
+          ON attribute.attrelid = candidate_table.oid
+         AND attribute.attnum > 0
+         AND NOT attribute.attisdropped
+       WHERE table_namespace.nspname IN (
+         'public','ingest','identity','knowledge','engagement','privacy',
+         'operations','media'
+       )
+         AND candidate_table.relkind IN ('r','p','v','m','f')
+       GROUP BY table_namespace.nspname, candidate_table.relname
+    LOOP
+      EXECUTE pg_catalog.format(
+        'REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s), '
+        'REFERENCES (%1$s) ON TABLE %2$I.%3$I '
+        'FROM home_agent_identity_erasure_kernel',
+        table_entry.column_list, table_entry.nspname, table_entry.relname
+      );
+    END LOOP;
+    REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public, ingest, identity,
+      knowledge, engagement, privacy, operations, media
+      FROM home_agent_identity_erasure_kernel;
+    REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public, ingest, identity,
+      knowledge, engagement, privacy, operations, media
+      FROM home_agent_identity_erasure_kernel;
+
+    FOR type_entry IN
+      SELECT type_namespace.nspname, candidate_type.typname
+        FROM pg_catalog.pg_type AS candidate_type
+        JOIN pg_catalog.pg_namespace AS type_namespace
+          ON type_namespace.oid = candidate_type.typnamespace
+       WHERE type_namespace.nspname IN (
+         'public','ingest','identity','knowledge','engagement','privacy',
+         'operations','media'
+       )
+         AND candidate_type.typisdefined
+         AND candidate_type.typrelid = 0
+         AND candidate_type.typelem = 0
+    LOOP
+      EXECUTE pg_catalog.format(
+        'REVOKE USAGE ON TYPE %I.%I '
+        'FROM home_agent_identity_erasure_kernel',
+        type_entry.nspname,
+        type_entry.typname
+      );
+    END LOOP;
+
+    ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA public,
+      ingest, identity, knowledge, engagement, privacy, operations, media
+      REVOKE ALL PRIVILEGES ON TABLES
+      FROM home_agent_identity_erasure_kernel;
+    ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA public,
+      ingest, identity, knowledge, engagement, privacy, operations, media
+      REVOKE ALL PRIVILEGES ON SEQUENCES
+      FROM home_agent_identity_erasure_kernel;
+    ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA public,
+      ingest, identity, knowledge, engagement, privacy, operations, media
+      REVOKE ALL PRIVILEGES ON FUNCTIONS
+      FROM home_agent_identity_erasure_kernel;
+    ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA public,
+      ingest, identity, knowledge, engagement, privacy, operations, media
+      REVOKE ALL PRIVILEGES ON TYPES
+      FROM home_agent_identity_erasure_kernel;
+
+    IF NOT EXISTS (
+      SELECT 1
+        FROM pg_catalog.pg_roles AS kernel_role
+       WHERE kernel_role.oid = kernel_oid
+         AND NOT kernel_role.rolcanlogin
+         AND NOT kernel_role.rolinherit
+         AND NOT kernel_role.rolsuper
+         AND NOT kernel_role.rolcreatedb
+         AND NOT kernel_role.rolcreaterole
+         AND NOT kernel_role.rolreplication
+         AND NOT kernel_role.rolbypassrls
+         AND kernel_role.rolconnlimit = 0
+         AND kernel_role.rolconfig IS NULL
+    ) OR EXISTS (
+      SELECT 1
+        FROM pg_catalog.pg_shdepend AS owned_object
+       WHERE owned_object.refobjid = kernel_oid
+         AND owned_object.deptype = 'o'
+    ) OR EXISTS (
+      SELECT 1
+        FROM pg_catalog.pg_auth_members AS membership
+        JOIN pg_catalog.pg_roles AS member
+          ON member.oid = membership.member
+       WHERE membership.roleid = kernel_oid
+         AND (
+           member.rolname <> 'home_agent_owner'
+           OR membership.admin_option
+           OR membership.inherit_option
+           OR NOT membership.set_option
+         )
+    ) OR (
+      SELECT pg_catalog.count(*)
+        FROM pg_catalog.pg_auth_members
+       WHERE roleid = kernel_oid
+    ) <> 1 THEN
+      RAISE EXCEPTION 'identity erasure kernel ownership/membership invalid'
+        USING ERRCODE = '42501';
+    END IF;
+  END IF;
+END
+$identity_erasure_kernel_quarantine$;
 SQL
 
 # The broad role setup above supports old pinned revisions and creates the

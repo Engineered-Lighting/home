@@ -41,6 +41,8 @@ SELECT 'CREATE ROLE home_agent_identity_finalizer_kernel NOLOGIN' WHERE NOT EXIS
   (SELECT 1 FROM pg_roles WHERE rolname='home_agent_identity_finalizer_kernel') \gexec
 SELECT 'CREATE ROLE home_agent_identity_finalizer LOGIN' WHERE NOT EXISTS
   (SELECT 1 FROM pg_roles WHERE rolname='home_agent_identity_finalizer') \gexec
+SELECT 'CREATE ROLE home_agent_identity_erasure_kernel NOLOGIN' WHERE NOT EXISTS
+  (SELECT 1 FROM pg_roles WHERE rolname='home_agent_identity_erasure_kernel') \gexec
 SELECT 'CREATE ROLE home_agent_ingest LOGIN' WHERE NOT EXISTS
   (SELECT 1 FROM pg_roles WHERE rolname='home_agent_ingest') \gexec
 SELECT 'CREATE ROLE home_agent_worker LOGIN' WHERE NOT EXISTS
@@ -61,7 +63,7 @@ WHERE member.rolname IN (
   'home_agent_worker', 'home_agent_erasure', 'home_agent_rollout',
   'home_agent_backup', 'home_agent_identity_migration',
   'home_agent_identity_kernel', 'home_agent_identity_finalizer',
-  'home_agent_identity_finalizer_kernel'
+  'home_agent_identity_finalizer_kernel', 'home_agent_identity_erasure_kernel'
 ) \gexec
 
 -- Kernel ownership is never a privilege-escalation path for an online role.
@@ -81,6 +83,13 @@ JOIN pg_roles AS member ON member.oid = membership.member
 WHERE parent.rolname = 'home_agent_identity_finalizer_kernel'
   AND member.rolname <> 'home_agent_owner' \gexec
 
+SELECT format('REVOKE %I FROM %I', parent.rolname, member.rolname)
+FROM pg_auth_members AS membership
+JOIN pg_roles AS parent ON parent.oid = membership.roleid
+JOIN pg_roles AS member ON member.oid = membership.member
+WHERE parent.rolname = 'home_agent_identity_erasure_kernel'
+  AND member.rolname <> 'home_agent_owner' \gexec
+
 ALTER ROLE home_agent_api PASSWORD :'api_password' NOSUPERUSER NOCREATEDB
   NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
 ALTER ROLE home_agent_binding_operator PASSWORD :'binding_operator_password'
@@ -97,6 +106,9 @@ ALTER ROLE home_agent_identity_finalizer_kernel NOLOGIN NOSUPERUSER NOCREATEDB
 ALTER ROLE home_agent_identity_finalizer PASSWORD :'identity_finalizer_password'
   NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS
   CONNECTION LIMIT 1 VALID UNTIL '1970-01-01 00:00:00+00';
+ALTER ROLE home_agent_identity_erasure_kernel RESET ALL;
+ALTER ROLE home_agent_identity_erasure_kernel NOLOGIN NOSUPERUSER NOCREATEDB
+  NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS CONNECTION LIMIT 0;
 ALTER ROLE home_agent_ingest PASSWORD :'ingest_password' NOSUPERUSER NOCREATEDB
   NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
 ALTER ROLE home_agent_worker PASSWORD :'worker_password' NOSUPERUSER NOCREATEDB
@@ -140,9 +152,12 @@ REVOKE CREATE, TEMPORARY ON DATABASE home_agent
   FROM home_agent_identity_finalizer;
 REVOKE ALL PRIVILEGES ON DATABASE home_agent FROM home_agent_identity_kernel;
 REVOKE ALL PRIVILEGES ON DATABASE home_agent FROM home_agent_identity_finalizer_kernel;
+REVOKE ALL PRIVILEGES ON DATABASE home_agent FROM home_agent_identity_erasure_kernel;
 GRANT home_agent_identity_kernel TO home_agent_owner
   WITH ADMIN FALSE, INHERIT FALSE, SET TRUE;
 GRANT home_agent_identity_finalizer_kernel TO home_agent_owner
+  WITH ADMIN FALSE, INHERIT FALSE, SET TRUE;
+GRANT home_agent_identity_erasure_kernel TO home_agent_owner
   WITH ADMIN FALSE, INHERIT FALSE, SET TRUE;
 
 -- pgBackRest copies cluster files as the unprivileged postgres OS account; it
@@ -158,7 +173,8 @@ REVOKE pg_monitor, pg_read_all_settings, pg_read_all_stats,
   pg_checkpoint, pg_maintain, pg_signal_backend
   FROM home_agent_backup, home_agent_rollout, home_agent_binding_operator,
   home_agent_identity_migration, home_agent_identity_kernel,
-  home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
+  home_agent_identity_finalizer, home_agent_identity_finalizer_kernel,
+  home_agent_identity_erasure_kernel;
 GRANT pg_read_all_settings TO home_agent_backup;
 GRANT EXECUTE ON FUNCTION pg_catalog.pg_backup_start(text, boolean)
   TO home_agent_backup;

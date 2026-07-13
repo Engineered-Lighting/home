@@ -10,23 +10,73 @@
 -- per-principal database isolation; completing RLS review for every readable
 -- table is a blocker before broader semantic retrieval is enabled.
 
-REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA identity FROM home_agent_api;
+DO $identity_api_acl_reset$
+DECLARE
+  target_table record;
+  target_role text;
+BEGIN
+  FOR target_table IN
+    SELECT candidate_table.relname,
+           pg_catalog.string_agg(
+             pg_catalog.quote_ident(attribute.attname), ', '
+             ORDER BY attribute.attnum
+           ) AS column_list
+      FROM pg_catalog.pg_class AS candidate_table
+      JOIN pg_catalog.pg_namespace AS table_namespace
+        ON table_namespace.oid = candidate_table.relnamespace
+      JOIN pg_catalog.pg_attribute AS attribute
+        ON attribute.attrelid = candidate_table.oid
+       AND attribute.attnum > 0
+       AND NOT attribute.attisdropped
+     WHERE table_namespace.nspname = 'identity'
+       AND candidate_table.relkind IN ('r','p','v','m','f')
+     GROUP BY candidate_table.relname
+  LOOP
+    FOREACH target_role IN ARRAY ARRAY['home_agent_api','PUBLIC']::text[]
+    LOOP
+      EXECUTE pg_catalog.format(
+        'REVOKE ALL PRIVILEGES ON TABLE identity.%I FROM %s',
+        target_table.relname,
+        CASE WHEN target_role = 'PUBLIC'
+          THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END
+      );
+      EXECUTE pg_catalog.format(
+        'REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s), '
+        'REFERENCES (%1$s) ON TABLE identity.%2$I FROM %3$s',
+        target_table.column_list,
+        target_table.relname,
+        CASE WHEN target_role = 'PUBLIC'
+          THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END
+      );
+    END LOOP;
+  END LOOP;
+END
+$identity_api_acl_reset$;
 
 -- Future identity tables inherit no API access.  A new online identity read or
 -- write therefore requires an explicit review and grant in this file.
 ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity
   REVOKE ALL PRIVILEGES ON TABLES FROM home_agent_api;
+ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity
+  REVOKE ALL PRIVILEGES ON TABLES FROM PUBLIC;
 
 GRANT SELECT ON TABLE
   identity.people,
   identity.principals,
   identity.confirmation_artifacts,
-  identity.ha_user_bindings,
   identity.principal_binding_requests,
   identity.principal_binding_proposals,
   identity.edge_privacy_user_blocks,
   identity.privacy_directives
 TO home_agent_api;
+
+-- E1 adds an owner-only generated binding-validity support column. Keep the
+-- existing authenticated binding read surface without exposing that kernel
+-- linkage column through a table-level SELECT grant.
+GRANT SELECT (
+  binding_id, proposal_id, ha_user_id, principal_id, person_id,
+  confirmed_by_principal_id, confirmed_at, revoked_at, source_artifact_id
+) ON TABLE identity.ha_user_bindings TO home_agent_api;
 
 -- An authenticated HA subject may allocate and close only its own request;
 -- FORCE RLS and app.ha_user_id provide the row boundary.

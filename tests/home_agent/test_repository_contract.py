@@ -74,8 +74,12 @@ class RepositoryBoundaryTests(unittest.TestCase):
             'script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)', grants
         )
         self.assertIn(
-            "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA identity "
-            "FROM home_agent_api",
+            "DO $identity_api_acl_reset$",
+            identity_acl,
+        )
+        self.assertIn("pg_catalog.pg_attribute", identity_acl)
+        self.assertIn(
+            "REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s)",
             identity_acl,
         )
         self.assertIn(
@@ -99,15 +103,11 @@ class RepositoryBoundaryTests(unittest.TestCase):
             "psql -v ON_ERROR_STOP=1 -f", 1
         )[0]
         self.assertIn(
-            "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA identity "
-            "FROM home_agent_api",
+            "DO $identity_api_acl_reset$",
             baseline,
         )
         self.assertLess(
-            baseline.index(
-                "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA identity "
-                "FROM home_agent_api"
-            ),
+            baseline.index("DO $identity_api_acl_reset$"),
             baseline.index("GRANT USAGE ON SCHEMA"),
         )
         self.assertNotRegex(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -115,7 +116,47 @@ async def replay_identity_api_acl(connection) -> None:
         for line in IDENTITY_API_ACL.splitlines()
         if not line.lstrip().startswith("--")
     )
-    for statement in executable_sql.split(";"):
+    statements: list[str] = []
+    start = 0
+    index = 0
+    quote: str | None = None
+    dollar_quote: str | None = None
+    while index < len(executable_sql):
+        if dollar_quote is not None:
+            if executable_sql.startswith(dollar_quote, index):
+                index += len(dollar_quote)
+                dollar_quote = None
+            else:
+                index += 1
+            continue
+        character = executable_sql[index]
+        if quote is not None:
+            if character == quote:
+                if (
+                    index + 1 < len(executable_sql)
+                    and executable_sql[index + 1] == quote
+                ):
+                    index += 2
+                    continue
+                quote = None
+            index += 1
+            continue
+        if character in ("'", '"'):
+            quote = character
+            index += 1
+            continue
+        if character == "$":
+            match = re.match(r"\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$", executable_sql[index:])
+            if match:
+                dollar_quote = match.group(0)
+                index += len(dollar_quote)
+                continue
+        if character == ";":
+            statements.append(executable_sql[start:index])
+            start = index + 1
+        index += 1
+    statements.append(executable_sql[start:])
+    for statement in statements:
         if statement.strip():
             await connection.execute(text(statement))
 
@@ -337,9 +378,27 @@ async def test_identity_api_acl_replay_removes_broad_and_future_privileges() -> 
             )
             await connection.execute(
                 text(
+                    "GRANT SELECT (alias), UPDATE (alias) "
+                    "ON TABLE identity.aliases TO home_agent_api"
+                )
+            )
+            await connection.execute(
+                text(
+                    "GRANT SELECT (alias) ON TABLE identity.aliases TO PUBLIC"
+                )
+            )
+            await connection.execute(
+                text(
                     "ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner "
                     "IN SCHEMA identity GRANT ALL PRIVILEGES ON TABLES "
                     "TO home_agent_api"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner "
+                    "IN SCHEMA identity GRANT ALL PRIVILEGES ON TABLES "
+                    "TO PUBLIC"
                 )
             )
             await replay_identity_api_acl(connection)
@@ -351,7 +410,6 @@ async def test_identity_api_acl_replay_removes_broad_and_future_privileges() -> 
                 "people",
                 "principals",
                 "confirmation_artifacts",
-                "ha_user_bindings",
                 "principal_binding_requests",
                 "principal_binding_proposals",
                 "edge_privacy_user_blocks",
@@ -364,6 +422,7 @@ async def test_identity_api_acl_replay_removes_broad_and_future_privileges() -> 
                 "legacy_relationship_candidates",
                 "source_entity_bindings",
                 "edge_privacy_blocks",
+                "ha_user_bindings",
                 probe,
             }
             for table in readable | inaccessible:
@@ -402,6 +461,46 @@ async def test_identity_api_acl_replay_removes_broad_and_future_privileges() -> 
                     "can_reference": False,
                     "can_trigger": False,
                 }
+
+            for column in (
+                "binding_id",
+                "proposal_id",
+                "ha_user_id",
+                "principal_id",
+                "person_id",
+                "confirmed_by_principal_id",
+                "confirmed_at",
+                "revoked_at",
+                "source_artifact_id",
+            ):
+                assert (
+                    await connection.execute(
+                        text(
+                            "SELECT has_column_privilege("
+                            "'home_agent_api', 'identity.ha_user_bindings', "
+                            ":column, 'SELECT')"
+                        ),
+                        {"column": column},
+                    )
+                ).scalar_one() is True
+
+            assert (
+                await connection.execute(
+                    text(
+                        "SELECT has_column_privilege('home_agent_api', "
+                        "'identity.aliases', 'alias', 'SELECT,UPDATE') "
+                        "OR EXISTS (SELECT 1 FROM pg_attribute a "
+                        "CROSS JOIN LATERAL aclexplode(a.attacl) acl "
+                        "WHERE a.attrelid = 'identity.aliases'::regclass "
+                        "AND a.attname = 'alias' AND acl.grantee = 0) "
+                        "OR EXISTS (SELECT 1 FROM pg_class c "
+                        "CROSS JOIN LATERAL aclexplode(c.relacl) acl "
+                        "WHERE c.oid = CAST(:probe AS regclass) "
+                        "AND acl.grantee = 0)"
+                    ),
+                    {"probe": f"identity.{probe}"},
+                )
+            ).scalar_one() is False
 
             assert (
                 await connection.execute(
@@ -1049,11 +1148,38 @@ async def test_partial_uniqueness_state_shapes_rls_and_runtime_grants() -> None:
                     .one()
                 )
                 assert dict(operator_acl) == {
-                    "can_select": True,
+                    "can_select": table != "ha_user_bindings",
                     "can_insert": False,
                     "can_update": False,
                     "can_delete": False,
                 }
+                if table == "ha_user_bindings":
+                    readable_binding_columns = (
+                        await connection.execute(
+                            text(
+                                "SELECT coalesce(array_agg(attname::text "
+                                "ORDER BY attnum) FILTER (WHERE "
+                                "has_column_privilege("
+                                "'home_agent_binding_operator', "
+                                "'identity.ha_user_bindings', attname, "
+                                "'SELECT')), ARRAY[]::text[]) "
+                                "FROM pg_attribute WHERE attrelid = "
+                                "'identity.ha_user_bindings'::regclass "
+                                "AND attnum > 0 AND NOT attisdropped"
+                            )
+                        )
+                    ).scalar_one()
+                    assert readable_binding_columns == [
+                        "binding_id",
+                        "proposal_id",
+                        "ha_user_id",
+                        "principal_id",
+                        "person_id",
+                        "confirmed_by_principal_id",
+                        "confirmed_at",
+                        "revoked_at",
+                        "source_artifact_id",
+                    ]
 
             allowed_update_columns = {
                 "home_agent_api": {

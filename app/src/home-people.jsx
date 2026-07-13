@@ -92,6 +92,7 @@ function peopleGraphCameraViewBox(viewBox, camera) {
 function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, connection = null, sim, spatialMode = false }) {
   const [view, setView] = useState("graph");   // graph | list | queue
   const [identities, setIdentities] = useState(null);  // null=loading, []=empty
+  const identitiesRef = useRef(null);
   const [error, setError] = useState(null);
   // Attempt number while fetchWithRetry is still reconnecting (null = idle).
   // Distinct from `error`, which is the terminal state after retries are spent.
@@ -124,6 +125,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
   // via tauriFetch, convert to a blob URL, store per-uuid, render the
   // blob URL as the src/href. Revoke on unmount or when bytes change.
   const [avatarBlobUrls, setAvatarBlobUrls] = useState({});
+  useEffect(() => { identitiesRef.current = identities; }, [identities]);
   // Track in-flight fetches so we don't double-fire for the same
   // (uuid, cacheBust) tuple. Keyed by `${uuid}:${cb}`.
   const blobFetchInFlightRef = useRef({});
@@ -190,6 +192,17 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
       setError("HA endpoint or token not configured");
       setIdentities([]);
       return;
+    }
+    const cached = readPeopleDataCache(endpoint);
+    if (cached && identitiesRef.current === null) {
+      setIdentities(cached.identities || []);
+      setFrigateDiagnostics(cached.frigateDiagnostics || null);
+      setFrigateUrl(cached.frigateUrl || null);
+      setFacesByPerson(cached.facesByPerson || null);
+      setFacesStatus(cached.facesByPerson
+        ? { state: "loaded", bucketCount: Object.keys(cached.facesByPerson).length, loadedAt: cached.cachedAt, cached: true }
+        : { state: "idle", cached: true });
+      setLoadedAt(cached.cachedAt || Date.now());
     }
     try {
       const url = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/identities`;
@@ -259,20 +272,24 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
                 bucketCount: Object.keys(fpayload).length,
                 loadedAt: Date.now(),
               });
+              writePeopleDataCache(endpoint, payload, fpayload);
             }
           } else {
             setFacesByPerson(null);
             setFacesStatus({ state: "error", error: `HTTP ${fresp.status}` });
+            writePeopleDataCache(endpoint, payload, null);
           }
         } catch (e) {
           // Proxy unreachable — gallery shows empty state.
           setFacesByPerson(null);
           setFacesStatus({ state: "error", error: e?.message || String(e) });
+          writePeopleDataCache(endpoint, payload, null);
         }
       } else {
         setFrigateUrl(null);
         setFacesByPerson(null);
         setFacesStatus({ state: "missing_url" });
+        writePeopleDataCache(endpoint, payload, null);
       }
     } catch (e) {
       setReconnecting(null);
@@ -672,6 +689,36 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
   return typeof document !== "undefined" && document.body
     ? ReactDOM.createPortal(overlay, document.body)
     : overlay;
+}
+
+function normalizePeopleEndpoint(endpoint) {
+  return String(endpoint || "").replace(/\/+$/, "");
+}
+
+function writePeopleDataCache(endpoint, payload, facesByPerson) {
+  if (!payload || !Array.isArray(payload.identities)) return null;
+  const cache = {
+    endpoint: normalizePeopleEndpoint(endpoint),
+    cachedAt: Date.now(),
+    identities: payload.identities || [],
+    relationships: payload.relationships || [],
+    frigateUrl: payload.frigate_url || null,
+    facesByPerson: facesByPerson || null,
+    frigateDiagnostics: {
+      seedReport: payload.frigate_seed_report || null,
+      capabilities: payload.frigate_capabilities || null,
+    },
+  };
+  window.__HOME_PEOPLE_DATA_CACHE = cache;
+  return cache;
+}
+
+function readPeopleDataCache(endpoint, maxAgeMs = 5 * 60 * 1000) {
+  const cache = window.__HOME_PEOPLE_DATA_CACHE;
+  if (!cache) return null;
+  if (cache.endpoint !== normalizePeopleEndpoint(endpoint)) return null;
+  if (!cache.cachedAt || Date.now() - cache.cachedAt > maxAgeMs) return null;
+  return cache;
 }
 
 /* ─────────────────────────────────────────────────────────────────────
@@ -3508,6 +3555,7 @@ async function prewarmPeopleData({ endpoint, token, signal, maxAvatars = 8, maxF
       out.facesError = err?.message || String(err);
     }
   }
+  writePeopleDataCache(base, payload, facesByPerson);
 
   for (const identity of identities.slice(0, maxAvatars)) {
     if (signal?.aborted) break;
@@ -3540,5 +3588,10 @@ async function prewarmPeopleData({ endpoint, token, signal, maxAvatars = 8, maxF
 }
 
 // Expose to window for home-app.jsx consumption
-window.HomePeoplePrewarm = { start: prewarmPeopleData };
+window.HomePeoplePrewarm = {
+  ...(window.HomePeoplePrewarm || {}),
+  start: prewarmPeopleData,
+  readCache: readPeopleDataCache,
+  writeCache: writePeopleDataCache,
+};
 window.HomePeopleOverlay = HomePeopleOverlay;

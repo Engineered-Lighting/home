@@ -5682,6 +5682,13 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         });
       }
     };
+    const loadFeatureInBackground = async (feature) => {
+      const loader = window.HomeFeatureLoader;
+      if (!loader?.load) return false;
+      await loader.load(feature, "background-warmup");
+      setFeatureLoadTick((tick) => tick + 1);
+      return true;
+    };
     const runJob = async (name, fn) => {
       if (controller?.signal?.aborted) return;
       if (!(await waitForQuiet())) {
@@ -5710,24 +5717,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     (async () => {
       await wait(700);
       if (cancelled) return;
-      await Promise.all([
-        runImmediateJob("people feature", () => prefetchFeature("people", "background-warmup")),
-        runImmediateJob("apartment feature", () => prefetchFeature("apartment", "background-warmup")),
-      ]);
-      if (connection === "online" && endpoint && token) {
-        await runJob("people data", async () => {
-          if (!window.HomePeoplePrewarm?.start) return { skipped: true, reason: "prewarm api unavailable" };
-          return window.HomePeoplePrewarm.start({
-            endpoint,
-            token,
-            signal: controller?.signal,
-            maxAvatars: saveData || slowLink ? 3 : 10,
-            maxFaceThumbs: saveData || slowLink ? 0 : 8,
-          });
-        });
-      } else {
-        setWarmup({ skipped: [...(window.__HOME_BACKGROUND_WARMUP?.skipped || []), { name: "people data", reason: "HA not online" }] });
-      }
+      await runImmediateJob("apartment feature", () => loadFeatureInBackground("apartment"));
       window.__HOME_BACKGROUND_WARMUP_CONTROLS_APARTMENT = true;
       await runJob("apartment modules", async () => {
         if (!window.Home3D?.ready) return { skipped: true, reason: "3d bridge unavailable" };

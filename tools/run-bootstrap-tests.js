@@ -21,6 +21,7 @@ const iconsSource = fs.readFileSync(path.join(SRC_DIR, "home-icons.jsx"), "utf8"
 const auditSource = fs.readFileSync(AUDIT, "utf8");
 const fetchRetrySource = fs.readFileSync(path.join(SRC_DIR, "home-fetch-with-retry.js"), "utf8");
 const peopleSource = fs.readFileSync(path.join(SRC_DIR, "home-people.jsx"), "utf8");
+const peoplePrewarmSource = fs.readFileSync(path.join(SRC_DIR, "home-people-prewarm.js"), "utf8");
 const worldstateSource = fs.readFileSync(path.join(SRC_DIR, "home-worldstate.jsx"), "utf8");
 const explainSource = fs.readFileSync(path.join(SRC_DIR, "home-explain.jsx"), "utf8");
 
@@ -249,10 +250,11 @@ assert("background warmup has a URL/localStorage kill switch",
   appSource.includes('get("warmup")') &&
     appSource.includes("home.perf.backgroundWarmup") &&
     appSource.includes("state: \"disabled\""));
-assert("background warmup waits for ready online credentials before tokened people data",
-  appSource.includes("bootPhase !== \"ready\"") &&
-    appSource.includes("connection === \"online\" && endpoint && token") &&
-    appSource.includes("HomePeoplePrewarm.start"));
+assert("people data warmup waits for boot and saved credentials outside React",
+  peoplePrewarmSource.includes("__bootState?.done") &&
+    peoplePrewarmSource.includes("loadPrefs") &&
+    peoplePrewarmSource.includes("api/extended_openai_conversation/identities") &&
+    peoplePrewarmSource.includes("Authorization: `Bearer ${token}`"));
 assert("background warmup pauses during interaction and focused input",
   appSource.includes("recent interaction") &&
     appSource.includes("input focused") &&

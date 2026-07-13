@@ -110,7 +110,12 @@ def api_settings() -> Settings:
 
 
 async def replay_identity_api_acl(connection) -> None:
-    for statement in IDENTITY_API_ACL.split(";"):
+    executable_sql = "\n".join(
+        line
+        for line in IDENTITY_API_ACL.splitlines()
+        if not line.lstrip().startswith("--")
+    )
+    for statement in executable_sql.split(";"):
         if statement.strip():
             await connection.execute(text(statement))
 

@@ -139,6 +139,19 @@ class _Agg:
         }
 
 
+class _LookFn(WorldStateFunction):
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    def _aggregator(self, hass):
+        return _Agg()
+
+    async def _reason_zoom(self, room_key, camera_entity, question, aiohttp, illuminated=False):
+        self.calls += 1
+        return {"data": {"answer": f"fresh answer {self.calls}"}}
+
+
 def assert_true(name, value, detail=None):
     if not value:
         raise AssertionError(f"{name}: {detail!r}")
@@ -186,6 +199,23 @@ async def main():
     assert_true("capture turns on mapped lights", any(c[0:2] == ("light", "turn_on") for c in calls), calls)
     assert_true("restore turns originally-off light back off", any(c[0:2] == ("light", "turn_off") and "light.living_room_lights" in c[2]["entity_id"] for c in calls), calls)
     assert_true("restore clears capture override", calls[-1][0:2] == ("input_boolean", "turn_off"), calls)
+
+    look_fn = _LookFn()
+    hass = _Hass({})
+    ctx = LLMContext()
+    results = []
+    for _ in range(8):
+        results.append(await look_fn._grounded_look(
+            hass,
+            {"room": "living_room", "question": "what is on the coffee table?", "allow_illumination": False},
+            ctx,
+        ))
+    assert_true(
+        "grounded look is not capped at three calls",
+        all("budget exhausted" not in str(r).lower() for r in results),
+        results,
+    )
+    assert_true("all repeated grounded looks reached vision", look_fn.calls == 8, look_fn.calls)
 
 
 if __name__ == "__main__":

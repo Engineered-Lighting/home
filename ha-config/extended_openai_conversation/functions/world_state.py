@@ -56,8 +56,7 @@ _LOGGER = logging.getLogger(__name__)
 # seconds; using conversation_id as the bucket key with a soft reset on
 # every new ingest is good enough. Stored in hass.data[DOMAIN].
 _REFRESH_BUDGET_KEY = "world_state_refresh_budget"
-_GROUNDED_LOOK_BUDGET_KEY = "world_state_grounded_look_budget"
-_GROUNDED_LOOK_MAX_PER_TURN = 3
+_GROUNDED_LOOK_CALLS_KEY = "world_state_grounded_look_calls"
 _VISION_CAPTURE_OVERRIDE = "input_boolean.living_lights_vision_capture_override"
 _TRAVEL_MODE_ENTITY = "input_boolean.living_lights_travel_mode"
 _OUTDOOR_ROOMS = {"driveway", "outside", "front_yard", "back_yard"}
@@ -335,18 +334,10 @@ class WorldStateFunction(Function):
         conv_id = (
             getattr(llm_context, "conversation_id", None) if llm_context else None
         ) or "no_conv"
-        budget = hass.data.setdefault(DOMAIN, {}).setdefault(
-            _GROUNDED_LOOK_BUDGET_KEY, {}
+        calls = hass.data.setdefault(DOMAIN, {}).setdefault(
+            _GROUNDED_LOOK_CALLS_KEY, {}
         )
-        used = budget.get(conv_id, 0)
-        if used >= _GROUNDED_LOOK_MAX_PER_TURN:
-            return {
-                "error": (
-                    f"grounded look budget exhausted "
-                    f"({_GROUNDED_LOOK_MAX_PER_TURN} per conversation)"
-                )
-            }
-        budget[conv_id] = used + 1
+        calls[conv_id] = calls.get(conv_id, 0) + 1
 
         agg = self._aggregator(hass)
         if agg is None:

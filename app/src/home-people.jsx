@@ -194,7 +194,9 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
       return;
     }
     const cached = readPeopleDataCache(endpoint);
+    let usingCached = false;
     if (cached && identitiesRef.current === null) {
+      usingCached = true;
       setIdentities(cached.identities || []);
       setFrigateDiagnostics(cached.frigateDiagnostics || null);
       setFrigateUrl(cached.frigateUrl || null);
@@ -215,8 +217,10 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
           headers: { Authorization: `Bearer ${token}` },
           cache: "no-store",
         },
+        timeoutMs: 20000,
+        maxAttempts: usingCached ? 2 : 4,
         onAttempt: ({ attempt, nextDelay }) => {
-          if (nextDelay != null) setReconnecting(attempt);
+          if (nextDelay != null && !usingCached && identitiesRef.current === null) setReconnecting(attempt);
         },
       });
       setReconnecting(null);
@@ -293,6 +297,9 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
       }
     } catch (e) {
       setReconnecting(null);
+      if (usingCached || identitiesRef.current?.length) {
+        return;
+      }
       const status = e && e.lastStatus;
       if (e && e.reason === "http" && status) {
         setError(`HTTP ${status}`);
@@ -3519,16 +3526,17 @@ async function prewarmPeopleData({ endpoint, token, signal, maxAvatars = 8, maxF
     faceThumbsWarmed: 0,
     durationMs: 0,
   };
+  const fetcher = (typeof window !== "undefined" && window.tauriFetch) || fetch;
 
   const jsonFetch = async (url) => {
-    const resp = await fetch(url, { headers, cache: "no-store", signal });
+    const resp = await fetcher(url, { headers, cache: "no-store", signal });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     return resp.json();
   };
 
   const warmImage = async (url, authed = false) => {
     try {
-      const resp = await fetch(url, {
+      const resp = await fetcher(url, {
         headers: authed ? headers : undefined,
         cache: "force-cache",
         signal,

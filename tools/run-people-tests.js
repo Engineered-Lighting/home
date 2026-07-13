@@ -888,9 +888,23 @@ process.stdout.write("\n[1mpeople overlay interaction contract (DOC-S83)[0m\n");
     peopleSource.includes("frigate_person_name: bucket.name") &&
     peopleSource.includes("create identity") &&
     peopleSource.includes("do not identify"));
+  assert("identity refresh is cache-first and quiet while cached graph is visible",
+    peopleSource.includes("let usingCached = false;") &&
+    peopleSource.includes("usingCached = true;") &&
+    peopleSource.includes("timeoutMs: 20000") &&
+    peopleSource.includes("maxAttempts: usingCached ? 2 : 4") &&
+    peopleSource.includes("nextDelay != null && !usingCached && identitiesRef.current === null") &&
+    peopleSource.includes("if (usingCached || identitiesRef.current?.length)") &&
+    peopleSource.includes("return;"));
+  assert("people prewarm uses the app fetch bridge when available",
+    peopleSource.includes('const fetcher = (typeof window !== "undefined" && window.tauriFetch) || fetch;') &&
+    peopleSource.includes('const resp = await fetcher(url, { headers, cache: "no-store", signal });') &&
+    peopleSource.includes("const resp = await fetcher(url, {") &&
+    peopleSource.includes('cache: "force-cache"'));
   assert("HomeHeader accepts and attaches People menu focus ref",
     /function HomeHeader\(\{[\s\S]*peopleButtonRef[\s\S]*\}\)/.test(appSource) &&
-    /\{onOpenPeople && <button[\s\S]*role="menuitem"[\s\S]*ref=\{peopleButtonRef\}[\s\S]*onClick=\{\(\) => runMenuAction\(onOpenPeople\)\}/.test(appSource));
+    /\{onOpenPeople && !mobile && <button[\s\S]*role="menuitem"[\s\S]*ref=\{peopleButtonRef\}[\s\S]*onClick=\{\(\) => runMenuAction\(onOpenPeople\)\}/.test(appSource) &&
+    /\{onOpenPeople && mobile && \([\s\S]*ref=\{peopleButtonRef\}[\s\S]*onClick=\{onOpenPeople\}/.test(appSource));
   assert("HomeApp restores focus to People header button on overlay close",
     appSource.includes("const peopleButtonRef = useRef(null);") &&
     appSource.includes("const closePeopleOverlay = useCallback(() => {") &&

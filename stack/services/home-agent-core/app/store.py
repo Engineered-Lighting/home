@@ -2868,7 +2868,6 @@ class CoreStore:
                         await connection.execute(
                             select(schema.people)
                             .where(schema.people.c.person_id == value.person_id)
-                            .with_for_update()
                         )
                     )
                     .mappings()

@@ -254,7 +254,6 @@ function principalOperationBoundaryTest() {
   const handlers = [
     "requestPrincipalBinding",
     "cancelPrincipalBindingRequest",
-    "confirmPrincipalBinding",
     "propose",
     "confirm",
     "enablePreference",
@@ -357,11 +356,14 @@ function principalOperationBoundaryTest() {
   assert("deployed Agent client has no initiative listing, claim, or presentation path",
     !/\b(?:initiatives|claimInitiative)\s*\(/.test(read("app/src/home-agent/api.js")) &&
     !/(native_agent_(?:list|claim)_initiative|Private travel greeting|Present once)/.test(agentSources));
-  assert("browser identity preview is fixed, explicit, and keeps location choices off",
+  assert("browser identity preview is fixed, explicit, and keeps confirmation disabled",
     agentPanel.includes('id="principal-binding-preview">{bindingProposal.confirmation_statement}</p>') &&
     agentPanel.includes("Review code <code>{bindingProposal.review_code}</code>") &&
     agentPanel.includes("Location memory default: off. Travel greetings default: off.") &&
-    agentPanel.includes("window.crypto.randomUUID()") &&
+    agentPanel.includes("capability_disabled") &&
+    agentPanel.includes("atomic database confirmation kernel") &&
+    !agentPanel.includes("confirmPrincipalBinding") &&
+    !agentPanel.includes("Confirm this identity binding") &&
     !read("app/src/home-agent/api.js").includes("/api/agent/v1/people") &&
     !read("app/src/home-agent/api.js").includes("/api/agent/v1/principal-bindings"));
   principalOperationBoundaryTest();

@@ -1,10 +1,23 @@
 #!/bin/sh
 set -eu
 
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+[ -f "$script_dir/identity-api-acl.sql" ] || {
+  echo "identity API ACL contract is missing" >&2
+  exit 78
+}
+
 export PGPASSWORD="$(tr -d '\r\n' < "$POSTGRES_OWNER_PASSWORD_FILE")"
 [ -n "$PGPASSWORD" ] || { echo "empty owner password" >&2; exit 78; }
 
 psql -v ON_ERROR_STOP=1 <<'SQL'
+-- First committed statement: remove any stale identity authority before any
+-- other grant work can fail. The separate exact ACL file only adds reviewed
+-- capabilities after this fail-closed reset succeeds.
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA identity FROM home_agent_api;
+ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity
+  REVOKE ALL PRIVILEGES ON TABLES FROM home_agent_api;
+
 GRANT USAGE ON SCHEMA ingest TO home_agent_ingest, home_agent_api,
   home_agent_worker, home_agent_erasure;
 GRANT USAGE ON SCHEMA identity, knowledge, engagement, privacy, operations
@@ -52,24 +65,15 @@ GRANT SELECT ON TABLE operations.erasure_ledger_state, operations.outbox
 GRANT SELECT ON TABLE operations.erasure_ledger_state TO home_agent_rollout;
 GRANT SELECT ON TABLE operations.rollout_authorizations TO home_agent_ingest;
 GRANT SELECT ON ALL TABLES IN SCHEMA ingest TO home_agent_api;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA identity, knowledge,
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA knowledge,
   engagement, privacy, operations TO home_agent_api;
--- Principal binding is a two-party workflow. These exact ACLs are repeated
--- after the schema-wide API grant so new default privileges cannot widen the
--- online roles. Subject access is scoped by the HA-user transaction GUC;
--- operator access is scoped by the unforgeable PostgreSQL session_user.
+-- Principal binding is a two-party workflow. Operator access is scoped by the
+-- unforgeable PostgreSQL session_user. Online subject grants are added only by
+-- the final identity-api-acl.sql contract.
 REVOKE ALL ON TABLE identity.principal_binding_requests,
   identity.principal_binding_proposals
   FROM PUBLIC, home_agent_ingest, home_agent_worker, home_agent_erasure,
   home_agent_rollout, home_agent_binding_operator, home_agent_api;
-GRANT SELECT, INSERT ON TABLE identity.principal_binding_requests
-  TO home_agent_api;
-GRANT UPDATE (state, closed_at)
-  ON TABLE identity.principal_binding_requests TO home_agent_api;
-GRANT SELECT ON TABLE identity.principal_binding_proposals TO home_agent_api;
-GRANT UPDATE (
-  state, consumed_at, result_principal_id, confirmation_artifact_id
-) ON TABLE identity.principal_binding_proposals TO home_agent_api;
 GRANT SELECT ON TABLE identity.principal_binding_requests
   TO home_agent_binding_operator;
 GRANT UPDATE (state, staged_at, expires_at, closed_at)
@@ -82,13 +86,6 @@ GRANT SELECT ON TABLE identity.people, identity.principals,
   identity.ha_user_bindings, identity.edge_privacy_user_blocks,
   identity.privacy_directives
   TO home_agent_binding_operator;
--- Subject confirmation may create a principal, one confirmation artifact,
--- and one binding. It cannot erase either authority record; governed erasure
--- retains the only DELETE grant. Confirmation artifacts are immutable.
-REVOKE UPDATE, DELETE, TRUNCATE ON TABLE identity.confirmation_artifacts
-  FROM home_agent_api;
-REVOKE DELETE, TRUNCATE ON TABLE identity.ha_user_bindings
-  FROM home_agent_api;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA operations TO home_agent_worker;
 -- A worker may prove maintenance only by calling the fenced database kernels.
 -- Revoke schema-wide/default DML again so no online credential can forge the
@@ -133,9 +130,6 @@ GRANT EXECUTE ON FUNCTION privacy.apply_person_auto_expiry(uuid)
   TO home_agent_worker;
 REVOKE EXECUTE ON FUNCTION privacy.expire_principal_binding_work(timestamptz)
   FROM home_agent_worker;
-GRANT EXECUTE ON FUNCTION
-  privacy.cancel_principal_binding_work_for_person(uuid,timestamptz)
-  TO home_agent_api;
 GRANT SELECT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ingest, identity, knowledge,
   engagement, privacy TO home_agent_erasure;
 REVOKE INSERT ON TABLE identity.principal_binding_requests,
@@ -163,7 +157,7 @@ GRANT SELECT, INSERT, UPDATE ON TABLE operations.erasure_ledger_state
 GRANT SELECT, UPDATE ON TABLE operations.outbox TO home_agent_erasure;
 ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA ingest
   GRANT SELECT, INSERT, UPDATE ON TABLES TO home_agent_ingest;
-ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity, knowledge,
+ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA knowledge,
   engagement, privacy, operations
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO home_agent_api;
 
@@ -633,3 +627,8 @@ BEGIN
 END
 $$;
 SQL
+
+# The broad role setup above supports old pinned revisions and creates the
+# default ACL baseline.  Always finish by narrowing online identity writes to
+# the exact column-level workflows in the separately testable SQL contract.
+psql -v ON_ERROR_STOP=1 -f "$script_dir/identity-api-acl.sql"

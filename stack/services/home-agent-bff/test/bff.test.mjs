@@ -1341,8 +1341,16 @@ test("every binding operation force-revalidates HA and reconstructs authority he
         proposal_digest: digest,
         confirmation_nonce: nonce,
       });
-    return new Response('{"state":"bound"}', {
-      status: 200,
+    const contained = coreCalls === 4;
+    return new Response(contained
+      ? JSON.stringify({
+        error: {
+          code: "capability_disabled",
+          message: "principal binding confirmation is disabled",
+        },
+      })
+      : '{"state":"ok"}', {
+      status: contained ? 409 : 200,
       headers: { "content-type": "application/json" },
     });
   };
@@ -1373,7 +1381,13 @@ test("every binding operation force-revalidates HA and reconstructs authority he
     },
     body: JSON.stringify({ proposal_digest: digest, confirmation_nonce: nonce }),
   });
-  assert.equal(response.status, 200);
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), {
+    error: {
+      code: "capability_disabled",
+      message: "principal binding confirmation is disabled",
+    },
+  });
   assert.equal(whoamiCalls, 4, "a recent session receives a fresh check for every binding operation");
   assert.equal(coreCalls, 4);
 });

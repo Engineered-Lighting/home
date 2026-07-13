@@ -54,13 +54,10 @@ from .models import (
     Phase3ReadinessView,
     PlaceCreate,
     PreferenceUpdate,
-    PrincipalBindingConfirmation,
-    PrincipalBindingConfirmationView,
     PrincipalBindingProposalView,
     PrincipalBindingRequestAction,
     RolloutMode,
     RolloutStatus,
-    SourceEntityBindingCreate,
     VisitCreate,
     VisitView,
 )
@@ -91,6 +88,14 @@ PHASE3_SCHEMA_REVISION = "0006_worker_maintenance_health"
 LEGACY_IDENTITY_IMPORT_RETIRED = (
     "sequential legacy identity import is retired; use the reviewed atomic "
     "identity finalizer"
+)
+SOURCE_ENTITY_BINDING_RETIRED = (
+    "source-entity binding is disabled until its principal, person, and "
+    "confirmation provenance are enforced by the database"
+)
+PRINCIPAL_BINDING_CONFIRMATION_RETIRED = (
+    "principal binding confirmation is disabled until its atomic database "
+    "kernel enforces the principal, artifact, proposal, and binding graph"
 )
 
 
@@ -264,6 +269,25 @@ def semantic_router() -> APIRouter:
         # and submitted identity content is never parsed or reflected.
         raise CapabilityDisabledError(LEGACY_IDENTITY_IMPORT_RETIRED)
 
+    @router.post("/source-entity-bindings")
+    async def retired_source_entity_binding(
+        _service: Service,
+        _bootstrap: None = Depends(require_bootstrap),
+    ) -> None:
+        # Deliberately accept no body or store dependency.  The old table has
+        # no principal/person/artifact integrity boundary, so even a valid HA
+        # subject cannot reach a partial implementation.
+        raise CapabilityDisabledError(SOURCE_ENTITY_BINDING_RETIRED)
+
+    @router.post("/principal-binding-proposal/confirm")
+    async def retired_principal_binding_confirmation(
+        _service: Service,
+    ) -> None:
+        # Request/proposal review remains available, but the online API role
+        # has no INSERT authority for principals, artifacts, or HA bindings.
+        # Accept no body/store dependency while that atomic kernel is absent.
+        raise CapabilityDisabledError(PRINCIPAL_BINDING_CONFIRMATION_RETIRED)
+
     @router.get("/operator-rollout", response_model=RolloutStatus)
     async def operator_rollout(
         _service: OperatorService,
@@ -417,33 +441,6 @@ def semantic_router() -> APIRouter:
         return await store.database.run_serializable(
             lambda: store.cancel_principal_binding_request(service.ha_user_id)
         )
-
-    @router.post(
-        "/principal-binding-proposal/confirm",
-        response_model=PrincipalBindingConfirmationView,
-    )
-    async def confirm_principal_binding_proposal(
-        value: PrincipalBindingConfirmation,
-        service: Service,
-        store: Store,
-    ) -> PrincipalBindingConfirmationView:
-        return await store.database.run_serializable(
-            lambda: store.confirm_principal_binding_proposal(
-                service.ha_user_id, value
-            )
-        )
-
-    @router.post("/source-entity-bindings", status_code=status.HTTP_201_CREATED)
-    async def bind_source_entity(
-        value: SourceEntityBindingCreate,
-        principal: Principal,
-        store: Store,
-        _bootstrap: None = Depends(require_bootstrap),
-    ) -> dict[str, uuid.UUID]:
-        binding_id = await store.database.run_serializable(
-            lambda: store.bind_source_entity(principal, value)
-        )
-        return {"binding_id": binding_id}
 
     @router.put("/preferences/{key}")
     async def set_preference(

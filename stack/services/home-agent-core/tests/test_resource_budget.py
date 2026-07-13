@@ -48,6 +48,10 @@ def test_only_exact_retired_identity_paths_bypass_write_middleware() -> None:
     assert is_retired_legacy_identity_import(
         "/v1/people/00000000-0000-4000-8000-000000000001/privacy-directives"
     )
+    assert is_retired_legacy_identity_import("/v1/source-entity-bindings")
+    assert is_retired_legacy_identity_import(
+        "/v1/principal-binding-proposal/confirm"
+    )
     assert not is_retired_legacy_identity_import("/v1/people/id/preferences")
     assert not is_retired_legacy_identity_import("/v1/people/id/aliases/extra")
     assert not is_retired_legacy_identity_import("/v1/people-attacker/id/aliases")

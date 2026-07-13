@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import inspect
 import os
 import uuid
 import hashlib
@@ -94,6 +95,29 @@ def test_legacy_import_routes_are_tombstones_and_relationships_are_not_facts() -
     assert routes[("GET", "/v1/operator-capabilities")] == (
         "retired_legacy_identity_import"
     )
+    assert routes[("POST", "/v1/source-entity-bindings")] == (
+        "retired_source_entity_binding"
+    )
+    assert routes[("POST", "/v1/principal-binding-proposal/confirm")] == (
+        "retired_principal_binding_confirmation"
+    )
+    source_tombstone = next(
+        route
+        for route in semantic_router().routes
+        if route.path == "/v1/source-entity-bindings"
+    )
+    assert set(inspect.signature(source_tombstone.endpoint).parameters) == {
+        "_service",
+        "_bootstrap",
+    }
+    confirmation_tombstone = next(
+        route
+        for route in semantic_router().routes
+        if route.path == "/v1/principal-binding-proposal/confirm"
+    )
+    assert set(inspect.signature(confirmation_tombstone.endpoint).parameters) == {
+        "_service"
+    }
     assert schema.external_recognition_bindings is not schema.source_entity_bindings
     assert ("POST", "/v1/relationships/parent-confirmations") not in routes
     assert not hasattr(CoreStore, "confirm_parent")

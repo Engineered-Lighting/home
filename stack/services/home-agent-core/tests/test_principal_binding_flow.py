@@ -13,7 +13,7 @@ from sqlalchemy import func, select, text, update
 from app import schema
 from app.config import Settings
 from app.db import Database
-from app.errors import ConflictError, NotFoundError
+from app.errors import ConflictError, ForbiddenError, NotFoundError
 from app.models import (
     OperatorPrincipalBindingProposalStage,
     PersonCreate,
@@ -142,6 +142,10 @@ async def test_staged_binding_happy_path_privacy_drift_and_race() -> None:
         )
         privacy_request = await _request_for(store, "ha-user-privacy")
         await _stage(store, privacy_request, privacy_person.person_id)
+        privacy_proposal = await store.principal_binding_proposal_status(
+            "ha-user-privacy"
+        )
+        assert privacy_proposal.proposal_digest is not None
         await store.import_reviewed_privacy_directive(
             privacy_person.person_id,
             ReviewedPrivacyDirectiveImport(
@@ -183,6 +187,41 @@ async def test_staged_binding_happy_path_privacy_drift_and_race() -> None:
             "request_state": "cancelled",
             "proposal_state": "cancelled",
         }
+        with pytest.raises(ConflictError, match="not confirmable"):
+            await store.confirm_principal_binding_proposal(
+                "ha-user-privacy",
+                PrincipalBindingConfirmation(
+                    proposal_digest=privacy_proposal.proposal_digest,
+                    confirmation_nonce=uuid.uuid4(),
+                ),
+            )
+
+        archived_person = await store.create_person(
+            PersonCreate(display_name="Archive transition")
+        )
+        archived_request = await _request_for(store, "ha-user-archived")
+        await _stage(store, archived_request, archived_person.person_id)
+        archived_proposal = await store.principal_binding_proposal_status(
+            "ha-user-archived"
+        )
+        assert archived_proposal.proposal_digest is not None
+        async with database.transaction() as connection:
+            await connection.execute(
+                update(schema.people)
+                .where(schema.people.c.person_id == archived_person.person_id)
+                .values(status="archived", updated_at=datetime.now(UTC))
+            )
+        assert (
+            await store.principal_binding_proposal_status("ha-user-archived")
+        ).state == "unavailable"
+        with pytest.raises(ForbiddenError, match="reviewed person is unavailable"):
+            await store.confirm_principal_binding_proposal(
+                "ha-user-archived",
+                PrincipalBindingConfirmation(
+                    proposal_digest=archived_proposal.proposal_digest,
+                    confirmation_nonce=uuid.uuid4(),
+                ),
+            )
 
         drift_person = await store.create_person(
             PersonCreate(display_name="Reviewed before drift")

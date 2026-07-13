@@ -61,6 +61,122 @@ def python_callables(relative: str) -> dict[str, ast.AST]:
 
 
 class RepositoryBoundaryTests(unittest.TestCase):
+    def test_online_api_identity_acl_is_read_only_except_exact_workflows(self) -> None:
+        grants = read("stack/home-agent-deploy/apply-grants.sh")
+        identity_acl = read("stack/home-agent-deploy/identity-api-acl.sql")
+
+        self.assertTrue(
+            grants.rstrip().endswith(
+                'psql -v ON_ERROR_STOP=1 -f "$script_dir/identity-api-acl.sql"'
+            )
+        )
+        self.assertIn(
+            'script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)', grants
+        )
+        self.assertIn(
+            "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA identity "
+            "FROM home_agent_api",
+            identity_acl,
+        )
+        self.assertIn(
+            "ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity",
+            identity_acl,
+        )
+        self.assertIn(
+            "REVOKE ALL PRIVILEGES ON TABLES FROM home_agent_api", identity_acl
+        )
+        self.assertNotIn("GRANT SELECT ON ALL TABLES", identity_acl)
+        self.assertNotRegex(
+            grants,
+            r"(?is)GRANT\s+SELECT\s*,\s*INSERT\s*,\s*UPDATE\s*,\s*DELETE\s+"
+            r"ON\s+ALL\s+TABLES\s+IN\s+SCHEMA\s+identity",
+        )
+        self.assertLess(
+            grants.index("identity API ACL contract is missing"),
+            grants.index("psql -v ON_ERROR_STOP=1 <<'SQL'"),
+        )
+        baseline = grants.split("psql -v ON_ERROR_STOP=1 <<'SQL'", 1)[1].split(
+            "psql -v ON_ERROR_STOP=1 -f", 1
+        )[0]
+        self.assertIn(
+            "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA identity "
+            "FROM home_agent_api",
+            baseline,
+        )
+        self.assertLess(
+            baseline.index(
+                "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA identity "
+                "FROM home_agent_api"
+            ),
+            baseline.index("GRANT USAGE ON SCHEMA"),
+        )
+        self.assertNotRegex(
+            baseline,
+            r"(?is)GRANT\s+(?:SELECT|INSERT|UPDATE|DELETE)[^;]*"
+            r"identity\.[a-z_]+[^;]*TO\s+home_agent_api",
+        )
+        self.assertNotRegex(
+            identity_acl,
+            r"(?is)ALTER DEFAULT PRIVILEGES[^;]*GRANT[^;]*home_agent_api",
+        )
+
+        semantic_targets = (
+            "people",
+            "aliases",
+            "external_recognition_bindings",
+            "privacy_directives",
+            "legacy_role_labels",
+            "legacy_relationship_candidates",
+        )
+        for table in semantic_targets:
+            self.assertNotRegex(
+                identity_acl,
+                rf"(?is)GRANT\s+(?:INSERT|UPDATE|DELETE)[^;]*"
+                rf"identity\.{table}\b",
+            )
+        for readable in ("people", "privacy_directives"):
+            self.assertIn(f"identity.{readable}", identity_acl)
+        for inaccessible in (
+            "aliases",
+            "external_recognition_bindings",
+            "legacy_role_labels",
+            "legacy_relationship_candidates",
+            "source_entity_bindings",
+            "edge_privacy_blocks",
+        ):
+            self.assertNotIn(f"identity.{inaccessible}", identity_acl)
+
+        exact_insert_columns = {
+            "principal_binding_requests": {
+                "request_id", "ha_user_id", "review_code", "state",
+                "requested_at", "expires_at",
+            },
+            "confirmation_artifacts": {
+                "artifact_id", "principal_id", "purpose", "proposal_digest",
+                "client_nonce_sha256", "issued_at", "expires_at", "consumed_at",
+            },
+        }
+        for table, columns in exact_insert_columns.items():
+            match = re.search(
+                rf"(?is)GRANT INSERT\s*\(([^;]*?)\)\s*ON TABLE identity\.{table} "
+                r"TO home_agent_api;",
+                identity_acl,
+            )
+            self.assertIsNotNone(match, table)
+            actual = {item.strip() for item in match.group(1).split(",")}
+            self.assertEqual(columns, actual, table)
+
+        self.assertNotRegex(
+            identity_acl,
+            r"(?is)GRANT\s+(?:INSERT|UPDATE|DELETE)\s+ON\s+ALL\s+TABLES",
+        )
+        self.assertRegex(
+            identity_acl,
+            r"(?is)REVOKE EXECUTE ON FUNCTION\s+"
+            r"privacy\.cancel_principal_binding_work_for_person"
+            r"\(uuid,timestamptz\)\s+FROM home_agent_api;",
+        )
+
     def test_phase3_erasure_operation_foundation_remains_owner_only(self) -> None:
         migration = read(
             "stack/services/home-agent-core/alembic/versions/"
@@ -269,7 +385,6 @@ class RepositoryBoundaryTests(unittest.TestCase):
             "principalBindingProposal",
             "requestPrincipalBinding",
             "cancelPrincipalBindingRequest",
-            "confirmPrincipalBinding",
         ):
             self.assertIn(operation, client)
         self.assertIn(
@@ -278,7 +393,10 @@ class RepositoryBoundaryTests(unittest.TestCase):
             panel,
         )
         self.assertIn("Review code <code>{bindingProposal.review_code}</code>", panel)
-        self.assertIn("window.crypto.randomUUID()", panel)
+        self.assertNotIn("confirmPrincipalBinding", panel)
+        self.assertNotIn("window.crypto.randomUUID()", panel)
+        self.assertIn("confirmation disabled", panel)
+        self.assertIn("capability_disabled", panel)
         self.assertNotIn("/api/agent/v1/people", client)
         self.assertNotIn("/api/agent/v1/principal-bindings", client)
         self.assertNotIn("phase3-readiness", client)

@@ -503,23 +503,6 @@ function HomeAgentPanel() {
       setError(cause.message || "principal_binding_cancel_failed");
     }
   };
-  const confirmPrincipalBinding = async () => {
-    const ticket = beginPrincipalOperation();
-    setBindingBusy(true);
-    setError("");
-    try {
-      if (!bindingProposal?.proposal_digest) throw new Error("binding_proposal_unavailable");
-      const confirmationNonce = window.crypto.randomUUID();
-      await api.confirmPrincipalBinding(bindingProposal.proposal_digest, confirmationNonce);
-      if (!principalOperationCurrent(ticket)) return;
-      bindingFocusPending.current = true;
-      await refresh();
-    } catch (cause) {
-      if (!principalOperationCurrent(ticket)) return;
-      setBindingBusy(false);
-      setError(cause.message || "principal_binding_confirmation_failed");
-    }
-  };
   const propose = async () => {
     const ticket = beginPrincipalOperation();
     setError("");
@@ -747,15 +730,11 @@ function HomeAgentPanel() {
   }, bindingBusy ? "Requesting review…" : "Request identity review")), bindingProposal?.state === "awaiting_operator_review" && React.createElement(React.Fragment, null, React.createElement("h3", null, "Awaiting private operator review"), React.createElement("p", null, "No identity is selected or bound yet. Return here after the reviewed candidate is staged."), React.createElement("p", null, "Review code ", React.createElement("code", null, bindingProposal.review_code)), React.createElement("button", {
     disabled: bindingBusy,
     onClick: cancelPrincipalBindingRequest
-  }, bindingBusy ? "Cancelling request…" : "Cancel identity review request")), bindingProposal?.state === "ready_for_confirmation" && React.createElement(React.Fragment, null, React.createElement("h3", null, "Confirm the reviewed identity"), React.createElement("p", {
+  }, bindingBusy ? "Cancelling request…" : "Cancel identity review request")), bindingProposal?.state === "ready_for_confirmation" && React.createElement(React.Fragment, null, React.createElement("h3", null, "Reviewed identity staged / confirmation disabled"), React.createElement("p", {
     id: "principal-binding-preview"
   }, bindingProposal.confirmation_statement), React.createElement("dl", {
     className: "agent-grid"
-  }, React.createElement("dt", null, "Confirmation expires"), React.createElement("dd", null, bindingProposal.expires_at || "unavailable")), React.createElement("p", null, "This confirmation binds only this signed-in account to the reviewed person. It does not enable either location choice."), React.createElement("button", {
-    disabled: bindingBusy,
-    "aria-describedby": "principal-binding-preview",
-    onClick: confirmPrincipalBinding
-  }, bindingBusy ? "Confirming identity…" : "Confirm this identity binding"), " ", React.createElement("button", {
+  }, React.createElement("dt", null, "Confirmation expires"), React.createElement("dd", null, bindingProposal.expires_at || "unavailable")), React.createElement("p", null, React.createElement("code", null, "capability_disabled"), ": the candidate cannot create a principal, confirmation artifact, or binding until the atomic database confirmation kernel is deployed."), React.createElement("button", {
     disabled: bindingBusy,
     onClick: cancelPrincipalBindingRequest
   }, "Cancel identity review request")), bindingProposal?.state === "unavailable" && React.createElement(React.Fragment, null, React.createElement("h3", null, "Identity review unavailable"), React.createElement("p", null, "Core cannot safely offer or confirm a reviewed identity for this account. No replacement mapping will be inferred.")), !new Set(["not_requested", "awaiting_operator_review", "ready_for_confirmation", "unavailable"]).has(bindingProposal?.state) && React.createElement(React.Fragment, null, React.createElement("h3", null, "Identity review unavailable"), React.createElement("p", null, "The binding workflow failed closed because its status was not recognized.")))), onboarding?.state === "contained" && React.createElement("p", null, "An existing binding is unavailable under governance or privacy policy. Core will not create a replacement automatically."), onboarding?.state === "bound" && React.createElement("p", null, "The identity binding remains usable for reviewed rollout work; preferences, teaching, and initiatives stay unavailable here until canary authorization."), React.createElement("p", null, "Location memory default: off. Travel greetings default: off."), React.createElement("p", null, "Exact activity counts, timestamps, and evidence content are intentionally omitted from this user-facing status."), React.createElement("code", null, onboarding?.phase2_blockers?.join(", ") || "no gate blockers"), error && React.createElement("p", {

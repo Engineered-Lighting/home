@@ -122,8 +122,10 @@ Core semantic API (the BFF exposes only its narrower explicit allowlist):
 - `GET /v1/principal-binding-proposal`
 - `POST /v1/principal-binding-request`
 - `POST /v1/principal-binding-request/cancel`
-- `POST /v1/principal-binding-proposal/confirm`
-- `POST /v1/source-entity-bindings`
+- `POST /v1/principal-binding-proposal/confirm` (no-write
+  `capability_disabled` tombstone until the atomic confirmation kernel exists)
+- `POST /v1/source-entity-bindings` (no-write `capability_disabled` tombstone
+  until database provenance constraints exist)
 - `PUT /v1/preferences/{key}` (disable in every rollout; enable only in canary)
 - `POST /v1/places`
 - `POST /v1/visits`
@@ -281,13 +283,31 @@ An insufficient property anchor keeps its teaching transaction in
 encrypted-locator retention summary covered by its digest, but confirmation is
 blocked until the client obtains precise evidence and creates a fresh preview.
 
-People creation, source-entity binding, direct place/visit creation, and legacy
-imports are not BFF routes. They require the appropriate reviewed offline
-operator/migration workflow. Direct principal binding no longer exists:
-authenticated subjects can only request, inspect, cancel, and confirm through
-the four exact BFF routes, while proposal staging uses the separate
+People creation, direct place/visit creation, and legacy imports are not BFF
+routes. They require the appropriate reviewed offline operator/migration
+workflow. Source-entity binding is disabled rather than delegated to an unsafe
+offline shortcut. Direct principal binding no longer exists:
+authenticated subjects can request, inspect, and cancel through exact BFF
+routes; confirmation is a no-body/no-store tombstone. Proposal staging uses the separate
 `home_agent_binding_operator` database role and is never BFF-routed. Neither a
 BFF credential nor an arbitrary HA UUID can bootstrap identity authority.
+
+`home_agent_api` is reset after every grant replay to no identity-table
+privileges, then receives SELECT on only the eight tables used by current
+authentication, binding, and privacy checks. Its direct identity writes are
+column-limited to principal-binding request creation/closure and proposal
+cancellation/expiry, plus immutable principal-scoped confirmation receipts
+needed by privacy opt-out and descriptor lifecycle workflows. It has no
+principal, HA-binding, People/alias/recognition/privacy/legacy-candidate, or
+source-entity-binding INSERT; no future-table defaults; and no arbitrary-person
+binding-cancellation function. This exact-table SELECT list is still a service boundary: several
+readable legacy identity tables do not yet provide reviewed per-principal RLS,
+so broader semantic retrieval remains disabled.
+
+The source-entity route is intentionally a no-body, no-store tombstone. The
+current table cannot enforce the principal/person pair, self-confirmation, or
+confirmation-artifact provenance at the database boundary; record-only ingest
+does not require it, and Frigate enrollment remains outside this API.
 
 Only in canary, once a reviewed `device_tracker.*` binding, encrypted locality,
 and the two separate opt-ins exist, the ingest role projects a visit from two

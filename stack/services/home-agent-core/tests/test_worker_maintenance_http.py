@@ -334,7 +334,7 @@ def test_direct_parent_confirmation_route_is_absent_in_every_rollout(
         assert response.status_code == 404
 
 
-def test_bootstrap_and_native_channel_partial_credentials_preserve_401(
+def test_native_channel_and_operator_partial_credentials_preserve_401(
     tmp_path, monkeypatch
 ) -> None:
     app = main_module.create_app(
@@ -346,12 +346,6 @@ def test_bootstrap_and_native_channel_partial_credentials_preserve_401(
     async def mutation_probe():
         return {"mutated": True}
 
-    _replace_post_route(
-        app,
-        "/v1/source-entity-bindings",
-        mutation_probe,
-        [require_service_identity, require_bootstrap],
-    )
     initiative_id = uuid.uuid4()
     initiative_path = f"/v1/initiatives/{initiative_id}/claim"
     _replace_post_route(
@@ -369,13 +363,6 @@ def test_bootstrap_and_native_channel_partial_credentials_preserve_401(
     )
 
     with TestClient(app) as client:
-        bootstrap_missing = client.post(
-            "/v1/source-entity-bindings", headers=_service_headers()
-        )
-        bootstrap_trusted = client.post(
-            "/v1/source-entity-bindings",
-            headers=_service_headers(**{"X-Home-Agent-Bootstrap": BOOTSTRAP_TOKEN}),
-        )
         channel_missing = client.post(initiative_path, headers=_service_headers())
         channel_trusted = client.post(
             initiative_path,
@@ -400,13 +387,49 @@ def test_bootstrap_and_native_channel_partial_credentials_preserve_401(
             headers=_service_headers(),
         )
 
-    assert bootstrap_missing.status_code == 401
     assert channel_missing.status_code == 401
-    assert bootstrap_trusted.status_code == 503
     assert channel_trusted.status_code == 503
     assert operator_trusted.status_code == 503
     assert operator_wrong_audience.status_code == 401
-    assert len(maintenance.calls) == 3
+    assert len(maintenance.calls) == 2
+
+
+def test_source_binding_tombstone_precedes_maintenance_and_never_opens_db(
+    tmp_path, monkeypatch
+) -> None:
+    app = main_module.create_app(
+        _api_settings(tmp_path, rollout_mode="shadow", bootstrap=True)
+    )
+    maintenance = Maintenance("maintenance_failed")
+    _configure_db_less_app(app, monkeypatch, maintenance=maintenance)
+
+    with TestClient(app) as client:
+        unauthenticated = client.post("/v1/source-entity-bindings", json={})
+        contained = client.post(
+            "/v1/source-entity-bindings",
+            headers=_service_headers(**{"X-Home-Agent-Bootstrap": BOOTSTRAP_TOKEN}),
+            json={"arbitrary_private_content": "must not be parsed"},
+        )
+        confirmation_contained = client.post(
+            "/v1/principal-binding-proposal/confirm",
+            headers=_service_headers(),
+            json={"arbitrary_private_content": "must not be parsed"},
+        )
+
+    assert unauthenticated.status_code == 401
+    assert contained.status_code == 409
+    assert contained.json()["error"]["code"] == "capability_disabled"
+    assert contained.json()["error"]["message"].startswith(
+        "source-entity binding is disabled"
+    )
+    assert "arbitrary_private_content" not in contained.text
+    assert confirmation_contained.status_code == 409
+    assert confirmation_contained.json()["error"]["code"] == "capability_disabled"
+    assert confirmation_contained.json()["error"]["message"].startswith(
+        "principal binding confirmation is disabled"
+    )
+    assert "arbitrary_private_content" not in confirmation_contained.text
+    assert maintenance.calls == []
 
 
 def test_privacy_essential_mutation_bypasses_maintenance_gate(

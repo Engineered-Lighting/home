@@ -22,6 +22,8 @@ _RETIRED_LEGACY_IDENTITY_IMPORT_EXACT_PATHS = frozenset(
         "/v1/people/verify-reviewed",
         "/v1/people/legacy-role-labels",
         "/v1/people/legacy-relationship-candidates",
+        "/v1/source-entity-bindings",
+        "/v1/principal-binding-proposal/confirm",
     }
 )
 _RETIRED_LEGACY_IDENTITY_IMPORT_PERSON_SUFFIXES = frozenset(

@@ -227,24 +227,6 @@ function HomeAgentPanel() {
     }
   };
 
-  const confirmPrincipalBinding = async () => {
-    const ticket = beginPrincipalOperation();
-    setBindingBusy(true);
-    setError("");
-    try {
-      if (!bindingProposal?.proposal_digest) throw new Error("binding_proposal_unavailable");
-      const confirmationNonce = window.crypto.randomUUID();
-      await api.confirmPrincipalBinding(bindingProposal.proposal_digest, confirmationNonce);
-      if (!principalOperationCurrent(ticket)) return;
-      bindingFocusPending.current = true;
-      await refresh();
-    } catch (cause) {
-      if (!principalOperationCurrent(ticket)) return;
-      setBindingBusy(false);
-      setError(cause.message || "principal_binding_confirmation_failed");
-    }
-  };
-
   const propose = async () => {
     const ticket = beginPrincipalOperation();
     setError("");
@@ -545,19 +527,12 @@ function HomeAgentPanel() {
                   </button>
                 </>}
                 {bindingProposal?.state === "ready_for_confirmation" && <>
-                  <h3>Confirm the reviewed identity</h3>
+                  <h3>Reviewed identity staged / confirmation disabled</h3>
                   <p id="principal-binding-preview">{bindingProposal.confirmation_statement}</p>
                   <dl className="agent-grid">
                     <dt>Confirmation expires</dt><dd>{bindingProposal.expires_at || "unavailable"}</dd>
                   </dl>
-                  <p>This confirmation binds only this signed-in account to the reviewed person. It does not enable either location choice.</p>
-                  <button
-                    disabled={bindingBusy}
-                    aria-describedby="principal-binding-preview"
-                    onClick={confirmPrincipalBinding}
-                  >
-                    {bindingBusy ? "Confirming identity…" : "Confirm this identity binding"}
-                  </button>{" "}
+                  <p><code>capability_disabled</code>: the candidate cannot create a principal, confirmation artifact, or binding until the atomic database confirmation kernel is deployed.</p>
                   <button disabled={bindingBusy} onClick={cancelPrincipalBindingRequest}>
                     Cancel identity review request
                   </button>

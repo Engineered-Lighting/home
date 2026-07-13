@@ -77,6 +77,8 @@ from identity_store import (  # type: ignore[import]
     PREFERENCE_SOURCES,
     SCHEMA_VERSION,
     CHANGE_LOG_RETENTION,
+    LEGACY_MIGRATION_MODE,
+    SEMANTIC_WRITES_MODE_ENV,
     is_disabled,
 )
 
@@ -108,9 +110,21 @@ def section(name: str):
 
 def fresh() -> IdentityStore:
     """In-memory store + setup. Each test gets a clean DB."""
+    os.environ[SEMANTIC_WRITES_MODE_ENV] = LEGACY_MIGRATION_MODE
     s = IdentityStore(db_path=":memory:")
     s.setup()
     return s
+
+def fresh_frozen() -> IdentityStore:
+    """In-memory store after Home Agent Core semantic cutover."""
+    old = os.environ.pop(SEMANTIC_WRITES_MODE_ENV, None)
+    try:
+        s = IdentityStore(db_path=":memory:")
+        s.setup()
+        return s
+    finally:
+        if old is not None:
+            os.environ[SEMANTIC_WRITES_MODE_ENV] = old
 
 
 # ── Schema integrity ──────────────────────────────────────────────────
@@ -259,6 +273,39 @@ def _rename_no_queue_when_unchanged():
     assert all(p["op"] != "rename" for p in pending), pending
 t("non-display_name update does NOT queue Frigate rename",
   _rename_no_queue_when_unchanged)
+
+def _frozen_profile_edit_allows_user_pronouns():
+    s = fresh()
+    u = s.create_identity("Marcelo", relationship_type="me")
+    s._semantic_writes_frozen = True
+    ok = s.update_identity(u, {"pronouns": "he/him"}, actor="user")
+    assert ok
+    after = s.get_identity(u)
+    assert after.pronouns == "he/him"
+t("frozen semantic authority still allows user profile pronoun edits",
+  _frozen_profile_edit_allows_user_pronouns)
+
+def _frozen_blocks_non_user_profile_edit():
+    s = fresh()
+    u = s.create_identity("Marcelo", relationship_type="me")
+    s._semantic_writes_frozen = True
+    try:
+        s.update_identity(u, {"pronouns": "he/him"}, actor="assistant")
+        raise AssertionError("expected PermissionError for non-user actor")
+    except PermissionError as e:
+        assert "semantic authority" in str(e)
+t("frozen semantic authority blocks assistant profile writes",
+  _frozen_blocks_non_user_profile_edit)
+
+def _frozen_blocks_legacy_create():
+    s = fresh_frozen()
+    try:
+        s.create_identity("New Person", relationship_type="friend")
+        raise AssertionError("expected PermissionError for legacy create")
+    except PermissionError as e:
+        assert "semantic authority" in str(e)
+t("frozen semantic authority blocks legacy create_identity",
+  _frozen_blocks_legacy_create)
 
 def _delete_cascades_and_queues():
     s = fresh()

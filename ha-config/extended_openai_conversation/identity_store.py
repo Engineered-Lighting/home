@@ -68,6 +68,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -84,6 +85,26 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger(__name__)
 
 IDENTITY_STORE_DISABLED_ENV = "EXTENDED_OPENAI_IDENTITY_STORE"
+SEMANTIC_WRITES_MODE_ENV = "EXTENDED_OPENAI_IDENTITY_SEMANTIC_WRITES"
+LEGACY_MIGRATION_MODE = "legacy_migration_only"
+SEMANTIC_AUTHORITY_KEY = "semantic_authority"
+CORE_SEMANTIC_AUTHORITY = "home_agent_core"
+USER_PROFILE_EDIT_ACTORS = {"user", "home_app", "ui"}
+USER_PROFILE_EDIT_FIELDS = {
+    "display_name",
+    "pronouns",
+    "relationship_type",
+    "relationship_subrole",
+    "notes",
+    "is_private",
+    "is_silent",
+    "is_ignored",
+    "is_archived",
+    "do_not_track",
+    "auto_expire_at",
+    "ha_person_entity_id",
+    "ha_device_tracker_entity_id",
+}
 
 # Schema version. Bump when columns change; migrations run on open.
 SCHEMA_VERSION = 1
@@ -361,6 +382,10 @@ class IdentityStore:
         self._lock = threading.RLock()
         self._conn: Optional[sqlite3.Connection] = None
         self._disabled = is_disabled()
+        # Fail closed. Legacy semantic writes are permitted only during an
+        # explicitly configured pre-cutover migration window, and never after
+        # the durable Core-authority marker has been written.
+        self._semantic_writes_frozen = True
         # Addendum 16 F-4a: set by the integration when setup() raises so
         # the IdentityListView can report `ready: false` + the Tauri
         # overlay can render a clear banner instead of "empty store".
@@ -392,13 +417,70 @@ class IdentityStore:
                 isolation_level=None,       # autocommit; we use BEGIN IMMEDIATE explicitly
             )
             self._conn.row_factory = sqlite3.Row
+            # New deletions/shortening must overwrite freed SQLite payload
+            # bytes. This is defense in depth on top of encrypted storage; it
+            # also lets the one-time historical audit scrub remove overflow
+            # pages instead of merely unlinking them from live rows.
+            self._conn.execute("PRAGMA secure_delete = ON")
             self._conn.executescript(SCHEMA_DDL)
+            authority_row = self._conn.execute(
+                "SELECT value FROM schema_meta WHERE key = ?",
+                (SEMANTIC_AUTHORITY_KEY,),
+            ).fetchone()
+            requested_mode = os.environ.get(SEMANTIC_WRITES_MODE_ENV, "").strip()
+            if authority_row is not None:
+                self._semantic_writes_frozen = True
+            elif requested_mode == LEGACY_MIGRATION_MODE:
+                self._semantic_writes_frozen = False
+            else:
+                self._semantic_writes_frozen = True
+                self._conn.execute(
+                    "INSERT INTO schema_meta(key, value) VALUES(?, ?)",
+                    (SEMANTIC_AUTHORITY_KEY, CORE_SEMANTIC_AUTHORITY),
+                )
+            # Historical audit rows could contain full identity snapshots,
+            # notes, relationship data, and deleted names.  Preserve only the
+            # content-free audit envelope; never read or copy the old JSON.
+            scrubbed = self._conn.execute(
+                "UPDATE change_log SET before_json = NULL, "
+                "after_json = '{\"operation_code\":\"legacy_scrubbed\"}', "
+                "link_conv_id = NULL, link_turn_id = NULL, link_tool_idx = NULL "
+                "WHERE before_json IS NOT NULL OR after_json IS NOT NULL "
+                "OR link_conv_id IS NOT NULL OR link_turn_id IS NOT NULL "
+                "OR link_tool_idx IS NOT NULL"
+            )
+            if scrubbed.rowcount > 0 and self.db_path != ":memory:":
+                # Flush and truncate any WAL pages that predate the scrub,
+                # then rebuild the database so stale freelist/overflow pages
+                # are not left as a recoverable local artifact. Any failure
+                # propagates and keeps the legacy identity API unavailable.
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                self._conn.execute("VACUUM")
             # Record schema version
             self._conn.execute(
                 "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
             )
             LOGGER.info("identity_store opened at %s (schema v%d)", self.db_path, SCHEMA_VERSION)
+
+    @property
+    def semantic_writes_frozen(self) -> bool:
+        return self._semantic_writes_frozen
+
+    def _require_semantic_writes(
+        self,
+        *,
+        actor: str = "system",
+        patch: Optional[dict] = None,
+    ) -> None:
+        if self._semantic_writes_frozen:
+            if actor in USER_PROFILE_EDIT_ACTORS and patch is not None:
+                fields = set(patch.keys()) - {"expected_version", "actor"}
+                if fields and fields <= USER_PROFILE_EDIT_FIELDS:
+                    return
+            raise PermissionError(
+                "legacy semantic authority is frozen; use Home Agent Core"
+            )
 
     def close(self) -> None:
         with self._lock:
@@ -572,6 +654,7 @@ class IdentityStore:
         audit row."""
         if self._disabled or self._conn is None:
             return ""
+        self._require_semantic_writes()
         if relationship_type not in RELATIONSHIP_TYPES:
             raise ValueError(f"invalid relationship_type: {relationship_type!r}")
         new_uuid = _new_uuid()
@@ -625,6 +708,66 @@ class IdentityStore:
             })
         return new_uuid
 
+    def ensure_recognition_enrollment(
+        self,
+        frigate_person_name: str,
+        *,
+        display_label: Optional[str] = None,
+        actor: str = "frigate_sync",
+    ) -> str:
+        """Maintain the isolated operational Frigate mapping after cutover.
+
+        This intentionally cannot set relationships, preferences, privacy, HA
+        bindings, or arbitrary aliases. Core review is still required before
+        the recognition identity becomes a semantic person.
+        """
+        if self._disabled or self._conn is None:
+            return ""
+        name = frigate_person_name.strip()
+        if not name or len(name) > 255 or any(ord(char) < 32 for char in name):
+            raise ValueError("invalid Frigate recognition identifier")
+        existing = self.resolve_frigate_name(name)
+        if existing is not None:
+            return existing.uuid
+        label = (display_label or "Unreviewed recognition").strip()
+        if not label or len(label) > 255:
+            raise ValueError("invalid operational recognition label")
+        new_uuid = _new_uuid()
+        now = _now_iso()
+        with self._txn() as conn:
+            conn.execute(
+                "INSERT INTO identities("
+                "uuid, display_name, relationship_type, flags_extra, "
+                "created_at, updated_at) VALUES (?,?, 'unknown', ?,?,?)",
+                (
+                    new_uuid,
+                    label,
+                    json.dumps({"operational_recognition_only": True}),
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                "INSERT INTO identity_aliases("
+                "identity_uuid, alias, alias_kind, created_at) "
+                "VALUES (?,?, 'frigate_name', ?)",
+                (new_uuid, name, now),
+            )
+            conn.execute(
+                "INSERT INTO enrollments("
+                "identity_uuid, frigate_person_name, created_at) VALUES (?,?,?)",
+                (new_uuid, name, now),
+            )
+            self._audit(
+                conn,
+                "frigate_writeback",
+                actor,
+                new_uuid,
+                None,
+                {"op": "recognition_enrollment_created"},
+            )
+        return new_uuid
+
     def update_identity(
         self,
         uuid_or_alias: str,
@@ -638,13 +781,10 @@ class IdentityStore:
         row was updated."""
         if self._disabled or self._conn is None:
             return False
+        self._require_semantic_writes(actor=actor, patch=patch)
         cur = self.get_identity(uuid_or_alias)
         if cur is None:
             return False
-        if expected_version is not None and cur.version != expected_version:
-            raise ValueError(
-                f"version mismatch: expected {expected_version}, got {cur.version}"
-            )
         allowed = {
             "display_name", "pronouns", "relationship_type",
             "relationship_subrole", "notes",
@@ -667,11 +807,23 @@ class IdentityStore:
         sets.append("updated_at = ?"); args.append(now)
         sets.append("version = version + 1")
         args.append(cur.uuid)
+        where = "uuid = ?"
+        if expected_version is not None:
+            where += " AND version = ?"
+            args.append(expected_version)
         with self._txn() as conn:
-            conn.execute(
-                f"UPDATE identities SET {', '.join(sets)} WHERE uuid = ?",
+            updated = conn.execute(
+                f"UPDATE identities SET {', '.join(sets)} WHERE {where}",
                 args,
             )
+            if updated.rowcount != 1:
+                current_version = conn.execute(
+                    "SELECT version FROM identities WHERE uuid = ?", (cur.uuid,)
+                ).fetchone()
+                actual = current_version["version"] if current_version else "missing"
+                raise ValueError(
+                    f"version mismatch: expected {expected_version}, got {actual}"
+                )
             # Also rename the primary 'name' alias if display_name changed
             if "display_name" in patch:
                 conn.execute(
@@ -735,6 +887,9 @@ class IdentityStore:
         self, uuid_or_alias: str, alias: str,
         *, kind: str = "nickname", actor: str = "user",
     ) -> bool:
+        if self._disabled or self._conn is None:
+            return False
+        self._require_semantic_writes()
         cur = self.get_identity(uuid_or_alias)
         if cur is None:
             return False
@@ -761,6 +916,9 @@ class IdentityStore:
     ) -> bool:
         """Hard-delete locally + queue Frigate-side delete via outbox
         (AR-8). All cascading rows go via ON DELETE CASCADE."""
+        if self._disabled or self._conn is None:
+            return False
+        self._require_semantic_writes()
         cur = self.get_identity(uuid_or_alias)
         if cur is None:
             return False
@@ -803,6 +961,7 @@ class IdentityStore:
         (e.g. partner) the caller should call twice (A→B, B→A)."""
         if self._disabled or self._conn is None:
             return 0
+        self._require_semantic_writes()
         if from_uuid == to_uuid:
             raise ValueError("cannot relate an identity to itself")
         if not self.get_identity(from_uuid) or not self.get_identity(to_uuid):
@@ -827,6 +986,7 @@ class IdentityStore:
     def end_relationship(self, edge_id: int, *, actor: str = "user") -> bool:
         if self._disabled or self._conn is None:
             return False
+        self._require_semantic_writes()
         now = _now_iso()
         with self._txn() as conn:
             cur = conn.execute(
@@ -854,6 +1014,7 @@ class IdentityStore:
     ) -> int:
         if self._disabled or self._conn is None:
             return 0
+        self._require_semantic_writes()
         if source not in PREFERENCE_SOURCES:
             raise ValueError(f"invalid source: {source!r}")
         scope_json = json.dumps(scope or {}, sort_keys=True)
@@ -903,6 +1064,12 @@ class IdentityStore:
         turn_id: Optional[str] = None,
         tool_idx: Optional[int] = None,
     ) -> None:
+        raw_operation = (
+            (after or {}).get("op") if isinstance(after, dict) else None
+        ) or kind
+        operation_code = re.sub(
+            r"[^a-z0-9_]+", "_", str(raw_operation).strip().lower()
+        ).strip("_")[:64] or "audit_event"
         conn.execute(
             "INSERT INTO change_log("
             "ts, kind, actor, target_uuid, before_json, after_json, "
@@ -910,9 +1077,9 @@ class IdentityStore:
             "VALUES (?,?,?,?,?,?,?,?,?)",
             (
                 _now_iso(), kind, actor, target_uuid,
-                json.dumps(before) if before is not None else None,
-                json.dumps(after) if after is not None else None,
-                conv_id, turn_id, tool_idx,
+                None,
+                json.dumps({"operation_code": operation_code}),
+                None, None, None,
             ),
         )
         # Addendum 16 F-5a: fire an HA bus event for identity mutations
@@ -931,7 +1098,7 @@ class IdentityStore:
             event_data = {
                 "actor": actor,
                 "target_uuid": target_uuid,
-                "op": (after or {}).get("op") if isinstance(after, dict) else None,
+                "op": operation_code,
                 "ts": _now_iso(),
             }
             try:

@@ -5662,7 +5662,25 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         setWarmup({ state: "deferred", current: null, reason: focused ? "input focused" : "recent interaction" });
         await wait(1200);
       }
-      return false;
+      setWarmup({ state: "running", current: null, reason: "continuing after interaction window" });
+      return true;
+    };
+    const runImmediateJob = async (name, fn) => {
+      if (controller?.signal?.aborted) return;
+      setWarmup({ state: "running", current: name, reason: null });
+      const started = Date.now();
+      try {
+        const detail = await fn();
+        setWarmup({
+          current: null,
+          completed: [...(window.__HOME_BACKGROUND_WARMUP?.completed || []), { name, durationMs: Date.now() - started, detail }],
+        });
+      } catch (err) {
+        setWarmup({
+          current: null,
+          failed: [...(window.__HOME_BACKGROUND_WARMUP?.failed || []), { name, error: err?.message || String(err) }],
+        });
+      }
     };
     const runJob = async (name, fn) => {
       if (controller?.signal?.aborted) return;
@@ -5690,9 +5708,12 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     let cancelled = false;
     setWarmup({ state: "queued", current: null });
     (async () => {
-      await wait(1800);
+      await wait(700);
       if (cancelled) return;
-      await runJob("people feature", () => prefetchFeature("people", "background-warmup"));
+      await Promise.all([
+        runImmediateJob("people feature", () => prefetchFeature("people", "background-warmup")),
+        runImmediateJob("apartment feature", () => prefetchFeature("apartment", "background-warmup")),
+      ]);
       if (connection === "online" && endpoint && token) {
         await runJob("people data", async () => {
           if (!window.HomePeoplePrewarm?.start) return { skipped: true, reason: "prewarm api unavailable" };
@@ -5708,7 +5729,6 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         setWarmup({ skipped: [...(window.__HOME_BACKGROUND_WARMUP?.skipped || []), { name: "people data", reason: "HA not online" }] });
       }
       window.__HOME_BACKGROUND_WARMUP_CONTROLS_APARTMENT = true;
-      await runJob("apartment feature", () => prefetchFeature("apartment", "background-warmup"));
       await runJob("apartment modules", async () => {
         if (!window.Home3D?.ready) return { skipped: true, reason: "3d bridge unavailable" };
         const engine = await window.Home3D.ready;

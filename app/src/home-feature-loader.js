@@ -50,7 +50,6 @@
       files: [
         ["home-apartment-data.js", false],
         ["home-apartment-sim.js", false],
-        ["home-apartment-prewarm.js", false],
         ["home-apartment-cards.jsx", true],
         ["home-apartment-calibrate.jsx", true],
         ["home-apartment-edit.jsx", true],

@@ -360,9 +360,10 @@ def test_bootstrap_and_native_channel_partial_credentials_preserve_401(
         mutation_probe,
         [require_native_service_identity],
     )
+    operator_path = "/v1/operator/principal-binding-proposals"
     _replace_post_route(
         app,
-        "/v1/people",
+        operator_path,
         mutation_probe,
         [require_operator_bearer, require_bootstrap],
     )
@@ -388,14 +389,14 @@ def test_bootstrap_and_native_channel_partial_credentials_preserve_401(
             ),
         )
         operator_trusted = client.post(
-            "/v1/people",
+            operator_path,
             headers={
                 "Authorization": f"Bearer {OPERATOR_TOKEN}",
                 "X-Home-Agent-Bootstrap": BOOTSTRAP_TOKEN,
             },
         )
         operator_wrong_audience = client.post(
-            "/v1/people",
+            operator_path,
             headers=_service_headers(),
         )
 

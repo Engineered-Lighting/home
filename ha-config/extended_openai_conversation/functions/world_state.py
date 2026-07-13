@@ -40,6 +40,7 @@ from homeassistant.helpers import llm
 
 from ..const import (
     DOMAIN,
+    GROUNDED_LOOK_TIMEOUT_S,
     REFRESH_PERCEPTION_MAX_PER_TURN,
     REFRESH_PERCEPTION_TIMEOUT_S,
     VISION_SIDECAR_URL,
@@ -448,7 +449,7 @@ class WorldStateFunction(Function):
             "images, and uncertainty when available."
         )
         try:
-            timeout = aiohttp.ClientTimeout(total=REFRESH_PERCEPTION_TIMEOUT_S + 6)
+            timeout = aiohttp.ClientTimeout(total=GROUNDED_LOOK_TIMEOUT_S)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(
                     url,

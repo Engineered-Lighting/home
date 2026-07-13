@@ -251,7 +251,7 @@ function eventTexts(events) {
     const result = await h.api.runNaturalDeepLook("what do you see in my apartment", h.options);
     const texts = eventTexts(h.events);
     assert("partial failure is still handled without HA fallback", result.handled === true && result.fallback === false && h.calls.sendToHA.length === 0, result);
-    assert("partial failure emits visible diagnostic", texts.includes("grounded look failed") && texts.includes("camera offline"), texts);
+    assert("partial failure does not spam visible diagnostics", !texts.includes("grounded look failed") && !texts.includes("camera offline"), texts);
     assert("partial failure final answer names failed camera", texts.includes("I could not inspect"), texts);
   }
 
@@ -262,7 +262,7 @@ function eventTexts(events) {
     const texts = eventTexts(h.events);
     assert("all failures fall back to HA", result.handled === true && result.fallback === true && h.calls.sendToHA.length === 1, { result, calls: h.calls.sendToHA });
     assert("fallback uses echoUser false", h.calls.sendToHA[0][1]?.echoUser === false, h.calls.sendToHA);
-    assert("all failures emit visible reason", texts.includes("grounded look failed for every selected camera"), texts);
+    assert("all failures emit concise fallback reason", texts.includes("deep visual look timed out - using quick caption fallback"), texts);
     assert("user text is still emitted only once", h.events.filter((e) => e.kind === "user").length === 1, h.events);
   }
 
@@ -288,7 +288,7 @@ function eventTexts(events) {
     const result = await h.api.runNaturalDeepLook("what do you see in my apartment", h.options);
     const texts = eventTexts(h.events);
     assert("malformed response becomes failure and fallback", result.reason === "all-look-failed" && h.calls.sendToHA.length === 1, result);
-    assert("malformed response is visible", texts.includes("malformed look response"), texts);
+    assert("malformed response is not exposed as transcript noise", !texts.includes("malformed look response") && texts.includes("deep visual look timed out - using quick caption fallback"), texts);
   }
 
   process.stdout.write("\nsimulation_and_non_visual_scenarios\n");

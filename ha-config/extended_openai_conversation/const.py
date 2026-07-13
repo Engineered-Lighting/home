@@ -180,6 +180,7 @@ VISION_SIDECAR_URL = "http://192.168.0.100:8091"
 # refresh_perception rate limits — protect the turn from runaway latency.
 REFRESH_PERCEPTION_MAX_PER_TURN = 2
 REFRESH_PERCEPTION_TIMEOUT_S = 8
+GROUNDED_LOOK_TIMEOUT_S = 150
 
 # ─────────────────────────────────────────────────────────────────────
 # M1 — event-aware perception scheduler (Addendum 27 / Section 6).

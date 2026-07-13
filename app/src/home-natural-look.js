@@ -370,7 +370,7 @@
     for (let i = 0; i < cameras.length; i++) {
       const cam = cameras[i];
       const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-      const timeoutMs = Number.isFinite(Number(opts.timeoutMs)) ? Number(opts.timeoutMs) : 12000;
+      const timeoutMs = Number.isFinite(Number(opts.timeoutMs)) ? Number(opts.timeoutMs) : 90000;
       const timeout = controller && timeoutMs > 0 ? setTimeout(() => {
         try { controller.abort(); } catch (_) {}
       }, timeoutMs) : null;
@@ -403,11 +403,6 @@
           name: cam.name,
           error: aborted ? "timeout" : (e && e.message ? e.message : String(e)),
         });
-        addEvent({
-          kind: "system",
-          tone: "warn",
-          text: `grounded look failed · ${cam.name} · ${aborted ? "timeout" : (e && e.message ? e.message : "error")}`,
-        });
       } finally {
         if (timeout) clearTimeout(timeout);
       }
@@ -422,7 +417,7 @@
     addEvent({
       kind: "system",
       tone: "warn",
-      text: "grounded look failed for every selected camera - using quick caption fallback",
+      text: "deep visual look timed out - using quick caption fallback",
     });
     if (typeof opts.sendToHA === "function") await opts.sendToHA(text, { echoUser: false });
     return { handled: true, reason: "all-look-failed", results, failures, fallback: true };

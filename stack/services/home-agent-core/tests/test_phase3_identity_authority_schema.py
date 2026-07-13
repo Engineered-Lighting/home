@@ -390,8 +390,14 @@ async def test_post_grant_tables_are_force_rls_and_runtime_roles_have_zero_acl()
                         {"name": name},
                     )
                 ).all()
-                assert {row.cmd for row in policies} == {"INSERT", "SELECT"}
-                assert all(row.roles == ["home_agent_owner"] for row in policies)
+                # Revision 0007's owner policies remain mandatory. Later
+                # additive kernels install separately tested, role-scoped
+                # SELECT/INSERT/UPDATE policies without weakening these.
+                policy_pairs = {
+                    (row.cmd, tuple(row.roles)) for row in policies
+                }
+                assert ("INSERT", ("home_agent_owner",)) in policy_pairs
+                assert ("SELECT", ("home_agent_owner",)) in policy_pairs
                 for role in RUNTIME_ROLES:
                     privileges = (
                         await connection.execute(

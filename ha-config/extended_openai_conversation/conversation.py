@@ -210,6 +210,58 @@ def _friendly_error_speech(err: Exception) -> str:
     return "I had trouble completing that. Try a simpler request."
 
 
+_VISUAL_QUERY_RE = re.compile(
+    r"\b("
+    r"what(?:'s|s| is)?\s+(?:going on|happening|in|inside|on|at)|"
+    r"what\s+do\s+you\s+see|"
+    r"look(?:\s+at|\s+in|\s+inside)?|"
+    r"check\s+(?:the\s+)?(?:camera|feed|view)|"
+    r"show\s+me\s+(?:the\s+)?(?:camera|feed|view)|"
+    r"can\s+you\s+see|"
+    r"do\s+you\s+see|"
+    r"describe\s+(?:the\s+)?(?:camera|feed|view|scene)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_VISUAL_ROOM_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("living_room", ("living room", "coffee table", "couch", "sofa", "tv", "bicycle")),
+    ("kitchen", ("kitchen", "counter", "island", "sink", "stove", "oven")),
+    ("dining_room", ("dining room", "dining table", "table", "chairs")),
+    ("workshop", ("workshop", "office", "desk")),
+    ("driveway", ("driveway", "outside", "front yard", "street", "car", "vehicle")),
+)
+
+
+def _infer_visual_room(text: str) -> str:
+    """Infer the room/camera for deterministic visual routing."""
+    q = (text or "").lower().replace("-", " ")
+    for room, terms in _VISUAL_ROOM_ALIASES:
+        if any(term in q for term in terms):
+            return room
+    return ""
+
+
+def _should_preroute_grounded_look(text: str) -> dict[str, Any] | None:
+    """Return grounded_look args for direct visual questions.
+
+    Tool-calling from the local OpenAI-compatible model is not guaranteed.
+    For direct "what do you see" camera questions, deterministic routing is
+    safer than hoping the model obeys the prompt.
+    """
+    text = (text or "").strip()
+    if not text or not _VISUAL_QUERY_RE.search(text):
+        return None
+    room = _infer_visual_room(text)
+    if not room:
+        return None
+    return {
+        "room": room,
+        "question": text,
+        "allow_illumination": room not in {"driveway", "outside", "front_yard", "back_yard"},
+    }
+
+
 # Module-import sentinel: writes a line every time this module is loaded.
 # If this file exists, my code is in the loaded module. If not, the
 # integration somehow loaded a different file or this one never executed.
@@ -527,6 +579,68 @@ class ExtendedOpenAIAgentEntity(
         # /config/external_routing.log so the workstation-side analyzer
         # can detect misroutes (e.g. local-routed turns where the agent
         # said "I don't know"). See plan ~/.claude/plans/keen-doodling-parasol.md.
+        # Deterministic visual routing. The local model occasionally ignores
+        # the "must call grounded_look" prompt and hallucinates that camera
+        # access is disabled. Direct visual questions are cheap to classify,
+        # so execute the vision tool before the LLM can dodge it.
+        _grounded_args = _should_preroute_grounded_look(user_input.text or "")
+        if _grounded_args:
+            try:
+                function = get_function("world_state")
+                llm_context = user_input.as_llm_context(DOMAIN)
+                tool_result = await function.execute(
+                    self.hass,
+                    {"type": "world_state", "name": "grounded_look"},
+                    _grounded_args,
+                    llm_context,
+                    self._get_exposed_entities(),
+                )
+                answer = (
+                    (tool_result or {}).get("suggested_phrasing")
+                    or ((tool_result or {}).get("data") or {}).get("answer")
+                    or ""
+                )
+                if not answer:
+                    err = (tool_result or {}).get("error")
+                    answer = (
+                        f"I couldn't get a fresh look at the "
+                        f"{_grounded_args['room'].replace('_', ' ')} right now."
+                    )
+                    if err:
+                        answer += f" ({err})"
+                answer = _apply_ha_asr_correction(answer)
+                resp = intent.IntentResponse(language=user_input.language)
+                resp.async_set_speech(answer)
+                try:
+                    self.hass.bus.async_fire(
+                        EVENT_CONVERSATION_FINISHED,
+                        {
+                            "conversation_id": user_input.conversation_id,
+                            "agent_id": self.subentry.subentry_id,
+                            "user_input_text": user_input.text or "",
+                            "assistant_text": answer,
+                            "route": "grounded_look_preroute",
+                        },
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                if dev and user_input.conversation_id:
+                    DEVICE_CONV_MEMORY[dev] = (
+                        time.time(),
+                        user_input.conversation_id,
+                    )
+                return ConversationResult(
+                    response=resp,
+                    conversation_id=user_input.conversation_id,
+                    continue_conversation=False,
+                )
+            except Exception as e:  # noqa: BLE001
+                _LOGGER.warning(
+                    "grounded_look preroute failed; falling back to LLM: %s",
+                    e,
+                    exc_info=True,
+                )
+
         _ext_routing_state = {
             "src": "voice" if dev and ("voice" in dev or "satellite" in dev or "wyoming" in dev) else "chat",
             "intent": "local",

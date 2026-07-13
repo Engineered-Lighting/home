@@ -35,11 +35,18 @@ depends_on: str | Sequence[str] | None = None
 
 KERNEL_ROLE = "home_agent_identity_erasure_kernel"
 
+# Computed from the pinned PostgreSQL 17.10 image after revision 0010 and the
+# reviewed provision-roles/apply-grants scripts.  Object identities are
+# name-based so the contract is independent of per-cluster OIDs.  Raw ACL text
+# deliberately distinguishes NULL/default ACLs from explicitly rewritten ACLs.
+PINNED_SYSTEM_CATALOG_CONTRACT_ROWS = 6563
+PINNED_SYSTEM_CATALOG_CONTRACT_DIGEST = (
+    "b4e8efc14ec69bc6532a324060b455f0df99311c40120b553b7f00b8ac0994ec"
+)
+
 PERSON_SCOPE = "privacy.person_erasure_scopes"
 SUBJECT_BLOCK = "privacy.subject_retrieval_blocks"
-ERASURE_RECEIPT = (
-    "operations.reviewed_identity_migration_erasure_receipts"
-)
+ERASURE_RECEIPT = "operations.reviewed_identity_migration_erasure_receipts"
 OPERATION = "operations.reviewed_identity_migration_erasure_operations"
 IMPACT = "operations.reviewed_identity_migration_erasure_impacts"
 
@@ -101,32 +108,223 @@ REQUEST_SCOPE_COLUMN = "identity_person_scope_commitment"
 BINDING_VALID_COLUMN = "identity_erasure_binding_valid_until"
 
 RELIED_SUPPORT_CONSTRAINTS = (
-    ("identity.principals", "principal_person_identity", "UNIQUE (principal_id, person_id)"),
-    ("identity.principals", "fk_principals_person_id_people", "FOREIGN KEY (person_id) REFERENCES identity.people(person_id)"),
-    ("identity.principals", "ck_principals_principal_kind", "CHECK (kind::text = ANY (ARRAY['ha_user'::character varying, 'voice_unknown'::character varying, 'service'::character varying]::text[]))"),
-    ("identity.ha_user_bindings", "uq_ha_user_bindings_proposal_id", "UNIQUE (proposal_id)"),
-    ("identity.ha_user_bindings", "fk_ha_user_bindings_proposal_id_principal_binding_proposals", "FOREIGN KEY (proposal_id) REFERENCES identity.principal_binding_proposals(proposal_id) ON DELETE CASCADE"),
-    ("identity.ha_user_bindings", "fk_ha_user_bindings_principal_id_principals", "FOREIGN KEY (principal_id) REFERENCES identity.principals(principal_id)"),
-    ("identity.ha_user_bindings", "fk_ha_user_bindings_person_id_people", "FOREIGN KEY (person_id) REFERENCES identity.people(person_id)"),
-    ("identity.ha_user_bindings", "fk_ha_user_bindings_confirmed_by_principal_id_principals", "FOREIGN KEY (confirmed_by_principal_id) REFERENCES identity.principals(principal_id)"),
-    ("identity.ha_user_bindings", "fk_ha_user_bindings_source_artifact_id_confirmation_artifacts", "FOREIGN KEY (source_artifact_id) REFERENCES identity.confirmation_artifacts(artifact_id)"),
-    ("identity.ha_user_bindings", "ha_binding_principal_person", "FOREIGN KEY (principal_id, person_id) REFERENCES identity.principals(principal_id, person_id)"),
-    ("identity.ha_user_bindings", "ck_ha_user_bindings_ha_binding_self_confirmation", "CHECK (confirmed_by_principal_id = principal_id)"),
-    ("identity.ha_user_bindings", "ck_ha_user_bindings_ha_binding_active_artifact", "CHECK (revoked_at IS NOT NULL OR source_artifact_id IS NOT NULL)"),
-    ("identity.confirmation_artifacts", "fk_confirmation_artifacts_principal_id_principals", "FOREIGN KEY (principal_id) REFERENCES identity.principals(principal_id)"),
-    ("identity.confirmation_artifacts", "confirmation_nonce_once", "UNIQUE (principal_id, client_nonce_sha256)"),
-    ("identity.confirmation_artifacts", "ck_confirmation_artifacts_confirmation_digests", "CHECK (proposal_digest::text ~ '^[0-9a-f]{64}$'::text AND client_nonce_sha256::text ~ '^[0-9a-f]{64}$'::text)"),
-    ("identity.confirmation_artifacts", "ck_confirmation_artifacts_confirmation_consumed_in_window", "CHECK (consumed_at >= issued_at AND consumed_at <= expires_at)"),
-    ("privacy.erasure_requests", "fk_erasure_requests_principal_id_principals", "FOREIGN KEY (principal_id) REFERENCES identity.principals(principal_id)"),
-    ("privacy.erasure_requests", "ck_erasure_requests_erasure_state", "CHECK (state::text = ANY (ARRAY['preview'::character varying, 'blocked'::character varying, 'running'::character varying, 'ledger_pending'::character varying, 'complete'::character varying, 'partial'::character varying, 'failed'::character varying]::text[]))"),
+    (
+        "identity.principals",
+        "principal_person_identity",
+        "UNIQUE (principal_id, person_id)",
+    ),
+    (
+        "identity.principals",
+        "fk_principals_person_id_people",
+        "FOREIGN KEY (person_id) REFERENCES identity.people(person_id)",
+    ),
+    (
+        "identity.principals",
+        "ck_principals_principal_kind",
+        "CHECK (kind::text = ANY (ARRAY['ha_user'::character varying, 'voice_unknown'::character varying, 'service'::character varying]::text[]))",
+    ),
+    (
+        "identity.ha_user_bindings",
+        "uq_ha_user_bindings_proposal_id",
+        "UNIQUE (proposal_id)",
+    ),
+    (
+        "identity.ha_user_bindings",
+        "fk_ha_user_bindings_proposal_id_principal_binding_proposals",
+        "FOREIGN KEY (proposal_id) REFERENCES identity.principal_binding_proposals(proposal_id) ON DELETE CASCADE",
+    ),
+    (
+        "identity.ha_user_bindings",
+        "fk_ha_user_bindings_principal_id_principals",
+        "FOREIGN KEY (principal_id) REFERENCES identity.principals(principal_id)",
+    ),
+    (
+        "identity.ha_user_bindings",
+        "fk_ha_user_bindings_person_id_people",
+        "FOREIGN KEY (person_id) REFERENCES identity.people(person_id)",
+    ),
+    (
+        "identity.ha_user_bindings",
+        "fk_ha_user_bindings_confirmed_by_principal_id_principals",
+        "FOREIGN KEY (confirmed_by_principal_id) REFERENCES identity.principals(principal_id)",
+    ),
+    (
+        "identity.ha_user_bindings",
+        "fk_ha_user_bindings_source_artifact_id_confirmation_artifacts",
+        "FOREIGN KEY (source_artifact_id) REFERENCES identity.confirmation_artifacts(artifact_id)",
+    ),
+    (
+        "identity.ha_user_bindings",
+        "ha_binding_principal_person",
+        "FOREIGN KEY (principal_id, person_id) REFERENCES identity.principals(principal_id, person_id)",
+    ),
+    (
+        "identity.ha_user_bindings",
+        "ck_ha_user_bindings_ha_binding_self_confirmation",
+        "CHECK (confirmed_by_principal_id = principal_id)",
+    ),
+    (
+        "identity.ha_user_bindings",
+        "ck_ha_user_bindings_ha_binding_active_artifact",
+        "CHECK (revoked_at IS NOT NULL OR source_artifact_id IS NOT NULL)",
+    ),
+    (
+        "identity.confirmation_artifacts",
+        "fk_confirmation_artifacts_principal_id_principals",
+        "FOREIGN KEY (principal_id) REFERENCES identity.principals(principal_id)",
+    ),
+    (
+        "identity.confirmation_artifacts",
+        "confirmation_nonce_once",
+        "UNIQUE (principal_id, client_nonce_sha256)",
+    ),
+    (
+        "identity.confirmation_artifacts",
+        "ck_confirmation_artifacts_confirmation_digests",
+        "CHECK (proposal_digest::text ~ '^[0-9a-f]{64}$'::text AND client_nonce_sha256::text ~ '^[0-9a-f]{64}$'::text)",
+    ),
+    (
+        "identity.confirmation_artifacts",
+        "ck_confirmation_artifacts_confirmation_consumed_in_window",
+        "CHECK (consumed_at >= issued_at AND consumed_at <= expires_at)",
+    ),
+    (
+        "privacy.erasure_requests",
+        "fk_erasure_requests_principal_id_principals",
+        "FOREIGN KEY (principal_id) REFERENCES identity.principals(principal_id)",
+    ),
+    (
+        "privacy.erasure_requests",
+        "ck_erasure_requests_erasure_state",
+        "CHECK (state::text = ANY (ARRAY['preview'::character varying, 'blocked'::character varying, 'running'::character varying, 'ledger_pending'::character varying, 'complete'::character varying, 'partial'::character varying, 'failed'::character varying]::text[]))",
+    ),
 )
 
 RELIED_SUPPORT_POLICIES = (
-    ("identity.confirmation_artifacts", "confirmation_artifacts_trusted_maintenance", "*", "((SESSION_USER = 'home_agent_owner'::name) OR ((CURRENT_USER = 'home_agent_owner'::name) AND (SESSION_USER = ANY (ARRAY['home_agent_worker'::name, 'home_agent_erasure'::name]))))"),
-    ("identity.confirmation_artifacts", "identity_confirmation_artifacts_principal", "*", "(principal_id = (NULLIF(current_setting('app.principal_id'::text, true), ''::text))::uuid)"),
-    ("identity.ha_user_bindings", "ha_user_bindings_ingest_read", "r", "(SESSION_USER = 'home_agent_ingest'::name)"),
-    ("identity.ha_user_bindings", "ha_user_bindings_subject_or_operator", "*", "(((ha_user_id)::text = NULLIF(current_setting('app.ha_user_id'::text, true), ''::text)) OR (principal_id = (NULLIF(current_setting('app.principal_id'::text, true), ''::text))::uuid) OR (SESSION_USER = ANY (ARRAY['home_agent_binding_operator'::name, 'home_agent_owner'::name])) OR ((CURRENT_USER = 'home_agent_owner'::name) AND (SESSION_USER = ANY (ARRAY['home_agent_worker'::name, 'home_agent_erasure'::name]))))"),
-    ("privacy.erasure_requests", "privacy_erasure_requests_principal", "*", "(principal_id = (NULLIF(current_setting('app.principal_id'::text, true), ''::text))::uuid)"),
+    (
+        "identity.confirmation_artifacts",
+        "confirmation_artifacts_trusted_maintenance",
+        "*",
+        "((SESSION_USER = 'home_agent_owner'::name) OR ((CURRENT_USER = 'home_agent_owner'::name) AND (SESSION_USER = ANY (ARRAY['home_agent_worker'::name, 'home_agent_erasure'::name]))))",
+    ),
+    (
+        "identity.confirmation_artifacts",
+        "identity_confirmation_artifacts_principal",
+        "*",
+        "(principal_id = (NULLIF(current_setting('app.principal_id'::text, true), ''::text))::uuid)",
+    ),
+    (
+        "identity.ha_user_bindings",
+        "ha_user_bindings_ingest_read",
+        "r",
+        "(SESSION_USER = 'home_agent_ingest'::name)",
+    ),
+    (
+        "identity.ha_user_bindings",
+        "ha_user_bindings_subject_or_operator",
+        "*",
+        "(((ha_user_id)::text = NULLIF(current_setting('app.ha_user_id'::text, true), ''::text)) OR (principal_id = (NULLIF(current_setting('app.principal_id'::text, true), ''::text))::uuid) OR (SESSION_USER = ANY (ARRAY['home_agent_binding_operator'::name, 'home_agent_owner'::name])) OR ((CURRENT_USER = 'home_agent_owner'::name) AND (SESSION_USER = ANY (ARRAY['home_agent_worker'::name, 'home_agent_erasure'::name]))))",
+    ),
+    (
+        "privacy.erasure_requests",
+        "privacy_erasure_requests_principal",
+        "*",
+        "(principal_id = (NULLIF(current_setting('app.principal_id'::text, true), ''::text))::uuid)",
+    ),
+)
+
+REVIEWED_OWNER_SECURITY_DEFINERS = (
+    (
+        "identity.validate_principal_binding_graph(uuid,uuid)",
+        ("search_path=pg_catalog",),
+        "8d969b350e9048d54de9341a9b2f08182572796ab11c9377b9e558214afede2f",
+    ),
+    (
+        "identity.validate_principal_binding_graph_trigger()",
+        ("search_path=pg_catalog",),
+        "4e71f303603b5f91349718b551a0857b417b560fd0852d944584ee023da96d23",
+    ),
+    (
+        "operations.fail_worker_maintenance(uuid,character varying)",
+        ("search_path=pg_catalog, pg_temp",),
+        "1153e40710124ec20cad3fefc04818c73422b624079c840352b931d84bb675ca",
+    ),
+    (
+        "operations.heartbeat_worker_maintenance(uuid)",
+        ("search_path=pg_catalog, pg_temp",),
+        "e6ae924753f2f7b97533702a73ff3eaa1e36f0e0eabc8ea4a472a83939ebbbaa",
+    ),
+    (
+        "operations.register_worker_maintenance(uuid)",
+        ("search_path=pg_catalog, pg_temp",),
+        "b6ce5f47882a12b290c354d5026fc7c893a4475b93a37271b9dcda4b88771ddd",
+    ),
+    (
+        "operations.run_worker_maintenance_cycle(uuid,bigint)",
+        ("search_path=pg_catalog, pg_temp",),
+        "9d33df9888f14c92f30a5baedf194cdbbb1c353f7150712921afe61cb37e3f93",
+    ),
+    (
+        "operations.stop_worker_maintenance(uuid)",
+        ("search_path=pg_catalog, pg_temp",),
+        "74626e7cdd743e751a4522a820ca4f71b2b5a87039692808acfa7fb764cbba74",
+    ),
+    (
+        "privacy.apply_person_auto_expiry(uuid)",
+        ("search_path=pg_catalog, pg_temp",),
+        "50c061d571b20c0410682dcdb3cd507e2e05d641c780d382cf4391177bebdf0f",
+    ),
+    (
+        "privacy.cancel_principal_binding_work_for_person(uuid,timestamptz)",
+        ("search_path=pg_catalog, pg_temp",),
+        "9dd6513a94677280100bfcd60c15ea83f46df10acf3e7763c468d05f615a67c5",
+    ),
+    (
+        "privacy.expire_principal_binding_work(timestamptz)",
+        ("search_path=pg_catalog, pg_temp",),
+        "c0051fad69310a8f492a1f10ed57238338dc0bb47c5804f76486809676d5b9e7",
+    ),
+    (
+        "privacy.replay_person_auto_expiry(uuid,uuid,uuid)",
+        ("search_path=pg_catalog, pg_temp",),
+        "5c566daf894cc2d63eb2f6f59aa54bf7ad3bf62ac67eeb540789792e707acf17",
+    ),
+)
+
+REVIEWED_OWNER_SECURITY_DEFINER_ACL = (
+    ("operations.fail_worker_maintenance(uuid,character varying)", "home_agent_worker"),
+    ("operations.heartbeat_worker_maintenance(uuid)", "home_agent_worker"),
+    ("operations.register_worker_maintenance(uuid)", "home_agent_worker"),
+    ("operations.run_worker_maintenance_cycle(uuid,bigint)", "home_agent_worker"),
+    ("operations.stop_worker_maintenance(uuid)", "home_agent_worker"),
+    ("privacy.apply_person_auto_expiry(uuid)", "home_agent_worker"),
+    ("privacy.apply_person_auto_expiry(uuid)", "home_agent_erasure"),
+    (
+        "privacy.cancel_principal_binding_work_for_person(uuid,timestamptz)",
+        "home_agent_erasure",
+    ),
+    ("privacy.expire_principal_binding_work(timestamptz)", "home_agent_erasure"),
+    ("privacy.replay_person_auto_expiry(uuid,uuid,uuid)", "home_agent_erasure"),
+)
+
+REVIEWED_IDENTITY_KERNEL_SECURITY_DEFINERS = (
+    (
+        "operations.reviewed_identity_migration_capabilities()",
+        "1b26f6a57891eb6b35fc2c822ba4d92148c76c3f89eeff0b77b702225c6c1db2",
+    ),
+    (
+        "operations.register_reviewed_identity_migration(jsonb)",
+        "07a9d2d776de63360d8c473e674e7feb24c057b5cb308f56f57e2e7758eaf2a7",
+    ),
+    (
+        "operations.bump_reviewed_identity_migration_replay_guard()",
+        "627bb84f83baa6183144de5d94ddcc4f0da56dc02e64c544b4b679b5ed3c316b",
+    ),
+)
+
+REVIEWED_IDENTITY_KERNEL_SECURITY_DEFINER_ACL = (
+    "operations.reviewed_identity_migration_capabilities()",
+    "operations.register_reviewed_identity_migration(jsonb)",
 )
 
 
@@ -194,35 +392,283 @@ def _admit_exact_predecessor() -> None:
         )
     )
     support_definition_values = ",".join(
-        "(" + ",".join(
+        "("
+        + ",".join(
             (
                 f"'{table}'::regclass",
                 "'" + name.replace("'", "''") + "'",
                 "'" + definition.replace("'", "''") + "'",
             )
-        ) + ")"
+        )
+        + ")"
         for table, name, definition in RELIED_SUPPORT_CONSTRAINTS
     )
     support_policy_values = ",".join(
-        "(" + ",".join(
+        "("
+        + ",".join(
             (
                 f"'{table}'::regclass",
                 "'" + name.replace("'", "''") + "'",
-                "'" + command + "'::\"char\"",
+                "'" + command + '\'::"char"',
                 "'" + expression.replace("'", "''") + "'",
             )
-        ) + ")"
+        )
+        + ")"
         for table, name, command, expression in RELIED_SUPPORT_POLICIES
+    )
+    security_definer_values = ",".join(
+        "("
+        + ",".join(
+            (
+                f"'{signature}'::regprocedure",
+                "'plpgsql'",
+                "ARRAY["
+                + ",".join(f"'{setting}'" for setting in configuration)
+                + "]::text[]",
+                f"'{source_digest}'",
+            )
+        )
+        + ")"
+        for signature, configuration, source_digest in REVIEWED_OWNER_SECURITY_DEFINERS
+    )
+    security_definer_acl_values = ",".join(
+        "("
+        + ",".join(
+            (
+                f"'{signature}'::regprocedure",
+                "'home_agent_owner'",
+                f"'{grantee}'",
+                "'EXECUTE'",
+                "false",
+            )
+        )
+        + ")"
+        for signature, grantee in (
+            tuple(
+                (signature, "home_agent_owner")
+                for signature, _, _ in REVIEWED_OWNER_SECURITY_DEFINERS
+            )
+            + REVIEWED_OWNER_SECURITY_DEFINER_ACL
+        )
+    )
+    identity_kernel_definer_values = ",".join(
+        f"('{signature}'::regprocedure,'{source_digest}')"
+        for signature, source_digest in REVIEWED_IDENTITY_KERNEL_SECURITY_DEFINERS
+    )
+    identity_kernel_definer_acl_values = ",".join(
+        "("
+        f"'{signature}'::regprocedure,"
+        "'home_agent_identity_kernel','home_agent_identity_migration',"
+        "'EXECUTE',false)"
+        for signature in REVIEWED_IDENTITY_KERNEL_SECURITY_DEFINER_ACL
     )
     op.execute(
         f"""
         DO $admission$
         DECLARE
           owner_oid oid;
+          api_oid oid;
+          identity_kernel_oid oid;
+          system_catalog_contract_rows bigint;
+          system_catalog_contract_digest text;
         BEGIN
           SELECT oid INTO STRICT owner_oid
             FROM pg_catalog.pg_roles
            WHERE rolname = 'home_agent_owner';
+          SELECT oid INTO STRICT api_oid
+            FROM pg_catalog.pg_roles
+           WHERE rolname = 'home_agent_api';
+          SELECT oid INTO STRICT identity_kernel_oid
+            FROM pg_catalog.pg_roles
+           WHERE rolname = 'home_agent_identity_kernel';
+
+          IF EXISTS (
+            SELECT 1
+              FROM (VALUES
+                ('home_agent_api', true, false, -1, NULL::timestamptz,
+                 ARRAY['statement_timeout=15s']::text[]),
+                ('home_agent_binding_operator', true, false, -1,
+                 NULL::timestamptz,
+                 ARRAY['statement_timeout=15s']::text[]),
+                ('home_agent_ingest', true, false, -1, NULL::timestamptz,
+                 ARRAY['statement_timeout=20s']::text[]),
+                ('home_agent_worker', true, false, -1, NULL::timestamptz,
+                 ARRAY['statement_timeout=60s']::text[]),
+                ('home_agent_erasure', true, false, -1, NULL::timestamptz,
+                 ARRAY['statement_timeout=60s']::text[]),
+                ('home_agent_rollout', true, false, 1, NULL::timestamptz,
+                 ARRAY['statement_timeout=30s']::text[]),
+                ('home_agent_backup', true, true, -1, NULL::timestamptz,
+                 NULL::text[]),
+                ('home_agent_identity_migration', true, false, 1,
+                 '1970-01-01 00:00:00+00'::timestamptz, ARRAY[
+                   'default_transaction_isolation=serializable',
+                   'statement_timeout=120s','lock_timeout=5s',
+                   'idle_in_transaction_session_timeout=15s',
+                   'transaction_timeout=180s'
+                 ]::text[]),
+                ('home_agent_identity_finalizer', true, false, 1,
+                 '1970-01-01 00:00:00+00'::timestamptz, ARRAY[
+                   'default_transaction_isolation=serializable',
+                   'statement_timeout=120s','lock_timeout=5s',
+                   'idle_in_transaction_session_timeout=15s',
+                   'transaction_timeout=180s'
+                 ]::text[]),
+                ('home_agent_identity_kernel', false, false, 0,
+                 NULL::timestamptz, NULL::text[]),
+                ('home_agent_identity_finalizer_kernel', false, false, 0,
+                 NULL::timestamptz, NULL::text[]),
+                ('home_agent_identity_erasure_kernel', false, false, 0,
+                 NULL::timestamptz, NULL::text[])
+              ) AS expected(
+                role_name, can_login, inherits_privileges, connection_limit,
+                valid_until, configuration
+              )
+             WHERE NOT EXISTS (
+               SELECT 1
+                 FROM pg_catalog.pg_roles AS actual
+                WHERE actual.rolname = expected.role_name
+                  AND actual.rolcanlogin = expected.can_login
+                  AND actual.rolinherit = expected.inherits_privileges
+                  AND NOT actual.rolsuper
+                  AND NOT actual.rolcreatedb
+                  AND NOT actual.rolcreaterole
+                  AND NOT actual.rolreplication
+                  AND NOT actual.rolbypassrls
+                  AND actual.rolconnlimit = expected.connection_limit
+                  AND actual.rolvaliduntil IS NOT DISTINCT FROM
+                      expected.valid_until
+                  AND actual.rolconfig IS NOT DISTINCT FROM
+                      expected.configuration
+             )
+          ) OR EXISTS (
+            SELECT 1
+              FROM pg_catalog.pg_roles AS unreviewed_privileged_role
+             WHERE unreviewed_privileged_role.rolname <> 'home_agent_owner'
+               AND (
+                 unreviewed_privileged_role.rolsuper
+                 OR unreviewed_privileged_role.rolcreatedb
+                 OR unreviewed_privileged_role.rolcreaterole
+                 OR unreviewed_privileged_role.rolreplication
+                 OR unreviewed_privileged_role.rolbypassrls
+                 OR (
+                   pg_catalog.left(
+                     unreviewed_privileged_role.rolname::text, 3
+                   ) = 'pg_'
+                   AND unreviewed_privileged_role.rolcanlogin
+                 )
+               )
+          ) OR EXISTS (
+            WITH expected_membership(
+              parent_name, member_name, grantor_name,
+              admin_option, inherit_option, set_option
+            ) AS (VALUES
+              ('home_agent_identity_kernel', 'home_agent_owner',
+               'home_agent_owner', false, false, true),
+              ('home_agent_identity_finalizer_kernel', 'home_agent_owner',
+               'home_agent_owner', false, false, true),
+              ('home_agent_identity_erasure_kernel', 'home_agent_owner',
+               'home_agent_owner', false, false, true),
+              ('pg_read_all_settings', 'home_agent_backup',
+               'home_agent_owner', false, true, true)
+            ),
+            actual_membership AS (
+              SELECT parent.rolname::text,
+                     member.rolname::text,
+                     grantor.rolname::text,
+                     edge.admin_option,
+                     edge.inherit_option,
+                     edge.set_option
+                FROM pg_catalog.pg_auth_members AS edge
+                JOIN pg_catalog.pg_roles AS parent ON parent.oid = edge.roleid
+                JOIN pg_catalog.pg_roles AS member ON member.oid = edge.member
+                JOIN pg_catalog.pg_roles AS grantor ON grantor.oid = edge.grantor
+               WHERE parent.rolname = ANY (ARRAY[
+                       'home_agent_owner','home_agent_api',
+                       'home_agent_binding_operator','home_agent_ingest',
+                       'home_agent_worker','home_agent_erasure',
+                       'home_agent_rollout','home_agent_backup',
+                       'home_agent_identity_migration',
+                       'home_agent_identity_finalizer',
+                       'home_agent_identity_kernel',
+                       'home_agent_identity_finalizer_kernel',
+                       'home_agent_identity_erasure_kernel'
+                     ]::name[])
+                  OR member.rolname = ANY (ARRAY[
+                       'home_agent_owner','home_agent_api',
+                       'home_agent_binding_operator','home_agent_ingest',
+                       'home_agent_worker','home_agent_erasure',
+                       'home_agent_rollout','home_agent_backup',
+                       'home_agent_identity_migration',
+                       'home_agent_identity_finalizer',
+                       'home_agent_identity_kernel',
+                       'home_agent_identity_finalizer_kernel',
+                       'home_agent_identity_erasure_kernel'
+                     ]::name[])
+            ),
+            membership_difference AS (
+              (SELECT * FROM actual_membership
+               EXCEPT SELECT * FROM expected_membership)
+              UNION ALL
+              (SELECT * FROM expected_membership
+               EXCEPT SELECT * FROM actual_membership)
+            )
+            SELECT 1 FROM membership_difference
+          ) THEN
+            RAISE EXCEPTION 'identity_erasure_e1_support_role_invalid'
+              USING ERRCODE = '55000';
+          END IF;
+
+          IF EXISTS (
+            WITH actual_ownership AS (
+              SELECT role_row.rolname::text AS owner_name,
+                     dependency.dbid,
+                     dependency.classid,
+                     dependency.objid,
+                     dependency.objsubid
+                FROM pg_catalog.pg_shdepend AS dependency
+                JOIN pg_catalog.pg_roles AS role_row
+                  ON role_row.oid = dependency.refobjid
+               WHERE dependency.deptype = 'o'
+                 AND role_row.rolname = ANY (ARRAY[
+                   'home_agent_api','home_agent_binding_operator',
+                   'home_agent_ingest','home_agent_worker',
+                   'home_agent_erasure','home_agent_rollout',
+                   'home_agent_backup','home_agent_identity_migration',
+                   'home_agent_identity_finalizer','home_agent_identity_kernel',
+                   'home_agent_identity_finalizer_kernel',
+                   'home_agent_identity_erasure_kernel'
+                 ]::name[])
+            ),
+            expected_ownership AS (
+              SELECT 'home_agent_identity_kernel'::text AS owner_name,
+                     database_row.oid AS dbid,
+                     'pg_catalog.pg_proc'::regclass::oid AS classid,
+                     reviewed.function_oid::oid AS objid,
+                     0::integer AS objsubid
+                FROM pg_catalog.pg_database AS database_row
+               CROSS JOIN pg_catalog.unnest(ARRAY[
+                 'operations.reviewed_identity_migration_capabilities()'
+                   ::regprocedure,
+                 'operations.register_reviewed_identity_migration(jsonb)'
+                   ::regprocedure,
+                 'operations.bump_reviewed_identity_migration_replay_guard()'
+                   ::regprocedure
+               ]) AS reviewed(function_oid)
+               WHERE database_row.datname = pg_catalog.current_database()
+            ),
+            ownership_difference AS (
+              (SELECT * FROM actual_ownership
+               EXCEPT SELECT * FROM expected_ownership)
+              UNION ALL
+              (SELECT * FROM expected_ownership
+               EXCEPT SELECT * FROM actual_ownership)
+            )
+            SELECT 1 FROM ownership_difference
+          ) THEN
+            RAISE EXCEPTION 'identity_erasure_e1_managed_role_ownership_invalid'
+              USING ERRCODE = '55000';
+          END IF;
 
           IF EXISTS (
             SELECT 1
@@ -557,6 +1003,462 @@ def _admit_exact_predecessor() -> None:
           IF EXISTS (
             SELECT 1
               FROM (VALUES
+                ('identity.principals'::regclass),
+                ('identity.ha_user_bindings'::regclass),
+                ('identity.confirmation_artifacts'::regclass)
+              ) AS protected_table(table_oid)
+              JOIN pg_catalog.pg_class AS table_row
+                ON table_row.oid = protected_table.table_oid
+             CROSS JOIN LATERAL pg_catalog.aclexplode(table_row.relacl)
+               AS table_acl
+             WHERE table_acl.grantee <> owner_oid
+               AND table_acl.privilege_type IN (
+                 'INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER',
+                 'MAINTAIN'
+               )
+          ) OR EXISTS (
+            SELECT 1
+              FROM (VALUES
+                ('identity.principals'::regclass),
+                ('identity.ha_user_bindings'::regclass),
+                ('identity.confirmation_artifacts'::regclass)
+              ) AS protected_table(table_oid)
+              JOIN pg_catalog.pg_attribute AS attribute
+                ON attribute.attrelid = protected_table.table_oid
+               AND attribute.attnum > 0
+               AND NOT attribute.attisdropped
+             CROSS JOIN LATERAL pg_catalog.aclexplode(attribute.attacl)
+               AS column_acl
+             WHERE column_acl.grantee <> owner_oid
+               AND column_acl.privilege_type IN (
+                 'INSERT','UPDATE','REFERENCES'
+               )
+               AND NOT (
+                 protected_table.table_oid =
+                   'identity.confirmation_artifacts'::regclass
+                 AND column_acl.grantee = api_oid
+                 AND column_acl.privilege_type = 'INSERT'
+                 AND NOT column_acl.is_grantable
+                 AND attribute.attname IN (
+                   'artifact_id','principal_id','purpose','proposal_digest',
+                   'client_nonce_sha256','issued_at','expires_at','consumed_at'
+                 )
+               )
+          ) THEN
+            RAISE EXCEPTION 'identity_erasure_e1_unexpected_support_acl'
+              USING ERRCODE = '55000';
+          END IF;
+
+          IF EXISTS (
+            SELECT 1
+              FROM pg_catalog.pg_roles AS role_row
+             WHERE pg_catalog.left(role_row.rolname::text, 3) <> 'pg_'
+               AND role_row.rolname <> ALL (ARRAY[
+                 'home_agent_owner','home_agent_api',
+                 'home_agent_binding_operator','home_agent_ingest',
+                 'home_agent_worker','home_agent_erasure',
+                 'home_agent_rollout','home_agent_backup',
+                 'home_agent_identity_migration',
+                 'home_agent_identity_finalizer',
+                 'home_agent_identity_kernel',
+                 'home_agent_identity_finalizer_kernel',
+                 'home_agent_identity_erasure_kernel'
+               ]::name[])
+          ) THEN
+            RAISE EXCEPTION 'identity_erasure_e1_role_inventory_invalid'
+              USING ERRCODE = '55000';
+          END IF;
+
+          IF (
+            SELECT pg_catalog.count(*)
+              FROM pg_catalog.pg_class AS relation_row
+              JOIN pg_catalog.pg_namespace AS relation_namespace
+                ON relation_namespace.oid = relation_row.relnamespace
+             WHERE relation_row.relkind IN ('v','m','f')
+               AND pg_catalog.left(relation_namespace.nspname::text, 3) <> 'pg_'
+               AND relation_namespace.nspname <> 'information_schema'
+          ) <> 1 OR NOT EXISTS (
+            SELECT 1
+              FROM pg_catalog.pg_class AS view_row
+             WHERE view_row.oid =
+                   'operations.phase2_rollout_evidence'::regclass
+               AND view_row.relkind = 'v'
+               AND view_row.relowner = owner_oid
+               AND view_row.relpersistence = 'p'
+               AND NOT view_row.relispartition
+               AND NOT view_row.relrowsecurity
+               AND NOT view_row.relforcerowsecurity
+               AND view_row.reloptions = ARRAY['security_barrier=true']::text[]
+               AND view_row.relacl::text =
+                   '{{home_agent_owner=arwdDxtm/home_agent_owner,'
+                   'home_agent_api=r/home_agent_owner,'
+                   'home_agent_ingest=r/home_agent_owner,'
+                   'home_agent_worker=r/home_agent_owner,'
+                   'home_agent_rollout=r/home_agent_owner}}'
+               AND pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
+                     pg_catalog.pg_get_viewdef(view_row.oid, true), 'UTF8'
+                   )), 'hex') =
+                   '5a88d6d58fb385eaf510243cb1bef64995eb6d1a3f7bd13820896f6f4c70e9a0'
+          ) THEN
+            RAISE EXCEPTION 'identity_erasure_e1_relation_projection_invalid'
+              USING ERRCODE = '55000';
+          END IF;
+
+          IF EXISTS (SELECT 1 FROM pg_catalog.pg_event_trigger) THEN
+            RAISE EXCEPTION 'identity_erasure_e1_event_trigger_invalid'
+              USING ERRCODE = '55000';
+          END IF;
+
+          IF EXISTS (
+               SELECT 1
+                 FROM pg_catalog.pg_parameter_acl AS parameter_acl
+                CROSS JOIN LATERAL
+                      pg_catalog.aclexplode(parameter_acl.paracl) AS acl
+             )
+             OR EXISTS (
+               SELECT 1
+                 FROM pg_catalog.pg_db_role_setting AS database_setting
+                CROSS JOIN LATERAL
+                      pg_catalog.unnest(database_setting.setconfig)
+                        AS setting(setting_text)
+                WHERE database_setting.setdatabase = (
+                        SELECT database_row.oid
+                          FROM pg_catalog.pg_database AS database_row
+                         WHERE database_row.datname =
+                               pg_catalog.current_database()
+                      )
+                   OR (
+                     database_setting.setdatabase = 0
+                     AND database_setting.setrole = owner_oid
+                   )
+             ) THEN
+            RAISE EXCEPTION 'identity_erasure_e1_system_catalog_invalid'
+              USING ERRCODE = '55000';
+          END IF;
+
+          WITH system_namespace AS MATERIALIZED (
+            SELECT namespace_row.oid, namespace_row.nspname
+              FROM pg_catalog.pg_namespace AS namespace_row
+             WHERE namespace_row.nspname IN (
+               'pg_catalog', 'information_schema'
+             )
+          ),
+          system_contract(
+            object_kind, object_identity, owner_name, object_shape, raw_acl
+          ) AS (
+            SELECT 'database'::text,
+                   pg_catalog.format('%I', database_row.datname),
+                   database_owner.rolname::text,
+                   pg_catalog.jsonb_build_array(),
+                   coalesce(
+                     database_row.datacl::text, '<NULL>'
+                   )
+              FROM pg_catalog.pg_database AS database_row
+              JOIN pg_catalog.pg_authid AS database_owner
+                ON database_owner.oid = database_row.datdba
+             WHERE database_row.datname = pg_catalog.current_database()
+            UNION ALL
+            SELECT 'namespace',
+                   pg_catalog.format('%I', namespace_row.nspname),
+                   namespace_owner.rolname::text,
+                   pg_catalog.jsonb_build_array(),
+                   coalesce(
+                     namespace_row.nspacl::text, '<NULL>'
+                   )
+              FROM pg_catalog.pg_namespace AS namespace_row
+              JOIN system_namespace
+                ON system_namespace.oid = namespace_row.oid
+              JOIN pg_catalog.pg_authid AS namespace_owner
+                ON namespace_owner.oid = namespace_row.nspowner
+            UNION ALL
+            SELECT 'relation',
+                   pg_catalog.format(
+                     '%I.%I', system_namespace.nspname, relation_row.relname
+                   ),
+                   relation_owner.rolname::text,
+                   pg_catalog.jsonb_build_array(
+                     relation_row.relkind::text,
+                     relation_row.relpersistence::text,
+                     relation_row.relrowsecurity,
+                     relation_row.relforcerowsecurity,
+                     relation_row.relispartition,
+                     relation_row.reloptions
+                   ),
+                   coalesce(
+                     relation_row.relacl::text, '<NULL>'
+                   )
+              FROM pg_catalog.pg_class AS relation_row
+              JOIN system_namespace
+                ON system_namespace.oid = relation_row.relnamespace
+              JOIN pg_catalog.pg_authid AS relation_owner
+                ON relation_owner.oid = relation_row.relowner
+            UNION ALL
+            SELECT 'column',
+                   pg_catalog.format(
+                     '%I.%I.%s.%I',
+                     system_namespace.nspname,
+                     relation_row.relname,
+                     attribute.attnum,
+                     attribute.attname
+                   ),
+                   relation_owner.rolname::text,
+                   pg_catalog.jsonb_build_array(
+                     pg_catalog.format(
+                       '%I.%I', type_namespace.nspname, attribute_type.typname
+                     ),
+                     attribute.atttypmod,
+                     attribute.attnotnull,
+                     attribute.atthasdef,
+                     attribute.attidentity::text,
+                     attribute.attgenerated::text
+                   ),
+                   coalesce(attribute.attacl::text, '<NULL>')
+              FROM pg_catalog.pg_attribute AS attribute
+              JOIN pg_catalog.pg_class AS relation_row
+                ON relation_row.oid = attribute.attrelid
+              JOIN system_namespace
+                ON system_namespace.oid = relation_row.relnamespace
+              JOIN pg_catalog.pg_authid AS relation_owner
+                ON relation_owner.oid = relation_row.relowner
+              JOIN pg_catalog.pg_type AS attribute_type
+                ON attribute_type.oid = attribute.atttypid
+              JOIN pg_catalog.pg_namespace AS type_namespace
+                ON type_namespace.oid = attribute_type.typnamespace
+             WHERE attribute.attnum > 0
+               AND NOT attribute.attisdropped
+            UNION ALL
+            SELECT 'function',
+                   pg_catalog.format(
+                     '%I.%I(%s)',
+                     system_namespace.nspname,
+                     function_row.proname,
+                     (
+                       SELECT coalesce(
+                                pg_catalog.string_agg(
+                                  pg_catalog.format(
+                                    '%I.%I',
+                                    argument_type_namespace.nspname,
+                                    argument_type.typname
+                                  ),
+                                  ',' ORDER BY argument.ordinality
+                                ),
+                                ''
+                              )
+                         FROM pg_catalog.unnest(
+                                function_row.proargtypes::oid[]
+                              ) WITH ORDINALITY
+                                AS argument(type_oid, ordinality)
+                         JOIN pg_catalog.pg_type AS argument_type
+                           ON argument_type.oid = argument.type_oid
+                         JOIN pg_catalog.pg_namespace
+                                AS argument_type_namespace
+                           ON argument_type_namespace.oid =
+                              argument_type.typnamespace
+                     )
+                   ),
+                   function_owner.rolname::text,
+                   pg_catalog.jsonb_build_array(
+                     function_row.prokind::text,
+                     function_language.lanname,
+                     function_row.prosecdef,
+                     function_row.proleakproof,
+                     function_row.provolatile::text,
+                     function_row.proparallel::text,
+                     function_row.proisstrict,
+                     function_row.proretset,
+                     pg_catalog.format(
+                       '%I.%I', return_type_namespace.nspname,
+                       return_type.typname
+                     ),
+                     function_row.proconfig,
+                     function_row.prosrc,
+                     function_row.probin
+                   ),
+                   coalesce(function_row.proacl::text, '<NULL>')
+              FROM pg_catalog.pg_proc AS function_row
+              JOIN system_namespace
+                ON system_namespace.oid = function_row.pronamespace
+              JOIN pg_catalog.pg_authid AS function_owner
+                ON function_owner.oid = function_row.proowner
+              JOIN pg_catalog.pg_language AS function_language
+                ON function_language.oid = function_row.prolang
+              JOIN pg_catalog.pg_type AS return_type
+                ON return_type.oid = function_row.prorettype
+              JOIN pg_catalog.pg_namespace AS return_type_namespace
+                ON return_type_namespace.oid = return_type.typnamespace
+            UNION ALL
+            SELECT 'type',
+                   pg_catalog.format(
+                     '%I.%I', system_namespace.nspname, type_row.typname
+                   ),
+                   type_owner.rolname::text,
+                   pg_catalog.jsonb_build_array(
+                     type_row.typtype::text,
+                     type_row.typcategory::text,
+                     type_row.typispreferred,
+                     type_row.typisdefined,
+                     type_row.typnotnull
+                   ),
+                   coalesce(type_row.typacl::text, '<NULL>')
+              FROM pg_catalog.pg_type AS type_row
+              JOIN system_namespace
+                ON system_namespace.oid = type_row.typnamespace
+              JOIN pg_catalog.pg_authid AS type_owner
+                ON type_owner.oid = type_row.typowner
+          ),
+          canonical_contract AS (
+            SELECT pg_catalog.count(*) AS contract_rows,
+                   pg_catalog.encode(
+                     pg_catalog.sha256(
+                       pg_catalog.convert_to(
+                         pg_catalog.jsonb_agg(
+                           pg_catalog.jsonb_build_array(
+                             object_kind, object_identity, owner_name,
+                             object_shape, raw_acl
+                           ) ORDER BY object_kind, object_identity
+                         )::text,
+                         'UTF8'
+                       )
+                     ),
+                     'hex'
+                   ) AS contract_digest
+              FROM system_contract
+          )
+          SELECT contract_rows, contract_digest
+            INTO STRICT system_catalog_contract_rows,
+                        system_catalog_contract_digest
+            FROM canonical_contract;
+
+          IF system_catalog_contract_rows <>
+               {PINNED_SYSTEM_CATALOG_CONTRACT_ROWS}
+             OR system_catalog_contract_digest <>
+               '{PINNED_SYSTEM_CATALOG_CONTRACT_DIGEST}' THEN
+            RAISE EXCEPTION
+              'identity_erasure_e1_system_catalog_invalid rows=% digest=%',
+              system_catalog_contract_rows,
+              system_catalog_contract_digest
+              USING ERRCODE = '55000';
+          END IF;
+
+          IF EXISTS (SELECT 1 FROM pg_catalog.pg_subscription)
+             OR EXISTS (SELECT 1 FROM pg_catalog.pg_subscription_rel)
+             OR EXISTS (SELECT 1 FROM pg_catalog.pg_publication)
+             OR EXISTS (SELECT 1 FROM pg_catalog.pg_publication_rel)
+             OR EXISTS (SELECT 1 FROM pg_catalog.pg_publication_namespace)
+             OR EXISTS (
+               SELECT 1
+                 FROM pg_catalog.pg_replication_slots
+                WHERE slot_type = 'logical'
+             )
+             OR EXISTS (SELECT 1 FROM pg_catalog.pg_replication_origin)
+             OR EXISTS (
+               SELECT 1
+                 FROM pg_catalog.pg_class AS replicated_relation
+                 JOIN pg_catalog.pg_namespace AS relation_namespace
+                   ON relation_namespace.oid =
+                      replicated_relation.relnamespace
+                WHERE relation_namespace.nspname IN (
+                  'public','ingest','identity','knowledge','engagement',
+                  'privacy','operations','media'
+                )
+                  AND replicated_relation.relkind IN ('r','p')
+                  AND replicated_relation.relreplident <> 'd'
+             ) THEN
+            RAISE EXCEPTION 'identity_erasure_e1_logical_replication_invalid'
+              USING ERRCODE = '55000';
+          END IF;
+
+          IF EXISTS (
+            SELECT 1
+              FROM pg_catalog.pg_rewrite AS rewrite_rule
+             WHERE rewrite_rule.ev_class = ANY (ARRAY[
+               'identity.principals'::regclass,
+               'identity.principal_binding_requests'::regclass,
+               'identity.principal_binding_proposals'::regclass,
+               'identity.ha_user_bindings'::regclass,
+               'identity.confirmation_artifacts'::regclass,
+               'privacy.erasure_requests'::regclass
+             ])
+          ) THEN
+            RAISE EXCEPTION 'identity_erasure_e1_support_rules_invalid'
+              USING ERRCODE = '55000';
+          END IF;
+
+          IF EXISTS (
+            SELECT 1
+              FROM pg_catalog.pg_inherits AS inheritance_edge
+             WHERE inheritance_edge.inhparent = ANY (ARRAY[
+               'identity.principals'::regclass,
+               'identity.principal_binding_requests'::regclass,
+               'identity.principal_binding_proposals'::regclass,
+               'identity.ha_user_bindings'::regclass,
+               'identity.confirmation_artifacts'::regclass,
+               'privacy.erasure_requests'::regclass
+             ])
+          ) THEN
+            RAISE EXCEPTION 'identity_erasure_e1_support_inheritance_invalid'
+              USING ERRCODE = '55000';
+          END IF;
+
+          IF EXISTS (
+            SELECT 1
+              FROM (VALUES
+                ('identity.principals'::regclass, ARRAY[]::text[]),
+                ('identity.principal_binding_requests'::regclass, ARRAY[
+                  'validate_principal_binding_graph_principal_binding_requests'
+                ]::text[]),
+                ('identity.principal_binding_proposals'::regclass, ARRAY[
+                  'validate_principal_binding_graph_principal_binding_proposals'
+                ]::text[]),
+                ('identity.ha_user_bindings'::regclass, ARRAY[
+                  'validate_principal_binding_graph_ha_user_bindings'
+                ]::text[]),
+                ('identity.confirmation_artifacts'::regclass, ARRAY[
+                  'validate_principal_binding_graph_confirmation_artifacts'
+                ]::text[]),
+                ('privacy.erasure_requests'::regclass, ARRAY[]::text[])
+              ) AS expected(expected_table, expected_triggers)
+             WHERE (
+               SELECT coalesce(
+                        pg_catalog.array_agg(
+                          trigger_row.tgname::text ORDER BY trigger_row.tgname
+                        ),
+                        ARRAY[]::text[]
+                      )
+                 FROM pg_catalog.pg_trigger AS trigger_row
+                WHERE trigger_row.tgrelid = expected.expected_table
+                  AND NOT trigger_row.tgisinternal
+             ) IS DISTINCT FROM expected.expected_triggers
+          ) THEN
+            RAISE EXCEPTION 'identity_erasure_e1_support_triggers_invalid'
+              USING ERRCODE = '55000';
+          END IF;
+
+          IF EXISTS (
+            SELECT 1
+              FROM pg_catalog.pg_trigger AS constraint_trigger
+             WHERE constraint_trigger.tgrelid = ANY (ARRAY[
+               'identity.principals'::regclass,
+               'identity.principal_binding_requests'::regclass,
+               'identity.principal_binding_proposals'::regclass,
+               'identity.ha_user_bindings'::regclass,
+               'identity.confirmation_artifacts'::regclass,
+               'privacy.erasure_requests'::regclass,
+               '{OPERATION}'::regclass,
+               '{IMPACT}'::regclass
+             ])
+               AND constraint_trigger.tgisinternal
+               AND constraint_trigger.tgconstraint <> 0
+               AND constraint_trigger.tgenabled <> 'O'
+          ) THEN
+            RAISE EXCEPTION
+              'identity_erasure_e1_constraint_trigger_invalid'
+              USING ERRCODE = '55000';
+          END IF;
+
+          IF EXISTS (
+            SELECT 1
+              FROM (VALUES
                 ('identity.principal_binding_requests'::regclass,
                  'validate_principal_binding_graph_principal_binding_requests'),
                 ('identity.principal_binding_proposals'::regclass,
@@ -641,6 +1543,184 @@ def _admit_exact_predecessor() -> None:
             RAISE EXCEPTION 'identity_erasure_e1_binding_graph_invalid'
               USING ERRCODE = '55000';
           END IF;
+
+          IF EXISTS (
+            WITH expected_acl(
+              function_oid, grantor_name, grantee_name,
+              privilege_type, is_grantable
+            ) AS (VALUES {security_definer_acl_values}),
+            actual_acl AS (
+              SELECT function_row.oid::regprocedure,
+                     grantor.rolname::text,
+                     coalesce(grantee.rolname::text, 'PUBLIC'),
+                     function_acl.privilege_type,
+                     function_acl.is_grantable
+                FROM pg_catalog.pg_proc AS function_row
+                JOIN pg_catalog.pg_namespace AS function_namespace
+                  ON function_namespace.oid = function_row.pronamespace
+               CROSS JOIN LATERAL pg_catalog.aclexplode(function_row.proacl)
+                 AS function_acl
+                JOIN pg_catalog.pg_roles AS grantor
+                  ON grantor.oid = function_acl.grantor
+                LEFT JOIN pg_catalog.pg_roles AS grantee
+                  ON grantee.oid = function_acl.grantee
+               WHERE function_row.proowner = owner_oid
+                 AND function_row.prosecdef
+                 AND pg_catalog.left(
+                       function_namespace.nspname::text, 3
+                     ) <> 'pg_'
+                 AND function_namespace.nspname <> 'information_schema'
+                 AND function_acl.privilege_type = 'EXECUTE'
+            ),
+            acl_difference AS (
+              (SELECT * FROM actual_acl EXCEPT SELECT * FROM expected_acl)
+              UNION ALL
+              (SELECT * FROM expected_acl EXCEPT SELECT * FROM actual_acl)
+            )
+            SELECT 1 FROM acl_difference
+          ) THEN
+            RAISE EXCEPTION
+              'identity_erasure_e1_unreviewed_security_definer_authority'
+              USING ERRCODE = '55000';
+          END IF;
+
+          IF EXISTS (
+            SELECT 1
+              FROM pg_catalog.pg_proc AS function_row
+              JOIN pg_catalog.pg_namespace AS function_namespace
+                ON function_namespace.oid = function_row.pronamespace
+             WHERE function_row.prosecdef
+               AND pg_catalog.left(function_namespace.nspname::text, 3) <> 'pg_'
+               AND function_namespace.nspname <> 'information_schema'
+               AND function_row.proowner NOT IN (owner_oid, identity_kernel_oid)
+          ) THEN
+            RAISE EXCEPTION
+              'identity_erasure_e1_security_definer_owner_invalid'
+              USING ERRCODE = '55000';
+          END IF;
+
+          IF (
+            SELECT pg_catalog.count(*)
+              FROM pg_catalog.pg_proc AS function_row
+              JOIN pg_catalog.pg_namespace AS function_namespace
+                ON function_namespace.oid = function_row.pronamespace
+             WHERE function_row.proowner = identity_kernel_oid
+               AND function_row.prosecdef
+               AND pg_catalog.left(function_namespace.nspname::text, 3) <> 'pg_'
+               AND function_namespace.nspname <> 'information_schema'
+          ) <> {len(REVIEWED_IDENTITY_KERNEL_SECURITY_DEFINERS)} OR EXISTS (
+            SELECT 1
+              FROM (VALUES {identity_kernel_definer_values}) AS expected(
+                function_oid, source_digest
+              )
+             WHERE NOT EXISTS (
+               SELECT 1
+                 FROM pg_catalog.pg_proc AS function_row
+                 JOIN pg_catalog.pg_language AS function_language
+                   ON function_language.oid = function_row.prolang
+                WHERE function_row.oid = expected.function_oid
+                  AND function_row.proowner = identity_kernel_oid
+                  AND function_row.prosecdef
+                  AND NOT function_row.proleakproof
+                  AND function_row.provolatile = 'v'
+                  AND function_row.proparallel = 'u'
+                  AND NOT function_row.proisstrict
+                  AND function_row.prokind = 'f'
+                  AND function_language.lanname = 'plpgsql'
+                  AND function_row.proconfig =
+                      ARRAY['search_path=pg_catalog, pg_temp']::text[]
+                  AND function_row.proacl IS NOT NULL
+                  AND pg_catalog.encode(pg_catalog.sha256(
+                        pg_catalog.convert_to(function_row.prosrc, 'UTF8')
+                      ), 'hex') = expected.source_digest
+             )
+          ) OR EXISTS (
+            WITH expected_acl(
+              function_oid, grantor_name, grantee_name,
+              privilege_type, is_grantable
+            ) AS (VALUES {identity_kernel_definer_acl_values}),
+            actual_acl AS (
+              SELECT function_row.oid::regprocedure,
+                     grantor.rolname::text,
+                     grantee.rolname::text,
+                     function_acl.privilege_type,
+                     function_acl.is_grantable
+                FROM pg_catalog.pg_proc AS function_row
+               CROSS JOIN LATERAL pg_catalog.aclexplode(function_row.proacl)
+                 AS function_acl
+                JOIN pg_catalog.pg_roles AS grantor
+                  ON grantor.oid = function_acl.grantor
+                JOIN pg_catalog.pg_roles AS grantee
+                  ON grantee.oid = function_acl.grantee
+               WHERE function_row.proowner = identity_kernel_oid
+                 AND function_row.prosecdef
+                 AND function_acl.privilege_type = 'EXECUTE'
+            ),
+            acl_difference AS (
+              (SELECT * FROM actual_acl EXCEPT SELECT * FROM expected_acl)
+              UNION ALL
+              (SELECT * FROM expected_acl EXCEPT SELECT * FROM actual_acl)
+            )
+            SELECT 1 FROM acl_difference
+          ) THEN
+            RAISE EXCEPTION
+              'identity_erasure_e1_identity_kernel_function_invalid'
+              USING ERRCODE = '55000';
+          END IF;
+
+          IF (
+            SELECT pg_catalog.count(*)
+              FROM pg_catalog.pg_proc AS function_row
+              JOIN pg_catalog.pg_namespace AS function_namespace
+                ON function_namespace.oid = function_row.pronamespace
+             WHERE function_row.proowner = owner_oid
+               AND function_row.prosecdef
+               AND pg_catalog.left(function_namespace.nspname::text, 3) <> 'pg_'
+               AND function_namespace.nspname <> 'information_schema'
+          ) <> {len(REVIEWED_OWNER_SECURITY_DEFINERS)} OR EXISTS (
+            SELECT 1
+              FROM (VALUES {security_definer_values}) AS expected(
+                function_oid, language_name, configuration, source_digest
+              )
+             WHERE NOT EXISTS (
+               SELECT 1
+                 FROM pg_catalog.pg_proc AS function_row
+                 JOIN pg_catalog.pg_language AS function_language
+                   ON function_language.oid = function_row.prolang
+                WHERE function_row.oid = expected.function_oid
+                  AND function_row.proowner = owner_oid
+                  AND function_row.prosecdef
+                  AND NOT function_row.proleakproof
+                  AND function_row.provolatile = 'v'
+                  AND function_row.proparallel = 'u'
+                  AND NOT function_row.proisstrict
+                  AND function_row.prokind = 'f'
+                  AND function_language.lanname = expected.language_name
+                  AND function_row.proconfig IS NOT DISTINCT FROM
+                      expected.configuration
+                  AND pg_catalog.encode(pg_catalog.sha256(
+                        pg_catalog.convert_to(function_row.prosrc, 'UTF8')
+                      ), 'hex') = expected.source_digest
+             )
+          ) THEN
+            RAISE EXCEPTION
+              'identity_erasure_e1_security_definer_contract_invalid'
+              USING ERRCODE = '55000';
+          END IF;
+
+          BEGIN
+            PERFORM identity.validate_principal_binding_graph(
+              binding_request.request_id, NULL::uuid
+            )
+              FROM identity.principal_binding_requests AS binding_request;
+            PERFORM identity.validate_principal_binding_graph(
+              NULL::uuid, binding_proposal.proposal_id
+            )
+              FROM identity.principal_binding_proposals AS binding_proposal;
+          EXCEPTION WHEN OTHERS THEN
+            RAISE EXCEPTION 'identity_erasure_e1_binding_graph_data_invalid'
+              USING ERRCODE = '55000';
+          END;
 
           -- E1 establishes mandatory blocking and receipt invariants before
           -- the first identity-erasure operation.  It never guesses how to
@@ -1175,9 +2255,7 @@ def _quarantine_kernel_role() -> None:
         $type_acl$
         """
     )
-    op.execute(
-        f"REVOKE USAGE, CREATE ON SCHEMA {schemas} FROM {KERNEL_ROLE}"
-    )
+    op.execute(f"REVOKE USAGE, CREATE ON SCHEMA {schemas} FROM {KERNEL_ROLE}")
     for object_kind in ("TABLES", "SEQUENCES", "FUNCTIONS", "TYPES"):
         op.execute(
             "ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA "
@@ -1208,7 +2286,7 @@ def _install_support_constraints() -> None:
         f"ADD CONSTRAINT {REQUEST_SCOPE_CHECK} CHECK ("
         "identity_person_scope_commitment IS NULL OR ("
         "identity_person_scope_commitment ~ '^[0-9a-f]{64}$' AND "
-        "scope = '{\"kind\":\"identity_person\"}'::jsonb))"
+        'scope = \'{"kind":"identity_person"}\'::jsonb))'
     )
     op.execute(
         "ALTER TABLE identity.ha_user_bindings "
@@ -1457,9 +2535,7 @@ def _install_foundation_tables() -> None:
             "TO home_agent_owner WITH CHECK (session_user = 'home_agent_owner')"
         )
         roles = ", ".join(RUNTIME_AND_OPERATOR_ROLES)
-        op.execute(
-            f"REVOKE ALL PRIVILEGES ON TABLE {table} FROM PUBLIC, {roles}"
-        )
+        op.execute(f"REVOKE ALL PRIVILEGES ON TABLE {table} FROM PUBLIC, {roles}")
         op.execute(f"GRANT SELECT, INSERT ON TABLE {table} TO home_agent_owner")
 
 
@@ -1865,8 +2941,7 @@ def downgrade() -> None:
     for table, name, _ in reversed(SUPPORT_CONSTRAINTS):
         op.execute(f"ALTER TABLE {table} DROP CONSTRAINT {name}")
     op.execute(
-        "ALTER TABLE privacy.erasure_requests "
-        f"DROP CONSTRAINT {REQUEST_SCOPE_CHECK}"
+        "ALTER TABLE privacy.erasure_requests " f"DROP CONSTRAINT {REQUEST_SCOPE_CHECK}"
     )
     op.drop_column(
         "erasure_requests",

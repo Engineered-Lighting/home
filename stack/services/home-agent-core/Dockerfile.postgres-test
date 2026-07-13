@@ -1,0 +1,30 @@
+ARG POSTGRES_BASE_IMAGE=postgres:17.10-bookworm@sha256:17b6c778de50f4bb9a878c36e736110fbcd9b7020377d6fdfdf20f7c0347e40a
+FROM ${POSTGRES_BASE_IMAGE}
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    VIRTUAL_ENV=/opt/home-agent-e1-test
+ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
+
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y \
+      ca-certificates python3 python3-pip python3-venv \
+    && python3 -m venv "${VIRTUAL_ENV}" \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace/stack/services/home-agent-core
+
+COPY stack/services/home-agent-core/requirements.txt /tmp/requirements.txt
+COPY stack/services/home-agent-core/requirements-dev.txt /tmp/requirements-dev.txt
+RUN pip install --no-cache-dir \
+      -r /tmp/requirements.txt -r /tmp/requirements-dev.txt
+
+COPY stack/services/home-agent-core/ /workspace/stack/services/home-agent-core/
+COPY stack/home-agent-deploy/ /workspace/stack/home-agent-deploy/
+COPY tests/home_agent/ /workspace/tests/home_agent/
+COPY tools/run-home-agent-e1-postgres-gate.py /workspace/tools/
+COPY .github/workflows/home-agent-e1-postgres.yml /workspace/.github/workflows/
+
+CMD ["python", "-m", "pytest", "-q"]

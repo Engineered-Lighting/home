@@ -13,6 +13,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.ids import uuid7
+from .e1_postgres_harness import assert_guarded_database_url
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -140,6 +141,36 @@ def test_0011_admission_acl_and_downgrade_fail_closed() -> None:
     assert "actual_policies IS DISTINCT FROM expected_policies" in source
     assert "actual_acl IS DISTINCT FROM expected_acl" in source
     assert "identity_erasure_e1_replay_guard_invalid" in source
+    assert "identity_erasure_e1_system_catalog_invalid" in source
+    assert "PINNED_SYSTEM_CATALOG_CONTRACT_ROWS" in source
+    assert "PINNED_SYSTEM_CATALOG_CONTRACT_DIGEST" in source
+    assert "PINNED_SYSTEM_CATALOG_CONTRACT_ROWS = 6563" in source
+    assert "b4e8efc14ec69bc6532a324060b455f0d" in source
+    assert 'PINNED_SYSTEM_CATALOG_CONTRACT_DIGEST = "pending"' not in source
+    assert "database_row.datacl::text" in source
+    assert "namespace_row.nspacl::text" in source
+    assert "relation_row.relacl::text" in source
+    assert "attribute.attacl::text" in source
+    assert "function_row.proacl::text" in source
+    assert "type_row.typacl::text" in source
+    assert "pg_catalog.pg_parameter_acl" in source
+    assert "pg_catalog.aclexplode(parameter_acl.paracl)" in source
+    assert "pg_catalog.pg_db_role_setting" in source
+    assert "pg_catalog.unnest(database_setting.setconfig)" in source
+    assert "function_row.proargtypes::oid[]" in source
+    assert "ORDER BY object_kind, object_identity" in source
+    assert "identity_erasure_e1_logical_replication_invalid" in source
+    for catalog in (
+        "pg_catalog.pg_subscription",
+        "pg_catalog.pg_subscription_rel",
+        "pg_catalog.pg_publication",
+        "pg_catalog.pg_publication_rel",
+        "pg_catalog.pg_publication_namespace",
+        "pg_catalog.pg_replication_slots",
+        "pg_catalog.pg_replication_origin",
+    ):
+        assert catalog in source
+    assert "replicated_relation.relreplident <> 'd'" in source
     assert "627bb84f83baa6183144de5d94ddcc4f0" in source
     assert "relowner = owner_oid" in source
     assert "relrowsecurity" in source
@@ -173,6 +204,7 @@ def test_0011_admission_acl_and_downgrade_fail_closed() -> None:
 )
 @pytest.mark.asyncio
 async def test_postgresql_e1_owner_rls_and_exact_manual_scope_boundary() -> None:
+    assert_guarded_database_url(os.environ[DATABASE_ENV])
     engine = create_async_engine(
         os.environ[DATABASE_ENV],
         isolation_level="SERIALIZABLE",
@@ -1398,6 +1430,7 @@ async def test_postgresql_e1_owner_rls_and_exact_manual_scope_boundary() -> None
 )
 def test_postgresql_e1_upgrade_round_trip_and_evidence_downgrade_guard() -> None:
     database_url = os.environ[LIFECYCLE_DATABASE_ENV]
+    assert_guarded_database_url(database_url)
 
     upgrade = _run_alembic(database_url, "upgrade", "0011_identity_erasure_e1")
     assert upgrade.returncode == 0, upgrade.stdout + upgrade.stderr

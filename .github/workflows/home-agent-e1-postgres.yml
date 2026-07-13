@@ -1,0 +1,44 @@
+name: home agent E1 PostgreSQL gate
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/home-agent-e1-postgres.yml"
+      - "stack/home-agent-deploy/apply-grants.sh"
+      - "stack/home-agent-deploy/identity-api-acl.sql"
+      - "stack/home-agent-deploy/provision-roles.sh"
+      - "stack/services/home-agent-core/**"
+      - "tests/home_agent/test_e1_postgres_gate_contract.py"
+      - "tests/home_agent/test_identity_erasure_kernel_foundation_deployment_contract.py"
+      - "tools/run-home-agent-e1-postgres-gate.py"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/home-agent-e1-postgres.yml"
+      - "stack/home-agent-deploy/apply-grants.sh"
+      - "stack/home-agent-deploy/identity-api-acl.sql"
+      - "stack/home-agent-deploy/provision-roles.sh"
+      - "stack/services/home-agent-core/**"
+      - "tests/home_agent/test_e1_postgres_gate_contract.py"
+      - "tests/home_agent/test_identity_erasure_kernel_foundation_deployment_contract.py"
+      - "tools/run-home-agent-e1-postgres-gate.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: home-agent-e1-postgres-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  admission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # actions/checkout v4.3.1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Run isolated PostgreSQL 17 E1 admission gate
+        run: python3 tools/run-home-agent-e1-postgres-gate.py

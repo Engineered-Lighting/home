@@ -10,15 +10,33 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator, Literal
+from typing import Annotated, Any, Iterator, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
 
 from .crypto import FieldCipher, SealedValue, canonical_json, sha256_json
 
 
 ZERO_HASH = "0" * 64
 CODE_PATTERN = re.compile(r"^[a-z0-9_]{1,64}$")
+IDENTITY_PERSON_ERASURE_OPERATION_CODES = ("activate_identity_person_retrieval_block",)
+IDENTITY_PERSON_ERASURE_RESIDUAL_CODES = (
+    "live_identity_rows_retained",
+    "semantic_dependencies_not_evaluated",
+    "generic_artifact_lineage_unresolved",
+    "external_cleanup_not_evaluated",
+    "legacy_cleanup_not_evaluated",
+    "backup_expiry_unverified",
+    "preexisting_snapshot_visibility",
+)
+IDENTITY_PERSON_RESIDUAL_COMMITMENT_DOMAIN = "identity-person-erasure-residual-v2"
 
 
 class LedgerIntegrityError(RuntimeError):
@@ -59,9 +77,17 @@ class ErasureLedgerRecord(BaseModel):
     @model_validator(mode="after")
     def validate_subject(self) -> "ErasureLedgerRecord":
         if self.subject_kind == "descriptor_fact":
-            if self.principal_id is None or self.fact_id is None or self.person_id is not None:
+            if (
+                self.principal_id is None
+                or self.fact_id is None
+                or self.person_id is not None
+            ):
                 raise ValueError("descriptor erasure subject is incomplete")
-        elif self.person_id is None or self.principal_id is not None or self.fact_id is not None:
+        elif (
+            self.person_id is None
+            or self.principal_id is not None
+            or self.fact_id is not None
+        ):
             raise ValueError("person erasure subject is incomplete")
         return self
 
@@ -89,6 +115,104 @@ class ErasureLedgerRecord(BaseModel):
         return value.astimezone(UTC)
 
 
+class IdentityPersonErasureLedgerRecord(BaseModel):
+    """Restore-safe, content-minimized identity-person retrieval tombstone.
+
+    Version 2 deliberately records only activation of the canonical retrieval
+    block.  It cannot represent physical whole-person deletion: all seven
+    baseline residuals remain mandatory until later, independently reviewed
+    cleanup kernels can resolve them.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal[2] = 2
+    subject_kind: Literal["identity_person"] = "identity_person"
+    outbox_id: uuid.UUID
+    erasure_request_id: uuid.UUID
+    person_id: uuid.UUID
+    operation_id: uuid.UUID
+    block_id: uuid.UUID
+    block_commitment: str = Field(pattern=r"^[0-9a-f]{64}$")
+    outcome_code: Literal["retrieval_block_active"] = "retrieval_block_active"
+    operation_codes: list[str] = Field(min_length=1, max_length=1)
+    policy_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    completed_at: datetime
+    source_created_at: datetime
+    external_pending_codes: list[str] = Field(default_factory=list, max_length=32)
+    legacy_untracked_codes: list[str] = Field(default_factory=list, max_length=32)
+    exact_residual_codes: list[str] = Field(min_length=7, max_length=7)
+    checkpoint_affected: Literal[True]
+    backup_expiry_at: None
+
+    @field_validator(
+        "operation_codes",
+        "external_pending_codes",
+        "legacy_untracked_codes",
+        "exact_residual_codes",
+    )
+    @classmethod
+    def validate_codes(cls, values: list[str]) -> list[str]:
+        if len(values) != len(set(values)):
+            raise ValueError("operation/residual codes must be unique")
+        if any(not CODE_PATTERN.fullmatch(value) for value in values):
+            raise ValueError("operation/residual code is invalid")
+        return values
+
+    @field_validator("completed_at", "source_created_at")
+    @classmethod
+    def validate_timestamp(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("ledger timestamps must include a UTC offset")
+        return value.astimezone(UTC)
+
+    @field_validator("erasure_request_id", "operation_id", "block_id")
+    @classmethod
+    def validate_uuidv7(cls, value: uuid.UUID) -> uuid.UUID:
+        if value.version != 7:
+            raise ValueError("identity-person ledger authority IDs must be UUIDv7")
+        return value
+
+    @model_validator(mode="after")
+    def validate_locked_outcome(self) -> "IdentityPersonErasureLedgerRecord":
+        if tuple(self.operation_codes) != IDENTITY_PERSON_ERASURE_OPERATION_CODES:
+            raise ValueError("identity-person ledger operation codes are invalid")
+        if tuple(self.exact_residual_codes) != IDENTITY_PERSON_ERASURE_RESIDUAL_CODES:
+            raise ValueError("identity-person ledger residual codes are invalid")
+        if self.source_created_at > self.completed_at:
+            raise ValueError("ledger completion precedes its source")
+        return self
+
+
+ErasureLedgerRecordValue: TypeAlias = Annotated[
+    ErasureLedgerRecord | IdentityPersonErasureLedgerRecord,
+    Field(discriminator="version"),
+]
+_ERASURE_LEDGER_RECORD_ADAPTER = TypeAdapter(ErasureLedgerRecordValue)
+
+
+def parse_erasure_ledger_record(payload: bytes) -> ErasureLedgerRecordValue:
+    """Validate one decrypted record through the version discriminator."""
+
+    return _ERASURE_LEDGER_RECORD_ADAPTER.validate_json(payload)
+
+
+def identity_person_residual_commitments(record_digest: str) -> dict[str, str]:
+    """Derive the seven content-free replay commitments from a verified record."""
+
+    if not re.fullmatch(r"[0-9a-f]{64}", record_digest):
+        raise ValueError("ledger record digest is invalid")
+    return {
+        code: hashlib.sha256(
+            (
+                f"{IDENTITY_PERSON_RESIDUAL_COMMITMENT_DOMAIN}:"
+                f"{record_digest}:{code}"
+            ).encode("utf-8")
+        ).hexdigest()
+        for code in IDENTITY_PERSON_ERASURE_RESIDUAL_CODES
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class LedgerHead:
     epoch: int
@@ -100,7 +224,7 @@ class LedgerEntry:
     epoch: int
     record_hash: str
     record_digest: str
-    record: ErasureLedgerRecord
+    record: ErasureLedgerRecordValue
 
 
 def read_ledger_head(path: Path) -> LedgerHead:
@@ -213,7 +337,13 @@ class EncryptedErasureLedger:
                 raise LedgerIntegrityError("database ledger epoch is ahead of ledger")
             return [entry for entry in entries if entry.epoch > epoch]
 
-    def append_once(self, record: ErasureLedgerRecord) -> LedgerEntry:
+    def append_once(self, record: ErasureLedgerRecordValue) -> LedgerEntry:
+        # Pydantic list fields remain mutable after construction. Revalidate a
+        # detached dump immediately before hashing so a caller cannot append a
+        # v2 record that later becomes unreadable after in-memory mutation.
+        record = _ERASURE_LEDGER_RECORD_ADAPTER.validate_python(
+            record.model_dump(mode="python")
+        )
         record_payload = record.model_dump(mode="json")
         record_digest = sha256_json(record_payload)
         with self._exclusive_lock():
@@ -334,7 +464,7 @@ class EncryptedErasureLedger:
                     purpose="erasure-ledger-entry",
                     artifact_id=f"{expected_epoch}:{outbox_id}",
                 )
-                record = ErasureLedgerRecord.model_validate_json(plaintext)
+                record = parse_erasure_ledger_record(plaintext)
             except Exception as exc:
                 raise LedgerIntegrityError(
                     "erasure ledger ciphertext failed verification"

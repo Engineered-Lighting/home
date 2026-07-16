@@ -5,6 +5,8 @@ After=docker.service srv-home\x2dagent.mount network-online.target
 Wants=network-online.target
 ConditionPathIsMountPoint=/srv/home-agent
 ConditionPathExists=/srv/home-agent/config/home-agent.env
+ConditionHost=!EngineeredLightingServer1
+ConditionHost=!home-app
 
 [Service]
 Type=oneshot
@@ -17,6 +19,17 @@ UMask=0077
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
+IOWeight=10
+CPUAccounting=true
+CPUQuota=100%
+MemoryAccounting=true
+MemoryHigh=1536M
+MemoryMax=2G
+MemorySwapMax=0
+TasksAccounting=true
+TasksMax=256
+LimitNOFILE=4096
+OOMPolicy=stop
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

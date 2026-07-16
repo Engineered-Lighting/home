@@ -36,3 +36,14 @@ If a change intentionally has no release note, mark the PR with the
   it, then manually tag from `main`.
 - `app/data/apartment` contains local runtime data and is not bundled into the
   desktop installer in v1.
+
+## Ubuntu AI Host Quarantine
+
+- Never run the Home Agent E1/E2 PostgreSQL Docker gate, image builds, broad
+  integration suites, or model/GPU workloads on `EngineeredLightingServer1` /
+  `home-app` while the 2026-07-12 unclean halt remains unresolved.
+- Do not bypass or weaken the runner's host, Linux-execution, Docker-endpoint,
+  daemon-identity, or resource-limit checks.
+- Use lightweight read-only diagnostics only when the host is needed. Run
+  deterministic unit/contract tests on the workstation and heavy database
+  gates on the pinned GitHub-hosted workflow.

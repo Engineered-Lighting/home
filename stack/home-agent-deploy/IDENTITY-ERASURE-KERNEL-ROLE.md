@@ -14,6 +14,25 @@ The role is deliberately dormant in E1:
   inherited use;
 - no erasure function or worker is installed.
 
+## Runtime restore boundary
+
+The separate `home_agent_erasure` login is only a quarantined restore-replay
+credential. Grant replay first removes every table and column ACL plus stale
+owner-default, sequence, and function grants, then applies an exact
+restore-replay allowlist. It has no table `DELETE`, no direct binding-table
+mutation, and no direct People mutation. Existing identity cascades remain
+behind the four reviewed owner-owned `SECURITY DEFINER` functions.
+
+E2's person tombstone and normalized residual writes remain exclusive to the
+offline owner; the NOLOGIN kernel can read only person identifiers from the
+tombstone and principal tables for deterministic suppression. It cannot read
+residuals, facts, places, or initiatives and has no table write privilege. The
+three suppression helpers are callable only by the exact roles whose RLS
+policies use them, and the trigger functions remain non-callable. The sole
+additional restore capability is `EXECUTE` on the separately owner-owned
+`replay_identity_person_retrieval_block_v2(jsonb)`. There is no direct
+tombstone or residual DML for `home_agent_erasure` or any other online role.
+
 The E1 tables are owned by `home_agent_owner`, use forced row-level security,
 and expose only owner `SELECT`/`INSERT`. A later migration must add the exact
 kernel policies and function privileges atomically with the audited function;
@@ -87,20 +106,36 @@ The full Core regression gate must set
 `REQUIRE_PHASE3_IDENTITY_ERASURE_E1_TESTS=1` and provide both disposable
 PostgreSQL URLs named by the E1 test module. In that mode collection fails
 instead of silently skipping either database test. The one-command adversarial
-gate below selects the behavioral and lifecycle nodes separately because each
-must run in its own production-shaped cluster.
+gate below selects the E1 behavioral and lifecycle nodes separately, and also
+exports the E2 owner and seven exact runtime-role URLs from mounted random
+secret files inside its isolated client containers.
 
 ## Disposable PostgreSQL 17 admission gate
 
-From the repository root, run:
+From a Windows or macOS disposable host with local Docker, run:
 
 ```sh
 python3 tools/run-home-agent-e1-postgres-gate.py
 ```
 
-The command accepts no database or Docker target. It rejects endpoint-routing
-environment variables and any active Docker endpoint other than local
-`unix://` or `npipe://`, then pins that endpoint for every daemon command.
+Ordinary Linux execution is disabled before Docker discovery. The pinned
+GitHub-hosted workflow is the only admitted Linux path: it passes the explicit
+`--github-hosted-linux` flag and the exact GitHub-hosted runner context. A
+self-hosted runner, bare local invocation, renamed host, or copied command is
+refused.
+
+`EngineeredLightingServer1` / `home-app` remains absolutely quarantined after
+the unclean 2026-07-12 halt immediately following a high-churn E1 gate. The
+runner checks both the process hostname and the Docker daemon name, so entering
+a container with the host Docker socket does not bypass the named-host block.
+There is no environment-variable bypass for either name quarantine. Removing
+them requires a reviewed code change after a separate on-site
+hardware/firmware stability review.
+
+The operator command accepts no database or Docker target. The CI-only flag
+does not select a target. The runner rejects endpoint-routing environment
+variables and any active Docker endpoint other than local `unix://` or
+`npipe://`, then pins that endpoint for every daemon command.
 
 It must run from a Git working tree. It generates a filtered build context
 from two fail-closed sources: an exact reviewed file manifest (including the
@@ -114,13 +149,22 @@ data are never sent to the Docker daemon. Docker may retain cache derived from
 that already-filtered context; the gate deliberately never prunes a machine's
 global build cache.
 
-Behavioral, lifecycle, and tamper admission run in three sequential,
+Behavioral, lifecycle, tamper admission, and E2 run in four sequential,
 unexposed PostgreSQL 17 clusters on separate internal networks and tmpfs data
 directories. The admission cluster keeps a locked revision-0007 template.
 Each test case alone recreates `home_agent`, provisions exact roles, upgrades
 and grants through revision 0010, verifies that it is the sole database with
 the three reviewed identity-kernel functions, then removes it. No test changes
 function ownership to manufacture the production ownership invariant.
+
+The fourth cluster upgrades and reapplies grants through revision 0012. It
+runs the downgrade/refusal lifecycle contract first against its empty sole
+`home_agent` database, verifies the sentinel/system-ID/database allowlist,
+terminates only that labeled database's sessions, drops and recreates it, and
+then reruns the full upgrade before schema, ledger, restore, runtime-role RLS,
+anti-resurrection, and deployment contracts. It does not clone a second E2
+database because revision 0011 deliberately admits the erasure-kernel ownership
+set in only one database per cluster.
 
 Before connection termination, database removal, role cleanup, or lifecycle
 downgrade, the gate verifies a random 256-bit run sentinel, PostgreSQL system

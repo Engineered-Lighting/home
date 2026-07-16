@@ -34,6 +34,16 @@ class MonthlyRestoreDrillContractTests(unittest.TestCase):
         self.assertIn("flock -n 9", self.source)
         self.assertNotIn("rm -rf", self.source)
 
+    def test_selector_refuses_the_incident_host_before_workload(self) -> None:
+        host_guard = self.source.index('assert_name_not_quarantined host "$(uname -n)"')
+        docker_probe = self.source.index("docker info --format")
+        backup_query = self.source.index('docker exec "$postgres_container"')
+        self.assertLess(host_guard, docker_probe)
+        self.assertLess(docker_probe, backup_query)
+        self.assertIn("engineeredlightingserver1|home-app", self.source)
+        self.assertIn('assert_name_not_quarantined "Docker daemon"', self.source)
+        self.assertNotIn("HOME_AGENT_ALLOW", self.source)
+
     def test_systemd_schedule_is_monthly_and_bounded(self) -> None:
         service = (SYSTEMD / "home-agent-monthly-restore-drill.service").read_text(
             encoding="utf-8"
@@ -45,8 +55,15 @@ class MonthlyRestoreDrillContractTests(unittest.TestCase):
         self.assertIn("TimeoutStartSec=2h", service)
         self.assertIn("ProtectSystem=strict", service)
         self.assertIn("ReadWritePaths=/srv/home-agent/restore-drills", service)
+        self.assertIn("ConditionHost=!EngineeredLightingServer1", service)
+        self.assertIn("ConditionHost=!home-app", service)
+        self.assertIn("CPUQuota=100%", service)
+        self.assertIn("MemoryMax=2G", service)
+        self.assertIn("MemorySwapMax=0", service)
+        self.assertIn("TasksMax=256", service)
+        self.assertIn("IOWeight=10", service)
         self.assertIn("OnCalendar=Sun *-*-01..07 04:30:00", timer)
-        self.assertIn("Persistent=true", timer)
+        self.assertIn("Persistent=false", timer)
 
 
 if __name__ == "__main__":

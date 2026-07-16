@@ -1,21 +1,29 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
+import re
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
-from sqlalchemy import func, select, update
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import cast, func, select, update
+from sqlalchemy.dialects.postgresql import JSONB, insert
 
 from . import schema
+from .crypto import sha256_json
 from .db import Database
 from .erasure import apply_descriptor_erasure
 from .ledger import (
     ZERO_HASH,
     EncryptedErasureLedger,
+    IdentityPersonErasureLedgerRecord,
+    LedgerEntry,
     LedgerHead,
     LedgerIntegrityError,
+    identity_person_residual_commitments,
     read_ledger_head,
 )
 
@@ -37,13 +45,37 @@ class OutboxHealth:
     unsupported: int
 
 
+def identity_person_restore_payload(entry: LedgerEntry) -> dict[str, Any]:
+    """Build the exact PostgreSQL replay-kernel payload for a v2 entry."""
+
+    record = entry.record
+    if not isinstance(record, IdentityPersonErasureLedgerRecord):
+        raise TypeError("identity-person restore requires a version-2 ledger record")
+    if entry.epoch <= 0:
+        raise LedgerIntegrityError("identity-person ledger epoch is invalid")
+    if not re.fullmatch(r"[0-9a-f]{64}", entry.record_hash):
+        raise LedgerIntegrityError("identity-person ledger record hash is invalid")
+    record_payload = record.model_dump(mode="json")
+    calculated_digest = sha256_json(record_payload)
+    if not hmac.compare_digest(calculated_digest, entry.record_digest):
+        raise LedgerIntegrityError("identity-person ledger record digest diverges")
+    return {
+        **record_payload,
+        "ledger_epoch": entry.epoch,
+        "ledger_record_hash": entry.record_hash,
+        "ledger_record_digest": entry.record_digest,
+        "residual_commitments": identity_person_residual_commitments(
+            entry.record_digest
+        ),
+    }
+
+
 async def outbox_health(database: Database) -> OutboxHealth:
     try:
         async with database.transaction() as connection:
             transaction_time = func.transaction_timestamp()
-            strict_erasure = (
-                (schema.outbox.c.topic == "privacy.erasure.completed")
-                & (schema.outbox.c.state != "complete")
+            strict_erasure = (schema.outbox.c.topic == "privacy.erasure.completed") & (
+                schema.outbox.c.state != "complete"
             )
             due_auto_expiry = (
                 (schema.outbox.c.topic == "privacy.person.auto_expire")
@@ -221,7 +253,8 @@ class RestoreReplay:
             if entry.epoch != previous_epoch + 1:
                 raise LedgerIntegrityError("erasure replay epoch is not contiguous")
             async with self.database.transaction(
-                principal_id=entry.record.principal_id, serializable=True
+                principal_id=getattr(entry.record, "principal_id", None),
+                serializable=True,
             ) as connection:
                 existing = (
                     (
@@ -235,6 +268,52 @@ class RestoreReplay:
                     .mappings()
                     .first()
                 )
+                if isinstance(entry.record, IdentityPersonErasureLedgerRecord):
+                    if existing is not None and (
+                        existing["outbox_id"] != entry.record.outbox_id
+                        or existing["erasure_request_id"]
+                        != entry.record.erasure_request_id
+                        or existing["record_hash"] != entry.record_hash
+                        or existing["record_digest"] != entry.record_digest
+                    ):
+                        raise LedgerIntegrityError(
+                            "identity-person erasure replay receipt conflicts "
+                            "with ledger"
+                        )
+                    await self._replay_identity_person_retrieval_block(
+                        connection, entry
+                    )
+                    if existing is None:
+                        await connection.execute(
+                            insert(schema.erasure_replay_receipts).values(
+                                ledger_epoch=entry.epoch,
+                                outbox_id=entry.record.outbox_id,
+                                erasure_request_id=entry.record.erasure_request_id,
+                                record_hash=entry.record_hash,
+                                record_digest=entry.record_digest,
+                            )
+                        )
+                        applied += 1
+                    await self._set_database_state(
+                        connection,
+                        LedgerHead(entry.epoch, entry.record_hash),
+                    )
+                    await connection.execute(
+                        update(schema.outbox)
+                        .where(
+                            schema.outbox.c.outbox_id == entry.record.outbox_id,
+                            schema.outbox.c.topic == "privacy.erasure.completed",
+                        )
+                        .values(
+                            state="complete",
+                            claim_token=None,
+                            claimed_at=None,
+                            completed_at=datetime.now(UTC),
+                            last_error_code=None,
+                        )
+                    )
+                    previous_epoch = entry.epoch
+                    continue
                 if entry.record.subject_kind == "person":
                     if existing is not None:
                         if (
@@ -400,6 +479,34 @@ class RestoreReplay:
         ):
             raise LedgerIntegrityError("restore replay did not reach ledger head")
         return applied
+
+    @staticmethod
+    async def _replay_identity_person_retrieval_block(connection, entry) -> None:
+        record = entry.record
+        if not isinstance(record, IdentityPersonErasureLedgerRecord):
+            raise LedgerIntegrityError(
+                "identity-person erasure ledger subject is incomplete"
+            )
+        payload = identity_person_restore_payload(entry)
+        replayed_block_id = (
+            await connection.execute(
+                select(
+                    func.privacy.replay_identity_person_retrieval_block_v2(
+                        cast(payload, JSONB)
+                    )
+                )
+            )
+        ).scalar_one()
+        try:
+            replayed_block_id = uuid.UUID(str(replayed_block_id))
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise LedgerIntegrityError(
+                "identity-person erasure replay kernel returned an invalid block"
+            ) from exc
+        if replayed_block_id != record.block_id:
+            raise LedgerIntegrityError(
+                "identity-person erasure replay kernel returned a conflicting block"
+            )
 
     @staticmethod
     async def _replay_person_auto_expiry(connection, entry) -> None:

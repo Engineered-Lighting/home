@@ -3,7 +3,7 @@ Description=Run the Home Agent restore drill on the first Sunday each month
 
 [Timer]
 OnCalendar=Sun *-*-01..07 04:30:00
-Persistent=true
+Persistent=false
 RandomizedDelaySec=20min
 AccuracySec=1min
 

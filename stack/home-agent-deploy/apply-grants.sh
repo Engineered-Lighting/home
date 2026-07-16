@@ -173,16 +173,100 @@ GRANT EXECUTE ON FUNCTION privacy.apply_person_auto_expiry(uuid)
   TO home_agent_worker;
 REVOKE EXECUTE ON FUNCTION privacy.expire_principal_binding_work(timestamptz)
   FROM home_agent_worker;
-GRANT SELECT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ingest, identity, knowledge,
-  engagement, privacy TO home_agent_erasure;
-REVOKE INSERT ON TABLE identity.principal_binding_requests,
-  identity.principal_binding_proposals FROM home_agent_erasure;
-GRANT SELECT, UPDATE, DELETE ON TABLE identity.principal_binding_requests,
-  identity.principal_binding_proposals TO home_agent_erasure;
-GRANT INSERT ON TABLE privacy.retrieval_blocks TO home_agent_erasure;
-GRANT SELECT, INSERT, UPDATE ON TABLE privacy.erasure_requests
-  TO home_agent_erasure;
-GRANT INSERT ON TABLE privacy.auto_expiry_receipts TO home_agent_erasure;
+-- The restore credential is not a general deletion principal. Start every
+-- replay from an empty application-table ACL, including stale column grants,
+-- then restore only the tables used by the descriptor/person ledger replay
+-- implementation below. SECURITY DEFINER kernels perform identity cascades;
+-- the login never receives direct People or binding mutation authority.
+DO $erasure_runtime_acl_reset$
+DECLARE
+  target_table record;
+BEGIN
+  FOR target_table IN
+    SELECT table_namespace.nspname,
+           candidate_table.relname,
+           pg_catalog.string_agg(
+             pg_catalog.quote_ident(attribute.attname), ', '
+             ORDER BY attribute.attnum
+           ) AS column_list
+      FROM pg_catalog.pg_class AS candidate_table
+      JOIN pg_catalog.pg_namespace AS table_namespace
+        ON table_namespace.oid = candidate_table.relnamespace
+      JOIN pg_catalog.pg_attribute AS attribute
+        ON attribute.attrelid = candidate_table.oid
+       AND attribute.attnum > 0
+       AND NOT attribute.attisdropped
+     WHERE table_namespace.nspname IN (
+       'ingest','identity','knowledge','engagement','privacy','operations'
+     )
+       AND candidate_table.relkind IN ('r','p','v','m','f')
+     GROUP BY table_namespace.nspname, candidate_table.relname
+  LOOP
+    EXECUTE pg_catalog.format(
+      'REVOKE ALL PRIVILEGES ON TABLE %I.%I FROM home_agent_erasure',
+      target_table.nspname, target_table.relname
+    );
+    EXECUTE pg_catalog.format(
+      'REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s), '
+      'REFERENCES (%1$s) ON TABLE %2$I.%3$I FROM home_agent_erasure',
+      target_table.column_list, target_table.nspname, target_table.relname
+    );
+  END LOOP;
+END
+$erasure_runtime_acl_reset$;
+REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA ingest, identity, knowledge,
+  engagement, privacy, operations FROM home_agent_erasure;
+REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA ingest, identity, knowledge,
+  engagement, privacy, operations FROM home_agent_erasure;
+ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA ingest, identity,
+  knowledge, engagement, privacy, operations
+  REVOKE ALL PRIVILEGES ON TABLES FROM home_agent_erasure;
+ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA ingest, identity,
+  knowledge, engagement, privacy, operations
+  REVOKE ALL PRIVILEGES ON SEQUENCES FROM home_agent_erasure;
+ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA ingest, identity,
+  knowledge, engagement, privacy, operations
+  REVOKE ALL PRIVILEGES ON FUNCTIONS FROM home_agent_erasure;
+
+GRANT SELECT ON TABLE ingest.artifact_links TO home_agent_erasure;
+GRANT SELECT (person_id) ON TABLE identity.people TO home_agent_erasure;
+GRANT SELECT (principal_id) ON TABLE identity.principals TO home_agent_erasure;
+GRANT SELECT (
+  binding_id, proposal_id, ha_user_id, principal_id, person_id,
+  confirmed_by_principal_id, confirmed_at, revoked_at, source_artifact_id
+) ON TABLE identity.ha_user_bindings TO home_agent_erasure;
+GRANT SELECT ON TABLE knowledge.memory_transactions,
+  knowledge.fact_versions TO home_agent_erasure;
+GRANT UPDATE (
+  state, exact_text_ciphertext, exact_text_nonce, exact_text_sha256,
+  candidate, preview, updated_at
+) ON TABLE knowledge.memory_transactions TO home_agent_erasure;
+GRANT UPDATE (object, system_range, resolution)
+  ON TABLE knowledge.fact_versions TO home_agent_erasure;
+GRANT SELECT ON TABLE engagement.initiatives TO home_agent_erasure;
+GRANT UPDATE (state, suppression_reason)
+  ON TABLE engagement.initiatives TO home_agent_erasure;
+GRANT INSERT (block_id, artifact_id, erasure_request_id)
+  ON TABLE privacy.retrieval_blocks TO home_agent_erasure;
+GRANT SELECT ON TABLE privacy.artifact_registry,
+  privacy.auto_expiry_schedules TO home_agent_erasure;
+GRANT UPDATE (status) ON TABLE privacy.artifact_registry TO home_agent_erasure;
+GRANT UPDATE (state, completed_at)
+  ON TABLE privacy.auto_expiry_schedules TO home_agent_erasure;
+GRANT SELECT ON TABLE privacy.auto_expiry_receipts TO home_agent_erasure;
+GRANT INSERT (
+  receipt_id, schedule_id, outbox_id, ledger_outbox_id, person_id,
+  operation_codes, cascade_counts, residual_codes, receipt_sha256, completed_at
+) ON TABLE privacy.auto_expiry_receipts TO home_agent_erasure;
+GRANT SELECT (
+  erasure_request_id, principal_id, scope, state, policy_digest, created_at,
+  completed_at
+) ON TABLE privacy.erasure_requests TO home_agent_erasure;
+GRANT INSERT (
+  erasure_request_id, principal_id, scope, state, policy_digest, completed_at
+) ON TABLE privacy.erasure_requests TO home_agent_erasure;
+GRANT UPDATE (state, completed_at)
+  ON TABLE privacy.erasure_requests TO home_agent_erasure;
 GRANT EXECUTE ON FUNCTION privacy.apply_person_auto_expiry(uuid)
   TO home_agent_erasure;
 GRANT EXECUTE ON FUNCTION privacy.expire_principal_binding_work(timestamptz)
@@ -192,12 +276,20 @@ GRANT EXECUTE ON FUNCTION
   TO home_agent_erasure;
 GRANT EXECUTE ON FUNCTION privacy.replay_person_auto_expiry(uuid,uuid,uuid)
   TO home_agent_erasure;
-GRANT SELECT ON TABLE identity.principals TO home_agent_erasure;
-GRANT SELECT, INSERT ON TABLE operations.erasure_replay_receipts
+GRANT SELECT ON TABLE operations.erasure_replay_receipts
   TO home_agent_erasure;
-GRANT SELECT, INSERT, UPDATE ON TABLE operations.erasure_ledger_state
-  TO home_agent_erasure;
-GRANT SELECT, UPDATE ON TABLE operations.outbox TO home_agent_erasure;
+GRANT INSERT (
+  ledger_epoch, outbox_id, erasure_request_id, record_hash, record_digest
+) ON TABLE operations.erasure_replay_receipts TO home_agent_erasure;
+GRANT SELECT ON TABLE operations.erasure_ledger_state TO home_agent_erasure;
+GRANT INSERT (state_key, recorded_epoch, recorded_head_hash)
+  ON TABLE operations.erasure_ledger_state TO home_agent_erasure;
+GRANT UPDATE (recorded_epoch, recorded_head_hash, updated_at)
+  ON TABLE operations.erasure_ledger_state TO home_agent_erasure;
+GRANT SELECT ON TABLE operations.outbox TO home_agent_erasure;
+GRANT UPDATE (
+  state, claim_token, claimed_at, completed_at, last_error_code
+) ON TABLE operations.outbox TO home_agent_erasure;
 ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA ingest
   GRANT SELECT, INSERT, UPDATE ON TABLES TO home_agent_ingest;
 ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA knowledge,
@@ -739,8 +831,9 @@ BEGIN
       column_list, grantee_sql
     );
   END LOOP;
-  GRANT SELECT ON TABLE identity.principals
-    TO home_agent_binding_operator, home_agent_erasure;
+  GRANT SELECT ON TABLE identity.principals TO home_agent_binding_operator;
+  GRANT SELECT (principal_id) ON TABLE identity.principals
+    TO home_agent_erasure;
   GRANT SELECT (
     binding_id, proposal_id, ha_user_id, principal_id, person_id,
     confirmed_by_principal_id, confirmed_at, revoked_at, source_artifact_id
@@ -856,8 +949,9 @@ $identity_erasure_e1_acl$;
 
 -- E1 reserves a NOLOGIN owner for a later erasure SECURITY DEFINER kernel.
 -- Grant replay must restore its global quarantine even after the one-time
--- migration has run. Keep this as the final in-database ACL operation so no
--- broad grant below can accidentally reauthorize the dormant role.
+-- migration has run. E2, when its complete function/table set exists, starts
+-- from this empty boundary and restores only its exact kernel/caller ACLs in
+-- the conditional block below.
 DO $identity_erasure_kernel_quarantine$
 DECLARE
   type_entry record;
@@ -973,6 +1067,29 @@ BEGIN
         FROM pg_catalog.pg_shdepend AS owned_object
        WHERE owned_object.refobjid = kernel_oid
          AND owned_object.deptype = 'o'
+         AND NOT (
+           owned_object.classid = 'pg_catalog.pg_proc'::regclass
+           AND coalesce(
+             owned_object.objid = ANY (ARRAY[
+               pg_catalog.to_regprocedure(
+                 'privacy.identity_person_is_blocked(uuid)'
+               )::oid,
+               pg_catalog.to_regprocedure(
+                 'privacy.identity_principal_is_blocked(uuid)'
+               )::oid,
+               pg_catalog.to_regprocedure(
+                 'privacy.identity_fact_is_blocked(text,uuid,text,jsonb,uuid)'
+               )::oid,
+               pg_catalog.to_regprocedure(
+                 'privacy.reject_tombstoned_identity_write()'
+               )::oid,
+               pg_catalog.to_regprocedure(
+                 'privacy.enforce_identity_person_erasure_residual_set()'
+               )::oid
+             ]::oid[]),
+             false
+           )
+         )
     ) OR EXISTS (
       SELECT 1
         FROM pg_catalog.pg_auth_members AS membership
@@ -996,6 +1113,181 @@ BEGIN
   END IF;
 END
 $identity_erasure_kernel_quarantine$;
+
+-- E2 is an all-or-none activation of the otherwise quarantined NOLOGIN
+-- kernel. The two durable control tables remain inaccessible to every online
+-- role. Runtime roles receive only deterministic suppression predicates, and
+-- the restore login receives only the v2 replay entry point.
+DO $identity_erasure_e2_acl$
+DECLARE
+  suppression_functions text[] := ARRAY[
+    'privacy.identity_person_is_blocked(uuid)',
+    'privacy.identity_principal_is_blocked(uuid)',
+    'privacy.identity_fact_is_blocked(text,uuid,text,jsonb,uuid)'
+  ]::text[];
+  trigger_functions text[] := ARRAY[
+    'privacy.reject_tombstoned_identity_write()',
+    'privacy.enforce_identity_person_erasure_residual_set()'
+  ]::text[];
+  replay_function text :=
+    'privacy.replay_identity_person_retrieval_block_v2(jsonb)';
+  all_functions text[];
+  column_list text;
+  function_count integer;
+  function_oid regprocedure;
+  grantee_sql text;
+  kernel_oid oid;
+  owner_oid oid;
+  target_role text;
+  target_signature text;
+  target_table text;
+BEGIN
+  all_functions := suppression_functions || trigger_functions
+    || ARRAY[replay_function]::text[];
+  SELECT pg_catalog.count(*)
+    INTO STRICT function_count
+    FROM pg_catalog.unnest(all_functions) AS signature(signature_text)
+   WHERE pg_catalog.to_regprocedure(signature.signature_text) IS NOT NULL;
+
+  IF function_count = 0
+     AND pg_catalog.to_regclass(
+       'privacy.identity_person_erasure_residuals'
+     ) IS NULL THEN
+    RETURN;
+  END IF;
+  IF function_count <> pg_catalog.cardinality(all_functions)
+     OR pg_catalog.to_regclass('privacy.subject_retrieval_blocks') IS NULL
+     OR pg_catalog.to_regclass(
+       'privacy.identity_person_erasure_residuals'
+     ) IS NULL THEN
+    RAISE EXCEPTION 'partial identity erasure E2 object set'
+      USING ERRCODE = '55000';
+  END IF;
+
+  SELECT oid INTO STRICT kernel_oid
+    FROM pg_catalog.pg_roles
+   WHERE rolname = 'home_agent_identity_erasure_kernel';
+  SELECT oid INTO STRICT owner_oid
+    FROM pg_catalog.pg_roles
+   WHERE rolname = 'home_agent_owner';
+  IF EXISTS (
+    SELECT 1
+      FROM pg_catalog.unnest(suppression_functions)
+           AS signature(signature_text)
+      JOIN pg_catalog.pg_proc AS function_row
+        ON function_row.oid = pg_catalog.to_regprocedure(
+          signature.signature_text
+        )
+     WHERE function_row.proowner <> kernel_oid
+        OR NOT function_row.prosecdef
+        OR function_row.prokind <> 'f'
+  ) OR EXISTS (
+    SELECT 1
+      FROM pg_catalog.unnest(trigger_functions) AS signature(signature_text)
+      JOIN pg_catalog.pg_proc AS function_row
+        ON function_row.oid = pg_catalog.to_regprocedure(
+          signature.signature_text
+        )
+     WHERE function_row.proowner <> kernel_oid
+        OR function_row.prokind <> 'f'
+        OR function_row.prosecdef IS DISTINCT FROM (
+          signature.signature_text =
+            'privacy.reject_tombstoned_identity_write()'
+        )
+  ) OR EXISTS (
+    SELECT 1
+      FROM pg_catalog.pg_proc AS replay_row
+     WHERE replay_row.oid = pg_catalog.to_regprocedure(replay_function)
+       AND (
+         replay_row.proowner <> owner_oid
+         OR NOT replay_row.prosecdef
+         OR replay_row.prokind <> 'f'
+       )
+  ) THEN
+    RAISE EXCEPTION 'identity erasure E2 function ownership invalid'
+      USING ERRCODE = '42501';
+  END IF;
+
+  FOREACH target_table IN ARRAY ARRAY[
+    'privacy.subject_retrieval_blocks',
+    'privacy.identity_person_erasure_residuals'
+  ]::text[]
+  LOOP
+    SELECT pg_catalog.string_agg(
+             pg_catalog.quote_ident(attribute.attname), ', '
+             ORDER BY attribute.attnum
+           )
+      INTO STRICT column_list
+      FROM pg_catalog.pg_attribute AS attribute
+     WHERE attribute.attrelid = target_table::regclass
+       AND attribute.attnum > 0
+       AND NOT attribute.attisdropped;
+    FOR target_role IN
+      SELECT role_row.rolname FROM pg_catalog.pg_roles AS role_row
+       WHERE role_row.rolname <> 'home_agent_owner'
+      UNION ALL SELECT 'PUBLIC'
+    LOOP
+      grantee_sql := CASE WHEN target_role = 'PUBLIC'
+        THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END;
+      EXECUTE pg_catalog.format(
+        'REVOKE ALL PRIVILEGES ON TABLE %s FROM %s',
+        target_table, grantee_sql
+      );
+      EXECUTE pg_catalog.format(
+        'REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s), '
+        'REFERENCES (%1$s) ON TABLE %2$s FROM %3$s',
+        column_list, target_table, grantee_sql
+      );
+    END LOOP;
+    EXECUTE pg_catalog.format(
+      'GRANT SELECT, INSERT ON TABLE %s TO home_agent_owner',
+      target_table
+    );
+  END LOOP;
+
+  GRANT USAGE ON SCHEMA identity, privacy
+    TO home_agent_identity_erasure_kernel;
+  GRANT SELECT (principal_id, person_id) ON TABLE identity.principals
+    TO home_agent_identity_erasure_kernel;
+  GRANT SELECT (person_id) ON TABLE privacy.subject_retrieval_blocks
+    TO home_agent_identity_erasure_kernel;
+
+  FOREACH target_signature IN ARRAY all_functions
+  LOOP
+    function_oid := pg_catalog.to_regprocedure(target_signature);
+    FOR target_role IN
+      SELECT role_row.rolname FROM pg_catalog.pg_roles AS role_row
+      UNION ALL SELECT 'PUBLIC'
+    LOOP
+      grantee_sql := CASE WHEN target_role = 'PUBLIC'
+        THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END;
+      EXECUTE pg_catalog.format(
+        'REVOKE ALL PRIVILEGES ON FUNCTION %s FROM %s',
+        function_oid, grantee_sql
+      );
+    END LOOP;
+  END LOOP;
+
+  GRANT USAGE ON SCHEMA privacy TO home_agent_api,
+    home_agent_binding_operator, home_agent_ingest, home_agent_worker,
+    home_agent_erasure, home_agent_rollout, home_agent_backup;
+  FOREACH target_signature IN ARRAY suppression_functions
+  LOOP
+    function_oid := pg_catalog.to_regprocedure(target_signature);
+    EXECUTE pg_catalog.format(
+      'GRANT EXECUTE ON FUNCTION %s TO home_agent_api, '
+      'home_agent_binding_operator, home_agent_ingest, home_agent_worker, '
+      'home_agent_erasure, home_agent_rollout, home_agent_backup',
+      function_oid
+    );
+  END LOOP;
+  function_oid := pg_catalog.to_regprocedure(replay_function);
+  EXECUTE pg_catalog.format(
+    'GRANT EXECUTE ON FUNCTION %s TO home_agent_erasure',
+    function_oid
+  );
+END
+$identity_erasure_e2_acl$;
 SQL
 
 # The broad role setup above supports old pinned revisions and creates the

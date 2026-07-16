@@ -1,4 +1,4 @@
-name: home agent E1 PostgreSQL gate
+name: home agent E1/E2 PostgreSQL gate
 
 on:
   pull_request:
@@ -32,13 +32,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  admission:
+  erasure-gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       # actions/checkout v4.3.1
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
-      - name: Run isolated PostgreSQL 17 E1 admission gate
-        run: python3 tools/run-home-agent-e1-postgres-gate.py
+      - name: Run isolated PostgreSQL 17 E1/E2 erasure gate
+        env:
+          HOME_AGENT_E1_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: >-
+          python3 tools/run-home-agent-e1-postgres-gate.py
+          --github-hosted-linux

@@ -1107,10 +1107,12 @@ async def test_partial_uniqueness_state_shapes_rls_and_runtime_grants() -> None:
                     grants[f"home_agent_binding_operator_{table}_update"] is False
                 )
                 assert grants[f"home_agent_binding_operator_{table}_delete"] is False
-                assert grants[f"home_agent_erasure_{table}_select"] is True
+                # Restore/erasure cancellation is a fenced function call, not
+                # a direct binding-table capability for the login role.
+                assert grants[f"home_agent_erasure_{table}_select"] is False
                 assert grants[f"home_agent_erasure_{table}_insert"] is False
-                assert grants[f"home_agent_erasure_{table}_update"] is True
-                assert grants[f"home_agent_erasure_{table}_delete"] is True
+                assert grants[f"home_agent_erasure_{table}_update"] is False
+                assert grants[f"home_agent_erasure_{table}_delete"] is False
                 for role in (
                     "home_agent_ingest",
                     "home_agent_worker",

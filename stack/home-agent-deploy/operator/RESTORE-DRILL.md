@@ -111,13 +111,25 @@ or a full isolated Home Assistant application restore.
 
 ## Monthly execution
 
-After one supervised drill passes, install `monthly_restore_drill.sh` and the
-matching service/timer templates from `operator/systemd`. The selector queries
-pgBackRest for the newest *completed full* backup, validates its immutable
-label, writes that label to the service journal, and invokes this same guarded
-operator. It never passes `latest` to a restore command.
+After one supervised drill passes on an operator-approved restore host, install
+`monthly_restore_drill.sh` and the matching service/timer templates from
+`operator/systemd`. The selector queries pgBackRest for the newest *completed
+full* backup, validates its immutable label, writes that label to the service
+journal, and invokes this same guarded operator. It never passes `latest` to a
+restore command.
+
+`EngineeredLightingServer1` / `home-app` is quarantined from this workload
+after the 2026-07-12 unclean halt. The systemd unit rejects both names before
+process start, and the selector independently checks both the process hostname
+and Docker daemon name before selecting a backup. There is no environment
+override. Run the drill on a separately reviewed restore host until the
+incident quarantine is explicitly removed by a reviewed source change.
 
 The timer runs on the first Sunday of each month after the normal daily backup
-window. A failed drill remains a failed systemd unit and must be investigated;
+window. It is deliberately non-persistent: a missed run does not catch up
+automatically during boot or crash recovery. CPU, memory, swap, task, file
+descriptor, and I/O limits bound the selector and staging process; each Docker
+container retains its own stricter CPU, memory, and PID limits. A failed or
+missed drill must be investigated and rescheduled on the approved restore host;
 the timer does not weaken cleanup, networking, checksum, or erasure-replay
 requirements.

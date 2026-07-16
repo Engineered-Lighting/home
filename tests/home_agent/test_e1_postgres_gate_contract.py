@@ -36,6 +36,95 @@ def test_runner_refuses_ambient_endpoint_overrides_before_docker(
         runner._validate_local_docker()
 
 
+def test_runner_hard_quarantines_the_ai_host() -> None:
+    runner = _load_runner()
+
+    for hostname in (
+        "EngineeredLightingServer1",
+        "engineeredlightingserver1.example.test",
+        "home-app",
+    ):
+        with pytest.raises(runner.GateFailure, match="2026-07-12 unclean host halt"):
+            runner._assert_host_not_quarantined(hostname)
+
+    runner._assert_host_not_quarantined("github-actions-runner")
+
+
+def test_runner_admits_only_explicit_github_hosted_linux_context() -> None:
+    runner = _load_runner()
+    admitted = dict(runner.GITHUB_HOSTED_LINUX_CONTEXT)
+
+    runner._assert_execution_admitted(
+        hostname="github-actions-runner",
+        platform="linux",
+        arguments=(runner.GITHUB_HOSTED_LINUX_FLAG,),
+        environment=admitted,
+    )
+    runner._assert_execution_admitted(
+        hostname="windows-disposable",
+        platform="win32",
+        arguments=(),
+        environment={},
+    )
+
+    with pytest.raises(runner.GateFailure, match="Linux execution is disabled"):
+        runner._assert_execution_admitted(
+            hostname="renamed-ai-host",
+            platform="linux",
+            arguments=(),
+            environment={},
+        )
+    with pytest.raises(runner.GateFailure, match="RUNNER_ENVIRONMENT"):
+        runner._assert_execution_admitted(
+            hostname="self-hosted-runner",
+            platform="linux",
+            arguments=(runner.GITHUB_HOSTED_LINUX_FLAG,),
+            environment={**admitted, runner.GITHUB_HOSTED_LINUX_ENVIRONMENT: "self-hosted"},
+        )
+    with pytest.raises(runner.GateFailure, match="valid only"):
+        runner._assert_execution_admitted(
+            hostname="windows-disposable",
+            platform="win32",
+            arguments=(runner.GITHUB_HOSTED_LINUX_FLAG,),
+            environment=admitted,
+        )
+    with pytest.raises(runner.GateFailure, match="2026-07-12 unclean host halt"):
+        runner._assert_execution_admitted(
+            hostname="EngineeredLightingServer1",
+            platform="linux",
+            arguments=(runner.GITHUB_HOSTED_LINUX_FLAG,),
+            environment=admitted,
+        )
+
+
+def test_runner_refuses_quarantined_docker_daemon_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _load_runner()
+    for name in runner.REMOTE_DOCKER_ENV:
+        monkeypatch.delenv(name, raising=False)
+
+    def fake_run(command, **_kwargs):
+        if command[:3] == ["docker", "context", "show"]:
+            output = "default\n"
+        elif command[:3] == ["docker", "context", "inspect"]:
+            output = "unix:///var/run/docker.sock\n"
+        elif "info" in command:
+            output = "EngineeredLightingServer1\n"
+        else:  # pragma: no cover - exact calls are part of this contract
+            raise AssertionError(command)
+        return runner.subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout=output,
+            stderr="",
+        )
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    with pytest.raises(runner.GateFailure, match="Docker daemon"):
+        runner._validate_local_docker()
+
+
 def test_generated_build_context_is_an_exact_filtered_manifest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -114,7 +203,7 @@ def test_generated_build_context_is_an_exact_filtered_manifest(
         canary.unlink(missing_ok=True)
 
 
-def test_context_manifest_explicitly_carries_untracked_e1_test_sources() -> None:
+def test_context_manifest_explicitly_carries_untracked_erasure_test_sources() -> None:
     runner = _load_runner()
 
     assert "stack/services/home-agent-core/tests/e1_postgres_harness.py" in (
@@ -125,6 +214,19 @@ def test_context_manifest_explicitly_carries_untracked_e1_test_sources() -> None
         "test_phase3_identity_erasure_admission_postgres.py"
         in runner.BUILD_CONTEXT_FILES
     )
+    for relative_path in (
+        "stack/services/home-agent-core/alembic/versions/"
+        "0012_identity_person_erasure_tombstone.py",
+        "stack/services/home-agent-core/app/identity_erasure_schema.py",
+        "stack/services/home-agent-core/tests/test_identity_person_restore_replay.py",
+        "stack/services/home-agent-core/tests/test_ledger_versions.py",
+        "stack/services/home-agent-core/tests/"
+        "test_phase3_identity_erasure_e2_runtime_postgres.py",
+        "stack/services/home-agent-core/tests/"
+        "test_phase3_identity_erasure_e2_schema.py",
+        "tests/home_agent/test_identity_erasure_e2_deployment_contract.py",
+    ):
+        assert relative_path in runner.BUILD_CONTEXT_FILES
 
 
 def test_context_policy_rejects_sensitive_binary_and_git_symlink_paths(
@@ -166,21 +268,49 @@ def test_context_policy_rejects_sensitive_binary_and_git_symlink_paths(
         runner._git_index_entries(runner.BUILD_CONTEXT_TREES)
 
 
-def test_runner_uses_three_fresh_clusters_and_revision_0007_case_clones() -> None:
+def test_runner_uses_four_fresh_clusters_and_revision_0007_case_clones() -> None:
     source = RUNNER.read_text(encoding="utf-8")
     harness = HARNESS.read_text(encoding="utf-8")
 
     assert 'REVISION_0007 = "0007_phase3_identity_authority"' in source
+    assert 'REVISION_0012 = "0012_identity_erasure_e2"' in source
     assert 'ADMISSION_TEMPLATE = "e1_template_0007"' in source
     assert 'CASE_DATABASE = "home_agent"' in harness
     assert "alembic_upgrade(database_url(database), REVISION_0010)" in harness
     assert "run_provision_roles(database_url(database))" in harness
     assert "assert_identity_kernel_ownership(database)" in harness
     assert "_set_identity_kernel_function_owner" not in harness
-    for phase in ("behavior", "lifecycle", "admission"):
+    for phase in ("behavior", "lifecycle", "admission", "e2"):
         assert f'"{phase}"' in source
     assert "fail_fast: bool = True" in source
     assert "fail_fast=False" in source
+
+
+def test_e2_phase_uses_secret_file_role_urls_and_guarded_database_recreation() -> None:
+    runner = _load_runner()
+    source = RUNNER.read_text(encoding="utf-8")
+
+    expected = {
+        "home_agent_api": "postgres_api_password",
+        "home_agent_binding_operator": "postgres_binding_operator_password",
+        "home_agent_ingest": "postgres_ingest_password",
+        "home_agent_worker": "postgres_worker_password",
+        "home_agent_erasure": "postgres_erasure_password",
+        "home_agent_rollout": "postgres_rollout_password",
+        "home_agent_backup": "postgres_backup_password",
+    }
+    observed = {
+        role: password_secret
+        for _environment, role, password_secret in runner.E2_RUNTIME_ROLE_URLS
+    }
+    assert observed == expected
+    assert "/run/secrets/{password_secret}" in source
+    assert "_guarded_recreate_base_database" in source
+    assert "guarded E2 lifecycle database removal" in source
+    assert "_verify_cluster_guard" in source
+    assert "test_postgresql_e2_clean_roundtrip" in source
+    assert "test_postgresql_e2_all_target_rls" in source
+    assert "test_postgresql_e2_restore_before_person" in source
 
 
 def test_runner_labels_clients_and_cleanup_residue_fails_the_gate() -> None:
@@ -199,12 +329,24 @@ def test_runner_labels_clients_and_cleanup_residue_fails_the_gate() -> None:
         "cleanup_failure",
     ):
         assert value in source
-    assert "if len(sys.argv) != 1:" in source
+    assert "_assert_execution_admitted()" in source
     assert "/var/lib/postgresql/data:rw,nosuid,nodev,noexec,size=1g" in source
     assert "170000 <= int(version) < 180000" in source
     assert '"--publish"' not in source
     assert '"--network=host"' not in source
     assert "HOME_AGENT_DATABASE_URL = os.getenv" not in source
+    assert "CLIENT_CONTAINER_LIMITS" in source
+    assert "POSTGRES_CONTAINER_LIMITS" in source
+    assert '"--cpus"' in source
+    assert '"--memory"' in source
+    assert '"--memory-swap"' in source
+    assert '"--pids-limit"' in source
+    assert '"no-new-privileges=true"' in source
+    assert "CLIENT_CHURN_COOLDOWN_SECONDS = 0.5" in source
+    assert "GITHUB_HOSTED_LINUX_FLAG" in source
+    assert "GITHUB_HOSTED_LINUX_CONTEXT" in source
+    assert "Docker daemon identity inspection" in source
+    assert "E1/E2 gate execution quarantine" in source
 
 
 def test_runner_pins_local_endpoint_sentinel_inventory_and_minimal_context() -> None:
@@ -260,7 +402,11 @@ def test_operator_documentation_states_precise_cleanup_limits() -> None:
 
     assert command in workflow
     assert command in role_doc
-    assert "timeout-minutes: 30" in workflow
+    assert "--github-hosted-linux" in workflow
+    assert "${{ runner.environment }}" in workflow
+    assert "timeout-minutes: 45" in workflow
     assert "contents: read" in workflow
     assert "SIGKILL" in role_doc
     assert "filtered build context" in role_doc
+    assert "EngineeredLightingServer1" in role_doc
+    assert "no environment-variable bypass" in role_doc

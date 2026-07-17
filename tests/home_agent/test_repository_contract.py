@@ -706,7 +706,8 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertIn("repo1-cipher-type=aes-256-cbc", pgbackrest)
         self.assertIn("repo1-bundle=y", pgbackrest)
         self.assertIn("archive-async=y", pgbackrest)
-        self.assertIn("archive-push-queue-max=0B", pgbackrest)
+        self.assertNotRegex(pgbackrest, r"(?m)^archive-push-queue-max=")
+        self.assertNotRegex(pgbackrest, r"(?m)^archive-queue-max=")
         self.assertIn("spool-path=/var/spool/pgbackrest", pgbackrest)
         self.assertIn("process-max=2", pgbackrest)
 
@@ -721,7 +722,9 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertIn("'^repo1-cipher-pass=[0-9a-f]{64}$'", preflight)
         self.assertIn("'^repo1-bundle=y$'", preflight)
         self.assertIn("'^archive-async=y$'", preflight)
-        self.assertIn("'^archive-push-queue-max=0B$'", preflight)
+        self.assertIn("'^archive-push-queue-max='", preflight)
+        self.assertIn("'^archive-queue-max='", preflight)
+        self.assertIn("no WAL drop threshold is permitted", preflight)
         self.assertIn("'^spool-path=/var/spool/pgbackrest$'", preflight)
         self.assertIn("'^process-max=2$'", preflight)
 

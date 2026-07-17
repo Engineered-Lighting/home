@@ -32,6 +32,17 @@ The worker accumulated 375 restarts, but consumed about 1.5 seconds of CPU per
 cycle and was not the source of the database crash. Stopping the worker did not
 stop PostgreSQL recovery; stopping PostgreSQL did.
 
+## Recovery canary finding
+
+The first bounded PostgreSQL-only recovery canary correctly proved the new
+PID-1 topology, but it also caught an unsafe configuration assumption before
+API, ingest, or worker startup. Setting `archive-push-queue-max=0B` caused
+pgBackRest to emit drop receipts and PostgreSQL to mark two still-local WAL
+segments as archived while the repository remained unavailable. PostgreSQL
+was stopped cleanly with zero container restarts. The segment files remain in
+`pg_wal`; they must be requeued and successfully received by the repository
+before backup health can be restored.
+
 ## Correction
 
 The PostgreSQL Compose service now sets `init: true`. Docker's minimal init
@@ -40,11 +51,12 @@ PostgreSQL only supervises its actual children. WAL archive failures remain
 fail-closed: PostgreSQL retains unarchived WAL and reports backup degradation;
 the change does not acknowledge, discard, or fake successful archiving.
 
-The deployment also locks `archive-push-queue-max=0B`. A positive limit would
-permit pgBackRest to acknowledge and drop queued WAL after that limit is
-crossed, breaking point-in-time recovery. Preflight rejects a missing,
-duplicate, or nonzero setting and also locks the encrypted spool path and
-bounded archive worker count.
+The deployment deliberately leaves `archive-push-queue-max` unset. Every
+configured value is a drop threshold: `0B` means the threshold is zero, not
+unlimited. Once a threshold is crossed, pgBackRest reports queued WAL as
+successfully archived and drops it, breaking point-in-time recovery. Preflight
+rejects both this option and its deprecated alias, and locks the encrypted
+spool path and bounded archive worker count.
 
 The deployment stays stopped until the corrected container topology is
 reviewed and the following low-impact recovery checks can run with the backup

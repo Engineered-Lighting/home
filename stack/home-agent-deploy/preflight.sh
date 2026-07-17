@@ -528,6 +528,14 @@ require_unique_pgbackrest_setting() {
     exit 78
   }
 }
+reject_pgbackrest_setting() {
+  pattern="$1"
+  description="$2"
+  if grep -Eq "$pattern" "$HOME_AGENT_PGBACKREST_CONF"; then
+    echo "pgBackRest config must not set $description" >&2
+    exit 78
+  fi
+}
 require_pgbackrest_setting '^repo1-type=sftp$' 'repo1-type=sftp'
 require_pgbackrest_setting '^repo1-path=/[^[:space:]]+$' 'an absolute repository path'
 require_pgbackrest_setting '^repo1-sftp-host=[^[:space:]]+$' 'a dedicated SFTP host'
@@ -543,9 +551,10 @@ require_pgbackrest_setting '^repo1-cipher-pass=[0-9a-f]{64}$' 'a 256-bit reposit
 require_pgbackrest_setting '^repo1-bundle=y$' 'repository file bundling for SFTP resilience'
 require_pgbackrest_setting '^pg1-user=home_agent_backup$' 'the least-privilege PostgreSQL backup role'
 require_unique_pgbackrest_setting 'archive-async' '^archive-async=y$' 'archive-async=y setting'
-require_unique_pgbackrest_setting 'archive-push-queue-max' '^archive-push-queue-max=0B$' 'archive-push-queue-max=0B setting'
 require_unique_pgbackrest_setting 'spool-path' '^spool-path=/var/spool/pgbackrest$' 'spool-path=/var/spool/pgbackrest setting'
 require_unique_pgbackrest_setting 'process-max' '^process-max=2$' 'process-max=2 setting'
+reject_pgbackrest_setting '^archive-push-queue-max=' 'archive-push-queue-max; no WAL drop threshold is permitted'
+reject_pgbackrest_setting '^archive-queue-max=' 'deprecated archive-queue-max; no WAL drop threshold is permitted'
 for key_path in "$HOME_AGENT_PGBACKREST_SFTP_KEY" "$HOME_AGENT_PGBACKREST_SFTP_PUBLIC_KEY"; do
   [ -s "$key_path" ] || { echo "missing pgBackRest SFTP key file: $key_path" >&2; exit 78; }
   key_source="$(findmnt -n -o SOURCE -T "$key_path" || true)"

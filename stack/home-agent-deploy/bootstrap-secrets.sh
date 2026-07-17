@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-destination="${1:-/etc/home-agent/secrets}"
+destination="${1:-/srv/home-agent/secrets}"
 master="$destination/master"
 script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 [ "$(id -u)" -eq 0 ] || {

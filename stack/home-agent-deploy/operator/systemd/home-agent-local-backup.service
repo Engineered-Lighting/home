@@ -1,0 +1,30 @@
+[Unit]
+Description=Bounded Home Agent local PostgreSQL backup
+Requires=docker.service
+After=docker.service
+RequiresMountsFor=/srv/home-agent
+ConditionPathIsMountPoint=/srv/home-agent
+ConditionPathIsRegular=/srv/home-agent/config/home-agent.env
+ConditionPathIsRegular=/usr/local/libexec/home-agent/local-backup.sh
+ConditionPathIsRegular=/usr/local/libexec/home-agent/backup-gate.sh
+ConditionPathIsRegular=/srv/home-agent/config/local-backup-operator.sha256
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/home-agent/local-backup.sh /srv/home-agent/config/home-agent.env
+ExecStopPost=-/usr/bin/docker rm -f home-agent-local-backup
+UMask=0077
+RuntimeDirectory=home-agent-local-backup
+RuntimeDirectoryMode=0700
+Nice=10
+CPUQuota=50%
+MemoryMax=768M
+TasksMax=256
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=2h
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/srv/home-agent
+NoNewPrivileges=true

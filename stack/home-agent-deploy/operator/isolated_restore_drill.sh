@@ -3,10 +3,9 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 umask 077
 
-# Restore drills deliberately do not use pgBackRest's libssh2 SFTP backend.
-# Native OpenSSH stages a host-key-pinned repository snapshot on encrypted
-# storage; every pgBackRest and PostgreSQL operation after that is local and
-# runs with Docker network_mode=none.
+# Local restore drills mount repo1 read-only. Legacy SFTP drills use native
+# OpenSSH to stage a host-key-pinned encrypted snapshot. Every pgBackRest and
+# PostgreSQL operation then runs with Docker network_mode=none.
 
 readonly EX_USAGE=64
 readonly EX_UNAVAILABLE=69
@@ -198,8 +197,8 @@ trap cleanup EXIT HUP INT TERM
 [[ $# == 2 ]] || usage
 [[ "$(id -u)" == 0 ]] || die "must run as root"
 
-for command in awk chmod chown date df dirname docker find findmnt flock install \
-  mktemp mountpoint readlink rm rmdir sftp sleep ssh-keygen stat timeout; do
+for command in awk chmod chown date df dirname docker find findmnt flock grep install \
+  mktemp mountpoint readlink rm rmdir sleep stat timeout; do
   require_command "$command"
 done
 
@@ -219,12 +218,26 @@ env_file="$(readlink -f -- "$env_file")"
 : "${HOME_AGENT_DATA_ROOT:?missing HOME_AGENT_DATA_ROOT}"
 : "${HOME_AGENT_RESTORE_DRILL_ROOT:?missing HOME_AGENT_RESTORE_DRILL_ROOT}"
 : "${HOME_AGENT_SECRETS_DIR:?missing HOME_AGENT_SECRETS_DIR}"
+: "${HOME_AGENT_BACKUP_TOPOLOGY:?missing HOME_AGENT_BACKUP_TOPOLOGY}"
 : "${HOME_AGENT_PGBACKREST_CONF:?missing HOME_AGENT_PGBACKREST_CONF}"
-: "${HOME_AGENT_PGBACKREST_SFTP_KEY:?missing HOME_AGENT_PGBACKREST_SFTP_KEY}"
-: "${HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS:?missing HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS}"
 : "${HOME_AGENT_POSTGRES_IMAGE:?missing HOME_AGENT_POSTGRES_IMAGE}"
 : "${HOME_AGENT_PGBACKREST_IMAGE:?missing HOME_AGENT_PGBACKREST_IMAGE}"
 : "${HOME_AGENT_EXPECTED_DB_REVISION:?missing HOME_AGENT_EXPECTED_DB_REVISION}"
+
+case "$HOME_AGENT_BACKUP_TOPOLOGY" in
+  local)
+    require_command pgrep
+    : "${HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT:?missing HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT}"
+    : "${HOME_AGENT_PGBACKREST_LOCK_FILE:?missing HOME_AGENT_PGBACKREST_LOCK_FILE}"
+    ;;
+  sftp_legacy)
+    require_command sftp
+    require_command ssh-keygen
+    : "${HOME_AGENT_PGBACKREST_SFTP_KEY:?missing HOME_AGENT_PGBACKREST_SFTP_KEY}"
+    : "${HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS:?missing HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS}"
+    ;;
+  *) die "HOME_AGENT_BACKUP_TOPOLOGY must be local or sftp_legacy" ;;
+esac
 
 [[ "$backup_label" =~ ^[0-9]{8}-[0-9]{6}F(_[0-9]{8}-[0-9]{6}[DI])?$ ]] ||
   die "invalid pgBackRest backup label"
@@ -246,10 +259,19 @@ minimum_free_kib=$((10#$minimum_free_kib))
   die "restore timeout inputs may not exceed 86400 seconds"
 
 for path_name in HOME_AGENT_DATA_ROOT HOME_AGENT_RESTORE_DRILL_ROOT \
-  HOME_AGENT_SECRETS_DIR HOME_AGENT_PGBACKREST_CONF \
-  HOME_AGENT_PGBACKREST_SFTP_KEY HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS; do
+  HOME_AGENT_SECRETS_DIR HOME_AGENT_PGBACKREST_CONF; do
   require_absolute_safe_path "$path_name" "${!path_name}"
 done
+if [[ "$HOME_AGENT_BACKUP_TOPOLOGY" == local ]]; then
+  require_absolute_safe_path HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT \
+    "$HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT"
+  require_absolute_safe_path HOME_AGENT_PGBACKREST_LOCK_FILE \
+    "$HOME_AGENT_PGBACKREST_LOCK_FILE"
+else
+  for path_name in HOME_AGENT_PGBACKREST_SFTP_KEY HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS; do
+    require_absolute_safe_path "$path_name" "${!path_name}"
+  done
+fi
 
 require_mapper_path "$HOME_AGENT_DATA_ROOT"
 restore_parent="$(dirname -- "$HOME_AGENT_RESTORE_DRILL_ROOT")"
@@ -268,13 +290,26 @@ restore_mount_target="$(findmnt -rn -o TARGET -T "$restore_root")"
 [[ -n "$restore_mount_target" ]] || die "cannot resolve encrypted restore mount"
 
 require_regular_nonsymlink "$HOME_AGENT_PGBACKREST_CONF"
-require_regular_nonsymlink "$HOME_AGENT_PGBACKREST_SFTP_KEY"
-require_regular_nonsymlink "$HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS"
-for protected_path in "$HOME_AGENT_PGBACKREST_CONF" \
-  "$HOME_AGENT_PGBACKREST_SFTP_KEY" "$HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS"; do
+for protected_path in "$HOME_AGENT_PGBACKREST_CONF"; do
   require_mapper_path "$protected_path"
   require_stat 0:999:640 "$protected_path"
 done
+if [[ "$HOME_AGENT_BACKUP_TOPOLOGY" == sftp_legacy ]]; then
+  require_regular_nonsymlink "$HOME_AGENT_PGBACKREST_SFTP_KEY"
+  require_regular_nonsymlink "$HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS"
+  for protected_path in "$HOME_AGENT_PGBACKREST_SFTP_KEY" "$HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS"; do
+    require_mapper_path "$protected_path"
+    require_stat 0:999:640 "$protected_path"
+  done
+else
+  [[ -d "$HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT" && ! -L "$HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT" ]] ||
+    die "local pgBackRest repository must be a non-symlink directory"
+  require_mapper_path "$HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT"
+  require_stat 999:999:700 "$HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT"
+  require_regular_nonsymlink "$HOME_AGENT_PGBACKREST_LOCK_FILE"
+  require_mapper_path "$HOME_AGENT_PGBACKREST_LOCK_FILE"
+  require_stat 999:999:600 "$HOME_AGENT_PGBACKREST_LOCK_FILE"
+fi
 
 owner_password="$HOME_AGENT_SECRETS_DIR/runtime/postgres/postgres_owner_password"
 require_regular_nonsymlink "$owner_password"
@@ -306,40 +341,43 @@ expected_version_num=$((10#$expected_pg_major * 10000 + 10#$expected_pg_minor))
 pg_bin="/usr/lib/postgresql/$expected_pg_major/bin"
 
 repo_type="$(pgbackrest_global_value repo1-type)" || die "missing unique repo1-type"
-repo_host="$(pgbackrest_global_value repo1-sftp-host)" || die "missing unique SFTP host"
-repo_user="$(pgbackrest_global_value repo1-sftp-host-user)" || die "missing unique SFTP user"
 repo_path="$(pgbackrest_global_value repo1-path)" || die "missing unique repository path"
-repo_port="$(pgbackrest_global_value repo1-sftp-host-port)" ||
-  die "missing unique SFTP port"
-host_check="$(pgbackrest_global_value repo1-sftp-host-key-check-type)" ||
-  die "missing unique host-key check type"
-host_hash="$(pgbackrest_global_value repo1-sftp-host-key-hash-type)" ||
-  die "missing unique host-key hash type"
-host_fingerprint="$(pgbackrest_global_value repo1-sftp-host-fingerprint)" ||
-  die "missing unique host-key fingerprint"
 cipher_type="$(pgbackrest_global_value repo1-cipher-type)" || die "missing unique cipher type"
 cipher_pass="$(pgbackrest_global_value repo1-cipher-pass)" || die "missing unique cipher passphrase"
 
-[[ "$repo_type" == sftp && "$repo_user" == homeagent_backup ]] ||
-  die "restore source must be the dedicated homeagent_backup SFTP repository"
-[[ "$repo_host" =~ ^[A-Za-z0-9.-]+$ ]] || die "invalid SFTP host"
-[[ "$repo_port" =~ ^[0-9]+$ ]] || die "invalid SFTP port"
-repo_port=$((10#$repo_port))
-((repo_port >= 1 && repo_port <= 65535)) ||
-  die "invalid SFTP port"
-require_absolute_safe_path repo1-path "$repo_path"
-[[ "$repo_path" != / && "$repo_path" != */ ]] ||
-  die "repository path must name a directory below the SFTP root"
-[[ "$host_check" == fingerprint && "$host_hash" == sha256 ]] ||
-  die "pgBackRest SFTP host verification must use a SHA-256 fingerprint"
-[[ "$host_fingerprint" =~ ^[0-9a-f]{64}$ ]] || die "invalid host fingerprint"
 [[ "$cipher_type" == aes-256-cbc && "$cipher_pass" =~ ^[0-9a-f]{64}$ ]] ||
   die "repository must use a 256-bit AES-256-CBC passphrase"
 
-host_lookup="$repo_host"
-[[ "$repo_port" == 22 ]] || host_lookup="[$repo_host]:$repo_port"
-known_hosts_contains_target "$host_lookup" "$HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS" ||
-  die "known_hosts does not contain a valid pinned entry for the SFTP target"
+case "$HOME_AGENT_BACKUP_TOPOLOGY" in
+  local)
+    [[ "$repo_type" == posix && "$repo_path" == /repository ]] ||
+      die "local restore source must be repo1 POSIX at /repository"
+    ;;
+  sftp_legacy)
+    repo_host="$(pgbackrest_global_value repo1-sftp-host)" || die "missing unique SFTP host"
+    repo_user="$(pgbackrest_global_value repo1-sftp-host-user)" || die "missing unique SFTP user"
+    repo_port="$(pgbackrest_global_value repo1-sftp-host-port)" || die "missing unique SFTP port"
+    host_check="$(pgbackrest_global_value repo1-sftp-host-key-check-type)" || die "missing unique host-key check type"
+    host_hash="$(pgbackrest_global_value repo1-sftp-host-key-hash-type)" || die "missing unique host-key hash type"
+    host_fingerprint="$(pgbackrest_global_value repo1-sftp-host-fingerprint)" || die "missing unique host-key fingerprint"
+    [[ "$repo_type" == sftp && "$repo_user" == homeagent_backup ]] ||
+      die "restore source must be the dedicated homeagent_backup SFTP repository"
+    [[ "$repo_host" =~ ^[A-Za-z0-9.-]+$ ]] || die "invalid SFTP host"
+    [[ "$repo_port" =~ ^[0-9]+$ ]] || die "invalid SFTP port"
+    repo_port=$((10#$repo_port))
+    ((repo_port >= 1 && repo_port <= 65535)) || die "invalid SFTP port"
+    require_absolute_safe_path repo1-path "$repo_path"
+    [[ "$repo_path" != / && "$repo_path" != */ ]] ||
+      die "repository path must name a directory below the SFTP root"
+    [[ "$host_check" == fingerprint && "$host_hash" == sha256 ]] ||
+      die "pgBackRest SFTP host verification must use a SHA-256 fingerprint"
+    [[ "$host_fingerprint" =~ ^[0-9a-f]{64}$ ]] || die "invalid host fingerprint"
+    host_lookup="$repo_host"
+    [[ "$repo_port" == 22 ]] || host_lookup="[$repo_host]:$repo_port"
+    known_hosts_contains_target "$host_lookup" "$HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS" ||
+      die "known_hosts does not contain a valid pinned entry for the SFTP target"
+    ;;
+esac
 
 available_kib="$(df -Pk "$restore_root" | awk 'NR == 2 {print $4}')"
 [[ "$available_kib" =~ ^[0-9]+$ && available_kib -ge minimum_free_kib ]] ||
@@ -371,47 +409,67 @@ for container in "$verify_container" "$restore_container" "$control_container" \
 done
 
 install -d -m 0700 -o root -g root "$workspace/ssh" "$workspace/stage"
-temporary_key="$workspace/ssh/id_ed25519"
-temporary_known_hosts="$workspace/ssh/known_hosts"
-install -m 0600 -o root -g root "$HOME_AGENT_PGBACKREST_SFTP_KEY" "$temporary_key"
-install -m 0600 -o root -g root \
-  "$HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS" "$temporary_known_hosts"
-require_stat 0:0:600 "$temporary_key"
-require_stat 0:0:600 "$temporary_known_hosts"
-known_hosts_contains_target "$host_lookup" "$temporary_known_hosts" ||
-  die "temporary known_hosts copy does not contain the pinned SFTP target"
+if [[ "$HOME_AGENT_BACKUP_TOPOLOGY" == local ]]; then
+  exec 8>>"$HOME_AGENT_PGBACKREST_LOCK_FILE"
+  flock -n -x 8 || die "repository writer or another local restore holds the coordination lock"
+  if pgrep -x pgbackrest >/dev/null 2>&1; then
+    die "local repository drill requires every pgBackRest process to be stopped"
+  fi
+  for running_container in $(docker ps -q); do
+    running_mounts="$(docker inspect --format '{{range .Mounts}}{{println .Source}}{{end}}' "$running_container")"
+    if printf '%s\n' "$running_mounts" | grep -Fxq "$production_data" ||
+       printf '%s\n' "$running_mounts" | grep -Fxq "$HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT"; then
+      die "local repository drill requires PostgreSQL and every repository writer to be stopped"
+    fi
+  done
+  repo_local="$(readlink -f -- "$HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT")"
+  [[ -n "$repo_local" ]] || die "cannot canonicalize local repository"
+  assert_disjoint_paths "$production_data" "$repo_local"
+  assert_disjoint_paths "$restore_root" "$repo_local"
+  info "using the encrypted local repository read-only"
+else
+  temporary_key="$workspace/ssh/id_ed25519"
+  temporary_known_hosts="$workspace/ssh/known_hosts"
+  install -m 0600 -o root -g root "$HOME_AGENT_PGBACKREST_SFTP_KEY" "$temporary_key"
+  install -m 0600 -o root -g root \
+    "$HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS" "$temporary_known_hosts"
+  require_stat 0:0:600 "$temporary_key"
+  require_stat 0:0:600 "$temporary_known_hosts"
+  known_hosts_contains_target "$host_lookup" "$temporary_known_hosts" ||
+    die "temporary known_hosts copy does not contain the pinned SFTP target"
 
-batch_file="$workspace/ssh/stage.batch"
-printf 'lcd %s\nget -pR %s\n' "$workspace/stage" "$repo_path" >"$batch_file"
-chmod 0600 "$batch_file"
+  batch_file="$workspace/ssh/stage.batch"
+  printf 'lcd %s\nget -pR %s\n' "$workspace/stage" "$repo_path" >"$batch_file"
+  chmod 0600 "$batch_file"
 
-info "staging the encrypted repository with native OpenSSH SFTP"
-timeout --signal=TERM --kill-after=30s "$sftp_timeout" \
-  sftp -q -F /dev/null -b "$batch_file" -P "$repo_port" -i "$temporary_key" \
-    -o BatchMode=yes \
-    -o IdentitiesOnly=yes \
-    -o IdentityAgent=none \
-    -o StrictHostKeyChecking=yes \
-    -o "UserKnownHostsFile=$temporary_known_hosts" \
-    -o GlobalKnownHostsFile=/dev/null \
-    -o UpdateHostKeys=no \
-    -o VerifyHostKeyDNS=no \
-    -o CanonicalizeHostname=no \
-    -o ProxyCommand=none \
-    -o ProxyJump=none \
-    -o ClearAllForwardings=yes \
-    -o PasswordAuthentication=no \
-    -o KbdInteractiveAuthentication=no \
-    -o PreferredAuthentications=publickey \
-    -o NumberOfPasswordPrompts=0 \
-    -o ConnectionAttempts=1 \
-    -o ConnectTimeout=20 \
-    -o ServerAliveInterval=30 \
-    -o ServerAliveCountMax=3 \
-    -o LogLevel=ERROR \
-    "$repo_user@$repo_host"
+  info "staging the encrypted repository with native OpenSSH SFTP"
+  timeout --signal=TERM --kill-after=30s "$sftp_timeout" \
+    sftp -q -F /dev/null -b "$batch_file" -P "$repo_port" -i "$temporary_key" \
+      -o BatchMode=yes \
+      -o IdentitiesOnly=yes \
+      -o IdentityAgent=none \
+      -o StrictHostKeyChecking=yes \
+      -o "UserKnownHostsFile=$temporary_known_hosts" \
+      -o GlobalKnownHostsFile=/dev/null \
+      -o UpdateHostKeys=no \
+      -o VerifyHostKeyDNS=no \
+      -o CanonicalizeHostname=no \
+      -o ProxyCommand=none \
+      -o ProxyJump=none \
+      -o ClearAllForwardings=yes \
+      -o PasswordAuthentication=no \
+      -o KbdInteractiveAuthentication=no \
+      -o PreferredAuthentications=publickey \
+      -o NumberOfPasswordPrompts=0 \
+      -o ConnectionAttempts=1 \
+      -o ConnectTimeout=20 \
+      -o ServerAliveInterval=30 \
+      -o ServerAliveCountMax=3 \
+      -o LogLevel=ERROR \
+      "$repo_user@$repo_host"
+  repo_local="$workspace/stage/${repo_path##*/}"
+fi
 
-repo_local="$workspace/stage/${repo_path##*/}"
 [[ -d "$repo_local" && ! -L "$repo_local" ]] || die "staged repository is missing"
 unsafe_repository_entry="$(
   find "$repo_local" -xdev \( -type l -o \( ! -type f ! -type d \) \) -print -quit
@@ -423,9 +481,11 @@ fi
 [[ -d "$repo_local/backup/$STANZA/$backup_label" ]] ||
   die "requested backup label is absent from the staged repository"
 [[ -d "$repo_local/archive/$STANZA" ]] || die "staged WAL archive is missing"
-chown -R 999:999 "$repo_local"
-find "$repo_local" -xdev -type d -exec chmod 0500 {} +
-find "$repo_local" -xdev -type f -exec chmod 0400 {} +
+if [[ "$HOME_AGENT_BACKUP_TOPOLOGY" == sftp_legacy ]]; then
+  chown -R 999:999 "$repo_local"
+  find "$repo_local" -xdev -type d -exec chmod 0500 {} +
+  find "$repo_local" -xdev -type f -exec chmod 0400 {} +
+fi
 
 install -d -m 0700 -o root -g root "$workspace/container"
 local_pgbackrest_config="$workspace/container/pgbackrest.conf"

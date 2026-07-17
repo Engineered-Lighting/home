@@ -1,15 +1,18 @@
 # Isolated PostgreSQL restore drill
 
-This drill proves that a completed encrypted off-host backup can be staged,
-decrypted, recovered, queried, dumped, shut down, and checksum-verified without
+This drill proves that a completed encrypted local or legacy off-host backup can
+be recovered, queried, dumped, shut down, and checksum-verified without
 touching the production cluster or opening a database port.
 
-The drill intentionally does **not** restore directly from pgBackRest's
-libssh2 SFTP backend. Parallel libssh2 restores have left worker processes
+For legacy recovery, the drill intentionally does **not** restore directly from
+pgBackRest's libssh2 SFTP backend. Parallel libssh2 restores have left workers
 hung after `EAGAIN`/`BAD_USE` transport failures against the Windows OpenSSH
 repository. Instead, native OpenSSH `sftp` copies the encrypted repository to
 temporary encrypted storage. The selected backup is then verified and restored
-from a local read-only POSIX repository with Docker `network_mode=none`.
+from a local read-only POSIX repository with Docker `network_mode=none`. Active
+`local` mode instead mounts the encrypted repo1 read-only and writes only to the
+guarded restore workspace. PostgreSQL and every repository writer must be
+stopped first so the repository is a coherent source.
 
 ## Required deployment inputs
 
@@ -18,12 +21,15 @@ Run `preflight.sh` after configuring these non-secret values in
 
 ```text
 HOME_AGENT_RESTORE_DRILL_ROOT=/srv/home-agent/restore-drills
-HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS=/srv/home-agent/backup-sftp/formd_known_hosts
+HOME_AGENT_BACKUP_TOPOLOGY=local
+HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT=/srv/home-agent/durable/pgbackrest-repository
 HOME_AGENT_PGBACKREST_IMAGE=engineered-lighting/home-agent-postgres:17.10
 HOME_AGENT_EXPECTED_DB_REVISION=0006a_worker_lease_arbitration
 ```
 
-The restore root and `known_hosts` file must be on the encrypted mapper. The
+The restore root and local repository must be on the encrypted mapper. For an
+offline `sftp_legacy` recovery, also configure the SFTP key and `known_hosts`;
+the
 known-host entry must be obtained through a separately authenticated channel;
 the drill never runs `ssh-keyscan` and requires `StrictHostKeyChecking=yes`.
 The root-owned OpenSSH `known_hosts` entry and pgBackRest's configured SHA-256
@@ -59,12 +65,12 @@ sudo bash home-agent-deploy/operator/isolated_restore_drill.sh \
   20260711-220110F
 ```
 
-The script takes an exclusive lock and performs these stages:
+The script takes an exclusive workspace lock and performs these stages:
 
 1. Validate root ownership, mapper placement, exact path separation, minimum
    free space, source-file modes, image digests, and the known-host fingerprint.
-2. Copy the SFTP private key to a mode-0600 file inside the encrypted drill
-   workspace and stage the encrypted repository with native OpenSSH batch SFTP.
+2. Mount local repo1 read-only after proving no production/repository writer is
+   running, or copy a legacy SFTP repository with native OpenSSH batch SFTP.
 3. Reject links and special files, then verify the requested backup using a
    local read-only POSIX pgBackRest repository.
 4. Restore as UID/GID 999 with immediate recovery, promotion, and archive mode
@@ -92,9 +98,10 @@ material. Set this only for a supervised investigation:
 HOME_AGENT_RESTORE_KEEP_FAILED=1
 ```
 
-When enabled, the staged encrypted repository and partial restored cluster stay
-under the mode-0700 encrypted drill root, but the temporary private key and
-local pgBackRest config are still removed. Delete retained workspaces only
+When enabled, the partial restored cluster (and a staged legacy repository, if
+used) stays under the mode-0700 encrypted drill root, but temporary credential
+material is still removed. The active local repository is never copied,
+chowned, chmodded, or deleted by cleanup. Delete retained workspaces only
 after resolving their canonical path and confirming their nearest mount is the
 approved encrypted restore mount. Never use a wildcard recursive removal.
 
@@ -118,12 +125,19 @@ full* backup, validates its immutable label, writes that label to the service
 journal, and invokes this same guarded operator. It never passes `latest` to a
 restore command.
 
-`EngineeredLightingServer1` / `home-app` is quarantined from this workload
-after the 2026-07-12 unclean halt. The systemd unit rejects both names before
-process start, and the selector independently checks both the process hostname
-and Docker daemon name before selecting a backup. There is no environment
-override. Run the drill on a separately reviewed restore host until the
-incident quarantine is explicitly removed by a reviewed source change.
+`EngineeredLightingServer1` / `home-app` remains quarantined from the scheduled
+restore workload after the 2026-07-12 unclean halt. The systemd unit rejects
+both names before process start, and the selector independently checks the
+process hostname and Docker daemon name. There is no environment override for
+that scheduled path.
+
+The scheduled selector is therefore not a local-topology execution path: it
+queries a running PostgreSQL container, while a coherent local-repository drill
+requires that container stopped. Do not schedule local drills. This reviewed
+local-only path permits one supervised, offline, resource-bounded manual drill
+after the WAL cutover is stable and while the exclusive repository lock is
+held. It does not lift the E1/E2 runner, image-build, stress-test, or scheduled
+restore quarantines.
 
 The timer runs on the first Sunday of each month after the normal daily backup
 window. It is deliberately non-persistent: a missed run does not catch up

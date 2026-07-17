@@ -1,8 +1,49 @@
 #!/bin/sh
 set -eu
 
-env_file="${1:-./home-agent.env}"
-[ -r "$env_file" ] || { echo "usage: $0 <home-agent.env>" >&2; exit 64; }
+env_file="${1:-/srv/home-agent/config/home-agent.env}"
+[ "$#" -le 1 ] || {
+  echo "usage: $0 /srv/home-agent/config/home-agent.env" >&2; exit 64;
+}
+for command in findmnt readlink stat; do
+  command -v "$command" >/dev/null 2>&1 || { echo "missing command: $command" >&2; exit 69; }
+done
+for trusted_parent in /srv/home-agent /srv/home-agent/config /srv/home-agent/durable; do
+  [ -d "$trusted_parent" ] && [ ! -L "$trusted_parent" ] || {
+    echo "trusted deployment parent is absent or unsafe: $trusted_parent" >&2; exit 78;
+  }
+  [ "$(stat -c '%u' "$trusted_parent")" = 0 ] || {
+    echo "trusted deployment parent must be root-owned: $trusted_parent" >&2; exit 78;
+  }
+  trusted_parent_mode="$(stat -c '%a' "$trusted_parent")"
+  [ $((0$trusted_parent_mode & 022)) -eq 0 ] || {
+    echo "trusted deployment parent may not be group/world-writable: $trusted_parent" >&2; exit 78;
+  }
+done
+[ "$(findmnt -rn -M /srv/home-agent -o TARGET 2>/dev/null || true)" = /srv/home-agent ] || {
+  echo "/srv/home-agent must be the exact encrypted-volume mount point" >&2; exit 78;
+}
+case "$(findmnt -rn -M /srv/home-agent -o SOURCE 2>/dev/null || true)" in
+  /dev/mapper/*) ;;
+  *) echo "/srv/home-agent is not mounted from a verified /dev/mapper source" >&2; exit 78 ;;
+esac
+[ "$env_file" = /srv/home-agent/config/home-agent.env ] || {
+  echo "deployment environment must use the reviewed installed path" >&2; exit 78;
+}
+[ -f "$env_file" ] && [ ! -L "$env_file" ] && [ -r "$env_file" ] || {
+  echo "usage: $0 <root-owned-home-agent.env>" >&2; exit 64;
+}
+[ "$(stat -c '%u' "$env_file")" = 0 ] && [ "$(stat -c '%h' "$env_file")" = 1 ] || {
+  echo "deployment environment must be root-owned with one hard link" >&2; exit 78;
+}
+env_mode="$(stat -c '%a' "$env_file")"
+[ $((0$env_mode & 022)) -eq 0 ] || {
+  echo "deployment environment may not be group/world-writable" >&2; exit 78;
+}
+env_file="$(readlink -f "$env_file")"
+[ "$env_file" = /srv/home-agent/config/home-agent.env ] || {
+  echo "deployment environment resolved outside the reviewed installed path" >&2; exit 78;
+}
 # This file is non-secret; secret material must remain in individual files.
 . "$env_file"
 
@@ -13,27 +54,37 @@ require_absolute() {
   esac
 }
 
-for command in docker openssl dirname find findmnt grep sha256sum install python3 stat readlink ssh-keygen tr wc; do
+for command in docker openssl dirname find findmnt grep sha256sum install python3 stat readlink tr wc; do
   command -v "$command" >/dev/null 2>&1 || { echo "missing command: $command" >&2; exit 69; }
 done
 
 : "${HOME_AGENT_DATA_ROOT:?missing HOME_AGENT_DATA_ROOT}"
+: "${HOME_AGENT_DEPLOYMENT_ROOT:?missing HOME_AGENT_DEPLOYMENT_ROOT}"
 : "${HOME_AGENT_RUNTIME_ROOT:?missing HOME_AGENT_RUNTIME_ROOT}"
 : "${HOME_AGENT_SESSION_ROOT:?missing HOME_AGENT_SESSION_ROOT}"
 : "${HOME_AGENT_ERASURE_LEDGER_ROOT:?missing HOME_AGENT_ERASURE_LEDGER_ROOT}"
 : "${HOME_AGENT_SECRETS_DIR:?missing HOME_AGENT_SECRETS_DIR}"
 : "${HOME_AGENT_TLS_DIR:?missing HOME_AGENT_TLS_DIR}"
+: "${HOME_AGENT_BACKUP_TOPOLOGY:?missing HOME_AGENT_BACKUP_TOPOLOGY}"
 : "${HOME_AGENT_PGBACKREST_CONF:?missing HOME_AGENT_PGBACKREST_CONF}"
-: "${HOME_AGENT_PGBACKREST_SFTP_KEY:?missing HOME_AGENT_PGBACKREST_SFTP_KEY}"
-: "${HOME_AGENT_PGBACKREST_SFTP_PUBLIC_KEY:?missing HOME_AGENT_PGBACKREST_SFTP_PUBLIC_KEY}"
-: "${HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS:?missing HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS}"
+: "${HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT:?missing HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT}"
+: "${HOME_AGENT_PGBACKREST_SPOOL_ROOT:?missing HOME_AGENT_PGBACKREST_SPOOL_ROOT}"
+: "${HOME_AGENT_PGBACKREST_LOCK_FILE:?missing HOME_AGENT_PGBACKREST_LOCK_FILE}"
+: "${HOME_AGENT_PGBACKREST_BACKUP_LOCK_FILE:?missing HOME_AGENT_PGBACKREST_BACKUP_LOCK_FILE}"
 : "${HOME_AGENT_RESTORE_DRILL_ROOT:?missing HOME_AGENT_RESTORE_DRILL_ROOT}"
 : "${HOME_AGENT_PGBACKREST_IMAGE:?missing HOME_AGENT_PGBACKREST_IMAGE}"
+: "${HOME_AGENT_PGBACKREST_IMAGE_ID:?missing HOME_AGENT_PGBACKREST_IMAGE_ID}"
+: "${HOME_AGENT_LOCAL_BACKUP_MANIFEST:?missing HOME_AGENT_LOCAL_BACKUP_MANIFEST}"
 : "${HOME_AGENT_EXPECTED_DB_REVISION:?missing HOME_AGENT_EXPECTED_DB_REVISION}"
 : "${HOME_AGENT_EDGE_BIND_ADDR:?missing HOME_AGENT_EDGE_BIND_ADDR}"
 : "${HOME_AGENT_POLICY_DIGEST:?missing HOME_AGENT_POLICY_DIGEST}"
 : "${HOME_AGENT_ROLLOUT_MODE:?missing HOME_AGENT_ROLLOUT_MODE}"
 : "${HOME_AGENT_NATIVE_PUBLIC_ORIGIN:?missing HOME_AGENT_NATIVE_PUBLIC_ORIGIN}"
+
+case "$HOME_AGENT_BACKUP_TOPOLOGY" in
+  local) ;;
+  *) echo "active deployment requires HOME_AGENT_BACKUP_TOPOLOGY=local" >&2; exit 78 ;;
+esac
 
 python3 - "$HOME_AGENT_NATIVE_PUBLIC_ORIGIN" "${HOME_AGENT_OAUTH_CLIENT_ID:-}" \
   "${HOME_AGENT_ALLOWED_ORIGINS:-}" <<'PY'
@@ -73,6 +124,7 @@ case "$HOME_AGENT_ROLLOUT_MODE" in
   *) echo "HOME_AGENT_ROLLOUT_MODE must be record_only, shadow, or canary" >&2; exit 78 ;;
 esac
 
+require_absolute HOME_AGENT_DEPLOYMENT_ROOT "$HOME_AGENT_DEPLOYMENT_ROOT"
 require_absolute HOME_AGENT_DATA_ROOT "$HOME_AGENT_DATA_ROOT"
 require_absolute HOME_AGENT_RUNTIME_ROOT "$HOME_AGENT_RUNTIME_ROOT"
 require_absolute HOME_AGENT_SESSION_ROOT "$HOME_AGENT_SESSION_ROOT"
@@ -80,9 +132,57 @@ require_absolute HOME_AGENT_ERASURE_LEDGER_ROOT "$HOME_AGENT_ERASURE_LEDGER_ROOT
 require_absolute HOME_AGENT_SECRETS_DIR "$HOME_AGENT_SECRETS_DIR"
 require_absolute HOME_AGENT_TLS_DIR "$HOME_AGENT_TLS_DIR"
 require_absolute HOME_AGENT_PGBACKREST_CONF "$HOME_AGENT_PGBACKREST_CONF"
-require_absolute HOME_AGENT_PGBACKREST_SFTP_KEY "$HOME_AGENT_PGBACKREST_SFTP_KEY"
-require_absolute HOME_AGENT_PGBACKREST_SFTP_PUBLIC_KEY "$HOME_AGENT_PGBACKREST_SFTP_PUBLIC_KEY"
-require_absolute HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS "$HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS"
+require_absolute HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT "$HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT"
+require_absolute HOME_AGENT_PGBACKREST_SPOOL_ROOT "$HOME_AGENT_PGBACKREST_SPOOL_ROOT"
+require_absolute HOME_AGENT_PGBACKREST_LOCK_FILE "$HOME_AGENT_PGBACKREST_LOCK_FILE"
+require_absolute HOME_AGENT_PGBACKREST_BACKUP_LOCK_FILE "$HOME_AGENT_PGBACKREST_BACKUP_LOCK_FILE"
+require_absolute HOME_AGENT_LOCAL_BACKUP_MANIFEST "$HOME_AGENT_LOCAL_BACKUP_MANIFEST"
+[ "$HOME_AGENT_DEPLOYMENT_ROOT" = /srv/home-agent ] || {
+  echo "HOME_AGENT_DEPLOYMENT_ROOT must be the reviewed /srv/home-agent mount" >&2
+  exit 78
+}
+for expected_pair in \
+  "HOME_AGENT_DATA_ROOT:$HOME_AGENT_DATA_ROOT:$HOME_AGENT_DEPLOYMENT_ROOT/durable" \
+  "HOME_AGENT_RUNTIME_ROOT:$HOME_AGENT_RUNTIME_ROOT:$HOME_AGENT_DEPLOYMENT_ROOT/runtime" \
+  "HOME_AGENT_SESSION_ROOT:$HOME_AGENT_SESSION_ROOT:$HOME_AGENT_DEPLOYMENT_ROOT/sessions" \
+  "HOME_AGENT_ERASURE_LEDGER_ROOT:$HOME_AGENT_ERASURE_LEDGER_ROOT:$HOME_AGENT_DEPLOYMENT_ROOT/erasure-ledger" \
+  "HOME_AGENT_SECRETS_DIR:$HOME_AGENT_SECRETS_DIR:$HOME_AGENT_DEPLOYMENT_ROOT/secrets" \
+  "HOME_AGENT_TLS_DIR:$HOME_AGENT_TLS_DIR:$HOME_AGENT_DEPLOYMENT_ROOT/tls" \
+  "HOME_AGENT_RESTORE_DRILL_ROOT:$HOME_AGENT_RESTORE_DRILL_ROOT:$HOME_AGENT_DEPLOYMENT_ROOT/restore-drills"
+do
+  path_name="${expected_pair%%:*}"
+  remainder="${expected_pair#*:}"
+  actual_path="${remainder%%:*}"
+  expected_path="${remainder#*:}"
+  [ "$actual_path" = "$expected_path" ] || {
+    echo "$path_name must be the reviewed child of HOME_AGENT_DEPLOYMENT_ROOT" >&2
+    exit 78
+  }
+done
+[ "$HOME_AGENT_PGBACKREST_CONF" = "$HOME_AGENT_DEPLOYMENT_ROOT/config/pgbackrest-local.conf" ] || {
+  echo "HOME_AGENT_PGBACKREST_CONF must be the reviewed local repository config path" >&2
+  exit 78
+}
+[ "$HOME_AGENT_LOCAL_BACKUP_MANIFEST" = "$HOME_AGENT_DEPLOYMENT_ROOT/config/local-backup-operator.sha256" ] || {
+  echo "HOME_AGENT_LOCAL_BACKUP_MANIFEST must be the reviewed operator manifest path" >&2
+  exit 78
+}
+[ "$HOME_AGENT_PGBACKREST_LOCK_FILE" = "$HOME_AGENT_DEPLOYMENT_ROOT/locks/pgbackrest-repository.lock" ] || {
+  echo "HOME_AGENT_PGBACKREST_LOCK_FILE must be the reviewed repository lock path" >&2
+  exit 78
+}
+[ "$HOME_AGENT_PGBACKREST_BACKUP_LOCK_FILE" = "$HOME_AGENT_DEPLOYMENT_ROOT/locks/pgbackrest-backup.lock" ] || {
+  echo "HOME_AGENT_PGBACKREST_BACKUP_LOCK_FILE must be the reviewed backup lock path" >&2
+  exit 78
+}
+[ "$HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT" = "$HOME_AGENT_DATA_ROOT/pgbackrest-repository" ] || {
+  echo "HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT must be the dedicated pgbackrest-repository child of HOME_AGENT_DATA_ROOT" >&2
+  exit 78
+}
+[ "$HOME_AGENT_PGBACKREST_SPOOL_ROOT" = "$HOME_AGENT_DATA_ROOT/pgbackrest-spool-local-v1" ] || {
+  echo "HOME_AGENT_PGBACKREST_SPOOL_ROOT must be the fresh pgbackrest-spool-local-v1 child of HOME_AGENT_DATA_ROOT" >&2
+  exit 78
+}
 require_absolute HOME_AGENT_RESTORE_DRILL_ROOT "$HOME_AGENT_RESTORE_DRILL_ROOT"
 [ ! -L "$HOME_AGENT_RESTORE_DRILL_ROOT" ] || {
   echo "HOME_AGENT_RESTORE_DRILL_ROOT may not be a symlink" >&2
@@ -96,13 +196,62 @@ printf '%s' "$HOME_AGENT_POSTGRES_IMAGE" | grep -Eq '@sha256:[0-9a-f]{64}$' || {
   echo "HOME_AGENT_POSTGRES_IMAGE must use an immutable sha256 digest" >&2
   exit 78
 }
+printf '%s' "$HOME_AGENT_PGBACKREST_IMAGE_ID" | grep -Eq '^sha256:[0-9a-f]{64}$' || {
+  echo "HOME_AGENT_PGBACKREST_IMAGE_ID must be an immutable local image ID" >&2
+  exit 78
+}
+actual_pgbackrest_image_id="$(docker image inspect --format '{{.Id}}' "$HOME_AGENT_PGBACKREST_IMAGE" 2>/dev/null || true)"
+[ "$actual_pgbackrest_image_id" = "$HOME_AGENT_PGBACKREST_IMAGE_ID" ] || {
+  echo "configured pgBackRest image tag does not match its approved immutable ID" >&2
+  exit 78
+}
 printf '%s' "$HOME_AGENT_EXPECTED_DB_REVISION" | grep -Eq '^[A-Za-z0-9._-]+$' || {
   echo "HOME_AGENT_EXPECTED_DB_REVISION is invalid" >&2
   exit 78
 }
 
+for existing_root in "$HOME_AGENT_DEPLOYMENT_ROOT" "$HOME_AGENT_DATA_ROOT"; do
+  [ -d "$existing_root" ] && [ ! -L "$existing_root" ] || {
+    echo "required encrypted deployment root is absent or unsafe: $existing_root" >&2
+    exit 78
+  }
+  case "$(findmnt -n -o SOURCE -T "$existing_root" || true)" in
+    /dev/mapper/*) ;;
+    *) echo "$existing_root is not on a verified /dev/mapper encrypted mount" >&2; exit 78 ;;
+  esac
+  [ "$(stat -c '%u' "$existing_root")" = 0 ] || {
+    echo "deployment structural parent must be root-owned: $existing_root" >&2
+    exit 78
+  }
+  existing_root_mode="$(stat -c '%a' "$existing_root")"
+  [ $((0$existing_root_mode & 022)) -eq 0 ] || {
+    echo "deployment structural parent may not be group/world-writable: $existing_root" >&2
+    exit 78
+  }
+done
+for planned_dir in \
+  "$HOME_AGENT_DATA_ROOT/postgres" \
+  "$HOME_AGENT_DATA_ROOT/resource-monitor" \
+  "$HOME_AGENT_RUNTIME_ROOT" \
+  "$HOME_AGENT_SESSION_ROOT" \
+  "$HOME_AGENT_ERASURE_LEDGER_ROOT" \
+  "$HOME_AGENT_SECRETS_DIR" \
+  "$HOME_AGENT_SECRETS_DIR/master" \
+  "$HOME_AGENT_TLS_DIR" \
+  "$(dirname "$HOME_AGENT_PGBACKREST_LOCK_FILE")" \
+  "$HOME_AGENT_RESTORE_DRILL_ROOT"
+do
+  [ ! -L "$planned_dir" ] || {
+    echo "refusing symlinked deployment directory: $planned_dir" >&2
+    exit 78
+  }
+  if [ -e "$planned_dir" ] && [ ! -d "$planned_dir" ]; then
+    echo "deployment directory path exists but is not a directory: $planned_dir" >&2
+    exit 78
+  fi
+done
+
 install -d -m 0700 -o 999 -g 999 "$HOME_AGENT_DATA_ROOT/postgres"
-install -d -m 0700 -o 999 -g 999 "$HOME_AGENT_DATA_ROOT/pgbackrest-spool"
 restore_parent="$(dirname "$HOME_AGENT_RESTORE_DRILL_ROOT")"
 [ -d "$restore_parent" ] || {
   echo "restore-drill parent does not exist: $restore_parent" >&2
@@ -120,6 +269,29 @@ install -d -m 0700 -o 10001 -g 10001 "$HOME_AGENT_ERASURE_LEDGER_ROOT"
 install -d -m 0700 -o root -g root "$HOME_AGENT_SECRETS_DIR"
 install -d -m 0700 -o root -g root "$HOME_AGENT_SECRETS_DIR/master"
 install -d -m 0750 -o root -g 101 "$HOME_AGENT_TLS_DIR"
+lock_parent="$(dirname "$HOME_AGENT_PGBACKREST_LOCK_FILE")"
+install -d -m 0700 -o root -g root "$lock_parent"
+for lock_file in "$HOME_AGENT_PGBACKREST_LOCK_FILE" "$HOME_AGENT_PGBACKREST_BACKUP_LOCK_FILE"; do
+  [ ! -L "$lock_file" ] || {
+    echo "pgBackRest lock file may not be a symlink" >&2; exit 78;
+  }
+  if [ -e "$lock_file" ]; then
+    [ -f "$lock_file" ] || {
+      echo "pgBackRest lock path exists but is not a regular file" >&2; exit 78;
+    }
+  else
+    install -m 0600 -o 999 -g 999 /dev/null "$lock_file"
+  fi
+  [ "$(stat -c '%h' "$lock_file")" = 1 ] || {
+    echo "pgBackRest lock file may not have hard links" >&2; exit 78;
+  }
+  chown 999:999 "$lock_file"
+  chmod 0600 "$lock_file"
+  case "$(findmnt -n -o SOURCE -T "$lock_file" || true)" in
+    /dev/mapper/*) ;;
+    *) echo "pgBackRest lock file is not on the encrypted deployment mapper" >&2; exit 78 ;;
+  esac
+done
 
 for target in "$HOME_AGENT_DATA_ROOT" "$HOME_AGENT_RUNTIME_ROOT" "$HOME_AGENT_SESSION_ROOT" "$HOME_AGENT_ERASURE_LEDGER_ROOT"; do
   source_device="$(findmnt -n -o SOURCE -T "$target" || true)"
@@ -127,6 +299,42 @@ for target in "$HOME_AGENT_DATA_ROOT" "$HOME_AGENT_RUNTIME_ROOT" "$HOME_AGENT_SE
     /dev/mapper/*) ;;
     *) echo "$target is not on a verified /dev/mapper encrypted mount" >&2; exit 78 ;;
   esac
+done
+pgbackrest_parent="$(dirname "$HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT")"
+[ "$pgbackrest_parent" = "$(dirname "$HOME_AGENT_PGBACKREST_SPOOL_ROOT")" ] || {
+  echo "pgBackRest repository and spool must have the same approved parent" >&2
+  exit 78
+}
+[ -d "$pgbackrest_parent" ] && [ ! -L "$pgbackrest_parent" ] || {
+  echo "pgBackRest repository parent must be an existing non-symlink directory" >&2
+  exit 78
+}
+pgbackrest_parent_source="$(findmnt -n -o SOURCE -T "$pgbackrest_parent" || true)"
+case "$pgbackrest_parent_source" in
+  /dev/mapper/*) ;;
+  *) echo "$pgbackrest_parent is not on a verified /dev/mapper encrypted mount" >&2; exit 78 ;;
+esac
+for private_path in "$HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT" "$HOME_AGENT_PGBACKREST_SPOOL_ROOT"; do
+  [ ! -L "$private_path" ] || {
+    echo "pgBackRest private path may not be a symlink: $private_path" >&2
+    exit 78
+  }
+  if [ -e "$private_path" ]; then
+    [ -d "$private_path" ] || {
+      echo "pgBackRest private path exists but is not a directory: $private_path" >&2
+      exit 78
+    }
+  else
+    install -d -m 0700 -o 999 -g 999 "$private_path"
+  fi
+  case "$(findmnt -n -o SOURCE -T "$private_path" || true)" in
+    /dev/mapper/*) ;;
+    *) echo "$private_path is not on a verified /dev/mapper encrypted mount" >&2; exit 78 ;;
+  esac
+  [ "$(stat -c '%u:%g:%a' "$private_path")" = "999:999:700" ] || {
+    echo "pgBackRest private path must be UID/GID 999 and mode 0700: $private_path" >&2
+    exit 78
+  }
 done
 restore_source_device="$(findmnt -n -o SOURCE -T "$HOME_AGENT_RESTORE_DRILL_ROOT" || true)"
 case "$restore_source_device" in
@@ -166,10 +374,22 @@ assert_separate_roots "$runtime_root" "$ledger_root"
 assert_separate_roots "$session_root" "$ledger_root"
 restore_drill_root="$(readlink -f "$HOME_AGENT_RESTORE_DRILL_ROOT")"
 postgres_root="$(readlink -f "$HOME_AGENT_DATA_ROOT/postgres")"
-[ -n "$restore_drill_root" ] && [ -n "$postgres_root" ] || {
+pgbackrest_spool_root="$(readlink -f "$HOME_AGENT_PGBACKREST_SPOOL_ROOT")"
+local_repo_root="$(readlink -f "$HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT")"
+[ -n "$restore_drill_root" ] && [ -n "$postgres_root" ] &&
+  [ -n "$pgbackrest_spool_root" ] && [ -n "$local_repo_root" ] || {
   echo "cannot canonicalize restore-drill roots" >&2; exit 78;
 }
 assert_separate_roots "$restore_drill_root" "$postgres_root"
+[ "$local_repo_root" != "$data_root" ] || {
+  echo "local pgBackRest repository may not be the data root" >&2; exit 78;
+}
+assert_separate_roots "$local_repo_root" "$postgres_root"
+assert_separate_roots "$local_repo_root" "$pgbackrest_spool_root"
+assert_separate_roots "$local_repo_root" "$restore_drill_root"
+assert_separate_roots "$local_repo_root" "$runtime_root"
+assert_separate_roots "$local_repo_root" "$session_root"
+assert_separate_roots "$local_repo_root" "$ledger_root"
 
 ledger_path="$HOME_AGENT_ERASURE_LEDGER_ROOT/ledger.jsonl"
 ledger_head_path="$HOME_AGENT_ERASURE_LEDGER_ROOT/ledger.head.json"
@@ -492,98 +712,113 @@ cmp -s "$identity_finalizer_runtime/database_url" \
   exit 78
 }
 
+verify_root_owned_input() {
+  input_path="$1"
+  [ -f "$input_path" ] && [ ! -L "$input_path" ] && [ -s "$input_path" ] || {
+    echo "operator input must be a non-symlink regular file: $input_path" >&2
+    exit 78
+  }
+  [ "$(stat -c '%u' "$input_path")" = 0 ] && [ "$(stat -c '%h' "$input_path")" = 1 ] || {
+    echo "operator input must be root-owned with one hard link: $input_path" >&2
+    exit 78
+  }
+  input_mode="$(stat -c '%a' "$input_path")"
+  [ $((0$input_mode & 022)) -eq 0 ] || {
+    echo "operator input may not be group/world-writable: $input_path" >&2
+    exit 78
+  }
+  case "$(findmnt -n -o SOURCE -T "$input_path" || true)" in
+    /dev/mapper/*) ;;
+    *) echo "$input_path is not on a verified /dev/mapper encrypted mount" >&2; exit 78 ;;
+  esac
+}
+
 for name in server.crt server.key client-ca.crt; do
   path="$HOME_AGENT_TLS_DIR/$name"
-  [ -s "$path" ] || {
-    echo "missing TLS file: $HOME_AGENT_TLS_DIR/$name" >&2; exit 78;
-  }
+  verify_root_owned_input "$path"
   chown root:101 "$path"
   chmod 0640 "$path"
 done
-[ -s "$HOME_AGENT_PGBACKREST_CONF" ] || { echo "missing pgBackRest config" >&2; exit 78; }
-config_source="$(findmnt -n -o SOURCE -T "$HOME_AGENT_PGBACKREST_CONF" || true)"
-case "$config_source" in
-  /dev/mapper/*) ;;
-  *) echo "$HOME_AGENT_PGBACKREST_CONF is not on a verified /dev/mapper encrypted mount" >&2; exit 78 ;;
-esac
+config_parent="$(dirname "$HOME_AGENT_PGBACKREST_CONF")"
+[ -d "$config_parent" ] && [ ! -L "$config_parent" ] &&
+  [ "$(stat -c '%u' "$config_parent")" = 0 ] || {
+  echo "pgBackRest config parent must be a root-owned non-symlink directory" >&2
+  exit 78
+}
+config_parent_mode="$(stat -c '%a' "$config_parent")"
+[ $((0$config_parent_mode & 022)) -eq 0 ] || {
+  echo "pgBackRest config parent may not be group/world-writable" >&2; exit 78;
+}
+verify_root_owned_input "$HOME_AGENT_PGBACKREST_CONF"
 chown root:999 "$HOME_AGENT_PGBACKREST_CONF"
 chmod 0640 "$HOME_AGENT_PGBACKREST_CONF"
 verify_secret 0:999:640 "$HOME_AGENT_PGBACKREST_CONF"
-require_pgbackrest_setting() {
-  pattern="$1"
-  description="$2"
-  grep -Eq "$pattern" "$HOME_AGENT_PGBACKREST_CONF" || {
-    echo "pgBackRest config must set $description" >&2
-    exit 78
-  }
+python3 - "$HOME_AGENT_PGBACKREST_CONF" <<'PY'
+import configparser
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+if re.search(r"(?m)^[ \t]+[^#; \t]|^[A-Za-z0-9_-]+[ \t]+=", text):
+    raise SystemExit(
+        "pgBackRest config contains a non-canonical whitespace-prefixed directive"
+    )
+
+parser = configparser.ConfigParser(
+    interpolation=None,
+    strict=True,
+    empty_lines_in_values=False,
+)
+parser.optionxform = str
+try:
+    parser.read_string(text)
+except configparser.Error:
+    raise SystemExit("pgBackRest config is not a strict canonical INI file") from None
+
+if parser.defaults() or parser.sections() != ["global", "home-agent"]:
+    raise SystemExit("pgBackRest config must contain only [global] and [home-agent]")
+
+global_expected = {
+    "repo1-type": "posix",
+    "repo1-path": "/repository",
+    "repo1-cipher-type": "aes-256-cbc",
+    "repo1-cipher-pass": None,
+    "repo1-bundle": "y",
+    "repo1-retention-full": "4",
+    "repo1-retention-diff": "7",
+    "repo1-retention-archive-type": "full",
+    "archive-async": "y",
+    "spool-path": "/var/spool/pgbackrest",
+    "process-max": "1",
+    "start-fast": "n",
+    "log-level-console": "info",
+    "log-level-file": "off",
 }
-require_unique_pgbackrest_setting() {
-  key="$1"
-  pattern="$2"
-  description="$3"
-  key_count="$(grep -Ec "^${key}=" "$HOME_AGENT_PGBACKREST_CONF" || true)"
-  exact_count="$(grep -Ec "$pattern" "$HOME_AGENT_PGBACKREST_CONF" || true)"
-  [ "$key_count" -eq 1 ] && [ "$exact_count" -eq 1 ] || {
-    echo "pgBackRest config must set exactly one $description" >&2
-    exit 78
-  }
+stanza_expected = {
+    "pg1-path": "/var/lib/postgresql/data",
+    "pg1-port": "5432",
+    "pg1-user": "home_agent_backup",
+    "pg1-database": "home_agent",
 }
-reject_pgbackrest_setting() {
-  pattern="$1"
-  description="$2"
-  if grep -Eq "$pattern" "$HOME_AGENT_PGBACKREST_CONF"; then
-    echo "pgBackRest config must not set $description" >&2
-    exit 78
-  fi
-}
-require_pgbackrest_setting '^repo1-type=sftp$' 'repo1-type=sftp'
-require_pgbackrest_setting '^repo1-path=/[^[:space:]]+$' 'an absolute repository path'
-require_pgbackrest_setting '^repo1-sftp-host=[^[:space:]]+$' 'a dedicated SFTP host'
-require_pgbackrest_setting '^repo1-sftp-host-port=[0-9]+$' 'an explicit SFTP port'
-require_pgbackrest_setting '^repo1-sftp-host-user=homeagent_backup$' 'the dedicated non-admin SFTP user'
-require_pgbackrest_setting '^repo1-sftp-private-key-file=/run/pgbackrest-sftp/id_ed25519$' 'the mounted private-key path'
-require_pgbackrest_setting '^repo1-sftp-public-key-file=/run/pgbackrest-sftp/id_ed25519.pub$' 'the mounted public-key path'
-require_pgbackrest_setting '^repo1-sftp-host-key-check-type=fingerprint$' 'strict fingerprint host-key checking'
-require_pgbackrest_setting '^repo1-sftp-host-key-hash-type=sha256$' 'SHA-256 host-key hashing'
-require_pgbackrest_setting '^repo1-sftp-host-fingerprint=[0-9a-f]{64}$' 'a verified SHA-256 host-key fingerprint'
-require_pgbackrest_setting '^repo1-cipher-type=aes-256-cbc$' 'AES-256-CBC repository encryption'
-require_pgbackrest_setting '^repo1-cipher-pass=[0-9a-f]{64}$' 'a 256-bit repository cipher passphrase'
-require_pgbackrest_setting '^repo1-bundle=y$' 'repository file bundling for SFTP resilience'
-require_pgbackrest_setting '^pg1-user=home_agent_backup$' 'the least-privilege PostgreSQL backup role'
-require_unique_pgbackrest_setting 'archive-async' '^archive-async=y$' 'archive-async=y setting'
-require_unique_pgbackrest_setting 'spool-path' '^spool-path=/var/spool/pgbackrest$' 'spool-path=/var/spool/pgbackrest setting'
-require_unique_pgbackrest_setting 'process-max' '^process-max=2$' 'process-max=2 setting'
-reject_pgbackrest_setting '^archive-push-queue-max=' 'archive-push-queue-max; no WAL drop threshold is permitted'
-reject_pgbackrest_setting '^archive-queue-max=' 'deprecated archive-queue-max; no WAL drop threshold is permitted'
-for key_path in "$HOME_AGENT_PGBACKREST_SFTP_KEY" "$HOME_AGENT_PGBACKREST_SFTP_PUBLIC_KEY"; do
-  [ -s "$key_path" ] || { echo "missing pgBackRest SFTP key file: $key_path" >&2; exit 78; }
-  key_source="$(findmnt -n -o SOURCE -T "$key_path" || true)"
-  case "$key_source" in
-    /dev/mapper/*) ;;
-    *) echo "$key_path is not on a verified /dev/mapper encrypted mount" >&2; exit 78 ;;
-  esac
-  chown root:999 "$key_path"
-  chmod 0640 "$key_path"
-  verify_secret 0:999:640 "$key_path"
-done
-known_hosts_path="$HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS"
-[ -s "$known_hosts_path" ] && [ ! -L "$known_hosts_path" ] || {
-  echo "missing or unsafe pinned known_hosts file: $known_hosts_path" >&2
-  exit 78
-}
-known_hosts_source="$(findmnt -n -o SOURCE -T "$known_hosts_path" || true)"
-case "$known_hosts_source" in
-  /dev/mapper/*) ;;
-  *) echo "$known_hosts_path is not on a verified /dev/mapper encrypted mount" >&2; exit 78 ;;
-esac
-chown root:999 "$known_hosts_path"
-chmod 0640 "$known_hosts_path"
-verify_secret 0:999:640 "$known_hosts_path"
-ssh-keygen -l -f "$known_hosts_path" -E sha256 >/dev/null 2>&1 || {
-  echo "pinned known_hosts contains no valid OpenSSH host key" >&2
-  exit 78
-}
-verify_secret 999:999:700 "$HOME_AGENT_DATA_ROOT/pgbackrest-spool"
+for section, expected in (("global", global_expected), ("home-agent", stanza_expected)):
+    actual = dict(parser.items(section, raw=True))
+    if set(actual) != set(expected):
+        raise SystemExit(f"pgBackRest [{section}] contains missing or unapproved options")
+    for key, value in expected.items():
+        if value is not None and actual[key] != value:
+            raise SystemExit(f"pgBackRest [{section}] has an invalid {key} setting")
+
+cipher_pass = parser.get("global", "repo1-cipher-pass", raw=True)
+if re.fullmatch(r"[0-9a-f]{64}", cipher_pass) is None:
+    raise SystemExit("pgBackRest repo1 cipher passphrase must be 256-bit lowercase hex")
+
+PY
+verify_secret 999:999:700 "$HOME_AGENT_PGBACKREST_SPOOL_ROOT"
+verify_secret 999:999:700 "$HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT"
+verify_secret 999:999:600 "$HOME_AGENT_PGBACKREST_LOCK_FILE"
+verify_secret 999:999:600 "$HOME_AGENT_PGBACKREST_BACKUP_LOCK_FILE"
 verify_secret 10001:10001:700 "$HOME_AGENT_ERASURE_LEDGER_ROOT"
 verify_secret 10001:10001:600 "$ledger_path"
 verify_secret 10001:10001:600 "$ledger_head_path"

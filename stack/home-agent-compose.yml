@@ -83,7 +83,7 @@ services:
       - -c
       - archive_timeout=300
       - -c
-      - archive_command=pgbackrest --stanza=home-agent archive-push %p
+      - archive_command=flock -s /run/home-agent-locks/repository.lock pgbackrest --stanza=home-agent archive-push %p
     secrets:
       - source: postgres_owner_password_postgres
         target: postgres_owner_password
@@ -91,13 +91,15 @@ services:
       - type: bind
         source: "${HOME_AGENT_DATA_ROOT:?set to the dedicated encrypted volume}/postgres"
         target: /var/lib/postgresql/data
-      - "${HOME_AGENT_PGBACKREST_CONF:?configure encrypted off-host pgBackRest repository}:/etc/pgbackrest/pgbackrest.conf:ro"
-      - "${HOME_AGENT_PGBACKREST_SFTP_KEY:?configure dedicated pgBackRest SFTP key}:/run/pgbackrest-sftp/id_ed25519:ro"
-      - "${HOME_AGENT_PGBACKREST_SFTP_PUBLIC_KEY:?configure dedicated pgBackRest SFTP public key}:/run/pgbackrest-sftp/id_ed25519.pub:ro"
-      - "${HOME_AGENT_DATA_ROOT}/pgbackrest-spool:/var/spool/pgbackrest"
+      - "${HOME_AGENT_PGBACKREST_CONF:?configure encrypted pgBackRest repository}:/etc/pgbackrest/pgbackrest.conf:ro"
+      # Local repo1 is the standalone recovery anchor. Legacy remote material
+      # is never mounted into the active database service.
+      - "${HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT:?set local pgBackRest repository root}:/repository"
+      - "${HOME_AGENT_PGBACKREST_SPOOL_ROOT:?set fresh topology-specific pgBackRest spool}:/var/spool/pgbackrest"
+      - "${HOME_AGENT_PGBACKREST_LOCK_FILE:?set repository coordination lock}:/run/home-agent-locks/repository.lock"
       - postgres-socket:/var/run/postgresql
       - ./home-agent-deploy/postgres-pg_hba.conf:/etc/pg_hba-home-agent.conf:ro
-    networks: [postgres-net, backup-egress]
+    networks: [postgres-net]
     mem_limit: 1g
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U home_agent_owner -d home_agent"]
@@ -125,6 +127,8 @@ services:
     entrypoint: ["/bin/sh", "/deploy/backup-gate.sh"]
     environment:
       POSTGRES_BACKUP_PASSWORD_FILE: /run/secrets/postgres_backup_password
+      HOME_AGENT_BACKUP_MIN_FREE_KIB: "${HOME_AGENT_BACKUP_MIN_FREE_KIB:-2097152}"
+      HOME_AGENT_BACKUP_TYPE: full
     secrets:
       - source: postgres_backup_password_backup_gate
         target: postgres_backup_password
@@ -133,15 +137,22 @@ services:
         source: "${HOME_AGENT_DATA_ROOT:?set to the dedicated encrypted volume}/postgres"
         target: /var/lib/postgresql/data
         read_only: true
-      - "${HOME_AGENT_PGBACKREST_CONF:?configure encrypted off-host pgBackRest repository}:/etc/pgbackrest/pgbackrest.conf:ro"
-      - "${HOME_AGENT_PGBACKREST_SFTP_KEY:?configure dedicated pgBackRest SFTP key}:/run/pgbackrest-sftp/id_ed25519:ro"
-      - "${HOME_AGENT_PGBACKREST_SFTP_PUBLIC_KEY:?configure dedicated pgBackRest SFTP public key}:/run/pgbackrest-sftp/id_ed25519.pub:ro"
-      - "${HOME_AGENT_DATA_ROOT}/pgbackrest-spool:/var/spool/pgbackrest"
-      - postgres-socket:/var/run/postgresql
+      - "${HOME_AGENT_PGBACKREST_CONF:?configure encrypted pgBackRest repository}:/etc/pgbackrest/pgbackrest.conf:ro"
+      - "${HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT:?set local pgBackRest repository root}:/repository"
+      - "${HOME_AGENT_PGBACKREST_SPOOL_ROOT:?set fresh topology-specific pgBackRest spool}:/var/spool/pgbackrest"
+      - "${HOME_AGENT_PGBACKREST_LOCK_FILE:?set repository coordination lock}:/run/home-agent-locks/repository.lock"
+      - "${HOME_AGENT_PGBACKREST_BACKUP_LOCK_FILE:?set backup serialization lock}:/run/home-agent-locks/backup.lock"
+      - postgres-socket:/var/run/postgresql:ro
       - ./home-agent-deploy:/deploy:ro
     tmpfs:
       - /tmp:size=16m,mode=1777
-    networks: [backup-egress]
+    # The bootstrap backup is intentionally bounded on the 14900K host. The
+    # database is small and correctness is more important than compression
+    # throughput during the startup gate.
+    cpus: "0.50"
+    mem_limit: 512m
+    pids_limit: 128
+    network_mode: none
     depends_on:
       provision-roles: {condition: service_completed_successfully}
 
@@ -607,7 +618,6 @@ networks:
       config:
         - subnet: "${HOME_AGENT_BFF_EGRESS_SUBNET:-172.22.0.0/24}"
           gateway: "${HOME_AGENT_BFF_EGRESS_GATEWAY:-172.22.0.1}"
-  backup-egress: {}
 
 volumes:
   postgres-socket: {}

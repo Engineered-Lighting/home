@@ -94,23 +94,27 @@ Install the commit-marker-ordered replication timer using
 `stack/home-agent-deploy/operator/ERASURE-LEDGER-BACKUP.md`; its rclone
 credential and staging directory must also remain on the encrypted mapper.
 
-Copy the non-secret environment template and calculate the versioned policy
-digest:
+Install the non-secret environment outside the user-writable source checkout and
+calculate the versioned policy digest. The installed file and each parent stay
+root-owned and non-writable by the operator account:
 
 ```sh
 cd /opt/home/home-github/stack
-cp home-agent.env.example home-agent.env
+sudo install -d -o root -g root -m 0750 /srv/home-agent/config
+sudo install -o root -g root -m 0600 home-agent.env.example \
+  /srv/home-agent/config/home-agent.env
 sha256sum home-agent-deploy/policy/home-agent-mvp-v1.json
+sudoedit /srv/home-agent/config/home-agent.env
 ```
 
-Fill `home-agent.env`, then generate independent secrets. The helper refuses to
-overwrite an existing set. It stores a root-only mode-0600 master set under
-`/etc/home-agent/secrets/master` and materializes distinct mode-0400 copies
+Fill the installed `home-agent.env`, then generate independent secrets. The
+helper refuses to overwrite an existing set. It stores a root-only mode-0600 master set under
+`/srv/home-agent/secrets/master` and materializes distinct mode-0400 copies
 under `runtime/<service>` with the numeric owner of that unprivileged
 container:
 
 ```sh
-sudo sh home-agent-deploy/bootstrap-secrets.sh /etc/home-agent/secrets
+sudo sh home-agent-deploy/bootstrap-secrets.sh /srv/home-agent/secrets
 ```
 
 For an existing deployment created before the isolated rollout writer, do not
@@ -120,7 +124,7 @@ the helper rematerialize service copies:
 
 ```sh
 sudo sh home-agent-deploy/add-rollout-role-secrets.sh \
-  /etc/home-agent/secrets
+  /srv/home-agent/secrets
 ```
 
 The additive helper refuses a partial or existing rollout set and never prints
@@ -133,8 +137,8 @@ as recovery from missing or damaged ledger state:
 
 ```sh
 sudo install -d -m 0700 -o 10001 -g 10001 /srv/home-agent/erasure-ledger
-sudo docker compose --env-file home-agent.env -f home-agent-compose.yml \
-  --profile operator run --rm --build ledger-init
+sudo docker compose --env-file /srv/home-agent/config/home-agent.env \
+  -f home-agent-compose.yml --profile operator run --rm ledger-init
 ```
 
 Do not point Compose at the master files or make them group/world-readable.
@@ -153,9 +157,9 @@ Create a private CA, server certificate with the Edge hostname/IP in its SAN,
 and a dedicated HA Edge client certificate. Install these server-side files:
 
 ```text
-/etc/home-agent/tls/server.crt
-/etc/home-agent/tls/server.key
-/etc/home-agent/tls/client-ca.crt
+/srv/home-agent/tls/server.crt
+/srv/home-agent/tls/server.key
+/srv/home-agent/tls/client-ca.crt
 ```
 
 Install the client certificate, client key, CA certificate, and a separate copy
@@ -163,27 +167,67 @@ of the master `edge_token` on the HA host. All HA-side key/token files must be
 mode 0600.
 
 Configure `pgbackrest.conf` from
-`stack/home-agent-deploy/pgbackrest.conf.example` using the separately approved
-off-host SFTP destination, independently verified SHA-256 host-key fingerprint,
-and backup cipher secret. Store it outside the repo on the encrypted mapper.
-Generate a dedicated key pair there, set `HOME_AGENT_PGBACKREST_SFTP_KEY` and
-`HOME_AGENT_PGBACKREST_SFTP_PUBLIC_KEY` to those files, and install only the
-public key on the non-admin, key-only SFTP account. The private key is mounted
-read-only at `/run/pgbackrest-sftp/id_ed25519`; neither key belongs in the
-source checkout or a container image.
-Preflight sets it to `root:999` mode 0640 so PostgreSQL and the UID/GID-999
-backup gate can read it without making the repository credential writable; it
-also enforces the encrypted mount, SFTP host-key pin, AES-256-CBC repository
-cipher, dedicated key mounts, and a UID/GID-999 mode-0700 pgBackRest spool. Keep
-`pg1-user=home_agent_backup`: preflight mounts that role's separate mode-0400
-password only into the backup gate. PostgreSQL uses the deployment-owned SCRAM
-HBA file even for existing clusters, so the backup container never receives or
-impersonates the bootstrap owner. Its SQL authority is limited to read-only
-settings (not live query statistics) and the four PostgreSQL 17 backup/WAL
-control functions required by pgBackRest.
-Keep `repo1-bundle=y` as well: new backups are grouped into bundle files to
-reduce small-file SFTP operations and improve restore resilience without
-changing the repository cipher or retention rules.
+`stack/home-agent-deploy/pgbackrest.conf.example` and store it outside the
+source checkout as `/srv/home-agent/config/pgbackrest-local.conf` on the
+encrypted mapper. The active deployment topology is explicitly local and
+egress-free.
+
+For a standalone Ubuntu deployment, use:
+
+```dotenv
+HOME_AGENT_BACKUP_TOPOLOGY=local
+HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT=/srv/home-agent/durable/pgbackrest-repository
+HOME_AGENT_PGBACKREST_SPOOL_ROOT=/srv/home-agent/durable/pgbackrest-spool-local-v1
+HOME_AGENT_BACKUP_MIN_FREE_KIB=2097152
+```
+
+Configure encrypted `repo1` as a POSIX repository at the container path
+`/repository`. The host repository must be an absolute, dedicated UID/GID-999
+mode-0700 directory on the approved encrypted mapper. It must not be PostgreSQL
+data, the archive spool, runtime/session state, or the independent erasure
+ledger, and none of those paths may be nested inside it. Local topology needs
+no FormD, NAS, or SFTP host; those systems are optional backup destinations,
+not Home Agent runtime dependencies.
+
+This local repository is deliberately a **same-host, same-volume recovery
+anchor**. It can recover from a damaged PostgreSQL cluster or an operator
+mistake, and it supports a new verifiable WAL/backup baseline. It does not
+survive loss, theft, destruction, or failure of the Ubuntu host, encrypted
+volume, or its keys. Treat operation without an independently replicated
+repository as degraded durability, not as completion of the plan's off-host
+backup requirement.
+
+`pgbackrest.sftp-legacy.conf.example` is retained only for a supervised,
+offline recovery of the retired repository. Active preflight rejects that
+topology; running PostgreSQL and the backup gate receive neither SFTP keys nor
+an external backup network. A future off-host copier needs its own reviewed
+failure-domain and credential boundary.
+
+Local operation requires the AES-256-CBC repository cipher, a fresh
+topology-specific UID/GID-999 mode-0700 pgBackRest spool, and
+`pg1-user=home_agent_backup`. Preflight mounts
+that role's separate mode-0400 password only into the backup gate. PostgreSQL
+uses the deployment-owned SCRAM HBA file even for existing clusters, so the
+backup container never receives or impersonates the bootstrap owner. Its SQL
+authority is limited to read-only settings (not live query statistics) and the
+four PostgreSQL 17 backup/WAL control functions required by pgBackRest. Keep
+`repo1-bundle=y`; it reduces small-file operations without changing the
+repository cipher or retention rules. The startup backup also refuses to run
+unless the shared encrypted volume has at least the configured reserve plus
+three times current PGDATA free; this prevents a same-volume backup from
+turning low disk space into a host incident. The 2-GiB setting is a
+non-lowerable floor; the gate preserves at least ten percent of the filesystem
+when that is larger.
+
+Install the reviewed prebuilt images before preflight; never build or move an
+image tag after it has been attested. Record the output of the following command
+as `HOME_AGENT_PGBACKREST_IMAGE_ID` in the installed environment:
+
+```sh
+sudo docker image inspect --format '{{.Id}}' \
+  engineered-lighting/home-agent-postgres:17.10
+sudoedit /srv/home-agent/config/home-agent.env
+```
 
 Run the strict preflight as root because the Compose secret source directories
 are deliberately not traversable by an ordinary host account. It verifies
@@ -193,18 +237,69 @@ digest, the rendered Compose configuration, required files, and the
 unprivileged mTLS ingress configuration; it starts no application service:
 
 ```sh
-sudo sh home-agent-deploy/preflight.sh ./home-agent.env
+sudo sh home-agent-deploy/preflight.sh \
+  /srv/home-agent/config/home-agent.env
 ```
 
-## Build and start
+## WAL continuity and staged start
 
-Validate the dedicated Compose project, then start it:
+Validate the dedicated Compose project without building or pulling a replacement
+image:
 
 ```sh
-sudo docker compose --env-file home-agent.env -f home-agent-compose.yml config
-sudo docker compose --env-file home-agent.env -f home-agent-compose.yml build
-sudo docker compose --env-file home-agent.env -f home-agent-compose.yml up -d
+sudo docker compose --env-file /srv/home-agent/config/home-agent.env \
+  -f home-agent-compose.yml config
 ```
+
+Do **not** issue an all-service `compose up` on an existing cluster when a WAL
+segment is still `.ready`, the archive topology has changed, or the repository
+has no verified baseline. With PostgreSQL and every pgBackRest writer stopped:
+
+1. Copy the exact pending WAL segment into a root-only incident-evidence
+   directory on the encrypted mapper and record its SHA-256. Never rename the
+   live marker, create `.done`, run `pg_archivecleanup`, or reset WAL.
+2. Create a fresh topology-specific repository and spool. Preserve the retired
+   repository/config/spool read-only for forensic recovery; never reuse its
+   queue state.
+3. Under the repository lock, run `stanza-create --no-online`, synchronously
+   push the preserved segment with `--no-archive-async`, retrieve the same
+   segment into tmpfs with `archive-get`, and require an exact SHA-256 match.
+4. Start only PostgreSQL. Require the live `.ready` marker to become `.done`
+   through the real configured `archive_command`, then retrieve and hash the
+   segment again. A fabricated marker or a current snapshot is not proof.
+5. Hold the same boot ID, healthy PostgreSQL, increasing uptime, low resource
+   use, and an intact archive for three minutes before advancing.
+
+The current recovery segment is
+`0000000100000000000000F5`; its evidence copy and recorded digest are operator
+inputs, not values to rediscover or replace. Start PostgreSQL only after the
+offline push/get proof:
+
+```sh
+sudo docker compose --env-file /srv/home-agent/config/home-agent.env \
+  -f home-agent-compose.yml up -d --no-deps --no-build --pull never postgres
+```
+
+After the archive proof and stability hold, run each transition separately and
+inspect its exit/readiness before continuing. `docker compose run` intentionally
+omits `--build` and uses only already installed images:
+
+```sh
+sudo docker compose --env-file /srv/home-agent/config/home-agent.env \
+  -f home-agent-compose.yml run --rm --no-deps --pull never provision-roles
+sudo docker compose --env-file /srv/home-agent/config/home-agent.env \
+  -f home-agent-compose.yml run --rm --no-deps --pull never backup-gate
+sudo docker compose --env-file /srv/home-agent/config/home-agent.env \
+  -f home-agent-compose.yml run --rm --no-deps --pull never migrate
+sudo docker compose --env-file /srv/home-agent/config/home-agent.env \
+  -f home-agent-compose.yml run --rm --no-deps --pull never grant-runtime
+```
+
+Take and verify a second full backup after migration; only that post-migration
+label is eligible for the restore acceptance drill. Then start `core-api`, hold
+and inspect it, followed separately by `core-worker`, `core-ingest`,
+`edge-ingress`, and finally `bff`. Do not advance a failed or degraded stage.
+An HA-dependent stage may remain stopped while Home Assistant is unavailable.
 
 The normal migration container requires
 `HOME_AGENT_EXPECTED_DB_REVISION=0006a_worker_lease_arbitration` and refuses any
@@ -220,7 +315,7 @@ Startup ordering is enforced:
 PostgreSQL ready
 → runtime roles provisioned
 → dedicated backup role authenticated
-→ pgBackRest stanza/check/full encrypted off-host backup
+→ pgBackRest stanza/check/full encrypted local repo1 backup
 → transactional migration
 → least-privilege grants
 → API / ingest / worker
@@ -228,26 +323,41 @@ PostgreSQL ready
 ```
 
 PostgreSQL uses the immutable official 17.10 Bookworm image index configured in
-`home-agent.env`; no database or Core port is published. A pgBackRest failure
+`/srv/home-agent/config/home-agent.env`; no database or Core port is published. A pgBackRest failure
 prevents the semantic roles from starting. Raw runtime observations live only
 under `HOME_AGENT_RUNTIME_ROOT`; sealed OAuth session/revocation state lives
 only under `HOME_AGENT_SESSION_ROOT`. Neither path belongs in the durable
-PostgreSQL or off-host backup source.
+PostgreSQL or selected pgBackRest repository source.
+
+Do not run `tools/run-home-agent-e1-postgres-gate.py`, any E1/E2 disposable
+PostgreSQL gate, image build, stress test, or AI/GPU workload on the Ubuntu
+service host. Those gates are quarantined to the reviewed hosted workflow or a
+separate disposable test machine. Normal preflight, migration, backup, restore,
+and staged service startup do not require that runner.
 
 Check readiness without printing environment variables or secrets:
 
 ```sh
-sudo docker compose --env-file home-agent.env -f home-agent-compose.yml ps
-sudo docker compose --env-file home-agent.env -f home-agent-compose.yml logs --tail=100 backup-gate migrate grant-runtime core-api core-ingest core-worker bff edge-ingress
+sudo docker compose --env-file /srv/home-agent/config/home-agent.env \
+  -f home-agent-compose.yml ps
+sudo docker compose --env-file /srv/home-agent/config/home-agent.env \
+  -f home-agent-compose.yml logs --tail=100 \
+  backup-gate migrate grant-runtime core-api core-ingest core-worker bff edge-ingress
 ```
 
 ## Isolated database restore drill
 
-After building the digest-labeled PostgreSQL/pgBackRest image, run the staged
-restore drill for one explicit completed backup label. Direct libssh2 SFTP
-restore is not an acceptance path: the operator stages the encrypted repository
-with native host-key-pinned OpenSSH SFTP, then verifies, restores, and boots it
-locally with `network_mode=none` and no published ports.
+After installing and attesting the digest-labeled PostgreSQL/pgBackRest image, run the staged
+restore drill for one explicit completed backup label. For a supervised legacy
+recovery, direct libssh2 restore is not an acceptance path: stage the encrypted
+repository with native host-key-pinned OpenSSH SFTP. For active `local` mode,
+mount the selected
+repository read-only and restore only into a separate root-owned scratch tree;
+never target live PostgreSQL data. Stop PostgreSQL and every pgBackRest writer
+before a local drill; the script fails closed if a running container still
+mounts production data or the repository. In either topology the drill
+verifies, restores, and boots only isolated scratch data with
+`network_mode=none` and no published ports.
 
 ```sh
 sudo bash home-agent-deploy/operator/isolated_restore_drill.sh \
@@ -259,6 +369,10 @@ The drill must pass revision, seven-schema, page-checksum, schema-dump, clean
 shutdown, and offline checksum validation. Detailed prerequisites, failure
 retention, and cleanup guards are documented in
 `stack/home-agent-deploy/operator/RESTORE-DRILL.md`.
+A successful `pgbackrest check` or full backup alone is not restore evidence.
+The operator script reads `HOME_AGENT_BACKUP_TOPOLOGY`; its legacy branch is
+offline recovery tooling and is never accepted by active deployment preflight.
+Local topology does not weaken or remove the isolated-restore acceptance gate.
 
 ## Web and OAuth routing
 
@@ -786,25 +900,83 @@ which excludes untrusted text and keeps model/action contexts disabled.
 
 ## Backup and restore gate
 
-WAL archive timeout is five minutes and the startup gate takes a full encrypted
-off-host backup. Schedule incremental backups and a monthly isolated restore.
+PostgreSQL forces an archive switch at least every five minutes and the startup
+gate takes a full encrypted backup into local repo1. Schedule daily full backups
+and a monthly isolated restore. A local full backup establishes the standalone service's
+recovery baseline, but it does not satisfy the off-host RPO or total-host-loss
+gate; add an independent destination when one becomes available.
 Never mount `HOME_AGENT_RUNTIME_ROOT`, `HOME_AGENT_SESSION_ROOT`, or the
 erasure ledger into the PostgreSQL backup job. Replicate the encrypted ledger
-and its head separately.
+and its head separately. A second directory on the same encrypted volume is
+not an independent ledger replica.
 
 A restored database must remain isolated from BFF/Edge until every later
 erasure epoch has been replayed and verified. With only PostgreSQL and its
 internal network running, invoke:
 
 ```sh
-sudo docker compose --env-file home-agent.env -f home-agent-compose.yml \
+sudo docker compose --env-file /srv/home-agent/config/home-agent.env \
+  -f home-agent-compose.yml \
   --profile operator run --rm restore-replay
 ```
 
 The dedicated erasure role replays the independent encrypted ledger
 idempotently. API and ingest readiness remain quarantined for a missing,
 stale, ahead, or divergent head and while an erasure receipt is still pending.
-Never initialize a replacement ledger during recovery or bypass this gate.
+Never initialize a replacement ledger during recovery or bypass this gate. If
+the Ubuntu volume and its only ledger copy are lost together, a restored
+database cannot be declared erasure-safe.
+
+Install the scheduled surface only after the first local full backup and WAL
+retrieval proof. Never execute root timers from the mutable Git checkout:
+
+```sh
+sudo install -d -o root -g root -m 0755 /usr/local/libexec/home-agent
+sudo install -o root -g root -m 0555 \
+  home-agent-deploy/operator/local_backup.sh \
+  /usr/local/libexec/home-agent/local-backup.sh
+sudo install -o root -g root -m 0555 \
+  home-agent-deploy/backup-gate.sh \
+  /usr/local/libexec/home-agent/backup-gate.sh
+sudo sh -c 'cd / && sha256sum \
+  usr/local/libexec/home-agent/local-backup.sh \
+  usr/local/libexec/home-agent/backup-gate.sh \
+  srv/home-agent/config/pgbackrest-local.conf \
+  > /srv/home-agent/config/local-backup-operator.sha256'
+sudo chown root:root /srv/home-agent/config/local-backup-operator.sha256
+sudo chmod 0600 /srv/home-agent/config/local-backup-operator.sha256
+sudo install -o root -g root -m 0644 \
+  home-agent-deploy/operator/systemd/home-agent-local-backup.service \
+  home-agent-deploy/operator/systemd/home-agent-local-backup.timer \
+  /etc/systemd/system/
+```
+
+Set `HOME_AGENT_PGBACKREST_IMAGE_ID` to the reviewed local image's immutable
+`sha256:` ID and keep the installed-operator manifest path from the example
+environment. The non-persistent timer runs one process-limited full backup each
+day, retaining four full recovery boundaries so archived WAL does not accumulate
+for weeks. It invokes the immutable image directly with pull policy
+`never`, never parses checkout Compose, and holds both backup serialization and
+repository locks. Confirm the service result and `pgbackrest info` before
+enabling the timer; it never runs E1/E2, builds, or model work.
+
+After the installed image ID and manifest are final, reload systemd and run the
+bounded oneshot once. Review its result and journal, confirm the new completed
+full in `pgbackrest info`, and only then enable the non-persistent timer:
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl start home-agent-local-backup.service
+sudo systemctl show home-agent-local-backup.service \
+  -p Result -p ExecMainCode -p ExecMainStatus
+sudo journalctl -u home-agent-local-backup.service -n 100 --no-pager
+sudo systemctl enable --now home-agent-local-backup.timer
+sudo systemctl list-timers home-agent-local-backup.timer --no-pager
+```
+
+The service is intentionally not independently enableable at boot. If the
+oneshot, WAL retrieval, or `pgbackrest info` verification fails, do not enable
+the timer.
 
 ## Known gated work
 
@@ -828,7 +1000,10 @@ Never initialize a replacement ledger during recovery or bypass this gate.
   allowlist. Initiative list/claim methods are absent from the deployed client
   and BFF pending a separate initiative-capability and rollout review.
 - Live credential rotation, firewall application, LUKS/key provisioning, HA
-  OAuth registration, certificates, off-host repository credentials, seven-day
-  observation, and human confirmations are operator work, not source changes.
+  OAuth registration, certificates, independently replicated backup and
+  erasure-ledger destinations, seven-day observation, and human confirmations
+  are operator work, not source changes. FormD or a NAS may provide those
+  destinations later, but neither is required to run the standalone service in
+  explicitly degraded-durability mode.
 
 These are release gates, not optional follow-ups.

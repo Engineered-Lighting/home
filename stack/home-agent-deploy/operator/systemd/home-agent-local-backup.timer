@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Home Agent local backup schedule
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+RandomizedDelaySec=15m
+Persistent=false
+Unit=home-agent-local-backup.service
+
+[Install]
+WantedBy=timers.target

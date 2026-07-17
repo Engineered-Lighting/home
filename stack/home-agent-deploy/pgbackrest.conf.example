@@ -1,28 +1,24 @@
-# Copy outside the repository, fill in the approved off-host repository, set
-# mode 0640/root:GID-999 (the container postgres group), and point
-# HOME_AGENT_PGBACKREST_CONF at it. Preflight enforces that mode/ownership.
+# Standalone Ubuntu recovery configuration. Copy outside the repository, fill
+# in a separately escrowed cipher passphrase, set mode 0640/root:GID-999 (the
+# container postgres group), and point HOME_AGENT_PGBACKREST_CONF at it.
+#
+# /repository is an encrypted same-host recovery anchor. It protects against
+# database mistakes and corruption, but not loss of the Ubuntu disk or host.
 [global]
-repo1-type=sftp
-repo1-path=/repo/home-agent
-repo1-sftp-host=REPLACE_WITH_SEPARATE_BACKUP_HOST
-repo1-sftp-host-port=22
-repo1-sftp-host-user=homeagent_backup
-repo1-sftp-private-key-file=/run/pgbackrest-sftp/id_ed25519
-repo1-sftp-public-key-file=/run/pgbackrest-sftp/id_ed25519.pub
-repo1-sftp-host-key-check-type=fingerprint
-repo1-sftp-host-key-hash-type=sha256
-repo1-sftp-host-fingerprint=REPLACE_WITH_VERIFIED_SHA256_HEX_FINGERPRINT
+repo1-type=posix
+repo1-path=/repository
 repo1-cipher-type=aes-256-cbc
 repo1-cipher-pass=REPLACE_WITH_SEPARATE_BACKUP_SECRET
 repo1-bundle=y
 repo1-retention-full=4
 repo1-retention-diff=7
+repo1-retention-archive-type=full
 archive-async=y
 # Deliberately leave archive-push-queue-max unset. Every configured value,
 # including 0B, is a drop threshold that can break the WAL archive stream.
 spool-path=/var/spool/pgbackrest
-process-max=2
-start-fast=y
+process-max=1
+start-fast=n
 log-level-console=info
 log-level-file=off
 

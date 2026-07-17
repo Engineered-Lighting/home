@@ -141,7 +141,8 @@ class IsolatedRestoreDrillContractTests(unittest.TestCase):
         preflight = read("stack/home-agent-deploy/preflight.sh")
         dockerfile = read("stack/home-agent-deploy/postgres.Dockerfile")
         for value in (
-            "HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS",
+            "HOME_AGENT_BACKUP_TOPOLOGY",
+            "HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT",
             "HOME_AGENT_RESTORE_DRILL_ROOT",
             "HOME_AGENT_PGBACKREST_IMAGE",
             "HOME_AGENT_EXPECTED_DB_REVISION",
@@ -149,8 +150,9 @@ class IsolatedRestoreDrillContractTests(unittest.TestCase):
             self.assertIn(value, environment)
             self.assertIn(value, preflight)
         self.assertIn("/dev/mapper", preflight)
-        self.assertIn("ssh-keygen -l -f", preflight)
-        self.assertIn("'^repo1-bundle=y$'", preflight)
+        self.assertNotIn("HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS", preflight)
+        self.assertIn("HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS", self.script)
+        self.assertIn('"repo1-bundle": "y"', preflight)
         self.assertIn("repo1-bundle=y", read("stack/home-agent-deploy/pgbackrest.conf.example"))
         self.assertIn('org.opencontainers.image.base.name="${POSTGRES_BASE_IMAGE}"', dockerfile)
 

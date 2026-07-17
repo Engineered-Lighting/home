@@ -517,6 +517,17 @@ require_pgbackrest_setting() {
     exit 78
   }
 }
+require_unique_pgbackrest_setting() {
+  key="$1"
+  pattern="$2"
+  description="$3"
+  key_count="$(grep -Ec "^${key}=" "$HOME_AGENT_PGBACKREST_CONF" || true)"
+  exact_count="$(grep -Ec "$pattern" "$HOME_AGENT_PGBACKREST_CONF" || true)"
+  [ "$key_count" -eq 1 ] && [ "$exact_count" -eq 1 ] || {
+    echo "pgBackRest config must set exactly one $description" >&2
+    exit 78
+  }
+}
 require_pgbackrest_setting '^repo1-type=sftp$' 'repo1-type=sftp'
 require_pgbackrest_setting '^repo1-path=/[^[:space:]]+$' 'an absolute repository path'
 require_pgbackrest_setting '^repo1-sftp-host=[^[:space:]]+$' 'a dedicated SFTP host'
@@ -531,6 +542,10 @@ require_pgbackrest_setting '^repo1-cipher-type=aes-256-cbc$' 'AES-256-CBC reposi
 require_pgbackrest_setting '^repo1-cipher-pass=[0-9a-f]{64}$' 'a 256-bit repository cipher passphrase'
 require_pgbackrest_setting '^repo1-bundle=y$' 'repository file bundling for SFTP resilience'
 require_pgbackrest_setting '^pg1-user=home_agent_backup$' 'the least-privilege PostgreSQL backup role'
+require_unique_pgbackrest_setting 'archive-async' '^archive-async=y$' 'archive-async=y setting'
+require_unique_pgbackrest_setting 'archive-push-queue-max' '^archive-push-queue-max=0B$' 'archive-push-queue-max=0B setting'
+require_unique_pgbackrest_setting 'spool-path' '^spool-path=/var/spool/pgbackrest$' 'spool-path=/var/spool/pgbackrest setting'
+require_unique_pgbackrest_setting 'process-max' '^process-max=2$' 'process-max=2 setting'
 for key_path in "$HOME_AGENT_PGBACKREST_SFTP_KEY" "$HOME_AGENT_PGBACKREST_SFTP_PUBLIC_KEY"; do
   [ -s "$key_path" ] || { echo "missing pgBackRest SFTP key file: $key_path" >&2; exit 78; }
   key_source="$(findmnt -n -o SOURCE -T "$key_path" || true)"

@@ -46,6 +46,11 @@ services:
         POSTGRES_BASE_IMAGE: "${HOME_AGENT_POSTGRES_IMAGE:-postgres:17.10-bookworm@sha256:17b6c778de50f4bb9a878c36e736110fbcd9b7020377d6fdfdf20f7c0347e40a}"
     image: engineered-lighting/home-agent-postgres:17.10
     platform: linux/amd64
+    # pgBackRest archive-async forks detached transfer processes. PostgreSQL
+    # must not be PID 1 or it can reap an orphaned pgBackRest failure as if a
+    # database backend exited, forcing crash recovery while the repository is
+    # unavailable. Docker's tiny init owns PID 1 and reaps those descendants.
+    init: true
     restart: unless-stopped
     shm_size: 256m
     environment:

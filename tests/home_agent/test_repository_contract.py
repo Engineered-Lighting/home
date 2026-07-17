@@ -502,6 +502,18 @@ class RepositoryBoundaryTests(unittest.TestCase):
             read("stack/home-agent-deploy/preflight.sh"),
         )
 
+    def test_postgres_init_reaps_async_archive_children(self) -> None:
+        compose = read("stack/home-agent-compose.yml")
+        postgres_block = compose.split("  postgres:", 1)[1].split(
+            "\n  backup-gate:", 1
+        )[0]
+        self.assertRegex(
+            postgres_block,
+            r"(?m)^    init: true$",
+            "PostgreSQL must not run as PID 1 while pgBackRest archive-async "
+            "can leave detached transfer processes to be reaped",
+        )
+
     def test_edge_ingress_exposes_only_exact_typed_mtls_routes(self) -> None:
         nginx = read("stack/home-agent-deploy/nginx-edge.conf")
         policy_location = re.search(
@@ -693,6 +705,10 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertIn("repo1-sftp-host-key-hash-type=sha256", pgbackrest)
         self.assertIn("repo1-cipher-type=aes-256-cbc", pgbackrest)
         self.assertIn("repo1-bundle=y", pgbackrest)
+        self.assertIn("archive-async=y", pgbackrest)
+        self.assertIn("archive-push-queue-max=0B", pgbackrest)
+        self.assertIn("spool-path=/var/spool/pgbackrest", pgbackrest)
+        self.assertIn("process-max=2", pgbackrest)
 
         preflight = read("stack/home-agent-deploy/preflight.sh")
         self.assertIn("HOME_AGENT_PGBACKREST_SFTP_KEY", preflight)
@@ -704,6 +720,10 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertIn("'^repo1-cipher-type=aes-256-cbc$'", preflight)
         self.assertIn("'^repo1-cipher-pass=[0-9a-f]{64}$'", preflight)
         self.assertIn("'^repo1-bundle=y$'", preflight)
+        self.assertIn("'^archive-async=y$'", preflight)
+        self.assertIn("'^archive-push-queue-max=0B$'", preflight)
+        self.assertIn("'^spool-path=/var/spool/pgbackrest$'", preflight)
+        self.assertIn("'^process-max=2$'", preflight)
 
         roles = read("stack/home-agent-deploy/provision-roles.sh")
         runtime_grants = read("stack/home-agent-deploy/apply-grants.sh")

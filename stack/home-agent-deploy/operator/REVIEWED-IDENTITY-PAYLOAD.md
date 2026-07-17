@@ -122,6 +122,43 @@ The verifier stores verified projections internally as canonical bytes and
 returns a fresh parse for each access, so caller mutation after verification
 cannot alter the later finalizer document.
 
+The verification policy's HMAC key and both canonical private-document byte
+fields are excluded from Python debug representations. Logging or formatting a
+policy, verified bundle, or verified finalizer object therefore does not emit
+the commitment key, person names, source references, aliases, or projection
+content. Callers must still treat the explicit projection/document accessors as
+private data.
+
+## Dormant E2 compatibility intent
+
+`identity_finalizer_compatibility.py` is a second offline, non-deployable
+boundary. It accepts raw bundle and envelope bytes and invokes both verification
+paths itself; it never accepts a caller-constructed verified document. It then
+cross-checks each projection's same-run lineage tuple and includes every person
+subject, including both endpoints of a legacy relationship candidate.
+
+The comparison input is a canonical, HMAC-bound, maximum-five-minute E2
+tombstone snapshot. Each row carries only pseudonymous person/block/outbox IDs,
+the positive ledger epoch, and exact block/hash/digest commitments. Rows must be
+strictly sorted and unique, the high-water mark must equal the maximum included
+ledger epoch, and the snapshot policy and revision must match the finalization
+policy. A blocked-subject intersection fails with only
+`identity_erasure_blocked`, never the person identifier.
+
+E2 also permits an active block before ledger attachment; that row cannot be
+represented by this ledger-bound observation contract. The input therefore
+cannot establish a complete negative view even when its row list is empty.
+
+Even a disjoint or empty supplied snapshot produces only
+`compatibility_status=coverage_unproven`. The intent permanently reports
+`non_deployable`, `capability_disabled`, `authoritative=false`,
+`commit_ready=false`, `enables_writes=false`, and
+`atomic_commit_enforced=false`. It cannot prove snapshot completeness or
+current database state, acquire a transaction lock, or substitute for the
+future `SERIALIZABLE` database kernel. No API, store, BFF, UI, Compose service,
+migration, or role activation imports it. The live Core service does not mount
+the operator source tree.
+
 ## Still disabled
 
 This verifier does not make finalization callable. Revision 0009 provides only

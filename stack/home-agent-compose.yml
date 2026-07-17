@@ -235,7 +235,6 @@ services:
       - source: bootstrap_token_core_api
         target: bootstrap_token
     volumes:
-      - ./home-agent-deploy/operator:/operator:ro
       - type: bind
         source: "${HOME_AGENT_DATA_ROOT}/resource-monitor"
         target: /storage-monitor/durable

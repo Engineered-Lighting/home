@@ -29,6 +29,16 @@ projection, or finalizer client in this milestone. The
 status 78 before opening its secret. Starting the operator profile therefore
 cannot perform a review, mutate semantic authority, or advance rollout.
 
+The adjacent offline E2 compatibility compiler does not change this role
+boundary. It can authenticate a signed finalizer document and prove only that
+its affected-person set is disjoint from the exact, short-lived,
+ledger-attached tombstone rows supplied to that invocation. It cannot represent
+an active pre-ledger block. It labels snapshot coverage and database currency
+unproven, emits no deployable or commit-ready artifact, and has no database
+client. An empty snapshot is never evidence that no tombstones exist. Only a
+future atomic database kernel may lock and recheck complete E2 state while
+committing semantic projections.
+
 ## Existing installation preparation
 
 Production remains pinned to `0006_worker_maintenance_health` and

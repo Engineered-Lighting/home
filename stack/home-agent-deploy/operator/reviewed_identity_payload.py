@@ -14,7 +14,7 @@ this verifier before a finalizer entrypoint can ever be enabled.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import hashlib
 import hmac
@@ -159,7 +159,7 @@ class VerificationPolicy:
     review_key_fingerprint: str
     finalization_public_key: Ed25519PublicKey
     finalization_key_fingerprint: str
-    commitment_key: bytes
+    commitment_key: bytes = field(repr=False)
     commitment_key_epoch: int
     commitment_key_fingerprint: str
     policy_version: str
@@ -237,8 +237,8 @@ class VerifiedProjectionBundle:
     run_id: uuid.UUID
     review_expires_at: datetime
     review_expired: bool
-    _projections_canonical: bytes
-    _finalization_proposal_canonical: bytes
+    _projections_canonical: bytes = field(repr=False)
+    _finalization_proposal_canonical: bytes = field(repr=False)
     verified_at: datetime
 
     @property
@@ -285,7 +285,7 @@ class VerifiedFinalizerDocument:
 
     run_id: uuid.UUID
     finalization_id: uuid.UUID
-    _document_canonical: bytes
+    _document_canonical: bytes = field(repr=False)
     verified_at: datetime
     review_expired: bool
     auto_expiry_elapsed: bool

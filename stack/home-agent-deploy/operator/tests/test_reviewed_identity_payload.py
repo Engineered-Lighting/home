@@ -389,6 +389,30 @@ class ReviewedIdentityPayloadTests(unittest.TestCase):
             "Marcelo",
         )
 
+    def test_debug_representations_redact_keys_and_private_documents(self) -> None:
+        raw, sources = self.fixture.build()
+        bundle = verifier.verify_projection_bundle(
+            raw, source_records=sources, policy=self.fixture.policy
+        )
+        finalizer = verifier.verify_finalization_envelope(
+            bundle,
+            self._finalization_envelope(bundle),
+            policy=self.fixture.policy,
+        )
+
+        policy_repr = repr(self.fixture.policy)
+        bundle_repr = repr(bundle)
+        finalizer_repr = repr(finalizer)
+        self.assertNotIn(repr(self.fixture.commitment_key), policy_repr)
+        self.assertNotIn("commitment_key=", policy_repr)
+        for rendered in (bundle_repr, finalizer_repr):
+            self.assertNotIn("Marcelo", rendered)
+            self.assertNotIn("legacy-identity-store", rendered)
+            self.assertNotIn(PERSON_ID, rendered)
+            self.assertNotIn("_projections_canonical", rendered)
+            self.assertNotIn("_finalization_proposal_canonical", rendered)
+            self.assertNotIn("_document_canonical", rendered)
+
     def test_finalization_signature_cannot_be_replaced_by_review_signature(
         self,
     ) -> None:

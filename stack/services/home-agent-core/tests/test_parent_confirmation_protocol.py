@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import dataclasses
 import inspect
 import re
@@ -670,4 +671,20 @@ def test_protocol_has_no_production_import_or_route() -> None:
             source = path.read_text(encoding="utf-8")
             inspected.append(path)
             assert not any(pattern.search(source) for pattern in forbidden), path
+            if path.suffix.lower() == ".py":
+                tree = ast.parse(source, filename=str(path))
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Import):
+                        assert all(
+                            not alias.name.endswith("parent_confirmation")
+                            for alias in node.names
+                        ), path
+                    if isinstance(node, ast.ImportFrom):
+                        assert not (
+                            (node.module or "").endswith("parent_confirmation")
+                            or any(
+                                alias.name == "parent_confirmation"
+                                for alias in node.names
+                            )
+                        ), path
     assert inspected

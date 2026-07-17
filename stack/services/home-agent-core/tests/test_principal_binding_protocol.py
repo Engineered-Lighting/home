@@ -6,10 +6,12 @@ import inspect
 import re
 import uuid
 from datetime import UTC, datetime, timedelta, timezone
+from itertools import combinations
 from pathlib import Path
 
 import pytest
 
+import app.principal_binding as principal_binding
 from app.principal_binding import (
     CAPABILITY_STATUS,
     CONTRACT_VERSION,
@@ -18,7 +20,7 @@ from app.principal_binding import (
     RULE_VERSION,
     AuthenticatedHaUserSnapshot,
     DormantPrincipalBindingIntent,
-    FinalizedMeCandidate,
+    ReviewedPersonNominee,
     PrincipalBindingContext,
     PrincipalBindingGraphSnapshot,
     PrincipalBindingPreview,
@@ -59,24 +61,24 @@ def _ha_user() -> AuthenticatedHaUserSnapshot:
     )
 
 
-def _candidate(*, person_id: uuid.UUID = _stable_id(4)) -> FinalizedMeCandidate:
-    return FinalizedMeCandidate(
-        candidate_id=_new_id(5),
+def _nominee(*, person_id: uuid.UUID = _stable_id(4)) -> ReviewedPersonNominee:
+    return ReviewedPersonNominee(
+        nominee_id=_new_id(5),
         migration_run_id=_new_id(6),
-        finalization_id=_new_id(7),
+        finalization_id=_new_id(6),
         person_id=person_id,
         person_display_label="Marcelo",
-        candidate_commitment=_digest("c"),
+        nominee_commitment=_digest("c"),
         projection_commitment=_digest("d"),
         finalization_commitment=_digest("e"),
         review_receipt_commitment=_digest("f"),
         privacy_state_commitment=_digest("1"),
         erasure_state_commitment=_digest("2"),
         status_observed_at=BASE_TIME,
-        candidate_role="me",
+        nomination_role="operator_review_candidate",
         review_status="reviewed",
         finalization_status="finalized",
-        authority_status="non_authoritative_candidate",
+        nomination_authority_status="unverified",
         person_status="active",
         retrieval_blocked=False,
         privacy_directives=(),
@@ -96,12 +98,12 @@ def _graph(
         person_id=person_id,
         graph_digest=_digest("3"),
         observed_at=BASE_TIME,
-        finalized_me_candidate_count=1,
+        reviewed_person_nominee_count=1,
         active_ha_user_binding_count=0,
         active_person_binding_count=0,
         other_open_request_count=0,
         other_ready_proposal_count=0,
-        conflicting_me_candidate_count=0,
+        conflicting_person_nominee_count=0,
     )
 
 
@@ -109,7 +111,7 @@ def _context() -> PrincipalBindingContext:
     return PrincipalBindingContext(
         request_id=_new_id(1),
         ha_user=_ha_user(),
-        me_candidates=(_candidate(),),
+        person_nominees=(_nominee(),),
         graph=_graph(),
         policy_version="home-agent-mvp-v1",
         policy_digest=_digest("4"),
@@ -152,15 +154,21 @@ def test_compiler_is_private_dormant_and_non_authoritative() -> None:
     assert preview.deployment_status == DEPLOYMENT_STATUS == "non_deployable"
     assert preview.capability_status == CAPABILITY_STATUS == "capability_disabled"
     assert preview.privacy_scope == "private"
-    assert preview.candidate_count == 1
+    assert preview.nominee_count == 1
     assert preview.authoritative is False
     assert preview.commit_ready is False
     assert preview.enables_writes is False
+    assert preview.me_identity_established is False
+    assert preview.binding_created is False
     assert preview.location_memory_enabled is False
     assert preview.travel_greetings_enabled is False
     assert preview.external_receipts_verified is False
+    assert preview.fresh_state_origin_verified is False
+    assert preview.nomination_authority_verified is False
     assert "Marcelo’s Home Assistant account" in preview.statement
     assert "Marcelo" in preview.statement
+    assert "reviewed person Marcelo proposed as your identity" in preview.statement
+    assert "not an established 'me' identity" in preview.safety_note
     assert "creates no binding" in preview.safety_note
     assert len(preview.preview_digest) == 64
     for payload in (
@@ -169,6 +177,11 @@ def test_compiler_is_private_dormant_and_non_authoritative() -> None:
     ):
         assert payload["location_memory_enabled"] is False
         assert payload["travel_greetings_enabled"] is False
+        assert payload["me_identity_established"] is False
+        assert payload["binding_created"] is False
+        assert payload["external_receipts_verified"] is False
+        assert payload["fresh_state_origin_verified"] is False
+        assert payload["nomination_authority_verified"] is False
 
 
 def test_verifier_returns_only_a_locked_dormant_intent() -> None:
@@ -177,13 +190,14 @@ def test_verifier_returns_only_a_locked_dormant_intent() -> None:
     assert intent.contract_version == CONTRACT_VERSION
     assert intent.rule_version == RULE_VERSION
     assert intent.deployment_status == "non_deployable"
-    assert intent.candidate_count == 1
+    assert intent.nominee_count == 1
     assert intent.requires_serializable_commit is True
     assert intent.requires_fresh_authenticated_ha_snapshot is True
     assert intent.requires_fresh_binding_graph_snapshot is True
     assert intent.requires_transaction_time_state_read is True
     assert intent.requires_external_authenticated_gesture is True
     assert intent.requires_single_use_artifact_consumption is True
+    assert intent.me_identity_established is False
     assert intent.binding_created is False
     assert intent.authoritative is False
     assert intent.commit_ready is False
@@ -192,32 +206,231 @@ def test_verifier_returns_only_a_locked_dormant_intent() -> None:
     assert intent.travel_greetings_enabled is False
     assert intent.external_receipts_verified is False
     assert intent.fresh_state_origin_verified is False
+    assert intent.nomination_authority_verified is False
     assert len(intent.verification_state_digest) == 64
     assert intent.capability_status == "capability_disabled"
 
 
-@pytest.mark.parametrize("candidates", [(), (_candidate(), _candidate())])
-def test_exactly_one_me_candidate_is_required(
-    candidates: tuple[FinalizedMeCandidate, ...],
+def test_absent_identity_and_authority_claims_are_hmac_bound(monkeypatch) -> None:
+    captured: list[dict[str, object]] = []
+    canonical_json = principal_binding.canonical_json
+
+    def capture(value: dict[str, object]) -> bytes:
+        captured.append(value)
+        return canonical_json(value)
+
+    monkeypatch.setattr(principal_binding, "canonical_json", capture)
+    _verify()
+
+    materials = {
+        value["domain"]: value
+        for value in captured
+        if isinstance(value.get("domain"), str)
+    }
+    locked_fields = (
+        "me_identity_established",
+        "binding_created",
+        "external_receipts_verified",
+        "fresh_state_origin_verified",
+        "nomination_authority_verified",
+    )
+    for domain in (
+        "home-agent:principal-binding:dormant-preview:v2",
+        "home-agent:principal-binding:fresh-verification-state:v2",
+    ):
+        locked = materials[domain]["locked_authority"]
+        assert isinstance(locked, dict)
+        assert {field: locked[field] for field in locked_fields} == {
+            field: False for field in locked_fields
+        }
+
+
+@pytest.mark.parametrize("nominees", [(), (_nominee(), _nominee())])
+def test_exactly_one_reviewed_person_nominee_is_required(
+    nominees: tuple[ReviewedPersonNominee, ...],
 ) -> None:
-    with pytest.raises(PrincipalBindingProtocolError, match="invalid_me_candidate_set"):
-        _compile(dataclasses.replace(_context(), me_candidates=candidates))
+    with pytest.raises(
+        PrincipalBindingProtocolError, match="invalid_person_nominee_set"
+    ):
+        _compile(dataclasses.replace(_context(), person_nominees=nominees))
 
 
-def test_candidate_container_must_be_an_exact_tuple() -> None:
-    class DeceptiveTuple(tuple[FinalizedMeCandidate, ...]):
+def test_nominee_container_must_be_an_exact_tuple() -> None:
+    class DeceptiveTuple(tuple[ReviewedPersonNominee, ...]):
         def __len__(self) -> int:
             return 1
 
     for malformed in (
-        [_candidate()],
-        DeceptiveTuple((_candidate(), _candidate(person_id=_stable_id(99)))),
+        [_nominee()],
+        DeceptiveTuple((_nominee(), _nominee(person_id=_stable_id(99)))),
     ):
-        context = dataclasses.replace(_context(), me_candidates=malformed)
+        context = dataclasses.replace(_context(), person_nominees=malformed)
         with pytest.raises(
-            PrincipalBindingProtocolError, match="invalid_me_candidate_set"
+            PrincipalBindingProtocolError, match="invalid_person_nominee_set"
         ):
             _compile(context)
+
+
+def test_protocol_rejects_deceptive_string_subclasses() -> None:
+    class DeceptiveStr(str):
+        def __eq__(self, other: object) -> bool:
+            return True
+
+        def __ne__(self, other: object) -> bool:
+            return False
+
+        __hash__ = str.__hash__
+
+    context = _context()
+    deceptive_ha = dataclasses.replace(
+        context.ha_user,
+        snapshot_origin=DeceptiveStr("client_claim"),
+        authentication_status=DeceptiveStr("anonymous"),
+        user_status=DeceptiveStr("inactive"),
+    )
+    with pytest.raises(PrincipalBindingProtocolError, match="invalid_ha_snapshot"):
+        _compile(dataclasses.replace(context, ha_user=deceptive_ha))
+
+    deceptive_nominee = dataclasses.replace(
+        context.person_nominees[0],
+        nomination_authority_status=DeceptiveStr("authoritative"),
+    )
+    with pytest.raises(PrincipalBindingProtocolError, match="invalid_person_nominee"):
+        _compile(dataclasses.replace(context, person_nominees=(deceptive_nominee,)))
+
+    deceptive_label = dataclasses.replace(
+        context.person_nominees[0],
+        person_display_label=DeceptiveStr("Marcelo"),
+    )
+    with pytest.raises(PrincipalBindingProtocolError, match="invalid_display_label"):
+        _compile(dataclasses.replace(context, person_nominees=(deceptive_label,)))
+
+    deceptive_commitment = dataclasses.replace(
+        context.person_nominees[0],
+        nominee_commitment=DeceptiveStr(_digest("c")),
+    )
+    with pytest.raises(PrincipalBindingProtocolError, match="invalid_commitment"):
+        _compile(dataclasses.replace(context, person_nominees=(deceptive_commitment,)))
+
+    deceptive_directive = dataclasses.replace(
+        context.person_nominees[0],
+        privacy_directives=(DeceptiveStr("private"),),
+    )
+    with pytest.raises(PrincipalBindingProtocolError, match="privacy_blocked"):
+        _compile(dataclasses.replace(context, person_nominees=(deceptive_directive,)))
+
+    with pytest.raises(PrincipalBindingProtocolError, match="invalid_policy"):
+        _compile(
+            dataclasses.replace(
+                context, policy_version=DeceptiveStr(context.policy_version)
+            )
+        )
+
+
+def test_protocol_rejects_deceptive_uuid_subclasses() -> None:
+    class DeceptiveUuid(uuid.UUID):
+        def __eq__(self, other: object) -> bool:
+            return True
+
+        def __ne__(self, other: object) -> bool:
+            return False
+
+        __hash__ = uuid.UUID.__hash__
+
+    context = _context()
+    graph = dataclasses.replace(
+        context.graph,
+        person_id=DeceptiveUuid(str(_stable_id(99))),
+    )
+    with pytest.raises(PrincipalBindingProtocolError, match="invalid_identifier"):
+        _compile(dataclasses.replace(context, graph=graph))
+
+
+def test_protocol_rejects_deceptive_datetime_subclasses() -> None:
+    class DeceptiveDatetime(datetime):
+        def astimezone(self, tz: object = None) -> datetime:
+            return BASE_TIME
+
+    deceptive_time = DeceptiveDatetime(2026, 7, 17, 15, 0, 0, 123456, tzinfo=UTC)
+    context = _context()
+    ha_user = dataclasses.replace(context.ha_user, observed_at=deceptive_time)
+    with pytest.raises(
+        PrincipalBindingProtocolError, match="invalid_trusted_state_time"
+    ):
+        _compile(dataclasses.replace(context, ha_user=ha_user))
+
+    with pytest.raises(
+        PrincipalBindingProtocolError, match="invalid_trusted_operation_time"
+    ):
+        compile_principal_binding_preview(
+            context,
+            digest_key=KEY,
+            trusted_operation_time=deceptive_time,
+        )
+
+
+def test_migration_run_and_finalization_share_one_activity_id() -> None:
+    context = _context()
+    nominee = context.person_nominees[0]
+    assert nominee.migration_run_id == nominee.finalization_id
+    assert _compile(context).nominee_count == 1
+
+    mismatched = dataclasses.replace(nominee, finalization_id=_new_id(7))
+    with pytest.raises(PrincipalBindingProtocolError, match="invalid_identifier"):
+        _compile(dataclasses.replace(context, person_nominees=(mismatched,)))
+
+
+_SEMANTIC_ID_ROLES = (
+    "request",
+    "snapshot",
+    "nominee",
+    "run_and_finalization",
+    "ha_user",
+    "person",
+)
+
+
+@pytest.mark.parametrize(("first", "second"), combinations(_SEMANTIC_ID_ROLES, 2))
+def test_distinct_semantic_id_roles_cannot_collide(first: str, second: str) -> None:
+    context = _context()
+    nominee = context.person_nominees[0]
+    semantic_ids = {
+        "request": context.request_id,
+        "snapshot": context.ha_user.snapshot_id,
+        "nominee": nominee.nominee_id,
+        "run_and_finalization": nominee.migration_run_id,
+        "ha_user": context.ha_user.ha_user_id,
+        "person": nominee.person_id,
+    }
+    collision = _new_id(99)
+    semantic_ids[first] = collision
+    semantic_ids[second] = collision
+    ha_user = dataclasses.replace(
+        context.ha_user,
+        snapshot_id=semantic_ids["snapshot"],
+        ha_user_id=semantic_ids["ha_user"],
+    )
+    nominee = dataclasses.replace(
+        nominee,
+        nominee_id=semantic_ids["nominee"],
+        migration_run_id=semantic_ids["run_and_finalization"],
+        finalization_id=semantic_ids["run_and_finalization"],
+        person_id=semantic_ids["person"],
+    )
+    graph = dataclasses.replace(
+        context.graph,
+        ha_user_id=semantic_ids["ha_user"],
+        person_id=semantic_ids["person"],
+    )
+    changed = dataclasses.replace(
+        context,
+        request_id=semantic_ids["request"],
+        ha_user=ha_user,
+        person_nominees=(nominee,),
+        graph=graph,
+    )
+    with pytest.raises(PrincipalBindingProtocolError, match="invalid_identifier"):
+        _compile(changed)
 
 
 @pytest.mark.parametrize(
@@ -240,26 +453,26 @@ def test_only_the_server_authenticated_active_ha_snapshot_is_accepted(
 @pytest.mark.parametrize(
     ("field", "replacement"),
     [
-        ("candidate_role", "household_member"),
+        ("nomination_role", "household_member"),
         ("review_status", "pending"),
         ("finalization_status", "draft"),
-        ("authority_status", "authoritative"),
+        ("nomination_authority_status", "authoritative"),
         ("person_status", "archived"),
     ],
 )
-def test_candidate_must_be_reviewed_finalized_active_me_only(
+def test_nominee_must_be_an_unverified_reviewed_operator_candidate(
     field: str, replacement: str
 ) -> None:
     context = _context()
-    candidate = dataclasses.replace(context.me_candidates[0], **{field: replacement})
-    with pytest.raises(PrincipalBindingProtocolError, match="invalid_me_candidate"):
-        _compile(dataclasses.replace(context, me_candidates=(candidate,)))
+    nominee = dataclasses.replace(context.person_nominees[0], **{field: replacement})
+    with pytest.raises(PrincipalBindingProtocolError, match="invalid_person_nominee"):
+        _compile(dataclasses.replace(context, person_nominees=(nominee,)))
 
 
 @pytest.mark.parametrize(
     "field",
     [
-        "candidate_commitment",
+        "nominee_commitment",
         "projection_commitment",
         "finalization_commitment",
         "review_receipt_commitment",
@@ -267,11 +480,11 @@ def test_candidate_must_be_reviewed_finalized_active_me_only(
         "erasure_state_commitment",
     ],
 )
-def test_every_candidate_commitment_is_required(field: str) -> None:
+def test_every_nominee_commitment_is_required(field: str) -> None:
     context = _context()
-    candidate = dataclasses.replace(context.me_candidates[0], **{field: "private"})
+    nominee = dataclasses.replace(context.person_nominees[0], **{field: "private"})
     with pytest.raises(PrincipalBindingProtocolError, match="invalid_commitment"):
-        _compile(dataclasses.replace(context, me_candidates=(candidate,)))
+        _compile(dataclasses.replace(context, person_nominees=(nominee,)))
 
 
 @pytest.mark.parametrize(
@@ -281,7 +494,7 @@ def test_every_candidate_commitment_is_required(field: str) -> None:
         "active_person_binding_count",
         "other_open_request_count",
         "other_ready_proposal_count",
-        "conflicting_me_candidate_count",
+        "conflicting_person_nominee_count",
     ],
 )
 def test_any_current_graph_conflict_fails_closed(field: str) -> None:
@@ -292,10 +505,14 @@ def test_any_current_graph_conflict_fails_closed(field: str) -> None:
 
 
 @pytest.mark.parametrize("count", [0, 2, -1, True])
-def test_graph_must_report_exactly_one_finalized_me_candidate(count: object) -> None:
+def test_graph_must_report_exactly_one_reviewed_person_nominee(
+    count: object,
+) -> None:
     context = _context()
-    graph = dataclasses.replace(context.graph, finalized_me_candidate_count=count)
-    with pytest.raises(PrincipalBindingProtocolError, match="invalid_me_candidate_set"):
+    graph = dataclasses.replace(context.graph, reviewed_person_nominee_count=count)
+    with pytest.raises(
+        PrincipalBindingProtocolError, match="invalid_person_nominee_set"
+    ):
         _compile(dataclasses.replace(context, graph=graph))
 
 
@@ -317,46 +534,46 @@ def test_graph_subjects_must_match_the_server_snapshots() -> None:
 )
 def test_blocking_or_unknown_privacy_directives_fail_closed(directive: str) -> None:
     context = _context()
-    candidate = dataclasses.replace(
-        context.me_candidates[0], privacy_directives=(directive,)
+    nominee = dataclasses.replace(
+        context.person_nominees[0], privacy_directives=(directive,)
     )
     with pytest.raises(PrincipalBindingProtocolError, match="privacy_blocked"):
-        _compile(dataclasses.replace(context, me_candidates=(candidate,)))
+        _compile(dataclasses.replace(context, person_nominees=(nominee,)))
 
 
 def test_no_directive_is_eligible_before_subject_binding() -> None:
     assert _compile().privacy_scope == "private"
     context = _context()
-    candidate = dataclasses.replace(
-        context.me_candidates[0], privacy_directives=("private", "private")
+    nominee = dataclasses.replace(
+        context.person_nominees[0], privacy_directives=("private", "private")
     )
     with pytest.raises(PrincipalBindingProtocolError, match="privacy_blocked"):
-        _compile(dataclasses.replace(context, me_candidates=(candidate,)))
+        _compile(dataclasses.replace(context, person_nominees=(nominee,)))
 
     for malformed in ([], "", set()):
-        candidate = dataclasses.replace(
-            context.me_candidates[0], privacy_directives=malformed
+        nominee = dataclasses.replace(
+            context.person_nominees[0], privacy_directives=malformed
         )
         with pytest.raises(PrincipalBindingProtocolError, match="privacy_blocked"):
-            _compile(dataclasses.replace(context, me_candidates=(candidate,)))
+            _compile(dataclasses.replace(context, person_nominees=(nominee,)))
 
 
 def test_retrieval_or_erasure_state_blocks_the_preview() -> None:
     context = _context()
     retrieval_blocked = dataclasses.replace(
-        context.me_candidates[0], retrieval_blocked=True
+        context.person_nominees[0], retrieval_blocked=True
     )
     with pytest.raises(PrincipalBindingProtocolError, match="privacy_blocked"):
-        _compile(dataclasses.replace(context, me_candidates=(retrieval_blocked,)))
+        _compile(dataclasses.replace(context, person_nominees=(retrieval_blocked,)))
 
     for replacement in (
         {"erasure_status": "pending"},
         {"open_erasure_request_count": 1},
         {"pending_erasure_task_count": 1},
     ):
-        candidate = dataclasses.replace(context.me_candidates[0], **replacement)
+        nominee = dataclasses.replace(context.person_nominees[0], **replacement)
         with pytest.raises(PrincipalBindingProtocolError, match="erasure_blocked"):
-            _compile(dataclasses.replace(context, me_candidates=(candidate,)))
+            _compile(dataclasses.replace(context, person_nominees=(nominee,)))
 
 
 def test_preview_and_trusted_state_windows_are_strictly_bounded() -> None:
@@ -417,10 +634,10 @@ def test_digest_is_deterministic_and_timezone_canonical() -> None:
         ha_user=dataclasses.replace(
             context.ha_user, observed_at=context.ha_user.observed_at.astimezone(brazil)
         ),
-        me_candidates=(
+        person_nominees=(
             dataclasses.replace(
-                context.me_candidates[0],
-                status_observed_at=context.me_candidates[
+                context.person_nominees[0],
+                status_observed_at=context.person_nominees[
                     0
                 ].status_observed_at.astimezone(brazil),
             ),
@@ -453,7 +670,7 @@ def test_ha_snapshot_axes_are_digest_bound(field: str, replacement: object) -> N
     ("field", "replacement"),
     [
         ("person_display_label", "Marcelo Lima"),
-        ("candidate_commitment", _digest("7")),
+        ("nominee_commitment", _digest("7")),
         ("projection_commitment", _digest("8")),
         ("finalization_commitment", _digest("9")),
         ("review_receipt_commitment", _digest("a")),
@@ -461,10 +678,10 @@ def test_ha_snapshot_axes_are_digest_bound(field: str, replacement: object) -> N
         ("erasure_state_commitment", _digest("b")),
     ],
 )
-def test_candidate_axes_are_digest_bound(field: str, replacement: object) -> None:
+def test_nominee_axes_are_digest_bound(field: str, replacement: object) -> None:
     context = _context()
-    candidate = dataclasses.replace(context.me_candidates[0], **{field: replacement})
-    changed = dataclasses.replace(context, me_candidates=(candidate,))
+    nominee = dataclasses.replace(context.person_nominees[0], **{field: replacement})
+    changed = dataclasses.replace(context, person_nominees=(nominee,))
     assert _compile(changed).preview_digest != _compile(context).preview_digest
 
 
@@ -520,9 +737,9 @@ def test_verification_accepts_new_read_metadata_with_unchanged_semantics() -> No
             snapshot_commitment=_digest("5"),
             observed_at=refreshed_at,
         ),
-        me_candidates=(
+        person_nominees=(
             dataclasses.replace(
-                original.me_candidates[0], status_observed_at=refreshed_at
+                original.person_nominees[0], status_observed_at=refreshed_at
             ),
         ),
         graph=dataclasses.replace(original.graph, observed_at=refreshed_at),
@@ -537,7 +754,7 @@ def test_verification_accepts_new_read_metadata_with_unchanged_semantics() -> No
     assert intent.proposal_digest == preview.preview_digest
     assert intent.ha_snapshot_id == _new_id(20)
     assert intent.ha_snapshot_observed_at == refreshed_at
-    assert intent.candidate_status_observed_at == refreshed_at
+    assert intent.nominee_status_observed_at == refreshed_at
     assert intent.graph_observed_at == refreshed_at
 
     original_state = verify_principal_binding_preview(
@@ -662,21 +879,21 @@ def test_digest_tampering_and_fresh_state_drift_are_rejected() -> None:
 def test_unicode_labels_are_nfc_and_control_free() -> None:
     context = _context()
     valid = dataclasses.replace(
-        context.me_candidates[0], person_display_label="Marcélo"
+        context.person_nominees[0], person_display_label="Marcélo"
     )
     assert (
         "Marcélo"
-        in _compile(dataclasses.replace(context, me_candidates=(valid,))).statement
+        in _compile(dataclasses.replace(context, person_nominees=(valid,))).statement
     )
 
     for label in ("Marce\u0301lo", "Marcelo\u202e", " Marcelo", ""):
-        candidate = dataclasses.replace(
-            context.me_candidates[0], person_display_label=label
+        nominee = dataclasses.replace(
+            context.person_nominees[0], person_display_label=label
         )
         with pytest.raises(
             PrincipalBindingProtocolError, match="invalid_display_label"
         ):
-            _compile(dataclasses.replace(context, me_candidates=(candidate,)))
+            _compile(dataclasses.replace(context, person_nominees=(nominee,)))
 
 
 def test_errors_and_audit_payload_are_content_free() -> None:
@@ -686,7 +903,7 @@ def test_errors_and_audit_payload_are_content_free() -> None:
         _compile(dataclasses.replace(context, graph=bad))
     assert str(exc.value) == "binding_graph_conflict"
     assert "Marcelo" not in str(exc.value)
-    assert str(context.me_candidates[0].person_id) not in str(exc.value)
+    assert str(context.person_nominees[0].person_id) not in str(exc.value)
 
     preview = _compile(context)
     private = str(preview.private_payload())
@@ -694,7 +911,7 @@ def test_errors_and_audit_payload_are_content_free() -> None:
     assert "Marcelo" in private
     assert "Marcelo" not in audit
     assert str(context.ha_user.ha_user_id) not in audit
-    assert str(context.me_candidates[0].person_id) not in audit
+    assert str(context.person_nominees[0].person_id) not in audit
     assert not hasattr(preview, "public_payload")
 
 
@@ -706,8 +923,8 @@ def test_sensitive_repr_output_is_redacted() -> None:
     for sensitive in (
         "Marcelo",
         str(context.ha_user.ha_user_id),
-        str(context.me_candidates[0].person_id),
-        context.me_candidates[0].candidate_commitment,
+        str(context.person_nominees[0].person_id),
+        context.person_nominees[0].nominee_commitment,
         context.graph.graph_digest,
         preview.preview_digest,
         intent.verification_state_digest,
@@ -723,18 +940,19 @@ def test_locked_safety_fields_cannot_be_replaced() -> None:
             ("authoritative", True),
             ("commit_ready", True),
             ("enables_writes", True),
+            ("me_identity_established", True),
+            ("binding_created", True),
             ("location_memory_enabled", True),
             ("travel_greetings_enabled", True),
+            ("external_receipts_verified", True),
+            ("fresh_state_origin_verified", True),
+            ("nomination_authority_verified", True),
             ("capability_status", "enabled"),
             ("deployment_status", "deployable"),
         ):
             with pytest.raises(ValueError):
                 dataclasses.replace(target, **{field_name: value})
 
-    with pytest.raises(ValueError):
-        dataclasses.replace(intent, binding_created=True)
-    with pytest.raises(ValueError):
-        dataclasses.replace(intent, fresh_state_origin_verified=True)
     with pytest.raises(ValueError):
         dataclasses.replace(intent, requires_transaction_time_state_read=False)
 
@@ -760,7 +978,7 @@ def test_protocol_accepts_no_client_authority_or_confirmation_fields() -> None:
         item.name
         for shape in (
             AuthenticatedHaUserSnapshot,
-            FinalizedMeCandidate,
+            ReviewedPersonNominee,
             PrincipalBindingGraphSnapshot,
             PrincipalBindingContext,
         )

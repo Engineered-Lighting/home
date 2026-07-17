@@ -3,9 +3,11 @@
 This module authenticates no Home Assistant request, verifies no external
 receipt, consumes no gesture, and writes nothing. It binds an already
 server-supplied authenticated-HA snapshot to a private preview and checks that
-preview against an age-bounded current context. It cannot prove that context's
-origin. A future deployable kernel must re-read the same state inside a
-SERIALIZABLE transaction and use a new contract version.
+preview against an age-bounded current context. A reviewed person nominee is
+only an operator-review candidate; it is not an established ``me`` identity.
+This module cannot prove the context's origin or nomination authority. A future
+deployable kernel must re-read the same state inside a SERIALIZABLE transaction
+and use a new contract version.
 """
 
 from __future__ import annotations
@@ -22,8 +24,8 @@ from typing import Iterable, NoReturn
 from .crypto import canonical_json
 
 
-CONTRACT_VERSION = "dormant-principal-binding-preview-v1"
-RULE_VERSION = "reviewed-me-principal-binding-compiler-v1"
+CONTRACT_VERSION = "dormant-principal-binding-preview-v2"
+RULE_VERSION = "reviewed-person-nominee-principal-binding-compiler-v2"
 DEPLOYMENT_STATUS = "non_deployable"
 CAPABILITY_STATUS = "capability_disabled"
 PRIVACY_SCOPE = "private"
@@ -34,7 +36,7 @@ KNOWN_PRIVACY_DIRECTIVES = frozenset(
     {"do_not_track", "ignored", "silent", "private", "auto_expire"}
 )
 # Before the principal binding exists, the caller has not yet proven that it is
-# the private candidate's subject. Every directive therefore blocks display,
+# the private nominee's subject. Every directive therefore blocks display,
 # including ``private``.
 BLOCKING_PRIVACY_DIRECTIVES = KNOWN_PRIVACY_DIRECTIVES
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -69,30 +71,32 @@ class AuthenticatedHaUserSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
-class FinalizedMeCandidate:
-    """One reviewed, finalized, still non-authoritative semantic candidate.
+class ReviewedPersonNominee:
+    """One reviewed person proposed as the authenticated user's identity.
 
     The privacy and erasure commitments describe semantic state and must omit
     the per-read ``status_observed_at`` metadata so unchanged state can be
-    checked against a fresh observation.
+    checked against a fresh observation. The nominee remains an
+    ``operator_review_candidate``; this object establishes neither nomination
+    authority nor a ``me`` identity.
     """
 
-    candidate_id: uuid.UUID = field(repr=False)
+    nominee_id: uuid.UUID = field(repr=False)
     migration_run_id: uuid.UUID = field(repr=False)
     finalization_id: uuid.UUID = field(repr=False)
     person_id: uuid.UUID = field(repr=False)
     person_display_label: str = field(repr=False)
-    candidate_commitment: str = field(repr=False)
+    nominee_commitment: str = field(repr=False)
     projection_commitment: str = field(repr=False)
     finalization_commitment: str = field(repr=False)
     review_receipt_commitment: str = field(repr=False)
     privacy_state_commitment: str = field(repr=False)
     erasure_state_commitment: str = field(repr=False)
     status_observed_at: datetime = field(repr=False)
-    candidate_role: str
+    nomination_role: str
     review_status: str
     finalization_status: str
-    authority_status: str
+    nomination_authority_status: str
     person_status: str
     retrieval_blocked: bool
     privacy_directives: tuple[str, ...] = field(default=(), repr=False)
@@ -112,12 +116,12 @@ class PrincipalBindingGraphSnapshot:
     person_id: uuid.UUID = field(repr=False)
     graph_digest: str = field(repr=False)
     observed_at: datetime = field(repr=False)
-    finalized_me_candidate_count: int
+    reviewed_person_nominee_count: int
     active_ha_user_binding_count: int
     active_person_binding_count: int
     other_open_request_count: int
     other_ready_proposal_count: int
-    conflicting_me_candidate_count: int
+    conflicting_person_nominee_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,7 +130,7 @@ class PrincipalBindingContext:
 
     request_id: uuid.UUID = field(repr=False)
     ha_user: AuthenticatedHaUserSnapshot = field(repr=False)
-    me_candidates: tuple[FinalizedMeCandidate, ...] = field(repr=False)
+    person_nominees: tuple[ReviewedPersonNominee, ...] = field(repr=False)
     graph: PrincipalBindingGraphSnapshot = field(repr=False)
     policy_version: str
     policy_digest: str = field(repr=False)
@@ -149,13 +153,17 @@ class PrincipalBindingPreview:
     rule_version: str = field(default=RULE_VERSION, init=False)
     deployment_status: str = field(default=DEPLOYMENT_STATUS, init=False)
     privacy_scope: str = field(default=PRIVACY_SCOPE, init=False)
-    candidate_count: int = field(default=1, init=False)
+    nominee_count: int = field(default=1, init=False)
     authoritative: bool = field(default=False, init=False)
     commit_ready: bool = field(default=False, init=False)
     enables_writes: bool = field(default=False, init=False)
+    me_identity_established: bool = field(default=False, init=False)
+    binding_created: bool = field(default=False, init=False)
     location_memory_enabled: bool = field(default=False, init=False)
     travel_greetings_enabled: bool = field(default=False, init=False)
     external_receipts_verified: bool = field(default=False, init=False)
+    fresh_state_origin_verified: bool = field(default=False, init=False)
+    nomination_authority_verified: bool = field(default=False, init=False)
     capability_status: str = field(default=CAPABILITY_STATUS, init=False)
 
     def private_payload(self) -> dict[str, object]:
@@ -172,13 +180,17 @@ class PrincipalBindingPreview:
             "safety_note": self.safety_note,
             "action_label": self.action_label,
             "expires_at": _utc_text(self.expires_at),
-            "candidate_count": self.candidate_count,
+            "nominee_count": self.nominee_count,
             "authoritative": self.authoritative,
             "commit_ready": self.commit_ready,
             "enables_writes": self.enables_writes,
+            "me_identity_established": self.me_identity_established,
+            "binding_created": self.binding_created,
             "location_memory_enabled": self.location_memory_enabled,
             "travel_greetings_enabled": self.travel_greetings_enabled,
             "external_receipts_verified": self.external_receipts_verified,
+            "fresh_state_origin_verified": self.fresh_state_origin_verified,
+            "nomination_authority_verified": self.nomination_authority_verified,
             "capability_status": self.capability_status,
         }
 
@@ -192,13 +204,17 @@ class PrincipalBindingPreview:
             "contract_version": self.contract_version,
             "rule_version": self.rule_version,
             "deployment_status": self.deployment_status,
-            "candidate_count": self.candidate_count,
+            "nominee_count": self.nominee_count,
             "authoritative": self.authoritative,
             "commit_ready": self.commit_ready,
             "enables_writes": self.enables_writes,
+            "me_identity_established": self.me_identity_established,
+            "binding_created": self.binding_created,
             "location_memory_enabled": self.location_memory_enabled,
             "travel_greetings_enabled": self.travel_greetings_enabled,
             "external_receipts_verified": self.external_receipts_verified,
+            "fresh_state_origin_verified": self.fresh_state_origin_verified,
+            "nomination_authority_verified": self.nomination_authority_verified,
             "capability_status": self.capability_status,
             "preview_digest": self.preview_digest,
         }
@@ -211,28 +227,29 @@ class DormantPrincipalBindingIntent:
     request_id: uuid.UUID = field(repr=False)
     ha_user_id: uuid.UUID = field(repr=False)
     person_id: uuid.UUID = field(repr=False)
-    candidate_id: uuid.UUID = field(repr=False)
+    nominee_id: uuid.UUID = field(repr=False)
     finalization_id: uuid.UUID = field(repr=False)
     ha_snapshot_id: uuid.UUID = field(repr=False)
     ha_snapshot_observed_at: datetime = field(repr=False)
-    candidate_status_observed_at: datetime = field(repr=False)
+    nominee_status_observed_at: datetime = field(repr=False)
     graph_observed_at: datetime = field(repr=False)
     verified_at: datetime = field(repr=False)
     proposal_digest: str = field(repr=False)
     verification_state_digest: str = field(repr=False)
     graph_digest: str = field(repr=False)
-    candidate_commitment: str = field(repr=False)
+    nominee_commitment: str = field(repr=False)
     finalization_commitment: str = field(repr=False)
     contract_version: str = field(default=CONTRACT_VERSION, init=False)
     rule_version: str = field(default=RULE_VERSION, init=False)
     deployment_status: str = field(default=DEPLOYMENT_STATUS, init=False)
-    candidate_count: int = field(default=1, init=False)
+    nominee_count: int = field(default=1, init=False)
     requires_serializable_commit: bool = field(default=True, init=False)
     requires_fresh_authenticated_ha_snapshot: bool = field(default=True, init=False)
     requires_fresh_binding_graph_snapshot: bool = field(default=True, init=False)
     requires_transaction_time_state_read: bool = field(default=True, init=False)
     requires_external_authenticated_gesture: bool = field(default=True, init=False)
     requires_single_use_artifact_consumption: bool = field(default=True, init=False)
+    me_identity_established: bool = field(default=False, init=False)
     binding_created: bool = field(default=False, init=False)
     authoritative: bool = field(default=False, init=False)
     commit_ready: bool = field(default=False, init=False)
@@ -241,6 +258,7 @@ class DormantPrincipalBindingIntent:
     travel_greetings_enabled: bool = field(default=False, init=False)
     external_receipts_verified: bool = field(default=False, init=False)
     fresh_state_origin_verified: bool = field(default=False, init=False)
+    nomination_authority_verified: bool = field(default=False, init=False)
     capability_status: str = field(default=CAPABILITY_STATUS, init=False)
 
 
@@ -248,7 +266,7 @@ class DormantPrincipalBindingIntent:
 class _ValidatedContext:
     ha_label: str = field(repr=False)
     person_label: str = field(repr=False)
-    candidate: FinalizedMeCandidate = field(repr=False)
+    nominee: ReviewedPersonNominee = field(repr=False)
     staged_at: datetime
     expires_at: datetime
     trusted_state_times: tuple[datetime, ...] = field(repr=False)
@@ -259,11 +277,7 @@ def _fail(code: str) -> NoReturn:
 
 
 def _require_uuid(value: uuid.UUID) -> None:
-    if (
-        not isinstance(value, uuid.UUID)
-        or value.int == 0
-        or value.variant != uuid.RFC_4122
-    ):
+    if type(value) is not uuid.UUID or value.int == 0 or value.variant != uuid.RFC_4122:
         _fail("invalid_identifier")
 
 
@@ -274,12 +288,12 @@ def _require_uuid7(value: uuid.UUID) -> None:
 
 
 def _require_hex64(value: str, *, code: str = "invalid_commitment") -> None:
-    if not isinstance(value, str) or _HEX64.fullmatch(value) is None:
+    if type(value) is not str or _HEX64.fullmatch(value) is None:
         _fail(code)
 
 
 def _utc(value: datetime, *, code: str = "invalid_time_window") -> datetime:
-    if not isinstance(value, datetime) or value.tzinfo is None:
+    if type(value) is not datetime or value.tzinfo is None:
         _fail(code)
     try:
         if value.utcoffset() is None:
@@ -294,7 +308,7 @@ def _utc_text(value: datetime) -> str:
 
 
 def _display_label(value: str) -> str:
-    if not isinstance(value, str) or value != value.strip():
+    if type(value) is not str or value != value.strip():
         _fail("invalid_display_label")
     if value != unicodedata.normalize("NFC", value):
         _fail("invalid_display_label")
@@ -309,7 +323,7 @@ def _privacy_is_eligible(directives: Iterable[str]) -> bool:
     if type(directives) is not tuple:
         return False
     observed = directives
-    if any(not isinstance(value, str) for value in observed):
+    if any(type(value) is not str for value in observed):
         return False
     directive_set = set(observed)
     return (
@@ -324,6 +338,38 @@ def _require_zero_count(value: int) -> None:
         _fail("binding_graph_conflict")
 
 
+def _require_literal(value: str, expected: str, *, code: str) -> None:
+    if type(value) is not str or value != expected:
+        _fail(code)
+
+
+def _require_semantic_id_invariants(
+    *,
+    request_id: uuid.UUID,
+    snapshot_id: uuid.UUID,
+    nominee_id: uuid.UUID,
+    migration_run_id: uuid.UUID,
+    finalization_id: uuid.UUID,
+    ha_user_id: uuid.UUID,
+    person_id: uuid.UUID,
+) -> None:
+    # The finalization is the terminal step of the same signed migration-run
+    # activity, so those two fields intentionally share one UUID. Every other
+    # identifier names a distinct semantic entity or activity.
+    if migration_run_id != finalization_id:
+        _fail("invalid_identifier")
+    semantic_ids = (
+        request_id,
+        snapshot_id,
+        nominee_id,
+        migration_run_id,
+        ha_user_id,
+        person_id,
+    )
+    if len(set(semantic_ids)) != len(semantic_ids):
+        _fail("invalid_identifier")
+
+
 def _validate_context(context: PrincipalBindingContext) -> _ValidatedContext:
     if type(context) is not PrincipalBindingContext:
         _fail("invalid_context")
@@ -336,54 +382,72 @@ def _validate_context(context: PrincipalBindingContext) -> _ValidatedContext:
     ha_user = context.ha_user
     _require_uuid7(ha_user.snapshot_id)
     _require_uuid(ha_user.ha_user_id)
-    if (
-        ha_user.snapshot_origin != HA_SNAPSHOT_ORIGIN
-        or ha_user.authentication_status != "authenticated"
-        or ha_user.user_status != "active"
-    ):
-        _fail("invalid_ha_snapshot")
+    _require_literal(
+        ha_user.snapshot_origin, HA_SNAPSHOT_ORIGIN, code="invalid_ha_snapshot"
+    )
+    _require_literal(
+        ha_user.authentication_status, "authenticated", code="invalid_ha_snapshot"
+    )
+    _require_literal(ha_user.user_status, "active", code="invalid_ha_snapshot")
     ha_label = _display_label(ha_user.display_label)
     _require_hex64(ha_user.snapshot_commitment)
     _require_hex64(ha_user.authorization_commitment)
 
-    if type(context.me_candidates) is not tuple or len(context.me_candidates) != 1:
-        _fail("invalid_me_candidate_set")
-    candidate = context.me_candidates[0]
-    if type(candidate) is not FinalizedMeCandidate:
-        _fail("invalid_me_candidate")
-    _require_uuid7(candidate.candidate_id)
-    _require_uuid7(candidate.migration_run_id)
-    _require_uuid7(candidate.finalization_id)
-    _require_uuid(candidate.person_id)
-    if (
-        candidate.candidate_role != "me"
-        or candidate.review_status != "reviewed"
-        or candidate.finalization_status != "finalized"
-        or candidate.authority_status != "non_authoritative_candidate"
-        or candidate.person_status != "active"
-        or type(candidate.retrieval_blocked) is not bool
-    ):
-        _fail("invalid_me_candidate")
-    if candidate.retrieval_blocked:
+    if type(context.person_nominees) is not tuple or len(context.person_nominees) != 1:
+        _fail("invalid_person_nominee_set")
+    nominee = context.person_nominees[0]
+    if type(nominee) is not ReviewedPersonNominee:
+        _fail("invalid_person_nominee")
+    _require_uuid7(nominee.nominee_id)
+    _require_uuid7(nominee.migration_run_id)
+    _require_uuid7(nominee.finalization_id)
+    _require_uuid(nominee.person_id)
+    _require_semantic_id_invariants(
+        request_id=context.request_id,
+        snapshot_id=ha_user.snapshot_id,
+        nominee_id=nominee.nominee_id,
+        migration_run_id=nominee.migration_run_id,
+        finalization_id=nominee.finalization_id,
+        ha_user_id=ha_user.ha_user_id,
+        person_id=nominee.person_id,
+    )
+    _require_literal(
+        nominee.nomination_role,
+        "operator_review_candidate",
+        code="invalid_person_nominee",
+    )
+    _require_literal(nominee.review_status, "reviewed", code="invalid_person_nominee")
+    _require_literal(
+        nominee.finalization_status, "finalized", code="invalid_person_nominee"
+    )
+    _require_literal(
+        nominee.nomination_authority_status,
+        "unverified",
+        code="invalid_person_nominee",
+    )
+    _require_literal(nominee.person_status, "active", code="invalid_person_nominee")
+    if type(nominee.retrieval_blocked) is not bool:
+        _fail("invalid_person_nominee")
+    if nominee.retrieval_blocked:
         _fail("privacy_blocked")
-    if not _privacy_is_eligible(candidate.privacy_directives):
+    if not _privacy_is_eligible(nominee.privacy_directives):
         _fail("privacy_blocked")
+    _require_literal(nominee.erasure_status, "clear", code="erasure_blocked")
     if (
-        candidate.erasure_status != "clear"
-        or type(candidate.open_erasure_request_count) is not int
-        or candidate.open_erasure_request_count != 0
-        or type(candidate.pending_erasure_task_count) is not int
-        or candidate.pending_erasure_task_count != 0
+        type(nominee.open_erasure_request_count) is not int
+        or nominee.open_erasure_request_count != 0
+        or type(nominee.pending_erasure_task_count) is not int
+        or nominee.pending_erasure_task_count != 0
     ):
         _fail("erasure_blocked")
-    person_label = _display_label(candidate.person_display_label)
+    person_label = _display_label(nominee.person_display_label)
     for commitment in (
-        candidate.candidate_commitment,
-        candidate.projection_commitment,
-        candidate.finalization_commitment,
-        candidate.review_receipt_commitment,
-        candidate.privacy_state_commitment,
-        candidate.erasure_state_commitment,
+        nominee.nominee_commitment,
+        nominee.projection_commitment,
+        nominee.finalization_commitment,
+        nominee.review_receipt_commitment,
+        nominee.privacy_state_commitment,
+        nominee.erasure_state_commitment,
     ):
         _require_hex64(commitment)
 
@@ -391,25 +455,25 @@ def _validate_context(context: PrincipalBindingContext) -> _ValidatedContext:
     _require_uuid(graph.ha_user_id)
     _require_uuid(graph.person_id)
     _require_hex64(graph.graph_digest, code="invalid_binding_graph")
-    if graph.ha_user_id != ha_user.ha_user_id or graph.person_id != candidate.person_id:
+    if graph.ha_user_id != ha_user.ha_user_id or graph.person_id != nominee.person_id:
         _fail("invalid_binding_graph")
     if (
-        type(graph.finalized_me_candidate_count) is not int
-        or graph.finalized_me_candidate_count != 1
+        type(graph.reviewed_person_nominee_count) is not int
+        or graph.reviewed_person_nominee_count != 1
     ):
-        _fail("invalid_me_candidate_set")
+        _fail("invalid_person_nominee_set")
     for count in (
         graph.active_ha_user_binding_count,
         graph.active_person_binding_count,
         graph.other_open_request_count,
         graph.other_ready_proposal_count,
-        graph.conflicting_me_candidate_count,
+        graph.conflicting_person_nominee_count,
     ):
         _require_zero_count(count)
 
     _require_hex64(context.policy_digest, code="invalid_policy")
     if (
-        not isinstance(context.policy_version, str)
+        type(context.policy_version) is not str
         or _POLICY_VERSION.fullmatch(context.policy_version) is None
     ):
         _fail("invalid_policy")
@@ -418,7 +482,7 @@ def _validate_context(context: PrincipalBindingContext) -> _ValidatedContext:
     expires_at = _utc(context.expires_at)
     trusted_state_times = (
         _utc(ha_user.observed_at, code="invalid_trusted_state_time"),
-        _utc(candidate.status_observed_at, code="invalid_trusted_state_time"),
+        _utc(nominee.status_observed_at, code="invalid_trusted_state_time"),
         _utc(graph.observed_at, code="invalid_trusted_state_time"),
     )
     if expires_at <= staged_at or expires_at - staged_at > MAX_PREVIEW_LIFETIME:
@@ -426,7 +490,7 @@ def _validate_context(context: PrincipalBindingContext) -> _ValidatedContext:
     return _ValidatedContext(
         ha_label=ha_label,
         person_label=person_label,
-        candidate=candidate,
+        nominee=nominee,
         staged_at=staged_at,
         expires_at=expires_at,
         trusted_state_times=trusted_state_times,
@@ -463,12 +527,13 @@ def _private_preview(
         title="Review your Home Assistant identity",
         statement=(
             f"Review linking the signed-in Home Assistant account "
-            f"{validated.ha_label} to the one finalized 'me' candidate "
-            f"{validated.person_label}."
+            f"{validated.ha_label} to the reviewed person "
+            f"{validated.person_label} proposed as your identity."
         ),
         safety_note=(
-            "This preview creates no binding, grants no memory access, and "
-            "does not enable location or agent writes."
+            "This nominee is not an established 'me' identity. This preview "
+            "creates no binding, grants no memory access, and does not enable "
+            "location or agent writes."
         ),
         action_label="Review identity link",
         expires_at=validated.expires_at,
@@ -476,31 +541,31 @@ def _private_preview(
     )
 
 
-def _candidate_preview_material(
-    candidate: FinalizedMeCandidate, label: str
+def _nominee_preview_material(
+    nominee: ReviewedPersonNominee, label: str
 ) -> dict[str, object]:
     return {
-        "candidate_id": str(candidate.candidate_id),
-        "migration_run_id": str(candidate.migration_run_id),
-        "finalization_id": str(candidate.finalization_id),
-        "person_id": str(candidate.person_id),
+        "nominee_id": str(nominee.nominee_id),
+        "migration_run_id": str(nominee.migration_run_id),
+        "finalization_id": str(nominee.finalization_id),
+        "person_id": str(nominee.person_id),
         "person_display_label": label,
-        "candidate_commitment": candidate.candidate_commitment,
-        "projection_commitment": candidate.projection_commitment,
-        "finalization_commitment": candidate.finalization_commitment,
-        "review_receipt_commitment": candidate.review_receipt_commitment,
-        "privacy_state_commitment": candidate.privacy_state_commitment,
-        "erasure_state_commitment": candidate.erasure_state_commitment,
-        "candidate_role": candidate.candidate_role,
-        "review_status": candidate.review_status,
-        "finalization_status": candidate.finalization_status,
-        "authority_status": candidate.authority_status,
-        "person_status": candidate.person_status,
-        "retrieval_blocked": candidate.retrieval_blocked,
-        "privacy_directives": sorted(candidate.privacy_directives),
-        "erasure_status": candidate.erasure_status,
-        "open_erasure_request_count": candidate.open_erasure_request_count,
-        "pending_erasure_task_count": candidate.pending_erasure_task_count,
+        "nominee_commitment": nominee.nominee_commitment,
+        "projection_commitment": nominee.projection_commitment,
+        "finalization_commitment": nominee.finalization_commitment,
+        "review_receipt_commitment": nominee.review_receipt_commitment,
+        "privacy_state_commitment": nominee.privacy_state_commitment,
+        "erasure_state_commitment": nominee.erasure_state_commitment,
+        "nomination_role": nominee.nomination_role,
+        "review_status": nominee.review_status,
+        "finalization_status": nominee.finalization_status,
+        "nomination_authority_status": nominee.nomination_authority_status,
+        "person_status": nominee.person_status,
+        "retrieval_blocked": nominee.retrieval_blocked,
+        "privacy_directives": sorted(nominee.privacy_directives),
+        "erasure_status": nominee.erasure_status,
+        "open_erasure_request_count": nominee.open_erasure_request_count,
+        "pending_erasure_task_count": nominee.pending_erasure_task_count,
     }
 
 
@@ -512,7 +577,7 @@ def _bound_material(
     ha_user = context.ha_user
     graph = context.graph
     return {
-        "domain": "home-agent:principal-binding:dormant-preview:v1",
+        "domain": "home-agent:principal-binding:dormant-preview:v2",
         "contract_version": CONTRACT_VERSION,
         "rule_version": RULE_VERSION,
         "deployment_status": DEPLOYMENT_STATUS,
@@ -531,20 +596,22 @@ def _bound_material(
             "authentication_status": ha_user.authentication_status,
             "user_status": ha_user.user_status,
         },
-        "me_candidate_count": 1,
-        "me_candidate": _candidate_preview_material(
-            validated.candidate, validated.person_label
+        "reviewed_person_nominee_count": 1,
+        "reviewed_person_nominee": _nominee_preview_material(
+            validated.nominee, validated.person_label
         ),
         "binding_graph": {
             "ha_user_id": str(graph.ha_user_id),
             "person_id": str(graph.person_id),
             "graph_digest": graph.graph_digest,
-            "finalized_me_candidate_count": graph.finalized_me_candidate_count,
+            "reviewed_person_nominee_count": graph.reviewed_person_nominee_count,
             "active_ha_user_binding_count": graph.active_ha_user_binding_count,
             "active_person_binding_count": graph.active_person_binding_count,
             "other_open_request_count": graph.other_open_request_count,
             "other_ready_proposal_count": graph.other_ready_proposal_count,
-            "conflicting_me_candidate_count": graph.conflicting_me_candidate_count,
+            "conflicting_person_nominee_count": (
+                graph.conflicting_person_nominee_count
+            ),
         },
         "private_display": preview.private_payload(),
         "locked_authority": {
@@ -552,10 +619,13 @@ def _bound_material(
             "authoritative": False,
             "commit_ready": False,
             "enables_writes": False,
+            "me_identity_established": False,
+            "binding_created": False,
             "location_memory_enabled": False,
             "travel_greetings_enabled": False,
-            "binding_created": False,
             "external_receipts_verified": False,
+            "fresh_state_origin_verified": False,
+            "nomination_authority_verified": False,
         },
     }
 
@@ -565,7 +635,7 @@ def _preview_digest(material: dict[str, object], digest_key: bytes) -> str:
         _fail("invalid_digest_key")
     purpose_key = hmac.new(
         digest_key,
-        b"home-agent:dormant-principal-binding-preview:v1",
+        b"home-agent:dormant-principal-binding-preview:v2",
         hashlib.sha256,
     ).digest()
     return hmac.new(purpose_key, canonical_json(material), hashlib.sha256).hexdigest()
@@ -580,10 +650,10 @@ def _verification_state_digest(
     digest_key: bytes,
 ) -> str:
     ha_user = context.ha_user
-    candidate = validated.candidate
+    nominee = validated.nominee
     graph = context.graph
     material = {
-        "domain": "home-agent:principal-binding:fresh-verification-state:v1",
+        "domain": "home-agent:principal-binding:fresh-verification-state:v2",
         "contract_version": CONTRACT_VERSION,
         "rule_version": RULE_VERSION,
         "request_id": str(context.request_id),
@@ -602,21 +672,23 @@ def _verification_state_digest(
             "authentication_status": ha_user.authentication_status,
             "user_status": ha_user.user_status,
         },
-        "me_candidate_state": {
-            **_candidate_preview_material(candidate, validated.person_label),
-            "observed_at": _utc_text(candidate.status_observed_at),
+        "reviewed_person_nominee_state": {
+            **_nominee_preview_material(nominee, validated.person_label),
+            "observed_at": _utc_text(nominee.status_observed_at),
         },
         "binding_graph": {
             "ha_user_id": str(graph.ha_user_id),
             "person_id": str(graph.person_id),
             "graph_digest": graph.graph_digest,
             "observed_at": _utc_text(graph.observed_at),
-            "finalized_me_candidate_count": graph.finalized_me_candidate_count,
+            "reviewed_person_nominee_count": graph.reviewed_person_nominee_count,
             "active_ha_user_binding_count": graph.active_ha_user_binding_count,
             "active_person_binding_count": graph.active_person_binding_count,
             "other_open_request_count": graph.other_open_request_count,
             "other_ready_proposal_count": graph.other_ready_proposal_count,
-            "conflicting_me_candidate_count": graph.conflicting_me_candidate_count,
+            "conflicting_person_nominee_count": (
+                graph.conflicting_person_nominee_count
+            ),
         },
         "policy": {
             "version": context.policy_version,
@@ -625,13 +697,14 @@ def _verification_state_digest(
         "locked_authority": {
             "deployment_status": DEPLOYMENT_STATUS,
             "capability_status": CAPABILITY_STATUS,
-            "candidate_count": 1,
+            "nominee_count": 1,
             "requires_serializable_commit": True,
             "requires_fresh_authenticated_ha_snapshot": True,
             "requires_fresh_binding_graph_snapshot": True,
             "requires_transaction_time_state_read": True,
             "requires_external_authenticated_gesture": True,
             "requires_single_use_artifact_consumption": True,
+            "me_identity_established": False,
             "binding_created": False,
             "authoritative": False,
             "commit_ready": False,
@@ -640,13 +713,14 @@ def _verification_state_digest(
             "travel_greetings_enabled": False,
             "external_receipts_verified": False,
             "fresh_state_origin_verified": False,
+            "nomination_authority_verified": False,
         },
     }
     if type(digest_key) is not bytes or len(digest_key) != 32:
         _fail("invalid_digest_key")
     purpose_key = hmac.new(
         digest_key,
-        b"home-agent:dormant-principal-binding-verification-state:v1",
+        b"home-agent:dormant-principal-binding-verification-state:v2",
         hashlib.sha256,
     ).digest()
     return hmac.new(purpose_key, canonical_json(material), hashlib.sha256).hexdigest()
@@ -706,10 +780,10 @@ def verify_principal_binding_preview(
         trusted_operation_time, validated, require_staged_snapshot=False
     )
     if (
-        not isinstance(supplied_digest, str)
+        type(supplied_digest) is not str
         or _HEX64.fullmatch(supplied_digest) is None
         or type(preview) is not PrincipalBindingPreview
-        or not isinstance(preview.preview_digest, str)
+        or type(preview.preview_digest) is not str
         or _HEX64.fullmatch(preview.preview_digest) is None
     ):
         _fail("preview_mismatch")
@@ -733,7 +807,7 @@ def verify_principal_binding_preview(
     ):
         _fail("preview_mismatch")
 
-    candidate = validated.candidate
+    nominee = validated.nominee
     verification_state_digest = _verification_state_digest(
         current_context,
         validated,
@@ -744,17 +818,17 @@ def verify_principal_binding_preview(
     return DormantPrincipalBindingIntent(
         request_id=current_context.request_id,
         ha_user_id=current_context.ha_user.ha_user_id,
-        person_id=candidate.person_id,
-        candidate_id=candidate.candidate_id,
-        finalization_id=candidate.finalization_id,
+        person_id=nominee.person_id,
+        nominee_id=nominee.nominee_id,
+        finalization_id=nominee.finalization_id,
         ha_snapshot_id=current_context.ha_user.snapshot_id,
         ha_snapshot_observed_at=_utc(current_context.ha_user.observed_at),
-        candidate_status_observed_at=_utc(candidate.status_observed_at),
+        nominee_status_observed_at=_utc(nominee.status_observed_at),
         graph_observed_at=_utc(current_context.graph.observed_at),
         verified_at=operation_time,
         proposal_digest=supplied_digest,
         verification_state_digest=verification_state_digest,
         graph_digest=current_context.graph.graph_digest,
-        candidate_commitment=candidate.candidate_commitment,
-        finalization_commitment=candidate.finalization_commitment,
+        nominee_commitment=nominee.nominee_commitment,
+        finalization_commitment=nominee.finalization_commitment,
     )

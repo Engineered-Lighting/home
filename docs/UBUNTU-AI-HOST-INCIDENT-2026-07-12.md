@@ -8,6 +8,13 @@ that gate as the probable trigger, but it does not prove whether the final
 mechanism was Linux/Docker resource churn, a silent total lockup, CPU/firmware
 instability, or PSU/motherboard protection.
 
+A later bounded re-read of the persistent journal found two earlier signals
+that the initial evidence capture missed: a kernel machine-check event at
+2026-07-12 19:04:27 PDT and a `uvicorn` process segfault in `libcrypto.so.3` at
+20:27:28 PDT. Those events do not identify the final reset mechanism, but they
+make pre-existing CPU/platform instability materially more likely. The
+high-churn gate remains the probable final trigger, not a proven sole cause.
+
 The gate must not run on this AI host. It is now hard-quarantined there and has
 resource/churn limits for CI or disposable test hosts.
 
@@ -22,8 +29,9 @@ resource/churn limits for CI or disposable test hosts.
 - SSH and Tailscale passed the initial, +60-second, and +180-second checks with
   the same boot ID and increasing uptime.
 - A later read-only smoke check passed at 718 seconds uptime.
-- `systemctl is-system-running` reports `degraded` only because
-  `home-agent-bff-egress-verify.service` failed. It was not restarted.
+- `systemctl is-system-running` initially reported `degraded` because
+  `home-agent-bff-egress-verify.service` failed. A later read-only check also
+  found `home-agent-db-backup.service` failed. Neither unit was restarted.
 
 ## Previous-boot evidence
 
@@ -49,14 +57,25 @@ Observed workload characteristics:
 - 493 of the final 500 kernel records were Docker bridge/veth churn.
 - The host remained responsive for only a few seconds after cleanup.
 
+Earlier in the same boot, the persistent kernel journal records:
+
+```text
+2026-07-12T19:04:27-07:00 mce: [Hardware Error]: Machine check events logged
+2026-07-12T20:27:28-07:00 uvicorn: segfault ... in libcrypto.so.3 ... CPU 8
+```
+
+The journal does not retain a decoded MCE bank/status record, so the
+machine-check cannot be attributed to a particular core, cache, memory path, or
+voltage domain from remote evidence alone. The segfault is likewise evidence of
+instability, not proof that `libcrypto` caused the host halt.
+
 No persisted evidence was found for:
 
 - kernel panic, hard/soft lockup, or kernel watchdog failure;
-- MCE/machine-check or other logged CPU hardware error;
 - thermal critical event or throttling;
 - OOM kill;
 - NVMe, filesystem, or general I/O failure;
-- userspace segfault or crash dump.
+- a persisted crash dump for either the segfault or final halt.
 
 `/sys/fs/pstore` and `/var/crash` were empty, and `coredumpctl` was unavailable.
 A catastrophic hardware reset or total lockup can leave none of these records,
@@ -97,5 +116,6 @@ The primary files are:
 - `20260716T202905Z-previous-journal-tail.txt`
 - `20260716T202905Z-events.ndjson`
 - `20260716T202905Z-status.json`
+- `20260716T234623-0300-evidence-supplement.txt`
 
 Do not publish the raw artifacts without another redaction pass.

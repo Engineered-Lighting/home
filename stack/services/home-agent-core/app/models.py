@@ -301,13 +301,13 @@ class Phase2ReadinessView(StrictModel):
 
 
 class Phase3ReadinessView(StrictModel):
-    """Non-authoritative, content-free diagnostic for schema revision 0006."""
+    """Non-authoritative, content-free pre-Phase-3 diagnostic."""
 
     contract: Literal["phase3-readiness-diagnostic-v0"] = (
         "phase3-readiness-diagnostic-v0"
     )
-    schema_revision: Literal["0006_worker_maintenance_health"] = (
-        "0006_worker_maintenance_health"
+    schema_revision: Literal["0006a_worker_lease_arbitration"] = (
+        "0006a_worker_lease_arbitration"
     )
     rollout_mode: RolloutMode
     shadow_predecessor_status: Phase3ShadowPredecessorStatus

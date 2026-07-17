@@ -1,7 +1,7 @@
 """Add owner-only Phase 3 reviewed identity-migration authority records.
 
 Revision ID: 0007_phase3_identity_authority
-Revises: 0006_worker_maintenance_health
+Revises: 0006a_worker_lease_arbitration
 Create Date: 2026-07-12
 
 This revision is schema groundwork only. It deliberately installs no runtime
@@ -27,7 +27,7 @@ Neither ``observed_stopped`` nor ``operator_attested`` means physically frozen
 or enforced offline, so finalization and cutover rows remain explicitly
 candidate/unverified and can never satisfy authoritative readiness.
 
-The runtime migration pin intentionally remains revision 0006 on this branch.
+The runtime migration pin intentionally remains revision 0006a on this branch.
 Do not run the normal ``alembic upgrade head``/migrate deployment profile with
 this groundwork release: Core must fail closed on revision 0007 until the later
 atomic finalizer and authoritative-readiness release updates the runtime pin.
@@ -44,7 +44,7 @@ from app import schema
 
 
 revision: str = "0007_phase3_identity_authority"
-down_revision: str | None = "0006_worker_maintenance_health"
+down_revision: str | None = "0006a_worker_lease_arbitration"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

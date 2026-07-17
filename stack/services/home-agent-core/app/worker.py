@@ -50,6 +50,10 @@ class WorkerMaintenanceLeaseLost(RuntimeError):
     """The PostgreSQL worker-instance fence no longer belongs to this process."""
 
 
+class WorkerMaintenanceRegistrationContended(RuntimeError):
+    """Another current worker owns the PostgreSQL maintenance lease."""
+
+
 class WorkerMaintenanceFatal(RuntimeError):
     """A non-retryable maintenance integrity or contract failure."""
 
@@ -123,7 +127,10 @@ class DurableWorker:
                         continue
                     try:
                         await self._register_maintenance()
-                    except WorkerMaintenanceLeaseLost:
+                    except WorkerMaintenanceRegistrationContended:
+                        next_registration = monotonic_now + WORKER_RETRY_SECONDS
+                        continue
+                    except (WorkerMaintenanceLeaseLost, WorkerMaintenanceFatal):
                         raise
                     except MemoryError:
                         raise
@@ -250,7 +257,8 @@ class DurableWorker:
                     )
                 ).scalar_one()
         except DBAPIError as exc:
-            if getattr(exc.orig, "sqlstate", None) == "55000":
+            if getattr(exc.orig, "sqlstate", None) in {"40001", "55000"}:
+                self._maintenance_registered = False
                 raise WorkerMaintenanceLeaseLost(
                     "worker maintenance instance fence was lost"
                 ) from exc
@@ -285,9 +293,13 @@ class DurableWorker:
                     )
                 )
             ).scalar_one()
+        if registered is False:
+            raise WorkerMaintenanceRegistrationContended(
+                "worker maintenance instance registration is contended"
+            )
         if registered is not True:
-            raise WorkerMaintenanceLeaseLost(
-                "worker maintenance instance registration was rejected"
+            raise WorkerMaintenanceFatal(
+                "worker maintenance registration receipt is invalid"
             )
         self._maintenance_registered = True
 

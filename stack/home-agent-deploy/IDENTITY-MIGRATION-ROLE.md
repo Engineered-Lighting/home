@@ -38,7 +38,7 @@ rotation mechanism; this milestone intentionally provides none.
 
 ## Existing installation preparation
 
-Keep the live deployment pinned to schema `0006_worker_maintenance_health` and
+Keep the live deployment pinned to schema `0006a_worker_lease_arbitration` and
 `record_only`. Do not run this branch's migrations or operator profile during
 Phase 2. When the later reviewed Phase 3 deployment gate explicitly authorizes
 role preparation, create the root-only secret pair and provision roles with:

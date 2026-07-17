@@ -69,6 +69,7 @@ Run migrations explicitly as the migration owner:
 ```sh
 docker run --rm --network home-agent-internal \
   -e HOME_AGENT_DATABASE_URL="$MIGRATION_DATABASE_URL" \
+  -e HOME_AGENT_EXPECTED_DB_REVISION=0006a_worker_lease_arbitration \
   home-agent-core migrate
 ```
 
@@ -107,7 +108,20 @@ state, discarding the subject envelope. Preference opt-out remains enabled in
 every mode, while opt-in is canary-only.
 
 `/readyz` stays unavailable until the database reports migration
-`0006_worker_maintenance_health`.
+`0006a_worker_lease_arbitration`.
+
+The production `migrate` entrypoint requires that exact revision through
+`HOME_AGENT_EXPECTED_DB_REVISION` and rejects missing or different targets. It
+does not upgrade to Alembic head because revisions 0007 through 0012 remain
+dormant Phase 3 schema groundwork. It then verifies the database reports the
+exact target; an old descendant database must be rebuilt rather than treated as
+proof that the inserted hotfix ran.
+
+A heartbeat timestamp in the future is intentionally still treated as fresh.
+This fails closed during a host clock rollback instead of allowing two workers
+to own the lease. If the owner is gone, keep workers stopped, correct and verify
+the host clock, restart PostgreSQL so its postmaster-start fence changes, then
+start exactly one worker. Do not delete or rewrite the lease row by hand.
 
 ## MVP API contract
 
@@ -203,7 +217,7 @@ The v3 gate also requires the fenced worker-maintenance cycle to be current;
 the response exposes only its categorical state, never the worker instance,
 timestamps, retention counts, or queue content.
 
-The Phase 3 endpoint is a fixed revision-`0006_worker_maintenance_health` gap
+The Phase 3 endpoint is a fixed revision-`0006a_worker_lease_arbitration` gap
 diagnostic, not a rollout gate. It rechecks the actual database revision and
 reports only the configured rollout mode plus a categorical shadow-predecessor
 status. Exact `shadow` mode and rollout-gate code `authorized` are required for
@@ -213,8 +227,9 @@ counts, identifiers, names, timestamps, digests, evidence content, or private
 records, and has literal `authoritative=false`, `enables_writes=false`, and
 `ready_to_advance=false`. Query parameters and GET bodies are rejected.
 
-Revision 0006 has no authoritative People migration manifest/completion
-receipt, privacy-cutover attestation, legacy semantic-write freeze attestation,
+The revision 0006a runtime line has no authoritative People migration
+manifest/completion receipt, privacy-cutover attestation, legacy semantic-write
+freeze attestation,
 unique `me` marker, or staged atomic two-parent confirmation protocol. The
 diagnostic therefore reports those fixed gaps as `unproven`, `not_evaluated`,
 or `capability_disabled`. An authoritative Phase 3 v1 gate requires a future

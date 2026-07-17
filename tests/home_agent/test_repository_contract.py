@@ -194,7 +194,7 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertIn(f"operations.{table_name}", grants)
         self.assertIn("pg_catalog.to_regclass", grants)
         self.assertIn(
-            'readiness_migration: str = "0006_worker_maintenance_health"',
+            'readiness_migration: str = "0006a_worker_lease_arbitration"',
             config,
         )
 
@@ -221,10 +221,10 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertNotIn("home_agent_migration_operator", migration)
         self.assertNotIn("parent_confirmation", migration)
         self.assertIn(
-            "runtime migration pin intentionally remains revision 0006", migration
+            "runtime migration pin intentionally remains revision 0006a", migration
         )
         self.assertIn(
-            'readiness_migration: str = "0006_worker_maintenance_health"', config
+            'readiness_migration: str = "0006a_worker_lease_arbitration"', config
         )
         self.assertNotIn("0007_phase3_identity_authority", config)
         revoke = grants.split("Revision 0007 is an owner-only schema foundation", 1)[
@@ -633,7 +633,7 @@ class RepositoryBoundaryTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, rollout_block)
         self.assertIn(
-            "HOME_AGENT_EXPECTED_DB_REVISION=0006_worker_maintenance_health",
+            "HOME_AGENT_EXPECTED_DB_REVISION=0006a_worker_lease_arbitration",
             read("stack/home-agent.env.example"),
         )
         migration = read(

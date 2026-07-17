@@ -73,7 +73,7 @@ def test_phase3_diagnostic_is_fixed_non_authoritative_and_content_free() -> None
 
     assert result.model_dump(mode="json") == {
         "contract": "phase3-readiness-diagnostic-v0",
-        "schema_revision": "0006_worker_maintenance_health",
+        "schema_revision": "0006a_worker_lease_arbitration",
         "rollout_mode": "shadow",
         "shadow_predecessor_status": "authorized",
         "semantic_people_migration_manifest_status": "unproven",
@@ -218,7 +218,7 @@ def test_phase3_endpoint_rechecks_actual_schema_and_fails_closed(tmp_path) -> No
     assert response.json() == {
         "error": {
             "code": "capability_disabled",
-            "message": "Phase 3 revision-0006 diagnostic is unavailable",
+            "message": "Phase 3 pre-authority diagnostic is unavailable",
             "details": {},
         }
     }

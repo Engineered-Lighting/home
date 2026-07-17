@@ -257,7 +257,7 @@ REVIEWED_OWNER_SECURITY_DEFINERS = (
     (
         "operations.register_worker_maintenance(uuid)",
         ("search_path=pg_catalog, pg_temp",),
-        "b6ce5f47882a12b290c354d5026fc7c893a4475b93a37271b9dcda4b88771ddd",
+        "77cfba8b257505ad93ebc11be6540ad626dd661e71353af9bacb13f88dc83b9d",
     ),
     (
         "operations.run_worker_maintenance_cycle(uuid,bigint)",

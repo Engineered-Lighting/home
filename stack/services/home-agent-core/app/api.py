@@ -84,7 +84,7 @@ Store = Annotated[CoreStore, Depends(store_from)]
 OperatorBindingStore = Annotated[CoreStore, Depends(operator_binding_store_from)]
 
 
-PHASE3_SCHEMA_REVISION = "0006_worker_maintenance_health"
+PHASE3_SCHEMA_REVISION = "0006a_worker_lease_arbitration"
 LEGACY_IDENTITY_IMPORT_RETIRED = (
     "sequential legacy identity import is retired; use the reviewed atomic "
     "identity finalizer"
@@ -105,7 +105,7 @@ def phase3_readiness_diagnostic(
     authorization_authorized: bool,
     authorization_code: str,
 ) -> Phase3ReadinessView:
-    """Describe only what revision 0006 can prove without private-state reads."""
+    """Describe only what the pre-Phase-3 runtime can prove without private reads."""
 
     blockers: list[Phase3ReadinessBlocker] = []
     if rollout_mode != "shadow":
@@ -352,7 +352,7 @@ def semantic_router() -> APIRouter:
         _service: OperatorService,
         _bootstrap: None = Depends(require_bootstrap),
     ) -> Phase3ReadinessView:
-        """Return a fixed, non-authoritative revision-0006 gap diagnostic."""
+        """Return a fixed, non-authoritative pre-Phase-3 gap diagnostic."""
 
         if request.query_params:
             raise ValidationDomainError(
@@ -367,7 +367,7 @@ def semantic_router() -> APIRouter:
             or actual_revision != settings.readiness_migration
         ):
             raise CapabilityDisabledError(
-                "Phase 3 revision-0006 diagnostic is unavailable"
+                "Phase 3 pre-authority diagnostic is unavailable"
             )
         authorization = await request.app.state.rollout_gate.status(force=True)
         return phase3_readiness_diagnostic(

@@ -188,6 +188,7 @@ services:
     command: ["migrate"]
     environment:
       HOME_AGENT_DATABASE_URL_FILE: /run/secrets/database_url
+      HOME_AGENT_EXPECTED_DB_REVISION: "${HOME_AGENT_EXPECTED_DB_REVISION:?set deployable database revision}"
     secrets:
       - source: database_url_owner_migrate
         target: database_url

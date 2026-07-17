@@ -38,10 +38,31 @@ load_secret HOME_AGENT_SERVICE_TOKEN "${HOME_AGENT_SERVICE_TOKEN_FILE:-}" "${HOM
 load_secret HOME_AGENT_OPERATOR_TOKEN "${HOME_AGENT_OPERATOR_TOKEN_FILE:-}" "${HOME_AGENT_OPERATOR_TOKEN:-}"
 load_secret HOME_AGENT_BOOTSTRAP_TOKEN "${HOME_AGENT_BOOTSTRAP_TOKEN_FILE:-}" "${HOME_AGENT_BOOTSTRAP_TOKEN:-}"
 
+DEPLOYABLE_MIGRATION_REVISION="0006a_worker_lease_arbitration"
+
+required_migration_target() {
+  target="${HOME_AGENT_EXPECTED_DB_REVISION:-}"
+  if [ -z "$target" ]; then
+    echo "HOME_AGENT_EXPECTED_DB_REVISION is required for migrations" >&2
+    exit 78
+  fi
+  if [ "$target" != "$DEPLOYABLE_MIGRATION_REVISION" ]; then
+    echo "HOME_AGENT_EXPECTED_DB_REVISION is not deployable by this image" >&2
+    exit 78
+  fi
+  printf '%s' "$target"
+}
+
+run_migration() {
+  migration_target="$(required_migration_target)"
+  alembic upgrade "$migration_target"
+  python -m app.migration_guard "$migration_target"
+}
+
 role="${1:-${HOME_AGENT_ROLE:-api}}"
 
-if [ "${HOME_AGENT_RUN_MIGRATIONS:-0}" = "1" ]; then
-  alembic upgrade head
+if [ "${HOME_AGENT_RUN_MIGRATIONS:-0}" = "1" ] && [ "$role" != "migrate" ]; then
+  run_migration
 fi
 
 case "$role" in
@@ -49,7 +70,7 @@ case "$role" in
     exec uvicorn app.main:create_app --factory --host 0.0.0.0 --port "${HOME_AGENT_PORT:-8104}" --workers 1
     ;;
   migrate)
-    exec alembic upgrade head
+    run_migration
     ;;
   ledger-init)
     exec python -m app.cli ledger-init

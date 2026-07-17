@@ -206,6 +206,14 @@ sudo docker compose --env-file home-agent.env -f home-agent-compose.yml build
 sudo docker compose --env-file home-agent.env -f home-agent-compose.yml up -d
 ```
 
+The normal migration container requires
+`HOME_AGENT_EXPECTED_DB_REVISION=0006a_worker_lease_arbitration` and refuses any
+other target. It never runs `alembic upgrade head`; revisions 0007 through 0012
+remain dormant Phase 3 groundwork and cannot be crossed by normal startup. A
+post-migration exact-revision check rejects any old descendant database that
+would otherwise make Alembic assume the inserted 0006a hotfix had already run;
+rebuild that non-production database rather than downgrading it in place.
+
 Startup ordering is enforced:
 
 ```text
@@ -563,7 +571,7 @@ Reviewed People, aliases, privacy directives, recognition bindings, status,
 and legacy relationship candidates may enter Core only through the atomic
 `SERIALIZABLE` finalizer after its writer-freeze, erasure, rollout, and operator
 review gates are deployed. Until then, keep the finalizer dormant and the live
-deployment pinned to record-only revision 0006.
+deployment pinned to record-only revision 0006a.
 
 ## Record-only, shadow, and canary gates
 
@@ -629,7 +637,7 @@ worker status, not its instance ID, timestamps, retention counts, or errors.
 
 `GET /v1/operator-rollout/phase3-readiness` is available only to the offline
 operator bearer paired with the bootstrap credential. It is deliberately a
-non-authoritative revision-0006 diagnostic: it rechecks the live database
+non-authoritative revision-0006a diagnostic: it rechecks the live database
 revision, accepts no query parameters or request body, reads no identity or
 fact rows, and exposes no names, IDs, timestamps, digests, counts, or private
 content. Its only live checks are the exact configured mode and the existing
@@ -638,7 +646,7 @@ with gate code `authorized` reports an authorized predecessor; `record_only`
 does not.
 
 The response always returns `authoritative=false`, `enables_writes=false`, and
-`ready_to_advance=false`. Revision 0006 cannot prove a People migration
+`ready_to_advance=false`. Revision 0006a cannot prove a People migration
 manifest/completion receipt, privacy cutover, legacy semantic-write freeze,
 unique `me` identity, or the staged atomic two-parent confirmation protocol,
 so the corresponding blockers remain fixed. Do not use this diagnostic to

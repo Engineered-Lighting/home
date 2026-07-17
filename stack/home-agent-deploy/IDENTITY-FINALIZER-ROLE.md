@@ -41,7 +41,7 @@ committing semantic projections.
 
 ## Existing installation preparation
 
-Production remains pinned to `0006_worker_maintenance_health` and
+Production remains pinned to `0006a_worker_lease_arbitration` and
 `record_only`. Do not run branch migrations or the finalizer service. After a
 future reviewed deployment gate separately authorizes dormant role preparation,
 an operator may atomically add its independent secret pair and replay only the

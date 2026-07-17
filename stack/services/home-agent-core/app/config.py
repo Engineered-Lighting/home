@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     )
     policy_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     rollout_mode: Literal["record_only", "shadow", "canary"] = "record_only"
-    readiness_migration: str = "0006_worker_maintenance_health"
+    readiness_migration: str = "0006a_worker_lease_arbitration"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
     @field_validator(

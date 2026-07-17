@@ -20,7 +20,7 @@ Run `preflight.sh` after configuring these non-secret values in
 HOME_AGENT_RESTORE_DRILL_ROOT=/srv/home-agent/restore-drills
 HOME_AGENT_PGBACKREST_SFTP_KNOWN_HOSTS=/srv/home-agent/backup-sftp/formd_known_hosts
 HOME_AGENT_PGBACKREST_IMAGE=engineered-lighting/home-agent-postgres:17.10
-HOME_AGENT_EXPECTED_DB_REVISION=0006_worker_maintenance_health
+HOME_AGENT_EXPECTED_DB_REVISION=0006a_worker_lease_arbitration
 ```
 
 The restore root and `known_hosts` file must be on the encrypted mapper. The

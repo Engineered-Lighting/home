@@ -13,4 +13,4 @@
 - Semantic database finalization remains disabled until a separate
   least-privilege finalizer role, atomic PostgreSQL kernel, and row-addressable
   erasure lineage are implemented and proven. The production schema pin remains
-  revision `0006_worker_maintenance_health`.
+  revision `0006a_worker_lease_arbitration`.

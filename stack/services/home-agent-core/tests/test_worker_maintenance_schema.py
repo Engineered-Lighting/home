@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import importlib.util
 import os
+from pathlib import Path
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -13,6 +16,8 @@ from app import schema
 from app.db import Database
 
 
+ROOT = Path(__file__).resolve().parents[1]
+LEASE_MIGRATION = ROOT / "alembic/versions/0006a_worker_lease_arbitration.py"
 REQUIRED_URLS = (
     "TEST_DATABASE_URL",
     "TEST_API_DATABASE_URL",
@@ -86,6 +91,43 @@ def test_worker_maintenance_metadata_is_unlogged_content_free_and_strict() -> No
     } <= rollout_columns
 
 
+def test_worker_lease_arbitration_is_a_narrow_deployable_0006_backport() -> None:
+    source = LEASE_MIGRATION.read_text(encoding="utf-8")
+
+    assert 'revision: str = "0006a_worker_lease_arbitration"' in source
+    assert 'down_revision: str | None = "0006_worker_maintenance_health"' in source
+    assert "existing_heartbeat_at" in source
+    assert "interval '{FRESH_LEASE_SECONDS} seconds'" in source
+    assert "FRESH_LEASE_SECONDS = 45" in source
+    assert "existing_database_start = database_start" in source
+    assert "existing_state <> 'stopping'" in source
+    assert "RETURN false" in source
+    assert "pg_advisory_xact_lock(7210202606)" in source
+    assert "CREATE TABLE" not in source
+    assert "ALTER TABLE" not in source
+    assert "not by competing workers" in source
+
+    spec = importlib.util.spec_from_file_location(
+        "worker_lease_migration", LEASE_MIGRATION
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    sql = module._REGISTER_FUNCTION_TEMPLATE.format(
+        fresh_owner_guard=module._FRESH_OWNER_GUARD
+    )
+    body_start = sql.index("AS $$") + len("AS $$")
+    body = sql[body_start : sql.index("$$", body_start)]
+    source_digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    e1_source = (
+        ROOT / "alembic/versions/0011_identity_erasure_schema_foundation.py"
+    ).read_text(encoding="utf-8")
+    assert source_digest == (
+        "77cfba8b257505ad93ebc11be6540ad626dd661e71353af9bacb13f88dc83b9d"
+    )
+    assert source_digest in e1_source
+
+
 @pytest.mark.skipif(
     not all(os.getenv(name) for name in REQUIRED_URLS),
     reason="owner and runtime-role PostgreSQL URLs are required",
@@ -148,6 +190,63 @@ async def test_worker_maintenance_functions_fence_roles_and_commit_exact_proof()
         assert registered["heartbeat_sequence"] == 1
         assert registered["success_sequence"] == 0
         assert registered["database_started_at"] <= registered["started_at"]
+
+        # A second live process is a standby while the first instance has a
+        # fresh heartbeat. Registration must not erase the current fence.
+        async with worker.transaction() as connection:
+            assert (
+                await connection.execute(
+                    text("SELECT operations.register_worker_maintenance(:instance)"),
+                    {"instance": second_instance},
+                )
+            ).scalar_one() is False
+            assert (
+                await connection.execute(
+                    text("SELECT operations.heartbeat_worker_maintenance(:instance)"),
+                    {"instance": second_instance},
+                )
+            ).scalar_one() is False
+        with pytest.raises(DBAPIError) as standby_cycle:
+            async with worker.transaction() as connection:
+                await connection.execute(
+                    text(
+                        "SELECT operations.run_worker_maintenance_cycle("
+                        ":instance, 0)"
+                    ),
+                    {"instance": second_instance},
+                )
+        assert sqlstate(standby_cycle) == "55000"
+        async with worker.transaction() as connection:
+            assert (
+                await connection.execute(
+                    select(schema.worker_maintenance_state.c.worker_instance_id)
+                )
+            ).scalar_one() == first_instance
+
+        # A future heartbeat after wall-clock rollback is intentionally fresh.
+        # Standby must fail closed until the postmaster fence changes rather
+        # than risk two workers running maintenance.
+        async with owner.transaction() as connection:
+            await connection.execute(
+                update(schema.worker_maintenance_state).values(
+                    heartbeat_at=func.clock_timestamp() + text("interval '1 hour'"),
+                    updated_at=func.clock_timestamp(),
+                )
+            )
+        async with worker.transaction() as connection:
+            assert (
+                await connection.execute(
+                    text("SELECT operations.register_worker_maintenance(:instance)"),
+                    {"instance": second_instance},
+                )
+            ).scalar_one() is False
+        async with owner.transaction() as connection:
+            await connection.execute(
+                update(schema.worker_maintenance_state).values(
+                    heartbeat_at=func.clock_timestamp(),
+                    updated_at=func.clock_timestamp(),
+                )
+            )
 
         async def blocked_heartbeat() -> bool:
             async with worker.transaction() as connection:

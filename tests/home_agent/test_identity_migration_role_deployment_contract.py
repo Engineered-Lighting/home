@@ -312,7 +312,7 @@ class IdentityMigrationRoleDeploymentContractTests(unittest.TestCase):
         roles = read("stack/home-agent-deploy/provision-roles.sh")
         documentation = read("stack/home-agent-deploy/IDENTITY-MIGRATION-ROLE.md")
         self.assertIn(
-            "HOME_AGENT_EXPECTED_DB_REVISION=0006_worker_maintenance_health",
+            "HOME_AGENT_EXPECTED_DB_REVISION=0006a_worker_lease_arbitration",
             env,
         )
         self.assertIn("VALID UNTIL '1970-01-01 00:00:00+00'", roles)

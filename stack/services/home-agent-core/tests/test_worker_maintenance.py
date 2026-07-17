@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy.exc import DBAPIError
 
 from app.ledger import LedgerIntegrityError
 from app.maintenance import (
@@ -17,6 +18,7 @@ from app.worker import (
     DurableWorker,
     WorkerMaintenanceFatal,
     WorkerMaintenanceLeaseLost,
+    WorkerMaintenanceRegistrationContended,
     WorkerMaintenanceRetryable,
 )
 
@@ -72,6 +74,21 @@ class Database:
     @asynccontextmanager
     async def transaction(self, **_kwargs):
         yield self.connection
+
+
+class SimulatedDatabaseFailure(Exception):
+    def __init__(self, sqlstate: str) -> None:
+        super().__init__(sqlstate)
+        self.sqlstate = sqlstate
+
+
+def database_failure(sqlstate: str) -> DBAPIError:
+    return DBAPIError(
+        "test statement",
+        {},
+        SimulatedDatabaseFailure(sqlstate),
+        connection_invalidated=False,
+    )
 
 
 def maintenance_row(**changes):
@@ -346,6 +363,53 @@ async def test_immediate_cycle_uses_db_time_prunes_verifies_and_validates_kernel
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("sqlstate", ("40001", "55000"))
+async def test_cycle_fence_loss_clears_local_registration_before_propagating(
+    sqlstate: str,
+) -> None:
+    database = Database([Result(scalar=NOW), database_failure(sqlstate)])
+    worker = DurableWorker(
+        database,
+        Ledger(),  # type: ignore[arg-type]
+        Spool(),  # type: ignore[arg-type]
+    )
+    worker._maintenance_registered = True
+
+    with pytest.raises(WorkerMaintenanceLeaseLost):
+        await worker._run_maintenance_cycle()
+
+    assert worker._maintenance_registered is False
+
+
+@pytest.mark.asyncio
+async def test_rejected_registration_is_contention_not_acquired_lease_loss() -> None:
+    worker = DurableWorker(
+        Database([Result(scalar=False)]),
+        Ledger(),  # type: ignore[arg-type]
+        Spool(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(WorkerMaintenanceRegistrationContended):
+        await worker._register_maintenance()
+
+    assert worker._maintenance_registered is False
+
+
+@pytest.mark.asyncio
+async def test_invalid_registration_receipt_is_fatal_not_standby() -> None:
+    worker = DurableWorker(
+        Database([Result(scalar=None)]),
+        Ledger(),  # type: ignore[arg-type]
+        Spool(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(WorkerMaintenanceFatal, match="receipt"):
+        await worker._register_maintenance()
+
+    assert worker._maintenance_registered is False
+
+
+@pytest.mark.asyncio
 async def test_ledger_integrity_failure_is_recorded_once_then_fatal():
     worker = DurableWorker(
         Database(),
@@ -451,6 +515,79 @@ class SupervisedWorker(DurableWorker):
     async def run_for_test(self):
         self._test_stop = __import__("asyncio").Event()
         await self.run(self._test_stop)
+
+
+class ContendedStartupWorker(DurableWorker):
+    def __init__(self) -> None:
+        super().__init__(
+            Database(),
+            Ledger(),
+            Spool(),
+            poll_seconds=0.001,  # type: ignore[arg-type]
+        )
+        self.events: list[str] = []
+        self.registration_attempts = 0
+
+    async def _register_maintenance(self) -> None:
+        self.events.append("register")
+        self.registration_attempts += 1
+        if self.registration_attempts == 1:
+            raise WorkerMaintenanceRegistrationContended("contended")
+        self._maintenance_registered = True
+
+    async def _run_maintenance_cycle(self):
+        self.events.append("cycle")
+        return RETENTION_RECEIPT
+
+    async def _heartbeat_maintenance(self) -> None:
+        self.events.append("heartbeat")
+
+    async def run_once(self, *, now=None) -> bool:
+        self.events.append("run_once")
+        self._test_stop.set()
+        return False
+
+    async def _stop_maintenance(self) -> None:
+        self.events.append("stop")
+        self._maintenance_registered = False
+
+    async def run_for_test(self) -> None:
+        self._test_stop = __import__("asyncio").Event()
+        await self.run(self._test_stop)
+
+
+@pytest.mark.asyncio
+async def test_registration_contention_retries_without_running_work_or_exiting(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("app.worker.WORKER_RETRY_SECONDS", 0.0)
+    worker = ContendedStartupWorker()
+
+    await worker.run_for_test()
+
+    assert worker.events == [
+        "register",
+        "register",
+        "cycle",
+        "heartbeat",
+        "run_once",
+        "stop",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fatal_registration_contract_failure_propagates_from_run() -> None:
+    worker = DurableWorker(
+        Database(), Ledger(), Spool(), poll_seconds=0.001  # type: ignore[arg-type]
+    )
+
+    async def fatal_registration() -> None:
+        raise WorkerMaintenanceFatal("invalid registration receipt")
+
+    worker._register_maintenance = fatal_registration  # type: ignore[method-assign]
+
+    with pytest.raises(WorkerMaintenanceFatal, match="receipt"):
+        await worker.run(__import__("asyncio").Event())
 
 
 @pytest.mark.asyncio

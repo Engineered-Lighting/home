@@ -154,6 +154,8 @@ BUILD_CONTEXT_FILES = (
     "tests/home_agent/test_identity_erasure_kernel_foundation_deployment_contract.py",
     "tests/home_agent/test_e1_postgres_gate_contract.py",
     "stack/services/home-agent-core/tests/e1_postgres_harness.py",
+    "stack/services/home-agent-core/alembic/versions/"
+    "0006a_worker_lease_arbitration.py",
     "stack/services/home-agent-core/tests/"
     "test_phase3_identity_erasure_admission_postgres.py",
     "stack/services/home-agent-core/alembic/versions/"

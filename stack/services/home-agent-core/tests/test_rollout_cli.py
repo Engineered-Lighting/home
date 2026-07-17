@@ -119,7 +119,7 @@ async def test_one_shot_checks_migration_restore_and_disk_before_receipt(
 
         async def migration_revision(self):
             events.append("migration")
-            return "0006_worker_maintenance_health"
+            return "0006a_worker_lease_arbitration"
 
         async def close(self):
             events.append("close")

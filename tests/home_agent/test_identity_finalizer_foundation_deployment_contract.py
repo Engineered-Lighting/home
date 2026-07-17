@@ -217,7 +217,7 @@ class IdentityFinalizerFoundationDeploymentContractTests(unittest.TestCase):
         env = read("stack/home-agent.env.example")
         roles = read("stack/home-agent-deploy/provision-roles.sh")
         self.assertIn(
-            "HOME_AGENT_EXPECTED_DB_REVISION=0006_worker_maintenance_health",
+            "HOME_AGENT_EXPECTED_DB_REVISION=0006a_worker_lease_arbitration",
             env,
         )
         self.assertRegex(

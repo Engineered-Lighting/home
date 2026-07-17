@@ -14,4 +14,4 @@
   unchanged.
 - Kept semantic finalization, authority cutover, parent confirmation, memory,
   greetings, model retrieval, and physical action disabled. Production remains
-  pinned to revision `0006_worker_maintenance_health` in `record_only` mode.
+  pinned to revision `0006a_worker_lease_arbitration` in `record_only` mode.

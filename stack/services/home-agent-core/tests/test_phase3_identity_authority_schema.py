@@ -320,7 +320,7 @@ def test_candidate_finalization_writer_privacy_cutover_and_erasure_are_honest() 
 def test_migration_is_owner_only_force_rls_and_refuses_evidence_downgrade() -> None:
     source = MIGRATION.read_text(encoding="utf-8")
     assert 'revision: str = "0007_phase3_identity_authority"' in source
-    assert 'down_revision: str | None = "0006_worker_maintenance_health"' in source
+    assert 'down_revision: str | None = "0006a_worker_lease_arbitration"' in source
     assert "finalizer function" in source
     assert "pre-0007 legacy-source projection" in source
     assert "ENABLE ROW LEVEL SECURITY" in source

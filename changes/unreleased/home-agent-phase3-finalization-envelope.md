@@ -10,4 +10,4 @@
   and restart-safe verification of an exact signed replay after expiry.
 - Kept PostgreSQL semantic projection, authority cutover, parent confirmation,
   memory, greetings, and physical action disabled; production remains pinned to
-  revision `0006_worker_maintenance_health` in `record_only` mode.
+  revision `0006a_worker_lease_arbitration` in `record_only` mode.

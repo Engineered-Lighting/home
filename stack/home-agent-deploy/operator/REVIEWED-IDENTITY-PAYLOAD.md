@@ -159,6 +159,40 @@ future `SERIALIZABLE` database kernel. No API, store, BFF, UI, Compose service,
 migration, or role activation imports it. The live Core service does not mount
 the operator source tree.
 
+## Dormant principal-nominee staging
+
+`principal_binding_candidate_staging.py` is an offline, non-deployable bridge
+from the signed finalizer document to a future principal-binding ceremony. It
+accepts the raw canonical review bundle, raw finalization envelope, freshly
+reconstructed source rows, deployment-pinned verification policy, and exactly
+one UUIDv7 Person-projection receipt ID. The receipt is the only selector: the
+compiler accepts no name, alias, HA user, principal, actor, legacy `me` label,
+or caller-constructed verified object.
+
+The compiler re-runs both signature checks, freezes the private source rows
+exactly once as a canonical source-item-ID-sorted snapshot, and verifies the
+selected Person's decision, receipt, projection, lineage, source digest, and
+signed-artifact commitments. It rejects an archived nominee, every known signed
+privacy directive, and display ambiguity after NFKC normalization, whitespace
+collapse, and case folding. Re-verification requires the original raw
+artifacts, reconstructed rows, and exact receipt selector again and returns a
+fresh object; the stable keyed nomination commitment deliberately excludes the
+verification clock.
+
+Selecting a signed receipt proves only which reviewed Person row is being
+nominated. This module authenticates neither the selector's caller nor an
+operator's authority to make that nomination. Its output therefore reports
+`nomination_role=operator_review_candidate`,
+`nomination_authority_status=unverified`, `nominee_count=1`,
+`operator_nomination_authority_verified=false`,
+`selector_authority_verified=false`, `me_identity_established=false`, and
+`binding_created=false`. Current HA identity, binding graph, person status,
+privacy, retrieval, erasure, confirmation, single-use consumption, and
+transaction state are also unverified. The result remains `non_deployable`,
+`capability_disabled`, `coverage_unproven`, non-authoritative, write-disabled,
+and non-portable. No Core API, store, BFF, UI, Compose service, migration, or
+runtime role imports it.
+
 ## Dormant parent-candidate staging
 
 `parent_confirmation_staging.py` is a separate offline bridge from the signed

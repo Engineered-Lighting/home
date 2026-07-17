@@ -160,6 +160,22 @@ tombstones and always return `capability_disabled`. They never parse submitted
 identity content or open a database transaction. Reviewed migration can proceed
 only through the separate atomic finalizer after its rollout gates are met.
 
+The offline operator-only `principal_binding_candidate_staging` compiler now
+closes one source-provenance gap without enabling binding. It re-verifies the
+raw identity-review bundle, distinct finalization envelope, and canonical
+private source snapshot, then resolves one exact Person-projection receipt. An
+offline operator must choose that receipt because the signed legacy data cannot
+declare who is `me`; the choice itself is explicitly unauthenticated and
+non-authoritative. The compiler accepts no name, alias, HA user, principal,
+actor, or legacy-role selector. Its output keeps operator authority, current HA
+identity and graph state, privacy/retrieval/erasure state, confirmation,
+single-use consumption, binding creation, location memory, and travel greetings
+false or unverified. It is `non_deployable`, `capability_disabled`,
+`coverage_unproven`, and non-portable, and it is not imported by Core API/store,
+BFF, native, browser, Edge, or Compose services. A future ceremony must reverify
+the raw artifacts and prove the authenticated selector and all transaction-time
+state; this Python result is not a binding candidate receipt.
+
 There is no direct parent-confirmation API. Caller-supplied parent/child UUIDs
 cannot create a single relationship edge, even with the Core service bearer.
 The source-only `app.parent_confirmation` compiler can now render and verify

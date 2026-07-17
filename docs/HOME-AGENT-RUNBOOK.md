@@ -524,6 +524,24 @@ Tracker binding, explicit parent facts, and the private Itaipava locality also
 remain disabled pending their separate reviewed flows. Do not use implicit
 legacy `parent` labels as `parent_of` facts.
 
+The operator-only `principal_binding_candidate_staging.py` compiler may be
+exercised with synthetic canonical fixtures while live services remain offline.
+It re-verifies the exact review bundle, separate finalization signature, and
+reconstructed source snapshot before resolving one UUIDv7 Person-projection
+receipt. That receipt is the sole permitted selector; never substitute a name,
+alias, HA UUID, principal UUID, actor claim, or legacy `me` label. The receipt
+choice is still only an operator nomination input: this compiler does not prove
+who supplied it or that they were authorized, and it never establishes `me`.
+
+Treat its result as private, in-process, and non-portable. A future consumer
+must re-submit the raw artifacts, source rows, and exact selector, then prove a
+fresh authenticated HA subject, current conflict-free graph, current privacy /
+retrieval / erasure state, and a single-use private confirmation inside the
+future serializable binding transaction. Until then every authority, binding,
+write, location-memory, and greeting flag stays false and the result remains
+`non_deployable`, `capability_disabled`, and `coverage_unproven`. It has no live
+invocation command, API route, database writer, or Compose service.
+
 In particular, neither browser nor native BFF accepts direct parent
 confirmation. The pure `app.parent_confirmation` module compiles exactly two
 server-staged candidates into a private digest-bound preview and verifies one

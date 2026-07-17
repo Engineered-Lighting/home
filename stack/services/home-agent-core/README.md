@@ -148,8 +148,17 @@ only through the separate atomic finalizer after its rollout gates are met.
 
 There is no direct parent-confirmation API. Caller-supplied parent/child UUIDs
 cannot create a single relationship edge, even with the Core service bearer.
-Explicit parent facts remain disabled until a future server-staged,
-digest-bound, atomic reviewed two-parent protocol replaces that authority.
+The source-only `app.parent_confirmation` compiler can now render and verify
+exactly two server-staged candidates as one private, digest-bound intent, but
+its output is explicitly non-authoritative, not commit-ready, and
+write-disabled under a dormant-only contract version, with status
+`capability_disabled`. It is not imported by Core API/store, BFF, native, or
+browser code. Explicit parent facts remain disabled until a later reviewed
+schema and serializable commit kernel uses a new deployable contract version
+and consumes a fresh authenticated confirmation without weakening those
+boundaries. The dormant compiler binds the supplied server snapshot but does
+not authenticate its receipt strings, mint or consume a confirmation artifact,
+choose a fact valid-from time, or provide replay protection.
 
 Operator-only identity review (never proxied through the BFF):
 

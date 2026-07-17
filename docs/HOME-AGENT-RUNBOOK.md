@@ -517,11 +517,21 @@ remain disabled pending their separate reviewed flows. Do not use implicit
 legacy `parent` labels as `parent_of` facts.
 
 In particular, neither browser nor native BFF accepts direct parent
-confirmation. Before either explicit parent fact can be enabled, Core must
-stage the complete exact candidate set, render a private digest-bound preview,
-and commit both reviewed edges atomically from one authenticated confirmation.
-Client-supplied parent/child UUIDs are not authority. Until that flow and its
-adversarial tests are deployed, parent role expansion remains unresolved.
+confirmation. The pure `app.parent_confirmation` module compiles exactly two
+server-staged candidates into a private digest-bound preview and verifies one
+inseparable two-edge intent, but deliberately returns
+`capability_disabled`, `authoritative=false`, and `commit_ready=false`. It has
+`enables_writes=false` as well and uses a dormant-only contract version. It has
+no API, store, database, BFF, native, or browser integration. Before either
+explicit parent fact can be enabled, a later reviewed schema and serializable
+commit kernel must use a new deployable contract version, consume a fresh
+authenticated confirmation, and commit both edges atomically. Client-supplied
+parent/child UUIDs are not authority. Until that full flow and its live
+adversarial tests are deployed, parent role expansion remains unresolved. The
+dormant compiler authenticates no receipt and accepts no client confirmation
+time; its verified preview still requires a new private authenticated gesture,
+single-use artifact consumption, and transaction-time validity inside the
+future commit kernel.
 
 After binding, `/home-agent/` may show the two stored location-preference
 booleans during record-only or shadow operation, but only as a rollback privacy

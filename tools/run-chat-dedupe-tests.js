@@ -55,6 +55,8 @@ const helperSource = [
     findRecentAssistantLikeIdx,
     findAssistantDuplicateIdx,
     findActiveAssistantStreamingIdx,
+    upsertAssistantTurnEvent,
+    coalesceAssistantTurnEvents,
     serviceCallMayEnergizeLights,
     shouldSuppressActionCardsForToolCall,
   });
@@ -93,6 +95,15 @@ assert("true token delta still appends",
 
 assert("duplicate snapshot does not append twice",
   H.mergeStreamingText("A car covered with a tarp", "A car covered with a tarp") === "A car covered with a tarp");
+
+const groundedLookAnswer = "Books, a cup, and other small objects are on the glass-topped coffee table in the living room.";
+
+assert("grounded-look cumulative snapshots settle to one sentence",
+  [
+    "Books, a cup, and other small objects",
+    groundedLookAnswer,
+    groundedLookAnswer,
+  ].reduce((current, chunk) => H.mergeStreamingText(current, chunk), "") === groundedLookAnswer);
 
 assert("stream overlap keeps one full camera answer",
   H.mergeStreamingText(
@@ -246,6 +257,11 @@ const prev = [
 assert("recent duplicate user/voice text is detected across kind names",
   H.isRecentDuplicateEvent(prev, { kind: "voice", text: "Whats in my driveway" }));
 
+assert("same user text in a distinct keyed turn is preserved",
+  !H.isRecentDuplicateEvent([
+    { kind: "user", time: nowTime(), text: "Whats in my driveway", turnKey: "turn-1" },
+  ], { kind: "user", time: nowTime(), text: "Whats in my driveway", turnKey: "turn-2" }));
+
 assert("recent duplicate assistant text is detected",
   H.isRecentDuplicateEvent(prev, { kind: "home", text: "A car is parked outside" }));
 
@@ -254,6 +270,75 @@ assert("perception card repeating recent assistant answer is suppressed",
     ...prev,
     { kind: "home", time: nowTime(), text: "A covered vehicle is parked in the driveway." },
   ], { kind: "perception", text: "driveway: A covered vehicle is parked in the driveway." }));
+
+assert("grounded-look image survives duplicate-caption suppression",
+  !H.isRecentDuplicateEvent([
+    { kind: "user", time: nowTime(), text: "What's on my coffee table?" },
+    { kind: "home", time: nowTime(), text: groundedLookAnswer },
+  ], {
+    kind: "perception",
+    time: nowTime(),
+    text: `living_room: ${groundedLookAnswer}`,
+    snapshotUrl: "/proxy/vision/reason/living_room/annotated.jpg?cb=1",
+    imageMode: "annotated",
+  }));
+
+assert("explicit unavailable-image state survives duplicate-caption suppression",
+  !H.isRecentDuplicateEvent([
+    { kind: "home", time: nowTime(), text: groundedLookAnswer },
+  ], {
+    kind: "perception",
+    time: nowTime(),
+    text: `living_room: ${groundedLookAnswer}`,
+    imageUnavailable: true,
+  }));
+
+assert("three assistant sources coalesce into one grounded-look bubble",
+  (() => {
+    const turnKey = "ha-turn:e-42";
+    const events = H.coalesceAssistantTurnEvents([
+      { id: "u1", kind: "user", time: nowTime(), text: "What's on my coffee table?", turnKey },
+      { id: "a1", kind: "home", time: nowTime(), text: groundedLookAnswer, turnKey, streaming: false },
+      { id: "a2", kind: "home", time: nowTime(), text: groundedLookAnswer, convId: "conversation-1" },
+      { id: "a3", kind: "home", time: nowTime(), text: groundedLookAnswer, sourceTurnId: "sse:99" },
+    ]);
+    const answers = events.filter((event) => event.kind === "home");
+    return answers.length === 1 && answers[0].text === groundedLookAnswer;
+  })());
+
+assert("turn identity replaces a different streamed draft with its final",
+  (() => {
+    const turnKey = "ha-turn:e-43";
+    const events = H.upsertAssistantTurnEvent([
+      { id: "u1", kind: "user", time: nowTime(), text: "Look in the living room", turnKey },
+      { id: "a1", kind: "home", time: nowTime(), text: "I'll take a closer look.", turnKey, streaming: true },
+      { id: "s1", kind: "system", time: nowTime(), text: "looking closely (living_room)…" },
+    ], {
+      id: "a2", kind: "home", time: nowTime(), text: groundedLookAnswer,
+      turnKey, convId: "conversation-1", streaming: false,
+    });
+    const answers = events.filter((event) => event.kind === "home");
+    return answers.length === 1
+      && answers[0].id === "a1"
+      && answers[0].text === groundedLookAnswer
+      && answers[0].convId === "conversation-1"
+      && answers[0].streaming === false;
+  })());
+
+assert("identical answers across separate user turns remain separate",
+  H.coalesceAssistantTurnEvents([
+    { kind: "user", time: nowTime(), text: "First look" },
+    { kind: "home", time: nowTime(), text: groundedLookAnswer },
+    { kind: "user", time: nowTime(), text: "Look again" },
+    { kind: "home", time: nowTime(), text: groundedLookAnswer },
+  ]).filter((event) => event.kind === "home").length === 2);
+
+assert("unscoped identical assistant events far apart remain separate",
+  H.coalesceAssistantTurnEvents([
+    { kind: "home", time: "08:00:00", text: groundedLookAnswer },
+    { kind: "system", time: "08:30:00", text: "reconnected" },
+    { kind: "home", time: "09:00:00", text: groundedLookAnswer },
+  ]).filter((event) => event.kind === "home").length === 2);
 
 assert("distinct perception card after assistant answer is preserved",
   !H.isRecentDuplicateEvent([

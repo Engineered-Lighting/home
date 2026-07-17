@@ -487,10 +487,11 @@ function usePerceptionImageReady(snapshotUrl) {
   return state;
 }
 
-function PerceptionContent({ text, snapshotUrl, imageMode }) {
+function PerceptionContent({ text, snapshotUrl, imageMode, imageUnavailable = false }) {
   const [expanded, setExpanded] = React.useState(false);
   const [lightboxOpen, setLightboxOpen] = React.useState(false);
   const imageState = usePerceptionImageReady(snapshotUrl);
+  const showImageUnavailable = imageUnavailable || imageState === "error";
   const isAnnotated = imageMode === "annotated";
   // Parse the text — bridge emits "perceived ROOM: SUMMARY" or just SUMMARY.
   // Try to extract a room name from the first colon-prefixed token.
@@ -626,6 +627,14 @@ function PerceptionContent({ text, snapshotUrl, imageMode }) {
               fontSize: 12,
               fontWeight: 400,
             }}>{short}</span>
+            {showImageUnavailable && (
+              <span role="status" style={{
+                color: "var(--hg-warn, #d6a448)",
+                fontFamily: HG_MONO,
+                fontSize: 9,
+                letterSpacing: "0.06em",
+              }}>image unavailable</span>
+            )}
           </div>
           <img
             src={snapshotUrl}
@@ -700,7 +709,13 @@ function PerceptionContent({ text, snapshotUrl, imageMode }) {
           fontSize: 12,
           fontWeight: 400,
         }}>{short}</span>
-        <span />
+        <span role={showImageUnavailable ? "status" : undefined} style={{
+          color: showImageUnavailable ? "var(--hg-warn, #d6a448)" : undefined,
+          fontFamily: HG_MONO,
+          fontSize: 9,
+          letterSpacing: "0.06em",
+          whiteSpace: "nowrap",
+        }}>{showImageUnavailable ? "image unavailable" : ""}</span>
       </div>
       {lightbox}
     </React.Fragment>
@@ -951,7 +966,7 @@ function EventContent({ e, onConfirm, onCancel, onUndo, onControlAction, lifecyc
         return <ActionContent id={e.id} title={e.title} service={e.service} target={e.target} attrs={e.attrs} status={e.status} latency={e.latency} reason={e.reason} traceId={e.traceId} onConfirm={onConfirm} onCancel={onCancel} onUndo={onUndo} />;
       case "home":       return <HomeContent text={e.text} streaming={e.streaming} />;
       case "external":   return <ExternalContent text={e.text} streaming={e.streaming} />;
-      case "perception": return <PerceptionContent text={e.text} snapshotUrl={e.snapshotUrl} imageMode={e.imageMode} />;
+      case "perception": return <PerceptionContent text={e.text} snapshotUrl={e.snapshotUrl} imageMode={e.imageMode} imageUnavailable={e.imageUnavailable} />;
       case "proactive":  return <ProactiveContent text={e.text} />;
       case "diag":       return <DiagContent text={e.text} channel={e.channel} />;
       case "system":     return <SystemContent text={e.text} tone={e.tone} />;

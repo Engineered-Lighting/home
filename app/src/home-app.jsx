@@ -425,6 +425,10 @@ function isRecentDuplicateEvent(prev, ev, lookback = 10, windowMs = 8000) {
   for (let i = prev.length - 1; i >= start; i--) {
     const e = prev[i];
     if (duplicateEventGroupKey(e?.kind) !== group) continue;
+    // A locally-issued turn key is stronger than the legacy text/time
+    // heuristic. Preserve an intentional repeated question in a new turn;
+    // same-turn echoes still share the key and collapse.
+    if (ev?.turnKey && e?.turnKey !== ev.turnKey) continue;
     if (canonicalChatText(e?.text) !== target) continue;
     if (!_withinWindow(e.time, windowMs, now)) continue;
     return true;
@@ -447,6 +451,11 @@ function perceptionAnswerText(text) {
 
 function isRedundantPerceptionOfAssistant(prev, ev, lookback = 10, windowMs = 8000) {
   if (ev?.kind !== "perception") return false;
+  // A perception event is also the transport for the camera artifact.
+  // The caption often repeats the spoken answer verbatim, but dropping
+  // that event also drops its segmented image. Only text-only perception
+  // echoes are redundant; an event carrying an artifact must render.
+  if (ev.snapshotUrl || ev.artifactUrl || ev.imageUnavailable) return false;
   const target = perceptionAnswerText(ev.text);
   if (!canonicalChatText(target)) return false;
 
@@ -459,6 +468,113 @@ function isRedundantPerceptionOfAssistant(prev, ev, lookback = 10, windowMs = 80
     if (isNearDuplicateChatText(e.text || "", target)) return true;
   }
   return false;
+}
+
+function assistantTurnIdentityValues(ev) {
+  if (!ev || typeof ev !== "object") return [];
+  return [
+    ["turn", ev.turnKey],
+    ["run", ev.runId],
+    ["source", ev.sourceTurnId],
+  ]
+    .filter(([, value]) => value !== null && value !== undefined && String(value).trim())
+    .map(([field, value]) => `${field}:${String(value)}`);
+}
+
+function assistantEventsShareIdentity(a, b) {
+  const aIds = assistantTurnIdentityValues(a);
+  if (!aIds.length) return false;
+  const bIds = new Set(assistantTurnIdentityValues(b));
+  return aIds.some((value) => bIds.has(value));
+}
+
+function assistantEventTimesClose(a, b, windowMs = 8000) {
+  const parse = (value) => {
+    const match = String(value || "").match(/^(\d{2}):(\d{2}):(\d{2})$/);
+    if (!match) return null;
+    return ((+match[1] * 60 * 60) + (+match[2] * 60) + (+match[3])) * 1000;
+  };
+  const aMs = parse(a?.time);
+  const bMs = parse(b?.time);
+  if (aMs === null || bMs === null) return true;
+  const dayMs = 24 * 60 * 60 * 1000;
+  const diff = Math.abs(aMs - bMs);
+  return Math.min(diff, dayMs - diff) <= windowMs;
+}
+
+function upsertAssistantTurnEvent(prev, incoming, lookback = 100) {
+  const events = Array.isArray(prev) ? prev : [];
+  if (!incoming || (incoming.kind !== "home" && incoming.kind !== "external")) {
+    return incoming ? [...events, incoming] : events;
+  }
+
+  const nextEvent = {
+    ...incoming,
+    text: normalizeChatEventText(incoming.text || ""),
+  };
+  const start = Math.max(0, events.length - lookback);
+  let currentTurnStart = start;
+  for (let i = events.length - 1; i >= start; i--) {
+    if (events[i]?.kind === "user" || events[i]?.kind === "voice") {
+      currentTurnStart = i + 1;
+      break;
+    }
+  }
+
+  const matches = [];
+  for (let i = start; i < events.length; i++) {
+    const existing = events[i];
+    if (existing?.kind !== nextEvent.kind) continue;
+    const explicitIdentity = assistantEventsShareIdentity(existing, nextEvent);
+    if (explicitIdentity) {
+      matches.push(i);
+      continue;
+    }
+    if (i < currentTurnStart) continue;
+    if (existing.streaming) {
+      matches.push(i);
+      continue;
+    }
+    if (!assistantEventTimesClose(existing, nextEvent)) continue;
+    const existingText = normalizeChatEventText(existing.text || "");
+    if (isNearDuplicateChatText(existingText, nextEvent.text)) matches.push(i);
+  }
+
+  if (!matches.length) return [...events, nextEvent];
+
+  const keepIdx = matches[0];
+  const existing = events[keepIdx];
+  const mergedText = nextEvent.streaming
+    ? mergeStreamingText(existing.text, nextEvent.text)
+    : settleAssistantFinalText(existing.text, nextEvent.text);
+  const merged = {
+    ...existing,
+    ...nextEvent,
+    id: existing.id,
+    time: existing.time,
+    text: mergedText,
+    streaming: nextEvent.streaming === true,
+    turnKey: nextEvent.turnKey || existing.turnKey,
+    runId: nextEvent.runId || existing.runId,
+    sourceTurnId: nextEvent.sourceTurnId || existing.sourceTurnId,
+    convId: nextEvent.convId || existing.convId,
+  };
+  const duplicateIdxs = new Set(matches.slice(1));
+  return events
+    .map((event, idx) => idx === keepIdx ? merged : event)
+    .filter((_event, idx) => !duplicateIdxs.has(idx));
+}
+
+function coalesceAssistantTurnEvents(events) {
+  let coalesced = [];
+  for (const event of Array.isArray(events) ? events : []) {
+    if (event?.kind === "home" || event?.kind === "external") {
+      coalesced = upsertAssistantTurnEvent(coalesced, event, Math.max(100, coalesced.length));
+    } else {
+      coalesced.push(event);
+    }
+  }
+  return coalesced;
 }
 
 function readViewportProfile() {
@@ -4552,6 +4668,12 @@ function visionBaseFromEndpoint(metricsBase, endpoint) {
   return siblingServiceBase(metricsBase, endpoint, "HG_DEFAULT_VISION_BASE", 8091, "http://192.168.0.100:8091");
 }
 
+function groundedVisionBaseFromEndpoint(metricsBase, endpoint) {
+  const configured = webDefaultBase("HG_DEFAULT_GROUNDED_VISION_BASE");
+  if (configured) return configured;
+  return visionBaseFromEndpoint(metricsBase, endpoint);
+}
+
 function visionMediaUrlFromEndpoint(pathOrUrl, metricsBase, endpoint) {
   const raw = String(pathOrUrl || "").trim();
   if (!raw) return "";
@@ -4579,6 +4701,23 @@ function visionMediaUrlFromEndpoint(pathOrUrl, metricsBase, endpoint) {
   }
   const base = visionBaseFromEndpoint(metricsBase, endpoint);
   if (!base) return raw;
+  return `${String(base).replace(/\/+$/, "")}/${raw.replace(/^\/+/, "")}`;
+}
+
+function groundedVisionMediaUrlFromEndpoint(pathOrUrl, metricsBase, endpoint) {
+  const raw = String(pathOrUrl || "").trim();
+  if (!raw) return "";
+  const base = groundedVisionBaseFromEndpoint(metricsBase, endpoint);
+  if (!base) return raw;
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const parsed = new URL(raw);
+      return `${String(base).replace(/\/+$/, "")}${parsed.pathname}${parsed.search}`;
+    } catch {
+      return raw;
+    }
+  }
+  if (raw.startsWith("/proxy/")) return raw;
   return `${String(base).replace(/\/+$/, "")}/${raw.replace(/^\/+/, "")}`;
 }
 
@@ -4759,7 +4898,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     debugMode: false,   // Show internal diag events ([parakeet], [direct], [kokoro], etc.) in feed
   }), []);
   const initialEventsFromStorage = useMemo(
-    () => (initialEvents ? initialEvents : loadEvents()).map(sanitizeChatEventForStorage),
+    () => coalesceAssistantTurnEvents(
+      (initialEvents ? initialEvents : loadEvents()).map(sanitizeChatEventForStorage),
+    ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
@@ -5527,7 +5668,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * chat history — filtered out so they never persist or stack across launches. */
   useEffect(() => {
     const id = requestAnimationFrame(() => saveEvents(
-      events.filter((e) => !e.onboarding).map(sanitizeChatEventForStorage),
+      coalesceAssistantTurnEvents(
+        events.filter((e) => !e.onboarding).map(sanitizeChatEventForStorage),
+      ),
     ));
     return () => cancelAnimationFrame(id);
   }, [events]);
@@ -6435,12 +6578,24 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       return;
     }
 
+    // One UI turn key follows this request across pipeline progress,
+    // intent-end, SSE, and conversation.finished. Source-specific IDs are
+    // not stable across a tool-using turn, so the locally-created key is the
+    // reliable identity used to upsert the one assistant bubble.
+    const thinkingId = nextId();
+    const turnKey = `ha-turn:${thinkingId}`;
+
     // Local instant feedback for the user's typed message. The matching
     // SSE event (when the sidecar tees the chat completion) will dedupe
     // against this by content and only add the assistant + tool_calls.
-    if (echoUser) addEvent({ kind: "user", text });
-    const thinkingId = nextId();
-    setEvents((prev) => [...prev, { id: thinkingId, kind: "thinking", time: fmtTime(), text: "calling assistant…" }]);
+    if (echoUser) addEvent({ kind: "user", text, turnKey });
+    setEvents((prev) => [...prev, {
+      id: thinkingId,
+      kind: "thinking",
+      time: fmtTime(),
+      text: "calling assistant…",
+      turnKey,
+    }]);
 
     // Addendum 29 Change 2: in-flight stub for the trace bar. Pushes a
     // placeholder LabTurn that the renderer shows as a pulsing band at
@@ -6497,6 +6652,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     // closure variables, not refs, because they reset every turn.
     const turnToolCalls = [];
     let streamingBubbleId = null;
+    let pipelineRunId = null;
     const finalizeStreamingBubble = () => {
       const id = streamingBubbleId;
       if (!id) return false;
@@ -6583,6 +6739,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             return [...next, {
               id: newId, kind: "home", time: fmtTime(),
               text: normalizeChatEventText(prog.textDelta), streaming: true,
+              turnKey, runId: pipelineRunId,
             }];
           });
           return;
@@ -6598,29 +6755,17 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           streamingBubbleId = null;
           if (activeStreamingId) streamingIds.current.delete(activeStreamingId);
           setEvents((prev) => {
-            const activeIdx = activeStreamingId
-              ? prev.findIndex((e) => e.id === activeStreamingId)
-              : findActiveAssistantStreamingIdx(prev, "home", 80);
-            const existingIdx = activeIdx !== -1
-              ? activeIdx
-              : findAssistantDuplicateIdx(prev, speechText, "home", 60);
-            if (existingIdx !== -1) {
-              return prev.map((e, i) => i === existingIdx
-                ? {
-                    ...e,
-                    text: settleAssistantFinalText(e.text, speechText),
-                    streaming: false,
-                    convId: convId || e.convId,
-                  }
-                : e);
-            }
-            return [...prev.filter((e) => e.id !== thinkingId), {
+            const withoutThinking = prev.filter((e) => e.id !== thinkingId);
+            return upsertAssistantTurnEvent(withoutThinking, {
               id: nextId(),
               kind: "home",
               time: fmtTime(),
               text: speechText,
               convId,
-            }];
+              turnKey,
+              runId: pipelineRunId,
+              streaming: false,
+            });
           });
         } else {
           // Lock the streaming bubble (if one exists) so the trailing stop-
@@ -6642,34 +6787,58 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           try {
             const base = metricsBase || metricsBaseFromEndpoint(endpoint);
             if (base) {
-              const visionOrigin = visionBaseFromEndpoint(base, endpoint);
+              // Browser result retrieval uses a dedicated authenticated,
+              // read-only gateway route. Tauri falls back to its direct
+              // vision base because the native shell has no web gateway.
+              const visionOrigin = groundedVisionBaseFromEndpoint(base, endpoint);
               const tauriFetch = window.tauriFetch || fetch;
               const seen = new Set();
               for (const tc of visionTools) {
-                if (seen.has(tc.name)) continue;   // dedupe within turn
-                seen.add(tc.name);
                 const isDescribe = tc.name === "describe_camera" || tc.name === "refresh_perception";
+                const resultFamily = isDescribe ? "describe" : "grounded-reason";
+                if (seen.has(resultFamily)) continue;
+                seen.add(resultFamily);
                 const latestPath = isDescribe ? "/describe/latest" : "/reason/latest";
+                const requestedRoom = String(tc.args?.room || tc.args?.camera || "camera")
+                  .replace(/[^a-z0-9_ -]/gi, "_");
+                const addUnavailableArtifact = () => addEvent({
+                  kind: "perception",
+                  text: `${requestedRoom}: image could not be loaded`,
+                  imageMode: isDescribe ? undefined : "annotated",
+                  imageUnavailable: true,
+                  turnKey,
+                });
                 tauriFetch(visionOrigin + latestPath, { cache: "no-store" })
                   .then((r) => r.ok ? r.json() : null)
                   .then((data) => {
-                    if (!data) return;
+                    if (!data) {
+                      addUnavailableArtifact();
+                      return;
+                    }
                     let snapshotUrl = null;
                     let cardText = "";
                     const cam = (data.camera || "").replace(/[^a-z_]/gi, "_");
+                    if (requestedRoom !== "camera" && cam && cam !== requestedRoom) {
+                      console.warn(`[perception] ignored mismatched ${resultFamily} artifact`, {
+                        requestedRoom,
+                        resultCamera: cam,
+                      });
+                      addUnavailableArtifact();
+                      return;
+                    }
                     if (isDescribe) {
                       const desc = data.description || "(no description)";
                       if (data.snapshot_url) {
-                        snapshotUrl = visionMediaUrlFromEndpoint(data.snapshot_url, base, endpoint) + "?cb=" + Date.now();
+                        snapshotUrl = groundedVisionMediaUrlFromEndpoint(data.snapshot_url, base, endpoint) + "?cb=" + Date.now();
                       }
                       cardText = `${cam}: ${desc}`;
                     } else {
                       if (data.annotated_url) {
-                        snapshotUrl = visionMediaUrlFromEndpoint(data.annotated_url, base, endpoint) + "?cb=" + Date.now();
+                        snapshotUrl = groundedVisionMediaUrlFromEndpoint(data.annotated_url, base, endpoint) + "?cb=" + Date.now();
                       } else if (data.detail_url) {
-                        snapshotUrl = visionMediaUrlFromEndpoint(data.detail_url, base, endpoint) + "?cb=" + Date.now();
+                        snapshotUrl = groundedVisionMediaUrlFromEndpoint(data.detail_url, base, endpoint) + "?cb=" + Date.now();
                       } else if (data.snapshot_url) {
-                        snapshotUrl = visionMediaUrlFromEndpoint(data.snapshot_url, base, endpoint) + "?cb=" + Date.now();
+                        snapshotUrl = groundedVisionMediaUrlFromEndpoint(data.snapshot_url, base, endpoint) + "?cb=" + Date.now();
                       }
                       cardText = `${cam}: ${data.answer || "(grounded look)"}`;
                     }
@@ -6678,12 +6847,23 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
                       text: cardText,
                       snapshotUrl,
                       imageMode: isDescribe ? undefined : "annotated",
+                      imageUnavailable: !snapshotUrl,
+                      turnKey,
                     });
                   })
                   .catch((err) => {
                     console.error(`[perception] ${tc.name} fetch err`, err);
+                    addUnavailableArtifact();
                   });
               }
+            } else {
+              addEvent({
+                kind: "perception",
+                text: "camera: image could not be loaded",
+                imageMode: "annotated",
+                imageUnavailable: true,
+                turnKey,
+              });
             }
           } catch (e) {
             console.error("[perception] outer", e);
@@ -6712,6 +6892,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       conversationId,
       onEvent,
     });
+    pipelineRunId = run?.id !== null && run?.id !== undefined && String(run.id).trim()
+      ? String(run.id)
+      : null;
     activeRunRef.current = run;
 
     try {
@@ -9329,13 +9512,26 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // "Marcello" and the other "Marcelo".
         const correctedUser = normalizeChatEventText(entry.user);
         // Dedup user/voice bubble against the last ~8 events.
-        const userIdx = findRecentUserIdx(prev, correctedUser, 20);
+        const immediateUserIdx = findRecentUserIdx(prev, correctedUser, 20);
+        // A grounded tool turn can legitimately run beyond the legacy 8s
+        // cross-source window. While the local pipeline is still active,
+        // bind its delayed SSE completion to the existing user turn rather
+        // than inserting a second user barrier and a second answer.
+        const userIdx = immediateUserIdx !== -1
+          ? immediateUserIdx
+          : (activeRunRef.current
+            ? findRecentUserIdx(prev, correctedUser, 100, 120000)
+            : -1);
+        const sourceTurnId = entry.id ? `sse:${entry.id}` : null;
+        const turnKey = userIdx !== -1 && prev[userIdx]?.turnKey
+          ? prev[userIdx].turnKey
+          : sourceTurnId;
         const newUserEvents = [];
         if (userIdx === -1 && correctedUser) {
           // No local user event → originated outside the Home app (Voice PE).
           newUserEvents.push({
             id: nextId(), kind: "voice", time: fmtTime(),
-            text: correctedUser,
+            text: correctedUser, turnKey,
           });
         }
         // Tag bridge-emitted diag events ([parakeet] heard, [direct]
@@ -9406,6 +9602,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
               channel: diagChannel,
               time: fmtTime(),
               text: correctedAssistant,
+              turnKey,
+              sourceTurnId,
             }]
           : [];
         // Defensive dedupe (May 2026): assistant text occasionally arrives
@@ -9422,19 +9620,11 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             continue;
           }
           const streamingIdx = findActiveAssistantStreamingIdx(nextEvents, ev.kind, 80);
-          const existingIdx = streamingIdx !== -1
-            ? streamingIdx
-            : findAssistantDuplicateIdx(nextEvents, ev.text, ev.kind, 60);
-          if (existingIdx === -1) {
-            nextEvents = [...nextEvents, ev];
-            continue;
-          }
-          if (nextEvents[existingIdx]?.streaming) {
-            streamingIds.current.delete(nextEvents[existingIdx].id);
-          }
-          nextEvents = nextEvents.map((e, i) => i === existingIdx
-            ? { ...e, text: settleAssistantFinalText(e.text, ev.text), streaming: false }
-            : e);
+          if (streamingIdx !== -1) streamingIds.current.delete(nextEvents[streamingIdx].id);
+          nextEvents = upsertAssistantTurnEvent(nextEvents, {
+            ...ev,
+            streaming: false,
+          });
         }
         return nextEvents;
       });
@@ -9911,49 +10101,48 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // filter the routing log by it later. WS event carries it
         // directly per slim payload (see comment above).
         const convId = d.conversation_id || null;
+        const sourceTurnId = d.run_id || d.turn_id || d.id || null;
+        const fallbackTurnKey = sourceTurnId
+          ? `finished:${sourceTurnId}`
+          : `finished:${Date.now()}:${userTextC.slice(0, 24)}`;
         setEvents((prev) => {
-          const userIdx = findRecentUserIdx(prev, userTextC, 20);
-          const streamingAsstIdx = assistantTextC
-            ? findActiveAssistantStreamingIdx(prev, "home", 80)
-            : -1;
-          const asstIdx = streamingAsstIdx !== -1
-            ? streamingAsstIdx
-            : findAssistantDuplicateIdx(prev, assistantTextC, "home", 60);
-          const newUser = (userTextC && userIdx === -1)
-            ? [{ id: nextId(), kind: "voice", time: fmtTime(), text: userTextC, convId }]
-            : [];
-          const newAsst = (assistantTextC && asstIdx === -1)
-            ? [{ id: nextId(), kind: "home", time: fmtTime(), text: assistantTextC, convId }]
-            : [];
-          // If we found existing bubbles (dedup hit) and they're
-          // missing a convId, retroactively stamp them so the drawer
-          // works on either fire-order race.
+          const immediateUserIdx = findRecentUserIdx(prev, userTextC, 20);
+          const userIdx = immediateUserIdx !== -1
+            ? immediateUserIdx
+            : (activeRunRef.current
+              ? findRecentUserIdx(prev, userTextC, 100, 120000)
+              : -1);
+          const turnKey = userIdx !== -1 && prev[userIdx]?.turnKey
+            ? prev[userIdx].turnKey
+            : fallbackTurnKey;
           let augmented = prev;
-          if (convId) {
-            if (userIdx !== -1 && !prev[userIdx]?.convId) {
-              augmented = augmented.map((e, i) => i === userIdx ? { ...e, convId } : e);
-            }
-            if (asstIdx !== -1 && !augmented[asstIdx]?.convId) {
-              augmented = augmented.map((e, i) => i === asstIdx ? { ...e, convId } : e);
-            }
-          }
-          if (asstIdx !== -1 && assistantTextC) {
-            if (augmented[asstIdx]?.streaming) {
-              streamingIds.current.delete(augmented[asstIdx].id);
-            }
-            augmented = augmented.map((e, i) => i === asstIdx
+          if (userTextC && userIdx === -1) {
+            augmented = [...augmented, {
+              id: nextId(), kind: "voice", time: fmtTime(),
+              text: userTextC, convId, turnKey,
+            }];
+          } else if (userIdx !== -1 && (convId || turnKey)) {
+            augmented = augmented.map((event, idx) => idx === userIdx
               ? {
-                  ...e,
-                  text: settleAssistantFinalText(e.text, assistantTextC),
-                  streaming: false,
-                  convId: convId || e.convId,
+                  ...event,
+                  convId: convId || event.convId,
+                  turnKey: event.turnKey || turnKey,
                 }
-              : e);
+              : event);
           }
-          if (newUser.length === 0 && newAsst.length === 0) {
-            return augmented === prev ? prev : augmented;
+          if (!assistantTextC) return augmented;
+          const streamingAsstIdx = findActiveAssistantStreamingIdx(augmented, "home", 80);
+          if (streamingAsstIdx !== -1) {
+            streamingIds.current.delete(augmented[streamingAsstIdx].id);
           }
-          return [...augmented, ...newUser, ...newAsst];
+          return upsertAssistantTurnEvent(augmented, {
+            id: nextId(), kind: "home", time: fmtTime(),
+            text: assistantTextC,
+            convId,
+            turnKey,
+            sourceTurnId: sourceTurnId ? `finished:${sourceTurnId}` : null,
+            streaming: false,
+          });
         });
       },
     );

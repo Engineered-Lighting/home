@@ -87,6 +87,13 @@ function eventTexts(events) {
 (async function main() {
   const api = loadApi();
 
+  process.stdout.write("\nnormalization_scenarios\n");
+  assert(
+    "smart apostrophes normalize to the routing apostrophe",
+    api.deepLookNormalize("What\u2019s_on-my coffee table") === "what's on my coffee table",
+    api.deepLookNormalize("What\u2019s_on-my coffee table"),
+  );
+
   process.stdout.write("\nabstract_visual_positive_scenarios\n");
   [
     ["what do you see in my apartment", "apartment", null, "quick_scan"],
@@ -94,6 +101,11 @@ function eventTexts(events) {
     ["check my apartment visually", "apartment", null, "quick_scan"],
     ["what's happening in the kitchen", "apartment", "kitchen", "targeted_look"],
     ["what do you see on my coffee table", "apartment", "living_room", "targeted_look"],
+    ["What\u2019s on my coffee table", "apartment", "living_room", "targeted_look"],
+    ["What's on my coffee table", "apartment", "living_room", "targeted_look"],
+    ["What is on my coffee table", "apartment", "living_room", "targeted_look"],
+    ["What\u2019s at my coffee table", "apartment", "living_room", "targeted_look"],
+    ["What is at the kitchen counter", "apartment", "kitchen", "targeted_look"],
     ["look at the driveway", "home", "driveway", "targeted_look"],
     ["does anything look weird", "apartment", null, "anomaly_scan"],
     ["describe everything in the kitchen", "apartment", "kitchen", "detailed_scan"],
@@ -120,6 +132,15 @@ function eventTexts(events) {
     "what do you see in this UI bug",
     "look at the test output",
     "describe the desktop build error",
+    "What's on my coffee table yesterday?",
+    "What's on my coffee table according to memory?",
+    "What do you remember was on my coffee table?",
+    "What's on my coffee table in the photo I sent?",
+    "What's on my coffee table in this screenshot?",
+    "What's on my coffee table in the recorded clip?",
+    "What's on my coffee table test checklist?",
+    "What's on the periodic table?",
+    "What's on my carpet?",
   ].forEach((prompt) => {
     assert(`does not trigger visual routing: ${prompt}`, api.detectDeepLookIntent(prompt) === null, api.detectDeepLookIntent(prompt));
   });
@@ -176,7 +197,7 @@ function eventTexts(events) {
   process.stdout.write("\ncoffee_table_targeted_scenario\n");
   {
     const h = makeHarness();
-    const result = await h.api.runNaturalDeepLook("what do you see on my coffee table", h.options);
+    const result = await h.api.runNaturalDeepLook("What\u2019s on my coffee table", h.options);
     assert("coffee table question is handled by natural look", result.handled === true && result.fallback === false, result);
     assert("coffee table routes to living room camera", h.calls.lookRunner.length === 1 && h.calls.lookRunner[0].camera === "living_room", h.calls.lookRunner);
     assert("targeted coffee table look asks for zoom/segmentation", h.calls.lookRunner[0].question.includes("zoom/crop plus segmentation"), h.calls.lookRunner[0].question);

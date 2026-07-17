@@ -126,6 +126,75 @@ function rx(pattern) {
   return (suffix) => pattern.test(suffix.split("?")[0]);
 }
 
+const GROUNDED_VISION_CAMERA_PATH = "[a-z0-9_-]{1,64}";
+const GROUNDED_VISION_IMAGE_PATHS = [
+  new RegExp(`^/reason/${GROUNDED_VISION_CAMERA_PATH}/annotated\\.jpg$`, "i"),
+  new RegExp(`^/reason_zoom/${GROUNDED_VISION_CAMERA_PATH}/(?:overview|detail)\\.jpg$`, "i"),
+  new RegExp(`^/snapshot/${GROUNDED_VISION_CAMERA_PATH}/latest\\.jpg$`, "i"),
+];
+
+const GROUNDED_VISION_METADATA_PATHS = new Set([
+  "/reason/latest",
+  "/describe/latest",
+]);
+
+function hasOnlyCacheBuster(parsed) {
+  if (!parsed.search) return true;
+  const entries = [...parsed.searchParams.entries()];
+  return entries.length === 1 && entries[0][0] === "cb" && /^\d{1,20}$/.test(entries[0][1]);
+}
+
+function isGroundedVisionResultRoute(suffix, method) {
+  if (method !== "GET" && method !== "HEAD") return false;
+  const parsed = new URL(suffix, "http://home.local");
+  if (GROUNDED_VISION_METADATA_PATHS.has(parsed.pathname)) return !parsed.search;
+  return GROUNDED_VISION_IMAGE_PATHS.some((pattern) => pattern.test(parsed.pathname)) &&
+    hasOnlyCacheBuster(parsed);
+}
+
+function stripVisionAdapterResponseHeaders(headers) {
+  delete headers["access-control-allow-credentials"];
+  delete headers["access-control-allow-origin"];
+  delete headers["set-cookie"];
+  delete headers["www-authenticate"];
+  headers["cross-origin-resource-policy"] = "same-origin";
+  headers["x-content-type-options"] = "nosniff";
+  return headers;
+}
+
+function groundedVisionResponseHeaders(headers, suffix) {
+  const parsed = new URL(suffix, "http://home.local");
+  stripVisionAdapterResponseHeaders(headers);
+  if (GROUNDED_VISION_METADATA_PATHS.has(parsed.pathname)) {
+    headers["content-type"] = "application/json; charset=utf-8";
+    headers["cache-control"] = "no-store";
+  } else {
+    headers["content-type"] = "image/jpeg";
+    // The sidecar rewrites these camera-scoped filenames after every look.
+    // The app adds a unique numeric cache-buster, making that URL safe to
+    // retain briefly without allowing a stale image to cross turns.
+    headers["cache-control"] = parsed.searchParams.has("cb")
+      ? "private, max-age=60, immutable"
+      : "private, no-cache";
+  }
+  return headers;
+}
+
+function isVisionCompatibilityRoute(suffix, method) {
+  const parsed = new URL(suffix, "http://home.local");
+  if (method === "GET" || method === "HEAD") {
+    if (/^(?:\/healthz|\/cameras|\/describe\/latest|\/reason\/latest)$/i.test(parsed.pathname)) {
+      return !parsed.search;
+    }
+    return GROUNDED_VISION_IMAGE_PATHS.some((pattern) => pattern.test(parsed.pathname)) &&
+      hasOnlyCacheBuster(parsed);
+  }
+  if (method === "POST") {
+    return !parsed.search && /^\/(?:describe|describe_clip|reason|reason_zoom)$/.test(parsed.pathname);
+  }
+  return false;
+}
+
 const routes = [
   {
     prefix: "/proxy/ha",
@@ -149,10 +218,19 @@ const routes = [
     ws: false,
   },
   {
+    prefix: "/proxy/vision-results",
+    env: "HOME_WEB_VISION_TARGET",
+    target: envTarget("HOME_WEB_VISION_TARGET", "http://192.168.0.100:8091"),
+    allow: isGroundedVisionResultRoute,
+    transformResponseHeaders: groundedVisionResponseHeaders,
+    ws: false,
+  },
+  {
     prefix: "/proxy/vision",
     env: "HOME_WEB_VISION_TARGET",
     target: envTarget("HOME_WEB_VISION_TARGET", "http://192.168.0.100:8091"),
-    allow: rx(/^\/(healthz|snapshot\/|describe_clip|describe|reason|reason_zoom|locate|api\/)/),
+    allow: isVisionCompatibilityRoute,
+    transformResponseHeaders: stripVisionAdapterResponseHeaders,
     ws: false,
   },
   {
@@ -733,6 +811,12 @@ function isSupervisorStackApi(route, suffix) {
 
 function proxyHeaders(reqHeaders, route, suffix) {
   const headers = cleanHeaders(reqHeaders, route.target);
+  if (route.prefix === "/proxy/vision-results" || route.prefix === "/proxy/vision") {
+    // Vision routes authenticate at the gateway boundary. They never forward
+    // a caller credential (including an unrelated browser Bearer token) to
+    // the untrusted vision adapter.
+    delete headers.authorization;
+  }
   if (route.prefix === "/proxy/supervisor") {
     delete headers.authorization;
     if (isSupervisorStackApi(route, suffix) && stackTokenProxy.enabled) {
@@ -1012,7 +1096,7 @@ function serveStatic(req, res) {
 
 function proxyHttp(req, res, route) {
   const suffix = routeSuffix(route, req.url);
-  if (!route.allow(suffix)) {
+  if (!route.allow(suffix, req.method)) {
     res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
     res.end("proxy path not allowed");
     return;
@@ -1024,8 +1108,11 @@ function proxyHttp(req, res, route) {
     method: req.method,
     headers: proxyHeaders(req.headers, route, suffix),
   }, (upstreamRes) => {
-    const headers = { ...upstreamRes.headers };
+    let headers = { ...upstreamRes.headers };
     delete headers["content-security-policy"];
+    if (route.transformResponseHeaders) {
+      headers = route.transformResponseHeaders(headers, suffix, upstreamRes) || headers;
+    }
     if (route.prefix === "/proxy/frigate" && /^\/clips\/faces\//.test(suffix.split("?")[0])) {
       const ext = path.extname(targetUrl.pathname).toLowerCase();
       headers["content-type"] = MIME.get(ext) || headers["content-type"] || "application/octet-stream";
@@ -1050,7 +1137,7 @@ function proxyUpgrade(req, socket, head, route) {
     return;
   }
   const suffix = routeSuffix(route, req.url);
-  if (!route.allow(suffix)) {
+  if (!route.allow(suffix, req.method)) {
     socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
     socket.destroy();
     return;

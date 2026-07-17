@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any, Literal
 
@@ -210,6 +211,35 @@ def _friendly_error_speech(err: Exception) -> str:
     return "I had trouble completing that. Try a simpler request."
 
 
+_VISUAL_QUERY_PUNCTUATION_TRANSLATION = str.maketrans(
+    {
+        # Mobile keyboards commonly replace ASCII apostrophes with smart
+        # quotes.  Keep the classifier's grammar ASCII-only and canonicalize
+        # harmless presentation variants before applying it.
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201b": "'",
+        "\u02bc": "'",
+        "\uff07": "'",
+        # Treat typographic/non-breaking dashes as word separators when
+        # matching aliases such as "coffee table".
+        "\u2010": "-",
+        "\u2011": "-",
+        "\u2012": "-",
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u2212": "-",
+    }
+)
+
+
+def _normalize_visual_query_text(text: str) -> str:
+    """Canonicalize harmless Unicode typography for visual routing only."""
+    normalized = unicodedata.normalize("NFKC", text or "")
+    normalized = normalized.translate(_VISUAL_QUERY_PUNCTUATION_TRANSLATION)
+    return " ".join(normalized.split())
+
+
 _VISUAL_QUERY_RE = re.compile(
     r"\b("
     r"what(?:'s|s| is)?\s+(?:going on|happening|in|inside|on|at)|"
@@ -224,10 +254,25 @@ _VISUAL_QUERY_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A direct-looking phrase can be embedded in a historical or supplied-media
+# question ("Do you remember what's on ...?").  Those must continue through
+# the normal conversation/memory path rather than silently inspecting a live
+# home camera.
+_NONLIVE_VISUAL_CONTEXT_RE = re.compile(
+    r"\b(?:do|can|could|would)\s+you\s+(?:remember|recall)\b|"
+    r"\b(?:remember|recall)\s+(?:what|where|who)\b|"
+    r"\b(?:earlier|yesterday|previously|usually|normally|typically|"
+    r"last\s+(?:time|night|week|month|year))\b|"
+    r"\b(?:in|from)\s+(?:(?:this|that|the|my|a|an)\s+)?"
+    r"(?:photo|photograph|image|picture|screenshot|recording|video|clip)\b|"
+    r"\baccording\s+to\s+(?:(?:your|the)\s+)?(?:memory|history)\b",
+    re.IGNORECASE,
+)
+
 _VISUAL_ROOM_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("living_room", ("living room", "coffee table", "couch", "sofa", "tv", "bicycle")),
     ("kitchen", ("kitchen", "counter", "island", "sink", "stove", "oven")),
-    ("dining_room", ("dining room", "dining table", "table", "chairs")),
+    ("dining_room", ("dining room", "dining table", "chairs")),
     ("workshop", ("workshop", "office", "desk")),
     ("driveway", ("driveway", "outside", "front yard", "street", "car", "vehicle")),
 )
@@ -235,9 +280,9 @@ _VISUAL_ROOM_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 def _infer_visual_room(text: str) -> str:
     """Infer the room/camera for deterministic visual routing."""
-    q = (text or "").lower().replace("-", " ")
+    q = _normalize_visual_query_text(text).casefold().replace("-", " ")
     for room, terms in _VISUAL_ROOM_ALIASES:
-        if any(term in q for term in terms):
+        if any(re.search(rf"(?<!\w){re.escape(term)}(?!\w)", q) for term in terms):
             return room
     return ""
 
@@ -250,9 +295,14 @@ def _should_preroute_grounded_look(text: str) -> dict[str, Any] | None:
     safer than hoping the model obeys the prompt.
     """
     text = (text or "").strip()
-    if not text or not _VISUAL_QUERY_RE.search(text):
+    normalized = _normalize_visual_query_text(text)
+    if (
+        not normalized
+        or _NONLIVE_VISUAL_CONTEXT_RE.search(normalized)
+        or not _VISUAL_QUERY_RE.search(normalized)
+    ):
         return None
-    room = _infer_visual_room(text)
+    room = _infer_visual_room(normalized)
     if not room:
         return None
     return {

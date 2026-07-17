@@ -118,6 +118,7 @@
     HG_DEFAULT_METRICS_BASE: "/proxy/metrics",
     HG_DEFAULT_VLLM_BASE: "/proxy/vllm",
     HG_DEFAULT_VISION_BASE: "/proxy/vision",
+    HG_DEFAULT_GROUNDED_VISION_BASE: "/proxy/vision-results",
     HG_DEFAULT_INTELLIGENCE_BASE: "/proxy/intelligence",
     HG_DEFAULT_SUPERVISOR_BASE: "/proxy/supervisor",
     HG_DEFAULT_S2S_BASE: "/proxy/bridge",

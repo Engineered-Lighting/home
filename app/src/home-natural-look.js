@@ -13,7 +13,12 @@
   ];
 
   function deepLookNormalize(text) {
-    return String(text || "").toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+    return String(text || "")
+      .toLowerCase()
+      .replace(/[\u2018\u2019\u02bc\uff07`]/g, "'")
+      .replace(/[_-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   function escapeRegExp(text) {
@@ -38,7 +43,13 @@
 
     const actionish = /\b(turn|switch|set|dim|brighten|open|close|lock|unlock|start|stop|restart|enable|disable|toggle|run|play|pause)\b/.test(s);
     const nonVisualDomain = /\b(lights?|lamps?|travel mode|temperature|thermostat|token|stack|models?|vllm|password|github|deploy|release|app|build|repo|branch|pr|pull request|installer|bug|error|ui|desktop|mobile|website|code|test|tests?)\b/.test(s);
-    if (actionish || nonVisualDomain) return null;
+    const historicalOrRemembered =
+      /\b(yesterday|last night|earlier|previously|history|historical|archive|archived|timeline|memory|remember|remembered|recall|recalled|past)\b/.test(s) ||
+      /\b(recorded|recording|footage|clip)\b/.test(s);
+    const suppliedVisual =
+      /\b(?:this|that|the|attached|uploaded|sent)\s+(?:photo|image|picture|screenshot|attachment)\b/.test(s) ||
+      /\b(?:photo|image|picture|screenshot|attachment)\s+(?:i|we)\s+(?:sent|uploaded|attached)\b/.test(s);
+    if (actionish || nonVisualDomain || historicalOrRemembered || suppliedVisual) return null;
 
     const explicitCamera = DEEP_LOOK_CAMERA_META.find((cam) => {
       const names = [cam.id.replace(/_/g, " "), cam.name].concat(cam.aliases || []);
@@ -51,10 +62,13 @@
       anomalyVisual ||
       /\b(visual status|look around|take a look|what can you see)\b/.test(s) ||
       /\b(is anything happening|anything happening|what(?:'s| is) happening|what(?:'s| is) going on)\b/.test(s);
+    const targetedSurfaceQuestion =
+      !!explicitCamera && /\bwhat(?:'s| is)\s+(?:on|at)\b/.test(s);
     const directVisual =
       /\b(what do you see|look at|describe)\b/.test(s) ||
       /\b(what(?:'s| is) (?:in|inside|visible))\b/.test(s) ||
-      /\b(camera|cameras|visually|see in|seeing in)\b/.test(s);
+      /\b(camera|cameras|visually|see in|seeing in)\b/.test(s) ||
+      targetedSurfaceQuestion;
     const place =
       /\b(apartment|home|house|room|camera|kitchen|living room|dining room|workshop|office|driveway|outside|inside|coffee table)\b/.test(s) ||
       !!explicitCamera;

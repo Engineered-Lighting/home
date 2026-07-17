@@ -249,6 +249,11 @@ function runStaticChecks() {
     check("persisted events are sanitized before save", source.includes("sanitizeChatEventForStorage") && source.includes(".map(sanitizeChatEventForStorage)"), "home-app.jsx"),
     check("orphan streaming bubbles auto-settle when idle", source.includes("orphan") || source.includes("streamingIds.current.clear()") && source.includes("[\"inactive\", \"ready\", \"idle\", \"error\"]"), "home-app.jsx"),
     check("home renderer normalizes duplicated text", fs.readFileSync(path.join(REPO, "app", "src", "home-events.jsx"), "utf8").includes("HomeNormalizeChatEventText"), "home-events.jsx"),
+    check("artifact perception bypasses text-only duplicate suppression", source.includes("ev.snapshotUrl || ev.artifactUrl || ev.imageUnavailable"), "home-app.jsx"),
+    check("grounded artifacts use the narrow browser result route", source.includes("groundedVisionBaseFromEndpoint") && source.includes("HG_DEFAULT_GROUNDED_VISION_BASE"), "home-app.jsx"),
+    check("grounded artifact fetch rejects cross-camera latest-result races", source.includes("ignored mismatched ${resultFamily} artifact") && source.includes('const resultFamily = isDescribe ? "describe" : "grounded-reason"'), "home-app.jsx"),
+    check("slow local tool turns retain their user-turn identity", source.includes("findRecentUserIdx(prev, correctedUser, 100, 120000)") && source.includes("activeRunRef.current"), "home-app.jsx"),
+    check("broken perception image is visible to the user", fs.readFileSync(path.join(REPO, "app", "src", "home-events.jsx"), "utf8").includes("image unavailable"), "home-events.jsx"),
     check("input remains single command source", source.includes('aria-label="Command input"'), "home-app.jsx"),
     check("stop streaming control is state-backed", source.includes("stopStreaming") && source.includes("streamingIds.current") && source.includes("activeRunRef"), "home-app.jsx"),
   ];

@@ -159,6 +159,35 @@ future `SERIALIZABLE` database kernel. No API, store, BFF, UI, Compose service,
 migration, or role activation imports it. The live Core service does not mount
 the operator source tree.
 
+## Dormant parent-candidate staging
+
+`parent_confirmation_staging.py` is a separate offline bridge from the signed
+finalizer document to the later parent-confirmation ceremony. It accepts only
+the raw canonical review bundle, raw finalization envelope, freshly
+reconstructed source records, and deployment-pinned verification policy. It
+invokes both signature-verification paths itself and accepts no parent selector,
+child ID, caller-constructed verified document, display label, or receipt digest.
+
+The compiler derives every signed `legacy_role_candidate` whose exact role is
+`parent`, requires exactly two distinct People projections that are not marked
+archived in that signed snapshot, and rejects compatibility-normalized
+ambiguous display labels or any known parent privacy directive. Each result
+binds the signed People and role decision IDs, projection receipts, projection
+commitments, compiler-owned lineage commitments, and source snapshot digests.
+Candidate ordering is canonical by stable person UUID.
+
+This proves source provenance only. The result permanently reports
+`non_deployable`, `capability_disabled`, and `coverage_unproven`, with
+`authoritative=false`, `commit_ready=false`, `enables_writes=false`, and
+`atomic_commit_enforced=false`. Current person status is explicitly unverified.
+The Python result and its private payload are not portable proof: any future
+consumer must submit the original raw signed artifacts and reconstructed source
+rows to the compiler's re-verification boundary. It cannot prove current
+retrieval blocks, complete erasure state, or a current HA-user-to-child binding;
+it cannot mint a review code or confirmation artifact, accept a private gesture,
+choose valid-from, or create either parent fact. No Core API, store, BFF, UI,
+Compose service, migration, or runtime role imports it.
+
 ## Still disabled
 
 This verifier does not make finalization callable. Revision 0009 provides only

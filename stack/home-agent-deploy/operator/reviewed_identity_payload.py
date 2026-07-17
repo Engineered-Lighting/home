@@ -936,6 +936,8 @@ def _verify_projection_bundle(
     policy: VerificationPolicy,
     allow_expired_review: bool,
 ) -> VerifiedProjectionBundle:
+    if type(raw_bundle) is not bytes:
+        raise VerificationError("projection bundle bytes are invalid")
     bundle = parse_canonical_json(raw_bundle)
     _exact_object(
         bundle,
@@ -959,9 +961,14 @@ def _verify_projection_bundle(
         raise VerificationError("manifest collection count is invalid")
     if len(projections) > MAX_ITEMS or len(source_records) != len(sources):
         raise VerificationError("projection or source record count is invalid")
-    private_sources = list(source_records)
-    if len(canonical_bytes(private_sources)) > MAX_CANONICAL_BYTES:
+    private_sources_canonical = canonical_bytes(list(source_records))
+    if len(private_sources_canonical) > MAX_CANONICAL_BYTES:
         raise VerificationError("private source record set is oversized")
+    private_sources = parse_canonical_json(
+        private_sources_canonical, maximum=MAX_CANONICAL_BYTES
+    )
+    if not isinstance(private_sources, list):  # canonical round-trip invariant
+        raise AssertionError("private source record set is malformed")
     run_id = _canonical_uuid(run["run_id"], "run", require_v7=True)
     _canonical_uuid(run["operator_request_id"], "operator request", require_v7=True)
     if run["contract_version"] != "reviewed-identity-migration-run-v1":
@@ -1158,6 +1165,7 @@ def _verify_projection_bundle(
             )
 
     projection_by_decision: dict[str, Mapping[str, Any]] = {}
+    projection_receipt_ids: set[str] = set()
     verified_projections: list[Mapping[str, Any]] = []
     for value in projections:
         projection = _exact_object(value, PROJECTION_KEYS, "projection")
@@ -1171,6 +1179,9 @@ def _verify_projection_bundle(
                 projection["receipt_id"], "projection receipt", require_v7=True
             )
         )
+        if receipt_id in projection_receipt_ids:
+            raise VerificationError("projection receipt ID is duplicated")
+        projection_receipt_ids.add(receipt_id)
         decision = apply_decisions.get(decision_id)
         if decision is None or decision_id in projection_by_decision:
             raise VerificationError("projection does not map to one apply decision")
@@ -1407,6 +1418,8 @@ def verify_finalization_envelope(
     ``bundle.finalization_signing_payload()`` and a finalization-only public key.
     """
 
+    if type(raw_envelope) is not bytes:
+        raise VerificationError("finalization envelope bytes are invalid")
     envelope = _exact_object(
         parse_canonical_json(raw_envelope),
         FINALIZATION_ENVELOPE_KEYS,

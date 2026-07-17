@@ -389,6 +389,30 @@ class ReviewedIdentityPayloadTests(unittest.TestCase):
             "Marcelo",
         )
 
+    def test_signed_artifact_verifiers_require_immutable_exact_bytes(self) -> None:
+        raw, sources = self.fixture.build()
+        with self.assertRaisesRegex(
+            verifier.VerificationError, "projection bundle bytes are invalid"
+        ):
+            verifier.verify_projection_bundle(
+                bytearray(raw),
+                source_records=sources,
+                policy=self.fixture.policy,
+            )
+
+        result = verifier.verify_projection_bundle(
+            raw, source_records=sources, policy=self.fixture.policy
+        )
+        envelope = self._finalization_envelope(result)
+        with self.assertRaisesRegex(
+            verifier.VerificationError, "finalization envelope bytes are invalid"
+        ):
+            verifier.verify_finalization_envelope(
+                result,
+                bytearray(envelope),
+                policy=self.fixture.policy,
+            )
+
     def test_debug_representations_redact_keys_and_private_documents(self) -> None:
         raw, sources = self.fixture.build()
         bundle = verifier.verify_projection_bundle(

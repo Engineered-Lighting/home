@@ -174,6 +174,21 @@ boundaries. The dormant compiler binds the supplied server snapshot but does
 not authenticate its receipt strings, mint or consume a confirmation artifact,
 choose a fact valid-from time, or provide replay protection.
 
+The offline operator-only `parent_confirmation_staging` compiler now closes one
+narrower provenance gap before that preview: it re-verifies the canonical
+identity-review bundle and distinct finalization signature, derives every
+signed legacy `parent` label without accepting a parent selector, and requires
+exactly two distinct People rows not archived in that signed snapshot. Its
+current person/privacy/retrieval axes remain unverified, and its Python result
+is not portable proof: any future consumer must re-verify the original signed
+artifacts and reconstructed source rows. Its output is still
+`non_deployable`, `capability_disabled`, and `coverage_unproven`; it does not
+authenticate the current child binding, prove complete erasure/retrieval state,
+mint a fresh gesture artifact, or create facts. It is not shipped or imported by
+Core API/store, BFF, native, browser, Edge, or Compose services. The existing
+dormant preview therefore still cannot be treated as a deployable consumer of
+that result.
+
 Operator-only identity review (never proxied through the BFF):
 
 - `GET /v1/operator/principal-binding-requests`

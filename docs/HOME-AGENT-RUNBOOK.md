@@ -541,6 +541,21 @@ time; its verified preview still requires a new private authenticated gesture,
 single-use artifact consumption, and transaction-time validity inside the
 future commit kernel.
 
+The operator-only `parent_confirmation_staging.py` compiler may be exercised
+with synthetic canonical fixtures while live services remain offline. It
+re-verifies both the identity review signature and the separate finalization
+signature, then derives all signed legacy `parent` labels; callers cannot name
+or omit a candidate. Exactly two distinct People rows that are not archived in
+the supplied signed snapshot and have no signed blocking privacy directive are
+required. Current person/privacy/retrieval state remains unverified. The output
+proves only in-process signed-source verification and remains
+`non_deployable`, `capability_disabled`, and `coverage_unproven`. Do not copy it
+into Core configuration or treat the Python object/private payload as portable
+proof. A future consumer must re-verify the original signed artifacts and source
+rows. Never use it as proof of current retrieval state, erasure completeness,
+Marcelo's HA binding, a private confirmation gesture, or an atomic parent-fact
+commit. It has no live invocation command or Compose service.
+
 After binding, `/home-agent/` may show the two stored location-preference
 booleans during record-only or shadow operation, but only as a rollback privacy
 surface. Precise-location retention, visit projection, teaching, and both

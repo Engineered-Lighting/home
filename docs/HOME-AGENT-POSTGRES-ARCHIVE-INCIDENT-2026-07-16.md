@@ -39,9 +39,20 @@ PID-1 topology, but it also caught an unsafe configuration assumption before
 API, ingest, or worker startup. Setting `archive-push-queue-max=0B` caused
 pgBackRest to emit drop receipts and PostgreSQL to mark two still-local WAL
 segments as archived while the repository remained unavailable. PostgreSQL
-was stopped cleanly with zero container restarts. The segment files remain in
-`pg_wal`; they must be requeued and successfully received by the repository
-before backup health can be restored.
+was stopped cleanly with zero container restarts. Post-stop inventory found
+that those two segments had already been recycled and a third still-local
+segment carried the same false completion state. Archive continuity is
+therefore broken. Existing backup history may not claim point-in-time recovery
+across this gap; after the repository returns, the retained segment is handled
+under a reviewed recovery procedure and a new verified full backup establishes
+a new recovery baseline.
+
+Current containment keeps PostgreSQL, API, ingest, and worker stopped. The
+remaining affected segment was copied to a root-only directory on the encrypted
+local volume and its SHA-256 verified. Its false async success receipt was moved
+out of the active spool, and its archive marker was atomically changed from
+`.done` to `.ready`. PostgreSQL stays stopped until the repository is reachable;
+the evidence copy is excluded from the pgBackRest repository backup path.
 
 ## Correction
 

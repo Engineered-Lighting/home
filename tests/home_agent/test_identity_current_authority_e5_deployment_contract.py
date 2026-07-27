@@ -211,6 +211,21 @@ def test_e5_run_lock_is_validated_before_e3_manifest_projection() -> None:
     )[0]
     manifest = e3.split("'policies',", 1)[1].split("'triggers',", 1)[0]
     run_lock_projection = manifest.rsplit("OR (", 1)[1]
+    relation_filter = manifest.index(
+        "WHERE policy_row.polrelid = relation.oid"
+    )
+    not_start = manifest.index("AND NOT (")
+    not_open = manifest.index("(", not_start)
+    depth = 0
+    not_close = None
+    for offset, character in enumerate(manifest[not_open:], start=not_open):
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth == 0:
+                not_close = offset
+                break
 
     assert (
         "e5_run_lock_policy constant text := "
@@ -263,6 +278,11 @@ def test_e5_run_lock_is_validated_before_e3_manifest_projection() -> None:
         "reference_policy.polname = e5_select_policy"
         in run_lock_projection
     )
+    assert relation_filter < not_start
+    assert not_close is not None
+    assert manifest.index(
+        "policy_row.polname = e5_run_lock_policy"
+    ) < not_close
     assert e3.index(
         "identity finalizer E3 reviewed E5 policy mismatch"
     ) < e3.index("WITH target_relations(target_name, relation_oid)")

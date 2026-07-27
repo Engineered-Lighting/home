@@ -3143,9 +3143,8 @@ BEGIN
                           AND reference_policy.polwithcheck IS NULL
                           AND reference_policy.polqual::text =
                                 policy_row.polqual::text
-                     )
-                   )
-                   OR (
+                      )
+                    OR (
                      current_revision = '0015_current_authority_e5a'
                      AND policy_row.polname = e5_run_lock_policy
                      AND policy_row.polrelid =
@@ -3173,8 +3172,9 @@ BEGIN
                           AND reference_policy.polwithcheck IS NULL
                           AND reference_policy.polqual::text =
                                 policy_row.polqual::text
-                     )
-                   )
+                      )
+                    )
+                  )
               ),
              'triggers', (
                SELECT coalesce(

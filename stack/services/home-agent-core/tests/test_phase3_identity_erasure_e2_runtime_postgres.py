@@ -1063,7 +1063,7 @@ async def test_postgresql_e2_clean_roundtrip_and_data_bearing_downgrade_refusal(
                 await connection.execute(
                     text("SELECT version_num FROM alembic_version")
                 )
-            ).scalar_one() == "0012_identity_erasure_e2"
+            ).scalar_one() == "0013_identity_finalizer_e3"
             assert (
                 await connection.execute(
                     text(

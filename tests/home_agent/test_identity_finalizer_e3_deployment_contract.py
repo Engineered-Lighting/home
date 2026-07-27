@@ -127,6 +127,25 @@ def test_e3_grant_replay_restores_only_the_reviewed_database_surface() -> None:
 
     assert "GRANT EXECUTE ON FUNCTION\n    operations.finalize" in admission
     assert "TO home_agent_identity_finalizer;" in admission
+    assert (
+        "evidence_select_policy constant text := 'identity_finalizer_e3_select'"
+        in admission
+    )
+    assert (
+        "evidence_insert_policy constant text := 'identity_finalizer_e3_insert'"
+        in admission
+    )
+    assert "pg_catalog.replace(target_table, '.', '_')" not in admission
+    assert "|| '_e3_kernel_select'" not in admission
+    assert "|| '_e3_kernel_insert'" not in admission
+    assert (
+        "'home_agent_identity_finalizer|operations."
+        "finalize_reviewed_identity_migration(bytea,uuid)',"
+    ) in admission
+    assert (
+        "'home_agent_identity_finalizer_kernel|operations."
+        "finalize_reviewed_identity_migration(bytea,uuid)',"
+    ) not in admission
     assert "GRANT SELECT, UPDATE (consumed_at)" not in admission
     assert "GRANT UPDATE (consumed_at)" in admission
     assert "GRANT SELECT, INSERT, UPDATE ON TABLE identity.people" not in admission
@@ -256,17 +275,17 @@ def test_e3_replay_validates_effective_and_direct_acl_surfaces() -> None:
         assert expected in admission
     assert "VALUES\n             (owner_oid),\n             (kernel_oid)" not in admission
 
-    # The NOLOGIN owner necessarily has implicit EXECUTE on its own main
-    # function. Direct ACL equality deliberately ignores that optional owner
-    # row while effective privilege equality includes it.
+    # Ownership preserves the ability to re-grant privileges, but ordinary
+    # EXECUTE is revocable. Both direct and effective manifests must therefore
+    # reject kernel execution of the externally callable finalizer.
     assert (
         "role_row.oid = kernel_oid\n"
         "        AND function_row.oid = finalizer_function"
-    ) in admission
+    ) not in admission
     assert (
         "home_agent_identity_finalizer_kernel|"
         "operations.finalize_reviewed_identity_migration(bytea,uuid)"
-    ) in admission
+    ) not in admission
 
 
 def test_e3_compose_surface_is_still_an_expired_non_callable_tombstone() -> None:

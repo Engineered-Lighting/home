@@ -1627,6 +1627,8 @@ DECLARE
   actual_effective_acl text[];
   expected_effective_acl text[];
   target_table text;
+  evidence_select_policy constant text := 'identity_finalizer_e3_select';
+  evidence_insert_policy constant text := 'identity_finalizer_e3_insert';
   predicate constant text :=
     'session_user = ''home_agent_identity_finalizer'' AND '
     'current_user = ''home_agent_identity_finalizer_kernel'' AND NOT '
@@ -2405,13 +2407,13 @@ BEGIN
   LOOP
     EXECUTE pg_catalog.format(
       'DROP POLICY IF EXISTS %I ON %s',
-      pg_catalog.replace(target_table, '.', '_') || '_e3_kernel_select',
+      evidence_select_policy,
       target_table
     );
     EXECUTE pg_catalog.format(
       'CREATE POLICY %I ON %s FOR SELECT '
       'TO home_agent_identity_finalizer_kernel USING (%s)',
-      pg_catalog.replace(target_table, '.', '_') || '_e3_kernel_select',
+      evidence_select_policy,
       target_table,
       predicate
     );
@@ -2425,25 +2427,25 @@ BEGIN
   LOOP
     EXECUTE pg_catalog.format(
       'DROP POLICY IF EXISTS %I ON %s',
-      pg_catalog.replace(target_table, '.', '_') || '_e3_kernel_select',
+      evidence_select_policy,
       target_table
     );
     EXECUTE pg_catalog.format(
       'DROP POLICY IF EXISTS %I ON %s',
-      pg_catalog.replace(target_table, '.', '_') || '_e3_kernel_insert',
+      evidence_insert_policy,
       target_table
     );
     EXECUTE pg_catalog.format(
       'CREATE POLICY %I ON %s FOR SELECT '
       'TO home_agent_identity_finalizer_kernel USING (%s)',
-      pg_catalog.replace(target_table, '.', '_') || '_e3_kernel_select',
+      evidence_select_policy,
       target_table,
       predicate
     );
     EXECUTE pg_catalog.format(
       'CREATE POLICY %I ON %s FOR INSERT '
       'TO home_agent_identity_finalizer_kernel WITH CHECK (%s)',
-      pg_catalog.replace(target_table, '.', '_') || '_e3_kernel_insert',
+      evidence_insert_policy,
       target_table,
       predicate
     );
@@ -2491,21 +2493,8 @@ BEGIN
             OR kernel_oid = ANY (policy_row.polroles)
           )
           AND policy_row.polname NOT IN (
-            'operations_reviewed_identity_migration_runs_e3_kernel_select',
-            'operations_reviewed_identity_migration_source_items_e3_kernel_select',
-            'operations_reviewed_identity_migration_decisions_e3_kernel_select',
-            'operations_reviewed_identity_migration_erasure_impacts_e3_kernel_select',
-            'operations_legacy_identity_writer_evidence_e3_kernel_select',
-            'operations_privacy_cutover_check_receipts_e3_kernel_select',
-            'operations_semantic_authority_cutovers_e3_kernel_select',
-            'operations_reviewed_identity_migration_item_receipts_e3_kernel_select',
-            'operations_reviewed_identity_migration_item_receipts_e3_kernel_insert',
-            'operations_reviewed_identity_migration_finalizations_e3_kernel_select',
-            'operations_reviewed_identity_migration_finalizations_e3_kernel_insert',
-            'operations_reviewed_identity_migration_projection_lineage_e3_kernel_select',
-            'operations_reviewed_identity_migration_projection_lineage_e3_kernel_insert',
-            'operations_reviewed_identity_migration_projection_subjects_e3_kernel_select',
-            'operations_reviewed_identity_migration_projection_subjects_e3_kernel_insert'
+            evidence_select_policy,
+            evidence_insert_policy
           )
      ) THEN
     RAISE EXCEPTION 'identity finalizer E3 evidence policy set mismatch'
@@ -2903,10 +2892,6 @@ BEGIN
       AND function_namespace.nspname IN (
         'ingest','identity','knowledge','engagement','privacy','operations',
         'media'
-      )
-      AND NOT (
-        role_row.oid = kernel_oid
-        AND function_row.oid = finalizer_function
       );
   IF actual_function_acl IS DISTINCT FROM expected_function_acl THEN
     RAISE EXCEPTION 'identity finalizer E3 function ACL mismatch'
@@ -3037,7 +3022,6 @@ BEGIN
 
   expected_effective_acl := ARRAY[
     'home_agent_identity_finalizer|operations.finalize_reviewed_identity_migration(bytea,uuid)',
-    'home_agent_identity_finalizer_kernel|operations.finalize_reviewed_identity_migration(bytea,uuid)',
     'home_agent_identity_finalizer_kernel|privacy.identity_person_is_blocked(uuid)',
     'home_agent_identity_finalizer_kernel|privacy.lock_identity_semantic_write_fence()'
   ]::text[];

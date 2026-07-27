@@ -43,6 +43,8 @@ FUNCTION = "operations.finalize_reviewed_identity_migration(bytea,uuid)"
 FENCE_TABLE = "privacy.identity_semantic_write_fence"
 FENCE_FUNCTION = "privacy.lock_identity_semantic_write_fence()"
 FENCE_TRIGGER_FUNCTION = "privacy.fence_identity_tombstone_write()"
+EVIDENCE_SELECT_POLICY = "identity_finalizer_e3_select"
+EVIDENCE_INSERT_POLICY = "identity_finalizer_e3_insert"
 # SHA-256 of the UTF-8 bytes
 # ``home-agent-identity-finalizer-verifier-bundle-v1\n``.  This is the
 # domain-separated identifier for the offline verifier rules accepted by E3;
@@ -3322,22 +3324,20 @@ def _install_evidence_policies() -> None:
         f"session_user, '{KERNEL_ROLE}', 'SET')"
     )
     for table in selectable:
-        policy = table.replace(".", "_") + "_e3_kernel_select"
-        op.execute(f"DROP POLICY IF EXISTS {policy} ON {table}")
+        op.execute(f"DROP POLICY IF EXISTS {EVIDENCE_SELECT_POLICY} ON {table}")
         op.execute(
-            f"CREATE POLICY {policy} ON {table} FOR SELECT TO {KERNEL_ROLE} "
-            f"USING ({predicate})"
+            f"CREATE POLICY {EVIDENCE_SELECT_POLICY} ON {table} "
+            f"FOR SELECT TO {KERNEL_ROLE} USING ({predicate})"
         )
     for table in writable:
-        policy_base = table.replace(".", "_") + "_e3_kernel"
-        op.execute(f"DROP POLICY IF EXISTS {policy_base}_select ON {table}")
-        op.execute(f"DROP POLICY IF EXISTS {policy_base}_insert ON {table}")
+        op.execute(f"DROP POLICY IF EXISTS {EVIDENCE_SELECT_POLICY} ON {table}")
+        op.execute(f"DROP POLICY IF EXISTS {EVIDENCE_INSERT_POLICY} ON {table}")
         op.execute(
-            f"CREATE POLICY {policy_base}_select ON {table} FOR SELECT "
+            f"CREATE POLICY {EVIDENCE_SELECT_POLICY} ON {table} FOR SELECT "
             f"TO {KERNEL_ROLE} USING ({predicate})"
         )
         op.execute(
-            f"CREATE POLICY {policy_base}_insert ON {table} FOR INSERT "
+            f"CREATE POLICY {EVIDENCE_INSERT_POLICY} ON {table} FOR INSERT "
             f"TO {KERNEL_ROLE} WITH CHECK ({predicate})"
         )
 
@@ -3910,9 +3910,8 @@ def downgrade() -> None:
     op.execute(f"DROP FUNCTION {FENCE_FUNCTION}")
     op.execute(f"DROP TABLE {FENCE_TABLE}")
     for table in EVIDENCE_TABLES:
-        table_name = table.replace(".", "_")
-        for suffix in ("_e3_kernel_select", "_e3_kernel_update", "_e3_kernel_insert"):
-            op.execute(f"DROP POLICY IF EXISTS {table_name}{suffix} ON {table}")
+        for policy in (EVIDENCE_SELECT_POLICY, EVIDENCE_INSERT_POLICY):
+            op.execute(f"DROP POLICY IF EXISTS {policy} ON {table}")
     op.execute(
         f"""
         REVOKE SELECT, INSERT ON TABLE identity.people FROM {KERNEL_ROLE};

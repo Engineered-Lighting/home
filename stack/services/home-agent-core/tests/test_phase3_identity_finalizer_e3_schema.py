@@ -252,6 +252,25 @@ def test_sql_conditional_expression_is_not_schema_qualified() -> None:
     assert "pg_catalog.coalesce" not in MIGRATION
 
 
+def test_evidence_policy_identifiers_cannot_truncate_or_collide() -> None:
+    select_policy = _literal("EVIDENCE_SELECT_POLICY")
+    insert_policy = _literal("EVIDENCE_INSERT_POLICY")
+    assert select_policy != insert_policy
+    assert len(select_policy.encode("utf-8")) <= 63
+    assert len(insert_policy.encode("utf-8")) <= 63
+    assert "_e3_" in select_policy
+    assert "_e3_" in insert_policy
+    install = MIGRATION.split("def _install_evidence_policies()", 1)[1].split(
+        "def _install_function_and_acl()", 1
+    )[0]
+    assert "table.replace(" not in install
+    assert "EVIDENCE_SELECT_POLICY" in install
+    assert "EVIDENCE_INSERT_POLICY" in install
+    downgrade = MIGRATION.split("def downgrade()", 1)[1]
+    assert "EVIDENCE_SELECT_POLICY" in downgrade
+    assert "EVIDENCE_INSERT_POLICY" in downgrade
+
+
 def test_finalizer_function_has_a_fixed_security_and_byte_boundary() -> None:
     body = _literal("FUNCTION_BODY")
     assert "SECURITY DEFINER" in MIGRATION

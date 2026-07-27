@@ -512,7 +512,8 @@ def _admit_exact_predecessor() -> None:
                    'default_transaction_isolation=serializable',
                    'statement_timeout=120s','lock_timeout=5s',
                    'idle_in_transaction_session_timeout=15s',
-                   'transaction_timeout=180s'
+                   'transaction_timeout=180s',
+                   'log_parameter_max_length_on_error=0'
                  ]::text[]),
                 ('home_agent_identity_kernel', false, false, 0,
                  NULL::timestamptz, NULL::text[]),

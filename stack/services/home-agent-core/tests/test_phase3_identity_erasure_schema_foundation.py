@@ -73,6 +73,7 @@ def test_0011_is_dormant_content_free_and_exactly_source_linked() -> None:
 
     assert 'revision: str = "0011_identity_erasure_e1"' in source
     assert 'down_revision: str | None = "0010_identity_erasure_source"' in source
+    assert "'log_parameter_max_length_on_error=0'" in source
     for table in (
         "privacy.person_erasure_scopes",
         "privacy.subject_retrieval_blocks",

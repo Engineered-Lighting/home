@@ -1716,7 +1716,7 @@ DECLARE
     '0012_identity_erasure_e2'
   ]::text[];
   expected_e3_catalog_sha256 constant text :=
-    'c79243af17d50d791e78f2c7afaa5d1f6ec128e82bcf711d837b68b84af1db71';
+    '123326a4620d3dd123773819d95255e40813a5a949f406570252ff1f7031f29a';
   expected_finalizer_body_sha256 constant text :=
     'e50a1c92607007529194916de30f14c5975fec1fe67f1569da4c46ace32bf85f';
   expected_fence_body_sha256 constant text :=

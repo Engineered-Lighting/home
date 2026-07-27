@@ -144,7 +144,9 @@ The binding-operator role is capped at eight connections with 15-second
 statement/idle-transaction, 5-second lock, and 30-second total-transaction
 limits. E5a reapplies the same limits transaction-locally before taking the
 semantic fence, run-row, and ledger locks, so a stranded pool transaction
-cannot retain them indefinitely.
+cannot retain them indefinitely. Those role-level limits are applied only by
+the post-E3 dormant role ceremony so historical E1-E3 replay retains its
+pinned caller shape.
 
 While holding the semantic fence, exact run row, and mutable ledger head, the
 verifier revalidates one E4 promotion and its exact append-only E3/E4

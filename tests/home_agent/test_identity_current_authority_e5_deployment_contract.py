@@ -54,13 +54,37 @@ def test_e5_role_is_additive_dormant_and_has_no_new_secret() -> None:
     assert f'KERNEL_ROLE = "{KERNEL_ROLE}"' in migration
     assert FUNCTION in migration
 
-    assert "ALTER ROLE home_agent_binding_operator RESET ALL;" in historical
+    assert "ALTER ROLE home_agent_binding_operator RESET ALL;" not in historical
     assert re.search(
         r"ALTER ROLE home_agent_binding_operator PASSWORD "
         r":'binding_operator_password'\s+NOSUPERUSER NOCREATEDB "
-        r"NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS\s+"
-        r"CONNECTION LIMIT 8;",
+        r"NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;",
         historical,
+    )
+    assert "CONNECTION LIMIT 8" not in historical
+    assert (
+        "ALTER ROLE home_agent_binding_operator SET "
+        "statement_timeout = '15s';" in historical
+    )
+    assert (
+        "ALTER ROLE home_agent_binding_operator SET lock_timeout"
+        not in historical
+    )
+    assert (
+        "ALTER ROLE home_agent_binding_operator SET\n"
+        "  idle_in_transaction_session_timeout" not in historical
+    )
+    assert (
+        "ALTER ROLE home_agent_binding_operator SET transaction_timeout"
+        not in historical
+    )
+
+    assert "ALTER ROLE home_agent_binding_operator RESET ALL;" in provisioner
+    assert re.search(
+        r"ALTER ROLE home_agent_binding_operator\s+"
+        r"NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION\s+"
+        r"NOINHERIT NOBYPASSRLS CONNECTION LIMIT 8;",
+        provisioner,
     )
     for setting in (
         "statement_timeout = '15s'",
@@ -72,8 +96,10 @@ def test_e5_role_is_additive_dormant_and_has_no_new_secret() -> None:
             r"ALTER ROLE home_agent_binding_operator SET\s+"
             + re.escape(setting)
             + r";",
-            historical,
+            provisioner,
         )
+    assert "caller_role.rolconnlimit = 8" in provisioner
+    assert "caller_role.rolconfig = ARRAY[" in provisioner
 
     assert KERNEL_ROLE not in historical
     assert f"CREATE ROLE {KERNEL_ROLE} NOLOGIN" in provisioner
@@ -98,10 +124,8 @@ def test_e5_role_is_additive_dormant_and_has_no_new_secret() -> None:
     assert "NOT admin_option" in provisioner
     assert "NOT inherit_option" in provisioner
     assert "set_option" in provisioner
-    assert (
-        "refobjid IN (login_oid, kernel_oid, authority_kernel_oid)"
-        in provisioner
-    )
+    assert "refobjid IN (" in provisioner
+    assert "authority_kernel_oid, caller_oid" in provisioner
 
 
 def test_e5_overlay_preserves_exact_e3_e4_pins_and_stop_boundary() -> None:

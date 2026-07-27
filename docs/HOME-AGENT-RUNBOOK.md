@@ -888,7 +888,9 @@ run row, and the ledger head until the surrounding transaction commits, the
 binding-operator role is limited to eight connections and carries 15-second
 statement/idle-transaction, 5-second lock, and 30-second total-transaction
 limits. The verifier reapplies those limits transaction-locally before taking
-application-data locks.
+application-data locks. The role-level limits are installed only by the
+post-E3 dormant cutover-role ceremony; the base role provisioner preserves the
+historical shape pinned by the E1-E3 migration chain.
 
 While holding the semantic fence, exact run row, and mutable ledger head, the
 verifier revalidates one E4 promotion and its exact append-only E3/E4

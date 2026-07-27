@@ -111,12 +111,20 @@ BEGIN
     RAISE EXCEPTION 'partial identity cutover role pair'
       USING ERRCODE = '55000';
   END IF;
+  IF NOT EXISTS (
+       SELECT 1 FROM pg_catalog.pg_roles
+        WHERE rolname = 'home_agent_binding_operator'
+     ) THEN
+    RAISE EXCEPTION 'identity authority caller role is missing'
+      USING ERRCODE = '55000';
+  END IF;
   IF EXISTS (
        SELECT 1
          FROM pg_catalog.pg_shdepend AS ownership
          JOIN pg_catalog.pg_roles AS target_role
            ON target_role.oid = ownership.refobjid
         WHERE target_role.rolname IN (
+          'home_agent_binding_operator',
           'home_agent_identity_cutover',
           'home_agent_identity_cutover_kernel',
           'home_agent_identity_authority_kernel'
@@ -152,11 +160,13 @@ SELECT pg_catalog.format(
   JOIN pg_catalog.pg_roles AS parent ON parent.oid = membership.roleid
   JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member
  WHERE member.rolname IN (
+         'home_agent_binding_operator',
          'home_agent_identity_cutover',
          'home_agent_identity_cutover_kernel',
          'home_agent_identity_authority_kernel'
        )
     OR parent.rolname IN (
+         'home_agent_binding_operator',
          'home_agent_identity_cutover',
          'home_agent_identity_cutover_kernel',
          'home_agent_identity_authority_kernel'
@@ -165,11 +175,18 @@ SELECT pg_catalog.format(
 ALTER ROLE home_agent_identity_cutover_kernel RESET ALL;
 ALTER ROLE home_agent_identity_authority_kernel RESET ALL;
 ALTER ROLE home_agent_identity_cutover RESET ALL;
+# This ceremony is admitted only after the historical E1-E3 chain. Applying
+# these E5 caller limits in the base provisioner would invalidate the pinned
+# predecessor role contract during a fresh migration replay.
+ALTER ROLE home_agent_binding_operator RESET ALL;
 ALTER ROLE home_agent_identity_cutover_kernel NOLOGIN NOSUPERUSER NOCREATEDB
   NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS CONNECTION LIMIT 0;
 ALTER ROLE home_agent_identity_authority_kernel
   NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION
   NOINHERIT NOBYPASSRLS CONNECTION LIMIT 0;
+ALTER ROLE home_agent_binding_operator
+  NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION
+  NOINHERIT NOBYPASSRLS CONNECTION LIMIT 8;
 ALTER ROLE home_agent_identity_cutover PASSWORD :'identity_cutover_password'
   NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS
   CONNECTION LIMIT 1 VALID UNTIL '1970-01-01 00:00:00+00';
@@ -181,6 +198,11 @@ ALTER ROLE home_agent_identity_cutover SET idle_in_transaction_session_timeout =
   '15s';
 ALTER ROLE home_agent_identity_cutover SET transaction_timeout = '180s';
 ALTER ROLE home_agent_identity_cutover SET log_parameter_max_length_on_error = 0;
+ALTER ROLE home_agent_binding_operator SET statement_timeout = '15s';
+ALTER ROLE home_agent_binding_operator SET lock_timeout = '5s';
+ALTER ROLE home_agent_binding_operator SET
+  idle_in_transaction_session_timeout = '15s';
+ALTER ROLE home_agent_binding_operator SET transaction_timeout = '30s';
 
 REVOKE ALL PRIVILEGES ON DATABASE home_agent
   FROM home_agent_identity_cutover, home_agent_identity_cutover_kernel,
@@ -197,7 +219,8 @@ REVOKE pg_monitor, pg_read_all_settings, pg_read_all_stats,
   pg_stat_scan_tables, pg_read_all_data, pg_write_all_data,
   pg_read_server_files, pg_write_server_files, pg_execute_server_program,
   pg_checkpoint, pg_maintain, pg_signal_backend
-  FROM home_agent_identity_cutover, home_agent_identity_cutover_kernel,
+  FROM home_agent_binding_operator, home_agent_identity_cutover,
+       home_agent_identity_cutover_kernel,
        home_agent_identity_authority_kernel;
 
 DO $identity_cutover_role_ceremony_validation$
@@ -206,6 +229,7 @@ DECLARE
   login_oid oid;
   kernel_oid oid;
   authority_kernel_oid oid;
+  caller_oid oid;
   database_oid oid;
 BEGIN
   SELECT oid INTO STRICT owner_oid FROM pg_catalog.pg_roles
@@ -216,6 +240,8 @@ BEGIN
    WHERE rolname = 'home_agent_identity_cutover_kernel';
   SELECT oid INTO STRICT authority_kernel_oid FROM pg_catalog.pg_roles
    WHERE rolname = 'home_agent_identity_authority_kernel';
+  SELECT oid INTO STRICT caller_oid FROM pg_catalog.pg_roles
+   WHERE rolname = 'home_agent_binding_operator';
   SELECT oid INTO STRICT database_oid FROM pg_catalog.pg_database
    WHERE datname = pg_catalog.current_database();
 
@@ -269,8 +295,30 @@ BEGIN
           AND authority_kernel_role.rolvaliduntil IS NULL
           AND authority_kernel_role.rolconfig IS NULL
      )
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_catalog.pg_roles AS caller_role
+        WHERE caller_role.oid = caller_oid
+          AND caller_role.rolcanlogin
+          AND NOT caller_role.rolinherit
+          AND NOT caller_role.rolsuper
+          AND NOT caller_role.rolcreatedb
+          AND NOT caller_role.rolcreaterole
+          AND NOT caller_role.rolreplication
+          AND NOT caller_role.rolbypassrls
+          AND caller_role.rolconnlimit = 8
+          AND caller_role.rolvaliduntil IS NULL
+          AND caller_role.rolconfig = ARRAY[
+            'statement_timeout=15s',
+            'lock_timeout=5s',
+            'idle_in_transaction_session_timeout=15s',
+            'transaction_timeout=30s'
+          ]::text[]
+     )
      OR NOT pg_catalog.has_database_privilege(
        login_oid, database_oid, 'CONNECT'
+     )
+     OR NOT pg_catalog.has_database_privilege(
+       caller_oid, database_oid, 'CONNECT'
      )
      OR pg_catalog.has_database_privilege(
        login_oid, database_oid, 'CREATE,TEMPORARY'
@@ -280,6 +328,9 @@ BEGIN
      )
      OR pg_catalog.has_database_privilege(
        authority_kernel_oid, database_oid, 'CONNECT,CREATE,TEMPORARY'
+     )
+     OR pg_catalog.has_database_privilege(
+       caller_oid, database_oid, 'CREATE,TEMPORARY'
      )
      OR (
        SELECT pg_catalog.count(*)
@@ -309,17 +360,23 @@ BEGIN
      ) <> 1
      OR EXISTS (
        SELECT 1 FROM pg_catalog.pg_auth_members
-        WHERE member IN (login_oid, kernel_oid, authority_kernel_oid)
-           OR roleid = login_oid
+        WHERE member IN (
+                login_oid, kernel_oid, authority_kernel_oid, caller_oid
+              )
+           OR roleid IN (login_oid, caller_oid)
      )
      OR EXISTS (
        SELECT 1 FROM pg_catalog.pg_db_role_setting
-        WHERE setrole IN (login_oid, kernel_oid, authority_kernel_oid)
+        WHERE setrole IN (
+                login_oid, kernel_oid, authority_kernel_oid, caller_oid
+              )
           AND setdatabase <> 0
      )
      OR EXISTS (
        SELECT 1 FROM pg_catalog.pg_shdepend
-        WHERE refobjid IN (login_oid, kernel_oid, authority_kernel_oid)
+        WHERE refobjid IN (
+                login_oid, kernel_oid, authority_kernel_oid, caller_oid
+              )
           AND deptype = 'o'
      )
      OR EXISTS (

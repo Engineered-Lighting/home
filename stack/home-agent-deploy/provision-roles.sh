@@ -92,10 +92,10 @@ WHERE parent.rolname = 'home_agent_identity_erasure_kernel'
 
 ALTER ROLE home_agent_api PASSWORD :'api_password' NOSUPERUSER NOCREATEDB
   NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
-ALTER ROLE home_agent_binding_operator RESET ALL;
+# Revisions through E3 pin this historical caller shape. The dormant
+# post-E3 cutover-role ceremony applies the tighter E5 transaction limits.
 ALTER ROLE home_agent_binding_operator PASSWORD :'binding_operator_password'
-  NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS
-  CONNECTION LIMIT 8;
+  NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
 ALTER ROLE home_agent_identity_kernel NOLOGIN NOSUPERUSER NOCREATEDB
   NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS CONNECTION LIMIT 0;
 ALTER ROLE home_agent_identity_migration PASSWORD :'identity_migration_password'
@@ -124,10 +124,6 @@ ALTER ROLE home_agent_backup PASSWORD :'backup_password' NOSUPERUSER NOCREATEDB
 
 ALTER ROLE home_agent_api SET statement_timeout = '15s';
 ALTER ROLE home_agent_binding_operator SET statement_timeout = '15s';
-ALTER ROLE home_agent_binding_operator SET lock_timeout = '5s';
-ALTER ROLE home_agent_binding_operator SET
-  idle_in_transaction_session_timeout = '15s';
-ALTER ROLE home_agent_binding_operator SET transaction_timeout = '30s';
 ALTER ROLE home_agent_identity_migration SET default_transaction_isolation =
   'serializable';
 ALTER ROLE home_agent_identity_migration SET statement_timeout = '120s';

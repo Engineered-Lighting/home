@@ -92,8 +92,8 @@ WHERE parent.rolname = 'home_agent_identity_erasure_kernel'
 
 ALTER ROLE home_agent_api PASSWORD :'api_password' NOSUPERUSER NOCREATEDB
   NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
-# Revisions through E3 pin this historical caller shape. The dormant
-# post-E3 cutover-role ceremony applies the tighter E5 transaction limits.
+-- Revisions through E3 pin this historical caller shape. The dormant
+-- post-E3 cutover-role ceremony applies the tighter E5 transaction limits.
 ALTER ROLE home_agent_binding_operator PASSWORD :'binding_operator_password'
   NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
 ALTER ROLE home_agent_identity_kernel NOLOGIN NOSUPERUSER NOCREATEDB

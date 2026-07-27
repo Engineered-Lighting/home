@@ -128,6 +128,17 @@ def test_e5_role_is_additive_dormant_and_has_no_new_secret() -> None:
     assert "authority_kernel_oid, caller_oid" in provisioner
 
 
+def test_e5_role_provisioning_sql_heredocs_have_only_sql_comments() -> None:
+    for relative_path in (
+        "stack/home-agent-deploy/provision-roles.sh",
+        "stack/home-agent-deploy/provision-identity-cutover-roles.sh",
+    ):
+        source = _read(relative_path)
+        sql = source.split("<<'SQL'", 1)[1].rsplit("\nSQL", 1)[0]
+        assert re.search(r"(?m)^-- .*historical", sql)
+        assert re.search(r"(?m)^\s*#", sql) is None
+
+
 def test_e5_overlay_preserves_exact_e3_e4_pins_and_stop_boundary() -> None:
     source = _read("stack/home-agent-deploy/apply-grants.sh")
     e3 = _grant_section("identity_finalizer_e3_acl")

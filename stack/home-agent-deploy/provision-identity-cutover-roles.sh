@@ -175,9 +175,9 @@ SELECT pg_catalog.format(
 ALTER ROLE home_agent_identity_cutover_kernel RESET ALL;
 ALTER ROLE home_agent_identity_authority_kernel RESET ALL;
 ALTER ROLE home_agent_identity_cutover RESET ALL;
-# This ceremony is admitted only after the historical E1-E3 chain. Applying
-# these E5 caller limits in the base provisioner would invalidate the pinned
-# predecessor role contract during a fresh migration replay.
+-- This ceremony is admitted only after the historical E1-E3 chain. Applying
+-- these E5 caller limits in the base provisioner would invalidate the pinned
+-- predecessor role contract during a fresh migration replay.
 ALTER ROLE home_agent_binding_operator RESET ALL;
 ALTER ROLE home_agent_identity_cutover_kernel NOLOGIN NOSUPERUSER NOCREATEDB
   NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS CONNECTION LIMIT 0;

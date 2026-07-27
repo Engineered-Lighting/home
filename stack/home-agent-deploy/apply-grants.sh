@@ -1524,14 +1524,17 @@ BEGIN
 END
 $identity_finalizer_e3_quarantine$;
 
--- A future owner- or E3-kernel-created function in a schema reachable by the
--- finalizer roles must not regain PostgreSQL's implicit PUBLIC EXECUTE grant.
--- Existing callable functions are checked again below with effective
--- has_function_privilege(), so inherited/PUBLIC access cannot hide in an ACL.
+-- Owner-created functions must not regain PostgreSQL's implicit PUBLIC
+-- EXECUTE grant. Do not persist a pg_default_acl object owned by the dormant
+-- E3 kernel: revisions 0009 and 0013 require that role to own nothing before
+-- the reviewed function is created. Restore the built-in kernel default here
+-- to remove any stale row left by an earlier grant script. The kernel is
+-- NOLOGIN and has no CREATE privilege; revision 0013 creates its one function
+-- and revokes PUBLIC in the same transactional migration.
 ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner
   REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_identity_finalizer_kernel
-  REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+  GRANT EXECUTE ON FUNCTIONS TO PUBLIC;
 
 -- Restore E3 only when every object, role, ownership dependency, fence, RLS
 -- policy, and narrow ACL is present. The login remains expired: this block

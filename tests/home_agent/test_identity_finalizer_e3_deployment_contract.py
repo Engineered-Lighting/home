@@ -170,8 +170,13 @@ def test_e3_replay_pins_exact_function_and_catalog_contracts() -> None:
     assert (
         "ALTER DEFAULT PRIVILEGES FOR ROLE "
         "home_agent_identity_finalizer_kernel\n"
-        "  REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC"
+        "  GRANT EXECUTE ON FUNCTIONS TO PUBLIC"
     ) in source
+    assert (
+        "ALTER DEFAULT PRIVILEGES FOR ROLE "
+        "home_agent_identity_finalizer_kernel\n"
+        "  REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC"
+    ) not in source
 
     for expected in (
         "expected_e3_catalog_sha256 constant text",

@@ -221,6 +221,10 @@ def test_role_admission_allows_only_the_reviewed_role_wide_settings() -> None:
     assert "AND setdatabase <> 0" in MIGRATION
 
 
+def test_sql_conditional_expression_is_not_schema_qualified() -> None:
+    assert "pg_catalog.coalesce" not in MIGRATION
+
+
 def test_finalizer_function_has_a_fixed_security_and_byte_boundary() -> None:
     body = _literal("FUNCTION_BODY")
     assert "SECURITY DEFINER" in MIGRATION

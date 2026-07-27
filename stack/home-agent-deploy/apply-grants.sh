@@ -1608,7 +1608,7 @@ DECLARE
   expected_e3_catalog_sha256 constant text :=
     'PENDING_E3_CATALOG_SHA256';
   expected_finalizer_body_sha256 constant text :=
-    'f805636d8603cf8d2f678626d5868a5e0d0fc1d97654ed3960b11b756d075b0f';
+    'e50a1c92607007529194916de30f14c5975fec1fe67f1569da4c46ace32bf85f';
   expected_fence_body_sha256 constant text :=
     'fd6919a406140ac5bc82d1d1dededa1397c5e27dc54916fb572ce7bc33ba22a5';
   expected_fence_trigger_body_sha256 constant text :=

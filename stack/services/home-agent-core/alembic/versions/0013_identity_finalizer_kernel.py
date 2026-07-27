@@ -567,7 +567,7 @@ BEGIN
       USING ERRCODE = '22023';
   END IF;
 
-  SELECT pg_catalog.coalesce(
+  SELECT coalesce(
            pg_catalog.array_agg(
              (projection -> 'record' ->> 'person_id')::uuid
              ORDER BY ordinal
@@ -1537,7 +1537,7 @@ BEGIN
              ON lineage.lineage_id = subject.lineage_id
           WHERE lineage.run_id = admission.run_id
        ) <> (
-         SELECT pg_catalog.coalesce(
+         SELECT coalesce(
                   pg_catalog.sum(
                     pg_catalog.jsonb_array_length(
                       projection -> 'lineage' -> 'subjects'
@@ -1711,7 +1711,7 @@ BEGIN
                    target_record ->> 'legacy_source_sha256'
              AND person.created_at = finalized_marker
              AND person.updated_at = finalized_marker
-             AND person.status = pg_catalog.coalesce((
+             AND person.status = coalesce((
                SELECT status_projection -> 'record' ->> 'status'
                  FROM pg_catalog.jsonb_array_elements(
                         document -> 'projections'
@@ -2809,7 +2809,7 @@ def _prepare_admission_table() -> None:
                        attribute.atttypid, attribute.atttypmod
                      ) || '|' ||
                      attribute.attnotnull::text || '|' ||
-                     pg_catalog.coalesce(
+                     coalesce(
                        pg_catalog.pg_get_expr(
                          default_value.adbin, default_value.adrelid
                        ),
@@ -2863,7 +2863,7 @@ def _prepare_admission_table() -> None:
                         )
                    FROM pg_catalog.pg_class AS table_row
                    CROSS JOIN LATERAL pg_catalog.aclexplode(
-                     pg_catalog.coalesce(
+                     coalesce(
                        table_row.relacl,
                        pg_catalog.acldefault('r', table_row.relowner)
                      )
@@ -2880,7 +2880,7 @@ def _prepare_admission_table() -> None:
                  SELECT 1
                    FROM pg_catalog.pg_class AS table_row
                    CROSS JOIN LATERAL pg_catalog.aclexplode(
-                     pg_catalog.coalesce(
+                     coalesce(
                        table_row.relacl,
                        pg_catalog.acldefault('r', table_row.relowner)
                      )

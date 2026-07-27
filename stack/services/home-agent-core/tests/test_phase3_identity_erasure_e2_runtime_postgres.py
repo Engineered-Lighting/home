@@ -1039,7 +1039,9 @@ async def test_postgresql_e2_clean_roundtrip_and_data_bearing_downgrade_refusal(
         await downgraded.dispose()
 
     upgrade = _run_alembic(database_url, "upgrade", "head")
-    assert upgrade.returncode == 0
+    assert upgrade.returncode == 0, (
+        f"stdout:\n{upgrade.stdout}\n\nstderr:\n{upgrade.stderr}"
+    )
     upgraded_erasure = create_async_engine(
         os.environ[LIFECYCLE_ERASURE_DATABASE_ENV], pool_size=1
     )

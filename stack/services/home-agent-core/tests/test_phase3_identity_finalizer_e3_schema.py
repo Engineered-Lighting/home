@@ -215,6 +215,12 @@ def test_bootstrap_accepts_only_the_exact_empty_metadata_shape() -> None:
     )
 
 
+def test_role_admission_allows_only_the_reviewed_role_wide_settings() -> None:
+    assert "'log_parameter_max_length_on_error=0'" in MIGRATION
+    assert "pg_catalog.pg_db_role_setting" in MIGRATION
+    assert "AND setdatabase <> 0" in MIGRATION
+
+
 def test_finalizer_function_has_a_fixed_security_and_byte_boundary() -> None:
     body = _literal("FUNCTION_BODY")
     assert "SECURITY DEFINER" in MIGRATION

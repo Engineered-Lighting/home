@@ -86,6 +86,7 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
     ) in admission
     assert "'log_parameter_max_length_on_error=0'" in admission
     assert "pg_catalog.pg_db_role_setting" in admission
+    assert "AND database_setting.setdatabase <> 0" in admission
     assert "identity finalizer E3 ownership dependency mismatch" in admission
     assert "identity finalizer E3 write-fence contract mismatch" in admission
     assert "identity finalizer E3 schema ACL mismatch" in admission
@@ -240,6 +241,8 @@ def test_e3_replay_validates_effective_and_direct_acl_surfaces() -> None:
         "pg_catalog.has_sequence_privilege(",
         "pg_catalog.has_type_privilege(",
         "pg_catalog.pg_default_acl",
+        "default_acl.defaclrole IN (finalizer_oid, kernel_oid)",
+        "default_acl.defaclrole = owner_oid",
         "default_acl.defaclnamespace = 0",
         "default_acl.defaclobjtype = 'f'",
         "default_privilege.grantee = 0",
@@ -251,6 +254,7 @@ def test_e3_replay_validates_effective_and_direct_acl_surfaces() -> None:
         "function_acl.grantee = 0",
     ):
         assert expected in admission
+    assert "VALUES\n             (owner_oid),\n             (kernel_oid)" not in admission
 
     # The NOLOGIN owner necessarily has implicit EXECUTE on its own main
     # function. Direct ACL equality deliberately ignores that optional owner

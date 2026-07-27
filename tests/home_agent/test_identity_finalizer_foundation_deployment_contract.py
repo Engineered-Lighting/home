@@ -190,8 +190,15 @@ class IdentityFinalizerFoundationDeploymentContractTests(unittest.TestCase):
         for statement in re.findall(r"(?is)GRANT\s+EXECUTE[\s\S]*?;", pre_e3):
             self.assertNotIn(LOGIN_ROLE, statement)
             self.assertNotIn(KERNEL_ROLE, statement)
+        stale_default_acl_cleanup = (
+            "ALTER DEFAULT PRIVILEGES FOR ROLE "
+            f"{KERNEL_ROLE}\n  GRANT EXECUTE ON FUNCTIONS TO PUBLIC;"
+        )
+        self.assertIn(stale_default_acl_cleanup, grants)
         for statement in re.findall(r"ALTER DEFAULT PRIVILEGES[\s\S]*?;", grants):
             if " GRANT " in f" {statement.upper()} ":
+                if statement == stale_default_acl_cleanup:
+                    continue
                 self.assertNotIn(LOGIN_ROLE, statement)
                 self.assertNotIn(KERNEL_ROLE, statement)
         self.assertIn(

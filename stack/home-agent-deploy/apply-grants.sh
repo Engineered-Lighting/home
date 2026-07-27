@@ -2041,6 +2041,7 @@ BEGIN
        SELECT 1
          FROM pg_catalog.pg_db_role_setting AS database_setting
         WHERE database_setting.setrole IN (finalizer_oid, kernel_oid)
+          AND database_setting.setdatabase <> 0
       ) THEN
     RAISE EXCEPTION 'identity finalizer E3 dormant role contract mismatch'
       USING ERRCODE = '42501';
@@ -3119,27 +3120,23 @@ BEGIN
      )
      OR EXISTS (
        SELECT 1
-         FROM (
-           VALUES
-             (owner_oid),
-             (kernel_oid)
-         ) AS required_default(owner_role_oid)
-        WHERE NOT EXISTS (
-          SELECT 1
-            FROM pg_catalog.pg_default_acl AS default_acl
-           WHERE default_acl.defaclrole =
-                 required_default.owner_role_oid
-             AND default_acl.defaclnamespace = 0
-             AND default_acl.defaclobjtype = 'f'
-             AND NOT EXISTS (
-               SELECT 1
-                 FROM pg_catalog.aclexplode(
-                   default_acl.defaclacl
-                 ) AS default_privilege
-                WHERE default_privilege.grantee = 0
-                  AND default_privilege.privilege_type = 'EXECUTE'
-             )
-        )
+         FROM pg_catalog.pg_default_acl AS default_acl
+        WHERE default_acl.defaclrole IN (finalizer_oid, kernel_oid)
+     )
+     OR NOT EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_default_acl AS default_acl
+        WHERE default_acl.defaclrole = owner_oid
+          AND default_acl.defaclnamespace = 0
+          AND default_acl.defaclobjtype = 'f'
+          AND NOT EXISTS (
+            SELECT 1
+              FROM pg_catalog.aclexplode(
+                default_acl.defaclacl
+              ) AS default_privilege
+             WHERE default_privilege.grantee = 0
+               AND default_privilege.privilege_type = 'EXECUTE'
+          )
      ) THEN
     RAISE EXCEPTION 'identity finalizer E3 default ACL mismatch'
       USING ERRCODE = '42501';

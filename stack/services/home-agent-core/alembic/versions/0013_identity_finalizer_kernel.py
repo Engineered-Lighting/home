@@ -3304,8 +3304,12 @@ def _validate_dormant_role() -> None:
                  ANY (login_config)
              )
              OR EXISTS (
+               -- The six role-wide settings above are themselves represented
+               -- here with setdatabase=0. Reject only per-database overlays,
+               -- which could change the finalizer contract in one database.
                SELECT 1 FROM pg_catalog.pg_db_role_setting
                 WHERE setrole IN (login_oid, kernel_oid)
+                  AND setdatabase <> 0
              ) THEN
             RAISE EXCEPTION 'identity_finalizer_e3_role_config_invalid'
               USING ERRCODE = '42501';

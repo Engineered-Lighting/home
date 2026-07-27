@@ -153,8 +153,13 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
     )
     assert "pg_catalog.cardinality(e4_e3_policy_relations)" in admission
     assert (
-        "'operations.enforced_legacy_identity_writer_freezes'::regclass"
+        "pg_catalog.to_regclass(\n"
+        "                    'operations.enforced_legacy_identity_writer_freezes'"
         in admission
+    )
+    assert (
+        "'operations.enforced_legacy_identity_writer_freezes'::regclass"
+        not in admission
     )
     assert "policy_row.polroles <>" in admission
     assert "ARRAY[cutover_kernel_oid]::oid[]" in admission

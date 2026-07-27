@@ -2544,7 +2544,9 @@ BEGIN
             AND policy_row.polname = e4_select_policy
            LEFT JOIN pg_catalog.pg_policy AS reference_policy
              ON reference_policy.polrelid =
-                  'operations.enforced_legacy_identity_writer_freezes'::regclass
+                  pg_catalog.to_regclass(
+                    'operations.enforced_legacy_identity_writer_freezes'
+                  )
             AND reference_policy.polname = e4_select_policy
           WHERE policy_row.oid IS NULL
              OR reference_policy.oid IS NULL

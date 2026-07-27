@@ -1895,6 +1895,7 @@ DECLARE
   evidence_insert_policy constant text := 'identity_finalizer_e3_insert';
   e4_select_policy constant text := 'identity_cutover_e4_select';
   e5_select_policy constant text := 'identity_authority_e5_select';
+  e5_run_lock_policy constant text := 'identity_authority_e5_run_lock';
   authority_kernel_oid oid;
   migration_run_lock_policy constant text :=
     'identity_finalizer_e3_migration_run_lock';
@@ -2714,9 +2715,10 @@ BEGIN
   END IF;
 
   -- Revision 0015 adds a second, separately owned SELECT overlay to the same
-  -- nine E3 relations. Validate every policy against the E5-owned reference
-  -- policy before projecting it out. The E5 block below pins the complete
-  -- verifier catalog after its independently committed quarantine.
+  -- nine E3 relations and one UPDATE policy used only to lock the migration
+  -- run. Validate every policy against the E5-owned SELECT reference before
+  -- projecting it out. The E5 block below pins the complete verifier catalog
+  -- after its independently committed quarantine.
   IF current_revision = '0015_current_authority_e5a'
      AND (
        (
@@ -2761,6 +2763,30 @@ BEGIN
              OR reference_policy.polwithcheck IS NOT NULL
              OR policy_row.polqual::text <>
                   reference_policy.polqual::text
+       )
+       OR (
+         SELECT pg_catalog.count(*)
+           FROM pg_catalog.pg_policy AS policy_row
+          WHERE policy_row.polname = e5_run_lock_policy
+       ) <> 1
+       OR NOT EXISTS (
+         SELECT 1
+           FROM pg_catalog.pg_policy AS lock_policy
+           JOIN pg_catalog.pg_policy AS select_policy
+             ON select_policy.polrelid = lock_policy.polrelid
+            AND select_policy.polname = e5_select_policy
+          WHERE lock_policy.polrelid =
+                'operations.reviewed_identity_migration_runs'::regclass
+            AND lock_policy.polname = e5_run_lock_policy
+            AND lock_policy.polpermissive
+            AND lock_policy.polcmd = 'w'
+            AND lock_policy.polroles =
+                  ARRAY[authority_kernel_oid]::oid[]
+            AND lock_policy.polqual IS NOT NULL
+            AND lock_policy.polwithcheck IS NOT NULL
+            AND lock_policy.polqual::text = select_policy.polqual::text
+            AND lock_policy.polwithcheck::text =
+                  select_policy.polqual::text
        )
      ) THEN
     RAISE EXCEPTION
@@ -3109,6 +3135,36 @@ BEGIN
                               )
                           AND reference_policy.polname =
                                 policy_row.polname
+                          AND reference_policy.polpermissive
+                          AND reference_policy.polcmd = 'r'
+                          AND reference_policy.polroles =
+                                policy_row.polroles
+                          AND reference_policy.polqual IS NOT NULL
+                          AND reference_policy.polwithcheck IS NULL
+                          AND reference_policy.polqual::text =
+                                policy_row.polqual::text
+                     )
+                   )
+                   OR (
+                     current_revision = '0015_current_authority_e5a'
+                     AND policy_row.polname = e5_run_lock_policy
+                     AND policy_row.polrelid =
+                           'operations.reviewed_identity_migration_runs'
+                             ::regclass
+                     AND policy_row.polpermissive
+                     AND policy_row.polcmd = 'w'
+                     AND policy_row.polroles =
+                           ARRAY[authority_kernel_oid]::oid[]
+                     AND policy_row.polqual IS NOT NULL
+                     AND policy_row.polwithcheck IS NOT NULL
+                     AND policy_row.polqual::text =
+                           policy_row.polwithcheck::text
+                     AND EXISTS (
+                       SELECT 1
+                         FROM pg_catalog.pg_policy AS reference_policy
+                        WHERE reference_policy.polrelid =
+                              policy_row.polrelid
+                          AND reference_policy.polname = e5_select_policy
                           AND reference_policy.polpermissive
                           AND reference_policy.polcmd = 'r'
                           AND reference_policy.polroles =

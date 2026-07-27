@@ -202,6 +202,72 @@ def test_e5_overlay_preserves_exact_e3_e4_pins_and_stop_boundary() -> None:
     assert "GRANT " not in e5
 
 
+def test_e5_run_lock_is_validated_before_e3_manifest_projection() -> None:
+    e3 = _grant_section("identity_finalizer_e3_acl")
+    validation = e3.split(
+        "-- Revision 0015 adds a second, separately owned SELECT overlay", 1
+    )[1].split(
+        "identity finalizer E3 reviewed E5 policy mismatch", 1
+    )[0]
+    manifest = e3.split("'policies',", 1)[1].split("'triggers',", 1)[0]
+    run_lock_projection = manifest.rsplit("OR (", 1)[1]
+
+    assert (
+        "e5_run_lock_policy constant text := "
+        "'identity_authority_e5_run_lock'"
+    ) in e3
+    assert "pg_catalog.count(*)" in validation
+    assert "WHERE policy_row.polname = e5_run_lock_policy" in validation
+    assert (
+        "'operations.reviewed_identity_migration_runs'::regclass"
+        in validation
+    )
+    assert "lock_policy.polcmd = 'w'" in validation
+    assert (
+        "lock_policy.polroles =\n"
+        "                  ARRAY[authority_kernel_oid]::oid[]"
+    ) in validation
+    assert "lock_policy.polqual IS NOT NULL" in validation
+    assert "lock_policy.polwithcheck IS NOT NULL" in validation
+    assert (
+        "lock_policy.polqual::text = select_policy.polqual::text"
+        in validation
+    )
+    assert (
+        "lock_policy.polwithcheck::text =\n"
+        "                  select_policy.polqual::text"
+    ) in validation
+
+    assert "policy_row.polname = e5_run_lock_policy" in manifest
+    assert "current_revision = '0015_current_authority_e5a'" in (
+        run_lock_projection
+    )
+    assert re.search(
+        r"'operations\.reviewed_identity_migration_runs'\s+::regclass",
+        run_lock_projection,
+    )
+    assert "policy_row.polpermissive" in run_lock_projection
+    assert "policy_row.polcmd = 'w'" in run_lock_projection
+    assert (
+        "policy_row.polroles =\n"
+        "                           ARRAY[authority_kernel_oid]::oid[]"
+    ) in run_lock_projection
+    assert "policy_row.polqual IS NOT NULL" in run_lock_projection
+    assert "policy_row.polwithcheck IS NOT NULL" in run_lock_projection
+    assert re.search(
+        r"policy_row\.polqual::text =\s+"
+        r"policy_row\.polwithcheck::text",
+        run_lock_projection,
+    )
+    assert (
+        "reference_policy.polname = e5_select_policy"
+        in run_lock_projection
+    )
+    assert e3.index(
+        "identity finalizer E3 reviewed E5 policy mismatch"
+    ) < e3.index("WITH target_relations(target_name, relation_oid)")
+
+
 def test_e5_replay_quarantines_and_pins_the_complete_direct_acl_surface() -> None:
     overlay = _grant_section(
         "identity_current_authority_e5_overlay_quarantine"

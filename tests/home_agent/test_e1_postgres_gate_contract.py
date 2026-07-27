@@ -231,6 +231,134 @@ def test_e5_catalog_digest_capture_is_exact_and_redacted(
         assert captured.err == ""
 
 
+def test_e5_catalog_failure_classifier_emits_only_allowlisted_code(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runner = _load_runner()
+    private_canary = "PRIVATE-E5-CATALOG-DETAIL-MUST-NOT-BE-EMITTED"
+    state = SimpleNamespace(
+        test_image="test-image",
+        pending_e5_catalog_digest=None,
+    )
+    phase = SimpleNamespace(name="e4-scaffold", network="e4-network")
+    fixed_exception = "current-authority E5 quarantine mismatch"
+
+    monkeypatch.setattr(
+        runner,
+        "_docker_run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout=(
+                f"{private_canary}\n"
+                f"psql:/workspace/apply-grants.sh:5338: ERROR: {fixed_exception}\n"
+                f"DETAIL: {private_canary}\n"
+                f"CONTEXT: {private_canary}\n"
+                f"STATEMENT: {private_canary}\n"
+            ),
+        ),
+    )
+    with pytest.raises(
+        runner.GateFailure,
+        match=r"^unpinned dormant E5 catalog blocked by e5_quarantine_mismatch$",
+    ) as failure:
+        runner._apply_grants_expect_failure(
+            state,
+            phase,
+            Path("."),
+            "home_agent",
+            expected_output=(
+                "identity current-authority E5 catalog admission is pending "
+                "reviewed digest"
+            ),
+            failure_label="unpinned dormant E5 catalog",
+            redact_output=True,
+            capture_e5_catalog_digest=True,
+        )
+
+    assert fixed_exception not in str(failure.value)
+    assert private_canary not in str(failure.value)
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_e5_catalog_failure_classifier_allowlist_is_fixed_and_complete() -> None:
+    runner = _load_runner()
+    apply_grants = (
+        ROOT / "stack/home-agent-deploy/apply-grants.sh"
+    ).read_text(encoding="utf-8")
+
+    assert len(runner.E5_CATALOG_FAILURE_CODES) == 43
+    assert len(set(runner.E5_CATALOG_FAILURE_CODES.values())) == 43
+    for exception_message, failure_code in (
+        runner.E5_CATALOG_FAILURE_CODES.items()
+    ):
+        assert f"'{exception_message}'" in apply_grants
+        assert runner._classify_e5_catalog_failure(
+            "PRIVATE\n"
+            f"psql:/workspace/apply-grants.sh:1: ERROR: {exception_message}\n"
+            "DETAIL: PRIVATE\nCONTEXT: PRIVATE\nSTATEMENT: PRIVATE\n"
+        ) == failure_code
+
+
+def test_e5_catalog_failure_classifier_fails_closed_on_ambiguous_or_spoofed_output(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runner = _load_runner()
+    state = SimpleNamespace(
+        test_image="test-image",
+        pending_e5_catalog_digest=None,
+    )
+    phase = SimpleNamespace(name="e4-scaffold", network="e4-network")
+    outputs = (
+        (
+            "ERROR: current-authority E5 policy contract mismatch\n"
+            "ERROR: current-authority E5 quarantine mismatch\n"
+        ),
+        (
+            "ERROR: current-authority E5 quarantine mismatch\n"
+            "ERROR: current-authority E5 quarantine mismatch\n"
+        ),
+        "ERROR: current-authority E5 quarantine mismatch with private suffix\n",
+        "DETAIL: current-authority E5 quarantine mismatch\n",
+        "DETAIL: private ERROR: current-authority E5 quarantine mismatch\n",
+        "STATEMENT: private ERROR: current-authority E5 quarantine mismatch\n",
+        "NOTERROR: current-authority E5 quarantine mismatch\n",
+    )
+
+    for output in outputs:
+        monkeypatch.setattr(
+            runner,
+            "_docker_run",
+            lambda *_args, value=output, **_kwargs: SimpleNamespace(
+                returncode=1,
+                stdout=value,
+            ),
+        )
+        with pytest.raises(
+            runner.GateFailure,
+            match=r"failed without the reviewed contract marker$",
+        ):
+            runner._apply_grants_expect_failure(
+                state,
+                phase,
+                Path("."),
+                "home_agent",
+                expected_output=(
+                    "identity current-authority E5 catalog admission is pending "
+                    "reviewed digest"
+                ),
+                failure_label="unpinned dormant E5 catalog",
+                redact_output=True,
+                capture_e5_catalog_digest=True,
+            )
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == ""
+
+
 def test_runner_refuses_quarantined_docker_daemon_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1677,7 +1677,7 @@ BEGIN
        AND attribute.attnum > 0
        AND NOT attribute.attisdropped;
     SELECT pg_catalog.array_agg(
-             constraint_row.conname || '|' || constraint_row.contype
+             constraint_row.conname || '|' || constraint_row.contype::text
              ORDER BY constraint_row.conname
            )
       INTO STRICT bootstrap_constraints

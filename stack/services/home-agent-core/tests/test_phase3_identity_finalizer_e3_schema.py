@@ -189,6 +189,10 @@ def test_bootstrap_accepts_only_the_exact_empty_metadata_shape() -> None:
     assert "NOT table_row.relrowsecurity" in MIGRATION
     assert "NOT table_row.relforcerowsecurity" in MIGRATION
     assert "expected_constraints constant text[]" in MIGRATION
+    assert "attribute.attidentity::text" in MIGRATION
+    assert "attribute.attgenerated::text" in MIGRATION
+    assert "constraint_row.contype::text" in MIGRATION
+    assert "policy.polcmd::text" in MIGRATION
     assert "pk_reviewed_identity_finalizer_admissions|p|true|false|false" in MIGRATION
     assert (
         "uq_reviewed_identity_finalizer_admissions_run_id|u|true|false|false"

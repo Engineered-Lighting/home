@@ -2748,8 +2748,8 @@ def _prepare_admission_table() -> None:
                          default_value.adbin, default_value.adrelid
                        ),
                        ''
-                     ) || '|' || attribute.attidentity || '|' ||
-                     attribute.attgenerated
+                     ) || '|' || attribute.attidentity::text || '|' ||
+                     attribute.attgenerated::text
                      ORDER BY attribute.attnum
                    )
               INTO STRICT actual_columns
@@ -2762,7 +2762,7 @@ def _prepare_admission_table() -> None:
                AND NOT attribute.attisdropped;
             SELECT pg_catalog.array_agg(
                      constraint_row.conname || '|' ||
-                     constraint_row.contype || '|' ||
+                     constraint_row.contype::text || '|' ||
                      constraint_row.convalidated::text || '|' ||
                      constraint_row.condeferrable::text || '|' ||
                      constraint_row.condeferred::text
@@ -3426,7 +3426,7 @@ def _assert_installed_contract() -> None:
           END IF;
 
           SELECT pg_catalog.array_agg(
-                   policy.polname || '|' || policy.polcmd || '|' ||
+                   policy.polname || '|' || policy.polcmd::text || '|' ||
                    policy.polpermissive::text || '|' ||
                    role_row.rolname || '|' ||
                    (policy.polqual IS NOT NULL)::text || '|' ||

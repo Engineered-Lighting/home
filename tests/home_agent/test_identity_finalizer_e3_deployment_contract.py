@@ -50,6 +50,7 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
     assert "bootstrap_columns IS DISTINCT FROM ARRAY[" in admission
     assert "bootstrap_constraints IS DISTINCT FROM ARRAY[" in admission
     assert "bootstrap_indexes IS DISTINCT FROM ARRAY[" in admission
+    assert "constraint_row.contype::text" in admission
     assert (
         "uq_reviewed_identity_finalizer_admissions_finalization__1d9a|u"
         in admission

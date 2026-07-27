@@ -1775,19 +1775,73 @@ BEGIN
             AND NOT attribute.attisdropped
             AND attribute.attacl IS NOT NULL
        )
-       OR EXISTS (
-         SELECT 1
-           FROM pg_catalog.aclexplode(
+        OR EXISTS (
+          SELECT 1
+            FROM pg_catalog.aclexplode(
              coalesce(
                (SELECT relacl FROM pg_catalog.pg_class
                  WHERE oid = admission_table),
                pg_catalog.acldefault('r', owner_oid)
              )
            ) AS table_acl
-          WHERE table_acl.grantee <> owner_oid
-          ) THEN
+           WHERE table_acl.grantee <> owner_oid
+           ) THEN
       RAISE EXCEPTION 'identity finalizer E3 inert bootstrap contract mismatch'
-        USING ERRCODE = '55000';
+        USING ERRCODE = '55000',
+              DETAIL = pg_catalog.format(
+                'columns=%s constraints=%s indexes=%s '
+                'relation=%s rows_present=%s policies_present=%s '
+                'comment_present=%s column_acl_present=%s '
+                'external_table_acl_present=%s',
+                bootstrap_columns,
+                bootstrap_constraints,
+                bootstrap_indexes,
+                (
+                  SELECT pg_catalog.format(
+                           'owner=%s kind=%s persistence=%s rls=%s '
+                           'force_rls=%s triggers=%s',
+                           table_row.relowner::regrole,
+                           table_row.relkind,
+                           table_row.relpersistence,
+                           table_row.relrowsecurity,
+                           table_row.relforcerowsecurity,
+                           table_row.relhastriggers
+                         )
+                    FROM pg_catalog.pg_class AS table_row
+                   WHERE table_row.oid = admission_table
+                ),
+                EXISTS (
+                  SELECT 1
+                    FROM operations.reviewed_identity_finalizer_admissions
+                ),
+                EXISTS (
+                  SELECT 1
+                    FROM pg_catalog.pg_policy
+                   WHERE polrelid = admission_table
+                ),
+                pg_catalog.obj_description(
+                  admission_table, 'pg_class'
+                ) IS NOT NULL,
+                EXISTS (
+                  SELECT 1
+                    FROM pg_catalog.pg_attribute AS attribute
+                   WHERE attribute.attrelid = admission_table
+                     AND attribute.attnum > 0
+                     AND NOT attribute.attisdropped
+                     AND attribute.attacl IS NOT NULL
+                ),
+                EXISTS (
+                  SELECT 1
+                    FROM pg_catalog.aclexplode(
+                      coalesce(
+                        (SELECT relacl FROM pg_catalog.pg_class
+                          WHERE oid = admission_table),
+                        pg_catalog.acldefault('r', owner_oid)
+                      )
+                    ) AS table_acl
+                   WHERE table_acl.grantee <> owner_oid
+                )
+              );
     END IF;
     RETURN;
   END IF;

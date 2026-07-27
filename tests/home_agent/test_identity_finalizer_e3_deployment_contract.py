@@ -47,6 +47,8 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
     assert "current_revision = ANY (pre_e3_revisions)" in admission
     assert "IF primary_object_count = 1" in admission
     assert "identity finalizer E3 inert bootstrap contract mismatch" in admission
+    assert "external_table_acl_present=%s" in admission
+    assert "rows_present=%s" in admission
     assert "bootstrap_columns IS DISTINCT FROM ARRAY[" in admission
     assert "bootstrap_constraints IS DISTINCT FROM ARRAY[" in admission
     assert "bootstrap_indexes IS DISTINCT FROM ARRAY[" in admission

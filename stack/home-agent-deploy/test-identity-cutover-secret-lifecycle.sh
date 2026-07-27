@@ -365,14 +365,35 @@ expect_status 70 matching-resume \
 # daemon. The rendered operator services must point only to the disposable
 # mode-0400 E4 files and remain inert.
 mkdir "$workspace/compose-data" "$workspace/compose-runtime" \
-  "$workspace/compose-ledger" "$workspace/compose-tls"
+  "$workspace/compose-ledger" "$workspace/compose-tls" \
+  "$workspace/compose-pgbackrest-repository" \
+  "$workspace/compose-pgbackrest-spool" \
+  "$workspace/compose-session"
 compose_json="$workspace/compose.json"
 if ! env \
+  HOME_AGENT_POLICY_DIGEST="$(
+    sha256sum \
+      "$repo_root/stack/home-agent-deploy/policy/home-agent-mvp-v1.json" |
+      cut -d ' ' -f 1
+  )" \
   HOME_AGENT_DATA_ROOT="$workspace/compose-data" \
   HOME_AGENT_RUNTIME_ROOT="$workspace/compose-runtime" \
   HOME_AGENT_ERASURE_LEDGER_ROOT="$workspace/compose-ledger" \
   HOME_AGENT_SECRETS_DIR="$success_root" \
   HOME_AGENT_TLS_DIR="$workspace/compose-tls" \
+  HOME_AGENT_PGBACKREST_CONF="$workspace/compose-pgbackrest.conf" \
+  HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT="$workspace/compose-pgbackrest-repository" \
+  HOME_AGENT_PGBACKREST_SPOOL_ROOT="$workspace/compose-pgbackrest-spool" \
+  HOME_AGENT_PGBACKREST_LOCK_FILE="$workspace/compose-repository.lock" \
+  HOME_AGENT_PGBACKREST_BACKUP_LOCK_FILE="$workspace/compose-backup.lock" \
+  HOME_AGENT_EXPECTED_DB_REVISION="0014_identity_cutover_e4" \
+  HOME_AGENT_EDGE_BIND_ADDR="127.0.0.1" \
+  HOME_AGENT_ALLOWED_ORIGINS="https://agent.invalid" \
+  HOME_AGENT_HA_URL="https://home-assistant.invalid" \
+  HOME_AGENT_OAUTH_CLIENT_ID="e4-lifecycle-fixture" \
+  HOME_AGENT_OAUTH_REDIRECT_URI="https://agent.invalid/api/agent/auth/callback" \
+  HOME_AGENT_NATIVE_PUBLIC_ORIGIN="https://native-agent.invalid" \
+  HOME_AGENT_SESSION_ROOT="$workspace/compose-session" \
   docker compose --profile operator \
     -f "$repo_root/stack/home-agent-compose.yml" \
     config --format json >"$compose_json" 2>>"$output_log"

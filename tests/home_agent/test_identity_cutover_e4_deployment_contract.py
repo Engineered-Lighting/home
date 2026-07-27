@@ -233,6 +233,7 @@ def test_hosted_gate_exercises_real_secret_lifecycle_and_compose_render() -> Non
     lifecycle = _read(
         "stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh"
     )
+    compose = _read("stack/home-agent-compose.yml")
     workflow = _read(".github/workflows/home-agent-e1-postgres.yml")
 
     assert "HOME_AGENT_SECRET_LIFECYCLE_RUNNER_ENVIRONMENT" in lifecycle
@@ -270,6 +271,15 @@ def test_hosted_gate_exercises_real_secret_lifecycle_and_compose_render() -> Non
     assert "provision-identity-cutover-roles" in lifecycle
     assert "secret-output-detected" in lifecycle
     assert 'cat "$output_log"' not in lifecycle
+    required_compose_environment = set(
+        re.findall(r"\$\{(HOME_AGENT_[A-Z0-9_]+):\?", compose)
+    )
+    assert required_compose_environment
+    assert not {
+        name
+        for name in required_compose_environment
+        if f"{name}=" not in lifecycle
+    }
 
     lifecycle_path = (
         "stack/home-agent-deploy/"

@@ -24,6 +24,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE = ROOT / "stack/services/home-agent-core"
+CORE_CONTAINER_ROOT = "/workspace/stack/services/home-agent-core"
 TEST_DOCKERFILE = CORE / "Dockerfile.postgres-test"
 POSTGRES_IMAGE = (
     "postgres:17.10-bookworm@sha256:"
@@ -736,7 +737,7 @@ def _docker_run(
             fixture_mount += ",readonly"
         arguments.extend(("--mount", fixture_mount))
     arguments.extend(
-        ("--workdir", "/workspace/stack/services/home-agent-core")
+        ("--workdir", CORE_CONTAINER_ROOT)
     )
     for key, value in environment.items():
         arguments.extend(("--env", f"{key}={value}"))
@@ -1087,8 +1088,10 @@ def _seed_e4_success_fixture(
         "postgres_identity_finalizer_password",
     )
     shell += (
-        "exec python "
-        "tests/seed_phase3_identity_semantic_cutover_e4_success.py"
+        f'cd "{CORE_CONTAINER_ROOT}"; '
+        f'export PYTHONPATH="{CORE_CONTAINER_ROOT}"; '
+        "exec python -m "
+        "tests.seed_phase3_identity_semantic_cutover_e4_success"
     )
     _docker_run(
         state,

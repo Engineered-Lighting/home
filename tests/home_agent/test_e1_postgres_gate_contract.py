@@ -633,6 +633,72 @@ def test_e4_fixture_files_are_bounded_private_and_exact(
         runner._validate_e4_fixture_material(tmp_path)
 
 
+def test_e4_fixture_seed_uses_fixed_core_module_import_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _load_runner()
+    fixture_directory = tmp_path / "fixture"
+    secrets_directory = tmp_path / "secrets"
+    fixture_directory.mkdir()
+    secrets_directory.mkdir()
+    observed: dict[str, object] = {}
+
+    def fake_docker_run(state, image, **kwargs):
+        observed.update(kwargs)
+        observed["image"] = image
+        document_path = fixture_directory / runner.E4_FIXTURE_DOCUMENT_FILE
+        admission_path = fixture_directory / runner.E4_FIXTURE_ADMISSION_FILE
+        document_path.write_text(
+            runner.base64.b64encode(b'{"synthetic":true}').decode("ascii")
+            + "\n",
+            encoding="ascii",
+        )
+        admission_path.write_text(
+            "0197f6f0-0000-7000-8000-000000000001\n",
+            encoding="ascii",
+        )
+        document_path.chmod(0o400)
+        admission_path.chmod(0o400)
+        return runner.subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+
+    monkeypatch.setattr(runner, "_docker_run", fake_docker_run)
+    runner._seed_e4_success_fixture(
+        SimpleNamespace(test_image="reviewed-test-image"),
+        SimpleNamespace(name="e4-scaffold", network="isolated-network"),
+        secrets_directory,
+        fixture_directory,
+    )
+
+    command = observed["command"]
+    assert isinstance(command, list)
+    assert command[:3] == ["sh", "-eu", "-c"]
+    shell = command[3]
+    assert isinstance(shell, str)
+    assert f'cd "{runner.CORE_CONTAINER_ROOT}";' in shell
+    assert (
+        f'export PYTHONPATH="{runner.CORE_CONTAINER_ROOT}";'
+        in shell
+    )
+    assert (
+        "exec python -m "
+        "tests.seed_phase3_identity_semantic_cutover_e4_success"
+        in shell
+    )
+    assert "python tests/" not in shell
+    assert ".py" not in shell
+    assert "$PYTHONPATH" not in shell
+    assert observed["fixture_directory"] == fixture_directory
+    assert observed["fixture_read_only"] is False
+    assert observed["run_as_host_user"] is True
+    assert observed["secrets_directory"] == secrets_directory
+
+
 def test_hosted_e4_success_fixture_has_a_non_skippable_contract() -> None:
     runner_source = RUNNER.read_text(encoding="utf-8")
     seeder_source = (
@@ -652,7 +718,12 @@ def test_hosted_e4_success_fixture_has_a_non_skippable_contract() -> None:
     assert "TEST_PHASE3_IDENTITY_ERASURE_E1_RUN_SENTINEL" in runtime_source
     assert "base64.b64decode(encoded_document, validate=True)" in runtime_source
     assert "admission_id.version == 7" in runtime_source
-    assert "seed_phase3_identity_semantic_cutover_e4_success.py" in runner_source
+    assert (
+        "tests.seed_phase3_identity_semantic_cutover_e4_success"
+        in runner_source
+    )
+    assert "CORE_CONTAINER_ROOT" in runner_source
+    assert "export PYTHONPATH=" in runner_source
     assert (
         "E4_SUCCESS_DOCUMENT_ENV: E4_FIXTURE_DOCUMENT_FILE"
         in runner_source

@@ -484,6 +484,20 @@ def test_required_json_nulls_cannot_bypass_exact_semantic_validation() -> None:
 def test_admission_consumption_qualifies_the_argument_column_boundary() -> None:
     body = _literal("FUNCTION_BODY")
 
+    assert body.startswith("\n<<finalizer_state>>\nDECLARE")
+    assert (
+        "finalization.decision_count = finalizer_state.decision_count"
+        in body
+    )
+    assert (
+        "finalization.apply_decision_count =\n"
+        "             finalizer_state.apply_decision_count"
+    ) in body
+    assert "finalization.decision_count = decision_count" not in body
+    assert (
+        "finalization.apply_decision_count = apply_decision_count"
+        not in body
+    )
     assert (
         "UPDATE operations.reviewed_identity_finalizer_admissions\n"
         "           AS consumed_admission"

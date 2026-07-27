@@ -986,7 +986,11 @@ async def _set_finalizer_valid_until(
 
 
 async def _downgraded_e3_boundary(database_url: str) -> dict[str, bool]:
-    engine = create_async_engine(database_url, pool_size=1)
+    engine = create_async_engine(
+        database_url,
+        pool_size=1,
+        hide_parameters=True,
+    )
     try:
         async with engine.begin() as connection:
             return dict(
@@ -1072,11 +1076,17 @@ async def test_postgresql_e3_lifecycle_boundary_and_atomic_finalizer() -> None:
         clean_reupgrade.stdout + clean_reupgrade.stderr
     )
 
-    owner = create_async_engine(owner_url, pool_size=2, max_overflow=0)
+    owner = create_async_engine(
+        owner_url,
+        pool_size=2,
+        max_overflow=0,
+        hide_parameters=True,
+    )
     admin = create_async_engine(
         os.environ[ADMIN_DATABASE_ENV],
         pool_size=1,
         max_overflow=0,
+        hide_parameters=True,
     )
     admin_target_url = make_url(os.environ[ADMIN_DATABASE_ENV]).set(
         database=make_url(owner_url).database
@@ -1085,11 +1095,13 @@ async def test_postgresql_e3_lifecycle_boundary_and_atomic_finalizer() -> None:
         admin_target_url,
         pool_size=1,
         max_overflow=0,
+        hide_parameters=True,
     )
     erasure = create_async_engine(
         os.environ[ERASURE_DATABASE_ENV],
         pool_size=2,
         max_overflow=0,
+        hide_parameters=True,
     )
     finalizer: AsyncEngine | None = None
     review_signature_rejected = False
@@ -1208,6 +1220,7 @@ async def test_postgresql_e3_lifecycle_boundary_and_atomic_finalizer() -> None:
             isolation_level="SERIALIZABLE",
             pool_size=2,
             max_overflow=0,
+            hide_parameters=True,
         )
 
         direct_connection = await finalizer.connect()

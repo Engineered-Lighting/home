@@ -76,6 +76,7 @@ BEGIN
 END;
 """
 FUNCTION_BODY = r"""
+<<finalizer_state>>
 DECLARE
   admission operations.reviewed_identity_finalizer_admissions%ROWTYPE;
   migration_run operations.reviewed_identity_migration_runs%ROWTYPE;
@@ -1497,8 +1498,9 @@ BEGIN
        AND finalization.verification_status = 'candidate_unverified'
        AND NOT finalization.authoritative
        AND finalization.source_item_count = source_count
-       AND finalization.decision_count = decision_count
-       AND finalization.apply_decision_count = apply_decision_count
+       AND finalization.decision_count = finalizer_state.decision_count
+       AND finalization.apply_decision_count =
+             finalizer_state.apply_decision_count
        AND finalization.receipt_count = projection_count
        AND finalization.source_manifest_commitment =
              migration_run.logical_source_manifest_commitment

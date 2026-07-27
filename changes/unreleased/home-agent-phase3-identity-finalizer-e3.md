@@ -19,3 +19,8 @@ fields.
 The admission-consumption update now qualifies its target columns explicitly,
 preventing PostgreSQL from confusing the admission argument with the stored
 admission identifier at the final atomic commit boundary.
+The hosted lifecycle harness now suppresses bound SQL parameters in every
+engine so a future failure cannot print the signed private finalizer document.
+The replay verifier also qualifies local count state through an explicit
+PL/pgSQL block label, eliminating ambiguity with identically named stored
+finalization columns.

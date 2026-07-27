@@ -315,6 +315,7 @@ DECLARE
     'operations.reviewed_identity_migration_decisions',
     'operations.reviewed_identity_migration_item_receipts',
     'operations.reviewed_identity_migration_finalizations',
+    'operations.reviewed_identity_finalizer_admissions',
     'operations.reviewed_identity_migration_projection_lineage',
     'operations.reviewed_identity_migration_projection_subjects',
     'operations.legacy_identity_writer_evidence',

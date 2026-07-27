@@ -88,6 +88,7 @@ class ApplyGrantsRevision0006aContractTests(unittest.TestCase):
             self.assertIn(f"'{role}'", section)
 
         for later_evidence_table in (
+            "reviewed_identity_finalizer_admissions",
             "reviewed_identity_migration_projection_lineage",
             "reviewed_identity_migration_projection_subjects",
         ):

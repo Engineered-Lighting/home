@@ -4,13 +4,13 @@ Requires=docker.service
 After=docker.service
 RequiresMountsFor=/srv/home-agent
 ConditionPathIsMountPoint=/srv/home-agent
-ConditionPathIsRegular=/srv/home-agent/config/home-agent.env
-ConditionPathIsRegular=/usr/local/libexec/home-agent/local-backup.sh
-ConditionPathIsRegular=/usr/local/libexec/home-agent/backup-gate.sh
-ConditionPathIsRegular=/srv/home-agent/config/local-backup-operator.sha256
 
 [Service]
 Type=oneshot
+ExecStartPre=/usr/bin/test -f /srv/home-agent/config/home-agent.env
+ExecStartPre=/usr/bin/test -f /usr/local/libexec/home-agent/local-backup.sh
+ExecStartPre=/usr/bin/test -f /usr/local/libexec/home-agent/backup-gate.sh
+ExecStartPre=/usr/bin/test -f /srv/home-agent/config/local-backup-operator.sha256
 ExecStart=/usr/local/libexec/home-agent/local-backup.sh /srv/home-agent/config/home-agent.env
 ExecStopPost=-/usr/bin/docker rm -f home-agent-local-backup
 UMask=0077

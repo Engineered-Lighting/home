@@ -38,7 +38,7 @@ function assert(name, cond, detail) {
 
 function extractCatalog() {
   const start = source.indexOf("const SLASH_CMD_CATEGORIES");
-  const end = source.indexOf("function InputRow", start);
+  const end = source.indexOf("function FeatureLoadingSurface", start);
   if (start < 0 || end < 0) throw new Error("slash command catalog block not found");
   const script = source.slice(start, end) + "\nObject.assign(window, { SLASH_CMD_CATEGORIES, SLASH_CMDS });";
   const sandbox = { window: {} };
@@ -110,6 +110,26 @@ function completionValue(cmd, commands) {
   assert("/route-log advertises /routes alias", /\/routes/.test(byCmd["/route-log"] && byCmd["/route-log"].desc || ""), byCmd["/route-log"]);
   assert("/s2s catalog describes configuration, not retired on/off voice mode", byCmd["/s2s"] && !/\bon\|off\b/i.test(byCmd["/s2s"].hint + " " + byCmd["/s2s"].desc), byCmd["/s2s"]);
 
+  process.stdout.write("\nvision_media_contract_test\n");
+  assert("vision media helper rebases relative sidecar paths",
+    source.includes("function visionMediaUrlFromEndpoint") &&
+    source.includes("raw.startsWith(\"/proxy/\")") &&
+    source.includes("visionBaseFromEndpoint(metricsBase, endpoint)"),
+    "visionMediaUrlFromEndpoint missing");
+  assert("vision media helper proxies absolute sidecar URLs in browser mode",
+    source.includes("webDefaultBase(\"HG_DEFAULT_VISION_BASE\")") &&
+    source.includes("u.port === \"8091\"") &&
+    source.includes("return `${proxied.replace(/\\/+$/, \"\")}${u.pathname}${u.search}`"),
+    "absolute vision sidecar URLs are not rewritten through the web proxy");
+  assert("HA perception captions resolve sidecar snapshot URLs",
+    source.includes("const snapshotUrl = d.snapshot_url") &&
+    source.includes("visionMediaUrlFromEndpoint(d.snapshot_url, base, endpoint)"),
+    "perception_caption relative snapshot URL fix missing");
+  assert("look transcript cards retain annotated image mode",
+    source.includes("imageMode: e.annotatedUrl ? \"annotated\" : undefined") &&
+    source.includes("imageMode: isDescribe ? undefined : \"annotated\""),
+    "look transcript annotated mode missing");
+
   process.stdout.write("\nslash_command_handler_coherence_test\n");
   const handleBlock = extractHandleBlock();
   const handlerCases = Array.from(handleBlock.matchAll(/case\s+"([^"]+)"\s*:/g), (m) => m[1]);
@@ -156,13 +176,14 @@ function completionValue(cmd, commands) {
   const renderEnd = source.indexOf("</div>", renderStart);
   const renderBlock = renderStart >= 0 && renderEnd >= 0 ? source.slice(renderStart, renderEnd) : "";
   assert("InputRow accepts the S80 control props",
-    /function InputRow\(\{\s*value,\s*onChange,\s*onSend,\s*voice,\s*onMicToggle,\s*isStreaming,\s*onStop,\s*focusToken,\s*mobile\s*=\s*false\s*\}\)/.test(inputBlock),
+    /function InputRow\(\{\s*value,\s*onChange,\s*onSend,\s*voice,\s*onMicToggle,\s*isStreaming,\s*onStop,\s*focusToken,\s*mobile\s*=\s*false,\s*theme\s*=\s*"dark"\s*\}\)/.test(inputBlock),
     inputBlock.slice(0, 300));
   assert("InputRow focus guard does not steal initial FirstRun focus",
     /useEffect\(\(\) => \{ if \(focusToken\) inputRef\.current\?\.focus\(\); \}, \[focusToken\]\)/.test(inputBlock),
     inputBlock.slice(0, 600));
   assert("slash menu filters only command prefixes before first argument",
-    /SLASH_CMDS\.filter\(\(c\) => c\.cmd\.startsWith\(firstTok\)\)/.test(inputBlock) &&
+    /const slashCommands = availableSlashCommands\(\{ mobile \}\)/.test(inputBlock) &&
+    /slashCommands\.filter\(\(c\) => c\.cmd\.startsWith\(firstTok\)\)/.test(inputBlock) &&
     /showMenu = isSlash && matches\.length > 0 && !value\.includes\(" "\)/.test(inputBlock),
     inputBlock.slice(0, 900));
   assert("slash menu keyboard navigation handles up down tab and Enter completion",
@@ -198,10 +219,13 @@ function completionValue(cmd, commands) {
   const sendToHaBlock = sendToHaStart >= 0 && sendToHaEnd >= 0 ? source.slice(sendToHaStart, sendToHaEnd) : "";
   assert("sendToHA settles streaming bubble on intent-end and run completion",
     /const finalizeStreamingBubble = \(\) =>/.test(sendToHaBlock) &&
+    /if \(prog\.toolCalls && prog\.toolCalls\.length\) \{[\s\S]*finalizeStreamingBubble\(\);/.test(sendToHaBlock) &&
+    /const previousId = streamingBubbleId/.test(sendToHaBlock) &&
     /finalizeStreamingBubble\(\);/.test(sendToHaBlock) &&
     /const pendingStreamingId = streamingBubbleId/.test(sendToHaBlock) &&
-    /streamingIds\.current\.delete\(pendingStreamingId\)/.test(sendToHaBlock) &&
-    /e\.id === pendingStreamingId[\s\S]*streaming: false/.test(sendToHaBlock),
+    /const staleStreamingIds = runStillActive \? new Set\(streamingIds\.current\) : new Set\(\)/.test(sendToHaBlock) &&
+    /if \(runStillActive\) streamingIds\.current\.clear\(\)/.test(sendToHaBlock) &&
+    /staleStreamingIds\.has\(e\.id\)[\s\S]*streaming: false/.test(sendToHaBlock),
     sendToHaBlock.slice(-1600));
   assert("stopStreaming cancels active run, timers, and streaming ids",
     /activeRunRef\.current\.cancel\?\.\(\)/.test(stopBlock) &&
@@ -222,7 +246,7 @@ function completionValue(cmd, commands) {
 
   process.stdout.write("\nslash_command_surface_contract_test\n");
   const helpBlock = extractCaseBlock("help");
-  assert("/help emits structured help event", /kind:\s*"help"[\s\S]*groups[\s\S]*totalCount:\s*SLASH_CMDS\.length/.test(helpBlock), helpBlock.slice(0, 600));
+  assert("/help emits structured help event", /kind:\s*"help"[\s\S]*groups[\s\S]*totalCount:\s*visibleCommands\.length/.test(helpBlock), helpBlock.slice(0, 900));
   assert("/help includes Simulation Mode help when sim is active", /sim\.active[\s\S]*window\.SimulationCommand[\s\S]*formatSimHelp/.test(helpBlock), helpBlock.slice(0, 600));
   assert("HelpContent renders clickable command rows", /function\s+HelpContent/.test(eventsSource) && /function\s+HelpRow/.test(eventsSource), "HelpContent/HelpRow missing");
   assert("HelpContent dispatches hg-fill-input events", /CustomEvent\("hg-fill-input"[\s\S]*detail:\s*cmd/.test(eventsSource), "missing hg-fill-input dispatch");

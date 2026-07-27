@@ -140,6 +140,8 @@ SUITES: list[Suite] = [
     # ── Addendum 28 follow-up: TTS-safe error speech ──
     _py_test("ha-config/extended_openai_conversation/test_friendly_error_speech.py",
              desc="_friendly_error_speech caps raw error JSON before TTS reads it"),
+    _py_test("ha-config/extended_openai_conversation/test_visual_preroute.py",
+             desc="live-camera preroute accepts mobile Unicode punctuation and rejects memory queries"),
 
     # ── Addendum 31: production-QA orchestrator meta-tests + helpers ──
     _py_test("tools/qa_common.py",

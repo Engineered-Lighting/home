@@ -1,0 +1,98 @@
+# living_lights_travel_mode.yaml - force known lighting outputs off while traveling.
+#
+# The input_boolean is declared in living_lights_observability.yaml so it
+# restores across HA restarts. This package is the enforcement layer: when
+# Travel Mode is on, any known lighting output that turns on is pushed
+# back off. It includes the Living Lights outputs plus the HomeAI
+# return-home aliases, outdoor light, and workshop plug lights known to
+# this repo.
+
+input_boolean:
+  living_lights_vision_capture_override:
+    name: Living Lights vision capture override
+    icon: mdi:camera-iris
+    initial: false
+
+automation:
+  - alias: "Living Lights - travel mode force off"
+    id: living_lights_travel_mode_force_off
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.living_lights_travel_mode
+        to: "on"
+      - trigger: homeassistant
+        event: start
+      - trigger: time_pattern
+        minutes: "/5"
+      - trigger: state
+        entity_id:
+          - light.dining_table_left
+          - light.dining_table_right
+          - light.dining_light
+          - light.dining_light_2
+          - light.dining_room_floodlight_timed
+          - light.front_left
+          - light.front_right
+          - light.kitchen_floodlight_timed
+          - light.island_left
+          - light.island_right
+          - light.living_room_lights
+          - light.office
+          - light.outdoor_light
+          - light.rear_left
+          - light.rear_right
+          - light.sink
+          - light.sink_light
+          - light.sink_light_2
+          - light.ambient_light_left_mss110_main_channel
+          - light.ambient_light_right_mss110_main_channel
+          - switch.ambient_light_left_mss110_main_channel
+          - switch.ambient_light_right_mss110_main_channel
+          - switch.smart_plug_mini_mss110_main_channel
+          - switch.workshop_light_left_mss110_main_channel
+          - switch.workshop_light_right_mss110_main_channel
+          - switch.smart_plug_mini_mss110_main_channel_2
+        to: "on"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.living_lights_travel_mode
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.living_lights_vision_capture_override
+        state: "off"
+    actions:
+      - action: light.turn_off
+        target:
+          entity_id:
+            - light.dining_table_left
+            - light.dining_table_right
+            - light.dining_light
+            - light.dining_light_2
+            - light.dining_room_floodlight_timed
+            - light.front_left
+            - light.front_right
+            - light.kitchen_floodlight_timed
+            - light.island_left
+            - light.island_right
+            - light.living_room_lights
+            - light.office
+            - light.outdoor_light
+            - light.rear_left
+            - light.rear_right
+            - light.sink
+            - light.sink_light
+            - light.sink_light_2
+            - light.ambient_light_left_mss110_main_channel
+            - light.ambient_light_right_mss110_main_channel
+        data:
+          transition: 1
+      - action: switch.turn_off
+        target:
+          entity_id:
+            - switch.ambient_light_left_mss110_main_channel
+            - switch.ambient_light_right_mss110_main_channel
+            - switch.smart_plug_mini_mss110_main_channel
+            - switch.workshop_light_left_mss110_main_channel
+            - switch.workshop_light_right_mss110_main_channel
+            - switch.smart_plug_mini_mss110_main_channel_2

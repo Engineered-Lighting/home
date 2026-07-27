@@ -51,7 +51,7 @@ function sliceBetweenIn(src, startNeedle, endNeedle) {
 function loadHelpers() {
   const script = [
     sliceBetween("const _STARTABLE", "/* Phase 2"),
-    "Object.assign(window, { _STARTABLE, _RESTARTABLE, _STOPPABLE, AI_STACK_SERVICE_RESTARTS, AI_STACK_VERBS, _aiStackServiceRestartSpec, _aiStackConfirmButtonLabel, _overallTone, _serviceTone, _serviceState, _fmtElapsed, _aiStackCardActionState, _aiStackLogsStreamUrl, _aiStackEmptyState, _aiStackFailureDiagnosis });",
+    "Object.assign(window, { _STARTABLE, _RESTARTABLE, _STOPPABLE, AI_STACK_SERVICE_RESTARTS, AI_STACK_VERBS, _aiStackServiceRestartSpec, _aiStackConfirmButtonLabel, _overallTone, _serviceTone, _serviceState, _fmtElapsed, _aiStackHasReadySignals, _aiStackEffectiveState, _aiStackCardActionState, _aiStackLogsStreamUrl, _aiStackEmptyState, _aiStackFailureDiagnosis });",
   ].join("\n\n");
   const sandbox = {
     window: {},
@@ -328,6 +328,42 @@ assert("starting without in-flight exposes no action row",
 a = actions("ready", { in_flight: { verb: "restart" } });
 assert("supervisor in-flight hides controls and shows progress",
   !a.showStart && !a.showRestart && !a.showStop && !a.showFreeGpu && !a.showServiceRestarts && a.showProgress, a);
+const recoveredStartingState = {
+  overall: "starting",
+  in_flight: {
+    verb: "start",
+    recovered: true,
+    started_at: "2026-06-23T12:00:00Z",
+  },
+  services: [
+    { name: "vllm", container: "running", health: "healthy", probe: "ok" },
+    { name: "wyoming-parakeet", container: "running", health: "healthy", probe: "ok" },
+    { name: "kokoro", container: "running", health: "healthy", probe: "ok" },
+    { name: "vision-sidecar", container: "running", health: "healthy", probe: "ok" },
+    { name: "metrics-sidecar", container: "running", health: "healthy", probe: "ok" },
+  ],
+  vllm_model_loaded: "qwen3-vl-30b",
+  expected_vllm_model: "qwen3-vl-30b",
+};
+assert("ready signals override stale recovered starting task",
+  H._aiStackEffectiveState(recoveredStartingState).overall === "ready" &&
+  H._aiStackEffectiveState(recoveredStartingState).inFlight === null &&
+  H._aiStackEffectiveState(recoveredStartingState).staleStarting === true,
+  H._aiStackEffectiveState(recoveredStartingState));
+a = actions("starting", recoveredStartingState);
+assert("stale recovered starting task does not show progress or hide ready controls",
+  !a.showStart && a.showRestart && a.showStop && a.showFreeGpu && a.showServiceRestarts && !a.showProgress, a);
+const realStartingState = {
+  ...recoveredStartingState,
+  services: [
+    { name: "vllm", container: "starting", health: "starting", probe: "fail" },
+    ...recoveredStartingState.services.slice(1),
+  ],
+};
+assert("real starting state remains in progress",
+  H._aiStackEffectiveState(realStartingState).overall === "starting" &&
+  H._aiStackEffectiveState(realStartingState).inFlight,
+  H._aiStackEffectiveState(realStartingState));
 a = actions("offline", {}, { kind: "starting", verb: "start" });
 assert("local starting hides start and shows progress", !a.showStart && a.showProgress, a);
 a = actions("offline", {}, { kind: "streaming", verb: "start" });

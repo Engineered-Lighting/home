@@ -227,6 +227,17 @@ class LocalPgBackRestRepositoryContractTests(unittest.TestCase):
         self.assertIn("MemoryMax=768M", service)
         self.assertIn("RequiresMountsFor=/srv/home-agent", service)
         self.assertIn("ConditionPathIsMountPoint=/srv/home-agent", service)
+        self.assertNotIn("ConditionPathIsRegular=", service)
+        self.assertEqual(service.count("ExecStartPre=/usr/bin/test -f "), 4)
+        self.assertIn(
+            "ExecStartPre=/usr/bin/test -f /srv/home-agent/config/home-agent.env",
+            service,
+        )
+        self.assertIn(
+            "ExecStartPre=/usr/bin/test -f "
+            "/srv/home-agent/config/local-backup-operator.sha256",
+            service,
+        )
         self.assertIn("ExecStart=/usr/local/libexec/home-agent/local-backup.sh", service)
         self.assertIn("ExecStopPost=-/usr/bin/docker rm -f home-agent-local-backup", service)
         self.assertIn("RuntimeDirectory=home-agent-local-backup", service)

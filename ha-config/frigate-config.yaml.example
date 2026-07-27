@@ -230,6 +230,12 @@ cameras:
       height: 540
       fps: 10
 
+    # Outdoor face crops create noisy Frigate buckets from passersby and
+    # covered-car artifacts. Keep person/object detection on, but do not
+    # enroll or recognize faces from the driveway camera.
+    face_recognition:
+      enabled: false
+
     objects:
       track:
         - person

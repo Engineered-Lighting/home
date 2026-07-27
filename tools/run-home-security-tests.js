@@ -225,8 +225,10 @@ test("legacy web gateway fails closed unless local development opts out", () => 
   assert.match(linuxInstaller, /HOME_WEB_AUTH_REQUIRED:-1/);
   assert.doesNotMatch(linuxInstaller, /HOME_WEB_AUTH_REQUIRED:-0/);
   assert.match(linuxInstaller, /HOME_WEB_ENABLE_LEGACY_HA_PROXY:-0/);
+  assert.match(linuxInstaller, /HOME_WEB_ENABLE_LEGACY_VISION_PROXY:-0/);
   assert.match(windowsLauncher, /HOME_WEB_AUTH_REQUIRED = "1"/);
   assert.doesNotMatch(windowsLauncher, /HOME_WEB_AUTH_REQUIRED = "0"/);
+  assert.match(windowsLauncher, /HOME_WEB_ENABLE_LEGACY_VISION_PROXY = "0"/);
 });
 
 test("generic legacy sensor, model, media, and admin proxies are opt-in", () => {

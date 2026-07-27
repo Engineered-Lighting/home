@@ -138,7 +138,11 @@ async function main() {
     const index = fs.readFileSync(path.join(SRC_DIR, "index.html"), "utf8");
     const bootFiles = bootLoaderFiles(index);
 
-    checks.push(check("Atlas launcher exists", app.includes("Open intelligence atlas"), "header action"));
+    checks.push(check(
+      "Intelligence action menu route exists",
+      app.includes("onOpenIntelligence") && app.includes(">intelligence</button>"),
+      "app actions menu",
+    ));
     checks.push(check("Atlas component is script-loaded", index.includes("home-intelligence.jsx"), "index.html"));
     checks.push(check("Atlas root class exists", intel.includes("intel-atlas"), "home-intelligence.jsx"));
     checks.push(check("Atlas top badge panels exist", intel.includes("globalPanel"), "badge panel state"));

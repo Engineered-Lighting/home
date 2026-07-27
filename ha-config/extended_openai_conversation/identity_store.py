@@ -89,6 +89,13 @@ SEMANTIC_WRITES_MODE_ENV = "EXTENDED_OPENAI_IDENTITY_SEMANTIC_WRITES"
 LEGACY_MIGRATION_MODE = "legacy_migration_only"
 SEMANTIC_AUTHORITY_KEY = "semantic_authority"
 CORE_SEMANTIC_AUTHORITY = "home_agent_core"
+# Temporary, non-authoritative compatibility exception for the production
+# People profile fix. This updates only the legacy self-profile projection and
+# must never be accepted as Core evidence or authority. It is deliberately
+# narrower than the legacy PATCH surface: relationships, names, notes, privacy
+# directives, and HA bindings remain Core authority.
+LEGACY_SELF_PROFILE_EDIT_ACTORS = {"user"}
+LEGACY_SELF_PROFILE_EDIT_FIELDS = {"pronouns"}
 
 # Schema version. Bump when columns change; migrations run on open.
 SCHEMA_VERSION = 1
@@ -451,8 +458,32 @@ class IdentityStore:
     def semantic_writes_frozen(self) -> bool:
         return self._semantic_writes_frozen
 
-    def _require_semantic_writes(self) -> None:
+    def _require_semantic_writes(
+        self,
+        *,
+        actor: str = "system",
+        patch: Optional[dict] = None,
+        target: Optional[IdentityRow] = None,
+    ) -> None:
         if self._semantic_writes_frozen:
+            fields = set(patch or {})
+            if (
+                actor in LEGACY_SELF_PROFILE_EDIT_ACTORS
+                and fields
+                and fields <= LEGACY_SELF_PROFILE_EDIT_FIELDS
+                and target is not None
+                and target.relationship_type == "me"
+                and self._conn is not None
+            ):
+                me_rows = self._conn.execute(
+                    "SELECT uuid FROM identities "
+                    "WHERE relationship_type = 'me' LIMIT 2"
+                ).fetchall()
+                if (
+                    len(me_rows) == 1
+                    and me_rows[0]["uuid"] == target.uuid
+                ):
+                    return
             raise PermissionError(
                 "legacy semantic authority is frozen; use Home Agent Core"
             )
@@ -756,10 +787,10 @@ class IdentityStore:
         row was updated."""
         if self._disabled or self._conn is None:
             return False
-        self._require_semantic_writes()
         cur = self.get_identity(uuid_or_alias)
         if cur is None:
             return False
+        self._require_semantic_writes(actor=actor, patch=patch, target=cur)
         allowed = {
             "display_name", "pronouns", "relationship_type",
             "relationship_subrole", "notes",

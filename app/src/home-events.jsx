@@ -123,9 +123,18 @@ function VoiceContent({ text }) {
 }
 
 function HomeContent({ text, streaming }) {
+  const displayText = (() => {
+    try {
+      return window.HomeNormalizeChatEventText
+        ? window.HomeNormalizeChatEventText(text || "")
+        : (text || "");
+    } catch {
+      return text || "";
+    }
+  })();
   return (
     <div style={{ ...T_PROSE, ...HG_FG_BRIGHT }}>
-      {text}
+      {displayText}
       {streaming && <span className="hg-caret" />}
     </div>
   );
@@ -449,9 +458,41 @@ function SystemContent({ text, tone }) {
  * perception lines (those came from a separate code path with no
  * cached frame); the chip falls back to the text-only layout.
  */
-function PerceptionContent({ text, snapshotUrl }) {
+function usePerceptionImageReady(snapshotUrl) {
+  const [state, setState] = React.useState(() => snapshotUrl ? "loading" : "idle");
+  React.useEffect(() => {
+    if (!snapshotUrl) {
+      setState("idle");
+      return undefined;
+    }
+    let cancelled = false;
+    setState("loading");
+    const img = new Image();
+    img.decoding = "async";
+    img.onload = async () => {
+      try { if (img.decode) await img.decode(); } catch (_) {}
+      if (!cancelled) setState("loaded");
+    };
+    img.onerror = () => {
+      if (!cancelled) setState("error");
+    };
+    img.src = snapshotUrl;
+    return () => {
+      cancelled = true;
+      img.onload = null;
+      img.onerror = null;
+      img.src = "";
+    };
+  }, [snapshotUrl]);
+  return state;
+}
+
+function PerceptionContent({ text, snapshotUrl, imageMode, imageUnavailable = false }) {
   const [expanded, setExpanded] = React.useState(false);
-  const [imgFailed, setImgFailed] = React.useState(false);
+  const [lightboxOpen, setLightboxOpen] = React.useState(false);
+  const imageState = usePerceptionImageReady(snapshotUrl);
+  const showImageUnavailable = imageUnavailable || imageState === "error";
+  const isAnnotated = imageMode === "annotated";
   // Parse the text — bridge emits "perceived ROOM: SUMMARY" or just SUMMARY.
   // Try to extract a room name from the first colon-prefixed token.
   let room = null;
@@ -462,61 +503,222 @@ function PerceptionContent({ text, snapshotUrl }) {
     summary = m[2];
   }
   const short = expanded ? summary : (summary.length > 90 ? summary.slice(0, 88) + "…" : summary);
-  const hasThumb = Boolean(snapshotUrl) && !imgFailed;
+  const hasThumb = Boolean(snapshotUrl) && imageState === "loaded";
   const clickable = summary.length > 90 || hasThumb;
+  const openLightbox = React.useCallback((e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    if (hasThumb) setLightboxOpen(true);
+  }, [hasThumb]);
+  const closeLightbox = React.useCallback(() => setLightboxOpen(false), []);
+  React.useEffect(() => {
+    if (!lightboxOpen) return undefined;
+    const onKey = (e) => {
+      if (e.key === "Escape") setLightboxOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightboxOpen]);
+  const lightbox = lightboxOpen && hasThumb ? (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={room ? `${room} perception image` : "perception image"}
+      onClick={closeLightbox}
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 99999,
+        background: "rgba(0,0,0,0.92)",
+        display: "grid",
+        gridTemplateRows: "auto minmax(0, 1fr)",
+        gap: 10,
+        padding: "calc(env(safe-area-inset-top, 0px) + 14px) 14px calc(env(safe-area-inset-bottom, 0px) + 14px)",
+        boxSizing: "border-box",
+      }}
+    >
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 12,
+        color: "rgba(255,255,255,0.8)",
+        fontFamily: HG_MONO,
+        fontSize: 11,
+        letterSpacing: "0.08em",
+      }}>
+        <span>{room ? room : "perception"}</span>
+        <button
+          type="button"
+          onClick={closeLightbox}
+          style={{
+            color: "white",
+            background: "rgba(255,255,255,0.08)",
+            border: "1px solid rgba(255,255,255,0.18)",
+            borderRadius: 4,
+            padding: "9px 12px",
+            fontFamily: HG_MONO,
+            fontSize: 11,
+            letterSpacing: "0.08em",
+            textTransform: "lowercase",
+          }}
+        >close</button>
+      </div>
+      <img
+        src={snapshotUrl}
+        alt={room ? `${room} perception full size` : "perception full size"}
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          alignSelf: "center",
+          justifySelf: "center",
+          maxWidth: "100%",
+          maxHeight: "100%",
+          objectFit: "contain",
+          borderRadius: 6,
+          background: "black",
+          boxShadow: "0 18px 60px rgba(0,0,0,0.45)",
+        }}
+      />
+    </div>
+  ) : null;
   // Layout: thumbnail (when present) | room label | summary | (right slot)
   const cols = hasThumb
-    ? (expanded ? "minmax(180px, 280px) minmax(60px, 100px) 1fr auto"
+    ? (isAnnotated ? "1fr"
+      : expanded ? "minmax(180px, 280px) minmax(60px, 100px) 1fr auto"
                 : "minmax(40px, 56px) minmax(60px, 100px) 1fr auto")
     : (room ? "minmax(60px, 100px) 1fr auto"
             : "auto 1fr auto");
   const thumbSize = expanded ? 200 : 40;
-  return (
-    <div
-      onClick={() => clickable && setExpanded((v) => !v)}
-      style={{
-        ...T_SYNTAX,
-        display: "grid",
-        gridTemplateColumns: cols,
-        columnGap: 10,
-        alignItems: hasThumb ? "center" : "baseline",
-        cursor: clickable ? "pointer" : "default",
-        color: "var(--hg-fg-3)",
-        fontSize: 11,
-        lineHeight: 1.5,
-        paddingTop: 2, paddingBottom: 2,
-      }}
-    >
-      {hasThumb && (
-        <img
-          src={snapshotUrl}
-          alt={room ? `${room} snapshot` : "perception snapshot"}
-          loading="lazy"
-          onError={() => setImgFailed(true)}
+  if (hasThumb && isAnnotated) {
+    return (
+      <React.Fragment>
+        <div
+          onClick={() => setExpanded((v) => !v)}
           style={{
-            width: thumbSize,
-            height: thumbSize * 0.6,
-            objectFit: "cover",
-            borderRadius: 3,
-            border: "1px solid var(--hg-border)",
-            display: "block",
+            ...T_SYNTAX,
+            display: "grid",
+            gridTemplateColumns: "1fr",
+            gap: 8,
+            cursor: "pointer",
+            color: "var(--hg-fg-3)",
+            fontSize: 11,
+            lineHeight: 1.5,
+            paddingTop: 4,
+            paddingBottom: 4,
           }}
-        />
-      )}
-      <span style={{
-        ...HG_FAINT,
-        fontWeight: 400,
-        letterSpacing: "0.06em",
-        color: "var(--hg-fg-4)",
-      }}>{room ? room : "perceived"}</span>
-      <span style={{
-        color: "var(--hg-fg-2)",
-        fontFamily: "'Geist', system-ui, sans-serif",
-        fontSize: 12,
-        fontWeight: 400,
-      }}>{short}</span>
-      <span />
-    </div>
+        >
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: room ? "minmax(74px, 108px) 1fr" : "auto 1fr",
+            columnGap: 10,
+            alignItems: "baseline",
+          }}>
+            <span style={{
+              ...HG_FAINT,
+              fontWeight: 400,
+              letterSpacing: "0.06em",
+              color: "var(--hg-fg-4)",
+            }}>{room ? room : "perceived"}</span>
+            <span style={{
+              color: "var(--hg-fg-2)",
+              fontFamily: "'Geist', system-ui, sans-serif",
+              fontSize: 12,
+              fontWeight: 400,
+            }}>{short}</span>
+            {showImageUnavailable && (
+              <span role="status" style={{
+                color: "var(--hg-warn, #d6a448)",
+                fontFamily: HG_MONO,
+                fontSize: 9,
+                letterSpacing: "0.06em",
+              }}>image unavailable</span>
+            )}
+          </div>
+          <img
+            src={snapshotUrl}
+            alt={room ? `${room} segmented view` : "segmented perception view"}
+            loading="lazy"
+            decoding="async"
+            onClick={openLightbox}
+            onError={(e) => { e.currentTarget.style.display = "none"; }}
+            style={{
+              width: "100%",
+              maxHeight: expanded ? "62vh" : "min(360px, 46vh)",
+              objectFit: "contain",
+              borderRadius: 5,
+              border: "1px solid var(--hg-border)",
+              background: "rgba(0,0,0,0.35)",
+              display: "block",
+              cursor: "zoom-in",
+            }}
+          />
+        </div>
+        {lightbox}
+      </React.Fragment>
+    );
+  }
+  return (
+    <React.Fragment>
+      <div
+        onClick={() => clickable && setExpanded((v) => !v)}
+        style={{
+          ...T_SYNTAX,
+          display: "grid",
+          gridTemplateColumns: cols,
+          columnGap: 10,
+          alignItems: hasThumb ? "center" : "baseline",
+          cursor: clickable ? "pointer" : "default",
+          color: "var(--hg-fg-3)",
+          fontSize: 11,
+          lineHeight: 1.5,
+          paddingTop: 2, paddingBottom: 2,
+        }}
+      >
+        {hasThumb && (
+          <img
+            src={snapshotUrl}
+            alt={room ? `${room} snapshot` : "perception snapshot"}
+            loading="lazy"
+            decoding="async"
+            onClick={openLightbox}
+            onError={(e) => { e.currentTarget.style.display = "none"; }}
+            style={{
+              width: expanded ? "min(100%, 280px)" : thumbSize,
+              height: expanded ? "auto" : thumbSize * 0.6,
+              maxHeight: expanded ? "42vh" : undefined,
+              objectFit: expanded ? "contain" : "cover",
+              borderRadius: 3,
+              border: "1px solid var(--hg-border)",
+              display: "block",
+              cursor: "zoom-in",
+              background: "rgba(0,0,0,0.35)",
+            }}
+          />
+        )}
+        <span style={{
+          ...HG_FAINT,
+          fontWeight: 400,
+          letterSpacing: "0.06em",
+          color: "var(--hg-fg-4)",
+        }}>{room ? room : "perceived"}</span>
+        <span style={{
+          color: "var(--hg-fg-2)",
+          fontFamily: "'Geist', system-ui, sans-serif",
+          fontSize: 12,
+          fontWeight: 400,
+        }}>{short}</span>
+        <span role={showImageUnavailable ? "status" : undefined} style={{
+          color: showImageUnavailable ? "var(--hg-warn, #d6a448)" : undefined,
+          fontFamily: HG_MONO,
+          fontSize: 9,
+          letterSpacing: "0.06em",
+          whiteSpace: "nowrap",
+        }}>{showImageUnavailable ? "image unavailable" : ""}</span>
+      </div>
+      {lightbox}
+    </React.Fragment>
   );
 }
 
@@ -600,6 +802,10 @@ function ExternalContent({ text, streaming }) {
 function HelpContent({ groups = [], totalCount = 0, tip = "" }) {
   const ROW_BASE = "var(--hg-fg-2)";
   const ROW_HOVER = "var(--hg-fg-0)";
+  const mobile = typeof window !== "undefined" && (
+    (window.matchMedia && window.matchMedia("(max-width: 699px)").matches) ||
+    window.innerWidth <= 699
+  );
   const dispatchFill = (cmd) => {
     // Send the full signature (cmd + hint placeholder) so the user
     // sees what's expected — but the signature with <hint> placeholder
@@ -614,17 +820,17 @@ function HelpContent({ groups = [], totalCount = 0, tip = "" }) {
     <div className="hg-scroll" style={{
       ...T_PROSE,
       color: "var(--hg-fg-2)",
-      maxHeight: "42vh",
+      maxHeight: mobile ? "34vh" : "42vh",
       overflowY: "auto",
-      paddingRight: 4,
+      paddingRight: mobile ? 0 : 4,
     }}>
       <div style={{
         ...T_META,
-        marginBottom: 10,
+        marginBottom: mobile ? 8 : 10,
         color: "var(--hg-fg-3)",
         textTransform: "lowercase",
-        letterSpacing: "0.08em",
-        fontSize: 10.5,
+        letterSpacing: mobile ? "0.055em" : "0.08em",
+        fontSize: mobile ? 10 : 10.5,
       }}>
         {totalCount > 0 ? `${totalCount} commands` : "commands"}
         {tip && (
@@ -634,19 +840,20 @@ function HelpContent({ groups = [], totalCount = 0, tip = "" }) {
         )}
       </div>
       {groups.map((group) => (
-        <div key={group.id} style={{ marginBottom: 14 }}>
+        <div key={group.id} style={{ marginBottom: mobile ? 11 : 14 }}>
           <div style={{
             ...T_META,
             color: "var(--hg-fg-3)",
-            fontSize: 9.5,
-            letterSpacing: "0.18em",
+            fontSize: mobile ? 9 : 9.5,
+            letterSpacing: mobile ? "0.11em" : "0.18em",
             textTransform: "uppercase",
-            marginBottom: 5,
+            marginBottom: mobile ? 4 : 5,
             paddingBottom: 3,
             borderBottom: "1px solid var(--hg-border-soft)",
+            lineHeight: 1.35,
           }}>
             <span>{group.label}</span>
-            {group.desc && (
+            {group.desc && !mobile && (
               <span style={{
                 color: "var(--hg-fg-4)",
                 marginLeft: 8,
@@ -673,6 +880,7 @@ function HelpContent({ groups = [], totalCount = 0, tip = "" }) {
                   onClick={() => dispatchFill(fillValue)}
                   baseColor={ROW_BASE}
                   hoverColor={ROW_HOVER}
+                  mobile={mobile}
                 />
               );
             })}
@@ -683,7 +891,7 @@ function HelpContent({ groups = [], totalCount = 0, tip = "" }) {
   );
 }
 
-function HelpRow({ sig, desc, onClick, baseColor, hoverColor }) {
+function HelpRow({ sig, desc, onClick, baseColor, hoverColor, mobile = false }) {
   const [hovered, setHovered] = React.useState(false);
   return (
     <div
@@ -699,28 +907,30 @@ function HelpRow({ sig, desc, onClick, baseColor, hoverColor }) {
         }
       }}
       title="click to paste this command into the input box"
+      className="hg-help-row"
       style={{
         ...T_SYNTAX,
         display: "grid",
-        gridTemplateColumns: "minmax(0, 28ch) minmax(0, 1fr)",
-        gap: 14,
-        padding: "3px 6px",
+        gridTemplateColumns: mobile ? "minmax(0, 1fr)" : "minmax(0, 28ch) minmax(0, 1fr)",
+        gap: mobile ? 2 : 14,
+        padding: mobile ? "6px 7px" : "3px 6px",
         color: hovered ? hoverColor : baseColor,
         background: hovered ? "color-mix(in oklab, var(--hg-fg-1) 6%, transparent)" : "transparent",
         cursor: "pointer",
-        borderRadius: 2,
+        borderRadius: mobile ? 4 : 2,
         transition: "color 100ms, background 100ms",
-        fontSize: 11.5,
+        fontSize: mobile ? 11 : 11.5,
+        lineHeight: mobile ? 1.28 : 1.2,
       }}
     >
-      <span style={{
+      <span className="hg-help-sig" style={{
         color: hovered ? "var(--hg-fg-0)" : "var(--hg-fg-1)",
         fontFamily: HG_MONO,
         overflow: "hidden",
         textOverflow: "ellipsis",
         whiteSpace: "nowrap",
       }}>{sig}</span>
-      <span style={{
+      <span className="hg-help-desc" style={{
         color: hovered ? "var(--hg-fg-1)" : "var(--hg-fg-3)",
         overflow: "hidden",
         textOverflow: "ellipsis",
@@ -756,7 +966,7 @@ function EventContent({ e, onConfirm, onCancel, onUndo, onControlAction, lifecyc
         return <ActionContent id={e.id} title={e.title} service={e.service} target={e.target} attrs={e.attrs} status={e.status} latency={e.latency} reason={e.reason} traceId={e.traceId} onConfirm={onConfirm} onCancel={onCancel} onUndo={onUndo} />;
       case "home":       return <HomeContent text={e.text} streaming={e.streaming} />;
       case "external":   return <ExternalContent text={e.text} streaming={e.streaming} />;
-      case "perception": return <PerceptionContent text={e.text} snapshotUrl={e.snapshotUrl} />;
+      case "perception": return <PerceptionContent text={e.text} snapshotUrl={e.snapshotUrl} imageMode={e.imageMode} imageUnavailable={e.imageUnavailable} />;
       case "proactive":  return <ProactiveContent text={e.text} />;
       case "diag":       return <DiagContent text={e.text} channel={e.channel} />;
       case "system":     return <SystemContent text={e.text} tone={e.tone} />;

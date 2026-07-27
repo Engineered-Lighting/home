@@ -14,14 +14,95 @@
   <style>
     html, body, #root { height: 100%; width: 100%; margin: 0; }
     body {
-      background: var(--hg-bg-0);
-      color: var(--hg-fg-0);
+      background: #050606;
+      color: #f4f2ec;
       overflow: hidden;
       user-select: none;
       -webkit-user-select: none;
     }
     /* Re-allow text selection in the conversation feed + inputs. */
     .hg-scroll, .hg-scroll *, input, textarea { user-select: text; -webkit-user-select: text; }
+    #hg-boot-shell {
+      position: fixed;
+      inset: 0;
+      z-index: 9000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #050606;
+      color: #f4f2ec;
+      font-family: Consolas, "SFMono-Regular", "Liberation Mono", monospace;
+      padding: max(18px, env(safe-area-inset-top)) 18px max(18px, env(safe-area-inset-bottom));
+      box-sizing: border-box;
+      pointer-events: none;
+    }
+    #hg-boot-shell[data-disabled="1"] { display: none; }
+    .hg-boot-card {
+      width: min(520px, 88vw);
+      transform: translateY(-3vh);
+    }
+    .hg-boot-ascii {
+      margin: 0;
+      font: 700 clamp(12px, 3.25vw, 20px)/1.04 Consolas, "SFMono-Regular", "Liberation Mono", monospace;
+      letter-spacing: 0;
+      white-space: pre;
+      color: #f4f2ec;
+      text-align: center;
+      opacity: 0.94;
+    }
+    .hg-boot-subtitle {
+      margin-top: 18px;
+      text-align: center;
+      font: 10px/1.4 Consolas, "SFMono-Regular", "Liberation Mono", monospace;
+      letter-spacing: 0.32em;
+      color: rgba(244, 242, 236, 0.44);
+    }
+    .hg-boot-bar {
+      position: relative;
+      height: 2px;
+      margin-top: 34px;
+      overflow: hidden;
+      background: rgba(244, 242, 236, 0.12);
+    }
+    .hg-boot-bar span {
+      display: block;
+      width: 8%;
+      height: 100%;
+      background: #f4f2ec;
+      box-shadow: 0 0 18px rgba(244, 242, 236, 0.3);
+      transition: width 180ms ease;
+    }
+    #hg-boot-shell[data-phase="idle"] .hg-boot-bar span,
+    #hg-boot-shell[data-phase="fetching"] .hg-boot-bar span {
+      animation: hg-boot-pulse 1.7s ease-in-out infinite;
+    }
+    #hg-boot-shell[data-phase="reconnecting"] .hg-boot-bar span,
+    #hg-boot-shell[data-phase="stalled"] .hg-boot-bar span,
+    #hg-boot-shell[data-phase="failed"] .hg-boot-bar span {
+      background: #f0a33a;
+      box-shadow: 0 0 18px rgba(240, 163, 58, 0.35);
+    }
+    .hg-boot-status {
+      margin-top: 12px;
+      display: flex;
+      gap: 14px;
+      justify-content: space-between;
+      color: rgba(244, 242, 236, 0.48);
+      font: 10px/1.5 Consolas, "SFMono-Regular", "Liberation Mono", monospace;
+      letter-spacing: 0.14em;
+      text-transform: lowercase;
+    }
+    .hg-boot-current {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    @keyframes hg-boot-pulse {
+      0% { opacity: 0.55; }
+      50% { opacity: 1; }
+      100% { opacity: 0.55; }
+    }
   </style>
   <script src="./vendor/react-18.3.1/react.production.min.js"></script>
   <script src="./vendor/react-18.3.1/react-dom.production.min.js"></script>
@@ -49,6 +130,23 @@
   <script src="./home-services.js"></script>
 </head>
 <body>
+  <div id="hg-boot-shell" data-phase="idle" aria-live="polite" aria-label="Home app loading">
+    <div class="hg-boot-card">
+      <pre class="hg-boot-ascii"> __
+/ /_  ____  ____ ___  ___
+/ __ \/ __ \/ __ `__ \/ _ \
+/ / / / /_/ / / / / / /  __/
+/_/ /_/\____/_/ /_/ /_/\___/</pre>
+      <div class="hg-boot-subtitle">engineered lighting</div>
+      <div class="hg-boot-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="3">
+        <span style="width:3%"></span>
+      </div>
+      <div class="hg-boot-status">
+        <span class="hg-boot-phase">starting</span>
+        <span class="hg-boot-current">initializing</span>
+      </div>
+    </div>
+  </div>
   <div id="root"></div>
   <!-- 3D engine bootstrap: dynamic import propagates the same cache-buster
        the JSX loader uses (home-3d siblings re-import with it; vendor libs
@@ -95,12 +193,20 @@
       var cb = window.HG_WEB_MODE && window.__HOME_ASSET_VERSION
         ? '?v=' + encodeURIComponent(window.__HOME_ASSET_VERSION)
         : '?cb=' + Date.now();
+      window.__HOME_BOOT_ASSET_SUFFIX = cb;
       var PREFETCH_WINDOW = 6;
       var files = [
+        // Resilient HTTP helper (window.fetchWithRetry) — must load before any
+        // panel that uses it (people / worldstate / explain).
+        ['home-fetch-with-retry.js', false],
+        ['home-perf.js', false],
+        ['home-feature-loader.js', false],
+        ['home-people-prewarm.js', false],
         ['home-tauri.jsx', true],
         ['home-ha.jsx', true],
         ['home-icons.jsx', true],
         ['home-events.jsx', true],
+        ['home-frigate-perception.js', false],
         ['home-script.jsx', true],
         ['home-vision.jsx', true],
         ['home-s2s.jsx', true],
@@ -111,6 +217,7 @@
         ['home-stack-actions.jsx', true],
         ['home-ai-stack.jsx', true],
         ['home-capabilities.js', false],
+        ['home-natural-look.js', false],
         ['home-metrics-lab-helpers.js', false],
         ['home-metrics-lab.jsx', true],
         ['home-people-helpers.js', false],
@@ -144,6 +251,71 @@
         ['home-app.jsx', true],
         ['home-mount.jsx', true],
       ];
+      var deferredFeatureFiles = {
+        'home-people-helpers.js': true,
+        'home-people.jsx': true,
+        'home-worldstate-helpers.js': true,
+        'home-worldstate.jsx': true,
+        'home-spatial-helpers.js': true,
+        'home-spatial.jsx': true,
+        'home-look.jsx': true,
+        'home-lights.jsx': true,
+        'home-intelligence.jsx': true,
+        'home-apartment-data.js': true,
+        'home-apartment-sim.js': true,
+        'home-apartment-cards.jsx': true,
+        'home-apartment-calibrate.jsx': true,
+        'home-apartment-edit.jsx': true,
+        'home-apartment.jsx': true,
+        'home-video-labeler-data.js': true,
+        'home-video-labeler-timeline.jsx': true,
+        'home-video-labeler.jsx': true,
+      };
+      function readLazyFeaturesEnabled() {
+        var raw = '';
+        try {
+          var params = new URLSearchParams(window.location.search || '');
+          raw = params.get('lazyFeatures') || params.get('lazy') || '';
+        } catch (_) {}
+        raw = String(raw || '').trim().toLowerCase();
+        if (['0', 'off', 'false', 'no'].indexOf(raw) >= 0) return false;
+        if (['1', 'on', 'true', 'yes'].indexOf(raw) >= 0) return true;
+        try {
+          raw = String(localStorage.getItem('home.perf.lazyFeatures') || '').trim().toLowerCase();
+          if (['0', 'off', 'false', 'no'].indexOf(raw) >= 0) return false;
+          if (['1', 'on', 'true', 'yes'].indexOf(raw) >= 0) return true;
+        } catch (_) {}
+        return !!(window.HG_WEB_MODE && !window.__TAURI__ && !window.__TAURI_INTERNALS__);
+      }
+      function readFlag(name, storageKey) {
+        var raw = '';
+        try { raw = new URLSearchParams(window.location.search || '').get(name) || ''; } catch (_) {}
+        raw = String(raw || '').trim().toLowerCase();
+        if (['0', 'off', 'false', 'no'].indexOf(raw) >= 0) return false;
+        if (['1', 'on', 'true', 'yes'].indexOf(raw) >= 0) return true;
+        if (storageKey) {
+          try { raw = String(localStorage.getItem(storageKey) || '').trim().toLowerCase(); } catch (_) { raw = ''; }
+          if (['0', 'off', 'false', 'no'].indexOf(raw) >= 0) return false;
+          if (['1', 'on', 'true', 'yes'].indexOf(raw) >= 0) return true;
+        }
+        return null;
+      }
+      var lazyFeaturesEnabled = readLazyFeaturesEnabled();
+      var bootShellEnabled = readFlag('bootShell', 'home.perf.bootShell') !== false;
+      if (!bootShellEnabled) {
+        var shellOff = document.getElementById('hg-boot-shell');
+        if (shellOff) shellOff.setAttribute('data-disabled', '1');
+      }
+      var originalFileCount = files.length;
+      if (lazyFeaturesEnabled) {
+        files = files.filter(function (item) { return !deferredFeatureFiles[item[0]]; });
+      }
+      window.__HOME_LAZY_FEATURES_ENABLED = lazyFeaturesEnabled;
+      window.__HOME_DEFERRED_FEATURE_FILES = Object.keys(deferredFeatureFiles);
+      window.__HOME_BOOT_FILES = files.map(function (item) { return item[0]; });
+      var webOptionalFiles = {
+        'home-tauri.jsx': true,
+      };
 
       var BABEL_PLUGINS = [
         'transform-class-properties',
@@ -153,25 +325,159 @@
 
       var boot = window.__bootState = {
         loaded: 0, total: files.length, current: null, failed: null, done: false,
-        prefetchWindow: PREFETCH_WINDOW,
+        prefetchWindow: PREFETCH_WINDOW, reconnecting: false, retryAttempts: 0,
+        lazyFeaturesEnabled: lazyFeaturesEnabled, originalTotal: originalFileCount,
+        phase: 'starting', shellEnabled: bootShellEnabled,
       };
+      if (window.__homePerf) window.__homePerf.mark('boot:start', {
+        total: files.length,
+        originalTotal: originalFileCount,
+        lazyFeaturesEnabled: lazyFeaturesEnabled,
+      });
       var fetches = [];
+      var babelFailures = {};
+      function bootProgressPct() {
+        if (!boot || !boot.total) return 3;
+        if (boot.done) return 100;
+        return Math.max(3, Math.min(99, Math.round((boot.loaded / boot.total) * 100)));
+      }
+
+      function updateBootShell(phase, detail) {
+        if (phase) boot.phase = phase;
+        var shell = document.getElementById('hg-boot-shell');
+        if (!shell || !bootShellEnabled) return;
+        var pct = bootProgressPct();
+        shell.setAttribute('data-phase', boot.phase || 'starting');
+        var bar = shell.querySelector('.hg-boot-bar');
+        var fill = shell.querySelector('.hg-boot-bar span');
+        var phaseEl = shell.querySelector('.hg-boot-phase');
+        var currentEl = shell.querySelector('.hg-boot-current');
+        if (bar) bar.setAttribute('aria-valuenow', String(pct));
+        if (fill) fill.style.width = pct + '%';
+        if (phaseEl) phaseEl.textContent = boot.done ? 'ready' : (boot.phase || 'starting');
+        if (currentEl) currentEl.textContent = detail || boot.current || (lazyFeaturesEnabled ? 'lazy features enabled' : 'loading');
+        window.__homeBootShell = {
+          enabled: bootShellEnabled,
+          phase: boot.phase,
+          percent: pct,
+          current: boot.current,
+          detail: detail || null,
+          updatedAt: Date.now(),
+        };
+      }
+
+      window.__homeRemoveBootShell = function () {
+        var shell = document.getElementById('hg-boot-shell');
+        if (shell && shell.parentNode) shell.parentNode.removeChild(shell);
+        window.__homeBootShell = Object.assign({}, window.__homeBootShell || {}, {
+          removed: true,
+          updatedAt: Date.now(),
+        });
+      };
+      updateBootShell('starting', 'preparing boot chain');
+
+      function swVersionLabel() {
+        return (window.HG_WEB_MODE && window.__HOME_ASSET_VERSION) ||
+          window.__HOME_BUILD_COMMIT || 'dev';
+      }
+
+      function removeOverlay() {
+        var el = document.getElementById('hg-boot-overlay');
+        if (el && el.parentNode) el.parentNode.removeChild(el);
+      }
 
       function overlay(title, detail) {
+        updateBootShell('failed', title);
         var msg = '[boot] ' + title + (detail ? '\n' + detail : '');
         console.error(msg);
-        var el = document.getElementById('hg-boot-overlay');
-        if (!el) {
-          el = document.createElement('div');
-          el.id = 'hg-boot-overlay';
-          el.style.cssText =
-            'position:fixed;top:0;left:0;right:0;z-index:99999;' +
-            'background:#3b0d0d;color:#ffd7d7;font:12px/1.5 Consolas,monospace;' +
-            'padding:10px 14px;border-bottom:1px solid #a33;' +
-            'white-space:pre-wrap;max-height:45vh;overflow:auto;';
-          (document.body || document.documentElement).appendChild(el);
-        }
+        // A terminal overlay always replaces any prior (e.g. reconnecting)
+        // overlay so its style/handlers can't leak through.
+        removeOverlay();
+        var el = document.createElement('div');
+        el.id = 'hg-boot-overlay';
+        el.style.cssText =
+          'position:fixed;top:0;left:0;right:0;z-index:99999;' +
+          'background:#3b0d0d;color:#ffd7d7;font:12px/1.5 Consolas,monospace;' +
+          'padding:10px 14px;border-bottom:1px solid #a33;' +
+          'white-space:pre-wrap;max-height:45vh;overflow:auto;';
+        (document.body || document.documentElement).appendChild(el);
         el.textContent = msg;
+      }
+
+      /* Full escape hatch: unregister every service worker, then reload. Lets a
+         stranded user recover without knowing about browser site-data settings.
+         Reloads even if the unregister rejects or the API is missing. */
+      function unregisterSwAndReload() {
+        function reload() { try { window.location.reload(); } catch (_) {} }
+        try {
+          if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+            navigator.serviceWorker.getRegistrations().then(function (regs) {
+              return Promise.all((regs || []).map(function (r) {
+                try { return r.unregister(); } catch (_) { return null; }
+              }));
+            }).then(reload, reload);
+            return;
+          }
+        } catch (_) {}
+        reload();
+      }
+
+      /* Recoverable boot state. Shown instead of a terminal error when a boot
+         file fails to FETCH (status 0 / timeout / abort — the AI-box reboot
+         window). We keep retrying with backoff so the app self-heals when the
+         box returns, and expose a manual reload that also clears the SW. */
+      function reconnectingOverlay(name, err, attempt) {
+        boot.reconnecting = true;
+        updateBootShell('reconnecting', name + ' · attempt ' + attempt);
+        console.error('[boot] Failed to load ' + name + ' — ' +
+          String((err && err.message) || err) +
+          ' (reconnecting, attempt ' + attempt + ')');
+        removeOverlay();
+        var el = document.createElement('div');
+        el.id = 'hg-boot-overlay';
+        el.style.cssText =
+          'position:fixed;top:0;left:0;right:0;z-index:99999;' +
+          'background:#12222b;color:#cfe8f2;font:12px/1.5 Consolas,monospace;' +
+          'padding:10px 14px;border-bottom:1px solid #2f6d84;' +
+          'display:flex;align-items:center;gap:12px;flex-wrap:wrap;';
+        (document.body || document.documentElement).appendChild(el);
+        var msg = document.createElement('span');
+        msg.textContent = 'Reconnecting to home… waiting for the network ' +
+          '(attempt ' + attempt + ').';
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = 'Reload now';
+        btn.style.cssText =
+          'font:11px/1 Consolas,monospace;color:#0c1418;background:#8fd0e6;' +
+          'border:0;padding:6px 12px;cursor:pointer;border-radius:3px;';
+        btn.addEventListener('click', function () {
+          msg.textContent = 'Reloading…';
+          btn.disabled = true;
+          unregisterSwAndReload();
+        });
+        el.appendChild(msg);
+        el.appendChild(btn);
+      }
+
+      function backoffDelay(attempt) {
+        // 1s, 2s, 4s, 8s, 16s, then capped at 30s.
+        return Math.min(30000, 1000 * Math.pow(2, Math.min(attempt - 1, 5)));
+      }
+
+      function scheduleBootRetry(i, err) {
+        boot.retryAttempts++;
+        var attempt = boot.retryAttempts;
+        reconnectingOverlay(files[i][0], err, attempt);
+        // Keep the mount watchdog calm: this is a known, actively-retrying
+        // state, not a silent stall.
+        lastProgressAt = Date.now();
+        setTimeout(function () {
+          // Drop cached failed fetches in the prefetch window so the retry
+          // re-hits the network instead of replaying the same failure.
+          var end = Math.min(files.length, i + PREFETCH_WINDOW);
+          for (var j = i; j < end; j++) fetches[j] = null;
+          step(i);
+        }, backoffDelay(attempt));
       }
 
       /* Success = HTTP 200, or status 0 WITH content (file:// and custom
@@ -256,19 +562,51 @@
         document.head.appendChild(s);
       }
 
+      function skipOptionalWebFile(name, err, index) {
+        if (!window.HG_WEB_MODE || !webOptionalFiles[name]) return false;
+        var reason = String((err && err.message) || err || 'unknown error');
+        console.warn('[boot] skipped optional web boot file ' + name + ' after retries - ' + reason);
+        boot.skipped = boot.skipped || [];
+        boot.skipped.push({ file: name, reason: reason });
+        boot.loaded++;
+        updateBootShell('executing', 'skipped ' + name);
+        primeWindow(index + 1);
+        step(index + 1);
+        return true;
+      }
+
       function step(i) {
         if (i >= files.length) {
           boot.done = true;
           boot.current = null;
+          if (boot.reconnecting) { boot.reconnecting = false; removeOverlay(); }
+          updateBootShell('complete', 'mounting interface');
+          console.info('[boot] chain complete — ' + boot.loaded + '/' + boot.total +
+            ' files, sw ' + swVersionLabel() +
+            (boot.skipped && boot.skipped.length ? ', skipped ' + boot.skipped.length : ''));
+          if (window.__homePerf) window.__homePerf.mark('boot:complete', {
+            loaded: boot.loaded,
+            total: boot.total,
+            skipped: boot.skipped || [],
+            lazyFeaturesEnabled: lazyFeaturesEnabled,
+          });
           return;
         }
         var name = files[i][0];
         var isBabel = files[i][1];
         boot.current = name;
+        updateBootShell('fetching', name);
+        var fetchStart = performance.now ? performance.now() : Date.now();
         fetchBootText(i).then(function (text) {
+          if (window.__homePerf) {
+            window.__homePerf.recordBootFile(name, 'fetch',
+              (performance.now ? performance.now() : Date.now()) - fetchStart);
+          }
           var code = text;
           if (isBabel) {
             try {
+              updateBootShell('transforming', name);
+              var transformStart = performance.now ? performance.now() : Date.now();
               code = Babel.transform(text, {
                 filename: name,
                 presets: ['react', 'env'],
@@ -276,7 +614,18 @@
                 sourceMaps: 'inline',
                 sourceFileName: name,
               }).code;
+              if (window.__homePerf) {
+                window.__homePerf.recordBootFile(name, 'transform',
+                  (performance.now ? performance.now() : Date.now()) - transformStart);
+              }
             } catch (err) {
+              if (skipOptionalWebFile(name, err, i)) return;
+              // A transform error is usually a real syntax fault — but a
+              // truncated fetch (flaky Tailscale) is indistinguishable. Re-fetch
+              // a few times before declaring the chain dead.
+              babelFailures[name] = (babelFailures[name] || 0) + 1;
+              if (babelFailures[name] <= 3) { scheduleBootRetry(i, err); return; }
+              boot.reconnecting = false;
               boot.failed = name;
               overlay('Babel transform failed in ' + name +
                 ' — boot chain stopped (downstream files depend on it)',
@@ -284,16 +633,28 @@
               return;
             }
           }
+          if (boot.reconnecting) { boot.reconnecting = false; removeOverlay(); }
+          updateBootShell('executing', name);
+          var executeStart = performance.now ? performance.now() : Date.now();
           execute(name, code);
+          if (window.__homePerf) {
+            window.__homePerf.recordBootFile(name, 'execute',
+              (performance.now ? performance.now() : Date.now()) - executeStart);
+          }
           boot.loaded++;
+          updateBootShell('executing', name);
           primeWindow(i + 1);
           step(i + 1);
         }).catch(function (err) {
-          boot.failed = name;
-          overlay('Failed to load ' + name + ' after 3 attempts — boot chain stopped',
-            String((err && err.message) || err));
+          if (skipOptionalWebFile(name, err, i)) return;
+          // Network failure (status 0 / timeout / abort) — the AI-box reboot
+          // window. Never a dead end: keep retrying with backoff so the app
+          // self-heals when the box returns, and offer a manual escape hatch.
+          scheduleBootRetry(i, err);
         });
       }
+      console.info('[boot] starting chain — sw ' + swVersionLabel() + ', ' +
+        files.length + ' files' + (lazyFeaturesEnabled ? ' (' + (originalFileCount - files.length) + ' deferred)' : ''));
       primeWindow(0);
       step(0);
 
@@ -308,10 +669,12 @@
         if (root && root.children.length > 0) return; /* mounted — done */
         if (boot.failed) return; /* overlay already explains it */
         if (!boot.done) {
+          if (boot.reconnecting) { setTimeout(watchdog, 2000); return; } /* actively retrying */
           if (boot.loaded !== lastLoaded) {
             lastLoaded = boot.loaded;
             lastProgressAt = Date.now();
           } else if (Date.now() - lastProgressAt > 90000) {
+            updateBootShell('stalled', boot.current || 'mount');
             overlay('Boot chain stalled at ' + boot.current,
               boot.loaded + '/' + boot.total + ' files executed');
             return;

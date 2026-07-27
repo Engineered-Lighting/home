@@ -23,6 +23,8 @@ const HC_SANS = "'Geist', system-ui, sans-serif";
 /* ── Constants ────────────────────────────────────────────────────────── */
 // A control card stays "active" (interactive) for this long, then "expired".
 const CONTROL_EXPIRY_MS = 8 * 60 * 1000;
+const HC_TRAVEL_MODE_CACHE_KEY = "home.lights.travelMode.state.v1";
+const HC_TRAVEL_MODE_EVENT = "home-travel-mode-change";
 
 // Only these (domain, service) pairs get a rich control card. Everything
 // else — light.turn_off, media_player.turn_off, scene.*, etc. — renders as
@@ -49,6 +51,33 @@ const VOLUME_ROUTING = {
 };
 
 function clampNum(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
+
+function readTravelModeLocked() {
+  try {
+    if (typeof window !== "undefined" && window.__HOME_TRAVEL_MODE_STATE === "on") return true;
+    if (typeof localStorage !== "undefined") {
+      return localStorage.getItem(HC_TRAVEL_MODE_CACHE_KEY) === "on";
+    }
+  } catch (_) {}
+  return false;
+}
+
+function useTravelModeLock() {
+  const [locked, setLocked] = React.useState(() => readTravelModeLocked());
+  React.useEffect(() => {
+    const refresh = () => setLocked(readTravelModeLocked());
+    window.addEventListener?.(HC_TRAVEL_MODE_EVENT, refresh);
+    window.addEventListener?.("storage", refresh);
+    const id = setInterval(refresh, 1500);
+    refresh();
+    return () => {
+      window.removeEventListener?.(HC_TRAVEL_MODE_EVENT, refresh);
+      window.removeEventListener?.("storage", refresh);
+      clearInterval(id);
+    };
+  }, []);
+  return locked;
+}
 
 /* ── humanize: entity_id / area slug → "Living Room" ─────────────────── */
 function humanize(s) {
@@ -217,8 +246,14 @@ async function readEntityStates(entityIds) {
 function ControlSlider({ kind, label, sub, value, min, max, step, unit, disabled, mixed, applying, onDrag, onCommit }) {
   const debRef = React.useRef(null);
   React.useEffect(() => () => { if (debRef.current) { clearTimeout(debRef.current); debRef.current = null; } }, []);
+  React.useEffect(() => {
+    if (!disabled || !debRef.current) return;
+    clearTimeout(debRef.current);
+    debRef.current = null;
+  }, [disabled]);
 
   const handleChange = (e) => {
+    if (disabled) return;
     const v = Number(e.target.value);
     if (onDrag) onDrag(v);
     if (debRef.current) clearTimeout(debRef.current);
@@ -228,6 +263,7 @@ function ControlSlider({ kind, label, sub, value, min, max, step, unit, disabled
     }, 120);
   };
   const flush = (e) => {
+    if (disabled) return;
     if (debRef.current) { clearTimeout(debRef.current); debRef.current = null; }
     if (onCommit) onCommit(Number(e.target.value));
   };
@@ -285,16 +321,31 @@ function fireServiceCall(opts) {
 /* ── ControlCardShell ─────────────────────────────────────────────────────
  * The glassy card surface shared by both control cards. `muted` dims a
  * read-only (superseded/expired/failed/unavailable) card. */
-function ControlCardShell({ children, muted, accent }) {
+function ControlCardShell({ children, muted, accent, locked }) {
   return (
-    <div className="hg-fade" style={{
+    <div className="hg-fade" aria-disabled={locked ? "true" : undefined} style={{
+      position: "relative",
       margin: "7px 0",
       background: "var(--hg-bg-1)",
       border: `1px solid ${accent && !muted ? "var(--hg-border)" : "var(--hg-border-soft)"}`,
       borderRadius: 8,
       padding: "11px 13px",
       opacity: muted ? 0.55 : 1,
-    }}>{children}</div>
+    }}>
+      {children}
+      {locked && (
+        <div
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            inset: 0,
+            borderRadius: 8,
+            pointerEvents: "none",
+            background: "linear-gradient(180deg, rgba(245,158,11,0.035), rgba(0,0,0,0.035))",
+          }}
+        />
+      )}
+    </div>
   );
 }
 
@@ -302,6 +353,7 @@ function ControlCardShell({ children, muted, accent }) {
 function StatusChip({ status }) {
   const map = {
     idle:     { tone: "success", word: "ready" },
+    locked:   { tone: "warn",    word: "travel mode" },
     applying: { tone: "pending", word: "applying" },
     updated:  { tone: "success", word: "updated" },
     error:    { tone: "error",   word: "failed" },
@@ -407,6 +459,7 @@ const AREA_CAPS = {
  * exact entities the command resolved. */
 function LightControlCard({ ctx, lifecycle, onControlAction }) {
   const hasEntities = ctx.targetEntities && ctx.targetEntities.length > 0;
+  const travelModeLocked = useTravelModeLock();
   const [caps, setCaps] = React.useState(hasEntities ? (ctx.capabilities || null) : AREA_CAPS);
   const [bri, setBri] = React.useState(ctx.setValues ? (ctx.setValues.brightness_pct != null ? ctx.setValues.brightness_pct : null) : null);
   const [kel, setKel] = React.useState(ctx.setValues ? (ctx.setValues.color_temp_kelvin != null ? ctx.setValues.color_temp_kelvin : null) : null);
@@ -493,6 +546,11 @@ function LightControlCard({ ctx, lifecycle, onControlAction }) {
     }, 700);
   };
   const commit = async (service_data, label) => {
+    if (travelModeLocked) {
+      setStatus("locked");
+      setStatusMsg("travel mode enabled");
+      return;
+    }
     setStatus("applying"); setStatusMsg("applying…");
     try {
       await fireServiceCall({
@@ -532,22 +590,43 @@ function LightControlCard({ ctx, lifecycle, onControlAction }) {
   const briReady = !!caps;
   const ctMin = caps ? caps.minKelvin : 2000;
   const ctMax = caps ? caps.maxKelvin : 6500;
-  const colorDisabled = !caps || !caps.anyColorTemp;
-  const briDisabled = !briReady || (caps && !caps.anyBrightness);
+  const colorDisabled = travelModeLocked || !caps || !caps.anyColorTemp;
+  const briDisabled = travelModeLocked || !briReady || (caps && !caps.anyBrightness);
 
   const setKelChip = (v) => {
+    if (travelModeLocked) return;
     const cv = clampNum(v, ctMin, ctMax);
     setKel(cv); commit({ color_temp_kelvin: cv }, `${cv} K`);
   };
-  const setBriChip = (v) => { setBri(v); commit({ brightness_pct: v }, `${v}%`); };
+  const setBriChip = (v) => {
+    if (travelModeLocked) return;
+    setBri(v); commit({ brightness_pct: v }, `${v}%`);
+  };
 
   return (
-    <ControlCardShell accent>
+    <ControlCardShell accent muted={travelModeLocked} locked={travelModeLocked}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 9 }}>
         <window.IconBulb size={13} stroke="var(--hg-ice-bright)" />
         <span style={{ fontFamily: HC_SANS, fontSize: 12.5, fontWeight: 500, color: "var(--hg-fg-0)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
-        <StatusChip status={status} />
+        <StatusChip status={travelModeLocked ? "locked" : status} />
       </div>
+
+      {travelModeLocked && (
+        <div style={{
+          marginBottom: 9,
+          padding: "6px 8px",
+          border: "1px solid rgba(245, 158, 11, 0.35)",
+          borderRadius: 5,
+          background: "rgba(245, 158, 11, 0.08)",
+          color: "var(--hg-warn)",
+          fontFamily: HC_MONO,
+          fontSize: 9.5,
+          letterSpacing: "0.08em",
+          textTransform: "uppercase",
+        }}>
+          travel mode enabled - controls locked
+        </div>
+      )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
         <ControlSlider

@@ -39,7 +39,7 @@ function loadHelpers() {
   const end = source.indexOf("/* Live frame:", start);
   if (start < 0 || end < 0) throw new Error("home-vision helper block not found");
   const script = source.slice(start, end)
-    + "\nObject.assign(window, { HG_CAMERAS, VISION_REFRESH_MS, _haBaseFromWs });";
+    + "\nObject.assign(window, { HG_CAMERAS, VISION_REFRESH_MS, _haBaseFromWs, _cameraHasHumanOccupancy });";
   const sandbox = { window: {}, URL };
   vm.runInNewContext(script, sandbox, { filename: "home-vision.helpers.js" });
   return sandbox.window;
@@ -71,7 +71,10 @@ function loadHelpers() {
   assert("Simulation Mode suppresses live errors", source.includes("const err = simulationSrc ? null : live.err"));
   assert("Simulation Mode uses deterministic stream key", source.includes("const streamKey = simulationSrc ? `sim-${camera.id}` : live.streamKey"));
   assert("Simulation Mode changes remount live/sim frames", source.includes("prevSimRef.current !== simActive") && source.includes("setOpenCount((c) => c + 1)"));
-  assert("occupied count derives from labels prop", source.includes("const occupied = cameras.filter((c) => (labels[c.id] || []).length > 0).length;"), source);
+  assert("camera occupancy ignores non-human objects", H._cameraHasHumanOccupancy(["car", "sink", "chair"]) === false);
+  assert("camera occupancy counts explicit human labels", H._cameraHasHumanOccupancy(["car", "person"]) === true);
+  assert("camera occupancy accepts object-shaped human labels", H._cameraHasHumanOccupancy([{ label: "person" }]) === true);
+  assert("occupied count derives from human-only helper", source.includes("const occupied = cameras.filter((c) => _cameraHasHumanOccupancy(labels[c.id])).length;"), source);
   assert("active camera labels derive from labels prop", source.includes("const objLabels = (labels[active.id] || []);"), source);
   assert("collapsed summary surfaces occupied count", source.includes('`${cameras.length} cameras') && source.includes('`${occupied} occupied`'));
   assert("vision exports card and camera roster", source.includes("Object.assign(window, { HomeVisionCard, HG_CAMERAS });"));
@@ -105,6 +108,12 @@ function loadHelpers() {
   assert("describe_clip samples multiple frames", visionServiceSource.includes("for i in range(frames):") && visionServiceSource.includes("/api/camera_proxy/{entity_id}"));
   assert("describe_clip records sampling and inference latency", visionServiceSource.includes("sampling_ms") && visionServiceSource.includes("inference_ms"));
   assert("describe_clip returns captured frame count", visionServiceSource.includes("frames_captured=len(jpegs)"));
+
+  process.stdout.write("\nvision_reason_answer_contract_test\n");
+  assert("reason answer parser falls back when ANSWER line only contains boxes",
+    visionServiceSource.includes("before = text[:m.start()].strip()") &&
+    visionServiceSource.includes("return _strip_primitives(before)"),
+    "_extract_answer should preserve readable prose before primitive-only ANSWER lines");
 
   if (fails) {
     console.log("\nFailures:");

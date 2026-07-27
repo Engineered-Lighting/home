@@ -99,16 +99,50 @@ function _fmtElapsed(startedAtIso) {
   return `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
+function _aiStackHasReadySignals(aiStackState = {}) {
+  const services = Array.isArray(aiStackState.services) ? aiStackState.services : [];
+  const requiredServicesUp = services.length > 0 && services.every((svc) =>
+    svc &&
+    svc.container !== "missing" &&
+    svc.container !== "exited" &&
+    svc.container !== "starting" &&
+    svc.health !== "unhealthy" &&
+    svc.health !== "starting" &&
+    svc.probe !== "fail"
+  );
+  const expected = aiStackState.expected_vllm_model;
+  const loaded = aiStackState.vllm_model_loaded;
+  const modelReady = !expected || loaded === expected;
+  return requiredServicesUp && modelReady;
+}
+
+function _aiStackEffectiveState(aiStackState = {}) {
+  const overall = aiStackState.overall || "unknown";
+  const readySignals = _aiStackHasReadySignals(aiStackState);
+  const staleStarting =
+    readySignals &&
+    (overall === "starting" || overall === "warming") &&
+    aiStackState.in_flight &&
+    (aiStackState.in_flight.recovered || aiStackState.in_flight.verb === "start");
+  return {
+    overall: staleStarting ? "ready" : overall,
+    inFlight: staleStarting ? null : aiStackState.in_flight,
+    staleStarting,
+  };
+}
+
 function _aiStackCardActionState(overall, aiStackState = {}, action = { kind: "idle" }) {
-  const supervisorInFlight = !!aiStackState.in_flight;
+  const effective = _aiStackEffectiveState({ ...aiStackState, overall });
+  const supervisorInFlight = !!effective.inFlight;
   const localBusy = action && (action.kind === "starting" || action.kind === "streaming");
   const busy = supervisorInFlight || localBusy;
-  const serviceRestartable = ["ready", "warming", "partial", "error", "down"].includes(overall);
+  const effectiveOverall = effective.overall;
+  const serviceRestartable = ["ready", "warming", "partial", "error", "down"].includes(effectiveOverall);
   return {
-    showStart: _STARTABLE.has(overall) && !busy,
-    showRestart: _RESTARTABLE.has(overall) && !busy,
-    showStop: _STOPPABLE.has(overall) && !busy,
-    showFreeGpu: _STOPPABLE.has(overall) && !busy,
+    showStart: _STARTABLE.has(effectiveOverall) && !busy,
+    showRestart: _RESTARTABLE.has(effectiveOverall) && !busy,
+    showStop: _STOPPABLE.has(effectiveOverall) && !busy,
+    showFreeGpu: _STOPPABLE.has(effectiveOverall) && !busy,
     showServiceRestarts: serviceRestartable && !busy,
     showProgress: busy,
     showTerminal: action && (action.kind === "done" || action.kind === "error"),
@@ -448,7 +482,8 @@ function AiStackCard({
   }
 
   // ── Live state derivations ────────────────────────────────────────
-  const overall = aiStackState.overall || "unknown";
+  const effective = _aiStackEffectiveState(aiStackState);
+  const overall = effective.overall;
   const overallTone = _overallTone(overall);
   const serviceChips = (aiStackState.services || []).map((s) => ({
     label: s.name,
@@ -459,7 +494,7 @@ function AiStackCard({
       : `${s.name} · ${s.container} · ${s.health} · ${s.probe_kind}: ${s.probe}`,
   }));
 
-  const inflight = aiStackState.in_flight;
+  const inflight = effective.inFlight;
   const inflightLine = inflight
     ? `${inflight.verb}... ${_fmtElapsed(inflight.started_at)}${inflight.recovered ? " (recovered)" : ""}`
     : null;
@@ -508,6 +543,15 @@ function AiStackCard({
           fontFamily: HG_FONT_MONO, fontSize: 9.5,
           color: "var(--hg-fg-5)", marginTop: 6, letterSpacing: "0.08em",
         }}>model: {modelEl}</div>
+      )}
+      {effective.staleStarting && (
+        <div style={{
+          fontFamily: HG_FONT_MONO,
+          fontSize: 9.5,
+          color: "var(--hg-fg-5)",
+          marginTop: 6,
+          letterSpacing: "0.08em",
+        }}>supervisor task recovered; services are ready</div>
       )}
 
       {/* Stack actions use the same inline confirm pattern as Lab controls. */}

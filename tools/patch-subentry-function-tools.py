@@ -49,6 +49,13 @@ SUBENTRY_TITLE = "Extended OpenAI Conversation"
 # const.py defaults but the user appears to have intentionally omitted
 # them (likely for safety). Override with --include-unsafe.
 SAFETY_SKIPLIST = {"load_skill", "bash"}
+LEGACY_LOOK_DESCRIPTION = (
+    "Answer a specific spatial or visual question about the home using the "
+    "grounded visual look path. This uses zoom/crop/segmentation and may "
+    "safely retry dark indoor looks with temporary lighting when occupancy "
+    "says the room is empty. Examples: what is on my coffee table, what is "
+    "on the counter, is the stove on, look at the driveway."
+)
 
 
 def _ssh(*cmd: str, capture: bool = True) -> str:
@@ -62,7 +69,7 @@ def _ssh(*cmd: str, capture: bool = True) -> str:
 def _ha_env() -> tuple[str, str]:
     """Pull HA_URL + HA_TOKEN from the Ubuntu bridge."""
     res = subprocess.run(
-        ["ssh", "hav-ubuntu", "grep", "-E", "^(HA_URL|HA_TOKEN)=", "/opt/home-ai-voice/.env"],
+        ["ssh", "hav-ubuntu", "cat", "/opt/home-ai-voice/.env"],
         capture_output=True, text=True,
     )
     if res.returncode != 0:
@@ -181,6 +188,21 @@ def _dump_yaml(entries: list[dict]) -> str:
     return yaml.dump(entries, sort_keys=False, default_flow_style=False, allow_unicode=True)
 
 
+def _remap_legacy_look(entries: list[dict]) -> bool:
+    """Route the older public `look(question)` tool through grounded_look."""
+    changed = False
+    for entry in entries:
+        if _tool_name(entry) != "look":
+            continue
+        fn = entry.setdefault("function", {})
+        if fn.get("type") == "world_state" and fn.get("name") == "grounded_look":
+            continue
+        entry.setdefault("spec", {})["description"] = LEGACY_LOOK_DESCRIPTION
+        entry["function"] = {"type": "world_state", "name": "grounded_look"}
+        changed = True
+    return changed
+
+
 def _write_subentry(full_data: dict, dry_run: bool) -> Path:
     """Serialize full_data back to a tempfile. Returns the path."""
     tmp = tempfile.NamedTemporaryFile(
@@ -257,8 +279,11 @@ def main() -> int:
 
     existing = yaml.safe_load(functions_yaml) or [] if functions_yaml else []
     existing_names = [_tool_name(e) for e in existing]
+    remapped_legacy_look = _remap_legacy_look(existing)
     print(f"  ✓ subentry currently has {len(existing)} tools")
     print(f"    names: {sorted(existing_names)}")
+    if remapped_legacy_look:
+        print("  -> remapped legacy look tool to world_state.grounded_look")
 
     print("\nStep 3: computing missing tools…")
     missing = _compute_missing(existing, defaults, args.include_unsafe)
@@ -272,7 +297,7 @@ def main() -> int:
     else:
         print(f"    (SAFETY_SKIPLIST excludes: {sorted(SAFETY_SKIPLIST)})")
 
-    if not missing:
+    if not missing and not remapped_legacy_look:
         print("\n✓ subentry already includes all desired tools. Nothing to do.")
         return 0
 
@@ -280,14 +305,17 @@ def main() -> int:
     merged = existing + missing
     print(f"  ✓ merged length: {len(merged)} ({len(existing)} existing + {len(missing)} new)")
 
-    # Re-render YAML. PRESERVE the existing YAML for already-present
-    # entries (don't reformat them) by appending only the new entries'
-    # YAML to the end. This minimizes the diff + keeps any user-edited
-    # comments intact.
-    new_entries_yaml = _dump_yaml(missing)
-    # Trim trailing newlines on existing, ensure newline separator
-    base = functions_yaml.rstrip()
-    merged_yaml = (base + "\n" + new_entries_yaml) if base else new_entries_yaml
+    if remapped_legacy_look:
+        merged_yaml = _dump_yaml(merged)
+    else:
+        # Re-render YAML. PRESERVE the existing YAML for already-present
+        # entries (don't reformat them) by appending only the new entries'
+        # YAML to the end. This minimizes the diff + keeps any user-edited
+        # comments intact.
+        new_entries_yaml = _dump_yaml(missing)
+        # Trim trailing newlines on existing, ensure newline separator
+        base = functions_yaml.rstrip()
+        merged_yaml = (base + "\n" + new_entries_yaml) if base else new_entries_yaml
 
     # Sanity-check: parse merged YAML, assert it includes all expected
     # names. Catches YAML formatting bugs in the dumper.

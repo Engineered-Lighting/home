@@ -49,11 +49,22 @@ function loadHelpers() {
     "Object.assign(window, {",
     "CONTROL_EXPIRY_MS, LIGHT_CARD_SERVICES, MEDIA_CARD_SERVICES, VOLUME_ROUTING,",
     "humanize, distillSetValues, buildActionContext, ctxToHaTarget, deriveControlLifecycles,",
-    "fireServiceCall, buildLightCaps, readMediaState, prettyRoom, mediaTitleOf",
+    "fireServiceCall, buildLightCaps, readMediaState, prettyRoom, mediaTitleOf,",
+    "readTravelModeLocked",
     "});",
   ].join("\n\n");
-  const sandbox = { window: {}, console };
+  const sandbox = {
+    window: {},
+    console,
+    localStorage: {
+      _data: new Map(),
+      getItem(key) { return this._data.has(key) ? this._data.get(key) : null; },
+      setItem(key, value) { this._data.set(key, String(value)); },
+      removeItem(key) { this._data.delete(key); },
+    },
+  };
   vm.runInNewContext(script, sandbox, { filename: "home-control.helpers.js" });
+  sandbox.window.__testLocalStorage = sandbox.localStorage;
   return sandbox.window;
 }
 
@@ -100,8 +111,8 @@ async function expectReject(name, promise, pattern) {
     /<QuickChip label="bright" disabled=\{briDisabled\} onClick=\{\(\) => setBriChip\(100\)\} \/>/.test(lightBlock),
     lightBlock.slice(0, 7000));
   assert("chip helpers commit through the same light.turn_on path",
-    /const setKelChip = \(v\) => \{[\s\S]*clampNum\(v, ctMin, ctMax\)[\s\S]*commit\(\{ color_temp_kelvin: cv \}/.test(lightBlock) &&
-    /const setBriChip = \(v\) => \{ setBri\(v\); commit\(\{ brightness_pct: v \}/.test(lightBlock),
+    /const setKelChip = \(v\) => \{[\s\S]*if \(travelModeLocked\) return;[\s\S]*clampNum\(v, ctMin, ctMax\)[\s\S]*commit\(\{ color_temp_kelvin: cv \}/.test(lightBlock) &&
+    /const setBriChip = \(v\) => \{[\s\S]*if \(travelModeLocked\) return;[\s\S]*setBri\(v\); commit\(\{ brightness_pct: v \}/.test(lightBlock),
     lightBlock.slice(0, 4300));
   assert("LightControlCard commit uses one light.turn_on dispatcher and reconciles afterward",
     /await fireServiceCall\(\{[\s\S]*domain: "light", service: "turn_on", service_data,[\s\S]*target: ctxToHaTarget\(ctx\), simTargets: ctx\.targetEntities, onControlAction/.test(lightBlock) &&
@@ -111,6 +122,13 @@ async function expectReject(name, promise, pattern) {
   assert("LightControlCard error dismiss resets visible status only",
     /status === "error"[\s\S]*<button[\s\S]*onClick=\{\(\) => \{ setStatus\("idle"\); setStatusMsg\(""\); \}\}[\s\S]*>dismiss<\/button>/.test(lightBlock),
     lightBlock.slice(0, 7600));
+  assert("LightControlCard locks controls while travel mode is enabled",
+    /const travelModeLocked = useTravelModeLock\(\);/.test(lightBlock) &&
+    /if \(travelModeLocked\) \{[\s\S]*setStatus\("locked"\);[\s\S]*return;[\s\S]*\}/.test(lightBlock) &&
+    /disabled=\{briDisabled\}/.test(lightBlock) &&
+    /disabled=\{colorDisabled\}/.test(lightBlock) &&
+    /travel mode enabled - controls locked/.test(lightBlock),
+    lightBlock.slice(0, 9000));
 
   process.stdout.write("\ncontrol_card_value_distillation_test\n");
   const overBright = api.distillSetValues("light", { brightness_pct: 120 });
@@ -316,6 +334,14 @@ async function expectReject(name, promise, pattern) {
   assert("readMediaState maps grouping capability bit", media.caps.group === true, media);
   assert("mediaTitleOf trims common speaker suffixes in groups", api.mediaTitleOf(mediaStates, ["media_player.living_room", "media_player.office_speaker"]) === "Living Room + Office");
   assert("missing media entity is unavailable", api.readMediaState(mediaStates, "media_player.missing").missing === true);
+
+  process.stdout.write("\ntravel_mode_control_lock_test\n");
+  assert("travel mode lock is off by default", api.readTravelModeLocked() === false);
+  api.__HOME_TRAVEL_MODE_STATE = "on";
+  assert("travel mode lock reads same-tab window state", api.readTravelModeLocked() === true);
+  api.__HOME_TRAVEL_MODE_STATE = "off";
+  api.__testLocalStorage.setItem("home.lights.travelMode.state.v1", "on");
+  assert("travel mode lock falls back to localStorage", api.readTravelModeLocked() === true);
 
   if (fails) {
     console.log("\nFailures:");

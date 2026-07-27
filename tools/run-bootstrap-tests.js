@@ -13,9 +13,17 @@ const HOME_APP = path.join(SRC_DIR, "home-app.jsx");
 const AUDIT = path.join(REPO, "tools", "qa-registry-audit.py");
 
 const indexSource = fs.readFileSync(INDEX, "utf8");
+const runtimeSource = fs.readFileSync(path.join(SRC_DIR, "home-web-runtime.js"), "utf8");
+const serviceWorkerSource = fs.readFileSync(path.join(SRC_DIR, "home-service-worker.js"), "utf8");
 const mountSource = fs.readFileSync(MOUNT, "utf8");
 const appSource = fs.readFileSync(HOME_APP, "utf8");
+const iconsSource = fs.readFileSync(path.join(SRC_DIR, "home-icons.jsx"), "utf8");
 const auditSource = fs.readFileSync(AUDIT, "utf8");
+const fetchRetrySource = fs.readFileSync(path.join(SRC_DIR, "home-fetch-with-retry.js"), "utf8");
+const peopleSource = fs.readFileSync(path.join(SRC_DIR, "home-people.jsx"), "utf8");
+const peoplePrewarmSource = fs.readFileSync(path.join(SRC_DIR, "home-people-prewarm.js"), "utf8");
+const worldstateSource = fs.readFileSync(path.join(SRC_DIR, "home-worldstate.jsx"), "utf8");
+const explainSource = fs.readFileSync(path.join(SRC_DIR, "home-explain.jsx"), "utf8");
 
 let passes = 0;
 let fails = 0;
@@ -128,7 +136,7 @@ assert("boot loader prefetches a bounded window while preserving ordered executi
   indexSource.includes("var PREFETCH_WINDOW = 6") &&
     indexSource.includes("function primeWindow(start)") &&
     indexSource.includes("primeWindow(0);") &&
-    /execute\(name,\s*code\);\s*boot\.loaded\+\+;[\s\S]*primeWindow\(i \+ 1\);[\s\S]*step\(i \+ 1\);/.test(indexSource));
+    /execute\(name,\s*code\);[\s\S]*boot\.loaded\+\+;[\s\S]*primeWindow\(i \+ 1\);[\s\S]*step\(i \+ 1\);/.test(indexSource));
 assert("status 0 empty loads are rejected",
   indexSource.includes("xhr.status === 0 && xhr.responseText.length > 0"));
 assert("XHR timeout becomes a hard boot failure",
@@ -144,11 +152,129 @@ assert("boot-file XHRs preserve gateway auth cookies",
 assert("Babel transform failures stop the boot chain",
   indexSource.includes("Babel transform failed in") && indexSource.includes("boot.failed = name"));
 assert("files execute before the chain advances",
-  /execute\(name,\s*code\);\s*boot\.loaded\+\+;[\s\S]*step\(i \+ 1\);/.test(indexSource));
+  /execute\(name,\s*code\);[\s\S]*boot\.loaded\+\+;[\s\S]*step\(i \+ 1\);/.test(indexSource));
 assert("visible overlay is used for loader failures",
   indexSource.includes("function overlay(title, detail)") &&
     indexSource.includes("Failed to load ") &&
     indexSource.includes("boot chain stopped"));
+assert("desktop glue is optional only in web mode",
+  indexSource.includes("var webOptionalFiles") &&
+    indexSource.includes("'home-tauri.jsx': true") &&
+    indexSource.includes("function skipOptionalWebFile") &&
+    indexSource.includes("!window.HG_WEB_MODE || !webOptionalFiles[name]") &&
+    indexSource.includes("skipped optional web boot file"));
+assert("web runtime provides browser-safe Tauri fallbacks",
+  runtimeSource.includes("IS_TAURI: false") &&
+    runtimeSource.includes("tauriFetch: browserTauriFetch") &&
+    runtimeSource.includes("loadPrefs: browserLoadPrefs") &&
+    runtimeSource.includes("saveEvents: browserSaveEvents"));
+assert("service worker activation does not forcibly navigate booting clients",
+  serviceWorkerSource.includes("self.clients.claim()") &&
+    !serviceWorkerSource.includes("client.navigate("));
+assert("service worker derives its cache name from the per-deploy ?v= version",
+  serviceWorkerSource.includes("self.location.href") &&
+    serviceWorkerSource.includes('searchParams.get("v")') &&
+    /CACHE_NAME\s*=\s*`home-web-static-\$\{SW_VERSION\}`/.test(serviceWorkerSource) &&
+    !serviceWorkerSource.includes('CACHE_NAME = "home-web-static-v2"'));
+assert("service worker install skips waiting and activate claims clients",
+  serviceWorkerSource.includes("self.skipWaiting()") &&
+    serviceWorkerSource.includes("self.clients.claim()"));
+assert("service worker bypasses app shell and app code modules",
+  serviceWorkerSource.includes("function isAppCodeModule") &&
+    serviceWorkerSource.includes("isAppShell(request, url) || isAppCodeModule(url)") &&
+    serviceWorkerSource.includes("avoids stale code on"));
+assert("service worker logs its version on install and activate",
+  serviceWorkerSource.includes("[home-sw]") &&
+    serviceWorkerSource.includes("installing") &&
+    serviceWorkerSource.includes("active"));
+assert("service worker install precaches non-code shell assets best-effort",
+  serviceWorkerSource.includes("PRECACHE_URLS") &&
+    /caches\.open\(CACHE_NAME\)[\s\S]*addAll\(PRECACHE_URLS\)/.test(serviceWorkerSource) &&
+    serviceWorkerSource.includes("event.waitUntil(precacheShell())") &&
+    /async function precacheShell\(\)\s*\{[\s\S]*try\s*\{[\s\S]*addAll\(PRECACHE_URLS\)[\s\S]*\}\s*catch/.test(serviceWorkerSource) &&
+    serviceWorkerSource.includes("self.skipWaiting()"));
+assert("service worker precache excludes app shell and app modules",
+  !/PRECACHE_URLS\s*=\s*\[[\s\S]*["']\/["'][\s\S]*\]/.test(serviceWorkerSource) &&
+    !/PRECACHE_URLS\s*=\s*\[[\s\S]*home-app\.jsx[\s\S]*\]/.test(serviceWorkerSource) &&
+    !/PRECACHE_URLS\s*=\s*\[[\s\S]*home-web-runtime\.js[\s\S]*\]/.test(serviceWorkerSource));
+assert("service worker precache never caches the worker itself",
+  serviceWorkerSource.includes("PRECACHE_URLS") &&
+    !/PRECACHE_URLS\s*=\s*\[[\s\S]*home-service-worker\.js[\s\S]*\]/.test(serviceWorkerSource));
+
+process.stdout.write("\nbootstrap_recoverable_boot_contract_test\n");
+assert("inline boot shell renders before app scripts",
+  indexSource.includes('id="hg-boot-shell"') &&
+    indexSource.includes("hg-boot-ascii") &&
+    indexSource.includes("hg-boot-bar") &&
+    indexSource.indexOf('id="hg-boot-shell"') < indexSource.indexOf('id="root"'),
+  "boot shell must be body markup, not React-rendered UI");
+assert("boot shell has a troubleshooting escape hatch",
+  indexSource.includes("readFlag('bootShell', 'home.perf.bootShell')") &&
+    indexSource.includes("data-disabled"));
+assert("boot shell tracks loader phases",
+  indexSource.includes("function updateBootShell") &&
+    indexSource.includes("updateBootShell('fetching'") &&
+    indexSource.includes("updateBootShell('transforming'") &&
+    indexSource.includes("updateBootShell('executing'") &&
+    indexSource.includes("updateBootShell('reconnecting'") &&
+    indexSource.includes("updateBootShell('complete'") &&
+    indexSource.includes("updateBootShell('failed'"));
+assert("home mount removes the static boot shell after React render",
+  mountSource.includes("window.__homeRemoveBootShell") &&
+    mountSource.includes("requestAnimationFrame") &&
+    mountSource.indexOf("window.__homeRoot.render(<HomeApp />)") < mountSource.indexOf("window.__homeRemoveBootShell"));
+assert("boot fetch failures reconnect with backoff instead of a dead end",
+  indexSource.includes("function scheduleBootRetry") &&
+    indexSource.includes("function backoffDelay") &&
+    /scheduleBootRetry\(i, err\);\s*\n\s*\}\);/.test(indexSource));
+assert("boot reconnecting overlay is shown instead of the terminal error",
+  indexSource.includes("function reconnectingOverlay") &&
+    indexSource.includes("Reconnecting to home"));
+assert("reconnecting overlay offers a reload that unregisters the service worker",
+  indexSource.includes("function unregisterSwAndReload") &&
+    indexSource.includes("getRegistrations") &&
+    indexSource.includes("r.unregister()") &&
+    indexSource.includes("Reload now"));
+assert("terminal Babel failure is bounded and clears the reconnecting state",
+  indexSource.includes("babelFailures[name] <= 3") &&
+    indexSource.includes("boot.reconnecting = false"));
+assert("mount watchdog stays quiet while the boot loader is reconnecting",
+  indexSource.includes("if (boot.reconnecting) { setTimeout(watchdog, 2000); return; }"));
+assert("boot outcome and service worker version are logged",
+  indexSource.includes("function swVersionLabel") &&
+    indexSource.includes("[boot] chain complete") &&
+    indexSource.includes("[boot] starting chain"));
+
+process.stdout.write("\nbackground_warmup_contract_test\n");
+assert("background warmup has a URL/localStorage kill switch",
+  appSource.includes('get("warmup")') &&
+    appSource.includes("home.perf.backgroundWarmup") &&
+    appSource.includes("state: \"disabled\""));
+assert("people data warmup waits for boot and saved credentials outside React",
+  peoplePrewarmSource.includes("__bootState?.done") &&
+    peoplePrewarmSource.includes("loadPrefs") &&
+    peoplePrewarmSource.includes("api/extended_openai_conversation/identities") &&
+    peoplePrewarmSource.includes("Authorization: `Bearer ${token}`"));
+assert("background warmup pauses during interaction and focused input",
+  appSource.includes("recent interaction") &&
+    appSource.includes("input focused") &&
+    appSource.includes("waitForQuiet"));
+assert("background warmup keeps apartment prewarm conservative on constrained links",
+  appSource.includes("saveData") &&
+    appSource.includes("slowLink") &&
+    appSource.includes("cellular") &&
+    appSource.includes("background-warmup-conservative"));
+assert("background warmup controls apartment auto-prewarm",
+  appSource.includes("__HOME_BACKGROUND_WARMUP_CONTROLS_APARTMENT") &&
+    fs.readFileSync(path.join(SRC_DIR, "home-apartment-prewarm.js"), "utf8").includes("__HOME_BACKGROUND_WARMUP_CONTROLS_APARTMENT"));
+assert("perf snapshot exposes boot shell and warmup state",
+  fs.readFileSync(path.join(SRC_DIR, "home-perf.js"), "utf8").includes("window.__homeBootShell") &&
+    fs.readFileSync(path.join(SRC_DIR, "home-perf.js"), "utf8").includes("window.__HOME_BACKGROUND_WARMUP"));
+assert("people prewarm exposes a quiet data warmer",
+  peopleSource.includes("window.HomePeoplePrewarm") &&
+    peopleSource.includes("prewarmPeopleData") &&
+    peopleSource.includes("cache: \"no-store\"") &&
+    peopleSource.includes("cache: \"force-cache\""));
 
 process.stdout.write("\nbootstrap_order_contract_test\n");
 [
@@ -199,6 +325,42 @@ before("home-app.jsx", "home-mount.jsx", "HomeApp loads before mount");
 assert("home-mount.jsx is the final boot file", names[names.length - 1] === "home-mount.jsx",
   names.slice(-5));
 
+present("home-fetch-with-retry.js");
+before("home-fetch-with-retry.js", "home-people.jsx", "fetch-with-retry loads before People");
+before("home-fetch-with-retry.js", "home-worldstate.jsx", "fetch-with-retry loads before Worldstate");
+before("home-fetch-with-retry.js", "home-explain.jsx", "fetch-with-retry loads before Explain");
+
+process.stdout.write("\nresilience_fetch_with_retry_contract_test\n");
+assert("fetch-with-retry exposes a global fetchWithRetry",
+  /(?:glob|window|globalThis)\.fetchWithRetry\s*=/.test(fetchRetrySource) &&
+    fetchRetrySource.includes("function fetchWithRetry"));
+assert("fetch-with-retry only retries transient statuses",
+  /RETRYABLE_STATUS\s*=\s*\{[^}]*408[^}]*429[^}]*502[^}]*503[^}]*504/.test(fetchRetrySource) &&
+    /NON_RETRYABLE_STATUS\s*=\s*\{[^}]*400[^}]*401[^}]*403[^}]*404[^}]*409/.test(fetchRetrySource));
+assert("fetch-with-retry aborts each attempt via AbortController and honors Retry-After",
+  fetchRetrySource.includes("new AbortController()") &&
+    fetchRetrySource.includes("parseRetryAfter") &&
+    fetchRetrySource.includes("RETRY_AFTER_CAP_MS"));
+assert("fetch-with-retry throws with attempts/lastStatus/reason metadata",
+  fetchRetrySource.includes("wrapped.reason") &&
+    fetchRetrySource.includes("wrapped.attempts") &&
+    fetchRetrySource.includes("wrapped.lastStatus"));
+assert("People identity load uses fetchWithRetry with a reconnecting banner",
+  peopleSource.includes("window.fetchWithRetry(") &&
+    peopleSource.includes("setReconnecting") &&
+    /reconnecting to identity store/i.test(peopleSource) &&
+    peopleSource.includes(">retry now</button>"));
+assert("Worldstate load uses fetchWithRetry with a reconnecting banner",
+  worldstateSource.includes("window.fetchWithRetry(") &&
+    worldstateSource.includes("setReconnecting") &&
+    /reconnecting to world state/i.test(worldstateSource) &&
+    worldstateSource.includes(">retry now</button>"));
+assert("Explain load uses fetchWithRetry with a reconnecting banner",
+  explainSource.includes("window.fetchWithRetry(") &&
+    explainSource.includes("setReconnecting") &&
+    /reconnecting to routing log/i.test(explainSource) &&
+    explainSource.includes(">retry now</button>"));
+
 process.stdout.write("\nbootstrap_mount_watchdog_contract_test\n");
 assert("watchdog lives in index.html",
   indexSource.includes("function watchdog()") && indexSource.includes("Mount watchdog"));
@@ -218,6 +380,36 @@ assert("home-mount renders HomeApp",
   mountSource.includes("window.__homeRoot.render(<HomeApp />)"));
 assert("home-mount invokes initial mount immediately",
   /window\.__homeMount\(\);\s*$/.test(mountSource.trim()));
+
+process.stdout.write("\nheader_navigation_contract_test\n");
+assert("header exposes a dedicated apartment action",
+  appSource.includes("onOpenApartment") &&
+    appSource.includes("aria-label=\"Open apartment view\"") &&
+    appSource.includes("openApartmentFromHeader"));
+assert("mobile header exposes people and apartment as direct actions",
+  appSource.includes("{onOpenPeople && mobile && (") &&
+    appSource.includes("aria-label=\"Open people view\"") &&
+    appSource.includes("aria-label=\"Open apartment view\""));
+assert("mobile header does not render the desktop actions menu",
+  appSource.includes("{!mobile && actionMenu}") &&
+    appSource.includes("serviceProfile && onOpenRemoteProfile && !mobile") &&
+    appSource.includes("{onToggleTheme && !mobile"));
+assert("video labeler is hidden on mobile",
+  appSource.includes("const videoLabelerAvailable = !mobile") &&
+    appSource.includes("onOpenVideoLabeler={isSpatialWide || !videoLabelerAvailable ? null : openVideoLabelerFeature}") &&
+    appSource.includes("video labeler is hidden on mobile"));
+assert("mobile slash/help hide desktop-only labeler command",
+  appSource.includes("function isMobileHiddenCommand(cmd)") &&
+    appSource.includes("function availableSlashCommands") &&
+    appSource.includes("const slashCommands = availableSlashCommands({ mobile });") &&
+    appSource.includes("const visibleCommands = availableSlashCommands({ mobile });"));
+assert("header connection status is anchored with the brand",
+  appSource.includes("const connectionStatusNode") &&
+    appSource.includes("{mobile && (") &&
+    appSource.includes("{!mobile && connectionStatusNode}"));
+assert("apartment header action is text-only",
+  !appSource.includes("IconApartment") &&
+    !iconsSource.includes("IconApartment"));
 
 process.stdout.write("\nregistry_boot_inventory_contract_test\n");
 assert("registry audit extracts the boot-loader file array",

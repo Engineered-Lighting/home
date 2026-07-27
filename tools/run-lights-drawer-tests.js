@@ -162,6 +162,73 @@ async function expectReject(name, promise, pattern) {
     source.includes("if (!open || !haOnline) return undefined;") &&
     source.includes("}, [open, client, haOnline]);"));
 
+  process.stdout.write("\ntravel_mode_wiring_test\n");
+  assert("travel mode helper constant is present", source.includes('const TRAVEL_MODE_ENTITY = "input_boolean.living_lights_travel_mode";'));
+  assert("travel mode state has a local fail-safe cache", source.includes('const TRAVEL_MODE_CACHE_KEY = "home.lights.travelMode.state.v1";') && source.includes("function seedTravelModeState"));
+  assert("travel mode cache only seeds fail-closed on state", source.includes('getItem(TRAVEL_MODE_CACHE_KEY) === "on" ? "on" : null') && source.includes("removeItem(TRAVEL_MODE_CACHE_KEY)"));
+  assert("drawer seeds travel mode from cache before HA sync", source.includes("useState(() => seedTravelModeState({}))"));
+  assert("HA fetch reconciles cached travel mode state", source.includes("setStates(seedTravelModeState(map))"));
+  assert("travel mode state changes refresh the local cache", source.includes("if (eid === TRAVEL_MODE_ENTITY) persistTravelModeState(ns.state);"));
+  assert("enabling travel mode fails visually closed before confirmation", source.includes('setStates(prev => ({ ...prev, [TRAVEL_MODE_ENTITY]: makeTravelModeState("on", true) }));'));
+  assert("travel mode card has a checking state instead of showing off while unknown", source.includes('"checking travel mode"') && source.includes("Checking Home Assistant before showing the travel safety state."));
+  assert("travel mode helper is covered by owned prefix subscription", source.includes('"input_boolean.living_lights_"'));
+  const renderStart = source.indexOf("<div role=\"dialog\"");
+  const travelRender = source.indexOf("<TravelModeCard", renderStart);
+  const scrollBody = source.indexOf("className=\"hg-scroll\"", renderStart);
+  assert("travel mode card is rendered before the drawer scroll body", travelRender > -1 && scrollBody > -1 && travelRender < scrollBody);
+  assert("travel mode button is not disabled by stale missing helper state", !source.includes("disabled={disabled || busy || !available}"));
+  assert("travel mode toggle verifies helper after service call", source.includes("confirmedStates = await readHaStates()") && source.includes("Travel Mode helper is not loaded in Home Assistant yet"));
+  assert("travel mode force-off includes every Living Lights bulb",
+    [
+      "light.dining_table_left",
+      "light.dining_table_right",
+      "light.dining_light",
+      "light.dining_light_2",
+      "light.dining_room_floodlight_timed",
+      "light.front_left",
+      "light.front_right",
+      "light.kitchen_floodlight_timed",
+      "light.island_left",
+      "light.island_right",
+      "light.living_room_lights",
+      "light.office",
+      "light.outdoor_light",
+      "light.rear_left",
+      "light.rear_right",
+      "light.sink",
+      "light.sink_light",
+      "light.sink_light_2",
+      "light.ambient_light_left_mss110_main_channel",
+      "light.ambient_light_right_mss110_main_channel",
+    ].every((entityId) => source.includes(entityId)));
+  assert("travel mode force-off includes ambient switches",
+    source.includes("switch.ambient_light_left_mss110_main_channel") &&
+    source.includes("switch.ambient_light_right_mss110_main_channel") &&
+    source.includes("switch.workshop_light_left_mss110_main_channel") &&
+    source.includes("switch.workshop_light_right_mss110_main_channel"));
+  assert("direct CT push is blocked while travel mode is on",
+    source.includes('setError("travel mode is on: lighting output is blocked")'));
+
+  process.stdout.write("\nadaptive_lighting_diagnostics_test\n");
+  assert("Adaptive Lighting diagnostics component is present",
+    source.includes("function AdaptiveLightingDiagnosticsCard"));
+  assert("Adaptive Lighting diagnostics renders in the scroll body",
+    source.includes("<AdaptiveLightingDiagnosticsCard states={states} haOnline={haOnline} />"));
+  assert("Adaptive Lighting diagnostics subscribes to adapt switches",
+    source.includes('"switch.adaptive_lighting_adapt_brightness_home"') &&
+    source.includes('"switch.adaptive_lighting_adapt_color_home"') &&
+    source.includes('"switch.adaptive_lighting_sleep_mode_home"'));
+  assert("Adaptive Lighting diagnostics warns when brightness adaptation is on",
+    source.includes("brightness adaptation is on; Living Lights should own brightness."));
+  assert("Adaptive Lighting diagnostics exposes takeover mode for canary review",
+    source.includes('"take_over_control_mode"') && source.includes("takeover"));
+
+  process.stdout.write("\nheader_menu_wiring_test\n");
+  const appSource = fs.readFileSync(path.join(REPO, "app", "src", "home-app.jsx"), "utf8");
+  assert("HomeHeader accepts lights menu opener", appSource.includes("onOpenApartment, onOpenLights, onOpenSimulationControls"));
+  assert("hamburger menu includes lowercase lights item", appSource.includes("onClick={() => runMenuAction(onOpenLights)}>lights</button>"));
+  assert("app passes /lights opener into HomeHeader", appSource.includes("onOpenLights={isSpatialWide ? null : openLightsFeature}"));
+
   if (fails) {
     console.log("\nFailures:");
     for (const f of failures) console.log("- " + f.name + (f.detail ? ": " + JSON.stringify(f.detail) : ""));

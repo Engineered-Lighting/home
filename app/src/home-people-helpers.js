@@ -89,21 +89,31 @@
     sister:           "siblings",
     brother:          "siblings",
     sibling:          "siblings",
+    "sister-in-law":  "in-laws",
+    "brother-in-law": "in-laws",
+    "girlfriend":     "partners",
+    "boyfriend":      "partners",
+    "spouse":         "partners",
+    "partner":        "partners",
     son:              "children",
     daughter:         "children",
     child:            "children",
+    stepson:          "children",
+    stepdaughter:     "children",
+    stepchild:        "children",
+    nephew:           "extended family",
+    niece:            "extended family",
     "mother-in-law":  "in-laws",
     "father-in-law":  "in-laws",
-    "sister-in-law":  "in-laws",
-    "brother-in-law": "in-laws",
     "son-in-law":     "in-laws",
     "daughter-in-law":"in-laws",
+    friend:           "friends",
   };
 
   // Stable cluster ordering for sort determinism: clusters listed
   // EARLIER in this list place EARLIER in the ring (clockwise from
   // the ring's starting angle).
-  const CLUSTER_ORDER = ["parents", "siblings", "children", "in-laws"];
+  const CLUSTER_ORDER = ["partners", "parents", "siblings", "children", "in-laws", "extended family", "friends"];
 
   function subroleCluster(identity) {
     if (!identity) return null;
@@ -120,6 +130,204 @@
     if (cluster == null) return [9999, originalIdx];
     const i = CLUSTER_ORDER.indexOf(cluster);
     return [i >= 0 ? i : 999, originalIdx];
+  }
+
+  function identityDisplayKey(identity) {
+    return String(identity?.display_name || "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, " ");
+  }
+
+  function buildKnownFamilyRelationships(identities) {
+    const byName = new Map();
+    for (const id of identities || []) {
+      const key = identityDisplayKey(id);
+      if (key) byName.set(key, id);
+      for (const alias of id?.aliases || []) {
+        if (!alias?.alias) continue;
+        byName.set(String(alias.alias).trim().toLowerCase().replace(/\s+/g, " "), id);
+      }
+    }
+    const edges = [];
+    function add(from, to, relType) {
+      const a = byName.get(from);
+      const b = byName.get(to);
+      if (!a || !b || a.uuid === b.uuid) return;
+      edges.push({
+        id: `known-${from}-${to}-${relType}`,
+        from_uuid: a.uuid,
+        to_uuid: b.uuid,
+        rel_type: relType,
+        status: "active",
+        known: true,
+      });
+    }
+    add("holly", "ben", "parent");
+    add("holly", "peter", "parent");
+    add("felipe", "ashley", "partner");
+    add("ashley", "felipe", "partner");
+    add("felipe", "aurelio", "parent");
+    add("ashley", "aurelio", "parent");
+    return edges;
+  }
+
+  function applyKnownFamilyPositions(layout, opts) {
+    opts = opts || {};
+    const radiusScale = Number.isFinite(opts.radiusScale) && opts.radiusScale > 0
+      ? opts.radiusScale
+      : 1;
+    const avatarScale = Number.isFinite(opts.avatarScale) && opts.avatarScale > 0
+      ? opts.avatarScale
+      : 1;
+    const portraitLayout = opts.portraitLayout === true;
+    const byName = new Map();
+    for (const node of layout || []) {
+      if (!node || node.overflow || node.pinned) continue;
+      const key = identityDisplayKey(node.identity);
+      if (key) byName.set(key, node);
+      for (const alias of node.identity?.aliases || []) {
+        if (alias?.alias) {
+          byName.set(String(alias.alias).trim().toLowerCase().replace(/\s+/g, " "), node);
+        }
+      }
+    }
+    function unit(angle) {
+      return { x: Math.cos(angle), y: Math.sin(angle) };
+    }
+    function setNode(node, x, y, branch) {
+      if (!node || node.pinned) return;
+      node.x = x;
+      node.y = y;
+      node.familyBranch = branch || null;
+    }
+    function placePairWithChild(leftName, rightName, childName, angle, branch) {
+      const left = byName.get(leftName);
+      const right = byName.get(rightName);
+      const child = byName.get(childName);
+      if (!left || !right) return;
+      const radial = unit(angle);
+      const perp = { x: -radial.y, y: radial.x };
+      const radius = radiusForRing(1) * radiusScale * 1.08;
+      const sep = 96 * avatarScale;
+      const mid = { x: radial.x * radius, y: radial.y * radius };
+      setNode(left, mid.x - perp.x * sep / 2, mid.y - perp.y * sep / 2, branch);
+      setNode(right, mid.x + perp.x * sep / 2, mid.y + perp.y * sep / 2, branch);
+      if (child) {
+        setNode(child, mid.x + radial.x * 150 * radiusScale, mid.y + radial.y * 150 * radiusScale, branch);
+      }
+    }
+    function placeParentChildren(parentName, childNames, angle, branch) {
+      const parent = byName.get(parentName);
+      if (!parent) return;
+      const children = childNames.map((name) => byName.get(name)).filter(Boolean);
+      if (children.length === 0) return;
+      const radial = unit(angle);
+      const perp = { x: -radial.y, y: radial.x };
+      const radius = radiusForRing(1) * radiusScale * 1.04;
+      setNode(parent, radial.x * radius, radial.y * radius, branch);
+      const childSpread = Math.max(76, 58 * avatarScale);
+      const outward = 160 * radiusScale;
+      const start = -((children.length - 1) * childSpread) / 2;
+      for (let i = 0; i < children.length; i++) {
+        const offset = start + i * childSpread;
+        setNode(
+          children[i],
+          parent.x + radial.x * outward + perp.x * offset,
+          parent.y + radial.y * outward + perp.y * offset,
+          branch,
+        );
+      }
+    }
+    function placeNamedArc(names, angleStart, angleStep, radiusMultiplier, branch) {
+      const nodes = names.map((name) => byName.get(name)).filter(Boolean);
+      if (nodes.length === 0) return;
+      const radius = radiusForRing(2) * radiusScale * radiusMultiplier;
+      const start = angleStart - ((nodes.length - 1) * angleStep) / 2;
+      for (let i = 0; i < nodes.length; i++) {
+        const angle = start + i * angleStep;
+        setNode(nodes[i], Math.cos(angle) * radius, Math.sin(angle) * radius, branch);
+      }
+    }
+
+    if (portraitLayout) {
+      placeParentChildren("holly", ["ben", "peter"], -0.98, "holly-family");
+      placePairWithChild("felipe", "ashley", "aurelio", 2.28, "felipe-ashley-family");
+      placeNamedArc(["david", "mark", "pat"], 1.28, 0.32, 0.88, "friends");
+    } else {
+      placeParentChildren("holly", ["ben", "peter"], -0.72, "holly-family");
+      placePairWithChild("felipe", "ashley", "aurelio", 2.42, "felipe-ashley-family");
+      placeNamedArc(["david", "mark", "pat"], 1.08, 0.36, 0.96, "friends");
+    }
+    return resolveLayoutCollisions(layout, opts);
+  }
+
+  function resolveLayoutCollisions(layout, opts) {
+    opts = opts || {};
+    if (!Array.isArray(layout) || layout.length < 2) return layout;
+    const iterations = Number.isFinite(opts.collisionIterations)
+      ? Math.max(0, opts.collisionIterations)
+      : 80;
+    const padding = Number.isFinite(opts.collisionPadding)
+      ? opts.collisionPadding
+      : 30;
+    const centerPadding = Number.isFinite(opts.centerCollisionPadding)
+      ? opts.centerCollisionPadding
+      : 42;
+    const nodes = layout.filter((n) => n && !n.overflow && !n.pinned);
+    const center = nodes.find((n) => n.ring === 0) || null;
+    function minDistance(a, b) {
+      const labelPad = a.ring === 0 || b.ring === 0 ? centerPadding : padding;
+      return ((a.size || 0) + (b.size || 0)) / 2 + labelPad;
+    }
+    for (let iter = 0; iter < iterations; iter++) {
+      let moved = false;
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const a = nodes[i];
+          const b = nodes[j];
+          const min = minDistance(a, b);
+          let dx = b.x - a.x;
+          let dy = b.y - a.y;
+          let dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist >= min) continue;
+          if (dist < 0.001) {
+            const angle = ((i + 1) * 1.618 + (j + 1) * 0.733) * Math.PI;
+            dx = Math.cos(angle);
+            dy = Math.sin(angle);
+            dist = 1;
+          }
+          const overlap = (min - dist) / 2;
+          const ux = dx / dist;
+          const uy = dy / dist;
+          const aFixed = a.ring === 0;
+          const bFixed = b.ring === 0;
+          if (!aFixed) {
+            a.x -= ux * (bFixed ? overlap * 2 : overlap);
+            a.y -= uy * (bFixed ? overlap * 2 : overlap);
+          }
+          if (!bFixed) {
+            b.x += ux * (aFixed ? overlap * 2 : overlap);
+            b.y += uy * (aFixed ? overlap * 2 : overlap);
+          }
+          moved = true;
+        }
+      }
+      if (center) {
+        for (const n of nodes) {
+          if (n.ring === 0) continue;
+          const min = minDistance(center, n);
+          const dist = Math.sqrt(n.x * n.x + n.y * n.y);
+          if (dist > min) continue;
+          const angle = dist > 0.001 ? Math.atan2(n.y, n.x) : -Math.PI / 2;
+          n.x = Math.cos(angle) * min;
+          n.y = Math.sin(angle) * min;
+          moved = true;
+        }
+      }
+      if (!moved) break;
+    }
+    return layout;
   }
 
   /** Per-ring starting-angle offset. Different rings rotate so their
@@ -291,6 +499,24 @@
     opts = opts || {};
     const manualPositions = opts.manualPositions || {};
     const overflowCap = opts.overflowCap != null ? opts.overflowCap : 12;
+    const radiusScale = Number.isFinite(opts.radiusScale) && opts.radiusScale > 0
+      ? opts.radiusScale
+      : 1;
+    const avatarScale = Number.isFinite(opts.avatarScale) && opts.avatarScale > 0
+      ? opts.avatarScale
+      : 1;
+    const clusterStepScale = Number.isFinite(opts.clusterStepScale) && opts.clusterStepScale > 0
+      ? opts.clusterStepScale
+      : 1;
+    const mobileTextScale = Number.isFinite(opts.textScale) && opts.textScale > 0
+      ? opts.textScale
+      : 1;
+    function scaledRadius(ring) {
+      return radiusForRing(ring) * radiusScale;
+    }
+    function scaledAvatarSize(ring) {
+      return avatarSizeForRing(ring) * avatarScale;
+    }
 
     // Group by ring
     const byRing = { 0: [], 1: [], 2: [], 3: [] };
@@ -308,7 +534,8 @@
         uuid: center.uuid,
         x: 0, y: 0,
         ring: 0,
-        size: avatarSizeForRing(0),
+        size: scaledAvatarSize(0),
+        textScale: mobileTextScale,
         identity: center,
         pinned: false,
         overflow: false,
@@ -318,8 +545,8 @@
     for (let ring = 1; ring <= 3; ring++) {
       const nodes = byRing[ring];
       if (nodes.length === 0) continue;
-      const radius = radiusForRing(ring);
-      const size = avatarSizeForRing(ring);
+      const radius = scaledRadius(ring);
+      const size = scaledAvatarSize(ring);
       // Visible count: cap at overflowCap. Excess goes to "+ N more" chip.
       const visibleCount = Math.min(nodes.length, overflowCap);
       const overflowCount = nodes.length - visibleCount;
@@ -352,7 +579,7 @@
       // long names like "Marcelo sr". π/4 (45°) → ~115 px between
       // ring-1 cluster member centers, which clears typical
       // mono-font display names.
-      const TIGHT_STEP = Math.PI / 4;  // 45° between cluster siblings
+      const TIGHT_STEP = (Math.PI / 4) * clusterStepScale;  // 45° between cluster siblings
       const runs = [];
       for (let i = 0; i < visible.length; i++) {
         const id = visible[i];
@@ -390,6 +617,7 @@
           out.push({
             uuid: id.uuid,
             x, y, ring, size,
+            textScale: mobileTextScale,
             identity: id,
             pinned,
             overflow: false,
@@ -403,6 +631,7 @@
           x: radius * Math.cos(angle),
           y: radius * Math.sin(angle),
           ring, size,
+          textScale: mobileTextScale,
           identity: null,
           pinned: false,
           overflow: true,
@@ -410,7 +639,14 @@
         });
       }
     }
-    return out;
+    return applyKnownFamilyPositions(out, {
+      radiusScale,
+      avatarScale,
+      collisionPadding: opts.collisionPadding,
+      centerCollisionPadding: opts.centerCollisionPadding,
+      collisionIterations: opts.collisionIterations,
+      portraitLayout: opts.portraitLayout,
+    });
   }
 
   /* ── Edge styling ─────────────────────────────────────────────────
@@ -486,11 +722,22 @@
     // Styling differentiates the ring (dashed for ring 3 service / neighbor),
     // so visual hierarchy is preserved. Without these lines the graph looks
     // like disconnected dots, which is what the user sees today.
+    const explicitPairs = new Set();
+    const explicitChildNodes = new Set();
+    for (let i = 0; i < (relationships || []).length; i++) {
+      const r = relationships[i];
+      if (!r || !r.from_uuid || !r.to_uuid) continue;
+      explicitPairs.add(`${r.from_uuid}->${r.to_uuid}`);
+      explicitPairs.add(`${r.to_uuid}->${r.from_uuid}`);
+      if (r.rel_type === "parent") explicitChildNodes.add(r.to_uuid);
+    }
+
     if (includeImplicit && centerNode) {
       const cr = (centerNode.size || 0) / 2;
       for (let i = 0; i < layout.length; i++) {
         const n = layout[i];
-        if (n.ring && n.ring > 0 && !n.overflow) {
+        const hasExplicitParentAnchor = explicitChildNodes.has(n.uuid);
+        if (n.ring && n.ring > 0 && !n.overflow && !hasExplicitParentAnchor) {
           const nr = (n.size || 0) / 2;
           const t = trimToBoundaries(n.x, n.y, centerNode.x, centerNode.y, nr, cr);
           edges.push({
@@ -569,6 +816,9 @@
     initialsFor,
     // Addendum 22 — subrole clustering + per-ring angle offset
     subroleCluster,
+    identityDisplayKey,
+    buildKnownFamilyRelationships,
+    applyKnownFamilyPositions,
     clustersForRing,
     ringAngleOffset,
     SUBROLE_TO_CLUSTER,

@@ -63,19 +63,67 @@ print("\nWorkflow scenario contracts\n")
 def test_registry_shape_and_filters() -> None:
     scenarios = ws.all_scenarios()
     ids = [scenario.id for scenario in scenarios]
-    assert len(scenarios) == 19, f"expected 19 workflow scenarios, got {len(scenarios)}"
+    assert len(scenarios) == 20, f"expected 20 workflow scenarios, got {len(scenarios)}"
     assert len(ids) == len(set(ids)), f"duplicate scenario ids: {ids}"
     assert len(ws.scenarios_for(phase=1)) == 8, "phase 1 scenario count drifted"
     assert len(ws.scenarios_for(phase=2)) == 7, "phase 2 scenario count drifted"
     assert len(ws.scenarios_for(phase=3)) == 4, "phase 3 scenario count drifted"
+    assert len(ws.scenarios_for(phase=4)) == 1, "phase 4 travel-mode scenario count drifted"
     assert [s.id for s in ws.scenarios_for(only_ids=["office_relax_vibe"])] == [
         "office_relax_vibe"
     ], "only_ids filter failed"
-    assert {"office_relax_vibe", "refusal_no_entity", "perception_branching"}.issubset(set(ids)), \
+    assert {"office_relax_vibe", "refusal_no_entity", "perception_branching", "travel_mode_blocks_light_on"}.issubset(set(ids)), \
         "expected stretch/safety scenarios missing"
 
 
 t("workflow scenario registry shape is stable", test_registry_shape_and_filters)
+
+
+def test_write_gated_filter_keeps_default_live_suite_read_only() -> None:
+    read_only = ws.scenarios_for(include_write_gated=False)
+    write_gated = [scenario for scenario in ws.all_scenarios() if ws.scenario_is_write_gated(scenario)]
+    assert read_only, "read-only suite must not be empty"
+    assert write_gated, "write-gated suite must not be empty"
+    assert all(not ws.scenario_is_write_gated(scenario) for scenario in read_only), \
+        "default workflow suite must exclude mutating scenarios"
+    assert all(s.safety_level == ws.SAFETY_READ_ONLY for s in read_only), \
+        "read-only suite should contain only read-only scenarios"
+    assert {s.id for s in write_gated}.issuperset({
+        "office_dim_warm",
+        "office_focus_vibe",
+        "mute_blocks_response",
+        "travel_mode_blocks_light_on",
+    }), "expected write-gated scenarios are not labeled"
+    assert ws.scenarios_for(only_ids=["office_dim_warm"], include_write_gated=False) == [], \
+        "explicit write scenario should still require include_write_gated"
+
+
+t("write-gated filter keeps the default live suite read-only",
+  test_write_gated_filter_keeps_default_live_suite_read_only)
+
+
+def test_fresh_visual_scenarios_accept_current_look_tool() -> None:
+    visual_ids = {
+        "find_then_describe",
+        "perception_refresh_then_describe",
+        "compound_multi_clause",
+        "perception_branching",
+    }
+    scenarios = {scenario.id: scenario for scenario in ws.all_scenarios()}
+    for scenario_id in visual_ids:
+        scenario = scenarios[scenario_id]
+        anyof_entries = [entry for entry in scenario.required_tools if isinstance(entry, ws.AnyOf)]
+        assert anyof_entries, f"{scenario_id} should have a visual AnyOf assertion"
+        names = {
+            option.name
+            for entry in anyof_entries
+            for option in entry.options
+        }
+        assert "look" in names, f"{scenario_id} should accept the current look tool"
+
+
+t("fresh visual scenarios accept the current look tool",
+  test_fresh_visual_scenarios_accept_current_look_tool)
 
 
 def _contract_text(contract) -> str:
@@ -182,6 +230,49 @@ t("safe entity guard permits only allowlisted targets",
   test_safe_entity_guard_allows_only_allowlisted_targets)
 
 
+def test_travel_mode_guard_blocks_energizing_service_calls() -> None:
+    light_on = service_args("light.office", domain="light", service="turn_on")
+    light_toggle = service_args("light.office", domain="light", service="toggle")
+    switch_on = service_args("switch.test_plug", domain="switch", service="turn_on")
+    light_off = service_args("light.office", domain="light", service="turn_off")
+    media = service_args("media_player.living_room", domain="media_player", service="media_pause")
+    assert ws.any_light_or_switch_on(light_on) is True, "light.turn_on should be blocked"
+    assert ws.any_light_or_switch_on(light_toggle) is True, "light.toggle should be blocked"
+    assert ws.any_light_or_switch_on(switch_on) is True, "switch.turn_on should be blocked"
+    assert ws.any_light_or_switch_on(light_off) is False, "light.turn_off should remain allowed"
+    assert ws.any_light_or_switch_on(media) is False, "media controls are not light energizing"
+
+    travel = ws.scenarios_for(only_ids=["travel_mode_blocks_light_on"])[0]
+    assert travel.safety_level == ws.SAFETY_TRAVEL_MODE, "travel scenario must be explicitly travel-gated"
+    assert travel.setup_state and travel.teardown_state, "travel scenario must restore helper state"
+    entities = ws.preflight_entities_for([travel])
+    assert ws.TRAVEL_MODE_ENTITY in entities, "travel helper should be preflighted"
+    assert not travel.forbidden_tools, \
+        "tool-layer TravelModeBlocked is the safety boundary; live scenario validates block speech"
+    assert travel.speech_must_match, "travel scenario must require block/refusal speech"
+    assert travel.speech_must_not_match, "travel scenario must reject success phrasing"
+
+
+t("travel mode guard blocks energizing light and switch service calls",
+  test_travel_mode_guard_blocks_energizing_service_calls)
+
+
+def test_live_runner_preserves_stateful_helper_state() -> None:
+    runner = (TOOLS_DIR / "diagnose-identity.py").read_text(encoding="utf-8")
+    assert "async def _snapshot_service_entities" in runner, \
+        "live runner should snapshot helper states before scenario setup"
+    assert "async def _restore_service_entity_snapshot" in runner, \
+        "live runner should restore the original helper states after attempts"
+    assert "list(sc.setup_state or []) + list(sc.teardown_state or [])" in runner, \
+        "runner should snapshot every helper touched by setup or teardown"
+    assert "await _restore_service_entity_snapshot(cfg, state_snapshot)" in runner, \
+        "runner should prefer restoring the starting state over static teardown"
+
+
+t("live runner preserves stateful helper state",
+  test_live_runner_preserves_stateful_helper_state)
+
+
 def test_cross_cutting_invariants_catch_planner_failures() -> None:
     assert ws.inv_non_empty_speech([], "done")[0] is True, "normal speech should pass"
     assert ws.inv_non_empty_speech([], "")[0] is False, "empty speech should fail"
@@ -253,6 +344,12 @@ def test_live_runner_applies_workflow_safety_guard() -> None:
     source = (TOOLS_DIR / "diagnose-identity.py").read_text(encoding="utf-8", errors="replace")
     assert "extra_forbidden = [ws_mod.SAFE_ENTITY_GUARD]" in source, \
         "workflow runner must attach SAFE_ENTITY_GUARD to every scenario"
+    assert "include_write_gated=args.include_write_gated" in source, \
+        "workflow runner must keep mutating scenarios behind an explicit CLI flag"
+    assert "inconclusive_max_rate=args.inconclusive_max_rate" in source, \
+        "workflow runner must enforce an inconclusive/trace-loss cap"
+    assert "write_workflow_corpus" in source, \
+        "workflow runner must write an attempt corpus for regression triage"
     assert "invariants = ws_mod.INVARIANTS" in source, \
         "workflow runner must apply workflow invariants"
     assert "expect_silent" in source and "expected silence but received assistant speech" in source, \

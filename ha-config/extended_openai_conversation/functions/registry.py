@@ -95,6 +95,21 @@ class RegistryFunction(Function):
         weren't exposed via the integration's expose-to-agent config."""
         return {e.get("entity_id") for e in (exposed_entities or []) if e.get("entity_id")}
 
+    def _text(self, value: Any) -> str:
+        """Coerce HA registry name-ish values to plain strings.
+
+        Some HA registry fields may be enum-like or computed-name objects
+        rather than literal strings. Fuzzy search should treat those as
+        display text instead of letting `str.join` or `.lower()` crash the
+        whole conversation request.
+        """
+        if value is None:
+            return ""
+        try:
+            return str(value)
+        except Exception:  # noqa: BLE001
+            return ""
+
     def _short_entity(
         self,
         hass: HomeAssistant,
@@ -112,11 +127,12 @@ class RegistryFunction(Function):
             or (state_obj.attributes.get("friendly_name") if state_obj else None)
             or ent.entity_id.split(".", 1)[-1].replace("_", " ")
         )
+        name = self._text(name)
         area_name: Optional[str] = None
         if ent.area_id and a_reg is not None:
             area = a_reg.async_get_area(ent.area_id)
             if area:
-                area_name = area.name
+                area_name = self._text(area.name)
         return {
             "entity_id": ent.entity_id,
             "name": name,
@@ -141,7 +157,7 @@ class RegistryFunction(Function):
             try:
                 f_reg = fr.async_get(hass)
                 for floor in f_reg.async_list_floors():
-                    floor_by_id[floor.floor_id] = floor.name
+                    floor_by_id[floor.floor_id] = self._text(floor.name)
             except Exception:
                 pass
 
@@ -154,11 +170,11 @@ class RegistryFunction(Function):
                 # Sample 3 entity NAMES to give the agent texture without dumping
                 # the whole list (which is what M3 is fighting against).
                 sample = [
-                    (ent.name or ent.entity_id) for ent in entities[:3]
+                    (self._text(ent.name) or ent.entity_id) for ent in entities[:3]
                 ]
                 areas_out.append({
                     "area_id": area.id,
-                    "name": area.name,
+                    "name": self._text(area.name),
                     "floor_name": (
                         floor_by_id.get(area.floor_id) if area.floor_id else None
                     ),
@@ -208,8 +224,9 @@ class RegistryFunction(Function):
             if area.id == area_arg or area.id == target:
                 area_id = area.id
                 break
-            slug = area.name.lower().replace(" ", "_")
-            if slug == target or area.name.lower() == area_arg.lower():
+            area_name = self._text(area.name)
+            slug = area_name.lower().replace(" ", "_")
+            if slug == target or area_name.lower() == area_arg.lower():
                 area_id = area.id
                 break
         if area_id is None:
@@ -290,8 +307,9 @@ class RegistryFunction(Function):
             if label.label_id == label_arg or label.label_id == target:
                 label_id = label.label_id
                 break
-            slug = label.name.lower().replace(" ", "_")
-            if slug == target or label.name.lower() == label_arg.lower():
+            label_name = self._text(label.name)
+            slug = label_name.lower().replace(" ", "_")
+            if slug == target or label_name.lower() == label_arg.lower():
                 label_id = label.label_id
                 break
         if label_id is None:
@@ -299,7 +317,7 @@ class RegistryFunction(Function):
                 "data": None,
                 "suggested_phrasing": (
                     f"No label called '{label_arg}'. Available labels: "
-                    + ", ".join(l.name for l in labels[:8])
+                    + ", ".join(self._text(l.name) for l in labels[:8])
                 ),
             }
 
@@ -351,7 +369,7 @@ class RegistryFunction(Function):
         area_id: Optional[str] = None
         if area_arg:
             for area in a_reg.async_list_areas():
-                if area.name.lower() == area_arg or area.id == area_arg:
+                if self._text(area.name).lower() == area_arg or area.id == area_arg:
                     area_id = area.id
                     break
 
@@ -371,11 +389,17 @@ class RegistryFunction(Function):
             if domain_filter and ent.entity_id.split(".", 1)[0] != domain_filter:
                 continue
             state_obj = hass.states.get(ent.entity_id)
-            friendly = (state_obj.attributes.get("friendly_name") if state_obj else None) or ""
-            aliases = ent.aliases or set()
+            friendly = self._text(
+                (state_obj.attributes.get("friendly_name") if state_obj else None) or ""
+            )
+            aliases = {
+                alias
+                for alias in (self._text(a) for a in (ent.aliases or set()))
+                if alias
+            }
             haystack_parts = [
                 ent.entity_id,
-                ent.name or "",
+                self._text(ent.name),
                 friendly,
                 *aliases,
             ]
@@ -384,7 +408,7 @@ class RegistryFunction(Function):
                 continue
             # Score: 3 if exact name match, 2 if name contains query,
             # 1 if any token matches.
-            name_l = (ent.name or friendly).lower()
+            name_l = (self._text(ent.name) or friendly).lower()
             if name_l == q:
                 score = 3.0
             elif q in name_l:
@@ -441,7 +465,7 @@ class RegistryFunction(Function):
         area_id: Optional[str] = None
         if area_arg:
             for area in a_reg.async_list_areas():
-                if area.name.lower() == area_arg or area.id == area_arg:
+                if self._text(area.name).lower() == area_arg or area.id == area_arg:
                     area_id = area.id
                     break
 

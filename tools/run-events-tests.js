@@ -62,6 +62,26 @@ assert("help rows dispatch input fill event", source.includes('CustomEvent("hg-f
 assert("why-click gate class is present", source.includes("hg-why-clickable"));
 assert("controllable actions prefer LightControlCard", source.includes("window.LightControlCard"));
 assert("controllable actions prefer MediaControlCard", source.includes("window.MediaControlCard"));
+assert("perception thumbnails preload before entering image layout",
+  source.includes("function usePerceptionImageReady") &&
+  source.includes('imageState === "loaded"') &&
+  source.includes('const img = new Image()') &&
+  !source.includes("Boolean(snapshotUrl) && !imgFailed"));
+assert("perception thumbnails open a fullscreen lightbox",
+  source.includes("lightboxOpen") &&
+  source.includes('aria-label={room ? `${room} perception image` : "perception image"}') &&
+  source.includes("cursor: \"zoom-in\""),
+  "lightbox contract missing");
+assert("annotated perception images render contained, not cropped",
+  source.includes('const isAnnotated = imageMode === "annotated"') &&
+  source.includes('maxHeight: expanded ? "62vh" : "min(360px, 46vh)"') &&
+  source.includes('objectFit: "contain"'),
+  "annotated image display contract missing");
+assert("failed perception thumbnails do not enter image layout",
+  source.includes("const hasThumb = Boolean(snapshotUrl) && imageState === \"loaded\"") &&
+  source.includes("hasThumb && isAnnotated") &&
+  source.includes("{hasThumb && ("),
+  "thumbnail layout should require decoded image");
 
 process.stdout.write("\nevents_speaker_mapping_test\n");
 const cases = [

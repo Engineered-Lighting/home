@@ -55,6 +55,7 @@ _TEMPLATE = """\
 # INERT until all of:
 #   input_boolean.living_lights_enabled = on
 #   input_boolean.living_lights_shadow  = off
+#   input_boolean.living_lights_travel_mode = off
 #   input_boolean.living_lights_zone_sofa_enabled = on
 #
 # Baked footprint centroids (normalised [0,1], from spatial_model.json):
@@ -144,6 +145,8 @@ automation:
     triggers:
       - trigger: state
         entity_id: sensor.living_room_sofa_gradient
+      - trigger: state
+        entity_id: input_boolean.living_lights_travel_mode
       # Periodic re-evaluation so manual-cooldown expiry isn't gated on a
       # gradient sensor state change (e.g., when the user is stationary).
       - trigger: time_pattern
@@ -154,6 +157,9 @@ automation:
         state: "on"
       - condition: state
         entity_id: input_boolean.living_lights_shadow
+        state: "off"
+      - condition: state
+        entity_id: input_boolean.living_lights_travel_mode
         state: "off"
       - condition: state
         entity_id: input_boolean.living_lights_zone_sofa_enabled

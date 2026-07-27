@@ -98,6 +98,16 @@ _LL_ZONE_TO_AREA = {
 }
 
 _LL_LEVEL_KEYS = ("brightness_pct", "brightness", "color_temp_kelvin", "color_temp")
+_TRAVEL_MODE_ENTITY = "input_boolean.living_lights_travel_mode"
+_TRAVEL_BLOCKED_SERVICES = {"turn_on", "toggle"}
+_TRAVEL_BLOCKED_DIRECT_DOMAINS = {"light", "switch"}
+_TRAVEL_BLOCKED_SCRIPT_HINTS = (
+    "light",
+    "lighting",
+    "living_lights",
+    "homeai_return_home",
+    "good_morning",
+)
 
 
 def _listify_target(value: Any) -> list[str]:
@@ -130,6 +140,97 @@ def _brightness_to_pct(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return max(0, min(100, int(round(raw / 255 * 100))))
+
+
+def _travel_mode_on(hass: HomeAssistant) -> bool:
+    try:
+        states = getattr(hass, "states", None)
+        state = states.get(_TRAVEL_MODE_ENTITY) if states else None
+    except Exception:  # pragma: no cover - defensive around HA startup/tests
+        return False
+    return getattr(state, "state", None) == "on"
+
+
+def _target_values(*values: Any) -> list[str]:
+    out: list[str] = []
+    for value in values:
+        out.extend(_listify_target(value))
+    return out
+
+
+def _service_target_entity_ids(
+    service_argument: dict[str, Any],
+    service_data: dict[str, Any],
+) -> list[str]:
+    ids = _target_values(
+        service_argument.get("entity_id"),
+        service_data.get("entity_id"),
+    )
+    for container in (
+        service_argument.get("target"),
+        service_data.get("target"),
+    ):
+        if isinstance(container, dict):
+            ids.extend(_listify_target(container.get("entity_id")))
+    return [entity.lower() for entity in ids]
+
+
+def _only_targets_travel_mode(service_argument: dict[str, Any], service_data: dict[str, Any]) -> bool:
+    entity_ids = _service_target_entity_ids(service_argument, service_data)
+    return bool(entity_ids) and all(entity == _TRAVEL_MODE_ENTITY for entity in entity_ids)
+
+
+def _travel_mode_blocks_service(
+    domain: str,
+    service: str,
+    service_argument: dict[str, Any],
+    service_data: dict[str, Any],
+) -> bool:
+    domain = (domain or "").lower()
+    service = (service or "").lower()
+    if service not in _TRAVEL_BLOCKED_SERVICES:
+        return False
+    if _only_targets_travel_mode(service_argument, service_data):
+        return False
+    if domain in _TRAVEL_BLOCKED_DIRECT_DOMAINS:
+        return True
+    if domain == "homeassistant":
+        entity_ids = _service_target_entity_ids(service_argument, service_data)
+        if not entity_ids:
+            return True
+        return any(entity.startswith(("light.", "switch.")) for entity in entity_ids)
+    if domain == "scene":
+        return True
+    if domain == "script":
+        entity_ids = _service_target_entity_ids(service_argument, service_data)
+        return any(
+            hint in entity.replace(".", "_")
+            for entity in entity_ids
+            for hint in _TRAVEL_BLOCKED_SCRIPT_HINTS
+        )
+    return False
+
+
+def _travel_mode_block_result(domain: str, service: str, service_data: dict[str, Any]) -> dict[str, Any]:
+    message = "Travel Mode is on, so I did not turn on any lights."
+    return {
+        "success": False,
+        "ok": False,
+        "blocked": True,
+        "blocked_by": "travel_mode",
+        "domain": domain,
+        "service": service,
+        "service_data": service_data,
+        "error": message,
+        "error_kind": "TravelModeBlocked",
+        "error_message": message,
+        "suggested_phrasing": message,
+        "ack_hint": message,
+        "instructions_for_agent": (
+            "Tell the user Travel Mode blocked the lighting command. Do not "
+            "retry with another lighting service unless Travel Mode is off."
+        ),
+    }
 
 
 def _living_lights_override_args(
@@ -452,7 +553,30 @@ class NativeFunction(Function):
                 raise CallServiceError(domain, service, service_data)
         if not hass.services.has_service(domain, service):
             raise ServiceNotFound(domain, service)
-        self.validate_entity_ids(hass, entity_id or [], exposed_entities)
+        try:
+            self.validate_entity_ids(hass, entity_id or [], exposed_entities)
+        except HomeAssistantError as e:
+            return {
+                "error": str(e),
+                "ok": False,
+                "latency_ms": 0,
+                "domain": domain,
+                "service": service,
+                "error_kind": type(e).__name__,
+                "error_message": str(e),
+                "suggested_phrasing": str(e),
+            }
+
+        if _travel_mode_on(hass) and _travel_mode_blocks_service(
+            domain, service, service_argument, service_data
+        ):
+            _LOGGER.info(
+                "Travel Mode blocked %s.%s service call before dispatch: %s",
+                domain,
+                service,
+                service_data,
+            )
+            return _travel_mode_block_result(domain, service, service_data)
 
         # M6 (Addendum 27 Section 6 / Milestone 6): high-impact safety
         # gate. Domains like lock, alarm, garage_door require an

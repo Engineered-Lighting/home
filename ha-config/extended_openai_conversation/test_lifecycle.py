@@ -39,7 +39,8 @@ sys.path.insert(0, str(THIS_DIR))
 # Add repo root for tools/test_helpers
 sys.path.insert(0, str(REPO_ROOT))
 
-# Force-enable for tests
+# Force-enable for tests, and opt the legacy lifecycle tests into the
+# explicit migration window. Production remains frozen by default.
 os.environ.pop("EXTENDED_OPENAI_IDENTITY_STORE", None)
 os.environ["EXTENDED_OPENAI_IDENTITY_SEMANTIC_WRITES"] = "legacy_migration_only"
 

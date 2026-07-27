@@ -33,6 +33,15 @@
     return `${capitalize(zoneName)} light adjusted manually`;
   }
 
+  function overrideDedupeKey(d) {
+    const zone = String(d.zone || "");
+    const light = String(d.light_entity || "");
+    const actual = String(d.actual_pct ?? "");
+    const predicted = String(d.predicted_pct ?? "");
+    const state = String(d.light_state || "");
+    return [zone, light, actual, predicted, state].join("|");
+  }
+
   window.HomeLightingEvents = {
     /**
      * Subscribe to override + articulation events.
@@ -52,6 +61,8 @@
 
       let unsubOverride;
       let unsubArticulation;
+      const recentOverrides = [];
+      const overrideWindowMs = 30000;
 
       try {
         unsubOverride = client.subscribeEvents(
@@ -59,6 +70,16 @@
           (ev) => {
             const d = (ev && ev.data) || {};
             const ts = (ev && ev.time_fired) || new Date().toISOString();
+            const key = d.context_id ? `ctx:${d.context_id}` : overrideDedupeKey(d);
+            const fallbackKey = overrideDedupeKey(d);
+            const nowMs = Date.parse(ts) || Date.now();
+            for (let i = recentOverrides.length - 1; i >= 0; i--) {
+              if (nowMs - recentOverrides[i].tsMs > overrideWindowMs) recentOverrides.splice(i, 1);
+            }
+            if (recentOverrides.some((item) => item.key === key || item.fallbackKey === fallbackKey)) {
+              return;
+            }
+            recentOverrides.push({ key, fallbackKey, tsMs: nowMs });
             const verbose = debugMode() === true;
             addEvent({
               kind: "system",

@@ -69,7 +69,7 @@ const CAPABILITY_REGISTRY = [
     // Tools that hit the vision-sidecar directly. refresh_perception
     // is the world_state-driven path; describe_clip is the F-3
     // multi-frame path; both route through the sidecar.
-    affected_tools: ["refresh_perception", "describe_clip"],
+    affected_tools: ["refresh_perception", "describe_clip", "look"],
     fallback_hint: "frigate occupancy still works; find_person uses HA presence.",
   },
   {

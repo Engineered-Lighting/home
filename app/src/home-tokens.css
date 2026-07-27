@@ -138,6 +138,16 @@ button {
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
   }
+
+  .hg-help-row {
+    min-height: 40px;
+  }
+
+  .hg-help-row .hg-help-desc {
+    white-space: normal !important;
+    font-family: "Geist", ui-sans-serif, system-ui, sans-serif !important;
+    line-height: 1.3;
+  }
 }
 
 /* ============================================================================

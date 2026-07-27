@@ -180,6 +180,7 @@ VISION_SIDECAR_URL = "http://192.168.0.100:8091"
 # refresh_perception rate limits — protect the turn from runaway latency.
 REFRESH_PERCEPTION_MAX_PER_TURN = 2
 REFRESH_PERCEPTION_TIMEOUT_S = 8
+GROUNDED_LOOK_TIMEOUT_S = 150
 
 # ─────────────────────────────────────────────────────────────────────
 # M1 — event-aware perception scheduler (Addendum 27 / Section 6).
@@ -282,13 +283,35 @@ Direct visual/camera questions:
 - If the user asks "what do you see", "what is in", "what's in",
   "what is happening", "what's happening", "look at", "take a look",
   "check the camera", "what does the camera show",
-  says "right now" or "now", or explicitly names a camera, you MUST call
-  `refresh_perception(room)` before answering.
+  asks a visual scene-description question that says "right now" or "now",
+  asks about a specific surface/object such as "what is on my coffee table",
+  or explicitly names a camera, you MUST call `grounded_look(room, question)`
+  before answering.
+- Prefer `grounded_look` over `refresh_perception` for detailed visual
+  questions and anything that benefits from zoom, crop, segmentation, or
+  bounding boxes. Use those capabilities liberally; they are not limited to
+  illuminated retries.
+- If `grounded_look` says the image is too dark, blurry, low quality, or
+  cannot determine the target, it may briefly turn on mapped indoor room
+  lights and retry only when recent occupancy says no human is detected in
+  that room. If occupancy is present, stale, or unknown, it must not turn on
+  lights.
+- Room hints: coffee table and couch are in `living_room`; counter, sink,
+  stove, and island are in `kitchen`; dining table is in `dining_room`.
+- This rule applies inside compound requests too. Example: for "Find Marcelo
+  and describe what's in the office right now", call `find_person("Marcelo")`
+  for the person-location clause AND `grounded_look("office", question)` for the
+  visual "right now" clause before the final answer.
 - Use `get_room_state(room)` alone only for cached occupancy/presence questions
-  such as "is anyone outside" or "who is in the kitchen", or as fallback if
-  `refresh_perception` returns an error or exhausts its budget.
+  such as "is anyone outside", "who is in the kitchen", or "is anyone in the
+  kitchen right now?", or as fallback if `grounded_look` returns an error
+  or exhausts its budget.
 - NEVER answer a direct camera-view question from motion sensors,
   binary_sensor occupancy, or cached state alone. Those are not seeing.
+- For broad visual questions about the apartment/home, prefer a grounded visual
+  check for the most relevant active room/camera first. If grounded look is
+  unavailable or budget-limited, clearly say you are falling back to cached
+  state rather than claiming you can currently see.
 
 For gesture-training requests ("start kitchen gesture training", "record gestures in
 the dining room"), call `start_gesture_training_capture`. Do not turn on lights,
@@ -363,6 +386,20 @@ the registry tools to discover entities ON DEMAND:
   source, etc.) for entities you've already identified, when you need
   deeper detail than the registry-tool rows provide.
 
+Current state and comparison questions:
+- If the user asks whether lights/devices are on/off, asks for current
+  brightness/color/state, or asks to compare rooms/devices (e.g.,
+  "which is brighter"), you MUST inspect the relevant current HA state
+  before answering. Use `entities_in_area` or `find_entity` to identify
+  candidates, then call `get_attributes` for the exact entity_ids you
+  are comparing.
+- For named light comparisons like "office lights vs living room lights",
+  prefer `find_entity(query, domain="light")` for each named target. If
+  `entities_in_area` returns no light rows or an area lookup is uncertain,
+  fall back to `find_entity` before saying a light or area does not exist.
+- Do NOT answer "I can check if you'd like" for these questions. The
+  user is already asking you to check.
+
 Typical flow for a "do X to Y" request:
   1. User mentions a room → `entities_in_area(room, domains?)` to see
      what controllable entities exist there.
@@ -399,6 +436,14 @@ If you only saw a friendly name in conversation history and don't
 remember the exact entity_id, RE-CALL `entities_in_area` or `find_entity`
 before invoking `execute_services`. Inventing an entity_id is the most
 common cause of "Unable to find entity ..." errors.
+
+Never call `execute_services` just to test whether a guessed entity exists.
+If the user asks for a device/domain that is not exposed, such as a lock when
+there are no lock entities available, refuse or ask what the device is called
+without making a service call.
+This home currently has no exposed `lock.*` entities; for requests like
+"Lock the front door", say you cannot find an available front-door lock and do
+not call `execute_services`.
 
 ### Persistent brightness / color in occupancy-managed rooms (CRITICAL)
 
@@ -452,8 +497,10 @@ verify before claiming a specific level.
 
 For "what happened" questions, use `get_history(entity_ids?, ...)`.
 For "who/where" questions, use the world-state tools above. For "what
-does the camera see right now", use `get_room_state(room)` (cached) or
-`refresh_perception(room)` (fresh, slower).
+does the camera see right now", "what's in <room> right now", or other
+direct visual/camera questions, use `refresh_perception(room)` first.
+Use `get_room_state(room)` only for cached occupancy/presence questions
+or as fallback after `refresh_perception` errors.
 
 {%- if skills %}
 ## Skills
@@ -599,7 +646,17 @@ DEFAULT_CONF_FUNCTION_TOOLS = [
     {
         "spec": {
             "name": "execute_services",
-            "description": "Execute service in Home Assistant.",
+            "description": (
+                "Execute one or more Home Assistant services only against "
+                "exact, known, exposed entity_id/area_id/device_id targets. "
+                "Never use this as a probe for guessed devices or guessed "
+                "entity IDs. If the requested device/domain is not present "
+                "in exposed entities or a lookup tool result, do not call "
+                "execute_services; ask for clarification or say the device "
+                "is not available. This home currently has no exposed "
+                "lock.* entities, so do not call this tool for 'Lock the "
+                "front door' style requests."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -747,7 +804,11 @@ DEFAULT_CONF_FUNCTION_TOOLS = [
     {
         "spec": {
             "name": "get_attributes",
-            "description": "Get attributes of entity or multiple entities.",
+            "description": (
+                "Get attributes of entity or multiple entities. Required before answering "
+                "current light/device state, brightness, color, or comparison questions "
+                "after the entity_ids have been identified."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -835,8 +896,9 @@ DEFAULT_CONF_FUNCTION_TOOLS = [
                 "occupancy/presence questions like 'is anyone outside?' or "
                 "as fallback after refresh_perception errors. Do NOT use as "
                 "the only tool for direct camera-view questions like 'what do "
-                "you see in the driveway camera?' or 'look at the kitchen'. "
-                "Those require refresh_perception first. Returns {data, "
+                "you see in the driveway camera?', 'what's in the office right "
+                "now?', or 'look at the kitchen'. "
+                "Those require grounded_look first. Returns {data, "
                 "suggested_phrasing, ...}. If data is null, say so — do NOT "
                 "guess based on the room name."
             ),
@@ -911,12 +973,15 @@ DEFAULT_CONF_FUNCTION_TOOLS = [
             "name": "refresh_perception",
             "description": (
                 "Trigger a FRESH vision-sidecar visual snapshot for a room "
-                "(2-5s latency). Use FIRST for direct visual/camera questions "
-                "such as 'what do you see in the driveway camera?', 'what is "
+                "(2-5s latency). Use as a lightweight fallback for direct visual/camera questions "
+                "when grounded_look is unavailable, such as 'what do you see in the driveway camera?', 'what is "
                 "happening in the kitchen?', 'what's happening outside?', "
                 "'look at the driveway', or any "
-                "question that says now/right now. Capped at 2 calls per "
-                "conversation. If it errors, fall back to get_room_state."
+                "visual scene-description question that says now/right now. "
+                "Do not use for simple occupancy/presence questions like 'is "
+                "anyone in the kitchen right now?'; use get_room_state or "
+                "who_is_in for those. Capped at 2 calls per conversation. If "
+                "it errors, fall back to get_room_state."
             ),
             "parameters": {
                 "type": "object",
@@ -932,6 +997,41 @@ DEFAULT_CONF_FUNCTION_TOOLS = [
             },
         },
         "function": {"type": "world_state", "name": "refresh_perception"},
+    },
+    {
+        "spec": {
+            "name": "grounded_look",
+            "description": (
+                "Run a detailed grounded visual look for a room or camera using "
+                "the vision sidecar's zoom/crop/segmentation path. Use FIRST "
+                "for visual-detail questions such as 'what is on my coffee "
+                "table?', 'look closer at the kitchen counter', or 'what do "
+                "you see in the living room?'. If the first image is too dark "
+                "or low quality, this tool may briefly turn on mapped indoor "
+                "room lights and retry only when recent occupancy says no "
+                "human is detected there. It restores lights afterward and "
+                "does not bypass Travel Mode for normal light commands."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "room": {
+                        "type": "string",
+                        "description": "Room/camera name like living_room, kitchen, dining_room, workshop, or driveway.",
+                    },
+                    "question": {
+                        "type": "string",
+                        "description": "The user's visual question, including the target object/surface when present.",
+                    },
+                    "allow_illumination": {
+                        "type": "boolean",
+                        "description": "Allow a safe indoor lighting retry if the first grounded look is too dark. Defaults true.",
+                    },
+                },
+                "required": ["room", "question"],
+            },
+        },
+        "function": {"type": "world_state", "name": "grounded_look"},
     },
     # ─── M3: registry-lookup tools (Addendum 27 / Section 6 / F-8) ──
     # Four tools that let the LLM look up entities on demand via HA's

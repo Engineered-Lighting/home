@@ -21,6 +21,9 @@ if (-not $env:HOME_WEB_AUTH_REQUIRED) {
 if (-not $env:HOME_WEB_ENABLE_LEGACY_HA_PROXY) {
   $env:HOME_WEB_ENABLE_LEGACY_HA_PROXY = "0"
 }
+if (-not $env:HOME_WEB_ENABLE_LEGACY_VISION_PROXY) {
+  $env:HOME_WEB_ENABLE_LEGACY_VISION_PROXY = "0"
+}
 
 Set-Location $repo
 & $node $server

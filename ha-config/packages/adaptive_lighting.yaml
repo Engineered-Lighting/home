@@ -6,7 +6,7 @@
 # than others" — every light now follows one curve, all day.
 #
 # Configures the already-installed Adaptive Lighting integration (HACS,
-# v1.30.1). AL only recolors lights that are already ON; it never
+# v1.31.0 baseline once the safe-update runbook is complete). AL only recolors lights that are already ON; it never
 # switches lights on/off — so it rides cleanly on top of the Living
 # Lights pilots (which own brightness + on/off).
 #
@@ -20,6 +20,13 @@
 # AR-K: the `lights` list below must cover every light any Living Lights
 # pilot controls (LIGHT_TARGETS in tools/build-living-lights-actuators.py)
 # — otherwise an uncovered light keeps drifting in colour.
+#
+# Canary rule: do not put the same bulb in this profile and a second
+# Adaptive Lighting profile. If testing `take_over_control_mode:
+# pause_changed`, remove the canary light from this list first and rebuild
+# that Living Lights pilot with:
+#   tools/build-living-lights-actuators.py --zone <zone> --omit-ct-zone <zone> --apply
+# so Living Lights writes brightness only while AL owns color.
 #
 # Post-deploy one-time action: turn switch.adaptive_lighting_adapt_brightness_home
 # OFF — Living Lights owns brightness. AL switch states are restored

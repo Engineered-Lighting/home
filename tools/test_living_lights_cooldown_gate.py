@@ -169,6 +169,22 @@ def _target_entity_ids(action) -> list[str]:
     return []
 
 
+def _assert_vision_capture_guard(automation, label: str) -> None:
+    conditions = automation.get("conditions") or []
+    for condition in conditions:
+        if (
+            condition.get("condition") == "state"
+            and condition.get("entity_id") == "input_boolean.living_lights_vision_capture_override"
+            and condition.get("state") == "off"
+            and str(condition.get("for")) == "00:00:05"
+        ):
+            return
+    raise AssertionError(
+        f"{label} must ignore system-owned vision-capture light writes and "
+        "their immediate restore grace period"
+    )
+
+
 # ───────────────────────── the test ──────────────────────────────────────
 
 def main() -> int:
@@ -232,6 +248,11 @@ def main() -> int:
         )
         if detect is None:
             raise AssertionError(f"missing settled manual detector for {light_entity}")
+        passed_checks += 1
+
+        _assert_vision_capture_guard(fast, f"{light_entity} fast armer")
+        passed_checks += 1
+        _assert_vision_capture_guard(detect, f"{light_entity} settled detector")
         passed_checks += 1
 
         if automations.index(fast) > automations.index(detect):
@@ -323,6 +344,9 @@ def main() -> int:
     for light_entity, owning_pairs in _mod.AGGREGATE_LIGHT_CONTROLLERS.items():
         fast_alias = f"Living Lights - fast manual hold arm ({light_entity})"
         fast = _automation_by_alias(manual_doc, fast_alias)
+        passed_checks += 1
+
+        _assert_vision_capture_guard(fast, f"{light_entity} aggregate fast armer")
         passed_checks += 1
 
         if automations.index(fast) > first_detect_index:
@@ -507,6 +531,35 @@ def main() -> int:
             print("  OK sentinel_1970: True")
     except TypeError as exc:
         failures.append(f"[sentinel_1970] TypeError: {exc}")
+
+    default_office = _mod.emit_actuator("office", _mod.LIGHT_TARGETS["office"])
+    canary_office = _mod.emit_actuator(
+        "office",
+        _mod.LIGHT_TARGETS["office"],
+        omit_ct_zones={"office"},
+    )
+    canary_sink = _mod.emit_actuator(
+        "sink",
+        _mod.LIGHT_TARGETS["sink"],
+        omit_ct_zones={"office"},
+    )
+    if "color_temp_kelvin:" not in default_office:
+        failures.append("[ct_default] office pilot must keep CT injection by default")
+    else:
+        passed_checks += 1
+        print("  OK ct_default: office injects CT by default")
+    if "color_temp_kelvin:" in canary_office:
+        failures.append("[ct_canary] office canary pilot must omit CT injection")
+    elif "Adaptive Lighting canary owns color" not in canary_office:
+        failures.append("[ct_canary] office canary pilot should document why CT is omitted")
+    else:
+        passed_checks += 1
+        print("  OK ct_canary: office canary omits CT")
+    if "color_temp_kelvin:" not in canary_sink:
+        failures.append("[ct_non_canary] non-canary zones must keep CT injection")
+    else:
+        passed_checks += 1
+        print("  OK ct_non_canary: sink still injects CT")
 
     if failures:
         print()

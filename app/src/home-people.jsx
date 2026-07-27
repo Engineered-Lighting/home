@@ -27,6 +27,62 @@ const { useState, useEffect, useRef, useCallback, useMemo } = React;
 const PEOPLE_FONT_MONO = "'Geist Mono', ui-monospace, monospace";
 const PEOPLE_FONT_SANS = "'Geist', system-ui, sans-serif";
 
+function usePeopleViewport() {
+  const read = useCallback(() => {
+    if (typeof window === "undefined") return { width: 1024, height: 768, mobile: false };
+    const vv = window.visualViewport;
+    const width = Math.round(vv?.width || window.innerWidth || 1024);
+    const height = Math.round(vv?.height || window.innerHeight || 768);
+    return { width, height, mobile: width < 700 };
+  }, []);
+  const [viewport, setViewport] = useState(read);
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    let raf = null;
+    const update = () => {
+      if (raf) cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => setViewport(read()));
+    };
+    window.addEventListener("resize", update);
+    window.visualViewport?.addEventListener("resize", update);
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      window.removeEventListener("resize", update);
+      window.visualViewport?.removeEventListener("resize", update);
+    };
+  }, [read]);
+  return viewport;
+}
+
+function clampPeopleGraphCamera(camera, viewBox, isMobile) {
+  const maxScale = isMobile ? 3 : 2.4;
+  const scale = Math.max(1, Math.min(maxScale, Number(camera?.scale) || 1));
+  if (!viewBox || !Number.isFinite(viewBox.w) || !Number.isFinite(viewBox.h)) {
+    return { scale, x: 0, y: 0 };
+  }
+  const visibleW = viewBox.w / scale;
+  const visibleH = viewBox.h / scale;
+  const maxX = Math.max(0, (viewBox.w - visibleW) / 2);
+  const maxY = Math.max(0, (viewBox.h - visibleH) / 2);
+  return {
+    scale,
+    x: Math.max(-maxX, Math.min(maxX, Number(camera?.x) || 0)),
+    y: Math.max(-maxY, Math.min(maxY, Number(camera?.y) || 0)),
+  };
+}
+
+function peopleGraphCameraViewBox(viewBox, camera) {
+  const scale = Math.max(1, Number(camera?.scale) || 1);
+  const visibleW = viewBox.w / scale;
+  const visibleH = viewBox.h / scale;
+  return {
+    x: viewBox.x + (viewBox.w - visibleW) / 2 + (Number(camera?.x) || 0),
+    y: viewBox.y + (viewBox.h - visibleH) / 2 + (Number(camera?.y) || 0),
+    w: visibleW,
+    h: visibleH,
+  };
+}
+
 /* ─────────────────────────────────────────────────────────────────────
  * Sub-component: HomePeopleOverlay
  *
@@ -36,7 +92,11 @@ const PEOPLE_FONT_SANS = "'Geist', system-ui, sans-serif";
 function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, connection = null, sim, spatialMode = false }) {
   const [view, setView] = useState("graph");   // graph | list | queue
   const [identities, setIdentities] = useState(null);  // null=loading, []=empty
+  const identitiesRef = useRef(null);
   const [error, setError] = useState(null);
+  // Attempt number while fetchWithRetry is still reconnecting (null = idle).
+  // Distinct from `error`, which is the terminal state after retries are spent.
+  const [reconnecting, setReconnecting] = useState(null);
   const [loadedAt, setLoadedAt] = useState(null);
   const [selectedUuid, setSelectedUuid] = useState(null);
   // F-4b: backend reports {ready:false, setup_error:"..."} when the
@@ -49,6 +109,8 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
   // gallery + hover thumbnails.
   const [frigateUrl, setFrigateUrl] = useState(null);
   const [facesByPerson, setFacesByPerson] = useState(null);
+  const [facesStatus, setFacesStatus] = useState({ state: "idle" });
+  const [frigateDiagnostics, setFrigateDiagnostics] = useState(null);
   // Addendum 24 Phase 3: HEAD-pre-check map per identity uuid → boolean.
   // AR24-9: SVG <image onError> can't distinguish 404 from network blip,
   // so we pre-fetch presence once and render <image> only when truthy.
@@ -63,6 +125,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
   // via tauriFetch, convert to a blob URL, store per-uuid, render the
   // blob URL as the src/href. Revoke on unmount or when bytes change.
   const [avatarBlobUrls, setAvatarBlobUrls] = useState({});
+  useEffect(() => { identitiesRef.current = identities; }, [identities]);
   // Track in-flight fetches so we don't double-fire for the same
   // (uuid, cacheBust) tuple. Keyed by `${uuid}:${cb}`.
   const blobFetchInFlightRef = useRef({});
@@ -113,11 +176,15 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
   const refresh = useCallback(async () => {
     setError(null);
     setNotReady(null);
+    setReconnecting(null);
     if (sim?.active) {
       // AR16-3 guard: sim mode never shows the ready:false banner — it
       // would conflict with sim's own fixture data shape.
       const simIdentities = (sim.snapshot?.people?.identities) || [];
       setIdentities(simIdentities);
+      setFacesByPerson(null);
+      setFacesStatus({ state: "sim" });
+      setFrigateDiagnostics(null);
       setLoadedAt(Date.now());
       return;
     }
@@ -126,13 +193,40 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
       setIdentities([]);
       return;
     }
+    const cached = readPeopleDataCache(endpoint);
+    let usingCached = false;
+    if (cached && identitiesRef.current === null) {
+      usingCached = true;
+      setIdentities(cached.identities || []);
+      setFrigateDiagnostics(cached.frigateDiagnostics || null);
+      setFrigateUrl(cached.frigateUrl || null);
+      setFacesByPerson(cached.facesByPerson || null);
+      setFacesStatus(cached.facesByPerson
+        ? { state: "loaded", bucketCount: Object.keys(cached.facesByPerson).length, loadedAt: cached.cachedAt, cached: true }
+        : { state: "idle", cached: true });
+      setLoadedAt(cached.cachedAt || Date.now());
+    }
     try {
       const url = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/identities`;
-      const resp = await window.tauriFetch(url, {
-        headers: { Authorization: `Bearer ${token}` },
-        cache: "no-store",
+      // fetchWithRetry rides out the AI-box reboot window: while it is still
+      // retrying we surface a "Reconnecting…" banner (via onAttempt); it only
+      // throws once retries are exhausted or the status is non-retryable.
+      const resp = await window.fetchWithRetry({
+        url,
+        options: {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        },
+        timeoutMs: 20000,
+        maxAttempts: usingCached ? 2 : 4,
+        onAttempt: ({ attempt, nextDelay }) => {
+          if (nextDelay != null && !usingCached && identitiesRef.current === null) setReconnecting(attempt);
+        },
       });
+      setReconnecting(null);
       if (!resp.ok) {
+        // fetchWithRetry throws rather than resolving non-ok, so this is a
+        // defensive fallback only.
         setError(`HTTP ${resp.status} ${resp.statusText}`);
         setIdentities([]);
         return;
@@ -154,6 +248,10 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
         return;
       }
       setIdentities(payload.identities || []);
+      setFrigateDiagnostics({
+        seedReport: payload.frigate_seed_report || null,
+        capabilities: payload.frigate_capabilities || null,
+      });
       setLoadedAt(Date.now());
       // Addendum 24: capture the Frigate URL the integration reports.
       // Fetch /api/faces THROUGH the HA-side FrigateProxyView so CORS
@@ -162,6 +260,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
       // stay direct-to-Frigate because <img> tags don't trigger CORS.
       if (payload.frigate_url) {
         setFrigateUrl(payload.frigate_url);
+        setFacesStatus({ state: "loading" });
         const proxyUrl = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/frigate_proxy?path=api/faces`;
         try {
           const fresp = await window.tauriFetch(proxyUrl, {
@@ -172,14 +271,43 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
             const fpayload = await fresp.json();
             if (fpayload && typeof fpayload === "object") {
               setFacesByPerson(fpayload);
+              setFacesStatus({
+                state: "loaded",
+                bucketCount: Object.keys(fpayload).length,
+                loadedAt: Date.now(),
+              });
+              writePeopleDataCache(endpoint, payload, fpayload);
             }
+          } else {
+            setFacesByPerson(null);
+            setFacesStatus({ state: "error", error: `HTTP ${fresp.status}` });
+            writePeopleDataCache(endpoint, payload, null);
           }
-        } catch {
+        } catch (e) {
           // Proxy unreachable — gallery shows empty state.
+          setFacesByPerson(null);
+          setFacesStatus({ state: "error", error: e?.message || String(e) });
+          writePeopleDataCache(endpoint, payload, null);
         }
+      } else {
+        setFrigateUrl(null);
+        setFacesByPerson(null);
+        setFacesStatus({ state: "missing_url" });
+        writePeopleDataCache(endpoint, payload, null);
       }
     } catch (e) {
-      setError(`Network error: ${e.message || e}`);
+      setReconnecting(null);
+      if (usingCached || identitiesRef.current?.length) {
+        return;
+      }
+      const status = e && e.lastStatus;
+      if (e && e.reason === "http" && status) {
+        setError(`HTTP ${status}`);
+      } else if (e && e.attempts) {
+        setError(`Identity store unreachable after ${e.attempts} ${e.attempts === 1 ? "attempt" : "attempts"}.`);
+      } else {
+        setError(`Network error: ${e.message || e}`);
+      }
       setIdentities([]);
     }
     // NOTE: `sim?.snapshot` deliberately omitted — it's an object reference
@@ -194,6 +322,18 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
   useEffect(() => {
     if (open) refresh();
   }, [open, refresh]);
+
+  const faceImageBaseUrl = useMemo(() => {
+    try {
+      const services = (typeof window !== "undefined") ? window.HomeServices : null;
+      const resolved = services && typeof services.get === "function"
+        ? services.get("frigate")
+        : "";
+      return resolved || frigateUrl;
+    } catch {
+      return frigateUrl;
+    }
+  }, [frigateUrl]);
 
   // Phase 3 avatar pre-check (AR24-9). One HEAD per identity at load
   // time + after every identity_mutation refresh. Sim mode skips —
@@ -428,6 +568,19 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
       <div className="hg-scroll" style={{
         flex: 1, overflow: "auto", padding: "24px 32px",
       }}>
+        {reconnecting != null && !error && (
+          <div style={{
+            border: "1px solid var(--hg-ice)",
+            background: "color-mix(in oklab, var(--hg-ice) 6%, transparent)",
+            padding: "10px 14px",
+            color: "var(--hg-ice)",
+            fontSize: 11, letterSpacing: "0.04em",
+            marginBottom: 16,
+          }}>
+            <strong style={{ marginRight: 8 }}>reconnecting to identity store…</strong>
+            waiting for the network (attempt {reconnecting}).
+          </div>
+        )}
         {error && (
           <div style={{
             border: "1px solid var(--hg-warn)",
@@ -436,8 +589,21 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
             color: "var(--hg-warn)",
             fontSize: 11, letterSpacing: "0.04em",
             marginBottom: 16,
+            display: "flex", alignItems: "center", gap: 12,
           }}>
-            <strong style={{ marginRight: 8 }}>error:</strong>{error}
+            <span style={{ flex: 1 }}>
+              <strong style={{ marginRight: 8 }}>error:</strong>{error}
+            </span>
+            <button
+              onClick={() => refresh()}
+              className="hg-focusable"
+              style={{
+                background: "transparent", border: "1px solid var(--hg-warn)",
+                color: "var(--hg-warn)", padding: "4px 11px",
+                fontFamily: PEOPLE_FONT_MONO, fontSize: 10, letterSpacing: "0.12em",
+                cursor: "pointer", textTransform: "lowercase", whiteSpace: "nowrap",
+              }}
+            >retry now</button>
           </div>
         )}
         {notReady && (
@@ -460,7 +626,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
             </div>
           </div>
         )}
-        {identities === null && !error && !notReady && (
+        {identities === null && !error && !notReady && reconnecting == null && (
           <div style={{ color: "var(--hg-fg-3)", fontSize: 11 }}>loading identities…</div>
         )}
         {identities !== null && (
@@ -469,7 +635,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
               <PeopleGraphView
                 identities={identities}
                 facesByPerson={facesByPerson}
-                frigateUrl={frigateUrl}
+                frigateUrl={faceImageBaseUrl}
                 endpoint={endpoint}
                 avatarPresence={avatarPresence}
                 avatarBlobUrls={avatarBlobUrls}
@@ -488,6 +654,10 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
             {view === "queue" && (
               <PeopleQueueView
                 identities={identities}
+                facesByPerson={facesByPerson}
+                frigateUrl={faceImageBaseUrl}
+                facesStatus={facesStatus}
+                frigateDiagnostics={frigateDiagnostics}
                 sim={sim}
                 endpoint={endpoint}
                 token={token}
@@ -514,7 +684,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
         token={token}
         sim={sim}
         facesByPerson={facesByPerson}
-        frigateUrl={frigateUrl}
+        frigateUrl={faceImageBaseUrl}
         avatarPresence={avatarPresence}
         avatarBlobUrls={avatarBlobUrls}
         onAvatarChanged={(uuid, present) => refreshAvatars(uuid, present)}
@@ -528,11 +698,60 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
     : overlay;
 }
 
+function normalizePeopleEndpoint(endpoint) {
+  return String(endpoint || "").replace(/\/+$/, "");
+}
+
+function writePeopleDataCache(endpoint, payload, facesByPerson) {
+  if (!payload || !Array.isArray(payload.identities)) return null;
+  const cache = {
+    endpoint: normalizePeopleEndpoint(endpoint),
+    cachedAt: Date.now(),
+    identities: payload.identities || [],
+    relationships: payload.relationships || [],
+    frigateUrl: payload.frigate_url || null,
+    facesByPerson: facesByPerson || null,
+    frigateDiagnostics: {
+      seedReport: payload.frigate_seed_report || null,
+      capabilities: payload.frigate_capabilities || null,
+    },
+  };
+  window.__HOME_PEOPLE_DATA_CACHE = cache;
+  return cache;
+}
+
+function readPeopleDataCache(endpoint, maxAgeMs = 5 * 60 * 1000) {
+  const cache = window.__HOME_PEOPLE_DATA_CACHE;
+  if (!cache) return null;
+  if (cache.endpoint !== normalizePeopleEndpoint(endpoint)) return null;
+  if (!cache.cachedAt || Date.now() - cache.cachedAt > maxAgeMs) return null;
+  return cache;
+}
+
 /* ─────────────────────────────────────────────────────────────────────
  * Sub-component: PeopleGraphView — radial relationship visualization
  * ──────────────────────────────────────────────────────────────────── */
 function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl, endpoint, avatarPresence, avatarBlobUrls, onNodeClick }) {
   const H = (typeof window !== "undefined" && window.HomePeopleHelpers) || null;
+  const peopleViewport = usePeopleViewport();
+  const isMobile = peopleViewport.mobile;
+  const [graphCamera, setGraphCamera] = useState({ scale: 1, x: 0, y: 0 });
+  const graphCameraRef = useRef(graphCamera);
+  const graphGestureRef = useRef(null);
+  const graphSvgRef = useRef(null);
+  useEffect(() => {
+    const el = graphSvgRef.current;
+    if (!el) return undefined;
+    const preventPagePinch = (ev) => ev.preventDefault();
+    el.addEventListener("gesturestart", preventPagePinch);
+    el.addEventListener("gesturechange", preventPagePinch);
+    el.addEventListener("gestureend", preventPagePinch);
+    return () => {
+      el.removeEventListener("gesturestart", preventPagePinch);
+      el.removeEventListener("gesturechange", preventPagePinch);
+      el.removeEventListener("gestureend", preventPagePinch);
+    };
+  }, []);
 
   // Addendum 23: hover state. Tracks the uuid currently being
   // pointed at; null when no hover. Mouse-leave is debounced ~50ms
@@ -605,19 +824,203 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
     );
   }
 
-  // Layout
-  const layout = H.buildRadialLayout(graphable);
+  // Layout. Mobile gets a slightly larger, tighter graph: larger faces
+  // make the relationship web legible, while reduced radii keep every
+  // node inside the phone viewport.
+  const layout = H.buildRadialLayout(graphable, isMobile
+    ? {
+        radiusScale: 1.2,
+        avatarScale: 1.4,
+        clusterStepScale: 1.2,
+        textScale: 1.28,
+        collisionPadding: 64,
+        centerCollisionPadding: 88,
+        collisionIterations: 120,
+        portraitLayout: true,
+      }
+    : undefined);
 
-  // Edge geometry — we don't yet load explicit relationships in Slice 5;
-  // implicit edges (ring-1 → center) carry the visual story for MVP.
-  // Slice 6 will add real edges when the detail panel can manage them.
-  const edges = H.buildEdgeGeometry(layout, relationships || []);
+  // Edge geometry. In addition to HA relationship rows, overlay a small
+  // trusted-family map from the seeded face folders so the graph can show
+  // parent/partner branches immediately after identities sync.
+  const knownFamilyRelationships = H.buildKnownFamilyRelationships
+    ? H.buildKnownFamilyRelationships(graphable)
+    : [];
+  const relationshipRows = [...(relationships || []), ...knownFamilyRelationships];
+  const edges = H.buildEdgeGeometry(layout, relationshipRows);
 
-  // SVG sizing — content has natural radius up to 400; pad for avatars.
-  // Canvas is centered around origin (0,0).
-  const PAD = 80;  // half the largest avatar + buffer
-  const VIEW_HALF = 380 + PAD;
+  // SVG sizing. Desktop keeps the full relationship-ring field; mobile
+  // fits to the actual visible nodes so sparse graphs do not render as a
+  // tiny cluster in an oversized 920px coordinate space.
+  const activeRings = new Set(layout.filter((n) => !n.overflow).map((n) => n.ring));
+  const nodeBounds = layout.reduce((bounds, n) => {
+    if (!n || n.overflow) return bounds;
+    const textScale = n.textScale || 1;
+    const name = String(n.identity?.display_name || "?");
+    const role = String(n.identity?.relationship_subrole || n.identity?.relationship_type || "");
+    const nameFont = Math.max(9, Math.round((n.size || 0) * 0.18 * textScale));
+    const roleFont = Math.max(7, Math.round((n.size || 0) * 0.14 * textScale));
+    const labelHalf = Math.max(
+      (n.size || 0) / 2,
+      name.length * nameFont * 0.31,
+      role.length * roleFont * 0.34,
+    );
+    const padX = labelHalf + (isMobile ? 18 : 28);
+    const padTop = (n.size || 0) / 2 + (isMobile ? 28 : 46);
+    const padBottom = (n.size || 0) / 2 + (isMobile ? 52 * textScale : 64);
+    return {
+      minX: Math.min(bounds.minX, (n.x || 0) - padX),
+      maxX: Math.max(bounds.maxX, (n.x || 0) + padX),
+      minY: Math.min(bounds.minY, (n.y || 0) - padTop),
+      maxY: Math.max(bounds.maxY, (n.y || 0) + padBottom),
+    };
+  }, { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
+  const hasNodeBounds = Number.isFinite(nodeBounds.minX) && Number.isFinite(nodeBounds.maxX);
+  const mobileViewBox = hasNodeBounds
+    ? {
+        x: nodeBounds.minX,
+        y: nodeBounds.minY - 28,
+        w: Math.max(260, nodeBounds.maxX - nodeBounds.minX),
+        h: Math.max(220, nodeBounds.maxY - nodeBounds.minY + 44),
+      }
+    : { x: -260, y: -220, w: 520, h: 440 };
+  const VIEW_HALF = 460;
   const VIEW_SIZE = VIEW_HALF * 2;
+  const graphViewBox = isMobile
+    ? mobileViewBox
+    : { x: -VIEW_HALF, y: -VIEW_HALF, w: VIEW_SIZE, h: VIEW_SIZE };
+  useEffect(() => {
+    graphCameraRef.current = graphCamera;
+  }, [graphCamera]);
+  useEffect(() => {
+    setGraphCamera((prev) => clampPeopleGraphCamera(prev, graphViewBox, isMobile));
+  }, [graphViewBox.x, graphViewBox.y, graphViewBox.w, graphViewBox.h, isMobile]);
+  const zoomedGraphViewBox = useMemo(
+    () => peopleGraphCameraViewBox(graphViewBox, graphCamera),
+    [graphViewBox.x, graphViewBox.y, graphViewBox.w, graphViewBox.h, graphCamera],
+  );
+  const graphClientDeltaToViewBox = useCallback((dx, dy, camera = graphCameraRef.current) => {
+    const rect = graphSvgRef.current?.getBoundingClientRect?.();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return { dx: 0, dy: 0 };
+    const current = peopleGraphCameraViewBox(graphViewBox, camera);
+    return {
+      dx: (dx / rect.width) * current.w,
+      dy: (dy / rect.height) * current.h,
+    };
+  }, [graphViewBox.x, graphViewBox.y, graphViewBox.w, graphViewBox.h]);
+  const handleGraphWheel = useCallback((ev) => {
+    if (!ev.ctrlKey) return;
+    ev.preventDefault();
+    const current = graphCameraRef.current;
+    const factor = Math.exp(-ev.deltaY * 0.002);
+    setGraphCamera(clampPeopleGraphCamera({
+      ...current,
+      scale: current.scale * factor,
+    }, graphViewBox, isMobile));
+  }, [graphViewBox.x, graphViewBox.y, graphViewBox.w, graphViewBox.h, isMobile]);
+  const handleGraphTouchStart = useCallback((ev) => {
+    if (ev.touches.length >= 2) {
+      ev.preventDefault();
+      const [a, b] = ev.touches;
+      graphGestureRef.current = {
+        type: "pinch",
+        distance: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1,
+        scale: graphCameraRef.current.scale,
+        x: graphCameraRef.current.x,
+        y: graphCameraRef.current.y,
+        cx: (a.clientX + b.clientX) / 2,
+        cy: (a.clientY + b.clientY) / 2,
+      };
+    } else if (ev.touches.length === 1 && graphCameraRef.current.scale > 1.01) {
+      const t = ev.touches[0];
+      graphGestureRef.current = {
+        type: "pan",
+        x: graphCameraRef.current.x,
+        y: graphCameraRef.current.y,
+        clientX: t.clientX,
+        clientY: t.clientY,
+      };
+    }
+  }, []);
+  const handleGraphTouchMove = useCallback((ev) => {
+    const gesture = graphGestureRef.current;
+    if (!gesture) return;
+    ev.preventDefault();
+    if (gesture.type === "pinch" && ev.touches.length >= 2) {
+      const [a, b] = ev.touches;
+      const distance = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || gesture.distance;
+      const cx = (a.clientX + b.clientX) / 2;
+      const cy = (a.clientY + b.clientY) / 2;
+      const move = graphClientDeltaToViewBox(gesture.cx - cx, gesture.cy - cy, {
+        scale: gesture.scale,
+        x: gesture.x,
+        y: gesture.y,
+      });
+      setGraphCamera(clampPeopleGraphCamera({
+        scale: gesture.scale * (distance / gesture.distance),
+        x: gesture.x + move.dx,
+        y: gesture.y + move.dy,
+      }, graphViewBox, isMobile));
+    } else if (gesture.type === "pan" && ev.touches.length === 1) {
+      const t = ev.touches[0];
+      const move = graphClientDeltaToViewBox(gesture.clientX - t.clientX, gesture.clientY - t.clientY);
+      setGraphCamera(clampPeopleGraphCamera({
+        scale: graphCameraRef.current.scale,
+        x: gesture.x + move.dx,
+        y: gesture.y + move.dy,
+      }, graphViewBox, isMobile));
+    }
+  }, [graphClientDeltaToViewBox, graphViewBox.x, graphViewBox.y, graphViewBox.w, graphViewBox.h, isMobile]);
+  const handleGraphTouchEnd = useCallback((ev) => {
+    if (ev.touches.length === 0) {
+      graphGestureRef.current = null;
+    } else if (ev.touches.length === 1 && graphCameraRef.current.scale > 1.01) {
+      const t = ev.touches[0];
+      graphGestureRef.current = {
+        type: "pan",
+        x: graphCameraRef.current.x,
+        y: graphCameraRef.current.y,
+        clientX: t.clientX,
+        clientY: t.clientY,
+      };
+    }
+  }, []);
+  const branchGroups = (() => {
+    const labels = {
+      "holly-family": "holly family",
+      "felipe-ashley-family": "ashley + felipe",
+      friends: "friends",
+    };
+    const grouped = new Map();
+    for (const n of layout) {
+      if (!n || n.overflow || !n.familyBranch) continue;
+      if (!grouped.has(n.familyBranch)) grouped.set(n.familyBranch, []);
+      grouped.get(n.familyBranch).push(n);
+    }
+    return Array.from(grouped.entries()).flatMap(([branch, nodes]) => {
+      if (nodes.length < 2) return [];
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (const n of nodes) {
+        const pad = (n.size || 0) / 2 + (isMobile ? 22 : 18);
+        minX = Math.min(minX, (n.x || 0) - pad);
+        maxX = Math.max(maxX, (n.x || 0) + pad);
+        minY = Math.min(minY, (n.y || 0) - pad);
+        maxY = Math.max(maxY, (n.y || 0) + pad);
+      }
+      if (!Number.isFinite(minX) || !Number.isFinite(maxX)) return [];
+      const cx = (minX + maxX) / 2;
+      const cy = (minY + maxY) / 2;
+      return [{
+        key: branch,
+        label: labels[branch] || branch.replace(/-/g, " "),
+        cx,
+        cy,
+        rx: Math.max(54, (maxX - minX) / 2),
+        ry: Math.max(44, (maxY - minY) / 2),
+        labelY: minY - (isMobile ? 12 : 10),
+      }];
+    });
+  })();
 
   // Addendum 23: pre-compute the connected-uuid set + tooltip placement
   // for the currently-hovered node. useMemo prevents recomputation
@@ -652,29 +1055,66 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
 
   return (
     <div style={{
-      display: "flex", justifyContent: "center",
-      padding: "20px 0",
+      display: "flex", justifyContent: "center", alignItems: "center",
+      padding: isMobile ? "0 0 max(22px, env(safe-area-inset-bottom))" : "20px 0",
+      minHeight: isMobile ? "calc(100dvh - 118px)" : "auto",
+      width: "100%",
     }}>
       <svg
+        ref={graphSvgRef}
         width="100%"
-        height="auto"
-        viewBox={`${-VIEW_HALF} ${-VIEW_HALF} ${VIEW_SIZE} ${VIEW_SIZE}`}
+        height={isMobile ? "calc(100dvh - 118px)" : "auto"}
+        viewBox={`${zoomedGraphViewBox.x} ${zoomedGraphViewBox.y} ${zoomedGraphViewBox.w} ${zoomedGraphViewBox.h}`}
         style={{
-          maxHeight: "min(80vh, 800px)",
-          maxWidth: "min(80vw, 1000px)",
+          maxHeight: isMobile ? "calc(100dvh - 118px)" : "min(80vh, 800px)",
+          maxWidth: isMobile ? "100vw" : "min(80vw, 1000px)",
+          minHeight: isMobile ? "min(720px, calc(100dvh - 118px))" : "auto",
           display: "block",
+          touchAction: "none",
+          overscrollBehavior: "contain",
         }}
+        preserveAspectRatio="xMidYMid meet"
+        onWheel={handleGraphWheel}
+        onTouchStart={handleGraphTouchStart}
+        onTouchMove={handleGraphTouchMove}
+        onTouchEnd={handleGraphTouchEnd}
+        onTouchCancel={handleGraphTouchEnd}
+        onDoubleClick={() => setGraphCamera({ scale: 1, x: 0, y: 0 })}
         aria-label="Relationship graph"
       >
+        <defs>
+          <radialGradient id="people-graph-field" cx="50%" cy="48%" r="66%">
+            <stop offset="0%" stopColor="var(--hg-fg-2)" stopOpacity="0.11" />
+            <stop offset="52%" stopColor="var(--hg-fg-3)" stopOpacity="0.035" />
+            <stop offset="100%" stopColor="var(--hg-bg-0)" stopOpacity="0" />
+          </radialGradient>
+          <filter id="people-node-soft-glow" x="-35%" y="-35%" width="170%" height="170%">
+            <feGaussianBlur stdDeviation="3" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+        <rect
+          x={graphViewBox.x}
+          y={graphViewBox.y}
+          width={graphViewBox.w}
+          height={graphViewBox.h}
+          fill="url(#people-graph-field)"
+          opacity={isMobile ? 0.9 : 0.45}
+          aria-hidden="true"
+        />
         {/* Subtle ring guides — radial vignette per Addendum 14 visual polish */}
         {[1, 2, 3].map((r) => (
           <circle
             key={`ring-${r}`}
-            cx={0} cy={0} r={H.radiusForRing(r)}
+            cx={0} cy={0} r={H.radiusForRing(r) * (isMobile ? 1.2 : 1)}
             fill="none"
             stroke="var(--hg-border-soft)"
-            strokeWidth={0.5}
-            opacity={0.4}
+            strokeWidth={isMobile ? 0.75 : 0.5}
+            strokeDasharray={isMobile ? "2,8" : undefined}
+            opacity={activeRings.has(r) ? (isMobile ? 0.28 : 0.4) : isMobile ? 0 : 0.18}
           />
         ))}
 
@@ -693,7 +1133,8 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
               stroke={e.style.stroke}
               strokeWidth={incident ? (e.style.width + 0.8) : e.style.width}
               strokeDasharray={e.style.dash || undefined}
-              opacity={dimmed ? 0.25 : 0.85}
+              opacity={dimmed ? 0.2 : isMobile ? 0.68 : 0.85}
+              strokeLinecap="round"
               style={{ transition: "opacity 180ms ease, stroke-width 180ms ease" }}
               aria-label={e.relType
                 ? `${e.relType}${e.status === "ended" ? " (ended)" : ""}`
@@ -702,70 +1143,30 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
           );
         })}
 
-        {/* Addendum 22 cluster arc labels — render a faint dashed arc
-            + a small text label slightly OUTSIDE each cluster's ring
-            so the grouping is visually explicit ("parents",
-            "siblings", "children", "in-laws"). Only renders when a
-            cluster has ≥ 2 members (single-member clusters are
-            visually self-evident). */}
-        {[1, 2, 3].flatMap((ring) => {
-          const clusters = H.clustersForRing ? H.clustersForRing(layout, ring) : {};
-          return Object.entries(clusters).flatMap(([name, members]) => {
-            if (members.length < 2) return [];
-            // Cluster bounds: midpoint between members' avg + outer
-            // radius (radius + size + label gap).
-            const ringRadius = H.radiusForRing(ring);
-            const labelRadius = ringRadius + (members[0].size / 2) + 22;
-            // Compute centroid angle of the cluster (average direction
-            // from origin to the members' midpoint).
-            let sumX = 0, sumY = 0;
-            for (const m of members) { sumX += m.x; sumY += m.y; }
-            const cx = sumX / members.length;
-            const cy = sumY / members.length;
-            const centroidAngle = Math.atan2(cy, cx);
-            const labelX = labelRadius * Math.cos(centroidAngle);
-            const labelY = labelRadius * Math.sin(centroidAngle);
-            // Arc endpoints flank the cluster's outermost members.
-            const angles = members.map((m) => Math.atan2(m.y, m.x));
-            const aMin = Math.min(...angles);
-            const aMax = Math.max(...angles);
-            const arcWidth = (members[0].size / 2) + 8;  // small pad
-            const arcR = ringRadius + arcWidth;
-            const a1 = aMin - 0.06;  // ~3.5° pad outside outer members
-            const a2 = aMax + 0.06;
-            const arcX1 = arcR * Math.cos(a1);
-            const arcY1 = arcR * Math.sin(a1);
-            const arcX2 = arcR * Math.cos(a2);
-            const arcY2 = arcR * Math.sin(a2);
-            // SVG arc path: M start A rx ry x-rotation large-arc sweep END
-            const largeArc = (a2 - a1) > Math.PI ? 1 : 0;
-            const sweep = 1;  // clockwise
-            const arcPath = `M ${arcX1.toFixed(1)} ${arcY1.toFixed(1)} `
-              + `A ${arcR.toFixed(1)} ${arcR.toFixed(1)} 0 ${largeArc} ${sweep} `
-              + `${arcX2.toFixed(1)} ${arcY2.toFixed(1)}`;
-            return [
-              <path
-                key={`cluster-arc-${ring}-${name}`}
-                d={arcPath}
-                fill="none"
-                stroke="var(--hg-fg-4)"
-                strokeWidth={0.6}
-                strokeDasharray="2,3"
-                opacity={0.55}
-              />,
-              <text
-                key={`cluster-label-${ring}-${name}`}
-                x={labelX} y={labelY + 3}
-                textAnchor="middle"
-                fontFamily={PEOPLE_FONT_MONO}
-                fontSize={9}
-                letterSpacing="0.14em"
-                fill="var(--hg-fg-3)"
-                style={{ textTransform: "uppercase" }}
-              >{name}</text>,
-            ];
-          });
-        })}
+        {/* Branch labels use the final node positions, not idealized ring
+            math, so they stay attached to the actual family/friend
+            groups after mobile collision resolution. */}
+        {branchGroups.map((g) => (
+          <g key={`branch-${g.key}`} aria-hidden="true">
+            <text
+              x={g.cx}
+              y={g.labelY}
+              textAnchor="middle"
+              fontFamily={PEOPLE_FONT_MONO}
+              fontSize={isMobile ? 9.5 : 8}
+              letterSpacing="0.16em"
+              fill="var(--hg-fg-3)"
+              stroke="var(--hg-bg-0)"
+              strokeWidth={3}
+              strokeLinejoin="round"
+              paintOrder="stroke fill"
+              opacity={isMobile ? 0.78 : 0.58}
+              style={{ textTransform: "uppercase" }}
+            >
+              {g.label}
+            </text>
+          </g>
+        ))}
 
         {/* Nodes */}
         {layout.map((node) => {
@@ -780,7 +1181,7 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
                         stroke="var(--hg-border)" strokeWidth={1} strokeDasharray="3,2" />
                 <text x={0} y={4} textAnchor="middle"
                       fontFamily={PEOPLE_FONT_MONO}
-                      fontSize={Math.max(9, node.size * 0.22)}
+                      fontSize={Math.max(9, node.size * 0.22 * (node.textScale || 1))}
                       fill="var(--hg-fg-3)">
                   +{node.overflowCount}
                 </text>
@@ -824,6 +1225,7 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
                 fill="var(--hg-bg-1)"
                 stroke={strokeColor}
                 strokeWidth={strokeWidth}
+                filter={isCenter && isMobile ? "url(#people-node-soft-glow)" : undefined}
                 style={{ transition: "stroke 180ms ease, stroke-width 180ms ease" }}
               />
               {/* Addendum 24 Phase 3: custom avatar wins when the parent
@@ -839,7 +1241,7 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
                       x={0} y={Math.round(node.size * 0.13)}
                       textAnchor="middle"
                       fontFamily={PEOPLE_FONT_SANS}
-                      fontSize={Math.round(node.size * 0.36)}
+                      fontSize={Math.round(node.size * 0.36 * (node.textScale || 1))}
                       fontWeight={300}
                       fill={isCenter ? "var(--hg-ice)" : "var(--hg-fg-1)"}
                       opacity={isArchived ? 0.6 : 1}
@@ -882,10 +1284,10 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
                   creating a clean halo that hides the edge stroke
                   beneath the text. No bbox math needed. */}
               <text
-                x={0} y={node.size / 2 + 14}
+                x={0} y={node.size / 2 + 14 * (node.textScale || 1)}
                 textAnchor="middle"
                 fontFamily={PEOPLE_FONT_MONO}
-                fontSize={Math.max(9, Math.round(node.size * 0.18))}
+                fontSize={Math.max(9, Math.round(node.size * 0.18 * (node.textScale || 1)))}
                 fill="var(--hg-fg-0)"
                 stroke="var(--hg-bg-0)"
                 strokeWidth={4}
@@ -908,10 +1310,10 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
                   : (id?.relationship_type || "").replace(/_/g, " ");
                 return (
                   <text
-                    x={0} y={node.size / 2 + 26}
+                    x={0} y={node.size / 2 + 28 * (node.textScale || 1)}
                     textAnchor="middle"
                     fontFamily={PEOPLE_FONT_MONO}
-                    fontSize={Math.max(7, Math.round(node.size * 0.14))}
+                    fontSize={Math.max(7, Math.round(node.size * 0.14 * (node.textScale || 1)))}
                     fill="var(--hg-fg-3)"
                     stroke="var(--hg-bg-0)"
                     strokeWidth={3}
@@ -1303,24 +1705,402 @@ function PeopleQueueCard({ identity, endpoint, token, sim, avatarBlobUrls, onSav
 /* ─────────────────────────────────────────────────────────────────────
  * Sub-component: PeopleQueueView
  * ──────────────────────────────────────────────────────────────────── */
-function PeopleQueueView({ identities, sim, endpoint, token, avatarBlobUrls, onSaved }) {
+function identityFrigateNames(identity) {
+  const names = new Set();
+  if (!identity) return names;
+  if (Array.isArray(identity.aliases)) {
+    for (const a of identity.aliases) {
+      if (a && a.kind === "frigate_name" && a.alias) names.add(String(a.alias).trim().toLowerCase());
+    }
+  }
+  if (identity.display_name) names.add(String(identity.display_name).trim().toLowerCase());
+  return names;
+}
+
+function unlinkedFaceBuckets(facesByPerson, identities) {
+  if (!facesByPerson || typeof facesByPerson !== "object") return [];
+  const linked = new Set();
+  for (const identity of identities || []) {
+    for (const name of identityFrigateNames(identity)) linked.add(name);
+  }
+  return Object.entries(facesByPerson)
+    .filter(([name, files]) => {
+      const key = String(name || "").trim().toLowerCase();
+      return key && !linked.has(key) && Array.isArray(files) && files.length > 0;
+    })
+    .map(([name, files]) => ({ name, files }))
+    .sort((a, b) => b.files.length - a.files.length || a.name.localeCompare(b.name));
+}
+
+function peopleQueueDiagnostics({ identities, facesByPerson, facesStatus, frigateDiagnostics }) {
+  const allIdentities = Array.isArray(identities) ? identities : [];
+  const unknowns = allIdentities.filter((i) => i.relationship_type === "unknown");
+  const linkedNames = new Set();
+  for (const identity of allIdentities) {
+    for (const name of identityFrigateNames(identity)) linkedNames.add(name);
+  }
+  const buckets = facesByPerson && typeof facesByPerson === "object"
+    ? Object.entries(facesByPerson)
+      .filter(([, files]) => Array.isArray(files))
+      .map(([name, files]) => ({
+        name,
+        key: String(name || "").trim().toLowerCase(),
+        count: files.length,
+        linked: linkedNames.has(String(name || "").trim().toLowerCase()),
+      }))
+    : [];
+  const train = buckets.find((b) => b.key === "train");
+  const linkedBuckets = buckets.filter((b) => b.linked && b.key !== "train");
+  const unlinkedBuckets = buckets.filter((b) => b.key && !b.linked && b.key !== "train" && b.count > 0);
+  const knownBuckets = buckets
+    .filter((b) => b.key && b.key !== "train" && b.count > 0)
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  const caps = frigateDiagnostics?.capabilities || null;
+  const seed = frigateDiagnostics?.seedReport || null;
+  return {
+    identityCount: allIdentities.length,
+    unknownCount: unknowns.length,
+    bucketCount: buckets.length,
+    linkedBucketCount: linkedBuckets.length,
+    unlinkedBucketCount: unlinkedBuckets.length,
+    knownBucketSummary: knownBuckets.slice(0, 6).map((b) => `${b.name} ${b.count}`).join(" · "),
+    trainCaptureCount: train ? train.count : null,
+    facesState: facesStatus?.state || "idle",
+    facesError: facesStatus?.error || null,
+    faceLibraryReachable: caps ? !!caps.face_library : null,
+    frigateReachable: caps ? !!caps.reachable : null,
+    lastSeedFound: seed && typeof seed.frigate_faces_found === "number" ? seed.frigate_faces_found : null,
+    lastSeedCreated: seed && typeof seed.identities_created === "number" ? seed.identities_created : null,
+    lastSeedErrors: seed && Array.isArray(seed.errors) ? seed.errors : [],
+  };
+}
+
+function QueueStat({ label, value, tone = "normal" }) {
+  const color = tone === "warn" ? "var(--hg-warn)" : tone === "crit" ? "var(--hg-crit)" : "var(--hg-fg-0)";
+  return (
+    <div style={{
+      border: "1px solid var(--hg-border-soft)",
+      background: "var(--hg-bg-1)",
+      padding: "10px 12px",
+      minWidth: 0,
+    }}>
+      <div style={{
+        fontFamily: PEOPLE_FONT_MONO,
+        fontSize: 9,
+        letterSpacing: "0.14em",
+        color: "var(--hg-fg-4)",
+        textTransform: "uppercase",
+        marginBottom: 6,
+      }}>{label}</div>
+      <div style={{
+        fontFamily: PEOPLE_FONT_MONO,
+        fontSize: 16,
+        color,
+      }}>{value}</div>
+    </div>
+  );
+}
+
+function UnlinkedFaceBucketCard({ bucket, frigateUrl, endpoint, token, sim, onSaved }) {
+  const [name, setName] = useState(bucket.name);
+  const [rel, setRel] = useState("unknown");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const base = String(frigateUrl || "").replace(/\/+$/, "");
+  const folder = encodeURIComponent(bucket.name);
+  const urls = base
+    ? bucket.files.slice(0, 6).map((f) => `${base}/clips/faces/${folder}/${encodeURIComponent(f)}`)
+    : [];
+
+  async function createLinkedIdentity(mode = "identity") {
+    setError(null);
+    const displayName = mode === "ignore" ? `ignored ${bucket.name}` : name.trim();
+    const relationshipType = mode === "ignore" ? "do_not_identify" : rel;
+    if (!displayName) {
+      setError("name required");
+      return;
+    }
+    setSaving(true);
+    try {
+      if (sim?.active) {
+        await new Promise((r) => setTimeout(r, 250));
+        onSaved?.({
+          display_name: displayName,
+          relationship_type: relationshipType,
+          aliases: [{ kind: "frigate_name", alias: bucket.name }],
+        });
+        return;
+      }
+      const url = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/identities/create`;
+      const resp = await window.tauriFetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          display_name: displayName,
+          relationship_type: relationshipType,
+          notes: mode === "ignore"
+            ? `ignored from unlinked Frigate face bucket ${bucket.name}`
+            : `created from unlinked Frigate face bucket ${bucket.name}`,
+          frigate_person_name: bucket.name,
+          actor: "people_queue",
+        }),
+      });
+      if (!resp.ok) {
+        const body = await resp.text().catch(() => "");
+        setError(`HTTP ${resp.status}: ${body.slice(0, 120)}`);
+        return;
+      }
+      const result = await resp.json();
+      if (result.error) {
+        setError(result.error);
+        return;
+      }
+      onSaved?.(result);
+    } catch (e) {
+      setError(`network error: ${e.message || e}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div style={{
+      border: "1px solid var(--hg-warn)",
+      padding: 14,
+      background: "color-mix(in srgb, var(--hg-warn) 8%, var(--hg-bg-1))",
+      display: "flex",
+      flexDirection: "column",
+      gap: 10,
+    }}>
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        fontFamily: PEOPLE_FONT_MONO,
+        fontSize: 10,
+        letterSpacing: "0.12em",
+        color: "var(--hg-warn)",
+      }}>
+        <span>unlinked face bucket</span>
+        <span style={{ marginLeft: "auto", color: "var(--hg-fg-3)" }}>{bucket.files.length} captures</span>
+      </div>
+      <div style={{ fontSize: 16, color: "var(--hg-fg-0)" }}>{bucket.name}</div>
+      {urls.length > 0 && (
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+          gap: 6,
+        }}>
+          {urls.map((url) => (
+            <img
+              key={url}
+              src={url}
+              alt=""
+              loading="lazy"
+              style={{
+                width: "100%",
+                aspectRatio: "1 / 1",
+                objectFit: "cover",
+                border: "1px solid var(--hg-border-soft)",
+                background: "var(--hg-bg-0)",
+              }}
+            />
+          ))}
+        </div>
+      )}
+      <div style={{ fontSize: 11, lineHeight: 1.5, color: "var(--hg-fg-3)" }}>
+        Frigate has captures for this bucket, but Home does not have a matching identity alias.
+        Name it if this is a real person, or mark it as do not identify if the bucket is junk.
+      </div>
+      <input
+        type="text"
+        value={name}
+        disabled={saving}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="person name"
+        className="hg-focusable"
+        style={{
+          background: "var(--hg-input-bg)",
+          border: "1px solid var(--hg-border-soft)",
+          padding: "8px 10px",
+          fontFamily: PEOPLE_FONT_SANS,
+          fontSize: 14,
+          color: "var(--hg-fg-0)",
+          outline: "none",
+        }}
+      />
+      <select
+        value={rel}
+        disabled={saving}
+        onChange={(e) => setRel(e.target.value)}
+        className="hg-focusable"
+        style={{
+          background: "var(--hg-input-bg)",
+          border: "1px solid var(--hg-border-soft)",
+          padding: "8px 10px",
+          fontFamily: PEOPLE_FONT_MONO,
+          fontSize: 11,
+          color: "var(--hg-fg-1)",
+          letterSpacing: "0.04em",
+          outline: "none",
+          cursor: saving ? "default" : "pointer",
+        }}
+      >
+        {REL_TYPE_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+      {error && (
+        <div style={{ color: "var(--hg-crit)", fontSize: 10, lineHeight: 1.4 }}>{error}</div>
+      )}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+        gap: 8,
+      }}>
+        <button
+          onClick={() => createLinkedIdentity("identity")}
+          disabled={saving || !name.trim()}
+          className="hg-focusable"
+          style={{
+            background: "var(--hg-ice)",
+            border: "1px solid var(--hg-ice)",
+            color: "var(--hg-bg-0)",
+            padding: "8px 10px",
+            fontFamily: PEOPLE_FONT_MONO,
+            fontSize: 10,
+            letterSpacing: "0.14em",
+            textTransform: "lowercase",
+            cursor: saving || !name.trim() ? "default" : "pointer",
+          }}
+        >
+          {saving ? "saving..." : "create identity"}
+        </button>
+        <button
+          onClick={() => createLinkedIdentity("ignore")}
+          disabled={saving}
+          className="hg-focusable"
+          style={{
+            background: "transparent",
+            border: "1px solid var(--hg-border-soft)",
+            color: "var(--hg-fg-2)",
+            padding: "8px 10px",
+            fontFamily: PEOPLE_FONT_MONO,
+            fontSize: 10,
+            letterSpacing: "0.14em",
+            textTransform: "lowercase",
+            cursor: saving ? "default" : "pointer",
+          }}
+        >
+          do not identify
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PeopleQueueView({ identities, facesByPerson, frigateUrl, facesStatus, frigateDiagnostics, sim, endpoint, token, avatarBlobUrls, onSaved }) {
   // The queue is everyone tagged 'unknown' — the auto-seed default for
   // Frigate-discovered faces. Once the user assigns a relationship type,
   // the card drops out (next refresh removes it from this filter).
   const unknowns = (identities || []).filter((i) => i.relationship_type === "unknown");
-  if (unknowns.length === 0) {
+  const unlinkedBuckets = unlinkedFaceBuckets(facesByPerson, identities);
+  const diagnostics = peopleQueueDiagnostics({ identities, facesByPerson, facesStatus, frigateDiagnostics });
+  if (unknowns.length === 0 && unlinkedBuckets.length === 0) {
     return (
       <div style={{
-        textAlign: "center", padding: "60px 20px",
+        padding: "28px 0 60px",
         color: "var(--hg-fg-3)",
       }}>
         <div style={{
-          fontFamily: PEOPLE_FONT_MONO, fontSize: 11, letterSpacing: "0.16em",
-          textTransform: "uppercase", color: "var(--hg-fg-3)", marginBottom: 8,
-        }}>queue is empty</div>
-        <div style={{ fontSize: 12, color: "var(--hg-fg-4)", lineHeight: 1.6, maxWidth: 480, margin: "0 auto" }}>
-          All known faces have been tagged. New faces detected by Frigate will appear here
-          for you to name + relate.
+          border: "1px solid var(--hg-border-soft)",
+          background: "var(--hg-bg-1)",
+          padding: 16,
+          maxWidth: 640,
+          margin: "0 auto",
+        }}>
+          <div style={{
+            fontFamily: PEOPLE_FONT_MONO, fontSize: 11, letterSpacing: "0.16em",
+            textTransform: "uppercase", color: "var(--hg-fg-2)", marginBottom: 8,
+          }}>queue is empty</div>
+          <div style={{ fontSize: 13, color: "var(--hg-fg-1)", lineHeight: 1.55, marginBottom: 14 }}>
+            home does not currently have any unknown identities or unlinked frigate face buckets to review.
+          </div>
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+            gap: 8,
+            marginBottom: 14,
+          }}>
+            <QueueStat label="identities" value={diagnostics.identityCount} />
+            <QueueStat label="unknown" value={diagnostics.unknownCount} />
+            <QueueStat label="face buckets" value={diagnostics.bucketCount || "none"} />
+            <QueueStat label="unlinked" value={diagnostics.unlinkedBucketCount} />
+            <QueueStat label="train" value={diagnostics.trainCaptureCount == null ? "unknown" : diagnostics.trainCaptureCount} />
+          </div>
+          <div style={{
+            fontFamily: PEOPLE_FONT_MONO,
+            fontSize: 10,
+            letterSpacing: "0.08em",
+            color: diagnostics.facesState === "error" ? "var(--hg-warn)" : "var(--hg-fg-3)",
+            lineHeight: 1.6,
+            marginBottom: 12,
+          }}>
+            frigate faces: {diagnostics.facesState}
+            {diagnostics.facesError ? ` · ${diagnostics.facesError}` : ""}
+            {diagnostics.lastSeedFound != null ? ` · last seed found ${diagnostics.lastSeedFound}` : ""}
+            {diagnostics.lastSeedCreated != null ? ` · created ${diagnostics.lastSeedCreated}` : ""}
+          </div>
+          <div style={{ fontSize: 12, color: "var(--hg-fg-3)", lineHeight: 1.6 }}>
+            {diagnostics.facesState === "loaded" && diagnostics.bucketCount > 0 ? (
+              <>
+                frigate is only reporting buckets already linked to home identities
+                {diagnostics.trainCaptureCount === 0 ? ", and the training bucket is empty." : "."}
+              </>
+            ) : diagnostics.facesState === "error" ? (
+              <>the people tab could not read frigate's face library, so the queue cannot see new buckets.</>
+            ) : (
+              <>the people tab has not loaded frigate's face library yet.</>
+            )}
+          </div>
+          <div style={{ marginTop: 14, fontSize: 12, color: "var(--hg-fg-4)", lineHeight: 1.7 }}>
+            <div>likely causes:</div>
+            <div>· driveway face recognition is intentionally disabled, so passerby faces do not enter this queue</div>
+            <div>· a new indoor face has not met Frigate's threshold/minimum-capture settings yet</div>
+            <div>· frigate recognized the person as an existing bucket instead of creating a new one</div>
+            <div>· the ha identity reseed loop has not picked up a new frigate bucket yet</div>
+          </div>
+          {diagnostics.knownBucketSummary && (
+            <div style={{
+              marginTop: 12,
+              padding: 10,
+              border: "1px solid var(--hg-border-soft)",
+              background: "var(--hg-bg-0)",
+              fontFamily: PEOPLE_FONT_MONO,
+              fontSize: 10,
+              letterSpacing: "0.06em",
+              color: "var(--hg-fg-3)",
+              lineHeight: 1.5,
+            }}>
+              current frigate buckets: {diagnostics.knownBucketSummary}
+            </div>
+          )}
+          {diagnostics.lastSeedErrors.length > 0 && (
+            <div style={{
+              marginTop: 12,
+              padding: 10,
+              border: "1px solid var(--hg-warn)",
+              color: "var(--hg-warn)",
+              fontFamily: PEOPLE_FONT_MONO,
+              fontSize: 10,
+              lineHeight: 1.5,
+            }}>
+              seed errors: {diagnostics.lastSeedErrors.slice(0, 2).join(" · ")}
+            </div>
+          )}
           {sim?.active && (
             <span style={{ display: "block", marginTop: 8, color: "var(--hg-fg-4)" }}>
               (sim mode active — no real Frigate detection)
@@ -1336,12 +2116,38 @@ function PeopleQueueView({ identities, sim, endpoint, token, avatarBlobUrls, onS
         fontSize: 9, letterSpacing: "0.18em", textTransform: "uppercase",
         color: "var(--hg-fg-3)", marginBottom: 16,
       }}>
-        {unknowns.length} unidentified — assign names + relationships
+        {unknowns.length} unidentified identities
+        {unlinkedBuckets.length > 0 ? ` + ${unlinkedBuckets.length} unlinked Frigate buckets` : ""}
       </div>
+      {unlinkedBuckets.length > 0 && (
+        <div style={{
+          marginBottom: 18,
+          padding: 12,
+          border: "1px solid var(--hg-border-soft)",
+          background: "var(--hg-bg-1)",
+          color: "var(--hg-fg-3)",
+          fontSize: 11,
+          lineHeight: 1.5,
+        }}>
+          These buckets exist in Frigate but are not linked to Home identities. They are shown here
+          so the queue does not report a false empty state.
+        </div>
+      )}
       <div style={{
         display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
         gap: 14,
       }}>
+        {unlinkedBuckets.map((bucket) => (
+          <UnlinkedFaceBucketCard
+            key={bucket.name}
+            bucket={bucket}
+            frigateUrl={frigateUrl}
+            endpoint={endpoint}
+            token={token}
+            sim={sim}
+            onSaved={onSaved}
+          />
+        ))}
         {unknowns.map((i) => (
           <PeopleQueueCard
             key={i.uuid}
@@ -2705,5 +3511,95 @@ function PreferencesSection({ identityUuid, preferences, endpoint, token, sim, o
   );
 }
 
+async function prewarmPeopleData({ endpoint, token, signal, maxAvatars = 8, maxFaceThumbs = 8 } = {}) {
+  const base = String(endpoint || "").replace(/\/+$/, "");
+  if (!base || !token) return { ok: false, skipped: true, reason: "missing credentials" };
+  const headers = { Authorization: `Bearer ${token}` };
+  const startedAt = Date.now();
+  const out = {
+    ok: true,
+    identities: 0,
+    relationships: 0,
+    faceBuckets: 0,
+    avatarsChecked: 0,
+    avatarsWarmed: 0,
+    faceThumbsWarmed: 0,
+    durationMs: 0,
+  };
+  const fetcher = (typeof window !== "undefined" && window.tauriFetch) || fetch;
+
+  const jsonFetch = async (url) => {
+    const resp = await fetcher(url, { headers, cache: "no-store", signal });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return resp.json();
+  };
+
+  const warmImage = async (url, authed = false) => {
+    try {
+      const resp = await fetcher(url, {
+        headers: authed ? headers : undefined,
+        cache: "force-cache",
+        signal,
+      });
+      if (!resp.ok) return false;
+      await resp.blob();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  };
+
+  const payload = await jsonFetch(`${base}/api/extended_openai_conversation/identities`);
+  const identities = Array.isArray(payload?.identities) ? payload.identities : [];
+  out.identities = identities.length;
+  out.relationships = Array.isArray(payload?.relationships) ? payload.relationships.length : 0;
+
+  let facesByPerson = null;
+  if (payload?.frigate_url) {
+    try {
+      facesByPerson = await jsonFetch(`${base}/api/extended_openai_conversation/frigate_proxy?path=api/faces`);
+      out.faceBuckets = facesByPerson && typeof facesByPerson === "object" ? Object.keys(facesByPerson).length : 0;
+    } catch (err) {
+      out.facesError = err?.message || String(err);
+    }
+  }
+  writePeopleDataCache(base, payload, facesByPerson);
+
+  for (const identity of identities.slice(0, maxAvatars)) {
+    if (signal?.aborted) break;
+    if (!identity?.uuid) continue;
+    out.avatarsChecked++;
+    const avatarUrl = `${base}/api/extended_openai_conversation/identity/${encodeURIComponent(identity.uuid)}/avatar`;
+    if (await warmImage(avatarUrl, true)) out.avatarsWarmed++;
+  }
+
+  const H = (typeof window !== "undefined" && window.HomePeopleHelpers) || null;
+  const faceBase = payload?.frigate_url ? String(payload.frigate_url).replace(/\/+$/, "") : "";
+  if (H?.frigateFaceCropUrls && facesByPerson && faceBase) {
+    const urls = [];
+    for (const identity of identities) {
+      const result = H.frigateFaceCropUrls(facesByPerson, identity, faceBase);
+      for (const url of result.urls || []) {
+        urls.push(url);
+        if (urls.length >= maxFaceThumbs) break;
+      }
+      if (urls.length >= maxFaceThumbs) break;
+    }
+    for (const url of urls) {
+      if (signal?.aborted) break;
+      if (await warmImage(url, false)) out.faceThumbsWarmed++;
+    }
+  }
+
+  out.durationMs = Date.now() - startedAt;
+  return out;
+}
+
 // Expose to window for home-app.jsx consumption
+window.HomePeoplePrewarm = {
+  ...(window.HomePeoplePrewarm || {}),
+  start: prewarmPeopleData,
+  readCache: readPeopleDataCache,
+  writeCache: writePeopleDataCache,
+};
 window.HomePeopleOverlay = HomePeopleOverlay;

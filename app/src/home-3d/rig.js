@@ -117,6 +117,26 @@ export function createRig(camera) {
         };
     }
 
+    function quadraticBezier(out, a, b, c, t) {
+        const u = 1 - t;
+        return out.copy(a).multiplyScalar(u * u)
+            .addScaledVector(b, 2 * u * t)
+            .addScaledVector(c, t * t);
+    }
+
+    function cameraSwoopMidpoint(from, to) {
+        const mid = from.clone().lerp(to, 0.5);
+        const distance = from.distanceTo(to);
+        if (!(distance > 0.001)) return mid;
+        const lift = THREE.MathUtils.clamp(distance * 0.18, 0.45, 3.1);
+        const lateral = new THREE.Vector3().subVectors(to, from).cross(WORLD_UP);
+        if (lateral.lengthSq() > 1e-6) {
+            lateral.normalize().multiplyScalar(THREE.MathUtils.clamp(distance * 0.045, 0, 0.85));
+            mid.add(lateral);
+        }
+        return mid.addScaledVector(WORLD_UP, lift);
+    }
+
     function applyOrbitPose() {
         const p = state.pivot;
         const az = cur.az + state.previewAz;
@@ -219,7 +239,8 @@ export function createRig(camera) {
                 const p = poseTween;
                 p.t += dt * 1000;
                 const k = easeInOutCubic(Math.min(1, p.t / p.dur));
-                camera.position.lerpVectors(p.fromPos, p.toPos, k);
+                if (p.midPos) quadraticBezier(camera.position, p.fromPos, p.midPos, p.toPos, k);
+                else camera.position.lerpVectors(p.fromPos, p.toPos, k);
                 camera.quaternion.slerpQuaternions(p.fromQuat, p.toQuat, k);
                 const fk = Math.max(0, (k - 0.6) / 0.4); // fov morphs in the last 40%
                 camera.fov = p.fromFov + (p.toFov - p.fromFov) * fk;
@@ -285,11 +306,14 @@ export function createRig(camera) {
          * returnToOverview() flies back and unlocks. */
         flyToPose({ position, quaternion, fov, dur = 900, projection = null }) {
             state.locked = true;
+            const fromPos = camera.position.clone();
+            const toPos = position.clone();
             poseTween = {
                 t: 0, dur, hold: true,
-                fromPos: camera.position.clone(), fromQuat: camera.quaternion.clone(),
+                fromPos, fromQuat: camera.quaternion.clone(),
                 fromFov: camera.fov,
-                toPos: position.clone(), toQuat: quaternion.clone(),
+                midPos: cameraSwoopMidpoint(fromPos, toPos),
+                toPos, toQuat: quaternion.clone(),
                 toFov: fov || camera.fov,
                 projection,
             };
@@ -312,6 +336,7 @@ export function createRig(camera) {
             heldPose = null;
         },
         inCameraPose() { return !!(heldPose || (poseTween && poseTween.hold)); },
+        cameraPoseFlying() { return !!(poseTween && poseTween.hold); },
         cameraPoseSettled() { return !!heldPose; },
 
         /* Instant hard reset (view unmount / recovery): drop any held or

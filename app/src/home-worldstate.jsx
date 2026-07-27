@@ -196,6 +196,8 @@ const WS_AUTO_REFRESH_MS = 5000;
 function HomeWorldStateDrawer({ open, onClose, endpoint, token, sim, refreshIntervalMs, initialRoom }) {
   const [data, setData] = useState(null);    // null = loading, {} = response
   const [error, setError] = useState(null);
+  // Attempt number while fetchWithRetry is still reconnecting (null = idle).
+  const [reconnecting, setReconnecting] = useState(null);
   const [fetchMs, setFetchMs] = useState(null);
   const [now, setNow] = useState(Date.now());
   // F-32+ auto-refresh state: when did the LAST successful fetch
@@ -234,6 +236,7 @@ function HomeWorldStateDrawer({ open, onClose, endpoint, token, sim, refreshInte
       setFetchMs(null);
     }
     setError(null);
+    setReconnecting(null);
     setNow(Date.now());
     setFetchingSince(Date.now());
 
@@ -259,12 +262,22 @@ function HomeWorldStateDrawer({ open, onClose, endpoint, token, sim, refreshInte
     try {
       const base = endpoint.replace(/\/+$/, "");
       const url = `${base}/api/extended_openai_conversation/world_state`;
-      const tauriFetch = window.tauriFetch || fetch;
-      const r = await tauriFetch(url, {
-        headers: { Authorization: `Bearer ${token}` },
-        cache: "no-store",
-        signal: controller.signal,
+      // Visible loads (initial/manual) retry through the box-reboot window with
+      // a reconnecting banner. Silent auto-refresh ticks stay single-shot so a
+      // sustained outage can't stack overlapping retry fans behind the poll.
+      const r = await window.fetchWithRetry({
+        url,
+        options: {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+          signal: controller.signal,
+        },
+        maxAttempts: silent ? 1 : 4,
+        onAttempt: ({ attempt, nextDelay }) => {
+          if (!silent && nextDelay != null) setReconnecting(attempt);
+        },
       });
+      setReconnecting(null);
       if (!r.ok) {
         setError(`HTTP ${r.status}`);
         if (!silent) setData({});
@@ -278,8 +291,15 @@ function HomeWorldStateDrawer({ open, onClose, endpoint, token, sim, refreshInte
       setLastFetchAt(Date.now());
       setFetchingSince(0);
     } catch (e) {
-      if (e?.name === "AbortError") return;
-      setError(e?.message || String(e));
+      // Our own controller only aborts on unmount cleanup — bail silently.
+      // A per-attempt timeout inside fetchWithRetry does NOT abort it, so a
+      // genuine outage still surfaces below.
+      if (controller.signal.aborted) return;
+      setReconnecting(null);
+      const status = e && e.lastStatus;
+      if (e && e.reason === "http" && status) setError(`HTTP ${status}`);
+      else if (e && e.attempts) setError(`world state unreachable after ${e.attempts} ${e.attempts === 1 ? "attempt" : "attempts"}`);
+      else setError(e?.message || String(e));
       if (!silent) setData({});
       setFetchMs(Date.now() - t0);
       setFetchingSince(0);
@@ -525,10 +545,30 @@ function HomeWorldStateDrawer({ open, onClose, endpoint, token, sim, refreshInte
           </div>
         )}
 
+        {/* Reconnecting (retrying through a box-reboot window) */}
+        {reconnecting != null && !error && (
+          <div style={{ padding: "20px 24px", color: "var(--hg-ice)", fontSize: 11 }}>
+            reconnecting to world state… waiting for the network (attempt {reconnecting}).
+          </div>
+        )}
+
         {/* Error */}
         {error && data !== null && (
-          <div style={{ padding: "20px 24px", color: "var(--hg-crit)", fontSize: 11 }}>
-            {error}
+          <div style={{
+            padding: "20px 24px", color: "var(--hg-crit)", fontSize: 11,
+            display: "flex", alignItems: "center", gap: 12,
+          }}>
+            <span style={{ flex: 1 }}>{error}</span>
+            <button
+              onClick={refreshManual}
+              className="hg-focusable"
+              style={{
+                background: "transparent", border: "1px solid var(--hg-crit)",
+                color: "var(--hg-crit)", padding: "4px 11px",
+                fontFamily: WS_FONT_MONO, fontSize: 10, letterSpacing: "0.12em",
+                cursor: "pointer", textTransform: "lowercase", whiteSpace: "nowrap",
+              }}
+            >retry now</button>
           </div>
         )}
 

@@ -44,6 +44,7 @@ sudo install -d -o "${install_user}" -g "${install_group}" "$(dirname -- "${auth
   printf 'Environment=HOME_WEB_HA_TARGET=%s\n' "${HOME_WEB_HA_TARGET:-http://192.168.0.125:8123}"
   printf 'Environment=HOME_WEB_METRICS_TARGET=%s\n' "${HOME_WEB_METRICS_TARGET:-http://192.168.0.100:8092}"
   printf 'Environment=HOME_WEB_VLLM_TARGET=%s\n' "${HOME_WEB_VLLM_TARGET:-http://192.168.0.100:8000}"
+  printf 'Environment=HOME_WEB_ENABLE_LEGACY_VISION_PROXY=%s\n' "${HOME_WEB_ENABLE_LEGACY_VISION_PROXY:-0}"
   printf 'Environment=HOME_WEB_VISION_TARGET=%s\n' "${HOME_WEB_VISION_TARGET:-http://192.168.0.100:8091}"
   printf 'Environment=HOME_WEB_INTELLIGENCE_TARGET=%s\n' "${HOME_WEB_INTELLIGENCE_TARGET:-http://192.168.0.100:8095}"
   printf 'Environment=HOME_WEB_SUPERVISOR_TARGET=%s\n' "${HOME_WEB_SUPERVISOR_TARGET:-http://home-app.taild52a15.ts.net:8093}"

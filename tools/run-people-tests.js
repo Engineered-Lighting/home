@@ -21,6 +21,7 @@ const path = require("path");
 const H = require(path.join(__dirname, "..", "app", "src", "home-people-helpers.js"));
 const peopleSource = fs.readFileSync(path.join(__dirname, "..", "app", "src", "home-people.jsx"), "utf8");
 const appSource = fs.readFileSync(path.join(__dirname, "..", "app", "src", "home-app.jsx"), "utf8");
+const haInitSource = fs.readFileSync(path.join(__dirname, "..", "ha-config", "extended_openai_conversation", "__init__.py"), "utf8");
 
 let passes = 0;
 let fails = 0;
@@ -373,8 +374,20 @@ process.stdout.write("\n[1msubrole clustering + ring offset[0m\n");
     H.subroleCluster({ relationship_subrole: "father" }) === "parents");
   assert("subroleCluster: sister → siblings",
     H.subroleCluster({ relationship_subrole: "sister" }) === "siblings");
+  assert("subroleCluster: brother → siblings",
+    H.subroleCluster({ relationship_subrole: "brother" }) === "siblings");
+  assert("subroleCluster: girlfriend → partners",
+    H.subroleCluster({ relationship_subrole: "girlfriend" }) === "partners");
+  assert("subroleCluster: sister-in-law → in-laws",
+    H.subroleCluster({ relationship_subrole: "sister-in-law" }) === "in-laws");
   assert("subroleCluster: son → children",
     H.subroleCluster({ relationship_subrole: "son" }) === "children");
+  assert("subroleCluster: stepson → children",
+    H.subroleCluster({ relationship_subrole: "stepson" }) === "children");
+  assert("subroleCluster: nephew → extended family",
+    H.subroleCluster({ relationship_subrole: "nephew" }) === "extended family");
+  assert("subroleCluster: friend → friends",
+    H.subroleCluster({ relationship_subrole: "friend" }) === "friends");
   assert("subroleCluster: mother-in-law → in-laws",
     H.subroleCluster({ relationship_subrole: "mother-in-law" }) === "in-laws");
   assert("subroleCluster: case-insensitive",
@@ -475,10 +488,126 @@ process.stdout.write("\n[1msubrole clustering + ring offset[0m\n");
   // ── Cluster ORDER determinism ──
   // parents comes before siblings → parents placed at startAngle,
   // siblings placed at startAngle + runStep.
-  assert("CLUSTER_ORDER[0] is 'parents'",
-    H.CLUSTER_ORDER[0] === "parents");
+  assert("CLUSTER_ORDER keeps parents after partners",
+    H.CLUSTER_ORDER[1] === "parents");
   assert("'parents' is mapped from 'mother' subrole",
     H.SUBROLE_TO_CLUSTER.mother === "parents");
+})();
+
+(function () {
+  // Mobile can opt into larger avatars + tighter radii while desktop
+  // default geometry stays unchanged.
+  const ids = [
+    { uuid: "me", relationship_type: "me" },
+    { uuid: "holly", relationship_type: "partner", relationship_subrole: "girlfriend" },
+    { uuid: "felipe", relationship_type: "family_immediate", relationship_subrole: "brother" },
+    { uuid: "mark", relationship_type: "friend", relationship_subrole: "friend" },
+    { uuid: "pat", relationship_type: "friend", relationship_subrole: "friend" },
+  ];
+  const desktop = H.buildRadialLayout(ids);
+  const mobile = H.buildRadialLayout(ids, {
+    radiusScale: 1.2,
+    avatarScale: 1.4,
+    clusterStepScale: 1.2,
+    textScale: 1.28,
+    collisionPadding: 64,
+    centerCollisionPadding: 88,
+    collisionIterations: 120,
+    portraitLayout: true,
+  });
+  const desktopHolly = desktop.find((n) => n.uuid === "holly");
+  const mobileHolly = mobile.find((n) => n.uuid === "holly");
+  assert("desktop avatar size unchanged",
+    desktopHolly.size === 60, desktopHolly);
+  assert("mobile avatar size scales up",
+    mobileHolly.size > desktopHolly.size, { desktop: desktopHolly.size, mobile: mobileHolly.size });
+  assert("mobile radius gives larger avatars room to breathe",
+    Math.hypot(mobileHolly.x, mobileHolly.y) >= Math.hypot(desktopHolly.x, desktopHolly.y),
+    { desktop: desktopHolly, mobile: mobileHolly });
+  assert("mobile text scale is carried on graph nodes",
+    mobileHolly.textScale === 1.28, mobileHolly);
+})();
+
+(function () {
+  const ids = [
+    { uuid: "me", display_name: "Marcelo", relationship_type: "me" },
+    { uuid: "holly", display_name: "Holly", relationship_type: "partner", relationship_subrole: "girlfriend" },
+    { uuid: "ben", display_name: "Ben", relationship_type: "family_immediate", relationship_subrole: "stepson" },
+    { uuid: "peter", display_name: "Peter", relationship_type: "family_immediate", relationship_subrole: "stepson" },
+    { uuid: "felipe", display_name: "Felipe", relationship_type: "family_immediate", relationship_subrole: "brother" },
+    { uuid: "ashley", display_name: "Ashley", relationship_type: "family_extended", relationship_subrole: "sister-in-law" },
+    { uuid: "aurelio", display_name: "Aurelio", relationship_type: "family_immediate", relationship_subrole: "nephew" },
+    { uuid: "david", display_name: "David", relationship_type: "friend", relationship_subrole: "friend" },
+    { uuid: "mark", display_name: "Mark", relationship_type: "friend", relationship_subrole: "friend" },
+    { uuid: "pat", display_name: "Pat", relationship_type: "friend", relationship_subrole: "friend" },
+  ];
+  const layout = H.buildRadialLayout(ids);
+  const byUuid = new Map(layout.map((n) => [n.uuid, n]));
+  const holly = byUuid.get("holly");
+  const ben = byUuid.get("ben");
+  const peter = byUuid.get("peter");
+  const felipe = byUuid.get("felipe");
+  const ashley = byUuid.get("ashley");
+  const aurelio = byUuid.get("aurelio");
+  const david = byUuid.get("david");
+  const mark = byUuid.get("mark");
+  const pat = byUuid.get("pat");
+  assert("known family layout marks Holly branch",
+    holly.familyBranch === "holly-family" &&
+    ben.familyBranch === "holly-family" &&
+    peter.familyBranch === "holly-family");
+  assert("Ben and Peter sit farther from center than Holly",
+    Math.hypot(ben.x, ben.y) > Math.hypot(holly.x, holly.y) &&
+    Math.hypot(peter.x, peter.y) > Math.hypot(holly.x, holly.y));
+  assert("Felipe and Ashley are side by side in one branch",
+    felipe.familyBranch === "felipe-ashley-family" &&
+    ashley.familyBranch === "felipe-ashley-family" &&
+    Math.abs(felipe.x - ashley.x) + Math.abs(felipe.y - ashley.y) > 40);
+  assert("Aurelio branches beyond Felipe and Ashley",
+    aurelio.familyBranch === "felipe-ashley-family" &&
+    Math.hypot(aurelio.x, aurelio.y) > Math.hypot((felipe.x + ashley.x) / 2, (felipe.y + ashley.y) / 2));
+  assert("known friends are grouped in one graph branch",
+    david.familyBranch === "friends" &&
+    mark.familyBranch === "friends" &&
+    pat.familyBranch === "friends");
+  assert("known friends stay visually close to each other",
+    Math.hypot(david.x - mark.x, david.y - mark.y) < 180 &&
+    Math.hypot(mark.x - pat.x, mark.y - pat.y) < 180,
+    { david, mark, pat });
+
+  const known = H.buildKnownFamilyRelationships(ids);
+  assert("known family relationships include Holly to Ben and Peter",
+    known.some((r) => r.from_uuid === "holly" && r.to_uuid === "ben" && r.rel_type === "parent") &&
+    known.some((r) => r.from_uuid === "holly" && r.to_uuid === "peter" && r.rel_type === "parent"),
+    known);
+  assert("known family relationships include Felipe/Ashley partner and Aurelio parent edges",
+    known.some((r) => r.from_uuid === "felipe" && r.to_uuid === "ashley" && r.rel_type === "partner") &&
+    known.some((r) => r.from_uuid === "felipe" && r.to_uuid === "aurelio" && r.rel_type === "parent") &&
+    known.some((r) => r.from_uuid === "ashley" && r.to_uuid === "aurelio" && r.rel_type === "parent"),
+    known);
+
+  const mobileLayout = H.buildRadialLayout(ids, {
+    radiusScale: 1.2,
+    avatarScale: 1.4,
+    clusterStepScale: 1.2,
+    textScale: 1.28,
+    collisionPadding: 64,
+    centerCollisionPadding: 88,
+    collisionIterations: 120,
+    portraitLayout: true,
+  }).filter((n) => !n.overflow);
+  const collisions = [];
+  for (let i = 0; i < mobileLayout.length; i++) {
+    for (let j = i + 1; j < mobileLayout.length; j++) {
+      const a = mobileLayout[i];
+      const b = mobileLayout[j];
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      const min = ((a.size || 0) + (b.size || 0)) / 2 + 32;
+      if (dist < min) collisions.push([a.uuid, b.uuid, dist, min]);
+    }
+  }
+  assert("mobile family graph has no overlapping avatar circles",
+    collisions.length === 0, collisions);
 })();
 
 /* ────────────────────────────────────────────────────────────────────────
@@ -710,9 +839,72 @@ process.stdout.write("\n[1mpeople overlay interaction contract (DOC-S83)[0m\n");
   assert("list row click opens same detail panel and panel close clears selection",
     peopleSource.includes("onRowClick={(id) => setSelectedUuid(id.uuid)}") &&
     peopleSource.includes("onClose={() => setSelectedUuid(null)}"));
-  assert("HomeHeader accepts and attaches People button focus ref",
+  assert("queue receives Frigate face buckets and resolved image base",
+    /<PeopleQueueView[\s\S]*facesByPerson=\{facesByPerson\}[\s\S]*frigateUrl=\{faceImageBaseUrl\}[\s\S]*facesStatus=\{facesStatus\}[\s\S]*frigateDiagnostics=\{frigateDiagnostics\}/.test(peopleSource));
+  assert("queue surfaces unlinked Frigate buckets and diagnostic empty state",
+    peopleSource.includes("function unlinkedFaceBuckets(facesByPerson, identities)") &&
+    peopleSource.includes("function peopleQueueDiagnostics") &&
+    peopleSource.includes("unlinked face bucket") &&
+    peopleSource.includes("home does not currently have any unknown identities or unlinked frigate face buckets to review"));
+  assert("queue empty state explains likely upstream causes",
+    peopleSource.includes("driveway face recognition is intentionally disabled") &&
+    peopleSource.includes("minimum-capture settings") &&
+    peopleSource.includes("identity reseed loop"));
+  assert("queue empty state lists current Frigate buckets when available",
+    peopleSource.includes("knownBucketSummary") &&
+    peopleSource.includes("current frigate buckets: {diagnostics.knownBucketSummary}"));
+  assert("mobile people graph uses a viewport-aware tight viewBox",
+    peopleSource.includes("function usePeopleViewport()") &&
+    peopleSource.includes("const peopleViewport = usePeopleViewport();") &&
+    peopleSource.includes("radiusScale: 1.2") &&
+    peopleSource.includes("avatarScale: 1.4") &&
+    peopleSource.includes("textScale: 1.28") &&
+    peopleSource.includes("collisionPadding: 64") &&
+    peopleSource.includes("portraitLayout: true") &&
+    peopleSource.includes("const nodeBounds = layout.reduce") &&
+    peopleSource.includes("const graphViewBox = isMobile") &&
+    peopleSource.includes('height={isMobile ? "calc(100dvh - 118px)"') &&
+    peopleSource.includes("people-graph-field") &&
+    peopleSource.includes("people-node-soft-glow") &&
+    peopleSource.includes("const branchGroups = (() => {") &&
+    peopleSource.includes("Branch labels use the final node positions") &&
+    peopleSource.includes("function clampPeopleGraphCamera(camera, viewBox, isMobile)") &&
+    peopleSource.includes("function peopleGraphCameraViewBox(viewBox, camera)") &&
+    peopleSource.includes("const [graphCamera, setGraphCamera] = useState({ scale: 1, x: 0, y: 0 })") &&
+    peopleSource.includes("touchAction: \"none\"") &&
+    peopleSource.includes("overscrollBehavior: \"contain\"") &&
+    peopleSource.includes("gesturestart") &&
+    peopleSource.includes("if (!ev.ctrlKey) return;") &&
+    peopleSource.includes("onTouchMove={handleGraphTouchMove}") &&
+    peopleSource.includes("onDoubleClick={() => setGraphCamera({ scale: 1, x: 0, y: 0 })}") &&
+    !peopleSource.includes('strokeDasharray="2,8"') &&
+    !peopleSource.includes("cluster-label-${ring}-${name}"));
+  assert("identities endpoint exposes sanitized Frigate diagnostics",
+    haInitSource.includes('"frigate_seed_report": asdict(seed_report) if seed_report is not None else None') &&
+    haInitSource.includes('"frigate_capabilities": asdict(capabilities) if capabilities is not None else None'));
+  assert("unlinked Frigate buckets can be resolved from the card",
+    peopleSource.includes("function UnlinkedFaceBucketCard({ bucket, frigateUrl, endpoint, token, sim, onSaved })") &&
+    peopleSource.includes("/api/extended_openai_conversation/identities/create") &&
+    peopleSource.includes("frigate_person_name: bucket.name") &&
+    peopleSource.includes("create identity") &&
+    peopleSource.includes("do not identify"));
+  assert("identity refresh is cache-first and quiet while cached graph is visible",
+    peopleSource.includes("let usingCached = false;") &&
+    peopleSource.includes("usingCached = true;") &&
+    peopleSource.includes("timeoutMs: 20000") &&
+    peopleSource.includes("maxAttempts: usingCached ? 2 : 4") &&
+    peopleSource.includes("nextDelay != null && !usingCached && identitiesRef.current === null") &&
+    peopleSource.includes("if (usingCached || identitiesRef.current?.length)") &&
+    peopleSource.includes("return;"));
+  assert("people prewarm uses the app fetch bridge when available",
+    peopleSource.includes('const fetcher = (typeof window !== "undefined" && window.tauriFetch) || fetch;') &&
+    peopleSource.includes('const resp = await fetcher(url, { headers, cache: "no-store", signal });') &&
+    peopleSource.includes("const resp = await fetcher(url, {") &&
+    peopleSource.includes('cache: "force-cache"'));
+  assert("HomeHeader accepts and attaches People menu focus ref",
     /function HomeHeader\(\{[\s\S]*peopleButtonRef[\s\S]*\}\)/.test(appSource) &&
-    /\{onOpenPeople && \([\s\S]*<button[\s\S]*ref=\{peopleButtonRef\}[\s\S]*onClick=\{onOpenPeople\}/.test(appSource));
+    /\{onOpenPeople && !mobile && <button[\s\S]*role="menuitem"[\s\S]*ref=\{peopleButtonRef\}[\s\S]*onClick=\{\(\) => runMenuAction\(onOpenPeople\)\}/.test(appSource) &&
+    /\{onOpenPeople && mobile && \([\s\S]*ref=\{peopleButtonRef\}[\s\S]*onClick=\{onOpenPeople\}/.test(appSource));
   assert("HomeApp restores focus to People header button on overlay close",
     appSource.includes("const peopleButtonRef = useRef(null);") &&
     appSource.includes("const closePeopleOverlay = useCallback(() => {") &&

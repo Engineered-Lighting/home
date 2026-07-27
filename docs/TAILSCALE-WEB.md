@@ -187,6 +187,9 @@ export HOME_WEB_ENABLE_LEGACY_HA_PROXY="0"
 export HOME_WEB_METRICS_TARGET="http://192.168.0.100:8092"
 export HOME_WEB_VLLM_TARGET="http://192.168.0.100:8000"
 export HOME_WEB_VISION_TARGET="http://192.168.0.100:8091"
+# Off by default. Set to 1 only while the authenticated legacy Home UI needs
+# its tightly allowlisted grounded-camera request compatibility surface.
+export HOME_WEB_ENABLE_LEGACY_VISION_PROXY="0"
 export HOME_WEB_INTELLIGENCE_TARGET="http://192.168.0.100:8095"
 export HOME_WEB_SUPERVISOR_TARGET="http://home-app.taild52a15.ts.net:8093"
 export HOME_WEB_STACK_TOKEN_FILE="/opt/home-ai-voice/.env"
@@ -227,7 +230,10 @@ active, the gateway still restricts it to these path families:
   proxy/stream, TTS proxy, and extended conversation endpoints
 - `/proxy/metrics/healthz`, `/metrics`, `/conversations/...`, `/trace...`
 - `/proxy/vllm/health...`, `/v1/models`, `/v1/chat/completions`, `/v1/completions`
-- `/proxy/vision/healthz`, `/snapshot/...`, `/describe...`, `/reason...`, `/locate`, `/api/...`
+- `/proxy/vision/healthz`, `/cameras`, the current grounded-result images and
+  metadata, plus exact `POST /describe`, `/describe_clip`, `/reason`, and
+  `/reason_zoom` requests. It does not expose `/locate`, `/api/...`, or
+  mutation methods.
 - `/proxy/intelligence/healthz`, `/api/...`, and read-only intelligence surfaces
 - `/proxy/supervisor/healthz`, `/api/stack/...`, `/api/services/...`
 - `/proxy/bridge/healthz`, `/rooms`, `/s2s`

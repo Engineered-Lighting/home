@@ -76,10 +76,9 @@ const APARTMENT_FIT_TIMEOUT_MS = 18000;
 const FEATURE_MATRIX = [
   ["01-boot", "App boot or first-run screen", "Header, main surface, and bottom affordances fit the viewport."],
   ["02-simulation-home", "Simulation home surface", "A usable non-secret test state is available for UI screenshots."],
-  ["03-mobile-actions-menu", "Mobile header actions menu", "People, intelligence, video labeler, theme, and simulation actions remain reachable."],
+  ["03-mobile-actions-menu", "Mobile header actions menu", "People, apartment, lights, intelligence, theme, and simulation actions remain reachable; desktop-only video labeler stays hidden."],
   ["04-people", "People overlay", "Overlay opens from the mobile actions menu and remains dismissible."],
   ["05-intelligence", "Intelligence atlas overlay", "Atlas opens from the mobile actions menu without clipping close/actions."],
-  ["06-video-labeler", "Video labeler overlay", "Labeler opens and its primary controls fit on phone width."],
   ["07-simulation-controls", "Simulation controls", "Scenario controls are reachable from mobile header actions."],
   ["08-slash-palette", "Slash command palette", "Command menu is scrollable above the mobile input bar."],
   ["09-help", "/help output", "Help/category output is readable without horizontal clipping."],
@@ -94,7 +93,7 @@ const FEATURE_MATRIX = [
   ["18-apartment-cloud", "Apartment cloud mode", "3D Apartment opens with the full apartment visible inside the mobile safe viewport."],
   ["19-apartment-photo", "Apartment photo mode", "Photo/splat mode renders the real apartment scan without the unavailable fallback."],
   ["20-apartment-mesh", "Apartment mesh mode", "Mesh mode keeps the full apartment visible without the mesh-unavailable fallback."],
-  ["21-apartment-fly-camera", "Apartment fly-to-camera/live view", "Camera fly-to locks to mesh/live view and hides mode controls on mobile."],
+  ["21-apartment-fly-camera", "Apartment fly-to-camera/live view", "Camera fly-to animates through the 3D model, then locks to mesh/live view and hides mode controls on mobile."],
 ];
 
 const BUTTON_PROBE_MATRIX = [
@@ -103,13 +102,12 @@ const BUTTON_PROBE_MATRIX = [
   ["b03-mobile-menu", "Header", "Mobile actions opens and exposes its action buttons."],
   ["b04-people-close", "People", "People opens from the mobile menu and close dismisses it."],
   ["b05-intelligence-close", "Intelligence", "Intelligence opens from the mobile menu and close dismisses it."],
-  ["b06-video-labeler-tabs", "Video labeler", "Video labeler opens, label/jobs tabs respond, refresh is clickable, and close dismisses it."],
   ["b07-simulation-controls", "Simulation", "Simulation controls open, reset is clickable, and close dismisses it."],
   ["b08-remote-dialog", "Remote", "Remote access dialog opens, profile buttons respond, test-all starts, and close dismisses it."],
   ["b09-slash-command", "Input", "Slash command input accepts and executes a command from mobile."],
   ["b10-drawer-closes", "Drawers", "World, lights, spatial, and look drawers expose a working close control."],
   ["b11-apartment-mode-buttons", "Apartment", "Cloud/photo/mesh HUD buttons respond and render runtime scan/mesh assets."],
-  ["b12-apartment-camera-buttons", "Apartment", "Fly-to-camera exposes only snap-safe controls before resetting cleanly."],
+  ["b12-apartment-camera-buttons", "Apartment", "Fly-to-camera exposes only snap-safe controls after the animated 3D swoop, then resets cleanly."],
   ["b13-apartment-light-control", "Apartment", "A device-card light button taps through to a Home Assistant service call on mobile."],
 ];
 
@@ -135,7 +133,7 @@ const DESKTOP_FEATURE_MATRIX = [
 
 const DESKTOP_BUTTON_PROBE_MATRIX = [
   ["d01-home-layout", "Home", "Visible controls stay inside the desktop viewport."],
-  ["d02-desktop-header", "Header", "Remote profile remains reachable and the mobile menu is absent."],
+  ["d02-desktop-header", "Header", "Desktop actions menu remains reachable and the mobile-specific menu is absent."],
   ["d03-remote-dialog", "Remote", "Remote access dialog opens, profile buttons respond, test-all starts, and close dismisses it."],
   ["d04-slash-command", "Input", "Slash command input accepts and executes a command at desktop width."],
   ["d05-drawer-closes", "Drawers", "World, lights, spatial, and look drawers expose a working close control."],
@@ -634,6 +632,24 @@ async function ensureCameraSnapLocked(page, context) {
   return `camera ${result.liveCam} snapped; mode buttons hidden${frame}${feed}`;
 }
 
+async function ensureCameraFlightStarted(page, context) {
+  const result = await page.evaluate(() => {
+    const snap = window.__havApartmentDebug?.snapshot?.() || {};
+    return {
+      liveCam: snap.liveCam || null,
+      liveOn: !!snap.liveOn,
+      cameraPoseFlying: !!snap.cameraPoseFlying,
+      cameraPoseReady: !!snap.cameraPoseReady,
+      liveFeedStatus: snap.liveFeedStatus || "",
+    };
+  });
+  if (!result.liveCam) throw new Error(`${context}: camera did not activate`);
+  if (result.cameraPoseReady) return `camera ${result.liveCam} settled before flight sample`;
+  if (!result.cameraPoseFlying) throw new Error(`${context}: camera pose is not animating`);
+  if (result.liveOn) throw new Error(`${context}: live feed covered the 3D camera flight`);
+  return `camera ${result.liveCam} flight animating before feed reveal (${result.liveFeedStatus || "status unknown"})`;
+}
+
 async function ensureDesktopHeader(page, context) {
   const result = await page.evaluate(() => {
     const visible = (el) => {
@@ -644,6 +660,7 @@ async function ensureDesktopHeader(page, context) {
     };
     return {
       mobileMenuVisible: visible(document.querySelector('button[aria-label="Open mobile actions"]')),
+      appMenuVisible: visible(document.querySelector('button[aria-label="Open app actions"]')),
       remoteVisible: visible(document.querySelector('button[aria-label="Remote profile"]')),
       peopleVisible: visible(document.querySelector('button[aria-label^="Open people"]')),
       intelligenceVisible: visible(document.querySelector('button[aria-label="Open intelligence atlas"]')),
@@ -651,13 +668,14 @@ async function ensureDesktopHeader(page, context) {
     };
   });
   if (result.mobileMenuVisible) throw new Error(`${context}: mobile actions menu is visible on desktop`);
-  if (!result.remoteVisible) throw new Error(`${context}: remote profile button is missing on desktop`);
+  if (!result.appMenuVisible) throw new Error(`${context}: desktop actions menu is missing`);
   const detail = await ensureVisualHealth(page, context);
   const optional = [
+    result.remoteVisible ? "profile" : "",
     result.peopleVisible ? "people" : "",
     result.intelligenceVisible ? "intelligence" : "",
     result.videoLabelerVisible ? "video labeler" : "",
-  ].filter(Boolean).join(", ") || "wide-mode optional icons hidden";
+  ].filter(Boolean).join(", ") || "actions menu owns secondary controls";
   return `${detail}; desktop header preserved; ${optional}`;
 }
 
@@ -696,8 +714,12 @@ async function enterSimulation(page) {
   }
 }
 
+async function openActionsMenu(page) {
+  return maybeClick(page.getByLabel(/open (mobile|app) actions/i), 1800);
+}
+
 async function openMobileMenu(page) {
-  return maybeClick(page.getByLabel(/open mobile actions/i), 1800);
+  return openActionsMenu(page);
 }
 
 async function ensureMobileMenuReachable(page, context) {
@@ -722,10 +744,14 @@ async function ensureMobileMenuReachable(page, context) {
     }));
     return { menuReachable: reachable(menu), items };
   });
-  const required = ["people", "intelligence", "video labeler"];
+  const required = ["people", "apartment", "lights", "intelligence"];
   const missing = required.filter((label) => !result.items.some((item) => item.label === label && item.reachable));
+  const hidden = result.items.some((item) => item.label === "video labeler" && item.reachable);
   if (!result.menuReachable || missing.length) {
     throw new Error(`${context}: mobile menu not reachable (${missing.join(", ") || "menu"})`);
+  }
+  if (hidden) {
+    throw new Error(`${context}: desktop-only video labeler is visible on mobile`);
   }
   return `mobile menu reachable with ${result.items.length} items`;
 }
@@ -739,6 +765,20 @@ async function clickMobileMenuItem(page, label) {
   }
   await page.waitForTimeout(1100);
   return clicked;
+}
+
+async function openRemoteProfile(page) {
+  let clicked = await maybeClick(page.locator('button[aria-label="Remote profile"]').first(), 500);
+  if (!clicked) {
+    await openActionsMenu(page);
+    clicked = await maybeClick(page.locator('button[aria-label="Remote profile"]').first(), 1800);
+  }
+  await page.waitForTimeout(450);
+  return clicked;
+}
+
+async function openMobileRemoteProfile(page) {
+  return openRemoteProfile(page);
 }
 
 async function exerciseApartmentLightControl(page, context) {
@@ -778,19 +818,22 @@ async function runButtonProbes(page, buttonItems) {
   await recordButtonProbe(buttonItems, "b12-apartment-camera-buttons", "Apartment back and close buttons respond", async () => {
     await page.waitForFunction(() => !!window.__havApartmentDebug, null, { timeout: 5000 });
     const active = await page.evaluate(() => !!window.__havApartmentDebug?.snapshot?.()?.liveCam);
+    let flight = "camera already active";
     if (!active) {
       const ok = await page.evaluate(() =>
         window.__havApartmentDebug?.flyFirstCalibratedCamera?.() ||
         window.__havApartmentDebug?.flyFirstCamera?.()
       );
       if (!ok) throw new Error("no camera device available for fly-to test");
-      await page.waitForTimeout(1600);
+      await page.waitForTimeout(220);
+      flight = await ensureCameraFlightStarted(page, "apartment camera flight");
+      await page.waitForTimeout(1380);
     }
     const snap = await ensureCameraSnapLocked(page, "apartment fly-camera controls");
     const detail = await ensureVisualHealth(page, "apartment fly-camera controls");
     const fit = await exitCameraAndEnsureFit(page, "apartment back-to-overview fit");
     await closeOverlays(page);
-    return `${detail}; ${snap}; ${fit}; fly-camera screenshot captured as 21-apartment-fly-camera.png`;
+    return `${detail}; ${flight}; ${snap}; ${fit}; fly-camera screenshot captured as 21-apartment-fly-camera.png`;
   });
 
   await closeOverlays(page);
@@ -817,7 +860,6 @@ async function runButtonProbes(page, buttonItems) {
     const reachable = await ensureMobileMenuReachable(page, "mobile menu");
     await expectVisibleText(page, /^people$/i);
     await expectVisibleText(page, /^intelligence$/i);
-    await expectVisibleText(page, /^video labeler$/i);
     const detail = await ensureVisualHealth(page, "mobile menu");
     await closeOverlays(page);
     return `${detail}; ${reachable}`;
@@ -837,18 +879,6 @@ async function runButtonProbes(page, buttonItems) {
     await expectVisibleText(page, /intelligence/i);
     await clickButtonByName(page, /close/i);
     return ensureVisualHealth(page, "intelligence closed");
-  });
-
-  await recordButtonProbe(buttonItems, "b06-video-labeler-tabs", "Video labeler tabs, refresh, and close respond", async () => {
-    const opened = await clickMobileMenuItem(page, "video labeler");
-    if (!opened) throw new Error("video labeler menu item did not click");
-    await expectVisibleText(page, /video labeler/i);
-    await clickButtonByName(page, /^jobs$/i);
-    await clickButtonByName(page, /^label$/i);
-    const refreshed = await maybeClick(page.getByRole("button", { name: /^refresh$/i }).first(), 900);
-    await clickButtonByName(page, /close/i);
-    const detail = await ensureVisualHealth(page, "video labeler closed");
-    return refreshed ? detail : `${detail}; refresh absent in simulation state`;
   });
 
   await recordButtonProbe(buttonItems, "b07-simulation-controls", "Simulation controls reset and close respond", async () => {
@@ -897,8 +927,7 @@ async function runButtonProbes(page, buttonItems) {
 
   await recordButtonProbe(buttonItems, "b08-remote-dialog", "Remote dialog profile buttons, test all, and close respond", async () => {
     await closeOverlays(page);
-    const remote = page.locator('button[aria-label="Remote profile"]').first();
-    if (!(await maybeClick(remote, 1800))) throw new Error("remote profile button missing");
+    if (!(await openMobileRemoteProfile(page))) throw new Error("remote profile button missing");
     await expectVisibleText(page, /Remote access \/ Travel readiness/i);
     await clickButtonByName(page, /Home LAN/i);
     await clickButtonByName(page, /Remote via Tailscale|tailscale|tail/i);
@@ -924,8 +953,7 @@ async function runDesktopButtonProbes(page, buttonItems) {
 
   await recordButtonProbe(buttonItems, "d03-remote-dialog", "Remote dialog profile buttons, test all, and close respond", async () => {
     await closeOverlays(page);
-    const remote = page.locator('button[aria-label="Remote profile"]').first();
-    if (!(await maybeClick(remote, 1800))) throw new Error("remote profile button missing");
+    if (!(await openRemoteProfile(page))) throw new Error("remote profile action missing");
     await expectVisibleText(page, /Remote access \/ Travel readiness/i);
     await clickButtonByName(page, /Home LAN/i);
     await clickButtonByName(page, /Remote via Tailscale|tailscale|tail/i);
@@ -981,12 +1009,14 @@ async function runDesktopButtonProbes(page, buttonItems) {
       window.__havApartmentDebug?.flyFirstCamera?.()
     );
     if (!ok) throw new Error("no camera device available for fly-to test");
-    await page.waitForTimeout(1600);
+    await page.waitForTimeout(220);
+    const flight = await ensureCameraFlightStarted(page, "desktop apartment camera flight");
+    await page.waitForTimeout(1380);
     const snap = await ensureCameraSnapLocked(page, "desktop apartment fly-camera controls");
     const detail = await ensureVisualHealth(page, "desktop apartment fly-camera controls");
     const fit = await exitCameraAndEnsureFit(page, "desktop apartment back-to-overview fit");
     await clickButtonByName(page, /close/i);
-    return `${detail}; ${snap}; ${fit}`;
+    return `${detail}; ${flight}; ${snap}; ${fit}`;
   });
 }
 
@@ -1050,8 +1080,7 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors, prof
 
       await closeOverlays(page);
       await step("04-remote-dialog", "Remote access / Travel readiness", async () => {
-        const remote = page.locator('button[aria-label="Remote profile"]').first();
-        if (!(await maybeClick(remote, 1800))) throw new Error("remote profile button missing");
+        if (!(await openRemoteProfile(page))) throw new Error("remote profile action missing");
         await expectVisibleText(page, /Remote access \/ Travel readiness/i);
         await page.waitForTimeout(600);
       });
@@ -1109,10 +1138,12 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors, prof
           window.__havApartmentDebug?.flyFirstCamera?.()
         );
         if (!ok) throw new Error("no camera device available for fly-to test");
-        await page.waitForTimeout(1600);
+        await page.waitForTimeout(220);
+        const flight = await ensureCameraFlightStarted(page, "desktop apartment fly-camera screenshot flight");
+        await page.waitForTimeout(1380);
         const snap = await ensureCameraSnapLocked(page, "desktop apartment fly-camera screenshot");
         const detail = await ensureVisualHealth(page, "desktop apartment fly-camera screenshot");
-        return `${detail}; ${snap}`;
+        return `${detail}; ${flight}; ${snap}`;
       });
 
       await runDesktopButtonProbes(page, buttonItems);
@@ -1126,7 +1157,6 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors, prof
     for (const [id, label, title] of [
       ["04-people", "people", "People overlay"],
       ["05-intelligence", "intelligence", "Intelligence atlas overlay"],
-      ["06-video-labeler", "video labeler", "Video labeler overlay"],
       ["07-simulation-controls", "simulation", "Simulation controls"],
     ]) {
       await closeOverlays(page);
@@ -1157,8 +1187,7 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors, prof
 
     await closeOverlays(page);
     await step("12-remote-dialog", "Remote access / Travel readiness", async () => {
-      const remote = page.locator('button[aria-label="Remote profile"]').first();
-      if (!(await maybeClick(remote, 1800))) throw new Error("remote profile button missing");
+      if (!(await openMobileRemoteProfile(page))) throw new Error("remote profile button missing");
       await expectVisibleText(page, /Remote access \/ Travel readiness/i);
       await page.waitForTimeout(600);
     });
@@ -1205,10 +1234,12 @@ async function runViewportAudit(browser, appUrl, viewport, outRoot, errors, prof
         window.__havApartmentDebug?.flyFirstCamera?.()
       );
       if (!ok) throw new Error("no camera device available for fly-to test");
-      await page.waitForTimeout(1600);
+      await page.waitForTimeout(220);
+      const flight = await ensureCameraFlightStarted(page, "apartment fly-camera screenshot flight");
+      await page.waitForTimeout(1380);
       const snap = await ensureCameraSnapLocked(page, "apartment fly-camera screenshot");
       const detail = await ensureVisualHealth(page, "apartment fly-camera screenshot");
-      return `${detail}; ${snap}`;
+      return `${detail}; ${flight}; ${snap}`;
     });
 
       await runButtonProbes(page, buttonItems);
@@ -1595,11 +1626,15 @@ async function cdpEnsureVisualHealth(client, context) {
 
 async function cdpEnsureMobileMenuReachable(client, context) {
   const result = await cdpAction(client, "(h) => h.menuVisibleReachable()");
-  const required = ["people", "intelligence", "video labeler"];
+  const required = ["people", "apartment", "lights", "intelligence"];
   const items = Array.isArray(result?.items) ? result.items : [];
   const missing = required.filter((label) => !items.some((item) => item.label === label && item.visible && item.reachable));
+  const hidden = items.some((item) => item.label === "video labeler" && item.visible && item.reachable);
   if (!result?.menu || missing.length) {
     throw new Error(`${context}: mobile menu not reachable (${missing.join(", ") || "menu"})`);
+  }
+  if (hidden) {
+    throw new Error(`${context}: desktop-only video labeler is visible on mobile`);
   }
   return `mobile menu reachable with ${items.length} items`;
 }
@@ -1691,6 +1726,24 @@ async function cdpEnsureCameraSnapLocked(client, context) {
   return `camera ${result.liveCam} snapped; mode buttons hidden${frame}${feed}`;
 }
 
+async function cdpEnsureCameraFlightStarted(client, context) {
+  const result = await cdpEval(client, `(() => {
+    const snap = window.__havApartmentDebug?.snapshot?.() || {};
+    return {
+      liveCam: snap.liveCam || null,
+      liveOn: !!snap.liveOn,
+      cameraPoseFlying: !!snap.cameraPoseFlying,
+      cameraPoseReady: !!snap.cameraPoseReady,
+      liveFeedStatus: snap.liveFeedStatus || "",
+    };
+  })()`, true);
+  if (!result.liveCam) throw new Error(`${context}: camera did not activate`);
+  if (result.cameraPoseReady) return `camera ${result.liveCam} settled before flight sample`;
+  if (!result.cameraPoseFlying) throw new Error(`${context}: camera pose is not animating`);
+  if (result.liveOn) throw new Error(`${context}: live feed covered the 3D camera flight`);
+  return `camera ${result.liveCam} flight animating before feed reveal (${result.liveFeedStatus || "status unknown"})`;
+}
+
 async function cdpEnsureDesktopHeader(client, context) {
   const result = await cdpEval(client, `(() => {
     const visible = (el) => {
@@ -1701,6 +1754,7 @@ async function cdpEnsureDesktopHeader(client, context) {
     };
     return {
       mobileMenuVisible: visible(document.querySelector('button[aria-label="Open mobile actions"]')),
+      appMenuVisible: visible(document.querySelector('button[aria-label="Open app actions"]')),
       remoteVisible: visible(document.querySelector('button[aria-label="Remote profile"]')),
       peopleVisible: visible(document.querySelector('button[aria-label^="Open people"]')),
       intelligenceVisible: visible(document.querySelector('button[aria-label="Open intelligence atlas"]')),
@@ -1708,13 +1762,14 @@ async function cdpEnsureDesktopHeader(client, context) {
     };
   })()`, true);
   if (result.mobileMenuVisible) throw new Error(`${context}: mobile actions menu is visible on desktop`);
-  if (!result.remoteVisible) throw new Error(`${context}: remote profile button is missing on desktop`);
+  if (!result.appMenuVisible) throw new Error(`${context}: desktop actions menu is missing`);
   const detail = await cdpEnsureVisualHealth(client, context);
   const optional = [
+    result.remoteVisible ? "profile" : "",
     result.peopleVisible ? "people" : "",
     result.intelligenceVisible ? "intelligence" : "",
     result.videoLabelerVisible ? "video labeler" : "",
-  ].filter(Boolean).join(", ") || "wide-mode optional icons hidden";
+  ].filter(Boolean).join(", ") || "actions menu owns secondary controls";
   return `${detail}; desktop header preserved; ${optional}`;
 }
 
@@ -1754,6 +1809,22 @@ async function cdpClickMobileMenuItem(client, label, waitMs = 900) {
   }
   if (!clicked) throw new Error(`menu item not clickable: ${label}`);
   await cdpDelay(waitMs);
+}
+
+async function cdpOpenMobileRemoteProfile(client) {
+  let ok = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Remote profile"]')`);
+  if (!ok) {
+    const opened = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Open mobile actions"], button[aria-label="Open app actions"]')`);
+    if (!opened) return false;
+    await cdpDelay(180);
+    ok = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Remote profile"]')`);
+  }
+  await cdpDelay(450);
+  return !!ok;
+}
+
+async function cdpOpenRemoteProfile(client) {
+  return cdpOpenMobileRemoteProfile(client);
 }
 
 async function cdpExpectText(client, pattern) {
@@ -1796,16 +1867,19 @@ async function cdpRunButtonProbes(client, buttonItems) {
   await cdpRecordButtonProbe(buttonItems, "b12-apartment-camera-buttons", "Apartment back and close buttons respond", async () => {
     await cdpWaitFor(client, "!!window.__havApartmentDebug", 5000);
     const active = await cdpEval(client, "!!window.__havApartmentDebug?.snapshot?.()?.liveCam", true);
+    let flight = "camera already active";
     if (!active) {
       const ok = await cdpEval(client, "window.__havApartmentDebug && (window.__havApartmentDebug.flyFirstCalibratedCamera() || window.__havApartmentDebug.flyFirstCamera())", true);
       if (!ok) throw new Error("no camera device available for fly-to test");
-      await cdpDelay(1600);
+      await cdpDelay(220);
+      flight = await cdpEnsureCameraFlightStarted(client, "apartment camera flight");
+      await cdpDelay(1380);
     }
     const snap = await cdpEnsureCameraSnapLocked(client, "apartment fly-camera controls");
     const detail = await cdpEnsureVisualHealth(client, "apartment fly-camera controls");
     const fit = await cdpExitCameraAndEnsureFit(client, "apartment back-to-overview fit");
     await cdpCloseOverlays(client);
-    return `${detail}; ${snap}; ${fit}; fly-camera screenshot captured as 21-apartment-fly-camera.png`;
+    return `${detail}; ${flight}; ${snap}; ${fit}; fly-camera screenshot captured as 21-apartment-fly-camera.png`;
   });
 
   await cdpCloseOverlays(client);
@@ -1834,7 +1908,6 @@ async function cdpRunButtonProbes(client, buttonItems) {
     const reachable = await cdpEnsureMobileMenuReachable(client, "mobile menu");
     await cdpExpectText(client, "^people$");
     await cdpExpectText(client, "^intelligence$");
-    await cdpExpectText(client, "^video labeler$");
     const detail = await cdpEnsureVisualHealth(client, "mobile menu");
     await cdpCloseOverlays(client);
     return `${detail}; ${reachable}`;
@@ -1852,18 +1925,6 @@ async function cdpRunButtonProbes(client, buttonItems) {
     await cdpExpectText(client, "intelligence");
     await cdpClickButton(client, "close", 450);
     return cdpEnsureVisualHealth(client, "intelligence closed");
-  });
-
-  await cdpRecordButtonProbe(buttonItems, "b06-video-labeler-tabs", "Video labeler tabs, refresh, and close respond", async () => {
-    await cdpClickMobileMenuItem(client, "video labeler", 900);
-    await cdpExpectText(client, "video labeler");
-    await cdpClickButton(client, "^jobs$");
-    await cdpClickButton(client, "^label$");
-    const refreshed = await cdpAction(client, `(h) => h.clickButtonMatch("^refresh$")`);
-    if (refreshed) await cdpDelay(350);
-    await cdpClickButton(client, "close");
-    const detail = await cdpEnsureVisualHealth(client, "video labeler closed");
-    return refreshed ? detail : `${detail}; refresh absent in simulation state`;
   });
 
   await cdpRecordButtonProbe(buttonItems, "b07-simulation-controls", "Simulation controls reset and close respond", async () => {
@@ -1910,9 +1971,8 @@ async function cdpRunButtonProbes(client, buttonItems) {
 
   await cdpRecordButtonProbe(buttonItems, "b08-remote-dialog", "Remote dialog profile buttons, test all, and close respond", async () => {
     await cdpCloseOverlays(client);
-    const ok = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Remote profile"]')`);
+    const ok = await cdpOpenMobileRemoteProfile(client);
     if (!ok) throw new Error("remote profile button missing");
-    await cdpDelay(450);
     await cdpExpectText(client, "Remote access / Travel readiness");
     await cdpClickButton(client, "Home LAN");
     await cdpClickButton(client, "Remote via Tailscale|tailscale|tail");
@@ -1937,9 +1997,8 @@ async function cdpRunDesktopButtonProbes(client, buttonItems) {
 
   await cdpRecordButtonProbe(buttonItems, "d03-remote-dialog", "Remote dialog profile buttons, test all, and close respond", async () => {
     await cdpCloseOverlays(client);
-    const ok = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Remote profile"]')`);
-    if (!ok) throw new Error("remote profile button missing");
-    await cdpDelay(450);
+    const ok = await cdpOpenRemoteProfile(client);
+    if (!ok) throw new Error("remote profile action missing");
     await cdpExpectText(client, "Remote access / Travel readiness");
     await cdpClickButton(client, "Home LAN");
     await cdpClickButton(client, "Remote via Tailscale|tailscale|tail");
@@ -1990,12 +2049,14 @@ async function cdpRunDesktopButtonProbes(client, buttonItems) {
     await cdpWaitFor(client, "!!window.__havApartmentDebug", 12000);
     const ok = await cdpEval(client, "window.__havApartmentDebug && (window.__havApartmentDebug.flyFirstCalibratedCamera() || window.__havApartmentDebug.flyFirstCamera())", true);
     if (!ok) throw new Error("no camera device available for fly-to test");
-    await cdpDelay(1600);
+    await cdpDelay(220);
+    const flight = await cdpEnsureCameraFlightStarted(client, "desktop apartment camera flight");
+    await cdpDelay(1380);
     const snap = await cdpEnsureCameraSnapLocked(client, "desktop apartment fly-camera controls");
     const detail = await cdpEnsureVisualHealth(client, "desktop apartment fly-camera controls");
     const fit = await cdpExitCameraAndEnsureFit(client, "desktop apartment back-to-overview fit");
     await cdpClickButton(client, "close", 600);
-    return `${detail}; ${snap}; ${fit}`;
+    return `${detail}; ${flight}; ${snap}; ${fit}`;
   });
 }
 
@@ -2055,8 +2116,8 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors, profile = 
 
       await cdpCloseOverlays(client);
       await step("04-remote-dialog", "Remote access / Travel readiness", async () => {
-        const ok = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Remote profile"]')`);
-        if (!ok) throw new Error("remote profile button missing");
+        const ok = await cdpOpenRemoteProfile(client);
+        if (!ok) throw new Error("remote profile action missing");
         await cdpExpectText(client, "Remote access / Travel readiness");
         await cdpDelay(600);
       });
@@ -2120,10 +2181,12 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors, profile = 
       await step("17-apartment-fly-camera", "Apartment fly-to-camera/live view", async () => {
         const ok = await cdpEval(client, "window.__havApartmentDebug && (window.__havApartmentDebug.flyFirstCalibratedCamera() || window.__havApartmentDebug.flyFirstCamera())", true);
         if (!ok) throw new Error("no camera device available for fly-to test");
-        await cdpDelay(1600);
+        await cdpDelay(220);
+        const flight = await cdpEnsureCameraFlightStarted(client, "desktop apartment fly-camera screenshot flight");
+        await cdpDelay(1380);
         const snap = await cdpEnsureCameraSnapLocked(client, "desktop apartment fly-camera screenshot");
         const detail = await cdpEnsureVisualHealth(client, "desktop apartment fly-camera screenshot");
-        return `${detail}; ${snap}`;
+        return `${detail}; ${flight}; ${snap}`;
       });
 
       await cdpRunDesktopButtonProbes(client, buttonItems);
@@ -2138,7 +2201,6 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors, profile = 
     for (const [id, label, title] of [
       ["04-people", "people", "People overlay"],
       ["05-intelligence", "intelligence", "Intelligence atlas overlay"],
-      ["06-video-labeler", "video labeler", "Video labeler overlay"],
       ["07-simulation-controls", "simulation", "Simulation controls"],
     ]) {
       await cdpCloseOverlays(client);
@@ -2179,7 +2241,7 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors, profile = 
 
     await cdpCloseOverlays(client);
     await step("12-remote-dialog", "Remote access / Travel readiness", async () => {
-      const ok = await cdpAction(client, `(h) => h.clickSelector('button[aria-label="Remote profile"]')`);
+      const ok = await cdpOpenMobileRemoteProfile(client);
       if (!ok) throw new Error("remote profile button missing");
       await cdpExpectText(client, "Remote access / Travel readiness");
       await cdpDelay(600);
@@ -2224,10 +2286,12 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors, profile = 
     await step("21-apartment-fly-camera", "Apartment fly-to-camera/live view", async () => {
       const ok = await cdpEval(client, "window.__havApartmentDebug && (window.__havApartmentDebug.flyFirstCalibratedCamera() || window.__havApartmentDebug.flyFirstCamera())", true);
       if (!ok) throw new Error("no camera device available for fly-to test");
-      await cdpDelay(1600);
+      await cdpDelay(220);
+      const flight = await cdpEnsureCameraFlightStarted(client, "apartment fly-camera screenshot flight");
+      await cdpDelay(1380);
       const snap = await cdpEnsureCameraSnapLocked(client, "apartment fly-camera screenshot");
       const detail = await cdpEnsureVisualHealth(client, "apartment fly-camera screenshot");
-      return `${detail}; ${snap}`;
+      return `${detail}; ${flight}; ${snap}`;
     });
 
       await cdpRunButtonProbes(client, buttonItems);

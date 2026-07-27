@@ -162,6 +162,7 @@ function loadStackTokenProxy() {
 
 const stackTokenProxy = loadStackTokenProxy();
 const legacyHaProxyEnabled = envEnabled("HOME_WEB_ENABLE_LEGACY_HA_PROXY");
+const legacyVisionProxyEnabled = envEnabled("HOME_WEB_ENABLE_LEGACY_VISION_PROXY");
 
 function rx(pattern) {
   return (suffix) => pattern.test(suffix.split("?")[0]);
@@ -188,6 +189,75 @@ function isNativeAgentRoute(method, suffix) {
   const pathname = parsed.pathname;
   return NATIVE_AGENT_ROUTES.some(([allowedMethod, pattern]) =>
     method === allowedMethod && pattern.test(pathname));
+}
+
+const GROUNDED_VISION_CAMERA_PATH = "[a-z0-9_-]{1,64}";
+const GROUNDED_VISION_IMAGE_PATHS = [
+  new RegExp(`^/reason/${GROUNDED_VISION_CAMERA_PATH}/annotated\\.jpg$`, "i"),
+  new RegExp(`^/reason_zoom/${GROUNDED_VISION_CAMERA_PATH}/(?:overview|detail)\\.jpg$`, "i"),
+  new RegExp(`^/snapshot/${GROUNDED_VISION_CAMERA_PATH}/latest\\.jpg$`, "i"),
+];
+
+const GROUNDED_VISION_METADATA_PATHS = new Set([
+  "/reason/latest",
+  "/describe/latest",
+]);
+
+function hasOnlyCacheBuster(parsed) {
+  if (!parsed.search) return true;
+  const entries = [...parsed.searchParams.entries()];
+  return entries.length === 1 && entries[0][0] === "cb" && /^\d{1,20}$/.test(entries[0][1]);
+}
+
+function isGroundedVisionResultRoute(suffix, method) {
+  if (method !== "GET" && method !== "HEAD") return false;
+  const parsed = new URL(suffix, "http://home.local");
+  if (GROUNDED_VISION_METADATA_PATHS.has(parsed.pathname)) return !parsed.search;
+  return GROUNDED_VISION_IMAGE_PATHS.some((pattern) => pattern.test(parsed.pathname)) &&
+    hasOnlyCacheBuster(parsed);
+}
+
+function stripVisionAdapterResponseHeaders(headers) {
+  delete headers["access-control-allow-credentials"];
+  delete headers["access-control-allow-origin"];
+  delete headers["set-cookie"];
+  delete headers["www-authenticate"];
+  headers["cross-origin-resource-policy"] = "same-origin";
+  headers["x-content-type-options"] = "nosniff";
+  return headers;
+}
+
+function groundedVisionResponseHeaders(headers, suffix) {
+  const parsed = new URL(suffix, "http://home.local");
+  stripVisionAdapterResponseHeaders(headers);
+  if (GROUNDED_VISION_METADATA_PATHS.has(parsed.pathname)) {
+    headers["content-type"] = "application/json; charset=utf-8";
+    headers["cache-control"] = "no-store";
+  } else {
+    headers["content-type"] = "image/jpeg";
+    // The sidecar rewrites these camera-scoped filenames after every look.
+    // The app adds a unique numeric cache-buster, making that URL safe to
+    // retain briefly without allowing a stale image to cross turns.
+    headers["cache-control"] = parsed.searchParams.has("cb")
+      ? "private, max-age=60, immutable"
+      : "private, no-cache";
+  }
+  return headers;
+}
+
+function isVisionCompatibilityRoute(suffix, method) {
+  const parsed = new URL(suffix, "http://home.local");
+  if (method === "GET" || method === "HEAD") {
+    if (/^(?:\/healthz|\/cameras|\/describe\/latest|\/reason\/latest)$/i.test(parsed.pathname)) {
+      return !parsed.search;
+    }
+    return GROUNDED_VISION_IMAGE_PATHS.some((pattern) => pattern.test(parsed.pathname)) &&
+      hasOnlyCacheBuster(parsed);
+  }
+  if (method === "POST") {
+    return !parsed.search && /^\/(?:describe|describe_clip|reason|reason_zoom)$/.test(parsed.pathname);
+  }
+  return false;
 }
 
 const routes = [
@@ -229,12 +299,24 @@ const routes = [
     enabled: envEnabled("HOME_WEB_ENABLE_LEGACY_VLLM_PROXY"),
   },
   {
+    prefix: "/proxy/vision-results",
+    env: "HOME_WEB_VISION_TARGET",
+    target: envTarget("HOME_WEB_VISION_TARGET", "http://192.168.0.100:8091"),
+    allow: isGroundedVisionResultRoute,
+    transformResponseHeaders: groundedVisionResponseHeaders,
+    ws: false,
+  },
+  {
+    // This production natural-look compatibility surface remains available
+    // during migration, but it is no longer a generic legacy adapter proxy:
+    // isVisionCompatibilityRoute pins every method and pathname.
     prefix: "/proxy/vision",
     env: "HOME_WEB_VISION_TARGET",
     target: envTarget("HOME_WEB_VISION_TARGET", "http://192.168.0.100:8091"),
-    allow: rx(/^\/(healthz|snapshot\/|describe_clip|describe|reason|reason_zoom|locate|api\/)/),
+    allow: isVisionCompatibilityRoute,
+    transformResponseHeaders: stripVisionAdapterResponseHeaders,
     ws: false,
-    enabled: envEnabled("HOME_WEB_ENABLE_LEGACY_VISION_PROXY"),
+    enabled: legacyVisionProxyEnabled,
   },
   {
     prefix: "/proxy/intelligence",
@@ -280,7 +362,7 @@ const routes = [
     prefix: "/proxy/frigate",
     env: "HOME_WEB_FRIGATE_TARGET",
     target: envTarget("HOME_WEB_FRIGATE_TARGET", "http://192.168.0.125:5000"),
-    allow: rx(/^\/api\//),
+    allow: rx(/^\/(api\/|clips\/faces\/)/),
     ws: false,
     enabled: envEnabled("HOME_WEB_ENABLE_LEGACY_FRIGATE_PROXY"),
   },
@@ -881,6 +963,12 @@ function proxyHeaders(reqHeaders, route, suffix) {
         value.startsWith("__Host-home_agent_oauth="));
     if (agentCookies.length) headers.cookie = agentCookies.join("; ");
   }
+  if (route.prefix === "/proxy/vision-results" || route.prefix === "/proxy/vision") {
+    // Vision routes authenticate at the gateway boundary. They never forward
+    // a caller credential (including an unrelated browser Bearer token) to
+    // the untrusted vision adapter.
+    delete headers.authorization;
+  }
   if (route.prefix === "/proxy/supervisor") {
     delete headers.authorization;
     if (isSupervisorStackApi(route, suffix) && stackTokenProxy.enabled) {
@@ -1039,17 +1127,112 @@ function appStaticCache(pathname, parsed) {
   return STATIC_REVALIDATE_CACHE;
 }
 
-function serveStatic(req, res) {
-  const parsed = new URL(req.url, "http://home.local");
-  if (parsed.pathname === "/healthz") {
+// Watchdog/liveness endpoint. Answered before auth so an external monitor can
+// poll it on a locked-down (auth-required) gateway, and handled for both GET
+// and HEAD. Logs at debug because the web-app watchdog hits it every ~5 min.
+function handleHealthz(req, res) {
+  console.debug(`[healthz] ${req.method} ${req.url}`);
+  if (req.method === "HEAD") {
+    res.writeHead(200, { "Cache-Control": "no-store" });
+    res.end();
+    return;
+  }
+  if (req.method !== "GET") {
+    res.writeHead(405, { "Cache-Control": "no-store", Allow: "GET, HEAD" });
+    res.end();
+    return;
+  }
+  // Superset payload: the spec-required { status, commit, uptime } plus the
+  // existing gatewayHealth() fields (routes, auth, stackTokenProxy) that the
+  // readiness probe in run-web-gateway-stack-token-tests.js relies on. `commit`
+  // is pinned to the asset version per spec, overriding gatewayHealth's
+  // git-only commit.
+  const body = {
+    ...gatewayHealth(),
+    status: "ok",
+    commit: BUILD_ASSET_VERSION,
+    uptime: process.uptime(),
+  };
+  sendJson(res, 200, body, { "Cache-Control": "no-store" });
+}
+
+function handleResetCache(req, res) {
+  if (req.method === "HEAD") {
     res.writeHead(200, {
-      "Content-Type": "application/json; charset=utf-8",
+      "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
     });
-    res.end(JSON.stringify(gatewayHealth()));
+    res.end();
+    return;
+  }
+  if (req.method !== "GET") {
+    res.writeHead(405, { "Cache-Control": "no-store", Allow: "GET, HEAD" });
+    res.end();
     return;
   }
 
+  const freshTarget = `/?fresh=${encodeURIComponent(BUILD_ASSET_VERSION)}`;
+  const body = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Resetting Home Cache</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #050606;
+      color: #f4f7f8;
+      font: 15px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    main { width: min(30rem, calc(100vw - 3rem)); }
+    p { color: #aeb8bd; }
+    a { color: #9dccff; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>resetting home cache</h1>
+    <p id="status">clearing service worker and cached app assets...</p>
+    <p><a href="${freshTarget}">open home</a></p>
+  </main>
+  <script>
+    (async function () {
+      const status = document.getElementById("status");
+      try {
+        if ("serviceWorker" in navigator && navigator.serviceWorker.getRegistrations) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(regs.map((reg) => reg.unregister()));
+        }
+        if ("caches" in window && caches.keys) {
+          const names = await caches.keys();
+          await Promise.all(names
+            .filter((name) => /^home-web-static-/.test(name))
+            .map((name) => caches.delete(name)));
+        }
+        status.textContent = "cache cleared. loading the current build...";
+      } catch (err) {
+        status.textContent = "cache reset had a problem, trying a fresh load anyway...";
+      }
+      window.location.replace("${freshTarget}");
+    })();
+  </script>
+</body>
+</html>`;
+  res.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Length": Buffer.byteLength(body),
+    "Cache-Control": "no-store",
+  });
+  res.end(body);
+}
+
+function serveStatic(req, res) {
+  const parsed = new URL(req.url, "http://home.local");
   if (parsed.pathname.startsWith("/assets/apartment/")) {
     const rel = parsed.pathname.slice("/assets/apartment/".length);
     const cache = isApartmentMetadata(parsed.pathname)
@@ -1248,8 +1431,16 @@ function proxyHttp(req, res, route) {
     method: req.method,
     headers: proxyHeaders(req.headers, route, suffix),
   }, (upstreamRes) => {
-    const headers = { ...upstreamRes.headers };
+    let headers = { ...upstreamRes.headers };
     delete headers["content-security-policy"];
+    if (route.transformResponseHeaders) {
+      headers = route.transformResponseHeaders(headers, suffix, upstreamRes) || headers;
+    }
+    if (route.prefix === "/proxy/frigate" && /^\/clips\/faces\//.test(suffix.split("?")[0])) {
+      const ext = path.extname(targetUrl.pathname).toLowerCase();
+      headers["content-type"] = MIME.get(ext) || headers["content-type"] || "application/octet-stream";
+      headers["cache-control"] = headers["cache-control"] || "private, max-age=3600";
+    }
     res.writeHead(upstreamRes.statusCode || 502, headers);
     upstreamRes.pipe(res);
   });
@@ -1401,6 +1592,14 @@ const server = http.createServer({
     return;
   }
 
+  if (parsed.pathname === "/healthz") {
+    handleHealthz(req, res);
+    return;
+  }
+  if (parsed.pathname === "/reset-cache") {
+    handleResetCache(req, res);
+    return;
+  }
   if (parsed.pathname === "/auth" || parsed.pathname.startsWith("/auth/")) {
     await handleAuthRoute(req, res, parsed);
     return;

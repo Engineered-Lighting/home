@@ -47,6 +47,536 @@ function applyAsrCorrection(text) {
   return text.replace(ASR_RE, (m) => ASR_ALIASES[m.toLowerCase()] || m);
 }
 
+function canonicalChatText(text) {
+  return String(text || "").replace(/\s+/g, " ").trim();
+}
+
+function canonicalChatTextLoose(text) {
+  return canonicalChatText(text)
+    .toLowerCase()
+    .replace(/[^\w'\s]+/g, " ")
+    .replace(/\b(a|an|the)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const HOME_TRAVEL_MODE_CACHE_KEY = "home.lights.travelMode.state.v1";
+
+function chatWordTokens(text) {
+  const loose = canonicalChatTextLoose(text);
+  return loose ? loose.split(" ").filter(Boolean) : [];
+}
+
+function isTokenSubsequence(shortWords, longWords) {
+  if (!Array.isArray(shortWords) || !Array.isArray(longWords)) return false;
+  if (shortWords.length < 5 || longWords.length < shortWords.length) return false;
+  let j = 0;
+  for (let i = 0; i < longWords.length && j < shortWords.length; i++) {
+    if (shortWords[j] === longWords[i]) j++;
+  }
+  return j === shortWords.length;
+}
+
+function orderedTokenOverlapScore(a, b) {
+  const aWords = chatWordTokens(a);
+  const bWords = chatWordTokens(b);
+  const minLen = Math.min(aWords.length, bWords.length);
+  if (!minLen) return 0;
+  const prev = new Array(bWords.length + 1).fill(0);
+  const cur = new Array(bWords.length + 1).fill(0);
+  for (let i = 1; i <= aWords.length; i++) {
+    for (let j = 1; j <= bWords.length; j++) {
+      cur[j] = aWords[i - 1] === bWords[j - 1]
+        ? prev[j - 1] + 1
+        : Math.max(prev[j], cur[j - 1]);
+    }
+    for (let j = 0; j <= bWords.length; j++) prev[j] = cur[j];
+  }
+  return prev[bWords.length] / minLen;
+}
+
+function isNearDuplicateChatText(a, b) {
+  const aKey = canonicalChatTextLoose(a);
+  const bKey = canonicalChatTextLoose(b);
+  if (!aKey || !bKey) return false;
+  if (aKey === bKey) return true;
+  const minChars = Math.min(aKey.length, bKey.length);
+  if (minChars >= 18 && (aKey.includes(bKey) || bKey.includes(aKey))) return true;
+
+  const aWords = chatWordTokens(a);
+  const bWords = chatWordTokens(b);
+  const minWords = Math.min(aWords.length, bWords.length);
+  if (minWords < 5) return false;
+  if (isTokenSubsequence(aWords, bWords) || isTokenSubsequence(bWords, aWords)) return true;
+  const score = orderedTokenOverlapScore(a, b);
+  if (score >= 0.82) return true;
+  const sameEdge = aWords[0] === bWords[0]
+    || aWords[aWords.length - 1] === bWords[bWords.length - 1];
+  return minWords >= 8 && sameEdge && score >= 0.72;
+}
+
+function splitChatClauses(text) {
+  const parts = [];
+  for (const line of String(text || "").replace(/\r\n/g, "\n").split(/\n+/)) {
+    const matches = line.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [];
+    for (const m of matches) {
+      const trimmed = m.trim();
+      if (trimmed) parts.push(trimmed);
+    }
+  }
+  return parts;
+}
+
+function collapseNearDuplicateClauses(text) {
+  if (typeof text !== "string" || !text) return text;
+  const clauses = splitChatClauses(text);
+  if (clauses.length < 2) return text;
+  const kept = [];
+  let changed = false;
+  const isContainedFragment = (shortText, longText) => {
+    const shortKey = canonicalChatTextLoose(shortText);
+    const longKey = canonicalChatTextLoose(longText);
+    if (!shortKey || !longKey || shortKey === longKey) return false;
+    const shortWords = shortKey.split(" ").filter(Boolean).length;
+    if (shortWords < 2 || shortWords > 10) return false;
+    return longKey.length >= shortKey.length + 8 && longKey.includes(shortKey);
+  };
+  for (const clause of clauses) {
+    let matched = false;
+    for (let i = 0; i < kept.length; i++) {
+      if (isContainedFragment(clause, kept[i])) {
+        matched = true;
+        changed = true;
+        break;
+      }
+      if (!isNearDuplicateChatText(kept[i], clause)) continue;
+      const clauseWords = chatWordTokens(clause).length;
+      const keptWords = chatWordTokens(kept[i]).length;
+      if (clauseWords > keptWords || clause.length > kept[i].length) {
+        kept[i] = clause;
+      }
+      matched = true;
+      changed = true;
+      break;
+    }
+    if (!matched) {
+      for (let i = kept.length - 1; i >= 0; i--) {
+        if (isContainedFragment(kept[i], clause)) {
+          kept.splice(i, 1);
+          changed = true;
+        }
+      }
+      kept.push(clause);
+    }
+  }
+  return changed ? kept.join(" ") : text;
+}
+
+function collapseRepeatedAdjacentText(text) {
+  if (typeof text !== "string" || !text) return text;
+  const normalized = text.replace(/\r\n/g, "\n");
+  const trimmed = normalized.trim();
+  if (!trimmed) return text;
+
+  const sameCanonical = (items) => {
+    if (items.length < 2) return false;
+    const first = canonicalChatText(items[0]);
+    if (first.length < 8) return false;
+    return items.every((item) => canonicalChatText(item) === first);
+  };
+
+  const paragraphs = trimmed.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+  if (sameCanonical(paragraphs)) return paragraphs[0];
+
+  const lines = trimmed.split(/\n/).map((p) => p.trim()).filter(Boolean);
+  if (sameCanonical(lines)) return lines[0];
+  if (lines.length > 1) {
+    const kept = lines.filter((line, idx) => {
+      const lineKey = canonicalChatText(line);
+      if (lineKey.length < 12) return true;
+      return !lines.some((other, otherIdx) => {
+        if (otherIdx === idx) return false;
+        const otherKey = canonicalChatText(other);
+        return otherKey.length >= lineKey.length + 5 && otherKey.includes(lineKey);
+      });
+    });
+    if (kept.length > 0 && kept.length < lines.length) {
+      return collapseRepeatedAdjacentText(kept.join("\n"));
+    }
+  }
+
+  const words = canonicalChatText(trimmed).split(" ").filter(Boolean);
+  if (words.length >= 6 && words.length % 2 === 0) {
+    const mid = words.length / 2;
+    const first = words.slice(0, mid).join(" ");
+    const second = words.slice(mid).join(" ");
+    if (first.length >= 18 && first === second) return first;
+  }
+
+  const collapsedOverlap = collapseOverlappingWordRuns(words);
+  if (collapsedOverlap) return collapsedOverlap;
+
+  return text;
+}
+
+function normalizeChatEventText(text) {
+  const corrected = applyAsrCorrection(text);
+  const adjacentCollapsed = collapseRepeatedAdjacentText(corrected);
+  const sentenceCollapsed = collapseRepeatedSentenceBlocks(adjacentCollapsed);
+  const halfCollapsed = collapseRepeatedTokenHalves(sentenceCollapsed);
+  return collapseRepeatedAdjacentText(collapseNearDuplicateClauses(
+    halfCollapsed || sentenceCollapsed,
+  ));
+}
+
+if (typeof window !== "undefined") {
+  window.HomeNormalizeChatEventText = normalizeChatEventText;
+}
+
+function sanitizeChatEventForStorage(ev) {
+  if (!ev || typeof ev !== "object") return ev;
+  const next = ev.text
+    ? { ...ev, text: normalizeChatEventText(ev.text) }
+    : { ...ev };
+  if (next.streaming) delete next.streaming;
+  return next;
+}
+
+function collapseOverlappingWordRuns(words) {
+  if (!Array.isArray(words) || words.length < 8) return "";
+  let out = words.slice();
+
+  for (let k = Math.min(Math.floor(out.length / 2), 48); k >= 3; k--) {
+    const first = out.slice(0, k).join(" ");
+    const next = out.slice(k, k * 2).join(" ");
+    if (first.length >= 18 && first === next) {
+      out = out.slice(k);
+      break;
+    }
+  }
+
+  for (let k = Math.min(Math.floor(out.length / 2), 48); k >= 3; k--) {
+    const suffix = out.slice(-k).join(" ");
+    const before = out.slice(0, -k);
+    const prior = before.slice(-k).join(" ");
+    if (suffix.length >= 18 && suffix === prior) {
+      out = before;
+      break;
+    }
+  }
+
+  const collapsed = out.join(" ");
+  return collapsed && collapsed !== words.join(" ") ? collapsed : "";
+}
+
+function collapseRepeatedTokenHalves(text) {
+  const normalized = canonicalChatText(text);
+  if (!normalized) return "";
+  const words = normalized.split(" ").filter(Boolean);
+  if (words.length < 8 || words.length % 2 !== 0) return "";
+  const mid = words.length / 2;
+  const first = words.slice(0, mid).join(" ");
+  const second = words.slice(mid).join(" ");
+  if (first.length >= 24 && first === second) return first;
+  return "";
+}
+
+function collapseRepeatedSentenceBlocks(text) {
+  if (typeof text !== "string" || !text) return text;
+  const clauses = splitChatClauses(text);
+  if (clauses.length < 4 || clauses.length % 2 !== 0) return text;
+  const mid = clauses.length / 2;
+  const first = clauses.slice(0, mid).join(" ");
+  const second = clauses.slice(mid).join(" ");
+  if (
+    canonicalChatText(first).length >= 40
+    && canonicalChatText(first) === canonicalChatText(second)
+  ) {
+    return first;
+  }
+  return text;
+}
+
+function mergeByWordOverlap(current, incoming) {
+  const curWords = canonicalChatText(current).split(" ").filter(Boolean);
+  const nextWords = canonicalChatText(incoming).split(" ").filter(Boolean);
+  if (!curWords.length) return incoming;
+  if (!nextWords.length) return current;
+
+  for (let k = Math.min(curWords.length, nextWords.length, 64); k >= 3; k--) {
+    const curTail = curWords.slice(-k).join(" ");
+    const nextHead = nextWords.slice(0, k).join(" ");
+    if (curTail.length >= 18 && curTail === nextHead) {
+      return normalizeChatEventText(curWords.concat(nextWords.slice(k)).join(" "));
+    }
+  }
+  return "";
+}
+
+function mergeByCharOverlap(current, incoming) {
+  const cur = String(current || "");
+  const next = String(incoming || "");
+  if (!cur || !next) return "";
+  const curKey = cur.toLowerCase();
+  const nextKey = next.toLowerCase();
+  for (let k = Math.min(cur.length, next.length, 96); k >= 8; k--) {
+    if (curKey.slice(-k) === nextKey.slice(0, k)) {
+      return normalizeChatEventText(cur + next.slice(k));
+    }
+  }
+  return "";
+}
+
+function joinStreamingFallback(current, incoming, rawIncoming) {
+  const cur = String(current || "");
+  const next = String(incoming || "");
+  const raw = String(rawIncoming || "");
+  if (!cur) return next;
+  if (!next) return cur;
+  if (/^\s/.test(raw)) return `${cur}${/\s$/.test(cur) || /^\s/.test(next) ? "" : " "}${next}`;
+  if (/^[.,!?;:)\]}]/.test(next)) return `${cur}${next}`;
+  if (/[\s([{]$/.test(cur)) return `${cur}${next}`;
+  if (!/\s/.test(next) && next.length <= 4) return `${cur}${next}`;
+  return `${cur} ${next}`;
+}
+
+function mergeStreamingText(current, incoming) {
+  const rawNext = applyAsrCorrection(String(incoming || ""));
+  const cur = normalizeChatEventText(String(current || ""));
+  const next = normalizeChatEventText(rawNext);
+  if (!next) return cur;
+  if (!cur) return next;
+
+  const curKey = canonicalChatText(cur);
+  const nextKey = canonicalChatText(next);
+  const curLoose = canonicalChatTextLoose(cur);
+  const nextLoose = canonicalChatTextLoose(next);
+  if (nextKey === curKey) return cur;
+  if (next.startsWith(cur) || nextKey.startsWith(curKey) || nextLoose.startsWith(curLoose)) return next;
+  if (cur.endsWith(next) || curKey.endsWith(nextKey) || curLoose.endsWith(nextLoose)) return cur;
+  if (curKey.includes(nextKey) || curLoose.includes(nextLoose)) return cur;
+  if (nextKey.includes(curKey) || nextLoose.includes(curLoose)) return next;
+  if (isNearDuplicateChatText(cur, next)) {
+    return chatWordTokens(next).length >= chatWordTokens(cur).length ? next : cur;
+  }
+  const charOverlapped = mergeByCharOverlap(cur, next);
+  if (charOverlapped) return charOverlapped;
+  const overlapped = mergeByWordOverlap(cur, next);
+  if (overlapped) return overlapped;
+  return normalizeChatEventText(joinStreamingFallback(cur, next, rawNext));
+}
+
+function settleAssistantFinalText(current, finalText) {
+  const cur = normalizeChatEventText(String(current || ""));
+  const final = normalizeChatEventText(String(finalText || ""));
+  if (!final) return cur;
+  return final;
+}
+
+function readCachedTravelModeOn() {
+  try {
+    if (typeof window !== "undefined" && window.__HOME_TRAVEL_MODE_STATE === "on") return true;
+    if (typeof localStorage !== "undefined") {
+      return localStorage.getItem(HOME_TRAVEL_MODE_CACHE_KEY) === "on";
+    }
+  } catch (_) {}
+  return false;
+}
+
+function serviceCallMayEnergizeLights(call) {
+  if (!call || typeof call !== "object") return false;
+  const domain = String(call.domain || "").toLowerCase();
+  const service = String(call.service || "").toLowerCase();
+  if (service !== "turn_on" && service !== "toggle") return false;
+  if (domain === "light" || domain === "switch" || domain === "scene") return true;
+  if (domain === "homeassistant") {
+    const sd = call.service_data || {};
+    const targets = [sd.entity_id, sd.area_id, sd.device_id].flat().filter(Boolean).join(" ").toLowerCase();
+    return !targets || /\b(light|switch)\./.test(targets);
+  }
+  if (domain === "script") {
+    const sd = call.service_data || {};
+    const targets = [sd.entity_id, sd.area_id, sd.device_id].flat().filter(Boolean).join(" ").toLowerCase();
+    return /light|lighting|living_lights|good_morning|return_home/.test(targets);
+  }
+  return false;
+}
+
+function shouldSuppressActionCardsForToolCall(name, parsed, travelModeOn = readCachedTravelModeOn()) {
+  if (name !== "execute_services" || !travelModeOn) return false;
+  const calls = Array.isArray(parsed?.list) ? parsed.list : [];
+  return calls.some(serviceCallMayEnergizeLights);
+}
+
+function duplicateEventGroupKey(kind) {
+  if (kind === "user" || kind === "voice") return "user";
+  if (kind === "home" || kind === "external" || kind === "perception") return kind;
+  return "";
+}
+
+function isRecentDuplicateEvent(prev, ev, lookback = 10, windowMs = 8000) {
+  if (isRedundantPerceptionOfAssistant(prev, ev, lookback, windowMs)) return true;
+
+  const group = duplicateEventGroupKey(ev?.kind);
+  const target = canonicalChatText(ev?.text);
+  if (!group || !target) return false;
+  const now = new Date();
+  const start = Math.max(0, prev.length - lookback);
+  for (let i = prev.length - 1; i >= start; i--) {
+    const e = prev[i];
+    if (duplicateEventGroupKey(e?.kind) !== group) continue;
+    // A locally-issued turn key is stronger than the legacy text/time
+    // heuristic. Preserve an intentional repeated question in a new turn;
+    // same-turn echoes still share the key and collapse.
+    if (ev?.turnKey && e?.turnKey !== ev.turnKey) continue;
+    if (canonicalChatText(e?.text) !== target) continue;
+    if (!_withinWindow(e.time, windowMs, now)) continue;
+    return true;
+  }
+  return false;
+}
+
+function perceptionAnswerText(text) {
+  const normalized = normalizeChatEventText(text || "");
+  const lines = normalized
+    .replace(/\r\n/g, "\n")
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length >= 2 && /^[a-z0-9_ -]{2,32}$/i.test(lines[0])) {
+    return lines.slice(1).join(" ");
+  }
+  return normalized.replace(/^[a-z0-9_ -]{2,32}:\s*/i, "");
+}
+
+function isRedundantPerceptionOfAssistant(prev, ev, lookback = 10, windowMs = 8000) {
+  if (ev?.kind !== "perception") return false;
+  // A perception event is also the transport for the camera artifact.
+  // The caption often repeats the spoken answer verbatim, but dropping
+  // that event also drops its segmented image. Only text-only perception
+  // echoes are redundant; an event carrying an artifact must render.
+  if (ev.snapshotUrl || ev.artifactUrl || ev.imageUnavailable) return false;
+  const target = perceptionAnswerText(ev.text);
+  if (!canonicalChatText(target)) return false;
+
+  const now = new Date();
+  const start = Math.max(0, prev.length - lookback);
+  for (let i = prev.length - 1; i >= start; i--) {
+    const e = prev[i];
+    if (e?.kind !== "home") continue;
+    if (!_withinWindow(e.time, windowMs, now)) continue;
+    if (isNearDuplicateChatText(e.text || "", target)) return true;
+  }
+  return false;
+}
+
+function assistantTurnIdentityValues(ev) {
+  if (!ev || typeof ev !== "object") return [];
+  return [
+    ["turn", ev.turnKey],
+    ["run", ev.runId],
+    ["source", ev.sourceTurnId],
+  ]
+    .filter(([, value]) => value !== null && value !== undefined && String(value).trim())
+    .map(([field, value]) => `${field}:${String(value)}`);
+}
+
+function assistantEventsShareIdentity(a, b) {
+  const aIds = assistantTurnIdentityValues(a);
+  if (!aIds.length) return false;
+  const bIds = new Set(assistantTurnIdentityValues(b));
+  return aIds.some((value) => bIds.has(value));
+}
+
+function assistantEventTimesClose(a, b, windowMs = 8000) {
+  const parse = (value) => {
+    const match = String(value || "").match(/^(\d{2}):(\d{2}):(\d{2})$/);
+    if (!match) return null;
+    return ((+match[1] * 60 * 60) + (+match[2] * 60) + (+match[3])) * 1000;
+  };
+  const aMs = parse(a?.time);
+  const bMs = parse(b?.time);
+  if (aMs === null || bMs === null) return true;
+  const dayMs = 24 * 60 * 60 * 1000;
+  const diff = Math.abs(aMs - bMs);
+  return Math.min(diff, dayMs - diff) <= windowMs;
+}
+
+function upsertAssistantTurnEvent(prev, incoming, lookback = 100) {
+  const events = Array.isArray(prev) ? prev : [];
+  if (!incoming || (incoming.kind !== "home" && incoming.kind !== "external")) {
+    return incoming ? [...events, incoming] : events;
+  }
+
+  const nextEvent = {
+    ...incoming,
+    text: normalizeChatEventText(incoming.text || ""),
+  };
+  const start = Math.max(0, events.length - lookback);
+  let currentTurnStart = start;
+  for (let i = events.length - 1; i >= start; i--) {
+    if (events[i]?.kind === "user" || events[i]?.kind === "voice") {
+      currentTurnStart = i + 1;
+      break;
+    }
+  }
+
+  const matches = [];
+  for (let i = start; i < events.length; i++) {
+    const existing = events[i];
+    if (existing?.kind !== nextEvent.kind) continue;
+    const explicitIdentity = assistantEventsShareIdentity(existing, nextEvent);
+    if (explicitIdentity) {
+      matches.push(i);
+      continue;
+    }
+    if (i < currentTurnStart) continue;
+    if (existing.streaming) {
+      matches.push(i);
+      continue;
+    }
+    if (!assistantEventTimesClose(existing, nextEvent)) continue;
+    const existingText = normalizeChatEventText(existing.text || "");
+    if (isNearDuplicateChatText(existingText, nextEvent.text)) matches.push(i);
+  }
+
+  if (!matches.length) return [...events, nextEvent];
+
+  const keepIdx = matches[0];
+  const existing = events[keepIdx];
+  const mergedText = nextEvent.streaming
+    ? mergeStreamingText(existing.text, nextEvent.text)
+    : settleAssistantFinalText(existing.text, nextEvent.text);
+  const merged = {
+    ...existing,
+    ...nextEvent,
+    id: existing.id,
+    time: existing.time,
+    text: mergedText,
+    streaming: nextEvent.streaming === true,
+    turnKey: nextEvent.turnKey || existing.turnKey,
+    runId: nextEvent.runId || existing.runId,
+    sourceTurnId: nextEvent.sourceTurnId || existing.sourceTurnId,
+    convId: nextEvent.convId || existing.convId,
+  };
+  const duplicateIdxs = new Set(matches.slice(1));
+  return events
+    .map((event, idx) => idx === keepIdx ? merged : event)
+    .filter((_event, idx) => !duplicateIdxs.has(idx));
+}
+
+function coalesceAssistantTurnEvents(events) {
+  let coalesced = [];
+  for (const event of Array.isArray(events) ? events : []) {
+    if (event?.kind === "home" || event?.kind === "external") {
+      coalesced = upsertAssistantTurnEvent(coalesced, event, Math.max(100, coalesced.length));
+    } else {
+      coalesced.push(event);
+    }
+  }
+  return coalesced;
+}
+
 function readViewportProfile() {
   if (typeof window === "undefined") {
     return { width: 1024, height: 768, mobile: false, phone: false };
@@ -89,8 +619,8 @@ function HomeHeader({
   theme, onToggleTheme, voice, connection, sidecarOnline, bridgeOnline,
   bridgeHealth, visionSidecarOnline, visionHealth, frigateMetrics, cameraLabels,
   sim, muteState, onUnmuteClick, onOpenPeople, onOpenIntelligence,
-  onOpenVideoLabeler, onOpenSimulationControls, peopleButtonRef, aiStackState, metrics,
-  serviceProfile, onOpenRemoteProfile, mobile = false,
+  onOpenVideoLabeler, onOpenApartment, onOpenLights, onOpenSimulationControls, aiStackState, metrics,
+  serviceProfile, onOpenRemoteProfile, peopleButtonRef, mobile = false,
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const isLive = voice.state !== "inactive" && voice.state !== "no-mic";
@@ -124,42 +654,156 @@ function HomeHeader({
     minHeight: 24,
     boxSizing: "border-box",
   };
-  const atlasIconColor = theme === "light"
-    ? "rgba(31, 79, 168, 0.86)"
-    : "rgba(238,248,255,0.78)";
-  const atlasIconBtn = {
-    ...iconBtn,
-    color: atlasIconColor,
+  const navChipBtn = {
+    all: "unset",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    border: "1px solid var(--hg-border)",
+    color: "var(--hg-fg-1)",
+    background: "rgba(138,190,255,0.055)",
+    padding: mobile ? "0 8px" : "3px 8px",
+    borderRadius: 5,
+    fontFamily: "'Geist Mono', monospace",
+    fontSize: mobile ? 9 : 9.5,
+    letterSpacing: "0.08em",
+    textTransform: "lowercase",
+    cursor: "pointer",
+    minHeight: mobile ? 38 : 28,
+    flexShrink: 0,
+    boxSizing: "border-box",
   };
   const hoverBright = (e) => { e.currentTarget.style.color = "var(--hg-fg-0)"; };
-  const hoverAtlas = (e) => {
-    e.currentTarget.style.color = "var(--hg-fg-0)";
-  };
   const hoverWarn   = (e) => { e.currentTarget.style.color = "var(--hg-warn)"; };
   const unhover     = (e) => { e.currentTarget.style.color = "var(--hg-fg-3)"; };
-  const unhoverAtlas = (e) => {
-    e.currentTarget.style.color = atlasIconColor;
-  };
   const chipMax = mobile ? "min(142px, 36vw)" : "none";
-  const mobileMenuItem = {
+  const actionMenuItem = {
     all: "unset",
-    minHeight: 42,
-    padding: "0 12px",
+    minHeight: mobile ? 40 : 36,
+    padding: mobile ? "0 13px" : "0 12px",
     display: "flex",
     alignItems: "center",
+    justifyContent: "space-between",
     gap: 8,
     color: "var(--hg-fg-1)",
     borderBottom: "1px solid var(--hg-border-soft)",
     cursor: "pointer",
     fontFamily: "'Geist Mono', monospace",
-    fontSize: 10.5,
-    letterSpacing: "0.09em",
-    textTransform: "uppercase",
+    fontSize: mobile ? 10 : 9.5,
+    letterSpacing: "0.075em",
+    textTransform: "lowercase",
+    lineHeight: 1.1,
   };
-  const mobileMenuAction = (fn) => {
+  const actionMenu = (
+    <span style={{
+      position: "relative",
+      display: "inline-flex",
+      flexShrink: 0,
+      zIndex: menuOpen ? 120 : "auto",
+    }}>
+      <button
+        type="button"
+        aria-label={mobile ? "Open mobile actions" : "Open app actions"}
+        aria-expanded={menuOpen ? "true" : "false"}
+        className="hg-focusable hg-mobile-touch"
+        onClick={() => setMenuOpen((open) => !open)}
+        style={{
+          ...iconBtn,
+          width: mobile ? 38 : 32,
+          height: mobile ? 38 : 32,
+          border: "1px solid var(--hg-border)",
+          borderRadius: mobile ? 6 : 5,
+          background: "rgba(255,255,255,0.025)",
+        }}
+      >
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M3 4.5h10M3 8h10M3 11.5h10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+        </svg>
+      </button>
+      {menuOpen && (
+        <>
+          <div
+            aria-hidden="true"
+            onClick={() => setMenuOpen(false)}
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 79,
+              cursor: "default",
+              background: "transparent",
+            }}
+          />
+          <div
+            role="menu"
+            style={{
+              position: "absolute",
+              top: mobile ? "calc(100% + 6px)" : "calc(100% + 8px)",
+              right: 0,
+              zIndex: 80,
+              width: mobile ? "min(218px, calc(100vw - 22px))" : 226,
+              maxHeight: mobile ? "min(330px, calc(100dvh - 92px))" : "min(360px, calc(100vh - 86px))",
+              overflowY: "auto",
+              background: "var(--hg-bg-1)",
+              border: "1px solid var(--hg-border)",
+              borderRadius: 8,
+              boxShadow: "0 16px 46px rgba(0,0,0,0.50)",
+            }}
+          >
+            {serviceProfile && onOpenRemoteProfile && !mobile && (
+              <button
+                type="button"
+                role="menuitem"
+                aria-label="Remote profile"
+                style={actionMenuItem}
+                onClick={() => runMenuAction(onOpenRemoteProfile)}
+              >
+                profile - {serviceProfile.shortLabel}
+              </button>
+            )}
+            {onOpenPeople && !mobile && <button type="button" role="menuitem" ref={peopleButtonRef} style={actionMenuItem} onClick={() => runMenuAction(onOpenPeople)}>people</button>}
+            {onOpenApartment && !mobile && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenApartment)}>apartment</button>}
+            {onOpenLights && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenLights)}>{mobile ? "lights + travel mode" : "lights"}</button>}
+            {onOpenIntelligence && !mobile && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenIntelligence)}>intelligence</button>}
+            {onOpenVideoLabeler && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenVideoLabeler)}>video labeler</button>}
+            {onToggleTheme && !mobile && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onToggleTheme)}>{theme === "dark" ? "light mode" : "dark mode"}</button>}
+            {sim?.active && onOpenSimulationControls && <button type="button" role="menuitem" style={actionMenuItem} onClick={() => runMenuAction(onOpenSimulationControls)}>simulation</button>}
+          </div>
+        </>
+      )}
+    </span>
+  );
+  function runMenuAction(fn) {
     setMenuOpen(false);
     fn?.();
-  };
+  }
+  const connectionStatusNode = (
+    <span style={{
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 6,
+      flexShrink: 0,
+      minWidth: 0,
+      maxWidth: mobile ? 86 : 150,
+      overflow: "hidden",
+      color: connection === "auth_invalid" ? "var(--hg-warn)"
+        : isDegraded ? "var(--hg-warn)"
+        : "var(--hg-fg-3)",
+    }}>
+      {/* Phase 1 bugfix: dot pulses ice-blue while a voice session is
+          live (mic open OR speaking), while the adjacent label keeps
+          the connection state readable in the quieter left header. */}
+      <ConnectionDot state={isLive ? "live" : isDegraded ? "degraded" : connection} />
+      <span title={isDegraded ? warnText : ""} style={{
+        minWidth: 0,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        fontFamily: "'Geist Mono', monospace",
+        fontSize: mobile ? 8 : 10,
+        letterSpacing: "0.12em",
+      }}>{statusText}</span>
+    </span>
+  );
   return (
     <div
       data-tauri-drag-region
@@ -176,18 +820,24 @@ function HomeHeader({
         minWidth: 0,
       }}
     >
-      <div data-tauri-drag-region style={{ display: "flex", flexDirection: "column", lineHeight: 1.05, pointerEvents: "none", minWidth: mobile ? 68 : "auto", flexShrink: 0 }}>
+      <div data-tauri-drag-region style={{ display: "flex", flexDirection: "column", lineHeight: 1.05, pointerEvents: "none", minWidth: mobile ? 72 : "auto", flexShrink: 0 }}>
         <span style={{
           fontFamily: "'Geist', system-ui, sans-serif",
           fontSize: mobile ? 16 : 17, fontWeight: 500, color: "var(--hg-fg-0)",
           letterSpacing: "-0.02em",
         }}>home</span>
+        {mobile && (
+          <span style={{ marginTop: 4 }}>
+            {connectionStatusNode}
+          </span>
+        )}
         {!mobile && <span style={{
           fontFamily: "'Geist Mono', monospace",
           fontSize: 8.5, letterSpacing: "0.24em",
           fontWeight: 500, color: "var(--hg-fg-4)", marginTop: 3,
         }}>engineered lighting</span>}
       </div>
+      {!mobile && connectionStatusNode}
       <span style={{
         marginLeft: "auto",
         display: "inline-flex",
@@ -196,7 +846,7 @@ function HomeHeader({
         gap: mobile ? 6 : 10,
         fontSize: 11.5,
         minWidth: 0,
-        flex: mobile ? "1 1 auto" : "0 1 auto",
+        flex: "0 1 auto",
         flexWrap: "nowrap",
         overflow: mobile && !menuOpen ? "hidden" : "visible",
       }}>
@@ -318,40 +968,6 @@ function HomeHeader({
             muted · {muteState.reason || "active"}
           </button>
         )}
-        {serviceProfile && onOpenRemoteProfile && (
-          <button
-            type="button"
-            aria-label="Remote profile"
-            onClick={onOpenRemoteProfile}
-            title={`Connection profile: ${serviceProfile.label}`}
-            className="hg-focusable hg-mobile-touch"
-            style={{
-              all: "unset",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 5,
-              border: "1px solid var(--hg-border)",
-              color: "var(--hg-fg-3)",
-              padding: "2px 7px",
-              borderRadius: 2,
-              fontFamily: "'Geist Mono', monospace",
-              fontSize: 9,
-              letterSpacing: "0.12em",
-              textTransform: "uppercase",
-              cursor: "pointer",
-              minHeight: mobile ? 30 : 24,
-              flexShrink: 0,
-            }}
-          >
-            <span style={{
-              width: 6,
-              height: 6,
-              borderRadius: 999,
-              background: serviceProfile.id === "tailscale" ? "var(--hg-ice)" : "var(--hg-fg-4)",
-            }} />
-            {serviceProfile.shortLabel}
-          </button>
-        )}
         {/* Simulation Mode pill — unmissable amber chip so the designer
             (or anyone) instantly knows the data is mocked. */}
         {sim?.active && (
@@ -389,7 +1005,7 @@ function HomeHeader({
               width: 6, height: 6, borderRadius: 999,
               background: "var(--hg-warn)",
             }} />
-            sim · {sim.scenario || "—"}
+            {mobile ? "sim" : `sim · ${sim.scenario || "—"}`}
           </span>
           </button>
         )}
@@ -397,155 +1013,36 @@ function HomeHeader({
             face-rec affordances live below now — name chip in the
             vision drawer, named perception line in the chat feed.
             The header stays clean. */}
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-          {/* Phase 1 bugfix: dot pulses ice-blue while a voice session is
-              live (mic open OR speaking), but the text label only shows
-              non-online states (connecting / bad token / offline). The
-              voice state itself lives in the bottom VoiceBanner. */}
-          <ConnectionDot state={isLive ? "live" : isDegraded ? "degraded" : connection} />
-          {(connection !== "online" || isDegraded) && (
-            <span title={isDegraded ? warnText : ""} style={{
-              color: connection === "auth_invalid" ? "var(--hg-warn)"
-                   : isDegraded ? "var(--hg-warn)"
-                   : "var(--hg-fg-3)",
-              fontFamily: "'Geist Mono', monospace",
-              fontSize: mobile ? 9 : 10, letterSpacing: "0.12em",
-            }}>{statusText}</span>
-          )}
-        </span>
-        {mobile && (
-          <span style={{
-            position: "relative",
-            display: "inline-flex",
-            flexShrink: 0,
-            zIndex: menuOpen ? 120 : "auto",
-          }}>
-            <button
-              type="button"
-              aria-label="Open mobile actions"
-              aria-expanded={menuOpen ? "true" : "false"}
-              className="hg-focusable hg-mobile-touch"
-              onClick={() => setMenuOpen((open) => !open)}
-              style={{
-                ...iconBtn,
-                width: 38,
-                height: 38,
-                border: "1px solid var(--hg-border)",
-                borderRadius: 6,
-                background: "rgba(255,255,255,0.025)",
-              }}
-            >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M3 4.5h10M3 8h10M3 11.5h10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              </svg>
-            </button>
-            {menuOpen && (
-              <>
-                <div
-                  aria-hidden="true"
-                  onClick={() => setMenuOpen(false)}
-                  style={{
-                    position: "fixed",
-                    inset: 0,
-                    zIndex: 79,
-                    cursor: "default",
-                    background: "transparent",
-                  }}
-                />
-                <div
-                  role="menu"
-                  style={{
-                    position: "absolute",
-                    top: "calc(100% + 7px)",
-                    right: 0,
-                    zIndex: 80,
-                    width: "min(230px, calc(100vw - 24px))",
-                    maxHeight: "min(360px, calc(100dvh - 96px))",
-                    overflowY: "auto",
-                    background: "var(--hg-bg-1)",
-                    border: "1px solid var(--hg-border)",
-                    borderRadius: 7,
-                    boxShadow: "0 18px 52px rgba(0,0,0,0.48)",
-                  }}
-                >
-                  {onOpenPeople && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenPeople)}>people</button>}
-                  {onOpenIntelligence && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenIntelligence)}>intelligence</button>}
-                  {onOpenVideoLabeler && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenVideoLabeler)}>video labeler</button>}
-                  {onToggleTheme && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onToggleTheme)}>{theme === "dark" ? "light mode" : "dark mode"}</button>}
-                  {sim?.active && onOpenSimulationControls && <button type="button" role="menuitem" style={mobileMenuItem} onClick={() => mobileMenuAction(onOpenSimulationControls)}>simulation</button>}
-                </div>
-              </>
-            )}
-          </span>
-        )}
-        {!mobile && onOpenPeople && (
+        {onOpenPeople && mobile && (
           <button
+            type="button"
             ref={peopleButtonRef}
-            aria-label="Open people — relationships and identities"
-            title="people · relationships and identities"
-            className="hg-focusable"
+            aria-label="Open people view"
+            title="people - identities and relationships"
+            className="hg-focusable hg-mobile-touch"
             onClick={onOpenPeople}
-            style={iconBtn}
-            onMouseEnter={hoverBright} onMouseLeave={unhover}
+            style={navChipBtn}
+            onMouseEnter={hoverBright}
+            onMouseLeave={(e) => { e.currentTarget.style.color = "var(--hg-fg-1)"; }}
           >
-            {/* Two-figure glyph — recognizable without leaning on emoji. */}
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-              <circle cx="5" cy="4.2" r="1.6" stroke="currentColor" strokeWidth="1.1" />
-              <path d="M2 11c0-1.7 1.3-3 3-3s3 1.3 3 3" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-              <circle cx="9.8" cy="5.2" r="1.3" stroke="currentColor" strokeWidth="1.1" />
-              <path d="M8 11c0-1.4 0.9-2.4 2-2.7" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-            </svg>
+            <span>people</span>
           </button>
         )}
-        {!mobile && onOpenIntelligence && (
+        {onOpenApartment && (
           <button
-            aria-label="Open intelligence atlas"
-            title="intelligence atlas"
-            className="hg-focusable"
-            onClick={onOpenIntelligence}
-            style={atlasIconBtn}
-            onMouseEnter={hoverAtlas} onMouseLeave={unhoverAtlas}
+            type="button"
+            aria-label="Open apartment view"
+            title="apartment - spatial command center"
+            className="hg-focusable hg-mobile-touch"
+            onClick={onOpenApartment}
+            style={navChipBtn}
+            onMouseEnter={hoverBright}
+            onMouseLeave={(e) => { e.currentTarget.style.color = "var(--hg-fg-1)"; }}
           >
-            {window.IconNeuralNetwork
-              ? <window.IconNeuralNetwork size={17} />
-              : (
-                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path d="M6.2 7.2 12 5.4l5.8 2.7M6.2 7.2l2.1 7.2M17.8 8.1l-2.1 6.8M8.3 14.4l7.4.5M12 5.4l3.7 9.5M12 5.4 8.3 14.4" stroke="currentColor" strokeWidth="1.05" strokeLinecap="round" opacity="0.44" />
-                  <circle cx="12" cy="5.4" r="2.05" fill="currentColor" />
-                  <circle cx="6.2" cy="7.2" r="1.45" fill="currentColor" opacity="0.68" />
-                  <circle cx="17.8" cy="8.1" r="1.45" fill="currentColor" opacity="0.68" />
-                  <circle cx="8.3" cy="14.4" r="1.65" fill="currentColor" opacity="0.8" />
-                  <circle cx="15.7" cy="14.9" r="1.65" fill="currentColor" opacity="0.8" />
-                </svg>
-              )}
+            <span>{mobile ? "apt" : "apartment"}</span>
           </button>
         )}
-        {!mobile && onOpenVideoLabeler && (
-          <button
-            aria-label="Open video labeler"
-            title="video labeler — review and label footage"
-            className="hg-focusable"
-            onClick={onOpenVideoLabeler}
-            style={iconBtn}
-            onMouseEnter={hoverBright} onMouseLeave={unhover}
-          >
-            {/* Film-strip glyph — frame + sprocket rows. */}
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-              <rect x="1.2" y="2.6" width="11.6" height="8.8" rx="1" stroke="currentColor" strokeWidth="1.1" />
-              <path d="M4.4 2.6v8.8M9.6 2.6v8.8" stroke="currentColor" strokeWidth="1.1" />
-              <path d="M1.2 5.5h3.2M1.2 8.4h3.2M9.6 5.5h3.2M9.6 8.4h3.2" stroke="currentColor" strokeWidth="0.9" opacity="0.6" />
-            </svg>
-          </button>
-        )}
-        {!mobile && onToggleTheme && (
-          <button
-            aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-            className="hg-focusable"
-            onClick={onToggleTheme}
-            style={iconBtn}
-            onMouseEnter={hoverBright} onMouseLeave={unhover}
-          >{theme === "dark" ? <IconSun size={14} /> : <IconMoon size={14} />}</button>
-        )}
+        {!mobile && actionMenu}
         {IS_TAURI && (
           <>
             <button
@@ -2720,14 +3217,15 @@ function RemoteProfileDialog({
     background: "transparent",
     color: "var(--hg-fg-2)",
     borderRadius: 4,
-    padding: mobile ? "8px 9px" : "7px 10px",
+    padding: mobile ? "7px 8px" : "7px 10px",
     cursor: "pointer",
     fontFamily: "'Geist Mono', monospace",
-    fontSize: mobile ? 9.5 : 10,
-    letterSpacing: "0.08em",
+    fontSize: mobile ? 9 : 10,
+    letterSpacing: mobile ? "0.07em" : "0.08em",
     textTransform: "uppercase",
-    minHeight: mobile ? 36 : "auto",
+    minHeight: mobile ? 34 : "auto",
     boxSizing: "border-box",
+    lineHeight: 1.15,
   };
   return (
     <div
@@ -2760,26 +3258,27 @@ function RemoteProfileDialog({
       }}>
         <div style={{
           padding: mobile
-            ? "calc(11px + env(safe-area-inset-top, 0px)) 12px 10px"
+            ? "calc(9px + env(safe-area-inset-top, 0px)) 12px 9px"
             : "18px 20px 14px",
           borderBottom: "1px solid var(--hg-border-soft)",
           display: "flex",
           alignItems: "flex-start",
-          gap: 14,
+          gap: mobile ? 10 : 14,
         }}>
           <div style={{ flex: 1 }}>
             <div style={{
               fontFamily: "'Geist', system-ui, sans-serif",
-              fontSize: mobile ? 16 : 19,
+              fontSize: mobile ? 15.5 : 19,
               fontWeight: 500,
               color: "var(--hg-fg-0)",
-              marginBottom: 4,
+              marginBottom: mobile ? 3 : 4,
             }}>Remote access / Travel readiness</div>
             <div style={{
               fontFamily: "'Geist Mono', monospace",
-              fontSize: mobile ? 9.5 : 10,
+              fontSize: mobile ? 9 : 10,
               color: "var(--hg-fg-4)",
-              letterSpacing: "0.08em",
+              letterSpacing: mobile ? "0.055em" : "0.08em",
+              lineHeight: 1.35,
             }}>
               {active.label} - v{build.version} - {build.commit} - travel {travel.status}
             </div>
@@ -2791,17 +3290,17 @@ function RemoteProfileDialog({
             cursor: "pointer",
             fontFamily: "'Geist Mono', monospace",
             fontSize: 18,
-            minWidth: mobile ? 44 : "auto",
-            minHeight: mobile ? 44 : "auto",
+            minWidth: mobile ? 40 : "auto",
+            minHeight: mobile ? 40 : "auto",
             lineHeight: 1,
           }}>x</button>
         </div>
 
         <div style={{
-          padding: mobile ? "9px 10px" : "14px 20px",
+          padding: mobile ? "8px 10px" : "14px 20px",
           borderBottom: "1px solid var(--hg-border-soft)",
           display: "flex",
-          gap: mobile ? 6 : 8,
+          gap: mobile ? 5 : 8,
           alignItems: "center",
           flexWrap: "wrap",
         }}>
@@ -2842,13 +3341,13 @@ function RemoteProfileDialog({
             border: `1px solid ${statusColor}`,
             background: travel.status === "ready" ? "rgba(138,190,255,0.06)" : "rgba(255,184,77,0.05)",
             borderRadius: 6,
-            padding: "10px 12px",
-            marginBottom: 14,
+            padding: mobile ? "8px 10px" : "10px 12px",
+            marginBottom: mobile ? 12 : 14,
             display: "grid",
             gridTemplateColumns: mobile ? "1fr" : "minmax(120px, 1fr) minmax(120px, 1fr) minmax(120px, 1fr)",
-            gap: 10,
+            gap: mobile ? 5 : 10,
             fontFamily: "'Geist Mono', monospace",
-            fontSize: 10,
+            fontSize: mobile ? 9.5 : 10,
             color: "var(--hg-fg-3)",
           }}>
             <div><span style={{ color: statusColor, textTransform: "uppercase" }}>{travel.status}</span></div>
@@ -3544,6 +4043,7 @@ const SLASH_CMDS = [
   { cmd: "/find",       hint: "<text>",     desc: "search past chat events for matching text", category: "debug" },
   { cmd: "/debug",    hint: "on|off|bundle",  desc: "show/hide diag events or export profile diagnostics", category: "debug" },
   { cmd: "/test",       hint: "classifier|external-privacy|external-suite", desc: "run built-in test suites and print a pass/fail summary", category: "debug" },
+  { cmd: "/perf",       hint: "status|copy|lazy on|lazy off", desc: "inspect boot/load performance and toggle web feature lazy loading", category: "debug" },
   { cmd: "/route-log",  hint: "[tail]",     desc: "dump recent external-routing decisions as JSONL. alias: /routes", category: "debug" },
   { cmd: "/lab-dump",       hint: "",       desc: "dump labSamplesRef + labTurnsRef + anchor stats as JSON (Addendum 32 evidence-gathering for line-graph flatness bug)", category: "debug" },
   { cmd: "/lab-dump-watch", hint: "<sec>|stop", desc: "auto-dump every N seconds for 12 iterations (timing-window evidence)", category: "debug" },
@@ -3558,6 +4058,81 @@ const SLASH_CMDS = [
   { cmd: "/help",       hint: "",           desc: "list commands grouped by category (click any entry to fill the input)", category: "meta" },
 ];
 
+function isMobileHiddenCommand(cmd) {
+  return cmd === "/labeler" || cmd === "/vl";
+}
+
+function availableSlashCommands({ mobile = false } = {}) {
+  return mobile ? SLASH_CMDS.filter((c) => !isMobileHiddenCommand(c.cmd)) : SLASH_CMDS;
+}
+
+function FeatureLoadingSurface({ open, title, status, error, onClose, mobile = false, fullscreen = true }) {
+  if (!open) return null;
+  const state = status?.state || "idle";
+  const pending = state === "loading" || state === "idle";
+  const panelStyle = fullscreen ? {
+    position: "fixed",
+    inset: 0,
+    zIndex: 7600,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: mobile ? "18px" : "32px",
+    background: "rgba(0,0,0,0.86)",
+    color: "var(--hg-fg-0)",
+  } : {
+    position: "relative",
+    minHeight: mobile ? 220 : 320,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: mobile ? "18px" : "32px",
+    background: "rgba(0,0,0,0.72)",
+    color: "var(--hg-fg-0)",
+  };
+  return (
+    <div style={panelStyle} role="status" aria-live="polite">
+      <div style={{
+        width: "min(420px, 100%)",
+        border: "1px solid var(--hg-border)",
+        background: "rgba(7,9,13,0.96)",
+        padding: mobile ? "18px" : "22px",
+        boxShadow: "0 18px 54px rgba(0,0,0,0.42)",
+        fontFamily: "'Geist Mono', monospace",
+      }}>
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 14,
+          marginBottom: 14,
+        }}>
+          <div style={{ fontSize: 10, letterSpacing: 2.4, color: "var(--hg-fg-2)" }}>
+            {title}
+          </div>
+          {onClose && (
+            <button type="button" onClick={onClose} style={{
+              border: "1px solid var(--hg-border)",
+              background: "rgba(255,255,255,0.03)",
+              color: "var(--hg-fg-2)",
+              padding: "8px 10px",
+              fontFamily: "'Geist Mono', monospace",
+              fontSize: 11,
+              cursor: "pointer",
+            }}>close</button>
+          )}
+        </div>
+        <div style={{ fontSize: mobile ? 18 : 20, lineHeight: 1.35 }}>
+          {pending ? "loading" : "could not load"}
+        </div>
+        <div style={{ marginTop: 10, color: error ? "var(--hg-warn)" : "var(--hg-fg-3)", fontSize: 12, lineHeight: 1.5 }}>
+          {error || status?.error || (pending ? "pulling this feature module into the running app." : "try again, or use /perf lazy off and reload.")}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, onStop, focusToken, mobile = false, theme = "dark" }) {
   const inputRef = useRef(null);
   const [sel, setSel] = useState(0);
@@ -3569,7 +4144,8 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
   useEffect(() => { if (focusToken) inputRef.current?.focus(); }, [focusToken]);
   const isSlash = value.startsWith("/");
   const firstTok = value.split(/\s+/)[0];
-  const matches = isSlash ? SLASH_CMDS.filter((c) => c.cmd.startsWith(firstTok)) : [];
+  const slashCommands = availableSlashCommands({ mobile });
+  const matches = isSlash ? slashCommands.filter((c) => c.cmd.startsWith(firstTok)) : [];
   const showMenu = isSlash && matches.length > 0 && !value.includes(" ");
   const spatialMode = !!(typeof window !== "undefined" && window.__HOME_SPATIAL_MODE);
   const lightTheme = theme === "light";
@@ -3586,7 +4162,7 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
   useEffect(() => { if (sel >= matches.length) setSel(0); }, [matches.length, sel]);
 
   const complete = (cmd) => {
-    onChange(cmd + (SLASH_CMDS.find(c => c.cmd === cmd)?.hint ? " " : ""));
+    onChange(cmd + (slashCommands.find(c => c.cmd === cmd)?.hint ? " " : ""));
     inputRef.current?.focus();
   };
   const handleKey = (e) => {
@@ -3607,14 +4183,14 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
       {showMenu && (
         <div style={{
           position: "absolute", bottom: "100%", left: mobile ? 8 : spatialMode ? 10 : 12, right: mobile ? 8 : spatialMode ? 10 : 12,
-          maxHeight: mobile ? "min(320px, 44dvh)" : spatialMode ? "min(260px, 34vh)" : "min(420px, 46vh)",
+          maxHeight: mobile ? "min(270px, 36dvh)" : spatialMode ? "min(260px, 34vh)" : "min(420px, 46vh)",
           overflowY: "auto",
           background: menuSurface,
           border: "1px solid var(--hg-border)",
           borderRadius: spatialMode ? 7 : 8,
-          marginBottom: spatialMode ? 7 : 8,
-          padding: spatialMode ? "4px 0" : "6px 0",
-          fontFamily: "'Geist Mono', monospace", fontSize: mobile ? 12.5 : spatialMode ? 11 : 12,
+          marginBottom: mobile ? 6 : spatialMode ? 7 : 8,
+          padding: mobile ? "4px 0" : spatialMode ? "4px 0" : "6px 0",
+          fontFamily: "'Geist Mono', monospace", fontSize: mobile ? 11.5 : spatialMode ? 11 : 12,
           boxShadow: menuShadow,
           backdropFilter: lightTheme ? "none" : spatialMode ? "blur(14px)" : "blur(18px)",
           zIndex: 20,
@@ -3624,10 +4200,10 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            padding: spatialMode ? "4px 10px 6px" : "4px 12px 8px",
+            padding: mobile ? "4px 11px 6px" : spatialMode ? "4px 10px 6px" : "4px 12px 8px",
             color: "var(--hg-fg-4)",
-            fontSize: 9,
-            letterSpacing: "0.14em",
+            fontSize: mobile ? 8.5 : 9,
+            letterSpacing: mobile ? "0.11em" : "0.14em",
             textTransform: "uppercase",
           }}>
             <span>commands</span>
@@ -3638,23 +4214,41 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
               onMouseEnter={() => setSel(i)}
               onMouseDown={(e) => { e.preventDefault(); complete(m.cmd); }}
               style={{
-                display: "flex", alignItems: "baseline", gap: 10,
-                minHeight: mobile ? 44 : "auto",
-                padding: mobile ? "9px 11px" : spatialMode ? "6px 10px" : "7px 12px",
+                display: mobile ? "grid" : "flex",
+                gridTemplateColumns: mobile ? "minmax(74px, max-content) minmax(0, 1fr)" : undefined,
+                gridTemplateAreas: mobile ? "\"cmd hint\" \"desc desc\"" : undefined,
+                alignItems: mobile ? "start" : "baseline",
+                gap: mobile ? "2px 8px" : 10,
+                minHeight: mobile ? 40 : "auto",
+                padding: mobile ? "7px 11px" : spatialMode ? "6px 10px" : "7px 12px",
                 background: i === sel ? menuSelected : "transparent",
                 cursor: "pointer",
               }}>
-              <span style={{ color: i === sel ? "var(--hg-fg-0)" : "var(--hg-fg-1)", minWidth: spatialMode ? 74 : 88 }}>{m.cmd}</span>
-              {m.hint && <span style={{ color: "var(--hg-fg-4)" }}>{m.hint}</span>}
               <span style={{
-                color: "var(--hg-fg-3)",
-                marginLeft: "auto",
-                fontFamily: "'Geist', system-ui, sans-serif",
-                fontSize: spatialMode ? 10.5 : 11.5,
+                gridArea: mobile ? "cmd" : undefined,
+                color: i === sel ? "var(--hg-fg-0)" : "var(--hg-fg-1)",
+                minWidth: mobile ? 0 : spatialMode ? 74 : 88,
+                whiteSpace: "nowrap",
+              }}>{m.cmd}</span>
+              {m.hint && <span style={{
+                gridArea: mobile ? "hint" : undefined,
+                color: "var(--hg-fg-4)",
+                minWidth: 0,
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
-                maxWidth: spatialMode ? 150 : "none",
+              }}>{m.hint}</span>}
+              <span style={{
+                gridArea: mobile ? "desc" : undefined,
+                color: "var(--hg-fg-3)",
+                marginLeft: mobile ? 0 : "auto",
+                fontFamily: "'Geist', system-ui, sans-serif",
+                fontSize: mobile ? 11 : spatialMode ? 10.5 : 11.5,
+                lineHeight: mobile ? 1.25 : 1.2,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                maxWidth: mobile ? "100%" : spatialMode ? 150 : "none",
               }}>{m.desc}</span>
             </div>
           ))}
@@ -3662,12 +4256,12 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
       )}
       <div style={{
           padding: mobile
-            ? "7px 9px calc(8px + env(safe-area-inset-bottom, 0px))"
+            ? "6px 9px calc(7px + env(safe-area-inset-bottom, 0px))"
             : spatialMode ? "9px 12px 11px" : "10px 12px 12px",
         borderTop: "1px solid var(--hg-border)",
         background: inputSurface,
         display: "flex", alignItems: "center", gap: mobile ? 8 : 10,
-        minHeight: mobile ? 54 : "auto",
+        minHeight: mobile ? 50 : "auto",
       }}>
         <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 8 }}>
           <input
@@ -4100,6 +4694,59 @@ function visionBaseFromEndpoint(metricsBase, endpoint) {
   return siblingServiceBase(metricsBase, endpoint, "HG_DEFAULT_VISION_BASE", 8091, "http://192.168.0.100:8091");
 }
 
+function groundedVisionBaseFromEndpoint(metricsBase, endpoint) {
+  const configured = webDefaultBase("HG_DEFAULT_GROUNDED_VISION_BASE");
+  if (configured) return configured;
+  return visionBaseFromEndpoint(metricsBase, endpoint);
+}
+
+function visionMediaUrlFromEndpoint(pathOrUrl, metricsBase, endpoint) {
+  const raw = String(pathOrUrl || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("/proxy/")) return raw;
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const u = new URL(raw);
+      const proxied = webDefaultBase("HG_DEFAULT_VISION_BASE");
+      const isBrowserProxy = proxied && proxied.startsWith("/");
+      const isVisionSidecar =
+        u.port === "8091" ||
+        /^192\.168\./.test(u.hostname) ||
+        /^100\./.test(u.hostname) ||
+        u.hostname === "localhost" ||
+        u.hostname === "127.0.0.1" ||
+        u.hostname === "engineeredlightingserver1" ||
+        u.hostname.endsWith(".taild52a15.ts.net");
+      if (isBrowserProxy && isVisionSidecar) {
+        return `${proxied.replace(/\/+$/, "")}${u.pathname}${u.search}`;
+      }
+    } catch {
+      return raw;
+    }
+    return raw;
+  }
+  const base = visionBaseFromEndpoint(metricsBase, endpoint);
+  if (!base) return raw;
+  return `${String(base).replace(/\/+$/, "")}/${raw.replace(/^\/+/, "")}`;
+}
+
+function groundedVisionMediaUrlFromEndpoint(pathOrUrl, metricsBase, endpoint) {
+  const raw = String(pathOrUrl || "").trim();
+  if (!raw) return "";
+  const base = groundedVisionBaseFromEndpoint(metricsBase, endpoint);
+  if (!base) return raw;
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const parsed = new URL(raw);
+      return `${String(base).replace(/\/+$/, "")}${parsed.pathname}${parsed.search}`;
+    } catch {
+      return raw;
+    }
+  }
+  if (raw.startsWith("/proxy/")) return raw;
+  return `${String(base).replace(/\/+$/, "")}/${raw.replace(/^\/+/, "")}`;
+}
+
 function supervisorBaseFromEndpoint(metricsBase, endpoint) {
   return siblingServiceBase(metricsBase, endpoint, "HG_DEFAULT_SUPERVISOR_BASE", 8093, "http://192.168.0.100:8093");
 }
@@ -4145,14 +4792,14 @@ function _withinWindow(eventTimeStr, windowMs = 8000, nowDate = new Date()) {
 }
 
 function findRecentUserIdx(prev, text, lookback = 8, windowMs = 8000) {
-  const target = (text || "").trim();
+  const target = canonicalChatText(normalizeChatEventText(text || ""));
   if (!target) return -1;
   const now = new Date();
   const start = Math.max(0, prev.length - lookback);
   for (let i = prev.length - 1; i >= start; i--) {
     const e = prev[i];
     if ((e.kind === "user" || e.kind === "voice") &&
-        (e.text || "").trim() === target &&
+        canonicalChatText(normalizeChatEventText(e.text || "")) === target &&
         _withinWindow(e.time, windowMs, now)) {
       return i;
     }
@@ -4161,17 +4808,63 @@ function findRecentUserIdx(prev, text, lookback = 8, windowMs = 8000) {
 }
 
 function findRecentAssistantIdx(prev, text, kind = "home", lookback = 20, windowMs = 8000) {
-  const target = (text || "").trim();
+  const target = canonicalChatText(normalizeChatEventText(text || ""));
   if (!target) return -1;
   const now = new Date();
   const start = Math.max(0, prev.length - lookback);
   for (let i = prev.length - 1; i >= start; i--) {
     const e = prev[i];
     if (e.kind === kind &&
-        (e.text || "").trim() === target &&
+        canonicalChatText(normalizeChatEventText(e.text || "")) === target &&
         _withinWindow(e.time, windowMs, now)) {
       return i;
     }
+  }
+  return -1;
+}
+
+function findRecentAssistantLikeIdx(prev, text, kind = "home", lookback = 20, windowMs = 8000) {
+  const target = normalizeChatEventText(text || "");
+  const targetKey = canonicalChatText(target);
+  if (!targetKey) return -1;
+  const now = new Date();
+  const start = Math.max(0, prev.length - lookback);
+  for (let i = prev.length - 1; i >= start; i--) {
+    const e = prev[i];
+    if (e.kind !== kind || !_withinWindow(e.time, windowMs, now)) continue;
+    const existing = normalizeChatEventText(e.text || "");
+    if (canonicalChatText(existing) === targetKey) return i;
+    if (isNearDuplicateChatText(existing, target)) return i;
+  }
+  return -1;
+}
+
+function findPriorAssistantSameTurnIdx(prev, text, kind = "home", lookback = 60) {
+  const target = normalizeChatEventText(text || "");
+  const targetKey = canonicalChatText(target);
+  if (!targetKey) return -1;
+  const start = Math.max(0, prev.length - lookback);
+  for (let i = prev.length - 1; i >= start; i--) {
+    const e = prev[i];
+    if (e?.kind === "user" || e?.kind === "voice") return -1;
+    if (e?.kind !== kind) continue;
+    const existing = normalizeChatEventText(e.text || "");
+    if (canonicalChatText(existing) === targetKey) return i;
+    if (isNearDuplicateChatText(existing, target)) return i;
+  }
+  return -1;
+}
+
+function findAssistantDuplicateIdx(prev, text, kind = "home", lookback = 60) {
+  return findPriorAssistantSameTurnIdx(prev, text, kind, lookback);
+}
+
+function findActiveAssistantStreamingIdx(prev, kind = "home", lookback = 80) {
+  const start = Math.max(0, prev.length - lookback);
+  for (let i = prev.length - 1; i >= start; i--) {
+    const e = prev[i];
+    if (e?.kind === "user" || e?.kind === "voice") return -1;
+    if (e?.kind === kind && e?.streaming) return i;
   }
   return -1;
 }
@@ -4212,6 +4905,7 @@ function isLightOrLampState(state, apartmentSwitchIds) {
 function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voiceOverride, themeOverride, autoplay = true }) {
   const viewport = useViewportProfile();
   const mobile = viewport.mobile;
+  const videoLabelerAvailable = !mobile;
   const initialPrefs = useMemo(() => loadPrefs({
     endpoint: webDefaultBase("HG_DEFAULT_HA_BASE"),
     token: "",
@@ -4230,7 +4924,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     debugMode: false,   // Show internal diag events ([parakeet], [direct], [kokoro], etc.) in feed
   }), []);
   const initialEventsFromStorage = useMemo(
-    () => (initialEvents ? initialEvents : loadEvents()),
+    () => coalesceAssistantTurnEvents(
+      (initialEvents ? initialEvents : loadEvents()).map(sanitizeChatEventForStorage),
+    ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
@@ -4320,6 +5016,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   // intelligence / apartment) — opening one closes the rest, which kills
   // Escape-stacking and z-fights between fixed inset-0 overlays.
   const [videoLabelerOpen, setVideoLabelerOpen] = useState(false);
+  useEffect(() => {
+    if (!videoLabelerAvailable) setVideoLabelerOpen(false);
+  }, [videoLabelerAvailable]);
   // S79: the active Simulation Mode header pill opens this local controls
   // dialog for switching scenarios, resetting fixtures, or returning live.
   const [simulationControlsOpen, setSimulationControlsOpen] = useState(false);
@@ -4328,6 +5027,12 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   // re-keys the drawer so a repeated /look re-runs cleanly.
   const [lookDrawerOpen, setLookDrawerOpen] = useState(false);
   const [lookInitial, setLookInitial] = useState({ camera: null, question: "", nonce: 0 });
+  const [featureLoadTick, setFeatureLoadTick] = useState(0);
+  const [featureLoadErrors, setFeatureLoadErrors] = useState({});
+  const featureStatusFor = (feature) => {
+    featureLoadTick; // render dependency for loader CustomEvent updates
+    return window.HomeFeatureLoader?.status?.(feature) || { feature, state: "loaded" };
+  };
   // Master plan F.3: full bridge /healthz snapshot for the DebugPanel
   // (only populated when debugMode is on to avoid wasted polls).
   const [bridgeHealth, setBridgeHealth] = useState(null);
@@ -4352,6 +5057,13 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   // (rather than always mutating the last appended event, which
   // breaks if anything else appends mid-stream).
   const currentExternalEventIdRef = useRef(null);
+  const lastSubmittedTextRef = useRef({ text: "", ts: 0 });
+
+  useEffect(() => {
+    const onFeatureLoader = () => setFeatureLoadTick((tick) => tick + 1);
+    window.addEventListener("home-feature-loader", onFeatureLoader);
+    return () => window.removeEventListener("home-feature-loader", onFeatureLoader);
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -4382,6 +5094,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         setPeopleOpen(false);
         setIntelligenceOpen(false);
         setApartmentOpen(true);
+        window.HomeFeatureLoader?.load?.("apartment", "audit").catch((e) => {
+          console.warn("[feature-loader] apartment audit load failed", e?.message || e);
+        });
         return true;
       },
     };
@@ -4887,6 +5602,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   const rootRef = useRef(null);
   const peopleButtonRef = useRef(null);
   const streamingIds = useRef(new Set());
+  const frigatePerceptionHintsRef = useRef([]);
   const haClientRef = useRef(null);
   const activeRunRef = useRef(null); // { id, cancel }
   const resetFeedScrollTop = useCallback(() => {
@@ -4897,11 +5613,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   }, []);
   const closePeopleOverlay = useCallback(() => {
     setPeopleOpen(false);
-    const focusPeopleButton = () => {
-      try { peopleButtonRef.current?.focus?.(); } catch {}
-    };
-    if (typeof requestAnimationFrame === "function") requestAnimationFrame(focusPeopleButton);
-    else setTimeout(focusPeopleButton, 0);
+    window.requestAnimationFrame(() => {
+      peopleButtonRef.current?.focus?.();
+    });
   }, []);
 
   /* ── First-run boot sequence ──────────────────────────────────────────
@@ -4979,9 +5693,28 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * Onboarding-injected hints (`e.onboarding`) are session-scoped UI, not
    * chat history — filtered out so they never persist or stack across launches. */
   useEffect(() => {
-    const id = requestAnimationFrame(() => saveEvents(events.filter((e) => !e.onboarding)));
+    const id = requestAnimationFrame(() => saveEvents(
+      coalesceAssistantTurnEvents(
+        events.filter((e) => !e.onboarding).map(sanitizeChatEventForStorage),
+      ),
+    ));
     return () => cancelAnimationFrame(id);
   }, [events]);
+
+  useEffect(() => {
+    if (!events.some((e) => e.streaming)) return undefined;
+    if (activeRunRef.current || currentExternalCtrlRef.current) return undefined;
+    if (voice.state && !["inactive", "ready", "idle", "error"].includes(voice.state)) return undefined;
+    const id = setTimeout(() => {
+      if (activeRunRef.current || currentExternalCtrlRef.current) return;
+      if (voice.state && !["inactive", "ready", "idle", "error"].includes(voice.state)) return;
+      streamingIds.current.clear();
+      setEvents((prev) => prev.map((e) => e.streaming
+        ? { ...e, text: normalizeChatEventText(e.text || ""), streaming: false }
+        : e));
+    }, 1500);
+    return () => clearTimeout(id);
+  }, [events, voice.state]);
 
   /* Persist conversation_id whenever it changes */
   useEffect(() => { saveConversationId(conversationId); }, [conversationId]);
@@ -4992,10 +5725,207 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     // shows forbidden spellings, regardless of source (SSE raw vLLM,
     // HA WS event, parakeet STT echo, etc).
     const corrected = ev?.text
-      ? { ...ev, text: applyAsrCorrection(ev.text) }
+      ? { ...ev, text: normalizeChatEventText(ev.text) }
       : ev;
-    setEvents((prev) => [...prev, { id: nextId(), time: fmtTime(), ...corrected }]);
+    setEvents((prev) => {
+      if (isRecentDuplicateEvent(prev, corrected)) return prev;
+      return [...prev, { id: nextId(), time: fmtTime(), ...corrected }];
+    });
   }, []);
+
+  const ensureFeature = useCallback(async (feature, label = feature, reason = "open") => {
+    const loader = window.HomeFeatureLoader;
+    if (!loader?.load) return true;
+    const status = loader.status?.(feature);
+    if (status?.state === "loaded") return true;
+    setFeatureLoadErrors((prev) => ({ ...prev, [feature]: null }));
+    setFeatureLoadTick((tick) => tick + 1);
+    try {
+      await loader.load(feature, reason);
+      setFeatureLoadTick((tick) => tick + 1);
+      return true;
+    } catch (err) {
+      const message = err?.message || String(err);
+      setFeatureLoadErrors((prev) => ({ ...prev, [feature]: message }));
+      setFeatureLoadTick((tick) => tick + 1);
+      addEvent({ kind: "system", text: `${label} load failed - ${message}`, tone: "error" });
+      return false;
+    }
+  }, [addEvent]);
+
+  const prefetchFeature = useCallback((feature, reason = "idle") => {
+    const loader = window.HomeFeatureLoader;
+    if (!loader?.prefetch) return Promise.resolve(false);
+    return loader.prefetch(feature, reason)
+      .then(() => true)
+      .catch(() => false)
+      .finally(() => setFeatureLoadTick((tick) => tick + 1));
+  }, []);
+
+  useEffect(() => {
+    if (bootPhase !== "ready" || !window.__HOME_LAZY_FEATURES_ENABLED || !window.HomeFeatureLoader) return undefined;
+    const readWarmupFlag = () => {
+      let raw = "";
+      try { raw = new URLSearchParams(window.location.search || "").get("warmup") || ""; } catch (_) {}
+      raw = String(raw || "").trim().toLowerCase();
+      if (["0", "off", "false", "no"].includes(raw)) return false;
+      if (["1", "on", "true", "yes"].includes(raw)) return true;
+      try { raw = String(localStorage.getItem("home.perf.backgroundWarmup") || "").trim().toLowerCase(); } catch (_) { raw = ""; }
+      if (["0", "off", "false", "no"].includes(raw)) return false;
+      if (["1", "on", "true", "yes"].includes(raw)) return true;
+      return true;
+    };
+    if (!readWarmupFlag()) {
+      window.__HOME_BACKGROUND_WARMUP = {
+        enabled: false,
+        state: "disabled",
+        reason: "warmup flag off",
+        updatedAt: Date.now(),
+      };
+      return undefined;
+    }
+    const nav = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    const saveData = !!nav?.saveData;
+    const slowLink = /(^|-)2g$/.test(String(nav?.effectiveType || ""));
+    const cellular = /cellular/i.test(String(nav?.type || ""));
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timers = [];
+    const activity = { lastAt: Date.now() };
+    const markActive = () => { activity.lastAt = Date.now(); };
+    ["pointerdown", "touchstart", "keydown", "wheel", "scroll"].forEach((name) => {
+      window.addEventListener(name, markActive, { passive: true, capture: true });
+    });
+    const setWarmup = (patch) => {
+      window.__HOME_BACKGROUND_WARMUP = {
+        enabled: true,
+        state: "running",
+        saveData,
+        slowLink,
+        cellular,
+        startedAt: window.__HOME_BACKGROUND_WARMUP?.startedAt || Date.now(),
+        updatedAt: Date.now(),
+        completed: window.__HOME_BACKGROUND_WARMUP?.completed || [],
+        skipped: window.__HOME_BACKGROUND_WARMUP?.skipped || [],
+        failed: window.__HOME_BACKGROUND_WARMUP?.failed || [],
+        ...patch,
+      };
+    };
+    const wait = (ms) => new Promise((resolve) => {
+      const id = setTimeout(resolve, ms);
+      timers.push(id);
+    });
+    const idle = () => new Promise((resolve) => {
+      if (typeof requestIdleCallback === "function") {
+        const id = requestIdleCallback(resolve, { timeout: 3000 });
+        timers.push(id);
+      } else {
+        const id = setTimeout(resolve, 0);
+        timers.push(id);
+      }
+    });
+    const waitForQuiet = async () => {
+      for (let i = 0; i < 8; i++) {
+        const focused = !!document.activeElement && ["INPUT", "TEXTAREA"].includes(document.activeElement.tagName);
+        const recentlyActive = Date.now() - activity.lastAt < 1400;
+        if (!focused && !recentlyActive) return true;
+        setWarmup({ state: "deferred", current: null, reason: focused ? "input focused" : "recent interaction" });
+        await wait(1200);
+      }
+      setWarmup({ state: "running", current: null, reason: "continuing after interaction window" });
+      return true;
+    };
+    const runImmediateJob = async (name, fn) => {
+      if (controller?.signal?.aborted) return;
+      setWarmup({ state: "running", current: name, reason: null });
+      const started = Date.now();
+      try {
+        const detail = await fn();
+        setWarmup({
+          current: null,
+          completed: [...(window.__HOME_BACKGROUND_WARMUP?.completed || []), { name, durationMs: Date.now() - started, detail }],
+        });
+      } catch (err) {
+        setWarmup({
+          current: null,
+          failed: [...(window.__HOME_BACKGROUND_WARMUP?.failed || []), { name, error: err?.message || String(err) }],
+        });
+      }
+    };
+    const loadFeatureInBackground = async (feature) => {
+      const loader = window.HomeFeatureLoader;
+      if (!loader?.load) return false;
+      await loader.load(feature, "background-warmup");
+      setFeatureLoadTick((tick) => tick + 1);
+      return true;
+    };
+    const runJob = async (name, fn) => {
+      if (controller?.signal?.aborted) return;
+      if (!(await waitForQuiet())) {
+        setWarmup({ skipped: [...(window.__HOME_BACKGROUND_WARMUP?.skipped || []), { name, reason: "interaction timeout" }] });
+        return;
+      }
+      await idle();
+      setWarmup({ state: "running", current: name, reason: null });
+      const started = Date.now();
+      try {
+        const detail = await fn();
+        setWarmup({
+          current: null,
+          completed: [...(window.__HOME_BACKGROUND_WARMUP?.completed || []), { name, durationMs: Date.now() - started, detail }],
+        });
+      } catch (err) {
+        setWarmup({
+          current: null,
+          failed: [...(window.__HOME_BACKGROUND_WARMUP?.failed || []), { name, error: err?.message || String(err) }],
+        });
+      }
+      await wait(650);
+    };
+    let cancelled = false;
+    setWarmup({ state: "queued", current: null });
+    (async () => {
+      await wait(700);
+      if (cancelled) return;
+      await runImmediateJob("apartment feature", () => loadFeatureInBackground("apartment"));
+      window.__HOME_BACKGROUND_WARMUP_CONTROLS_APARTMENT = true;
+      await runJob("apartment modules", async () => {
+        if (!window.Home3D?.ready) return { skipped: true, reason: "3d bridge unavailable" };
+        const engine = await window.Home3D.ready;
+        if (engine?.preloadModules) return engine.preloadModules({ includeRenderers: true });
+        return { skipped: true, reason: "preloadModules unavailable" };
+      });
+      await runJob("apartment assets", async () => {
+        if (!window.HomeApartmentPrewarm?.start) return { skipped: true, reason: "prewarm api unavailable" };
+        const fullAllowed = !(saveData || slowLink || cellular);
+        window.HomeApartmentPrewarm.start({
+          mode: fullAllowed ? "full" : "metadata",
+          reason: fullAllowed ? "background-warmup" : "background-warmup-conservative",
+        });
+        for (let i = 0; i < 90; i++) {
+          const status = window.HomeApartmentPrewarm.status?.() || {};
+          if (status.state && status.state !== "running") return status;
+          await wait(1000);
+        }
+        return window.HomeApartmentPrewarm.status?.() || { state: "unknown" };
+      });
+      setWarmup({ state: "complete", current: null, completedAt: Date.now() });
+    })();
+    return () => {
+      cancelled = true;
+      controller?.abort?.();
+      timers.forEach((id) => {
+        try { clearTimeout(id); } catch (_) {}
+        try { cancelIdleCallback(id); } catch (_) {}
+      });
+      ["pointerdown", "touchstart", "keydown", "wheel", "scroll"].forEach((name) => {
+        window.removeEventListener(name, markActive, { capture: true });
+      });
+    };
+  }, [bootPhase, connection, endpoint, prefetchFeature, token]);
+
+  useEffect(() => {
+    if (spatialLayout) ensureFeature("apartment", "apartment", "spatial-layout");
+  }, [ensureFeature, spatialLayout]);
 
   // Lab sim-mode injection (Addendum 10). Runs after `sim` is available
   // from useSimulation. When a lab fixture is in the snapshot, overwrite
@@ -5033,7 +5963,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
 
   const finishStream = useCallback((id, patch = {}) => {
     streamingIds.current.delete(id);
-    setEvents((prev) => prev.map((e) => e.id === id ? { ...e, ...patch, streaming: false } : e));
+    setEvents((prev) => prev.map((e) => e.id === id
+      ? { ...e, ...patch, text: normalizeChatEventText((patch && patch.text) || e.text || ""), streaming: false }
+      : e));
   }, []);
 
   /* ── Boot phase driver: "settling" → "ready" ──────────────────────────
@@ -5358,6 +6290,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       webMode: !!window.HG_WEB_MODE,
       userAgent: navigator.userAgent,
     });
+    bundle.performance = window.__homePerf?.snapshot?.() || null;
+    bundle.featureLoader = window.HomeFeatureLoader?.statusAll?.() || null;
     const text = JSON.stringify(bundle, null, 2);
     try {
       await navigator.clipboard?.writeText?.(text);
@@ -5401,6 +6335,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       webMode: !!window.HG_WEB_MODE,
       userAgent: navigator.userAgent,
     });
+    bundle.performance = window.__homePerf?.snapshot?.() || null;
+    bundle.featureLoader = window.HomeFeatureLoader?.statusAll?.() || null;
     const text = JSON.stringify(bundle, null, 2);
     try {
       await navigator.clipboard?.writeText?.(text);
@@ -5693,12 +6629,13 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   }, [connection, endpoint, metricsBase, sim.active]);
 
   /* ── HA conversation: send text via assist_pipeline/run ────────────── */
-  const sendToHA = useCallback(async (text) => {
+  const sendToHA = useCallback(async (text, options = {}) => {
+    const echoUser = options.echoUser !== false;
     // Simulation Mode: no real HA pipeline available. Echo the message
     // back as a system note so the designer sees obvious feedback and
     // suggest the story scenarios for scripted demos.
     if (sim.active) {
-      addEvent({ kind: "user", text });
+      if (echoUser) addEvent({ kind: "user", text });
       addEvent({
         kind: "system",
         text: "[sim] live HA pipeline is mocked off. Try `/sim action-success`, `/sim action-failed`, or `/sim movie-mode` to see a scripted demo turn.",
@@ -5711,12 +6648,24 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       return;
     }
 
+    // One UI turn key follows this request across pipeline progress,
+    // intent-end, SSE, and conversation.finished. Source-specific IDs are
+    // not stable across a tool-using turn, so the locally-created key is the
+    // reliable identity used to upsert the one assistant bubble.
+    const thinkingId = nextId();
+    const turnKey = `ha-turn:${thinkingId}`;
+
     // Local instant feedback for the user's typed message. The matching
     // SSE event (when the sidecar tees the chat completion) will dedupe
     // against this by content and only add the assistant + tool_calls.
-    addEvent({ kind: "user", text });
-    const thinkingId = nextId();
-    setEvents((prev) => [...prev, { id: thinkingId, kind: "thinking", time: fmtTime(), text: "calling assistant…" }]);
+    if (echoUser) addEvent({ kind: "user", text, turnKey });
+    setEvents((prev) => [...prev, {
+      id: thinkingId,
+      kind: "thinking",
+      time: fmtTime(),
+      text: "calling assistant…",
+      turnKey,
+    }]);
 
     // Addendum 29 Change 2: in-flight stub for the trace bar. Pushes a
     // placeholder LabTurn that the renderer shows as a pulsing band at
@@ -5773,13 +6722,14 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     // closure variables, not refs, because they reset every turn.
     const turnToolCalls = [];
     let streamingBubbleId = null;
+    let pipelineRunId = null;
     const finalizeStreamingBubble = () => {
       const id = streamingBubbleId;
       if (!id) return false;
       streamingBubbleId = null;
       streamingIds.current.delete(id);
       setEvents((prev) => prev.map((e) =>
-        e.id === id ? { ...e, streaming: false } : e));
+        e.id === id ? { ...e, text: normalizeChatEventText(e.text || ""), streaming: false } : e));
       return true;
     };
 
@@ -5802,6 +6752,11 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         if (!prog) return;
 
         if (prog.toolCalls && prog.toolCalls.length) {
+          // Tool calls can arrive after a short assistant preamble such as
+          // "I'll check...". Close that pre-tool bubble before inserting the
+          // system/tool beat; otherwise it remains streaming behind the final
+          // answer and the input row stays stuck on STOP.
+          finalizeStreamingBubble();
           for (const tc of prog.toolCalls) {
             turnToolCalls.push(tc);
             // Small "looking…" beat so the user sees the LLM commit to a
@@ -5810,6 +6765,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             const friendly = tc.name === "look" ? "looking"
               : tc.name === "describe_camera" ? "looking quickly"
               : tc.name === "refresh_perception" ? "looking freshly"
+              : tc.name === "grounded_look" ? "looking closely"
               : tc.name === "look_zoom" ? "looking closer"
               : tc.name;
             const camHint = (tc.args && (tc.args.camera || tc.args.room))
@@ -5824,19 +6780,36 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           setEvents((prev) => {
             const last = prev[prev.length - 1];
             if (last && last.kind === "home" && last.streaming && last.id === streamingBubbleId) {
-              // Append the delta. HA sends deltas (not accumulated text),
-              // unlike the s2s personaplex bridge which sends snapshots.
+              // HA usually sends deltas, but some provider/tool paths emit
+              // accumulated snapshots. Merge defensively so snapshots don't
+              // render as "answer answer" when appended like deltas.
               return [...prev.slice(0, -1),
-                      { ...last, text: (last.text || "") + prog.textDelta }];
+                      { ...last, text: mergeStreamingText(last.text, prog.textDelta) }];
             }
             // First content delta of the turn — replace the thinking stub.
             const next = prev.filter((e) => e.id !== thinkingId);
+            if (streamingBubbleId) {
+              const previousId = streamingBubbleId;
+              streamingBubbleId = null;
+              streamingIds.current.delete(previousId);
+              for (let i = 0; i < next.length; i++) {
+                if (next[i].id === previousId) {
+                  next[i] = {
+                    ...next[i],
+                    text: normalizeChatEventText(next[i].text || ""),
+                    streaming: false,
+                  };
+                  break;
+                }
+              }
+            }
             const newId = nextId();
             streamingBubbleId = newId;
             streamingIds.current.add(newId);
             return [...next, {
               id: newId, kind: "home", time: fmtTime(),
-              text: prog.textDelta, streaming: true,
+              text: normalizeChatEventText(prog.textDelta), streaming: true,
+              turnKey, runId: pipelineRunId,
             }];
           });
           return;
@@ -5844,11 +6817,31 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       }
 
       if (haEvent.type === "intent-end") {
-        const { convId } = extractIntentEnd(haEvent);
+        const { convId, speech } = extractIntentEnd(haEvent);
         if (convId) setConversationId(convId);
-        // Lock the streaming bubble (if one exists) so the trailing stop-
-        // button / visual cue settles.
-        finalizeStreamingBubble();
+        const speechText = normalizeChatEventText(speech || "");
+        if (speechText) {
+          const activeStreamingId = streamingBubbleId;
+          streamingBubbleId = null;
+          if (activeStreamingId) streamingIds.current.delete(activeStreamingId);
+          setEvents((prev) => {
+            const withoutThinking = prev.filter((e) => e.id !== thinkingId);
+            return upsertAssistantTurnEvent(withoutThinking, {
+              id: nextId(),
+              kind: "home",
+              time: fmtTime(),
+              text: speechText,
+              convId,
+              turnKey,
+              runId: pipelineRunId,
+              streaming: false,
+            });
+          });
+        } else {
+          // Lock the streaming bubble (if one exists) so the trailing stop-
+          // button / visual cue settles.
+          finalizeStreamingBubble();
+        }
         // Surface a perception card per vision tool the LLM called this
         // turn. Tool results are NEVER in HA events, so we hit the
         // sidecar's ring-buffer endpoints (/reason/latest, /describe/latest)
@@ -5858,35 +6851,64 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // (home-events.jsx:423) parses the room out and labels the card.
         const visionTools = turnToolCalls.filter((t) =>
           t.name === "look" || t.name === "look_zoom" ||
-          t.name === "describe_camera" || t.name === "refresh_perception");
+          t.name === "describe_camera" || t.name === "refresh_perception" ||
+          t.name === "grounded_look");
         if (visionTools.length) {
           try {
             const base = metricsBase || metricsBaseFromEndpoint(endpoint);
             if (base) {
-              const visionOrigin = visionBaseFromEndpoint(base, endpoint);
+              // Browser result retrieval uses a dedicated authenticated,
+              // read-only gateway route. Tauri falls back to its direct
+              // vision base because the native shell has no web gateway.
+              const visionOrigin = groundedVisionBaseFromEndpoint(base, endpoint);
               const tauriFetch = window.tauriFetch || fetch;
               const seen = new Set();
               for (const tc of visionTools) {
-                if (seen.has(tc.name)) continue;   // dedupe within turn
-                seen.add(tc.name);
                 const isDescribe = tc.name === "describe_camera" || tc.name === "refresh_perception";
+                const resultFamily = isDescribe ? "describe" : "grounded-reason";
+                if (seen.has(resultFamily)) continue;
+                seen.add(resultFamily);
                 const latestPath = isDescribe ? "/describe/latest" : "/reason/latest";
+                const requestedRoom = String(tc.args?.room || tc.args?.camera || "camera")
+                  .replace(/[^a-z0-9_ -]/gi, "_");
+                const addUnavailableArtifact = () => addEvent({
+                  kind: "perception",
+                  text: `${requestedRoom}: image could not be loaded`,
+                  imageMode: isDescribe ? undefined : "annotated",
+                  imageUnavailable: true,
+                  turnKey,
+                });
                 tauriFetch(visionOrigin + latestPath, { cache: "no-store" })
                   .then((r) => r.ok ? r.json() : null)
                   .then((data) => {
-                    if (!data) return;
+                    if (!data) {
+                      addUnavailableArtifact();
+                      return;
+                    }
                     let snapshotUrl = null;
                     let cardText = "";
                     const cam = (data.camera || "").replace(/[^a-z_]/gi, "_");
+                    if (requestedRoom !== "camera" && cam && cam !== requestedRoom) {
+                      console.warn(`[perception] ignored mismatched ${resultFamily} artifact`, {
+                        requestedRoom,
+                        resultCamera: cam,
+                      });
+                      addUnavailableArtifact();
+                      return;
+                    }
                     if (isDescribe) {
                       const desc = data.description || "(no description)";
                       if (data.snapshot_url) {
-                        snapshotUrl = visionOrigin + data.snapshot_url + "?cb=" + Date.now();
+                        snapshotUrl = groundedVisionMediaUrlFromEndpoint(data.snapshot_url, base, endpoint) + "?cb=" + Date.now();
                       }
                       cardText = `${cam}: ${desc}`;
                     } else {
                       if (data.annotated_url) {
-                        snapshotUrl = visionOrigin + data.annotated_url + "?cb=" + Date.now();
+                        snapshotUrl = groundedVisionMediaUrlFromEndpoint(data.annotated_url, base, endpoint) + "?cb=" + Date.now();
+                      } else if (data.detail_url) {
+                        snapshotUrl = groundedVisionMediaUrlFromEndpoint(data.detail_url, base, endpoint) + "?cb=" + Date.now();
+                      } else if (data.snapshot_url) {
+                        snapshotUrl = groundedVisionMediaUrlFromEndpoint(data.snapshot_url, base, endpoint) + "?cb=" + Date.now();
                       }
                       cardText = `${cam}: ${data.answer || "(grounded look)"}`;
                     }
@@ -5894,12 +6916,24 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
                       kind: "perception",
                       text: cardText,
                       snapshotUrl,
+                      imageMode: isDescribe ? undefined : "annotated",
+                      imageUnavailable: !snapshotUrl,
+                      turnKey,
                     });
                   })
                   .catch((err) => {
                     console.error(`[perception] ${tc.name} fetch err`, err);
+                    addUnavailableArtifact();
                   });
               }
+            } else {
+              addEvent({
+                kind: "perception",
+                text: "camera: image could not be loaded",
+                imageMode: "annotated",
+                imageUnavailable: true,
+                turnKey,
+              });
             }
           } catch (e) {
             console.error("[perception] outer", e);
@@ -5928,6 +6962,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       conversationId,
       onEvent,
     });
+    pipelineRunId = run?.id !== null && run?.id !== undefined && String(run.id).trim()
+      ? String(run.id)
+      : null;
     activeRunRef.current = run;
 
     try {
@@ -5940,17 +6977,24 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       // by a streaming bubble), the existing filter removes the stub. If it
       // did start but HA never emitted intent-end, settle that bubble too so
       // the STOP affordance never remains wedged after run.done resolves.
+      const runStillActive = activeRunRef.current?.id === run.id;
       const pendingStreamingId = streamingBubbleId;
+      const staleStreamingIds = runStillActive ? new Set(streamingIds.current) : new Set();
       if (pendingStreamingId) {
         streamingBubbleId = null;
         streamingIds.current.delete(pendingStreamingId);
       }
+      if (runStillActive) streamingIds.current.clear();
       setEvents((prev) => prev
         .filter((e) => e.id !== thinkingId)
-        .map((e) => pendingStreamingId && e.id === pendingStreamingId
-          ? { ...e, streaming: false }
+        .map((e) => (
+          (pendingStreamingId && e.id === pendingStreamingId)
+          || staleStreamingIds.has(e.id)
+          || e.streaming
+        )
+          ? { ...e, text: normalizeChatEventText(e.text || ""), streaming: false }
           : e));
-      if (activeRunRef.current?.id === run.id) activeRunRef.current = null;
+      if (runStillActive) activeRunRef.current = null;
     }
   }, [connection, conversationId, addEvent, metricsBase, endpoint, muteState?.muted]);
 
@@ -6578,14 +7622,15 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // (groups + commands) so HelpContent in home-events.jsx can
         // render hover-brighten + click-to-fill-input UX. The old
         // flat text rendering is no longer reachable from here.
+        const visibleCommands = availableSlashCommands({ mobile });
         const groups = SLASH_CMD_CATEGORIES.map((cat) => {
-          const cmds = SLASH_CMDS.filter((c) => c.category === cat.id);
+          const cmds = visibleCommands.filter((c) => c.category === cat.id);
           return { ...cat, commands: cmds };
         }).filter((g) => g.commands.length > 0);
         // Uncategorized fallback — surfaces drift the moment a command
         // is added without a category (instead of silently disappearing
         // from /help).
-        const uncategorized = SLASH_CMDS.filter((c) => !c.category);
+        const uncategorized = visibleCommands.filter((c) => !c.category);
         if (uncategorized.length > 0) {
           groups.push({
             id: "_uncategorized",
@@ -6603,7 +7648,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         addEvent({
           kind: "help",
           groups,
-          totalCount: SLASH_CMDS.length,
+          totalCount: visibleCommands.length,
           tip: "hover any command to highlight · click to paste into the input box · then hit Enter",
         });
         return true;
@@ -6791,6 +7836,58 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         addEvent({ kind: "system", text: `unknown /external subcommand: ${sub}`, tone: "warn" });
         return true;
       }
+      case "perf": {
+        const parts = arg.trim().split(/\s+/).filter(Boolean);
+        const sub = (parts[0] || "status").toLowerCase();
+        if (sub === "lazy") {
+          const next = (parts[1] || "").toLowerCase();
+          if (next === "on" || next === "off") {
+            try { localStorage.setItem("home.perf.lazyFeatures", next); } catch {}
+            addEvent({
+              kind: "system",
+              text: `perf lazy ${next} - reload to apply`,
+              tone: "ok",
+            });
+            return true;
+          }
+          addEvent({
+            kind: "system",
+            text: `perf lazy - ${window.__HOME_LAZY_FEATURES_ENABLED ? "on" : "off"}`,
+            tone: "info",
+          });
+          return true;
+        }
+        const snapshot = window.__homePerf?.snapshot?.() || {};
+        if (sub === "copy" || sub === "bundle") {
+          const text = JSON.stringify(snapshot, null, 2);
+          navigator.clipboard?.writeText?.(text).then(() => {
+            addEvent({ kind: "system", text: "perf bundle copied", tone: "ok" });
+          }, () => {
+            addEvent({ kind: "system", text: `perf bundle:\n${text.slice(0, 1800)}`, tone: "info" });
+          });
+          return true;
+        }
+        const boot = snapshot.boot || {};
+        const state = boot.state || {};
+        const slow = (boot.slowestFiles || []).slice(0, 6)
+          .map((row) => `  ${row.file}: ${row.totalMs}ms`)
+          .join("\n");
+        const features = window.HomeFeatureLoader?.statusAll?.() || {};
+        const featureLines = Object.entries(features)
+          .map(([id, st]) => `  ${id}: ${st?.state || "unknown"}${st?.durationMs ? ` (${st.durationMs}ms)` : ""}`)
+          .join("\n");
+        addEvent({
+          kind: "system",
+          tone: "info",
+          text:
+            `perf status\n` +
+            `lazy features: ${window.__HOME_LAZY_FEATURES_ENABLED ? "on" : "off"}\n` +
+            `boot: ${state.loaded ?? "?"}/${state.total ?? "?"}${state.done ? " complete" : " running"}\n` +
+            (slow ? `slowest boot files:\n${slow}\n` : "") +
+            (featureLines ? `features:\n${featureLines}` : ""),
+        });
+        return true;
+      }
       case "test": {
         const [sub] = arg.split(/\s+/).filter(Boolean);
         if (!sub) {
@@ -6828,12 +7925,14 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       case "spatial": {
         // Addendum 38 Phase 1 — open the light-footprint Map drawer.
         setSpatialDrawerOpen(true);
+        ensureFeature("spatial", "spatial", "slash");
         return true;
       }
       case "home2":
       case "spatial-home": {
         const next = !/^off|classic|chat|0|false$/i.test(arg.trim());
         setSpatialLayout(next);
+        if (next) ensureFeature("apartment", "apartment", "spatial-layout");
         try { localStorage.setItem("hg-layout-v2", next ? "spatial" : "classic"); } catch (e) { /* ignore */ }
         addEvent({
           kind: "system",
@@ -6850,7 +7949,10 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         if (sub === "prewarm" || sub === "warm" || sub === "prewarm status" || sub === "warm status" || sub === "status") {
           const prewarm = window.HomeApartmentPrewarm;
           if (!prewarm) {
-            addEvent({ kind: "system", text: "apartment prewarm module not loaded", tone: "error" });
+            addEvent({ kind: "system", text: "loading apartment modules...", tone: "info" });
+            ensureFeature("apartment", "apartment", "prewarm").then((ok) => {
+              if (ok) handleCommand(`/apartment ${sub}`);
+            });
             return true;
           }
           if (sub === "prewarm" || sub === "warm") {
@@ -6874,16 +7976,14 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           return true;
         }
         // Full-screen 3D apartment takeover (white point cloud, P0).
-        if (!window.HomeApartmentView) {
-          addEvent({ kind: "system", text: "apartment module not loaded", tone: "error" });
-          return true;
-        }
         if (spatialLayout) {
           addEvent({ kind: "system", text: "apartment is already primary in Home 2 layout", tone: "info" });
+          ensureFeature("apartment", "apartment", "spatial-layout");
           return true;
         }
         setVideoLabelerOpen(false);
         setApartmentOpen(true);
+        ensureFeature("apartment", "apartment", "slash");
         return true;
       }
       case "labeler":
@@ -6891,6 +7991,14 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // Video timeline labeler (M0). `/labeler base <url>` rewires the
         // service base; bare /labeler
         // opens the full-screen overlay, closing the other takeovers.
+        if (!videoLabelerAvailable) {
+          addEvent({
+            kind: "system",
+            text: "video labeler is hidden on mobile. use desktop web or the desktop app for that workflow.",
+            tone: "info",
+          });
+          return true;
+        }
         const a = arg.trim();
         if (/^base\s+\S/.test(a)) {
           const url = window.HomeSecurity?.sanitizeServiceUrl?.(
@@ -6907,14 +8015,11 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           }
           return true;
         }
-        if (!window.HomeVideoLabelerOverlay) {
-          addEvent({ kind: "system", text: "video labeler module not loaded", tone: "error" });
-          return true;
-        }
         setPeopleOpen(false);
         setIntelligenceOpen(false);
         setApartmentOpen(false);
         setVideoLabelerOpen(true);
+        ensureFeature("videoLabeler", "video labeler", "slash");
         return true;
       }
       case "look": {
@@ -6931,6 +8036,18 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           nonce: Date.now(),
         });
         setLookDrawerOpen(true);
+        if (!window.HomeLookDrawer || !window.HomeLookParseArg) {
+          ensureFeature("look", "look", "slash").then((ok) => {
+            if (ok && window.HomeLookParseArg) {
+              const reparsed = window.HomeLookParseArg(arg);
+              setLookInitial({
+                camera: reparsed.camera,
+                question: reparsed.question,
+                nonce: Date.now(),
+              });
+            }
+          });
+        }
         return true;
       }
       case "world-state":
@@ -6949,6 +8066,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           // No room arg, no --raw → open the drawer with full view
           setWorldStateInitialRoom(null);
           setWorldStateDrawerOpen(true);
+          ensureFeature("world", "world state", "slash");
           return true;
         }
         if (!wantsRaw && argSansFlags) {
@@ -6956,6 +8074,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           // that room. User can ×-clear the filter to widen.
           setWorldStateInitialRoom(argSansFlags);
           setWorldStateDrawerOpen(true);
+          ensureFeature("world", "world state", "slash");
           return true;
         }
         // Fall through to legacy raw dump (--raw flag explicitly given).
@@ -7120,6 +8239,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             ["find_person", "locate a person across cameras + HA presence"],
             ["who_is_in", "list persons currently in a specific room"],
             ["refresh_perception", "force a fresh vision-sidecar caption (1-3s blocking)"],
+            ["grounded_look", "inspect a camera with segmentation / boxes for visual grounding"],
           ] },
           { group: "vision (multi-frame + clips)", tools: [
             ["describe_clip", "watch a short clip (N frames over Xs) and describe motion — F-3"],
@@ -7334,6 +8454,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           return true;
         }
         setLightsOpen(true);
+        ensureFeature("lights", "lights", "slash");
         return true;
       }
       case "why-light": {
@@ -7599,7 +8720,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     // CALL time, by which point it's defined. Its identity is stable
     // (its own deps are [addEvent], itself stable), so omitting it
     // doesn't cause a memoization correctness issue.
-  }, [addEvent, announceTravelReadiness, applyServiceProfile, connectTo, copyDebugBundle, copyRecoveryCommands, copyTravelBundle, currentTravelReadiness, debugMode, endpoint, events, kokoroVoice, metricsBase, openAgentSurface, playScript, runRemoteCheck, runTravelCheck, s2sBase, s2sToken, s2sVoice, sendToHA, spatialLayout, stopStreaming, syncServiceStateFromResolver, token]);
+  }, [addEvent, announceTravelReadiness, applyServiceProfile, connectTo, copyDebugBundle, copyRecoveryCommands, copyTravelBundle, currentTravelReadiness, debugMode, endpoint, ensureFeature, events, kokoroVoice, metricsBase, openAgentSurface, playScript, runRemoteCheck, runTravelCheck, s2sBase, s2sToken, s2sVoice, sendToHA, spatialLayout, stopStreaming, syncServiceStateFromResolver, token]);
 
   /* ── External Reasoning dispatch (see home-external.jsx) ─────────────
    *
@@ -7639,16 +8760,18 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     // mutating events appended by other paths during the stream).
     const appendDelta = (delta) => {
       setEvents((prev) => prev.map((e) =>
-        e.id === externalId ? { ...e, text: applyAsrCorrection((e.text || "") + delta) } : e,
+        e.id === externalId ? { ...e, text: mergeStreamingText(e.text, delta || "") } : e,
       ));
     };
     const finalize = (extra) => {
       const fixed = extra && typeof extra.text === "string"
-        ? { ...extra, text: applyAsrCorrection(extra.text) }
+        ? { ...extra, text: normalizeChatEventText(extra.text) }
         : extra;
       setEvents((prev) => prev
         .filter((e) => e.id !== thinkingId)
-        .map((e) => e.id === externalId ? { ...e, ...(fixed || {}), streaming: false } : e),
+        .map((e) => e.id === externalId
+          ? { ...e, ...(fixed || {}), text: normalizeChatEventText((fixed && fixed.text) || e.text || ""), streaming: false }
+          : e),
       );
     };
     const replaceWithError = (msg, tone) => {
@@ -7750,10 +8873,42 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     return true;
   }, [addEvent, connection, endpoint, sim.active, token]);
 
+  const runNaturalDeepLook = useCallback(async (text) => {
+    const api = window.HomeNaturalLook;
+    if (!api || typeof api.runNaturalDeepLook !== "function") return false;
+    const result = await api.runNaturalDeepLook(text, {
+      addEvent,
+      endpoint,
+      ensureFeature,
+      metricsBase,
+      metricsBaseFromEndpoint,
+      normalizeAnswer: normalizeChatEventText,
+      perceptionHints: (window.HomeFrigatePerception?.freshPerceptionHints
+        ? window.HomeFrigatePerception.freshPerceptionHints([
+            ...frigatePerceptionHintsRef.current,
+            ...events.filter((e) => e.kind === "perception" && e.perception),
+          ])
+        : events.filter((e) => e.kind === "perception" && e.perception).map((e) => e.perception)),
+      roomContext,
+      sendToHA,
+      simActive: sim.active,
+      lookFullFrameRunner: window.HomeLookReasonRequest,
+      lookRunner: window.HomeLookReasonZoomRequest,
+    });
+    return !!result?.handled;
+  }, [addEvent, endpoint, ensureFeature, events, metricsBase, roomContext, sendToHA, sim.active]);
+
   /* ── Free-form user input ─────────────────────────────────────────── */
   const sendInput = useCallback(async () => {
     const text = input.trim();
     if (!text) return;
+    const submitKey = canonicalChatText(text);
+    const now = Date.now();
+    if (submitKey && lastSubmittedTextRef.current.text === submitKey
+        && now - lastSubmittedTextRef.current.ts < 1200) {
+      return;
+    }
+    lastSubmittedTextRef.current = { text: submitKey, ts: now };
     if (text.startsWith("/")) {
       setInput("");
       handleCommand(text);
@@ -7761,6 +8916,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     }
     setInput("");
     if (await answerDirectLightStateQuestion(text)) return;
+    if (await runNaturalDeepLook(text)) return;
     // External Reasoning router: classify the text + dispatch externally
     // ONLY if (a) classifier returned "external" AND (b) the user has
     // enabled auto-routing AND (c) provider is configured. Otherwise
@@ -7782,7 +8938,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     } else {
       sendToHA(text);
     }
-  }, [input, handleCommand, answerDirectLightStateQuestion, sendToHA, dispatchExternal]);
+  }, [input, handleCommand, answerDirectLightStateQuestion, runNaturalDeepLook, sendToHA, dispatchExternal]);
 
   /* ── Global keyboard shortcuts ─────────────────────────────────────── */
   useEffect(() => {
@@ -7879,7 +9035,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       if (!haEvent || !haEvent.type) return;
       console.log("[ha voice]", haEvent.type, haEvent.data);
       if (haEvent.type === "stt-end") {
-        const transcript = applyAsrCorrection(haEvent.data?.stt_output?.text || "");
+        const transcript = normalizeChatEventText(haEvent.data?.stt_output?.text || "");
         if (transcript) {
           setEvents((prev) => prev.map((e) =>
             e.id === voiceId ? { ...e, text: transcript } : e
@@ -8052,7 +9208,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // vs HA WS conversation.finished). Without this, the bridge's
         // raw Parakeet output ("Marcella") and HA's corrected output
         // ("Marcelo") render as two different bubbles for one utterance.
-        const text = applyAsrCorrection(rawText);
+        const text = normalizeChatEventText(rawText);
         if (role === "user") {
           // User-side partials still ignored: the Parakeet transcript
           // arrives all at once at end-of-utterance, no streaming.
@@ -8082,18 +9238,21 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // PersonaPlex speaks instead of dumping the whole utterance at
         // end-of-speech (PersonaPlex can ramble for 60+ seconds).
         if (role === "assistant") {
+          const cleanText = normalizeChatEventText(text || "");
           if (partial) {
             setEvents((prev) => {
               // Append/replace the live streaming home event for this turn.
               const last = prev[prev.length - 1];
               if (last && last.kind === "home" && last.streaming) {
-                return [...prev.slice(0, -1), { ...last, text }];
+                return [...prev.slice(0, -1), { ...last, text: cleanText }];
               }
+              const newId = nextId();
+              streamingIds.current.add(newId);
               return [...prev, {
-                id: nextId(),
+                id: newId,
                 kind: "home",
                 time: fmtTime(),
-                text,
+                text: cleanText,
                 streaming: true,
               }];
             });
@@ -8104,16 +9263,24 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           setEvents((prev) => {
             const last = prev[prev.length - 1];
             if (last && last.kind === "home" && last.streaming) {
-              return [...prev.slice(0, -1), { ...last, text, streaming: false }];
+              streamingIds.current.delete(last.id);
+              return [...prev.slice(0, -1), { ...last, text: cleanText, streaming: false }];
             }
             // Dedup against recent assistant bubbles: HA WS event and
             // s2s bridge can both fire for the same turn.
-            if (findRecentAssistantIdx(prev, text, "home", 20) !== -1) return prev;
+            const existingIdx = findAssistantDuplicateIdx(prev, cleanText, "home", 60);
+            if (existingIdx !== -1) {
+              const existing = prev[existingIdx];
+              if (existing?.streaming) streamingIds.current.delete(existing.id);
+              return prev.map((e, i) => i === existingIdx
+                ? { ...e, text: settleAssistantFinalText(e.text, cleanText), streaming: false }
+                : e);
+            }
             return [...prev, {
               id: nextId(),
               kind: "home",
               time: fmtTime(),
-              text,
+              text: cleanText,
             }];
           });
           setMetrics((prev) => ({
@@ -8329,6 +9496,17 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           || (() => { try { return JSON.parse(fn.arguments || "{}"); } catch { return {}; } })();
 
         if (name === "execute_services" && parsed && Array.isArray(parsed.list)) {
+          if (shouldSuppressActionCardsForToolCall(name, parsed)) {
+            actionCards.push({
+              id: nextId(), kind: "tool", time: fmtTime(),
+              name,
+              args: parsed,
+              status: "blocked",
+              latency: null,
+              note: "travel mode blocked lighting output",
+            });
+            continue;
+          }
           // Group by service key to coalesce many entity actions into one card.
           const groups = new Map();
           for (const call of parsed.list) {
@@ -8399,15 +9577,28 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // on insert) we must correct here too — otherwise the same
         // logical text shows as two bubbles when one source emits
         // "Marcello" and the other "Marcelo".
-        const correctedUser = applyAsrCorrection(entry.user);
+        const correctedUser = normalizeChatEventText(entry.user);
         // Dedup user/voice bubble against the last ~8 events.
-        const userIdx = findRecentUserIdx(prev, correctedUser, 8);
+        const immediateUserIdx = findRecentUserIdx(prev, correctedUser, 20);
+        // A grounded tool turn can legitimately run beyond the legacy 8s
+        // cross-source window. While the local pipeline is still active,
+        // bind its delayed SSE completion to the existing user turn rather
+        // than inserting a second user barrier and a second answer.
+        const userIdx = immediateUserIdx !== -1
+          ? immediateUserIdx
+          : (activeRunRef.current
+            ? findRecentUserIdx(prev, correctedUser, 100, 120000)
+            : -1);
+        const sourceTurnId = entry.id ? `sse:${entry.id}` : null;
+        const turnKey = userIdx !== -1 && prev[userIdx]?.turnKey
+          ? prev[userIdx].turnKey
+          : sourceTurnId;
         const newUserEvents = [];
         if (userIdx === -1 && correctedUser) {
           // No local user event → originated outside the Home app (Voice PE).
           newUserEvents.push({
             id: nextId(), kind: "voice", time: fmtTime(),
-            text: correctedUser,
+            text: correctedUser, turnKey,
           });
         }
         // Tag bridge-emitted diag events ([parakeet] heard, [direct]
@@ -8448,8 +9639,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             }
           }
           if (heardText) {
-            const correctedHeard = applyAsrCorrection(heardText);
-            if (findRecentUserIdx(prev, correctedHeard, 8) === -1) {
+            const correctedHeard = normalizeChatEventText(heardText);
+            if (findRecentUserIdx(prev, correctedHeard, 20) === -1) {
               newUserEvents.push({
                 id: nextId(), kind: "voice", time: fmtTime(),
                 text: correctedHeard,
@@ -8470,7 +9661,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           : entry.assistant;
         // Same Tauri-side ASR correction: catches the SSE-feed path
         // (raw vLLM completions that bypassed HA's output backstop).
-        const correctedAssistant = applyAsrCorrection(cleanedText);
+        const correctedAssistant = normalizeChatEventText(cleanedText);
         const assistantEvent = entry.assistant
           ? [{
               id: nextId(),
@@ -8478,6 +9669,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
               channel: diagChannel,
               time: fmtTime(),
               text: correctedAssistant,
+              turnKey,
+              sourceTurnId,
             }]
           : [];
         // Defensive dedupe (May 2026): assistant text occasionally arrives
@@ -8487,10 +9680,20 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // assistant role, and the new conv.finished subscriber uses the
         // same lookup helper. Scan back 20 events (action cards +
         // perceptions can interleave between duplicates).
-        return [...prev, ...newUserEvents, ...actionCards, ...assistantEvent.filter((ev) => {
-          if (ev.kind !== "home" && ev.kind !== "perception") return true;
-          return findRecentAssistantIdx(prev, ev.text, ev.kind, 20) === -1;
-        })];
+        let nextEvents = [...prev, ...newUserEvents, ...actionCards];
+        for (const ev of assistantEvent) {
+          if (ev.kind !== "home" && ev.kind !== "perception") {
+            nextEvents = [...nextEvents, ev];
+            continue;
+          }
+          const streamingIdx = findActiveAssistantStreamingIdx(nextEvents, ev.kind, 80);
+          if (streamingIdx !== -1) streamingIds.current.delete(nextEvents[streamingIdx].id);
+          nextEvents = upsertAssistantTurnEvent(nextEvents, {
+            ...ev,
+            streaming: false,
+          });
+        }
+        return nextEvents;
       });
     };
     es.onerror = (e) => {
@@ -8687,7 +9890,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       }
     });
     return unsub;
-  }, [connection]);
+  }, [connection, sim.active]);
 
   /* ── Routing decisions → live [route] diag stream ────────────────────
    *
@@ -8791,9 +9994,13 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       (ev) => {
         const d = ev?.data || {};
         const room = d.room || "";
-        const caption = applyAsrCorrection(d.caption || "");
+        const caption = normalizeChatEventText(d.caption || "");
         if (!caption) return;
         const text = room ? `${room}: ${caption}` : caption;
+        const base = metricsBase || metricsBaseFromEndpoint(endpoint);
+        const snapshotUrl = d.snapshot_url
+          ? visionMediaUrlFromEndpoint(d.snapshot_url, base, endpoint)
+          : null;
         // 8-event lookback dedupe — matches the SSE handler's window.
         // PerceptionContent renders the chip; snapshotUrl is consumed
         // by the same component for thumbnail rendering when present.
@@ -8809,7 +10016,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             channel: "perception",
             time: fmtTime(),
             text,
-            snapshotUrl: d.snapshot_url || null,
+            snapshotUrl,
             source: d.source || null,
             latencyMs: d.latency_ms != null ? d.latency_ms : null,
           }];
@@ -8818,6 +10025,27 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     );
     return unsub;
   }, [connection]);
+
+  useEffect(() => {
+    if (sim.active) return undefined;
+    if (connection !== "online" || !haClientRef.current) return undefined;
+    const normalizer = window.HomeFrigatePerception;
+    if (!normalizer?.normalizeHomePerceptionEvent) return undefined;
+    const unsub = haClientRef.current.subscribeEvents(
+      "homeai_perception",
+      (ev) => {
+        const normalized = normalizer.normalizeHomePerceptionEvent(ev?.data || {});
+        if (!normalized) return;
+        const prevHints = frigatePerceptionHintsRef.current || [];
+        if (normalizer.isDuplicatePerceptionEvent(prevHints, normalized)) return;
+        frigatePerceptionHintsRef.current = [
+          ...prevHints.slice(-39),
+          { homePerception: normalized, createdAt: Date.now() },
+        ];
+      },
+    );
+    return unsub;
+  }, [connection, sim.active]);
 
   /* ── Jarvis mute (Addendum 9) — header pill subscription ───────────
    *
@@ -8931,37 +10159,54 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // on assistant_text before the event fires, but this is the
         // single line of defense for the user_input_text path AND a
         // safety net if HA somehow misses.
-        const userTextC = applyAsrCorrection(userText);
-        const assistantTextC = applyAsrCorrection(assistantText);
+        const userTextC = normalizeChatEventText(userText);
+        const assistantTextC = normalizeChatEventText(assistantText);
         // M5: capture conversation_id so the explainability drawer can
         // filter the routing log by it later. WS event carries it
         // directly per slim payload (see comment above).
         const convId = d.conversation_id || null;
+        const sourceTurnId = d.run_id || d.turn_id || d.id || null;
+        const fallbackTurnKey = sourceTurnId
+          ? `finished:${sourceTurnId}`
+          : `finished:${Date.now()}:${userTextC.slice(0, 24)}`;
         setEvents((prev) => {
-          const userIdx = findRecentUserIdx(prev, userTextC, 8);
-          const asstIdx = findRecentAssistantIdx(prev, assistantTextC, "home", 20);
-          const newUser = (userTextC && userIdx === -1)
-            ? [{ id: nextId(), kind: "voice", time: fmtTime(), text: userTextC, convId }]
-            : [];
-          const newAsst = (assistantTextC && asstIdx === -1)
-            ? [{ id: nextId(), kind: "home", time: fmtTime(), text: assistantTextC, convId }]
-            : [];
-          // If we found existing bubbles (dedup hit) and they're
-          // missing a convId, retroactively stamp them so the drawer
-          // works on either fire-order race.
+          const immediateUserIdx = findRecentUserIdx(prev, userTextC, 20);
+          const userIdx = immediateUserIdx !== -1
+            ? immediateUserIdx
+            : (activeRunRef.current
+              ? findRecentUserIdx(prev, userTextC, 100, 120000)
+              : -1);
+          const turnKey = userIdx !== -1 && prev[userIdx]?.turnKey
+            ? prev[userIdx].turnKey
+            : fallbackTurnKey;
           let augmented = prev;
-          if (convId) {
-            if (userIdx !== -1 && !prev[userIdx]?.convId) {
-              augmented = augmented.map((e, i) => i === userIdx ? { ...e, convId } : e);
-            }
-            if (asstIdx !== -1 && !augmented[asstIdx]?.convId) {
-              augmented = augmented.map((e, i) => i === asstIdx ? { ...e, convId } : e);
-            }
+          if (userTextC && userIdx === -1) {
+            augmented = [...augmented, {
+              id: nextId(), kind: "voice", time: fmtTime(),
+              text: userTextC, convId, turnKey,
+            }];
+          } else if (userIdx !== -1 && (convId || turnKey)) {
+            augmented = augmented.map((event, idx) => idx === userIdx
+              ? {
+                  ...event,
+                  convId: convId || event.convId,
+                  turnKey: event.turnKey || turnKey,
+                }
+              : event);
           }
-          if (newUser.length === 0 && newAsst.length === 0) {
-            return augmented === prev ? prev : augmented;
+          if (!assistantTextC) return augmented;
+          const streamingAsstIdx = findActiveAssistantStreamingIdx(augmented, "home", 80);
+          if (streamingAsstIdx !== -1) {
+            streamingIds.current.delete(augmented[streamingAsstIdx].id);
           }
-          return [...augmented, ...newUser, ...newAsst];
+          return upsertAssistantTurnEvent(augmented, {
+            id: nextId(), kind: "home", time: fmtTime(),
+            text: assistantTextC,
+            convId,
+            turnKey,
+            sourceTurnId: sourceTurnId ? `finished:${sourceTurnId}` : null,
+            streaming: false,
+          });
         });
       },
     );
@@ -9438,6 +10683,55 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     setLookDrawerOpen(false);
     setExplainConvId(null);
   };
+  const openPeopleFeature = () => {
+    setVideoLabelerOpen(false);
+    setIntelligenceOpen(false);
+    setApartmentOpen(false);
+    setPeopleOpen(true);
+    ensureFeature("people", "people", "header");
+  };
+  const openIntelligenceFeature = () => {
+    setVideoLabelerOpen(false);
+    setPeopleOpen(false);
+    setApartmentOpen(false);
+    setIntelligenceOpen(true);
+    ensureFeature("intelligence", "intelligence", "header");
+  };
+  const openVideoLabelerFeature = () => {
+    if (!videoLabelerAvailable) {
+      addEvent({
+        kind: "system",
+        text: "video labeler is hidden on mobile. use desktop web or the desktop app for that workflow.",
+        tone: "info",
+      });
+      return;
+    }
+    setPeopleOpen(false);
+    setIntelligenceOpen(false);
+    setApartmentOpen(false);
+    setVideoLabelerOpen(true);
+    ensureFeature("videoLabeler", "video labeler", "header");
+  };
+  const openLightsFeature = () => {
+    setPeopleOpen(false);
+    setIntelligenceOpen(false);
+    setVideoLabelerOpen(false);
+    setApartmentOpen(false);
+    setLightsOpen(true);
+    ensureFeature("lights", "lights", "header");
+  };
+  const openApartmentFromHeader = () => {
+    setPeopleOpen(false);
+    setIntelligenceOpen(false);
+    setVideoLabelerOpen(false);
+    setLightsOpen(false);
+    setWorldStateDrawerOpen(false);
+    setSpatialDrawerOpen(false);
+    setLookDrawerOpen(false);
+    setExplainConvId(null);
+    setApartmentOpen(true);
+    ensureFeature("apartment", "apartment", "header");
+  };
   const metricsStrip = (
     <MetricsStrip
       metrics={metrics}
@@ -9527,21 +10821,25 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
               closeSpatialToolSurfaces();
               setSpatialOpsDockOpen(false);
               setVideoLabelerOpen(true);
+              ensureFeature("videoLabeler", "video labeler", "spatial-rail");
             }}
             onPeople={() => {
               closeSpatialToolSurfaces();
               setSpatialOpsDockOpen(false);
               setPeopleOpen(true);
+              ensureFeature("people", "people", "spatial-rail");
             }}
             onIntelligence={() => {
               closeSpatialToolSurfaces();
               setSpatialOpsDockOpen(false);
               setIntelligenceOpen(true);
+              ensureFeature("intelligence", "intelligence", "spatial-rail");
             }}
             onLights={() => {
               closeSpatialToolSurfaces();
               setSpatialOpsDockOpen(false);
               setLightsOpen(true);
+              ensureFeature("lights", "lights", "spatial-rail");
             }}
             onOps={() => {
               closeSpatialToolSurfaces();
@@ -9573,6 +10871,28 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           )}
         </div>
       )}
+      {isSpatialWide && !window.HomeApartmentView && (
+        <div data-theme="dark" style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          bottom: 0,
+          right: spatialStageRight,
+          zIndex: 0,
+          minWidth: 0,
+          overflow: "hidden",
+          background: "#000",
+        }}>
+          <FeatureLoadingSurface
+            open={true}
+            title="apartment"
+            status={featureStatusFor("apartment")}
+            error={featureLoadErrors.apartment}
+            mobile={mobile}
+            fullscreen={false}
+          />
+        </div>
+      )}
       <div style={appColumnStyle}>
       <HomeHeader
         theme={theme}
@@ -9589,21 +10909,17 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         sim={sim}
         muteState={muteState}
         onUnmuteClick={handleUnmuteClick}
-        onOpenPeople={isSpatialWide ? null : () => { setVideoLabelerOpen(false); setPeopleOpen(true); }}
-        onOpenIntelligence={isSpatialWide ? null : () => { setVideoLabelerOpen(false); setIntelligenceOpen(true); }}
-        onOpenVideoLabeler={isSpatialWide ? null : () => {
-          // full-screen surfaces are mutually exclusive (see state decl)
-          setPeopleOpen(false);
-          setIntelligenceOpen(false);
-          setApartmentOpen(false);
-          setVideoLabelerOpen(true);
-        }}
+        onOpenPeople={isSpatialWide ? null : openPeopleFeature}
+        onOpenIntelligence={isSpatialWide ? null : openIntelligenceFeature}
+        onOpenVideoLabeler={isSpatialWide || !videoLabelerAvailable ? null : openVideoLabelerFeature}
+        onOpenApartment={isSpatialWide ? null : openApartmentFromHeader}
+        onOpenLights={isSpatialWide ? null : openLightsFeature}
         onOpenSimulationControls={() => setSimulationControlsOpen(true)}
-        peopleButtonRef={peopleButtonRef}
         aiStackState={aiStackState}
         metrics={metrics}
         serviceProfile={serviceProfile}
         onOpenRemoteProfile={() => setRemotePanelOpen(true)}
+        peopleButtonRef={peopleButtonRef}
         mobile={mobile}
       />
       <SimulationControlsDialog
@@ -9640,6 +10956,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           spatialMode={isSpatialWide}
         />
       )}
+      {peopleOpen && !window.HomePeopleOverlay && (
+        <FeatureLoadingSurface
+          open={peopleOpen}
+          title="people"
+          status={featureStatusFor("people")}
+          error={featureLoadErrors.people}
+          onClose={closePeopleOverlay}
+          mobile={mobile}
+        />
+      )}
       {/* M5 (Addendum 27) — explainability drawer. Mounted alongside
           people overlay so it can co-exist (people open + drawer open
           for a tool-firing turn = both visible, drawer on the right). */}
@@ -9652,15 +10978,35 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           spatialMode={isSpatialWide}
         />
       )}
+      {intelligenceOpen && !window.HomeIntelligenceOverlay && (
+        <FeatureLoadingSurface
+          open={intelligenceOpen}
+          title="intelligence"
+          status={featureStatusFor("intelligence")}
+          error={featureLoadErrors.intelligence}
+          onClose={() => setIntelligenceOpen(false)}
+          mobile={mobile}
+        />
+      )}
       {/* /labeler — full-screen video timeline labeler (M0 shell; see
           home-video-labeler.jsx). Sim containment lives in the overlay +
           its data layer (media URLs bypass tauriFetch). */}
-      {window.HomeVideoLabelerOverlay && (
+      {videoLabelerAvailable && window.HomeVideoLabelerOverlay && (
         <window.HomeVideoLabelerOverlay
           open={videoLabelerOpen}
           onClose={() => setVideoLabelerOpen(false)}
           sim={sim}
           spatialMode={isSpatialWide}
+        />
+      )}
+      {videoLabelerAvailable && videoLabelerOpen && !window.HomeVideoLabelerOverlay && (
+        <FeatureLoadingSurface
+          open={videoLabelerOpen}
+          title="video labeler"
+          status={featureStatusFor("videoLabeler")}
+          error={featureLoadErrors.videoLabeler}
+          onClose={() => setVideoLabelerOpen(false)}
+          mobile={mobile}
         />
       )}
       {window.HomeExplainDrawer && (
@@ -9714,6 +11060,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           }}
         />
       )}
+      {lightsOpen && !window.HomeLightsDrawer && (
+        <FeatureLoadingSurface
+          open={lightsOpen}
+          title="lights"
+          status={featureStatusFor("lights")}
+          error={featureLoadErrors.lights}
+          onClose={() => setLightsOpen(false)}
+          mobile={mobile}
+        />
+      )}
       {/* F-32 (Addendum 27) — world-state drawer. Same right-anchored
           slot as the explain drawer; users typically open one OR the
           other (both technically valid but the explain drawer wins
@@ -9728,6 +11084,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           initialRoom={worldStateInitialRoom}
         />
       )}
+      {worldStateDrawerOpen && !window.HomeWorldStateDrawer && (
+        <FeatureLoadingSurface
+          open={worldStateDrawerOpen}
+          title="world state"
+          status={featureStatusFor("world")}
+          error={featureLoadErrors.world}
+          onClose={() => setWorldStateDrawerOpen(false)}
+          mobile={mobile}
+        />
+      )}
       {/* Addendum 38 Phase 1 — /spatial light-footprint drawer. Same
           right-anchored slot as the world-state + explain drawers. */}
       {window.HomeSpatialDrawer && (
@@ -9737,6 +11103,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           endpoint={endpoint}
           token={token}
           sim={sim}
+        />
+      )}
+      {spatialDrawerOpen && !window.HomeSpatialDrawer && (
+        <FeatureLoadingSurface
+          open={spatialDrawerOpen}
+          title="spatial"
+          status={featureStatusFor("spatial")}
+          error={featureLoadErrors.spatial}
+          onClose={() => setSpatialDrawerOpen(false)}
+          mobile={mobile}
         />
       )}
       {/* /apartment — full-screen 3D spatial command center. Full-viewport
@@ -9749,6 +11125,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           endpoint={endpoint}
           token={token}
           sim={sim}
+        />
+      )}
+      {apartmentOpen && !spatialLayout && !window.HomeApartmentView && (
+        <FeatureLoadingSurface
+          open={apartmentOpen}
+          title="apartment"
+          status={featureStatusFor("apartment")}
+          error={featureLoadErrors.apartment}
+          onClose={() => setApartmentOpen(false)}
+          mobile={mobile}
         />
       )}
       {/* Phase 0.5 — /look "Thinking with Visual Primitives" drawer. Same
@@ -9773,12 +11159,23 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
                 kind: "perception",
                 text: `${e.camera} — ${e.answer || "(no answer)"}`,
                 snapshotUrl: e.annotatedUrl || null,
+                imageMode: e.annotatedUrl ? "annotated" : undefined,
               });
             } else if (e.type === "error") {
               addEvent({ kind: "system", tone: "error",
                          text: `look · ${e.text}` });
             }
           }}
+        />
+      )}
+      {lookDrawerOpen && !window.HomeLookDrawer && (
+        <FeatureLoadingSurface
+          open={lookDrawerOpen}
+          title="look"
+          status={featureStatusFor("look")}
+          error={featureLoadErrors.look}
+          onClose={() => setLookDrawerOpen(false)}
+          mobile={mobile}
         />
       )}
       {/* Boot sequence — one atomic conditional. While bootPhase !== "ready"

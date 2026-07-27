@@ -1345,6 +1345,10 @@ def _contract_e2_acl() -> None:
     for function in SUPPRESSION_FUNCTIONS:
         op.execute(f"REVOKE ALL ON FUNCTION {function} FROM PUBLIC, {all_roles}")
         op.execute(f"GRANT EXECUTE ON FUNCTION {function} TO {suppression_roles}")
+        # The SECURITY DEFINER anti-resurrection trigger runs as this NOLOGIN
+        # kernel and dispatches through each helper. PostgreSQL ownership keeps
+        # grant options, not ordinary EXECUTE after an explicit self-revoke.
+        op.execute(f"GRANT EXECUTE ON FUNCTION {function} TO {KERNEL_ROLE}")
     for function in TRIGGER_FUNCTIONS:
         op.execute(f"REVOKE ALL ON FUNCTION {function} FROM PUBLIC, {all_roles}")
 
@@ -1420,6 +1424,14 @@ def _assert_installed_contract() -> None:
           END IF;
           IF NOT pg_catalog.has_function_privilege(
                'home_agent_erasure', '{REPLAY_FUNCTION}', 'EXECUTE'
+             ) OR EXISTS (
+               SELECT 1
+                 FROM pg_catalog.unnest(
+                   ARRAY[{suppression_functions}]::regprocedure[]
+                 ) AS function_row(function_oid)
+                WHERE NOT pg_catalog.has_function_privilege(
+                  '{KERNEL_ROLE}', function_row.function_oid, 'EXECUTE'
+                )
              ) OR EXISTS (
                SELECT 1 FROM pg_catalog.unnest(
                  ARRAY[{managed_roles}]::text[]

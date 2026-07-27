@@ -42,6 +42,19 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
     assert "REFERENCES (%1$s)" in quarantine
     assert "SELECT role_row.rolname FROM pg_catalog.pg_roles" in quarantine
     assert "UNION ALL SELECT 'PUBLIC'" in quarantine
+    legacy_revoke = (
+        "REVOKE ALL ON FUNCTION ingest.reject_artifact_link_cycle() FROM PUBLIC"
+    )
+    normalized_source = " ".join(source.split())
+    assert legacy_revoke in normalized_source
+    assert source.index("$identity_finalizer_e3_quarantine$;") < source.index(
+        "REVOKE ALL ON FUNCTION ingest.reject_artifact_link_cycle()"
+    ) < source.index("DO $identity_finalizer_e3_acl$")
+    assert (
+        "REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA "
+        "public, ingest, identity, knowledge, engagement, privacy, "
+        "operations, media FROM PUBLIC"
+    ) not in " ".join(quarantine.split())
 
     assert "IF primary_object_count = 0 THEN" in admission
     assert "current_revision = ANY (pre_e3_revisions)" in admission

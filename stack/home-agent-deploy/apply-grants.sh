@@ -1369,6 +1369,11 @@ BEGIN
       'home_agent_erasure, home_agent_rollout, home_agent_backup',
       function_oid
     );
+    EXECUTE pg_catalog.format(
+      'GRANT EXECUTE ON FUNCTION %s '
+      'TO home_agent_identity_erasure_kernel',
+      function_oid
+    );
   END LOOP;
   function_oid := pg_catalog.to_regprocedure(replay_function);
   EXECUTE pg_catalog.format(
@@ -1523,6 +1528,12 @@ BEGIN
   END LOOP;
 END
 $identity_finalizer_e3_quarantine$;
+
+-- Revision 0001 predates the per-function PUBLIC-EXECUTE convention used by
+-- every later migration. Repair that one bootstrap routine explicitly after
+-- the E3 quarantine commits. If this legacy object is missing or tampered,
+-- replay fails closed without rolling the quarantine back.
+REVOKE ALL ON FUNCTION ingest.reject_artifact_link_cycle() FROM PUBLIC;
 
 -- Owner-created functions must not regain PostgreSQL's implicit PUBLIC
 -- EXECUTE grant. Do not persist a pg_default_acl object owned by the dormant

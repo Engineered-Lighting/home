@@ -7,6 +7,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 GRANTS = ROOT / "stack/home-agent-deploy/apply-grants.sh"
 ROLE_DOC = ROOT / "stack/home-agent-deploy/IDENTITY-ERASURE-KERNEL-ROLE.md"
+INITIAL_MIGRATION = (
+    ROOT
+    / "stack/services/home-agent-core/alembic/versions/0001_greenfield_core.py"
+)
 
 
 def _normalized(value: str) -> str:
@@ -146,6 +150,10 @@ def test_e2_tombstones_residuals_and_helpers_are_contract_bound() -> None:
         "home_agent_worker, home_agent_erasure, home_agent_rollout, "
         "home_agent_backup"
     ) in _normalized(e2)
+    assert (
+        "'GRANT EXECUTE ON FUNCTION %s ' "
+        "'TO home_agent_identity_erasure_kernel'"
+    ) in _normalized(e2)
     assert "GRANT EXECUTE ON FUNCTION %s TO home_agent_erasure" in e2
     assert not any(
         " ON TABLE " in statement and re.search(r"\bhome_agent_erasure\b", statement)
@@ -154,3 +162,14 @@ def test_e2_tombstones_residuals_and_helpers_are_contract_bound() -> None:
 
     assert "no direct tombstone or residual DML" in _normalized(role_doc)
     assert "exact restore-replay allowlist" in _normalized(role_doc)
+
+
+def test_legacy_lineage_trigger_public_execute_is_repaired_exactly() -> None:
+    grants = _normalized(GRANTS.read_text(encoding="utf-8"))
+    migration = _normalized(INITIAL_MIGRATION.read_text(encoding="utf-8"))
+    exact_revoke = (
+        "REVOKE ALL ON FUNCTION ingest.reject_artifact_link_cycle() FROM PUBLIC"
+    )
+
+    assert exact_revoke in grants
+    assert exact_revoke in migration

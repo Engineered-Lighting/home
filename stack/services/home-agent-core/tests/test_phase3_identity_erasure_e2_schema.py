@@ -185,6 +185,15 @@ def test_e2_kernel_stays_dml_free_and_replay_is_owner_owned() -> None:
     assert "TO {KERNEL_ROLE};" in source
     assert "GRANT INSERT ON TABLE {BLOCK_TABLE} TO {KERNEL_ROLE}" not in source
     assert "GRANT INSERT ON TABLE {RESIDUAL_TABLE} TO {KERNEL_ROLE}" not in source
+    assert (
+        'op.execute(f"GRANT EXECUTE ON FUNCTION {function} TO {KERNEL_ROLE}")'
+        in source
+    )
+    assert (
+        "NOT pg_catalog.has_function_privilege(\n"
+        "                  '{KERNEL_ROLE}', function_row.function_oid, 'EXECUTE'"
+        in source
+    )
     assert source.index("RESET ROLE;") < source.index(
         "CREATE FUNCTION privacy.replay_identity_person_retrieval_block_v2"
     )

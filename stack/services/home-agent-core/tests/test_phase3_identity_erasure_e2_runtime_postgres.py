@@ -613,6 +613,44 @@ def _sqlstate(error: pytest.ExceptionInfo[DBAPIError]) -> str | None:
 
 
 async def _assert_catalog_boundary(connection) -> None:
+    suppression_helpers = (
+        "privacy.identity_person_is_blocked(uuid)",
+        "privacy.identity_principal_is_blocked(uuid)",
+        "privacy.identity_fact_is_blocked(text,uuid,text,jsonb,uuid)",
+    )
+    kernel_denied_functions = (
+        "privacy.reject_tombstoned_identity_write()",
+        "privacy.enforce_identity_person_erasure_residual_set()",
+        "privacy.replay_identity_person_retrieval_block_v2(jsonb)",
+        "ingest.reject_artifact_link_cycle()",
+    )
+    for signature in (*suppression_helpers, *kernel_denied_functions):
+        row = (
+            (
+                await connection.execute(
+                    text(
+                        "SELECT has_function_privilege("
+                        "'home_agent_identity_erasure_kernel', "
+                        "CAST(:signature AS regprocedure), 'EXECUTE') "
+                        "AS kernel_execute, EXISTS ("
+                        "SELECT 1 FROM pg_proc function_row, "
+                        "LATERAL aclexplode(COALESCE("
+                        "function_row.proacl, "
+                        "acldefault('f', function_row.proowner))) function_acl "
+                        "WHERE function_row.oid=CAST(:signature AS regprocedure) "
+                        "AND function_acl.grantee=0 "
+                        "AND function_acl.privilege_type='EXECUTE'"
+                        ") AS public_execute"
+                    ),
+                    {"signature": signature},
+                )
+            )
+            .mappings()
+            .one()
+        )
+        assert row["kernel_execute"] is (signature in suppression_helpers)
+        assert row["public_execute"] is False
+
     for table in (
         "identity.people",
         "identity.principals",

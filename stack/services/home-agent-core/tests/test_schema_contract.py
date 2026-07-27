@@ -1,8 +1,30 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from app import schema
 from app.api import semantic_router
 from sqlalchemy import CheckConstraint
+
+
+ROOT = Path(__file__).resolve().parents[1]
+INITIAL_MIGRATION = ROOT / "alembic/versions/0001_greenfield_core.py"
+
+
+def test_initial_lineage_trigger_does_not_leave_public_execute() -> None:
+    source = INITIAL_MIGRATION.read_text(encoding="utf-8")
+
+    create = source.index(
+        "CREATE OR REPLACE FUNCTION ingest.reject_artifact_link_cycle()"
+    )
+    trigger = source.index(
+        "FOR EACH ROW EXECUTE FUNCTION ingest.reject_artifact_link_cycle();"
+    )
+    revoke = source.index(
+        "REVOKE ALL ON FUNCTION ingest.reject_artifact_link_cycle()"
+    )
+    assert create < trigger < revoke
+    assert "FROM PUBLIC;" in source[revoke : revoke + 120]
 
 
 def test_greenfield_authority_has_expected_schema_boundaries() -> None:

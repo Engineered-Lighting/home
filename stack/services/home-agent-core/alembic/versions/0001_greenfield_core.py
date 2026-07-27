@@ -60,6 +60,9 @@ def upgrade() -> None:
         CREATE TRIGGER artifact_link_acyclic
         BEFORE INSERT OR UPDATE ON ingest.artifact_links
         FOR EACH ROW EXECUTE FUNCTION ingest.reject_artifact_link_cycle();
+
+        REVOKE ALL ON FUNCTION ingest.reject_artifact_link_cycle()
+          FROM PUBLIC;
         """
     )
 

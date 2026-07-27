@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ast
+from collections.abc import Callable
 import hashlib
 import json
 import os
@@ -443,6 +444,7 @@ async def _seed_fixture(
     comprehensive: bool = False,
     review_signature_override: str | None = None,
     raw_document_override: bytes | None = None,
+    document_mutator: Callable[[dict[str, Any]], None] | None = None,
 ) -> FinalizerFixture:
     now = datetime.now(UTC)
     run_id = uuid7()
@@ -681,6 +683,8 @@ async def _seed_fixture(
         "source_manifest_commitment": source_manifest,
         "verification_status": "candidate_unverified",
     }
+    if document_mutator is not None:
+        document_mutator(document)
     document_bytes = raw_document_override or _canonical_bytes(document)
 
     await connection.execute(
@@ -832,26 +836,6 @@ async def _probe_finalize(
         if transaction.is_active:
             await transaction.rollback()
         await connection.close()
-
-
-async def _set_admitted_document(
-    engine: AsyncEngine,
-    fixture: FinalizerFixture,
-    document: bytes,
-) -> None:
-    async with engine.begin() as connection:
-        await connection.execute(
-            text(
-                "UPDATE operations.reviewed_identity_finalizer_admissions "
-                "SET document_sha256=:digest, document_octets=:octets "
-                "WHERE admission_id=:admission"
-            ),
-            {
-                "digest": hashlib.sha256(document).hexdigest(),
-                "octets": len(document),
-                "admission": fixture.admission_id,
-            },
-        )
 
 
 async def _replay_erasure(
@@ -1093,68 +1077,110 @@ async def test_postgresql_e3_lifecycle_boundary_and_atomic_finalizer() -> None:
                 comprehensive=True,
             )
 
-        hostile_null_documents: list[tuple[str, dict[str, Any]]] = []
-        top_commitment_null = json.loads(comprehensive.document)
-        top_commitment_null["finalization_commitment"] = None
-        hostile_null_documents.append(
-            ("top_finalization_commitment", top_commitment_null)
-        )
-        for kind, field in (
-            ("person", "legacy_source_ref"),
-            ("person_status", "source_snapshot_sha256"),
-            ("alias", "source_ref"),
-            ("privacy_directive", "source_snapshot_sha256"),
-        ):
-            hostile_document = json.loads(comprehensive.document)
-            target = next(
-                projection
-                for projection in hostile_document["projections"]
-                if projection["decision_kind"] == kind
-            )
-            target["record"][field] = None
-            hostile_null_documents.append((f"{kind}.{field}", hostile_document))
-
-        for label, hostile_document in hostile_null_documents:
-            hostile_bytes = _canonical_bytes(hostile_document)
-            await _set_admitted_document(
-                admin_target,
-                comprehensive,
-                hostile_bytes,
-            )
-            _value, hostile_error = await _probe_finalize(
-                finalizer,
-                comprehensive,
-                hostile_bytes,
-            )
-            assert hostile_error is not None, f"{label} JSON null was accepted"
-            assert _sqlstate(hostile_error) in {"22023", "42501"}, label
-        await _set_admitted_document(
-            admin_target,
-            comprehensive,
-            comprehensive.document,
-        )
-
-        private_canary = f"PRIVATE_FINALIZER_CANARY_{uuid.uuid4().hex}"
-        private_document = json.loads(comprehensive.document)
-        private_document["review_expires_at"] = private_canary
-        private_document_bytes = _canonical_bytes(private_document)
-        async with admin_target.begin() as connection:
-            await connection.execute(
+        original_admission = {
+            "document_sha256": hashlib.sha256(comprehensive.document).hexdigest(),
+            "document_octets": len(comprehensive.document),
+        }
+        async with owner.begin() as connection:
+            owner_mutation = await connection.execute(
                 text(
                     "UPDATE operations.reviewed_identity_finalizer_admissions "
                     "SET document_sha256=:digest, document_octets=:octets "
                     "WHERE admission_id=:admission"
                 ),
                 {
-                    "digest": hashlib.sha256(private_document_bytes).hexdigest(),
-                    "octets": len(private_document_bytes),
+                    "digest": _digest(f"owner-mutation-{uuid.uuid4().hex}"),
+                    "octets": len(comprehensive.document) + 1,
                     "admission": comprehensive.admission_id,
                 },
             )
+            assert owner_mutation.rowcount == 0
+            persisted_admission = (
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT document_sha256, document_octets "
+                            "FROM operations."
+                            "reviewed_identity_finalizer_admissions "
+                            "WHERE admission_id=:admission"
+                        ),
+                        {"admission": comprehensive.admission_id},
+                    )
+                )
+                .mappings()
+                .one()
+            )
+        assert dict(persisted_admission) == original_admission
+
+        def null_finalization_commitment(document: dict[str, Any]) -> None:
+            document["finalization_commitment"] = None
+
+        def null_projection_field(
+            kind: str,
+            field: str,
+        ) -> Callable[[dict[str, Any]], None]:
+            def mutate(document: dict[str, Any]) -> None:
+                target = next(
+                    projection
+                    for projection in document["projections"]
+                    if projection["decision_kind"] == kind
+                )
+                target["record"][field] = None
+
+            return mutate
+
+        hostile_null_mutators: list[
+            tuple[str, Callable[[dict[str, Any]], None]]
+        ] = [
+            ("top_finalization_commitment", null_finalization_commitment),
+        ]
+        for kind, field in (
+            ("person", "legacy_source_ref"),
+            ("person_status", "source_snapshot_sha256"),
+            ("alias", "source_ref"),
+            ("privacy_directive", "source_snapshot_sha256"),
+        ):
+            hostile_null_mutators.append(
+                (f"{kind}.{field}", null_projection_field(kind, field))
+            )
+
+        hostile_null_fixtures: list[tuple[str, FinalizerFixture]] = []
+        async with owner.begin() as connection:
+            for label, mutator in hostile_null_mutators:
+                hostile_null_fixtures.append(
+                    (
+                        label,
+                        await _seed_fixture(
+                            connection,
+                            label=f"hostile-null-{label}-{uuid.uuid4().hex}",
+                            comprehensive=True,
+                            document_mutator=mutator,
+                        ),
+                    )
+                )
+
+        for label, hostile_fixture in hostile_null_fixtures:
+            _value, hostile_error = await _probe_finalize(
+                finalizer,
+                hostile_fixture,
+            )
+            assert hostile_error is not None, f"{label} JSON null was accepted"
+            assert _sqlstate(hostile_error) == "22023", label
+
+        private_canary = f"PRIVATE_FINALIZER_CANARY_{uuid.uuid4().hex}"
+
+        def replace_review_expiry(document: dict[str, Any]) -> None:
+            document["review_expires_at"] = private_canary
+
+        async with owner.begin() as connection:
+            private_fixture = await _seed_fixture(
+                connection,
+                label=f"private-canary-{uuid.uuid4().hex}",
+                document_mutator=replace_review_expiry,
+            )
         _value, private_error = await _probe_finalize(
             finalizer,
-            comprehensive,
-            private_document_bytes,
+            private_fixture,
         )
         assert private_error is not None
         assert _sqlstate(private_error) == "22023"
@@ -1163,57 +1189,36 @@ async def test_postgresql_e3_lifecycle_boundary_and_atomic_finalizer() -> None:
         )
         assert private_canary not in str(private_error)
 
-        infinite_document = json.loads(comprehensive.document)
-        for projection in infinite_document["projections"]:
-            if (
-                projection["decision_kind"] == "privacy_directive"
-                and projection["record"]["directive"] == "auto_expire"
-            ):
-                projection["record"]["expires_at"] = "infinity"
-        for closure in infinite_document["privacy_closures"]:
-            for directive in closure["directives"]:
-                if directive["directive"] == "auto_expire":
-                    directive["expires_at"] = "infinity"
-        for effect in infinite_document["auto_expiry_effects"]:
-            effect["due_at"] = "infinity"
-        infinite_document_bytes = _canonical_bytes(infinite_document)
-        async with admin_target.begin() as connection:
-            await connection.execute(
-                text(
-                    "UPDATE operations.reviewed_identity_finalizer_admissions "
-                    "SET document_sha256=:digest, document_octets=:octets "
-                    "WHERE admission_id=:admission"
-                ),
-                {
-                    "digest": hashlib.sha256(infinite_document_bytes).hexdigest(),
-                    "octets": len(infinite_document_bytes),
-                    "admission": comprehensive.admission_id,
-                },
+        def replace_auto_expiry_with_infinity(document: dict[str, Any]) -> None:
+            for projection in document["projections"]:
+                if (
+                    projection["decision_kind"] == "privacy_directive"
+                    and projection["record"]["directive"] == "auto_expire"
+                ):
+                    projection["record"]["expires_at"] = "infinity"
+            for closure in document["privacy_closures"]:
+                for directive in closure["directives"]:
+                    if directive["directive"] == "auto_expire":
+                        directive["expires_at"] = "infinity"
+            for effect in document["auto_expiry_effects"]:
+                effect["due_at"] = "infinity"
+
+        async with owner.begin() as connection:
+            infinite_fixture = await _seed_fixture(
+                connection,
+                label=f"infinite-expiry-{uuid.uuid4().hex}",
+                comprehensive=True,
+                document_mutator=replace_auto_expiry_with_infinity,
             )
         _value, infinite_error = await _probe_finalize(
             finalizer,
-            comprehensive,
-            infinite_document_bytes,
+            infinite_fixture,
         )
         assert infinite_error is not None
         assert _sqlstate(infinite_error) == "22023"
         assert "identity_finalizer_privacy_record_invalid" in str(
             infinite_error.orig
         )
-
-        async with admin_target.begin() as connection:
-            await connection.execute(
-                text(
-                    "UPDATE operations.reviewed_identity_finalizer_admissions "
-                    "SET document_sha256=:digest, document_octets=:octets "
-                    "WHERE admission_id=:admission"
-                ),
-                {
-                    "digest": hashlib.sha256(comprehensive.document).hexdigest(),
-                    "octets": len(comprehensive.document),
-                    "admission": comprehensive.admission_id,
-                },
-            )
 
         _value, tampered = await _probe_finalize(
             finalizer,
@@ -1224,39 +1229,18 @@ async def test_postgresql_e3_lifecycle_boundary_and_atomic_finalizer() -> None:
         assert _sqlstate(tampered) == "42501"
 
         malformed_bytes = b"\xff\xfe"
-        async with admin_target.begin() as connection:
-            await connection.execute(
-                text(
-                    "UPDATE operations.reviewed_identity_finalizer_admissions "
-                    "SET document_sha256=:digest, document_octets=:octets "
-                    "WHERE admission_id=:admission"
-                ),
-                {
-                    "digest": hashlib.sha256(malformed_bytes).hexdigest(),
-                    "octets": len(malformed_bytes),
-                    "admission": comprehensive.admission_id,
-                },
+        async with owner.begin() as connection:
+            malformed_fixture = await _seed_fixture(
+                connection,
+                label=f"malformed-{uuid.uuid4().hex}",
+                raw_document_override=malformed_bytes,
             )
         _value, malformed_error = await _probe_finalize(
             finalizer,
-            comprehensive,
-            malformed_bytes,
+            malformed_fixture,
         )
         assert malformed_error is not None
         assert _sqlstate(malformed_error) == "22023"
-        async with admin_target.begin() as connection:
-            await connection.execute(
-                text(
-                    "UPDATE operations.reviewed_identity_finalizer_admissions "
-                    "SET document_sha256=:digest, document_octets=:octets "
-                    "WHERE admission_id=:admission"
-                ),
-                {
-                    "digest": hashlib.sha256(comprehensive.document).hexdigest(),
-                    "octets": len(comprehensive.document),
-                    "admission": comprehensive.admission_id,
-                },
-            )
 
         signed_document = json.loads(comprehensive.document)
         live_review_signature = signed_document["review_attestation"][

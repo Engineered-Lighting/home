@@ -66,6 +66,35 @@ function request(port, pathname, { method = "GET", headers = {}, body } = {}) {
   });
 }
 
+function websocketUpgrade(port, pathname, { headers = {} } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      host: "127.0.0.1",
+      port,
+      path: pathname,
+      method: "GET",
+      headers: {
+        Connection: "Upgrade",
+        Upgrade: "websocket",
+        "Sec-WebSocket-Key": Buffer.alloc(16).toString("base64"),
+        "Sec-WebSocket-Version": "13",
+        ...headers,
+      },
+    });
+    req.once("upgrade", (res, socket) => {
+      socket.destroy();
+      resolve({ status: res.statusCode, headers: res.headers });
+    });
+    req.once("response", (res) => {
+      res.resume();
+      res.once("end", () => resolve({ status: res.statusCode, headers: res.headers }));
+    });
+    req.once("error", reject);
+    req.setTimeout(2_000, () => req.destroy(new Error("websocket upgrade probe timed out")));
+    req.end();
+  });
+}
+
 async function waitForGateway(port, child) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     if (child.exitCode != null) throw new Error(`gateway exited ${child.exitCode}`);
@@ -93,6 +122,7 @@ async function waitForGateway(port, child) {
     ].every((token) => gatewaySource.includes(token)),
   );
   const upstreamRequests = [];
+  const upstreamUpgrades = [];
   const upstream = http.createServer((req, res) => {
     upstreamRequests.push({
       method: req.method,
@@ -123,6 +153,14 @@ async function waitForGateway(port, child) {
     });
     res.end(JSON.stringify({ ok: !native || authorized }));
   });
+  upstream.on("upgrade", (req, socket) => {
+    upstreamUpgrades.push({
+      url: req.url,
+      authorization: req.headers.authorization || "",
+    });
+    socket.write("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n");
+    socket.destroy();
+  });
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "home-native-gateway-"));
   let child;
   try {
@@ -143,6 +181,8 @@ async function waitForGateway(port, child) {
         // A stale target must not reactivate the quarantined broad HA proxy.
         HOME_WEB_HA_TARGET: `http://127.0.0.1:${upstreamPort}`,
         HOME_WEB_ENABLE_LEGACY_HA_PROXY: "0",
+        HOME_WEB_TRACKER_TARGET: `http://127.0.0.1:${upstreamPort}`,
+        HOME_WEB_ENABLE_LEGACY_TRACKER_PROXY: "1",
       },
       stdio: ["ignore", "ignore", "pipe"],
     });
@@ -224,6 +264,18 @@ async function waitForGateway(port, child) {
       upstreamRequests.length = 0;
       const response = await request(gatewayPort, denied, { headers: { Host: NATIVE_HOST } });
       assert(`native origin denies browser/legacy surface: ${denied}`, response.status === 404 && upstreamRequests.length === 0, { status: response.status, upstreamRequests });
+    }
+
+    for (const [name, host] of [["browser", AGENT_HOST], ["native", NATIVE_HOST]]) {
+      upstreamUpgrades.length = 0;
+      const response = await websocketUpgrade(gatewayPort, "/proxy/tracker/ws/tracks", {
+        headers: { Host: host, Authorization: BASIC },
+      });
+      assert(
+        `${name} Agent origin rejects websocket upgrades before legacy proxying`,
+        response.status === 403 && upstreamUpgrades.length === 0,
+        { status: response.status, upstreamUpgrades },
+      );
     }
 
     for (const denied of ["/home-agent/index.html", "/api/agent/auth/session", "/api/agent/v1/snapshot"]) {

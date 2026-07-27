@@ -1,21 +1,28 @@
 import copy
-import unittest
+import io
 import ipaddress
+import tempfile
+import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 
 from network_contract import (
     ContractError,
+    main,
     read_env,
     validate_bff_inspect,
     validate_candidate_collisions,
     validate_address_contract,
     validate_network_inspect,
+    validate_image_id,
     validate_oauth_contract,
     validate_origin_inspect,
 )
 
 STACK = Path(__file__).resolve().parents[2]
 PUBLIC_ORIGIN = "https://home-app.example.ts.net:8443"
+ORIGIN_IMAGE_ID = "sha256:" + ("ab" * 32)
+BFF_IMAGE_ID = "sha256:" + ("cd" * 32)
 
 
 def live_shape(*, internal=True, ip_range="172.23.128.0/17", containers=None):
@@ -40,7 +47,9 @@ def live_shape(*, internal=True, ip_range="172.23.128.0/17", containers=None):
 def bff_shape():
     return {
         "Name": "/home-agent-bff-1",
+        "Image": BFF_IMAGE_ID,
         "Config": {
+            "Image": "engineered-lighting/home-agent-bff:local",
             "Labels": {
                 "com.docker.compose.project": "home-agent",
                 "com.docker.compose.service": "bff",
@@ -57,6 +66,7 @@ def bff_shape():
 def origin_shape():
     return {
         "Name": "/home-agent-origin-origin-1",
+        "Image": ORIGIN_IMAGE_ID,
         "Config": {
             "Image": "engineered-lighting/home-agent-origin:local",
             "User": "1000:1000",
@@ -115,7 +125,7 @@ class NetworkContractTests(unittest.TestCase):
         }
         origin = {"HOME_AGENT_WEB_PUBLIC_ORIGIN": PUBLIC_ORIGIN}
         self.assertEqual(validate_oauth_contract(base, origin), PUBLIC_ORIGIN)
-        validate_bff_inspect(bff_shape(), PUBLIC_ORIGIN)
+        validate_bff_inspect(bff_shape(), PUBLIC_ORIGIN, BFF_IMAGE_ID)
         for key in tuple(base):
             invalid = dict(base)
             invalid[key] = "https://legacy.example.invalid"
@@ -131,7 +141,7 @@ class NetworkContractTests(unittest.TestCase):
         stale_bff = bff_shape()
         stale_bff["Config"]["Env"][0] = "HOME_AGENT_ALLOWED_ORIGINS=https://legacy.invalid"
         with self.assertRaises(ContractError):
-            validate_bff_inspect(stale_bff, PUBLIC_ORIGIN)
+            validate_bff_inspect(stale_bff, PUBLIC_ORIGIN, BFF_IMAGE_ID)
 
     def test_origin_cannot_be_dynamic_gateway_or_mismatched_serve_target(self):
         invalid = (
@@ -259,6 +269,7 @@ class NetworkContractTests(unittest.TestCase):
             network_name="home-agent_api-net",
             origin=origin_ip,
             public_origin=PUBLIC_ORIGIN,
+            image_id=ORIGIN_IMAGE_ID,
         )
         mutations = []
         extra_network = origin_shape()
@@ -283,12 +294,14 @@ class NetworkContractTests(unittest.TestCase):
                     network_name="home-agent_api-net",
                     origin=origin_ip,
                     public_origin=PUBLIC_ORIGIN,
+                    image_id=ORIGIN_IMAGE_ID,
                 )
 
     def test_running_origin_identity_and_hardening_cannot_drift(self):
         origin_ip = ipaddress.ip_address("172.23.0.10")
         mutations = []
         for path, value in (
+            (("", "Image"), "sha256:" + ("cd" * 32)),
             (("Config", "Image"), "unreviewed:latest"),
             (("Config", "User"), "0:0"),
             (("HostConfig", "ReadonlyRootfs"), False),
@@ -298,7 +311,10 @@ class NetworkContractTests(unittest.TestCase):
             (("State", "Running"), False),
         ):
             inspect = copy.deepcopy(origin_shape())
-            inspect[path[0]][path[1]] = value
+            if path[0]:
+                inspect[path[0]][path[1]] = value
+            else:
+                inspect[path[1]] = value
             mutations.append((path, inspect))
         wrong_label = origin_shape()
         wrong_label["Config"]["Labels"]["com.docker.compose.service"] = "legacy"
@@ -310,11 +326,144 @@ class NetworkContractTests(unittest.TestCase):
                     network_name="home-agent_api-net",
                     origin=origin_ip,
                     public_origin=PUBLIC_ORIGIN,
+                    image_id=ORIGIN_IMAGE_ID,
+                )
+
+    def test_running_bff_image_identity_cannot_drift(self):
+        for path, value in (
+            (("Image",), "sha256:" + ("ef" * 32)),
+            (("Config", "Image"), "unreviewed:latest"),
+        ):
+            inspect = copy.deepcopy(bff_shape())
+            if len(path) == 1:
+                inspect[path[0]] = value
+            else:
+                inspect[path[0]][path[1]] = value
+            with self.subTest(path=path), self.assertRaises(ContractError):
+                validate_bff_inspect(inspect, PUBLIC_ORIGIN, BFF_IMAGE_ID)
+
+        with self.assertRaises(ContractError):
+            validate_bff_inspect(
+                bff_shape(),
+                PUBLIC_ORIGIN,
+                "sha256:" + ("ef" * 32),
+            )
+
+    def test_candidate_bff_check_allows_previous_content_but_not_tag_drift(self):
+        previous = bff_shape()
+        previous["Image"] = "sha256:" + ("ef" * 32)
+        validate_bff_inspect(
+            previous,
+            PUBLIC_ORIGIN,
+            BFF_IMAGE_ID,
+            require_image_match=False,
+        )
+
+        previous["Config"]["Image"] = "unreviewed:latest"
+        with self.assertRaises(ContractError):
+            validate_bff_inspect(
+                previous,
+                PUBLIC_ORIGIN,
+                BFF_IMAGE_ID,
+                require_image_match=False,
+            )
+
+    def test_image_id_must_be_one_exact_lowercase_sha256_digest(self):
+        self.assertEqual(validate_image_id(ORIGIN_IMAGE_ID), ORIGIN_IMAGE_ID)
+        self.assertEqual(
+            validate_image_id(BFF_IMAGE_ID, component="BFF"),
+            BFF_IMAGE_ID,
+        )
+        for value in (
+            "",
+            "sha256:" + ("a" * 63),
+            "sha256:" + ("a" * 65),
+            "sha256:" + ("AB" * 32),
+            "sha256: " + ("ab" * 32),
+            "sha512:" + ("ab" * 32),
+            f"{ORIGIN_IMAGE_ID}\n",
+        ):
+            with self.subTest(value=value), self.assertRaises(ContractError):
+                validate_image_id(value)
+            with (
+                self.subTest(component="BFF", value=value),
+                self.assertRaisesRegex(ContractError, "^BFF image ID must"),
+            ):
+                validate_image_id(value, component="BFF")
+
+    def test_candidate_preflight_rejects_missing_or_malformed_image_ids(self):
+        base_lines = (
+            f"HOME_AGENT_ALLOWED_ORIGINS={PUBLIC_ORIGIN}",
+            f"HOME_AGENT_OAUTH_CLIENT_ID={PUBLIC_ORIGIN}",
+            f"HOME_AGENT_OAUTH_REDIRECT_URI={PUBLIC_ORIGIN}/api/agent/auth/callback",
+        )
+        origin_lines = (
+            f"HOME_AGENT_WEB_PUBLIC_ORIGIN={PUBLIC_ORIGIN}",
+            "HOME_AGENT_WEB_INTERNAL_IP=172.23.0.10",
+            "HOME_AGENT_WEB_SERVE_TARGET=http://172.23.0.10:8096",
+        )
+
+        def run_candidate(
+            bff_image_line: str,
+            origin_image_line: str,
+        ) -> tuple[int, str]:
+            base_text = "\n".join((*base_lines, bff_image_line))
+            origin_text = "\n".join((*origin_lines, origin_image_line))
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                base_path = root / "base.env"
+                origin_path = root / "origin.env"
+                base_path.write_text(f"{base_text}\n", encoding="utf-8")
+                origin_path.write_text(f"{origin_text}\n", encoding="utf-8")
+                error = io.StringIO()
+                with redirect_stderr(error):
+                    result = main(
+                        [
+                            "--base-env",
+                            str(base_path),
+                            "--origin-env",
+                            str(origin_path),
+                            "--candidate-only",
+                        ]
+                    )
+                return result, error.getvalue()
+
+        for bff_image_line in (
+            "",
+            f"HOME_AGENT_BFF_IMAGE_ID=sha256:{'AB' * 32}",
+            f"HOME_AGENT_BFF_IMAGE_ID=sha256:{'a' * 63}",
+        ):
+            with self.subTest(bff_image_line=bff_image_line):
+                result, error = run_candidate(
+                    bff_image_line,
+                    f"HOME_AGENT_WEB_IMAGE_ID={ORIGIN_IMAGE_ID}",
+                )
+                self.assertEqual(result, 1)
+                self.assertIn(
+                    "BFF image ID must be one exact lowercase sha256 digest",
+                    error,
+                )
+
+        for origin_image_line in (
+            "",
+            f"HOME_AGENT_WEB_IMAGE_ID=sha256:{'AB' * 32}",
+            f"HOME_AGENT_WEB_IMAGE_ID=sha256:{'a' * 63}",
+        ):
+            with self.subTest(origin_image_line=origin_image_line):
+                result, error = run_candidate(
+                    f"HOME_AGENT_BFF_IMAGE_ID={BFF_IMAGE_ID}",
+                    origin_image_line,
+                )
+                self.assertEqual(result, 1)
+                self.assertIn(
+                    "Agent origin image ID must be one exact lowercase sha256 digest",
+                    error,
                 )
 
     def test_compose_has_no_host_port_or_noninternal_origin_network(self):
         origin_compose = (STACK / "home-agent-deploy/agent-origin/compose.yml").read_text()
         base_compose = (STACK / "home-agent-compose.yml").read_text()
+        base_env = (STACK / "home-agent.env.example").read_text()
         origin_env = (STACK / "home-agent-deploy/agent-origin/home-agent-origin.env.example").read_text()
         self.assertNotIn("ports:", origin_compose)
         self.assertNotIn("origin-public", origin_compose)
@@ -324,8 +473,30 @@ class NetworkContractTests(unittest.TestCase):
             base_compose,
         )
         self.assertIn("HOME_AGENT_API_DYNAMIC_RANGE:-172.23.128.0/17", base_compose)
+        self.assertIn(
+            "HOME_AGENT_BFF_IMAGE_ID=sha256:REPLACE_WITH_LOCAL_IMAGE_ID",
+            base_env,
+        )
         self.assertIn("HOME_AGENT_WEB_INTERNAL_IP=172.23.0.10", origin_env)
         self.assertIn("HOME_AGENT_WEB_SERVE_TARGET=http://172.23.0.10:8096", origin_env)
+        self.assertIn(
+            "HOME_AGENT_WEB_IMAGE_ID=sha256:REPLACE_WITH_LOCAL_IMAGE_ID",
+            origin_env,
+        )
+        with self.assertRaises(ContractError):
+            validate_image_id(
+                read_env(
+                    STACK
+                    / "home-agent-deploy/agent-origin/home-agent-origin.env.example"
+                )["HOME_AGENT_WEB_IMAGE_ID"]
+            )
+        with self.assertRaisesRegex(ContractError, "^BFF image ID must"):
+            validate_image_id(
+                read_env(STACK / "home-agent.env.example")[
+                    "HOME_AGENT_BFF_IMAGE_ID"
+                ],
+                component="BFF",
+            )
         validate_oauth_contract(
             read_env(STACK / "home-agent.env.example"),
             read_env(STACK / "home-agent-deploy/agent-origin/home-agent-origin.env.example"),

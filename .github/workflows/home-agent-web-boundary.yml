@@ -1,0 +1,715 @@
+name: home agent web boundary gate
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/home-agent-web-boundary.yml"
+      - "app/src/home-agent/**"
+      - "app/src/vendor/babel-7.29.0/**"
+      - "app/src/vendor/react-18.3.1/**"
+      - "package.json"
+      - "stack/home-agent.env.example"
+      - "stack/home-agent-compose.yml"
+      - "stack/home-agent-deploy/agent-origin/**"
+      - "stack/services/home-agent-bff/**"
+      - "stack/services/home-agent-origin/**"
+      - "tests/home_agent/test_home_agent_web_boundary_gate_contract.py"
+      - "tests/home_agent/test_panel_build_contract.py"
+      - "tools/build-home-agent-panel.js"
+      - "tools/run-agent-origin-boundary-tests.mjs"
+      - "tools/run-home-security-tests.js"
+      - "tools/run-native-agent-gateway-tests.js"
+      - "tools/run-native-agent-security-tests.js"
+      - "tools/run-web-gateway-path-security-tests.mjs"
+      - "tools/run-web-gateway-stack-token-tests.js"
+      - "web-gateway/**"
+  push:
+    branches: [main, codex/home-agent-integration]
+    paths:
+      - ".github/workflows/home-agent-web-boundary.yml"
+      - "app/src/home-agent/**"
+      - "app/src/vendor/babel-7.29.0/**"
+      - "app/src/vendor/react-18.3.1/**"
+      - "package.json"
+      - "stack/home-agent.env.example"
+      - "stack/home-agent-compose.yml"
+      - "stack/home-agent-deploy/agent-origin/**"
+      - "stack/services/home-agent-bff/**"
+      - "stack/services/home-agent-origin/**"
+      - "tests/home_agent/test_home_agent_web_boundary_gate_contract.py"
+      - "tests/home_agent/test_panel_build_contract.py"
+      - "tools/build-home-agent-panel.js"
+      - "tools/run-agent-origin-boundary-tests.mjs"
+      - "tools/run-home-security-tests.js"
+      - "tools/run-native-agent-gateway-tests.js"
+      - "tools/run-native-agent-security-tests.js"
+      - "tools/run-web-gateway-path-security-tests.mjs"
+      - "tools/run-web-gateway-stack-token-tests.js"
+      - "web-gateway/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: home-agent-web-boundary-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_IMAGE: node:24-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd
+  NODE_LINUX_AMD64_DIGEST: sha256:4ba75f835bb8802193e4c114572113d4b26f95f6f094f4b5229d2a77773e0afc
+  BFF_IMAGE: engineered-lighting/home-agent-bff:ci-${{ github.sha }}
+  ORIGIN_IMAGE: engineered-lighting/home-agent-origin:ci-${{ github.sha }}
+  BFF_DEPLOYMENT_IMAGE: engineered-lighting/home-agent-bff:local
+  ORIGIN_DEPLOYMENT_IMAGE: engineered-lighting/home-agent-origin:local
+
+jobs:
+  web-boundary-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+
+    steps:
+      # actions/checkout v4.3.1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Verify the pinned Node Linux AMD64 manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          index_json="$(mktemp "${RUNNER_TEMP}/home-agent-node-index.XXXXXX.json")"
+          trap 'rm -f -- "${index_json}"' EXIT
+          docker buildx imagetools inspect "${NODE_IMAGE}" --raw >"${index_json}"
+          NODE_INDEX_JSON="${index_json}" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          index = json.loads(Path(os.environ["NODE_INDEX_JSON"]).read_text(encoding="utf-8"))
+          digests = [
+              item.get("digest")
+              for item in index.get("manifests", [])
+              if item.get("platform", {}).get("os") == "linux"
+              and item.get("platform", {}).get("architecture") == "amd64"
+              and not item.get("platform", {}).get("variant")
+          ]
+          expected = os.environ["NODE_LINUX_AMD64_DIGEST"]
+          if digests != [expected]:
+              raise SystemExit("pinned Node Linux AMD64 manifest mismatch")
+          PY
+
+      - name: Run deterministic source boundary tests in the pinned Node image
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_run() {
+            docker run --rm \
+              --network none \
+              --read-only \
+              --tmpfs /tmp:size=64m,mode=1777 \
+              --cap-drop ALL \
+              --security-opt no-new-privileges \
+              --memory 256m \
+              --memory-swap 256m \
+              --cpus 1 \
+              --pids-limit 64 \
+              --user "$(id -u):$(id -g)" \
+              -e HOME=/tmp \
+              -e npm_config_cache=/tmp/npm-cache \
+              -v "${GITHUB_WORKSPACE}:/work:ro" \
+              -w /work \
+              "${NODE_IMAGE}" "$@"
+          }
+          node_run node tools/build-home-agent-panel.js --check
+          node_run node tools/run-home-security-tests.js
+          node_run node tools/run-native-agent-security-tests.js
+          node_run node tools/run-agent-origin-boundary-tests.mjs
+          node_run node tools/run-native-agent-gateway-tests.js
+          node_run node tools/run-web-gateway-path-security-tests.mjs
+          node_run node tools/run-web-gateway-stack-token-tests.js
+          node_run npm --prefix stack/services/home-agent-bff run check
+          node_run npm --prefix stack/services/home-agent-bff test
+          node_run npm --prefix stack/services/home-agent-origin run check
+          node_run npm --prefix stack/services/home-agent-origin test
+
+      - name: Run deployment and workflow contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover \
+            -s stack/home-agent-deploy/agent-origin \
+            -p 'test_network_contract.py' \
+            -v
+          python3 -m unittest -v \
+            tests/home_agent/test_home_agent_web_boundary_gate_contract.py \
+            tests/home_agent/test_panel_build_contract.py
+          git diff --exit-code -- app/src/home-agent/panel.js
+
+      - name: Build the reviewed Linux AMD64 images
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --platform linux/amd64 \
+            --pull \
+            --provenance=false \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --load \
+            -t "${BFF_IMAGE}" \
+            stack/services/home-agent-bff
+          docker buildx build \
+            --platform linux/amd64 \
+            --pull \
+            --provenance=false \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --build-context agent_assets=app/src/home-agent \
+            --load \
+            -t "${ORIGIN_IMAGE}" \
+            stack/services/home-agent-origin
+
+      - name: Smoke the images on an internal-only network
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof="home-agent-web-gate=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          network="home-agent-web-gate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          bff="home-agent-web-gate-bff-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          origin="home-agent-web-gate-origin-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          secret_dir=""
+          cleanup() {
+            docker rm -f "${origin}" "${bff}" >/dev/null 2>&1 || true
+            docker network rm "${network}" >/dev/null 2>&1 || true
+            if [[ -n "${secret_dir}" ]]; then
+              rm -rf -- "${secret_dir}"
+            fi
+          }
+          trap cleanup EXIT
+          secret_dir="$(mktemp -d "${RUNNER_TEMP}/home-agent-web-gate-secrets.XXXXXX")"
+          chmod 0755 "${secret_dir}"
+          printf '%s\n' AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA \
+            >"${secret_dir}/session_encryption_key"
+          printf '%s\n' hosted-gate-core-token >"${secret_dir}/service_token"
+          chmod 0444 \
+            "${secret_dir}/session_encryption_key" \
+            "${secret_dir}/service_token"
+          docker network create --internal --label "${proof}" "${network}"
+          docker run -d \
+            --name "${bff}" \
+            --label "${proof}" \
+            --network "${network}" \
+            --network-alias bff \
+            --user 1000:1000 \
+            --read-only \
+            --tmpfs /tmp:size=16m,mode=1777 \
+            --tmpfs /sessions:rw,nosuid,nodev,noexec,size=16m,mode=0700,uid=1000,gid=1000 \
+            --mount "type=bind,src=${secret_dir}/session_encryption_key,dst=/run/secrets/session_encryption_key,readonly" \
+            --mount "type=bind,src=${secret_dir}/service_token,dst=/run/secrets/service_token,readonly" \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --memory 256m \
+            --memory-swap 256m \
+            --cpus 1 \
+            --pids-limit 64 \
+            -e NODE_ENV=production \
+            -e HOME_AGENT_BFF_HOST=0.0.0.0 \
+            -e HOME_AGENT_BFF_PORT=8097 \
+            -e HOME_AGENT_SESSION_DB_PATH=/sessions/sessions.sqlite \
+            -e HOME_AGENT_SESSION_ENCRYPTION_KEY_FILE=/run/secrets/session_encryption_key \
+            -e HOME_AGENT_ALLOWED_ORIGINS=https://agent.gate.invalid \
+            -e HOME_AGENT_HA_URL=https://ha.gate.invalid \
+            -e HOME_AGENT_OAUTH_CLIENT_ID=https://agent.gate.invalid \
+            -e HOME_AGENT_OAUTH_REDIRECT_URI=https://agent.gate.invalid/api/agent/auth/callback \
+            -e HOME_AGENT_CORE_URL=http://core:8104 \
+            -e HOME_AGENT_CORE_TOKEN_FILE=/run/secrets/service_token \
+            "${BFF_IMAGE}"
+          docker run -d \
+            --name "${origin}" \
+            --label "${proof}" \
+            --network "${network}" \
+            --network-alias origin \
+            --read-only \
+            --tmpfs /tmp:size=8m,mode=1777 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --memory 128m \
+            --memory-swap 128m \
+            --cpus 1 \
+            --pids-limit 64 \
+            -e HOME_AGENT_WEB_HOST=0.0.0.0 \
+            -e HOME_AGENT_WEB_PORT=8096 \
+            -e HOME_AGENT_WEB_PUBLIC_ORIGIN=https://agent.gate.invalid \
+            -e HOME_AGENT_WEB_BFF_URL=http://bff:8097 \
+            -e HOME_AGENT_WEB_ASSET_ROOT=/srv/home-agent \
+            "${ORIGIN_IMAGE}"
+          docker run --rm -i \
+            --network "${network}" \
+            --read-only \
+            --tmpfs /tmp:size=8m,mode=1777 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --memory 64m \
+            --memory-swap 64m \
+            --cpus 1 \
+            --pids-limit 32 \
+            "${NODE_IMAGE}" node --input-type=module - <<'NODE'
+          import http from "node:http";
+          const request = (host, port, path, headers = {}) => new Promise((resolve, reject) => {
+            const req = http.request({ host, port, path, headers }, (res) => {
+              let body = "";
+              res.setEncoding("utf8");
+              res.on("data", (chunk) => { body += chunk; });
+              res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body }));
+            });
+            req.once("error", reject);
+            req.setTimeout(2_000, () => req.destroy(new Error("probe timeout")));
+            req.end();
+          });
+          const waitFor = async (host, port, path, headers, status) => {
+            let last;
+            for (let attempt = 0; attempt < 60; attempt += 1) {
+              try {
+                last = await request(host, port, path, headers);
+                if (last.status === status) return last;
+              } catch (error) {
+                last = error;
+              }
+              await new Promise((resolve) => setTimeout(resolve, 100));
+            }
+            throw new Error(`service did not become ready: ${String(last?.status || last)}`);
+          };
+          await waitFor("bff", 8097, "/healthz", {}, 200);
+          const positive = await waitFor(
+            "origin", 8096, "/home-agent/index.html",
+            { Host: "agent.gate.invalid" }, 200,
+          );
+          const csp = String(positive.headers["content-security-policy"] || "");
+          if (!csp.includes("default-src 'none'") || !csp.includes("frame-ancestors 'none'")) {
+            throw new Error("origin CSP incomplete");
+          }
+          const expectedHeaders = {
+            "cross-origin-opener-policy": "same-origin",
+            "cross-origin-resource-policy": "same-origin",
+            "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+            "referrer-policy": "no-referrer",
+            "strict-transport-security": "max-age=31536000",
+            "x-content-type-options": "nosniff",
+            "x-frame-options": "DENY",
+          };
+          for (const [name, expected] of Object.entries(expectedHeaders)) {
+            if (positive.headers[name] !== expected) {
+              throw new Error(`origin security header mismatch: ${name}`);
+            }
+          }
+          for (const path of ["/", "/healthz", "/native-oauth-client", "/api/agent/native/v1/snapshot"]) {
+            const response = await request("origin", 8096, path, { Host: "agent.gate.invalid" });
+            if (response.status !== 404) throw new Error(`unexpected ${path} status ${response.status}`);
+          }
+          const session = await request(
+            "origin", 8096, "/api/agent/auth/session",
+            { Host: "agent.gate.invalid", Origin: "https://agent.gate.invalid" },
+          );
+          if (session.status !== 401) throw new Error(`unexpected session status ${session.status}`);
+          NODE
+          docker exec "${bff}" node --input-type=module -e '
+            import fs from "node:fs";
+            const directory = fs.statSync("/sessions");
+            const database = fs.statSync("/sessions/sessions.sqlite");
+            if (
+              directory.uid !== 1000 || (directory.mode & 0o777) !== 0o700 ||
+              database.uid !== 1000 || (database.mode & 0o777) !== 0o600
+            ) process.exit(1);
+          '
+          docker run --rm \
+            --network "${network}" \
+            --read-only \
+            --tmpfs /tmp:size=8m,mode=1777 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --memory 64m \
+            --memory-swap 64m \
+            --cpus 1 \
+            --pids-limit 32 \
+            "${ORIGIN_IMAGE}" npm run verify-network
+          cleanup
+          trap - EXIT
+          if docker ps -aq --filter "label=${proof}" | grep -q .; then
+            echo "hosted web boundary gate left a labeled container behind" >&2
+            exit 1
+          fi
+          if docker network ls -q --filter "label=${proof}" | grep -q .; then
+            echo "hosted web boundary gate left a labeled network behind" >&2
+            exit 1
+          fi
+          if [[ -e "${secret_dir}" ]]; then
+            echo "hosted web boundary gate left its temporary secret directory behind" >&2
+            exit 1
+          fi
+
+  deployable-images:
+    needs: web-boundary-gate
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+
+    steps:
+      # actions/checkout v4.3.1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Verify the pinned Node Linux AMD64 manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          index_json="$(mktemp "${RUNNER_TEMP}/home-agent-node-index.XXXXXX.json")"
+          trap 'rm -f -- "${index_json}"' EXIT
+          docker buildx imagetools inspect "${NODE_IMAGE}" --raw >"${index_json}"
+          NODE_INDEX_JSON="${index_json}" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          index = json.loads(Path(os.environ["NODE_INDEX_JSON"]).read_text(encoding="utf-8"))
+          digests = [
+              item.get("digest")
+              for item in index.get("manifests", [])
+              if item.get("platform", {}).get("os") == "linux"
+              and item.get("platform", {}).get("architecture") == "amd64"
+              and not item.get("platform", {}).get("variant")
+          ]
+          expected = os.environ["NODE_LINUX_AMD64_DIGEST"]
+          if digests != [expected]:
+              raise SystemExit("pinned Node Linux AMD64 manifest mismatch")
+          PY
+
+      - name: Rebuild the exact deployable Linux AMD64 images
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --platform linux/amd64 \
+            --pull \
+            --provenance=false \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --load \
+            -t "${BFF_IMAGE}" \
+            stack/services/home-agent-bff
+          docker buildx build \
+            --platform linux/amd64 \
+            --pull \
+            --provenance=false \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --build-context agent_assets=app/src/home-agent \
+            --load \
+            -t "${ORIGIN_IMAGE}" \
+            stack/services/home-agent-origin
+
+      - name: Smoke the exact deployable images
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof="home-agent-web-package=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          network="home-agent-web-package-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          bff="home-agent-web-package-bff-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          origin="home-agent-web-package-origin-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          secret_dir=""
+          cleanup() {
+            docker rm -f "${origin}" "${bff}" >/dev/null 2>&1 || true
+            docker network rm "${network}" >/dev/null 2>&1 || true
+            if [[ -n "${secret_dir}" ]]; then
+              rm -rf -- "${secret_dir}"
+            fi
+          }
+          trap cleanup EXIT
+          secret_dir="$(mktemp -d "${RUNNER_TEMP}/home-agent-web-package-secrets.XXXXXX")"
+          chmod 0755 "${secret_dir}"
+          printf '%s\n' AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA \
+            >"${secret_dir}/session_encryption_key"
+          printf '%s\n' hosted-package-core-token >"${secret_dir}/service_token"
+          chmod 0444 \
+            "${secret_dir}/session_encryption_key" \
+            "${secret_dir}/service_token"
+          docker network create --internal --label "${proof}" "${network}"
+          docker run -d \
+            --name "${bff}" \
+            --label "${proof}" \
+            --network "${network}" \
+            --network-alias bff \
+            --user 1000:1000 \
+            --read-only \
+            --tmpfs /tmp:size=16m,mode=1777 \
+            --tmpfs /sessions:rw,nosuid,nodev,noexec,size=16m,mode=0700,uid=1000,gid=1000 \
+            --mount "type=bind,src=${secret_dir}/session_encryption_key,dst=/run/secrets/session_encryption_key,readonly" \
+            --mount "type=bind,src=${secret_dir}/service_token,dst=/run/secrets/service_token,readonly" \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --memory 256m \
+            --memory-swap 256m \
+            --cpus 1 \
+            --pids-limit 64 \
+            -e NODE_ENV=production \
+            -e HOME_AGENT_BFF_HOST=0.0.0.0 \
+            -e HOME_AGENT_BFF_PORT=8097 \
+            -e HOME_AGENT_SESSION_DB_PATH=/sessions/sessions.sqlite \
+            -e HOME_AGENT_SESSION_ENCRYPTION_KEY_FILE=/run/secrets/session_encryption_key \
+            -e HOME_AGENT_ALLOWED_ORIGINS=https://agent.gate.invalid \
+            -e HOME_AGENT_HA_URL=https://ha.gate.invalid \
+            -e HOME_AGENT_OAUTH_CLIENT_ID=https://agent.gate.invalid \
+            -e HOME_AGENT_OAUTH_REDIRECT_URI=https://agent.gate.invalid/api/agent/auth/callback \
+            -e HOME_AGENT_CORE_URL=http://core:8104 \
+            -e HOME_AGENT_CORE_TOKEN_FILE=/run/secrets/service_token \
+            "${BFF_IMAGE}"
+          docker run -d \
+            --name "${origin}" \
+            --label "${proof}" \
+            --network "${network}" \
+            --network-alias origin \
+            --read-only \
+            --tmpfs /tmp:size=8m,mode=1777 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --memory 128m \
+            --memory-swap 128m \
+            --cpus 1 \
+            --pids-limit 64 \
+            -e HOME_AGENT_WEB_HOST=0.0.0.0 \
+            -e HOME_AGENT_WEB_PORT=8096 \
+            -e HOME_AGENT_WEB_PUBLIC_ORIGIN=https://agent.gate.invalid \
+            -e HOME_AGENT_WEB_BFF_URL=http://bff:8097 \
+            -e HOME_AGENT_WEB_ASSET_ROOT=/srv/home-agent \
+            "${ORIGIN_IMAGE}"
+          docker run --rm -i \
+            --network "${network}" \
+            --read-only \
+            --tmpfs /tmp:size=8m,mode=1777 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --memory 64m \
+            --memory-swap 64m \
+            --cpus 1 \
+            --pids-limit 32 \
+            "${NODE_IMAGE}" node --input-type=module - <<'NODE'
+          import http from "node:http";
+          const request = (host, port, path, headers = {}) => new Promise((resolve, reject) => {
+            const req = http.request({ host, port, path, headers }, (res) => {
+              let body = "";
+              res.setEncoding("utf8");
+              res.on("data", (chunk) => { body += chunk; });
+              res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body }));
+            });
+            req.once("error", reject);
+            req.setTimeout(2_000, () => req.destroy(new Error("probe timeout")));
+            req.end();
+          });
+          const waitFor = async (host, port, path, headers, status) => {
+            let last;
+            for (let attempt = 0; attempt < 60; attempt += 1) {
+              try {
+                last = await request(host, port, path, headers);
+                if (last.status === status) return last;
+              } catch (error) {
+                last = error;
+              }
+              await new Promise((resolve) => setTimeout(resolve, 100));
+            }
+            throw new Error(`service did not become ready: ${String(last?.status || last)}`);
+          };
+          await waitFor("bff", 8097, "/healthz", {}, 200);
+          const positive = await waitFor(
+            "origin", 8096, "/home-agent/index.html",
+            { Host: "agent.gate.invalid" }, 200,
+          );
+          const csp = String(positive.headers["content-security-policy"] || "");
+          if (!csp.includes("default-src 'none'") || !csp.includes("frame-ancestors 'none'")) {
+            throw new Error("origin CSP incomplete");
+          }
+          const expectedHeaders = {
+            "cross-origin-opener-policy": "same-origin",
+            "cross-origin-resource-policy": "same-origin",
+            "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+            "referrer-policy": "no-referrer",
+            "strict-transport-security": "max-age=31536000",
+            "x-content-type-options": "nosniff",
+            "x-frame-options": "DENY",
+          };
+          for (const [name, expected] of Object.entries(expectedHeaders)) {
+            if (positive.headers[name] !== expected) {
+              throw new Error(`origin security header mismatch: ${name}`);
+            }
+          }
+          for (const path of ["/", "/healthz", "/native-oauth-client", "/api/agent/native/v1/snapshot"]) {
+            const response = await request("origin", 8096, path, { Host: "agent.gate.invalid" });
+            if (response.status !== 404) throw new Error(`unexpected ${path} status ${response.status}`);
+          }
+          const session = await request(
+            "origin", 8096, "/api/agent/auth/session",
+            { Host: "agent.gate.invalid", Origin: "https://agent.gate.invalid" },
+          );
+          if (session.status !== 401) throw new Error(`unexpected session status ${session.status}`);
+          NODE
+          docker exec "${bff}" node --input-type=module -e '
+            import fs from "node:fs";
+            const directory = fs.statSync("/sessions");
+            const database = fs.statSync("/sessions/sessions.sqlite");
+            if (
+              directory.uid !== 1000 || (directory.mode & 0o777) !== 0o700 ||
+              database.uid !== 1000 || (database.mode & 0o777) !== 0o600
+            ) process.exit(1);
+          '
+          docker run --rm \
+            --network "${network}" \
+            --read-only \
+            --tmpfs /tmp:size=8m,mode=1777 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --memory 64m \
+            --memory-swap 64m \
+            --cpus 1 \
+            --pids-limit 32 \
+            "${ORIGIN_IMAGE}" npm run verify-network
+          cleanup
+          trap - EXIT
+          if docker ps -aq --filter "label=${proof}" | grep -q .; then
+            echo "hosted deployable web gate left a labeled container behind" >&2
+            exit 1
+          fi
+          if docker network ls -q --filter "label=${proof}" | grep -q .; then
+            echo "hosted deployable web gate left a labeled network behind" >&2
+            exit 1
+          fi
+          if [[ -e "${secret_dir}" ]]; then
+            echo "hosted deployable web gate left its temporary secret directory behind" >&2
+            exit 1
+          fi
+
+      - name: Export image archives and immutable manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          export BFF_IMAGE_ID
+          export ORIGIN_IMAGE_ID
+          export BFF_ARCHIVE_SHA256
+          export ORIGIN_ARCHIVE_SHA256
+          BFF_IMAGE_ID="$(docker image inspect "${BFF_IMAGE}" --format '{{.Id}}')"
+          ORIGIN_IMAGE_ID="$(docker image inspect "${ORIGIN_IMAGE}" --format '{{.Id}}')"
+          docker save "${BFF_IMAGE}" \
+            | gzip -n -9 > dist/home-agent-bff-linux-amd64.tar.gz
+          docker save "${ORIGIN_IMAGE}" \
+            | gzip -n -9 > dist/home-agent-origin-linux-amd64.tar.gz
+          BFF_ARCHIVE_SHA256="$(sha256sum dist/home-agent-bff-linux-amd64.tar.gz | cut -d' ' -f1)"
+          ORIGIN_ARCHIVE_SHA256="$(sha256sum dist/home-agent-origin-linux-amd64.tar.gz | cut -d' ' -f1)"
+          python3 - <<'PY'
+          import json
+          import os
+          import tarfile
+          from pathlib import Path
+
+          def verify_archive(path, image_id, expected_tags):
+              expected_config = image_id.removeprefix("sha256:")
+              with tarfile.open(path, mode="r:gz") as archive:
+                  member = archive.extractfile("manifest.json")
+                  if member is None:
+                      raise SystemExit(f"{path}: Docker manifest missing")
+                  records = json.load(member)
+              configs = {
+                  Path(str(record.get("Config", ""))).name.removesuffix(".json")
+                  for record in records
+              }
+              tags = {
+                  tag
+                  for record in records
+                  for tag in (record.get("RepoTags") or [])
+              }
+              if configs != {expected_config} or tags != set(expected_tags):
+                  raise SystemExit(f"{path}: image identity or tag contract mismatch")
+
+          verify_archive(
+              Path("dist/home-agent-bff-linux-amd64.tar.gz"),
+              os.environ["BFF_IMAGE_ID"],
+              (os.environ["BFF_IMAGE"],),
+          )
+          verify_archive(
+              Path("dist/home-agent-origin-linux-amd64.tar.gz"),
+              os.environ["ORIGIN_IMAGE_ID"],
+              (os.environ["ORIGIN_IMAGE"],),
+          )
+
+          payload = {
+              "schema_version": 1,
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "source_ref": os.environ["GITHUB_REF"],
+              "source_commit": os.environ["GITHUB_SHA"],
+              "platform": "linux/amd64",
+              "base_image": {
+                  "reference": "node:24-alpine",
+                  "index_digest": os.environ["NODE_IMAGE"].split("@", 1)[1],
+                  "linux_amd64_digest": os.environ["NODE_LINUX_AMD64_DIGEST"],
+              },
+              "images": {
+                  "bff": {
+                      "source_tag": os.environ["BFF_IMAGE"],
+                      "deployment_tag": os.environ["BFF_DEPLOYMENT_IMAGE"],
+                      "image_id": os.environ["BFF_IMAGE_ID"],
+                      "archive": "home-agent-bff-linux-amd64.tar.gz",
+                      "archive_sha256": os.environ["BFF_ARCHIVE_SHA256"],
+                  },
+                  "origin": {
+                      "source_tag": os.environ["ORIGIN_IMAGE"],
+                      "deployment_tag": os.environ["ORIGIN_DEPLOYMENT_IMAGE"],
+                      "image_id": os.environ["ORIGIN_IMAGE_ID"],
+                      "archive": "home-agent-origin-linux-amd64.tar.gz",
+                      "archive_sha256": os.environ["ORIGIN_ARCHIVE_SHA256"],
+                  },
+              },
+          }
+          Path("dist/manifest.json").write_text(
+              json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          (
+            cd dist
+            sha256sum \
+              home-agent-bff-linux-amd64.tar.gz \
+              home-agent-origin-linux-amd64.tar.gz \
+              manifest.json > SHA256SUMS
+          )
+          (
+            cd dist
+            sha256sum -c SHA256SUMS
+          )
+
+      - name: Attest the deployable archives and manifest
+        id: attest
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6
+        with:
+          subject-path: |
+            dist/home-agent-bff-linux-amd64.tar.gz
+            dist/home-agent-origin-linux-amd64.tar.gz
+            dist/manifest.json
+            dist/SHA256SUMS
+
+      - name: Add the offline provenance bundle
+        shell: bash
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          test -s "${BUNDLE_PATH}"
+          cp "${BUNDLE_PATH}" dist/provenance.sigstore.json
+
+      - name: Upload the attested deployment bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: home-agent-web-images-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

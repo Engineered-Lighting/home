@@ -1618,8 +1618,10 @@ server.maxRequestsPerSocket = 100;
 server.setTimeout(GATEWAY_REQUEST_TIMEOUT_MS);
 
 server.on("upgrade", (req, socket, head) => {
-  if (classifyAgentOrigin(req.headers, agentOriginBoundary).agentHost) {
-    socket.write("HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nagent origin does not permit websocket upgrades");
+  const browserAgentUpgrade = classifyAgentOrigin(req.headers, agentOriginBoundary);
+  const nativeAgentUpgrade = classifyAgentOrigin(req.headers, nativeAgentOriginBoundary);
+  if (browserAgentUpgrade.agentHost || nativeAgentUpgrade.agentHost) {
+    socket.write("HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\n\r\ndedicated Agent origins do not permit websocket upgrades");
     socket.destroy();
     return;
   }

@@ -241,6 +241,67 @@ sudo sh home-agent-deploy/preflight.sh \
   /srv/home-agent/config/home-agent.env
 ```
 
+## Hosted immutable web image handoff
+
+The Ubuntu deployment host is import-only for the Home Agent BFF and browser
+origin. Never run Docker or Compose build/pull operations for those images on
+that host. The only deployable artifact is
+`home-agent-web-images-<source-commit>` from the `deployable-images` job of
+`.github/workflows/home-agent-web-boundary.yml` after a successful `main`
+`push` or `workflow_dispatch` run on a GitHub-hosted runner. A passing pull
+request or feature-branch gate is not a deployable build.
+
+On a trusted administration workstation, select the exact workflow run and
+40-character `main` source commit, confirm the run's workflow name, conclusion,
+event, branch, and head SHA, and download only the exact
+`home-agent-web-images-${SOURCE_COMMIT}` artifact. Require only these five
+files: the two image archives, `manifest.json`, `SHA256SUMS`, and
+`provenance.sigstore.json`. Verify every attested subject:
+
+```sh
+for subject in \
+  home-agent-bff-linux-amd64.tar.gz \
+  home-agent-origin-linux-amd64.tar.gz \
+  manifest.json \
+  SHA256SUMS
+do
+  gh attestation verify "$subject" \
+    --bundle provenance.sigstore.json \
+    --repo Engineered-Lighting/home \
+    --signer-workflow \
+      Engineered-Lighting/home/.github/workflows/home-agent-web-boundary.yml \
+    --source-ref refs/heads/main \
+    --source-digest "$SOURCE_COMMIT" \
+    --deny-self-hosted-runners
+done
+sha256sum --strict --check SHA256SUMS
+```
+
+Then validate `manifest.json` as an exact schema: repository, source ref,
+source commit, `linux/amd64` platform, pinned Node index and Linux AMD64 base
+digests, the exact BFF/origin source and deployment tags, archive digests, and
+immutable top-level image IDs must all match. The complete validator and exact
+download/import commands are in
+`stack/home-agent-deploy/agent-origin/README.md`. Retain the complete read-only
+bundle as deployment/rollback evidence, transfer it through the approved
+administrative channel, and do not load, unpack, start, or otherwise execute
+either image on the workstation.
+
+On Ubuntu, store the same bundle in a root-controlled directory on the
+encrypted volume, repeat the checksum and exact-manifest checks, and archive
+the existing BFF/origin images and IDs before loading either verified tarball.
+After loading, compare both source-tag top-level IDs with the manifest. Only
+after both match may the `:local` deployment tags move. Set
+`HOME_AGENT_BFF_IMAGE_ID` to the verified BFF ID and
+`HOME_AGENT_WEB_IMAGE_ID` to the verified origin ID before preflight. Preflight
+always requires the running BFF's exact
+`engineered-lighting/home-agent-bff:local` configuration reference. Candidate
+mode runs before BFF recreation, so it validates the new ID's syntax but permits
+the old running content ID; post-recreate normal and `--require-origin`
+preflight require the running BFF's top-level Docker image ID to match the
+reviewed value. A mutable tag alone is never provenance or deployment approval;
+any failed check leaves the current tags and services untouched.
+
 ## WAL continuity and staged start
 
 Validate the dedicated Compose project without building or pulling a replacement
@@ -408,14 +469,16 @@ observability layer redacts or excludes the callback query string; preserving a
 request-target access log fails the authentication gate. Reassess and adopt
 enforced PKCE when HA implements it.
 
-The Agent host serves only `/home-agent/*`, `/api/agent/*`, and the fixed
-`/native-oauth-client` metadata page. It has no gateway Basic-login, legacy UI,
-legacy proxy, health, or websocket surface. The static Agent bundle has no
-parent-path dependencies. Requests carrying an Origin must exactly match the
-configured Agent origin. On every other host, browser Agent static/session/API
-routes and OAuth metadata return 404, even with valid gateway Basic or HA
-Bearer credentials. This prevents same-origin legacy UI script execution from
-reading Agent CSRF state or mutating semantic memory.
+The browser Agent host serves only `/home-agent/*` and `/api/agent/*`. It
+returns 404 for `/native-oauth-client`; native OAuth metadata and typed native
+routes belong only to the separately configured native web-gateway origin. The
+browser host has no gateway Basic-login, legacy UI, legacy proxy, health, or
+websocket surface. The static Agent bundle has no parent-path dependencies.
+Requests carrying an Origin must exactly match the configured browser Agent
+origin. On every other host, browser Agent static/session/API routes and OAuth
+metadata return 404, even with valid gateway Basic or HA Bearer credentials.
+This prevents same-origin legacy UI script execution from reading Agent CSRF
+state or mutating semantic memory.
 
 The Agent host relies on HA OAuth/BFF authentication, not the legacy gateway
 Basic cookie. Open `https://agent.home.example.internal/home-agent/`; `/agent`
@@ -483,14 +546,17 @@ The code and tokens never enter the webview. Treat a hostile browser extension
 or local process that can read callback URLs as outside this canary's threat
 model; leave native login disabled on an untrusted Windows profile.
 
-The dedicated Agent host publishes `/native-oauth-client` without Basic auth;
-that sub-10 KiB document contains the exact HA client-metadata redirect link
-and no application/session data. Exact typed native Agent routes also bypass
-gateway Basic because HA Bearer and Basic share the `Authorization` header.
-The bearer is preserved to the BFF, which immediately validates HA `whoami`.
-Native typed routes remain usable during origin migration, but they never gain
-browser cookie/session semantics. Non-Agent routes on the Agent host are
-denied, and browser Agent routes on legacy hosts are denied.
+The dedicated native web-gateway host publishes `/native-oauth-client` without
+Basic auth; that sub-10 KiB document contains the exact HA client-metadata
+redirect link and no application/session data. Exact typed native Agent routes
+also bypass gateway Basic because HA Bearer and Basic share the `Authorization`
+header. The bearer is preserved to the BFF, which immediately validates HA
+`whoami`. Native typed routes remain usable during browser-origin migration,
+but they never gain browser cookie/session semantics. Every non-native HTTP
+route on the native host is denied before legacy authentication, proxy
+selection, or static fallback. Every websocket upgrade on the native host is
+independently rejected before authentication, route lookup, or legacy
+websocket proxying. Browser Agent routes on legacy hosts are also denied.
 
 ### Native installation registry
 
@@ -577,7 +643,7 @@ reads the new registry at process startup:
 ```sh
 sudo sh home-agent-deploy/preflight.sh "$ENV_FILE"
 sudo docker compose --env-file "$ENV_FILE" -f home-agent-compose.yml \
-  up -d --no-deps --force-recreate bff
+  up -d --no-deps --no-build --pull never --force-recreate bff
 curl -fsS "http://127.0.0.1:${HOME_AGENT_BFF_PORT:-8097}/healthz"
 ```
 

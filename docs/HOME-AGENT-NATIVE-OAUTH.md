@@ -61,9 +61,10 @@ fail closed before Core. Production preflight requires the canonical HTTPS
 native origin and rejects equality with the browser OAuth origin.
 It also rejects membership anywhere in the browser allowed-origins set.
 
-The dedicated Agent origin serves `GET /native-oauth-client` without Basic authentication so
-HA can inspect it. The page is a fixed, deny-all-CSP document under 10 KiB and
-contains exactly:
+The separately configured native web-gateway origin serves
+`GET /native-oauth-client` without Basic authentication so HA can inspect it.
+The browser Agent origin deliberately returns 404 for this path. The metadata
+page is a fixed, deny-all-CSP document under 10 KiB and contains exactly:
 
 ```html
 <link rel="redirect_uri" href="http://127.0.0.1:43821/oauth/callback">

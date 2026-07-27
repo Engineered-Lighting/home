@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Fail-closed validation for the Agent origin's internal Docker address."""
+"""Fail-closed validation for the Agent origin network and reviewed web images."""
 
 from __future__ import annotations
 
 import argparse
 import ipaddress
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -19,6 +20,8 @@ ORIGIN_PORT = 8096
 EXPECTED_ORIGIN_CONTAINER = "home-agent-origin-origin-1"
 EXPECTED_ORIGIN_IMAGE = "engineered-lighting/home-agent-origin:local"
 EXPECTED_BFF_CONTAINER = "home-agent-bff-1"
+EXPECTED_BFF_IMAGE = "engineered-lighting/home-agent-bff:local"
+IMAGE_ID_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
 
 
 class ContractError(ValueError):
@@ -48,6 +51,14 @@ def read_env(path: str | Path) -> dict[str, str]:
 
 def expected_serve_target(origin_ip: ipaddress.IPv4Address) -> str:
     return f"http://{origin_ip}:{ORIGIN_PORT}"
+
+
+def validate_image_id(value: str, *, component: str = "Agent origin") -> str:
+    if IMAGE_ID_PATTERN.fullmatch(value) is None:
+        raise ContractError(
+            f"{component} image ID must be one exact lowercase sha256 digest"
+        )
+    return value
 
 
 def validate_serve_target(value: str, origin_ip: ipaddress.IPv4Address) -> None:
@@ -377,14 +388,26 @@ def container_environment(inspect: dict) -> dict[str, str]:
     return values
 
 
-def validate_bff_inspect(inspect: dict, public_origin: str) -> None:
-    labels = inspect.get("Config", {}).get("Labels", {}) or {}
+def validate_bff_inspect(
+    inspect: dict,
+    public_origin: str,
+    image_id: str,
+    *,
+    require_image_match: bool = True,
+) -> None:
+    expected_image_id = validate_image_id(image_id, component="BFF")
+    config = inspect.get("Config", {})
+    labels = config.get("Labels", {}) or {}
     if (
         inspect.get("Name") != f"/{EXPECTED_BFF_CONTAINER}"
         or labels.get("com.docker.compose.project") != "home-agent"
         or labels.get("com.docker.compose.service") != "bff"
     ):
         raise ContractError("running BFF does not have the expected Compose identity")
+    if config.get("Image") != EXPECTED_BFF_IMAGE:
+        raise ContractError("BFF is running an unexpected image reference")
+    if require_image_match and inspect.get("Image") != expected_image_id:
+        raise ContractError("BFF image content differs from the reviewed image ID")
     environment = container_environment(inspect)
     expected = {
         "HOME_AGENT_ALLOWED_ORIGINS": public_origin,
@@ -401,7 +424,9 @@ def validate_origin_inspect(
     network_name: str,
     origin: ipaddress.IPv4Address,
     public_origin: str,
+    image_id: str,
 ) -> None:
+    expected_image_id = validate_image_id(image_id)
     config = inspect.get("Config", {})
     host = inspect.get("HostConfig", {})
     network_settings = inspect.get("NetworkSettings", {})
@@ -429,6 +454,8 @@ def validate_origin_inspect(
         raise ContractError("Agent origin has a published port")
     if config.get("Image") != EXPECTED_ORIGIN_IMAGE:
         raise ContractError("Agent origin is running an unexpected image reference")
+    if inspect.get("Image") != expected_image_id:
+        raise ContractError("Agent origin image content differs from the reviewed image ID")
     if config.get("User") != "1000:1000":
         raise ContractError("Agent origin is not running as the reviewed unprivileged user")
     if host.get("ReadonlyRootfs") is not True:
@@ -460,6 +487,8 @@ def configuration(base_env: dict[str, str], origin_env: dict[str, str]) -> dict[
         "origin": origin_env.get("HOME_AGENT_WEB_INTERNAL_IP", ""),
         "serve_target": origin_env.get("HOME_AGENT_WEB_SERVE_TARGET", ""),
         "public_origin": origin_env.get("HOME_AGENT_WEB_PUBLIC_ORIGIN", ""),
+        "bff_image_id": base_env.get("HOME_AGENT_BFF_IMAGE_ID", ""),
+        "origin_image_id": origin_env.get("HOME_AGENT_WEB_IMAGE_ID", ""),
     }
 
 
@@ -478,6 +507,11 @@ def main(argv: list[str] | None = None) -> int:
         origin_env = read_env(args.origin_env)
         values = configuration(base_env, origin_env)
         public_origin = validate_oauth_contract(base_env, origin_env)
+        bff_image_id = validate_image_id(
+            values["bff_image_id"],
+            component="BFF",
+        )
+        origin_image_id = validate_image_id(values["origin_image_id"])
         subnet, dynamic, gateway, origin = validate_address_contract(
             values["subnet"],
             values["dynamic"],
@@ -494,7 +528,12 @@ def main(argv: list[str] | None = None) -> int:
             host_routes=inspect_host_routes(),
             tailscale_routes=inspect_tailscale_routes(),
         )
-        validate_bff_inspect(inspect_container(EXPECTED_BFF_CONTAINER), public_origin)
+        validate_bff_inspect(
+            inspect_container(EXPECTED_BFF_CONTAINER),
+            public_origin,
+            bff_image_id,
+            require_image_match=not args.candidate_only,
+        )
         if args.candidate_only:
             if args.print_serve_target:
                 print(expected_serve_target(origin))
@@ -515,6 +554,7 @@ def main(argv: list[str] | None = None) -> int:
                 network_name=values["network"],
                 origin=origin,
                 public_origin=public_origin,
+                image_id=origin_image_id,
             )
     except (ContractError, OSError, subprocess.SubprocessError) as exc:
         print(f"home-agent-origin network preflight failed: {exc}", file=sys.stderr)

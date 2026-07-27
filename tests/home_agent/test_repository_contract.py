@@ -378,6 +378,176 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertNotIn("phase3-readiness", origin)
         self.assertIn("X-Home-Agent-Channel", bff)
 
+    def test_operator_docs_match_origin_and_phase2_boundaries(self) -> None:
+        browser_origin = read("stack/services/home-agent-origin/src/origin.mjs")
+        native_gateway = read("web-gateway/server.mjs")
+        runbook = read("docs/HOME-AGENT-RUNBOOK.md")
+        native_oauth = read("docs/HOME-AGENT-NATIVE-OAUTH.md")
+        origin_runbook = read("stack/home-agent-deploy/agent-origin/README.md")
+        base_env = read("stack/home-agent.env.example")
+        network_contract = read(
+            "stack/home-agent-deploy/agent-origin/network_contract.py"
+        )
+        origin_note = read("changes/unreleased/home-agent-dedicated-origin.md")
+        phase2_note = read("changes/unreleased/home-agent-phase2-readiness.md")
+        hosted_workflow = read(".github/workflows/home-agent-web-boundary.yml")
+        normalized_runbook = " ".join(runbook.split())
+        normalized_origin_runbook = " ".join(origin_runbook.split())
+        normalized_origin_note = " ".join(origin_note.split())
+
+        self.assertNotIn("native-oauth-client", browser_origin)
+        self.assertIn('parsed.pathname === "/native-oauth-client"', native_gateway)
+        self.assertIn(
+            "The browser Agent host serves only `/home-agent/*` and "
+            "`/api/agent/*`.",
+            runbook,
+        )
+        self.assertIn(
+            "The dedicated native web-gateway host publishes "
+            "`/native-oauth-client`",
+            runbook,
+        )
+        self.assertIn(
+            "The browser Agent origin deliberately returns 404 for this path.",
+            native_oauth,
+        )
+        self.assertNotIn("up -d --build", origin_runbook)
+        self.assertIn("up -d --no-build --pull never", origin_runbook)
+        self.assertIn(
+            "external, attested build; do not build or pull it during this procedure",
+            origin_runbook,
+        )
+        self.assertNotRegex(
+            origin_runbook,
+            r"(?m)^\s*(?:sudo )?docker (?:build|buildx|pull)\b",
+        )
+        for subject in (
+            "home-agent-bff-linux-amd64.tar.gz",
+            "home-agent-origin-linux-amd64.tar.gz",
+            "manifest.json",
+            "SHA256SUMS",
+        ):
+            attestation_block = hosted_workflow[
+                hosted_workflow.index("subject-path: |") :
+                hosted_workflow.index("- name: Add the offline provenance bundle")
+            ]
+            self.assertIn(subject, attestation_block)
+            self.assertIn(subject, runbook)
+            self.assertIn(subject, origin_runbook)
+        for constraint in (
+            "--signer-workflow",
+            "--source-ref refs/heads/main",
+            "--source-digest",
+            "--deny-self-hosted-runners",
+            "sha256sum --strict --check SHA256SUMS",
+        ):
+            self.assertIn(constraint, runbook)
+            self.assertIn(constraint, origin_runbook)
+        for exact_manifest_value in (
+            '"platform": "linux/amd64"',
+            "sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd",
+            "sha256:4ba75f835bb8802193e4c114572113d4b26f95f6f094f4b5229d2a77773e0afc",
+            "engineered-lighting/home-agent-bff:local",
+            "engineered-lighting/home-agent-origin:local",
+        ):
+            self.assertIn(exact_manifest_value, hosted_workflow)
+            self.assertIn(exact_manifest_value, origin_runbook)
+        self.assertIn('"source_ref": "refs/heads/main"', origin_runbook)
+        self.assertIn("github.ref == 'refs/heads/main'", hosted_workflow)
+        self.assertIn("unexpected manifest top-level fields", origin_runbook)
+        self.assertIn("manifest image set mismatch", origin_runbook)
+        self.assertIn(
+            "HOME_AGENT_BFF_IMAGE_ID=sha256:REPLACE_WITH_LOCAL_IMAGE_ID",
+            base_env,
+        )
+        for image_id_setting in (
+            "HOME_AGENT_BFF_IMAGE_ID",
+            "HOME_AGENT_WEB_IMAGE_ID",
+        ):
+            self.assertIn(image_id_setting, runbook)
+            self.assertIn(image_id_setting, origin_runbook)
+            self.assertIn(image_id_setting, normalized_origin_note)
+        self.assertIn(
+            'EXPECTED_BFF_IMAGE = "engineered-lighting/home-agent-bff:local"',
+            network_contract,
+        )
+        self.assertIn(
+            'base_env.get("HOME_AGENT_BFF_IMAGE_ID", "")',
+            network_contract,
+        )
+        self.assertIn(
+            'if require_image_match and inspect.get("Image") != expected_image_id',
+            network_contract,
+        )
+        self.assertIn(
+            "require_image_match=not args.candidate_only",
+            network_contract,
+        )
+        self.assertIn(
+            "Candidate mode runs before BFF recreation",
+            normalized_runbook,
+        )
+        self.assertIn(
+            "old BFF is still running at that point",
+            normalized_origin_runbook,
+        )
+        self.assertIn(
+            "ORIGIN_ENV must be an absolute private configuration path",
+            origin_runbook,
+        )
+        self.assertIn('sudoedit "$BASE_ENV"', origin_runbook)
+        self.assertIn('sudoedit "$ORIGIN_ENV"', origin_runbook)
+        self.assertNotIn(
+            "sudoedit home-agent-deploy/agent-origin/home-agent-origin.env",
+            origin_runbook,
+        )
+        self.assertIn("mutable tag alone is never provenance", normalized_runbook)
+        self.assertIn(
+            "mutable tag by itself is never provenance",
+            normalized_origin_runbook,
+        )
+        archive_at = origin_runbook.index(
+            "archive_image engineered-lighting/home-agent-bff:local bff"
+        )
+        load_at = origin_runbook.index(
+            "sudo docker image load --input home-agent-bff-linux-amd64.tar.gz"
+        )
+        compare_at = origin_runbook.index(
+            'test "$BFF_ACTUAL_ID" = "$BFF_EXPECTED_ID"'
+        )
+        tag_at = origin_runbook.index(
+            'sudo docker image tag "$BFF_SOURCE" '
+            "engineered-lighting/home-agent-bff:local"
+        )
+        self.assertLess(archive_at, load_at)
+        self.assertLess(load_at, compare_at)
+        self.assertLess(compare_at, tag_at)
+        self.assertIn(
+            "Every non-native HTTP route on the native host is denied before "
+            "legacy authentication, proxy selection, or static fallback.",
+            normalized_runbook,
+        )
+        self.assertIn(
+            "Every websocket upgrade on the native host is independently "
+            "rejected before authentication, route lookup, or legacy websocket "
+            "proxying.",
+            normalized_runbook,
+        )
+        for release_contract in (
+            ".github/workflows/home-agent-web-boundary.yml",
+            "all four signed subjects",
+            "HOME_AGENT_BFF_IMAGE_ID",
+            "HOME_AGENT_WEB_IMAGE_ID",
+            "every websocket upgrade before any legacy proxy path",
+        ):
+            self.assertIn(release_contract, normalized_origin_note)
+        self.assertNotIn("or three-controlled-journey", phase2_note)
+        self.assertIn("required 500 qualifying redacted-envelope", phase2_note)
+        self.assertIn(
+            "Controlled journeys remain informational replay evidence",
+            phase2_note,
+        )
+
     def test_agent_surface_uses_typed_descriptor_lifecycle_only(self) -> None:
         client = read("app/src/home-agent/api.js")
         panel = read("app/src/home-agent/panel.jsx")

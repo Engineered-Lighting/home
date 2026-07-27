@@ -522,15 +522,15 @@ services:
   identity-finalizer:
     image: engineered-lighting/home-agent-core:local
     profiles: [operator]
-    # This deployment surface is deliberately non-callable. Provisioning
-    # always expires its login, no finalization function exists, and this
-    # entrypoint exits before opening the persisted database URL.
+    # This deployment surface remains deliberately non-callable. The dormant
+    # database kernel is not activated, provisioning keeps its login expired,
+    # and this entrypoint exits before reading the persisted database URL.
     restart: "no"
     user: "10001:10001"
     read_only: true
     init: true
     entrypoint: ["/bin/sh", "-c"]
-    command: ["echo 'identity finalizer capability is not implemented' >&2; exit 78"]
+    command: ["echo 'identity finalizer kernel is dormant and not activated' >&2; exit 78"]
     environment:
       HOME_AGENT_FINALIZER_DATABASE_URL_FILE: /run/secrets/database_url
     security_opt:

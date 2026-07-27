@@ -384,8 +384,8 @@ class PrincipalBindingAuthorityBoundaryContractTests(unittest.TestCase):
         self.assertEqual(
             command_lines,
             [
-                "command: [\"echo 'identity finalizer capability is not implemented' "
-                '>&2; exit 78"]'
+                "command: [\"echo 'identity finalizer kernel is dormant and not "
+                'activated\' >&2; exit 78"]'
             ],
         )
         entrypoint_lines = [

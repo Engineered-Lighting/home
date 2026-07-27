@@ -250,7 +250,9 @@ class RepositoryBoundaryTests(unittest.TestCase):
             self.assertIn(role, revoke)
         self.assertNotIn("GRANT", revoke)
 
-        manifest_grants = grants.split("Revision 0008 is manifest-only", 1)[1]
+        manifest_grants = grants.split("Revision 0008 is manifest-only", 1)[1].split(
+            "-- When E1 exists", 1
+        )[0]
         self.assertIn(
             "operations.reviewed_identity_migration_capabilities()",
             manifest_grants,

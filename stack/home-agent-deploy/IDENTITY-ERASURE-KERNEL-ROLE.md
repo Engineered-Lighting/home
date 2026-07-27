@@ -108,7 +108,9 @@ PostgreSQL URLs named by the E1 test module. In that mode collection fails
 instead of silently skipping either database test. The one-command adversarial
 gate below selects the E1 behavioral and lifecycle nodes separately, and also
 exports the E2 owner and seven exact runtime-role URLs from mounted random
-secret files inside its isolated client containers.
+secret files inside its isolated client containers. A separate fifth cluster
+receives the dormant E3 finalizer URLs from those files without activating the
+expired login.
 
 ## Disposable PostgreSQL 17 admission gate
 
@@ -149,10 +151,13 @@ data are never sent to the Docker daemon. Docker may retain cache derived from
 that already-filtered context; the gate deliberately never prunes a machine's
 global build cache.
 
-Behavioral, lifecycle, tamper admission, and E2 run in four sequential,
+Behavioral, lifecycle, tamper admission, E2, and dormant E3 run in five sequential,
 unexposed PostgreSQL 17 clusters on separate internal networks and tmpfs data
 directories. The admission cluster keeps a locked revision-0007 template.
-Each test case alone recreates `home_agent`, provisions exact roles, upgrades
+Every fresh upgrade path first stops at the live revision-0006a pin and replays
+the current grant script before advancing, so production-pin compatibility is
+tested rather than inferred. Each test case alone recreates `home_agent`,
+provisions exact roles, upgrades
 and grants through revision 0010, verifies that it is the sole database with
 the three reviewed identity-kernel functions, then removes it. No test changes
 function ownership to manufacture the production ownership invariant.
@@ -165,6 +170,11 @@ then reruns the full upgrade before schema, ledger, restore, runtime-role RLS,
 anti-resurrection, and deployment contracts. It does not clone a second E2
 database because revision 0011 deliberately admits the erasure-kernel ownership
 set in only one database per cluster.
+
+The fifth cluster repeats the guarded upgrade and grant sequence through
+revision 0013, then runs only the E3 schema, database-kernel, write-fence, and
+deployment contracts. Production remains pinned to 0006a, the finalizer login
+remains expired, and no Compose service or live database is activated.
 
 Before connection termination, database removal, role cleanup, or lifecycle
 downgrade, the gate verifies a random 256-bit run sentinel, PostgreSQL system

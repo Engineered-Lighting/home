@@ -22,6 +22,7 @@ RUN pip install --no-cache-dir \
       -r /tmp/requirements.txt -r /tmp/requirements-dev.txt
 
 COPY stack/services/home-agent-core/ /workspace/stack/services/home-agent-core/
+COPY stack/home-agent-compose.yml stack/home-agent.env.example /workspace/stack/
 COPY stack/home-agent-deploy/ /workspace/stack/home-agent-deploy/
 COPY tests/home_agent/ /workspace/tests/home_agent/
 COPY tools/run-home-agent-e1-postgres-gate.py /workspace/tools/

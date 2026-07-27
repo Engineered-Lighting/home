@@ -1789,6 +1789,96 @@ reviewed_identity_migration_finalizations = Table(
     schema="operations",
 )
 
+# Content-free, owner-admitted boundary for the dormant E3 database finalizer.
+# The canonical private finalizer document remains caller-supplied ``bytea``;
+# this row stores only digests, counts, build bindings, and one-time state.
+reviewed_identity_finalizer_admissions = Table(
+    "reviewed_identity_finalizer_admissions",
+    metadata,
+    Column("admission_id", UUID_PK, primary_key=True),
+    Column("run_id", UUID_PK, nullable=False, unique=True),
+    Column("finalization_id", UUID_PK, nullable=False, unique=True),
+    Column("contract_version", String(64), nullable=False),
+    Column("verification_status", String(32), nullable=False),
+    Column("document_sha256", String(64), nullable=False, unique=True),
+    Column("document_octets", Integer, nullable=False),
+    Column("finalization_commitment", String(64), nullable=False, unique=True),
+    Column("decision_manifest_commitment", String(64), nullable=False),
+    Column("receipt_set_commitment", String(64), nullable=False),
+    Column("lineage_set_commitment", String(64), nullable=False),
+    Column("privacy_closure_set_commitment", String(64), nullable=False),
+    Column("auto_expiry_effect_set_commitment", String(64), nullable=False),
+    Column("review_receipt_commitment", String(64), nullable=False),
+    Column("release_manifest_digest", String(64), nullable=False),
+    Column("migration_tool_bundle_digest", String(64), nullable=False),
+    Column("core_oci_manifest_digest", String(64), nullable=False),
+    Column("core_schema_digest", String(64), nullable=False),
+    Column("core_capability_digest", String(64), nullable=False),
+    Column("policy_digest", String(64), nullable=False),
+    Column("review_signing_key_fingerprint", String(64), nullable=False),
+    Column("finalization_signing_key_fingerprint", String(64), nullable=False),
+    Column("verifier_bundle_digest", String(64), nullable=False),
+    Column(
+        "admitted_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("transaction_timestamp()"),
+    ),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("consumed_at", DateTime(timezone=True)),
+    ForeignKeyConstraint(
+        ["run_id"],
+        ["operations.reviewed_identity_migration_runs.run_id"],
+        name="fk_identity_finalizer_admission_run",
+    ),
+    CheckConstraint(
+        f"{_uuidv7_shape('admission_id')} AND "
+        f"{_uuidv7_shape('finalization_id')} AND finalization_id = run_id",
+        name="uuidv7_ids",
+    ),
+    CheckConstraint(
+        "contract_version = 'reviewed-identity-finalizer-admission-v1' "
+        "AND verification_status = 'offline_verified'",
+        name="fixed_contract",
+    ),
+    CheckConstraint(
+        "document_octets BETWEEN 2 AND 4194304",
+        name="document_size",
+    ),
+    CheckConstraint(
+        _hex64(
+            "document_sha256",
+            "finalization_commitment",
+            "decision_manifest_commitment",
+            "receipt_set_commitment",
+            "lineage_set_commitment",
+            "privacy_closure_set_commitment",
+            "auto_expiry_effect_set_commitment",
+            "review_receipt_commitment",
+            "release_manifest_digest",
+            "migration_tool_bundle_digest",
+            "core_oci_manifest_digest",
+            "core_schema_digest",
+            "core_capability_digest",
+            "policy_digest",
+            "review_signing_key_fingerprint",
+            "finalization_signing_key_fingerprint",
+            "verifier_bundle_digest",
+        ),
+        name="digest_shape",
+    ),
+    CheckConstraint(
+        "isfinite(admitted_at) AND isfinite(expires_at) "
+        "AND expires_at > admitted_at "
+        "AND expires_at <= admitted_at + interval '15 minutes' "
+        "AND (consumed_at IS NULL "
+        "OR (isfinite(consumed_at) AND consumed_at >= admitted_at "
+        "AND consumed_at <= expires_at))",
+        name="one_time_window",
+    ),
+    schema="operations",
+)
+
 # This is point-in-time evidence only. Revision 0007 deliberately has no
 # physically-frozen/enforced-offline strength and cannot authorize cutover.
 legacy_identity_writer_evidence = Table(

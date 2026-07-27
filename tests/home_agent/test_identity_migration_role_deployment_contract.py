@@ -241,8 +241,11 @@ class IdentityMigrationRoleDeploymentContractTests(unittest.TestCase):
             compose_service(compose, "provision-roles"),
         )
 
-    def test_grant_replay_is_manifest_only_and_has_no_finalizer(self) -> None:
+    def test_0008_grant_replay_is_manifest_only(self) -> None:
         grants = read("stack/home-agent-deploy/apply-grants.sh")
+        manifest_grants = grants.split("Revision 0008 is manifest-only", 1)[1].split(
+            "-- When E1 exists", 1
+        )[0]
         self.assertIn(
             "FROM home_agent_identity_migration, home_agent_identity_kernel;",
             grants,
@@ -304,8 +307,10 @@ class IdentityMigrationRoleDeploymentContractTests(unittest.TestCase):
             "identity migration kernel ACL contract mismatch",
             validation,
         )
-        self.assertNotIn("finalize_reviewed_identity_migration", grants)
-        self.assertNotIn("semantic_authority_cutovers\n      TO", grants)
+        self.assertNotIn("finalize_reviewed_identity_migration", manifest_grants)
+        self.assertNotIn(
+            "semantic_authority_cutovers\n      TO", manifest_grants
+        )
 
     def test_revision_remains_pinned_and_activation_is_not_implemented(self) -> None:
         env = read("stack/home-agent.env.example")

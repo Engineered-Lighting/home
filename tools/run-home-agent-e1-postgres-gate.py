@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the E1/E2 gate only against locally hosted, disposable PostgreSQL 17."""
+"""Run the E1/E2/E3 gate only against disposable PostgreSQL 17."""
 
 from __future__ import annotations
 
@@ -29,10 +29,12 @@ OWNER = "home_agent_owner"
 BASE_DATABASE = "home_agent"
 ADMIN_DATABASE = "postgres"
 ADMISSION_TEMPLATE = "e1_template_0007"
+REVISION_0006A = "0006a_worker_lease_arbitration"
 REVISION_0007 = "0007_phase3_identity_authority"
 REVISION_0010 = "0010_identity_erasure_source"
 REVISION_0011 = "0011_identity_erasure_e1"
 REVISION_0012 = "0012_identity_erasure_e2"
+REVISION_0013 = "0013_identity_finalizer_e3"
 RUN_LABEL = "com.engineeredlighting.home-agent-e1.run"
 MANAGED_LABEL = "com.engineeredlighting.home-agent-e1.managed"
 PHASE_LABEL = "com.engineeredlighting.home-agent-e1.phase"
@@ -142,6 +144,8 @@ E2_RUNTIME_ROLE_URLS = (
     ),
 )
 BUILD_CONTEXT_FILES = (
+    "stack/home-agent-compose.yml",
+    "stack/home-agent.env.example",
     "stack/services/home-agent-core/Dockerfile.postgres-test",
     "stack/services/home-agent-core/alembic.ini",
     "stack/services/home-agent-core/pytest.ini",
@@ -152,6 +156,7 @@ BUILD_CONTEXT_FILES = (
     "stack/home-agent-deploy/identity-api-acl.sql",
     "stack/home-agent-deploy/IDENTITY-ERASURE-KERNEL-ROLE.md",
     "tests/home_agent/test_identity_erasure_kernel_foundation_deployment_contract.py",
+    "tests/home_agent/test_apply_grants_revision_0006a_contract.py",
     "tests/home_agent/test_e1_postgres_gate_contract.py",
     "stack/services/home-agent-core/tests/e1_postgres_harness.py",
     "stack/services/home-agent-core/alembic/versions/"
@@ -160,13 +165,22 @@ BUILD_CONTEXT_FILES = (
     "test_phase3_identity_erasure_admission_postgres.py",
     "stack/services/home-agent-core/alembic/versions/"
     "0012_identity_person_erasure_tombstone.py",
+    "stack/services/home-agent-core/alembic/versions/"
+    "0013_identity_finalizer_kernel.py",
     "stack/services/home-agent-core/app/identity_erasure_schema.py",
+    "stack/home-agent-deploy/operator/reviewed_identity_payload.py",
+    "stack/home-agent-deploy/operator/REVIEWED-IDENTITY-PAYLOAD.md",
     "stack/services/home-agent-core/tests/test_identity_person_restore_replay.py",
     "stack/services/home-agent-core/tests/test_ledger_versions.py",
     "stack/services/home-agent-core/tests/"
     "test_phase3_identity_erasure_e2_runtime_postgres.py",
     "stack/services/home-agent-core/tests/" "test_phase3_identity_erasure_e2_schema.py",
+    "stack/services/home-agent-core/tests/"
+    "test_phase3_identity_finalizer_e3_runtime_postgres.py",
+    "stack/services/home-agent-core/tests/"
+    "test_phase3_identity_finalizer_e3_schema.py",
     "tests/home_agent/test_identity_erasure_e2_deployment_contract.py",
+    "tests/home_agent/test_identity_finalizer_e3_deployment_contract.py",
     "tools/run-home-agent-e1-postgres-gate.py",
     ".github/workflows/home-agent-e1-postgres.yml",
 )
@@ -191,7 +205,10 @@ REVIEWED_CONTEXT_SUFFIXES = {
     ".txt",
     ".yml",
 }
-REVIEWED_CONTEXT_FILENAMES = {"Dockerfile.postgres-test"}
+REVIEWED_CONTEXT_FILENAMES = {
+    "Dockerfile.postgres-test",
+    "home-agent.env.example",
+}
 SENSITIVE_CONTEXT_COMPONENTS = {
     ".gnupg",
     ".ssh",
@@ -1175,6 +1192,8 @@ def _run_behavior_phase(
     secrets_directory: Path,
     phase: Phase,
 ) -> None:
+    _alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0006A)
+    _apply_grants(state, phase, secrets_directory, BASE_DATABASE)
     _alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0010)
     _apply_grants(state, phase, secrets_directory, BASE_DATABASE)
     _alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0011)
@@ -1209,6 +1228,8 @@ def _run_lifecycle_phase(
     secrets_directory: Path,
     phase: Phase,
 ) -> None:
+    _alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0006A)
+    _apply_grants(state, phase, secrets_directory, BASE_DATABASE)
     _alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0010)
     _apply_grants(state, phase, secrets_directory, BASE_DATABASE)
     _pytest(
@@ -1236,6 +1257,8 @@ def _run_admission_phase(
     secrets_directory: Path,
     phase: Phase,
 ) -> None:
+    _alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0006A)
+    _apply_grants(state, phase, secrets_directory, BASE_DATABASE)
     _alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0007)
     _apply_grants(state, phase, secrets_directory, BASE_DATABASE)
     _assert_database_revision(
@@ -1306,6 +1329,8 @@ def _run_admission_phase(
             "tests/test_phase3_identity_erasure_admission_postgres.py",
             "/workspace/tests/home_agent/"
             "test_identity_erasure_kernel_foundation_deployment_contract.py",
+            "/workspace/tests/home_agent/"
+            "test_apply_grants_revision_0006a_contract.py",
             "/workspace/tests/home_agent/test_e1_postgres_gate_contract.py",
         ],
         url_environment={
@@ -1329,6 +1354,8 @@ def _upgrade_e2_database(
     phase: Phase,
     secrets_directory: Path,
 ) -> None:
+    _alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0006A)
+    _apply_grants(state, phase, secrets_directory, BASE_DATABASE)
     for revision in (REVISION_0010, REVISION_0011, REVISION_0012):
         _alembic(state, phase, secrets_directory, BASE_DATABASE, revision)
         _apply_grants(state, phase, secrets_directory, BASE_DATABASE)
@@ -1338,6 +1365,23 @@ def _upgrade_e2_database(
         secrets_directory,
         BASE_DATABASE,
         REVISION_0012,
+    )
+
+
+def _upgrade_e3_database(
+    state: GateState,
+    phase: Phase,
+    secrets_directory: Path,
+) -> None:
+    _upgrade_e2_database(state, phase, secrets_directory)
+    _alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0013)
+    _apply_grants(state, phase, secrets_directory, BASE_DATABASE)
+    _assert_database_revision(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+        REVISION_0013,
     )
 
 
@@ -1451,6 +1495,56 @@ def _run_e2_phase(
     )
 
 
+def _run_e3_phase(
+    state: GateState,
+    secrets_directory: Path,
+    phase: Phase,
+) -> None:
+    guard_environment = {
+        SENTINEL_ENV: state.sentinel,
+        SYSTEM_ID_ENV: phase.system_identifier,
+        ALLOWLIST_ENV: BASE_DATABASE,
+        "TEST_PHASE3_IDENTITY_FINALIZER_E3_OWNER_PASSWORD_FILE": (
+            "/run/secrets/postgres_owner_password"
+        ),
+    }
+    _upgrade_e3_database(state, phase, secrets_directory)
+    _verify_cluster_guard(
+        state,
+        phase,
+        secrets_directory,
+        {ADMIN_DATABASE, "template0", "template1", BASE_DATABASE},
+    )
+    _pytest(
+        state,
+        phase,
+        secrets_directory,
+        nodes=[
+            "tests/test_phase3_identity_finalizer_e3_schema.py",
+            "tests/test_phase3_identity_finalizer_e3_runtime_postgres.py",
+            "/workspace/tests/home_agent/"
+            "test_identity_finalizer_e3_deployment_contract.py",
+        ],
+        url_environment={
+            "TEST_PHASE3_IDENTITY_FINALIZER_E3_OWNER_DATABASE_URL": BASE_DATABASE,
+            "TEST_PHASE3_IDENTITY_FINALIZER_E3_ADMIN_DATABASE_URL": ADMIN_DATABASE,
+        },
+        credential_url_environment={
+            "TEST_PHASE3_IDENTITY_FINALIZER_E3_FINALIZER_DATABASE_URL": (
+                BASE_DATABASE,
+                "home_agent_identity_finalizer",
+                "postgres_identity_finalizer_password",
+            ),
+            **{
+                environment_name: (BASE_DATABASE, role, password_secret)
+                for environment_name, role, password_secret in E2_RUNTIME_ROLE_URLS
+            },
+        },
+        environment=guard_environment,
+        fail_fast=False,
+    )
+
+
 def _build_test_image(state: GateState, build_context: Path) -> None:
     dockerfile = (
         build_context / "stack/services/home-agent-core/Dockerfile.postgres-test"
@@ -1480,7 +1574,7 @@ def main() -> int:
     try:
         _assert_execution_admitted()
     except GateFailure as error:
-        print(f"E1/E2 gate execution quarantine: {error}", file=sys.stderr)
+        print(f"E1/E2/E3 gate execution quarantine: {error}", file=sys.stderr)
         return 77
     if shutil.which("docker") is None:
         print("Docker is required for the E1 PostgreSQL gate", file=sys.stderr)
@@ -1523,38 +1617,45 @@ def main() -> int:
         ):
             build_context = Path(context_temp)
             secrets_directory = Path(secrets_temp)
-            print("[1/6] Generating the minimal filtered build context")
+            print("[1/7] Generating the minimal filtered build context")
             _prepare_build_context(build_context)
             _write_secrets(secrets_directory)
-            print("[2/6] Building the labeled pinned PostgreSQL 17 test image")
+            print("[2/7] Building the labeled pinned PostgreSQL 17 test image")
             _build_test_image(state, build_context)
-            print("[3/6] Running the production-shaped behavioral cluster")
+            print("[3/7] Running the production-shaped behavioral cluster")
             _run_phase(
                 state,
                 "behavior",
                 secrets_directory,
                 lambda phase: _run_behavior_phase(state, secrets_directory, phase),
             )
-            print("[4/6] Running the production-shaped lifecycle cluster")
+            print("[4/7] Running the production-shaped lifecycle cluster")
             _run_phase(
                 state,
                 "lifecycle",
                 secrets_directory,
                 lambda phase: _run_lifecycle_phase(state, secrets_directory, phase),
             )
-            print("[5/6] Running isolated revision-0007 admission cases")
+            print("[5/7] Running isolated revision-0007 admission cases")
             _run_phase(
                 state,
                 "admission",
                 secrets_directory,
                 lambda phase: _run_admission_phase(state, secrets_directory, phase),
             )
-            print("[6/6] Running isolated revision-0012 E2 contracts")
+            print("[6/7] Running isolated revision-0012 E2 contracts")
             _run_phase(
                 state,
                 "e2",
                 secrets_directory,
                 lambda phase: _run_e2_phase(state, secrets_directory, phase),
+            )
+            print("[7/7] Running isolated dormant revision-0013 E3 contracts")
+            _run_phase(
+                state,
+                "e3",
+                secrets_directory,
+                lambda phase: _run_e3_phase(state, secrets_directory, phase),
             )
             exit_code = 0
     except KeyboardInterrupt:
@@ -1577,7 +1678,7 @@ def main() -> int:
         print(f"E1 gate cleanup failed: {cleanup_failure}", file=sys.stderr)
         return 1
     if exit_code == 0:
-        print("E1/E2 PostgreSQL 17 gate passed; labeled cleanup verified")
+        print("E1/E2/E3 PostgreSQL 17 gate passed; labeled cleanup verified")
     return exit_code
 
 

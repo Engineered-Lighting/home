@@ -136,6 +136,7 @@ ALTER ROLE home_agent_identity_finalizer SET lock_timeout = '5s';
 ALTER ROLE home_agent_identity_finalizer SET idle_in_transaction_session_timeout =
   '15s';
 ALTER ROLE home_agent_identity_finalizer SET transaction_timeout = '180s';
+ALTER ROLE home_agent_identity_finalizer SET log_parameter_max_length_on_error = 0;
 ALTER ROLE home_agent_ingest SET statement_timeout = '20s';
 ALTER ROLE home_agent_worker SET statement_timeout = '60s';
 ALTER ROLE home_agent_erasure SET statement_timeout = '60s';

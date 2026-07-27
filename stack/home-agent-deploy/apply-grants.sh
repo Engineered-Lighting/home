@@ -315,6 +315,8 @@ DECLARE
     'operations.reviewed_identity_migration_decisions',
     'operations.reviewed_identity_migration_item_receipts',
     'operations.reviewed_identity_migration_finalizations',
+    'operations.reviewed_identity_migration_projection_lineage',
+    'operations.reviewed_identity_migration_projection_subjects',
     'operations.legacy_identity_writer_evidence',
     'operations.privacy_cutover_check_receipts',
     'operations.semantic_authority_cutovers',
@@ -421,14 +423,14 @@ REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public, ingest, identity,
   knowledge, engagement, privacy, operations
   FROM home_agent_identity_migration, home_agent_identity_kernel;
 REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public, ingest, identity,
-  knowledge, engagement, privacy, operations
+  knowledge, engagement, privacy, operations, media
   FROM home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
 REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public, ingest, identity,
-  knowledge, engagement, privacy, operations
+  knowledge, engagement, privacy, operations, media
   FROM home_agent_identity_migration, home_agent_identity_kernel,
   home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
-REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA ingest, identity, knowledge,
-  engagement, privacy, operations
+REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public, ingest, identity,
+  knowledge, engagement, privacy, operations, media
   FROM home_agent_identity_migration, home_agent_identity_kernel,
   home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
 DO $type_acl$
@@ -441,7 +443,8 @@ BEGIN
       JOIN pg_catalog.pg_namespace AS type_namespace
         ON type_namespace.oid = candidate_type.typnamespace
      WHERE type_namespace.nspname IN (
-       'public','ingest','identity','knowledge','engagement','privacy','operations'
+       'public','ingest','identity','knowledge','engagement','privacy',
+       'operations','media'
      )
        AND candidate_type.typisdefined
        AND candidate_type.typrelid = 0
@@ -457,23 +460,23 @@ BEGIN
 END
 $type_acl$;
 REVOKE USAGE, CREATE ON SCHEMA public, ingest, identity, knowledge, engagement,
-  privacy, operations
+  privacy, operations, media
   FROM home_agent_identity_migration, home_agent_identity_kernel,
   home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
 ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA public, ingest,
-  identity, knowledge, engagement, privacy, operations
+  identity, knowledge, engagement, privacy, operations, media
   REVOKE ALL PRIVILEGES ON TABLES
   FROM home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
 ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA public, ingest,
-  identity, knowledge, engagement, privacy, operations
+  identity, knowledge, engagement, privacy, operations, media
   REVOKE ALL PRIVILEGES ON SEQUENCES
   FROM home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
-ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA ingest, identity,
-  knowledge, engagement, privacy, operations
+ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA public, ingest,
+  identity, knowledge, engagement, privacy, operations, media
   REVOKE ALL PRIVILEGES ON FUNCTIONS
   FROM home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
 ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA public, ingest,
-  identity, knowledge, engagement, privacy, operations
+  identity, knowledge, engagement, privacy, operations, media
   REVOKE ALL PRIVILEGES ON TYPES
   FROM home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
 DO $identity_migration_runs_column_acl$
@@ -1373,6 +1376,1683 @@ BEGIN
   );
 END
 $identity_erasure_e2_acl$;
+
+-- E3 is dormant database-only authority. Grant replay must first remove every
+-- table/column/function capability held by either finalizer role. This
+-- quarantine is committed before the conditional admission below, so a
+-- partial or tampered 0013 object set remains inaccessible when validation
+-- fails. Revision 0006a has none of the E3 objects and continues through the
+-- explicit zero-object path.
+DO $identity_finalizer_e3_quarantine$
+DECLARE
+  column_list text;
+  function_oid regprocedure;
+  grantee_sql text;
+  target_role text;
+  target_signature text;
+  target_table record;
+  type_entry record;
+BEGIN
+  FOR target_table IN
+    SELECT table_namespace.nspname,
+           candidate_table.relname,
+           pg_catalog.string_agg(
+             pg_catalog.quote_ident(attribute.attname), ', '
+             ORDER BY attribute.attnum
+           ) AS column_list
+      FROM pg_catalog.pg_class AS candidate_table
+      JOIN pg_catalog.pg_namespace AS table_namespace
+        ON table_namespace.oid = candidate_table.relnamespace
+      JOIN pg_catalog.pg_attribute AS attribute
+        ON attribute.attrelid = candidate_table.oid
+       AND attribute.attnum > 0
+       AND NOT attribute.attisdropped
+     WHERE table_namespace.nspname IN (
+       'public','ingest','identity','knowledge','engagement','privacy',
+       'operations','media'
+     )
+       AND candidate_table.relkind IN ('r','p','v','m','f')
+     GROUP BY table_namespace.nspname, candidate_table.relname
+  LOOP
+    EXECUTE pg_catalog.format(
+      'REVOKE ALL PRIVILEGES ON TABLE %I.%I FROM '
+      'home_agent_identity_finalizer, home_agent_identity_finalizer_kernel',
+      target_table.nspname, target_table.relname
+    );
+    EXECUTE pg_catalog.format(
+      'REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s), '
+      'REFERENCES (%1$s) ON TABLE %2$I.%3$I FROM '
+      'home_agent_identity_finalizer, home_agent_identity_finalizer_kernel',
+      target_table.column_list, target_table.nspname, target_table.relname
+    );
+  END LOOP;
+
+  REVOKE USAGE, CREATE ON SCHEMA public, ingest, identity, knowledge,
+    engagement, privacy, operations, media
+    FROM home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
+  REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public, ingest, identity,
+    knowledge, engagement, privacy, operations, media
+    FROM home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
+  REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public, ingest, identity,
+    knowledge, engagement, privacy, operations, media
+    FROM home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
+  FOR type_entry IN
+    SELECT type_namespace.nspname, candidate_type.typname
+      FROM pg_catalog.pg_type AS candidate_type
+      JOIN pg_catalog.pg_namespace AS type_namespace
+        ON type_namespace.oid = candidate_type.typnamespace
+     WHERE type_namespace.nspname IN (
+       'public','ingest','identity','knowledge','engagement','privacy',
+       'operations','media'
+     )
+       AND candidate_type.typisdefined
+       AND candidate_type.typrelid = 0
+       AND candidate_type.typelem = 0
+  LOOP
+    EXECUTE pg_catalog.format(
+      'REVOKE USAGE ON TYPE %I.%I FROM '
+      'home_agent_identity_finalizer, home_agent_identity_finalizer_kernel',
+      type_entry.nspname,
+      type_entry.typname
+    );
+  END LOOP;
+
+  -- Dedicated E3 control objects may never retain a grant to an unreviewed
+  -- role. Quarantine each object independently before checking completeness.
+  FOREACH target_signature IN ARRAY ARRAY[
+    'operations.finalize_reviewed_identity_migration(bytea,uuid)',
+    'privacy.lock_identity_semantic_write_fence()',
+    'privacy.fence_identity_tombstone_write()'
+  ]::text[]
+  LOOP
+    function_oid := pg_catalog.to_regprocedure(target_signature);
+    IF function_oid IS NULL THEN
+      CONTINUE;
+    END IF;
+    FOR target_role IN
+      SELECT role_row.rolname FROM pg_catalog.pg_roles AS role_row
+      UNION ALL SELECT 'PUBLIC'
+    LOOP
+      grantee_sql := CASE WHEN target_role = 'PUBLIC'
+        THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END;
+      EXECUTE pg_catalog.format(
+        'REVOKE ALL PRIVILEGES ON FUNCTION %s FROM %s',
+        function_oid, grantee_sql
+      );
+    END LOOP;
+  END LOOP;
+
+  FOREACH column_list IN ARRAY ARRAY[
+    'operations.reviewed_identity_finalizer_admissions',
+    'privacy.identity_semantic_write_fence'
+  ]::text[]
+  LOOP
+    IF pg_catalog.to_regclass(column_list) IS NULL THEN
+      CONTINUE;
+    END IF;
+    SELECT pg_catalog.string_agg(
+             pg_catalog.quote_ident(attribute.attname), ', '
+             ORDER BY attribute.attnum
+           )
+      INTO STRICT grantee_sql
+      FROM pg_catalog.pg_attribute AS attribute
+     WHERE attribute.attrelid = column_list::regclass
+       AND attribute.attnum > 0
+       AND NOT attribute.attisdropped;
+    FOR target_role IN
+      SELECT role_row.rolname FROM pg_catalog.pg_roles AS role_row
+       WHERE role_row.rolname <> 'home_agent_owner'
+      UNION ALL SELECT 'PUBLIC'
+    LOOP
+      EXECUTE pg_catalog.format(
+        'REVOKE ALL PRIVILEGES ON TABLE %s FROM %s',
+        column_list,
+        CASE WHEN target_role = 'PUBLIC'
+          THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END
+      );
+      EXECUTE pg_catalog.format(
+        'REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s), '
+        'REFERENCES (%1$s) ON TABLE %2$s FROM %3$s',
+        grantee_sql,
+        column_list,
+        CASE WHEN target_role = 'PUBLIC'
+          THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END
+      );
+    END LOOP;
+  END LOOP;
+END
+$identity_finalizer_e3_quarantine$;
+
+-- A future owner- or E3-kernel-created function in a schema reachable by the
+-- finalizer roles must not regain PostgreSQL's implicit PUBLIC EXECUTE grant.
+-- Existing callable functions are checked again below with effective
+-- has_function_privilege(), so inherited/PUBLIC access cannot hide in an ACL.
+ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner
+  REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_identity_finalizer_kernel
+  REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+
+-- Restore E3 only when every object, role, ownership dependency, fence, RLS
+-- policy, and narrow ACL is present. The login remains expired: this block
+-- makes the reviewed database kernel internally complete, not live.
+DO $identity_finalizer_e3_acl$
+DECLARE
+  admission_table regclass :=
+    pg_catalog.to_regclass(
+      'operations.reviewed_identity_finalizer_admissions'
+    );
+  fence_table regclass :=
+    pg_catalog.to_regclass('privacy.identity_semantic_write_fence');
+  finalizer_function regprocedure :=
+    pg_catalog.to_regprocedure(
+      'operations.finalize_reviewed_identity_migration(bytea,uuid)'
+    );
+  fence_function regprocedure :=
+    pg_catalog.to_regprocedure(
+      'privacy.lock_identity_semantic_write_fence()'
+    );
+  fence_trigger_function regprocedure :=
+    pg_catalog.to_regprocedure(
+      'privacy.fence_identity_tombstone_write()'
+    );
+  person_blocked_function regprocedure :=
+    pg_catalog.to_regprocedure(
+      'privacy.identity_person_is_blocked(uuid)'
+    );
+  finalizer_oid oid;
+  kernel_oid oid;
+  owner_oid oid;
+  erasure_kernel_oid oid;
+  database_oid oid;
+  current_revision text;
+  primary_object_count integer;
+  bootstrap_columns text[];
+  bootstrap_constraints text[];
+  bootstrap_indexes text[];
+  evidence_table regclass;
+  evidence_tables constant text[] := ARRAY[
+    'operations.reviewed_identity_migration_runs',
+    'operations.reviewed_identity_migration_source_items',
+    'operations.reviewed_identity_migration_decisions',
+    'operations.reviewed_identity_migration_item_receipts',
+    'operations.reviewed_identity_migration_finalizations',
+    'operations.reviewed_identity_migration_projection_lineage',
+    'operations.reviewed_identity_migration_projection_subjects',
+    'operations.reviewed_identity_migration_erasure_impacts',
+    'operations.legacy_identity_writer_evidence',
+    'operations.privacy_cutover_check_receipts',
+    'operations.semantic_authority_cutovers'
+  ]::text[];
+  pre_e3_revisions constant text[] := ARRAY[
+    '0001_greenfield_core',
+    '0002_people_privacy_cutover',
+    '0003_resource_budgets',
+    '0004_rollout_authorizations',
+    '0005_principal_binding_proposals',
+    '0006_worker_maintenance_health',
+    '0006a_worker_lease_arbitration',
+    '0007_phase3_identity_authority',
+    '0008_identity_migration_kernel',
+    '0009_identity_finalizer_base',
+    '0010_identity_erasure_source',
+    '0011_identity_erasure_e1',
+    '0012_identity_erasure_e2'
+  ]::text[];
+  expected_e3_catalog_sha256 constant text :=
+    'PENDING_E3_CATALOG_SHA256';
+  expected_finalizer_body_sha256 constant text :=
+    'f805636d8603cf8d2f678626d5868a5e0d0fc1d97654ed3960b11b756d075b0f';
+  expected_fence_body_sha256 constant text :=
+    'fd6919a406140ac5bc82d1d1dededa1397c5e27dc54916fb572ce7bc33ba22a5';
+  expected_fence_trigger_body_sha256 constant text :=
+    'f78a0f25ca2ea86f286c4bf288a1bcb8889213b0e272d8784852da67b110e69f';
+  expected_person_blocked_body_sha256 constant text :=
+    '36032e050f94dd376dfffd59a25b54f5d0afa197ac13922156be46df753889ea';
+  actual_e3_catalog_sha256 text;
+  expected_schema_acl text[];
+  actual_schema_acl text[];
+  expected_table_acl text[];
+  actual_table_acl text[];
+  expected_column_acl text[];
+  actual_column_acl text[];
+  expected_function_acl text[];
+  actual_function_acl text[];
+  actual_effective_acl text[];
+  expected_effective_acl text[];
+  target_table text;
+  predicate constant text :=
+    'session_user = ''home_agent_identity_finalizer'' AND '
+    'current_user = ''home_agent_identity_finalizer_kernel'' AND NOT '
+    'pg_catalog.pg_has_role(session_user, '
+    '''home_agent_identity_finalizer_kernel'', ''SET'')';
+BEGIN
+  SELECT version_num
+    INTO STRICT current_revision
+    FROM public.alembic_version;
+  SELECT oid INTO STRICT owner_oid
+    FROM pg_catalog.pg_roles WHERE rolname = 'home_agent_owner';
+
+  primary_object_count := pg_catalog.num_nonnulls(
+    admission_table,
+    fence_table,
+    finalizer_function,
+    fence_function,
+    fence_trigger_function
+  );
+  IF primary_object_count = 0 THEN
+    IF current_revision = ANY (pre_e3_revisions) THEN
+      RETURN;
+    END IF;
+    RAISE EXCEPTION 'identity finalizer E3 object set absent at unknown revision'
+      USING ERRCODE = '55000';
+  END IF;
+
+  -- metadata.create_all() at a fresh pre-0013 revision contains the future
+  -- admission relation because revision 0001 deliberately uses the current
+  -- SQLAlchemy metadata. Accept only that exact empty, owner-only, inert
+  -- bootstrap. Any other one-object state is a partial E3 deployment.
+  IF primary_object_count = 1
+     AND admission_table IS NOT NULL
+     AND current_revision = ANY (pre_e3_revisions) THEN
+    SELECT pg_catalog.array_agg(
+             attribute.attname || '|' ||
+             pg_catalog.format_type(
+               attribute.atttypid, attribute.atttypmod
+             ) || '|' ||
+             attribute.attnotnull::text || '|' ||
+             coalesce(
+               pg_catalog.pg_get_expr(
+                 default_row.adbin, default_row.adrelid, true
+               ),
+               ''
+             )
+             ORDER BY attribute.attnum
+           )
+      INTO STRICT bootstrap_columns
+      FROM pg_catalog.pg_attribute AS attribute
+      LEFT JOIN pg_catalog.pg_attrdef AS default_row
+        ON default_row.adrelid = attribute.attrelid
+       AND default_row.adnum = attribute.attnum
+     WHERE attribute.attrelid = admission_table
+       AND attribute.attnum > 0
+       AND NOT attribute.attisdropped;
+    SELECT pg_catalog.array_agg(
+             constraint_row.conname || '|' || constraint_row.contype
+             ORDER BY constraint_row.conname
+           )
+      INTO STRICT bootstrap_constraints
+      FROM pg_catalog.pg_constraint AS constraint_row
+     WHERE constraint_row.conrelid = admission_table;
+    SELECT pg_catalog.array_agg(
+             index_row.relname || '|' ||
+             index_state.indisprimary::text || '|' ||
+             index_state.indisunique::text
+             ORDER BY index_row.relname
+           )
+      INTO STRICT bootstrap_indexes
+      FROM pg_catalog.pg_index AS index_state
+      JOIN pg_catalog.pg_class AS index_row
+        ON index_row.oid = index_state.indexrelid
+     WHERE index_state.indrelid = admission_table;
+
+    IF bootstrap_columns IS DISTINCT FROM ARRAY[
+         'admission_id|uuid|true|',
+         'run_id|uuid|true|',
+         'finalization_id|uuid|true|',
+         'contract_version|character varying(64)|true|',
+         'verification_status|character varying(32)|true|',
+         'document_sha256|character varying(64)|true|',
+         'document_octets|integer|true|',
+         'finalization_commitment|character varying(64)|true|',
+         'decision_manifest_commitment|character varying(64)|true|',
+         'receipt_set_commitment|character varying(64)|true|',
+         'lineage_set_commitment|character varying(64)|true|',
+         'privacy_closure_set_commitment|character varying(64)|true|',
+         'auto_expiry_effect_set_commitment|character varying(64)|true|',
+         'review_receipt_commitment|character varying(64)|true|',
+         'release_manifest_digest|character varying(64)|true|',
+         'migration_tool_bundle_digest|character varying(64)|true|',
+         'core_oci_manifest_digest|character varying(64)|true|',
+         'core_schema_digest|character varying(64)|true|',
+         'core_capability_digest|character varying(64)|true|',
+         'policy_digest|character varying(64)|true|',
+         'review_signing_key_fingerprint|character varying(64)|true|',
+         'finalization_signing_key_fingerprint|character varying(64)|true|',
+         'verifier_bundle_digest|character varying(64)|true|',
+         'admitted_at|timestamp with time zone|true|transaction_timestamp()',
+         'expires_at|timestamp with time zone|true|',
+         'consumed_at|timestamp with time zone|false|'
+       ]::text[]
+       OR bootstrap_constraints IS DISTINCT FROM ARRAY[
+         'ck_reviewed_identity_finalizer_admissions_digest_shape|c',
+         'ck_reviewed_identity_finalizer_admissions_document_size|c',
+         'ck_reviewed_identity_finalizer_admissions_fixed_contract|c',
+         'ck_reviewed_identity_finalizer_admissions_one_time_window|c',
+         'ck_reviewed_identity_finalizer_admissions_uuidv7_ids|c',
+         'fk_identity_finalizer_admission_run|f',
+         'pk_reviewed_identity_finalizer_admissions|p',
+         'uq_reviewed_identity_finalizer_admissions_document_sha256|u',
+         'uq_reviewed_identity_finalizer_admissions_finalization__1d9a|u',
+         'uq_reviewed_identity_finalizer_admissions_finalization_id|u',
+         'uq_reviewed_identity_finalizer_admissions_run_id|u'
+       ]::text[]
+       OR bootstrap_indexes IS DISTINCT FROM ARRAY[
+         'pk_reviewed_identity_finalizer_admissions|true|true',
+         'uq_reviewed_identity_finalizer_admissions_document_sha256|false|true',
+         'uq_reviewed_identity_finalizer_admissions_finalization__1d9a|false|true',
+         'uq_reviewed_identity_finalizer_admissions_finalization_id|false|true',
+         'uq_reviewed_identity_finalizer_admissions_run_id|false|true'
+       ]::text[]
+       OR NOT EXISTS (
+         SELECT 1
+           FROM pg_catalog.pg_class AS table_row
+          WHERE table_row.oid = admission_table
+            AND table_row.relowner = owner_oid
+            AND table_row.relkind = 'r'
+            AND table_row.relpersistence = 'p'
+            AND NOT table_row.relrowsecurity
+            AND NOT table_row.relforcerowsecurity
+            AND NOT table_row.relhastriggers
+       )
+       OR EXISTS (
+         SELECT 1
+           FROM operations.reviewed_identity_finalizer_admissions
+       )
+       OR EXISTS (
+         SELECT 1
+           FROM pg_catalog.pg_policy
+          WHERE polrelid = admission_table
+       )
+       OR pg_catalog.obj_description(
+            admission_table, 'pg_class'
+          ) IS NOT NULL
+       OR EXISTS (
+         SELECT 1
+           FROM pg_catalog.pg_attribute AS attribute
+          WHERE attribute.attrelid = admission_table
+            AND attribute.attnum > 0
+            AND NOT attribute.attisdropped
+            AND attribute.attacl IS NOT NULL
+       )
+       OR EXISTS (
+         SELECT 1
+           FROM pg_catalog.aclexplode(
+             coalesce(
+               (SELECT relacl FROM pg_catalog.pg_class
+                 WHERE oid = admission_table),
+               pg_catalog.acldefault('r', owner_oid)
+             )
+           ) AS table_acl
+          WHERE table_acl.grantee <> owner_oid
+          ) THEN
+      RAISE EXCEPTION 'identity finalizer E3 inert bootstrap contract mismatch'
+        USING ERRCODE = '55000';
+    END IF;
+    RETURN;
+  END IF;
+  IF primary_object_count <> 5
+     OR pg_catalog.to_regclass(
+       'operations.reviewed_identity_migration_runs'
+     ) IS NULL
+     OR pg_catalog.to_regclass(
+       'operations.reviewed_identity_migration_source_items'
+     ) IS NULL
+     OR pg_catalog.to_regclass(
+       'operations.reviewed_identity_migration_decisions'
+     ) IS NULL
+     OR pg_catalog.to_regclass(
+       'operations.reviewed_identity_migration_item_receipts'
+     ) IS NULL
+     OR pg_catalog.to_regclass(
+       'operations.reviewed_identity_migration_finalizations'
+     ) IS NULL
+     OR pg_catalog.to_regclass(
+       'operations.reviewed_identity_migration_projection_lineage'
+     ) IS NULL
+     OR pg_catalog.to_regclass(
+       'operations.reviewed_identity_migration_projection_subjects'
+     ) IS NULL
+     OR pg_catalog.to_regclass(
+       'operations.reviewed_identity_migration_erasure_impacts'
+     ) IS NULL
+     OR pg_catalog.to_regclass(
+       'operations.legacy_identity_writer_evidence'
+     ) IS NULL
+     OR pg_catalog.to_regclass(
+       'operations.privacy_cutover_check_receipts'
+     ) IS NULL
+     OR pg_catalog.to_regclass(
+       'operations.semantic_authority_cutovers'
+     ) IS NULL
+     OR person_blocked_function IS NULL
+     OR NOT EXISTS (
+       SELECT 1
+         FROM public.alembic_version
+        WHERE version_num = '0013_identity_finalizer_e3'
+     ) THEN
+    RAISE EXCEPTION 'partial identity finalizer E3 object set'
+      USING ERRCODE = '55000';
+  END IF;
+
+  SELECT oid INTO STRICT finalizer_oid
+    FROM pg_catalog.pg_roles WHERE rolname = 'home_agent_identity_finalizer';
+  SELECT oid INTO STRICT kernel_oid
+    FROM pg_catalog.pg_roles
+   WHERE rolname = 'home_agent_identity_finalizer_kernel';
+  SELECT oid INTO STRICT erasure_kernel_oid
+    FROM pg_catalog.pg_roles
+   WHERE rolname = 'home_agent_identity_erasure_kernel';
+  SELECT oid INTO STRICT database_oid
+    FROM pg_catalog.pg_database
+   WHERE datname = pg_catalog.current_database();
+
+  IF NOT EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_roles AS login_role
+        WHERE login_role.oid = finalizer_oid
+          AND login_role.rolcanlogin
+          AND NOT login_role.rolinherit
+          AND NOT login_role.rolsuper
+          AND NOT login_role.rolcreatedb
+          AND NOT login_role.rolcreaterole
+          AND NOT login_role.rolreplication
+           AND NOT login_role.rolbypassrls
+           AND login_role.rolconnlimit = 1
+           AND login_role.rolvaliduntil IS NOT NULL
+           AND login_role.rolvaliduntil =
+               timestamptz '1970-01-01 00:00:00+00'
+           AND login_role.rolconfig = ARRAY[
+             'default_transaction_isolation=serializable',
+             'statement_timeout=120s',
+             'lock_timeout=5s',
+             'idle_in_transaction_session_timeout=15s',
+             'transaction_timeout=180s',
+             'log_parameter_max_length_on_error=0'
+           ]::text[]
+     )
+     OR NOT EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_roles AS kernel_role
+        WHERE kernel_role.oid = kernel_oid
+          AND NOT kernel_role.rolcanlogin
+          AND NOT kernel_role.rolinherit
+          AND NOT kernel_role.rolsuper
+          AND NOT kernel_role.rolcreatedb
+          AND NOT kernel_role.rolcreaterole
+          AND NOT kernel_role.rolreplication
+           AND NOT kernel_role.rolbypassrls
+           AND kernel_role.rolconnlimit = 0
+           AND kernel_role.rolvaliduntil IS NULL
+           AND kernel_role.rolconfig IS NULL
+     )
+     OR NOT pg_catalog.has_database_privilege(
+       finalizer_oid, database_oid, 'CONNECT'
+     )
+     OR pg_catalog.has_database_privilege(
+       finalizer_oid, database_oid, 'CREATE,TEMPORARY'
+     )
+     OR pg_catalog.has_database_privilege(
+       kernel_oid, database_oid, 'CONNECT,CREATE,TEMPORARY'
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_auth_members AS membership
+        WHERE membership.member = finalizer_oid
+           OR membership.roleid = finalizer_oid
+     )
+     OR (
+       SELECT pg_catalog.count(*)
+         FROM pg_catalog.pg_auth_members AS membership
+        WHERE membership.roleid = kernel_oid
+          AND membership.member = owner_oid
+          AND NOT membership.admin_option
+          AND NOT membership.inherit_option
+          AND membership.set_option
+     ) <> 1
+     OR (
+       SELECT pg_catalog.count(*)
+         FROM pg_catalog.pg_auth_members AS membership
+        WHERE membership.roleid = kernel_oid
+     ) <> 1
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_auth_members AS membership
+        WHERE membership.member = kernel_oid
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_db_role_setting AS database_setting
+        WHERE database_setting.setrole IN (finalizer_oid, kernel_oid)
+      ) THEN
+    RAISE EXCEPTION 'identity finalizer E3 dormant role contract mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_shdepend AS login_ownership
+        WHERE login_ownership.refobjid = finalizer_oid
+          AND login_ownership.deptype = 'o'
+     )
+     OR (
+       SELECT pg_catalog.count(*)
+         FROM pg_catalog.pg_shdepend AS kernel_ownership
+        WHERE kernel_ownership.refobjid = kernel_oid
+          AND kernel_ownership.deptype = 'o'
+     ) <> 1
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_shdepend AS kernel_ownership
+        WHERE kernel_ownership.refobjid = kernel_oid
+          AND kernel_ownership.deptype = 'o'
+          AND NOT (
+            kernel_ownership.dbid = database_oid
+            AND kernel_ownership.classid = 'pg_catalog.pg_proc'::regclass
+            AND kernel_ownership.objid = finalizer_function::oid
+            AND kernel_ownership.objsubid = 0
+          )
+     ) THEN
+    RAISE EXCEPTION 'identity finalizer E3 ownership dependency mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
+  FOREACH target_table IN ARRAY evidence_tables
+  LOOP
+    evidence_table := pg_catalog.to_regclass(target_table);
+    IF evidence_table IS NULL
+       OR NOT EXISTS (
+         SELECT 1
+           FROM pg_catalog.pg_class AS table_row
+          WHERE table_row.oid = evidence_table
+            AND table_row.relowner = owner_oid
+            AND table_row.relkind = 'r'
+            AND table_row.relpersistence = 'p'
+            AND table_row.relrowsecurity
+            AND table_row.relforcerowsecurity
+       ) THEN
+      RAISE EXCEPTION
+        'identity finalizer E3 evidence relation contract mismatch: %',
+        target_table
+        USING ERRCODE = '42501';
+    END IF;
+  END LOOP;
+
+  IF NOT EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_proc AS function_row
+         WHERE function_row.oid = finalizer_function
+           AND function_row.proowner = kernel_oid
+           AND function_row.prolang = (
+             SELECT language_row.oid
+               FROM pg_catalog.pg_language AS language_row
+              WHERE language_row.lanname = 'plpgsql'
+           )
+           AND function_row.prosecdef
+           AND function_row.prokind = 'f'
+           AND function_row.provolatile = 'v'
+           AND function_row.prorettype = 'uuid'::regtype
+           AND NOT function_row.proretset
+           AND NOT function_row.proisstrict
+           AND NOT function_row.proleakproof
+           AND function_row.proparallel = 'u'
+           AND function_row.pronargs = 2
+           AND function_row.pronargdefaults = 0
+           AND function_row.proargtypes =
+               ARRAY[
+                 'bytea'::pg_catalog.regtype::oid,
+                 'uuid'::pg_catalog.regtype::oid
+               ]::pg_catalog.oidvector
+           AND function_row.proallargtypes IS NULL
+           AND function_row.proargmodes IS NULL
+           AND function_row.proargnames =
+               ARRAY['finalizer_document','admission_id']::text[]
+           AND function_row.proconfig =
+               ARRAY['search_path=pg_catalog, pg_temp']::text[]
+           AND pg_catalog.encode(
+                 pg_catalog.sha256(
+                   pg_catalog.convert_to(function_row.prosrc, 'UTF8')
+                 ),
+                 'hex'
+               ) = expected_finalizer_body_sha256
+      )
+      OR NOT EXISTS (
+        SELECT 1
+          FROM pg_catalog.pg_proc AS function_row
+         WHERE function_row.oid = fence_function
+           AND function_row.proowner = owner_oid
+           AND function_row.prolang = (
+             SELECT language_row.oid
+               FROM pg_catalog.pg_language AS language_row
+              WHERE language_row.lanname = 'plpgsql'
+           )
+           AND function_row.prosecdef
+           AND function_row.prokind = 'f'
+           AND function_row.provolatile = 'v'
+           AND function_row.prorettype = 'void'::regtype
+           AND NOT function_row.proretset
+           AND NOT function_row.proisstrict
+           AND NOT function_row.proleakproof
+           AND function_row.proparallel = 'u'
+           AND function_row.pronargs = 0
+           AND function_row.pronargdefaults = 0
+           AND function_row.proargtypes = ''::pg_catalog.oidvector
+           AND function_row.proallargtypes IS NULL
+           AND function_row.proargmodes IS NULL
+           AND function_row.proargnames IS NULL
+           AND function_row.proconfig =
+               ARRAY['search_path=pg_catalog, pg_temp']::text[]
+           AND pg_catalog.encode(
+                 pg_catalog.sha256(
+                   pg_catalog.convert_to(function_row.prosrc, 'UTF8')
+                 ),
+                 'hex'
+               ) = expected_fence_body_sha256
+      )
+      OR NOT EXISTS (
+        SELECT 1
+          FROM pg_catalog.pg_proc AS function_row
+         WHERE function_row.oid = fence_trigger_function
+           AND function_row.proowner = owner_oid
+           AND function_row.prolang = (
+             SELECT language_row.oid
+               FROM pg_catalog.pg_language AS language_row
+              WHERE language_row.lanname = 'plpgsql'
+           )
+           AND function_row.prosecdef
+           AND function_row.prokind = 'f'
+           AND function_row.provolatile = 'v'
+           AND function_row.prorettype = 'trigger'::regtype
+           AND NOT function_row.proretset
+           AND NOT function_row.proisstrict
+           AND NOT function_row.proleakproof
+           AND function_row.proparallel = 'u'
+           AND function_row.pronargs = 0
+           AND function_row.pronargdefaults = 0
+           AND function_row.proargtypes = ''::pg_catalog.oidvector
+           AND function_row.proallargtypes IS NULL
+           AND function_row.proargmodes IS NULL
+           AND function_row.proargnames IS NULL
+           AND function_row.proconfig =
+               ARRAY['search_path=pg_catalog, pg_temp']::text[]
+           AND pg_catalog.encode(
+                 pg_catalog.sha256(
+                   pg_catalog.convert_to(function_row.prosrc, 'UTF8')
+                 ),
+                 'hex'
+               ) = expected_fence_trigger_body_sha256
+      )
+      OR NOT EXISTS (
+        SELECT 1
+          FROM pg_catalog.pg_proc AS function_row
+         WHERE function_row.oid = person_blocked_function
+           AND function_row.proowner = erasure_kernel_oid
+           AND function_row.prolang = (
+             SELECT language_row.oid
+               FROM pg_catalog.pg_language AS language_row
+              WHERE language_row.lanname = 'sql'
+           )
+           AND function_row.prosecdef
+           AND function_row.prokind = 'f'
+           AND function_row.provolatile = 's'
+           AND function_row.prorettype = 'boolean'::regtype
+           AND NOT function_row.proretset
+           AND NOT function_row.proisstrict
+           AND NOT function_row.proleakproof
+           AND function_row.proparallel = 'u'
+           AND function_row.pronargs = 1
+           AND function_row.pronargdefaults = 0
+           AND function_row.proargtypes =
+               ARRAY[
+                 'uuid'::pg_catalog.regtype::oid
+               ]::pg_catalog.oidvector
+           AND function_row.proallargtypes IS NULL
+           AND function_row.proargmodes IS NULL
+           AND function_row.proargnames =
+               ARRAY['target_person_id']::text[]
+           AND function_row.proconfig =
+               ARRAY['search_path=pg_catalog']::text[]
+           AND pg_catalog.encode(
+                 pg_catalog.sha256(
+                   pg_catalog.convert_to(function_row.prosrc, 'UTF8')
+                 ),
+                 'hex'
+               ) = expected_person_blocked_body_sha256
+      ) THEN
+    RAISE EXCEPTION 'identity finalizer E3 function contract mismatch'
+      USING ERRCODE = '42501',
+            DETAIL = pg_catalog.format(
+              'finalizer=%s fence=%s trigger=%s person_blocked=%s',
+              pg_catalog.encode(
+                pg_catalog.sha256(pg_catalog.convert_to(
+                  (SELECT prosrc FROM pg_catalog.pg_proc
+                    WHERE oid = finalizer_function), 'UTF8'
+                )), 'hex'
+              ),
+              pg_catalog.encode(
+                pg_catalog.sha256(pg_catalog.convert_to(
+                  (SELECT prosrc FROM pg_catalog.pg_proc
+                    WHERE oid = fence_function), 'UTF8'
+                )), 'hex'
+              ),
+              pg_catalog.encode(
+                pg_catalog.sha256(pg_catalog.convert_to(
+                  (SELECT prosrc FROM pg_catalog.pg_proc
+                    WHERE oid = fence_trigger_function), 'UTF8'
+                )), 'hex'
+              ),
+              pg_catalog.encode(
+                pg_catalog.sha256(pg_catalog.convert_to(
+                  (SELECT prosrc FROM pg_catalog.pg_proc
+                    WHERE oid = person_blocked_function), 'UTF8'
+                )), 'hex'
+              )
+            );
+  END IF;
+
+  IF NOT EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_class AS table_row
+        WHERE table_row.oid = admission_table
+          AND table_row.relowner = owner_oid
+          AND table_row.relkind = 'r'
+          AND table_row.relpersistence = 'p'
+          AND table_row.relrowsecurity
+          AND table_row.relforcerowsecurity
+     )
+     OR NOT EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_class AS table_row
+        WHERE table_row.oid = fence_table
+          AND table_row.relowner = owner_oid
+          AND table_row.relkind = 'r'
+          AND table_row.relpersistence = 'p'
+          AND table_row.relrowsecurity
+          AND table_row.relforcerowsecurity
+     )
+     OR (
+       SELECT pg_catalog.count(*)
+         FROM privacy.identity_semantic_write_fence
+        WHERE fence_key = 'global' AND fence_generation = 1
+     ) <> 1
+     OR (
+       SELECT pg_catalog.count(*)
+         FROM privacy.identity_semantic_write_fence
+     ) <> 1
+     OR NOT EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_trigger AS trigger_row
+        WHERE trigger_row.tgrelid =
+              'privacy.subject_retrieval_blocks'::regclass
+          AND trigger_row.tgname =
+              'subject_retrieval_blocks_identity_write_fence'
+          AND trigger_row.tgfoid = fence_trigger_function
+          AND trigger_row.tgenabled = 'O'
+          AND NOT trigger_row.tgisinternal
+           AND trigger_row.tgtype = 23
+           AND trigger_row.tgnargs = 0
+           AND trigger_row.tgargs = ''::bytea
+           AND trigger_row.tgqual IS NULL
+           AND trigger_row.tgoldtable IS NULL
+           AND trigger_row.tgnewtable IS NULL
+           AND trigger_row.tgattr::text = (
+            SELECT attribute.attnum::text
+              FROM pg_catalog.pg_attribute AS attribute
+             WHERE attribute.attrelid =
+                   'privacy.subject_retrieval_blocks'::regclass
+               AND attribute.attname = 'person_id'
+               AND NOT attribute.attisdropped
+          )
+     ) THEN
+    RAISE EXCEPTION 'identity finalizer E3 write-fence contract mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
+  -- Restore the exact RLS policy texts. Admission/fence tables have no other
+  -- policies; evidence tables retain their reviewed E1/E2 owner policies.
+  DROP POLICY IF EXISTS reviewed_identity_finalizer_admissions_owner_select
+    ON operations.reviewed_identity_finalizer_admissions;
+  CREATE POLICY reviewed_identity_finalizer_admissions_owner_select
+    ON operations.reviewed_identity_finalizer_admissions
+    FOR SELECT TO home_agent_owner
+    USING (session_user = 'home_agent_owner');
+  DROP POLICY IF EXISTS reviewed_identity_finalizer_admissions_owner_insert
+    ON operations.reviewed_identity_finalizer_admissions;
+  CREATE POLICY reviewed_identity_finalizer_admissions_owner_insert
+    ON operations.reviewed_identity_finalizer_admissions
+    FOR INSERT TO home_agent_owner
+    WITH CHECK (session_user = 'home_agent_owner');
+  DROP POLICY IF EXISTS reviewed_identity_finalizer_admissions_e3_kernel_select
+    ON operations.reviewed_identity_finalizer_admissions;
+  CREATE POLICY reviewed_identity_finalizer_admissions_e3_kernel_select
+    ON operations.reviewed_identity_finalizer_admissions
+    FOR SELECT TO home_agent_identity_finalizer_kernel
+    USING (
+      session_user = 'home_agent_identity_finalizer'
+      AND current_user = 'home_agent_identity_finalizer_kernel'
+      AND NOT pg_catalog.pg_has_role(
+        session_user, 'home_agent_identity_finalizer_kernel', 'SET'
+      )
+    );
+  DROP POLICY IF EXISTS reviewed_identity_finalizer_admissions_e3_kernel_update
+    ON operations.reviewed_identity_finalizer_admissions;
+  CREATE POLICY reviewed_identity_finalizer_admissions_e3_kernel_update
+    ON operations.reviewed_identity_finalizer_admissions
+    FOR UPDATE TO home_agent_identity_finalizer_kernel
+    USING (
+      session_user = 'home_agent_identity_finalizer'
+      AND current_user = 'home_agent_identity_finalizer_kernel'
+      AND NOT pg_catalog.pg_has_role(
+        session_user, 'home_agent_identity_finalizer_kernel', 'SET'
+      )
+    )
+    WITH CHECK (
+      session_user = 'home_agent_identity_finalizer'
+      AND current_user = 'home_agent_identity_finalizer_kernel'
+      AND NOT pg_catalog.pg_has_role(
+        session_user, 'home_agent_identity_finalizer_kernel', 'SET'
+      )
+    );
+  DROP POLICY IF EXISTS identity_semantic_write_fence_owner
+    ON privacy.identity_semantic_write_fence;
+  CREATE POLICY identity_semantic_write_fence_owner
+    ON privacy.identity_semantic_write_fence
+    FOR ALL TO home_agent_owner
+    USING (current_user = 'home_agent_owner')
+    WITH CHECK (current_user = 'home_agent_owner');
+
+  IF (
+       SELECT pg_catalog.count(*)
+         FROM pg_catalog.pg_policy
+        WHERE polrelid = admission_table
+     ) <> 4
+     OR (
+       SELECT pg_catalog.count(*)
+         FROM pg_catalog.pg_policy
+        WHERE polrelid = fence_table
+     ) <> 1 THEN
+    RAISE EXCEPTION 'identity finalizer E3 control policy set mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
+  FOREACH target_table IN ARRAY ARRAY[
+    'operations.reviewed_identity_migration_runs',
+    'operations.reviewed_identity_migration_source_items',
+    'operations.reviewed_identity_migration_decisions',
+    'operations.reviewed_identity_migration_erasure_impacts',
+    'operations.legacy_identity_writer_evidence',
+    'operations.privacy_cutover_check_receipts',
+    'operations.semantic_authority_cutovers'
+  ]::text[]
+  LOOP
+    EXECUTE pg_catalog.format(
+      'DROP POLICY IF EXISTS %I ON %s',
+      pg_catalog.replace(target_table, '.', '_') || '_e3_kernel_select',
+      target_table
+    );
+    EXECUTE pg_catalog.format(
+      'CREATE POLICY %I ON %s FOR SELECT '
+      'TO home_agent_identity_finalizer_kernel USING (%s)',
+      pg_catalog.replace(target_table, '.', '_') || '_e3_kernel_select',
+      target_table,
+      predicate
+    );
+  END LOOP;
+  FOREACH target_table IN ARRAY ARRAY[
+    'operations.reviewed_identity_migration_item_receipts',
+    'operations.reviewed_identity_migration_finalizations',
+    'operations.reviewed_identity_migration_projection_lineage',
+    'operations.reviewed_identity_migration_projection_subjects'
+  ]::text[]
+  LOOP
+    EXECUTE pg_catalog.format(
+      'DROP POLICY IF EXISTS %I ON %s',
+      pg_catalog.replace(target_table, '.', '_') || '_e3_kernel_select',
+      target_table
+    );
+    EXECUTE pg_catalog.format(
+      'DROP POLICY IF EXISTS %I ON %s',
+      pg_catalog.replace(target_table, '.', '_') || '_e3_kernel_insert',
+      target_table
+    );
+    EXECUTE pg_catalog.format(
+      'CREATE POLICY %I ON %s FOR SELECT '
+      'TO home_agent_identity_finalizer_kernel USING (%s)',
+      pg_catalog.replace(target_table, '.', '_') || '_e3_kernel_select',
+      target_table,
+      predicate
+    );
+    EXECUTE pg_catalog.format(
+      'CREATE POLICY %I ON %s FOR INSERT '
+      'TO home_agent_identity_finalizer_kernel WITH CHECK (%s)',
+      pg_catalog.replace(target_table, '.', '_') || '_e3_kernel_insert',
+      target_table,
+      predicate
+    );
+  END LOOP;
+
+  IF (
+       SELECT pg_catalog.count(*)
+         FROM pg_catalog.pg_policy AS policy_row
+        WHERE policy_row.polrelid = ANY (ARRAY[
+          'operations.reviewed_identity_migration_runs'::regclass,
+          'operations.reviewed_identity_migration_source_items'::regclass,
+          'operations.reviewed_identity_migration_decisions'::regclass,
+          'operations.reviewed_identity_migration_erasure_impacts'::regclass,
+          'operations.legacy_identity_writer_evidence'::regclass,
+          'operations.privacy_cutover_check_receipts'::regclass,
+          'operations.semantic_authority_cutovers'::regclass,
+          'operations.reviewed_identity_migration_item_receipts'::regclass,
+          'operations.reviewed_identity_migration_finalizations'::regclass,
+          'operations.reviewed_identity_migration_projection_lineage'::regclass,
+          'operations.reviewed_identity_migration_projection_subjects'::regclass
+        ]::oid[])
+          AND (
+            0 = ANY (policy_row.polroles)
+            OR kernel_oid = ANY (policy_row.polroles)
+          )
+     ) <> 15
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_policy AS policy_row
+        WHERE policy_row.polrelid = ANY (ARRAY[
+          'operations.reviewed_identity_migration_runs'::regclass,
+          'operations.reviewed_identity_migration_source_items'::regclass,
+          'operations.reviewed_identity_migration_decisions'::regclass,
+          'operations.reviewed_identity_migration_erasure_impacts'::regclass,
+          'operations.legacy_identity_writer_evidence'::regclass,
+          'operations.privacy_cutover_check_receipts'::regclass,
+          'operations.semantic_authority_cutovers'::regclass,
+          'operations.reviewed_identity_migration_item_receipts'::regclass,
+          'operations.reviewed_identity_migration_finalizations'::regclass,
+          'operations.reviewed_identity_migration_projection_lineage'::regclass,
+          'operations.reviewed_identity_migration_projection_subjects'::regclass
+        ]::oid[])
+          AND (
+            0 = ANY (policy_row.polroles)
+            OR kernel_oid = ANY (policy_row.polroles)
+          )
+          AND policy_row.polname NOT IN (
+            'operations_reviewed_identity_migration_runs_e3_kernel_select',
+            'operations_reviewed_identity_migration_source_items_e3_kernel_select',
+            'operations_reviewed_identity_migration_decisions_e3_kernel_select',
+            'operations_reviewed_identity_migration_erasure_impacts_e3_kernel_select',
+            'operations_legacy_identity_writer_evidence_e3_kernel_select',
+            'operations_privacy_cutover_check_receipts_e3_kernel_select',
+            'operations_semantic_authority_cutovers_e3_kernel_select',
+            'operations_reviewed_identity_migration_item_receipts_e3_kernel_select',
+            'operations_reviewed_identity_migration_item_receipts_e3_kernel_insert',
+            'operations_reviewed_identity_migration_finalizations_e3_kernel_select',
+            'operations_reviewed_identity_migration_finalizations_e3_kernel_insert',
+            'operations_reviewed_identity_migration_projection_lineage_e3_kernel_select',
+            'operations_reviewed_identity_migration_projection_lineage_e3_kernel_insert',
+            'operations_reviewed_identity_migration_projection_subjects_e3_kernel_select',
+            'operations_reviewed_identity_migration_projection_subjects_e3_kernel_insert'
+          )
+     ) THEN
+    RAISE EXCEPTION 'identity finalizer E3 evidence policy set mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
+  -- One reviewed digest pins the complete PostgreSQL catalog shape of the
+  -- admission, fence, and eleven evidence relations: columns/defaults,
+  -- constraints and their definitions, indexes, RLS policies, comments, and
+  -- non-internal triggers. It is intentionally PostgreSQL-image-specific.
+  -- The digest is emitted in DETAIL while the 0013 migration is still moving;
+  -- replace the PENDING sentinel only after the migration body is frozen.
+  WITH target_relations(target_name, relation_oid) AS (
+    SELECT target_name, pg_catalog.to_regclass(target_name)
+      FROM pg_catalog.unnest(
+        evidence_tables || ARRAY[
+          'operations.reviewed_identity_finalizer_admissions',
+          'privacy.identity_semantic_write_fence'
+        ]::text[]
+      ) AS target(target_name)
+  ),
+  relation_manifests AS (
+    SELECT target.target_name,
+           pg_catalog.jsonb_build_object(
+             'owner', owner_role.rolname,
+             'kind', relation.relkind,
+             'persistence', relation.relpersistence,
+             'rls', relation.relrowsecurity,
+             'force_rls', relation.relforcerowsecurity,
+             'replica_identity', relation.relreplident,
+             'comment', pg_catalog.obj_description(
+               relation.oid, 'pg_class'
+             ),
+             'columns', (
+               SELECT pg_catalog.jsonb_agg(
+                        pg_catalog.jsonb_build_array(
+                          attribute.attnum,
+                          attribute.attname,
+                          pg_catalog.format_type(
+                            attribute.atttypid, attribute.atttypmod
+                          ),
+                          attribute.attnotnull,
+                          attribute.attidentity,
+                          attribute.attgenerated,
+                          CASE
+                            WHEN attribute.attcollation = 0 THEN NULL
+                            ELSE attribute.attcollation::regcollation::text
+                          END,
+                          pg_catalog.pg_get_expr(
+                            default_row.adbin, default_row.adrelid, true
+                          )
+                        )
+                        ORDER BY attribute.attnum
+                      )
+                 FROM pg_catalog.pg_attribute AS attribute
+                 LEFT JOIN pg_catalog.pg_attrdef AS default_row
+                   ON default_row.adrelid = attribute.attrelid
+                  AND default_row.adnum = attribute.attnum
+                WHERE attribute.attrelid = relation.oid
+                  AND attribute.attnum > 0
+                  AND NOT attribute.attisdropped
+             ),
+             'constraints', (
+               SELECT coalesce(
+                        pg_catalog.jsonb_agg(
+                          pg_catalog.jsonb_build_array(
+                            constraint_row.conname,
+                            constraint_row.contype,
+                            constraint_row.condeferrable,
+                            constraint_row.condeferred,
+                            constraint_row.convalidated,
+                            constraint_row.conkey::text,
+                            CASE
+                              WHEN constraint_row.confrelid = 0 THEN NULL
+                              ELSE constraint_row.confrelid::regclass::text
+                            END,
+                            constraint_row.confkey::text,
+                            constraint_row.confupdtype,
+                            constraint_row.confdeltype,
+                            constraint_row.confmatchtype,
+                            pg_catalog.pg_get_constraintdef(
+                              constraint_row.oid, true
+                            )
+                          )
+                          ORDER BY constraint_row.conname
+                        ),
+                        '[]'::jsonb
+                      )
+                 FROM pg_catalog.pg_constraint AS constraint_row
+                WHERE constraint_row.conrelid = relation.oid
+             ),
+             'indexes', (
+               SELECT coalesce(
+                        pg_catalog.jsonb_agg(
+                          pg_catalog.jsonb_build_array(
+                            index_relation.relname,
+                            index_state.indisunique,
+                            index_state.indisprimary,
+                            index_state.indisexclusion,
+                            index_state.indimmediate,
+                            index_state.indisvalid,
+                            index_state.indisready,
+                            index_state.indkey::text,
+                            pg_catalog.pg_get_indexdef(
+                              index_relation.oid, 0, true
+                            )
+                          )
+                          ORDER BY index_relation.relname
+                        ),
+                        '[]'::jsonb
+                      )
+                 FROM pg_catalog.pg_index AS index_state
+                 JOIN pg_catalog.pg_class AS index_relation
+                   ON index_relation.oid = index_state.indexrelid
+                WHERE index_state.indrelid = relation.oid
+             ),
+             'policies', (
+               SELECT coalesce(
+                        pg_catalog.jsonb_agg(
+                          pg_catalog.jsonb_build_array(
+                            policy_row.polname,
+                            policy_row.polpermissive,
+                            policy_row.polcmd,
+                            (
+                              SELECT pg_catalog.jsonb_agg(
+                                       CASE
+                                         WHEN policy_role.role_oid = 0
+                                           THEN 'PUBLIC'
+                                         ELSE role_row.rolname
+                                       END
+                                       ORDER BY policy_role.role_oid
+                                     )
+                                FROM pg_catalog.unnest(
+                                  policy_row.polroles
+                                ) AS policy_role(role_oid)
+                                LEFT JOIN pg_catalog.pg_roles AS role_row
+                                  ON role_row.oid = policy_role.role_oid
+                            ),
+                            pg_catalog.pg_get_expr(
+                              policy_row.polqual, policy_row.polrelid, true
+                            ),
+                            pg_catalog.pg_get_expr(
+                              policy_row.polwithcheck,
+                              policy_row.polrelid,
+                              true
+                            )
+                          )
+                          ORDER BY policy_row.polname
+                        ),
+                        '[]'::jsonb
+                      )
+                 FROM pg_catalog.pg_policy AS policy_row
+                WHERE policy_row.polrelid = relation.oid
+             ),
+             'triggers', (
+               SELECT coalesce(
+                        pg_catalog.jsonb_agg(
+                          pg_catalog.jsonb_build_array(
+                            trigger_row.tgname,
+                            trigger_row.tgenabled,
+                            trigger_row.tgtype,
+                            trigger_row.tgattr::text,
+                            pg_catalog.encode(trigger_row.tgargs, 'hex'),
+                            pg_catalog.pg_get_expr(
+                              trigger_row.tgqual, trigger_row.tgrelid, true
+                            ),
+                            trigger_row.tgfoid::regprocedure::text,
+                            pg_catalog.pg_get_triggerdef(
+                              trigger_row.oid, true
+                            )
+                          )
+                          ORDER BY trigger_row.tgname
+                        ),
+                        '[]'::jsonb
+                      )
+                 FROM pg_catalog.pg_trigger AS trigger_row
+                WHERE trigger_row.tgrelid = relation.oid
+                  AND NOT trigger_row.tgisinternal
+             )
+           ) AS manifest
+      FROM target_relations AS target
+      JOIN pg_catalog.pg_class AS relation
+        ON relation.oid = target.relation_oid
+      JOIN pg_catalog.pg_roles AS owner_role
+        ON owner_role.oid = relation.relowner
+  )
+  SELECT pg_catalog.encode(
+           pg_catalog.sha256(
+             pg_catalog.convert_to(
+               pg_catalog.jsonb_agg(
+                 pg_catalog.jsonb_build_array(
+                   manifest.target_name, manifest.manifest
+                 )
+                 ORDER BY manifest.target_name
+               )::text,
+               'UTF8'
+             )
+           ),
+           'hex'
+         )
+    INTO STRICT actual_e3_catalog_sha256
+    FROM relation_manifests AS manifest;
+  IF expected_e3_catalog_sha256 !~ '^[0-9a-f]{64}$'
+     OR actual_e3_catalog_sha256 <> expected_e3_catalog_sha256 THEN
+    RAISE EXCEPTION 'identity finalizer E3 catalog manifest mismatch'
+      USING ERRCODE = '42501',
+            DETAIL = pg_catalog.format(
+              'expected=%s actual=%s',
+              expected_e3_catalog_sha256,
+              actual_e3_catalog_sha256
+            );
+  END IF;
+
+  GRANT USAGE ON SCHEMA operations
+    TO home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
+  GRANT USAGE ON SCHEMA identity, privacy
+    TO home_agent_identity_finalizer_kernel;
+  GRANT SELECT ON TABLE
+    operations.reviewed_identity_migration_runs,
+    operations.reviewed_identity_migration_source_items,
+    operations.reviewed_identity_migration_decisions,
+    operations.reviewed_identity_migration_erasure_impacts,
+    operations.legacy_identity_writer_evidence,
+    operations.privacy_cutover_check_receipts,
+    operations.semantic_authority_cutovers
+    TO home_agent_identity_finalizer_kernel;
+  GRANT SELECT ON TABLE operations.reviewed_identity_finalizer_admissions
+    TO home_agent_identity_finalizer_kernel;
+  GRANT UPDATE (consumed_at)
+    ON TABLE operations.reviewed_identity_finalizer_admissions
+    TO home_agent_identity_finalizer_kernel;
+  GRANT SELECT, INSERT ON TABLE
+    operations.reviewed_identity_migration_item_receipts,
+    operations.reviewed_identity_migration_finalizations,
+    operations.reviewed_identity_migration_projection_lineage,
+    operations.reviewed_identity_migration_projection_subjects
+    TO home_agent_identity_finalizer_kernel;
+  GRANT SELECT, INSERT ON TABLE identity.people
+    TO home_agent_identity_finalizer_kernel;
+  GRANT UPDATE (
+    status, status_source_ref, status_source_version,
+    status_source_sha256, updated_at
+  ) ON TABLE identity.people TO home_agent_identity_finalizer_kernel;
+  GRANT SELECT, INSERT ON TABLE
+    identity.aliases,
+    identity.external_recognition_bindings,
+    identity.privacy_directives,
+    identity.legacy_role_labels,
+    identity.legacy_relationship_candidates,
+    privacy.auto_expiry_schedules,
+    operations.outbox
+    TO home_agent_identity_finalizer_kernel;
+  GRANT EXECUTE ON FUNCTION privacy.identity_person_is_blocked(uuid),
+    privacy.lock_identity_semantic_write_fence()
+    TO home_agent_identity_finalizer_kernel;
+  GRANT EXECUTE ON FUNCTION
+    operations.finalize_reviewed_identity_migration(bytea,uuid)
+    TO home_agent_identity_finalizer;
+
+  expected_schema_acl := ARRAY[
+    'home_agent_identity_finalizer|operations|USAGE',
+    'home_agent_identity_finalizer_kernel|identity|USAGE',
+    'home_agent_identity_finalizer_kernel|operations|USAGE',
+    'home_agent_identity_finalizer_kernel|privacy|USAGE'
+  ]::text[];
+  SELECT pg_catalog.array_agg(
+           role_row.rolname || '|' || namespace_row.nspname || '|' ||
+           schema_acl.privilege_type
+           ORDER BY role_row.rolname, namespace_row.nspname,
+                    schema_acl.privilege_type
+         )
+    INTO actual_schema_acl
+    FROM pg_catalog.pg_namespace AS namespace_row
+    CROSS JOIN LATERAL
+      pg_catalog.aclexplode(namespace_row.nspacl) AS schema_acl
+    JOIN pg_catalog.pg_roles AS role_row ON role_row.oid = schema_acl.grantee
+   WHERE role_row.oid IN (finalizer_oid, kernel_oid);
+  IF actual_schema_acl IS DISTINCT FROM expected_schema_acl THEN
+    RAISE EXCEPTION 'identity finalizer E3 schema ACL mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
+  expected_table_acl := ARRAY[
+    'home_agent_identity_finalizer_kernel|identity.aliases|INSERT',
+    'home_agent_identity_finalizer_kernel|identity.aliases|SELECT',
+    'home_agent_identity_finalizer_kernel|identity.external_recognition_bindings|INSERT',
+    'home_agent_identity_finalizer_kernel|identity.external_recognition_bindings|SELECT',
+    'home_agent_identity_finalizer_kernel|identity.legacy_relationship_candidates|INSERT',
+    'home_agent_identity_finalizer_kernel|identity.legacy_relationship_candidates|SELECT',
+    'home_agent_identity_finalizer_kernel|identity.legacy_role_labels|INSERT',
+    'home_agent_identity_finalizer_kernel|identity.legacy_role_labels|SELECT',
+    'home_agent_identity_finalizer_kernel|identity.people|INSERT',
+    'home_agent_identity_finalizer_kernel|identity.people|SELECT',
+    'home_agent_identity_finalizer_kernel|identity.privacy_directives|INSERT',
+    'home_agent_identity_finalizer_kernel|identity.privacy_directives|SELECT',
+    'home_agent_identity_finalizer_kernel|operations.legacy_identity_writer_evidence|SELECT',
+    'home_agent_identity_finalizer_kernel|operations.outbox|INSERT',
+    'home_agent_identity_finalizer_kernel|operations.outbox|SELECT',
+    'home_agent_identity_finalizer_kernel|operations.privacy_cutover_check_receipts|SELECT',
+    'home_agent_identity_finalizer_kernel|operations.reviewed_identity_finalizer_admissions|SELECT',
+    'home_agent_identity_finalizer_kernel|operations.reviewed_identity_migration_decisions|SELECT',
+    'home_agent_identity_finalizer_kernel|operations.reviewed_identity_migration_erasure_impacts|SELECT',
+    'home_agent_identity_finalizer_kernel|operations.reviewed_identity_migration_finalizations|INSERT',
+    'home_agent_identity_finalizer_kernel|operations.reviewed_identity_migration_finalizations|SELECT',
+    'home_agent_identity_finalizer_kernel|operations.reviewed_identity_migration_item_receipts|INSERT',
+    'home_agent_identity_finalizer_kernel|operations.reviewed_identity_migration_item_receipts|SELECT',
+    'home_agent_identity_finalizer_kernel|operations.reviewed_identity_migration_projection_lineage|INSERT',
+    'home_agent_identity_finalizer_kernel|operations.reviewed_identity_migration_projection_lineage|SELECT',
+    'home_agent_identity_finalizer_kernel|operations.reviewed_identity_migration_projection_subjects|INSERT',
+    'home_agent_identity_finalizer_kernel|operations.reviewed_identity_migration_projection_subjects|SELECT',
+    'home_agent_identity_finalizer_kernel|operations.reviewed_identity_migration_runs|SELECT',
+    'home_agent_identity_finalizer_kernel|operations.reviewed_identity_migration_source_items|SELECT',
+    'home_agent_identity_finalizer_kernel|operations.semantic_authority_cutovers|SELECT',
+    'home_agent_identity_finalizer_kernel|privacy.auto_expiry_schedules|INSERT',
+    'home_agent_identity_finalizer_kernel|privacy.auto_expiry_schedules|SELECT'
+  ]::text[];
+  SELECT pg_catalog.array_agg(
+           role_row.rolname || '|' || table_namespace.nspname || '.' ||
+           table_row.relname || '|' || table_acl.privilege_type
+           ORDER BY role_row.rolname, table_namespace.nspname,
+                    table_row.relname, table_acl.privilege_type
+         )
+    INTO actual_table_acl
+    FROM pg_catalog.pg_class AS table_row
+    JOIN pg_catalog.pg_namespace AS table_namespace
+      ON table_namespace.oid = table_row.relnamespace
+    CROSS JOIN LATERAL
+      pg_catalog.aclexplode(table_row.relacl) AS table_acl
+    JOIN pg_catalog.pg_roles AS role_row ON role_row.oid = table_acl.grantee
+   WHERE role_row.oid IN (finalizer_oid, kernel_oid)
+     AND table_namespace.nspname IN (
+       'public','ingest','identity','knowledge','engagement','privacy',
+       'operations','media'
+     );
+  IF actual_table_acl IS DISTINCT FROM expected_table_acl THEN
+    RAISE EXCEPTION 'identity finalizer E3 table ACL mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
+  expected_column_acl := ARRAY[
+    'home_agent_identity_finalizer_kernel|identity.people|status|UPDATE',
+    'home_agent_identity_finalizer_kernel|identity.people|status_source_ref|UPDATE',
+    'home_agent_identity_finalizer_kernel|identity.people|status_source_sha256|UPDATE',
+    'home_agent_identity_finalizer_kernel|identity.people|status_source_version|UPDATE',
+    'home_agent_identity_finalizer_kernel|identity.people|updated_at|UPDATE',
+    'home_agent_identity_finalizer_kernel|operations.reviewed_identity_finalizer_admissions|consumed_at|UPDATE'
+  ]::text[];
+  SELECT pg_catalog.array_agg(
+           role_row.rolname || '|' || table_namespace.nspname || '.' ||
+           table_row.relname || '|' || attribute.attname || '|' ||
+           column_acl.privilege_type
+           ORDER BY role_row.rolname, table_namespace.nspname,
+                    table_row.relname, attribute.attname,
+                    column_acl.privilege_type
+         )
+    INTO actual_column_acl
+    FROM pg_catalog.pg_attribute AS attribute
+    JOIN pg_catalog.pg_class AS table_row
+      ON table_row.oid = attribute.attrelid
+    JOIN pg_catalog.pg_namespace AS table_namespace
+      ON table_namespace.oid = table_row.relnamespace
+    CROSS JOIN LATERAL
+      pg_catalog.aclexplode(attribute.attacl) AS column_acl
+    JOIN pg_catalog.pg_roles AS role_row ON role_row.oid = column_acl.grantee
+   WHERE role_row.oid IN (finalizer_oid, kernel_oid)
+     AND table_namespace.nspname IN (
+       'public','ingest','identity','knowledge','engagement','privacy',
+       'operations','media'
+     );
+  IF actual_column_acl IS DISTINCT FROM expected_column_acl THEN
+    RAISE EXCEPTION 'identity finalizer E3 column ACL mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
+  expected_function_acl := ARRAY[
+    'home_agent_identity_finalizer|operations.finalize_reviewed_identity_migration(bytea,uuid)|EXECUTE',
+    'home_agent_identity_finalizer_kernel|privacy.identity_person_is_blocked(uuid)|EXECUTE',
+    'home_agent_identity_finalizer_kernel|privacy.lock_identity_semantic_write_fence()|EXECUTE'
+  ]::text[];
+  SELECT pg_catalog.array_agg(
+           role_row.rolname || '|' ||
+           function_row.oid::regprocedure::text || '|' ||
+           function_acl.privilege_type
+           ORDER BY role_row.rolname, function_row.oid::regprocedure::text,
+                    function_acl.privilege_type
+         )
+    INTO actual_function_acl
+    FROM pg_catalog.pg_proc AS function_row
+    JOIN pg_catalog.pg_namespace AS function_namespace
+      ON function_namespace.oid = function_row.pronamespace
+    CROSS JOIN LATERAL
+      pg_catalog.aclexplode(function_row.proacl) AS function_acl
+    JOIN pg_catalog.pg_roles AS role_row ON role_row.oid = function_acl.grantee
+   WHERE role_row.oid IN (finalizer_oid, kernel_oid)
+      AND function_namespace.nspname IN (
+        'ingest','identity','knowledge','engagement','privacy','operations',
+        'media'
+      )
+      AND NOT (
+        role_row.oid = kernel_oid
+        AND function_row.oid = finalizer_function
+      );
+  IF actual_function_acl IS DISTINCT FROM expected_function_acl THEN
+    RAISE EXCEPTION 'identity finalizer E3 function ACL mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_namespace AS namespace_row
+         CROSS JOIN LATERAL
+           pg_catalog.aclexplode(namespace_row.nspacl) AS schema_acl
+        WHERE schema_acl.grantee IN (finalizer_oid, kernel_oid)
+          AND schema_acl.is_grantable
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_class AS table_row
+         JOIN pg_catalog.pg_namespace AS table_namespace
+           ON table_namespace.oid = table_row.relnamespace
+         CROSS JOIN LATERAL
+           pg_catalog.aclexplode(table_row.relacl) AS table_acl
+        WHERE table_acl.grantee IN (finalizer_oid, kernel_oid)
+          AND table_acl.is_grantable
+          AND table_namespace.nspname IN (
+            'public','ingest','identity','knowledge','engagement','privacy',
+            'operations','media'
+          )
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_attribute AS attribute
+         JOIN pg_catalog.pg_class AS table_row
+           ON table_row.oid = attribute.attrelid
+         JOIN pg_catalog.pg_namespace AS table_namespace
+           ON table_namespace.oid = table_row.relnamespace
+         CROSS JOIN LATERAL
+           pg_catalog.aclexplode(attribute.attacl) AS column_acl
+        WHERE column_acl.grantee IN (finalizer_oid, kernel_oid)
+          AND column_acl.is_grantable
+          AND table_namespace.nspname IN (
+            'public','ingest','identity','knowledge','engagement','privacy',
+            'operations','media'
+          )
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_proc AS function_row
+         JOIN pg_catalog.pg_namespace AS function_namespace
+           ON function_namespace.oid = function_row.pronamespace
+         CROSS JOIN LATERAL
+           pg_catalog.aclexplode(function_row.proacl) AS function_acl
+        WHERE function_acl.grantee IN (finalizer_oid, kernel_oid)
+          AND function_acl.is_grantable
+          AND function_namespace.nspname IN (
+            'public','ingest','identity','knowledge','engagement','privacy',
+            'operations','media'
+          )
+     ) THEN
+    RAISE EXCEPTION 'identity finalizer E3 grant option detected'
+      USING ERRCODE = '42501';
+  END IF;
+
+  expected_effective_acl := ARRAY[
+    'home_agent_identity_finalizer|operations|USAGE',
+    'home_agent_identity_finalizer|public|USAGE',
+    'home_agent_identity_finalizer_kernel|identity|USAGE',
+    'home_agent_identity_finalizer_kernel|operations|USAGE',
+    'home_agent_identity_finalizer_kernel|privacy|USAGE',
+    'home_agent_identity_finalizer_kernel|public|USAGE'
+  ]::text[];
+  SELECT pg_catalog.array_agg(
+           role_row.rolname || '|' || namespace_row.nspname || '|' ||
+           privilege_name
+           ORDER BY role_row.rolname, namespace_row.nspname, privilege_name
+         )
+    INTO actual_effective_acl
+    FROM pg_catalog.pg_roles AS role_row
+    CROSS JOIN pg_catalog.pg_namespace AS namespace_row
+    CROSS JOIN pg_catalog.unnest(
+      ARRAY['CREATE','USAGE']::text[]
+    ) AS privilege(privilege_name)
+   WHERE role_row.oid IN (finalizer_oid, kernel_oid)
+     AND namespace_row.nspname IN (
+       'public','ingest','identity','knowledge','engagement','privacy',
+       'operations','media'
+     )
+     AND pg_catalog.has_schema_privilege(
+       role_row.oid, namespace_row.oid, privilege_name
+     );
+  IF actual_effective_acl IS DISTINCT FROM expected_effective_acl THEN
+    RAISE EXCEPTION 'identity finalizer E3 effective schema ACL mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
+  -- Effective table access catches direct, inherited, and PUBLIC privileges.
+  -- Column-only UPDATE does not satisfy has_table_privilege(), and is pinned
+  -- separately by expected_column_acl above.
+  expected_effective_acl := expected_table_acl;
+  SELECT pg_catalog.array_agg(
+           role_row.rolname || '|' || table_namespace.nspname || '.' ||
+           table_row.relname || '|' || privilege_name
+           ORDER BY role_row.rolname, table_namespace.nspname,
+                    table_row.relname, privilege_name
+         )
+    INTO actual_effective_acl
+    FROM pg_catalog.pg_roles AS role_row
+    CROSS JOIN pg_catalog.pg_class AS table_row
+    JOIN pg_catalog.pg_namespace AS table_namespace
+      ON table_namespace.oid = table_row.relnamespace
+    CROSS JOIN pg_catalog.unnest(
+      ARRAY[
+        'DELETE','INSERT','REFERENCES','SELECT','TRIGGER','TRUNCATE','UPDATE'
+      ]::text[]
+    ) AS privilege(privilege_name)
+   WHERE role_row.oid IN (finalizer_oid, kernel_oid)
+     AND table_row.relkind IN ('r','p','v','m','f')
+     AND table_namespace.nspname IN (
+       'public','ingest','identity','knowledge','engagement','privacy',
+       'operations','media'
+     )
+     AND pg_catalog.has_table_privilege(
+       role_row.oid, table_row.oid, privilege_name
+     );
+  IF actual_effective_acl IS DISTINCT FROM expected_effective_acl THEN
+    RAISE EXCEPTION 'identity finalizer E3 effective table ACL mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
+  expected_effective_acl := ARRAY[
+    'home_agent_identity_finalizer|operations.finalize_reviewed_identity_migration(bytea,uuid)',
+    'home_agent_identity_finalizer_kernel|operations.finalize_reviewed_identity_migration(bytea,uuid)',
+    'home_agent_identity_finalizer_kernel|privacy.identity_person_is_blocked(uuid)',
+    'home_agent_identity_finalizer_kernel|privacy.lock_identity_semantic_write_fence()'
+  ]::text[];
+  SELECT pg_catalog.array_agg(
+           role_row.rolname || '|' ||
+           function_row.oid::regprocedure::text
+           ORDER BY role_row.rolname,
+                    function_row.oid::regprocedure::text
+         )
+    INTO actual_effective_acl
+    FROM pg_catalog.pg_roles AS role_row
+    CROSS JOIN pg_catalog.pg_proc AS function_row
+    JOIN pg_catalog.pg_namespace AS function_namespace
+      ON function_namespace.oid = function_row.pronamespace
+   WHERE role_row.oid IN (finalizer_oid, kernel_oid)
+     AND function_namespace.nspname IN (
+       'public','ingest','identity','knowledge','engagement','privacy',
+       'operations','media'
+     )
+     AND pg_catalog.has_function_privilege(
+       role_row.oid, function_row.oid, 'EXECUTE'
+     );
+  IF actual_effective_acl IS DISTINCT FROM expected_effective_acl THEN
+    RAISE EXCEPTION 'identity finalizer E3 effective function ACL mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_roles AS role_row
+         CROSS JOIN pg_catalog.pg_class AS sequence_row
+         JOIN pg_catalog.pg_namespace AS sequence_namespace
+           ON sequence_namespace.oid = sequence_row.relnamespace
+        WHERE role_row.oid IN (finalizer_oid, kernel_oid)
+          AND sequence_row.relkind = 'S'
+          AND sequence_namespace.nspname IN (
+            'public','ingest','identity','knowledge','engagement','privacy',
+            'operations','media'
+          )
+          AND (
+            pg_catalog.has_sequence_privilege(
+              role_row.oid, sequence_row.oid, 'USAGE'
+            )
+            OR pg_catalog.has_sequence_privilege(
+              role_row.oid, sequence_row.oid, 'SELECT'
+            )
+            OR pg_catalog.has_sequence_privilege(
+              role_row.oid, sequence_row.oid, 'UPDATE'
+            )
+          )
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_roles AS role_row
+         CROSS JOIN pg_catalog.pg_type AS type_row
+         JOIN pg_catalog.pg_namespace AS type_namespace
+           ON type_namespace.oid = type_row.typnamespace
+        WHERE role_row.oid IN (finalizer_oid, kernel_oid)
+          AND type_namespace.nspname IN (
+            'public','ingest','identity','knowledge','engagement','privacy',
+            'operations','media'
+          )
+          AND type_row.typisdefined
+          AND type_row.typrelid = 0
+          AND type_row.typelem = 0
+          AND pg_catalog.has_type_privilege(
+            role_row.oid, type_row.oid, 'USAGE'
+          )
+     ) THEN
+    RAISE EXCEPTION 'identity finalizer E3 sequence/type ACL mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_default_acl AS default_acl
+         CROSS JOIN LATERAL
+           pg_catalog.aclexplode(default_acl.defaclacl) AS privilege
+        WHERE privilege.grantee IN (finalizer_oid, kernel_oid)
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM (
+           VALUES
+             (owner_oid),
+             (kernel_oid)
+         ) AS required_default(owner_role_oid)
+        WHERE NOT EXISTS (
+          SELECT 1
+            FROM pg_catalog.pg_default_acl AS default_acl
+           WHERE default_acl.defaclrole =
+                 required_default.owner_role_oid
+             AND default_acl.defaclnamespace = 0
+             AND default_acl.defaclobjtype = 'f'
+             AND NOT EXISTS (
+               SELECT 1
+                 FROM pg_catalog.aclexplode(
+                   default_acl.defaclacl
+                 ) AS default_privilege
+                WHERE default_privilege.grantee = 0
+                  AND default_privilege.privilege_type = 'EXECUTE'
+             )
+        )
+     ) THEN
+    RAISE EXCEPTION 'identity finalizer E3 default ACL mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_class AS control_table
+         CROSS JOIN LATERAL
+           pg_catalog.aclexplode(control_table.relacl) AS table_acl
+        WHERE control_table.oid IN (admission_table, fence_table)
+          AND table_acl.grantee = 0
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_proc AS control_function
+         CROSS JOIN LATERAL
+           pg_catalog.aclexplode(control_function.proacl) AS function_acl
+        WHERE control_function.oid IN (
+          finalizer_function,
+          fence_function,
+          fence_trigger_function,
+          person_blocked_function
+        )
+          AND function_acl.grantee = 0
+     ) THEN
+    RAISE EXCEPTION 'identity finalizer E3 PUBLIC ACL mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+END
+$identity_finalizer_e3_acl$;
 SQL
 
 # The broad role setup above supports old pinned revisions and creates the

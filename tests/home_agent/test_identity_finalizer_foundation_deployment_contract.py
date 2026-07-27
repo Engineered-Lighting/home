@@ -163,7 +163,9 @@ class IdentityFinalizerFoundationDeploymentContractTests(unittest.TestCase):
         )
         self.assertIn("driver: none", service)
         self.assertIn("read_only: true", service)
-        self.assertIn("identity finalizer capability is not implemented", service)
+        self.assertIn(
+            "identity finalizer kernel is dormant and not activated", service
+        )
         self.assertIn("exit 78", service)
         self.assertNotIn("api-net", service)
         self.assertNotIn("edge-net", service)
@@ -180,14 +182,14 @@ class IdentityFinalizerFoundationDeploymentContractTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, service)
 
-    def test_grants_quarantine_both_roles_and_expose_no_finalizer(self) -> None:
+    def test_grants_quarantine_then_conditionally_restore_only_e3(self) -> None:
         grants = read("stack/home-agent-deploy/apply-grants.sh")
         for role in (LOGIN_ROLE, KERNEL_ROLE):
             self.assertIn(role, grants)
-        for statement in re.findall(r"(?is)GRANT\s+EXECUTE[\s\S]*?;", grants):
+        pre_e3 = grants.split("DO $identity_finalizer_e3_quarantine$", 1)[0]
+        for statement in re.findall(r"(?is)GRANT\s+EXECUTE[\s\S]*?;", pre_e3):
             self.assertNotIn(LOGIN_ROLE, statement)
             self.assertNotIn(KERNEL_ROLE, statement)
-        self.assertNotIn("finalize_reviewed_identity_migration", grants)
         for statement in re.findall(r"ALTER DEFAULT PRIVILEGES[\s\S]*?;", grants):
             if " GRANT " in f" {statement.upper()} ":
                 self.assertNotIn(LOGIN_ROLE, statement)
@@ -205,6 +207,28 @@ class IdentityFinalizerFoundationDeploymentContractTests(unittest.TestCase):
             grants,
         )
         self.assertIn("pg_catalog.to_regclass", grants)
+        quarantine = grants.split("DO $identity_finalizer_e3_quarantine$", 1)[1].split(
+            "$identity_finalizer_e3_quarantine$;", 1
+        )[0]
+        admission = grants.split("DO $identity_finalizer_e3_acl$", 1)[1].split(
+            "$identity_finalizer_e3_acl$;", 1
+        )[0]
+        self.assertIn("REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s)", quarantine)
+        self.assertIn("IF primary_object_count = 0 THEN", admission)
+        self.assertIn("partial identity finalizer E3 object set", admission)
+        self.assertIn(
+            "operations.finalize_reviewed_identity_migration(bytea,uuid)",
+            admission,
+        )
+        self.assertIn(
+            "TO home_agent_identity_finalizer;",
+            admission,
+        )
+        self.assertIn(
+            "login_role.rolvaliduntil =\n"
+            "               timestamptz '1970-01-01 00:00:00+00'",
+            admission,
+        )
 
     def test_foundation_migration_exposes_no_callable_finalizer(self) -> None:
         migration = read(

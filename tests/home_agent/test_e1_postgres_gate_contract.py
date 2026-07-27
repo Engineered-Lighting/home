@@ -217,7 +217,11 @@ def test_context_manifest_explicitly_carries_untracked_erasure_test_sources() ->
     for relative_path in (
         "stack/services/home-agent-core/alembic/versions/"
         "0012_identity_person_erasure_tombstone.py",
+        "stack/services/home-agent-core/alembic/versions/"
+        "0013_identity_finalizer_kernel.py",
         "stack/services/home-agent-core/app/identity_erasure_schema.py",
+        "stack/home-agent-deploy/operator/reviewed_identity_payload.py",
+        "stack/home-agent-deploy/operator/REVIEWED-IDENTITY-PAYLOAD.md",
         "stack/services/home-agent-core/tests/test_identity_person_restore_replay.py",
         "stack/services/home-agent-core/tests/test_ledger_versions.py",
         "stack/services/home-agent-core/tests/"
@@ -225,6 +229,11 @@ def test_context_manifest_explicitly_carries_untracked_erasure_test_sources() ->
         "stack/services/home-agent-core/tests/"
         "test_phase3_identity_erasure_e2_schema.py",
         "tests/home_agent/test_identity_erasure_e2_deployment_contract.py",
+        "stack/services/home-agent-core/tests/"
+        "test_phase3_identity_finalizer_e3_runtime_postgres.py",
+        "stack/services/home-agent-core/tests/"
+        "test_phase3_identity_finalizer_e3_schema.py",
+        "tests/home_agent/test_identity_finalizer_e3_deployment_contract.py",
     ):
         assert relative_path in runner.BUILD_CONTEXT_FILES
 
@@ -268,22 +277,41 @@ def test_context_policy_rejects_sensitive_binary_and_git_symlink_paths(
         runner._git_index_entries(runner.BUILD_CONTEXT_TREES)
 
 
-def test_runner_uses_four_fresh_clusters_and_revision_0007_case_clones() -> None:
+def test_runner_uses_five_fresh_clusters_and_revision_0007_case_clones() -> None:
     source = RUNNER.read_text(encoding="utf-8")
     harness = HARNESS.read_text(encoding="utf-8")
 
+    assert 'REVISION_0006A = "0006a_worker_lease_arbitration"' in source
     assert 'REVISION_0007 = "0007_phase3_identity_authority"' in source
     assert 'REVISION_0012 = "0012_identity_erasure_e2"' in source
+    assert 'REVISION_0013 = "0013_identity_finalizer_e3"' in source
     assert 'ADMISSION_TEMPLATE = "e1_template_0007"' in source
     assert 'CASE_DATABASE = "home_agent"' in harness
     assert "alembic_upgrade(database_url(database), REVISION_0010)" in harness
     assert "run_provision_roles(database_url(database))" in harness
     assert "assert_identity_kernel_ownership(database)" in harness
     assert "_set_identity_kernel_function_owner" not in harness
-    for phase in ("behavior", "lifecycle", "admission", "e2"):
+    for phase in ("behavior", "lifecycle", "admission", "e2", "e3"):
         assert f'"{phase}"' in source
     assert "fail_fast: bool = True" in source
     assert "fail_fast=False" in source
+
+
+def test_each_fresh_upgrade_path_replays_grants_at_the_live_0006a_pin() -> None:
+    source = RUNNER.read_text(encoding="utf-8")
+    boundaries = (
+        ("def _run_behavior_phase(", "def _run_lifecycle_phase(", "REVISION_0010"),
+        ("def _run_lifecycle_phase(", "def _run_admission_phase(", "REVISION_0010"),
+        ("def _run_admission_phase(", "def _upgrade_e2_database(", "REVISION_0007"),
+        ("def _upgrade_e2_database(", "def _upgrade_e3_database(", "REVISION_0010"),
+    )
+
+    for start, end, next_revision in boundaries:
+        section = source.split(start, 1)[1].split(end, 1)[0]
+        live_pin = section.index("REVISION_0006A")
+        grant_replay = section.index("_apply_grants", live_pin)
+        next_upgrade = section.index(next_revision, live_pin)
+        assert live_pin < grant_replay < next_upgrade
 
 
 def test_e2_phase_uses_secret_file_role_urls_and_guarded_database_recreation() -> None:
@@ -311,6 +339,26 @@ def test_e2_phase_uses_secret_file_role_urls_and_guarded_database_recreation() -
     assert "test_postgresql_e2_clean_roundtrip" in source
     assert "test_postgresql_e2_all_target_rls" in source
     assert "test_postgresql_e2_restore_before_person" in source
+
+
+def test_e3_phase_is_guarded_dormant_and_uses_secret_file_role_urls() -> None:
+    source = RUNNER.read_text(encoding="utf-8")
+
+    assert "def _upgrade_e3_database(" in source
+    assert "_upgrade_e2_database(state, phase, secrets_directory)" in source
+    assert "_alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0013)" in (
+        source
+    )
+    assert "_apply_grants(state, phase, secrets_directory, BASE_DATABASE)" in source
+    assert "def _run_e3_phase(" in source
+    assert "TEST_PHASE3_IDENTITY_FINALIZER_E3_OWNER_DATABASE_URL" in source
+    assert "TEST_PHASE3_IDENTITY_FINALIZER_E3_FINALIZER_DATABASE_URL" in source
+    assert "postgres_identity_finalizer_password" in source
+    assert "test_phase3_identity_finalizer_e3_schema.py" in source
+    assert "test_phase3_identity_finalizer_e3_runtime_postgres.py" in source
+    assert "test_identity_finalizer_e3_deployment_contract.py" in source
+    assert "test_apply_grants_revision_0006a_contract.py" in source
+    assert "Running isolated dormant revision-0013 E3 contracts" in source
 
 
 def test_runner_labels_clients_and_cleanup_residue_fails_the_gate() -> None:
@@ -346,7 +394,7 @@ def test_runner_labels_clients_and_cleanup_residue_fails_the_gate() -> None:
     assert "GITHUB_HOSTED_LINUX_FLAG" in source
     assert "GITHUB_HOSTED_LINUX_CONTEXT" in source
     assert "Docker daemon identity inspection" in source
-    assert "E1/E2 gate execution quarantine" in source
+    assert "E1/E2/E3 gate execution quarantine" in source
 
 
 def test_runner_pins_local_endpoint_sentinel_inventory_and_minimal_context() -> None:
@@ -388,11 +436,22 @@ def test_test_image_and_ci_pin_the_reviewed_top_level_inputs() -> None:
     assert "requirements-dev.txt" in dockerfile
     assert "python3 -m venv" in dockerfile
     assert "COPY stack/home-agent-deploy/" in dockerfile
+    assert (
+        "COPY stack/home-agent-compose.yml stack/home-agent.env.example "
+        "/workspace/stack/"
+    ) in dockerfile
     assert "COPY tests/home_agent/" in dockerfile
     assert "COPY tools/run-home-agent-e1-postgres-gate.py" in dockerfile
     assert "COPY .github/workflows/home-agent-e1-postgres.yml" in dockerfile
     assert f"actions/checkout@{CHECKOUT_SHA}" in workflow
     assert "actions/checkout v4.3.1" in workflow
+    assert workflow.count('- "stack/home-agent.env.example"') == 2
+    assert (
+        workflow.count(
+            '- "tests/home_agent/test_apply_grants_revision_0006a_contract.py"'
+        )
+        == 2
+    )
 
 
 def test_operator_documentation_states_precise_cleanup_limits() -> None:

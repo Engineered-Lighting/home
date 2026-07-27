@@ -87,6 +87,20 @@ class ApplyGrantsRevision0006aContractTests(unittest.TestCase):
         ):
             self.assertIn(f"'{role}'", section)
 
+        for later_evidence_table in (
+            "reviewed_identity_migration_projection_lineage",
+            "reviewed_identity_migration_projection_subjects",
+        ):
+            self.assertEqual(
+                section.count(f"'operations.{later_evidence_table}'"),
+                1,
+                later_evidence_table,
+            )
+            self.assertLess(
+                section.index(f"'operations.{later_evidence_table}'"),
+                section.index("$phase3_identity_foundation_acl$;"),
+            )
+
     def test_replay_guard_column_revoke_is_also_0006a_absence_safe(self) -> None:
         source = GRANTS.read_text(encoding="utf-8")
         block = source.split("DO $identity_migration_runs_column_acl$", 1)[1].split(

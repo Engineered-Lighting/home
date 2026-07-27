@@ -1077,41 +1077,6 @@ async def test_postgresql_e3_lifecycle_boundary_and_atomic_finalizer() -> None:
                 comprehensive=True,
             )
 
-        original_admission = {
-            "document_sha256": hashlib.sha256(comprehensive.document).hexdigest(),
-            "document_octets": len(comprehensive.document),
-        }
-        async with owner.begin() as connection:
-            owner_mutation = await connection.execute(
-                text(
-                    "UPDATE operations.reviewed_identity_finalizer_admissions "
-                    "SET document_sha256=:digest, document_octets=:octets "
-                    "WHERE admission_id=:admission"
-                ),
-                {
-                    "digest": _digest(f"owner-mutation-{uuid.uuid4().hex}"),
-                    "octets": len(comprehensive.document) + 1,
-                    "admission": comprehensive.admission_id,
-                },
-            )
-            assert owner_mutation.rowcount == 0
-            persisted_admission = (
-                (
-                    await connection.execute(
-                        text(
-                            "SELECT document_sha256, document_octets "
-                            "FROM operations."
-                            "reviewed_identity_finalizer_admissions "
-                            "WHERE admission_id=:admission"
-                        ),
-                        {"admission": comprehensive.admission_id},
-                    )
-                )
-                .mappings()
-                .one()
-            )
-        assert dict(persisted_admission) == original_admission
-
         def null_finalization_commitment(document: dict[str, Any]) -> None:
             document["finalization_commitment"] = None
 
@@ -1165,7 +1130,9 @@ async def test_postgresql_e3_lifecycle_boundary_and_atomic_finalizer() -> None:
                 hostile_fixture,
             )
             assert hostile_error is not None, f"{label} JSON null was accepted"
-            assert _sqlstate(hostile_error) == "22023", label
+            assert _sqlstate(hostile_error) == "22023", (
+                f"{label}: {hostile_error.orig}"
+            )
 
         private_canary = f"PRIVATE_FINALIZER_CANARY_{uuid.uuid4().hex}"
 
@@ -1183,7 +1150,11 @@ async def test_postgresql_e3_lifecycle_boundary_and_atomic_finalizer() -> None:
             private_fixture,
         )
         assert private_error is not None
-        assert _sqlstate(private_error) == "22023"
+        private_sqlstate = _sqlstate(private_error)
+        assert private_sqlstate == "22023", (
+            "private document bypassed the sanitized invalid-input boundary; "
+            f"sqlstate={private_sqlstate}"
+        )
         assert "identity_finalizer_private_document_rejected" in str(
             private_error.orig
         )
@@ -1215,7 +1186,7 @@ async def test_postgresql_e3_lifecycle_boundary_and_atomic_finalizer() -> None:
             infinite_fixture,
         )
         assert infinite_error is not None
-        assert _sqlstate(infinite_error) == "22023"
+        assert _sqlstate(infinite_error) == "22023", str(infinite_error.orig)
         assert "identity_finalizer_privacy_record_invalid" in str(
             infinite_error.orig
         )

@@ -16,6 +16,9 @@ PINNED_E3_CATALOG_SHA256 = (
 PINNED_E4_CATALOG_SHA256 = (
     "a96aeb68c7c5656988088ae74539760c6a811320849f01c122e02141f87eff27"
 )
+PINNED_E5_CATALOG_SHA256 = (
+    "adfd664ccb07372107649fab7275d1d3040ebe498813fc69af27a4e7336cd084"
+)
 
 
 def _read(relative_path: str) -> str:
@@ -342,12 +345,12 @@ def test_e5_replay_quarantines_and_pins_the_complete_direct_acl_surface() -> Non
     assert "policy_row.polcmd = 'r'" in admission
     assert "policy_row.polcmd = 'w'" in admission
 
-    assert "'PENDING_E5_CATALOG_SHA256'" in admission
+    assert f"'{PINNED_E5_CATALOG_SHA256}'" in admission
+    assert "PENDING_E5_CATALOG_SHA256" not in admission
     assert "expected_e5_catalog_sha256 !~ '^[0-9a-f]{64}$'" in admission
     assert "actual_e5_catalog_sha256" in admission
     assert (
-        "identity current-authority E5 catalog admission is pending "
-        "reviewed digest"
+        "identity current-authority E5 catalog admission digest mismatch"
     ) in admission
     for manifest_field in (
         "'function'",
@@ -412,7 +415,7 @@ def test_e5_replay_quarantines_and_pins_the_complete_direct_acl_surface() -> Non
     assert "GRANT " not in admission
 
 
-def test_hosted_runner_provisions_before_0015_and_captures_only_after_cleanup() -> None:
+def test_hosted_runner_provisions_before_0015_and_enforces_pinned_catalog() -> None:
     runner = _read("tools/run-home-agent-e1-postgres-gate.py")
     workflow = _read(".github/workflows/home-agent-e1-postgres.yml")
     phase = runner.split("def _run_e4_scaffold_phase(", 1)[1].split(
@@ -435,18 +438,19 @@ def test_hosted_runner_provisions_before_0015_and_captures_only_after_cleanup() 
     assert "TEST_PHASE3_IDENTITY_CURRENT_AUTHORITY_E5_DATABASE_URL" in runner
     assert phase.count("REVISION_0015") >= 4
     assert "_alembic_downgrade(" in phase
-    assert (
-        "identity current-authority E5 catalog admission is pending "
-        in phase
-    )
-    assert '"reviewed digest"' in phase
-    assert "capture_e5_catalog_digest=True" in phase
-    assert "PENDING_E5_CATALOG_SHA256" in runner
-    assert "pending_e5_catalog_digest" in runner
-    assert "_extract_e5_catalog_digest" in runner
-    assert "E5_CATALOG_SHA256=" in runner
+    assert phase.count(
+        "identity cutover E4 activation contract is not installed"
+    ) == 2
+    assert "pinned dormant E5 catalog" in phase
+    assert "capture_e5_catalog_digest" not in runner
+    assert "PENDING_E5_CATALOG_SHA256" not in runner
+    assert "pending_e5_catalog_digest" not in runner
+    assert "_extract_e5_catalog_digest" not in runner
+    assert "_classify_e5_catalog_failure" not in runner
+    assert "E5_CATALOG_FAILURE_CODES" not in runner
+    assert "E5_CATALOG_SHA256=" not in runner
     assert runner.index("if cleanup_failure is not None:") < runner.index(
-        'print(f"E5_CATALOG_SHA256='
+        '"E1/E2/E3/E4 PostgreSQL 17 gate passed; "'
     )
     assert "verify rejected E5 catalog remains broadly quarantined" in phase
     assert "binding_operator AS caller" in phase

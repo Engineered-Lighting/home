@@ -5074,10 +5074,9 @@ BEGIN
 END
 $identity_current_authority_e5_quarantine$;
 
--- The first reviewed 0015 run intentionally carries a non-digest sentinel.
--- A trusted GitHub-hosted gate may report only the exact post-quarantine
--- digest after every phase and labeled cleanup succeeds. A follow-up pins it
--- and removes that one-time discovery path. No positive E5 ACL is installed.
+-- The E5 catalog manifest is pinned to the reviewed post-quarantine state.
+-- A matching catalog remains dormant behind the unchanged E4 activation stop;
+-- no positive E5 ACL is installed here.
 DO $identity_current_authority_e5_acl$
 DECLARE
   actual_e5_catalog_sha256 text;
@@ -5095,7 +5094,7 @@ DECLARE
     'transaction_timeout=30s'
   ]::text[];
   expected_e5_catalog_sha256 constant text :=
-    'PENDING_E5_CATALOG_SHA256';
+    'adfd664ccb07372107649fab7275d1d3040ebe498813fc69af27a4e7336cd084';
   function_name_count integer;
   kernel_owned_object_count integer;
   owner_oid oid;
@@ -5751,7 +5750,7 @@ BEGIN
   IF expected_e5_catalog_sha256 !~ '^[0-9a-f]{64}$'
      OR actual_e5_catalog_sha256 <> expected_e5_catalog_sha256 THEN
     RAISE EXCEPTION
-      'identity current-authority E5 catalog admission is pending reviewed digest'
+      'identity current-authority E5 catalog admission digest mismatch'
       USING ERRCODE = '42501',
             DETAIL = pg_catalog.format(
               'expected=%s actual=%s',

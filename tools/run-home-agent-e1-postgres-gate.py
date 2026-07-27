@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path, PurePosixPath
-import re
 import secrets
 import shutil
 import signal
@@ -62,117 +61,6 @@ E5_OWNER_DATABASE_ENV = (
 E5_AUTHORITY_DATABASE_ENV = (
     "TEST_PHASE3_IDENTITY_CURRENT_AUTHORITY_E5_DATABASE_URL"
 )
-E5_CATALOG_FAILURE_CODES = {
-    "partial Phase 3 identity authority table set": (
-        "foundation_identity_authority_table_set_mismatch"
-    ),
-    "partial identity migration kernel function set": (
-        "foundation_migration_function_set_mismatch"
-    ),
-    "identity migration kernel ownership contract mismatch": (
-        "foundation_migration_ownership_mismatch"
-    ),
-    "identity migration kernel ownership dependency mismatch": (
-        "foundation_migration_ownership_dependency_mismatch"
-    ),
-    "identity migration replay guard trigger mismatch": (
-        "foundation_migration_replay_guard_mismatch"
-    ),
-    "identity migration kernel ACL contract mismatch": (
-        "foundation_migration_acl_mismatch"
-    ),
-    "identity erasure kernel ownership/membership invalid": (
-        "e1_erasure_kernel_role_mismatch"
-    ),
-    "partial identity erasure E2 object set": "e2_object_set_mismatch",
-    "identity erasure E2 function ownership invalid": (
-        "e2_function_ownership_mismatch"
-    ),
-    "identity finalizer E3 object set absent at unknown revision": (
-        "e3_object_set_revision_mismatch"
-    ),
-    "partial identity finalizer E3 object set": "e3_object_set_mismatch",
-    "identity finalizer E3 dormant role contract mismatch": (
-        "e3_dormant_role_mismatch"
-    ),
-    "identity finalizer E3 ownership dependency mismatch": (
-        "e3_ownership_dependency_mismatch"
-    ),
-    "identity finalizer E3 function contract mismatch": (
-        "e3_function_mismatch"
-    ),
-    "identity finalizer E3 write-fence contract mismatch": (
-        "e3_write_fence_mismatch"
-    ),
-    "identity finalizer E3 reviewed descendant policy mismatch": (
-        "e3_reviewed_descendant_policy_mismatch"
-    ),
-    "identity finalizer E3 reviewed E5 policy mismatch": (
-        "e3_reviewed_e5_policy_mismatch"
-    ),
-    "identity finalizer E3 control policy set mismatch": (
-        "e3_control_policy_set_mismatch"
-    ),
-    "identity finalizer E3 evidence policy set mismatch": (
-        "e3_evidence_policy_set_mismatch"
-    ),
-    "identity finalizer E3 catalog manifest mismatch": (
-        "e3_catalog_manifest_mismatch"
-    ),
-    "identity finalizer E3 schema ACL mismatch": "e3_schema_acl_mismatch",
-    "identity finalizer E3 table ACL mismatch": "e3_table_acl_mismatch",
-    "identity finalizer E3 column ACL mismatch": "e3_column_acl_mismatch",
-    "identity finalizer E3 function ACL mismatch": "e3_function_acl_mismatch",
-    "identity finalizer E3 grant option detected": "e3_grant_option_detected",
-    "identity finalizer E3 effective schema ACL mismatch": (
-        "e3_effective_schema_acl_mismatch"
-    ),
-    "identity finalizer E3 effective table ACL mismatch": (
-        "e3_effective_table_acl_mismatch"
-    ),
-    "identity finalizer E3 effective function ACL mismatch": (
-        "e3_effective_function_acl_mismatch"
-    ),
-    "identity finalizer E3 sequence/type ACL mismatch": (
-        "e3_sequence_type_acl_mismatch"
-    ),
-    "identity finalizer E3 default ACL mismatch": "e3_default_acl_mismatch",
-    "identity finalizer E3 PUBLIC ACL mismatch": "e3_public_acl_mismatch",
-    "identity cutover E4 role ceremony was omitted": (
-        "e4_role_ceremony_missing"
-    ),
-    "partial identity cutover E4 role pair": "e4_role_pair_mismatch",
-    "identity cutover E4 dormant role contract mismatch": (
-        "e4_dormant_role_mismatch"
-    ),
-    "partial or revision-mismatched identity cutover E4 object set": (
-        "e4_object_set_mismatch"
-    ),
-    "identity cutover E4 reviewed E5 policy mismatch": (
-        "e4_reviewed_e5_policy_mismatch"
-    ),
-    "identity cutover E4 catalog admission is pending reviewed digest": (
-        "e4_catalog_digest_mismatch"
-    ),
-    "partial or revision-mismatched current-authority E5 object set": (
-        "e5_object_set_mismatch"
-    ),
-    "current-authority E5 caller role contract mismatch": (
-        "e5_caller_role_mismatch"
-    ),
-    "current-authority E5 dormant role contract mismatch": (
-        "e5_dormant_role_mismatch"
-    ),
-    "current-authority E5 ownership contract mismatch": (
-        "e5_ownership_mismatch"
-    ),
-    "current-authority E5 policy contract mismatch": (
-        "e5_policy_mismatch"
-    ),
-    "current-authority E5 quarantine mismatch": (
-        "e5_quarantine_mismatch"
-    ),
-}
 RUN_LABEL = "com.engineeredlighting.home-agent-e1.run"
 MANAGED_LABEL = "com.engineeredlighting.home-agent-e1.managed"
 PHASE_LABEL = "com.engineeredlighting.home-agent-e1.phase"
@@ -420,7 +308,6 @@ class GateState:
     client_sequence: int = 0
     interrupted: bool = False
     phases: set[str] = field(default_factory=set)
-    pending_e5_catalog_digest: str | None = None
 
     @property
     def name_prefix(self) -> str:
@@ -1011,7 +898,6 @@ def _apply_grants_expect_failure(
     expected_output: str,
     failure_label: str = "tampered E2 helper",
     redact_output: bool = False,
-    capture_e5_catalog_digest: bool = False,
 ) -> None:
     result = _docker_run(
         state,
@@ -1028,48 +914,11 @@ def _apply_grants_expect_failure(
         raise GateFailure(f"{failure_label} unexpectedly passed grant replay")
     if expected_output not in result.stdout:
         output = result.stdout.rstrip()
-        if output and not (redact_output or capture_e5_catalog_digest):
+        if output and not redact_output:
             print(output, file=sys.stderr)
-        if capture_e5_catalog_digest:
-            failure_code = _classify_e5_catalog_failure(result.stdout)
-            if failure_code is not None:
-                raise GateFailure(f"{failure_label} blocked by {failure_code}")
         raise GateFailure(
             f"{failure_label} failed without the reviewed contract marker"
         )
-    if capture_e5_catalog_digest:
-        if state.pending_e5_catalog_digest is not None:
-            raise GateFailure("E5 catalog digest was captured more than once")
-        state.pending_e5_catalog_digest = _extract_e5_catalog_digest(result.stdout)
-
-
-def _classify_e5_catalog_failure(output: str) -> str | None:
-    matches = [
-        failure_code
-        for exception_message, failure_code in E5_CATALOG_FAILURE_CODES.items()
-        for _match in re.finditer(
-            r"^(?:psql:[^\r\n]*:\d+:\s+)?ERROR:\s+"
-            rf"{re.escape(exception_message)}\r?$",
-            output,
-            re.MULTILINE,
-        )
-    ]
-    if len(matches) != 1:
-        return None
-    return matches[0]
-
-
-def _extract_e5_catalog_digest(output: str) -> str:
-    matches = re.findall(
-        r"DETAIL:\s+expected=PENDING_E5_CATALOG_SHA256 "
-        r"actual=([0-9a-f]{64})(?=\s|$)",
-        output,
-    )
-    if len(matches) != 1:
-        raise GateFailure(
-            "unpinned E5 catalog failed without one exact redacted digest"
-        )
-    return matches[0]
 
 
 def _provision_roles(
@@ -2417,12 +2266,10 @@ def _run_e4_scaffold_phase(
         secrets_directory,
         BASE_DATABASE,
         expected_output=(
-            "identity current-authority E5 catalog admission is pending "
-            "reviewed digest"
+            "identity cutover E4 activation contract is not installed"
         ),
-        failure_label="unpinned dormant E5 catalog",
+        failure_label="pinned dormant E5 catalog",
         redact_output=True,
-        capture_e5_catalog_digest=True,
     )
     quarantined_acl = _psql(
         state,
@@ -2690,13 +2537,6 @@ def main() -> int:
         print(f"E1 gate cleanup failed: {cleanup_failure}", file=sys.stderr)
         return 1
     if exit_code == 0:
-        if state.pending_e5_catalog_digest is None:
-            print(
-                "E1 gate failed: E5 catalog digest was not captured",
-                file=sys.stderr,
-            )
-            return 1
-        print(f"E5_CATALOG_SHA256={state.pending_e5_catalog_digest}")
         print(
             "E1/E2/E3/E4 PostgreSQL 17 gate passed; "
             "E5 catalog gate passed; labeled cleanup verified"

@@ -271,6 +271,41 @@ def test_evidence_policy_identifiers_cannot_truncate_or_collide() -> None:
     assert "EVIDENCE_INSERT_POLICY" in downgrade
 
 
+def test_kernel_schema_privileges_cover_function_compilation_only() -> None:
+    install = MIGRATION.split("def _install_function_and_acl()", 1)[1].split(
+        "def _validate_dormant_role()", 1
+    )[0]
+    usage_and_create = (
+        "GRANT USAGE, CREATE ON SCHEMA operations TO {KERNEL_ROLE};"
+    )
+    set_role = "SET LOCAL ROLE {KERNEL_ROLE};"
+    reset_role = "RESET ROLE;"
+    revoke_create = "REVOKE CREATE ON SCHEMA operations FROM {KERNEL_ROLE};"
+    persistent_usage = (
+        "GRANT USAGE ON SCHEMA operations TO {FINALIZER_ROLE}, {KERNEL_ROLE};"
+    )
+
+    grant_position = install.index(usage_and_create)
+    set_role_position = install.index(set_role, grant_position)
+    create_position = install.index(
+        "CREATE FUNCTION operations.finalize_reviewed_identity_migration(",
+        set_role_position,
+    )
+    reset_position = install.index(reset_role, create_position)
+    revoke_position = install.index(revoke_create, reset_position)
+    persistent_usage_position = install.index(persistent_usage, revoke_position)
+
+    assert (
+        grant_position
+        < set_role_position
+        < create_position
+        < reset_position
+        < revoke_position
+        < persistent_usage_position
+    )
+    assert "REVOKE USAGE ON SCHEMA operations FROM {KERNEL_ROLE}" not in install
+
+
 def test_finalizer_function_has_a_fixed_security_and_byte_boundary() -> None:
     body = _literal("FUNCTION_BODY")
     assert "SECURITY DEFINER" in MIGRATION

@@ -3345,7 +3345,7 @@ def _install_evidence_policies() -> None:
 def _install_function_and_acl() -> None:
     op.execute(
         f"""
-        GRANT CREATE ON SCHEMA operations TO {KERNEL_ROLE};
+        GRANT USAGE, CREATE ON SCHEMA operations TO {KERNEL_ROLE};
         SET LOCAL ROLE {KERNEL_ROLE};
         CREATE FUNCTION operations.finalize_reviewed_identity_migration(
           finalizer_document bytea,

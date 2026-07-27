@@ -1715,6 +1715,13 @@ DECLARE
     '0011_identity_erasure_e1',
     '0012_identity_erasure_e2'
   ]::text[];
+  -- E4 is the only reviewed descendant whose migration preserves the exact
+  -- E3 relations, functions, policies, ownership, and ACL contract validated
+  -- below. Every later revision must be admitted explicitly after review.
+  reviewed_e3_catalog_revisions constant text[] := ARRAY[
+    '0013_identity_finalizer_e3',
+    '0014_identity_cutover_e4'
+  ]::text[];
   expected_e3_catalog_sha256 constant text :=
     '123326a4620d3dd123773819d95255e40813a5a949f406570252ff1f7031f29a';
   expected_finalizer_body_sha256 constant text :=
@@ -2057,10 +2064,8 @@ BEGIN
        'operations.semantic_authority_cutovers'
      ) IS NULL
      OR person_blocked_function IS NULL
-     OR NOT EXISTS (
-       SELECT 1
-         FROM public.alembic_version
-        WHERE version_num = '0013_identity_finalizer_e3'
+     OR NOT (
+       current_revision = ANY (reviewed_e3_catalog_revisions)
      ) THEN
     RAISE EXCEPTION 'partial identity finalizer E3 object set'
       USING ERRCODE = '55000';

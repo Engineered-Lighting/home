@@ -97,6 +97,25 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
     assert "primary_object_count <> 5" in admission
     assert "partial identity finalizer E3 object set" in admission
     assert "0013_identity_finalizer_e3" in admission
+    reviewed_revisions = re.search(
+        r"reviewed_e3_catalog_revisions constant text\[\] := ARRAY\["
+        r"(.*?)\]\:\:text\[\]",
+        admission,
+        re.DOTALL,
+    )
+    assert reviewed_revisions is not None
+    assert re.findall(
+        r"'([0-9a-z_]+)'",
+        reviewed_revisions.group(1),
+    ) == [
+        "0013_identity_finalizer_e3",
+        "0014_identity_cutover_e4",
+    ]
+    assert (
+        "current_revision = ANY (reviewed_e3_catalog_revisions)"
+        in admission
+    )
+    assert "0015_" not in reviewed_revisions.group(1)
     assert (
         "login_role.rolvaliduntil =\n"
         "               timestamptz '1970-01-01 00:00:00+00'"

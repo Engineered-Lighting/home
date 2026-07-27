@@ -259,6 +259,8 @@ def test_context_manifest_explicitly_carries_untracked_erasure_test_sources() ->
         "stack/services/home-agent-core/alembic/versions/"
         "0014_identity_semantic_cutover_e4.py",
         "stack/services/home-agent-core/app/identity_erasure_schema.py",
+        "stack/home-agent-deploy/postgres-pg_hba.conf",
+        "stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh",
         "stack/home-agent-deploy/operator/reviewed_identity_payload.py",
         "stack/home-agent-deploy/operator/REVIEWED-IDENTITY-PAYLOAD.md",
         "stack/services/home-agent-core/tests/test_identity_person_restore_replay.py",
@@ -291,6 +293,13 @@ def test_context_policy_rejects_sensitive_binary_and_git_symlink_paths(
 ) -> None:
     runner = _load_runner()
 
+    runner._validate_context_path_policy(
+        "stack/home-agent-deploy/postgres-pg_hba.conf"
+    )
+    with pytest.raises(runner.GateFailure, match="unreviewed"):
+        runner._validate_context_path_policy(
+            "stack/home-agent-deploy/unreviewed.conf"
+        )
     with pytest.raises(runner.GateFailure, match="sensitive"):
         runner._validate_context_path_policy(
             "stack/services/home-agent-core/tests/secrets/canary.py"
@@ -490,6 +499,41 @@ def test_e4_scaffold_phase_is_fresh_dormant_and_secret_file_only() -> None:
     )
     assert "verify rejected E4 kernel remains quarantined" in source
     assert "Running isolated dormant E4 deployment scaffold" in source
+
+
+def test_direct_psycopg_url_exports_are_narrow_and_scheme_distinct() -> None:
+    runner = _load_runner()
+
+    sqlalchemy_export = runner._database_url_shell_export(
+        "TEST_SQLALCHEMY_DATABASE_URL",
+        runner.BASE_DATABASE,
+    )
+    direct_owner_export = runner._direct_psycopg_database_url_shell_export(
+        runner.E4_SCAFFOLD_OWNER_DATABASE_ENV,
+        runner.BASE_DATABASE,
+    )
+    direct_cutover_export = runner._direct_psycopg_database_url_shell_export(
+        runner.E4_SCAFFOLD_CUTOVER_DATABASE_ENV,
+        runner.BASE_DATABASE,
+        "home_agent_identity_cutover",
+        "postgres_identity_cutover_password",
+    )
+
+    assert '"postgresql+psycopg://' in sqlalchemy_export
+    assert '"postgresql://' in direct_owner_export
+    assert '"postgresql://' in direct_cutover_export
+    assert "+psycopg" not in direct_owner_export
+    assert "+psycopg" not in direct_cutover_export
+    with pytest.raises(runner.GateFailure, match="unreviewed direct psycopg"):
+        runner._direct_psycopg_database_url_shell_export(
+            "TEST_UNREVIEWED_DATABASE_URL",
+            runner.BASE_DATABASE,
+        )
+    with pytest.raises(runner.GateFailure, match="unreviewed direct psycopg"):
+        runner._direct_psycopg_database_url_shell_export(
+            runner.E4_SCAFFOLD_CUTOVER_DATABASE_ENV,
+            runner.BASE_DATABASE,
+        )
 
 
 @pytest.mark.parametrize(

@@ -42,6 +42,12 @@ REVISION_0013 = "0013_identity_finalizer_e3"
 REVISION_0014 = "0014_identity_cutover_e4"
 E4_SUCCESS_DOCUMENT_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_DOCUMENT_B64"
 E4_SUCCESS_ADMISSION_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_ADMISSION_ID"
+E4_SCAFFOLD_OWNER_DATABASE_ENV = (
+    "TEST_PHASE3_IDENTITY_CUTOVER_E4_OWNER_DATABASE_URL"
+)
+E4_SCAFFOLD_CUTOVER_DATABASE_ENV = (
+    "TEST_PHASE3_IDENTITY_CUTOVER_E4_DATABASE_URL"
+)
 E4_FIXTURE_MOUNT = "/run/e4-fixture"
 E4_FIXTURE_DOCUMENT_FILE = "document.b64"
 E4_FIXTURE_ADMISSION_FILE = "admission_id"
@@ -173,6 +179,8 @@ BUILD_CONTEXT_FILES = (
     "stack/home-agent-deploy/add-identity-cutover-role-secrets.sh",
     "stack/home-agent-deploy/preflight-identity-cutover-roles.sh",
     "stack/home-agent-deploy/provision-identity-cutover-roles.sh",
+    "stack/home-agent-deploy/postgres-pg_hba.conf",
+    "stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh",
     "tests/home_agent/test_identity_erasure_kernel_foundation_deployment_contract.py",
     "tests/home_agent/test_apply_grants_revision_0006a_contract.py",
     "tests/home_agent/test_e1_postgres_gate_contract.py",
@@ -237,6 +245,7 @@ REVIEWED_CONTEXT_SUFFIXES = {
 REVIEWED_CONTEXT_FILENAMES = {
     "Dockerfile.postgres-test",
     "home-agent.env.example",
+    "postgres-pg_hba.conf",
 }
 SENSITIVE_CONTEXT_COMPONENTS = {
     ".gnupg",
@@ -969,6 +978,33 @@ def _database_url_shell_export(
     )
 
 
+def _direct_psycopg_database_url_shell_export(
+    name: str,
+    database: str,
+    role: str = OWNER,
+    password_secret: str = "postgres_owner_password",
+) -> str:
+    reviewed_contracts = {
+        E4_SCAFFOLD_OWNER_DATABASE_ENV: (
+            BASE_DATABASE,
+            OWNER,
+            "postgres_owner_password",
+        ),
+        E4_SCAFFOLD_CUTOVER_DATABASE_ENV: (
+            BASE_DATABASE,
+            "home_agent_identity_cutover",
+            "postgres_identity_cutover_password",
+        ),
+    }
+    if reviewed_contracts.get(name) != (database, role, password_secret):
+        raise GateFailure("unreviewed direct psycopg database URL export")
+    return (
+        f'export {name}="postgresql://{role}:'
+        f"$(tr -d '\\r\\n' < /run/secrets/{password_secret})"
+        f'@postgres:5432/{database}"; '
+    )
+
+
 def _validate_e4_fixture_material(directory: Path) -> None:
     if directory.is_symlink() or not directory.is_dir():
         raise GateFailure("E4 fixture output is not a real directory")
@@ -1161,6 +1197,10 @@ def _pytest(
     nodes: list[str],
     url_environment: dict[str, str],
     credential_url_environment: dict[str, tuple[str, str, str]] | None = None,
+    direct_psycopg_url_environment: dict[str, str] | None = None,
+    direct_psycopg_credential_url_environment: (
+        dict[str, tuple[str, str, str]] | None
+    ) = None,
     environment: dict[str, str] | None = None,
     fixture_file_environment: dict[str, str] | None = None,
     fixture_directory: Path | None = None,
@@ -1173,6 +1213,17 @@ def _pytest(
         credential_url_environment or {}
     ).items():
         shell += _database_url_shell_export(name, database, role, password_secret)
+    for name, database in (direct_psycopg_url_environment or {}).items():
+        shell += _direct_psycopg_database_url_shell_export(name, database)
+    for name, (database, role, password_secret) in (
+        direct_psycopg_credential_url_environment or {}
+    ).items():
+        shell += _direct_psycopg_database_url_shell_export(
+            name,
+            database,
+            role,
+            password_secret,
+        )
     if fixture_file_environment:
         if fixture_directory is None:
             raise GateFailure("E4 fixture exports require a fixture directory")
@@ -1979,11 +2030,12 @@ def _run_e4_scaffold_phase(
             "/workspace/tests/home_agent/"
             "test_identity_cutover_e4_deployment_contract.py",
         ],
-        url_environment={
-            "TEST_PHASE3_IDENTITY_CUTOVER_E4_OWNER_DATABASE_URL": BASE_DATABASE,
+        url_environment={},
+        direct_psycopg_url_environment={
+            E4_SCAFFOLD_OWNER_DATABASE_ENV: BASE_DATABASE,
         },
-        credential_url_environment={
-            "TEST_PHASE3_IDENTITY_CUTOVER_E4_DATABASE_URL": (
+        direct_psycopg_credential_url_environment={
+            E4_SCAFFOLD_CUTOVER_DATABASE_ENV: (
                 BASE_DATABASE,
                 "home_agent_identity_cutover",
                 "postgres_identity_cutover_password",

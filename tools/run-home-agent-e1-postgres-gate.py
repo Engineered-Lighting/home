@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path, PurePosixPath
-import re
 import secrets
 import shutil
 import signal
@@ -295,7 +294,6 @@ class GateState:
     client_sequence: int = 0
     interrupted: bool = False
     phases: set[str] = field(default_factory=set)
-    pending_e4_catalog_digest: str | None = None
 
     @property
     def name_prefix(self) -> str:
@@ -885,7 +883,7 @@ def _apply_grants_expect_failure(
     *,
     expected_output: str,
     failure_label: str = "tampered E2 helper",
-    capture_e4_catalog_digest: bool = False,
+    redact_output: bool = False,
 ) -> None:
     result = _docker_run(
         state,
@@ -902,28 +900,11 @@ def _apply_grants_expect_failure(
         raise GateFailure(f"{failure_label} unexpectedly passed grant replay")
     if expected_output not in result.stdout:
         output = result.stdout.rstrip()
-        if output and not capture_e4_catalog_digest:
+        if output and not redact_output:
             print(output, file=sys.stderr)
         raise GateFailure(
             f"{failure_label} failed without the reviewed contract marker"
         )
-    if capture_e4_catalog_digest:
-        if state.pending_e4_catalog_digest is not None:
-            raise GateFailure("E4 catalog digest was captured more than once")
-        state.pending_e4_catalog_digest = _extract_e4_catalog_digest(result.stdout)
-
-
-def _extract_e4_catalog_digest(output: str) -> str:
-    matches = re.findall(
-        r"DETAIL:\s+expected=PENDING_E4_CATALOG_SHA256 "
-        r"actual=([0-9a-f]{64})(?=\s|$)",
-        output,
-    )
-    if len(matches) != 1:
-        raise GateFailure(
-            "unpinned E4 catalog failed without one exact redacted digest"
-        )
-    return matches[0]
 
 
 def _provision_roles(
@@ -2077,9 +2058,10 @@ def _run_e4_scaffold_phase(
         secrets_directory,
         BASE_DATABASE,
         expected_output=(
-            "identity cutover E4 catalog admission is pending reviewed digest"
+            "identity cutover E4 activation contract is not installed"
         ),
         failure_label="empty E4 quarantine before downgrade",
+        redact_output=True,
     )
     _alembic_downgrade(
         state,
@@ -2192,10 +2174,10 @@ def _run_e4_scaffold_phase(
         secrets_directory,
         BASE_DATABASE,
         expected_output=(
-            "identity cutover E4 catalog admission is pending reviewed digest"
+            "identity cutover E4 activation contract is not installed"
         ),
-        failure_label="unpinned E4 catalog",
-        capture_e4_catalog_digest=True,
+        failure_label="pinned dormant E4 catalog",
+        redact_output=True,
     )
     quarantined_acl = _psql(
         state,
@@ -2375,13 +2357,6 @@ def main() -> int:
         print(f"E1 gate cleanup failed: {cleanup_failure}", file=sys.stderr)
         return 1
     if exit_code == 0:
-        if state.pending_e4_catalog_digest is None:
-            print(
-                "E1 gate failed: E4 catalog digest was not captured",
-                file=sys.stderr,
-            )
-            return 1
-        print(f"E4_CATALOG_SHA256={state.pending_e4_catalog_digest}")
         print(
             "E1/E2/E3/E4 PostgreSQL 17 gate passed; "
             "labeled cleanup verified"

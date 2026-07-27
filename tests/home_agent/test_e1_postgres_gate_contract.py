@@ -98,40 +98,58 @@ def test_runner_admits_only_explicit_github_hosted_linux_context() -> None:
         )
 
 
-def test_e4_catalog_diagnostic_extracts_only_one_exact_digest(
+def test_e4_catalog_failure_redacts_unexpected_output(
+    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     runner = _load_runner()
-    digest = "a" * 64
     private_canary = "PRIVATE-E4-FAILURE-CONTEXT-MUST-NOT-BE-EMITTED"
+    activation_stop = "identity cutover E4 activation contract is not installed"
+    state = SimpleNamespace(test_image="test-image")
+    phase = SimpleNamespace(name="e4-scaffold", network="e4-network")
 
-    assert (
-        runner._extract_e4_catalog_digest(
-            f"{private_canary}\n"
-            "ERROR: identity cutover E4 catalog admission is pending\n"
-            "DETAIL: expected=PENDING_E4_CATALOG_SHA256 "
-            f"actual={digest}\n"
-        )
-        == digest
+    monkeypatch.setattr(
+        runner,
+        "_docker_run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout=f"{private_canary}\nERROR: {activation_stop}\n",
+        ),
+    )
+    runner._apply_grants_expect_failure(
+        state,
+        phase,
+        Path("."),
+        "home_agent",
+        expected_output=activation_stop,
+        failure_label="pinned dormant E4 catalog",
+        redact_output=True,
     )
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
 
-    with pytest.raises(runner.GateFailure, match="one exact redacted digest"):
-        runner._extract_e4_catalog_digest(private_canary)
-    with pytest.raises(runner.GateFailure, match="one exact redacted digest"):
-        runner._extract_e4_catalog_digest(
-            "\n".join(
-                [
-                    "DETAIL: expected=PENDING_E4_CATALOG_SHA256 "
-                    f"actual={digest}",
-                    "DETAIL: expected=PENDING_E4_CATALOG_SHA256 "
-                    f"actual={'b' * 64}",
-                ]
-            )
+    monkeypatch.setattr(
+        runner,
+        "_docker_run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout=private_canary,
+        ),
+    )
+    with pytest.raises(runner.GateFailure, match="reviewed contract marker"):
+        runner._apply_grants_expect_failure(
+            state,
+            phase,
+            Path("."),
+            "home_agent",
+            expected_output=activation_stop,
+            failure_label="pinned dormant E4 catalog",
+            redact_output=True,
         )
-    assert capsys.readouterr().out == ""
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
 
 
 def test_runner_refuses_quarantined_docker_daemon_name(
@@ -490,12 +508,19 @@ def test_e4_scaffold_phase_is_fresh_dormant_and_secret_file_only() -> None:
     assert "terminate and verify disposable E4 {role} login is expired" in source
     assert "pg_terminate_backend(activity.pid, 5000)" in source
     assert "empty E4 quarantine before downgrade" in source
-    assert "unpinned E4 catalog" in source
-    assert "capture_e4_catalog_digest=True" in source
-    assert "E4_CATALOG_SHA256=" in source
+    assert "pinned dormant E4 catalog" in source
+    assert (
+        section.count("identity cutover E4 activation contract is not installed")
+        == 2
+    )
+    assert section.count("redact_output=True") == 2
+    assert "pending_e4_catalog_digest" not in source
+    assert "_extract_e4_catalog_digest" not in source
+    assert "capture_e4_catalog_digest" not in source
+    assert "E4_CATALOG_SHA256=" not in source
     assert "if cleanup_failure is not None:" in source
     assert source.index("if cleanup_failure is not None:") < source.index(
-        'print(f"E4_CATALOG_SHA256={state.pending_e4_catalog_digest}")'
+        '"E1/E2/E3/E4 PostgreSQL 17 gate passed; "'
     )
     assert "verify rejected E4 kernel remains quarantined" in source
     assert "Running isolated dormant E4 deployment scaffold" in source

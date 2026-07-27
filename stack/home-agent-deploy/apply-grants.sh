@@ -3624,11 +3624,10 @@ BEGIN
 END
 $identity_cutover_e4_quarantine$;
 
--- The migration-owned E4 catalog manifest is intentionally not guessed. At
--- revisions through 0013 this validates a zero-authority dormant role pair.
--- If 0014 objects appear, replay reports the observed catalog digest and
--- remains quarantined until a reviewed change replaces the explicit pending
--- value and adds only the exact positive ACLs required by the E4 kernel.
+-- The migration-owned E4 catalog manifest is pinned to the reviewed
+-- post-quarantine state. At revisions through 0013 this validates a
+-- zero-authority dormant role pair. At 0014, a matching catalog still stops
+-- before activation; no positive E4 ACLs are installed here.
 DO $identity_cutover_e4_acl$
 DECLARE
   admission_table regclass := pg_catalog.to_regclass(
@@ -3642,7 +3641,7 @@ DECLARE
   cutover_oid oid;
   database_oid oid;
   expected_e4_catalog_sha256 constant text :=
-    'PENDING_E4_CATALOG_SHA256';
+    'a96aeb68c7c5656988088ae74539760c6a811320849f01c122e02141f87eff27';
   freeze_table regclass := pg_catalog.to_regclass(
     'operations.enforced_legacy_identity_writer_freezes'
   );

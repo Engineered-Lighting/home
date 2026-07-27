@@ -51,22 +51,23 @@ pair may exist but must own nothing. Partial roles or objects, wrong-revision
 objects, stale grants, and a 0014 upgrade attempted without the ceremony all
 fail closed.
 
-The exact 0014 catalog digest is deliberately recorded as
-`PENDING_E4_CATALOG_SHA256`. If all four objects appear at
-`0014_identity_cutover_e4`, the hosted gate reports only
-`E4_CATALOG_SHA256=<64 lowercase hex>` from the rejected grant replay and
-adds no positive grant. The digest describes the post-quarantine state:
+The exact reviewed 0014 post-quarantine catalog digest is pinned as
+`a96aeb68c7c5656988088ae74539760c6a811320849f01c122e02141f87eff27`.
+If all four objects appear at `0014_identity_cutover_e4`, the hosted gate
+recomputes and validates that digest, then must reach the deliberate
+`identity cutover E4 activation contract is not installed` stop. The hosted
+gate adds no positive grant and prints neither the raw PostgreSQL failure
+output nor a digest-discovery marker. The digest describes the
+post-quarantine state:
 relation ownership and RLS flags, column and constraint shape, user triggers
 and rewrite rules, normalized policy roles/commands/qualifiers/checks,
 table/column/function ACLs, function ownership/configuration/body, and every
 direct application-catalog grant to the two dormant roles. It also records
 their effective access to every exact E4 dependency so a grant through
-`PUBLIC` cannot disappear from the review.
-It never emits the raw PostgreSQL failure output. A
-reviewed follow-up must pin this dormant catalog and the external
-legacy-writer-freeze contract together. Any later callable activation needs a
-distinct reviewed activation manifest; replacing this placeholder alone is
-not an activation procedure.
+`PUBLIC` cannot disappear from the review. This pin admits only that dormant
+catalog. The external legacy-writer-freeze ceremony remains a separate
+operator review, and any later callable activation needs a distinct reviewed
+activation manifest.
 
 Production remains pinned to `0006a_worker_lease_arbitration` and
 `record_only`.

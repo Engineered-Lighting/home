@@ -8,6 +8,9 @@ ROOT = Path(__file__).resolve().parents[2]
 LOGIN_ROLE = "home_agent_identity_cutover"
 KERNEL_ROLE = "home_agent_identity_cutover_kernel"
 SERVICE = "identity-cutover"
+PINNED_E4_CATALOG_SHA256 = (
+    "a96aeb68c7c5656988088ae74539760c6a811320849f01c122e02141f87eff27"
+)
 
 
 def _read(relative_path: str) -> str:
@@ -349,7 +352,7 @@ def test_operator_services_separate_additive_ceremony_from_inert_surface() -> No
     assert not re.search(r"(?m)^\s+ports:", provisioner)
 
 
-def test_grant_replay_quarantines_e4_and_keeps_catalog_pending() -> None:
+def test_grant_replay_quarantines_e4_and_pins_reviewed_catalog() -> None:
     source = _read("stack/home-agent-deploy/apply-grants.sh")
     quarantine = _grant_section("identity_cutover_e4_quarantine")
     admission = _grant_section("identity_cutover_e4_acl")
@@ -389,7 +392,8 @@ def test_grant_replay_quarantines_e4_and_keeps_catalog_pending() -> None:
     ):
         assert cascade_template in quarantine
 
-    assert "PENDING_E4_CATALOG_SHA256" in admission
+    assert f"'{PINNED_E4_CATALOG_SHA256}'" in admission
+    assert "PENDING_E4_CATALOG_SHA256" not in admission
     assert "expected_e4_catalog_sha256 !~ '^[0-9a-f]{64}$'" in admission
     assert "actual_e4_catalog_sha256" in admission
     assert "Hash the post-quarantine catalog" in admission
@@ -459,16 +463,18 @@ def test_historical_e1_catalog_is_not_rewritten_for_e4() -> None:
 def test_production_pin_and_rollout_mode_remain_inert() -> None:
     env = _read("stack/home-agent.env.example")
     docs = _read("stack/home-agent-deploy/IDENTITY-CUTOVER-ROLE.md")
+    normalized_docs = " ".join(docs.split())
 
     assert (
         "HOME_AGENT_EXPECTED_DB_REVISION=0006a_worker_lease_arbitration" in env
     )
     assert "HOME_AGENT_ROLLOUT_MODE=record_only" in env
-    assert "PENDING_E4_CATALOG_SHA256" in docs
-    assert "E4_CATALOG_SHA256=<64 lowercase hex>" in docs
-    assert "never emits the raw PostgreSQL failure output" in docs
+    assert PINNED_E4_CATALOG_SHA256 in docs
+    assert "PENDING_E4_CATALOG_SHA256" not in docs
+    assert "E4_CATALOG_SHA256=" not in docs
+    assert "raw PostgreSQL failure output" in normalized_docs
     assert "Do not prepare or run this role on the live host yet" in docs
-    assert "adds no positive grant" in docs
+    assert "adds no positive grant" in normalized_docs
     assert "PENDING_E4_SYSTEM_CATALOG_SHA256" not in docs
 
     deploy_names = "\n".join(

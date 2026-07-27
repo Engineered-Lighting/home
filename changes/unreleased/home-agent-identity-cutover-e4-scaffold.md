@@ -11,3 +11,5 @@ secret lifecycle. Replays now terminate and prove the absence of disposable
 cutover sessions, cascade delegated-grant cleanup, database-scope the login,
 and reject orphaned or stale credential publications. Production remains
 record-only at revision 0006a, with no cutover activation path.
+The hosted gate now pins the reviewed dormant E4 post-quarantine catalog and
+must still stop at the explicit activation-not-installed boundary.

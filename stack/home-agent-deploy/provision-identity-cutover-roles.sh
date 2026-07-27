@@ -71,7 +71,8 @@ $identity_cutover_role_session_cleanup$;
 
 DO $identity_cutover_role_ceremony_preflight$
 DECLARE
-  role_count integer;
+  cutover_role_count integer;
+  authority_kernel_count integer;
 BEGIN
   IF (
        SELECT version_num FROM public.alembic_version
@@ -96,13 +97,17 @@ BEGIN
       'identity cutover role ceremony found E4 objects before role admission'
       USING ERRCODE = '55000';
   END IF;
-  SELECT pg_catalog.count(*) INTO STRICT role_count
+  SELECT pg_catalog.count(*) INTO STRICT cutover_role_count
     FROM pg_catalog.pg_roles
    WHERE rolname IN (
      'home_agent_identity_cutover',
      'home_agent_identity_cutover_kernel'
    );
-  IF role_count NOT IN (0, 2) THEN
+  SELECT pg_catalog.count(*) INTO STRICT authority_kernel_count
+    FROM pg_catalog.pg_roles
+   WHERE rolname = 'home_agent_identity_authority_kernel';
+  IF cutover_role_count NOT IN (0, 2)
+     OR authority_kernel_count NOT IN (0, 1) THEN
     RAISE EXCEPTION 'partial identity cutover role pair'
       USING ERRCODE = '55000';
   END IF;
@@ -113,7 +118,8 @@ BEGIN
            ON target_role.oid = ownership.refobjid
         WHERE target_role.rolname IN (
           'home_agent_identity_cutover',
-          'home_agent_identity_cutover_kernel'
+          'home_agent_identity_cutover_kernel',
+          'home_agent_identity_authority_kernel'
         )
           AND ownership.deptype = 'o'
      ) THEN
@@ -127,6 +133,11 @@ SELECT 'CREATE ROLE home_agent_identity_cutover_kernel NOLOGIN'
 WHERE NOT EXISTS (
   SELECT 1 FROM pg_catalog.pg_roles
    WHERE rolname = 'home_agent_identity_cutover_kernel'
+) \gexec
+SELECT 'CREATE ROLE home_agent_identity_authority_kernel NOLOGIN'
+WHERE NOT EXISTS (
+  SELECT 1 FROM pg_catalog.pg_roles
+   WHERE rolname = 'home_agent_identity_authority_kernel'
 ) \gexec
 SELECT 'CREATE ROLE home_agent_identity_cutover LOGIN'
 WHERE NOT EXISTS (
@@ -142,17 +153,23 @@ SELECT pg_catalog.format(
   JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member
  WHERE member.rolname IN (
          'home_agent_identity_cutover',
-         'home_agent_identity_cutover_kernel'
+         'home_agent_identity_cutover_kernel',
+         'home_agent_identity_authority_kernel'
        )
     OR parent.rolname IN (
          'home_agent_identity_cutover',
-         'home_agent_identity_cutover_kernel'
+         'home_agent_identity_cutover_kernel',
+         'home_agent_identity_authority_kernel'
        ) \gexec
 
 ALTER ROLE home_agent_identity_cutover_kernel RESET ALL;
+ALTER ROLE home_agent_identity_authority_kernel RESET ALL;
 ALTER ROLE home_agent_identity_cutover RESET ALL;
 ALTER ROLE home_agent_identity_cutover_kernel NOLOGIN NOSUPERUSER NOCREATEDB
   NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS CONNECTION LIMIT 0;
+ALTER ROLE home_agent_identity_authority_kernel
+  NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION
+  NOINHERIT NOBYPASSRLS CONNECTION LIMIT 0;
 ALTER ROLE home_agent_identity_cutover PASSWORD :'identity_cutover_password'
   NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS
   CONNECTION LIMIT 1 VALID UNTIL '1970-01-01 00:00:00+00';
@@ -166,24 +183,29 @@ ALTER ROLE home_agent_identity_cutover SET transaction_timeout = '180s';
 ALTER ROLE home_agent_identity_cutover SET log_parameter_max_length_on_error = 0;
 
 REVOKE ALL PRIVILEGES ON DATABASE home_agent
-  FROM home_agent_identity_cutover, home_agent_identity_cutover_kernel;
+  FROM home_agent_identity_cutover, home_agent_identity_cutover_kernel,
+       home_agent_identity_authority_kernel;
 GRANT CONNECT ON DATABASE home_agent TO home_agent_identity_cutover;
 REVOKE CREATE, TEMPORARY ON DATABASE home_agent
   FROM home_agent_identity_cutover;
 GRANT home_agent_identity_cutover_kernel TO home_agent_owner
+  WITH ADMIN FALSE, INHERIT FALSE, SET TRUE;
+GRANT home_agent_identity_authority_kernel TO home_agent_owner
   WITH ADMIN FALSE, INHERIT FALSE, SET TRUE;
 
 REVOKE pg_monitor, pg_read_all_settings, pg_read_all_stats,
   pg_stat_scan_tables, pg_read_all_data, pg_write_all_data,
   pg_read_server_files, pg_write_server_files, pg_execute_server_program,
   pg_checkpoint, pg_maintain, pg_signal_backend
-  FROM home_agent_identity_cutover, home_agent_identity_cutover_kernel;
+  FROM home_agent_identity_cutover, home_agent_identity_cutover_kernel,
+       home_agent_identity_authority_kernel;
 
 DO $identity_cutover_role_ceremony_validation$
 DECLARE
   owner_oid oid;
   login_oid oid;
   kernel_oid oid;
+  authority_kernel_oid oid;
   database_oid oid;
 BEGIN
   SELECT oid INTO STRICT owner_oid FROM pg_catalog.pg_roles
@@ -192,6 +214,8 @@ BEGIN
    WHERE rolname = 'home_agent_identity_cutover';
   SELECT oid INTO STRICT kernel_oid FROM pg_catalog.pg_roles
    WHERE rolname = 'home_agent_identity_cutover_kernel';
+  SELECT oid INTO STRICT authority_kernel_oid FROM pg_catalog.pg_roles
+   WHERE rolname = 'home_agent_identity_authority_kernel';
   SELECT oid INTO STRICT database_oid FROM pg_catalog.pg_database
    WHERE datname = pg_catalog.current_database();
 
@@ -231,6 +255,20 @@ BEGIN
           AND kernel_role.rolvaliduntil IS NULL
           AND kernel_role.rolconfig IS NULL
      )
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_catalog.pg_roles AS authority_kernel_role
+        WHERE authority_kernel_role.oid = authority_kernel_oid
+          AND NOT authority_kernel_role.rolcanlogin
+          AND NOT authority_kernel_role.rolinherit
+          AND NOT authority_kernel_role.rolsuper
+          AND NOT authority_kernel_role.rolcreatedb
+          AND NOT authority_kernel_role.rolcreaterole
+          AND NOT authority_kernel_role.rolreplication
+          AND NOT authority_kernel_role.rolbypassrls
+          AND authority_kernel_role.rolconnlimit = 0
+          AND authority_kernel_role.rolvaliduntil IS NULL
+          AND authority_kernel_role.rolconfig IS NULL
+     )
      OR NOT pg_catalog.has_database_privilege(
        login_oid, database_oid, 'CONNECT'
      )
@@ -239,6 +277,9 @@ BEGIN
      )
      OR pg_catalog.has_database_privilege(
        kernel_oid, database_oid, 'CONNECT,CREATE,TEMPORARY'
+     )
+     OR pg_catalog.has_database_privilege(
+       authority_kernel_oid, database_oid, 'CONNECT,CREATE,TEMPORARY'
      )
      OR (
        SELECT pg_catalog.count(*)
@@ -250,22 +291,35 @@ BEGIN
           AND set_option
      ) <> 1
      OR (
+       SELECT pg_catalog.count(*)
+         FROM pg_catalog.pg_auth_members
+        WHERE roleid = authority_kernel_oid
+          AND member = owner_oid
+          AND NOT admin_option
+          AND NOT inherit_option
+          AND set_option
+     ) <> 1
+     OR (
        SELECT pg_catalog.count(*) FROM pg_catalog.pg_auth_members
         WHERE roleid = kernel_oid
      ) <> 1
+     OR (
+       SELECT pg_catalog.count(*) FROM pg_catalog.pg_auth_members
+        WHERE roleid = authority_kernel_oid
+     ) <> 1
      OR EXISTS (
        SELECT 1 FROM pg_catalog.pg_auth_members
-        WHERE member IN (login_oid, kernel_oid)
+        WHERE member IN (login_oid, kernel_oid, authority_kernel_oid)
            OR roleid = login_oid
      )
      OR EXISTS (
        SELECT 1 FROM pg_catalog.pg_db_role_setting
-        WHERE setrole IN (login_oid, kernel_oid)
+        WHERE setrole IN (login_oid, kernel_oid, authority_kernel_oid)
           AND setdatabase <> 0
      )
      OR EXISTS (
        SELECT 1 FROM pg_catalog.pg_shdepend
-        WHERE refobjid IN (login_oid, kernel_oid)
+        WHERE refobjid IN (login_oid, kernel_oid, authority_kernel_oid)
           AND deptype = 'o'
      )
      OR EXISTS (
@@ -281,4 +335,4 @@ $identity_cutover_role_ceremony_validation$;
 SQL
 
 unset cutover_password PGPASSWORD
-echo "provisioned expired dormant identity cutover role pair at revision 0013"
+echo "provisioned expired dormant identity cutover roles at revision 0013"

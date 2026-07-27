@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 LOGIN_ROLE = "home_agent_identity_cutover"
 KERNEL_ROLE = "home_agent_identity_cutover_kernel"
+AUTHORITY_KERNEL_ROLE = "home_agent_identity_authority_kernel"
 SERVICE = "identity-cutover"
 PINNED_E4_CATALOG_SHA256 = (
     "a96aeb68c7c5656988088ae74539760c6a811320849f01c122e02141f87eff27"
@@ -40,10 +41,12 @@ def test_cutover_role_pair_is_distinct_expired_and_non_escalatable() -> None:
 
     assert LOGIN_ROLE not in historical_roles
     assert KERNEL_ROLE not in historical_roles
+    assert AUTHORITY_KERNEL_ROLE not in historical_roles
     assert "0013_identity_finalizer_e3" in roles
     assert "identity cutover role ceremony requires revision 0013" in roles
     assert f"CREATE ROLE {LOGIN_ROLE} LOGIN" in roles
     assert f"CREATE ROLE {KERNEL_ROLE} NOLOGIN" in roles
+    assert f"CREATE ROLE {AUTHORITY_KERNEL_ROLE} NOLOGIN" in roles
     assert re.search(
         rf"ALTER ROLE {LOGIN_ROLE} PASSWORD "
         rf":'identity_cutover_password'[\s\S]*?NOSUPERUSER NOCREATEDB "
@@ -57,17 +60,29 @@ def test_cutover_role_pair_is_distinct_expired_and_non_escalatable() -> None:
         rf"CONNECTION LIMIT 0;",
         roles,
     )
+    assert re.search(
+        rf"ALTER ROLE {AUTHORITY_KERNEL_ROLE}\s+"
+        rf"NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION\s+"
+        rf"NOINHERIT NOBYPASSRLS CONNECTION LIMIT 0;",
+        roles,
+    )
     assert (
         f"GRANT {KERNEL_ROLE} TO home_agent_owner\n"
         "  WITH ADMIN FALSE, INHERIT FALSE, SET TRUE;"
     ) in roles
+    assert (
+        f"GRANT {AUTHORITY_KERNEL_ROLE} TO home_agent_owner\n"
+        "  WITH ADMIN FALSE, INHERIT FALSE, SET TRUE;"
+    ) in roles
     assert f"GRANT {KERNEL_ROLE} TO {LOGIN_ROLE}" not in roles
+    assert f"GRANT {AUTHORITY_KERNEL_ROLE} TO {LOGIN_ROLE}" not in roles
     assert (
         f"REVOKE CREATE, TEMPORARY ON DATABASE home_agent\n  FROM {LOGIN_ROLE};"
     ) in roles
     assert (
         "REVOKE ALL PRIVILEGES ON DATABASE home_agent\n"
-        f"  FROM {LOGIN_ROLE}, {KERNEL_ROLE};"
+        f"  FROM {LOGIN_ROLE}, {KERNEL_ROLE},\n"
+        f"       {AUTHORITY_KERNEL_ROLE};"
     ) in roles
     cleanup = roles.split(
         "DO $identity_cutover_role_session_cleanup$", 1
@@ -299,7 +314,7 @@ def test_hosted_gate_exercises_real_secret_lifecycle_and_compose_render() -> Non
     )
     assert workflow.index("Exercise E4 additive secret lifecycle") < (
         workflow.index(
-            "Run isolated PostgreSQL 17 E1/E2/E3/E4 authority gate"
+            "Run isolated PostgreSQL 17 E1/E2/E3/E4/E5 authority gate"
         )
     )
 
@@ -432,6 +447,21 @@ def test_grant_replay_quarantines_e4_and_pins_reviewed_catalog() -> None:
     ):
         assert f"pg_catalog.{acl_catalog}" in admission
     assert "0014_identity_cutover_e4" in admission
+    reviewed_revisions = re.search(
+        r"reviewed_e4_catalog_revisions constant text\[\] := ARRAY\["
+        r"(.*?)\]\:\:text\[\]",
+        admission,
+        re.DOTALL,
+    )
+    assert reviewed_revisions is not None
+    assert re.findall(
+        r"'([0-9a-z_]+)'", reviewed_revisions.group(1)
+    ) == [
+        "0014_identity_cutover_e4",
+        "0015_current_authority_e5a",
+    ]
+    assert "identity_authority_e5_select" in admission
+    assert "identity cutover E4 reviewed E5 policy mismatch" in admission
     assert "object_count = 0" in admission
     assert "object_count <> 4" in admission
     assert "current_revision = ANY (pre_e4_revisions)" in admission
@@ -443,7 +473,12 @@ def test_grant_replay_quarantines_e4_and_pins_reviewed_catalog() -> None:
         "identity cutover E4 catalog admission is pending reviewed digest"
         in admission
     )
-    assert "identity cutover E4 activation contract is not installed" in admission
+    assert re.search(
+        r"IF current_revision = '0014_identity_cutover_e4' THEN\s+"
+        r"RAISE EXCEPTION "
+        r"'identity cutover E4 activation contract is not installed'",
+        admission,
+    )
     assert "GRANT " not in admission
     assert "identity cutover E4 role ceremony was omitted" in admission
 

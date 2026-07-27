@@ -123,6 +123,55 @@ to own the lease. If the owner is gone, keep workers stopped, correct and verify
 the host clock, restart PostgreSQL so its postmaster-start fence changes, then
 start exactly one worker. Do not delete or rewrite the lease row by hand.
 
+Revision `0015_current_authority_e5a` is dormant database-only groundwork; it
+is not the production migration target. Production remains pinned to
+`0006a_worker_lease_arbitration` in `record_only`. The revision adds the
+content-free categorical verifier
+`operations.evaluate_current_identity_semantic_authority(uuid) RETURNS
+varchar(32)`, with no API, BFF, UI, native, binding-write, or live-activation
+surface.
+
+Only a `home_agent_binding_operator` session may invoke the security-definer
+function, whose current authority is the NOLOGIN
+`home_agent_identity_authority_kernel`. Invocation requires a writable
+`SERIALIZABLE` transaction outside recovery. Invalid UUIDv7 input, role, and
+transaction boundaries fail respectively with
+`identity_authority_status_input_invalid` (`22023`),
+`identity_authority_status_role_invalid` (`42501`), and
+`identity_authority_status_transaction_invalid` (`25000`).
+
+The binding-operator role is capped at eight connections with 15-second
+statement/idle-transaction, 5-second lock, and 30-second total-transaction
+limits. E5a reapplies the same limits transaction-locally before taking the
+semantic fence, run-row, and ledger locks, so a stranded pool transaction
+cannot retain them indefinitely.
+
+While holding the semantic fence, exact run row, and mutable ledger head, the
+verifier revalidates one E4 promotion and its exact append-only E3/E4
+finalization/admission, legacy writer-freeze, privacy, and projection graph.
+It checks the database's monotone erasure-ledger continuity and the promoted
+run's erasure impacts and subject retrieval blocks. It returns exactly one of:
+
+- `current_database_authority`
+- `promotion_missing`
+- `promotion_invalid`
+- `ledger_state_missing`
+- `ledger_regressed`
+- `ledger_diverged`
+- `ledger_continuity_invalid`
+- `erasure_impact_present`
+- `subject_retrieval_blocked`
+
+The positive category proves only current database authority relative to that
+erasure overlay. It is not a fresh external encrypted-ledger check, Home
+Assistant identity proof, current privacy-directive evaluation, or proof that
+the external legacy writer is still frozen. It structurally rechecks the
+immutable stored graph and exact E4 verifier-bundle marker; it does not
+reverify the private E4 document or its signature. Future E5b must supply a
+private authenticated HA confirmation and principal/person binding kernel,
+invoke this verifier, and write the binding in the same `SERIALIZABLE`
+transaction. Until then there is no semantic binding or activation capability.
+
 ## MVP API contract
 
 Edge:

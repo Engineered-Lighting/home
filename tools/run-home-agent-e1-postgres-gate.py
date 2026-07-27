@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the E1/E2/E3/E4 scaffold gate only against disposable PostgreSQL 17."""
+"""Run the E1/E2/E3/E4/E5 scaffold gate against disposable PostgreSQL 17."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import secrets
 import shutil
 import signal
@@ -40,6 +41,7 @@ REVISION_0011 = "0011_identity_erasure_e1"
 REVISION_0012 = "0012_identity_erasure_e2"
 REVISION_0013 = "0013_identity_finalizer_e3"
 REVISION_0014 = "0014_identity_cutover_e4"
+REVISION_0015 = "0015_current_authority_e5a"
 E4_SUCCESS_DOCUMENT_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_DOCUMENT_B64"
 E4_SUCCESS_ADMISSION_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_ADMISSION_ID"
 E4_SCAFFOLD_OWNER_DATABASE_ENV = (
@@ -54,6 +56,12 @@ E4_LEDGER_WORKER_DATABASE_ENV = (
 E4_FIXTURE_MOUNT = "/run/e4-fixture"
 E4_FIXTURE_DOCUMENT_FILE = "document.b64"
 E4_FIXTURE_ADMISSION_FILE = "admission_id"
+E5_OWNER_DATABASE_ENV = (
+    "TEST_PHASE3_IDENTITY_CURRENT_AUTHORITY_E5_OWNER_DATABASE_URL"
+)
+E5_AUTHORITY_DATABASE_ENV = (
+    "TEST_PHASE3_IDENTITY_CURRENT_AUTHORITY_E5_DATABASE_URL"
+)
 RUN_LABEL = "com.engineeredlighting.home-agent-e1.run"
 MANAGED_LABEL = "com.engineeredlighting.home-agent-e1.managed"
 PHASE_LABEL = "com.engineeredlighting.home-agent-e1.phase"
@@ -198,6 +206,8 @@ BUILD_CONTEXT_FILES = (
     "0013_identity_finalizer_kernel.py",
     "stack/services/home-agent-core/alembic/versions/"
     "0014_identity_semantic_cutover_e4.py",
+    "stack/services/home-agent-core/alembic/versions/"
+    "0015_identity_current_authority_e5.py",
     "stack/services/home-agent-core/app/identity_erasure_schema.py",
     "stack/home-agent-deploy/operator/reviewed_identity_payload.py",
     "stack/home-agent-deploy/operator/REVIEWED-IDENTITY-PAYLOAD.md",
@@ -221,6 +231,11 @@ BUILD_CONTEXT_FILES = (
     "seed_phase3_identity_semantic_cutover_e4_success.py",
     "stack/services/home-agent-core/tests/"
     "test_phase3_identity_semantic_cutover_e4_schema.py",
+    "stack/services/home-agent-core/tests/"
+    "test_phase3_identity_current_authority_e5_schema.py",
+    "stack/services/home-agent-core/tests/"
+    "test_phase3_identity_current_authority_e5_runtime_postgres.py",
+    "tests/home_agent/test_identity_current_authority_e5_deployment_contract.py",
     "tools/run-home-agent-e1-postgres-gate.py",
     ".github/workflows/home-agent-e1-postgres.yml",
 )
@@ -294,6 +309,7 @@ class GateState:
     client_sequence: int = 0
     interrupted: bool = False
     phases: set[str] = field(default_factory=set)
+    pending_e5_catalog_digest: str | None = None
 
     @property
     def name_prefix(self) -> str:
@@ -884,6 +900,7 @@ def _apply_grants_expect_failure(
     expected_output: str,
     failure_label: str = "tampered E2 helper",
     redact_output: bool = False,
+    capture_e5_catalog_digest: bool = False,
 ) -> None:
     result = _docker_run(
         state,
@@ -900,11 +917,28 @@ def _apply_grants_expect_failure(
         raise GateFailure(f"{failure_label} unexpectedly passed grant replay")
     if expected_output not in result.stdout:
         output = result.stdout.rstrip()
-        if output and not redact_output:
+        if output and not (redact_output or capture_e5_catalog_digest):
             print(output, file=sys.stderr)
         raise GateFailure(
             f"{failure_label} failed without the reviewed contract marker"
         )
+    if capture_e5_catalog_digest:
+        if state.pending_e5_catalog_digest is not None:
+            raise GateFailure("E5 catalog digest was captured more than once")
+        state.pending_e5_catalog_digest = _extract_e5_catalog_digest(result.stdout)
+
+
+def _extract_e5_catalog_digest(output: str) -> str:
+    matches = re.findall(
+        r"DETAIL:\s+expected=PENDING_E5_CATALOG_SHA256 "
+        r"actual=([0-9a-f]{64})(?=\s|$)",
+        output,
+    )
+    if len(matches) != 1:
+        raise GateFailure(
+            "unpinned E5 catalog failed without one exact redacted digest"
+        )
+    return matches[0]
 
 
 def _provision_roles(
@@ -2004,7 +2038,7 @@ def _run_e4_scaffold_phase(
     phase: Phase,
     fixture_directory: Path,
 ) -> None:
-    """Run the additive E4 ceremony after preserving the historical chain."""
+    """Run the additive E4/E5 ceremony after preserving the historical chain."""
     _upgrade_e3_database(state, phase, secrets_directory)
     _provision_identity_cutover_roles(state, phase, secrets_directory)
     _apply_grants(state, phase, secrets_directory, BASE_DATABASE)
@@ -2060,7 +2094,10 @@ def _run_e4_scaffold_phase(
         expected_output=(
             "identity cutover E4 activation contract is not installed"
         ),
-        failure_label="empty E4 quarantine before downgrade",
+        failure_label=(
+            "pinned dormant E4 catalog; "
+            "empty E4 quarantine before downgrade"
+        ),
         redact_output=True,
     )
     _alembic_downgrade(
@@ -2168,16 +2205,93 @@ def _run_e4_scaffold_phase(
             role="home_agent_identity_cutover",
             enabled=False,
         )
+
+    # E5a is a function/policy overlay over the admitted synthetic E4
+    # promotion. Exercise it while the migration-owned ACL is callable only by
+    # the reviewed binding-operator role, then prove its stateless downgrade
+    # and re-upgrade before grant replay quarantines every callable path.
+    _alembic(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+        REVISION_0015,
+    )
+    _assert_database_revision(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+        REVISION_0015,
+    )
+    _pytest(
+        state,
+        phase,
+        secrets_directory,
+        nodes=[
+            "tests/test_phase3_identity_current_authority_e5_schema.py",
+            "tests/"
+            "test_phase3_identity_current_authority_e5_runtime_postgres.py",
+            "/workspace/tests/home_agent/"
+            "test_identity_current_authority_e5_deployment_contract.py",
+        ],
+        url_environment={
+            E5_OWNER_DATABASE_ENV: BASE_DATABASE,
+        },
+        credential_url_environment={
+            E5_AUTHORITY_DATABASE_ENV: (
+                BASE_DATABASE,
+                "home_agent_binding_operator",
+                "postgres_binding_operator_password",
+            ),
+        },
+        environment={
+            SENTINEL_ENV: state.sentinel,
+            SYSTEM_ID_ENV: phase.system_identifier,
+            ALLOWLIST_ENV: BASE_DATABASE,
+        },
+        fail_fast=False,
+    )
+    _alembic_downgrade(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+        REVISION_0014,
+    )
+    _assert_database_revision(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+        REVISION_0014,
+    )
+    _alembic(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+        REVISION_0015,
+    )
+    _assert_database_revision(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+        REVISION_0015,
+    )
     _apply_grants_expect_failure(
         state,
         phase,
         secrets_directory,
         BASE_DATABASE,
         expected_output=(
-            "identity cutover E4 activation contract is not installed"
+            "identity current-authority E5 catalog admission is pending "
+            "reviewed digest"
         ),
-        failure_label="pinned dormant E4 catalog",
+        failure_label="unpinned dormant E5 catalog",
         redact_output=True,
+        capture_e5_catalog_digest=True,
     )
     quarantined_acl = _psql(
         state,
@@ -2201,6 +2315,88 @@ def _run_e4_scaffold_phase(
     if quarantined_acl.stdout.strip() != "0":
         raise GateFailure(
             "rejected E4 kernel retained an EXECUTE privilege after quarantine"
+        )
+    e5_quarantined_acl = _psql(
+        state,
+        phase,
+        secrets_directory,
+        database=BASE_DATABASE,
+        sql=(
+            "WITH authority_kernel AS ("
+            "SELECT oid FROM pg_catalog.pg_roles "
+            "WHERE rolname='home_agent_identity_authority_kernel'), "
+            "binding_operator AS ("
+            "SELECT oid FROM pg_catalog.pg_roles "
+            "WHERE rolname='home_agent_binding_operator'), "
+            "direct_kernel_acl AS ("
+            "SELECT database_acl.grantee "
+            "FROM pg_catalog.pg_database AS database_row "
+            "CROSS JOIN authority_kernel AS kernel "
+            "CROSS JOIN LATERAL pg_catalog.aclexplode(database_row.datacl) "
+            "AS database_acl WHERE database_acl.grantee=kernel.oid "
+            "UNION ALL SELECT namespace_acl.grantee "
+            "FROM pg_catalog.pg_namespace AS namespace_row "
+            "CROSS JOIN authority_kernel AS kernel "
+            "CROSS JOIN LATERAL pg_catalog.aclexplode(namespace_row.nspacl) "
+            "AS namespace_acl WHERE namespace_acl.grantee=kernel.oid "
+            "UNION ALL SELECT relation_acl.grantee "
+            "FROM pg_catalog.pg_class AS relation_row "
+            "CROSS JOIN authority_kernel AS kernel "
+            "CROSS JOIN LATERAL pg_catalog.aclexplode(relation_row.relacl) "
+            "AS relation_acl WHERE relation_acl.grantee=kernel.oid "
+            "UNION ALL SELECT attribute_acl.grantee "
+            "FROM pg_catalog.pg_attribute AS attribute_row "
+            "CROSS JOIN authority_kernel AS kernel "
+            "CROSS JOIN LATERAL pg_catalog.aclexplode(attribute_row.attacl) "
+            "AS attribute_acl WHERE attribute_acl.grantee=kernel.oid "
+            "UNION ALL SELECT function_acl.grantee "
+            "FROM pg_catalog.pg_proc AS function_row "
+            "CROSS JOIN authority_kernel AS kernel "
+            "CROSS JOIN LATERAL pg_catalog.aclexplode(function_row.proacl) "
+            "AS function_acl WHERE function_acl.grantee=kernel.oid "
+            "UNION ALL SELECT type_acl.grantee "
+            "FROM pg_catalog.pg_type AS type_row "
+            "CROSS JOIN authority_kernel AS kernel "
+            "CROSS JOIN LATERAL pg_catalog.aclexplode(type_row.typacl) "
+            "AS type_acl WHERE type_acl.grantee=kernel.oid "
+            "UNION ALL SELECT default_acl_item.grantee "
+            "FROM pg_catalog.pg_default_acl AS default_acl "
+            "CROSS JOIN authority_kernel AS kernel "
+            "CROSS JOIN LATERAL pg_catalog.aclexplode(default_acl.defaclacl) "
+            "AS default_acl_item "
+            "WHERE default_acl_item.grantee=kernel.oid "
+            "UNION ALL SELECT parameter_acl_item.grantee "
+            "FROM pg_catalog.pg_parameter_acl AS parameter_acl "
+            "CROSS JOIN authority_kernel AS kernel "
+            "CROSS JOIN LATERAL pg_catalog.aclexplode(parameter_acl.paracl) "
+            "AS parameter_acl_item "
+            "WHERE parameter_acl_item.grantee=kernel.oid), "
+            "caller_acl AS ("
+            "SELECT function_acl.grantee "
+            "FROM pg_catalog.pg_proc AS function_row "
+            "CROSS JOIN binding_operator AS caller "
+            "CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE("
+            "function_row.proacl, pg_catalog.acldefault("
+            "'f', function_row.proowner))) AS function_acl "
+            "WHERE function_row.oid='operations."
+            "evaluate_current_identity_semantic_authority(uuid)'::regprocedure "
+            "AND function_acl.grantee=caller.oid "
+            "AND function_acl.privilege_type='EXECUTE' "
+            "UNION ALL SELECT namespace_acl.grantee "
+            "FROM pg_catalog.pg_namespace AS namespace_row "
+            "CROSS JOIN binding_operator AS caller "
+            "CROSS JOIN LATERAL pg_catalog.aclexplode(namespace_row.nspacl) "
+            "AS namespace_acl "
+            "WHERE namespace_row.nspname IN ('operations','privacy') "
+            "AND namespace_acl.grantee=caller.oid) "
+            "SELECT (SELECT count(*) FROM direct_kernel_acl) + "
+            "(SELECT count(*) FROM caller_acl)"
+        ),
+        label="verify rejected E5 catalog remains broadly quarantined",
+    )
+    if e5_quarantined_acl.stdout.strip() != "0":
+        raise GateFailure(
+            "rejected E5 catalog retained a callable or direct privilege"
         )
 
 
@@ -2233,7 +2429,10 @@ def main() -> int:
     try:
         _assert_execution_admitted()
     except GateFailure as error:
-        print(f"E1/E2/E3/E4 gate execution quarantine: {error}", file=sys.stderr)
+        print(
+            f"E1/E2/E3/E4 gate execution quarantine (E5 included): {error}",
+            file=sys.stderr,
+        )
         return 77
     if shutil.which("docker") is None:
         print("Docker is required for the E1 PostgreSQL gate", file=sys.stderr)
@@ -2324,7 +2523,10 @@ def main() -> int:
                 secrets_directory,
                 lambda phase: _run_e3_phase(state, secrets_directory, phase),
             )
-            print("[8/8] Running isolated dormant E4 deployment scaffold")
+            print(
+                "[8/8] Running isolated dormant E4 deployment scaffold "
+                "with E5"
+            )
             _run_phase(
                 state,
                 "e4-scaffold",
@@ -2357,9 +2559,16 @@ def main() -> int:
         print(f"E1 gate cleanup failed: {cleanup_failure}", file=sys.stderr)
         return 1
     if exit_code == 0:
+        if state.pending_e5_catalog_digest is None:
+            print(
+                "E1 gate failed: E5 catalog digest was not captured",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"E5_CATALOG_SHA256={state.pending_e5_catalog_digest}")
         print(
             "E1/E2/E3/E4 PostgreSQL 17 gate passed; "
-            "labeled cleanup verified"
+            "E5 catalog gate passed; labeled cleanup verified"
         )
     return exit_code
 

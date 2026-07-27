@@ -29,12 +29,21 @@ class BindingOperatorDeploymentContractTests(unittest.TestCase):
         self.assertRegex(
             roles,
             r"ALTER ROLE home_agent_binding_operator PASSWORD :'binding_operator_password'\s+"
-            r"NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;",
+            r"NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT "
+            r"NOBYPASSRLS\s+CONNECTION LIMIT 8;",
         )
-        self.assertIn(
-            "ALTER ROLE home_agent_binding_operator SET statement_timeout = '15s';",
-            roles,
-        )
+        self.assertIn("ALTER ROLE home_agent_binding_operator RESET ALL;", roles)
+        for setting in (
+            "statement_timeout = '15s'",
+            "lock_timeout = '5s'",
+            "idle_in_transaction_session_timeout = '15s'",
+            "transaction_timeout = '30s'",
+        ):
+            self.assertRegex(
+                roles,
+                rf"ALTER ROLE home_agent_binding_operator SET\s+"
+                rf"{re.escape(setting)};",
+            )
         self.assertRegex(
             roles,
             r"GRANT CONNECT ON DATABASE home_agent TO[\s\S]*"

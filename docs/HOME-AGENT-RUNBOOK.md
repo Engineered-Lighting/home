@@ -863,6 +863,66 @@ and erasure checks, operator stop/backup evidence, and the separately signed
 cutover receipt. Until those gates pass, remain
 `legacy_frozen_pending_cutover`.
 
+### Dormant E5a current database-authority verifier
+
+Revision `0015_current_authority_e5a` adds only the database-local,
+content-free verifier
+`operations.evaluate_current_identity_semantic_authority(uuid) RETURNS
+varchar(32)`. Production remains pinned to
+`0006a_worker_lease_arbitration` in `record_only`; E5a has no deployment
+command, API or BFF route, UI or native surface, principal-binding write, or
+live activation path.
+
+The sole permitted session boundary is
+`session_user=home_agent_binding_operator` with
+`current_user=home_agent_identity_authority_kernel`. The caller must already
+be in a writable `SERIALIZABLE` transaction on a non-recovery database. A null
+or non-UUIDv7 promotion ID fails with
+`identity_authority_status_input_invalid` (`22023`), an invalid role boundary
+fails with `identity_authority_status_role_invalid` (`42501`), and an invalid
+transaction boundary fails with
+`identity_authority_status_transaction_invalid` (`25000`).
+
+Because a successful call holds the semantic-write fence, its exact migration
+run row, and the ledger head until the surrounding transaction commits, the
+binding-operator role is limited to eight connections and carries 15-second
+statement/idle-transaction, 5-second lock, and 30-second total-transaction
+limits. The verifier reapplies those limits transaction-locally before taking
+application-data locks.
+
+While holding the semantic fence, exact run row, and mutable ledger head, the
+verifier revalidates one E4 promotion and its exact append-only E3/E4
+finalization, admission, writer-freeze, privacy, and projection evidence. It
+then checks monotone erasure-ledger continuity from the promotion's admitted
+head through the current database head, plus exact-run erasure impacts and
+subject retrieval blocks. Its only result values are:
+
+- `current_database_authority`
+- `promotion_missing`
+- `promotion_invalid`
+- `ledger_state_missing`
+- `ledger_regressed`
+- `ledger_diverged`
+- `ledger_continuity_invalid`
+- `erasure_impact_present`
+- `subject_retrieval_blocked`
+
+`current_database_authority` is deliberately narrow. It means that the
+historical E4 promotion remains current against the database erasure overlay.
+It does not authenticate a Home Assistant user, prove that the external
+encrypted erasure ledger is currently available, re-evaluate current privacy
+directives, prove that the external legacy writer remains frozen, or reverify
+the private E4 document and its signature. E5a structurally rechecks the
+immutable stored graph and exact E4 verifier-bundle marker under the pinned
+catalog contracts.
+
+Do not call E5a as a standalone readiness probe or treat its categorical result
+as a binding receipt. Future E5b must add the private, authenticated Home
+Assistant confirmation and principal/person binding kernel. That kernel must
+invoke E5a and commit the binding in the same writable `SERIALIZABLE`
+transaction; until that separately reviewed work exists, semantic identity
+binding remains disabled.
+
 ## Record-only, shadow, and canary gates
 
 Every fresh deployment starts with `HOME_AGENT_ROLLOUT_MODE=record_only`.

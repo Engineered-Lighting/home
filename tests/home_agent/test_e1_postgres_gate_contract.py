@@ -152,6 +152,85 @@ def test_e4_catalog_failure_redacts_unexpected_output(
     assert captured.err == ""
 
 
+def test_e5_catalog_digest_capture_is_exact_and_redacted(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runner = _load_runner()
+    digest = "a" * 64
+    pending_marker = (
+        "identity current-authority E5 catalog admission is pending "
+        "reviewed digest"
+    )
+    private_canary = "PRIVATE-E5-FAILURE-CONTEXT-MUST-NOT-BE-EMITTED"
+    state = SimpleNamespace(
+        test_image="test-image",
+        pending_e5_catalog_digest=None,
+    )
+    phase = SimpleNamespace(name="e4-scaffold", network="e4-network")
+
+    monkeypatch.setattr(
+        runner,
+        "_docker_run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout=(
+                f"{private_canary}\nERROR: {pending_marker}\n"
+                "DETAIL: expected=PENDING_E5_CATALOG_SHA256 "
+                f"actual={digest}\n"
+            ),
+        ),
+    )
+    runner._apply_grants_expect_failure(
+        state,
+        phase,
+        Path("."),
+        "home_agent",
+        expected_output=pending_marker,
+        failure_label="unpinned dormant E5 catalog",
+        redact_output=True,
+        capture_e5_catalog_digest=True,
+    )
+    assert state.pending_e5_catalog_digest == digest
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+    state.pending_e5_catalog_digest = None
+    for invalid_detail in (
+        "",
+        "DETAIL: expected=PENDING_E5_CATALOG_SHA256 actual=ABC\n",
+        (
+            "DETAIL: expected=PENDING_E5_CATALOG_SHA256 "
+            f"actual={digest}\n"
+            "DETAIL: expected=PENDING_E5_CATALOG_SHA256 "
+            f"actual={'b' * 64}\n"
+        ),
+    ):
+        monkeypatch.setattr(
+            runner,
+            "_docker_run",
+            lambda *_args, detail=invalid_detail, **_kwargs: SimpleNamespace(
+                returncode=1,
+                stdout=f"{private_canary}\nERROR: {pending_marker}\n{detail}",
+            ),
+        )
+        with pytest.raises(runner.GateFailure, match="exact redacted digest"):
+            runner._apply_grants_expect_failure(
+                state,
+                phase,
+                Path("."),
+                "home_agent",
+                expected_output=pending_marker,
+                failure_label="unpinned dormant E5 catalog",
+                redact_output=True,
+                capture_e5_catalog_digest=True,
+            )
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == ""
+
+
 def test_runner_refuses_quarantined_docker_daemon_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -276,6 +355,8 @@ def test_context_manifest_explicitly_carries_untracked_erasure_test_sources() ->
         "0013_identity_finalizer_kernel.py",
         "stack/services/home-agent-core/alembic/versions/"
         "0014_identity_semantic_cutover_e4.py",
+        "stack/services/home-agent-core/alembic/versions/"
+        "0015_identity_current_authority_e5.py",
         "stack/services/home-agent-core/app/identity_erasure_schema.py",
         "stack/home-agent-deploy/postgres-pg_hba.conf",
         "stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh",
@@ -302,6 +383,12 @@ def test_context_manifest_explicitly_carries_untracked_erasure_test_sources() ->
         "seed_phase3_identity_semantic_cutover_e4_success.py",
         "stack/services/home-agent-core/tests/"
         "test_phase3_identity_semantic_cutover_e4_schema.py",
+        "stack/services/home-agent-core/tests/"
+        "test_phase3_identity_current_authority_e5_schema.py",
+        "stack/services/home-agent-core/tests/"
+        "test_phase3_identity_current_authority_e5_runtime_postgres.py",
+        "tests/home_agent/"
+        "test_identity_current_authority_e5_deployment_contract.py",
     ):
         assert relative_path in runner.BUILD_CONTEXT_FILES
 
@@ -361,6 +448,7 @@ def test_runner_uses_six_fresh_clusters_and_revision_0007_case_clones() -> None:
     assert 'REVISION_0012 = "0012_identity_erasure_e2"' in source
     assert 'REVISION_0013 = "0013_identity_finalizer_e3"' in source
     assert 'REVISION_0014 = "0014_identity_cutover_e4"' in source
+    assert 'REVISION_0015 = "0015_current_authority_e5a"' in source
     assert 'ADMISSION_TEMPLATE = "e1_template_0007"' in source
     assert 'CASE_DATABASE = "home_agent"' in harness
     assert "alembic_upgrade(database_url(database), REVISION_0010)" in harness
@@ -449,7 +537,7 @@ def test_e3_phase_is_guarded_dormant_and_uses_secret_file_role_urls() -> None:
     assert "Running isolated dormant revision-0013 E3 contracts" in source
 
 
-def test_e4_scaffold_phase_is_fresh_dormant_and_secret_file_only() -> None:
+def test_e4_e5_scaffold_phase_is_fresh_dormant_and_secret_file_only() -> None:
     source = RUNNER.read_text(encoding="utf-8")
 
     assert "def _run_e4_scaffold_phase(" in source
@@ -498,6 +586,17 @@ def test_e4_scaffold_phase_is_fresh_dormant_and_secret_file_only() -> None:
     assert "test_phase3_identity_semantic_cutover_e4_schema.py" in source
     assert "test_phase3_identity_semantic_cutover_e4_runtime_postgres.py" in source
     assert "test_identity_cutover_e4_deployment_contract.py" in source
+    assert "test_phase3_identity_current_authority_e5_schema.py" in source
+    assert "test_phase3_identity_current_authority_e5_runtime_postgres.py" in (
+        source
+    )
+    assert "test_identity_current_authority_e5_deployment_contract.py" in (
+        source
+    )
+    assert "TEST_PHASE3_IDENTITY_CURRENT_AUTHORITY_E5_OWNER_DATABASE_URL" in (
+        source
+    )
+    assert "TEST_PHASE3_IDENTITY_CURRENT_AUTHORITY_E5_DATABASE_URL" in source
     assert "def _set_disposable_e4_role_login(" in source
     assert 'role="home_agent_identity_finalizer"' in section
     assert 'role="home_agent_identity_cutover"' in section
@@ -511,19 +610,38 @@ def test_e4_scaffold_phase_is_fresh_dormant_and_secret_file_only() -> None:
     assert "pinned dormant E4 catalog" in source
     assert (
         section.count("identity cutover E4 activation contract is not installed")
-        == 2
+        == 1
     )
+    e5_upgrade = section.index("REVISION_0015", login_open)
+    e5_downgrade = section.index("_alembic_downgrade(", e5_upgrade)
+    e5_reupgrade = section.index("_alembic(", e5_downgrade)
+    e5_replay = section.index("_apply_grants_expect_failure(", e5_reupgrade)
+    assert e5_upgrade < e5_downgrade < e5_reupgrade < e5_replay
     assert section.count("redact_output=True") == 2
     assert "pending_e4_catalog_digest" not in source
     assert "_extract_e4_catalog_digest" not in source
     assert "capture_e4_catalog_digest" not in source
     assert "E4_CATALOG_SHA256=" not in source
+    assert "pending_e5_catalog_digest" in source
+    assert "_extract_e5_catalog_digest" in source
+    assert "capture_e5_catalog_digest=True" in section
+    assert "E5_CATALOG_SHA256=" in source
+    assert "unpinned dormant E5 catalog" in section
+    assert (
+        "identity current-authority E5 catalog admission is pending "
+        in section
+    )
+    assert '"reviewed digest"' in section
     assert "if cleanup_failure is not None:" in source
     assert source.index("if cleanup_failure is not None:") < source.index(
         '"E1/E2/E3/E4 PostgreSQL 17 gate passed; "'
     )
+    assert source.index("if cleanup_failure is not None:") < source.index(
+        'print(f"E5_CATALOG_SHA256='
+    )
     assert "verify rejected E4 kernel remains quarantined" in source
     assert "Running isolated dormant E4 deployment scaffold" in source
+    assert "verify rejected E5 catalog remains broadly quarantined" in source
 
 
 def test_direct_psycopg_url_exports_are_narrow_and_scheme_distinct() -> None:

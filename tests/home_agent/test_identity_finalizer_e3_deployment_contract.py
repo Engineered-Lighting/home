@@ -110,12 +110,26 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
     ) == [
         "0013_identity_finalizer_e3",
         "0014_identity_cutover_e4",
+        "0015_current_authority_e5a",
     ]
     assert (
         "current_revision = ANY (reviewed_e3_catalog_revisions)"
         in admission
     )
-    assert "0015_" not in reviewed_revisions.group(1)
+    assert "0016_" not in reviewed_revisions.group(1)
+    overlay_revisions = re.search(
+        r"reviewed_e4_overlay_revisions constant text\[\] := ARRAY\["
+        r"(.*?)\]\:\:text\[\]",
+        admission,
+        re.DOTALL,
+    )
+    assert overlay_revisions is not None
+    assert re.findall(
+        r"'([0-9a-z_]+)'", overlay_revisions.group(1)
+    ) == [
+        "0014_identity_cutover_e4",
+        "0015_current_authority_e5a",
+    ]
     assert (
         "login_role.rolvaliduntil =\n"
         "               timestamptz '1970-01-01 00:00:00+00'"
@@ -166,15 +180,13 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
     assert "policy_row.polqual::text <>" in admission
     assert "reference_policy.polqual::text" in admission
     assert (
-        "WHEN current_revision = '0014_identity_cutover_e4' THEN 5"
+        "WHEN current_revision = '0015_current_authority_e5a' THEN 6"
         in admission
     )
-    assert "ELSE 4" in admission
-    assert re.search(
-        r"\) <> \(\s*CASE\s+WHEN current_revision = "
-        r"'0014_identity_cutover_e4' THEN 5\s+ELSE 4\s+END\s+\)",
-        admission,
+    assert "WHEN current_revision = ANY (reviewed_e4_overlay_revisions) THEN 5" in (
+        admission
     )
+    assert "ELSE 4" in admission
     assert "identity finalizer E3 evidence policy set mismatch" in admission
     assert "identity finalizer E3 schema ACL mismatch" in admission
     assert "identity finalizer E3 table ACL mismatch" in admission
@@ -360,8 +372,9 @@ def test_e3_replay_pins_exact_function_and_catalog_contracts() -> None:
     policy_manifest = admission.split("'policies', (", 1)[1].split(
         "'triggers', (", 1
     )[0]
-    assert "current_revision = '0014_identity_cutover_e4'" in policy_manifest
+    assert "reviewed_e4_overlay_revisions" in policy_manifest
     assert "policy_row.polname = e4_select_policy" in policy_manifest
+    assert "policy_row.polname = e5_select_policy" in policy_manifest
     assert "policy_row.polpermissive" in policy_manifest
     assert "policy_row.polcmd = 'r'" in policy_manifest
     assert "policy_row.polwithcheck IS NULL" in policy_manifest
@@ -369,6 +382,7 @@ def test_e3_replay_pins_exact_function_and_catalog_contracts() -> None:
     assert "identity_cutover_e4_insert" not in policy_manifest
     assert "identity_cutover_e4_update" not in policy_manifest
     assert "LIKE" not in policy_manifest
+    assert "identity finalizer E3 reviewed E5 policy mismatch" in admission
 
     e4_admission = source.split("DO $identity_cutover_e4_acl$", 1)[1].split(
         "$identity_cutover_e4_acl$;", 1

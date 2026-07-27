@@ -507,6 +507,9 @@ def test_exact_replay_is_read_only_complete_and_refuses_drift() -> None:
 
 def test_shared_write_fence_orders_every_tombstone_and_finalization() -> None:
     body = _literal("FUNCTION_BODY")
+    installed_contract = MIGRATION.split(
+        "def _assert_installed_contract()", 1
+    )[1].split("def upgrade()", 1)[0]
     assert body.index("privacy.lock_identity_semantic_write_fence()") < body.index(
         "reviewed_identity_finalizer_admissions AS candidate"
     )
@@ -518,6 +521,15 @@ def test_shared_write_fence_orders_every_tombstone_and_finalization() -> None:
     assert "privacy.subject_retrieval_blocks" in MIGRATION
     assert "PERFORM privacy.lock_identity_semantic_write_fence();" in MIGRATION
     assert "GRANT EXECUTE ON FUNCTION {FENCE_FUNCTION} TO {KERNEL_ROLE}" in MIGRATION
+    assert (
+        "pg_catalog.cardinality(\n"
+        "                     trigger_row.tgattr::smallint[]\n"
+        "                   ) = 1"
+    ) in installed_contract
+    assert ") = ANY(trigger_row.tgattr::smallint[])" in installed_contract
+    assert "AND NOT attribute.attisdropped" in installed_contract
+    assert "trigger_row.tgattr::smallint[] = ARRAY[" not in installed_contract
+    assert "AND trigger_row.tgconstrindid = 0" in installed_contract
 
 
 def test_roles_rls_and_acl_remain_dormant_and_non_delegable() -> None:

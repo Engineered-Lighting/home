@@ -3722,17 +3722,21 @@ def _assert_installed_contract() -> None:
                AND trigger_row.tgnewtable IS NULL
                AND trigger_row.tgconstraint = 0
                AND trigger_row.tgconstrrelid = 0
+               AND trigger_row.tgconstrindid = 0
                AND NOT trigger_row.tgdeferrable
                AND NOT trigger_row.tginitdeferred
                AND trigger_row.tgparentid = 0
-               AND trigger_row.tgattr::smallint[] = ARRAY[
-                 (
-                   SELECT attnum FROM pg_catalog.pg_attribute
-                    WHERE attrelid =
-                          'privacy.subject_retrieval_blocks'::regclass
-                      AND attname = 'person_id'
-                 )
-               ]::smallint[]
+               AND pg_catalog.cardinality(
+                     trigger_row.tgattr::smallint[]
+                   ) = 1
+               AND (
+                 SELECT attribute.attnum
+                   FROM pg_catalog.pg_attribute AS attribute
+                  WHERE attribute.attrelid =
+                        'privacy.subject_retrieval_blocks'::regclass
+                    AND attribute.attname = 'person_id'
+                    AND NOT attribute.attisdropped
+               ) = ANY(trigger_row.tgattr::smallint[])
           ) OR (
             SELECT pg_catalog.count(*)
               FROM pg_catalog.pg_trigger

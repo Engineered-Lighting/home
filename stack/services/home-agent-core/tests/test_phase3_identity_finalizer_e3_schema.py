@@ -188,6 +188,12 @@ def test_bootstrap_accepts_only_the_exact_empty_metadata_shape() -> None:
     assert "table_row.relowner = owner_oid" in MIGRATION
     assert "NOT table_row.relrowsecurity" in MIGRATION
     assert "NOT table_row.relforcerowsecurity" in MIGRATION
+    assert "AND table_row.relhastriggers" in MIGRATION
+    assert "actual_trigger_count <> 2" in MIGRATION
+    assert "actual_insert_ri_trigger_count <> 1" in MIGRATION
+    assert "actual_update_ri_trigger_count <> 1" in MIGRATION
+    assert 'pg_catalog."RI_FKey_check_ins"()' in MIGRATION
+    assert 'pg_catalog."RI_FKey_check_upd"()' in MIGRATION
     assert "expected_constraints constant text[]" in MIGRATION
     assert "attribute.attidentity::text" in MIGRATION
     assert "attribute.attgenerated::text" in MIGRATION

@@ -1570,6 +1570,9 @@ DECLARE
   bootstrap_columns text[];
   bootstrap_constraints text[];
   bootstrap_indexes text[];
+  bootstrap_trigger_count integer;
+  bootstrap_insert_ri_trigger_count integer;
+  bootstrap_update_ri_trigger_count integer;
   evidence_table regclass;
   evidence_tables constant text[] := ARRAY[
     'operations.reviewed_identity_migration_runs',
@@ -1695,6 +1698,56 @@ BEGIN
       JOIN pg_catalog.pg_class AS index_row
         ON index_row.oid = index_state.indexrelid
      WHERE index_state.indrelid = admission_table;
+    SELECT pg_catalog.count(*),
+           pg_catalog.count(*) FILTER (
+             WHERE trigger_row.tgisinternal
+               AND trigger_row.tgenabled::text = 'O'
+               AND trigger_row.tgparentid = 0
+               AND NOT trigger_row.tgdeferrable
+               AND NOT trigger_row.tginitdeferred
+               AND trigger_row.tgnargs = 0
+               AND trigger_row.tgqual IS NULL
+               AND trigger_row.tgoldtable IS NULL
+               AND trigger_row.tgnewtable IS NULL
+               AND constraint_row.conrelid = admission_table
+               AND constraint_row.conname =
+                     'fk_identity_finalizer_admission_run'
+               AND constraint_row.contype::text = 'f'
+               AND trigger_row.tgconstrrelid = constraint_row.confrelid
+               AND trigger_row.tgconstrindid = constraint_row.conindid
+               AND trigger_row.tgfoid = pg_catalog.to_regprocedure(
+                     'pg_catalog."RI_FKey_check_ins"()'
+                   )
+               AND trigger_row.tgtype = 5
+           ),
+           pg_catalog.count(*) FILTER (
+             WHERE trigger_row.tgisinternal
+               AND trigger_row.tgenabled::text = 'O'
+               AND trigger_row.tgparentid = 0
+               AND NOT trigger_row.tgdeferrable
+               AND NOT trigger_row.tginitdeferred
+               AND trigger_row.tgnargs = 0
+               AND trigger_row.tgqual IS NULL
+               AND trigger_row.tgoldtable IS NULL
+               AND trigger_row.tgnewtable IS NULL
+               AND constraint_row.conrelid = admission_table
+               AND constraint_row.conname =
+                     'fk_identity_finalizer_admission_run'
+               AND constraint_row.contype::text = 'f'
+               AND trigger_row.tgconstrrelid = constraint_row.confrelid
+               AND trigger_row.tgconstrindid = constraint_row.conindid
+               AND trigger_row.tgfoid = pg_catalog.to_regprocedure(
+                     'pg_catalog."RI_FKey_check_upd"()'
+                   )
+               AND trigger_row.tgtype = 17
+           )
+      INTO STRICT bootstrap_trigger_count,
+                  bootstrap_insert_ri_trigger_count,
+                  bootstrap_update_ri_trigger_count
+      FROM pg_catalog.pg_trigger AS trigger_row
+      LEFT JOIN pg_catalog.pg_constraint AS constraint_row
+        ON constraint_row.oid = trigger_row.tgconstraint
+     WHERE trigger_row.tgrelid = admission_table;
 
     IF bootstrap_columns IS DISTINCT FROM ARRAY[
          'admission_id|uuid|true|',
@@ -1744,6 +1797,9 @@ BEGIN
          'uq_reviewed_identity_finalizer_admissions_finalization_id|false|true',
          'uq_reviewed_identity_finalizer_admissions_run_id|false|true'
        ]::text[]
+       OR bootstrap_trigger_count <> 2
+       OR bootstrap_insert_ri_trigger_count <> 1
+       OR bootstrap_update_ri_trigger_count <> 1
        OR NOT EXISTS (
          SELECT 1
            FROM pg_catalog.pg_class AS table_row
@@ -1753,7 +1809,7 @@ BEGIN
             AND table_row.relpersistence = 'p'
             AND NOT table_row.relrowsecurity
             AND NOT table_row.relforcerowsecurity
-            AND NOT table_row.relhastriggers
+            AND table_row.relhastriggers
        )
        OR EXISTS (
          SELECT 1
@@ -1790,12 +1846,16 @@ BEGIN
         USING ERRCODE = '55000',
               DETAIL = pg_catalog.format(
                 'columns=%s constraints=%s indexes=%s '
+                'ri_triggers=%s/%s/%s '
                 'relation=%s rows_present=%s policies_present=%s '
                 'comment_present=%s column_acl_present=%s '
                 'external_table_acl_present=%s',
                 bootstrap_columns,
                 bootstrap_constraints,
                 bootstrap_indexes,
+                bootstrap_trigger_count,
+                bootstrap_insert_ri_trigger_count,
+                bootstrap_update_ri_trigger_count,
                 (
                   SELECT pg_catalog.format(
                            'owner=%s kind=%s persistence=%s rls=%s '

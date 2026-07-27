@@ -2658,6 +2658,9 @@ def _prepare_admission_table() -> None:
           actual_columns text[];
           actual_constraints text[];
           actual_indexes text[];
+          actual_trigger_count integer;
+          actual_insert_ri_trigger_count integer;
+          actual_update_ri_trigger_count integer;
           expected_columns constant text[] := ARRAY[
             'admission_id|uuid|true|||',
             'run_id|uuid|true|||',
@@ -2724,9 +2727,72 @@ def _prepare_admission_table() -> None:
                  AND NOT table_row.relrowsecurity
                  AND NOT table_row.relforcerowsecurity
                  AND NOT table_row.relhasrules
-                 AND NOT table_row.relhastriggers
+                 AND table_row.relhastriggers
                  AND table_row.relreplident = 'd'
             ) THEN
+              RAISE EXCEPTION
+                'identity_finalizer_admission_bootstrap_shape_invalid'
+                USING ERRCODE = '55000';
+            END IF;
+            SELECT pg_catalog.count(*),
+                   pg_catalog.count(*) FILTER (
+                     WHERE trigger_row.tgisinternal
+                       AND trigger_row.tgenabled::text = 'O'
+                       AND trigger_row.tgparentid = 0
+                       AND NOT trigger_row.tgdeferrable
+                       AND NOT trigger_row.tginitdeferred
+                       AND trigger_row.tgnargs = 0
+                       AND trigger_row.tgqual IS NULL
+                       AND trigger_row.tgoldtable IS NULL
+                       AND trigger_row.tgnewtable IS NULL
+                       AND constraint_row.conrelid = occupied
+                       AND constraint_row.conname =
+                             'fk_identity_finalizer_admission_run'
+                       AND constraint_row.contype::text = 'f'
+                       AND trigger_row.tgconstrrelid =
+                             constraint_row.confrelid
+                       AND trigger_row.tgconstrindid =
+                             constraint_row.conindid
+                       AND trigger_row.tgfoid =
+                             pg_catalog.to_regprocedure(
+                               'pg_catalog."RI_FKey_check_ins"()'
+                             )
+                       AND trigger_row.tgtype = 5
+                   ),
+                   pg_catalog.count(*) FILTER (
+                     WHERE trigger_row.tgisinternal
+                       AND trigger_row.tgenabled::text = 'O'
+                       AND trigger_row.tgparentid = 0
+                       AND NOT trigger_row.tgdeferrable
+                       AND NOT trigger_row.tginitdeferred
+                       AND trigger_row.tgnargs = 0
+                       AND trigger_row.tgqual IS NULL
+                       AND trigger_row.tgoldtable IS NULL
+                       AND trigger_row.tgnewtable IS NULL
+                       AND constraint_row.conrelid = occupied
+                       AND constraint_row.conname =
+                             'fk_identity_finalizer_admission_run'
+                       AND constraint_row.contype::text = 'f'
+                       AND trigger_row.tgconstrrelid =
+                             constraint_row.confrelid
+                       AND trigger_row.tgconstrindid =
+                             constraint_row.conindid
+                       AND trigger_row.tgfoid =
+                             pg_catalog.to_regprocedure(
+                               'pg_catalog."RI_FKey_check_upd"()'
+                             )
+                       AND trigger_row.tgtype = 17
+                   )
+              INTO STRICT actual_trigger_count,
+                          actual_insert_ri_trigger_count,
+                          actual_update_ri_trigger_count
+              FROM pg_catalog.pg_trigger AS trigger_row
+              LEFT JOIN pg_catalog.pg_constraint AS constraint_row
+                ON constraint_row.oid = trigger_row.tgconstraint
+             WHERE trigger_row.tgrelid = occupied;
+            IF actual_trigger_count <> 2
+               OR actual_insert_ri_trigger_count <> 1
+               OR actual_update_ri_trigger_count <> 1 THEN
               RAISE EXCEPTION
                 'identity_finalizer_admission_bootstrap_shape_invalid'
                 USING ERRCODE = '55000';

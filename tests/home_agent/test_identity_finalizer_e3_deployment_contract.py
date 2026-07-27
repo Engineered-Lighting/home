@@ -67,7 +67,12 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
     )
     assert "NOT table_row.relrowsecurity" in admission
     assert "NOT table_row.relforcerowsecurity" in admission
-    assert "NOT table_row.relhastriggers" in admission
+    assert "AND table_row.relhastriggers" in admission
+    assert "bootstrap_trigger_count <> 2" in admission
+    assert "bootstrap_insert_ri_trigger_count <> 1" in admission
+    assert "bootstrap_update_ri_trigger_count <> 1" in admission
+    assert 'pg_catalog."RI_FKey_check_ins"()' in admission
+    assert 'pg_catalog."RI_FKey_check_upd"()' in admission
     assert (
         "FROM operations.reviewed_identity_finalizer_admissions" in admission
     )

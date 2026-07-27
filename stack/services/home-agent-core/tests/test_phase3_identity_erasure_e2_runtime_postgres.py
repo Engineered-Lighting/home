@@ -27,6 +27,7 @@ LIFECYCLE_DATABASE_ENV = "TEST_PHASE3_IDENTITY_ERASURE_E2_LIFECYCLE_DATABASE_URL
 LIFECYCLE_ERASURE_DATABASE_ENV = (
     "TEST_PHASE3_IDENTITY_ERASURE_E2_LIFECYCLE_ERASURE_DATABASE_URL"
 )
+E2_ROUNDTRIP_TARGET_REVISION = "0013_identity_finalizer_e3"
 ROLE_DATABASE_ENVS = {
     "home_agent_api": "TEST_PHASE3_IDENTITY_ERASURE_E2_API_DATABASE_URL",
     "home_agent_binding_operator": (
@@ -1366,7 +1367,14 @@ async def test_postgresql_e2_clean_roundtrip_and_data_bearing_downgrade_refusal(
     finally:
         await downgraded.dispose()
 
-    upgrade = _run_alembic(database_url, "upgrade", "head")
+    # This historical E2/E3 compatibility exercise must stop at its reviewed
+    # boundary. Later migrations can require their own explicit role ceremony
+    # and must not be entered merely because Alembic's head advanced.
+    upgrade = _run_alembic(
+        database_url,
+        "upgrade",
+        E2_ROUNDTRIP_TARGET_REVISION,
+    )
     assert upgrade.returncode == 0, (
         f"stdout:\n{upgrade.stdout}\n\nstderr:\n{upgrade.stderr}"
     )
@@ -1391,7 +1399,7 @@ async def test_postgresql_e2_clean_roundtrip_and_data_bearing_downgrade_refusal(
                 await connection.execute(
                     text("SELECT version_num FROM alembic_version")
                 )
-            ).scalar_one() == "0013_identity_finalizer_e3"
+            ).scalar_one() == E2_ROUNDTRIP_TARGET_REVISION
             assert (
                 await connection.execute(
                     text(

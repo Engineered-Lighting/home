@@ -1675,6 +1675,7 @@ DECLARE
     );
   finalizer_oid oid;
   kernel_oid oid;
+  cutover_kernel_oid oid;
   owner_oid oid;
   erasure_kernel_oid oid;
   database_oid oid;
@@ -1699,6 +1700,17 @@ DECLARE
     'operations.legacy_identity_writer_evidence',
     'operations.privacy_cutover_check_receipts',
     'operations.semantic_authority_cutovers'
+  ]::text[];
+  e4_e3_policy_relations constant text[] := ARRAY[
+    'operations.reviewed_identity_migration_runs',
+    'operations.reviewed_identity_migration_finalizations',
+    'operations.reviewed_identity_finalizer_admissions',
+    'operations.semantic_authority_cutovers',
+    'operations.legacy_identity_writer_evidence',
+    'operations.privacy_cutover_check_receipts',
+    'operations.reviewed_identity_migration_erasure_impacts',
+    'operations.reviewed_identity_migration_projection_lineage',
+    'operations.reviewed_identity_migration_projection_subjects'
   ]::text[];
   pre_e3_revisions constant text[] := ARRAY[
     '0001_greenfield_core',
@@ -1746,6 +1758,7 @@ DECLARE
   target_table text;
   evidence_select_policy constant text := 'identity_finalizer_e3_select';
   evidence_insert_policy constant text := 'identity_finalizer_e3_insert';
+  e4_select_policy constant text := 'identity_cutover_e4_select';
   migration_run_lock_policy constant text :=
     'identity_finalizer_e3_migration_run_lock';
   predicate constant text :=
@@ -2079,6 +2092,11 @@ BEGIN
   SELECT oid INTO STRICT erasure_kernel_oid
     FROM pg_catalog.pg_roles
    WHERE rolname = 'home_agent_identity_erasure_kernel';
+  IF current_revision = '0014_identity_cutover_e4' THEN
+    SELECT oid INTO STRICT cutover_kernel_oid
+      FROM pg_catalog.pg_roles
+     WHERE rolname = 'home_agent_identity_cutover_kernel';
+  END IF;
   SELECT oid INTO STRICT database_oid
     FROM pg_catalog.pg_database
    WHERE datname = pg_catalog.current_database();
@@ -2498,11 +2516,67 @@ BEGIN
     USING (current_user = 'home_agent_owner')
     WITH CHECK (current_user = 'home_agent_owner');
 
+  -- Revision 0014 adds one reviewed E4 SELECT policy to nine E3 evidence
+  -- relations. Validate that overlay against its E4-owned reference policy
+  -- before projecting it out of the E3-only policy count and catalog digest.
+  -- The E4 block below separately validates the complete E4 policy catalog.
+  IF current_revision = '0014_identity_cutover_e4'
+     AND (
+       (
+         SELECT pg_catalog.count(*)
+           FROM pg_catalog.pg_policy AS policy_row
+          WHERE policy_row.polname = e4_select_policy
+            AND policy_row.polrelid IN (
+              SELECT pg_catalog.to_regclass(target.target_name)
+                FROM pg_catalog.unnest(
+                       e4_e3_policy_relations
+                     ) AS target(target_name)
+            )
+       ) <> pg_catalog.cardinality(e4_e3_policy_relations)
+       OR EXISTS (
+         SELECT 1
+           FROM pg_catalog.unnest(
+                  e4_e3_policy_relations
+                ) AS target(target_name)
+           LEFT JOIN pg_catalog.pg_policy AS policy_row
+             ON policy_row.polrelid =
+                  pg_catalog.to_regclass(target.target_name)
+            AND policy_row.polname = e4_select_policy
+           LEFT JOIN pg_catalog.pg_policy AS reference_policy
+             ON reference_policy.polrelid =
+                  'operations.enforced_legacy_identity_writer_freezes'::regclass
+            AND reference_policy.polname = e4_select_policy
+          WHERE policy_row.oid IS NULL
+             OR reference_policy.oid IS NULL
+             OR NOT policy_row.polpermissive
+             OR policy_row.polcmd <> 'r'
+             OR policy_row.polroles <>
+                  ARRAY[cutover_kernel_oid]::oid[]
+             OR policy_row.polqual IS NULL
+             OR policy_row.polwithcheck IS NOT NULL
+             OR NOT reference_policy.polpermissive
+             OR reference_policy.polcmd <> 'r'
+             OR reference_policy.polroles <>
+                  ARRAY[cutover_kernel_oid]::oid[]
+             OR reference_policy.polqual IS NULL
+             OR reference_policy.polwithcheck IS NOT NULL
+             OR policy_row.polqual::text <>
+                  reference_policy.polqual::text
+       )
+     ) THEN
+    RAISE EXCEPTION
+      'identity finalizer E3 reviewed descendant policy mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
   IF (
        SELECT pg_catalog.count(*)
          FROM pg_catalog.pg_policy
         WHERE polrelid = admission_table
-     ) <> 4
+     ) <> CASE
+            WHEN current_revision = '0014_identity_cutover_e4' THEN 5
+            ELSE 4
+          END
      OR (
        SELECT pg_catalog.count(*)
          FROM pg_catalog.pg_policy
@@ -2796,9 +2870,42 @@ BEGIN
                         ),
                         '[]'::jsonb
                       )
-                 FROM pg_catalog.pg_policy AS policy_row
-                WHERE policy_row.polrelid = relation.oid
-             ),
+                  FROM pg_catalog.pg_policy AS policy_row
+                 WHERE policy_row.polrelid = relation.oid
+                   AND NOT (
+                     current_revision = '0014_identity_cutover_e4'
+                     AND policy_row.polname = e4_select_policy
+                     AND policy_row.polrelid IN (
+                       SELECT pg_catalog.to_regclass(target.target_name)
+                         FROM pg_catalog.unnest(
+                                e4_e3_policy_relations
+                              ) AS target(target_name)
+                     )
+                     AND policy_row.polpermissive
+                     AND policy_row.polcmd = 'r'
+                     AND policy_row.polroles =
+                           ARRAY[cutover_kernel_oid]::oid[]
+                     AND policy_row.polqual IS NOT NULL
+                     AND policy_row.polwithcheck IS NULL
+                     AND EXISTS (
+                       SELECT 1
+                         FROM pg_catalog.pg_policy AS reference_policy
+                        WHERE reference_policy.polrelid =
+                              pg_catalog.to_regclass(
+                                'operations.enforced_legacy_identity_writer_freezes'
+                              )
+                          AND reference_policy.polname = e4_select_policy
+                          AND reference_policy.polpermissive
+                          AND reference_policy.polcmd = 'r'
+                          AND reference_policy.polroles =
+                                ARRAY[cutover_kernel_oid]::oid[]
+                          AND reference_policy.polqual IS NOT NULL
+                          AND reference_policy.polwithcheck IS NULL
+                          AND reference_policy.polqual::text =
+                                policy_row.polqual::text
+                     )
+                   )
+              ),
              'triggers', (
                SELECT coalesce(
                         pg_catalog.jsonb_agg(

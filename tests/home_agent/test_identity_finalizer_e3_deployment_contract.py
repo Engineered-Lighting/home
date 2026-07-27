@@ -125,6 +125,47 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
     assert "AND database_setting.setdatabase <> 0" in admission
     assert "identity finalizer E3 ownership dependency mismatch" in admission
     assert "identity finalizer E3 write-fence contract mismatch" in admission
+    assert "identity finalizer E3 control policy set mismatch" in admission
+    descendant_policy_relations = re.search(
+        r"e4_e3_policy_relations constant text\[\] := ARRAY\["
+        r"(.*?)\]\:\:text\[\]",
+        admission,
+        re.DOTALL,
+    )
+    assert descendant_policy_relations is not None
+    assert re.findall(
+        r"'(operations\.[a-z0-9_]+)'",
+        descendant_policy_relations.group(1),
+    ) == [
+        "operations.reviewed_identity_migration_runs",
+        "operations.reviewed_identity_migration_finalizations",
+        "operations.reviewed_identity_finalizer_admissions",
+        "operations.semantic_authority_cutovers",
+        "operations.legacy_identity_writer_evidence",
+        "operations.privacy_cutover_check_receipts",
+        "operations.reviewed_identity_migration_erasure_impacts",
+        "operations.reviewed_identity_migration_projection_lineage",
+        "operations.reviewed_identity_migration_projection_subjects",
+    ]
+    assert (
+        "identity finalizer E3 reviewed descendant policy mismatch"
+        in admission
+    )
+    assert "pg_catalog.cardinality(e4_e3_policy_relations)" in admission
+    assert (
+        "'operations.enforced_legacy_identity_writer_freezes'::regclass"
+        in admission
+    )
+    assert "policy_row.polroles <>" in admission
+    assert "ARRAY[cutover_kernel_oid]::oid[]" in admission
+    assert "policy_row.polqual::text <>" in admission
+    assert "reference_policy.polqual::text" in admission
+    assert (
+        "WHEN current_revision = '0014_identity_cutover_e4' THEN 5"
+        in admission
+    )
+    assert "ELSE 4" in admission
+    assert "identity finalizer E3 evidence policy set mismatch" in admission
     assert "identity finalizer E3 schema ACL mismatch" in admission
     assert "identity finalizer E3 table ACL mismatch" in admission
     assert "identity finalizer E3 column ACL mismatch" in admission
@@ -296,8 +337,45 @@ def test_e3_replay_pins_exact_function_and_catalog_contracts() -> None:
         "'triggers'",
         "pg_catalog.pg_get_triggerdef(",
         "actual_e3_catalog_sha256 <> expected_e3_catalog_sha256",
+        "policy_row.polname = e4_select_policy",
+        "policy_row.polrelid IN (",
+        "e4_e3_policy_relations",
+        "policy_row.polroles =",
+        "ARRAY[cutover_kernel_oid]::oid[]",
+        "reference_policy.polqual::text =",
+        "policy_row.polqual::text",
     ):
         assert expected in admission
+
+    policy_manifest = admission.split("'policies', (", 1)[1].split(
+        "'triggers', (", 1
+    )[0]
+    assert "current_revision = '0014_identity_cutover_e4'" in policy_manifest
+    assert "policy_row.polname = e4_select_policy" in policy_manifest
+    assert "policy_row.polpermissive" in policy_manifest
+    assert "policy_row.polcmd = 'r'" in policy_manifest
+    assert "policy_row.polwithcheck IS NULL" in policy_manifest
+    assert "e4_e3_policy_relations" in policy_manifest
+    assert "identity_cutover_e4_insert" not in policy_manifest
+    assert "identity_cutover_e4_update" not in policy_manifest
+    assert "LIKE" not in policy_manifest
+
+    e4_admission = source.split("DO $identity_cutover_e4_acl$", 1)[1].split(
+        "$identity_cutover_e4_acl$;", 1
+    )[0]
+    assert "policy_row.polname IN (" in e4_admission
+    for e4_policy in (
+        "identity_cutover_e4_select",
+        "identity_cutover_e4_insert",
+        "identity_cutover_e4_update",
+    ):
+        assert f"'{e4_policy}'" in e4_admission
+    for policy_field in (
+        "policy_row.polroles",
+        "policy_row.polqual",
+        "policy_row.polwithcheck",
+    ):
+        assert policy_field in e4_admission
 
     assert "trigger_row.tgargs = ''::bytea" in admission
     assert "trigger_row.tgqual IS NULL" in admission

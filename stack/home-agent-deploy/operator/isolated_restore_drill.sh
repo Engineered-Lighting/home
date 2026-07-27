@@ -198,9 +198,13 @@ trap cleanup EXIT HUP INT TERM
 [[ "$(id -u)" == 0 ]] || die "must run as root"
 
 for command in awk chmod chown date df dirname docker find findmnt flock grep install \
-  mktemp mountpoint readlink rm rmdir sleep stat timeout; do
+  mktemp mountpoint python3 readlink rm rmdir sleep stat timeout; do
   require_command "$command"
 done
+
+operator_dir="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
+repository_guard="$operator_dir/pgbackrest_repository_guard.py"
+require_regular_nonsymlink "$repository_guard"
 
 env_file="$1"
 backup_label="$2"
@@ -471,12 +475,8 @@ else
 fi
 
 [[ -d "$repo_local" && ! -L "$repo_local" ]] || die "staged repository is missing"
-unsafe_repository_entry="$(
-  find "$repo_local" -xdev \( -type l -o \( ! -type f ! -type d \) \) -print -quit
-)"
-if [[ -n "$unsafe_repository_entry" ]]; then
-  die "staged repository contains a symlink or special file"
-fi
+python3 "$repository_guard" "$repo_local" "$STANZA" ||
+  die "staged repository tree validation failed"
 [[ -f "$repo_local/backup/$STANZA/backup.info" ]] || die "staged backup.info is missing"
 [[ -d "$repo_local/backup/$STANZA/$backup_label" ]] ||
   die "requested backup label is absent from the staged repository"

@@ -117,6 +117,21 @@ class IsolatedRestoreDrillContractTests(unittest.TestCase):
             self.assertIn(value, self.script)
         self.assertNotIn("rm -rf", self.script)
 
+    def test_repository_tree_uses_the_fail_closed_pgbackrest_guard(self) -> None:
+        self.assertIn(
+            'repository_guard="$operator_dir/pgbackrest_repository_guard.py"',
+            self.script,
+        )
+        self.assertIn(
+            'python3 "$repository_guard" "$repo_local" "$STANZA"',
+            self.script,
+        )
+        self.assertIn('require_regular_nonsymlink "$repository_guard"', self.script)
+        self.assertNotIn(
+            r"\( -type l -o \( ! -type f ! -type d \) \)",
+            self.script,
+        )
+
     def test_recovery_contract_checks_revision_schema_dump_and_checksums(self) -> None:
         for value in (
             "HOME_AGENT_EXPECTED_DB_REVISION",
@@ -165,6 +180,9 @@ class IsolatedRestoreDrillContractTests(unittest.TestCase):
         self.assertIn("network_mode=none", documentation)
         self.assertIn("post-migration full backup", documentation)
         self.assertIn("full isolated Home Assistant application restore", documentation)
+        self.assertIn("run --rm --no-deps --pull never", documentation)
+        self.assertIn("up -d --no-deps --no-build --pull never", documentation)
+        self.assertIn("Do not use `docker compose start core-api`", documentation)
 
 
 if __name__ == "__main__":

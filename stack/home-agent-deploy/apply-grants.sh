@@ -301,20 +301,97 @@ ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA knowledge,
 -- cannot accidentally expose candidate migration authority to any online,
 -- operator, erasure, rollout, or SQL-backup credential. A later reviewed
 -- migration must introduce a dedicated writer and its narrow API atomically.
-REVOKE ALL PRIVILEGES ON TABLE
-  operations.reviewed_identity_migration_runs,
-  operations.reviewed_identity_migration_source_items,
-  operations.reviewed_identity_migration_decisions,
-  operations.reviewed_identity_migration_item_receipts,
-  operations.reviewed_identity_migration_finalizations,
-  operations.legacy_identity_writer_evidence,
-  operations.privacy_cutover_check_receipts,
-  operations.semantic_authority_cutovers,
-  operations.reviewed_identity_migration_erasure_impacts
-FROM PUBLIC, home_agent_api, home_agent_binding_operator, home_agent_ingest,
-  home_agent_worker, home_agent_erasure, home_agent_rollout, home_agent_backup,
-  home_agent_identity_migration, home_agent_identity_kernel,
-  home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
+--
+-- Production remains pinned to 0006a, where none of these relations exists.
+-- Quarantine each relation that does exist in a committed statement before
+-- validating the all-or-none 0007 set. A partial/tampered migration therefore
+-- loses both table and independently granted column privileges even though the
+-- following validation aborts grant replay.
+DO $phase3_identity_foundation_acl$
+DECLARE
+  candidate_tables text[] := ARRAY[
+    'operations.reviewed_identity_migration_runs',
+    'operations.reviewed_identity_migration_source_items',
+    'operations.reviewed_identity_migration_decisions',
+    'operations.reviewed_identity_migration_item_receipts',
+    'operations.reviewed_identity_migration_finalizations',
+    'operations.legacy_identity_writer_evidence',
+    'operations.privacy_cutover_check_receipts',
+    'operations.semantic_authority_cutovers',
+    'operations.reviewed_identity_migration_erasure_impacts'
+  ]::text[];
+  column_list text;
+  grantee_sql text;
+  target_name text;
+  target_role text;
+  target_table regclass;
+BEGIN
+  FOREACH target_name IN ARRAY candidate_tables
+  LOOP
+    target_table := pg_catalog.to_regclass(target_name);
+    IF target_table IS NULL THEN
+      CONTINUE;
+    END IF;
+    SELECT pg_catalog.string_agg(
+             pg_catalog.quote_ident(attribute.attname), ', '
+             ORDER BY attribute.attnum
+           )
+      INTO STRICT column_list
+      FROM pg_catalog.pg_attribute AS attribute
+     WHERE attribute.attrelid = target_table
+       AND attribute.attnum > 0
+       AND NOT attribute.attisdropped;
+    FOREACH target_role IN ARRAY ARRAY[
+      'PUBLIC', 'home_agent_api', 'home_agent_binding_operator',
+      'home_agent_ingest', 'home_agent_worker', 'home_agent_erasure',
+      'home_agent_rollout', 'home_agent_backup',
+      'home_agent_identity_migration', 'home_agent_identity_kernel',
+      'home_agent_identity_finalizer', 'home_agent_identity_finalizer_kernel'
+    ]::text[]
+    LOOP
+      grantee_sql := CASE WHEN target_role = 'PUBLIC'
+        THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END;
+      EXECUTE pg_catalog.format(
+        'REVOKE ALL PRIVILEGES ON TABLE %s FROM %s',
+        target_table, grantee_sql
+      );
+      EXECUTE pg_catalog.format(
+        'REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s), '
+        'REFERENCES (%1$s) ON TABLE %2$s FROM %3$s',
+        column_list, target_table, grantee_sql
+      );
+    END LOOP;
+  END LOOP;
+END
+$phase3_identity_foundation_acl$;
+
+DO $phase3_identity_foundation_set_validation$
+DECLARE
+  candidate_tables text[] := ARRAY[
+    'operations.reviewed_identity_migration_runs',
+    'operations.reviewed_identity_migration_source_items',
+    'operations.reviewed_identity_migration_decisions',
+    'operations.reviewed_identity_migration_item_receipts',
+    'operations.reviewed_identity_migration_finalizations',
+    'operations.legacy_identity_writer_evidence',
+    'operations.privacy_cutover_check_receipts',
+    'operations.semantic_authority_cutovers',
+    'operations.reviewed_identity_migration_erasure_impacts'
+  ]::text[];
+  present_table_count integer;
+BEGIN
+  SELECT pg_catalog.count(*)
+    INTO STRICT present_table_count
+    FROM pg_catalog.unnest(candidate_tables) AS candidate(target_name)
+   WHERE pg_catalog.to_regclass(candidate.target_name) IS NOT NULL;
+  IF present_table_count NOT IN (
+    0, pg_catalog.cardinality(candidate_tables)
+  ) THEN
+    RAISE EXCEPTION 'partial Phase 3 identity authority table set'
+      USING ERRCODE = '55000';
+  END IF;
+END
+$phase3_identity_foundation_set_validation$;
 
 -- Revision 0010 may be absent while production remains pinned to 0006. If
 -- its dormant erasure-operation table exists, grant replay must nevertheless
@@ -399,10 +476,18 @@ ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA public, ingest,
   identity, knowledge, engagement, privacy, operations
   REVOKE ALL PRIVILEGES ON TYPES
   FROM home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
-REVOKE UPDATE (expires_at) ON TABLE
-  operations.reviewed_identity_migration_runs
-  FROM home_agent_identity_migration, home_agent_identity_kernel,
-  home_agent_identity_finalizer, home_agent_identity_finalizer_kernel;
+DO $identity_migration_runs_column_acl$
+BEGIN
+  IF pg_catalog.to_regclass(
+       'operations.reviewed_identity_migration_runs'
+     ) IS NOT NULL THEN
+    EXECUTE 'REVOKE UPDATE (expires_at) ON TABLE '
+      'operations.reviewed_identity_migration_runs '
+      'FROM home_agent_identity_migration, home_agent_identity_kernel, '
+      'home_agent_identity_finalizer, home_agent_identity_finalizer_kernel';
+  END IF;
+END
+$identity_migration_runs_column_acl$;
 REVOKE SELECT (
   authorization_id, from_mode, to_mode, rule_version, policy_version,
   policy_digest, authorized_at

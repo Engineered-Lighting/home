@@ -71,8 +71,11 @@ The script takes an exclusive workspace lock and performs these stages:
    free space, source-file modes, image digests, and the known-host fingerprint.
 2. Mount local repo1 read-only after proving no production/repository writer is
    running, or copy a legacy SFTP repository with native OpenSSH batch SFTP.
-3. Reject links and special files, then verify the requested backup using a
-   local read-only POSIX pgBackRest repository.
+3. Reject special files and every link except pgBackRest's exact
+   `backup/home-agent/latest` symlink. That one link must use a relative full
+   backup label and resolve to an existing non-symlink directory in the same
+   stanza before the requested backup is verified from the local read-only
+   POSIX repository.
 4. Restore as UID/GID 999 with immediate recovery, promotion, and archive mode
    disabled.
 5. Compare the restored and production PostgreSQL system identifiers.
@@ -88,6 +91,26 @@ The script takes an exclusive workspace lock and performs these stages:
 
 No backup passphrase, database password, or private key is placed in an
 argument, environment variable, Docker inspection record, or log line.
+
+## Returning production to service
+
+The drill does not restart production. From the same reviewed deployment
+checkout, refresh the root-owned runtime secret copies with `preflight.sh`,
+then use the normal staged startup sequence:
+
+1. Start PostgreSQL alone with `up -d --no-deps --no-build --pull never` and
+   require it to become healthy.
+2. Run fresh, disposable `provision-roles`, `backup-gate`, `migrate`, and
+   `grant-runtime` containers in that order with
+   `run --rm --no-deps --pull never`. Stop if any one-shot fails.
+3. Start `core-api`, `core-worker`, `core-ingest`, `edge-ingress`, and `bff`
+   separately with `up -d --no-deps --no-build --pull never`, checking each
+   service before advancing.
+4. Re-verify the BFF firewall contract, then restart the local backup timer.
+
+Do not use `docker compose start core-api` (or another dependent long-running
+service) as the recovery shortcut. Compose may then execute an old stopped
+one-shot container whose secret mounts predate the reviewed deployment.
 
 ## Failure handling
 

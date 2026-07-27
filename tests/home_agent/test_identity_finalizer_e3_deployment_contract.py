@@ -8,6 +8,10 @@ ROOT = Path(__file__).resolve().parents[2]
 GRANTS = ROOT / "stack/home-agent-deploy/apply-grants.sh"
 COMPOSE = ROOT / "stack/home-agent-compose.yml"
 RUNNER = ROOT / "tools/run-home-agent-e1-postgres-gate.py"
+E3_CATALOG_SHA256 = (
+    "c79243af17d50d791e78f2c7afaa5d1f"
+    "6ec128e82bcf711d837b68b84af1db71"
+)
 
 
 def _service(source: str, name: str) -> str:
@@ -107,6 +111,8 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
     assert "identity finalizer E3 column ACL mismatch" in admission
     assert "identity finalizer E3 function ACL mismatch" in admission
     assert "identity finalizer E3 catalog manifest mismatch" in admission
+    assert E3_CATALOG_SHA256 in admission
+    assert "PENDING_E3_CATALOG_SHA256" not in admission
     assert "identity finalizer E3 effective schema ACL mismatch" in admission
     assert "identity finalizer E3 effective table ACL mismatch" in admission
     assert "identity finalizer E3 effective function ACL mismatch" in admission

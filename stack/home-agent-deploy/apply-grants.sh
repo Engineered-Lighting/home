@@ -1511,7 +1511,27 @@ BEGIN
       );
     END LOOP;
   END IF;
-  IF EXISTS (
+  IF (
+       authority_function IS NOT NULL
+       OR EXISTS (
+         SELECT 1
+           FROM pg_catalog.pg_proc AS function_row
+           JOIN pg_catalog.pg_namespace AS function_namespace
+             ON function_namespace.oid = function_row.pronamespace
+          WHERE function_namespace.nspname = 'operations'
+            AND function_row.proname =
+                  'evaluate_current_identity_semantic_authority'
+       )
+       OR EXISTS (
+         SELECT 1
+           FROM pg_catalog.pg_policy AS policy_row
+          WHERE policy_row.polname IN (
+            'identity_authority_e5_select',
+            'identity_authority_e5_run_lock'
+          )
+       )
+     )
+     AND EXISTS (
        SELECT 1 FROM pg_catalog.pg_roles
         WHERE rolname = 'home_agent_binding_operator'
      ) THEN
@@ -4844,12 +4864,32 @@ $identity_cutover_e4_acl$;
 -- revision or catalog state. This quarantine commits independently.
 DO $identity_current_authority_e5_quarantine$
 DECLARE
+  e5_catalog_present boolean;
   function_oid regprocedure;
   grantee_sql text;
   target_role text;
   target_table record;
   type_entry record;
 BEGIN
+  SELECT EXISTS (
+           SELECT 1
+             FROM pg_catalog.pg_proc AS function_row
+             JOIN pg_catalog.pg_namespace AS function_namespace
+               ON function_namespace.oid = function_row.pronamespace
+            WHERE function_namespace.nspname = 'operations'
+              AND function_row.proname =
+                    'evaluate_current_identity_semantic_authority'
+         )
+         OR EXISTS (
+           SELECT 1
+             FROM pg_catalog.pg_policy AS policy_row
+            WHERE policy_row.polname IN (
+              'identity_authority_e5_select',
+              'identity_authority_e5_run_lock'
+            )
+         )
+    INTO STRICT e5_catalog_present;
+
   FOR function_oid IN
     SELECT function_row.oid::regprocedure
       FROM pg_catalog.pg_proc AS function_row
@@ -4872,7 +4912,8 @@ BEGIN
     END LOOP;
   END LOOP;
 
-  IF EXISTS (
+  IF e5_catalog_present
+     AND EXISTS (
        SELECT 1 FROM pg_catalog.pg_roles
         WHERE rolname = 'home_agent_binding_operator'
      ) THEN

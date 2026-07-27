@@ -214,6 +214,9 @@ def test_e5_replay_quarantines_and_pins_the_complete_direct_acl_surface() -> Non
     assert "REVOKE ALL PRIVILEGES ON TABLE %s" in overlay
     assert "REVOKE USAGE, CREATE ON SCHEMA operations, privacy" in overlay
     assert "'FROM home_agent_binding_operator CASCADE'" in overlay
+    assert "authority_function IS NOT NULL" in overlay
+    assert "identity_authority_e5_select" in overlay
+    assert "identity_authority_e5_run_lock" in overlay
 
     assert "function_row.proname =" in quarantine
     assert "'evaluate_current_identity_semantic_authority'" in quarantine
@@ -237,6 +240,10 @@ def test_e5_replay_quarantines_and_pins_the_complete_direct_acl_surface() -> Non
         "REVOKE USAGE, CREATE ON SCHEMA operations, privacy\n"
         "      FROM home_agent_binding_operator CASCADE;"
     ) in quarantine
+    assert "e5_catalog_present boolean;" in quarantine
+    assert "IF e5_catalog_present" in quarantine
+    assert "identity_authority_e5_select" in quarantine
+    assert "identity_authority_e5_run_lock" in quarantine
 
     assert f"current_revision <> '{REVISION}'" in admission
     assert "function_name_count <> 1" in admission

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import insert, text
+from sqlalchemy import delete, insert, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -76,6 +76,7 @@ class Projection:
 class FinalizerFixture:
     run_id: uuid.UUID
     admission_id: uuid.UUID
+    authorization_id: uuid.UUID
     document: bytes
     projections: tuple[Projection, ...]
     person_ids: tuple[uuid.UUID, ...]
@@ -736,6 +737,7 @@ async def _seed_fixture(
     return FinalizerFixture(
         run_id=run_id,
         admission_id=admission_id,
+        authorization_id=authorization_id,
         document=document_bytes,
         projections=tuple(projections),
         person_ids=tuple(person_ids),
@@ -836,6 +838,115 @@ async def _probe_finalize(
         if transaction.is_active:
             await transaction.rollback()
         await connection.close()
+
+
+async def _delete_rejected_fixture(
+    connection,
+    fixture: FinalizerFixture,
+    rejection: DBAPIError | None,
+) -> None:
+    if rejection is None:
+        raise AssertionError("refusing to delete a fixture without a failed probe")
+    finalization_count = (
+        await connection.execute(
+            text(
+                "SELECT count(*) FROM "
+                "operations.reviewed_identity_migration_finalizations "
+                "WHERE run_id=:run"
+            ),
+            {"run": fixture.run_id},
+        )
+    ).scalar_one()
+    assert finalization_count == 0
+
+    admission_ids = (
+        (
+            await connection.execute(
+                delete(schema.reviewed_identity_finalizer_admissions)
+                .where(
+                    schema.reviewed_identity_finalizer_admissions.c.admission_id
+                    == fixture.admission_id
+                )
+                .returning(
+                    schema.reviewed_identity_finalizer_admissions.c.admission_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert admission_ids == [fixture.admission_id]
+
+    decision_ids = (
+        (
+            await connection.execute(
+                delete(schema.reviewed_identity_migration_decisions)
+                .where(
+                    schema.reviewed_identity_migration_decisions.c.run_id
+                    == fixture.run_id
+                )
+                .returning(
+                    schema.reviewed_identity_migration_decisions.c.decision_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert set(decision_ids) == {
+        projection.decision_id for projection in fixture.projections
+    }
+    assert len(decision_ids) == len(fixture.projections)
+
+    source_item_ids = (
+        (
+            await connection.execute(
+                delete(schema.reviewed_identity_migration_source_items)
+                .where(
+                    schema.reviewed_identity_migration_source_items.c.run_id
+                    == fixture.run_id
+                )
+                .returning(
+                    schema.reviewed_identity_migration_source_items.c.source_item_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(source_item_ids) == len(fixture.projections)
+    assert len(set(source_item_ids)) == len(source_item_ids)
+
+    run_ids = (
+        (
+            await connection.execute(
+                delete(schema.reviewed_identity_migration_runs)
+                .where(
+                    schema.reviewed_identity_migration_runs.c.run_id == fixture.run_id
+                )
+                .returning(schema.reviewed_identity_migration_runs.c.run_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert run_ids == [fixture.run_id]
+
+    authorization_ids = (
+        (
+            await connection.execute(
+                delete(schema.rollout_authorizations)
+                .where(
+                    schema.rollout_authorizations.c.authorization_id
+                    == fixture.authorization_id
+                )
+                .returning(schema.rollout_authorizations.c.authorization_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert authorization_ids == [fixture.authorization_id]
 
 
 async def _replay_erasure(
@@ -1070,13 +1181,6 @@ async def test_postgresql_e3_lifecycle_boundary_and_atomic_finalizer() -> None:
             await direct_transaction.rollback()
             await direct_connection.close()
 
-        async with owner.begin() as connection:
-            comprehensive = await _seed_fixture(
-                connection,
-                label=f"complete-{uuid.uuid4().hex}",
-                comprehensive=True,
-            )
-
         def null_finalization_commitment(document: dict[str, Any]) -> None:
             document["finalization_commitment"] = None
 
@@ -1109,22 +1213,14 @@ async def test_postgresql_e3_lifecycle_boundary_and_atomic_finalizer() -> None:
                 (f"{kind}.{field}", null_projection_field(kind, field))
             )
 
-        hostile_null_fixtures: list[tuple[str, FinalizerFixture]] = []
-        async with owner.begin() as connection:
-            for label, mutator in hostile_null_mutators:
-                hostile_null_fixtures.append(
-                    (
-                        label,
-                        await _seed_fixture(
-                            connection,
-                            label=f"hostile-null-{label}-{uuid.uuid4().hex}",
-                            comprehensive=True,
-                            document_mutator=mutator,
-                        ),
-                    )
+        for label, mutator in hostile_null_mutators:
+            async with owner.begin() as connection:
+                hostile_fixture = await _seed_fixture(
+                    connection,
+                    label=f"hostile-null-{label}-{uuid.uuid4().hex}",
+                    comprehensive=True,
+                    document_mutator=mutator,
                 )
-
-        for label, hostile_fixture in hostile_null_fixtures:
             _value, hostile_error = await _probe_finalize(
                 finalizer,
                 hostile_fixture,
@@ -1133,6 +1229,12 @@ async def test_postgresql_e3_lifecycle_boundary_and_atomic_finalizer() -> None:
             assert _sqlstate(hostile_error) == "22023", (
                 f"{label}: {hostile_error.orig}"
             )
+            async with owner.begin() as connection:
+                await _delete_rejected_fixture(
+                    connection,
+                    hostile_fixture,
+                    hostile_error,
+                )
 
         private_canary = f"PRIVATE_FINALIZER_CANARY_{uuid.uuid4().hex}"
 
@@ -1159,6 +1261,12 @@ async def test_postgresql_e3_lifecycle_boundary_and_atomic_finalizer() -> None:
             private_error.orig
         )
         assert private_canary not in str(private_error)
+        async with owner.begin() as connection:
+            await _delete_rejected_fixture(
+                connection,
+                private_fixture,
+                private_error,
+            )
 
         def replace_auto_expiry_with_infinity(document: dict[str, Any]) -> None:
             for projection in document["projections"]:
@@ -1190,14 +1298,12 @@ async def test_postgresql_e3_lifecycle_boundary_and_atomic_finalizer() -> None:
         assert "identity_finalizer_privacy_record_invalid" in str(
             infinite_error.orig
         )
-
-        _value, tampered = await _probe_finalize(
-            finalizer,
-            comprehensive,
-            comprehensive.document + b" ",
-        )
-        assert tampered is not None
-        assert _sqlstate(tampered) == "42501"
+        async with owner.begin() as connection:
+            await _delete_rejected_fixture(
+                connection,
+                infinite_fixture,
+                infinite_error,
+            )
 
         malformed_bytes = b"\xff\xfe"
         async with owner.begin() as connection:
@@ -1212,6 +1318,27 @@ async def test_postgresql_e3_lifecycle_boundary_and_atomic_finalizer() -> None:
         )
         assert malformed_error is not None
         assert _sqlstate(malformed_error) == "22023"
+        async with owner.begin() as connection:
+            await _delete_rejected_fixture(
+                connection,
+                malformed_fixture,
+                malformed_error,
+            )
+
+        async with owner.begin() as connection:
+            comprehensive = await _seed_fixture(
+                connection,
+                label=f"complete-{uuid.uuid4().hex}",
+                comprehensive=True,
+            )
+
+        _value, tampered = await _probe_finalize(
+            finalizer,
+            comprehensive,
+            comprehensive.document + b" ",
+        )
+        assert tampered is not None
+        assert _sqlstate(tampered) == "42501"
 
         signed_document = json.loads(comprehensive.document)
         live_review_signature = signed_document["review_attestation"][

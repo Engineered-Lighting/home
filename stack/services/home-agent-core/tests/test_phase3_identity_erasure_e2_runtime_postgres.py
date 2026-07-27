@@ -53,6 +53,12 @@ DERIVED_TARGETS = {
     "knowledge.fact_support",
     "engagement.presentation_attempts",
 }
+ACL_DARK_TARGETS = {
+    "identity.aliases",
+    "identity.external_recognition_bindings",
+    "identity.legacy_role_labels",
+    "identity.legacy_relationship_candidates",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -780,9 +786,16 @@ async def test_postgresql_e2_all_target_rls_and_control_evidence_matrix() -> Non
             for role, engine in engines.items()
         }
         for probe in scenario.target_rows:
-            assert any(
-                matrix[probe.table] is True for matrix in before_targets.values()
-            ), f"no runtime role could observe {probe.table} before tombstoning"
+            states = {
+                matrix[probe.table] for matrix in before_targets.values()
+            }
+            if probe.table in ACL_DARK_TARGETS:
+                assert states == {None}
+            else:
+                assert True in states, (
+                    f"no runtime role could observe {probe.table} "
+                    "before tombstoning"
+                )
 
         assert await _replay(
             engines["home_agent_erasure"], scenario.payload

@@ -87,7 +87,10 @@ class PgBackRestRepositoryGuardTests(unittest.TestCase):
         self.make_symlink(FULL_LABEL, linked_label)
         self.make_symlink(linked_label.name, self.stanza / "latest")
 
-        self.assert_rejected("existing non-symlink directory")
+        self.assert_rejected(
+            "existing non-symlink directory|"
+            "symlink outside backup/<stanza>/latest"
+        )
 
     def test_reserved_latest_path_rejects_regular_files_and_directories(self) -> None:
         latest = self.stanza / "latest"

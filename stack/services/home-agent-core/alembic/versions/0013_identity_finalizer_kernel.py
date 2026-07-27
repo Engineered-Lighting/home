@@ -2658,6 +2658,33 @@ def _prepare_admission_table() -> None:
           actual_columns text[];
           actual_constraints text[];
           actual_indexes text[];
+          actual_column_mismatch_positions integer[];
+          actual_constraint_mismatch_positions integer[];
+          actual_index_mismatch_positions integer[];
+          actual_columns_sha256 text;
+          expected_columns_sha256 text;
+          actual_constraints_sha256 text;
+          expected_constraints_sha256 text;
+          actual_indexes_sha256 text;
+          expected_indexes_sha256 text;
+          actual_owner_privileges text[];
+          actual_unexpected_acl_count bigint;
+          actual_missing_key_shape_count bigint;
+          actual_invalid_constraint_count bigint;
+          actual_policy_count bigint;
+          actual_user_trigger_count bigint;
+          actual_rewrite_count bigint;
+          actual_security_label_count bigint;
+          actual_publication_count bigint;
+          actual_relkind text;
+          actual_relpersistence text;
+          actual_owner_matches boolean;
+          actual_is_partition boolean;
+          actual_row_security boolean;
+          actual_force_row_security boolean;
+          actual_has_rules boolean;
+          actual_has_triggers boolean;
+          actual_replica_identity text;
           actual_trigger_count integer;
           actual_insert_ri_trigger_count integer;
           actual_update_ri_trigger_count integer;
@@ -2716,23 +2743,52 @@ def _prepare_admission_table() -> None:
             SELECT oid INTO STRICT owner_oid
               FROM pg_catalog.pg_roles
              WHERE rolname = 'home_agent_owner';
-            IF NOT EXISTS (
-              SELECT 1
-                FROM pg_catalog.pg_class AS table_row
-               WHERE table_row.oid = occupied
-                 AND table_row.relkind = 'r'
-                 AND table_row.relpersistence = 'p'
-                 AND table_row.relowner = owner_oid
-                 AND NOT table_row.relispartition
-                 AND NOT table_row.relrowsecurity
-                 AND NOT table_row.relforcerowsecurity
-                 AND NOT table_row.relhasrules
-                 AND table_row.relhastriggers
-                 AND table_row.relreplident = 'd'
-            ) THEN
+            SELECT table_row.relkind::text,
+                   table_row.relpersistence::text,
+                   table_row.relowner = owner_oid,
+                   table_row.relispartition,
+                   table_row.relrowsecurity,
+                   table_row.relforcerowsecurity,
+                   table_row.relhasrules,
+                   table_row.relhastriggers,
+                   table_row.relreplident::text
+              INTO STRICT actual_relkind,
+                          actual_relpersistence,
+                          actual_owner_matches,
+                          actual_is_partition,
+                          actual_row_security,
+                          actual_force_row_security,
+                          actual_has_rules,
+                          actual_has_triggers,
+                          actual_replica_identity
+              FROM pg_catalog.pg_class AS table_row
+             WHERE table_row.oid = occupied;
+            IF actual_relkind IS DISTINCT FROM 'r'
+               OR actual_relpersistence IS DISTINCT FROM 'p'
+               OR actual_owner_matches IS DISTINCT FROM true
+               OR actual_is_partition IS DISTINCT FROM false
+               OR actual_row_security IS DISTINCT FROM false
+               OR actual_force_row_security IS DISTINCT FROM false
+               OR actual_has_rules IS DISTINCT FROM false
+               OR actual_has_triggers IS DISTINCT FROM true
+               OR actual_replica_identity IS DISTINCT FROM 'd' THEN
               RAISE EXCEPTION
                 'identity_finalizer_admission_bootstrap_shape_invalid'
-                USING ERRCODE = '55000';
+                USING ERRCODE = '55000',
+                      DETAIL = pg_catalog.format(
+                        'class relkind=%s persistence=%s owner_match=%s '
+                        'partition=%s rls=%s force_rls=%s rules=%s '
+                        'triggers=%s replica_identity=%s',
+                        actual_relkind,
+                        actual_relpersistence,
+                        actual_owner_matches,
+                        actual_is_partition,
+                        actual_row_security,
+                        actual_force_row_security,
+                        actual_has_rules,
+                        actual_has_triggers,
+                        actual_replica_identity
+                      );
             END IF;
             SELECT pg_catalog.count(*),
                    pg_catalog.count(*) FILTER (
@@ -2795,7 +2851,13 @@ def _prepare_admission_table() -> None:
                OR actual_update_ri_trigger_count <> 1 THEN
               RAISE EXCEPTION
                 'identity_finalizer_admission_bootstrap_shape_invalid'
-                USING ERRCODE = '55000';
+                USING ERRCODE = '55000',
+                      DETAIL = pg_catalog.format(
+                        'ri_triggers total=%s insert_exact=%s update_exact=%s',
+                        actual_trigger_count,
+                        actual_insert_ri_trigger_count,
+                        actual_update_ri_trigger_count
+                      );
             END IF;
             EXECUTE 'SELECT EXISTS (SELECT 1 FROM {ADMISSION})'
               INTO occupied_rows;
@@ -2854,142 +2916,256 @@ def _prepare_admission_table() -> None:
               JOIN pg_catalog.pg_am AS access_method
                 ON access_method.oid = index_row.relam
              WHERE index_contract.indrelid = occupied;
+            SELECT
+              pg_catalog.encode(
+                pg_catalog.sha256(
+                  pg_catalog.convert_to(actual_columns::text, 'UTF8')
+                ),
+                'hex'
+              ),
+              pg_catalog.encode(
+                pg_catalog.sha256(
+                  pg_catalog.convert_to(expected_columns::text, 'UTF8')
+                ),
+                'hex'
+              ),
+              pg_catalog.encode(
+                pg_catalog.sha256(
+                  pg_catalog.convert_to(actual_constraints::text, 'UTF8')
+                ),
+                'hex'
+              ),
+              pg_catalog.encode(
+                pg_catalog.sha256(
+                  pg_catalog.convert_to(expected_constraints::text, 'UTF8')
+                ),
+                'hex'
+              ),
+              pg_catalog.encode(
+                pg_catalog.sha256(
+                  pg_catalog.convert_to(actual_indexes::text, 'UTF8')
+                ),
+                'hex'
+              ),
+              pg_catalog.encode(
+                pg_catalog.sha256(
+                  pg_catalog.convert_to(expected_indexes::text, 'UTF8')
+                ),
+                'hex'
+              )
+              INTO STRICT actual_columns_sha256,
+                          expected_columns_sha256,
+                          actual_constraints_sha256,
+                          expected_constraints_sha256,
+                          actual_indexes_sha256,
+                          expected_indexes_sha256;
+            SELECT pg_catalog.array_agg(
+                     mismatch_position ORDER BY mismatch_position
+                   )
+              INTO STRICT actual_column_mismatch_positions
+              FROM pg_catalog.generate_series(
+                     1,
+                     CASE
+                       WHEN pg_catalog.cardinality(actual_columns) >
+                            pg_catalog.cardinality(expected_columns)
+                       THEN pg_catalog.cardinality(actual_columns)
+                       ELSE pg_catalog.cardinality(expected_columns)
+                     END
+                   ) AS mismatch_series(mismatch_position)
+             WHERE actual_columns[mismatch_position]
+                   IS DISTINCT FROM expected_columns[mismatch_position];
+            SELECT pg_catalog.array_agg(
+                     mismatch_position ORDER BY mismatch_position
+                   )
+              INTO STRICT actual_constraint_mismatch_positions
+              FROM pg_catalog.generate_series(
+                     1,
+                     CASE
+                       WHEN pg_catalog.cardinality(actual_constraints) >
+                            pg_catalog.cardinality(expected_constraints)
+                       THEN pg_catalog.cardinality(actual_constraints)
+                       ELSE pg_catalog.cardinality(expected_constraints)
+                     END
+                   ) AS mismatch_series(mismatch_position)
+             WHERE actual_constraints[mismatch_position]
+                   IS DISTINCT FROM expected_constraints[mismatch_position];
+            SELECT pg_catalog.array_agg(
+                     mismatch_position ORDER BY mismatch_position
+                   )
+              INTO STRICT actual_index_mismatch_positions
+              FROM pg_catalog.generate_series(
+                     1,
+                     CASE
+                       WHEN pg_catalog.cardinality(actual_indexes) >
+                            pg_catalog.cardinality(expected_indexes)
+                       THEN pg_catalog.cardinality(actual_indexes)
+                       ELSE pg_catalog.cardinality(expected_indexes)
+                     END
+                   ) AS mismatch_series(mismatch_position)
+             WHERE actual_indexes[mismatch_position]
+                   IS DISTINCT FROM expected_indexes[mismatch_position];
+            SELECT pg_catalog.array_agg(
+                     acl.privilege_type ORDER BY acl.privilege_type
+                   ) FILTER (
+                     WHERE acl.grantee = owner_oid
+                       AND acl.grantor = owner_oid
+                       AND NOT acl.is_grantable
+                   ),
+                   pg_catalog.count(*) FILTER (
+                     WHERE acl.grantee <> owner_oid
+                        OR acl.grantor <> owner_oid
+                        OR acl.is_grantable
+                   )
+              INTO STRICT actual_owner_privileges,
+                          actual_unexpected_acl_count
+              FROM pg_catalog.pg_class AS table_row
+              CROSS JOIN LATERAL pg_catalog.aclexplode(
+                coalesce(
+                  table_row.relacl,
+                  pg_catalog.acldefault('r', table_row.relowner)
+                )
+              ) AS acl
+             WHERE table_row.oid = occupied;
+            SELECT pg_catalog.count(*)
+              INTO STRICT actual_missing_key_shape_count
+              FROM (VALUES
+                ('pk_reviewed_identity_finalizer_admissions',
+                  ARRAY['admission_id']::text[]),
+                ('uq_reviewed_identity_finalizer_admissions_run_id',
+                  ARRAY['run_id']::text[]),
+                ('uq_reviewed_identity_finalizer_admissions_finalization_id',
+                  ARRAY['finalization_id']::text[]),
+                ('uq_reviewed_identity_finalizer_admissions_document_sha256',
+                  ARRAY['document_sha256']::text[]),
+                ('uq_reviewed_identity_finalizer_admissions_finalization__1d9a',
+                  ARRAY['finalization_commitment']::text[]),
+                ('fk_identity_finalizer_admission_run',
+                  ARRAY['run_id']::text[])
+              ) AS expected_constraint(name, column_names)
+             WHERE NOT EXISTS (
+               SELECT 1
+                 FROM pg_catalog.pg_constraint AS constraint_row
+                WHERE constraint_row.conrelid = occupied
+                  AND constraint_row.conname = expected_constraint.name
+                  AND ARRAY(
+                    SELECT attribute.attname::text
+                      FROM pg_catalog.unnest(constraint_row.conkey)
+                           WITH ORDINALITY AS key_column(attnum, ordinal)
+                      JOIN pg_catalog.pg_attribute AS attribute
+                        ON attribute.attrelid = occupied
+                       AND attribute.attnum = key_column.attnum
+                     ORDER BY key_column.ordinal
+                  ) = expected_constraint.column_names
+             );
+            SELECT pg_catalog.count(*)
+              INTO STRICT actual_invalid_constraint_count
+              FROM pg_catalog.pg_constraint AS constraint_row
+             WHERE constraint_row.conrelid = occupied
+               AND (
+                 constraint_row.connoinherit
+                 OR (
+                   constraint_row.contype IN ('p','u')
+                   AND (
+                     constraint_row.conindid = 0
+                     OR NOT EXISTS (
+                       SELECT 1
+                         FROM pg_catalog.pg_index AS backing_index
+                        WHERE backing_index.indexrelid =
+                              constraint_row.conindid
+                          AND backing_index.indrelid = occupied
+                          AND backing_index.indpred IS NULL
+                          AND backing_index.indexprs IS NULL
+                     )
+                   )
+                 )
+                 OR (
+                   constraint_row.contype = 'f'
+                   AND (
+                     constraint_row.confrelid <>
+                       'operations.reviewed_identity_migration_runs'
+                         ::regclass
+                     OR constraint_row.confupdtype <> 'a'
+                     OR constraint_row.confdeltype <> 'a'
+                     OR constraint_row.confmatchtype <> 's'
+                     OR constraint_row.conkey <> ARRAY[
+                       (
+                         SELECT attnum
+                           FROM pg_catalog.pg_attribute
+                          WHERE attrelid = occupied
+                            AND attname = 'run_id'
+                       )
+                     ]::smallint[]
+                   )
+                 )
+               );
+            SELECT
+              (SELECT pg_catalog.count(*) FROM pg_catalog.pg_policy
+                WHERE polrelid = occupied),
+              (SELECT pg_catalog.count(*) FROM pg_catalog.pg_trigger
+                WHERE tgrelid = occupied AND NOT tgisinternal),
+              (SELECT pg_catalog.count(*) FROM pg_catalog.pg_rewrite
+                WHERE ev_class = occupied AND rulename <> '_RETURN'),
+              (SELECT pg_catalog.count(*) FROM pg_catalog.pg_seclabel
+                WHERE classoid = 'pg_catalog.pg_class'::regclass
+                  AND objoid = occupied),
+              (SELECT pg_catalog.count(*) FROM pg_catalog.pg_publication_rel
+                WHERE prrelid = occupied)
+              INTO STRICT actual_policy_count,
+                          actual_user_trigger_count,
+                          actual_rewrite_count,
+                          actual_security_label_count,
+                          actual_publication_count;
             IF actual_columns IS DISTINCT FROM expected_columns
                OR actual_constraints IS DISTINCT FROM expected_constraints
                OR actual_indexes IS DISTINCT FROM expected_indexes
-               OR (
-                 SELECT pg_catalog.array_agg(
-                          acl.privilege_type ORDER BY acl.privilege_type
-                        )
-                   FROM pg_catalog.pg_class AS table_row
-                   CROSS JOIN LATERAL pg_catalog.aclexplode(
-                     coalesce(
-                       table_row.relacl,
-                       pg_catalog.acldefault('r', table_row.relowner)
-                     )
-                   ) AS acl
-                  WHERE table_row.oid = occupied
-                    AND acl.grantee = owner_oid
-                    AND acl.grantor = owner_oid
-                    AND NOT acl.is_grantable
-               ) IS DISTINCT FROM ARRAY[
+               OR actual_owner_privileges IS DISTINCT FROM ARRAY[
                  'DELETE','INSERT','MAINTAIN','REFERENCES','SELECT','TRIGGER',
                  'TRUNCATE','UPDATE'
                ]::text[]
-               OR EXISTS (
-                 SELECT 1
-                   FROM pg_catalog.pg_class AS table_row
-                   CROSS JOIN LATERAL pg_catalog.aclexplode(
-                     coalesce(
-                       table_row.relacl,
-                       pg_catalog.acldefault('r', table_row.relowner)
-                     )
-                   ) AS acl
-                  WHERE table_row.oid = occupied
-                    AND (
-                      acl.grantee <> owner_oid
-                      OR acl.grantor <> owner_oid
-                      OR acl.is_grantable
-                    )
-               )
-               OR EXISTS (
-                 SELECT 1
-                   FROM (VALUES
-                     ('pk_reviewed_identity_finalizer_admissions',
-                       ARRAY['admission_id']::text[]),
-                     ('uq_reviewed_identity_finalizer_admissions_run_id',
-                       ARRAY['run_id']::text[]),
-                     ('uq_reviewed_identity_finalizer_admissions_finalization_id',
-                       ARRAY['finalization_id']::text[]),
-                     ('uq_reviewed_identity_finalizer_admissions_document_sha256',
-                       ARRAY['document_sha256']::text[]),
-                     ('uq_reviewed_identity_finalizer_admissions_finalization__1d9a',
-                       ARRAY['finalization_commitment']::text[]),
-                     ('fk_identity_finalizer_admission_run',
-                       ARRAY['run_id']::text[])
-                   ) AS expected_constraint(name, column_names)
-                  WHERE NOT EXISTS (
-                    SELECT 1
-                      FROM pg_catalog.pg_constraint AS constraint_row
-                     WHERE constraint_row.conrelid = occupied
-                       AND constraint_row.conname = expected_constraint.name
-                       AND ARRAY(
-                         SELECT attribute.attname::text
-                           FROM pg_catalog.unnest(constraint_row.conkey)
-                                WITH ORDINALITY AS key_column(attnum, ordinal)
-                           JOIN pg_catalog.pg_attribute AS attribute
-                             ON attribute.attrelid = occupied
-                            AND attribute.attnum = key_column.attnum
-                          ORDER BY key_column.ordinal
-                       ) = expected_constraint.column_names
-                  )
-               )
-               OR EXISTS (
-                 SELECT 1
-                   FROM pg_catalog.pg_constraint AS constraint_row
-                  WHERE constraint_row.conrelid = occupied
-                    AND (
-                      constraint_row.connoinherit
-                      OR (
-                        constraint_row.contype IN ('p','u')
-                        AND (
-                          constraint_row.conindid = 0
-                          OR NOT EXISTS (
-                            SELECT 1
-                              FROM pg_catalog.pg_index AS backing_index
-                             WHERE backing_index.indexrelid =
-                                   constraint_row.conindid
-                               AND backing_index.indrelid = occupied
-                               AND backing_index.indpred IS NULL
-                               AND backing_index.indexprs IS NULL
-                          )
-                        )
-                      )
-                      OR (
-                        constraint_row.contype = 'f'
-                        AND (
-                          constraint_row.confrelid <>
-                            'operations.reviewed_identity_migration_runs'
-                              ::regclass
-                          OR constraint_row.confupdtype <> 'a'
-                          OR constraint_row.confdeltype <> 'a'
-                          OR constraint_row.confmatchtype <> 's'
-                          OR constraint_row.conkey <> ARRAY[
-                            (
-                              SELECT attnum
-                                FROM pg_catalog.pg_attribute
-                               WHERE attrelid = occupied
-                                 AND attname = 'run_id'
-                            )
-                          ]::smallint[]
-                        )
-                      )
-                    )
-               )
-               OR EXISTS (
-                 SELECT 1 FROM pg_catalog.pg_policy
-                  WHERE polrelid = occupied
-               )
-               OR EXISTS (
-                 SELECT 1 FROM pg_catalog.pg_trigger
-                  WHERE tgrelid = occupied AND NOT tgisinternal
-               )
-               OR EXISTS (
-                 SELECT 1 FROM pg_catalog.pg_rewrite
-                  WHERE ev_class = occupied AND rulename <> '_RETURN'
-               )
-               OR EXISTS (
-                 SELECT 1 FROM pg_catalog.pg_seclabel
-                  WHERE classoid = 'pg_catalog.pg_class'::regclass
-                    AND objoid = occupied
-               )
-               OR EXISTS (
-                 SELECT 1 FROM pg_catalog.pg_publication_rel
-                  WHERE prrelid = occupied
-               ) THEN
+               OR actual_unexpected_acl_count <> 0
+               OR actual_missing_key_shape_count <> 0
+               OR actual_invalid_constraint_count <> 0
+               OR actual_policy_count <> 0
+               OR actual_user_trigger_count <> 0
+               OR actual_rewrite_count <> 0
+               OR actual_security_label_count <> 0
+               OR actual_publication_count <> 0 THEN
               RAISE EXCEPTION
                 'identity_finalizer_admission_bootstrap_shape_invalid'
-                USING ERRCODE = '55000';
+                USING ERRCODE = '55000',
+                      DETAIL = pg_catalog.format(
+                        'columns count=%s actual_sha256=%s expected_sha256=%s '
+                        'mismatch_positions=%s constraints count=%s '
+                        'actual_sha256=%s expected_sha256=%s '
+                        'mismatch_positions=%s indexes count=%s '
+                        'actual_sha256=%s expected_sha256=%s '
+                        'mismatch_positions=%s owner_privileges=%s '
+                        'unexpected_acl_count=%s missing_key_shape_count=%s '
+                        'invalid_constraint_count=%s policies=%s '
+                        'user_triggers=%s rewrites=%s security_labels=%s '
+                        'publications=%s',
+                        pg_catalog.cardinality(actual_columns),
+                        actual_columns_sha256,
+                        expected_columns_sha256,
+                        actual_column_mismatch_positions,
+                        pg_catalog.cardinality(actual_constraints),
+                        actual_constraints_sha256,
+                        expected_constraints_sha256,
+                        actual_constraint_mismatch_positions,
+                        pg_catalog.cardinality(actual_indexes),
+                        actual_indexes_sha256,
+                        expected_indexes_sha256,
+                        actual_index_mismatch_positions,
+                        actual_owner_privileges,
+                        actual_unexpected_acl_count,
+                        actual_missing_key_shape_count,
+                        actual_invalid_constraint_count,
+                        actual_policy_count,
+                        actual_user_trigger_count,
+                        actual_rewrite_count,
+                        actual_security_label_count,
+                        actual_publication_count
+                      );
             END IF;
             DROP TABLE {ADMISSION};
           END IF;

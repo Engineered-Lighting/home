@@ -186,9 +186,12 @@ def test_bootstrap_accepts_only_the_exact_empty_metadata_shape() -> None:
     assert "identity_finalizer_admission_bootstrap_shape_invalid" in MIGRATION
     assert "actual_columns IS DISTINCT FROM expected_columns" in MIGRATION
     assert "table_row.relowner = owner_oid" in MIGRATION
-    assert "NOT table_row.relrowsecurity" in MIGRATION
-    assert "NOT table_row.relforcerowsecurity" in MIGRATION
-    assert "AND table_row.relhastriggers" in MIGRATION
+    assert "table_row.relrowsecurity" in MIGRATION
+    assert "actual_row_security IS DISTINCT FROM false" in MIGRATION
+    assert "table_row.relforcerowsecurity" in MIGRATION
+    assert "actual_force_row_security IS DISTINCT FROM false" in MIGRATION
+    assert "table_row.relhastriggers" in MIGRATION
+    assert "actual_has_triggers IS DISTINCT FROM true" in MIGRATION
     assert "actual_trigger_count <> 2" in MIGRATION
     assert "actual_insert_ri_trigger_count <> 1" in MIGRATION
     assert "actual_update_ri_trigger_count <> 1" in MIGRATION
@@ -207,6 +210,25 @@ def test_bootstrap_accepts_only_the_exact_empty_metadata_shape() -> None:
     assert "constraint_row.contype IN ('p','u')" in MIGRATION
     assert "constraint_row.contype = 'f'" in MIGRATION
     assert "expected_indexes constant text[]" in MIGRATION
+    assert "'class relkind=%s persistence=%s owner_match=%s '" in MIGRATION
+    assert "'ri_triggers total=%s insert_exact=%s update_exact=%s'" in MIGRATION
+    assert "actual_column_mismatch_positions integer[]" in MIGRATION
+    assert "actual_constraint_mismatch_positions integer[]" in MIGRATION
+    assert "actual_index_mismatch_positions integer[]" in MIGRATION
+    assert "actual_columns_sha256 text" in MIGRATION
+    assert "actual_owner_privileges text[]" in MIGRATION
+    assert "actual_unexpected_acl_count bigint" in MIGRATION
+    assert "'columns count=%s actual_sha256=%s expected_sha256=%s '" in MIGRATION
+    assert "'user_triggers=%s rewrites=%s security_labels=%s '" in MIGRATION
+    assert "'publications=%s'" in MIGRATION
+    bootstrap = MIGRATION.split("def _prepare_admission_table()", 1)[1].split(
+        "def _install_shared_write_fence()", 1
+    )[0]
+    assert "pg_catalog.pg_get_constraintdef(" not in bootstrap
+    assert "pg_catalog.pg_get_indexdef(" not in bootstrap
+    assert "actual_constraint_definitions" not in bootstrap
+    assert "actual_index_definitions" not in bootstrap
+    assert "actual_acl text[]" not in bootstrap
     assert MIGRATION.index("identity_finalizer_admission_preexisting_evidence") < (
         MIGRATION.index("DROP TABLE {ADMISSION}")
     )

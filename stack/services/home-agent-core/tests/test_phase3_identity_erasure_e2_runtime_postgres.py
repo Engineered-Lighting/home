@@ -569,6 +569,19 @@ async def _visibility(
         ).scalar_one() == expected_role
         await _set_subject_scope(connection, scenario)
         for probe in probes:
+            schema_name = probe.table.split(".", 1)[0]
+            schema_permitted = (
+                await connection.execute(
+                    text(
+                        "SELECT has_schema_privilege("
+                        "current_user, :schema, 'USAGE')"
+                    ),
+                    {"schema": schema_name},
+                )
+            ).scalar_one()
+            if not schema_permitted:
+                visible[probe.table] = None
+                continue
             permitted = (
                 await connection.execute(
                     text(

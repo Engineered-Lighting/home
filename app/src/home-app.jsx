@@ -10946,6 +10946,11 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           the metrics drawer (per AR-13). */}
       {window.HomePeopleOverlay && (
         <window.HomePeopleOverlay
+          key={JSON.stringify([
+            "private-people",
+            String(endpoint || "").replace(/\/+$/, ""),
+            String(token || ""),
+          ])}
           open={peopleOpen}
           onClose={closePeopleOverlay}
           endpoint={endpoint}

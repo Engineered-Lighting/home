@@ -1,4 +1,4 @@
-name: home agent E1/E2/E3 PostgreSQL gate
+name: home agent E1/E2/E3/E4 PostgreSQL gate
 
 on:
   pull_request:
@@ -7,6 +7,15 @@ on:
       - "stack/home-agent.env.example"
       - "stack/home-agent-compose.yml"
       - "stack/home-agent-deploy/apply-grants.sh"
+      - "stack/home-agent-deploy/add-identity-cutover-role-secrets.sh"
+      - "stack/home-agent-deploy/bootstrap-secrets.sh"
+      - "stack/home-agent-deploy/IDENTITY-CUTOVER-ROLE.md"
+      - "stack/home-agent-deploy/materialize-secrets.sh"
+      - "stack/home-agent-deploy/postgres-pg_hba.conf"
+      - "stack/home-agent-deploy/preflight.sh"
+      - "stack/home-agent-deploy/preflight-identity-cutover-roles.sh"
+      - "stack/home-agent-deploy/provision-identity-cutover-roles.sh"
+      - "stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh"
       - "stack/home-agent-deploy/identity-api-acl.sql"
       - "stack/home-agent-deploy/operator/REVIEWED-IDENTITY-PAYLOAD.md"
       - "stack/home-agent-deploy/operator/reviewed_identity_payload.py"
@@ -18,6 +27,7 @@ on:
       - "tests/home_agent/test_identity_erasure_e2_deployment_contract.py"
       - "tests/home_agent/test_identity_finalizer_e3_deployment_contract.py"
       - "tests/home_agent/test_identity_finalizer_foundation_deployment_contract.py"
+      - "tests/home_agent/test_identity_cutover_e4_deployment_contract.py"
       - "tools/run-home-agent-e1-postgres-gate.py"
   push:
     # Keep the exact integration branch on GitHub-hosted runners until the
@@ -28,6 +38,15 @@ on:
       - "stack/home-agent.env.example"
       - "stack/home-agent-compose.yml"
       - "stack/home-agent-deploy/apply-grants.sh"
+      - "stack/home-agent-deploy/add-identity-cutover-role-secrets.sh"
+      - "stack/home-agent-deploy/bootstrap-secrets.sh"
+      - "stack/home-agent-deploy/IDENTITY-CUTOVER-ROLE.md"
+      - "stack/home-agent-deploy/materialize-secrets.sh"
+      - "stack/home-agent-deploy/postgres-pg_hba.conf"
+      - "stack/home-agent-deploy/preflight.sh"
+      - "stack/home-agent-deploy/preflight-identity-cutover-roles.sh"
+      - "stack/home-agent-deploy/provision-identity-cutover-roles.sh"
+      - "stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh"
       - "stack/home-agent-deploy/identity-api-acl.sql"
       - "stack/home-agent-deploy/operator/REVIEWED-IDENTITY-PAYLOAD.md"
       - "stack/home-agent-deploy/operator/reviewed_identity_payload.py"
@@ -39,6 +58,7 @@ on:
       - "tests/home_agent/test_identity_erasure_e2_deployment_contract.py"
       - "tests/home_agent/test_identity_finalizer_e3_deployment_contract.py"
       - "tests/home_agent/test_identity_finalizer_foundation_deployment_contract.py"
+      - "tests/home_agent/test_identity_cutover_e4_deployment_contract.py"
       - "tools/run-home-agent-e1-postgres-gate.py"
   workflow_dispatch:
 
@@ -58,7 +78,17 @@ jobs:
       # actions/checkout v4.3.1
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
-      - name: Run isolated PostgreSQL 17 E1/E2/E3 authority gate
+      - name: Exercise E4 additive secret lifecycle
+        env:
+          HOME_AGENT_SECRET_LIFECYCLE_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: >-
+          sudo --non-interactive env
+          GITHUB_ACTIONS="$GITHUB_ACTIONS"
+          HOME_AGENT_SECRET_LIFECYCLE_RUNNER_ENVIRONMENT="$HOME_AGENT_SECRET_LIFECYCLE_RUNNER_ENVIRONMENT"
+          RUNNER_TEMP="$RUNNER_TEMP"
+          sh stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh
+
+      - name: Run isolated PostgreSQL 17 E1/E2/E3/E4 authority gate
         env:
           HOME_AGENT_E1_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: >-

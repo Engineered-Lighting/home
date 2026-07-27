@@ -14,13 +14,68 @@ runtime_root="$secrets_root/runtime"
   echo "materialize-secrets.sh must run as root" >&2
   exit 77
 }
-[ -d "$master_root" ] || {
-  echo "missing root-only master secret directory: $master_root" >&2
+case "$secrets_root" in
+  /*) ;;
+  *) echo "secrets root must be absolute" >&2; exit 78 ;;
+esac
+[ -d "$secrets_root" ] && [ ! -L "$secrets_root" ] &&
+  [ "$(stat -c '%u:%g:%a' "$secrets_root")" = "0:0:700" ] || {
+  echo "root-only secret directory is absent or unsafe" >&2
+  exit 78
+}
+[ -d "$master_root" ] && [ ! -L "$master_root" ] &&
+  [ "$(stat -c '%u:%g:%a' "$master_root")" = "0:0:700" ] || {
+  echo "root-only master secret directory is absent or unsafe" >&2
   exit 78
 }
 
 umask 077
-install -d -m 0700 -o root -g root "$runtime_root"
+if [ -e "$runtime_root" ] || [ -L "$runtime_root" ]; then
+  [ -d "$runtime_root" ] && [ ! -L "$runtime_root" ] &&
+    [ "$(stat -c '%u:%g:%a' "$runtime_root")" = "0:0:700" ] || {
+    echo "runtime secret directory is unsafe" >&2
+    exit 78
+  }
+else
+  install -d -m 0700 -o root -g root "$runtime_root"
+fi
+
+stale_cutover_master="$(
+  find "$master_root" -mindepth 1 -maxdepth 1 \
+    \( -name '.identity-cutover.new.*' \
+       -o -name '.identity-cutover.previous.*' \) \
+    -print -quit
+)"
+[ -z "$stale_cutover_master" ] || {
+  echo "stale identity cutover master publication exists" >&2
+  exit 73
+}
+
+identity_cutover_master="$master_root/identity-cutover"
+identity_cutover_enabled=0
+if [ -e "$identity_cutover_master" ] || [ -L "$identity_cutover_master" ]; then
+  [ -d "$identity_cutover_master" ] && [ ! -L "$identity_cutover_master" ] || {
+    echo "identity cutover master path is not a safe directory" >&2
+    exit 78
+  }
+  identity_cutover_enabled=1
+else
+  orphaned_cutover_runtime="$(
+    find "$runtime_root" -mindepth 1 -maxdepth 1 \
+      \( -name 'identity-cutover' \
+         -o -name 'provision-identity-cutover-roles' \
+         -o -name '.identity-cutover.new.*' \
+         -o -name '.identity-cutover.previous.*' \
+         -o -name '.provision-identity-cutover-roles.new.*' \
+         -o -name '.provision-identity-cutover-roles.previous.*' \) \
+      -print -quit
+  )"
+  [ -z "$orphaned_cutover_runtime" ] || {
+    echo "orphaned identity cutover runtime exists without its master" >&2
+    exit 78
+  }
+fi
+unset orphaned_cutover_runtime stale_cutover_master
 
 install_secret() {
   service="$1"
@@ -62,6 +117,15 @@ install_exact_single_secret_service() {
   [ -s "$source_path" ] && [ ! -L "$source_path" ] || {
     echo "missing or unsafe master secret: $source_path" >&2
     exit 78
+  }
+  stale_publication="$(
+    find "$runtime_root" -mindepth 1 -maxdepth 1 \
+      \( -name ".$service.new.*" -o -name ".$service.previous.*" \) \
+      -print -quit
+  )"
+  [ -z "$stale_publication" ] || {
+    echo "$service_label stale runtime publication exists" >&2
+    exit 73
   }
   [ ! -e "$temporary_dir" ] && [ ! -L "$temporary_dir" ] &&
     [ ! -e "$previous_dir" ] && [ ! -L "$previous_dir" ] || {
@@ -111,6 +175,86 @@ install_exact_single_secret_service() {
   fi
 }
 
+install_exact_secret_pair_service() {
+  service="$1"
+  first_source="$2"
+  first_target="$3"
+  second_source="$4"
+  second_target="$5"
+  owner_uid="$6"
+  owner_gid="$7"
+  service_label="$8"
+  service_dir="$runtime_root/$service"
+  temporary_dir="$runtime_root/.$service.new.$$"
+  previous_dir="$runtime_root/.$service.previous.$$"
+
+  for source_name in "$first_source" "$second_source"; do
+    source_path="$master_root/$source_name"
+    [ -s "$source_path" ] && [ ! -L "$source_path" ] || {
+      echo "missing or unsafe master secret: $source_path" >&2
+      exit 78
+    }
+  done
+  stale_publication="$(
+    find "$runtime_root" -mindepth 1 -maxdepth 1 \
+      \( -name ".$service.new.*" -o -name ".$service.previous.*" \) \
+      -print -quit
+  )"
+  [ -z "$stale_publication" ] || {
+    echo "$service_label stale runtime publication exists" >&2
+    exit 73
+  }
+  [ ! -e "$temporary_dir" ] && [ ! -L "$temporary_dir" ] &&
+    [ ! -e "$previous_dir" ] && [ ! -L "$previous_dir" ] || {
+    echo "$service_label runtime publication path already exists" >&2
+    exit 73
+  }
+  install -d -m 0700 -o root -g root "$temporary_dir"
+  if ! install -m 0400 -o "$owner_uid" -g "$owner_gid" \
+       "$master_root/$first_source" "$temporary_dir/$first_target" ||
+     ! install -m 0400 -o "$owner_uid" -g "$owner_gid" \
+       "$master_root/$second_source" "$temporary_dir/$second_target"; then
+    rm -f "$temporary_dir/$first_target" "$temporary_dir/$second_target"
+    rmdir "$temporary_dir" 2>/dev/null || true
+    exit 78
+  fi
+
+  if [ -e "$service_dir" ] || [ -L "$service_dir" ]; then
+    [ -d "$service_dir" ] && [ ! -L "$service_dir" ] || {
+      rm -f "$temporary_dir/$first_target" "$temporary_dir/$second_target"
+      rmdir "$temporary_dir"
+      echo "$service_label runtime path is not a safe directory" >&2
+      exit 78
+    }
+    unsafe_entry="$(find "$service_dir" -mindepth 1 -maxdepth 1 ! -type f -print -quit)"
+    [ -z "$unsafe_entry" ] || {
+      rm -f "$temporary_dir/$first_target" "$temporary_dir/$second_target"
+      rmdir "$temporary_dir"
+      echo "$service_label runtime directory contains an unsafe entry" >&2
+      exit 78
+    }
+    if ! mv -T --no-clobber "$service_dir" "$previous_dir"; then
+      rm -f "$temporary_dir/$first_target" "$temporary_dir/$second_target"
+      rmdir "$temporary_dir"
+      echo "$service_label runtime retirement failed" >&2
+      exit 73
+    fi
+  fi
+
+  if ! mv -T --no-clobber "$temporary_dir" "$service_dir"; then
+    [ ! -d "$previous_dir" ] ||
+      mv -T --no-clobber "$previous_dir" "$service_dir"
+    rm -f "$temporary_dir/$first_target" "$temporary_dir/$second_target"
+    rmdir "$temporary_dir" 2>/dev/null || true
+    echo "$service_label runtime publication failed" >&2
+    exit 73
+  fi
+  if [ -d "$previous_dir" ]; then
+    find "$previous_dir" -mindepth 1 -maxdepth 1 -type f -delete
+    rmdir "$previous_dir"
+  fi
+}
+
 # The official postgres entrypoint re-executes as UID/GID 999 before reading
 # POSTGRES_PASSWORD_FILE, so this copy must be readable only by that account.
 install_secret postgres postgres_owner_password postgres_owner_password 999 999
@@ -140,6 +284,13 @@ if [ -e "$identity_finalizer_master" ] || [ -L "$identity_finalizer_master" ]; t
   }
   install_secret provision-roles identity-finalizer/postgres_identity_finalizer_password \
     postgres_identity_finalizer_password 0 0
+fi
+if [ "$identity_cutover_enabled" -eq 1 ]; then
+  install_exact_secret_pair_service provision-identity-cutover-roles \
+    postgres_owner_password postgres_owner_password \
+    identity-cutover/postgres_identity_cutover_password \
+    postgres_identity_cutover_password 0 0 \
+    "identity cutover role provisioner"
 fi
 install_secret grant-runtime postgres_owner_password postgres_owner_password 0 0
 
@@ -182,6 +333,11 @@ if [ -e "$identity_finalizer_master" ] || [ -L "$identity_finalizer_master" ]; t
   install_exact_single_secret_service identity-finalizer \
     identity-finalizer/database_url_identity_finalizer database_url 10001 10001 \
     "identity finalizer"
+fi
+if [ "$identity_cutover_enabled" -eq 1 ]; then
+  install_exact_single_secret_service identity-cutover \
+    identity-cutover/database_url_identity_cutover database_url 10001 10001 \
+    "identity cutover"
 fi
 
 echo "materialized least-privilege Home Agent service secrets"

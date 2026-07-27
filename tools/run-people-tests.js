@@ -18,6 +18,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const vm = require("vm");
 const H = require(path.join(__dirname, "..", "app", "src", "home-people-helpers.js"));
 const peopleSource = fs.readFileSync(path.join(__dirname, "..", "app", "src", "home-people.jsx"), "utf8");
 const appSource = fs.readFileSync(path.join(__dirname, "..", "app", "src", "home-app.jsx"), "utf8");
@@ -689,68 +690,22 @@ process.stdout.write("\n[1mhover state helpers (Addendum 23)[0m\n");
  * - Frigate-alias lookup beats display_name fallback
  * - Empty facesByPerson / null identity returns {count:0,urls:[]}
  * ──────────────────────────────────────────────────────────────── */
-process.stdout.write("\n[1mFrigate face-crop URL builder (Addendum 24)[0m\n");
+process.stdout.write("\n[1mlegacy face-thumbnail containment (E4)[0m\n");
 
 (function () {
-  const faces = {
-    "marcelo": ["marcelo-1.webp", "marcelo-2.webp"],
-    "marcelo sr": ["marcelo sr-a.webp"],
-    "david": ["david-1.webp", "david-2.webp", "david-3.webp"],
-  };
-  const base = "http://192.168.0.125:5000";
-
-  // ── alias lookup wins over display_name ──
-  const idWithAlias = {
-    display_name: "Marcelo",
-    aliases: [{ alias: "marcelo", kind: "frigate_name" }, { alias: "Marcelo", kind: "name" }],
-  };
-  let r = H.frigateFaceCropUrls(faces, idWithAlias, base);
-  assert("alias lookup → count matches frigate bucket", r.count === 2, r);
-  assert("alias lookup → urls use clips/faces path",
-    r.urls[0] === `${base}/clips/faces/marcelo/marcelo-1.webp`, r.urls);
-
-  // ── display_name fallback ──
-  const idNoAlias = { display_name: "David", aliases: [] };
-  r = H.frigateFaceCropUrls(faces, idNoAlias, base);
-  assert("display_name fallback → count matches", r.count === 3, r);
-
-  // ── space in folder name URL-encoded (AR24-1) ──
-  const idMsr = {
-    display_name: "Marcelo sr",
-    aliases: [{ alias: "marcelo sr", kind: "frigate_name" }],
-  };
-  r = H.frigateFaceCropUrls(faces, idMsr, base);
-  assert("space in folder URL-encoded as %20",
-    r.urls[0] === `${base}/clips/faces/marcelo%20sr/marcelo%20sr-a.webp`,
-    r.urls);
-  assert("frigateName preserves original (unencoded)",
-    r.frigateName === "marcelo sr", r);
-
-  // ── no facesByPerson → empty ──
-  r = H.frigateFaceCropUrls(null, idWithAlias, base);
-  assert("null facesByPerson returns empty", r.count === 0);
-  r = H.frigateFaceCropUrls({}, idWithAlias, base);
-  assert("empty facesByPerson returns empty", r.count === 0);
-
-  // ── no identity → empty ──
-  r = H.frigateFaceCropUrls(faces, null, base);
-  assert("null identity returns empty", r.count === 0);
-
-  // ── no frigateUrl → empty ──
-  r = H.frigateFaceCropUrls(faces, idWithAlias, null);
-  assert("null frigateUrl returns empty", r.count === 0);
-  r = H.frigateFaceCropUrls(faces, idWithAlias, "");
-  assert("empty frigateUrl returns empty", r.count === 0);
-
-  // ── trailing slash in base URL handled ──
-  r = H.frigateFaceCropUrls(faces, idWithAlias, "http://x:5000/");
-  assert("trailing slash in base trimmed",
-    r.urls[0] === "http://x:5000/clips/faces/marcelo/marcelo-1.webp", r.urls);
-
-  // ── unknown identity (no match anywhere) → empty ──
-  const idUnknown = { display_name: "Ghost", aliases: [] };
-  r = H.frigateFaceCropUrls(faces, idUnknown, base);
-  assert("identity with no matching bucket returns empty", r.count === 0);
+  const r = H.frigateFaceCropUrls(
+    { marcelo: ["face.webp"] },
+    { display_name: "Marcelo" },
+    "http://frigate.invalid",
+  );
+  assert("compatibility helper returns no browser URLs",
+    r.count === 0 && Array.isArray(r.urls) && r.urls.length === 0, r);
+  assert("compatibility helper declares the containment reason",
+    r.disabled === true && r.reason === "legacy_face_thumbnails_disabled", r);
+  assert("People source has no direct Frigate face-crop path",
+    !peopleSource.includes("/clips/faces/"));
+  assert("legacy inspector explains why thumbnails are absent",
+    peopleSource.includes("Face thumbnails are disabled in the legacy inspector during cutover."));
 })();
 
 /* ────────────────────────────────────────────────────────────────────────
@@ -831,7 +786,7 @@ process.stdout.write("\n[1mpeople overlay interaction contract (DOC-S83)[0m\n");
     peopleSource.includes("onClose();") &&
     /aria-label="Close"[\s\S]*onClick=\{onClose\}/.test(peopleSource));
   assert("graph/list/queue tabs switch view without clearing selected identity",
-    /\{\["graph", "list", "queue"\]\.map\(\(v\) => \([\s\S]*onClick=\{\(\) => setView\(v\)\}/.test(peopleSource) &&
+    /\(legacyMutationsReadOnly \? \["graph", "list"\] : \["graph", "list", "queue"\]\)\.map\(\(v\) => \([\s\S]*onClick=\{\(\) => setView\(v\)\}/.test(peopleSource) &&
     !/onClick=\{\(\) => \{\s*setView\(v\);[\s\S]*setSelectedUuid/.test(peopleSource));
   assert("graph node click opens detail panel selection",
     peopleSource.includes("onNodeClick={(id) => id && setSelectedUuid(id.uuid)}") &&
@@ -839,8 +794,9 @@ process.stdout.write("\n[1mpeople overlay interaction contract (DOC-S83)[0m\n");
   assert("list row click opens same detail panel and panel close clears selection",
     peopleSource.includes("onRowClick={(id) => setSelectedUuid(id.uuid)}") &&
     peopleSource.includes("onClose={() => setSelectedUuid(null)}"));
-  assert("queue receives Frigate face buckets and resolved image base",
-    /<PeopleQueueView[\s\S]*facesByPerson=\{facesByPerson\}[\s\S]*frigateUrl=\{faceImageBaseUrl\}[\s\S]*facesStatus=\{facesStatus\}[\s\S]*frigateDiagnostics=\{frigateDiagnostics\}/.test(peopleSource));
+  assert("queue receives typed Frigate metadata without a direct image base",
+    /<PeopleQueueView[\s\S]*facesByPerson=\{facesByPerson\}[\s\S]*facesStatus=\{facesStatus\}[\s\S]*frigateDiagnostics=\{frigateDiagnostics\}/.test(peopleSource) &&
+    !peopleSource.includes("faceImageBaseUrl"));
   assert("queue surfaces unlinked Frigate buckets and diagnostic empty state",
     peopleSource.includes("function unlinkedFaceBuckets(facesByPerson, identities)") &&
     peopleSource.includes("function peopleQueueDiagnostics") &&
@@ -882,25 +838,104 @@ process.stdout.write("\n[1mpeople overlay interaction contract (DOC-S83)[0m\n");
   assert("identities endpoint exposes sanitized Frigate diagnostics",
     haInitSource.includes('"frigate_seed_report": asdict(seed_report) if seed_report is not None else None') &&
     haInitSource.includes('"frigate_capabilities": asdict(capabilities) if capabilities is not None else None'));
+  assert("verified E4 pending-cutover boundary makes People fail-closed read-only",
+    haInitSource.includes('"legacy_identity_boundary": {') &&
+    haInitSource.includes('"state": store.legacy_authority_state') &&
+    haInitSource.includes('"semantic_write_fence_installed"') &&
+    haInitSource.includes('"semantic_write_fence_generation"') &&
+    haInitSource.includes('"semantic_write_fence_trigger_digest"') &&
+    peopleSource.includes("legacyBoundary?.semantic_write_fence_installed === true") &&
+    peopleSource.includes('legacyBoundary?.state === "legacy_migration_only"') &&
+    peopleSource.includes("legacyBoundary?.semantic_writes_frozen === false") &&
+    peopleSource.includes("legacy read-only · cutover pending") &&
+    !/core managed|managed by home agent core/i.test(peopleSource) &&
+    peopleSource.includes("readOnly={legacyMutationsReadOnly}") &&
+    peopleSource.includes('view === "queue" && !legacyMutationsReadOnly') &&
+    peopleSource.includes("if (readOnly) return;"));
+  assert("legacy People APIs reject authenticated non-admin users with 403",
+    haInitSource.includes("def _admin_only_legacy_handler(handler):") &&
+    haInitSource.includes("raise web.HTTPForbidden(") &&
+    haInitSource.includes("IdentityListView,") &&
+    haInitSource.includes("IdentityDetailView,") &&
+    haInitSource.includes("IdentityBackupView,") &&
+    haInitSource.includes("FrigateProxyView,") &&
+    haInitSource.includes("AvatarView,") &&
+    haInitSource.includes('for _method_name in ("get", "head", "post", "put", "patch", "delete")') &&
+    !haInitSource.includes("raise Unauthorized()"));
+  assert("revoked credentials remain behind HA auth on every People endpoint",
+    [
+      "IdentityListView",
+      "IdentityDetailView",
+      "IdentityBackupView",
+      "IdentityCreateView",
+      "RelationshipsView",
+      "PreferencesView",
+      "FrigateProxyView",
+      "AvatarView",
+    ].every((name) => new RegExp(
+      `class ${name}[^]*?requires_auth = True[^]*?(?=\\nclass |\\n_LEGACY_)`
+    ).test(haInitSource)) &&
+    /async def wrapped[\s\S]*if not _request_has_ha_admin_capability\(request\):[\s\S]*raise web\.HTTPForbidden[\s\S]*response = await handler[\s\S]*return response/.test(haInitSource));
+  assert("legacy identity compatibility ignores client actor labels",
+    haInitSource.includes('body.pop("actor", None)') &&
+    haInitSource.includes("_request_has_ha_admin_capability(request)") &&
+    haInitSource.includes("allow_legacy_self_profile_edit=(") &&
+    !haInitSource.includes('actor=body.get("actor"'));
   assert("unlinked Frigate buckets can be resolved from the card",
-    peopleSource.includes("function UnlinkedFaceBucketCard({ bucket, frigateUrl, endpoint, token, sim, onSaved })") &&
+    peopleSource.includes("function UnlinkedFaceBucketCard({ bucket, endpoint, token, operationScopeKey, sim, onSaved })") &&
     peopleSource.includes("/api/extended_openai_conversation/identities/create") &&
     peopleSource.includes("frigate_person_name: bucket.name") &&
     peopleSource.includes("create identity") &&
     peopleSource.includes("do not identify"));
-  assert("identity refresh is cache-first and quiet while cached graph is visible",
-    peopleSource.includes("let usingCached = false;") &&
-    peopleSource.includes("usingCached = true;") &&
+  assert("identity refresh has no sensitive cache and rejects stale responses",
+    !peopleSource.includes("writePeopleDataCache") &&
+    !peopleSource.includes("readPeopleDataCache") &&
+    !peopleSource.includes("window.__HOME_PEOPLE_DATA_CACHE =") &&
     peopleSource.includes("timeoutMs: 20000") &&
-    peopleSource.includes("maxAttempts: usingCached ? 2 : 4") &&
-    peopleSource.includes("nextDelay != null && !usingCached && identitiesRef.current === null") &&
-    peopleSource.includes("if (usingCached || identitiesRef.current?.length)") &&
-    peopleSource.includes("return;"));
-  assert("people prewarm uses the app fetch bridge when available",
-    peopleSource.includes('const fetcher = (typeof window !== "undefined" && window.tauriFetch) || fetch;') &&
-    peopleSource.includes('const resp = await fetcher(url, { headers, cache: "no-store", signal });') &&
-    peopleSource.includes("const resp = await fetcher(url, {") &&
-    peopleSource.includes('cache: "force-cache"'));
+    peopleSource.includes("maxAttempts: 4") &&
+    peopleSource.includes("const generation = ++requestGenerationRef.current;") &&
+    peopleSource.includes("if (!isCurrent()) return;") &&
+    peopleSource.includes("requestGenerationRef.current += 1") &&
+    peopleSource.includes("setSelectedUuid(null);"));
+  assert("principal-bearing People state is render-scoped before effects run",
+    peopleSource.includes("function peoplePrincipalScopedValue(") &&
+    peopleSource.includes("const principalDataScopeRef = useRef(null);") &&
+    peopleSource.includes("principalDataScopeRef.current = credentialScopeKey;") &&
+    peopleSource.includes("principalDataScopeRef.current, storedIdentities, null") &&
+    /principalDataScopeRef\.current,\s*storedAvatarBlobUrls/.test(peopleSource) &&
+    peopleSource.includes("payloadScopeRef.current,") &&
+    appSource.includes('key={JSON.stringify([') &&
+    appSource.includes('"private-people"'));
+  assert("avatar blob cleanup reads the latest scoped URL map",
+    peopleSource.includes("const avatarBlobUrlsRef = useRef(EMPTY_PEOPLE_MAP);") &&
+    peopleSource.includes("avatarBlobUrlsRef.current = storedAvatarBlobUrls;") &&
+    peopleSource.includes("Object.values(avatarBlobUrlsRef.current)"));
+  assert("detail view clears and cancels prior-principal payloads",
+    peopleSource.includes("setPayload(null);") &&
+    peopleSource.includes("usePeopleOperationGuard(") &&
+    peopleSource.includes("if (!operation.isCurrent()) return;") &&
+    peopleSource.includes("signal: operation.signal"));
+  assert("all People async mutation families bind credential and identity scope",
+    peopleSource.includes("peopleCredentialScopeKey(open, endpoint, token)") &&
+    peopleSource.includes("`${operationScopeKey}:queue-identity:${identity.uuid}`") &&
+    peopleSource.includes("`${operationScopeKey}:unlinked-face:${bucket.name}`") &&
+    peopleSource.includes("`${operationScopeKey}:detail:${identityUuid || \"closed\"}`") &&
+    peopleSource.includes("`${operationScopeKey}:avatar:${identity.uuid}`") &&
+    peopleSource.includes("`${operationScopeKey}:preferences:${identityUuid}`"));
+  assert("Frigate metadata uses one exact typed authenticated route",
+    peopleSource.includes("/api/extended_openai_conversation/frigate_proxy/faces") &&
+    haInitSource.includes('url = "/api/extended_openai_conversation/frigate_proxy/faces"') &&
+    haInitSource.includes("request.raw_path == cls.url") &&
+    haInitSource.includes('"Cache-Control": "no-store"') &&
+    !haInitSource.includes("_ALLOWED_PREFIXES"));
+  assert("fenced plaintext identity backup is disabled",
+    haInitSource.includes("legacy_identity_export_disabled_pending_cutover") &&
+    haInitSource.includes("if store.semantic_write_fence_installed:"));
+  assert("people prewarm is an inert sensitive-cache compatibility stub",
+    peopleSource.includes("sensitive_people_cache_disabled") &&
+    peopleSource.includes("readCache: () => null") &&
+    peopleSource.includes("writeCache: () => null") &&
+    !peopleSource.includes('cache: "force-cache"'));
   assert("HomeHeader accepts and attaches People menu focus ref",
     /function HomeHeader\(\{[\s\S]*peopleButtonRef[\s\S]*\}\)/.test(appSource) &&
     /\{onOpenPeople && !mobile && <button[\s\S]*role="menuitem"[\s\S]*ref=\{peopleButtonRef\}[\s\S]*onClick=\{\(\) => runMenuAction\(onOpenPeople\)\}/.test(appSource) &&
@@ -913,11 +948,93 @@ process.stdout.write("\n[1mpeople overlay interaction contract (DOC-S83)[0m\n");
     appSource.includes("onClose={closePeopleOverlay}"));
 })();
 
-process.stdout.write(passes + " pass · " + fails + " fail\n");
-if (fails > 0) {
-  process.stdout.write("\n[31mFailures:[0m\n");
-  for (let i = 0; i < failures.length; i++) {
-    process.stdout.write("  - " + failures[i].name + "\n");
+async function runDeferredCredentialSwitchTest() {
+  process.stdout.write("\n[1mdeferred credential-switch lifecycle (E4)[0m\n");
+  const start = peopleSource.indexOf("function peopleCredentialScopeKey");
+  const end = peopleSource.indexOf("function usePeopleViewport");
+  const hookSource = peopleSource.slice(start, end);
+  const slots = [];
+  let cursor = 0;
+  const ReactHarness = {
+    useRef(initial) {
+      const index = cursor++;
+      if (!slots[index]) slots[index] = { current: initial };
+      return slots[index];
+    },
+    useEffect(effect) {
+      const index = cursor++;
+      if (!slots[index]) slots[index] = { cleanup: effect() };
+    },
+    useCallback(callback) {
+      cursor++;
+      return callback;
+    },
+  };
+  const context = {
+    AbortController,
+    React: ReactHarness,
+  };
+  vm.createContext(context);
+  vm.runInContext(
+    `const { useRef, useEffect, useCallback } = React;\n${hookSource}`,
+    context,
+  );
+  const oldPrincipalValue = { name: "old-principal" };
+  assert("current credential scope may render its own principal data",
+    context.peoplePrincipalScopedValue(
+      "scope-a", "scope-a", oldPrincipalValue, null,
+    ) === oldPrincipalValue);
+  assert("changed credential scope suppresses old data synchronously",
+    context.peoplePrincipalScopedValue(
+      "scope-b", "scope-a", oldPrincipalValue, null,
+    ) === null);
+  function render(scopeKey) {
+    cursor = 0;
+    return context.usePeopleOperationGuard(scopeKey);
   }
+  function deferred() {
+    let resolve;
+    const promise = new Promise((done) => { resolve = done; });
+    return { promise, resolve };
+  }
+
+  const oldBegin = render("open:endpoint-a:token-a:identity-a");
+  const oldOperation = oldBegin("mutation-and-refetch");
+  const pending = deferred();
+  let stateUpdates = 0;
+  let capturedRefreshes = 0;
+  const lateContinuation = pending.promise.then(() => {
+    if (!oldOperation.isCurrent()) return;
+    stateUpdates++;
+    capturedRefreshes++;
+  });
+
+  const newBegin = render("open:endpoint-b:token-b:identity-b");
+  assert("credential/identity switch aborts prior in-flight operation",
+    oldOperation.signal.aborted === true);
+  pending.resolve();
+  await lateContinuation;
+  assert("late prior-credential result cannot update React state",
+    stateUpdates === 0, stateUpdates);
+  assert("late prior-credential result cannot invoke captured refresh",
+    capturedRefreshes === 0, capturedRefreshes);
+
+  const currentOperation = newBegin("mutation-and-refetch");
+  assert("new credential generation can start current work",
+    currentOperation.isCurrent() === true);
+  currentOperation.finish();
 }
-process.exit(fails === 0 ? 0 : 1);
+
+runDeferredCredentialSwitchTest().then(() => {
+  process.stdout.write(passes + " pass · " + fails + " fail\n");
+  if (fails > 0) {
+    process.stdout.write("\n[31mFailures:[0m\n");
+    for (let i = 0; i < failures.length; i++) {
+      process.stdout.write("  - " + failures[i].name + "\n");
+    }
+  }
+  process.exit(fails === 0 ? 0 : 1);
+}).catch((error) => {
+  process.stderr.write(`deferred credential-switch harness crashed: ${error.stack || error}\n`);
+  process.exit(1);
+});

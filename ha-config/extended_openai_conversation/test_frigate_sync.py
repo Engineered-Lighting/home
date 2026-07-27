@@ -15,10 +15,10 @@ Coverage:
     - unreachable when /api/version times out
     - graceful when httpx absent (skipped path)
 
-  Auto-seed:
-    - empty store + Frigate has 3 faces → 3 identities created
+  Operational enrollment poll:
+    - empty store + Frigate has 3 faces → 3 opaque identifiers retained
     - 'train' bucket filtered out (Frigate's training holding pen)
-    - re-seed (force=True) doesn't duplicate (resolve_frigate_name)
+    - re-seed (force=True) doesn't duplicate operational identifiers
     - non-empty store + force=False → skipped with reason
     - Frigate offline → seed returns error in report, doesn't raise
 
@@ -53,9 +53,6 @@ os.environ["EXTENDED_OPENAI_IDENTITY_SEMANTIC_WRITES"] = "legacy_migration_only"
 
 from identity_store import IdentityStore  # type: ignore[import]
 from frigate_sync import (  # type: ignore[import]
-    FrigateCapabilities,
-    SeedReport,
-    WritebackResult,
     probe_frigate_capabilities,
     auto_seed_identities_from_frigate,
     rename_frigate_face,
@@ -145,7 +142,9 @@ class MockHttpClient:
 
 
 def fresh_store() -> IdentityStore:
-    s = IdentityStore(db_path=":memory:"); s.setup(); return s
+    s = IdentityStore(db_path=":memory:")
+    s.setup()
+    return s
 
 
 # ── Capability probe ────────────────────────────────────────────────
@@ -225,15 +224,11 @@ async def _seed_empty_store():
     assert rep.attempted is True
     assert rep.frigate_faces_found == 3, rep   # train excluded
     assert rep.identities_created == 3, rep
-    # Verify created identities
-    ids = s.list_identities()
-    names = sorted(i.display_name for i in ids)
-    assert names == ["David", "Marcelo", "Sarah"], names
-    # Frigate aliases attached
-    for i in ids:
-        frigate_aliases = [a for a in i.aliases if a["kind"] == "frigate_name"]
-        assert len(frigate_aliases) == 1, (i.display_name, i.aliases)
-t("empty store + 3 Frigate faces → 3 identities + train bucket filtered",
+    # No semantic people or display labels are created.
+    assert s.list_identities() == []
+    for name in ("sarah", "marcelo", "david"):
+        assert s.resolve_operational_recognition_name(name) is not None
+t("empty store + 3 Frigate faces → 3 operational ids + train filtered",
   _seed_empty_store)
 
 async def _seed_proceeds_when_non_empty_and_dedupes_per_face():
@@ -242,8 +237,11 @@ async def _seed_proceeds_when_non_empty_and_dedupes_per_face():
     (resolve_frigate_name) ensures pre-existing identities are not
     duplicated. This test verifies the new behavior."""
     s = fresh_store()
-    pre_uuid = s.create_identity("PreExisting", relationship_type="friend",
-                                  frigate_person_name="preexisting")
+    s.create_identity(
+        "PreExisting",
+        relationship_type="friend",
+        frigate_person_name="preexisting",
+    )
     http = MockHttpClient()
     # Frigate returns the pre-existing face AND two NEW faces
     http.stub("GET", "/api/faces", MockResponse(200,
@@ -254,11 +252,13 @@ async def _seed_proceeds_when_non_empty_and_dedupes_per_face():
     assert rep.attempted is True, "auto-seed must always attempt now"
     assert rep.identities_created == 2, f"created sarah+ben: {rep.identities_created}"
     assert rep.identities_skipped_existing == 1, f"skipped preexisting: {rep}"
-    # Total store has 3 identities (1 pre-existing + 2 new)
+    # Semantic store remains unchanged; new buckets are operational only.
     rows = s.list_identities()
     names = sorted(r.display_name for r in rows)
-    assert names == ["Ben", "PreExisting", "Sarah"], names
-t("non-empty store + new Frigate faces → dedupes existing, creates new (B+C fix)",
+    assert names == ["PreExisting"], names
+    assert s.resolve_operational_recognition_name("sarah") is not None
+    assert s.resolve_operational_recognition_name("ben") is not None
+t("non-empty store + new Frigate faces → semantic dedup + operational ids",
   _seed_proceeds_when_non_empty_and_dedupes_per_face)
 
 async def _seed_force_idempotent():
@@ -272,9 +272,72 @@ async def _seed_force_idempotent():
     assert rep2.attempted is True
     assert rep2.identities_skipped_existing == 1, rep2
     assert rep2.identities_created == 0, rep2
-    # Still only 1 row
-    assert len(s.list_identities()) == 1
-t("force=True is idempotent (resolve_frigate_name dedupes)", _seed_force_idempotent)
+    assert s.list_identities() == []
+    assert s.resolve_operational_recognition_name("sarah") is not None
+t("force=True is idempotent in operational storage", _seed_force_idempotent)
+
+async def _seed_purges_changed_privacy_before_network():
+    s = fresh_store()
+    identity_uuid = s.create_identity(
+        "Privacy subject",
+        frigate_person_name="privacy_face",
+    )
+    assert s.ensure_recognition_enrollment("privacy_face") == "privacy_face"
+    assert s.update_identity(identity_uuid, {"do_not_track": True})
+    # Simulate a stale row from an earlier process/revision. The periodic poll
+    # must purge it even when Frigate is currently offline.
+    s._operational_conn.execute(
+        "INSERT INTO operational_recognition_enrollments("
+        "frigate_person_name, source, created_at, updated_at"
+        ") VALUES('privacy_face', 'frigate', "
+        "'2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"
+    )
+    http = MockHttpClient()
+    http.stub_exception(
+        "GET",
+        "/api/faces",
+        ConnectionError("offline after privacy purge"),
+    )
+    report = await auto_seed_identities_from_frigate(s, http_client=http)
+    assert report.operational_rows_purged == 1, report
+    assert s._operational_conn.execute(
+        "SELECT COUNT(*) FROM operational_recognition_enrollments"
+    ).fetchone()[0] == 0
+t("periodic poll purges changed privacy before network access",
+  _seed_purges_changed_privacy_before_network)
+
+async def _disabled_seed_still_enforces_privacy():
+    s = fresh_store()
+    identity_uuid = s.create_identity(
+        "Disabled bridge privacy subject",
+        frigate_person_name="disabled_privacy_face",
+    )
+    assert s.update_identity(identity_uuid, {"do_not_track": True})
+    # Recreate a stale row to model retention from a prior process/policy.
+    s._operational_conn.execute(
+        "INSERT INTO operational_recognition_enrollments("
+        "frigate_person_name, source, created_at, updated_at"
+        ") VALUES('disabled_privacy_face', 'frigate', "
+        "'2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"
+    )
+    http = MockHttpClient()
+    os.environ["EXTENDED_OPENAI_FRIGATE_SYNC"] = "off"
+    try:
+        report = await auto_seed_identities_from_frigate(
+            s,
+            http_client=http,
+        )
+    finally:
+        os.environ["EXTENDED_OPENAI_FRIGATE_SYNC"] = "on"
+    assert report.attempted is False, report
+    assert report.skipped_reason == "frigate sync disabled", report
+    assert report.operational_rows_purged == 1, report
+    assert http.calls == []
+    assert s._operational_conn.execute(
+        "SELECT COUNT(*) FROM operational_recognition_enrollments"
+    ).fetchone()[0] == 0
+t("disabled sync still purges changed privacy",
+  _disabled_seed_still_enforces_privacy)
 
 async def _seed_handles_offline():
     s = fresh_store()

@@ -3301,6 +3301,1158 @@ BEGIN
   END IF;
 END
 $identity_finalizer_e3_acl$;
+
+-- E4 remains an unactivated semantic-authority cutover boundary. Always
+-- quarantine both dedicated roles and the exact E4 control objects before
+-- inspecting revision state. This statement commits independently, so a
+-- partial or future object set cannot retain stale authority when the
+-- following catalog admission fails.
+DO $identity_cutover_e4_quarantine$
+DECLARE
+  control_columns text;
+  control_name text;
+  control_table regclass;
+  function_oid regprocedure;
+  grantee_sql text;
+  target_role text;
+  target_table record;
+  type_entry record;
+BEGIN
+  -- Quarantine the exact E4 controls from every extant role even if the
+  -- additive role ceremony was omitted or only partially completed.
+  function_oid := pg_catalog.to_regprocedure(
+    'operations.commit_reviewed_identity_cutover(bytea,uuid)'
+  );
+  IF function_oid IS NOT NULL THEN
+    FOR target_role IN
+      SELECT role_row.rolname FROM pg_catalog.pg_roles AS role_row
+      UNION ALL SELECT 'PUBLIC'
+    LOOP
+      grantee_sql := CASE WHEN target_role = 'PUBLIC'
+        THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END;
+      EXECUTE pg_catalog.format(
+        'REVOKE ALL PRIVILEGES ON FUNCTION %s FROM %s CASCADE',
+        function_oid, grantee_sql
+      );
+    END LOOP;
+  END IF;
+
+  FOREACH control_name IN ARRAY ARRAY[
+    'operations.enforced_legacy_identity_writer_freezes',
+    'operations.reviewed_identity_cutover_admissions',
+    'operations.semantic_authority_promotions'
+  ]::text[]
+  LOOP
+    control_table := pg_catalog.to_regclass(control_name);
+    IF control_table IS NULL THEN
+      CONTINUE;
+    END IF;
+    SELECT pg_catalog.string_agg(
+             pg_catalog.quote_ident(attribute.attname), ', '
+             ORDER BY attribute.attnum
+           )
+      INTO STRICT control_columns
+      FROM pg_catalog.pg_attribute AS attribute
+     WHERE attribute.attrelid = control_table
+       AND attribute.attnum > 0
+       AND NOT attribute.attisdropped;
+    FOR target_role IN
+      SELECT role_row.rolname FROM pg_catalog.pg_roles AS role_row
+       WHERE role_row.rolname <> 'home_agent_owner'
+      UNION ALL SELECT 'PUBLIC'
+    LOOP
+      EXECUTE pg_catalog.format(
+        'REVOKE ALL PRIVILEGES ON TABLE %s FROM %s CASCADE',
+        control_table,
+        CASE WHEN target_role = 'PUBLIC'
+          THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END
+      );
+      EXECUTE pg_catalog.format(
+        'REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s), '
+        'REFERENCES (%1$s) ON TABLE %2$s FROM %3$s CASCADE',
+        control_columns,
+        control_table,
+        CASE WHEN target_role = 'PUBLIC'
+          THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END
+      );
+    END LOOP;
+  END LOOP;
+
+  -- Remove every generic application capability from whichever members of
+  -- the additive pair exist. The following admission statement rejects a
+  -- missing or partial pair only after this quarantine commits.
+  FOR target_table IN
+    SELECT table_namespace.nspname,
+           candidate_table.relname,
+           pg_catalog.string_agg(
+             pg_catalog.quote_ident(attribute.attname), ', '
+             ORDER BY attribute.attnum
+           ) AS column_list
+      FROM pg_catalog.pg_class AS candidate_table
+      JOIN pg_catalog.pg_namespace AS table_namespace
+        ON table_namespace.oid = candidate_table.relnamespace
+      JOIN pg_catalog.pg_attribute AS attribute
+        ON attribute.attrelid = candidate_table.oid
+       AND attribute.attnum > 0
+       AND NOT attribute.attisdropped
+     WHERE table_namespace.nspname IN (
+       'public','ingest','identity','knowledge','engagement','privacy',
+       'operations','media'
+     )
+       AND candidate_table.relkind IN ('r','p','v','m','f')
+     GROUP BY table_namespace.nspname, candidate_table.relname
+  LOOP
+    FOR target_role IN
+      SELECT role_row.rolname FROM pg_catalog.pg_roles AS role_row
+       WHERE role_row.rolname IN (
+         'home_agent_identity_cutover',
+         'home_agent_identity_cutover_kernel'
+       )
+    LOOP
+      EXECUTE pg_catalog.format(
+        'REVOKE ALL PRIVILEGES ON TABLE %I.%I FROM %I CASCADE',
+        target_table.nspname, target_table.relname, target_role
+      );
+      EXECUTE pg_catalog.format(
+        'REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s), '
+        'REFERENCES (%1$s) ON TABLE %2$I.%3$I FROM %4$I CASCADE',
+        target_table.column_list, target_table.nspname,
+        target_table.relname, target_role
+      );
+    END LOOP;
+  END LOOP;
+
+  FOR target_role IN
+    SELECT role_row.rolname FROM pg_catalog.pg_roles AS role_row
+     WHERE role_row.rolname IN (
+       'home_agent_identity_cutover',
+       'home_agent_identity_cutover_kernel'
+     )
+  LOOP
+    EXECUTE pg_catalog.format(
+      'REVOKE USAGE, CREATE ON SCHEMA public, ingest, identity, knowledge, '
+      'engagement, privacy, operations, media FROM %I CASCADE',
+      target_role
+    );
+    EXECUTE pg_catalog.format(
+      'REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public, ingest, '
+      'identity, knowledge, engagement, privacy, operations, media FROM %I '
+      'CASCADE',
+      target_role
+    );
+    EXECUTE pg_catalog.format(
+      'REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public, ingest, '
+      'identity, knowledge, engagement, privacy, operations, media FROM %I '
+      'CASCADE',
+      target_role
+    );
+  END LOOP;
+  FOR type_entry IN
+    SELECT type_namespace.nspname, candidate_type.typname
+      FROM pg_catalog.pg_type AS candidate_type
+      JOIN pg_catalog.pg_namespace AS type_namespace
+        ON type_namespace.oid = candidate_type.typnamespace
+     WHERE type_namespace.nspname IN (
+       'public','ingest','identity','knowledge','engagement','privacy',
+       'operations','media'
+     )
+       AND candidate_type.typisdefined
+       AND candidate_type.typrelid = 0
+       AND candidate_type.typelem = 0
+  LOOP
+    FOR target_role IN
+      SELECT role_row.rolname FROM pg_catalog.pg_roles AS role_row
+       WHERE role_row.rolname IN (
+         'home_agent_identity_cutover',
+         'home_agent_identity_cutover_kernel'
+       )
+    LOOP
+      EXECUTE pg_catalog.format(
+        'REVOKE USAGE ON TYPE %I.%I FROM %I CASCADE',
+        type_entry.nspname, type_entry.typname, target_role
+      );
+    END LOOP;
+  END LOOP;
+  FOR target_role IN
+    SELECT role_row.rolname FROM pg_catalog.pg_roles AS role_row
+     WHERE role_row.rolname IN (
+       'home_agent_identity_cutover',
+       'home_agent_identity_cutover_kernel'
+     )
+  LOOP
+    EXECUTE pg_catalog.format(
+      'ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA public, '
+      'ingest, identity, knowledge, engagement, privacy, operations, media '
+      'REVOKE ALL PRIVILEGES ON TABLES FROM %I CASCADE',
+      target_role
+    );
+    EXECUTE pg_catalog.format(
+      'ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA public, '
+      'ingest, identity, knowledge, engagement, privacy, operations, media '
+      'REVOKE ALL PRIVILEGES ON SEQUENCES FROM %I CASCADE',
+      target_role
+    );
+    EXECUTE pg_catalog.format(
+      'ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA public, '
+      'ingest, identity, knowledge, engagement, privacy, operations, media '
+      'REVOKE ALL PRIVILEGES ON FUNCTIONS FROM %I CASCADE',
+      target_role
+    );
+    EXECUTE pg_catalog.format(
+      'ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA public, '
+      'ingest, identity, knowledge, engagement, privacy, operations, media '
+      'REVOKE ALL PRIVILEGES ON TYPES FROM %I CASCADE',
+      target_role
+    );
+  END LOOP;
+END
+$identity_cutover_e4_quarantine$;
+
+-- The migration-owned E4 catalog manifest is intentionally not guessed. At
+-- revisions through 0013 this validates a zero-authority dormant role pair.
+-- If 0014 objects appear, replay reports the observed catalog digest and
+-- remains quarantined until a reviewed change replaces the explicit pending
+-- value and adds only the exact positive ACLs required by the E4 kernel.
+DO $identity_cutover_e4_acl$
+DECLARE
+  admission_table regclass := pg_catalog.to_regclass(
+    'operations.reviewed_identity_cutover_admissions'
+  );
+  actual_e4_catalog_sha256 text;
+  current_revision text;
+  cutover_function regprocedure := pg_catalog.to_regprocedure(
+    'operations.commit_reviewed_identity_cutover(bytea,uuid)'
+  );
+  cutover_oid oid;
+  database_oid oid;
+  expected_e4_catalog_sha256 constant text :=
+    'PENDING_E4_CATALOG_SHA256';
+  freeze_table regclass := pg_catalog.to_regclass(
+    'operations.enforced_legacy_identity_writer_freezes'
+  );
+  kernel_oid oid;
+  object_count integer;
+  owner_oid oid;
+  promotion_table regclass := pg_catalog.to_regclass(
+    'operations.semantic_authority_promotions'
+  );
+  pre_e4_revisions constant text[] := ARRAY[
+    '0001_greenfield_core',
+    '0002_people_privacy_cutover',
+    '0003_resource_budgets',
+    '0004_rollout_authorizations',
+    '0005_principal_binding_proposals',
+    '0006_worker_maintenance_health',
+    '0006a_worker_lease_arbitration',
+    '0007_phase3_identity_authority',
+    '0008_identity_migration_kernel',
+    '0009_identity_finalizer_base',
+    '0010_identity_erasure_source',
+    '0011_identity_erasure_e1',
+    '0012_identity_erasure_e2',
+    '0013_identity_finalizer_e3'
+  ]::text[];
+  role_count integer;
+BEGIN
+  SELECT version_num INTO STRICT current_revision
+    FROM public.alembic_version;
+  object_count :=
+    (admission_table IS NOT NULL)::integer +
+    (cutover_function IS NOT NULL)::integer +
+    (freeze_table IS NOT NULL)::integer +
+    (promotion_table IS NOT NULL)::integer;
+  SELECT pg_catalog.count(*) INTO STRICT role_count
+    FROM pg_catalog.pg_roles
+   WHERE rolname IN (
+     'home_agent_identity_cutover',
+     'home_agent_identity_cutover_kernel'
+   );
+  IF role_count = 0 THEN
+    IF object_count = 0 AND current_revision = ANY (pre_e4_revisions) THEN
+      RETURN;
+    END IF;
+    RAISE EXCEPTION 'identity cutover E4 role ceremony was omitted'
+      USING ERRCODE = '55000';
+  ELSIF role_count <> 2 THEN
+    RAISE EXCEPTION 'partial identity cutover E4 role pair'
+      USING ERRCODE = '55000';
+  END IF;
+  SELECT oid INTO STRICT owner_oid
+    FROM pg_catalog.pg_roles WHERE rolname = 'home_agent_owner';
+  SELECT oid INTO STRICT cutover_oid
+    FROM pg_catalog.pg_roles WHERE rolname = 'home_agent_identity_cutover';
+  SELECT oid INTO STRICT kernel_oid
+    FROM pg_catalog.pg_roles
+   WHERE rolname = 'home_agent_identity_cutover_kernel';
+  SELECT oid INTO STRICT database_oid
+    FROM pg_catalog.pg_database
+   WHERE datname = pg_catalog.current_database();
+
+  IF NOT EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_roles AS login_role
+        WHERE login_role.oid = cutover_oid
+          AND login_role.rolcanlogin
+          AND NOT login_role.rolinherit
+          AND NOT login_role.rolsuper
+          AND NOT login_role.rolcreatedb
+          AND NOT login_role.rolcreaterole
+          AND NOT login_role.rolreplication
+          AND NOT login_role.rolbypassrls
+          AND login_role.rolconnlimit = 1
+          AND login_role.rolvaliduntil =
+              timestamptz '1970-01-01 00:00:00+00'
+          AND login_role.rolconfig = ARRAY[
+            'default_transaction_isolation=serializable',
+            'statement_timeout=120s',
+            'lock_timeout=5s',
+            'idle_in_transaction_session_timeout=15s',
+            'transaction_timeout=180s',
+            'log_parameter_max_length_on_error=0'
+          ]::text[]
+     )
+     OR NOT EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_roles AS kernel_role
+        WHERE kernel_role.oid = kernel_oid
+          AND NOT kernel_role.rolcanlogin
+          AND NOT kernel_role.rolinherit
+          AND NOT kernel_role.rolsuper
+          AND NOT kernel_role.rolcreatedb
+          AND NOT kernel_role.rolcreaterole
+          AND NOT kernel_role.rolreplication
+          AND NOT kernel_role.rolbypassrls
+          AND kernel_role.rolconnlimit = 0
+          AND kernel_role.rolvaliduntil IS NULL
+          AND kernel_role.rolconfig IS NULL
+     )
+     OR NOT pg_catalog.has_database_privilege(
+       cutover_oid, database_oid, 'CONNECT'
+     )
+     OR pg_catalog.has_database_privilege(
+       cutover_oid, database_oid, 'CREATE,TEMPORARY'
+     )
+     OR pg_catalog.has_database_privilege(
+       kernel_oid, database_oid, 'CONNECT,CREATE,TEMPORARY'
+     )
+     OR EXISTS (
+       SELECT 1 FROM pg_catalog.pg_auth_members AS membership
+        WHERE membership.member = cutover_oid
+           OR membership.roleid = cutover_oid
+     )
+     OR (
+       SELECT pg_catalog.count(*)
+         FROM pg_catalog.pg_auth_members AS membership
+        WHERE membership.roleid = kernel_oid
+          AND membership.member = owner_oid
+          AND NOT membership.admin_option
+          AND NOT membership.inherit_option
+          AND membership.set_option
+     ) <> 1
+     OR (
+       SELECT pg_catalog.count(*)
+         FROM pg_catalog.pg_auth_members AS membership
+        WHERE membership.roleid = kernel_oid
+     ) <> 1
+     OR EXISTS (
+       SELECT 1 FROM pg_catalog.pg_auth_members AS membership
+        WHERE membership.member = kernel_oid
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_db_role_setting AS database_setting
+        WHERE database_setting.setrole IN (cutover_oid, kernel_oid)
+          AND database_setting.setdatabase <> 0
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_shdepend AS login_ownership
+        WHERE login_ownership.refobjid = cutover_oid
+          AND login_ownership.deptype = 'o'
+     ) THEN
+    RAISE EXCEPTION 'identity cutover E4 dormant role contract mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF object_count = 0 AND current_revision = ANY (pre_e4_revisions) THEN
+    IF EXISTS (
+         SELECT 1
+           FROM pg_catalog.pg_shdepend AS kernel_ownership
+          WHERE kernel_ownership.refobjid = kernel_oid
+            AND kernel_ownership.deptype = 'o'
+       ) THEN
+      RAISE EXCEPTION 'identity cutover E4 pre-migration ownership mismatch'
+        USING ERRCODE = '42501';
+    END IF;
+    RETURN;
+  END IF;
+
+  IF object_count <> 4
+     OR current_revision <> '0014_identity_cutover_e4' THEN
+    RAISE EXCEPTION 'partial or revision-mismatched identity cutover E4 object set'
+      USING ERRCODE = '55000',
+            DETAIL = pg_catalog.format(
+              'revision=%s objects=%s', current_revision, object_count
+            );
+  END IF;
+
+  -- Hash the post-quarantine catalog, not the migration's temporarily
+  -- callable state. A later activation needs a distinct reviewed manifest.
+  -- The manifest includes ownership/RLS, normalized policies and ACLs, plus
+  -- every direct application-catalog grant to either dormant E4 role.
+  SELECT pg_catalog.encode(
+           pg_catalog.sha256(
+             pg_catalog.convert_to(
+               pg_catalog.jsonb_build_object(
+                 'relations',
+                 (
+                   SELECT pg_catalog.jsonb_agg(
+                            pg_catalog.jsonb_build_array(
+                              target.target_name,
+                              pg_catalog.jsonb_build_object(
+                                'owner',
+                                relation_row.relowner::regrole::text,
+                                'kind',
+                                relation_row.relkind::text,
+                                'persistence',
+                                relation_row.relpersistence::text,
+                                'row_security',
+                                relation_row.relrowsecurity,
+                                'force_row_security',
+                                relation_row.relforcerowsecurity,
+                                'columns',
+                                (
+                                  SELECT pg_catalog.jsonb_agg(
+                                           pg_catalog.jsonb_build_array(
+                                             attribute.attname,
+                                             pg_catalog.format_type(
+                                               attribute.atttypid,
+                                               attribute.atttypmod
+                                             ),
+                                             attribute.attnotnull,
+                                             coalesce(
+                                               pg_catalog.pg_get_expr(
+                                                 default_row.adbin,
+                                                 default_row.adrelid,
+                                                 true
+                                               ),
+                                               ''
+                                             )
+                                           )
+                                           ORDER BY attribute.attnum
+                                         )
+                                    FROM pg_catalog.pg_attribute AS attribute
+                                    LEFT JOIN pg_catalog.pg_attrdef AS default_row
+                                      ON default_row.adrelid =
+                                           attribute.attrelid
+                                     AND default_row.adnum = attribute.attnum
+                                   WHERE attribute.attrelid =
+                                         target.target_relation
+                                     AND attribute.attnum > 0
+                                     AND NOT attribute.attisdropped
+                                ),
+                                 'constraints',
+                                 (
+                                  SELECT coalesce(
+                                           pg_catalog.jsonb_agg(
+                                             pg_catalog.jsonb_build_array(
+                                               constraint_row.conname,
+                                               constraint_row.contype::text,
+                                               pg_catalog.pg_get_constraintdef(
+                                                 constraint_row.oid, true
+                                               )
+                                             )
+                                             ORDER BY constraint_row.conname
+                                           ),
+                                           '[]'::jsonb
+                                         )
+                                    FROM pg_catalog.pg_constraint
+                                         AS constraint_row
+                                    WHERE constraint_row.conrelid =
+                                          target.target_relation
+                                 ),
+                                 'user_triggers',
+                                 (
+                                   SELECT coalesce(
+                                            pg_catalog.jsonb_agg(
+                                              pg_catalog.jsonb_build_array(
+                                                trigger_row.tgname,
+                                                trigger_row.tgenabled::text,
+                                                trigger_row.tgtype,
+                                                trigger_row.tgfoid
+                                                  ::regprocedure::text,
+                                                pg_catalog.pg_get_triggerdef(
+                                                  trigger_row.oid, true
+                                                )
+                                              )
+                                              ORDER BY trigger_row.tgname
+                                            ),
+                                            '[]'::jsonb
+                                          )
+                                     FROM pg_catalog.pg_trigger AS trigger_row
+                                    WHERE trigger_row.tgrelid =
+                                          target.target_relation
+                                      AND NOT trigger_row.tgisinternal
+                                 ),
+                                 'rules',
+                                 (
+                                   SELECT coalesce(
+                                            pg_catalog.jsonb_agg(
+                                              pg_catalog.jsonb_build_array(
+                                                rule_row.rulename,
+                                                rule_row.ev_type::text,
+                                                rule_row.ev_enabled::text,
+                                                rule_row.is_instead,
+                                                pg_catalog.pg_get_ruledef(
+                                                  rule_row.oid, true
+                                                )
+                                              )
+                                              ORDER BY rule_row.rulename
+                                            ),
+                                            '[]'::jsonb
+                                          )
+                                     FROM pg_catalog.pg_rewrite AS rule_row
+                                    WHERE rule_row.ev_class =
+                                          target.target_relation
+                                 ),
+                                 'table_acl',
+                                (
+                                  SELECT coalesce(
+                                           pg_catalog.jsonb_agg(
+                                             pg_catalog.jsonb_build_array(
+                                               CASE
+                                                 WHEN relation_acl.grantee = 0
+                                                 THEN 'PUBLIC'
+                                                 ELSE
+                                                   relation_acl.grantee
+                                                     ::regrole::text
+                                               END,
+                                               relation_acl.grantor
+                                                 ::regrole::text,
+                                               relation_acl.privilege_type,
+                                               relation_acl.is_grantable
+                                             )
+                                             ORDER BY
+                                               relation_acl.grantee,
+                                               relation_acl.grantor,
+                                               relation_acl.privilege_type,
+                                               relation_acl.is_grantable
+                                           ),
+                                           '[]'::jsonb
+                                         )
+                                    FROM pg_catalog.aclexplode(
+                                           coalesce(
+                                             relation_row.relacl,
+                                             pg_catalog.acldefault(
+                                               'r',
+                                               relation_row.relowner
+                                             )
+                                           )
+                                         ) AS relation_acl
+                                ),
+                                'column_acl',
+                                (
+                                  SELECT coalesce(
+                                           pg_catalog.jsonb_agg(
+                                             pg_catalog.jsonb_build_array(
+                                               attribute.attname,
+                                               CASE
+                                                 WHEN column_acl.grantee = 0
+                                                 THEN 'PUBLIC'
+                                                 ELSE
+                                                   column_acl.grantee
+                                                     ::regrole::text
+                                               END,
+                                               column_acl.grantor
+                                                 ::regrole::text,
+                                               column_acl.privilege_type,
+                                               column_acl.is_grantable
+                                             )
+                                             ORDER BY
+                                               attribute.attnum,
+                                               column_acl.grantee,
+                                               column_acl.grantor,
+                                               column_acl.privilege_type,
+                                               column_acl.is_grantable
+                                           ),
+                                           '[]'::jsonb
+                                         )
+                                    FROM pg_catalog.pg_attribute AS attribute
+                                    CROSS JOIN LATERAL
+                                      pg_catalog.aclexplode(attribute.attacl)
+                                        AS column_acl
+                                   WHERE attribute.attrelid =
+                                         target.target_relation
+                                     AND attribute.attnum > 0
+                                     AND NOT attribute.attisdropped
+                                )
+                              )
+                            )
+                            ORDER BY target.target_name
+                          )
+                     FROM (
+                       VALUES
+                         (
+                           'operations.enforced_legacy_identity_writer_freezes',
+                           freeze_table
+                         ),
+                         (
+                           'operations.reviewed_identity_cutover_admissions',
+                           admission_table
+                         ),
+                         (
+                           'operations.semantic_authority_promotions',
+                           promotion_table
+                         )
+                     ) AS target(target_name, target_relation)
+                     JOIN pg_catalog.pg_class AS relation_row
+                       ON relation_row.oid = target.target_relation
+                 ),
+                 'policies',
+                 (
+                   SELECT coalesce(
+                            pg_catalog.jsonb_agg(
+                              pg_catalog.jsonb_build_array(
+                                pg_catalog.format(
+                                  '%I.%I',
+                                  policy_namespace.nspname,
+                                  policy_relation.relname
+                                ),
+                                policy_row.polname,
+                                policy_row.polcmd::text,
+                                policy_row.polpermissive,
+                                (
+                                  SELECT pg_catalog.jsonb_agg(
+                                           CASE
+                                             WHEN policy_role.role_oid = 0
+                                             THEN 'PUBLIC'
+                                             ELSE
+                                               policy_role.role_oid
+                                                 ::regrole::text
+                                           END
+                                           ORDER BY policy_role.role_oid
+                                         )
+                                    FROM pg_catalog.unnest(
+                                           policy_row.polroles
+                                         ) AS policy_role(role_oid)
+                                ),
+                                coalesce(
+                                  pg_catalog.pg_get_expr(
+                                    policy_row.polqual,
+                                    policy_row.polrelid,
+                                    true
+                                  ),
+                                  ''
+                                ),
+                                coalesce(
+                                  pg_catalog.pg_get_expr(
+                                    policy_row.polwithcheck,
+                                    policy_row.polrelid,
+                                    true
+                                  ),
+                                  ''
+                                )
+                              )
+                              ORDER BY
+                                policy_namespace.nspname,
+                                policy_relation.relname,
+                                policy_row.polname,
+                                policy_row.polcmd
+                            ),
+                            '[]'::jsonb
+                          )
+                     FROM pg_catalog.pg_policy AS policy_row
+                     JOIN pg_catalog.pg_class AS policy_relation
+                       ON policy_relation.oid = policy_row.polrelid
+                     JOIN pg_catalog.pg_namespace AS policy_namespace
+                       ON policy_namespace.oid =
+                            policy_relation.relnamespace
+                    WHERE policy_row.polrelid IN (
+                            freeze_table,
+                            admission_table,
+                            promotion_table
+                          )
+                       OR (
+                            policy_row.polname IN (
+                              'identity_cutover_e4_select',
+                              'identity_cutover_e4_insert',
+                              'identity_cutover_e4_update'
+                            )
+                            AND policy_namespace.nspname IN (
+                              'identity',
+                              'knowledge',
+                              'operations',
+                              'privacy'
+                            )
+                          )
+                 ),
+                 'function',
+                 (
+                   SELECT pg_catalog.jsonb_build_object(
+                            'identity',
+                            function_row.oid::regprocedure::text,
+                            'owner',
+                            function_row.proowner::regrole::text,
+                            'language',
+                            function_language.lanname,
+                            'returns',
+                            pg_catalog.format_type(
+                              function_row.prorettype, NULL
+                            ),
+                            'security_definer',
+                            function_row.prosecdef,
+                            'volatility',
+                            function_row.provolatile::text,
+                            'configuration',
+                            function_row.proconfig,
+                            'body_sha256',
+                            pg_catalog.encode(
+                              pg_catalog.sha256(
+                                pg_catalog.convert_to(
+                                  function_row.prosrc, 'UTF8'
+                                )
+                              ),
+                              'hex'
+                            ),
+                            'acl',
+                            (
+                              SELECT coalesce(
+                                       pg_catalog.jsonb_agg(
+                                         pg_catalog.jsonb_build_array(
+                                           CASE
+                                             WHEN function_acl.grantee = 0
+                                             THEN 'PUBLIC'
+                                             ELSE
+                                               function_acl.grantee
+                                                 ::regrole::text
+                                           END,
+                                           function_acl.grantor
+                                             ::regrole::text,
+                                           function_acl.privilege_type,
+                                           function_acl.is_grantable
+                                         )
+                                         ORDER BY
+                                           function_acl.grantee,
+                                           function_acl.grantor,
+                                           function_acl.privilege_type,
+                                           function_acl.is_grantable
+                                       ),
+                                       '[]'::jsonb
+                                     )
+                                FROM pg_catalog.aclexplode(
+                                       coalesce(
+                                         function_row.proacl,
+                                         pg_catalog.acldefault(
+                                           'f', function_row.proowner
+                                         )
+                                       )
+                                     ) AS function_acl
+                            )
+                          )
+                     FROM pg_catalog.pg_proc AS function_row
+                     JOIN pg_catalog.pg_language AS function_language
+                       ON function_language.oid = function_row.prolang
+                    WHERE function_row.oid = cutover_function
+                 ),
+                 'role_acl_inventory',
+                 (
+                   SELECT coalesce(
+                            pg_catalog.jsonb_agg(
+                              pg_catalog.jsonb_build_array(
+                                direct_acl.object_kind,
+                                direct_acl.object_identity,
+                                direct_acl.grantee_name,
+                                direct_acl.grantor_name,
+                                direct_acl.privilege_type,
+                                direct_acl.is_grantable
+                              )
+                              ORDER BY
+                                direct_acl.object_kind,
+                                direct_acl.object_identity,
+                                direct_acl.grantee_name,
+                                direct_acl.grantor_name,
+                                direct_acl.privilege_type,
+                                direct_acl.is_grantable
+                            ),
+                            '[]'::jsonb
+                          )
+                     FROM (
+                       SELECT
+                         'database'::text AS object_kind,
+                         database_row.datname::text AS object_identity,
+                         granted_role.rolname::text AS grantee_name,
+                         database_acl.grantor::regrole::text
+                           AS grantor_name,
+                         database_acl.privilege_type::text,
+                         database_acl.is_grantable
+                       FROM pg_catalog.pg_database AS database_row
+                       CROSS JOIN LATERAL pg_catalog.aclexplode(
+                         database_row.datacl
+                       ) AS database_acl
+                       JOIN pg_catalog.pg_roles AS granted_role
+                         ON granted_role.oid = database_acl.grantee
+                      WHERE database_row.datname =
+                            pg_catalog.current_database()
+                        AND granted_role.rolname IN (
+                          'home_agent_identity_cutover',
+                          'home_agent_identity_cutover_kernel'
+                        )
+                       UNION ALL
+                       SELECT
+                         'schema',
+                         namespace_row.nspname,
+                         granted_role.rolname,
+                         schema_acl.grantor::regrole::text,
+                         schema_acl.privilege_type,
+                         schema_acl.is_grantable
+                       FROM pg_catalog.pg_namespace AS namespace_row
+                       CROSS JOIN LATERAL pg_catalog.aclexplode(
+                         namespace_row.nspacl
+                       ) AS schema_acl
+                       JOIN pg_catalog.pg_roles AS granted_role
+                         ON granted_role.oid = schema_acl.grantee
+                      WHERE namespace_row.nspname IN (
+                              'public','ingest','identity','knowledge',
+                              'engagement','privacy','operations','media'
+                            )
+                        AND granted_role.rolname IN (
+                              'home_agent_identity_cutover',
+                              'home_agent_identity_cutover_kernel'
+                            )
+                       UNION ALL
+                       SELECT
+                         'relation',
+                         pg_catalog.format(
+                           '%I.%I',
+                           relation_namespace.nspname,
+                           relation_row.relname
+                         ),
+                         granted_role.rolname,
+                         relation_acl.grantor::regrole::text,
+                         relation_acl.privilege_type,
+                         relation_acl.is_grantable
+                       FROM pg_catalog.pg_class AS relation_row
+                       JOIN pg_catalog.pg_namespace AS relation_namespace
+                         ON relation_namespace.oid =
+                              relation_row.relnamespace
+                       CROSS JOIN LATERAL pg_catalog.aclexplode(
+                         relation_row.relacl
+                       ) AS relation_acl
+                       JOIN pg_catalog.pg_roles AS granted_role
+                         ON granted_role.oid = relation_acl.grantee
+                      WHERE relation_namespace.nspname IN (
+                              'public','ingest','identity','knowledge',
+                              'engagement','privacy','operations','media'
+                            )
+                        AND granted_role.rolname IN (
+                              'home_agent_identity_cutover',
+                              'home_agent_identity_cutover_kernel'
+                            )
+                       UNION ALL
+                       SELECT
+                         'column',
+                         pg_catalog.format(
+                           '%I.%I.%I',
+                           column_namespace.nspname,
+                           column_relation.relname,
+                           column_row.attname
+                         ),
+                         granted_role.rolname,
+                         column_acl.grantor::regrole::text,
+                         column_acl.privilege_type,
+                         column_acl.is_grantable
+                       FROM pg_catalog.pg_attribute AS column_row
+                       JOIN pg_catalog.pg_class AS column_relation
+                         ON column_relation.oid = column_row.attrelid
+                       JOIN pg_catalog.pg_namespace AS column_namespace
+                         ON column_namespace.oid =
+                              column_relation.relnamespace
+                       CROSS JOIN LATERAL pg_catalog.aclexplode(
+                         column_row.attacl
+                       ) AS column_acl
+                       JOIN pg_catalog.pg_roles AS granted_role
+                         ON granted_role.oid = column_acl.grantee
+                      WHERE column_row.attnum > 0
+                        AND NOT column_row.attisdropped
+                        AND column_namespace.nspname IN (
+                              'public','ingest','identity','knowledge',
+                              'engagement','privacy','operations','media'
+                            )
+                        AND granted_role.rolname IN (
+                              'home_agent_identity_cutover',
+                              'home_agent_identity_cutover_kernel'
+                            )
+                       UNION ALL
+                       SELECT
+                         'function',
+                         function_row.oid::regprocedure::text,
+                         granted_role.rolname,
+                         function_acl.grantor::regrole::text,
+                         function_acl.privilege_type,
+                         function_acl.is_grantable
+                       FROM pg_catalog.pg_proc AS function_row
+                       JOIN pg_catalog.pg_namespace AS function_namespace
+                         ON function_namespace.oid =
+                              function_row.pronamespace
+                       CROSS JOIN LATERAL pg_catalog.aclexplode(
+                         function_row.proacl
+                       ) AS function_acl
+                       JOIN pg_catalog.pg_roles AS granted_role
+                         ON granted_role.oid = function_acl.grantee
+                      WHERE function_namespace.nspname IN (
+                              'public','ingest','identity','knowledge',
+                              'engagement','privacy','operations','media'
+                            )
+                        AND granted_role.rolname IN (
+                              'home_agent_identity_cutover',
+                              'home_agent_identity_cutover_kernel'
+                            )
+                       UNION ALL
+                       SELECT
+                         'type',
+                         pg_catalog.format(
+                           '%I.%I',
+                           type_namespace.nspname,
+                           type_row.typname
+                         ),
+                         granted_role.rolname,
+                         type_acl.grantor::regrole::text,
+                         type_acl.privilege_type,
+                         type_acl.is_grantable
+                       FROM pg_catalog.pg_type AS type_row
+                       JOIN pg_catalog.pg_namespace AS type_namespace
+                         ON type_namespace.oid = type_row.typnamespace
+                       CROSS JOIN LATERAL pg_catalog.aclexplode(
+                         type_row.typacl
+                       ) AS type_acl
+                       JOIN pg_catalog.pg_roles AS granted_role
+                         ON granted_role.oid = type_acl.grantee
+                      WHERE type_namespace.nspname IN (
+                              'public','ingest','identity','knowledge',
+                              'engagement','privacy','operations','media'
+                            )
+                        AND granted_role.rolname IN (
+                              'home_agent_identity_cutover',
+                              'home_agent_identity_cutover_kernel'
+                            )
+                       UNION ALL
+                       SELECT
+                         'default_acl',
+                         pg_catalog.format(
+                           '%s:%s:%s',
+                           default_acl.defaclrole::regrole::text,
+                           coalesce(
+                             default_namespace.nspname,
+                             '<all-schemas>'
+                           ),
+                           default_acl.defaclobjtype::text
+                         ),
+                         granted_role.rolname,
+                         exploded_default_acl.grantor::regrole::text,
+                         exploded_default_acl.privilege_type,
+                         exploded_default_acl.is_grantable
+                       FROM pg_catalog.pg_default_acl AS default_acl
+                       LEFT JOIN pg_catalog.pg_namespace AS default_namespace
+                         ON default_namespace.oid =
+                              default_acl.defaclnamespace
+                       CROSS JOIN LATERAL pg_catalog.aclexplode(
+                         default_acl.defaclacl
+                       ) AS exploded_default_acl
+                       JOIN pg_catalog.pg_roles AS granted_role
+                         ON granted_role.oid =
+                              exploded_default_acl.grantee
+                      WHERE (
+                              default_acl.defaclnamespace = 0
+                              OR default_namespace.nspname IN (
+                                'public','ingest','identity','knowledge',
+                                'engagement','privacy','operations','media'
+                              )
+                            )
+                        AND granted_role.rolname IN (
+                              'home_agent_identity_cutover',
+                              'home_agent_identity_cutover_kernel'
+                            )
+                       UNION ALL
+                       SELECT
+                         'parameter',
+                         parameter_acl.parname,
+                         granted_role.rolname,
+                         exploded_parameter_acl.grantor::regrole::text,
+                         exploded_parameter_acl.privilege_type,
+                         exploded_parameter_acl.is_grantable
+                       FROM pg_catalog.pg_parameter_acl AS parameter_acl
+                       CROSS JOIN LATERAL pg_catalog.aclexplode(
+                         parameter_acl.paracl
+                       ) AS exploded_parameter_acl
+                       JOIN pg_catalog.pg_roles AS granted_role
+                         ON granted_role.oid =
+                              exploded_parameter_acl.grantee
+                      WHERE granted_role.rolname IN (
+                              'home_agent_identity_cutover',
+                              'home_agent_identity_cutover_kernel'
+                            )
+                     ) AS direct_acl
+                 ),
+                 'dependency_effective_access',
+                 (
+                   SELECT pg_catalog.jsonb_agg(
+                            pg_catalog.jsonb_build_array(
+                              effective_access.object_kind,
+                              effective_access.object_identity,
+                              effective_access.role_name,
+                              effective_access.privilege_type,
+                              effective_access.is_allowed
+                            )
+                            ORDER BY
+                              effective_access.object_kind,
+                              effective_access.object_identity,
+                              effective_access.role_name,
+                              effective_access.privilege_type
+                          )
+                     FROM (
+                       SELECT
+                         'schema'::text AS object_kind,
+                         target_schema.schema_name::text
+                           AS object_identity,
+                         target_role.role_name::text AS role_name,
+                         target_privilege.privilege_type::text
+                           AS privilege_type,
+                         pg_catalog.has_schema_privilege(
+                           target_role.role_name,
+                           target_schema.schema_name,
+                           target_privilege.privilege_type
+                         ) AS is_allowed
+                       FROM (
+                         VALUES
+                           ('home_agent_identity_cutover'),
+                           ('home_agent_identity_cutover_kernel')
+                       ) AS target_role(role_name)
+                       CROSS JOIN (
+                         VALUES ('operations'), ('privacy')
+                       ) AS target_schema(schema_name)
+                       CROSS JOIN (
+                         VALUES ('USAGE'), ('CREATE')
+                       ) AS target_privilege(privilege_type)
+                       UNION ALL
+                       SELECT
+                         'relation',
+                         target_relation.relation_name,
+                         target_role.role_name,
+                         target_privilege.privilege_type,
+                         pg_catalog.has_table_privilege(
+                           target_role.role_name,
+                           pg_catalog.to_regclass(
+                             target_relation.relation_name
+                           ),
+                           target_privilege.privilege_type
+                         )
+                       FROM (
+                         VALUES
+                           ('home_agent_identity_cutover'),
+                           ('home_agent_identity_cutover_kernel')
+                       ) AS target_role(role_name)
+                       CROSS JOIN (
+                         VALUES
+                           (
+                             'operations.enforced_legacy_identity_writer_freezes'
+                           ),
+                           (
+                             'operations.reviewed_identity_cutover_admissions'
+                           ),
+                           (
+                             'operations.semantic_authority_promotions'
+                           ),
+                           (
+                             'operations.reviewed_identity_migration_runs'
+                           ),
+                           (
+                             'operations.reviewed_identity_migration_finalizations'
+                           ),
+                           (
+                             'operations.reviewed_identity_finalizer_admissions'
+                           ),
+                           ('operations.semantic_authority_cutovers'),
+                           ('operations.legacy_identity_writer_evidence'),
+                           ('operations.privacy_cutover_check_receipts'),
+                           (
+                             'operations.reviewed_identity_migration_erasure_impacts'
+                           ),
+                           (
+                             'operations.reviewed_identity_migration_projection_lineage'
+                           ),
+                           (
+                             'operations.reviewed_identity_migration_projection_subjects'
+                           ),
+                           (
+                             'operations.erasure_ledger_state'
+                           )
+                       ) AS target_relation(relation_name)
+                       CROSS JOIN (
+                         VALUES
+                           ('SELECT'),
+                           ('INSERT'),
+                           ('UPDATE'),
+                           ('DELETE'),
+                           ('TRUNCATE'),
+                           ('REFERENCES'),
+                           ('TRIGGER')
+                       ) AS target_privilege(privilege_type)
+                       UNION ALL
+                       SELECT
+                         'function',
+                         target_function.function_name,
+                         target_role.role_name,
+                         'EXECUTE',
+                         pg_catalog.has_function_privilege(
+                           target_role.role_name,
+                           pg_catalog.to_regprocedure(
+                             target_function.function_name
+                           ),
+                           'EXECUTE'
+                         )
+                       FROM (
+                         VALUES
+                           ('home_agent_identity_cutover'),
+                           ('home_agent_identity_cutover_kernel')
+                       ) AS target_role(role_name)
+                       CROSS JOIN (
+                         VALUES
+                           (
+                             'operations.commit_reviewed_identity_cutover(bytea,uuid)'
+                           ),
+                           (
+                             'privacy.lock_identity_semantic_write_fence()'
+                           ),
+                           ('privacy.identity_person_is_blocked(uuid)')
+                       ) AS target_function(function_name)
+                     ) AS effective_access
+                 )
+               )::text,
+               'UTF8'
+             )
+           ),
+           'hex'
+         )
+    INTO STRICT actual_e4_catalog_sha256;
+
+  IF expected_e4_catalog_sha256 !~ '^[0-9a-f]{64}$'
+     OR actual_e4_catalog_sha256 <> expected_e4_catalog_sha256 THEN
+    RAISE EXCEPTION
+      'identity cutover E4 catalog admission is pending reviewed digest'
+      USING ERRCODE = '42501',
+            DETAIL = pg_catalog.format(
+              'expected=%s actual=%s',
+              expected_e4_catalog_sha256,
+              actual_e4_catalog_sha256
+            );
+  END IF;
+
+  -- No positive E4 grants exist until the catalog digest and external legacy
+  -- writer-freeze ceremony are reviewed together.
+  RAISE EXCEPTION 'identity cutover E4 activation contract is not installed'
+    USING ERRCODE = '55000';
+END
+$identity_cutover_e4_acl$;
 SQL
 
 # The broad role setup above supports old pinned revisions and creates the

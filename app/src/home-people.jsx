@@ -26,6 +26,89 @@ const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
 const PEOPLE_FONT_MONO = "'Geist Mono', ui-monospace, monospace";
 const PEOPLE_FONT_SANS = "'Geist', system-ui, sans-serif";
+const EMPTY_PEOPLE_MAP = Object.freeze({});
+const EMPTY_FACES_STATUS = Object.freeze({ state: "idle" });
+
+function peopleCredentialScopeKey(open, endpoint, token) {
+  // This value is never logged or persisted. It exists only to synchronously
+  // invalidate work started by a prior credential set before React effects run.
+  return JSON.stringify([
+    !!open,
+    String(endpoint || "").replace(/\/+$/, ""),
+    String(token || ""),
+  ]);
+}
+
+function peoplePrincipalScopedValue(
+  currentScopeKey,
+  valueScopeKey,
+  value,
+  fallback,
+) {
+  return currentScopeKey === valueScopeKey ? value : fallback;
+}
+
+function abortPeopleOperationState(state) {
+  if (!state?.controllers) return;
+  for (const controller of state.controllers.values()) {
+    try { controller.abort(); } catch {}
+  }
+  state.controllers.clear();
+}
+
+function usePeopleOperationGuard(scopeKey) {
+  const stateRef = useRef(null);
+  if (!stateRef.current || stateRef.current.scopeKey !== scopeKey) {
+    abortPeopleOperationState(stateRef.current);
+    stateRef.current = {
+      scopeKey,
+      controllers: new Map(),
+    };
+  }
+
+  useEffect(() => () => abortPeopleOperationState(stateRef.current), []);
+
+  return useCallback((channel) => {
+    const state = stateRef.current;
+    const key = String(channel || "default");
+    const previous = state.controllers.get(key);
+    if (previous) {
+      try { previous.abort(); } catch {}
+    }
+    const controller = new AbortController();
+    state.controllers.set(key, controller);
+    let finished = false;
+    return {
+      signal: controller.signal,
+      isCurrent: () => (
+        !finished
+        && !controller.signal.aborted
+        && stateRef.current === state
+        && state.scopeKey === scopeKey
+      ),
+      finish: () => {
+        if (finished) return;
+        finished = true;
+        if (state.controllers.get(key) === controller) {
+          state.controllers.delete(key);
+        }
+      },
+      cancel: () => {
+        try { controller.abort(); } catch {}
+        if (state.controllers.get(key) === controller) {
+          state.controllers.delete(key);
+        }
+        finished = true;
+      },
+    };
+  }, [scopeKey]);
+}
+
+function peopleOperationAborted(error, operation) {
+  return !operation.isCurrent()
+    || error?.name === "AbortError"
+    || error?.reason === "abort";
+}
 
 function usePeopleViewport() {
   const read = useCallback(() => {
@@ -90,33 +173,36 @@ function peopleGraphCameraViewBox(viewBox, camera) {
  * home-app.jsx + an endpoint/token pair for HA REST calls.
  * ──────────────────────────────────────────────────────────────────── */
 function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, connection = null, sim, spatialMode = false }) {
+  const credentialScopeKey = peopleCredentialScopeKey(open, endpoint, token);
+  const principalDataScopeRef = useRef(null);
   const [view, setView] = useState("graph");   // graph | list | queue
-  const [identities, setIdentities] = useState(null);  // null=loading, []=empty
-  const identitiesRef = useRef(null);
+  const [storedIdentities, setIdentities] = useState(null);  // null=loading, []=empty
   const [error, setError] = useState(null);
   // Attempt number while fetchWithRetry is still reconnecting (null = idle).
   // Distinct from `error`, which is the terminal state after retries are spent.
   const [reconnecting, setReconnecting] = useState(null);
   const [loadedAt, setLoadedAt] = useState(null);
-  const [selectedUuid, setSelectedUuid] = useState(null);
+  const [storedSelectedUuid, setSelectedUuid] = useState(null);
   // F-4b: backend reports {ready:false, setup_error:"..."} when the
   // SQLite open failed at integration setup. Different from `error`
   // (which is a network-side failure) — `notReady` means HA is
   // reachable but the identity_store didn't initialize.
   const [notReady, setNotReady] = useState(null);
-  // Addendum 24: Frigate base URL (from /identities response) +
-  // /api/faces snapshot (fetched once per overlay open). Used by the
-  // gallery + hover thumbnails.
-  const [frigateUrl, setFrigateUrl] = useState(null);
-  const [facesByPerson, setFacesByPerson] = useState(null);
-  const [facesStatus, setFacesStatus] = useState({ state: "idle" });
-  const [frigateDiagnostics, setFrigateDiagnostics] = useState(null);
+  // Set only from the authenticated HA identity-list response. The legacy
+  // People UI becomes read-only only after the explicit E4 SQLite fence is
+  // present and verified server-side.
+  const [storedLegacyBoundary, setLegacyBoundary] = useState(null);
+  // The authenticated, typed Frigate faces operation returns metadata only.
+  // Legacy face-crop bytes are intentionally not loaded into the browser.
+  const [storedFacesByPerson, setFacesByPerson] = useState(null);
+  const [storedFacesStatus, setFacesStatus] = useState(EMPTY_FACES_STATUS);
+  const [storedFrigateDiagnostics, setFrigateDiagnostics] = useState(null);
   // Addendum 24 Phase 3: HEAD-pre-check map per identity uuid → boolean.
   // AR24-9: SVG <image onError> can't distinguish 404 from network blip,
   // so we pre-fetch presence once and render <image> only when truthy.
   // Cache-bust string bumps on successful upload (AR24-8) so re-renders
   // pull the new bytes through WebView2's cache.
-  const [avatarPresence, setAvatarPresence] = useState({});
+  const [storedAvatarPresence, setAvatarPresence] = useState(EMPTY_PEOPLE_MAP);
   const [avatarCacheBust, setAvatarCacheBust] = useState(null);
   // Post-Phase-3 fix: SVG <image href="..."> and HTML <img src="...">
   // cannot send `Authorization: Bearer <token>` headers. Our AvatarView
@@ -124,20 +210,58 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
   // broken-image placeholder. Fix: fetch the bytes WITH the auth header
   // via tauriFetch, convert to a blob URL, store per-uuid, render the
   // blob URL as the src/href. Revoke on unmount or when bytes change.
-  const [avatarBlobUrls, setAvatarBlobUrls] = useState({});
-  useEffect(() => { identitiesRef.current = identities; }, [identities]);
+  const [storedAvatarBlobUrls, setAvatarBlobUrls] = useState(EMPTY_PEOPLE_MAP);
+  const avatarBlobUrlsRef = useRef(EMPTY_PEOPLE_MAP);
   // Track in-flight fetches so we don't double-fire for the same
   // (uuid, cacheBust) tuple. Keyed by `${uuid}:${cb}`.
   const blobFetchInFlightRef = useRef({});
+  const requestGenerationRef = useRef(0);
+  const beginPeopleOperation = usePeopleOperationGuard(credentialScopeKey);
+  const identities = peoplePrincipalScopedValue(
+    credentialScopeKey, principalDataScopeRef.current, storedIdentities, null,
+  );
+  const selectedUuid = peoplePrincipalScopedValue(
+    credentialScopeKey, principalDataScopeRef.current, storedSelectedUuid, null,
+  );
+  const legacyBoundary = peoplePrincipalScopedValue(
+    credentialScopeKey, principalDataScopeRef.current, storedLegacyBoundary, null,
+  );
+  const facesByPerson = peoplePrincipalScopedValue(
+    credentialScopeKey, principalDataScopeRef.current, storedFacesByPerson, null,
+  );
+  const facesStatus = peoplePrincipalScopedValue(
+    credentialScopeKey,
+    principalDataScopeRef.current,
+    storedFacesStatus,
+    EMPTY_FACES_STATUS,
+  );
+  const frigateDiagnostics = peoplePrincipalScopedValue(
+    credentialScopeKey,
+    principalDataScopeRef.current,
+    storedFrigateDiagnostics,
+    null,
+  );
+  const avatarPresence = peoplePrincipalScopedValue(
+    credentialScopeKey,
+    principalDataScopeRef.current,
+    storedAvatarPresence,
+    EMPTY_PEOPLE_MAP,
+  );
+  const avatarBlobUrls = peoplePrincipalScopedValue(
+    credentialScopeKey,
+    principalDataScopeRef.current,
+    storedAvatarBlobUrls,
+    EMPTY_PEOPLE_MAP,
+  );
+  avatarBlobUrlsRef.current = storedAvatarBlobUrls;
   // Revoke ALL blob URLs when the overlay closes — prevents memory leak
   // for users who open + close repeatedly.
   useEffect(() => {
     return () => {
-      Object.values(avatarBlobUrls).forEach((u) => {
+      Object.values(avatarBlobUrlsRef.current).forEach((u) => {
         if (u) try { URL.revokeObjectURL(u); } catch {}
       });
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   // Notifier function the detail panel calls after a successful upload
   // or delete. `present` is the truth state we already know from the
@@ -174,37 +298,56 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
 
   // Initial load + refresh on open. Sim mode short-circuits to fixture data.
   const refresh = useCallback(async () => {
+    const operation = beginPeopleOperation("identity-refresh");
+    const generation = ++requestGenerationRef.current;
+    const isCurrent = () => (
+      operation.isCurrent()
+      && requestGenerationRef.current === generation
+    );
+    const publishCurrentScope = () => {
+      if (!isCurrent()) return false;
+      principalDataScopeRef.current = credentialScopeKey;
+      return true;
+    };
+    principalDataScopeRef.current = null;
     setError(null);
     setNotReady(null);
     setReconnecting(null);
+    // Never render a prior principal's identities, faces, or authorization
+    // decision while a fresh HA-admin request is pending.
+    setIdentities(null);
+    setLegacyBoundary(null);
+    setFrigateDiagnostics(null);
+    setFacesByPerson(null);
+    setFacesStatus({ state: "idle" });
+    setAvatarPresence({});
+    setSelectedUuid(null);
+    setAvatarBlobUrls((previous) => {
+      Object.values(previous).forEach((url) => {
+        if (url) try { URL.revokeObjectURL(url); } catch {}
+      });
+      return {};
+    });
     if (sim?.active) {
       // AR16-3 guard: sim mode never shows the ready:false banner — it
       // would conflict with sim's own fixture data shape.
       const simIdentities = (sim.snapshot?.people?.identities) || [];
+      if (!publishCurrentScope()) return;
       setIdentities(simIdentities);
+      setLegacyBoundary(null);
       setFacesByPerson(null);
       setFacesStatus({ state: "sim" });
       setFrigateDiagnostics(null);
       setLoadedAt(Date.now());
+      operation.finish();
       return;
     }
     if (!endpoint || !token) {
+      if (!publishCurrentScope()) return;
       setError("HA endpoint or token not configured");
       setIdentities([]);
+      operation.finish();
       return;
-    }
-    const cached = readPeopleDataCache(endpoint);
-    let usingCached = false;
-    if (cached && identitiesRef.current === null) {
-      usingCached = true;
-      setIdentities(cached.identities || []);
-      setFrigateDiagnostics(cached.frigateDiagnostics || null);
-      setFrigateUrl(cached.frigateUrl || null);
-      setFacesByPerson(cached.facesByPerson || null);
-      setFacesStatus(cached.facesByPerson
-        ? { state: "loaded", bucketCount: Object.keys(cached.facesByPerson).length, loadedAt: cached.cachedAt, cached: true }
-        : { state: "idle", cached: true });
-      setLoadedAt(cached.cachedAt || Date.now());
     }
     try {
       const url = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/identities`;
@@ -216,23 +359,28 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
         options: {
           headers: { Authorization: `Bearer ${token}` },
           cache: "no-store",
+          signal: operation.signal,
         },
         timeoutMs: 20000,
-        maxAttempts: usingCached ? 2 : 4,
+        maxAttempts: 4,
         onAttempt: ({ attempt, nextDelay }) => {
-          if (nextDelay != null && !usingCached && identitiesRef.current === null) setReconnecting(attempt);
+          if (nextDelay != null && isCurrent()) setReconnecting(attempt);
         },
       });
+      if (!isCurrent()) return;
       setReconnecting(null);
       if (!resp.ok) {
         // fetchWithRetry throws rather than resolving non-ok, so this is a
         // defensive fallback only.
+        if (!publishCurrentScope()) return;
         setError(`HTTP ${resp.status} ${resp.statusText}`);
         setIdentities([]);
         return;
       }
       const payload = await resp.json();
+      if (!isCurrent()) return;
       if (payload.enabled === false) {
+        if (!publishCurrentScope()) return;
         setError("Identity store disabled (EXTENDED_OPENAI_IDENTITY_STORE=off)");
         setIdentities([]);
         return;
@@ -241,34 +389,36 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
       // identity_store SQLite open failed. Surface explicitly so the
       // user knows it's a setup problem, not "no identities yet".
       if (payload.ready === false) {
+        if (!publishCurrentScope()) return;
         setNotReady({
           error: payload.setup_error || "identity_store initialization failed",
         });
         setIdentities([]);
         return;
       }
+      if (!publishCurrentScope()) return;
       setIdentities(payload.identities || []);
+      setLegacyBoundary(payload.legacy_identity_boundary || null);
       setFrigateDiagnostics({
         seedReport: payload.frigate_seed_report || null,
         capabilities: payload.frigate_capabilities || null,
       });
       setLoadedAt(Date.now());
-      // Addendum 24: capture the Frigate URL the integration reports.
-      // Fetch /api/faces THROUGH the HA-side FrigateProxyView so CORS
-      // works (Frigate's nginx doesn't send Access-Control-Allow-Origin
-      // headers; direct Tauri fetch is blocked). Image URLs themselves
-      // stay direct-to-Frigate because <img> tags don't trigger CORS.
-      if (payload.frigate_url) {
-        setFrigateUrl(payload.frigate_url);
+      // Fetch only the exact typed metadata operation. The browser never
+      // receives a Frigate base URL and never loads crop bytes directly.
+      if (payload.frigate_faces_available === true) {
         setFacesStatus({ state: "loading" });
-        const proxyUrl = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/frigate_proxy?path=api/faces`;
+        const proxyUrl = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/frigate_proxy/faces`;
         try {
           const fresp = await window.tauriFetch(proxyUrl, {
             headers: { Authorization: `Bearer ${token}` },
             cache: "no-store",
+            signal: operation.signal,
           });
+          if (!isCurrent()) return;
           if (fresp.ok) {
             const fpayload = await fresp.json();
+            if (!isCurrent()) return;
             if (fpayload && typeof fpayload === "object") {
               setFacesByPerson(fpayload);
               setFacesStatus({
@@ -276,32 +426,29 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
                 bucketCount: Object.keys(fpayload).length,
                 loadedAt: Date.now(),
               });
-              writePeopleDataCache(endpoint, payload, fpayload);
             }
           } else {
             setFacesByPerson(null);
             setFacesStatus({ state: "error", error: `HTTP ${fresp.status}` });
-            writePeopleDataCache(endpoint, payload, null);
           }
         } catch (e) {
+          if (!isCurrent()) return;
           // Proxy unreachable — gallery shows empty state.
           setFacesByPerson(null);
           setFacesStatus({ state: "error", error: e?.message || String(e) });
-          writePeopleDataCache(endpoint, payload, null);
         }
       } else {
-        setFrigateUrl(null);
         setFacesByPerson(null);
         setFacesStatus({ state: "missing_url" });
-        writePeopleDataCache(endpoint, payload, null);
       }
     } catch (e) {
+      if (!isCurrent()) return;
+      if (!publishCurrentScope()) return;
       setReconnecting(null);
-      if (usingCached || identitiesRef.current?.length) {
-        return;
-      }
       const status = e && e.lastStatus;
-      if (e && e.reason === "http" && status) {
+      if (status === 401 || status === 403) {
+        setError("Home Assistant administrator access required");
+      } else if (e && e.reason === "http" && status) {
         setError(`HTTP ${status}`);
       } else if (e && e.attempts) {
         setError(`Identity store unreachable after ${e.attempts} ${e.attempts === 1 ? "attempt" : "attempts"}.`);
@@ -309,6 +456,8 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
         setError(`Network error: ${e.message || e}`);
       }
       setIdentities([]);
+    } finally {
+      operation.finish();
     }
     // NOTE: `sim?.snapshot` deliberately omitted — it's an object reference
     // recreated on every parent render, so including it would make `refresh`
@@ -317,23 +466,49 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
     // also depends on `refresh`. The sim snapshot is read at call time from
     // the closure, so removing it from deps is safe; we just don't auto-
     // refresh when the snapshot mutates without sim.active toggling.
-  }, [endpoint, token, sim?.active]);
+  }, [
+    endpoint,
+    token,
+    sim?.active,
+    beginPeopleOperation,
+    credentialScopeKey,
+  ]);
+
+  const legacyFrozenPendingCutover =
+    legacyBoundary?.semantic_write_fence_installed === true;
+  const legacyMutationsReadOnly =
+    !sim?.active && !(
+      legacyBoundary?.state === "legacy_migration_only"
+      && legacyBoundary?.semantic_writes_frozen === false
+    );
+
+  useEffect(() => {
+    if (legacyMutationsReadOnly && view === "queue") setView("graph");
+  }, [legacyMutationsReadOnly, view]);
+
+  // Closing the private surface or changing credentials clears every
+  // principal-bearing value. There is intentionally no in-memory/localStorage
+  // People cache and no stale-while-revalidate behavior.
+  useEffect(() => {
+    principalDataScopeRef.current = null;
+    requestGenerationRef.current += 1;
+    setIdentities(null);
+    setLegacyBoundary(null);
+    setSelectedUuid(null);
+    setFacesByPerson(null);
+    setFrigateDiagnostics(null);
+    setAvatarPresence({});
+    setAvatarBlobUrls((previous) => {
+      Object.values(previous).forEach((url) => {
+        if (url) try { URL.revokeObjectURL(url); } catch {}
+      });
+      return {};
+    });
+  }, [open, endpoint, token]);
 
   useEffect(() => {
     if (open) refresh();
   }, [open, refresh]);
-
-  const faceImageBaseUrl = useMemo(() => {
-    try {
-      const services = (typeof window !== "undefined") ? window.HomeServices : null;
-      const resolved = services && typeof services.get === "function"
-        ? services.get("frigate")
-        : "";
-      return resolved || frigateUrl;
-    } catch {
-      return frigateUrl;
-    }
-  }, [frigateUrl]);
 
   // Phase 3 avatar pre-check (AR24-9). One HEAD per identity at load
   // time + after every identity_mutation refresh. Sim mode skips —
@@ -344,6 +519,8 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
     if (!identities || identities.length === 0) return;
     if (!endpoint || !token) return;
     let cancelled = false;
+    const generation = requestGenerationRef.current;
+    const operation = beginPeopleOperation("avatar-presence");
     (async () => {
       const next = {};
       for (const i of identities) {
@@ -354,16 +531,29 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
             method: "HEAD",
             headers: { Authorization: `Bearer ${token}` },
             cache: "no-store",
+            signal: operation.signal,
           });
+          if (
+            cancelled
+            || !operation.isCurrent()
+            || requestGenerationRef.current !== generation
+          ) return;
           next[i.uuid] = resp.ok;
         } catch {
           next[i.uuid] = false;
         }
       }
-      if (!cancelled) setAvatarPresence(next);
-    })();
-    return () => { cancelled = true; };
-  }, [open, sim?.active, identities, endpoint, token]);
+      if (
+        !cancelled
+        && operation.isCurrent()
+        && requestGenerationRef.current === generation
+      ) setAvatarPresence(next);
+    })().finally(operation.finish);
+    return () => {
+      cancelled = true;
+      operation.cancel();
+    };
+  }, [open, sim?.active, identities, endpoint, token, beginPeopleOperation]);
 
   // Avatar blob fetcher — for every identity where avatarPresence is
   // true AND we don't yet have a blob URL (or cacheBust changed), fetch
@@ -375,6 +565,8 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
     if (!endpoint || !token) return;
     const ids = identities || [];
     let cancelled = false;
+    const generation = requestGenerationRef.current;
+    const operation = beginPeopleOperation("avatar-blobs");
     // CRITICAL: avatarBlobUrls is INTENTIONALLY NOT in the dep list. If
     // it were, every setAvatarBlobUrls call (one per identity fetched)
     // would re-run this effect, run cleanup → cancelled=true → and the
@@ -392,7 +584,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
       for (const i of ids) {
         if (cancelled) return;
         if (!avatarPresence[i.uuid]) continue;
-        const inflightKey = `${i.uuid}:${avatarCacheBust || "init"}`;
+        const inflightKey = `${generation}:${i.uuid}:${avatarCacheBust || "init"}`;
         if (blobFetchInFlightRef.current[inflightKey]) continue;
         if (avatarBlobUrls[i.uuid]) continue;
         blobFetchInFlightRef.current[inflightKey] = true;
@@ -401,11 +593,20 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
           const resp = await window.tauriFetch(url, {
             headers: { Authorization: `Bearer ${token}` },
             cache: "no-store",
+            signal: operation.signal,
           });
-          if (cancelled) return;
+          if (
+            cancelled
+            || !operation.isCurrent()
+            || requestGenerationRef.current !== generation
+          ) return;
           if (!resp.ok) continue;
           const blob = await resp.blob();
-          if (cancelled) return;
+          if (
+            cancelled
+            || !operation.isCurrent()
+            || requestGenerationRef.current !== generation
+          ) return;
           const blobUrl = URL.createObjectURL(blob);
           setAvatarBlobUrls((prev) => {
             if (prev[i.uuid]) {
@@ -420,10 +621,13 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
           delete blobFetchInFlightRef.current[inflightKey];
         }
       }
-    })();
-    return () => { cancelled = true; };
+    })().finally(operation.finish);
+    return () => {
+      cancelled = true;
+      operation.cancel();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, sim?.active, identities, endpoint, token, avatarPresence, avatarCacheBust]);
+  }, [open, sim?.active, identities, endpoint, token, avatarPresence, avatarCacheBust, beginPeopleOperation]);
 
   // F-5b: subscribe to the integration's `identity_mutation` HA bus
   // event. Any create/update/delete on the HA side (made via curl, via
@@ -534,7 +738,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
         borderBottom: "1px solid var(--hg-border-soft)",
         fontFamily: PEOPLE_FONT_MONO,
       }}>
-        {["graph", "list", "queue"].map((v) => (
+        {(legacyMutationsReadOnly ? ["graph", "list"] : ["graph", "list", "queue"]).map((v) => (
           <button
             key={v}
             onClick={() => setView(v)}
@@ -626,6 +830,22 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
             </div>
           </div>
         )}
+        {legacyFrozenPendingCutover && !notReady && (
+          <div style={{
+            border: "1px solid var(--hg-border-soft)",
+            background: "var(--hg-bg-1)",
+            padding: "10px 14px",
+            color: "var(--hg-fg-2)",
+            fontSize: 11, letterSpacing: "0.04em",
+            marginBottom: 16,
+          }}>
+            <strong style={{ marginRight: 8 }}>legacy read-only · cutover pending</strong>
+            This verified legacy People view is read-only. The replacement
+            authority has not been promoted by this boundary. Semantic identity,
+            relationship, preference, privacy, profile, and avatar edits are
+            closed here.
+          </div>
+        )}
         {identities === null && !error && !notReady && reconnecting == null && (
           <div style={{ color: "var(--hg-fg-3)", fontSize: 11 }}>loading identities…</div>
         )}
@@ -634,8 +854,6 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
             {view === "graph" && (
               <PeopleGraphView
                 identities={identities}
-                facesByPerson={facesByPerson}
-                frigateUrl={faceImageBaseUrl}
                 endpoint={endpoint}
                 avatarPresence={avatarPresence}
                 avatarBlobUrls={avatarBlobUrls}
@@ -651,16 +869,16 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
                 onRowClick={(id) => setSelectedUuid(id.uuid)}
               />
             )}
-            {view === "queue" && (
+            {view === "queue" && !legacyMutationsReadOnly && (
               <PeopleQueueView
                 identities={identities}
                 facesByPerson={facesByPerson}
-                frigateUrl={faceImageBaseUrl}
                 facesStatus={facesStatus}
                 frigateDiagnostics={frigateDiagnostics}
                 sim={sim}
                 endpoint={endpoint}
                 token={token}
+                operationScopeKey={credentialScopeKey}
                 avatarPresence={avatarPresence}
                 avatarBlobUrls={avatarBlobUrls}
                 onSaved={refresh}
@@ -682,14 +900,14 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
         identityUuid={selectedUuid}
         endpoint={endpoint}
         token={token}
+        operationScopeKey={credentialScopeKey}
         sim={sim}
-        facesByPerson={facesByPerson}
-        frigateUrl={faceImageBaseUrl}
         avatarPresence={avatarPresence}
         avatarBlobUrls={avatarBlobUrls}
         onAvatarChanged={(uuid, present) => refreshAvatars(uuid, present)}
         onClose={() => setSelectedUuid(null)}
         onChanged={refresh}
+        readOnly={legacyMutationsReadOnly}
       />
     </div>
   );
@@ -698,40 +916,10 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
     : overlay;
 }
 
-function normalizePeopleEndpoint(endpoint) {
-  return String(endpoint || "").replace(/\/+$/, "");
-}
-
-function writePeopleDataCache(endpoint, payload, facesByPerson) {
-  if (!payload || !Array.isArray(payload.identities)) return null;
-  const cache = {
-    endpoint: normalizePeopleEndpoint(endpoint),
-    cachedAt: Date.now(),
-    identities: payload.identities || [],
-    relationships: payload.relationships || [],
-    frigateUrl: payload.frigate_url || null,
-    facesByPerson: facesByPerson || null,
-    frigateDiagnostics: {
-      seedReport: payload.frigate_seed_report || null,
-      capabilities: payload.frigate_capabilities || null,
-    },
-  };
-  window.__HOME_PEOPLE_DATA_CACHE = cache;
-  return cache;
-}
-
-function readPeopleDataCache(endpoint, maxAgeMs = 5 * 60 * 1000) {
-  const cache = window.__HOME_PEOPLE_DATA_CACHE;
-  if (!cache) return null;
-  if (cache.endpoint !== normalizePeopleEndpoint(endpoint)) return null;
-  if (!cache.cachedAt || Date.now() - cache.cachedAt > maxAgeMs) return null;
-  return cache;
-}
-
 /* ─────────────────────────────────────────────────────────────────────
  * Sub-component: PeopleGraphView — radial relationship visualization
  * ──────────────────────────────────────────────────────────────────── */
-function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl, endpoint, avatarPresence, avatarBlobUrls, onNodeClick }) {
+function PeopleGraphView({ identities, relationships, endpoint, avatarPresence, avatarBlobUrls, onNodeClick }) {
   const H = (typeof window !== "undefined" && window.HomePeopleHelpers) || null;
   const peopleViewport = usePeopleViewport();
   const isMobile = peopleViewport.mobile;
@@ -1037,17 +1225,8 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
     ? layout.find((n) => n.uuid === hoveredUuid)
     : null;
   const hoveringCenter = !!hoveredNode && hoveredNode.ring === 0;
-  // Addendum 24 Phase 2: tooltip height bumps when face thumbnails
-  // are available for the hovered identity. The placement helper
-  // needs the actual height to avoid clipping near viewport edges.
-  const hoveredFaceUrls = useMemo(() => {
-    if (!hoveredNode || !hoveredNode.identity) return { count: 0, urls: [] };
-    if (!H || !H.frigateFaceCropUrls) return { count: 0, urls: [] };
-    return H.frigateFaceCropUrls(facesByPerson, hoveredNode.identity, frigateUrl);
-  }, [hoveredNode, facesByPerson, frigateUrl, H]);
   const TOOLTIP_BASE_H = 70;
-  const TOOLTIP_THUMB_H = 40;  // thumb row 32px + 8px pad
-  const tooltipH = TOOLTIP_BASE_H + (hoveredFaceUrls.count > 0 ? TOOLTIP_THUMB_H : 0);
+  const tooltipH = TOOLTIP_BASE_H;
   const tooltipPos = useMemo(() => {
     if (!hoveredNode || !H || !H.tooltipPlacement) return null;
     return H.tooltipPlacement(hoveredNode, VIEW_HALF, layout, { tooltipH });
@@ -1336,7 +1515,6 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
           const id = hoveredNode.identity;
           const tw = 180;
           const th = tooltipH;
-          const hasThumbs = hoveredFaceUrls.count > 0;
           const lines = [];
           const sub = id.relationship_subrole;
           const relLine = sub
@@ -1350,14 +1528,7 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
           if (id.is_silent)  flags.push("silent");
           if (id.is_archived) flags.push("archived");
           if (flags.length) lines.push(flags.join(" · "));
-          // "click to edit" bottom-right anchor when no thumbs;
-          // thumbs occupy the bottom row otherwise.
-          const editHintY = hasThumbs ? 60 : (th - 8);
-          // Thumb row: up to 4 32px thumbs, 6px gap, anchored bottom
-          const thumbSize = 32;
-          const thumbGap = 6;
-          const thumbY = th - thumbSize - 4;
-          const visibleThumbs = hoveredFaceUrls.urls.slice(0, 4);
+          const editHintY = th - 8;
           return (
             <g
               transform={`translate(${tooltipPos.x}, ${tooltipPos.y})`}
@@ -1388,16 +1559,6 @@ function PeopleGraphView({ identities, relationships, facesByPerson, frigateUrl,
                   letterSpacing="0.06em"
                   fill="var(--hg-fg-3)"
                 >{line.toUpperCase()}</text>
-              ))}
-              {/* Addendum 24 Phase 2: thumbnail row */}
-              {hasThumbs && visibleThumbs.map((u, i) => (
-                <image
-                  key={`tt-thumb-${i}`}
-                  href={u}
-                  x={10 + i * (thumbSize + thumbGap)} y={thumbY}
-                  width={thumbSize} height={thumbSize}
-                  preserveAspectRatio="xMidYMid slice"
-                />
               ))}
               <text
                 x={tw - 10} y={editHintY}
@@ -1542,11 +1703,14 @@ const REL_TYPE_OPTIONS = [
  * save; on success, the parent refreshes the list and this card
  * disappears (because the identity is no longer relationship_type=unknown).
  * ──────────────────────────────────────────────────────────────────── */
-function PeopleQueueCard({ identity, endpoint, token, sim, avatarBlobUrls, onSaved }) {
+function PeopleQueueCard({ identity, endpoint, token, operationScopeKey, sim, avatarBlobUrls, onSaved }) {
   const [name, setName] = useState(identity.display_name);
   const [rel, setRel] = useState(identity.relationship_type);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const beginOperation = usePeopleOperationGuard(
+    `${operationScopeKey}:queue-identity:${identity.uuid}`,
+  );
 
   const frigateAlias = (identity.aliases || []).find((a) => a.kind === "frigate_name");
   // Parent-fetched blob URL (handles auth). Null when no avatar set.
@@ -1560,11 +1724,13 @@ function PeopleQueueCard({ identity, endpoint, token, sim, avatarBlobUrls, onSav
       setError("name required");
       return;
     }
+    const operation = beginOperation("save");
     setSaving(true);
     try {
       if (sim?.active) {
         // In sim mode, no PATCH — just fake the save so the UI updates.
         await new Promise((r) => setTimeout(r, 250));
+        if (!operation.isCurrent()) return;
         onSaved?.({ uuid: identity.uuid, display_name: name.trim(), relationship_type: rel });
         return;
       }
@@ -1580,22 +1746,28 @@ function PeopleQueueCard({ identity, endpoint, token, sim, avatarBlobUrls, onSav
           relationship_type: rel,
           expected_version: identity.version,
         }),
+        signal: operation.signal,
       });
+      if (!operation.isCurrent()) return;
       if (!resp.ok) {
         const body = await resp.text().catch(() => "");
+        if (!operation.isCurrent()) return;
         setError(`HTTP ${resp.status}: ${body.slice(0, 100)}`);
         return;
       }
       const result = await resp.json();
+      if (!operation.isCurrent()) return;
       if (result.error) {
         setError(result.error);
         return;
       }
       onSaved?.({ uuid: identity.uuid, display_name: name.trim(), relationship_type: rel });
     } catch (e) {
+      if (peopleOperationAborted(e, operation)) return;
       setError(`network error: ${e.message || e}`);
     } finally {
-      setSaving(false);
+      if (operation.isCurrent()) setSaving(false);
+      operation.finish();
     }
   }
 
@@ -1724,12 +1896,17 @@ function unlinkedFaceBuckets(facesByPerson, identities) {
     for (const name of identityFrigateNames(identity)) linked.add(name);
   }
   return Object.entries(facesByPerson)
-    .filter(([name, files]) => {
+    .filter(([name, captureCount]) => {
       const key = String(name || "").trim().toLowerCase();
-      return key && !linked.has(key) && Array.isArray(files) && files.length > 0;
+      return key
+        && !linked.has(key)
+        && Number.isInteger(captureCount)
+        && captureCount > 0;
     })
-    .map(([name, files]) => ({ name, files }))
-    .sort((a, b) => b.files.length - a.files.length || a.name.localeCompare(b.name));
+    .map(([name, captureCount]) => ({ name, captureCount }))
+    .sort((a, b) => (
+      b.captureCount - a.captureCount || a.name.localeCompare(b.name)
+    ));
 }
 
 function peopleQueueDiagnostics({ identities, facesByPerson, facesStatus, frigateDiagnostics }) {
@@ -1741,11 +1918,13 @@ function peopleQueueDiagnostics({ identities, facesByPerson, facesStatus, frigat
   }
   const buckets = facesByPerson && typeof facesByPerson === "object"
     ? Object.entries(facesByPerson)
-      .filter(([, files]) => Array.isArray(files))
-      .map(([name, files]) => ({
+      .filter(([, captureCount]) => (
+        Number.isInteger(captureCount) && captureCount >= 0
+      ))
+      .map(([name, captureCount]) => ({
         name,
         key: String(name || "").trim().toLowerCase(),
-        count: files.length,
+        count: captureCount,
         linked: linkedNames.has(String(name || "").trim().toLowerCase()),
       }))
     : [];
@@ -1801,16 +1980,14 @@ function QueueStat({ label, value, tone = "normal" }) {
   );
 }
 
-function UnlinkedFaceBucketCard({ bucket, frigateUrl, endpoint, token, sim, onSaved }) {
+function UnlinkedFaceBucketCard({ bucket, endpoint, token, operationScopeKey, sim, onSaved }) {
   const [name, setName] = useState(bucket.name);
   const [rel, setRel] = useState("unknown");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
-  const base = String(frigateUrl || "").replace(/\/+$/, "");
-  const folder = encodeURIComponent(bucket.name);
-  const urls = base
-    ? bucket.files.slice(0, 6).map((f) => `${base}/clips/faces/${folder}/${encodeURIComponent(f)}`)
-    : [];
+  const beginOperation = usePeopleOperationGuard(
+    `${operationScopeKey}:unlinked-face:${bucket.name}`,
+  );
 
   async function createLinkedIdentity(mode = "identity") {
     setError(null);
@@ -1820,10 +1997,12 @@ function UnlinkedFaceBucketCard({ bucket, frigateUrl, endpoint, token, sim, onSa
       setError("name required");
       return;
     }
+    const operation = beginOperation("create");
     setSaving(true);
     try {
       if (sim?.active) {
         await new Promise((r) => setTimeout(r, 250));
+        if (!operation.isCurrent()) return;
         onSaved?.({
           display_name: displayName,
           relationship_type: relationshipType,
@@ -1847,22 +2026,28 @@ function UnlinkedFaceBucketCard({ bucket, frigateUrl, endpoint, token, sim, onSa
           frigate_person_name: bucket.name,
           actor: "people_queue",
         }),
+        signal: operation.signal,
       });
+      if (!operation.isCurrent()) return;
       if (!resp.ok) {
         const body = await resp.text().catch(() => "");
+        if (!operation.isCurrent()) return;
         setError(`HTTP ${resp.status}: ${body.slice(0, 120)}`);
         return;
       }
       const result = await resp.json();
+      if (!operation.isCurrent()) return;
       if (result.error) {
         setError(result.error);
         return;
       }
       onSaved?.(result);
     } catch (e) {
+      if (peopleOperationAborted(e, operation)) return;
       setError(`network error: ${e.message || e}`);
     } finally {
-      setSaving(false);
+      if (operation.isCurrent()) setSaving(false);
+      operation.finish();
     }
   }
 
@@ -1885,32 +2070,12 @@ function UnlinkedFaceBucketCard({ bucket, frigateUrl, endpoint, token, sim, onSa
         color: "var(--hg-warn)",
       }}>
         <span>unlinked face bucket</span>
-        <span style={{ marginLeft: "auto", color: "var(--hg-fg-3)" }}>{bucket.files.length} captures</span>
+        <span style={{ marginLeft: "auto", color: "var(--hg-fg-3)" }}>{bucket.captureCount} captures</span>
       </div>
       <div style={{ fontSize: 16, color: "var(--hg-fg-0)" }}>{bucket.name}</div>
-      {urls.length > 0 && (
-        <div style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-          gap: 6,
-        }}>
-          {urls.map((url) => (
-            <img
-              key={url}
-              src={url}
-              alt=""
-              loading="lazy"
-              style={{
-                width: "100%",
-                aspectRatio: "1 / 1",
-                objectFit: "cover",
-                border: "1px solid var(--hg-border-soft)",
-                background: "var(--hg-bg-0)",
-              }}
-            />
-          ))}
-        </div>
-      )}
+      <div style={{ fontSize: 10, color: "var(--hg-fg-4)" }}>
+        face thumbnails are disabled in the legacy inspector
+      </div>
       <div style={{ fontSize: 11, lineHeight: 1.5, color: "var(--hg-fg-3)" }}>
         Frigate has captures for this bucket, but Home does not have a matching identity alias.
         Name it if this is a real person, or mark it as do not identify if the bucket is junk.
@@ -2002,7 +2167,7 @@ function UnlinkedFaceBucketCard({ bucket, frigateUrl, endpoint, token, sim, onSa
   );
 }
 
-function PeopleQueueView({ identities, facesByPerson, frigateUrl, facesStatus, frigateDiagnostics, sim, endpoint, token, avatarBlobUrls, onSaved }) {
+function PeopleQueueView({ identities, facesByPerson, facesStatus, frigateDiagnostics, sim, endpoint, token, operationScopeKey, avatarBlobUrls, onSaved }) {
   // The queue is everyone tagged 'unknown' — the auto-seed default for
   // Frigate-discovered faces. Once the user assigns a relationship type,
   // the card drops out (next refresh removes it from this filter).
@@ -2141,9 +2306,9 @@ function PeopleQueueView({ identities, facesByPerson, frigateUrl, facesStatus, f
           <UnlinkedFaceBucketCard
             key={bucket.name}
             bucket={bucket}
-            frigateUrl={frigateUrl}
             endpoint={endpoint}
             token={token}
+            operationScopeKey={operationScopeKey}
             sim={sim}
             onSaved={onSaved}
           />
@@ -2154,6 +2319,7 @@ function PeopleQueueView({ identities, facesByPerson, frigateUrl, facesStatus, f
             identity={i}
             endpoint={endpoint}
             token={token}
+            operationScopeKey={operationScopeKey}
             sim={sim}
             avatarBlobUrls={avatarBlobUrls}
             onSaved={onSaved}
@@ -2175,8 +2341,11 @@ function PeopleQueueView({ identities, facesByPerson, frigateUrl, facesStatus, f
  * GET /api/extended_openai_conversation/identity/{uuid} so we don't
  * have to compose from the list endpoint's lighter projection.
  * ──────────────────────────────────────────────────────────────────── */
-function PeopleDetailPanel({ identityUuid, endpoint, token, sim, facesByPerson, frigateUrl, avatarPresence, avatarBlobUrls, onAvatarChanged, onClose, onChanged }) {
-  const [payload, setPayload] = useState(null);
+function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, sim, avatarPresence, avatarBlobUrls, onAvatarChanged, onClose, onChanged, readOnly = false }) {
+  const detailScopeKey =
+    `${operationScopeKey}:detail:${identityUuid || "closed"}`;
+  const payloadScopeRef = useRef(null);
+  const [storedPayload, setPayload] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [dirty, setDirty] = useState(null);   // pending patch object, or null
@@ -2184,13 +2353,24 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, sim, facesByPerson, 
   // Addendum 24 Phase 3: avatar crop modal toggle
   const [showAvatarModal, setShowAvatarModal] = useState(false);
   const H = (typeof window !== "undefined" && window.HomePeopleHelpers) || null;
+  const beginOperation = usePeopleOperationGuard(detailScopeKey);
+  const payload = peoplePrincipalScopedValue(
+    detailScopeKey,
+    payloadScopeRef.current,
+    storedPayload,
+    null,
+  );
 
   // Load detail on mount / when uuid changes
   useEffect(() => {
+    // Clear before any await so a prior principal's detail never remains
+    // visible during credential/endpoint revalidation.
+    payloadScopeRef.current = null;
+    setPayload(null);
     if (!identityUuid) {
-      setPayload(null);
-      return;
+      return undefined;
     }
+    const operation = beginOperation("load");
     setLoading(true);
     setError(null);
     setDirty(null);
@@ -2200,48 +2380,71 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, sim, facesByPerson, 
           // Synthesize a minimal payload from the sim snapshot
           const all = sim.snapshot?.people?.identities || [];
           const found = all.find((i) => i.uuid === identityUuid);
-          setPayload(found ? {
-            identity: found,
-            relationships: [],
-            preferences: [],
-          } : null);
+          if (operation.isCurrent()) {
+            payloadScopeRef.current = detailScopeKey;
+            setPayload(found ? {
+              identity: found,
+              relationships: [],
+              preferences: [],
+            } : null);
+          }
           return;
         }
         const url = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/identity/${identityUuid}`;
         const resp = await window.tauriFetch(url, {
           headers: { Authorization: `Bearer ${token}` },
           cache: "no-store",
+          signal: operation.signal,
         });
+        if (!operation.isCurrent()) return;
         if (!resp.ok) {
           setError(`HTTP ${resp.status}`);
           return;
         }
         const data = await resp.json();
-        setPayload(data);
+        if (operation.isCurrent()) {
+          payloadScopeRef.current = detailScopeKey;
+          setPayload(data);
+        }
       } catch (e) {
-        setError(`network error: ${e.message || e}`);
+        if (!peopleOperationAborted(e, operation)) {
+          setError(`network error: ${e.message || e}`);
+        }
       } finally {
-        setLoading(false);
+        if (operation.isCurrent()) setLoading(false);
+        operation.finish();
       }
     })();
+    return operation.cancel;
     // NOTE: `sim` deliberately omitted from deps — it's an object reference
     // recreated on every parent render, which would cause this effect to
     // fire on every render (re-fetch + setState storm = visible flicker).
     // We use `sim?.active` instead (stable boolean); sim.snapshot is read
     // at call time from the closure.
-  }, [identityUuid, endpoint, token, sim?.active]);
+  }, [
+    identityUuid,
+    endpoint,
+    token,
+    sim?.active,
+    beginOperation,
+    detailScopeKey,
+  ]);
 
   function patch(field, value) {
+    if (readOnly) return;
     setDirty((prev) => ({ ...(prev || {}), [field]: value }));
   }
 
   async function save() {
+    if (readOnly) return;
     if (!dirty || !payload) return;
+    const operation = beginOperation("save");
     setSaving(true);
     setError(null);
     try {
       if (sim?.active) {
         await new Promise((r) => setTimeout(r, 200));
+        if (!operation.isCurrent()) return;
         onChanged?.();
         setDirty(null);
         return;
@@ -2257,13 +2460,17 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, sim, facesByPerson, 
           ...dirty,
           expected_version: payload.identity.version,
         }),
+        signal: operation.signal,
       });
+      if (!operation.isCurrent()) return;
       if (!resp.ok) {
         const t = await resp.text().catch(() => "");
+        if (!operation.isCurrent()) return;
         setError(`HTTP ${resp.status}: ${t.slice(0, 120)}`);
         return;
       }
       const result = await resp.json();
+      if (!operation.isCurrent()) return;
       if (result.error) {
         setError(result.error);
         return;
@@ -2274,25 +2481,38 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, sim, facesByPerson, 
       const r2 = await window.tauriFetch(url, {
         headers: { Authorization: `Bearer ${token}` },
         cache: "no-store",
+        signal: operation.signal,
       });
-      if (r2.ok) setPayload(await r2.json());
+      if (!operation.isCurrent()) return;
+      if (r2.ok) {
+        const nextPayload = await r2.json();
+        if (operation.isCurrent()) {
+          payloadScopeRef.current = detailScopeKey;
+          setPayload(nextPayload);
+        }
+      }
     } catch (e) {
+      if (peopleOperationAborted(e, operation)) return;
       setError(`network error: ${e.message || e}`);
     } finally {
-      setSaving(false);
+      if (operation.isCurrent()) setSaving(false);
+      operation.finish();
     }
   }
 
   async function deletePerson() {
+    if (readOnly) return;
     if (!payload) return;
     if (!window.confirm(`Delete ${payload.identity.display_name}? This removes the identity, all preferences, and queues a delete to Frigate.`)) {
       return;
     }
+    const operation = beginOperation("delete");
     setSaving(true);
     setError(null);
     try {
       if (sim?.active) {
         await new Promise((r) => setTimeout(r, 200));
+        if (!operation.isCurrent()) return;
         onChanged?.();
         onClose?.();
         return;
@@ -2301,18 +2521,23 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, sim, facesByPerson, 
       const resp = await window.tauriFetch(url, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
+        signal: operation.signal,
       });
+      if (!operation.isCurrent()) return;
       if (!resp.ok) {
         const t = await resp.text().catch(() => "");
+        if (!operation.isCurrent()) return;
         setError(`HTTP ${resp.status}: ${t.slice(0, 120)}`);
         return;
       }
       onChanged?.();
       onClose?.();
     } catch (e) {
+      if (peopleOperationAborted(e, operation)) return;
       setError(`network error: ${e.message || e}`);
     } finally {
-      setSaving(false);
+      if (operation.isCurrent()) setSaving(false);
+      operation.finish();
     }
   }
 
@@ -2370,6 +2595,13 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, sim, facesByPerson, 
             fontSize: 9, letterSpacing: "0.12em", color: "var(--hg-fg-4)",
           }}>v{ident.version}</span>
         )}
+        {readOnly && (
+          <span style={{
+            marginLeft: ident ? 8 : "auto",
+            fontSize: 8, letterSpacing: "0.12em",
+            color: "var(--hg-fg-3)", textTransform: "uppercase",
+          }}>legacy read-only · cutover pending</span>
+        )}
       </div>
 
       {loading && (
@@ -2424,18 +2656,18 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, sim, facesByPerson, 
             })()}
             <button
               onClick={() => setShowAvatarModal(true)}
-              disabled={sim?.active}
+              disabled={sim?.active || readOnly}
               className="hg-focusable"
-              title={sim?.active ? "avatar upload disabled in sim mode" : "edit avatar"}
+              title={readOnly ? "legacy identity is read-only" : (sim?.active ? "avatar upload disabled in sim mode" : "edit avatar")}
               style={{
                 background: "transparent",
                 border: "1px solid var(--hg-border-soft)",
-                color: sim?.active ? "var(--hg-fg-4)" : "var(--hg-fg-2)",
+                color: (sim?.active || readOnly) ? "var(--hg-fg-4)" : "var(--hg-fg-2)",
                 padding: "6px 10px",
                 fontFamily: PEOPLE_FONT_MONO,
                 fontSize: 10, letterSpacing: "0.16em",
                 textTransform: "lowercase",
-                cursor: sim?.active ? "default" : "pointer",
+                cursor: (sim?.active || readOnly) ? "default" : "pointer",
               }}
             >{(avatarBlobUrls && avatarBlobUrls[merged.uuid]) || (avatarPresence && avatarPresence[merged.uuid]) ? "change avatar" : "set avatar"}</button>
           </div>
@@ -2452,7 +2684,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, sim, facesByPerson, 
               value={merged.display_name || ""}
               onChange={(e) => patch("display_name", e.target.value)}
               className="hg-focusable"
-              disabled={saving}
+              disabled={saving || readOnly}
               style={{
                 width: "100%",
                 background: "var(--hg-input-bg)",
@@ -2476,7 +2708,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, sim, facesByPerson, 
               value={merged.relationship_type || "unknown"}
               onChange={(e) => patch("relationship_type", e.target.value)}
               className="hg-focusable"
-              disabled={saving}
+              disabled={saving || readOnly}
               style={{
                 width: "100%",
                 background: "var(--hg-input-bg)",
@@ -2486,7 +2718,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, sim, facesByPerson, 
                 fontSize: 11, color: "var(--hg-fg-1)",
                 letterSpacing: "0.04em",
                 outline: "none",
-                cursor: saving ? "default" : "pointer",
+                cursor: (saving || readOnly) ? "default" : "pointer",
               }}
             >
               {REL_TYPE_OPTIONS.map((o) => (
@@ -2508,7 +2740,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, sim, facesByPerson, 
               onChange={(e) => patch("relationship_subrole", e.target.value || null)}
               placeholder="e.g. sibling, parent, contractor"
               className="hg-focusable"
-              disabled={saving}
+              disabled={saving || readOnly}
               style={{
                 width: "100%",
                 background: "var(--hg-input-bg)",
@@ -2534,7 +2766,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, sim, facesByPerson, 
               onChange={(e) => patch("pronouns", e.target.value || null)}
               placeholder="they/them"
               className="hg-focusable"
-              disabled={saving}
+              disabled={saving || readOnly}
               style={{
                 width: "100%",
                 background: "var(--hg-input-bg)",
@@ -2588,7 +2820,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, sim, facesByPerson, 
             <textarea
               value={merged.notes || ""}
               onChange={(e) => patch("notes", e.target.value || null)}
-              disabled={saving}
+              disabled={saving || readOnly}
               rows={3}
               className="hg-focusable"
               style={{
@@ -2626,7 +2858,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, sim, facesByPerson, 
                     type="checkbox"
                     checked={!!merged[f.key]}
                     onChange={(e) => patch(f.key, e.target.checked)}
-                    disabled={saving}
+                    disabled={saving || readOnly}
                   />
                   <span>{f.label}</span>
                 </label>
@@ -2669,19 +2901,16 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, sim, facesByPerson, 
             preferences={payload.preferences || []}
             endpoint={endpoint}
             token={token}
+            operationScopeKey={operationScopeKey}
             sim={sim}
             onChanged={onChanged}
+            readOnly={readOnly}
           />
 
-          {/* Addendum 24: Frigate face captures gallery + lightbox */}
-          <FaceCapturesSection
-            identity={payload.identity}
-            facesByPerson={facesByPerson}
-            frigateUrl={frigateUrl}
-          />
+          <FaceCapturesSection />
 
           {/* Save + delete row */}
-          <div style={{
+          {!readOnly && <div style={{
             display: "flex", gap: 8, marginTop: 6,
             paddingTop: 14,
             borderTop: "1px solid var(--hg-border-soft)",
@@ -2715,7 +2944,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, sim, facesByPerson, 
                 cursor: saving ? "default" : "pointer",
               }}
             >delete</button>
-          </div>
+          </div>}
         </div>
       )}
 
@@ -2727,11 +2956,12 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, sim, facesByPerson, 
       `}</style>
 
       {/* Addendum 24 Phase 3: avatar crop modal — portal-mounted */}
-      {showAvatarModal && ident && (
+      {showAvatarModal && ident && !readOnly && (
         <AvatarCropModal
           identity={ident}
           endpoint={endpoint}
           token={token}
+          operationScopeKey={operationScopeKey}
           onClose={() => setShowAvatarModal(false)}
           onUploaded={(uuid, present) => onAvatarChanged?.(uuid, present)}
         />
@@ -2746,11 +2976,9 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, sim, facesByPerson, 
 /* ─────────────────────────────────────────────────────────────────────
  * Sub-component: FaceCapturesSection (Addendum 24 Phase 1b)
  *
- * Shows the full grid of Frigate face crops for this identity, with
- * a click-to-lightbox preview. Data sourced from the parent's
- * `facesByPerson` snapshot of GET /api/faces (fetched once per
- * overlay open). Image bytes load directly from Frigate's
- * /clips/faces/<frigate_name>/<file>.webp endpoint.
+ * Face thumbnails are deliberately absent from the legacy inspector.
+ * Reintroducing them requires a typed, authenticated byte endpoint with
+ * no-store responses and explicit blob URL revocation.
  * ──────────────────────────────────────────────────────────────────── */
 
 /* ─────────────────────────────────────────────────────────────────────
@@ -2774,7 +3002,7 @@ const AVATAR_JPEG_QUALITY = 0.85;
 const AVATAR_VIEWPORT_PX = 320;          // size of the in-modal canvas
 const AVATAR_MAX_INPUT_BYTES = 12 * 1024 * 1024; // pre-resize input cap
 
-function AvatarCropModal({ identity, endpoint, token, onClose, onUploaded }) {
+function AvatarCropModal({ identity, endpoint, token, operationScopeKey, onClose, onUploaded }) {
   const fileRef = useRef(null);
   const canvasRef = useRef(null);
   const imgRef = useRef(null);
@@ -2786,6 +3014,9 @@ function AvatarCropModal({ identity, endpoint, token, onClose, onUploaded }) {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [hasImage, setHasImage] = useState(false);
+  const beginOperation = usePeopleOperationGuard(
+    `${operationScopeKey}:avatar:${identity.uuid}`,
+  );
 
   // Esc closes
   useEffect(() => {
@@ -2865,18 +3096,28 @@ function AvatarCropModal({ identity, endpoint, token, onClose, onUploaded }) {
     setHasImage(false);
     setZoom(1.0);
     setOffset({ x: 0, y: 0 });
+    const operation = beginOperation("file-read");
     const reader = new FileReader();
     reader.onload = (ev) => {
+      if (!operation.isCurrent()) return;
       const img = new Image();
       img.onload = () => {
+        if (!operation.isCurrent()) return;
         imgRef.current = img;
         setImgLoaded(true);
         setHasImage(true);
+        operation.finish();
       };
-      img.onerror = () => setError("failed to decode image");
+      img.onerror = () => {
+        if (operation.isCurrent()) setError("failed to decode image");
+        operation.finish();
+      };
       img.src = ev.target.result;
     };
-    reader.onerror = () => setError("failed to read file");
+    reader.onerror = () => {
+      if (operation.isCurrent()) setError("failed to read file");
+      operation.finish();
+    };
     reader.readAsDataURL(file);
   }
 
@@ -2897,6 +3138,7 @@ function AvatarCropModal({ identity, endpoint, token, onClose, onUploaded }) {
 
   async function save() {
     if (!hasImage) return;
+    const operation = beginOperation("save");
     setError(null);
     setBusy(true);
     try {
@@ -2916,6 +3158,7 @@ function AvatarCropModal({ identity, endpoint, token, onClose, onUploaded }) {
           AVATAR_JPEG_QUALITY,
         );
       });
+      if (!operation.isCurrent()) return;
       // POST as raw body (AR24-6: simpler than multipart; AvatarView
       // accepts both shapes).
       const url = `${endpoint.replace(/\/+$/, "")}/api/extended_openai_conversation/identity/${encodeURIComponent(identity.uuid)}/avatar`;
@@ -2926,25 +3169,32 @@ function AvatarCropModal({ identity, endpoint, token, onClose, onUploaded }) {
           "Content-Type": "image/jpeg",
         },
         body: blob,
+        signal: operation.signal,
       });
+      if (!operation.isCurrent()) return;
       if (!resp.ok) {
         const body = await resp.text().catch(() => "");
+        if (!operation.isCurrent()) return;
         setError(`HTTP ${resp.status}: ${body.slice(0, 120)}`);
         return;
       }
       const result = await resp.json().catch(() => ({}));
+      if (!operation.isCurrent()) return;
       if (result.error) { setError(result.error); return; }
       // present=true — POST succeeded, file is on disk now.
       onUploaded?.(identity.uuid, true);
       onClose();
     } catch (e) {
+      if (peopleOperationAborted(e, operation)) return;
       setError(`upload failed: ${e.message || e}`);
     } finally {
-      setBusy(false);
+      if (operation.isCurrent()) setBusy(false);
+      operation.finish();
     }
   }
 
   async function deleteAvatar() {
+    const operation = beginOperation("delete");
     setError(null);
     setBusy(true);
     try {
@@ -2952,7 +3202,9 @@ function AvatarCropModal({ identity, endpoint, token, onClose, onUploaded }) {
       const resp = await window.tauriFetch(url, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
+        signal: operation.signal,
       });
+      if (!operation.isCurrent()) return;
       if (!resp.ok && resp.status !== 404) {
         setError(`HTTP ${resp.status}`);
         return;
@@ -2961,9 +3213,11 @@ function AvatarCropModal({ identity, endpoint, token, onClose, onUploaded }) {
       onUploaded?.(identity.uuid, false);
       onClose();
     } catch (e) {
+      if (peopleOperationAborted(e, operation)) return;
       setError(`delete failed: ${e.message || e}`);
     } finally {
-      setBusy(false);
+      if (operation.isCurrent()) setBusy(false);
+      operation.finish();
     }
   }
 
@@ -3137,26 +3391,7 @@ function AvatarCropModal({ identity, endpoint, token, onClose, onUploaded }) {
     : modal;
 }
 
-function FaceCapturesSection({ identity, facesByPerson, frigateUrl }) {
-  const H = (typeof window !== "undefined" && window.HomePeopleHelpers) || null;
-  const [lightboxUrl, setLightboxUrl] = useState(null);
-  const result = useMemo(() => {
-    if (!H || !H.frigateFaceCropUrls) return { count: 0, urls: [] };
-    return H.frigateFaceCropUrls(facesByPerson, identity, frigateUrl);
-  }, [H, facesByPerson, identity, frigateUrl]);
-
-  // Esc closes lightbox
-  useEffect(() => {
-    if (!lightboxUrl) return undefined;
-    const onKey = (e) => { if (e.key === "Escape") setLightboxUrl(null); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [lightboxUrl]);
-
-  const MAX_VISIBLE = 24;
-  const visible = result.urls.slice(0, MAX_VISIBLE);
-  const overflow = Math.max(0, result.count - MAX_VISIBLE);
-
+function FaceCapturesSection() {
   return (
     <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid var(--hg-border-soft)" }}>
       <label style={{
@@ -3164,88 +3399,10 @@ function FaceCapturesSection({ identity, facesByPerson, frigateUrl }) {
         letterSpacing: "0.16em", textTransform: "lowercase",
         color: "var(--hg-fg-3)",
         display: "block", marginBottom: 8,
-      }}>face captures ({result.count})</label>
-
-      {result.count === 0 && (
-        <div style={{ fontSize: 11, color: "var(--hg-fg-4)", fontStyle: "italic" }}>
-          {!frigateUrl
-            ? "Frigate URL not available — connect or reload."
-            : !facesByPerson
-              ? "Frigate face library unreachable."
-              : "No face captures yet for this identity."}
-        </div>
-      )}
-
-      {result.count > 0 && (
-        <div style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(4, 1fr)",
-          gap: 6,
-        }}>
-          {visible.map((u) => (
-            <button
-              key={u}
-              onClick={() => setLightboxUrl(u)}
-              className="hg-focusable"
-              style={{
-                padding: 0, border: "1px solid var(--hg-border-soft)",
-                background: "var(--hg-bg-0)", cursor: "pointer",
-                aspectRatio: "1 / 1", overflow: "hidden",
-                borderRadius: 3,
-                transition: "border-color 160ms ease",
-              }}
-              onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--hg-fg-2)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--hg-border-soft)"; }}
-              aria-label="View face capture full size"
-            >
-              <img
-                src={u}
-                alt=""
-                loading="lazy"
-                style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-              />
-            </button>
-          ))}
-          {overflow > 0 && (
-            <div style={{
-              aspectRatio: "1 / 1", display: "flex",
-              alignItems: "center", justifyContent: "center",
-              border: "1px dashed var(--hg-border-soft)", borderRadius: 3,
-              fontFamily: PEOPLE_FONT_MONO, fontSize: 10,
-              color: "var(--hg-fg-3)",
-            }}>+{overflow}</div>
-          )}
-        </div>
-      )}
-
-      {/* Lightbox — fullscreen overlay; click anywhere or Esc to close */}
-      {lightboxUrl && ReactDOM.createPortal(
-        <div
-          onClick={() => setLightboxUrl(null)}
-          role="dialog"
-          aria-modal="true"
-          aria-label="Face capture preview"
-          style={{
-            position: "fixed", inset: 0,
-            background: "rgba(0,0,0,0.85)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            zIndex: 2000, cursor: "zoom-out",
-            animation: "people-fade-in 160ms ease-out",
-          }}
-        >
-          <img
-            src={lightboxUrl}
-            alt="Face capture"
-            style={{
-              maxWidth: "90vw", maxHeight: "90vh",
-              imageRendering: "auto",
-              boxShadow: "0 0 40px rgba(0,0,0,0.6)",
-            }}
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>,
-        document.body,
-      )}
+      }}>face captures</label>
+      <div style={{ fontSize: 11, color: "var(--hg-fg-4)", fontStyle: "italic" }}>
+        Face thumbnails are disabled in the legacy inspector during cutover.
+      </div>
     </div>
   );
 }
@@ -3273,13 +3430,16 @@ const COMMON_PREF_KEYS = [
   "notes",                // string (freeform)
 ];
 
-function PreferencesSection({ identityUuid, preferences, endpoint, token, sim, onChanged }) {
+function PreferencesSection({ identityUuid, preferences, endpoint, token, operationScopeKey, sim, onChanged, readOnly = false }) {
   const [adding, setAdding] = useState(false);
   const [newKey, setNewKey] = useState("");
   const [newValue, setNewValue] = useState("");
   const [newScope, setNewScope] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const beginOperation = usePeopleOperationGuard(
+    `${operationScopeKey}:preferences:${identityUuid}`,
+  );
 
   function reset() {
     setNewKey(""); setNewValue(""); setNewScope("");
@@ -3287,6 +3447,7 @@ function PreferencesSection({ identityUuid, preferences, endpoint, token, sim, o
   }
 
   async function save() {
+    if (readOnly) return;
     setError(null);
     if (!newKey.trim()) { setError("key required"); return; }
     if (!newValue) { setError("value required"); return; }
@@ -3307,10 +3468,12 @@ function PreferencesSection({ identityUuid, preferences, endpoint, token, sim, o
         return;
       }
     }
+    const operation = beginOperation("save");
     setSaving(true);
     try {
       if (sim?.active) {
         await new Promise((r) => setTimeout(r, 200));
+        if (!operation.isCurrent()) return;
         onChanged?.(); reset();
         return;
       }
@@ -3324,19 +3487,25 @@ function PreferencesSection({ identityUuid, preferences, endpoint, token, sim, o
           scope: parsedScope,
           source: "manual",
         }),
+        signal: operation.signal,
       });
+      if (!operation.isCurrent()) return;
       if (!resp.ok) {
         const t = await resp.text().catch(() => "");
+        if (!operation.isCurrent()) return;
         setError(`HTTP ${resp.status}: ${t.slice(0, 100)}`);
         return;
       }
       const result = await resp.json();
+      if (!operation.isCurrent()) return;
       if (result.error) { setError(result.error); return; }
       onChanged?.(); reset();
     } catch (e) {
+      if (peopleOperationAborted(e, operation)) return;
       setError(`network error: ${e.message || e}`);
     } finally {
-      setSaving(false);
+      if (operation.isCurrent()) setSaving(false);
+      operation.finish();
     }
   }
 
@@ -3350,7 +3519,7 @@ function PreferencesSection({ identityUuid, preferences, endpoint, token, sim, o
           textTransform: "uppercase", color: "var(--hg-fg-3)",
         }}>preferences ({preferences.length})</label>
         <span style={{ marginLeft: "auto" }}>
-          {!adding && (
+          {!adding && !readOnly && (
             <button
               onClick={() => setAdding(true)}
               className="hg-focusable"
@@ -3402,7 +3571,7 @@ function PreferencesSection({ identityUuid, preferences, endpoint, token, sim, o
         </ul>
       )}
 
-      {adding && (
+      {adding && !readOnly && (
         <div style={{
           marginTop: 10, padding: 12,
           background: "var(--hg-bg-2)",
@@ -3511,95 +3680,28 @@ function PreferencesSection({ identityUuid, preferences, endpoint, token, sim, o
   );
 }
 
-async function prewarmPeopleData({ endpoint, token, signal, maxAvatars = 8, maxFaceThumbs = 8 } = {}) {
-  const base = String(endpoint || "").replace(/\/+$/, "");
-  if (!base || !token) return { ok: false, skipped: true, reason: "missing credentials" };
-  const headers = { Authorization: `Bearer ${token}` };
-  const startedAt = Date.now();
-  const out = {
-    ok: true,
-    identities: 0,
-    relationships: 0,
-    faceBuckets: 0,
-    avatarsChecked: 0,
-    avatarsWarmed: 0,
-    faceThumbsWarmed: 0,
-    durationMs: 0,
+async function prewarmPeopleData() {
+  // Sensitive identity, face, and avatar content is fetched only while the
+  // HA-admin People surface is open. Prewarming would recreate a cross-session
+  // cache before current authorization is known.
+  try { delete window.__HOME_PEOPLE_DATA_CACHE; } catch {}
+  return {
+    ok: false,
+    skipped: true,
+    reason: "sensitive_people_cache_disabled",
   };
-  const fetcher = (typeof window !== "undefined" && window.tauriFetch) || fetch;
-
-  const jsonFetch = async (url) => {
-    const resp = await fetcher(url, { headers, cache: "no-store", signal });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    return resp.json();
-  };
-
-  const warmImage = async (url, authed = false) => {
-    try {
-      const resp = await fetcher(url, {
-        headers: authed ? headers : undefined,
-        cache: "force-cache",
-        signal,
-      });
-      if (!resp.ok) return false;
-      await resp.blob();
-      return true;
-    } catch (_) {
-      return false;
-    }
-  };
-
-  const payload = await jsonFetch(`${base}/api/extended_openai_conversation/identities`);
-  const identities = Array.isArray(payload?.identities) ? payload.identities : [];
-  out.identities = identities.length;
-  out.relationships = Array.isArray(payload?.relationships) ? payload.relationships.length : 0;
-
-  let facesByPerson = null;
-  if (payload?.frigate_url) {
-    try {
-      facesByPerson = await jsonFetch(`${base}/api/extended_openai_conversation/frigate_proxy?path=api/faces`);
-      out.faceBuckets = facesByPerson && typeof facesByPerson === "object" ? Object.keys(facesByPerson).length : 0;
-    } catch (err) {
-      out.facesError = err?.message || String(err);
-    }
-  }
-  writePeopleDataCache(base, payload, facesByPerson);
-
-  for (const identity of identities.slice(0, maxAvatars)) {
-    if (signal?.aborted) break;
-    if (!identity?.uuid) continue;
-    out.avatarsChecked++;
-    const avatarUrl = `${base}/api/extended_openai_conversation/identity/${encodeURIComponent(identity.uuid)}/avatar`;
-    if (await warmImage(avatarUrl, true)) out.avatarsWarmed++;
-  }
-
-  const H = (typeof window !== "undefined" && window.HomePeopleHelpers) || null;
-  const faceBase = payload?.frigate_url ? String(payload.frigate_url).replace(/\/+$/, "") : "";
-  if (H?.frigateFaceCropUrls && facesByPerson && faceBase) {
-    const urls = [];
-    for (const identity of identities) {
-      const result = H.frigateFaceCropUrls(facesByPerson, identity, faceBase);
-      for (const url of result.urls || []) {
-        urls.push(url);
-        if (urls.length >= maxFaceThumbs) break;
-      }
-      if (urls.length >= maxFaceThumbs) break;
-    }
-    for (const url of urls) {
-      if (signal?.aborted) break;
-      if (await warmImage(url, false)) out.faceThumbsWarmed++;
-    }
-  }
-
-  out.durationMs = Date.now() - startedAt;
-  return out;
 }
 
 // Expose to window for home-app.jsx consumption
 window.HomePeoplePrewarm = {
   ...(window.HomePeoplePrewarm || {}),
   start: prewarmPeopleData,
-  readCache: readPeopleDataCache,
-  writeCache: writePeopleDataCache,
+  readCache: () => null,
+  writeCache: () => null,
+  status: () => ({
+    state: "disabled",
+    reason: "sensitive_people_cache_disabled",
+  }),
 };
+try { delete window.__HOME_PEOPLE_DATA_CACHE; } catch {}
 window.HomePeopleOverlay = HomePeopleOverlay;

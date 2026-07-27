@@ -786,6 +786,83 @@ and legacy relationship candidates may enter Core only through the atomic
 review gates are deployed. Until then, keep the finalizer dormant and the live
 deployment pinned to record-only revision 0006a.
 
+### Dormant E4 legacy writer-freeze ceremony
+
+Do not perform this ceremony merely because the installer exists. It is an
+irreversible cutover prerequisite and requires a separately reviewed E4
+activation. Home Assistant must be stopped so the installer can obtain an
+exclusive SQLite lock. From a reviewed checkout, run:
+
+```text
+python3 ha-config/extended_openai_conversation/freeze_legacy_identity_semantics.py \
+  --database /config/extended_openai_conversation/identity.db
+```
+
+The network-free installer opens an existing database in read/write mode (it
+will not create one) and holds the same lifetime OS lock used by the integration.
+It requires a clean WAL checkpoint, exact pinned schema, clean foreign keys,
+zero pending writebacks, and consistent legacy Frigate alias/enrollment links.
+Case-folded recognition-name collisions are rejected even when SQLite would
+otherwise treat the spellings as distinct.
+Before the first fence, it scrubs contentful audit snapshots and conversation
+links, runs `VACUUM` with secure deletion, checkpoints again, and then installs
+the exact generation-2 trigger and marker contract. It performs blocked-write
+probes, post-commit integrity checks, removes clean WAL/SHM/journal sidecars,
+fsyncs the main database and final directory state, and reopens the immutable
+main file read-only without creating a plaintext verification copy.
+Re-running the same verified generation is idempotent. A partial marker,
+missing/modified or extra trigger, schema drift, malformed/noncanonical marker,
+conflicting pending-cutover marker, newer generation, active reader/writer,
+dirty outbox, inconsistent recognition link, hardlinked database/witness,
+residual journal, or failed probe aborts without auto-repair.
+
+Before its first irreversible SQLite mutation, the ceremony atomically writes
+and fsyncs a mode-`0600` witness beside the database:
+`identity.db.e4-cutover-witness`. This witness is deliberately outside SQLite
+and must be preserved independently when restoring `identity.db`. If a crash
+or old-database restore leaves the witness without the exact generation-2
+database fence, normal HA startup and `legacy_migration_only` both fail closed.
+Stop HA and rerun the same ceremony to complete the witness-first state; never
+delete, roll back, or restore an older copy of the witness. A database-only
+backup is therefore not a complete E4 boundary backup.
+
+After the explicit fence, every legacy semantic table and both fence metadata
+rows reject insert, update, delete, and replacement. HA opens that database
+query-only, guards every legacy admin read, and performs a full revalidation
+whenever the database, journal sidecars, or witness fingerprint changes.
+Recognition polling, when separately enabled, writes only the opaque
+Frigate identifier to a separate operational database. It never creates a
+semantic identity, alias, display label, or prompt context; legacy
+`do_not_track`, ignored, and do-not-identify subjects are rejected at ingress.
+The operational database has a random persistent instance marker; every
+operation checks the opened handle and a fresh read-only connection through
+the visible path against the exact marker and schema before mutation.
+The private legacy inspector receives only privacy-filtered bucket names and
+bounded capture counts; crop filenames and crop bytes never cross that route.
+After the physical fence, operational recognition persistence is disabled
+unless the caller supplies a current deterministic Core privacy decision;
+legacy privacy may veto but cannot authorize it. Privacy changes synchronously
+purge newly blocked opaque rows, and every periodic Frigate poll reapplies the
+current policy before network processing, including when the network bridge is
+disabled. Private/silent records remain absent from normal UI, prompts, and
+initiatives.
+
+The HA-admin-only identities response reports boundary state
+`legacy_frozen_pending_cutover`. This means only that the legacy authority is
+frozen: it does **not** promote or claim Home Agent Core authority. The People
+surface has no identity/face cache, suppresses prior-principal data during
+credential changes before effects run, fails read-only while boundary state is
+unknown, and says “legacy read-only · cutover pending.” Caller-provided
+`actor` labels never authorize the pre-fence compatibility path; that narrow
+unique-`me` pronoun edit is derived from the authenticated HA administrator and
+exists only before this explicit ceremony.
+
+The ceremony alone is not an E4 activation receipt. Core promotion still
+requires the reviewed PostgreSQL migration/finalization transaction, privacy
+and erasure checks, operator stop/backup evidence, and the separately signed
+cutover receipt. Until those gates pass, remain
+`legacy_frozen_pending_cutover`.
+
 ## Record-only, shadow, and canary gates
 
 Every fresh deployment starts with `HOME_AGENT_ROLLOUT_MODE=record_only`.

@@ -70,6 +70,7 @@ import logging
 import os
 import re
 import sqlite3
+import stat
 import threading
 import time
 import uuid as _uuid
@@ -77,7 +78,44 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Optional, TYPE_CHECKING
+from typing import Any, Callable, Iterable, Optional, TYPE_CHECKING
+
+try:
+    from .legacy_identity_fence import (
+        EXPECTED_TRIGGER_DIGEST,
+        LEGACY_APPLICATION_FROZEN_UNPROVEN,
+        LEGACY_FROZEN_PENDING_CUTOVER,
+        LegacyIdentityFenceError,
+        LegacyIdentityProcessLock,
+        OBSOLETE_PRE_E4_AUTHORITY_VALUE,
+        SEMANTIC_AUTHORITY_KEY,
+        SEMANTIC_WRITE_FENCE_GENERATION,
+        cutover_witness_path,
+        ensure_cutover_witness,
+        fence_artifacts_present,
+        require_unfenced_schema_meta_contract,
+        scrub_legacy_audit_content,
+        verify_cutover_witness,
+        verify_semantic_write_fence,
+    )
+except ImportError:
+    from legacy_identity_fence import (  # type: ignore[no-redef]
+        EXPECTED_TRIGGER_DIGEST,
+        LEGACY_APPLICATION_FROZEN_UNPROVEN,
+        LEGACY_FROZEN_PENDING_CUTOVER,
+        LegacyIdentityFenceError,
+        LegacyIdentityProcessLock,
+        OBSOLETE_PRE_E4_AUTHORITY_VALUE,
+        SEMANTIC_AUTHORITY_KEY,
+        SEMANTIC_WRITE_FENCE_GENERATION,
+        cutover_witness_path,
+        ensure_cutover_witness,
+        fence_artifacts_present,
+        require_unfenced_schema_meta_contract,
+        scrub_legacy_audit_content,
+        verify_cutover_witness,
+        verify_semantic_write_fence,
+    )
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -87,15 +125,20 @@ LOGGER = logging.getLogger(__name__)
 IDENTITY_STORE_DISABLED_ENV = "EXTENDED_OPENAI_IDENTITY_STORE"
 SEMANTIC_WRITES_MODE_ENV = "EXTENDED_OPENAI_IDENTITY_SEMANTIC_WRITES"
 LEGACY_MIGRATION_MODE = "legacy_migration_only"
-SEMANTIC_AUTHORITY_KEY = "semantic_authority"
-CORE_SEMANTIC_AUTHORITY = "home_agent_core"
 # Temporary, non-authoritative compatibility exception for the production
 # People profile fix. This updates only the legacy self-profile projection and
 # must never be accepted as Core evidence or authority. It is deliberately
 # narrower than the legacy PATCH surface: relationships, names, notes, privacy
 # directives, and HA bindings remain Core authority.
-LEGACY_SELF_PROFILE_EDIT_ACTORS = {"user"}
 LEGACY_SELF_PROFILE_EDIT_FIELDS = {"pronouns"}
+RECOGNITION_PRIVACY_FIELDS = {
+    "do_not_track",
+    "is_ignored",
+    "is_private",
+    "is_silent",
+    "relationship_type",
+    "auto_expire_at",
+}
 
 # Schema version. Bump when columns change; migrations run on open.
 SCHEMA_VERSION = 1
@@ -304,6 +347,51 @@ CREATE INDEX IF NOT EXISTS idx_pending_state ON pending_writes(state);
 CREATE INDEX IF NOT EXISTS idx_pending_created ON pending_writes(created_at);
 """
 
+OPERATIONAL_RECOGNITION_TABLE_SQL = """
+CREATE TABLE operational_recognition_enrollments (
+    frigate_person_name TEXT PRIMARY KEY NOT NULL COLLATE NOCASE
+        CHECK (
+            typeof(frigate_person_name) = 'text'
+            AND length(frigate_person_name) BETWEEN 1 AND 255
+        ),
+    source TEXT NOT NULL DEFAULT 'frigate'
+        CHECK (source = 'frigate'),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)
+"""
+
+OPERATIONAL_STORE_META_TABLE_SQL = """
+CREATE TABLE operational_store_meta (
+    key TEXT PRIMARY KEY NOT NULL
+        CHECK (
+            typeof(key) = 'text'
+            AND key IN ('contract', 'generation', 'instance_id')
+        ),
+    value TEXT NOT NULL CHECK (typeof(value) = 'text')
+)
+"""
+
+OPERATIONAL_STORE_CONTRACT = "home_agent_operational_recognition_v1"
+OPERATIONAL_STORE_GENERATION = "1"
+
+# The only pre-marker schema accepted for the one-time prerelease cleanup.
+OPERATIONAL_RECOGNITION_PRERELEASE_TABLE_SQL = """
+CREATE TABLE operational_recognition_enrollments (
+    frigate_person_name TEXT PRIMARY KEY NOT NULL COLLATE NOCASE,
+    display_label TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'frigate',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)
+"""
+
+OPERATIONAL_RECOGNITION_DDL = (
+    "PRAGMA journal_mode = WAL;\n"
+    f"{OPERATIONAL_RECOGNITION_TABLE_SQL};\n"
+    f"{OPERATIONAL_STORE_META_TABLE_SQL};"
+)
+
 
 # ── Utility ─────────────────────────────────────────────────────────
 
@@ -349,6 +437,14 @@ class IdentityRow:
     updated_at: str = ""
 
 
+@dataclass
+class OperationalRecognitionRow:
+    frigate_person_name: str
+    source: str = "frigate"
+    created_at: str = ""
+    updated_at: str = ""
+
+
 # ── IdentityStore (the API surface) ─────────────────────────────────
 
 
@@ -360,7 +456,13 @@ class IdentityStore:
     Internal lock guards multi-step transactions (AR-9).
     """
 
-    def __init__(self, hass: "HomeAssistant | None" = None, db_path: Optional[str] = None):
+    def __init__(
+        self,
+        hass: "HomeAssistant | None" = None,
+        db_path: Optional[str] = None,
+        operational_db_path: Optional[str] = None,
+        core_recognition_policy: Optional[Callable[[str], str]] = None,
+    ):
         self.hass = hass
         # In HA: /config/extended_openai_conversation/identity.db
         # In pytest: caller passes db_path=":memory:" or a tmp file
@@ -370,13 +472,35 @@ class IdentityStore:
             else:
                 db_path = ":memory:"
         self.db_path = db_path
+        if operational_db_path is None:
+            if db_path == ":memory:":
+                operational_db_path = ":memory:"
+            else:
+                semantic_path = Path(db_path)
+                operational_db_path = str(
+                    semantic_path.with_name(
+                        f"{semantic_path.stem}-recognition{semantic_path.suffix}"
+                    )
+                )
+        self.operational_db_path = operational_db_path
+        self._core_recognition_policy = core_recognition_policy
         self._lock = threading.RLock()
         self._conn: Optional[sqlite3.Connection] = None
+        self._operational_conn: Optional[sqlite3.Connection] = None
+        self._operational_path_identity: Optional[tuple[int, int]] = None
+        self._operational_instance_id: Optional[str] = None
+        self._process_lock: Optional[LegacyIdentityProcessLock] = None
         self._disabled = is_disabled()
         # Fail closed. Legacy semantic writes are permitted only during an
         # explicitly configured pre-cutover migration window, and never after
-        # the durable Core-authority marker has been written.
+        # the explicit legacy freeze marker has been written.
         self._semantic_writes_frozen = True
+        # The E4 fence is stronger than the earlier application-mode marker:
+        # it is an explicit offline ceremony backed by an exact SQLite trigger
+        # contract. Before this marker only, HA administrators retain the
+        # narrow unique-self pronoun compatibility edit.
+        self._semantic_write_fence_installed = False
+        self._fence_verification_fingerprint: Optional[tuple] = None
         # Addendum 16 F-4a: set by the integration when setup() raises so
         # the IdentityListView can report `ready: false` + the Tauri
         # overlay can render a clear banner instead of "empty store".
@@ -400,75 +524,875 @@ class IdentityStore:
         with self._lock:
             if self._conn is not None:
                 return
-            if self.db_path != ":memory:":
-                Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-            self._conn = sqlite3.connect(
-                self.db_path,
-                check_same_thread=False,    # we manage our own locking
-                isolation_level=None,       # autocommit; we use BEGIN IMMEDIATE explicitly
-            )
-            self._conn.row_factory = sqlite3.Row
-            # New deletions/shortening must overwrite freed SQLite payload
-            # bytes. This is defense in depth on top of encrypted storage; it
-            # also lets the one-time historical audit scrub remove overflow
-            # pages instead of merely unlinking them from live rows.
-            self._conn.execute("PRAGMA secure_delete = ON")
-            self._conn.executescript(SCHEMA_DDL)
-            authority_row = self._conn.execute(
-                "SELECT value FROM schema_meta WHERE key = ?",
-                (SEMANTIC_AUTHORITY_KEY,),
-            ).fetchone()
-            requested_mode = os.environ.get(SEMANTIC_WRITES_MODE_ENV, "").strip()
-            if authority_row is not None:
-                self._semantic_writes_frozen = True
-            elif requested_mode == LEGACY_MIGRATION_MODE:
-                self._semantic_writes_frozen = False
-            else:
-                self._semantic_writes_frozen = True
-                self._conn.execute(
-                    "INSERT INTO schema_meta(key, value) VALUES(?, ?)",
-                    (SEMANTIC_AUTHORITY_KEY, CORE_SEMANTIC_AUTHORITY),
+            try:
+                self._validate_database_paths()
+                if self.db_path != ":memory:":
+                    Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+                    self._process_lock = LegacyIdentityProcessLock(
+                        self.db_path
+                    ).acquire()
+                    self._validate_database_paths()
+                existing_file = (
+                    self.db_path != ":memory:"
+                    and Path(self.db_path).is_file()
                 )
-            # Historical audit rows could contain full identity snapshots,
-            # notes, relationship data, and deleted names.  Preserve only the
-            # content-free audit envelope; never read or copy the old JSON.
-            scrubbed = self._conn.execute(
-                "UPDATE change_log SET before_json = NULL, "
-                "after_json = '{\"operation_code\":\"legacy_scrubbed\"}', "
-                "link_conv_id = NULL, link_turn_id = NULL, link_tool_idx = NULL "
-                "WHERE before_json IS NOT NULL OR after_json IS NOT NULL "
-                "OR link_conv_id IS NOT NULL OR link_turn_id IS NOT NULL "
-                "OR link_tool_idx IS NOT NULL"
+                witness_required = (
+                    self.db_path != ":memory:"
+                    and verify_cutover_witness(
+                        self.db_path,
+                        schema_ddl=SCHEMA_DDL,
+                    )
+                )
+                if witness_required and not existing_file:
+                    raise LegacyIdentityFenceError(
+                        "legacy_cutover_witness_requires_fenced_database"
+                    )
+                self._conn = self._open_semantic_connection(
+                    read_only=existing_file
+                )
+                self._validate_database_paths()
+
+                # Probe an existing file through a query-only connection.
+                # A fenced database is therefore never opened writable, even
+                # briefly, before its exact contract is verified.
+                artifacts_present = fence_artifacts_present(self._conn)
+                if witness_required and not artifacts_present:
+                    raise LegacyIdentityFenceError(
+                        "legacy_cutover_witness_requires_fenced_database"
+                    )
+                if artifacts_present:
+                    self._semantic_write_fence_installed = (
+                        verify_semantic_write_fence(
+                            self._conn,
+                            schema_ddl=SCHEMA_DDL,
+                        )
+                    )
+                    if not self._semantic_write_fence_installed:
+                        raise LegacyIdentityFenceError(
+                            "semantic_write_fence_partial"
+                        )
+                    self._semantic_writes_frozen = True
+                    if self.db_path != ":memory:" and not witness_required:
+                        ensure_cutover_witness(
+                            self.db_path,
+                            schema_ddl=SCHEMA_DDL,
+                        )
+                else:
+                    if existing_file:
+                        self._conn.close()
+                        self._conn = self._open_semantic_connection(
+                            read_only=False
+                        )
+                    self._setup_mutable_semantic_store(
+                        new_database=not existing_file
+                    )
+
+                self._setup_operational_recognition_store()
+                self._validate_database_paths()
+                if self._semantic_write_fence_installed:
+                    # Operational setup is a separate SQLite lifecycle. Prove
+                    # path separation and the semantic fence again after it.
+                    self.assert_legacy_read_current()
+                self.setup_error = None
+                LOGGER.info(
+                    "identity_store opened at %s (schema v%d, fenced=%s)",
+                    self.db_path,
+                    SCHEMA_VERSION,
+                    self._semantic_write_fence_installed,
+                )
+            except Exception:
+                self._semantic_writes_frozen = True
+                if self._operational_conn is not None:
+                    self._operational_conn.close()
+                    self._operational_conn = None
+                self._operational_path_identity = None
+                self._operational_instance_id = None
+                if self._conn is not None:
+                    self._conn.close()
+                self._conn = None
+                self._fence_verification_fingerprint = None
+                if self._process_lock is not None:
+                    self._process_lock.release()
+                    self._process_lock = None
+                raise
+
+    def _open_semantic_connection(
+        self,
+        *,
+        read_only: bool,
+    ) -> sqlite3.Connection:
+        if read_only and self.db_path != ":memory:":
+            resolved = Path(self.db_path).expanduser().resolve().as_posix()
+            connection = sqlite3.connect(
+                f"file:{resolved}?mode=ro",
+                uri=True,
+                check_same_thread=False,
+                isolation_level=None,
             )
-            if scrubbed.rowcount > 0 and self.db_path != ":memory:":
-                # Flush and truncate any WAL pages that predate the scrub,
-                # then rebuild the database so stale freelist/overflow pages
-                # are not left as a recoverable local artifact. Any failure
-                # propagates and keeps the legacy identity API unavailable.
-                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                self._conn.execute("VACUUM")
-            # Record schema version
+        else:
+            connection = sqlite3.connect(
+                self.db_path,
+                check_same_thread=False,
+                isolation_level=None,
+            )
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        if read_only:
+            connection.execute("PRAGMA query_only = ON")
+        else:
+            connection.execute("PRAGMA secure_delete = ON")
+        return connection
+
+    @staticmethod
+    def _absolute_database_path(value: str) -> Path:
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            path = Path(os.path.abspath(path))
+        return path
+
+    def _validate_database_paths(self) -> None:
+        """Reject aliases that could merge semantic and operational stores."""
+
+        semantic = (
+            None
+            if self.db_path == ":memory:"
+            else self._absolute_database_path(self.db_path)
+        )
+        operational = (
+            None
+            if self.operational_db_path == ":memory:"
+            else self._absolute_database_path(self.operational_db_path)
+        )
+        for label, path in (
+            ("semantic", semantic),
+            ("operational", operational),
+        ):
+            if path is None:
+                continue
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                continue
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+                raise LegacyIdentityFenceError(
+                    "legacy_identity_database_symlink_rejected"
+                )
+            if info.st_nlink != 1:
+                raise LegacyIdentityFenceError(
+                    f"legacy_identity_{label}_database_link_count_invalid"
+                )
+        if semantic is None or operational is None:
+            return
+        semantic_resolved = semantic.resolve(strict=False)
+        operational_resolved = operational.resolve(strict=False)
+        if os.path.normcase(str(semantic_resolved)) == os.path.normcase(
+            str(operational_resolved)
+        ):
+            raise LegacyIdentityFenceError(
+                "legacy_identity_database_path_collision"
+            )
+        if semantic.exists() and operational.exists():
+            try:
+                same_file = os.path.samefile(semantic, operational)
+            except OSError as exc:
+                raise LegacyIdentityFenceError(
+                    "legacy_identity_database_path_unverifiable"
+                ) from exc
+            if same_file:
+                raise LegacyIdentityFenceError(
+                    "legacy_identity_database_inode_collision"
+                )
+        witness = cutover_witness_path(semantic)
+        if os.path.normcase(str(operational_resolved)) == os.path.normcase(
+            str(witness.resolve(strict=False))
+        ):
+            raise LegacyIdentityFenceError(
+                "legacy_identity_operational_witness_path_collision"
+            )
+        if operational.exists() and witness.exists():
+            try:
+                if os.path.samefile(operational, witness):
+                    raise LegacyIdentityFenceError(
+                        "legacy_identity_operational_witness_inode_collision"
+                    )
+            except LegacyIdentityFenceError:
+                raise
+            except OSError as exc:
+                raise LegacyIdentityFenceError(
+                    "legacy_identity_database_path_unverifiable"
+                ) from exc
+
+    def _setup_mutable_semantic_store(
+        self,
+        *,
+        new_database: bool,
+    ) -> None:
+        assert self._conn is not None
+        self._conn.executescript(SCHEMA_DDL)
+        metadata = {
+            str(row["key"]): str(row["value"])
+            for row in self._conn.execute(
+                "SELECT key, value FROM schema_meta"
+            ).fetchall()
+        }
+        if new_database:
+            if metadata:
+                raise LegacyIdentityFenceError(
+                    "legacy_identity_new_database_metadata_present"
+                )
             self._conn.execute(
-                "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('schema_version', ?)",
+                "INSERT INTO schema_meta(key, value) "
+                "VALUES('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
             )
-            LOGGER.info("identity_store opened at %s (schema v%d)", self.db_path, SCHEMA_VERSION)
+        elif metadata.get("schema_version") != str(SCHEMA_VERSION):
+            raise LegacyIdentityFenceError(
+                "legacy_identity_schema_version_mismatch"
+            )
+        if set(metadata) - {"schema_version", SEMANTIC_AUTHORITY_KEY}:
+            raise LegacyIdentityFenceError(
+                "legacy_identity_schema_meta_key_set_mismatch"
+            )
+        authority_row = self._conn.execute(
+            "SELECT value FROM schema_meta WHERE key = ?",
+            (SEMANTIC_AUTHORITY_KEY,),
+        ).fetchone()
+        requested_mode = os.environ.get(SEMANTIC_WRITES_MODE_ENV, "").strip()
+        if authority_row is not None:
+            self._semantic_writes_frozen = True
+            if authority_row["value"] == OBSOLETE_PRE_E4_AUTHORITY_VALUE:
+                self._conn.execute(
+                    "UPDATE schema_meta SET value = ? WHERE key = ?",
+                    (
+                        LEGACY_APPLICATION_FROZEN_UNPROVEN,
+                        SEMANTIC_AUTHORITY_KEY,
+                    ),
+                )
+            elif (
+                authority_row["value"]
+                != LEGACY_APPLICATION_FROZEN_UNPROVEN
+            ):
+                raise LegacyIdentityFenceError(
+                    "semantic_authority_marker_conflict"
+                )
+        elif requested_mode == LEGACY_MIGRATION_MODE:
+            self._semantic_writes_frozen = False
+        else:
+            self._semantic_writes_frozen = True
+            self._conn.execute(
+                "INSERT INTO schema_meta(key, value) VALUES(?, ?)",
+                (
+                    SEMANTIC_AUTHORITY_KEY,
+                    LEGACY_APPLICATION_FROZEN_UNPROVEN,
+                ),
+            )
+        # Historical audit rows could contain full identity snapshots,
+        # notes, relationship data, and deleted names. Preserve only the
+        # content-free audit envelope; never read or copy the old JSON.
+        scrubbed = scrub_legacy_audit_content(self._conn)
+        if scrubbed > 0 and self.db_path != ":memory:":
+            self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            self._conn.execute("VACUUM")
+        require_unfenced_schema_meta_contract(self._conn)
+
+    def _setup_operational_recognition_store(self) -> None:
+        self._validate_database_paths()
+        prior_identity = self._operational_database_identity()
+        if self.operational_db_path != ":memory:":
+            Path(self.operational_db_path).parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+        self._operational_conn = sqlite3.connect(
+            self.operational_db_path,
+            check_same_thread=False,
+            isolation_level=None,
+        )
+        self._operational_conn.row_factory = sqlite3.Row
+        # This sqlite_master read is deliberately the first statement issued
+        # through the opened handle. A redirected connect must be rejected
+        # before any PRAGMA, DDL, or row mutation reaches the wrong database.
+        initial_objects = self._inspect_operational_objects(
+            self._operational_conn
+        )
+        initial_shape = self._classify_operational_shape(initial_objects)
+        self._require_operational_connection_targets_visible_path(
+            self._operational_conn
+        )
+        self._validate_database_paths()
+        opened_identity = self._operational_database_identity()
+        if (
+            prior_identity is not None
+            and opened_identity != prior_identity
+        ):
+            raise LegacyIdentityFenceError(
+                "legacy_identity_operational_database_substituted"
+            )
+        self._operational_path_identity = opened_identity
+        if initial_shape == "current":
+            instance_id = self._read_operational_contract(
+                self._operational_conn,
+                objects=initial_objects,
+            )
+            self._verify_visible_operational_store(
+                expected_instance_id=instance_id,
+            )
+        else:
+            # Bind the unmarked handle to the visible path before allowing its
+            # one-time schema upgrade. The fresh reader must see the exact
+            # reviewed empty/current/prerelease shape seen by this handle.
+            self._verify_visible_operational_store(
+                expected_unmarked_objects=initial_objects,
+            )
+            self._operational_conn.execute("PRAGMA secure_delete = ON")
+            journal_mode = self._operational_conn.execute(
+                "PRAGMA journal_mode = WAL"
+            ).fetchone()
+            expected_journal_mode = (
+                "memory"
+                if self.operational_db_path == ":memory:"
+                else "wal"
+            )
+            if (
+                journal_mode is None
+                or str(journal_mode[0]).lower()
+                != expected_journal_mode
+            ):
+                raise LegacyIdentityFenceError(
+                    "legacy_identity_operational_journal_mode_not_wal"
+                )
+            if initial_shape == "prerelease":
+                # E4 prerelease schema cleanup: remove the duplicated semantic
+                # display label while retaining only the opaque identifier.
+                self._operational_conn.executescript(
+                    """
+                    BEGIN IMMEDIATE;
+                    CREATE TABLE operational_recognition_enrollments_v2 (
+                        frigate_person_name TEXT PRIMARY KEY NOT NULL
+                            COLLATE NOCASE
+                            CHECK (
+                                typeof(frigate_person_name) = 'text'
+                                AND length(frigate_person_name)
+                                    BETWEEN 1 AND 255
+                            ),
+                        source TEXT NOT NULL DEFAULT 'frigate'
+                            CHECK (source = 'frigate'),
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+                    INSERT OR IGNORE INTO
+                        operational_recognition_enrollments_v2(
+                            frigate_person_name, source, created_at, updated_at
+                        )
+                    SELECT frigate_person_name, source, created_at, updated_at
+                    FROM operational_recognition_enrollments;
+                    DROP TABLE operational_recognition_enrollments;
+                    ALTER TABLE operational_recognition_enrollments_v2
+                        RENAME TO operational_recognition_enrollments;
+                    COMMIT;
+                    """
+                )
+                self._operational_conn.execute(
+                    "PRAGMA wal_checkpoint(TRUNCATE)"
+                )
+                self._operational_conn.execute("VACUUM")
+                self._operational_conn.execute(
+                    "PRAGMA wal_checkpoint(TRUNCATE)"
+                )
+            self._validate_database_paths()
+            if (
+                self._operational_database_identity()
+                != self._operational_path_identity
+            ):
+                raise LegacyIdentityFenceError(
+                    "legacy_identity_operational_database_substituted"
+                )
+            self._operational_conn.execute("BEGIN IMMEDIATE")
+            try:
+                if initial_shape == "empty":
+                    self._operational_conn.execute(
+                        OPERATIONAL_RECOGNITION_TABLE_SQL
+                    )
+                self._operational_conn.execute(
+                    OPERATIONAL_STORE_META_TABLE_SQL
+                )
+                instance_id = _uuid.uuid4().hex
+                self._operational_conn.executemany(
+                    "INSERT INTO operational_store_meta(key, value) "
+                    "VALUES(?, ?)",
+                    (
+                        ("contract", OPERATIONAL_STORE_CONTRACT),
+                        ("generation", OPERATIONAL_STORE_GENERATION),
+                        ("instance_id", instance_id),
+                    ),
+                )
+                self._operational_conn.execute("COMMIT")
+            except Exception:
+                self._operational_conn.execute("ROLLBACK")
+                raise
+            current_objects = self._inspect_operational_objects(
+                self._operational_conn
+            )
+            self._classify_operational_shape(current_objects)
+            if (
+                self._read_operational_contract(
+                    self._operational_conn,
+                    objects=current_objects,
+                )
+                != instance_id
+            ):
+                raise LegacyIdentityFenceError(
+                    "legacy_identity_operational_marker_commit_failed"
+                )
+            self._verify_visible_operational_store(
+                expected_instance_id=instance_id,
+            )
+
+        self._operational_instance_id = instance_id
+        self._operational_conn.execute("PRAGMA secure_delete = ON")
+        self._require_operational_database_current()
+        self.purge_blocked_operational_recognition()
+
+    @staticmethod
+    def _normalize_operational_sql(value: str) -> str:
+        normalized = " ".join((value or "").strip().rstrip(";").split())
+        for name in (
+            "operational_recognition_enrollments",
+            "operational_store_meta",
+        ):
+            normalized = normalized.replace(
+                f'CREATE TABLE "{name}"',
+                f"CREATE TABLE {name}",
+                1,
+            )
+        return normalized
+
+    def _inspect_operational_objects(
+        self,
+        connection: sqlite3.Connection,
+    ) -> dict[str, tuple[str, str]]:
+        rows = connection.execute(
+            "SELECT type, name, sql FROM sqlite_master "
+            "WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
+        ).fetchall()
+        objects: dict[str, tuple[str, str]] = {}
+        for row in rows:
+            object_type = str(row["type"])
+            name = str(row["name"])
+            sql = row["sql"]
+            if object_type != "table" or type(sql) is not str:
+                raise LegacyIdentityFenceError(
+                    "legacy_identity_operational_unknown_object"
+                )
+            if name not in {
+                "operational_recognition_enrollments",
+                "operational_store_meta",
+            }:
+                raise LegacyIdentityFenceError(
+                    "legacy_identity_operational_unknown_object"
+                )
+            objects[name] = (
+                object_type,
+                self._normalize_operational_sql(sql),
+            )
+        return objects
+
+    def _classify_operational_shape(
+        self,
+        objects: dict[str, tuple[str, str]],
+    ) -> str:
+        names = set(objects)
+        if not names:
+            return "empty"
+        expected_current = self._normalize_operational_sql(
+            OPERATIONAL_RECOGNITION_TABLE_SQL
+        )
+        recognition = objects.get(
+            "operational_recognition_enrollments"
+        )
+        if recognition is None:
+            raise LegacyIdentityFenceError(
+                "legacy_identity_operational_schema_mismatch"
+            )
+        recognition_sql = recognition[1]
+        if names == {"operational_recognition_enrollments"}:
+            if recognition_sql == expected_current:
+                return "unmarked_current"
+            if recognition_sql == self._normalize_operational_sql(
+                OPERATIONAL_RECOGNITION_PRERELEASE_TABLE_SQL
+            ):
+                return "prerelease"
+            raise LegacyIdentityFenceError(
+                "legacy_identity_operational_schema_mismatch"
+            )
+        if names != {
+            "operational_recognition_enrollments",
+            "operational_store_meta",
+        }:
+            raise LegacyIdentityFenceError(
+                "legacy_identity_operational_schema_mismatch"
+            )
+        if recognition_sql != expected_current:
+            raise LegacyIdentityFenceError(
+                "legacy_identity_operational_schema_mismatch"
+            )
+        if objects["operational_store_meta"][1] != (
+            self._normalize_operational_sql(
+                OPERATIONAL_STORE_META_TABLE_SQL
+            )
+        ):
+            raise LegacyIdentityFenceError(
+                "legacy_identity_operational_meta_schema_mismatch"
+            )
+        return "current"
+
+    def _read_operational_contract(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        objects: Optional[dict[str, tuple[str, str]]] = None,
+    ) -> str:
+        current_objects = (
+            objects
+            if objects is not None
+            else self._inspect_operational_objects(connection)
+        )
+        if self._classify_operational_shape(current_objects) != "current":
+            raise LegacyIdentityFenceError(
+                "legacy_identity_operational_marker_missing"
+            )
+        rows = connection.execute(
+            "SELECT key, value FROM operational_store_meta ORDER BY key"
+        ).fetchall()
+        marker: dict[str, str] = {}
+        for row in rows:
+            if type(row["key"]) is not str or type(row["value"]) is not str:
+                raise LegacyIdentityFenceError(
+                    "legacy_identity_operational_marker_non_text"
+                )
+            marker[row["key"]] = row["value"]
+        if set(marker) != {"contract", "generation", "instance_id"}:
+            raise LegacyIdentityFenceError(
+                "legacy_identity_operational_marker_key_set_mismatch"
+            )
+        if marker["contract"] != OPERATIONAL_STORE_CONTRACT:
+            raise LegacyIdentityFenceError(
+                "legacy_identity_operational_marker_contract_mismatch"
+            )
+        if marker["generation"] != OPERATIONAL_STORE_GENERATION:
+            raise LegacyIdentityFenceError(
+                "legacy_identity_operational_marker_generation_mismatch"
+            )
+        instance_id = marker["instance_id"]
+        try:
+            parsed = _uuid.UUID(hex=instance_id)
+        except (AttributeError, ValueError) as exc:
+            raise LegacyIdentityFenceError(
+                "legacy_identity_operational_instance_id_invalid"
+            ) from exc
+        if (
+            parsed.version != 4
+            or parsed.hex != instance_id
+            or len(instance_id) != 32
+        ):
+            raise LegacyIdentityFenceError(
+                "legacy_identity_operational_instance_id_invalid"
+            )
+        return instance_id
+
+    def _require_operational_connection_targets_visible_path(
+        self,
+        connection: sqlite3.Connection,
+    ) -> None:
+        rows = connection.execute("PRAGMA database_list").fetchall()
+        main_rows = [row for row in rows if str(row["name"]) == "main"]
+        if len(main_rows) != 1:
+            raise LegacyIdentityFenceError(
+                "legacy_identity_operational_database_binding_invalid"
+            )
+        actual = str(main_rows[0]["file"] or "")
+        if self.operational_db_path == ":memory:":
+            if actual:
+                raise LegacyIdentityFenceError(
+                    "legacy_identity_operational_database_binding_mismatch"
+                )
+            return
+        if not actual:
+            raise LegacyIdentityFenceError(
+                "legacy_identity_operational_database_binding_mismatch"
+            )
+        visible = self._absolute_database_path(
+            self.operational_db_path
+        ).resolve(strict=False)
+        actual_path = Path(actual).expanduser().resolve(strict=False)
+        if os.path.normcase(str(visible)) != os.path.normcase(
+            str(actual_path)
+        ):
+            raise LegacyIdentityFenceError(
+                "legacy_identity_operational_database_binding_mismatch"
+            )
+
+    def _verify_visible_operational_store(
+        self,
+        *,
+        expected_instance_id: Optional[str] = None,
+        expected_unmarked_objects: Optional[
+            dict[str, tuple[str, str]]
+        ] = None,
+    ) -> None:
+        if self.operational_db_path == ":memory:":
+            if expected_instance_id is not None:
+                if (
+                    self._read_operational_contract(
+                        self._operational_conn
+                    )
+                    != expected_instance_id
+                ):
+                    raise LegacyIdentityFenceError(
+                        "legacy_identity_operational_marker_mismatch"
+                    )
+            return
+        visible = self._absolute_database_path(
+            self.operational_db_path
+        ).resolve(strict=False)
+        fresh = sqlite3.connect(
+            f"file:{visible.as_posix()}?mode=ro",
+            uri=True,
+            check_same_thread=False,
+            isolation_level=None,
+        )
+        fresh.row_factory = sqlite3.Row
+        try:
+            # As for the primary handle, sqlite_master is the first read.
+            objects = self._inspect_operational_objects(fresh)
+            self._require_operational_connection_targets_visible_path(fresh)
+            if expected_instance_id is not None:
+                if (
+                    self._read_operational_contract(
+                        fresh,
+                        objects=objects,
+                    )
+                    != expected_instance_id
+                ):
+                    raise LegacyIdentityFenceError(
+                        "legacy_identity_operational_marker_mismatch"
+                    )
+            elif (
+                expected_unmarked_objects is None
+                or objects != expected_unmarked_objects
+            ):
+                raise LegacyIdentityFenceError(
+                    "legacy_identity_operational_unmarked_shape_mismatch"
+                )
+            else:
+                shape = self._classify_operational_shape(objects)
+                if shape not in {
+                    "empty",
+                    "unmarked_current",
+                    "prerelease",
+                }:
+                    raise LegacyIdentityFenceError(
+                        "legacy_identity_operational_unmarked_shape_mismatch"
+                    )
+        finally:
+            fresh.close()
+
+    def _operational_database_identity(self) -> Optional[tuple[int, int]]:
+        if self.operational_db_path == ":memory:":
+            return None
+        path = self._absolute_database_path(self.operational_db_path)
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            return None
+        return (info.st_dev, info.st_ino)
+
+    def _require_operational_database_current(self) -> None:
+        if (
+            self._operational_conn is None
+            or self._operational_instance_id is None
+        ):
+            raise LegacyIdentityFenceError(
+                "legacy_identity_operational_store_unbound"
+            )
+        if self.operational_db_path != ":memory:":
+            self._validate_database_paths()
+            current = self._operational_database_identity()
+            if (
+                self._operational_path_identity is not None
+                and current != self._operational_path_identity
+            ):
+                raise LegacyIdentityFenceError(
+                    "legacy_identity_operational_database_substituted"
+                )
+        objects = self._inspect_operational_objects(
+            self._operational_conn
+        )
+        if (
+            self._read_operational_contract(
+                self._operational_conn,
+                objects=objects,
+            )
+            != self._operational_instance_id
+        ):
+            raise LegacyIdentityFenceError(
+                "legacy_identity_operational_marker_mismatch"
+            )
+        self._require_operational_connection_targets_visible_path(
+            self._operational_conn
+        )
+        if self.operational_db_path == ":memory:":
+            return
+        self._verify_visible_operational_store(
+            expected_instance_id=self._operational_instance_id,
+        )
 
     @property
     def semantic_writes_frozen(self) -> bool:
         return self._semantic_writes_frozen
 
+    @property
+    def semantic_write_fence_installed(self) -> bool:
+        return self._semantic_write_fence_installed
+
+    @property
+    def recognition_metadata_available(self) -> bool:
+        """Whether legacy recognition metadata may cross the private API."""
+
+        if self._disabled or self._operational_conn is None:
+            return False
+        if (
+            self._semantic_write_fence_installed
+            and self._core_recognition_policy is None
+        ):
+            return False
+        return True
+
+    @property
+    def semantic_write_fence_generation(self) -> Optional[int]:
+        return (
+            SEMANTIC_WRITE_FENCE_GENERATION
+            if self._semantic_write_fence_installed
+            else None
+        )
+
+    @property
+    def semantic_write_fence_trigger_digest(self) -> Optional[str]:
+        return (
+            EXPECTED_TRIGGER_DIGEST
+            if self._semantic_write_fence_installed
+            else None
+        )
+
+    @property
+    def legacy_authority_state(self) -> str:
+        if self._semantic_write_fence_installed:
+            return LEGACY_FROZEN_PENDING_CUTOVER
+        if self._semantic_writes_frozen:
+            return LEGACY_APPLICATION_FROZEN_UNPROVEN
+        return "legacy_migration_only"
+
+    def _current_fence_file_fingerprint(self) -> tuple:
+        resolved = self._absolute_database_path(self.db_path)
+        paths = (
+            resolved,
+            Path(f"{resolved}-wal"),
+            Path(f"{resolved}-shm"),
+            Path(f"{resolved}-journal"),
+            cutover_witness_path(resolved),
+        )
+        fingerprint = []
+        for path in paths:
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                fingerprint.append((str(path), None))
+                continue
+            fingerprint.append(
+                (
+                    str(path),
+                    info.st_mode,
+                    info.st_dev,
+                    info.st_ino,
+                    info.st_nlink,
+                    info.st_size,
+                    info.st_mtime_ns,
+                    info.st_ctime_ns,
+                )
+            )
+        return tuple(fingerprint)
+
+    def assert_legacy_read_current(self) -> None:
+        """Verify a changed fence image before returning a legacy read."""
+
+        if not self._semantic_write_fence_installed:
+            if self.db_path != ":memory:":
+                self._validate_database_paths()
+            return
+        try:
+            if self.db_path == ":memory:":
+                if self._conn is None or not verify_semantic_write_fence(
+                    self._conn,
+                    schema_ddl=SCHEMA_DDL,
+                ):
+                    raise LegacyIdentityFenceError(
+                        "semantic_write_fence_not_current"
+                    )
+                return
+            self._validate_database_paths()
+            before = self._current_fence_file_fingerprint()
+            if before == self._fence_verification_fingerprint:
+                return
+            if not verify_cutover_witness(
+                self.db_path,
+                schema_ddl=SCHEMA_DDL,
+            ):
+                raise LegacyIdentityFenceError(
+                    "legacy_cutover_witness_missing"
+                )
+            resolved = Path(self.db_path).expanduser().resolve().as_posix()
+            fresh = sqlite3.connect(
+                f"file:{resolved}?mode=ro",
+                uri=True,
+                isolation_level=None,
+            )
+            try:
+                fresh.execute("PRAGMA foreign_keys = ON")
+                fresh.execute("PRAGMA query_only = ON")
+                if not verify_semantic_write_fence(
+                    fresh,
+                    schema_ddl=SCHEMA_DDL,
+                ):
+                    raise LegacyIdentityFenceError(
+                        "semantic_write_fence_not_current"
+                    )
+            finally:
+                fresh.close()
+            after = self._current_fence_file_fingerprint()
+            if after != before:
+                raise LegacyIdentityFenceError(
+                    "legacy_identity_fence_changed_during_verification"
+                )
+            self._fence_verification_fingerprint = after
+        except Exception as exc:
+            self._fence_verification_fingerprint = None
+            self.setup_error = f"legacy_frozen_view_degraded:{exc}"
+            raise LegacyIdentityFenceError(
+                "legacy_frozen_view_degraded"
+            ) from exc
+
     def _require_semantic_writes(
         self,
         *,
-        actor: str = "system",
         patch: Optional[dict] = None,
         target: Optional[IdentityRow] = None,
+        allow_legacy_self_profile_edit: bool = False,
     ) -> None:
         if self._semantic_writes_frozen:
             fields = set(patch or {})
             if (
-                actor in LEGACY_SELF_PROFILE_EDIT_ACTORS
+                allow_legacy_self_profile_edit
+                and not self._semantic_write_fence_installed
                 and fields
                 and fields <= LEGACY_SELF_PROFILE_EDIT_FIELDS
                 and target is not None
@@ -485,7 +1409,7 @@ class IdentityStore:
                 ):
                     return
             raise PermissionError(
-                "legacy semantic authority is frozen; use Home Agent Core"
+                "legacy semantics are frozen pending reviewed cutover"
             )
 
     def close(self) -> None:
@@ -493,6 +1417,15 @@ class IdentityStore:
             if self._conn is not None:
                 self._conn.close()
                 self._conn = None
+            if self._operational_conn is not None:
+                self._operational_conn.close()
+                self._operational_conn = None
+            self._operational_path_identity = None
+            self._operational_instance_id = None
+            if self._process_lock is not None:
+                self._process_lock.release()
+                self._process_lock = None
+            self._fence_verification_fingerprint = None
 
     @contextmanager
     def _txn(self):
@@ -503,9 +1436,12 @@ class IdentityStore:
             return
         with self._lock:
             assert self._conn is not None
+            self._validate_database_paths()
             self._conn.execute("BEGIN IMMEDIATE")
             try:
+                self._validate_database_paths()
                 yield self._conn
+                self._validate_database_paths()
                 self._conn.execute("COMMIT")
             except Exception:
                 self._conn.execute("ROLLBACK")
@@ -517,6 +1453,7 @@ class IdentityStore:
         """Look up by uuid; if not found, try alias resolution."""
         if self._disabled or self._conn is None:
             return None
+        self.assert_legacy_read_current()
         with self._lock:
             row = self._conn.execute(
                 "SELECT * FROM identities WHERE uuid = ?", (uuid_or_alias,)
@@ -547,6 +1484,7 @@ class IdentityStore:
     ) -> list[IdentityRow]:
         if self._disabled or self._conn is None:
             return []
+        self.assert_legacy_read_current()
         clauses = []
         args: list[Any] = []
         if not include_archived:
@@ -568,6 +1506,11 @@ class IdentityStore:
         """Map a Frigate person name → identity row. Used by world_state's
         projection layer to substitute display_name + privacy flags."""
         if self._disabled or self._conn is None or not frigate_name:
+            return None
+        if self._semantic_writes_frozen:
+            # A frozen legacy identity is historical evidence only. This
+            # cutoff applies before and after the physical fence; only the
+            # explicit legacy migration mode can project it into WorldState.
             return None
         with self._lock:
             row = self._conn.execute(
@@ -593,6 +1536,7 @@ class IdentityStore:
     ) -> list[dict]:
         if self._disabled or self._conn is None:
             return []
+        self.assert_legacy_read_current()
         clauses = ["from_uuid = ?"]
         args: list[Any] = [identity_uuid]
         if not include_ended:
@@ -621,6 +1565,7 @@ class IdentityStore:
     ) -> list[dict]:
         if self._disabled or self._conn is None:
             return []
+        self.assert_legacy_read_current()
         with self._lock:
             rows = self._conn.execute(
                 "SELECT * FROM preferences WHERE identity_uuid = ? ORDER BY key",
@@ -723,56 +1668,271 @@ class IdentityStore:
     ) -> str:
         """Maintain the isolated operational Frigate mapping after cutover.
 
-        This intentionally cannot set relationships, preferences, privacy, HA
-        bindings, or arbitrary aliases. Core review is still required before
-        the recognition identity becomes a semantic person.
+        The enrollment lives in a separate operational database with no
+        identity UUID, alias, privacy, relationship, preference, or HA-binding
+        columns. It can never become semantic context by table linkage.
         """
-        if self._disabled or self._conn is None:
+        # Compatibility arguments intentionally have no durable representation.
+        # A display label would duplicate a semantic name in the operational
+        # database and create another privacy/erasure surface.
+        del actor, display_label
+        if self._disabled or self._operational_conn is None:
             return ""
+        self._require_operational_database_current()
         name = frigate_person_name.strip()
         if not name or len(name) > 255 or any(ord(char) < 32 for char in name):
             raise ValueError("invalid Frigate recognition identifier")
-        existing = self.resolve_frigate_name(name)
-        if existing is not None:
-            return existing.uuid
-        label = (display_label or "Unreviewed recognition").strip()
-        if not label or len(label) > 255:
-            raise ValueError("invalid operational recognition label")
-        new_uuid = _new_uuid()
+        if self.legacy_recognition_persistence_policy(name) == "blocked":
+            self._purge_operational_recognition_name(name)
+            return ""
         now = _now_iso()
-        with self._txn() as conn:
-            conn.execute(
-                "INSERT INTO identities("
-                "uuid, display_name, relationship_type, flags_extra, "
-                "created_at, updated_at) VALUES (?,?, 'unknown', ?,?,?)",
-                (
-                    new_uuid,
-                    label,
-                    json.dumps({"operational_recognition_only": True}),
-                    now,
-                    now,
-                ),
+        with self._lock:
+            conn = self._operational_conn
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                matches = self._operational_casefold_matches(name)
+                if len(matches) > 1:
+                    conn.executemany(
+                        "DELETE FROM operational_recognition_enrollments "
+                        "WHERE frigate_person_name = ?",
+                        ((match,) for match in matches),
+                    )
+                    conn.execute("COMMIT")
+                    return ""
+                if not matches:
+                    conn.execute(
+                        "INSERT INTO operational_recognition_enrollments("
+                        "frigate_person_name, source, created_at, updated_at"
+                        ") VALUES(?, 'frigate', ?, ?)",
+                        (name, now, now),
+                    )
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        return name
+
+    def resolve_operational_recognition_name(
+        self,
+        frigate_person_name: str,
+    ) -> Optional[OperationalRecognitionRow]:
+        if (
+            self._disabled
+            or self._operational_conn is None
+            or not frigate_person_name
+        ):
+            return None
+        self._require_operational_database_current()
+        if (
+            self.legacy_recognition_persistence_policy(
+                frigate_person_name
             )
-            conn.execute(
-                "INSERT INTO identity_aliases("
-                "identity_uuid, alias, alias_kind, created_at) "
-                "VALUES (?,?, 'frigate_name', ?)",
-                (new_uuid, name, now),
+            == "blocked"
+        ):
+            self._purge_operational_recognition_name(
+                frigate_person_name
             )
-            conn.execute(
-                "INSERT INTO enrollments("
-                "identity_uuid, frigate_person_name, created_at) VALUES (?,?,?)",
-                (new_uuid, name, now),
+            return None
+        with self._lock:
+            matches = self._operational_casefold_matches(
+                frigate_person_name
             )
-            self._audit(
-                conn,
-                "frigate_writeback",
-                actor,
-                new_uuid,
-                None,
-                {"op": "recognition_enrollment_created"},
-            )
-        return new_uuid
+            if len(matches) != 1:
+                if matches:
+                    self._operational_conn.execute("BEGIN IMMEDIATE")
+                    try:
+                        self._operational_conn.executemany(
+                            "DELETE FROM operational_recognition_enrollments "
+                            "WHERE frigate_person_name = ?",
+                            ((match,) for match in matches),
+                        )
+                        self._operational_conn.execute("COMMIT")
+                    except Exception:
+                        self._operational_conn.execute("ROLLBACK")
+                        raise
+                return None
+            row = self._operational_conn.execute(
+                "SELECT * FROM operational_recognition_enrollments "
+                "WHERE frigate_person_name = ?",
+                (matches[0],),
+            ).fetchone()
+        if row is None:
+            return None
+        return OperationalRecognitionRow(
+            frigate_person_name=row["frigate_person_name"],
+            source=row["source"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    def legacy_recognition_persistence_policy(
+        self,
+        frigate_person_name: str,
+    ) -> str:
+        """Return a non-model-facing ingress policy for a Frigate bucket.
+
+        `blocked` identities are never copied to the operational database.
+        `restricted` covers private/silent legacy records: the opaque Frigate
+        identifier may remain operational, but no semantic label is copied and
+        the fenced store is never wired to WorldState. `unmatched` is a new
+        Frigate bucket with no legacy semantic record.
+        """
+
+        if self._disabled or self._conn is None or not frigate_person_name:
+            return "blocked"
+        if self._semantic_write_fence_installed:
+            self.assert_legacy_read_current()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT i.uuid, i.do_not_track, i.is_ignored, "
+                "i.is_silent, i.is_private, i.relationship_type, "
+                "a.alias AS recognition_name "
+                "FROM identities AS i "
+                "JOIN identity_aliases AS a "
+                "ON a.identity_uuid = i.uuid "
+                "WHERE a.alias_kind = 'frigate_name' "
+                "UNION ALL "
+                "SELECT i.uuid, i.do_not_track, i.is_ignored, "
+                "i.is_silent, i.is_private, i.relationship_type, "
+                "e.frigate_person_name AS recognition_name "
+                "FROM identities AS i "
+                "JOIN enrollments AS e ON e.identity_uuid = i.uuid "
+                "WHERE e.retired_at IS NULL"
+            ).fetchall()
+        target = frigate_person_name.casefold()
+        matches = {
+            row["uuid"]: row
+            for row in rows
+            if str(row["recognition_name"]).casefold() == target
+        }
+        legacy_policy = "unmatched"
+        if matches:
+            if any(
+                bool(row["do_not_track"])
+                or bool(row["is_ignored"])
+                or row["relationship_type"] == "do_not_identify"
+                for row in matches.values()
+            ):
+                legacy_policy = "blocked"
+            elif len(matches) != 1:
+                legacy_policy = "blocked"
+            elif any(
+                bool(row["is_silent"]) or bool(row["is_private"])
+                for row in matches.values()
+            ):
+                legacy_policy = "restricted"
+            else:
+                legacy_policy = "allowed"
+
+        # Once the physical fence is installed, Core is semantic/privacy
+        # authority. Legacy privacy can veto, but it can no longer authorize
+        # persistence by itself. Until a caller wires a current deterministic
+        # Core policy provider, operational recognition fails closed.
+        if self._semantic_write_fence_installed:
+            if self._core_recognition_policy is None:
+                return "blocked"
+            try:
+                core_policy = self._core_recognition_policy(
+                    frigate_person_name
+                )
+            except Exception:  # noqa: BLE001
+                return "blocked"
+            if core_policy not in {"allowed", "restricted", "blocked"}:
+                return "blocked"
+            if "blocked" in {legacy_policy, core_policy}:
+                return "blocked"
+            if "restricted" in {legacy_policy, core_policy}:
+                return "restricted"
+            return core_policy
+        return legacy_policy
+
+    def _operational_casefold_matches(self, name: str) -> list[str]:
+        if self._operational_conn is None:
+            return []
+        self._require_operational_database_current()
+        target = name.casefold()
+        return [
+            str(row["frigate_person_name"])
+            for row in self._operational_conn.execute(
+                "SELECT frigate_person_name "
+                "FROM operational_recognition_enrollments"
+            ).fetchall()
+            if str(row["frigate_person_name"]).casefold() == target
+        ]
+
+    def _purge_operational_recognition_name(self, name: str) -> int:
+        if self._operational_conn is None:
+            return 0
+        self._require_operational_database_current()
+        with self._lock:
+            matches = self._operational_casefold_matches(name)
+            if not matches:
+                return 0
+            self._operational_conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._operational_conn.executemany(
+                    "DELETE FROM operational_recognition_enrollments "
+                    "WHERE frigate_person_name = ?",
+                    ((match,) for match in matches),
+                )
+                self._operational_conn.execute("COMMIT")
+            except Exception:
+                self._operational_conn.execute("ROLLBACK")
+                raise
+            return len(matches)
+
+    def _purge_blocked_operational_recognition_rows(self) -> int:
+        if self._operational_conn is None:
+            return 0
+        self._require_operational_database_current()
+        with self._lock:
+            names = [
+                str(row["frigate_person_name"])
+                for row in self._operational_conn.execute(
+                    "SELECT frigate_person_name "
+                    "FROM operational_recognition_enrollments"
+                ).fetchall()
+            ]
+        groups: dict[str, list[str]] = {}
+        for name in names:
+            groups.setdefault(name.casefold(), []).append(name)
+        purge = {
+            name
+            for group in groups.values()
+            for name in group
+            if len(group) > 1
+        }
+        for name in names:
+            if self.legacy_recognition_persistence_policy(name) == "blocked":
+                purge.add(name)
+        if not purge:
+            return 0
+        with self._lock:
+            self._operational_conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._operational_conn.executemany(
+                    "DELETE FROM operational_recognition_enrollments "
+                    "WHERE frigate_person_name = ?",
+                    ((name,) for name in sorted(purge)),
+                )
+                self._operational_conn.execute("COMMIT")
+            except Exception:
+                self._operational_conn.execute("ROLLBACK")
+                raise
+        return len(purge)
+
+    def purge_blocked_operational_recognition(self) -> int:
+        """Reapply current privacy policy to every durable opaque mapping.
+
+        The method validates the operational database identity before every
+        mutation. Core-policy errors resolve to ``blocked`` in the policy
+        adapter, so periodic callers safely delete rather than retain rows
+        whose current privacy authorization cannot be established.
+        """
+
+        if self._disabled or self._operational_conn is None:
+            return 0
+        return self._purge_blocked_operational_recognition_rows()
 
     def update_identity(
         self,
@@ -781,6 +1941,7 @@ class IdentityStore:
         *,
         actor: str = "user",
         expected_version: Optional[int] = None,
+        allow_legacy_self_profile_edit: bool = False,
     ) -> bool:
         """Partial update. Allowed keys map to schema columns. Bumps
         version (optimistic concurrency per AR-9). Returns True if a
@@ -790,7 +1951,11 @@ class IdentityStore:
         cur = self.get_identity(uuid_or_alias)
         if cur is None:
             return False
-        self._require_semantic_writes(actor=actor, patch=patch, target=cur)
+        self._require_semantic_writes(
+            patch=patch,
+            target=cur,
+            allow_legacy_self_profile_edit=allow_legacy_self_profile_edit,
+        )
         allowed = {
             "display_name", "pronouns", "relationship_type",
             "relationship_subrole", "notes",
@@ -809,8 +1974,17 @@ class IdentityStore:
             args.append(int(v) if isinstance(v, bool) else v)
         if not sets:
             return False
+        privacy_changed = bool(
+            set(patch) & RECOGNITION_PRIVACY_FIELDS
+        )
+        privacy_recognition_names = {
+            str(alias["alias"])
+            for alias in cur.aliases
+            if alias.get("kind") == "frigate_name"
+        } if privacy_changed else set()
         now = _now_iso()
-        sets.append("updated_at = ?"); args.append(now)
+        sets.append("updated_at = ?")
+        args.append(now)
         sets.append("version = version + 1")
         args.append(cur.uuid)
         where = "uuid = ?"
@@ -887,6 +2061,27 @@ class IdentityStore:
                         )
             self._audit(conn, "identity_mutation", actor, cur.uuid,
                         asdict(cur), patch)
+            if privacy_changed:
+                privacy_recognition_names.update(
+                    str(row["recognition_name"])
+                    for row in conn.execute(
+                        "SELECT alias AS recognition_name "
+                        "FROM identity_aliases "
+                        "WHERE identity_uuid = ? "
+                        "AND alias_kind = 'frigate_name' "
+                        "UNION "
+                        "SELECT frigate_person_name AS recognition_name "
+                        "FROM enrollments "
+                        "WHERE identity_uuid = ? AND retired_at IS NULL",
+                        (cur.uuid, cur.uuid),
+                    ).fetchall()
+                )
+        if privacy_changed:
+            for recognition_name in privacy_recognition_names:
+                self._purge_operational_recognition_name(
+                    recognition_name
+                )
+            self.purge_blocked_operational_recognition()
         return True
 
     def add_alias(
@@ -957,6 +2152,8 @@ class IdentityStore:
                         "VALUES ('frigate','delete',?, 'pending',?,?)",
                         (json.dumps({"person_name": name}), now, now),
                     )
+        for name in unique_names:
+            self._purge_operational_recognition_name(name)
         return True
 
     def add_relationship(
@@ -1121,6 +2318,8 @@ class IdentityStore:
     def pending_writes(self, *, state: str = "pending", limit: int = 100) -> list[dict]:
         if self._disabled or self._conn is None:
             return []
+        if self._semantic_writes_frozen:
+            return []
         with self._lock:
             rows = self._conn.execute(
                 "SELECT * FROM pending_writes WHERE state = ? "
@@ -1140,6 +2339,7 @@ class IdentityStore:
     def mark_pending_write(self, pw_id: int, *, state: str, error: Optional[str] = None) -> bool:
         if self._disabled or self._conn is None:
             return False
+        self._require_semantic_writes()
         if state not in ("pending", "in_flight", "done", "failed"):
             raise ValueError(f"invalid pending_write state: {state!r}")
         now = _now_iso()
@@ -1158,6 +2358,7 @@ class IdentityStore:
         rows (US-5.21)."""
         if self._disabled or self._conn is None:
             return 0
+        self._require_semantic_writes()
         now_ts = now_ts if now_ts is not None else time.time()
         total = 0
         with self._txn() as conn:

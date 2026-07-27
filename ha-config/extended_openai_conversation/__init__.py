@@ -15,7 +15,7 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.const import CONF_API_KEY, Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady, Unauthorized
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
@@ -31,6 +31,7 @@ from .const import (
 )
 from .helpers import get_authenticated_client
 from .identity_store import IdentityStore
+from .legacy_identity_fence import LegacyIdentityFenceError
 from .lighting_evidence import all_source_status, export_source_lines
 from .frigate_sync import (
     auto_seed_identities_from_frigate,
@@ -1122,9 +1123,9 @@ class IdentityListView(CORSHomeAssistantView):
             return self.json({
                 "enabled": True,
                 "ready": False,
-                "setup_error": setup_error,
+                "setup_error": "legacy_identity_store_unavailable",
                 "identities": [],
-            })
+            }, status_code=503)
         include_archived = request.query.get("include_archived", "0") == "1"
         include_ignored = request.query.get("include_ignored", "0") == "1"
         rel_type = (request.query.get("relationship_type") or "").strip() or None
@@ -1137,18 +1138,57 @@ class IdentityListView(CORSHomeAssistantView):
                 relationship_type=rel_type,
             )
             return [asdict(r) for r in rows]
-        identities = await hass.async_add_executor_job(_list)
-        # Addendum 24: expose the Frigate base URL so the people overlay
-        # can build face-crop image URLs without hardcoding the IP.
+        try:
+            identities = await hass.async_add_executor_job(_list)
+        except LegacyIdentityFenceError:
+            return self.json({
+                "enabled": True,
+                "ready": False,
+                "setup_error": "legacy_frozen_view_degraded",
+                "identities": [],
+            }, status_code=503)
+        # Report only whether the typed Frigate metadata operation is
+        # available. Never expose its origin to legacy browser code.
         from dataclasses import asdict
-        from .frigate_sync import base_url as _frigate_base_url
+        from .frigate_sync import is_disabled as _frigate_sync_disabled
         data = hass.data.get(DOMAIN, {})
         seed_report = data.get("frigate_seed_report")
-        capabilities = data.get("frigate_capabilities")
+        capabilities = data.get("frigate_caps")
+        frigate_faces_available = (
+            not _frigate_sync_disabled()
+            and store.recognition_metadata_available
+            and capabilities is not None
+            and bool(capabilities.reachable)
+            and bool(capabilities.face_library)
+        )
         return self.json({
             "enabled": True, "ready": True,
             "identities": identities,
-            "frigate_url": _frigate_base_url(),
+            "legacy_identity_boundary": {
+                "state": store.legacy_authority_state,
+                "semantic_writes_frozen": store.semantic_writes_frozen,
+                "semantic_write_fence_installed": (
+                    store.semantic_write_fence_installed
+                ),
+                "semantic_write_fence_generation": (
+                    store.semantic_write_fence_generation
+                ),
+                "semantic_write_fence_trigger_digest": (
+                    store.semantic_write_fence_trigger_digest
+                ),
+                "mutation_mode": (
+                    "legacy_frozen_pending_cutover"
+                    if store.semantic_write_fence_installed
+                    else (
+                        "admin_self_profile_compatibility"
+                        if store.semantic_writes_frozen
+                        else "legacy_migration"
+                    )
+                ),
+            },
+            # Presence only. Never hand the browser a Frigate origin that it
+            # could use for unauthenticated face-crop requests.
+            "frigate_faces_available": frigate_faces_available,
             "frigate_seed_report": asdict(seed_report) if seed_report is not None else None,
             "frigate_capabilities": asdict(capabilities) if capabilities is not None else None,
         })
@@ -1188,7 +1228,13 @@ class IdentityDetailView(CORSHomeAssistantView):
                 "preferences": store.list_preferences(row.uuid),
             }
 
-        payload = await hass.async_add_executor_job(_read)
+        try:
+            payload = await hass.async_add_executor_job(_read)
+        except LegacyIdentityFenceError:
+            return self.json(
+                {"error": "legacy_frozen_view_degraded"},
+                status_code=503,
+            )
         if payload is None:
             return self.json({"error": "not found"}, status_code=404)
         return self.json(payload)
@@ -1205,12 +1251,25 @@ class IdentityDetailView(CORSHomeAssistantView):
         if not isinstance(body, dict):
             return self.json({"error": "body must be a JSON object"}, status_code=400)
         expected_version = body.pop("expected_version", None)
-        actor = body.pop("actor", "user")
+        # Actor labels are audit metadata, never authorization. The narrow
+        # pre-E4 self-profile compatibility capability comes only from HA's
+        # authenticated server-side user object.
+        body.pop("actor", None)
+        allow_legacy_self_profile_edit = _request_has_ha_admin_capability(
+            request
+        )
 
         def _update() -> dict:
             try:
-                ok = store.update_identity(uuid, body, actor=actor,
-                                            expected_version=expected_version)
+                ok = store.update_identity(
+                    uuid,
+                    body,
+                    actor="ha_admin",
+                    expected_version=expected_version,
+                    allow_legacy_self_profile_edit=(
+                        allow_legacy_self_profile_edit
+                    ),
+                )
                 return {"updated": ok}
             except PermissionError as e:
                 return {"error": str(e), "status": 403}
@@ -1230,7 +1289,10 @@ class IdentityDetailView(CORSHomeAssistantView):
             return self.json({"enabled": False}, status_code=503)
 
         def _delete() -> dict:
-            ok = store.delete_identity(uuid, actor="user")
+            try:
+                ok = store.delete_identity(uuid, actor="ha_admin")
+            except PermissionError as exc:
+                return {"error": str(exc), "status": 403}
             # Cascade: best-effort avatar-file removal. Doesn't block the
             # delete return if the unlink fails (file just sits orphaned).
             avatar_removed = False
@@ -1239,6 +1301,9 @@ class IdentityDetailView(CORSHomeAssistantView):
             return {"deleted": ok, "avatar_removed": avatar_removed}
 
         result = await hass.async_add_executor_job(_delete)
+        if "error" in result:
+            status = int(result.pop("status", 400))
+            return self.json(result, status_code=status)
         if not result["deleted"]:
             return self.json({"error": "not found"}, status_code=404)
         return self.json(result)
@@ -1266,6 +1331,22 @@ class IdentityBackupView(CORSHomeAssistantView):
         store: IdentityStore | None = hass.data.get(DOMAIN, {}).get("identity_store")
         if store is None:
             return self.json({"enabled": False}, status_code=503)
+        if store.semantic_write_fence_installed:
+            try:
+                await hass.async_add_executor_job(
+                    store.assert_legacy_read_current
+                )
+            except LegacyIdentityFenceError:
+                return self.json(
+                    {"error": "legacy_frozen_view_degraded"},
+                    status_code=503,
+                )
+            # This export is a plaintext copy of the legacy semantic
+            # authority. The reviewed fence closes that second export path.
+            return self.json(
+                {"error": "legacy_identity_export_disabled_pending_cutover"},
+                status_code=410,
+            )
 
         # AR24-10: opt-in avatar inclusion via ?include_avatars=1. Default
         # OFF because base64 JPEG bytes bloat the JSON (~50 KB per
@@ -1305,7 +1386,13 @@ class IdentityBackupView(CORSHomeAssistantView):
                 "identities": out_identities,
             }
 
-        payload = await hass.async_add_executor_job(_snapshot)
+        try:
+            payload = await hass.async_add_executor_job(_snapshot)
+        except LegacyIdentityFenceError:
+            return self.json(
+                {"error": "legacy_frozen_view_degraded"},
+                status_code=503,
+            )
         return self.json(payload)
 
 
@@ -1344,15 +1431,18 @@ class IdentityCreateView(CORSHomeAssistantView):
                     aliases=body.get("aliases") or [],
                     frigate_person_name=body.get("frigate_person_name"),
                     ha_person_entity_id=body.get("ha_person_entity_id"),
-                    actor=body.get("actor", "user"),
+                    actor="ha_admin",
                 )
                 return {"uuid": new_uuid}
+            except PermissionError as e:
+                return {"error": str(e), "status": 403}
             except ValueError as e:
                 return {"error": str(e)}
 
         result = await hass.async_add_executor_job(_create)
         if "error" in result:
-            return self.json(result, status_code=400)
+            status = int(result.pop("status", 400))
+            return self.json(result, status_code=status)
         return self.json(result)
 
 
@@ -1387,15 +1477,18 @@ class RelationshipsView(CORSHomeAssistantView):
                 edge_id = store.add_relationship(
                     uuid, to_uuid, rel_type,
                     edge_data=body.get("edge_data") or {},
-                    actor=body.get("actor", "user"),
+                    actor="ha_admin",
                 )
                 return {"edge_id": edge_id}
+            except PermissionError as e:
+                return {"error": str(e), "status": 403}
             except ValueError as e:
                 return {"error": str(e)}
 
         result = await hass.async_add_executor_job(_add)
         if "error" in result:
-            return self.json(result, status_code=400)
+            status = int(result.pop("status", 400))
+            return self.json(result, status_code=status)
         return self.json(result)
 
 
@@ -1434,58 +1527,172 @@ class PreferencesView(CORSHomeAssistantView):
                     source=body.get("source", "manual"),
                     confidence=body.get("confidence"),
                     provenance=body.get("provenance") or {},
-                    actor=body.get("actor", "user"),
+                    actor="ha_admin",
                 )
                 return {"preference_id": pref_id}
+            except PermissionError as e:
+                return {"error": str(e), "status": 403}
             except ValueError as e:
                 return {"error": str(e)}
 
         result = await hass.async_add_executor_job(_set)
         if "error" in result:
-            return self.json(result, status_code=400)
+            status = int(result.pop("status", 400))
+            return self.json(result, status_code=status)
         return self.json(result)
 
 
 class FrigateProxyView(CORSHomeAssistantView):
-    """GET /api/extended_openai_conversation/frigate_proxy?path=api/faces
+    """GET /api/extended_openai_conversation/frigate_proxy/faces.
 
-    Tauri ↔ Frigate cross-origin proxy. Frigate's nginx doesn't send
-    CORS headers, so the WebView2 fetch from tauri.localhost is blocked.
-    This view fetches Frigate server-side (no CORS gate) and returns the
-    response with our CORS-enabled view headers.
-
-    Whitelisted paths only — never an arbitrary URL passthrough. The
-    `clips/faces/<name>/<file>` images don't need proxying because
-    <img> tag loads don't trigger CORS preflight.
+    This is one exact, typed metadata operation, not a path proxy.
+    Face-crop bytes are not exposed to the legacy browser surface.
     """
 
-    url = "/api/extended_openai_conversation/frigate_proxy"
+    url = "/api/extended_openai_conversation/frigate_proxy/faces"
     name = "api:extended_openai_conversation:frigate_proxy"
     requires_auth = True
 
-    # Whitelist of allowed proxy paths (exact match or prefix match).
-    _ALLOWED_PREFIXES = ("api/faces",)
+    @classmethod
+    def _is_exact_request(cls, request: web.Request) -> bool:
+        """Reject every request shape except the one typed operation."""
+        return (
+            request.path == cls.url
+            and request.raw_path == cls.url
+            and not request.query_string
+        )
+
+    @staticmethod
+    def _sanitize_faces_payload(payload) -> dict[str, int]:
+        """Validate metadata and retain only per-bucket capture counts."""
+
+        if type(payload) is not dict or len(payload) > 512:
+            raise ValueError("invalid Frigate faces payload")
+        sanitized: dict[str, int] = {}
+        total_files = 0
+        for person_name, filenames in payload.items():
+            if (
+                type(person_name) is not str
+                or not 1 <= len(person_name) <= 255
+                or any(ord(char) < 32 for char in person_name)
+                or type(filenames) is not list
+                or len(filenames) > 2048
+            ):
+                raise ValueError("invalid Frigate faces payload")
+            for filename in filenames:
+                if (
+                    type(filename) is not str
+                    or not 1 <= len(filename) <= 512
+                    or any(ord(char) < 32 for char in filename)
+                ):
+                    raise ValueError("invalid Frigate faces payload")
+            total_files += len(filenames)
+            if total_files > 8192:
+                raise ValueError("invalid Frigate faces payload")
+            sanitized[person_name] = len(filenames)
+        return sanitized
+
+    @staticmethod
+    def _metadata_store_available(store) -> bool:
+        return bool(
+            store is not None
+            and not getattr(store, "setup_error", None)
+            and getattr(store, "recognition_metadata_available", False)
+        )
+
+    @classmethod
+    def _filter_faces_payload(
+        cls,
+        store,
+        payload,
+    ) -> dict[str, int]:
+        """Apply deterministic Core/legacy privacy policy to metadata."""
+
+        if not cls._metadata_store_available(store):
+            raise PermissionError("recognition metadata unavailable")
+        sanitized = cls._sanitize_faces_payload(payload)
+        visible: dict[str, int] = {}
+        for person_name, capture_count in sanitized.items():
+            policy = store.legacy_recognition_persistence_policy(person_name)
+            if policy in {"allowed", "unmatched"}:
+                visible[person_name] = capture_count
+        return visible
 
     async def get(self, request: web.Request) -> web.Response:
-        path = (request.query.get("path") or "").lstrip("/")
-        if not path or not any(path.startswith(p) for p in self._ALLOWED_PREFIXES):
-            return self.json({"error": "path not allowed"}, status_code=400)
-        from .frigate_sync import base_url as _frigate_base_url
+        if not self._is_exact_request(request):
+            return self.json(
+                {"error": "exact typed operation required"},
+                status_code=400,
+            )
+        hass: HomeAssistant = request.app["hass"]
+        store: IdentityStore | None = hass.data.get(DOMAIN, {}).get(
+            "identity_store"
+        )
+        if not self._metadata_store_available(store):
+            return self.json(
+                {"error": "frigate metadata unavailable"},
+                status_code=503,
+            )
+        capabilities = hass.data.get(DOMAIN, {}).get("frigate_caps")
+        if not (
+            capabilities is not None
+            and bool(capabilities.reachable)
+            and bool(capabilities.face_library)
+        ):
+            return self.json(
+                {"error": "frigate metadata unavailable"},
+                status_code=503,
+            )
+        try:
+            await hass.async_add_executor_job(
+                store.assert_legacy_read_current
+            )
+        except LegacyIdentityFenceError:
+            return self.json(
+                {"error": "legacy_frozen_view_degraded"},
+                status_code=503,
+            )
+        from .frigate_sync import (
+            base_url as _frigate_base_url,
+            is_disabled as _frigate_sync_disabled,
+        )
+        if _frigate_sync_disabled():
+            return self.json(
+                {"error": "frigate metadata unavailable"},
+                status_code=503,
+            )
         base = _frigate_base_url()
         if not base:
             return self.json({"error": "frigate not configured"}, status_code=503)
-        url = f"{base.rstrip('/')}/{path}"
+        url = f"{base.rstrip('/')}/api/faces"
         import httpx
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.get(url)
-            return web.Response(
-                body=resp.content,
-                status=resp.status_code,
-                content_type=resp.headers.get("content-type", "application/json"),
+            if resp.status_code != 200 or len(resp.content) > 1048576:
+                raise ValueError("invalid Frigate faces response")
+            payload = await hass.async_add_executor_job(
+                self._filter_faces_payload,
+                store,
+                resp.json(),
             )
-        except Exception as e:  # noqa: BLE001
-            return self.json({"error": f"frigate fetch failed: {e}"}, status_code=502)
+            return web.json_response(
+                payload,
+                headers={
+                    "Cache-Control": "no-store",
+                    "X-Content-Type-Options": "nosniff",
+                },
+            )
+        except LegacyIdentityFenceError:
+            return self.json(
+                {"error": "legacy_frozen_view_degraded"},
+                status_code=503,
+            )
+        except Exception:  # noqa: BLE001
+            return self.json(
+                {"error": "frigate metadata fetch failed"},
+                status_code=502,
+            )
 
 
 class AvatarView(CORSHomeAssistantView):
@@ -1518,6 +1725,20 @@ class AvatarView(CORSHomeAssistantView):
         if path is None:
             return self.json({"error": "invalid uuid"}, status_code=400)
         hass: HomeAssistant = request.app["hass"]
+        store: IdentityStore | None = hass.data.get(DOMAIN, {}).get(
+            "identity_store"
+        )
+        if store is None or getattr(store, "setup_error", None):
+            return self.json({"enabled": False}, status_code=503)
+        try:
+            await hass.async_add_executor_job(
+                store.assert_legacy_read_current
+            )
+        except LegacyIdentityFenceError:
+            return self.json(
+                {"error": "legacy_frozen_view_degraded"},
+                status_code=503,
+            )
 
         def _read() -> bytes | None:
             try:
@@ -1533,7 +1754,10 @@ class AvatarView(CORSHomeAssistantView):
         return web.Response(
             body=data,
             content_type="image/jpeg",
-            headers={"Cache-Control": "max-age=60, must-revalidate"},
+            headers={
+                "Cache-Control": "private, no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
         )
 
     async def head(self, request: web.Request, uuid: str) -> web.Response:
@@ -1544,10 +1768,25 @@ class AvatarView(CORSHomeAssistantView):
         if path is None:
             return web.Response(status=400)
         hass: HomeAssistant = request.app["hass"]
+        store: IdentityStore | None = hass.data.get(DOMAIN, {}).get(
+            "identity_store"
+        )
+        no_store_headers = {"Cache-Control": "private, no-store"}
+        if store is None or getattr(store, "setup_error", None):
+            return web.Response(status=503, headers=no_store_headers)
+        try:
+            await hass.async_add_executor_job(
+                store.assert_legacy_read_current
+            )
+        except LegacyIdentityFenceError:
+            return web.Response(status=503, headers=no_store_headers)
         exists = await hass.async_add_executor_job(
             lambda: path.exists() if path else False
         )
-        return web.Response(status=200 if exists else 404)
+        return web.Response(
+            status=200 if exists else 404,
+            headers=no_store_headers,
+        )
 
     async def post(self, request: web.Request, uuid: str) -> web.Response:
         path = self._path_for(uuid)
@@ -1560,6 +1799,21 @@ class AvatarView(CORSHomeAssistantView):
         store: IdentityStore | None = hass.data.get(DOMAIN, {}).get("identity_store")
         if store is None:
             return self.json({"enabled": False}, status_code=503)
+        if store.semantic_writes_frozen:
+            if store.semantic_write_fence_installed:
+                try:
+                    await hass.async_add_executor_job(
+                        store.assert_legacy_read_current
+                    )
+                except LegacyIdentityFenceError:
+                    return self.json(
+                        {"error": "legacy_frozen_view_degraded"},
+                        status_code=503,
+                    )
+            return self.json(
+                {"error": store.legacy_authority_state},
+                status_code=403,
+            )
         identity = await hass.async_add_executor_job(store.get_identity, uuid)
         if identity is None:
             return self.json({"error": "identity not found"}, status_code=404)
@@ -1613,6 +1867,26 @@ class AvatarView(CORSHomeAssistantView):
         if path is None:
             return self.json({"error": "invalid uuid"}, status_code=400)
         hass: HomeAssistant = request.app["hass"]
+        store: IdentityStore | None = hass.data.get(DOMAIN, {}).get(
+            "identity_store"
+        )
+        if store is None:
+            return self.json({"enabled": False}, status_code=503)
+        if store.semantic_writes_frozen:
+            if store.semantic_write_fence_installed:
+                try:
+                    await hass.async_add_executor_job(
+                        store.assert_legacy_read_current
+                    )
+                except LegacyIdentityFenceError:
+                    return self.json(
+                        {"error": "legacy_frozen_view_degraded"},
+                        status_code=503,
+                    )
+            return self.json(
+                {"error": store.legacy_authority_state},
+                status_code=403,
+            )
 
         def _unlink() -> bool:
             try:
@@ -1642,15 +1916,28 @@ def _delete_avatar_file_sync(uuid: str) -> bool:
     return False
 
 
+def _request_has_ha_admin_capability(request: web.Request) -> bool:
+    """Derive legacy compatibility authority from HA authentication only."""
+
+    user = request.get("hass_user")
+    return user is not None and bool(getattr(user, "is_admin", False))
+
+
 def _admin_only_legacy_handler(handler):
     """Require HA administrator authority for every legacy private API."""
 
     @wraps(handler)
     async def wrapped(self, request: web.Request, *args, **kwargs):
-        user = request.get("hass_user")
-        if user is None or not bool(getattr(user, "is_admin", False)):
-            raise Unauthorized()
-        return await handler(self, request, *args, **kwargs)
+        if not _request_has_ha_admin_capability(request):
+            raise web.HTTPForbidden(
+                reason="HA administrator authority required"
+            )
+        response = await handler(self, request, *args, **kwargs)
+        if hasattr(response, "headers"):
+            response.headers["Cache-Control"] = "private, no-store"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
     wrapped._home_agent_admin_guard = True
     return wrapped
@@ -1800,9 +2087,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # be no-op in pytest. Tests pass `hass=None` and won't trigger.
     identity_store.set_hass_for_events(hass)
 
-    # Frigate auto-seed: only runs if the store is empty. If it has rows,
-    # this is a no-op. If Frigate is offline, returns an error report
-    # without raising; the people tab can surface that for retry.
+    # Frigate operational enrollment: opaque source identifiers go only to
+    # the separate recognition database after legacy privacy-policy checks.
+    # No semantic identity or prompt context is created here.
     try:
         seed_report = await auto_seed_identities_from_frigate(identity_store)
         if seed_report.attempted:
@@ -1841,7 +2128,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # enriches with identity_context (relationship_type, privacy flags,
     # display_name substitution).
     try:
-        aggregator.set_identity_store(identity_store)
+        if (
+            not identity_store.semantic_writes_frozen
+            and not identity_store.setup_error
+        ):
+            aggregator.set_identity_store(identity_store)
     except Exception as e:  # noqa: BLE001
         _LOGGER.warning("Failed to wire IdentityStore into aggregator: %s", e)
     hass.data.setdefault(DOMAIN, {})["world_state"] = aggregator
@@ -1863,8 +2154,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 _LOGGER.debug("pending_writes drainer iteration failed: %s", e)
     try:
         import asyncio as _asyncio
-        drainer_task = _asyncio.create_task(_drain_loop())
-        hass.data[DOMAIN]["pending_writes_drainer_task"] = drainer_task
+        if identity_store.semantic_writes_frozen:
+            hass.data[DOMAIN]["pending_writes_drainer_task"] = None
+        else:
+            drainer_task = _asyncio.create_task(_drain_loop())
+            hass.data[DOMAIN]["pending_writes_drainer_task"] = drainer_task
 
         # Addendum 16 F-3: cancel the drainer on HA shutdown. Drainer
         # is created in async_setup (component-level), NOT async_setup_entry,
@@ -1907,7 +2201,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 rep = await auto_seed_identities_from_frigate(identity_store)
                 if rep.identities_created > 0:
                     _LOGGER.info(
-                        "Frigate reseed: created %d new identities from %d Frigate faces",
+                        "Frigate poll: retained %d new operational identifiers "
+                        "from %d Frigate faces",
                         rep.identities_created, rep.frigate_faces_found,
                     )
             except _asyncio.CancelledError:

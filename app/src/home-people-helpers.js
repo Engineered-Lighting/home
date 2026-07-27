@@ -342,44 +342,17 @@
 
   /* ── Addendum 24 helpers: Frigate face crops ────────────────── */
 
-  /** Given the /api/faces payload (a {personName: [filename, ...]}
-   *  dict) + an identity + the Frigate base URL, return the count of
-   *  face crops Frigate has + the full URLs to fetch each crop.
-   *
-   *  Lookup order:
-   *   1. identity.aliases with kind === "frigate_name" (canonical)
-   *   2. display_name.toLowerCase() as fallback
-   *
-   *  Both the folder + filename MUST be URL-encoded — Frigate folder
-   *  names like "marcelo sr" contain spaces (AR24-1). */
-  function frigateFaceCropUrls(facesByPerson, identity, frigateBaseUrl) {
-    if (!identity || !facesByPerson || !frigateBaseUrl) {
-      return { count: 0, urls: [], frigateName: null };
-    }
-    const candidates = [];
-    if (Array.isArray(identity.aliases)) {
-      for (const a of identity.aliases) {
-        if (a && a.kind === "frigate_name" && a.alias) {
-          candidates.push(a.alias);
-        }
-      }
-    }
-    if (identity.display_name) {
-      candidates.push(identity.display_name.toLowerCase());
-    }
-    const baseTrimmed = String(frigateBaseUrl).replace(/\/+$/, "");
-    for (const cand of candidates) {
-      const crops = facesByPerson[cand];
-      if (Array.isArray(crops) && crops.length > 0) {
-        const folder = encodeURIComponent(cand);
-        return {
-          count: crops.length,
-          urls: crops.map((f) => `${baseTrimmed}/clips/faces/${folder}/${encodeURIComponent(f)}`),
-          frigateName: cand,
-        };
-      }
-    }
-    return { count: 0, urls: [], frigateName: null };
+  /** Compatibility surface retained for callers from the legacy UI.
+   *  E4 intentionally returns no URLs: direct browser crop loads cannot
+   *  authenticate and can be retained by browser/network caches. */
+  function frigateFaceCropUrls() {
+    return {
+      count: 0,
+      urls: [],
+      frigateName: null,
+      disabled: true,
+      reason: "legacy_face_thumbnails_disabled",
+    };
   }
 
   /* ── Addendum 23 helpers: hover state ─────────────────────────── */

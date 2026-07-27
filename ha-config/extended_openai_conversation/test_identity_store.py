@@ -75,13 +75,9 @@ os.environ["EXTENDED_OPENAI_IDENTITY_SEMANTIC_WRITES"] = "legacy_migration_only"
 
 from identity_store import (  # type: ignore[import]
     IdentityStore,
-    RELATIONSHIP_TYPES,
-    PREFERENCE_SOURCES,
     SCHEMA_VERSION,
-    CHANGE_LOG_RETENTION,
     LEGACY_MIGRATION_MODE,
     SEMANTIC_WRITES_MODE_ENV,
-    is_disabled,
 )
 
 
@@ -276,16 +272,21 @@ def _rename_no_queue_when_unchanged():
 t("non-display_name update does NOT queue Frigate rename",
   _rename_no_queue_when_unchanged)
 
-def _frozen_profile_edit_allows_user_pronouns():
+def _frozen_profile_edit_allows_ha_admin_pronouns_before_e4_fence():
     s = fresh()
     u = s.create_identity("Marcelo", relationship_type="me")
     s._semantic_writes_frozen = True
-    ok = s.update_identity(u, {"pronouns": "he/him"}, actor="user")
+    ok = s.update_identity(
+        u,
+        {"pronouns": "he/him"},
+        actor="ha_admin",
+        allow_legacy_self_profile_edit=True,
+    )
     assert ok
     after = s.get_identity(u)
     assert after.pronouns == "he/him"
-t("frozen semantic authority still allows user profile pronoun edits",
-  _frozen_profile_edit_allows_user_pronouns)
+t("pre-E4 freeze allows HA-admin self-profile pronoun compatibility",
+  _frozen_profile_edit_allows_ha_admin_pronouns_before_e4_fence)
 
 def _frozen_profile_edit_requires_unique_me():
     s = fresh()
@@ -293,10 +294,14 @@ def _frozen_profile_edit_requires_unique_me():
     s.create_identity("Ambiguous self", relationship_type="me")
     s._semantic_writes_frozen = True
     try:
-        s.update_identity(first, {"pronouns": "he/him"}, actor="user")
+        s.update_identity(
+            first,
+            {"pronouns": "he/him"},
+            allow_legacy_self_profile_edit=True,
+        )
         raise AssertionError("expected PermissionError for ambiguous self")
     except PermissionError as e:
-        assert "semantic authority" in str(e)
+        assert "frozen pending" in str(e)
 t("frozen pronoun compatibility requires exactly one me identity",
   _frozen_profile_edit_requires_unique_me)
 
@@ -306,10 +311,14 @@ def _frozen_profile_edit_blocks_third_party_pronouns():
     other = s.create_identity("Other", relationship_type="friend")
     s._semantic_writes_frozen = True
     try:
-        s.update_identity(other, {"pronouns": "they/them"}, actor="user")
+        s.update_identity(
+            other,
+            {"pronouns": "they/them"},
+            allow_legacy_self_profile_edit=True,
+        )
         raise AssertionError("expected PermissionError for third-party pronouns")
     except PermissionError as e:
-        assert "semantic authority" in str(e)
+        assert "frozen pending" in str(e)
 t("frozen pronoun compatibility cannot edit a third party",
   _frozen_profile_edit_blocks_third_party_pronouns)
 
@@ -334,27 +343,31 @@ def _frozen_profile_edit_blocks_semantic_and_privacy_fields():
         me = s.create_identity("Marcelo", relationship_type="me")
         s._semantic_writes_frozen = True
         try:
-            s.update_identity(me, patch, actor="user")
+            s.update_identity(
+                me,
+                patch,
+                allow_legacy_self_profile_edit=True,
+            )
             raise AssertionError(f"expected PermissionError for {sorted(patch)}")
         except PermissionError as e:
-            assert "semantic authority" in str(e)
+            assert "frozen pending" in str(e)
 t("frozen compatibility blocks semantic, privacy, binding, and mixed patches",
   _frozen_profile_edit_blocks_semantic_and_privacy_fields)
 
-def _frozen_blocks_non_user_profile_edit():
-    for actor in ("assistant", "system", "home_app", "ui", "frigate_sync"):
-        s = fresh()
-        u = s.create_identity("Marcelo", relationship_type="me")
-        s._semantic_writes_frozen = True
+def _frozen_blocks_profile_edit_without_server_capability():
+    s = fresh()
+    u = s.create_identity("Marcelo", relationship_type="me")
+    s._semantic_writes_frozen = True
+    for actor in ("user", "assistant", "system", "home_app", "ui", "frigate_sync"):
         try:
             s.update_identity(u, {"pronouns": "he/him"}, actor=actor)
             raise AssertionError(
-                f"expected PermissionError for non-user actor {actor}"
+                f"expected PermissionError without HA capability for {actor}"
             )
         except PermissionError as e:
-            assert "semantic authority" in str(e)
-t("frozen semantic authority blocks assistant profile writes",
-  _frozen_blocks_non_user_profile_edit)
+            assert "frozen pending" in str(e)
+t("caller actor labels cannot authorize frozen profile writes",
+  _frozen_blocks_profile_edit_without_server_capability)
 
 def _frozen_blocks_legacy_create():
     s = fresh_frozen()
@@ -362,7 +375,7 @@ def _frozen_blocks_legacy_create():
         s.create_identity("New Person", relationship_type="friend")
         raise AssertionError("expected PermissionError for legacy create")
     except PermissionError as e:
-        assert "semantic authority" in str(e)
+        assert "frozen pending" in str(e)
 t("frozen semantic authority blocks legacy create_identity",
   _frozen_blocks_legacy_create)
 
@@ -468,7 +481,7 @@ def _set_pref_upserts():
     pid = s.set_preference(u, "light_temp_pref", 2700)
     assert pid > 0
     # Set same key + same (empty) scope → update, not duplicate
-    pid2 = s.set_preference(u, "light_temp_pref", 3000)
+    s.set_preference(u, "light_temp_pref", 3000)
     prefs = s.list_preferences(u)
     assert len(prefs) == 1, prefs
     assert prefs[0]["value"] == 3000
@@ -670,11 +683,17 @@ def _semantic_freeze_is_irreversible_and_recognition_stays_operational():
             raise AssertionError("semantic create unexpectedly succeeded")
         except PermissionError:
             pass
-        recognition_uuid = frozen.ensure_recognition_enrollment(
+        recognition_name = frozen.ensure_recognition_enrollment(
             "new_frigate_cluster", display_label="Unreviewed recognition"
         )
-        assert recognition_uuid
-        assert frozen.resolve_frigate_name("new_frigate_cluster") is not None
+        assert recognition_name == "new_frigate_cluster"
+        assert frozen.resolve_frigate_name("new_frigate_cluster") is None
+        assert (
+            frozen.resolve_operational_recognition_name(
+                "new_frigate_cluster"
+            )
+            is not None
+        )
         frozen.close()
 
         os.environ["EXTENDED_OPENAI_IDENTITY_SEMANTIC_WRITES"] = (
@@ -684,14 +703,14 @@ def _semantic_freeze_is_irreversible_and_recognition_stays_operational():
         reopened.setup()
         assert reopened.semantic_writes_frozen is True
         try:
-            reopened.add_alias(recognition_uuid, "Must fail")
+            reopened.add_alias(recognition_name, "Must fail")
             raise AssertionError("semantic alias unexpectedly succeeded")
         except PermissionError:
             pass
         reopened.close()
 
 t(
-    "Core cutover marker freezes semantics but preserves recognition enrollment",
+    "pending-cutover freeze isolates operational recognition enrollment",
     _semantic_freeze_is_irreversible_and_recognition_stays_operational,
 )
 
@@ -735,7 +754,10 @@ def _txn_isolation():
             results[key] = False
     t1 = threading.Thread(target=worker, args=("A", "first"))
     t2 = threading.Thread(target=worker, args=("B", "second"))
-    t1.start(); t2.start(); t1.join(); t2.join()
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
     # Exactly one wins, one fails version check
     wins = sum(1 for v in results.values() if v)
     assert wins == 1, f"expected exactly one winner, got {results}"

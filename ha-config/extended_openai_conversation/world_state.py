@@ -274,6 +274,13 @@ class WorldStateAggregator:
         both the aggregator and the store are instantiated. Loose-coupling
         on purpose — the aggregator never imports identity_store directly,
         so the world_state module stays testable without the store."""
+        # A fenced legacy database is historical evidence only. Keeping this
+        # defense here (in addition to integration setup) ensures no future
+        # caller can accidentally wire names, notes, relationships, or privacy
+        # metadata into model-facing WorldState projections.
+        if getattr(store, "semantic_writes_frozen", True):
+            self._identity_store = None
+            return
         self._identity_store = store
 
     # ─── lifecycle ──────────────────────────────────────────────────
@@ -1116,7 +1123,7 @@ class WorldStateAggregator:
         ha_location = person_data.get("ha_location")
         parts = [f"I don't currently see {canonical} on any camera"]
         if ha_location == "home":
-            parts.append(f"their phone is home")
+            parts.append("their phone is home")
         elif ha_location and ha_location not in (None, "unknown", "unavailable"):
             parts.append(f"their phone shows them as {ha_location}")
         if last_visual_room and last_visual_age is not None:

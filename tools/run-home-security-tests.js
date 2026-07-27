@@ -325,7 +325,16 @@ test("legacy model tools and automatic private context are locked off", () => {
     path.join(root, "ha-config", "extended_openai_conversation", "identity_store.py"),
     "utf8",
   );
-  assert.match(identityStore, /UPDATE change_log SET before_json = NULL/);
+  const legacyFence = fs.readFileSync(
+    path.join(root, "ha-config", "extended_openai_conversation", "legacy_identity_fence.py"),
+    "utf8",
+  );
+  assert.match(identityStore, /scrub_legacy_audit_content\(self\._conn\)/);
+  assert.match(
+    legacyFence,
+    /UPDATE change_log SET ts = \?, kind = \?, actor = \?,[\s\S]*target_uuid = NULL, before_json = NULL, after_json = \?[\s\S]*link_conv_id = NULL[\s\S]*pinned = 0/,
+  );
+  assert.match(legacyFence, /SCRUBBED_AUDIT_ACTOR = "legacy_scrubbed"/);
   assert.match(identityStore, /json\.dumps\(\{"operation_code": operation_code\}\)/);
   assert.doesNotMatch(identityStore, /json\.dumps\(before\) if before is not None/);
 });

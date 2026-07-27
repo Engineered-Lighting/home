@@ -250,11 +250,12 @@ assert("background warmup has a URL/localStorage kill switch",
   appSource.includes('get("warmup")') &&
     appSource.includes("home.perf.backgroundWarmup") &&
     appSource.includes("state: \"disabled\""));
-assert("people data warmup waits for boot and saved credentials outside React",
-  peoplePrewarmSource.includes("__bootState?.done") &&
-    peoplePrewarmSource.includes("loadPrefs") &&
-    peoplePrewarmSource.includes("api/extended_openai_conversation/identities") &&
-    peoplePrewarmSource.includes("Authorization: `Bearer ${token}`"));
+assert("people data prewarm is disabled and never reads saved credentials",
+  peoplePrewarmSource.includes("sensitive_people_cache_disabled") &&
+    peoplePrewarmSource.includes("readCache: () => null") &&
+    peoplePrewarmSource.includes("writeCache: () => null") &&
+    !peoplePrewarmSource.includes("loadPrefs") &&
+    !peoplePrewarmSource.includes("Authorization:"));
 assert("background warmup pauses during interaction and focused input",
   appSource.includes("recent interaction") &&
     appSource.includes("input focused") &&
@@ -270,11 +271,13 @@ assert("background warmup controls apartment auto-prewarm",
 assert("perf snapshot exposes boot shell and warmup state",
   fs.readFileSync(path.join(SRC_DIR, "home-perf.js"), "utf8").includes("window.__homeBootShell") &&
     fs.readFileSync(path.join(SRC_DIR, "home-perf.js"), "utf8").includes("window.__HOME_BACKGROUND_WARMUP"));
-assert("people prewarm exposes a quiet data warmer",
+assert("people prewarm exposes an inert privacy-safe compatibility surface",
   peopleSource.includes("window.HomePeoplePrewarm") &&
     peopleSource.includes("prewarmPeopleData") &&
-    peopleSource.includes("cache: \"no-store\"") &&
-    peopleSource.includes("cache: \"force-cache\""));
+    peopleSource.includes("sensitive_people_cache_disabled") &&
+    peopleSource.includes("readCache: () => null") &&
+    peopleSource.includes("writeCache: () => null") &&
+    !peopleSource.includes("writePeopleDataCache"));
 
 process.stdout.write("\nbootstrap_order_contract_test\n");
 [
@@ -468,9 +471,11 @@ assert("stored events do not make an uncredentialed launch look online",
   /const hasStoredHaCredentials = !!\(initialPrefs\.endpoint && initialPrefs\.token\);[\s\S]*const \[connection, setConnection\] = useState\(\s*hasStoredHaCredentials \? "reconnecting" : "disconnected"\s*\);/.test(appSource) &&
     !/initialEvents \? "online"/.test(appSource),
   appSource.slice(appSource.indexOf("const hasStoredHaCredentials") - 300, appSource.indexOf("const hasStoredHaCredentials") + 500));
-assert("prefs persistence includes endpoint token and selected model",
-  /savePrefs\(\{\s*endpoint,\s*token,\s*model,/.test(prefsBlock) &&
-    /\[endpoint,\s*token,\s*model,/.test(prefsBlock),
+assert("prefs persistence keeps endpoint/model but excludes bearer token",
+  /savePrefs\(\{\s*endpoint,\s*model,/.test(prefsBlock) &&
+    /\[endpoint,\s*model,/.test(prefsBlock) &&
+    !/savePrefs\(\{[^}]*\btoken\b/.test(prefsBlock) &&
+    !/\[endpoint,\s*token,/.test(prefsBlock),
   prefsBlock);
 assert("connectTo persists typed endpoint/token before attempting HA connect",
   /setEndpoint\(haUrl\);[\s\S]*setToken\(accessToken\);[\s\S]*setAvailableModels\(null\);[\s\S]*setConnection\("connecting"\);/.test(connectBlock) &&

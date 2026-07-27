@@ -1,21 +1,25 @@
 #!/usr/bin/env python3
-"""Run the E1/E2/E3 gate only against disposable PostgreSQL 17."""
+"""Run the E1/E2/E3/E4 scaffold gate only against disposable PostgreSQL 17."""
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import secrets
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 from typing import Callable
+import uuid
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +39,12 @@ REVISION_0010 = "0010_identity_erasure_source"
 REVISION_0011 = "0011_identity_erasure_e1"
 REVISION_0012 = "0012_identity_erasure_e2"
 REVISION_0013 = "0013_identity_finalizer_e3"
+REVISION_0014 = "0014_identity_cutover_e4"
+E4_SUCCESS_DOCUMENT_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_DOCUMENT_B64"
+E4_SUCCESS_ADMISSION_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_ADMISSION_ID"
+E4_FIXTURE_MOUNT = "/run/e4-fixture"
+E4_FIXTURE_DOCUMENT_FILE = "document.b64"
+E4_FIXTURE_ADMISSION_FILE = "admission_id"
 RUN_LABEL = "com.engineeredlighting.home-agent-e1.run"
 MANAGED_LABEL = "com.engineeredlighting.home-agent-e1.managed"
 PHASE_LABEL = "com.engineeredlighting.home-agent-e1.phase"
@@ -100,6 +110,7 @@ SECRET_NAMES = (
     "postgres_binding_operator_password",
     "postgres_identity_migration_password",
     "postgres_identity_finalizer_password",
+    "postgres_identity_cutover_password",
     "postgres_ingest_password",
     "postgres_worker_password",
     "postgres_erasure_password",
@@ -155,6 +166,13 @@ BUILD_CONTEXT_FILES = (
     "stack/home-agent-deploy/apply-grants.sh",
     "stack/home-agent-deploy/identity-api-acl.sql",
     "stack/home-agent-deploy/IDENTITY-ERASURE-KERNEL-ROLE.md",
+    "stack/home-agent-deploy/IDENTITY-CUTOVER-ROLE.md",
+    "stack/home-agent-deploy/bootstrap-secrets.sh",
+    "stack/home-agent-deploy/materialize-secrets.sh",
+    "stack/home-agent-deploy/preflight.sh",
+    "stack/home-agent-deploy/add-identity-cutover-role-secrets.sh",
+    "stack/home-agent-deploy/preflight-identity-cutover-roles.sh",
+    "stack/home-agent-deploy/provision-identity-cutover-roles.sh",
     "tests/home_agent/test_identity_erasure_kernel_foundation_deployment_contract.py",
     "tests/home_agent/test_apply_grants_revision_0006a_contract.py",
     "tests/home_agent/test_e1_postgres_gate_contract.py",
@@ -167,6 +185,8 @@ BUILD_CONTEXT_FILES = (
     "0012_identity_person_erasure_tombstone.py",
     "stack/services/home-agent-core/alembic/versions/"
     "0013_identity_finalizer_kernel.py",
+    "stack/services/home-agent-core/alembic/versions/"
+    "0014_identity_semantic_cutover_e4.py",
     "stack/services/home-agent-core/app/identity_erasure_schema.py",
     "stack/home-agent-deploy/operator/reviewed_identity_payload.py",
     "stack/home-agent-deploy/operator/REVIEWED-IDENTITY-PAYLOAD.md",
@@ -181,6 +201,15 @@ BUILD_CONTEXT_FILES = (
     "test_phase3_identity_finalizer_e3_schema.py",
     "tests/home_agent/test_identity_erasure_e2_deployment_contract.py",
     "tests/home_agent/test_identity_finalizer_e3_deployment_contract.py",
+    "tests/home_agent/test_identity_cutover_e4_deployment_contract.py",
+    "stack/services/home-agent-core/tests/"
+    "test_phase3_identity_cutover_e4_scaffold_postgres.py",
+    "stack/services/home-agent-core/tests/"
+    "test_phase3_identity_semantic_cutover_e4_runtime_postgres.py",
+    "stack/services/home-agent-core/tests/"
+    "seed_phase3_identity_semantic_cutover_e4_success.py",
+    "stack/services/home-agent-core/tests/"
+    "test_phase3_identity_semantic_cutover_e4_schema.py",
     "tools/run-home-agent-e1-postgres-gate.py",
     ".github/workflows/home-agent-e1-postgres.yml",
 )
@@ -253,6 +282,7 @@ class GateState:
     client_sequence: int = 0
     interrupted: bool = False
     phases: set[str] = field(default_factory=set)
+    pending_e4_catalog_digest: str | None = None
 
     @property
     def name_prefix(self) -> str:
@@ -662,6 +692,9 @@ def _docker_run(
     label: str,
     timeout: int = 300,
     check: bool = True,
+    fixture_directory: Path | None = None,
+    fixture_read_only: bool = True,
+    run_as_host_user: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     name = state.next_client_name(phase)
     arguments = state.docker(
@@ -673,10 +706,28 @@ def _docker_run(
         *CLIENT_CONTAINER_LIMITS,
         "--network",
         network,
-        "--mount",
-        f"type=bind,source={secrets_directory},target=/run/secrets,readonly",
-        "--workdir",
-        "/workspace/stack/services/home-agent-core",
+    )
+    if run_as_host_user and os.name == "posix":
+        arguments.extend(("--user", f"{os.getuid()}:{os.getgid()}"))
+    arguments.extend(
+        (
+            "--mount",
+            f"type=bind,source={secrets_directory},"
+            "target=/run/secrets,readonly",
+        )
+    )
+    if fixture_directory is not None:
+        if fixture_directory.is_symlink() or not fixture_directory.is_dir():
+            raise GateFailure("E4 fixture mount must be a real directory")
+        fixture_source = fixture_directory.resolve(strict=True)
+        fixture_mount = (
+            f"type=bind,source={fixture_source},target={E4_FIXTURE_MOUNT}"
+        )
+        if fixture_read_only:
+            fixture_mount += ",readonly"
+        arguments.extend(("--mount", fixture_mount))
+    arguments.extend(
+        ("--workdir", "/workspace/stack/services/home-agent-core")
     )
     for key, value in environment.items():
         arguments.extend(("--env", f"{key}={value}"))
@@ -764,6 +815,37 @@ def _alembic(
     )
 
 
+def _alembic_downgrade(
+    state: GateState,
+    phase: Phase,
+    secrets_directory: Path,
+    database: str,
+    revision: str,
+) -> None:
+    _docker_run(
+        state,
+        state.test_image,
+        phase=phase.name,
+        network=phase.network,
+        secrets_directory=secrets_directory,
+        environment=_client_environment(database),
+        command=[
+            "sh",
+            "-eu",
+            "-c",
+            "password=\"$(tr -d '\\r\\n' < "
+            '"$POSTGRES_OWNER_PASSWORD_FILE")"; '
+            'export HOME_AGENT_DATABASE_URL="postgresql+psycopg://'
+            f'{OWNER}:$password@postgres:5432/{database}"; '
+            'exec python -m alembic downgrade "$1"',
+            "e1-alembic-downgrade",
+            revision,
+        ],
+        label=f"downgrade of {database} to {revision}",
+        timeout=600,
+    )
+
+
 def _apply_grants(
     state: GateState,
     phase: Phase,
@@ -789,6 +871,8 @@ def _apply_grants_expect_failure(
     database: str,
     *,
     expected_output: str,
+    failure_label: str = "tampered E2 helper",
+    capture_e4_catalog_digest: bool = False,
 ) -> None:
     result = _docker_run(
         state,
@@ -802,14 +886,31 @@ def _apply_grants_expect_failure(
         check=False,
     )
     if result.returncode == 0:
-        raise GateFailure("tampered E2 helper unexpectedly passed grant replay")
+        raise GateFailure(f"{failure_label} unexpectedly passed grant replay")
     if expected_output not in result.stdout:
         output = result.stdout.rstrip()
-        if output:
+        if output and not capture_e4_catalog_digest:
             print(output, file=sys.stderr)
         raise GateFailure(
-            "tampered E2 helper failed without the reviewed contract marker"
+            f"{failure_label} failed without the reviewed contract marker"
         )
+    if capture_e4_catalog_digest:
+        if state.pending_e4_catalog_digest is not None:
+            raise GateFailure("E4 catalog digest was captured more than once")
+        state.pending_e4_catalog_digest = _extract_e4_catalog_digest(result.stdout)
+
+
+def _extract_e4_catalog_digest(output: str) -> str:
+    matches = re.findall(
+        r"DETAIL:\s+expected=PENDING_E4_CATALOG_SHA256 "
+        r"actual=([0-9a-f]{64})(?=\s|$)",
+        output,
+    )
+    if len(matches) != 1:
+        raise GateFailure(
+            "unpinned E4 catalog failed without one exact redacted digest"
+        )
+    return matches[0]
 
 
 def _provision_roles(
@@ -829,6 +930,32 @@ def _provision_roles(
     )
 
 
+def _provision_identity_cutover_roles(
+    state: GateState,
+    phase: Phase,
+    secrets_directory: Path,
+) -> None:
+    _docker_run(
+        state,
+        state.test_image,
+        phase=phase.name,
+        network=phase.network,
+        secrets_directory=secrets_directory,
+        environment={
+            **_client_environment(BASE_DATABASE),
+            "POSTGRES_OWNER_PASSWORD_FILE": (
+                "/run/secrets/postgres_owner_password"
+            ),
+        },
+        command=[
+            "sh",
+            "/workspace/stack/home-agent-deploy/"
+            "provision-identity-cutover-roles.sh",
+        ],
+        label=f"additive E4 role ceremony for {phase.name}",
+    )
+
+
 def _database_url_shell_export(
     name: str,
     database: str,
@@ -842,6 +969,190 @@ def _database_url_shell_export(
     )
 
 
+def _validate_e4_fixture_material(directory: Path) -> None:
+    if directory.is_symlink() or not directory.is_dir():
+        raise GateFailure("E4 fixture output is not a real directory")
+    expected_names = {
+        E4_FIXTURE_DOCUMENT_FILE,
+        E4_FIXTURE_ADMISSION_FILE,
+    }
+    entries = list(directory.iterdir())
+    if {entry.name for entry in entries} != expected_names:
+        raise GateFailure("E4 fixture output has missing or unexpected files")
+    for entry in entries:
+        if entry.is_symlink() or not entry.is_file():
+            raise GateFailure("E4 fixture output contains a non-regular file")
+        if entry.resolve(strict=True).parent != directory.resolve(strict=True):
+            raise GateFailure("E4 fixture output escapes its directory")
+        if os.name == "posix" and stat.S_IMODE(entry.stat().st_mode) & 0o077:
+            raise GateFailure("E4 fixture output permissions are too broad")
+        if os.name == "posix" and entry.stat().st_uid != os.getuid():
+            raise GateFailure("E4 fixture output is not owned by the gate user")
+
+    try:
+        document_lines = (
+            directory.joinpath(E4_FIXTURE_DOCUMENT_FILE)
+            .read_text(encoding="ascii")
+            .splitlines()
+        )
+        admission_lines = (
+            directory.joinpath(E4_FIXTURE_ADMISSION_FILE)
+            .read_text(encoding="ascii")
+            .splitlines()
+        )
+        if len(document_lines) != 1 or len(admission_lines) != 1:
+            raise ValueError("fixture files must each contain exactly one line")
+        document = base64.b64decode(document_lines[0], validate=True)
+        admission_id = uuid.UUID(admission_lines[0])
+    except (OSError, UnicodeError, ValueError) as error:
+        raise GateFailure("E4 fixture output is malformed") from error
+    if not 2 <= len(document) <= 1048576:
+        raise GateFailure("E4 fixture document is outside the admitted bound")
+    if (
+        admission_lines[0] != str(admission_id)
+        or admission_id.version != 7
+        or admission_id.variant != uuid.RFC_4122
+    ):
+        raise GateFailure("E4 fixture admission identity is not UUIDv7")
+
+
+def _fixture_file_shell_export(name: str, filename: str) -> str:
+    allowed = {
+        E4_SUCCESS_DOCUMENT_ENV: E4_FIXTURE_DOCUMENT_FILE,
+        E4_SUCCESS_ADMISSION_ENV: E4_FIXTURE_ADMISSION_FILE,
+    }
+    if allowed.get(name) != filename:
+        raise GateFailure("unreviewed E4 fixture environment export")
+    return (
+        f'test -s "{E4_FIXTURE_MOUNT}/{filename}"; '
+        f'export {name}="$(tr -d \'\\r\\n\' < '
+        f'"{E4_FIXTURE_MOUNT}/{filename}")"; '
+    )
+
+
+def _seed_e4_success_fixture(
+    state: GateState,
+    phase: Phase,
+    secrets_directory: Path,
+    fixture_directory: Path,
+) -> None:
+    if fixture_directory.is_symlink() or not fixture_directory.is_dir():
+        raise GateFailure("E4 fixture directory is not a real directory")
+    if any(fixture_directory.iterdir()):
+        raise GateFailure("E4 fixture directory is not empty before seeding")
+    shell = _database_url_shell_export(
+        "TEST_PHASE3_IDENTITY_CUTOVER_E4_OWNER_DATABASE_URL",
+        BASE_DATABASE,
+    )
+    shell += _database_url_shell_export(
+        "TEST_PHASE3_IDENTITY_CUTOVER_E4_FINALIZER_DATABASE_URL",
+        BASE_DATABASE,
+        "home_agent_identity_finalizer",
+        "postgres_identity_finalizer_password",
+    )
+    shell += (
+        "exec python "
+        "tests/seed_phase3_identity_semantic_cutover_e4_success.py"
+    )
+    _docker_run(
+        state,
+        state.test_image,
+        phase=phase.name,
+        network=phase.network,
+        secrets_directory=secrets_directory,
+        environment=_client_environment(ADMIN_DATABASE),
+        command=["sh", "-eu", "-c", shell],
+        label="seed disposable synthetic E4 admitted-success fixture",
+        timeout=600,
+        fixture_directory=fixture_directory,
+        fixture_read_only=False,
+        run_as_host_user=True,
+    )
+    _validate_e4_fixture_material(fixture_directory)
+
+
+def _set_disposable_e4_role_login(
+    state: GateState,
+    phase: Phase,
+    secrets_directory: Path,
+    *,
+    role: str,
+    enabled: bool,
+) -> None:
+    allowed_roles = {
+        "home_agent_identity_finalizer",
+        "home_agent_identity_cutover",
+    }
+    if role not in allowed_roles:
+        raise GateFailure("unreviewed disposable E4 login role")
+    action = "open" if enabled else "re-expire"
+    if enabled:
+        role_change_sql = (
+            "DO $e4_bounded_login$ BEGIN "
+            f"EXECUTE pg_catalog.format('ALTER ROLE {role} VALID UNTIL %L', "
+            "pg_catalog.clock_timestamp() + interval '5 minutes'); "
+            "END $e4_bounded_login$"
+        )
+    else:
+        role_change_sql = (
+            f"ALTER ROLE {role} VALID UNTIL '1970-01-01 00:00:00+00'"
+        )
+    _psql(
+        state,
+        phase,
+        secrets_directory,
+        database=BASE_DATABASE,
+        sql=role_change_sql,
+        label=f"{action} disposable E4 {role} login",
+    )
+    if enabled:
+        bounded_window = _psql(
+            state,
+            phase,
+            secrets_directory,
+            database=BASE_DATABASE,
+            sql=(
+                "SELECT count(*) FROM pg_catalog.pg_roles "
+                f"WHERE rolname='{role}' AND rolcanlogin "
+                "AND rolvaliduntil > pg_catalog.clock_timestamp() "
+                "AND rolvaliduntil <= "
+                "pg_catalog.clock_timestamp() + interval '5 minutes'"
+            ),
+            label=f"verify bounded disposable E4 {role} login window",
+        )
+        if bounded_window.stdout.strip() != "1":
+            raise GateFailure(
+                f"disposable E4 {role} login window was not bounded"
+            )
+        return
+    verification = _psql(
+        state,
+        phase,
+        secrets_directory,
+        database=BASE_DATABASE,
+        sql=(
+            "SELECT pg_catalog.pg_terminate_backend(activity.pid, 5000) "
+            "FROM pg_catalog.pg_stat_activity AS activity "
+            f"WHERE activity.usename='{role}' "
+            "AND activity.pid <> pg_catalog.pg_backend_pid(); "
+            "SELECT "
+            "(SELECT count(*) FROM pg_catalog.pg_roles "
+            f"WHERE rolname='{role}' AND rolcanlogin "
+            "AND rolvaliduntil <= "
+            "'1970-01-01 00:00:00+00'::timestamptz)::text "
+            "|| '|' || "
+            "(SELECT count(*) FROM pg_catalog.pg_stat_activity "
+            f"WHERE usename='{role}')::text"
+        ),
+        label=f"terminate and verify disposable E4 {role} login is expired",
+    )
+    final_row = verification.stdout.strip().splitlines()[-1:]
+    if final_row != ["1|0"]:
+        raise GateFailure(
+            f"disposable E4 {role} login or session remained usable"
+        )
+
+
 def _pytest(
     state: GateState,
     phase: Phase,
@@ -851,6 +1162,8 @@ def _pytest(
     url_environment: dict[str, str],
     credential_url_environment: dict[str, tuple[str, str, str]] | None = None,
     environment: dict[str, str] | None = None,
+    fixture_file_environment: dict[str, str] | None = None,
+    fixture_directory: Path | None = None,
     fail_fast: bool = True,
 ) -> None:
     shell = "password=\"$(tr -d '\\r\\n' < " '"$POSTGRES_OWNER_PASSWORD_FILE")"; '
@@ -860,6 +1173,12 @@ def _pytest(
         credential_url_environment or {}
     ).items():
         shell += _database_url_shell_export(name, database, role, password_secret)
+    if fixture_file_environment:
+        if fixture_directory is None:
+            raise GateFailure("E4 fixture exports require a fixture directory")
+        _validate_e4_fixture_material(fixture_directory)
+        for name, filename in fixture_file_environment.items():
+            shell += _fixture_file_shell_export(name, filename)
     fail_fast_argument = " -x" if fail_fast else ""
     shell += f'exec python -m pytest{fail_fast_argument} -q "$@"'
     client_environment = _client_environment(ADMIN_DATABASE)
@@ -875,6 +1194,7 @@ def _pytest(
         command=["sh", "-eu", "-c", shell, "e1-pytest", *nodes],
         label=f"{phase.name} PostgreSQL test contracts",
         timeout=1200,
+        fixture_directory=fixture_directory,
     )
 
 
@@ -1634,6 +1954,210 @@ def _run_e3_phase(
     )
 
 
+def _run_e4_scaffold_phase(
+    state: GateState,
+    secrets_directory: Path,
+    phase: Phase,
+    fixture_directory: Path,
+) -> None:
+    """Run the additive E4 ceremony after preserving the historical chain."""
+    _upgrade_e3_database(state, phase, secrets_directory)
+    _provision_identity_cutover_roles(state, phase, secrets_directory)
+    _apply_grants(state, phase, secrets_directory, BASE_DATABASE)
+    _verify_cluster_guard(
+        state,
+        phase,
+        secrets_directory,
+        {ADMIN_DATABASE, "template0", "template1", BASE_DATABASE},
+    )
+    _pytest(
+        state,
+        phase,
+        secrets_directory,
+        nodes=[
+            "tests/test_phase3_identity_cutover_e4_scaffold_postgres.py",
+            "/workspace/tests/home_agent/"
+            "test_identity_cutover_e4_deployment_contract.py",
+        ],
+        url_environment={
+            "TEST_PHASE3_IDENTITY_CUTOVER_E4_OWNER_DATABASE_URL": BASE_DATABASE,
+        },
+        credential_url_environment={
+            "TEST_PHASE3_IDENTITY_CUTOVER_E4_DATABASE_URL": (
+                BASE_DATABASE,
+                "home_agent_identity_cutover",
+                "postgres_identity_cutover_password",
+            ),
+        },
+        environment={
+            SENTINEL_ENV: state.sentinel,
+            SYSTEM_ID_ENV: phase.system_identifier,
+            ALLOWLIST_ENV: BASE_DATABASE,
+        },
+        fail_fast=False,
+    )
+    _alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0014)
+    _assert_database_revision(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+        REVISION_0014,
+    )
+
+    # Exercise the quarantined-role downgrade while all E4 relations are
+    # empty. Once an admitted fixture exists, downgrade must fail by design.
+    _apply_grants_expect_failure(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+        expected_output=(
+            "identity cutover E4 catalog admission is pending reviewed digest"
+        ),
+        failure_label="empty E4 quarantine before downgrade",
+    )
+    _alembic_downgrade(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+        REVISION_0013,
+    )
+    _assert_database_revision(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+        REVISION_0013,
+    )
+    _alembic(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+        REVISION_0014,
+    )
+    _assert_database_revision(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+        REVISION_0014,
+    )
+    try:
+        _set_disposable_e4_role_login(
+            state,
+            phase,
+            secrets_directory,
+            role="home_agent_identity_finalizer",
+            enabled=True,
+        )
+        _seed_e4_success_fixture(
+            state,
+            phase,
+            secrets_directory,
+            fixture_directory,
+        )
+    finally:
+        _set_disposable_e4_role_login(
+            state,
+            phase,
+            secrets_directory,
+            role="home_agent_identity_finalizer",
+            enabled=False,
+        )
+
+    # The isolated disposable contract test opens the otherwise expired login.
+    # Re-expire it before testing grant replay and destroy the whole labeled
+    # cluster on every success/failure path.
+    try:
+        _set_disposable_e4_role_login(
+            state,
+            phase,
+            secrets_directory,
+            role="home_agent_identity_cutover",
+            enabled=True,
+        )
+        _pytest(
+            state,
+            phase,
+            secrets_directory,
+            nodes=[
+                "tests/test_phase3_identity_semantic_cutover_e4_schema.py",
+                "tests/"
+                "test_phase3_identity_semantic_cutover_e4_runtime_postgres.py",
+                "/workspace/tests/home_agent/"
+                "test_identity_cutover_e4_deployment_contract.py",
+            ],
+            url_environment={
+                "TEST_PHASE3_IDENTITY_CUTOVER_E4_OWNER_DATABASE_URL": (
+                    BASE_DATABASE
+                ),
+            },
+            credential_url_environment={
+                "TEST_PHASE3_IDENTITY_CUTOVER_E4_DATABASE_URL": (
+                    BASE_DATABASE,
+                    "home_agent_identity_cutover",
+                    "postgres_identity_cutover_password",
+                ),
+            },
+            environment={
+                SENTINEL_ENV: state.sentinel,
+                SYSTEM_ID_ENV: phase.system_identifier,
+                ALLOWLIST_ENV: BASE_DATABASE,
+            },
+            fixture_file_environment={
+                E4_SUCCESS_DOCUMENT_ENV: E4_FIXTURE_DOCUMENT_FILE,
+                E4_SUCCESS_ADMISSION_ENV: E4_FIXTURE_ADMISSION_FILE,
+            },
+            fixture_directory=fixture_directory,
+            fail_fast=False,
+        )
+    finally:
+        _set_disposable_e4_role_login(
+            state,
+            phase,
+            secrets_directory,
+            role="home_agent_identity_cutover",
+            enabled=False,
+        )
+    _apply_grants_expect_failure(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+        expected_output=(
+            "identity cutover E4 catalog admission is pending reviewed digest"
+        ),
+        failure_label="unpinned E4 catalog",
+        capture_e4_catalog_digest=True,
+    )
+    quarantined_acl = _psql(
+        state,
+        phase,
+        secrets_directory,
+        database=BASE_DATABASE,
+        sql=(
+            "SELECT count(*) FROM pg_catalog.pg_proc AS function_row "
+            "CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE("
+            "function_row.proacl, pg_catalog.acldefault("
+            "'f', function_row.proowner))) AS function_acl "
+            "WHERE function_row.oid='operations."
+            "commit_reviewed_identity_cutover(bytea,uuid)'::regprocedure "
+            "AND function_acl.grantee=("
+            "SELECT oid FROM pg_catalog.pg_roles "
+            "WHERE rolname='home_agent_identity_cutover') "
+            "AND function_acl.privilege_type='EXECUTE'"
+        ),
+        label="verify rejected E4 kernel remains quarantined",
+    )
+    if quarantined_acl.stdout.strip() != "0":
+        raise GateFailure(
+            "rejected E4 kernel retained an EXECUTE privilege after quarantine"
+        )
+
+
 def _build_test_image(state: GateState, build_context: Path) -> None:
     dockerfile = (
         build_context / "stack/services/home-agent-core/Dockerfile.postgres-test"
@@ -1663,7 +2187,7 @@ def main() -> int:
     try:
         _assert_execution_admitted()
     except GateFailure as error:
-        print(f"E1/E2/E3 gate execution quarantine: {error}", file=sys.stderr)
+        print(f"E1/E2/E3/E4 gate execution quarantine: {error}", file=sys.stderr)
         return 77
     if shutil.which("docker") is None:
         print("Docker is required for the E1 PostgreSQL gate", file=sys.stderr)
@@ -1703,48 +2227,68 @@ def main() -> int:
             tempfile.TemporaryDirectory(
                 prefix="home-agent-e1-secrets-"
             ) as secrets_temp,
+            tempfile.TemporaryDirectory(
+                prefix="home-agent-e4-fixture-"
+            ) as e4_fixture_temp,
         ):
             build_context = Path(context_temp)
             secrets_directory = Path(secrets_temp)
-            print("[1/7] Generating the minimal filtered build context")
+            e4_fixture_directory = Path(e4_fixture_temp)
+            try:
+                e4_fixture_directory.chmod(0o700)
+            except OSError:
+                pass
+            print("[1/8] Generating the minimal filtered build context")
             _prepare_build_context(build_context)
             _write_secrets(secrets_directory)
-            print("[2/7] Building the labeled pinned PostgreSQL 17 test image")
+            print("[2/8] Building the labeled pinned PostgreSQL 17 test image")
             _build_test_image(state, build_context)
-            print("[3/7] Running the production-shaped behavioral cluster")
+            print("[3/8] Running the production-shaped behavioral cluster")
             _run_phase(
                 state,
                 "behavior",
                 secrets_directory,
                 lambda phase: _run_behavior_phase(state, secrets_directory, phase),
             )
-            print("[4/7] Running the production-shaped lifecycle cluster")
+            print("[4/8] Running the production-shaped lifecycle cluster")
             _run_phase(
                 state,
                 "lifecycle",
                 secrets_directory,
                 lambda phase: _run_lifecycle_phase(state, secrets_directory, phase),
             )
-            print("[5/7] Running isolated revision-0007 admission cases")
+            print("[5/8] Running isolated revision-0007 admission cases")
             _run_phase(
                 state,
                 "admission",
                 secrets_directory,
                 lambda phase: _run_admission_phase(state, secrets_directory, phase),
             )
-            print("[6/7] Running isolated revision-0012 E2 contracts")
+            print("[6/8] Running isolated revision-0012 E2 contracts")
             _run_phase(
                 state,
                 "e2",
                 secrets_directory,
                 lambda phase: _run_e2_phase(state, secrets_directory, phase),
             )
-            print("[7/7] Running isolated dormant revision-0013 E3 contracts")
+            print("[7/8] Running isolated dormant revision-0013 E3 contracts")
             _run_phase(
                 state,
                 "e3",
                 secrets_directory,
                 lambda phase: _run_e3_phase(state, secrets_directory, phase),
+            )
+            print("[8/8] Running isolated dormant E4 deployment scaffold")
+            _run_phase(
+                state,
+                "e4-scaffold",
+                secrets_directory,
+                lambda phase: _run_e4_scaffold_phase(
+                    state,
+                    secrets_directory,
+                    phase,
+                    e4_fixture_directory,
+                ),
             )
             exit_code = 0
     except KeyboardInterrupt:
@@ -1767,7 +2311,17 @@ def main() -> int:
         print(f"E1 gate cleanup failed: {cleanup_failure}", file=sys.stderr)
         return 1
     if exit_code == 0:
-        print("E1/E2/E3 PostgreSQL 17 gate passed; labeled cleanup verified")
+        if state.pending_e4_catalog_digest is None:
+            print(
+                "E1 gate failed: E4 catalog digest was not captured",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"E4_CATALOG_SHA256={state.pending_e4_catalog_digest}")
+        print(
+            "E1/E2/E3/E4 PostgreSQL 17 gate passed; "
+            "labeled cleanup verified"
+        )
     return exit_code
 
 

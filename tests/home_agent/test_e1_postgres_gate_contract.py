@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -95,6 +96,42 @@ def test_runner_admits_only_explicit_github_hosted_linux_context() -> None:
             arguments=(runner.GITHUB_HOSTED_LINUX_FLAG,),
             environment=admitted,
         )
+
+
+def test_e4_catalog_diagnostic_extracts_only_one_exact_digest(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runner = _load_runner()
+    digest = "a" * 64
+    private_canary = "PRIVATE-E4-FAILURE-CONTEXT-MUST-NOT-BE-EMITTED"
+
+    assert (
+        runner._extract_e4_catalog_digest(
+            f"{private_canary}\n"
+            "ERROR: identity cutover E4 catalog admission is pending\n"
+            "DETAIL: expected=PENDING_E4_CATALOG_SHA256 "
+            f"actual={digest}\n"
+        )
+        == digest
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+    with pytest.raises(runner.GateFailure, match="one exact redacted digest"):
+        runner._extract_e4_catalog_digest(private_canary)
+    with pytest.raises(runner.GateFailure, match="one exact redacted digest"):
+        runner._extract_e4_catalog_digest(
+            "\n".join(
+                [
+                    "DETAIL: expected=PENDING_E4_CATALOG_SHA256 "
+                    f"actual={digest}",
+                    "DETAIL: expected=PENDING_E4_CATALOG_SHA256 "
+                    f"actual={'b' * 64}",
+                ]
+            )
+        )
+    assert capsys.readouterr().out == ""
 
 
 def test_runner_refuses_quarantined_docker_daemon_name(
@@ -219,6 +256,8 @@ def test_context_manifest_explicitly_carries_untracked_erasure_test_sources() ->
         "0012_identity_person_erasure_tombstone.py",
         "stack/services/home-agent-core/alembic/versions/"
         "0013_identity_finalizer_kernel.py",
+        "stack/services/home-agent-core/alembic/versions/"
+        "0014_identity_semantic_cutover_e4.py",
         "stack/services/home-agent-core/app/identity_erasure_schema.py",
         "stack/home-agent-deploy/operator/reviewed_identity_payload.py",
         "stack/home-agent-deploy/operator/REVIEWED-IDENTITY-PAYLOAD.md",
@@ -234,6 +273,15 @@ def test_context_manifest_explicitly_carries_untracked_erasure_test_sources() ->
         "stack/services/home-agent-core/tests/"
         "test_phase3_identity_finalizer_e3_schema.py",
         "tests/home_agent/test_identity_finalizer_e3_deployment_contract.py",
+        "stack/services/home-agent-core/tests/"
+        "test_phase3_identity_cutover_e4_scaffold_postgres.py",
+        "tests/home_agent/test_identity_cutover_e4_deployment_contract.py",
+        "stack/services/home-agent-core/tests/"
+        "test_phase3_identity_semantic_cutover_e4_runtime_postgres.py",
+        "stack/services/home-agent-core/tests/"
+        "seed_phase3_identity_semantic_cutover_e4_success.py",
+        "stack/services/home-agent-core/tests/"
+        "test_phase3_identity_semantic_cutover_e4_schema.py",
     ):
         assert relative_path in runner.BUILD_CONTEXT_FILES
 
@@ -277,7 +325,7 @@ def test_context_policy_rejects_sensitive_binary_and_git_symlink_paths(
         runner._git_index_entries(runner.BUILD_CONTEXT_TREES)
 
 
-def test_runner_uses_five_fresh_clusters_and_revision_0007_case_clones() -> None:
+def test_runner_uses_six_fresh_clusters_and_revision_0007_case_clones() -> None:
     source = RUNNER.read_text(encoding="utf-8")
     harness = HARNESS.read_text(encoding="utf-8")
 
@@ -285,13 +333,21 @@ def test_runner_uses_five_fresh_clusters_and_revision_0007_case_clones() -> None
     assert 'REVISION_0007 = "0007_phase3_identity_authority"' in source
     assert 'REVISION_0012 = "0012_identity_erasure_e2"' in source
     assert 'REVISION_0013 = "0013_identity_finalizer_e3"' in source
+    assert 'REVISION_0014 = "0014_identity_cutover_e4"' in source
     assert 'ADMISSION_TEMPLATE = "e1_template_0007"' in source
     assert 'CASE_DATABASE = "home_agent"' in harness
     assert "alembic_upgrade(database_url(database), REVISION_0010)" in harness
     assert "run_provision_roles(database_url(database))" in harness
     assert "assert_identity_kernel_ownership(database)" in harness
     assert "_set_identity_kernel_function_owner" not in harness
-    for phase in ("behavior", "lifecycle", "admission", "e2", "e3"):
+    for phase in (
+        "behavior",
+        "lifecycle",
+        "admission",
+        "e2",
+        "e3",
+        "e4-scaffold",
+    ):
         assert f'"{phase}"' in source
     assert "fail_fast: bool = True" in source
     assert "fail_fast=False" in source
@@ -366,6 +422,213 @@ def test_e3_phase_is_guarded_dormant_and_uses_secret_file_role_urls() -> None:
     assert "Running isolated dormant revision-0013 E3 contracts" in source
 
 
+def test_e4_scaffold_phase_is_fresh_dormant_and_secret_file_only() -> None:
+    source = RUNNER.read_text(encoding="utf-8")
+
+    assert "def _run_e4_scaffold_phase(" in source
+    assert "_upgrade_e3_database(state, phase, secrets_directory)" in source
+    assert "def _provision_identity_cutover_roles(" in source
+    assert "provision-identity-cutover-roles.sh" in source
+    section = source.split("def _run_e4_scaffold_phase(", 1)[1].split(
+        "def _build_test_image(", 1
+    )[0]
+    historical_upgrade = section.index("_upgrade_e3_database(")
+    ceremony = section.index("_provision_identity_cutover_roles(")
+    quarantine = section.index("_apply_grants(", ceremony)
+    e4_upgrade = section.index("REVISION_0014", quarantine)
+    assert historical_upgrade < ceremony < quarantine < e4_upgrade
+    empty_quarantine = section.index(
+        "_apply_grants_expect_failure(", e4_upgrade
+    )
+    empty_downgrade = section.index("_alembic_downgrade(", e4_upgrade)
+    second_upgrade = section.index("_alembic(", empty_downgrade)
+    fixture_seed = section.index("_seed_e4_success_fixture(", second_upgrade)
+    login_open = section.index(
+        'role="home_agent_identity_cutover"', fixture_seed
+    )
+    assert (
+        e4_upgrade
+        < empty_quarantine
+        < empty_downgrade
+        < second_upgrade
+        < fixture_seed
+        < login_open
+    )
+    assert "TEST_PHASE3_IDENTITY_CUTOVER_E4_OWNER_DATABASE_URL" in source
+    assert "TEST_PHASE3_IDENTITY_CUTOVER_E4_DATABASE_URL" in source
+    assert "TEST_PHASE3_IDENTITY_CUTOVER_E4_FINALIZER_DATABASE_URL" in source
+    assert "TEST_PHASE3_IDENTITY_CUTOVER_E4_DOCUMENT_B64" in source
+    assert "TEST_PHASE3_IDENTITY_CUTOVER_E4_ADMISSION_ID" in source
+    assert "home_agent_identity_cutover" in source
+    assert "postgres_identity_cutover_password" in source
+    assert "seed_phase3_identity_semantic_cutover_e4_success.py" in source
+    assert "fixture_file_environment={" in section
+    assert "fixture_read_only=False" in source
+    assert "run_as_host_user=True" in source
+    assert '("--user", f"{os.getuid()}:{os.getgid()}")' in source
+    assert "fixture_directory=fixture_directory" in section
+    assert "test_phase3_identity_cutover_e4_scaffold_postgres.py" in source
+    assert "test_phase3_identity_semantic_cutover_e4_schema.py" in source
+    assert "test_phase3_identity_semantic_cutover_e4_runtime_postgres.py" in source
+    assert "test_identity_cutover_e4_deployment_contract.py" in source
+    assert "def _set_disposable_e4_role_login(" in source
+    assert 'role="home_agent_identity_finalizer"' in section
+    assert 'role="home_agent_identity_cutover"' in section
+    assert section.count("finally:") >= 2
+    assert "VALID UNTIL 'infinity'" not in source
+    assert "interval '5 minutes'" in source
+    assert "verify bounded disposable E4 {role} login window" in source
+    assert "terminate and verify disposable E4 {role} login is expired" in source
+    assert "pg_terminate_backend(activity.pid, 5000)" in source
+    assert "empty E4 quarantine before downgrade" in source
+    assert "unpinned E4 catalog" in source
+    assert "capture_e4_catalog_digest=True" in source
+    assert "E4_CATALOG_SHA256=" in source
+    assert "if cleanup_failure is not None:" in source
+    assert source.index("if cleanup_failure is not None:") < source.index(
+        'print(f"E4_CATALOG_SHA256={state.pending_e4_catalog_digest}")'
+    )
+    assert "verify rejected E4 kernel remains quarantined" in source
+    assert "Running isolated dormant E4 deployment scaffold" in source
+
+
+@pytest.mark.parametrize(
+    ("failing_role", "expected_roles"),
+    [
+        (
+            "home_agent_identity_finalizer",
+            [
+                ("home_agent_identity_finalizer", True),
+                ("home_agent_identity_finalizer", False),
+            ],
+        ),
+        (
+            "home_agent_identity_cutover",
+            [
+                ("home_agent_identity_finalizer", True),
+                ("home_agent_identity_finalizer", False),
+                ("home_agent_identity_cutover", True),
+                ("home_agent_identity_cutover", False),
+            ],
+        ),
+    ],
+)
+def test_e4_scaffold_reexpires_role_when_opening_reports_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    failing_role: str,
+    expected_roles: list[tuple[str, bool]],
+) -> None:
+    runner = _load_runner()
+    calls: list[tuple[str, bool]] = []
+
+    for name in (
+        "_upgrade_e3_database",
+        "_provision_identity_cutover_roles",
+        "_apply_grants",
+        "_verify_cluster_guard",
+        "_pytest",
+        "_alembic",
+        "_assert_database_revision",
+        "_apply_grants_expect_failure",
+        "_alembic_downgrade",
+        "_seed_e4_success_fixture",
+    ):
+        monkeypatch.setattr(runner, name, lambda *args, **kwargs: None)
+
+    def fail_after_opening(
+        *args: object,
+        role: str,
+        enabled: bool,
+        **kwargs: object,
+    ) -> None:
+        calls.append((role, enabled))
+        if role == failing_role and enabled:
+            raise runner.GateFailure("simulated failure after ALTER ROLE committed")
+
+    monkeypatch.setattr(runner, "_set_disposable_e4_role_login", fail_after_opening)
+
+    with pytest.raises(runner.GateFailure, match="after ALTER ROLE committed"):
+        runner._run_e4_scaffold_phase(
+            SimpleNamespace(sentinel="test-sentinel"),
+            tmp_path,
+            SimpleNamespace(system_identifier="test-system"),
+            tmp_path,
+        )
+
+    assert calls == expected_roles
+
+
+def test_e4_fixture_files_are_bounded_private_and_exact(
+    tmp_path: Path,
+) -> None:
+    runner = _load_runner()
+    document = b'{"authority_scope": "synthetic-test-only"}'
+    admission_id = "0197f6f0-0000-7000-8000-000000000001"
+    document_path = tmp_path / runner.E4_FIXTURE_DOCUMENT_FILE
+    admission_path = tmp_path / runner.E4_FIXTURE_ADMISSION_FILE
+    document_path.write_text(
+        runner.base64.b64encode(document).decode("ascii") + "\n",
+        encoding="ascii",
+    )
+    admission_path.write_text(admission_id + "\n", encoding="ascii")
+    document_path.chmod(0o400)
+    admission_path.chmod(0o400)
+
+    runner._validate_e4_fixture_material(tmp_path)
+    export = runner._fixture_file_shell_export(
+        runner.E4_SUCCESS_DOCUMENT_ENV,
+        runner.E4_FIXTURE_DOCUMENT_FILE,
+    )
+    assert runner.E4_SUCCESS_DOCUMENT_ENV in export
+    assert runner.E4_FIXTURE_DOCUMENT_FILE in export
+    assert document.decode("ascii") not in export
+
+    (tmp_path / "unexpected").write_text("must fail\n", encoding="ascii")
+    with pytest.raises(runner.GateFailure, match="unexpected"):
+        runner._validate_e4_fixture_material(tmp_path)
+
+
+def test_hosted_e4_success_fixture_has_a_non_skippable_contract() -> None:
+    runner_source = RUNNER.read_text(encoding="utf-8")
+    seeder_source = (
+        ROOT
+        / "stack/services/home-agent-core/tests/"
+        "seed_phase3_identity_semantic_cutover_e4_success.py"
+    ).read_text(encoding="utf-8")
+    runtime_source = (
+        ROOT
+        / "stack/services/home-agent-core/tests/"
+        "test_phase3_identity_semantic_cutover_e4_runtime_postgres.py"
+    ).read_text(encoding="utf-8")
+
+    assert "test_e4_hosted_gate_cannot_silently_skip_admitted_success" in (
+        runtime_source
+    )
+    assert "TEST_PHASE3_IDENTITY_ERASURE_E1_RUN_SENTINEL" in runtime_source
+    assert "base64.b64decode(encoded_document, validate=True)" in runtime_source
+    assert "admission_id.version == 7" in runtime_source
+    assert "seed_phase3_identity_semantic_cutover_e4_success.py" in runner_source
+    assert (
+        "E4_SUCCESS_DOCUMENT_ENV: E4_FIXTURE_DOCUMENT_FILE"
+        in runner_source
+    )
+    assert (
+        "E4_SUCCESS_ADMISSION_ENV: E4_FIXTURE_ADMISSION_FILE"
+        in runner_source
+    )
+    assert "_seed_fixture" in seeder_source
+    assert "_finalize" in seeder_source
+    assert "(CAST(:document AS jsonb))::text" in seeder_source
+    assert "len(values) != 27" in seeder_source
+    assert seeder_source.count("hide_parameters=True") == 2
+    assert "erasure_ledger_verification" in seeder_source
+    assert "e3_source_manifest_commitment" in seeder_source
+    assert "e3_projection_manifest_commitment" in seeder_source
+    assert "e3_commitment_key_epoch" in seeder_source
+    assert "print(" not in seeder_source
+
+
 def test_runner_labels_clients_and_cleanup_residue_fails_the_gate() -> None:
     source = RUNNER.read_text(encoding="utf-8")
 
@@ -399,7 +662,7 @@ def test_runner_labels_clients_and_cleanup_residue_fails_the_gate() -> None:
     assert "GITHUB_HOSTED_LINUX_FLAG" in source
     assert "GITHUB_HOSTED_LINUX_CONTEXT" in source
     assert "Docker daemon identity inspection" in source
-    assert "E1/E2/E3 gate execution quarantine" in source
+    assert "E1/E2/E3/E4 gate execution quarantine" in source
 
 
 def test_runner_pins_local_endpoint_sentinel_inventory_and_minimal_context() -> None:

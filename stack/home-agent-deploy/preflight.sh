@@ -607,6 +607,7 @@ do
     exit 78
   }
 done
+
 unset binding_operator_password rollout_password rollout_url
 unset identity_migration_password identity_migration_url
 unset identity_finalizer_password identity_finalizer_url other_password other_path
@@ -616,6 +617,11 @@ printf '%s\n' '{"action":"validate"}' |
   python3 "$deploy_dir/operator/manage_native_installations.py" \
     "$native_installations_master" >/dev/null
 sh "$deploy_dir/materialize-secrets.sh" "$HOME_AGENT_SECRETS_DIR"
+identity_cutover_master="$HOME_AGENT_SECRETS_DIR/master/identity-cutover"
+if [ -e "$identity_cutover_master" ] || [ -L "$identity_cutover_master" ]; then
+  sh "$deploy_dir/preflight-identity-cutover-roles.sh" \
+    "$HOME_AGENT_SECRETS_DIR"
+fi
 
 verify_secret() {
   expected="$1"

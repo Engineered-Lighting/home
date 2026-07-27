@@ -1534,6 +1534,9 @@ def _run_e2_phase(
         secrets_directory,
         database=BASE_DATABASE,
         sql=(
+            "GRANT EXECUTE ON FUNCTION "
+            "privacy.identity_fact_version_is_visible(uuid) TO "
+            "home_agent_identity_erasure_kernel; "
             "GRANT CREATE ON SCHEMA privacy TO "
             "home_agent_identity_erasure_kernel; "
             "SET ROLE home_agent_identity_erasure_kernel; "
@@ -1544,6 +1547,9 @@ def _run_e2_phase(
             "SET search_path=pg_catalog SET row_security=on "
             "AS $tampered$ SELECT true $tampered$; "
             "RESET ROLE; "
+            "REVOKE EXECUTE ON FUNCTION "
+            "privacy.identity_fact_version_is_visible(uuid) FROM "
+            "home_agent_identity_erasure_kernel; "
             "REVOKE CREATE ON SCHEMA privacy FROM "
             "home_agent_identity_erasure_kernel"
         ),

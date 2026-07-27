@@ -661,6 +661,7 @@ def _docker_run(
     command: list[str],
     label: str,
     timeout: int = 300,
+    check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     name = state.next_client_name(phase)
     arguments = state.docker(
@@ -685,6 +686,7 @@ def _docker_run(
         arguments,
         label=label,
         timeout=timeout,
+        check=check,
         environment=state.docker_environment,
     )
     time.sleep(CLIENT_CHURN_COOLDOWN_SECONDS)
@@ -778,6 +780,36 @@ def _apply_grants(
         command=["sh", "/workspace/stack/home-agent-deploy/apply-grants.sh"],
         label=f"grant application for {database}",
     )
+
+
+def _apply_grants_expect_failure(
+    state: GateState,
+    phase: Phase,
+    secrets_directory: Path,
+    database: str,
+    *,
+    expected_output: str,
+) -> None:
+    result = _docker_run(
+        state,
+        state.test_image,
+        phase=phase.name,
+        network=phase.network,
+        secrets_directory=secrets_directory,
+        environment=_client_environment(database),
+        command=["sh", "/workspace/stack/home-agent-deploy/apply-grants.sh"],
+        label=f"rejected grant application for {database}",
+        check=False,
+    )
+    if result.returncode == 0:
+        raise GateFailure("tampered E2 helper unexpectedly passed grant replay")
+    if expected_output not in result.stdout:
+        output = result.stdout.rstrip()
+        if output:
+            print(output, file=sys.stderr)
+        raise GateFailure(
+            "tampered E2 helper failed without the reviewed contract marker"
+        )
 
 
 def _provision_roles(
@@ -1493,6 +1525,56 @@ def _run_e2_phase(
         credential_url_environment=runtime_urls,
         environment=guard_environment,
     )
+
+    # A same-owner SECURITY DEFINER replacement must fail admission, and the
+    # separately committed caller quarantine must leave it non-callable.
+    _psql(
+        state,
+        phase,
+        secrets_directory,
+        database=BASE_DATABASE,
+        sql=(
+            "GRANT CREATE ON SCHEMA privacy TO "
+            "home_agent_identity_erasure_kernel; "
+            "SET ROLE home_agent_identity_erasure_kernel; "
+            "CREATE OR REPLACE FUNCTION "
+            "privacy.identity_fact_version_is_visible(uuid) "
+            "RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER "
+            "SET search_path=pg_catalog SET row_security=on "
+            "AS $tampered$ SELECT true $tampered$; "
+            "RESET ROLE; "
+            "REVOKE CREATE ON SCHEMA privacy FROM "
+            "home_agent_identity_erasure_kernel"
+        ),
+        label="tamper E2 fact visibility helper in disposable database",
+    )
+    _apply_grants_expect_failure(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+        expected_output="identity erasure E2 function ownership invalid",
+    )
+    quarantined_acl = _psql(
+        state,
+        phase,
+        secrets_directory,
+        database=BASE_DATABASE,
+        sql=(
+            "SELECT count(*) FROM pg_catalog.pg_proc AS function_row "
+            "CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE("
+            "function_row.proacl, pg_catalog.acldefault("
+            "'f', function_row.proowner))) AS function_acl "
+            "WHERE function_row.oid='privacy."
+            "identity_fact_version_is_visible(uuid)'::regprocedure "
+            "AND function_acl.privilege_type='EXECUTE'"
+        ),
+        label="verify rejected E2 helper remains quarantined",
+    )
+    if quarantined_acl.stdout.strip() != "0":
+        raise GateFailure(
+            "rejected E2 helper retained an EXECUTE privilege after quarantine"
+        )
 
 
 def _run_e3_phase(

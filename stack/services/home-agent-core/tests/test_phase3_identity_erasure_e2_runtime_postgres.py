@@ -637,7 +637,16 @@ async def _assert_catalog_boundary(connection) -> None:
         "privacy.identity_principal_is_blocked(uuid)",
         "privacy.identity_fact_is_blocked(text,uuid,text,jsonb,uuid)",
     )
+    initiative_fact_visibility_helper = (
+        "privacy.identity_fact_version_is_visible(uuid)"
+    )
+    initiative_fact_visibility_roles = {
+        "home_agent_api",
+        "home_agent_ingest",
+        "home_agent_erasure",
+    }
     kernel_denied_functions = (
+        initiative_fact_visibility_helper,
         "privacy.reject_tombstoned_identity_write()",
         "privacy.enforce_identity_person_erasure_residual_set()",
         "privacy.replay_identity_person_retrieval_block_v2(jsonb)",
@@ -669,6 +678,150 @@ async def _assert_catalog_boundary(connection) -> None:
         )
         assert row["kernel_execute"] is (signature in suppression_helpers)
         assert row["public_execute"] is False
+
+    helper_contract = (
+        (
+            await connection.execute(
+                text(
+                    "SELECT pg_get_userbyid(function_row.proowner) AS owner, "
+                    "function_row.prosecdef AS security_definer, "
+                    "function_row.provolatile AS volatility, "
+                    "function_row.proconfig AS settings, "
+                    "ARRAY(SELECT CASE WHEN function_acl.grantee=0 "
+                    "THEN 'PUBLIC' "
+                    "ELSE pg_get_userbyid(function_acl.grantee) END "
+                    "FROM aclexplode(COALESCE("
+                    "function_row.proacl, "
+                    "acldefault('f', function_row.proowner)"
+                    ")) AS function_acl "
+                    "WHERE function_acl.privilege_type='EXECUTE' "
+                    "ORDER BY 1) AS execute_roles "
+                    ", EXISTS (SELECT 1 FROM aclexplode(COALESCE("
+                    "function_row.proacl, "
+                    "acldefault('f', function_row.proowner)"
+                    ")) AS function_acl "
+                    "WHERE function_acl.privilege_type='EXECUTE' "
+                    "AND function_acl.is_grantable) "
+                    "AS execute_grant_option "
+                    "FROM pg_proc AS function_row "
+                    "WHERE function_row.oid=CAST(:signature AS regprocedure)"
+                ),
+                {"signature": initiative_fact_visibility_helper},
+            )
+        )
+        .mappings()
+        .one()
+    )
+    assert helper_contract == {
+        "owner": "home_agent_identity_erasure_kernel",
+        "security_definer": True,
+        "volatility": "s",
+        "settings": ["search_path=pg_catalog", "row_security=on"],
+        "execute_roles": sorted(initiative_fact_visibility_roles),
+        "execute_grant_option": False,
+    }
+
+    for role in RUNTIME_ROLES:
+        role_capabilities = (
+            (
+                await connection.execute(
+                    text(
+                        "SELECT has_function_privilege("
+                        ":role, CAST(:signature AS regprocedure), 'EXECUTE') "
+                        "AS helper_execute, has_schema_privilege("
+                        ":role, 'privacy', 'USAGE') AS privacy_usage"
+                    ),
+                    {
+                        "role": role,
+                        "signature": initiative_fact_visibility_helper,
+                    },
+                )
+            )
+            .mappings()
+            .one()
+        )
+        assert role_capabilities == {
+            "helper_execute": role in initiative_fact_visibility_roles,
+            "privacy_usage": True,
+        }
+
+    kernel_fact_acl = (
+        (
+            await connection.execute(
+                text(
+                    "SELECT has_schema_privilege("
+                    "'home_agent_identity_erasure_kernel', "
+                    "'identity', 'USAGE') AND has_schema_privilege("
+                    "'home_agent_identity_erasure_kernel', "
+                    "'knowledge', 'USAGE') AND has_schema_privilege("
+                    "'home_agent_identity_erasure_kernel', "
+                    "'privacy', 'USAGE') AS required_schema_usage, "
+                    "has_schema_privilege("
+                    "'home_agent_identity_erasure_kernel', "
+                    "'identity', 'CREATE') OR has_schema_privilege("
+                    "'home_agent_identity_erasure_kernel', "
+                    "'knowledge', 'CREATE') OR has_schema_privilege("
+                    "'home_agent_identity_erasure_kernel', "
+                    "'privacy', 'CREATE') AS schema_create, "
+                    "has_table_privilege("
+                    "'home_agent_identity_erasure_kernel', "
+                    "'knowledge.fact_versions', 'SELECT') "
+                    "AS table_select, "
+                    "has_table_privilege("
+                    "'home_agent_identity_erasure_kernel', "
+                    "'knowledge.fact_versions', "
+                    "'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') "
+                    "AS table_write, "
+                    "has_any_column_privilege("
+                    "'home_agent_identity_erasure_kernel', "
+                    "'knowledge.fact_versions', "
+                    "'INSERT,UPDATE,REFERENCES') AS column_write, "
+                    "EXISTS (SELECT 1 "
+                    "FROM pg_attribute AS granted_attribute "
+                    "CROSS JOIN LATERAL aclexplode("
+                    "granted_attribute.attacl) AS attribute_acl "
+                    "WHERE granted_attribute.attrelid="
+                    "'knowledge.fact_versions'::regclass "
+                    "AND attribute_acl.grantee=("
+                    "SELECT role.oid FROM pg_roles AS role "
+                    "WHERE role.rolname="
+                    "'home_agent_identity_erasure_kernel') "
+                    "AND attribute_acl.is_grantable) "
+                    "AS column_grant_option, "
+                    "ARRAY(SELECT attribute.attname "
+                    "FROM pg_attribute AS attribute "
+                    "WHERE attribute.attrelid="
+                    "'knowledge.fact_versions'::regclass "
+                    "AND attribute.attnum > 0 "
+                    "AND NOT attribute.attisdropped "
+                    "AND has_column_privilege("
+                    "'home_agent_identity_erasure_kernel', "
+                    "'knowledge.fact_versions', attribute.attname, 'SELECT') "
+                    "ORDER BY attribute.attname) AS selected_columns"
+                )
+            )
+        )
+        .mappings()
+        .one()
+    )
+    assert kernel_fact_acl == {
+        "required_schema_usage": True,
+        "schema_create": False,
+        "table_select": False,
+        "table_write": False,
+        "column_write": False,
+        "column_grant_option": False,
+        "selected_columns": sorted(
+            (
+                "fact_version_id",
+                "subject_type",
+                "subject_id",
+                "predicate",
+                "object",
+                "perspective_principal_id",
+            )
+        ),
+    }
 
     for table in (
         "identity.people",
@@ -797,6 +950,83 @@ async def test_postgresql_e2_all_target_rls_and_control_evidence_matrix() -> Non
                     "before tombstoning"
                 )
 
+        async with engines["home_agent_ingest"].begin() as connection:
+            assert (
+                await connection.execute(text("SELECT session_user"))
+            ).scalar_one() == "home_agent_ingest"
+            await _set_subject_scope(connection, scenario)
+            pre_replay = (
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT NOT has_table_privilege("
+                            "current_user, 'knowledge.fact_versions', 'SELECT'"
+                            ") AND NOT has_any_column_privilege("
+                            "current_user, 'knowledge.fact_versions', 'SELECT'"
+                            ") AS no_direct_fact_select, "
+                            "privacy.identity_fact_version_is_visible("
+                            "CAST(:fact AS uuid)) AS fact_visible, "
+                            "privacy.identity_fact_version_is_visible("
+                            "NULL::uuid) AS null_fact_visible, "
+                            "privacy.identity_fact_version_is_visible("
+                            "CAST(:missing_fact AS uuid)) "
+                            "AS missing_fact_visible, "
+                            "(SELECT initiative_id "
+                            "FROM engagement.initiatives "
+                            "WHERE initiative_id=CAST(:initiative AS uuid)) "
+                            "AS visible_initiative"
+                        ),
+                        {
+                            "fact": str(scenario.fact_version_id),
+                            "missing_fact": str(uuid7()),
+                            "initiative": str(scenario.initiative_id),
+                        },
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            assert pre_replay == {
+                "no_direct_fact_select": True,
+                "fact_visible": True,
+                "null_fact_visible": False,
+                "missing_fact_visible": False,
+                "visible_initiative": scenario.initiative_id,
+            }
+
+            await connection.execute(
+                text(
+                    "SELECT set_config("
+                    "'app.principal_id', :principal, true)"
+                ),
+                {"principal": str(scenario.other_principal_id)},
+            )
+            cross_principal = (
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT privacy."
+                            "identity_fact_version_is_visible("
+                            "CAST(:fact AS uuid)) AS fact_visible, "
+                            "(SELECT initiative_id "
+                            "FROM engagement.initiatives "
+                            "WHERE initiative_id=CAST(:initiative AS uuid)) "
+                            "AS visible_initiative"
+                        ),
+                        {
+                            "fact": str(scenario.fact_version_id),
+                            "initiative": str(scenario.initiative_id),
+                        },
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            assert cross_principal == {
+                "fact_visible": False,
+                "visible_initiative": None,
+            }
+
         assert await _replay(
             engines["home_agent_erasure"], scenario.payload
         ) == uuid.UUID(str(scenario.payload["block_id"]))
@@ -813,6 +1043,37 @@ async def test_postgresql_e2_all_target_rls_and_control_evidence_matrix() -> Non
             for probe in scenario.target_rows:
                 assert after_targets[role][probe.table] in {False, None}
             assert after_controls[role] == before_controls[role]
+
+        async with engines["home_agent_ingest"].begin() as connection:
+            assert (
+                await connection.execute(text("SELECT session_user"))
+            ).scalar_one() == "home_agent_ingest"
+            await _set_subject_scope(connection, scenario)
+            post_replay = (
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT privacy."
+                            "identity_fact_version_is_visible("
+                            "CAST(:fact AS uuid)) AS fact_visible, "
+                            "(SELECT initiative_id "
+                            "FROM engagement.initiatives "
+                            "WHERE initiative_id=CAST(:initiative AS uuid)) "
+                            "AS visible_initiative"
+                        ),
+                        {
+                            "fact": str(scenario.fact_version_id),
+                            "initiative": str(scenario.initiative_id),
+                        },
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            assert post_replay == {
+                "fact_visible": False,
+                "visible_initiative": None,
+            }
 
         async with owner.begin() as connection:
             for probe in (*scenario.target_rows, *scenario.control_rows):
@@ -1077,6 +1338,7 @@ async def test_postgresql_e2_clean_roundtrip_and_data_bearing_downgrade_refusal(
                             "IN ('identity_person_is_blocked', "
                             "'identity_principal_is_blocked', "
                             "'identity_fact_is_blocked', "
+                            "'identity_fact_version_is_visible', "
                             "'reject_tombstoned_identity_write', "
                             "'enforce_identity_person_erasure_residual_set')) "
                             "AS helpers_absent, "

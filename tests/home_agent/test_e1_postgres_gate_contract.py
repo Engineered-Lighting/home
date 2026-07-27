@@ -339,6 +339,11 @@ def test_e2_phase_uses_secret_file_role_urls_and_guarded_database_recreation() -
     assert "test_postgresql_e2_clean_roundtrip" in source
     assert "test_postgresql_e2_all_target_rls" in source
     assert "test_postgresql_e2_restore_before_person" in source
+    assert "def _apply_grants_expect_failure(" in source
+    assert "tamper E2 fact visibility helper in disposable database" in source
+    assert "identity erasure E2 function ownership invalid" in source
+    assert "verify rejected E2 helper remains quarantined" in source
+    assert "rejected E2 helper retained an EXECUTE privilege" in source
 
 
 def test_e3_phase_is_guarded_dormant_and_uses_secret_file_role_urls() -> None:
@@ -449,6 +454,12 @@ def test_test_image_and_ci_pin_the_reviewed_top_level_inputs() -> None:
     assert (
         workflow.count(
             '- "tests/home_agent/test_apply_grants_revision_0006a_contract.py"'
+        )
+        == 2
+    )
+    assert (
+        workflow.count(
+            '- "tests/home_agent/test_identity_erasure_e2_deployment_contract.py"'
         )
         == 2
     )

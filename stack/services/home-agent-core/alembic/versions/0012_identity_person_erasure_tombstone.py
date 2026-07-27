@@ -177,13 +177,8 @@ SUPPRESSION_TARGETS = (
     (
         "engagement.initiatives",
         "NOT privacy.identity_principal_is_blocked(principal_id) AND ("
-        "source_fact_version_id IS NULL OR EXISTS ("
-        "SELECT 1 FROM knowledge.fact_versions AS e2_fact "
-        "WHERE e2_fact.fact_version_id = initiatives.source_fact_version_id "
-        "AND NOT privacy.identity_fact_is_blocked("
-        "e2_fact.subject_type::text, e2_fact.subject_id, "
-        "e2_fact.predicate::text, e2_fact.object, "
-        "e2_fact.perspective_principal_id)))",
+        "source_fact_version_id IS NULL OR "
+        "privacy.identity_fact_version_is_visible(source_fact_version_id))",
         ("principal:principal_id",),
         True,
     ),
@@ -208,6 +203,15 @@ SUPPRESSION_FUNCTIONS = (
     "privacy.identity_person_is_blocked(uuid)",
     "privacy.identity_principal_is_blocked(uuid)",
     "privacy.identity_fact_is_blocked(text,uuid,text,jsonb,uuid)",
+)
+
+INITIATIVE_FACT_VISIBILITY_FUNCTION = (
+    "privacy.identity_fact_version_is_visible(uuid)"
+)
+INITIATIVE_FACT_VISIBILITY_ROLES = (
+    "home_agent_api",
+    "home_agent_ingest",
+    "home_agent_erasure",
 )
 
 TRIGGER_FUNCTIONS = (
@@ -731,15 +735,21 @@ def _install_kernel_functions() -> None:
     )
     replay_key_array = ",".join(f"'{key}'" for key in replay_keys)
 
-    # E2 gives the NOLOGIN kernel only the two narrow lookup projections used
-    # by the suppression predicates.  It receives no residual or semantic
-    # table access and no DML authority.
+    # E2 gives the NOLOGIN kernel only the narrow lookup projections used by
+    # the suppression predicates. Its fact projection remains constrained by
+    # the existing principal RLS policy and exposes only a fail-closed boolean
+    # to the three initiative readers. It receives no table-level semantic
+    # read, residual-table access, or DML authority.
     op.execute(
         f"""
-        GRANT USAGE ON SCHEMA identity, privacy TO {KERNEL_ROLE};
+        GRANT USAGE ON SCHEMA identity, knowledge, privacy TO {KERNEL_ROLE};
         GRANT SELECT (person_id) ON TABLE {BLOCK_TABLE} TO {KERNEL_ROLE};
         GRANT SELECT (principal_id, person_id)
           ON TABLE identity.principals TO {KERNEL_ROLE};
+        GRANT SELECT (
+          fact_version_id, subject_type, subject_id, predicate, object,
+          perspective_principal_id
+        ) ON TABLE knowledge.fact_versions TO {KERNEL_ROLE};
         CREATE POLICY subject_retrieval_blocks_e2_kernel_lookup
           ON {BLOCK_TABLE} FOR SELECT TO {KERNEL_ROLE}
           USING (current_user = '{KERNEL_ROLE}');
@@ -816,6 +826,37 @@ def _install_kernel_functions() -> None:
           END IF;
           RETURN privacy.identity_person_is_blocked(object_person_text::uuid);
         END
+        $function$;
+
+        CREATE FUNCTION privacy.identity_fact_version_is_visible(
+          target_fact_version_id uuid
+        ) RETURNS boolean
+        LANGUAGE sql
+        STABLE
+        SECURITY DEFINER
+        SET search_path = pg_catalog
+        SET row_security = on
+        AS $function$
+          SELECT target_fact_version_id IS NOT NULL
+             AND EXISTS (
+               SELECT 1
+                 FROM knowledge.fact_versions AS fact
+                WHERE fact.fact_version_id = target_fact_version_id
+                  AND fact.perspective_principal_id =
+                      nullif(
+                        pg_catalog.current_setting(
+                          'app.principal_id', true
+                        ),
+                        ''
+                      )::uuid
+                  AND NOT privacy.identity_fact_is_blocked(
+                    fact.subject_type::text,
+                    fact.subject_id,
+                    fact.predicate::text,
+                    fact.object,
+                    fact.perspective_principal_id
+                  )
+             )
         $function$;
 
         CREATE FUNCTION privacy.reject_tombstoned_identity_write()
@@ -1253,8 +1294,10 @@ def _install_suppression_boundary() -> None:
             )
 
     # The kernel-owned principal lookup must not recursively inherit the
-    # runtime-only restrictive policy.  It has only the two projected columns
-    # and this exact SELECT policy; the role is NOLOGIN and has no membership.
+    # runtime-only restrictive policy. It has only the two projected principal
+    # columns and this exact SELECT policy; the separate fact projection stays
+    # behind the original principal policy plus FORCE RLS. The role is NOLOGIN
+    # and has no membership.
     op.execute(
         f"""
         CREATE POLICY principals_e2_erasure_kernel_lookup
@@ -1267,6 +1310,7 @@ def _install_suppression_boundary() -> None:
 def _contract_e2_acl() -> None:
     all_roles = ", ".join(ALL_MANAGED_ROLES)
     suppression_roles = ", ".join(RUNTIME_SUPPRESSION_ROLES)
+    initiative_fact_roles = ", ".join(INITIATIVE_FACT_VISIBILITY_ROLES)
 
     # FORCE-RLS admits the owner-owned replay function only while it is called
     # by the erasure login. The function has no UPDATE/DELETE statement and
@@ -1336,6 +1380,12 @@ def _contract_e2_acl() -> None:
           FROM PUBLIC, {all_roles};
         GRANT SELECT, INSERT ON TABLE {BLOCK_TABLE} TO home_agent_owner;
         GRANT SELECT (person_id) ON TABLE {BLOCK_TABLE} TO {KERNEL_ROLE};
+        GRANT USAGE ON SCHEMA knowledge TO {KERNEL_ROLE};
+        GRANT SELECT (
+          fact_version_id, subject_type, subject_id, predicate, object,
+          perspective_principal_id
+        ) ON TABLE knowledge.fact_versions TO {KERNEL_ROLE};
+        GRANT USAGE ON SCHEMA privacy TO {initiative_fact_roles};
 
         REVOKE ALL ON FUNCTION {REPLAY_FUNCTION}
           FROM PUBLIC, {all_roles};
@@ -1349,12 +1399,23 @@ def _contract_e2_acl() -> None:
         # kernel and dispatches through each helper. PostgreSQL ownership keeps
         # grant options, not ordinary EXECUTE after an explicit self-revoke.
         op.execute(f"GRANT EXECUTE ON FUNCTION {function} TO {KERNEL_ROLE}")
+    op.execute(
+        f"REVOKE ALL ON FUNCTION {INITIATIVE_FACT_VISIBILITY_FUNCTION} "
+        f"FROM PUBLIC, {all_roles}"
+    )
+    op.execute(
+        f"GRANT EXECUTE ON FUNCTION {INITIATIVE_FACT_VISIBILITY_FUNCTION} "
+        f"TO {initiative_fact_roles}"
+    )
     for function in TRIGGER_FUNCTIONS:
         op.execute(f"REVOKE ALL ON FUNCTION {function} FROM PUBLIC, {all_roles}")
 
 
 def _assert_installed_contract() -> None:
     suppression_roles = ",".join(f"'{role}'" for role in RUNTIME_SUPPRESSION_ROLES)
+    initiative_fact_roles = ",".join(
+        f"'{role}'" for role in INITIATIVE_FACT_VISIBILITY_ROLES
+    )
     suppression_functions = ",".join(
         f"'{function}'::regprocedure" for function in SUPPRESSION_FUNCTIONS
     )
@@ -1378,6 +1439,57 @@ def _assert_installed_contract() -> None:
              ) OR NOT pg_catalog.has_column_privilege(
                '{KERNEL_ROLE}', 'identity.principals',
                'person_id', 'SELECT'
+             ) OR EXISTS (
+               SELECT 1
+                 FROM pg_catalog.unnest(
+                   ARRAY['identity','knowledge','privacy']::text[]
+                 ) AS required_schema(schema_name)
+                WHERE NOT pg_catalog.has_schema_privilege(
+                        '{KERNEL_ROLE}',
+                        required_schema.schema_name,
+                        'USAGE'
+                      )
+                   OR pg_catalog.has_schema_privilege(
+                        '{KERNEL_ROLE}',
+                        required_schema.schema_name,
+                        'CREATE'
+                      )
+             ) OR EXISTS (
+               SELECT 1
+                 FROM pg_catalog.unnest(
+                   ARRAY[{initiative_fact_roles}]::text[]
+                 ) AS runtime(role_name)
+                WHERE NOT pg_catalog.has_schema_privilege(
+                  runtime.role_name, 'privacy', 'USAGE'
+                )
+             ) OR EXISTS (
+               SELECT 1
+                 FROM pg_catalog.unnest(ARRAY[
+                   'fact_version_id', 'subject_type', 'subject_id',
+                   'predicate', 'object', 'perspective_principal_id'
+                 ]::text[]) AS required_column(column_name)
+                WHERE NOT pg_catalog.has_column_privilege(
+                  '{KERNEL_ROLE}', 'knowledge.fact_versions',
+                  required_column.column_name, 'SELECT'
+                )
+             ) OR EXISTS (
+               SELECT 1
+                 FROM pg_catalog.pg_attribute AS attribute
+                WHERE attribute.attrelid =
+                      'knowledge.fact_versions'::regclass
+                  AND attribute.attnum > 0
+                  AND NOT attribute.attisdropped
+                  AND attribute.attname <> ALL(ARRAY[
+                    'fact_version_id', 'subject_type', 'subject_id',
+                    'predicate', 'object', 'perspective_principal_id'
+                  ]::text[])
+                  AND pg_catalog.has_column_privilege(
+                    '{KERNEL_ROLE}', 'knowledge.fact_versions',
+                    attribute.attname, 'SELECT'
+                  )
+             ) OR pg_catalog.has_table_privilege(
+               '{KERNEL_ROLE}', 'knowledge.fact_versions',
+               'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'
              ) OR pg_catalog.has_table_privilege(
                '{KERNEL_ROLE}', '{BLOCK_TABLE}',
                'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'
@@ -1402,6 +1514,12 @@ def _assert_installed_contract() -> None:
                 ('privacy.identity_fact_is_blocked(text,uuid,text,jsonb,uuid)'
                    ::regprocedure,
                  true, kernel_oid, ARRAY['search_path=pg_catalog']::text[]),
+                ('privacy.identity_fact_version_is_visible(uuid)'
+                   ::regprocedure,
+                 true, kernel_oid,
+                 ARRAY[
+                   'search_path=pg_catalog', 'row_security=on'
+                 ]::text[]),
                 ('privacy.reject_tombstoned_identity_write()'::regprocedure,
                  true, kernel_oid, ARRAY['search_path=pg_catalog']::text[]),
                 ('privacy.enforce_identity_person_erasure_residual_set()'
@@ -1424,6 +1542,24 @@ def _assert_installed_contract() -> None:
           END IF;
           IF NOT pg_catalog.has_function_privilege(
                'home_agent_erasure', '{REPLAY_FUNCTION}', 'EXECUTE'
+             ) OR EXISTS (
+               SELECT 1
+                 FROM (VALUES {','.join(f"('{role}')" for role in INITIATIVE_FACT_VISIBILITY_ROLES)})
+                      AS runtime(role_name)
+                WHERE NOT pg_catalog.has_function_privilege(
+                  runtime.role_name,
+                  '{INITIATIVE_FACT_VISIBILITY_FUNCTION}', 'EXECUTE'
+                )
+             ) OR EXISTS (
+               SELECT 1
+                 FROM pg_catalog.unnest(
+                   ARRAY[{managed_roles}]::text[]
+                 ) AS managed(role_name)
+                WHERE managed.role_name NOT IN ({initiative_fact_roles})
+                  AND pg_catalog.has_function_privilege(
+                    managed.role_name,
+                    '{INITIATIVE_FACT_VISIBILITY_FUNCTION}', 'EXECUTE'
+                  )
              ) OR EXISTS (
                SELECT 1
                  FROM pg_catalog.unnest(
@@ -1556,6 +1692,8 @@ def _drop_kernel_functions() -> None:
           privacy.enforce_identity_person_erasure_residual_set();
         DROP FUNCTION IF EXISTS privacy.reject_tombstoned_identity_write();
         DROP FUNCTION IF EXISTS
+          privacy.identity_fact_version_is_visible(uuid);
+        DROP FUNCTION IF EXISTS
           privacy.identity_fact_is_blocked(text,uuid,text,jsonb,uuid);
         DROP FUNCTION IF EXISTS privacy.identity_principal_is_blocked(uuid);
         DROP FUNCTION IF EXISTS privacy.identity_person_is_blocked(uuid);
@@ -1563,7 +1701,12 @@ def _drop_kernel_functions() -> None:
         REVOKE SELECT (person_id) ON TABLE {BLOCK_TABLE} FROM {KERNEL_ROLE};
         REVOKE SELECT (principal_id, person_id)
           ON TABLE identity.principals FROM {KERNEL_ROLE};
-        REVOKE USAGE ON SCHEMA identity, privacy FROM {KERNEL_ROLE};
+        REVOKE SELECT (
+          fact_version_id, subject_type, subject_id, predicate, object,
+          perspective_principal_id
+        ) ON TABLE knowledge.fact_versions FROM {KERNEL_ROLE};
+        REVOKE USAGE ON SCHEMA identity, knowledge, privacy
+          FROM {KERNEL_ROLE};
         """
     )
 

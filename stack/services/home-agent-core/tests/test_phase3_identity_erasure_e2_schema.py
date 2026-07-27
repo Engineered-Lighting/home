@@ -175,16 +175,78 @@ def test_e2_suppression_excludes_control_and_confirmation_evidence() -> None:
     assert "reject_tombstoned_identity_write" in source
     assert "target_predicate <> 'parent_of'" in source
     assert "identity_fact_is_blocked(text,uuid,text,jsonb,uuid)" in source
+    assert (
+        "privacy.identity_fact_version_is_visible(source_fact_version_id)"
+        in target_section
+    )
+    assert (
+        "e2_fact.fact_version_id = initiatives.source_fact_version_id"
+        not in target_section
+    )
 
 
 def test_e2_kernel_stays_dml_free_and_replay_is_owner_owned() -> None:
     source = MIGRATION.read_text(encoding="utf-8")
+    visibility_helper = source.split(
+        "CREATE FUNCTION privacy.identity_fact_version_is_visible(", 1
+    )[1].split(
+        "CREATE FUNCTION privacy.reject_tombstoned_identity_write()", 1
+    )[0]
 
     assert "GRANT SELECT (person_id) ON TABLE {BLOCK_TABLE}" in source
     assert "GRANT SELECT (principal_id, person_id)" in source
+    assert (
+        "GRANT USAGE ON SCHEMA identity, knowledge, privacy TO {KERNEL_ROLE};"
+        in source
+    )
+    assert "GRANT USAGE ON SCHEMA privacy TO {initiative_fact_roles};" in source
+    assert (
+        "runtime.role_name, 'privacy', 'USAGE'"
+        in source
+    )
+    assert (
+        "required_schema.schema_name,\n"
+        "                        'CREATE'"
+        in source
+    )
+    assert (
+        "GRANT SELECT (\n"
+        "          fact_version_id, subject_type, subject_id, predicate, object,\n"
+        "          perspective_principal_id\n"
+        "        ) ON TABLE knowledge.fact_versions TO {KERNEL_ROLE};"
+        in source
+    )
+    assert (
+        "GRANT SELECT ON TABLE knowledge.fact_versions TO {KERNEL_ROLE}"
+        not in source
+    )
+    assert (
+        "GRANT INSERT ON TABLE knowledge.fact_versions TO {KERNEL_ROLE}"
+        not in source
+    )
     assert "TO {KERNEL_ROLE};" in source
     assert "GRANT INSERT ON TABLE {BLOCK_TABLE} TO {KERNEL_ROLE}" not in source
     assert "GRANT INSERT ON TABLE {RESIDUAL_TABLE} TO {KERNEL_ROLE}" not in source
+    assert "LANGUAGE sql" in visibility_helper
+    assert "STABLE" in visibility_helper
+    assert "SECURITY DEFINER" in visibility_helper
+    assert "SET search_path = pg_catalog" in visibility_helper
+    assert "SET row_security = on" in visibility_helper
+    assert "fact.perspective_principal_id =" in visibility_helper
+    assert "pg_catalog.current_setting(" in visibility_helper
+    assert "'app.principal_id', true" in visibility_helper
+    assert "privacy.identity_fact_is_blocked(" in visibility_helper
+    assert "INITIATIVE_FACT_VISIBILITY_ROLES = (" in source
+    assert (
+        'INITIATIVE_FACT_VISIBILITY_FUNCTION} "\n'
+        '        f"TO {initiative_fact_roles}"'
+        in source
+    )
+    assert (
+        "GRANT EXECUTE ON FUNCTION "
+        "{INITIATIVE_FACT_VISIBILITY_FUNCTION} TO {KERNEL_ROLE}"
+        not in source
+    )
     assert (
         'op.execute(f"GRANT EXECUTE ON FUNCTION {function} TO {KERNEL_ROLE}")'
         in source
@@ -201,6 +263,11 @@ def test_e2_kernel_stays_dml_free_and_replay_is_owner_owned() -> None:
     assert "SECURITY INVOKER" in source
     assert "current_user = 'home_agent_owner'" in source
     assert "session_user = 'home_agent_erasure'" in source
+    assert (
+        "DROP FUNCTION IF EXISTS\n"
+        "          privacy.identity_fact_version_is_visible(uuid);"
+        in source
+    )
 
 
 @pytest.mark.skipif(

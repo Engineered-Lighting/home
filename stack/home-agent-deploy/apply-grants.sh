@@ -56,6 +56,46 @@ BEGIN
   END LOOP;
 END
 $identity_api_acl_reset$;
+
+-- Commit caller-side E2 function quarantine before any positive grant work.
+-- A same-owner SECURITY DEFINER replacement must not retain a previously
+-- reviewed EXECUTE grant merely because any later admission step rejects it.
+DO $identity_erasure_e2_function_quarantine$
+DECLARE
+  function_oid regprocedure;
+  grantee_sql text;
+  target_role text;
+  target_signature text;
+BEGIN
+  FOREACH target_signature IN ARRAY ARRAY[
+    'privacy.identity_person_is_blocked(uuid)',
+    'privacy.identity_principal_is_blocked(uuid)',
+    'privacy.identity_fact_is_blocked(text,uuid,text,jsonb,uuid)',
+    'privacy.identity_fact_version_is_visible(uuid)',
+    'privacy.reject_tombstoned_identity_write()',
+    'privacy.enforce_identity_person_erasure_residual_set()',
+    'privacy.replay_identity_person_retrieval_block_v2(jsonb)'
+  ]::text[]
+  LOOP
+    function_oid := pg_catalog.to_regprocedure(target_signature);
+    IF function_oid IS NULL THEN
+      CONTINUE;
+    END IF;
+    FOR target_role IN
+      SELECT role_row.rolname FROM pg_catalog.pg_roles AS role_row
+      UNION ALL SELECT 'PUBLIC'
+    LOOP
+      grantee_sql := CASE WHEN target_role = 'PUBLIC'
+        THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END;
+      EXECUTE pg_catalog.format(
+        'REVOKE ALL PRIVILEGES ON FUNCTION %s FROM %s',
+        function_oid, grantee_sql
+      );
+    END LOOP;
+  END LOOP;
+END
+$identity_erasure_e2_function_quarantine$;
+
 ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity
   REVOKE ALL PRIVILEGES ON TABLES FROM home_agent_api;
 ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity
@@ -1170,6 +1210,9 @@ BEGIN
                  'privacy.identity_fact_is_blocked(text,uuid,text,jsonb,uuid)'
                )::oid,
                pg_catalog.to_regprocedure(
+                 'privacy.identity_fact_version_is_visible(uuid)'
+               )::oid,
+               pg_catalog.to_regprocedure(
                  'privacy.reject_tombstoned_identity_write()'
                )::oid,
                pg_catalog.to_regprocedure(
@@ -1205,8 +1248,10 @@ $identity_erasure_kernel_quarantine$;
 
 -- E2 is an all-or-none activation of the otherwise quarantined NOLOGIN
 -- kernel. The two durable control tables remain inaccessible to every online
--- role. Runtime roles receive only deterministic suppression predicates, and
--- the restore login receives only the v2 replay entry point.
+-- role. Runtime roles receive only deterministic suppression predicates; the
+-- initiative readers additionally receive one principal-scoped boolean
+-- helper without fact-table access. The restore login receives only the v2
+-- replay entry point.
 DO $identity_erasure_e2_acl$
 DECLARE
   suppression_functions text[] := ARRAY[
@@ -1214,6 +1259,14 @@ DECLARE
     'privacy.identity_principal_is_blocked(uuid)',
     'privacy.identity_fact_is_blocked(text,uuid,text,jsonb,uuid)'
   ]::text[];
+  initiative_fact_visibility_function text :=
+    'privacy.identity_fact_version_is_visible(uuid)';
+  initiative_fact_visibility_body_sha256 constant text :=
+    '83bcbf75f10489a4a7517c33a2dbc16bdb7aefc2b1f237ae1720b71a38f0fa82';
+  initiative_fact_visibility_roles text[] := ARRAY[
+    'home_agent_api', 'home_agent_ingest', 'home_agent_erasure'
+  ]::text[];
+  all_suppression_functions text[];
   trigger_functions text[] := ARRAY[
     'privacy.reject_tombstoned_identity_write()',
     'privacy.enforce_identity_person_erasure_residual_set()'
@@ -1231,7 +1284,9 @@ DECLARE
   target_signature text;
   target_table text;
 BEGIN
-  all_functions := suppression_functions || trigger_functions
+  all_suppression_functions := suppression_functions
+    || ARRAY[initiative_fact_visibility_function]::text[];
+  all_functions := all_suppression_functions || trigger_functions
     || ARRAY[replay_function]::text[];
   SELECT pg_catalog.count(*)
     INTO STRICT function_count
@@ -1261,15 +1316,44 @@ BEGIN
    WHERE rolname = 'home_agent_owner';
   IF EXISTS (
     SELECT 1
-      FROM pg_catalog.unnest(suppression_functions)
+      FROM pg_catalog.unnest(all_suppression_functions)
            AS signature(signature_text)
       JOIN pg_catalog.pg_proc AS function_row
         ON function_row.oid = pg_catalog.to_regprocedure(
           signature.signature_text
         )
      WHERE function_row.proowner <> kernel_oid
-        OR NOT function_row.prosecdef
-        OR function_row.prokind <> 'f'
+       OR NOT function_row.prosecdef
+       OR function_row.prokind <> 'f'
+  ) OR NOT EXISTS (
+    SELECT 1
+      FROM pg_catalog.pg_proc AS function_row
+     WHERE function_row.oid = pg_catalog.to_regprocedure(
+             initiative_fact_visibility_function
+           )
+       AND function_row.proowner = kernel_oid
+       AND function_row.prolang = (
+         SELECT language_row.oid
+           FROM pg_catalog.pg_language AS language_row
+          WHERE language_row.lanname = 'sql'
+       )
+       AND function_row.prorettype = 'boolean'::regtype
+       AND NOT function_row.proretset
+       AND function_row.prokind = 'f'
+       AND function_row.prosecdef
+       AND function_row.provolatile = 's'
+       AND NOT function_row.proisstrict
+       AND NOT function_row.proleakproof
+       AND function_row.proparallel = 'u'
+       AND function_row.proconfig = ARRAY[
+             'search_path=pg_catalog', 'row_security=on'
+           ]::text[]
+       AND pg_catalog.encode(
+             pg_catalog.sha256(
+               pg_catalog.convert_to(function_row.prosrc, 'UTF8')
+             ),
+             'hex'
+           ) = initiative_fact_visibility_body_sha256
   ) OR EXISTS (
     SELECT 1
       FROM pg_catalog.unnest(trigger_functions) AS signature(signature_text)
@@ -1334,11 +1418,16 @@ BEGIN
     );
   END LOOP;
 
-  GRANT USAGE ON SCHEMA identity, privacy
+  GRANT USAGE ON SCHEMA identity, knowledge, privacy
     TO home_agent_identity_erasure_kernel;
   GRANT SELECT (principal_id, person_id) ON TABLE identity.principals
     TO home_agent_identity_erasure_kernel;
   GRANT SELECT (person_id) ON TABLE privacy.subject_retrieval_blocks
+    TO home_agent_identity_erasure_kernel;
+  GRANT SELECT (
+    fact_version_id, subject_type, subject_id, predicate, object,
+    perspective_principal_id
+  ) ON TABLE knowledge.fact_versions
     TO home_agent_identity_erasure_kernel;
 
   FOREACH target_signature IN ARRAY all_functions
@@ -1373,6 +1462,16 @@ BEGIN
       'GRANT EXECUTE ON FUNCTION %s '
       'TO home_agent_identity_erasure_kernel',
       function_oid
+    );
+  END LOOP;
+  function_oid := pg_catalog.to_regprocedure(
+    initiative_fact_visibility_function
+  );
+  FOREACH target_role IN ARRAY initiative_fact_visibility_roles
+  LOOP
+    EXECUTE pg_catalog.format(
+      'GRANT EXECUTE ON FUNCTION %s TO %I',
+      function_oid, target_role
     );
   END LOOP;
   function_oid := pg_catalog.to_regprocedure(replay_function);

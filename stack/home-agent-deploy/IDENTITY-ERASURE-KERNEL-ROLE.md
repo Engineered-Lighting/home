@@ -24,12 +24,26 @@ mutation, and no direct People mutation. Existing identity cascades remain
 behind the four reviewed owner-owned `SECURITY DEFINER` functions.
 
 E2's person tombstone and normalized residual writes remain exclusive to the
-offline owner; the NOLOGIN kernel can read only person identifiers from the
-tombstone and principal tables for deterministic suppression. It cannot read
-residuals, facts, places, or initiatives and has no table write privilege. The
-three suppression helpers are callable only by the exact roles whose RLS
-policies use them, and the trigger functions remain non-callable. The sole
-additional restore capability is `EXECUTE` on the separately owner-owned
+offline owner. For deterministic suppression, the NOLOGIN kernel can read only
+person identifiers from the block and principal tables plus a six-column,
+forced-RLS projection of `knowledge.fact_versions`: `fact_version_id`,
+`subject_type`, `subject_id`, `predicate`, `object`, and
+`perspective_principal_id`. It has no table-level fact access, access to any
+other fact column, residual, place, or initiative access, or table write
+privilege.
+
+The three base suppression helpers are callable only by the exact roles whose
+RLS policies use them and by the kernel for its anti-resurrection trigger.
+`identity_fact_version_is_visible(uuid)` is a separate principal-scoped boolean
+helper executable only by `home_agent_api`, `home_agent_ingest`, and
+`home_agent_erasure`, not to `PUBLIC` or the kernel itself. Its
+`SECURITY DEFINER` body retains forced RLS and discloses neither fact contents
+nor whether an invisible fact is missing, cross-principal, or blocked. Grant
+replay verifies its SQL language, stable volatility, fixed settings, and exact
+body digest before restoring those callers. A caller-side function quarantine
+commits first, so a rejected same-owner replacement cannot retain earlier
+execution grants. Trigger functions remain non-callable. The sole additional
+restore capability is `EXECUTE` on the separately owner-owned
 `replay_identity_person_retrieval_block_v2(jsonb)`. There is no direct
 tombstone or residual DML for `home_agent_erasure` or any other online role.
 

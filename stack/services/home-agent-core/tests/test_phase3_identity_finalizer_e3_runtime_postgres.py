@@ -6,6 +6,7 @@ from collections.abc import Callable
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import uuid
@@ -107,6 +108,15 @@ def _signature(value: str) -> str:
 
 def _sqlstate(error: DBAPIError) -> str | None:
     return getattr(error.orig, "sqlstate", None)
+
+
+def _safe_identity_error_code(error: DBAPIError) -> str:
+    migration_source = (
+        ROOT / "alembic/versions/0013_identity_finalizer_kernel.py"
+    ).read_text(encoding="utf-8")
+    known_codes = set(re.findall(r"\bidentity_[a-z0-9_]+\b", migration_source))
+    error_codes = re.findall(r"\bidentity_[a-z0-9_]+\b", str(error.orig))
+    return next((code for code in error_codes if code in known_codes), "unavailable")
 
 
 def _canonical_bytes(document: dict[str, Any]) -> bytes:
@@ -1424,7 +1434,12 @@ async def test_postgresql_e3_lifecycle_boundary_and_atomic_finalizer() -> None:
             comprehensive,
         )
         assert collision_error is not None
-        assert _sqlstate(collision_error) == "23505"
+        collision_sqlstate = _sqlstate(collision_error)
+        assert collision_sqlstate == "23505", (
+            "preexisting person collision returned an unexpected error class; "
+            f"sqlstate={collision_sqlstate}; "
+            f"error_code={_safe_identity_error_code(collision_error)}"
+        )
         async with owner.begin() as connection:
             await connection.execute(
                 text("DELETE FROM identity.people WHERE person_id=:person"),

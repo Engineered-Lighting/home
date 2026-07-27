@@ -445,6 +445,10 @@ def test_document_review_and_finalization_attestations_bind_to_live_evidence() -
 def test_required_json_nulls_cannot_bypass_exact_semantic_validation() -> None:
     body = _literal("FUNCTION_BODY")
 
+    assert (
+        "'label_id','person_id','perspective','role_label','source_ref'"
+        in body
+    )
     for typed_gate in (
         "required_string(key_name)",
         "required_count(key_name)",
@@ -475,6 +479,20 @@ def test_required_json_nulls_cannot_bypass_exact_semantic_validation() -> None:
     assert body.index("required_lineage_string(key_name)") < body.index(
         "target_projection_id := (target_lineage ->> 'projection_id')::uuid"
     )
+
+
+def test_admission_consumption_qualifies_the_argument_column_boundary() -> None:
+    body = _literal("FUNCTION_BODY")
+
+    assert (
+        "UPDATE operations.reviewed_identity_finalizer_admissions\n"
+        "           AS consumed_admission"
+    ) in body
+    assert (
+        "consumed_admission.admission_id = admission.admission_id"
+        in body
+    )
+    assert "WHERE admission_id = admission.admission_id" not in body
 
 
 def test_privacy_closure_and_auto_expiry_are_exact_bidirectional_sets() -> None:

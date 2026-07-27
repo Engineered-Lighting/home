@@ -2603,9 +2603,10 @@ BEGIN
     document -> 'finalization_attestation' ->> 'finalization_signature'
     );
     UPDATE operations.reviewed_identity_finalizer_admissions
+           AS consumed_admission
        SET consumed_at = pg_catalog.transaction_timestamp()
-     WHERE admission_id = admission.admission_id
-       AND consumed_at IS NULL;
+     WHERE consumed_admission.admission_id = admission.admission_id
+       AND consumed_admission.consumed_at IS NULL;
     GET DIAGNOSTICS affected_rows = ROW_COUNT;
     IF affected_rows <> 1 THEN
       RAISE EXCEPTION 'identity_finalizer_admission_consume_failed'

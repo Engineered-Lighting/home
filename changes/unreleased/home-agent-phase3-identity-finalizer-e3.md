@@ -16,3 +16,6 @@ The verifier's exact legacy-role key manifest now uses the same lexical order
 as PostgreSQL's ordered key scan, allowing valid reviewed role candidates to
 reach the atomic projection boundary while still rejecting extra or missing
 fields.
+The admission-consumption update now qualifies its target columns explicitly,
+preventing PostgreSQL from confusing the admission argument with the stored
+admission identifier at the final atomic commit boundary.

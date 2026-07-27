@@ -990,7 +990,7 @@ BEGIN
              FROM pg_catalog.jsonb_object_keys(target_record)
                   AS keys(key_name)
           ) IS DISTINCT FROM ARRAY[
-            'label_id','perspective','person_id','role_label','source_ref',
+            'label_id','person_id','perspective','role_label','source_ref',
             'source_snapshot_sha256','source_version'
           ]::text[]
           OR EXISTS (

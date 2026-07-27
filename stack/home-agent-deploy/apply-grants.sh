@@ -1718,7 +1718,7 @@ DECLARE
   expected_e3_catalog_sha256 constant text :=
     '123326a4620d3dd123773819d95255e40813a5a949f406570252ff1f7031f29a';
   expected_finalizer_body_sha256 constant text :=
-    'e50a1c92607007529194916de30f14c5975fec1fe67f1569da4c46ace32bf85f';
+    '68a26af4acdf7961937ad0c9e7f1233bb0f64fecc26c870f7eb5a1b5233a3410';
   expected_fence_body_sha256 constant text :=
     'fd6919a406140ac5bc82d1d1dededa1397c5e27dc54916fb572ce7bc33ba22a5';
   expected_fence_trigger_body_sha256 constant text :=

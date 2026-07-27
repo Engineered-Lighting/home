@@ -12,3 +12,7 @@ reproduced by two independent runs of the immutable hosted gate. The finalizer
 kernel receives one lock-only `expires_at` column privilege so PostgreSQL can
 perform its reviewed migration-run `FOR SHARE`; a session-bound RLS policy with
 an always-false write check prevents that privilege from mutating the run.
+The verifier's exact legacy-role key manifest now uses the same lexical order
+as PostgreSQL's ordered key scan, allowing valid reviewed role candidates to
+reach the atomic projection boundary while still rejecting extra or missing
+fields.

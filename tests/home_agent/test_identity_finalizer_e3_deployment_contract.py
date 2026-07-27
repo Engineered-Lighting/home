@@ -165,6 +165,11 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
         in admission
     )
     assert "ELSE 4" in admission
+    assert re.search(
+        r"\) <> \(\s*CASE\s+WHEN current_revision = "
+        r"'0014_identity_cutover_e4' THEN 5\s+ELSE 4\s+END\s+\)",
+        admission,
+    )
     assert "identity finalizer E3 evidence policy set mismatch" in admission
     assert "identity finalizer E3 schema ACL mismatch" in admission
     assert "identity finalizer E3 table ACL mismatch" in admission

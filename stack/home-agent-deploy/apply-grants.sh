@@ -2573,10 +2573,12 @@ BEGIN
        SELECT pg_catalog.count(*)
          FROM pg_catalog.pg_policy
         WHERE polrelid = admission_table
-     ) <> CASE
-            WHEN current_revision = '0014_identity_cutover_e4' THEN 5
-            ELSE 4
-          END
+     ) <> (
+       CASE
+         WHEN current_revision = '0014_identity_cutover_e4' THEN 5
+         ELSE 4
+       END
+     )
      OR (
        SELECT pg_catalog.count(*)
          FROM pg_catalog.pg_policy

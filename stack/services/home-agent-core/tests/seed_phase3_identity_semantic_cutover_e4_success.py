@@ -13,7 +13,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import base64
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 import hashlib
 import json
 import os
@@ -26,6 +26,8 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.ids import uuid7
+from app.ledger import LedgerHead, ZERO_HASH
+from app.worker import DurableWorker
 from tests.test_phase3_identity_finalizer_e3_runtime_postgres import (
     _finalize,
     _seed_fixture,
@@ -35,6 +37,9 @@ from tests.test_phase3_identity_finalizer_e3_runtime_postgres import (
 OWNER_DATABASE_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_OWNER_DATABASE_URL"
 FINALIZER_DATABASE_ENV = (
     "TEST_PHASE3_IDENTITY_CUTOVER_E4_FINALIZER_DATABASE_URL"
+)
+LEDGER_WORKER_DATABASE_ENV = (
+    "TEST_PHASE3_IDENTITY_CUTOVER_E4_LEDGER_WORKER_DATABASE_URL"
 )
 OUTPUT_DIRECTORY = Path("/run/e4-fixture")
 DOCUMENT_FILE = "document.b64"
@@ -137,7 +142,8 @@ async def _canonical_document(connection, values: dict[str, str]) -> bytes:
 async def _seed() -> tuple[bytes, uuid.UUID]:
     owner_url = os.environ.get(OWNER_DATABASE_ENV)
     finalizer_url = os.environ.get(FINALIZER_DATABASE_ENV)
-    if not owner_url or not finalizer_url:
+    ledger_worker_url = os.environ.get(LEDGER_WORKER_DATABASE_ENV)
+    if not owner_url or not finalizer_url or not ledger_worker_url:
         raise RuntimeError("synthetic E4 fixture database URLs are missing")
 
     owner_engine = create_async_engine(
@@ -150,7 +156,21 @@ async def _seed() -> tuple[bytes, uuid.UUID]:
         pool_pre_ping=True,
         hide_parameters=True,
     )
+    ledger_worker_engine = create_async_engine(
+        _async_url(ledger_worker_url),
+        pool_pre_ping=True,
+        hide_parameters=True,
+    )
     try:
+        # A fresh database has no ledger singleton until the durable worker
+        # reconciles its independently governed head. Exercise that production
+        # path with the worker credential instead of owner-seeding the table.
+        async with ledger_worker_engine.begin() as connection:
+            await DurableWorker._advance_ledger_state(
+                connection,
+                LedgerHead(epoch=0, head_hash=ZERO_HASH),
+                datetime.now(UTC),
+            )
         async with owner_engine.begin() as connection:
             fixture = await _seed_fixture(
                 connection,
@@ -217,6 +237,8 @@ async def _seed() -> tuple[bytes, uuid.UUID]:
             if (
                 evidence["finalization_id"] != fixture.run_id
                 or evidence["consumed_at"] != evidence["finalized_at"]
+                or evidence["recorded_epoch"] != 0
+                or evidence["recorded_head_hash"] != ZERO_HASH
                 or evidence["updated_at"] > evidence["fixture_time"]
             ):
                 raise RuntimeError("synthetic E3/ledger prerequisite mismatch")
@@ -563,6 +585,7 @@ async def _seed() -> tuple[bytes, uuid.UUID]:
 
         return document, admission_id
     finally:
+        await ledger_worker_engine.dispose()
         await finalizer_engine.dispose()
         await owner_engine.dispose()
 

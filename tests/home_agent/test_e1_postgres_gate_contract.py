@@ -693,6 +693,9 @@ def test_e4_fixture_seed_uses_fixed_core_module_import_boundary(
     assert "python tests/" not in shell
     assert ".py" not in shell
     assert "$PYTHONPATH" not in shell
+    assert runner.E4_LEDGER_WORKER_DATABASE_ENV in shell
+    assert "postgresql+psycopg://home_agent_worker:" in shell
+    assert "/run/secrets/postgres_worker_password" in shell
     assert observed["fixture_directory"] == fixture_directory
     assert observed["fixture_read_only"] is False
     assert observed["run_as_host_user"] is True
@@ -734,9 +737,20 @@ def test_hosted_e4_success_fixture_has_a_non_skippable_contract() -> None:
     )
     assert "_seed_fixture" in seeder_source
     assert "_finalize" in seeder_source
+    assert "LEDGER_WORKER_DATABASE_ENV" in seeder_source
+    assert "DurableWorker._advance_ledger_state(" in seeder_source
+    assert "LedgerHead(epoch=0, head_hash=ZERO_HASH)" in seeder_source
+    assert (
+        seeder_source.index("DurableWorker._advance_ledger_state(")
+        < seeder_source.index("fixture = await _seed_fixture(")
+    )
+    assert "evidence[\"recorded_epoch\"] != 0" in seeder_source
+    assert 'evidence["recorded_head_hash"] != ZERO_HASH' in seeder_source
+    assert "INSERT INTO operations.erasure_ledger_state" not in seeder_source
+    assert "insert(schema.erasure_ledger_state)" not in seeder_source
     assert "(CAST(:document AS jsonb))::text" in seeder_source
     assert "len(values) != 27" in seeder_source
-    assert seeder_source.count("hide_parameters=True") == 2
+    assert seeder_source.count("hide_parameters=True") == 3
     assert "erasure_ledger_verification" in seeder_source
     assert "e3_source_manifest_commitment" in seeder_source
     assert "e3_projection_manifest_commitment" in seeder_source

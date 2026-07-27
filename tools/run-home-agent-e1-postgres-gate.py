@@ -49,6 +49,9 @@ E4_SCAFFOLD_OWNER_DATABASE_ENV = (
 E4_SCAFFOLD_CUTOVER_DATABASE_ENV = (
     "TEST_PHASE3_IDENTITY_CUTOVER_E4_DATABASE_URL"
 )
+E4_LEDGER_WORKER_DATABASE_ENV = (
+    "TEST_PHASE3_IDENTITY_CUTOVER_E4_LEDGER_WORKER_DATABASE_URL"
+)
 E4_FIXTURE_MOUNT = "/run/e4-fixture"
 E4_FIXTURE_DOCUMENT_FILE = "document.b64"
 E4_FIXTURE_ADMISSION_FILE = "admission_id"
@@ -1086,6 +1089,12 @@ def _seed_e4_success_fixture(
         BASE_DATABASE,
         "home_agent_identity_finalizer",
         "postgres_identity_finalizer_password",
+    )
+    shell += _database_url_shell_export(
+        E4_LEDGER_WORKER_DATABASE_ENV,
+        BASE_DATABASE,
+        "home_agent_worker",
+        "postgres_worker_password",
     )
     shell += (
         f'cd "{CORE_CONTAINER_ROOT}"; '

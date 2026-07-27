@@ -45,6 +45,7 @@ FENCE_FUNCTION = "privacy.lock_identity_semantic_write_fence()"
 FENCE_TRIGGER_FUNCTION = "privacy.fence_identity_tombstone_write()"
 EVIDENCE_SELECT_POLICY = "identity_finalizer_e3_select"
 EVIDENCE_INSERT_POLICY = "identity_finalizer_e3_insert"
+MIGRATION_RUN_LOCK_POLICY = "identity_finalizer_e3_migration_run_lock"
 # SHA-256 of the UTF-8 bytes
 # ``home-agent-identity-finalizer-verifier-bundle-v1\n``.  This is the
 # domain-separated identifier for the offline verifier rules accepted by E3;
@@ -3329,6 +3330,18 @@ def _install_evidence_policies() -> None:
             f"CREATE POLICY {EVIDENCE_SELECT_POLICY} ON {table} "
             f"FOR SELECT TO {KERNEL_ROLE} USING ({predicate})"
         )
+    # PostgreSQL applies UPDATE privilege and USING-policy checks to locking
+    # reads. This policy admits only the finalizer's FOR SHARE; its false
+    # WITH CHECK prevents the same column grant from changing a row.
+    migration_run_table = "operations.reviewed_identity_migration_runs"
+    op.execute(
+        f"DROP POLICY IF EXISTS {MIGRATION_RUN_LOCK_POLICY} "
+        f"ON {migration_run_table}"
+    )
+    op.execute(
+        f"CREATE POLICY {MIGRATION_RUN_LOCK_POLICY} ON {migration_run_table} "
+        f"FOR UPDATE TO {KERNEL_ROLE} USING ({predicate}) WITH CHECK (false)"
+    )
     for table in writable:
         op.execute(f"DROP POLICY IF EXISTS {EVIDENCE_SELECT_POLICY} ON {table}")
         op.execute(f"DROP POLICY IF EXISTS {EVIDENCE_INSERT_POLICY} ON {table}")
@@ -3381,6 +3394,9 @@ def _install_function_and_acl() -> None:
           operations.legacy_identity_writer_evidence,
           operations.privacy_cutover_check_receipts,
           operations.semantic_authority_cutovers
+          TO {KERNEL_ROLE};
+        GRANT UPDATE (expires_at) ON TABLE
+          operations.reviewed_identity_migration_runs
           TO {KERNEL_ROLE};
         GRANT SELECT, UPDATE (consumed_at) ON TABLE {ADMISSION}
           TO {KERNEL_ROLE};
@@ -3703,6 +3719,50 @@ def _assert_installed_contract() -> None:
               USING ERRCODE = '55000';
           END IF;
 
+          IF (
+               SELECT pg_catalog.count(*)
+                 FROM pg_catalog.pg_policy AS lock_policy
+                WHERE lock_policy.polrelid =
+                      'operations.reviewed_identity_migration_runs'::regclass
+                  AND lock_policy.polname = '{MIGRATION_RUN_LOCK_POLICY}'
+             ) <> 1
+             OR NOT EXISTS (
+               SELECT 1
+                 FROM pg_catalog.pg_policy AS lock_policy
+                 JOIN pg_catalog.pg_policy AS select_policy
+                   ON select_policy.polrelid = lock_policy.polrelid
+                  AND select_policy.polname = '{EVIDENCE_SELECT_POLICY}'
+                WHERE lock_policy.polrelid =
+                      'operations.reviewed_identity_migration_runs'::regclass
+                  AND lock_policy.polname = '{MIGRATION_RUN_LOCK_POLICY}'
+                  AND lock_policy.polpermissive
+                  AND lock_policy.polcmd = 'w'
+                  AND lock_policy.polroles = ARRAY[kernel_oid]::oid[]
+                  AND lock_policy.polqual::text =
+                      select_policy.polqual::text
+                  AND pg_catalog.pg_get_expr(
+                        lock_policy.polwithcheck,
+                        lock_policy.polrelid,
+                        true
+                      ) = 'false'
+             )
+             OR EXISTS (
+               SELECT 1
+                 FROM pg_catalog.pg_policy AS unexpected_policy
+                WHERE unexpected_policy.polrelid =
+                      'operations.reviewed_identity_migration_runs'::regclass
+                  AND (
+                    0 = ANY (unexpected_policy.polroles)
+                    OR kernel_oid = ANY (unexpected_policy.polroles)
+                  )
+                  AND unexpected_policy.polcmd IN ('*', 'w')
+                  AND unexpected_policy.polname <>
+                      '{MIGRATION_RUN_LOCK_POLICY}'
+             ) THEN
+            RAISE EXCEPTION 'identity_finalizer_e3_policy_contract_invalid'
+              USING ERRCODE = '55000';
+          END IF;
+
           IF NOT EXISTS (
             SELECT 1
               FROM pg_catalog.pg_trigger AS trigger_row
@@ -3835,6 +3895,32 @@ def _assert_installed_contract() -> None:
              OR pg_catalog.has_table_privilege(
                '{KERNEL_ROLE}', 'identity.people', 'UPDATE'
              )
+             OR pg_catalog.has_table_privilege(
+               '{KERNEL_ROLE}',
+               'operations.reviewed_identity_migration_runs',
+               'UPDATE'
+             )
+             OR NOT pg_catalog.has_column_privilege(
+               '{KERNEL_ROLE}',
+               'operations.reviewed_identity_migration_runs',
+               'expires_at',
+               'UPDATE'
+             )
+             OR EXISTS (
+               SELECT 1
+                 FROM pg_catalog.pg_attribute AS attribute
+                WHERE attribute.attrelid =
+                      'operations.reviewed_identity_migration_runs'::regclass
+                  AND attribute.attnum > 0
+                  AND NOT attribute.attisdropped
+                  AND attribute.attname <> 'expires_at'
+                  AND pg_catalog.has_column_privilege(
+                        '{KERNEL_ROLE}',
+                        attribute.attrelid,
+                        attribute.attnum,
+                        'UPDATE'
+                      )
+             )
              OR NOT pg_catalog.has_column_privilege(
                '{KERNEL_ROLE}', 'identity.people', 'status', 'UPDATE'
              )
@@ -3914,7 +4000,11 @@ def downgrade() -> None:
     op.execute(f"DROP FUNCTION {FENCE_FUNCTION}")
     op.execute(f"DROP TABLE {FENCE_TABLE}")
     for table in EVIDENCE_TABLES:
-        for policy in (EVIDENCE_SELECT_POLICY, EVIDENCE_INSERT_POLICY):
+        for policy in (
+            EVIDENCE_SELECT_POLICY,
+            EVIDENCE_INSERT_POLICY,
+            MIGRATION_RUN_LOCK_POLICY,
+        ):
             op.execute(f"DROP POLICY IF EXISTS {policy} ON {table}")
     op.execute(
         f"""
@@ -3923,6 +4013,9 @@ def downgrade() -> None:
           status, status_source_ref, status_source_version,
           status_source_sha256, updated_at
         ) ON TABLE identity.people FROM {KERNEL_ROLE};
+        REVOKE UPDATE (expires_at) ON TABLE
+          operations.reviewed_identity_migration_runs
+          FROM {KERNEL_ROLE};
         REVOKE ALL PRIVILEGES ON TABLE
           identity.aliases,
           identity.external_recognition_bindings,

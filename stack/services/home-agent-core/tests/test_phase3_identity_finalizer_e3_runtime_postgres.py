@@ -1013,7 +1013,11 @@ async def _downgraded_e3_boundary(database_url: str) -> dict[str, bool]:
                             "NOT has_table_privilege(:kernel, "
                             "'operations.reviewed_identity_migration_runs', "
                             "'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,"
-                            "REFERENCES,TRIGGER') AS kernel_table_acl_absent, "
+                            "REFERENCES,TRIGGER') AND "
+                            "NOT has_column_privilege(:kernel, "
+                            "'operations.reviewed_identity_migration_runs', "
+                            "'expires_at', 'UPDATE') "
+                            "AS kernel_table_acl_absent, "
                             "NOT has_schema_privilege(:finalizer, "
                             "'operations', 'USAGE') AS "
                             "finalizer_schema_acl_absent "
@@ -1130,7 +1134,32 @@ async def test_postgresql_e3_lifecycle_boundary_and_atomic_finalizer() -> None:
                             "JOIN pg_roles role ON role.oid=acl.grantee "
                             "WHERE role.rolname=:kernel "
                             "AND acl.privilege_type='EXECUTE') "
-                            "AS kernel_no_explicit_execute "
+                            "AS kernel_no_explicit_execute, "
+                            "has_column_privilege(:kernel, 'operations."
+                            "reviewed_identity_migration_runs', 'expires_at', "
+                            "'UPDATE') AS migration_run_lock_column, "
+                            "NOT has_table_privilege(:kernel, 'operations."
+                            "reviewed_identity_migration_runs', 'UPDATE') "
+                            "AS migration_run_no_table_update, "
+                            "EXISTS (SELECT 1 FROM pg_policy lock_policy "
+                            "JOIN pg_policy select_policy ON "
+                            "select_policy.polrelid=lock_policy.polrelid "
+                            "AND select_policy.polname="
+                            "'identity_finalizer_e3_select' "
+                            "JOIN pg_roles policy_role ON "
+                            "lock_policy.polroles=ARRAY[policy_role.oid]::oid[] "
+                            "WHERE policy_role.rolname=:kernel "
+                            "AND lock_policy.polrelid='operations."
+                            "reviewed_identity_migration_runs'::regclass "
+                            "AND lock_policy.polname='identity_finalizer_e3_"
+                            "migration_run_lock' "
+                            "AND lock_policy.polpermissive "
+                            "AND lock_policy.polcmd='w' "
+                            "AND lock_policy.polqual::text="
+                            "select_policy.polqual::text "
+                            "AND pg_get_expr(lock_policy.polwithcheck, "
+                            "lock_policy.polrelid, true)='false') "
+                            "AS migration_run_lock_policy "
                             "FROM pg_proc function "
                             "WHERE function.oid='operations."
                             "finalize_reviewed_identity_migration"
@@ -1155,6 +1184,9 @@ async def test_postgresql_e3_lifecycle_boundary_and_atomic_finalizer() -> None:
                 "body_sha256": expected_body_sha256,
                 "finalizer_execute": True,
                 "kernel_no_explicit_execute": True,
+                "migration_run_lock_column": True,
+                "migration_run_no_table_update": True,
+                "migration_run_lock_policy": True,
             }
 
         await _set_finalizer_valid_until(

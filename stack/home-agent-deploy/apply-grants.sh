@@ -1739,6 +1739,8 @@ DECLARE
   target_table text;
   evidence_select_policy constant text := 'identity_finalizer_e3_select';
   evidence_insert_policy constant text := 'identity_finalizer_e3_insert';
+  migration_run_lock_policy constant text :=
+    'identity_finalizer_e3_migration_run_lock';
   predicate constant text :=
     'session_user = ''home_agent_identity_finalizer'' AND '
     'current_user = ''home_agent_identity_finalizer_kernel'' AND NOT '
@@ -2528,6 +2530,19 @@ BEGIN
       predicate
     );
   END LOOP;
+  DROP POLICY IF EXISTS identity_finalizer_e3_migration_run_lock
+    ON operations.reviewed_identity_migration_runs;
+  CREATE POLICY identity_finalizer_e3_migration_run_lock
+    ON operations.reviewed_identity_migration_runs
+    FOR UPDATE TO home_agent_identity_finalizer_kernel
+    USING (
+      session_user = 'home_agent_identity_finalizer'
+      AND current_user = 'home_agent_identity_finalizer_kernel'
+      AND NOT pg_catalog.pg_has_role(
+        session_user, 'home_agent_identity_finalizer_kernel', 'SET'
+      )
+    )
+    WITH CHECK (false);
   FOREACH target_table IN ARRAY ARRAY[
     'operations.reviewed_identity_migration_item_receipts',
     'operations.reviewed_identity_migration_finalizations',
@@ -2581,7 +2596,7 @@ BEGIN
             0 = ANY (policy_row.polroles)
             OR kernel_oid = ANY (policy_row.polroles)
           )
-     ) <> 15
+     ) <> 16
      OR EXISTS (
        SELECT 1
          FROM pg_catalog.pg_policy AS policy_row
@@ -2604,8 +2619,28 @@ BEGIN
           )
           AND policy_row.polname NOT IN (
             evidence_select_policy,
-            evidence_insert_policy
+            evidence_insert_policy,
+            migration_run_lock_policy
           )
+     )
+     OR NOT EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_policy AS lock_policy
+         JOIN pg_catalog.pg_policy AS select_policy
+           ON select_policy.polrelid = lock_policy.polrelid
+          AND select_policy.polname = evidence_select_policy
+        WHERE lock_policy.polrelid =
+              'operations.reviewed_identity_migration_runs'::regclass
+          AND lock_policy.polname = migration_run_lock_policy
+          AND lock_policy.polpermissive
+          AND lock_policy.polcmd = 'w'
+          AND lock_policy.polroles = ARRAY[kernel_oid]::oid[]
+          AND lock_policy.polqual::text = select_policy.polqual::text
+          AND pg_catalog.pg_get_expr(
+                lock_policy.polwithcheck,
+                lock_policy.polrelid,
+                true
+              ) = 'false'
      ) THEN
     RAISE EXCEPTION 'identity finalizer E3 evidence policy set mismatch'
       USING ERRCODE = '42501';
@@ -2831,6 +2866,9 @@ BEGIN
     operations.privacy_cutover_check_receipts,
     operations.semantic_authority_cutovers
     TO home_agent_identity_finalizer_kernel;
+  GRANT UPDATE (expires_at)
+    ON TABLE operations.reviewed_identity_migration_runs
+    TO home_agent_identity_finalizer_kernel;
   GRANT SELECT ON TABLE operations.reviewed_identity_finalizer_admissions
     TO home_agent_identity_finalizer_kernel;
   GRANT UPDATE (consumed_at)
@@ -2950,7 +2988,8 @@ BEGIN
     'home_agent_identity_finalizer_kernel|identity.people|status_source_sha256|UPDATE',
     'home_agent_identity_finalizer_kernel|identity.people|status_source_version|UPDATE',
     'home_agent_identity_finalizer_kernel|identity.people|updated_at|UPDATE',
-    'home_agent_identity_finalizer_kernel|operations.reviewed_identity_finalizer_admissions|consumed_at|UPDATE'
+    'home_agent_identity_finalizer_kernel|operations.reviewed_identity_finalizer_admissions|consumed_at|UPDATE',
+    'home_agent_identity_finalizer_kernel|operations.reviewed_identity_migration_runs|expires_at|UPDATE'
   ]::text[];
   SELECT pg_catalog.array_agg(
            role_row.rolname || '|' || table_namespace.nspname || '.' ||

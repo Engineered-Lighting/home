@@ -255,20 +255,54 @@ def test_sql_conditional_expression_is_not_schema_qualified() -> None:
 def test_evidence_policy_identifiers_cannot_truncate_or_collide() -> None:
     select_policy = _literal("EVIDENCE_SELECT_POLICY")
     insert_policy = _literal("EVIDENCE_INSERT_POLICY")
-    assert select_policy != insert_policy
-    assert len(select_policy.encode("utf-8")) <= 63
-    assert len(insert_policy.encode("utf-8")) <= 63
-    assert "_e3_" in select_policy
-    assert "_e3_" in insert_policy
+    lock_policy = _literal("MIGRATION_RUN_LOCK_POLICY")
+    policies = (select_policy, insert_policy, lock_policy)
+    assert len(set(policies)) == len(policies)
+    for policy in policies:
+        assert len(policy.encode("utf-8")) <= 63
+        assert "_e3_" in policy
     install = MIGRATION.split("def _install_evidence_policies()", 1)[1].split(
         "def _install_function_and_acl()", 1
     )[0]
     assert "table.replace(" not in install
     assert "EVIDENCE_SELECT_POLICY" in install
     assert "EVIDENCE_INSERT_POLICY" in install
+    assert "MIGRATION_RUN_LOCK_POLICY" in install
     downgrade = MIGRATION.split("def downgrade()", 1)[1]
     assert "EVIDENCE_SELECT_POLICY" in downgrade
     assert "EVIDENCE_INSERT_POLICY" in downgrade
+    assert "MIGRATION_RUN_LOCK_POLICY" in downgrade
+
+
+def test_migration_run_lock_is_column_narrow_and_cannot_mutate() -> None:
+    policy_install = MIGRATION.split(
+        "def _install_evidence_policies()", 1
+    )[1].split("def _install_function_and_acl()", 1)[0]
+    acl_install = MIGRATION.split("def _install_function_and_acl()", 1)[1].split(
+        "def _validate_dormant_role()", 1
+    )[0]
+    installed_contract = MIGRATION.split(
+        "def _assert_installed_contract()", 1
+    )[1].split("def upgrade()", 1)[0]
+
+    assert "FOR UPDATE TO {KERNEL_ROLE} USING ({predicate})" in policy_install
+    assert "WITH CHECK (false)" in policy_install
+    assert (
+        "GRANT UPDATE (expires_at) ON TABLE\n"
+        "          operations.reviewed_identity_migration_runs"
+    ) in acl_install
+    assert "lock_policy.polqual::text" in installed_contract
+    assert "select_policy.polqual::text" in installed_contract
+    assert ") = 'false'" in installed_contract
+    assert (
+        "'operations.reviewed_identity_migration_runs',\n"
+        "               'UPDATE'"
+    ) in installed_contract
+    assert (
+        "'operations.reviewed_identity_migration_runs',\n"
+        "               'expires_at',\n"
+        "               'UPDATE'"
+    ) in installed_contract
 
 
 def test_kernel_schema_privileges_cover_function_compilation_only() -> None:
@@ -366,6 +400,10 @@ def test_only_the_candidate_projection_surface_can_be_written() -> None:
         "identity.people",
         "operations.reviewed_identity_finalizer_admissions",
     }
+    assert (
+        "FROM operations.reviewed_identity_migration_runs AS candidate" in body
+    )
+    assert "FOR SHARE;" in body
     for forbidden in (
         "identity.principals",
         "identity.ha_user_bindings",
@@ -547,11 +585,16 @@ def test_roles_rls_and_acl_remain_dormant_and_non_delegable() -> None:
         "FORCE ROW LEVEL SECURITY",
         "reviewed_identity_finalizer_admissions_e3_kernel_select",
         "reviewed_identity_finalizer_admissions_e3_kernel_update",
+        "identity_finalizer_e3_migration_run_lock",
         "NOT pg_catalog.pg_has_role(",
         "GRANT EXECUTE ON FUNCTION {FUNCTION} TO {FINALIZER_ROLE}",
     ):
         assert marker in MIGRATION
     assert "GRANT EXECUTE ON FUNCTION {FUNCTION} TO {KERNEL_ROLE}" not in MIGRATION
+    assert (
+        "GRANT UPDATE (expires_at) ON TABLE\n"
+        "          operations.reviewed_identity_migration_runs"
+    ) in MIGRATION
     assert "GRANT SELECT, INSERT ON TABLE identity.people TO {KERNEL_ROLE}" in MIGRATION
     assert (
         "status, status_source_ref, status_source_version,\n"
@@ -604,3 +647,7 @@ def test_downgrade_refuses_evidence_and_restores_the_exact_0012_acl() -> None:
     assert "DROP FUNCTION operations.finalize_reviewed_identity_migration" in downgrade
     assert "DROP TABLE {FENCE_TABLE}" in downgrade
     assert "op.drop_table(" in downgrade
+    assert (
+        "REVOKE UPDATE (expires_at) ON TABLE\n"
+        "          operations.reviewed_identity_migration_runs"
+    ) in downgrade

@@ -154,6 +154,18 @@ def test_e3_grant_replay_restores_only_the_reviewed_database_surface() -> None:
         "evidence_insert_policy constant text := 'identity_finalizer_e3_insert'"
         in admission
     )
+    assert (
+        "migration_run_lock_policy constant text :=\n"
+        "    'identity_finalizer_e3_migration_run_lock'"
+    ) in admission
+    assert (
+        "CREATE POLICY identity_finalizer_e3_migration_run_lock\n"
+        "    ON operations.reviewed_identity_migration_runs\n"
+        "    FOR UPDATE TO home_agent_identity_finalizer_kernel"
+    ) in admission
+    assert "WITH CHECK (false)" in admission
+    assert ") <> 16" in admission
+    assert "lock_policy.polqual::text = select_policy.polqual::text" in admission
     assert "pg_catalog.replace(target_table, '.', '_')" not in admission
     assert "|| '_e3_kernel_select'" not in admission
     assert "|| '_e3_kernel_insert'" not in admission
@@ -167,6 +179,10 @@ def test_e3_grant_replay_restores_only_the_reviewed_database_surface() -> None:
     ) not in admission
     assert "GRANT SELECT, UPDATE (consumed_at)" not in admission
     assert "GRANT UPDATE (consumed_at)" in admission
+    assert (
+        "GRANT UPDATE (expires_at)\n"
+        "    ON TABLE operations.reviewed_identity_migration_runs"
+    ) in admission
     assert "GRANT SELECT, INSERT, UPDATE ON TABLE identity.people" not in admission
     assert (
         "GRANT SELECT, INSERT ON TABLE identity.people" in admission
@@ -183,6 +199,7 @@ def test_e3_grant_replay_restores_only_the_reviewed_database_surface() -> None:
         "identity.people|status_source_version|UPDATE",
         "identity.people|status_source_sha256|UPDATE",
         "identity.people|updated_at|UPDATE",
+        "operations.reviewed_identity_migration_runs|expires_at|UPDATE",
     ):
         assert update_column in admission
     for forbidden_write in (

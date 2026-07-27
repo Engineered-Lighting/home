@@ -3062,7 +3062,10 @@ def _prepare_admission_table() -> None:
               FROM pg_catalog.pg_constraint AS constraint_row
              WHERE constraint_row.conrelid = occupied
                AND (
-                 constraint_row.connoinherit
+                 (
+                   constraint_row.contype = 'c'
+                   AND constraint_row.connoinherit
+                 )
                  OR (
                    constraint_row.contype IN ('p','u')
                    AND (

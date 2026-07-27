@@ -207,6 +207,11 @@ def test_bootstrap_accepts_only_the_exact_empty_metadata_shape() -> None:
         "uq_reviewed_identity_finalizer_admissions_run_id|u|true|false|false"
         in MIGRATION
     )
+    assert re.search(
+        r"constraint_row\.contype = 'c'\s+"
+        r"AND constraint_row\.connoinherit",
+        MIGRATION,
+    )
     assert "constraint_row.contype IN ('p','u')" in MIGRATION
     assert "constraint_row.contype = 'f'" in MIGRATION
     assert "expected_indexes constant text[]" in MIGRATION

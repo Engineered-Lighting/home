@@ -109,9 +109,13 @@ def test_e5b_descendant_overlays_preserve_predecessor_catalog_pins() -> None:
     e5a = _block(source, "identity_current_authority_e5_acl")
 
     assert "0016_principal_binding_kernel_e5b" not in source
-    assert _revision_array(e3, "reviewed_e3_catalog_revisions")[-1] == REVISION
-    assert _revision_array(e4, "reviewed_e4_catalog_revisions")[-1] == REVISION
-    assert _revision_array(e5a, "reviewed_e5_catalog_revisions")[-1] == REVISION
+    for revisions in (
+        _revision_array(e3, "reviewed_e3_catalog_revisions"),
+        _revision_array(e4, "reviewed_e4_catalog_revisions"),
+        _revision_array(e5a, "reviewed_e5_catalog_revisions"),
+    ):
+        assert REVISION in revisions
+        assert revisions[-1] == "0017_authenticated_binding_e5c"
     assert f"'{PINNED_E3}'" in e3
     assert f"'{PINNED_E4}'" in e4
     assert f"'{PINNED_E5A}'" in e5a
@@ -242,7 +246,9 @@ def test_e5b_manifest_pins_complete_denial_only_catalog() -> None:
         admission,
     )
 
-    assert f"current_revision <> '{REVISION}'" in admission
+    assert "current_revision NOT IN (" in admission
+    assert f"'{REVISION}'" in admission
+    assert "'0017_authenticated_binding_e5c'" in admission
     assert FUNCTION_NAME in admission
     assert FUNCTION_ARGUMENTS in admission
     assert RECEIPT in admission
@@ -311,8 +317,9 @@ def test_e5b_manifest_pins_complete_denial_only_catalog() -> None:
         in admission
     )
     assert re.search(
+        rf"IF current_revision = '{REVISION}' THEN\s+"
         r"RAISE EXCEPTION "
         r"'identity cutover E4 activation contract is not installed'\s+"
-        r"USING ERRCODE = '55000';\s+END\s*$",
+        r"USING ERRCODE = '55000';\s+END IF;\s+END\s*$",
         admission,
     )

@@ -99,7 +99,7 @@ def test_legacy_import_routes_are_tombstones_and_relationships_are_not_facts() -
         "retired_source_entity_binding"
     )
     assert routes[("POST", "/v1/principal-binding-proposal/confirm")] == (
-        "retired_principal_binding_confirmation"
+        "principal_binding_confirmation"
     )
     source_tombstone = next(
         route
@@ -110,13 +110,14 @@ def test_legacy_import_routes_are_tombstones_and_relationships_are_not_facts() -
         "_service",
         "_bootstrap",
     }
-    confirmation_tombstone = next(
+    confirmation_route = next(
         route
         for route in semantic_router().routes
         if route.path == "/v1/principal-binding-proposal/confirm"
     )
-    assert set(inspect.signature(confirmation_tombstone.endpoint).parameters) == {
-        "_service"
+    assert set(inspect.signature(confirmation_route.endpoint).parameters) == {
+        "request",
+        "service",
     }
     assert schema.external_recognition_bindings is not schema.source_entity_bindings
     assert ("POST", "/v1/relationships/parent-confirmations") not in routes

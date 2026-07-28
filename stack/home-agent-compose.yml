@@ -173,6 +173,8 @@ services:
         target: postgres_api_password
       - source: postgres_binding_operator_password_provision
         target: postgres_binding_operator_password
+      - source: postgres_binding_committer_password_provision
+        target: postgres_binding_committer_password
       - source: postgres_identity_migration_password_provision
         target: postgres_identity_migration_password
       - source: postgres_identity_finalizer_password_provision
@@ -268,6 +270,7 @@ services:
       HOME_AGENT_ROLE: api
       HOME_AGENT_KNOWLEDGE_ENCRYPTION_KEY_FILE: /run/secrets/knowledge_encryption_key
       HOME_AGENT_OPERATOR_DATABASE_URL_FILE: /run/secrets/operator_database_url
+      HOME_AGENT_BINDING_COMMIT_DATABASE_URL_FILE: /run/secrets/binding_commit_database_url
       HOME_AGENT_SERVICE_TOKEN_FILE: /run/secrets/service_token
       HOME_AGENT_OPERATOR_TOKEN_FILE: /run/secrets/operator_token
       HOME_AGENT_BOOTSTRAP_TOKEN_FILE: /run/secrets/bootstrap_token
@@ -276,6 +279,8 @@ services:
         target: database_url
       - source: database_url_binding_operator_core_api
         target: operator_database_url
+      - source: database_url_binding_committer_core_api
+        target: binding_commit_database_url
       - source: knowledge_encryption_key_core_api
         target: knowledge_encryption_key
       - source: service_token_core_api
@@ -617,6 +622,7 @@ secrets:
   postgres_owner_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_owner_password"}
   postgres_api_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_api_password"}
   postgres_binding_operator_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_binding_operator_password"}
+  postgres_binding_committer_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_binding_committer_password"}
   postgres_identity_migration_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_identity_migration_password"}
   postgres_identity_finalizer_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_identity_finalizer_password"}
   postgres_ingest_password_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-roles/postgres_ingest_password"}
@@ -631,6 +637,7 @@ secrets:
   database_url_owner_migrate: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/migrate/database_url"}
   database_url_api_core_api: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-api/database_url"}
   database_url_binding_operator_core_api: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-api/operator_database_url"}
+  database_url_binding_committer_core_api: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-api/binding_commit_database_url"}
   knowledge_encryption_key_core_api: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-api/knowledge_encryption_key"}
   service_token_core_api: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-api/service_token"}
   operator_token_core_api: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-api/operator_token"}

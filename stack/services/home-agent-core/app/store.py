@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Mapping
 
 from psycopg.types.range import Range
-from sqlalchemy import and_, delete, func, literal, or_, select, update
+from sqlalchemy import and_, delete, func, literal, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 
@@ -35,6 +35,7 @@ from .memory import (
     propose_parents_mountain_house,
     render_travel_arrival,
 )
+from .principal_binding_adapter import PrincipalBindingCommitContext
 from .maintenance import WorkerMaintenanceInspector
 from .resources import inspect_disk_budget
 from .models import (
@@ -3228,6 +3229,43 @@ class CoreStore:
         if result is None:
             raise ConflictError("binding confirmation did not commit")
         return result
+
+    async def principal_binding_commit_context(
+        self,
+        ha_user_id: str,
+        proposal_digest: str,
+    ) -> PrincipalBindingCommitContext:
+        """Resolve only the reviewed IDs needed by the commit-only connection."""
+
+        self._require_rollout("shadow", "principal_binding_confirmation")
+        async with self.database.transaction(binding_operator=True) as connection:
+            rows = (
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT proposal.proposal_id "
+                            "FROM identity.principal_binding_proposals "
+                            "AS proposal "
+                            "WHERE proposal.ha_user_id=:ha_user_id "
+                            "AND proposal.proposal_digest=:proposal_digest "
+                            "AND proposal.state='ready'"
+                        ),
+                        {
+                            "ha_user_id": ha_user_id,
+                            "proposal_digest": proposal_digest,
+                        },
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        if not rows:
+            raise NotFoundError("binding proposal does not exist")
+        if len(rows) != 1:
+            raise ConflictError("binding proposal authority is ambiguous")
+        return PrincipalBindingCommitContext(
+            proposal_id=rows[0]["proposal_id"],
+        )
 
     async def resolve_principal(self, ha_user_id: str) -> dict[str, Any]:
         async with self.database.transaction(ha_user_id=ha_user_id) as connection:

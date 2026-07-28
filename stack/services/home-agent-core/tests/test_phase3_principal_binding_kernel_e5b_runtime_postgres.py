@@ -6,6 +6,7 @@ import secrets
 import uuid
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import text
@@ -14,15 +15,25 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from app.crypto import sha256_json
+from app.db import Database, PrincipalBindingCommitDatabase
 from app.ids import uuid7
-from app.store import binding_person_snapshot_digest, binding_proposal_digest
+from app.models import PrincipalBindingConfirmation
+from app.principal_binding_adapter import AuthenticatedPrincipalBindingAdapter
+from app.store import (
+    CoreStore,
+    binding_person_snapshot_digest,
+    binding_proposal_digest,
+)
 
 
 OWNER_DATABASE_ENV = (
     "TEST_PHASE3_PRINCIPAL_BINDING_KERNEL_E5B_OWNER_DATABASE_URL"
 )
 BINDING_DATABASE_ENV = (
-    "TEST_PHASE3_PRINCIPAL_BINDING_KERNEL_E5B_DATABASE_URL"
+    "TEST_PHASE3_PRINCIPAL_BINDING_KERNEL_E5B_COMMITTER_DATABASE_URL"
+)
+OPERATOR_DATABASE_ENV = (
+    "TEST_PHASE3_PRINCIPAL_BINDING_ADAPTER_E5C_OPERATOR_DATABASE_URL"
 )
 HOSTED_GATE_SENTINEL_ENV = "TEST_PHASE3_IDENTITY_ERASURE_E1_RUN_SENTINEL"
 RETAIN_DOWNGRADE_EVIDENCE_ENV = (
@@ -267,7 +278,7 @@ async def _commit(
             await connection.execute(
                 text(
                     f"SELECT {FUNCTION}("
-                    ":promotion_id,CAST(:ha_user_id AS varchar(64)),"
+                    ":proposal_id,CAST(:ha_user_id AS varchar(64)),"
                     "CAST(:proposal_digest AS varchar(64)),:nonce,"
                     ":receipt_id,:principal_id,:artifact_id,:binding_id)"
                 ),
@@ -280,7 +291,7 @@ def _commit_values(
     staged: StagedBinding,
 ) -> dict[str, object]:
     return {
-        "promotion_id": staged.promotion_id,
+        "proposal_id": staged.proposal_id,
         "ha_user_id": staged.ha_user_id,
         "proposal_digest": staged.proposal_digest,
         "nonce": staged.nonce,
@@ -690,9 +701,9 @@ async def test_e5b_rejects_prior_caller_dml_in_the_same_transaction() -> None:
                     {"request_id": staged.request_id},
                 )
                 await connection.execute(
-                    text(
-                        f"SELECT {FUNCTION}("
-                        ":promotion_id,CAST(:ha_user_id AS varchar(64)),"
+                        text(
+                            f"SELECT {FUNCTION}("
+                            ":proposal_id,CAST(:ha_user_id AS varchar(64)),"
                         "CAST(:proposal_digest AS varchar(64)),:nonce,"
                         ":receipt_id,:principal_id,:artifact_id,:binding_id)"
                     ),
@@ -729,9 +740,9 @@ async def test_e5b_rejects_prior_caller_row_lock() -> None:
                     {"request_id": staged.request_id},
                 )
                 await connection.execute(
-                    text(
-                        f"SELECT {FUNCTION}("
-                        ":promotion_id,CAST(:ha_user_id AS varchar(64)),"
+                        text(
+                            f"SELECT {FUNCTION}("
+                            ":proposal_id,CAST(:ha_user_id AS varchar(64)),"
                         "CAST(:proposal_digest AS varchar(64)),:nonce,"
                         ":receipt_id,:principal_id,:artifact_id,:binding_id)"
                     ),
@@ -834,6 +845,48 @@ async def test_e5b_current_edge_privacy_block_is_content_free_denial() -> None:
     finally:
         await _cleanup(owner_engine, staged)
         await binding_engine.dispose()
+        await owner_engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not (
+        _runtime_configured()
+        and os.getenv(OPERATOR_DATABASE_ENV)
+    ),
+    reason="E5c PostgreSQL split credentials are not configured",
+)
+async def test_e5c_split_adapter_commits_after_pinned_grant_replay() -> None:
+    owner_engine = _engine(OWNER_DATABASE_ENV)
+    staged = await _stage_binding(owner_engine, label="e5c-split-adapter")
+    operator_database = Database(os.environ[OPERATOR_DATABASE_ENV])
+    commit_database = PrincipalBindingCommitDatabase(
+        os.environ[BINDING_DATABASE_ENV]
+    )
+    store = object.__new__(CoreStore)
+    store.database = operator_database
+    store.settings = SimpleNamespace(rollout_mode="shadow")
+    adapter = AuthenticatedPrincipalBindingAdapter(commit_database)
+    try:
+        context = await store.principal_binding_commit_context(
+            staged.ha_user_id,
+            staged.proposal_digest,
+        )
+        result = await adapter.commit(
+            context=context,
+            ha_user_id=staged.ha_user_id,
+            value=PrincipalBindingConfirmation(
+                proposal_digest=staged.proposal_digest,
+                confirmation_nonce=staged.nonce,
+            ),
+        )
+        assert result.state == "bound"
+        assert result.location_memory_enabled is False
+        assert result.travel_greetings_enabled is False
+    finally:
+        await _cleanup(owner_engine, staged)
+        await adapter.close()
+        await operator_database.close()
         await owner_engine.dispose()
 
 

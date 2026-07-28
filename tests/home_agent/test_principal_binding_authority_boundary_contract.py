@@ -314,10 +314,10 @@ class PrincipalBindingAuthorityBoundaryContractTests(unittest.TestCase):
         self.assertNotIn("principal_binding_candidate_staging", compose)
         self.assertNotIn("ReviewedPrincipalNominee", compose)
 
-    def test_public_confirmation_route_remains_a_no_body_no_store_tombstone(
+    def test_public_confirmation_route_is_revision_gated_before_body_parse(
         self,
     ) -> None:
-        route = function(API_PATH, "retired_principal_binding_confirmation")
+        route = function(API_PATH, "principal_binding_confirmation")
         parameters = [
             argument.arg
             for argument in (
@@ -326,7 +326,7 @@ class PrincipalBindingAuthorityBoundaryContractTests(unittest.TestCase):
                 *route.args.kwonlyargs,
             )
         ]
-        self.assertEqual(parameters, ["_service"])
+        self.assertEqual(parameters, ["request", "service"])
         post_paths = {
             ast.literal_eval(decorator.args[0])
             for decorator in route.decorator_list
@@ -337,18 +337,17 @@ class PrincipalBindingAuthorityBoundaryContractTests(unittest.TestCase):
             and isinstance(decorator.args[0], ast.Constant)
         }
         self.assertEqual(post_paths, {"/principal-binding-proposal/confirm"})
-        self.assertEqual(len(route.body), 1)
-        raise_node = route.body[0]
-        self.assertIsInstance(raise_node, ast.Raise)
-        assert isinstance(raise_node, ast.Raise)
-        self.assertIsInstance(raise_node.exc, ast.Call)
-        assert isinstance(raise_node.exc, ast.Call)
-        self.assertIsInstance(raise_node.exc.func, ast.Name)
-        self.assertEqual(raise_node.exc.func.id, "CapabilityDisabledError")
-        self.assertEqual(len(raise_node.exc.args), 1)
-        reason = raise_node.exc.args[0]
-        self.assertIsInstance(reason, ast.Name)
-        self.assertEqual(reason.id, "PRINCIPAL_BINDING_CONFIRMATION_RETIRED")
+        source = ast.get_source_segment(read(API_PATH), route)
+        assert source is not None
+        self.assertLess(
+            source.index("readiness_migration"),
+            source.index("raw_body = await request.body()"),
+        )
+        self.assertIn("PRINCIPAL_BINDING_CONFIRMATION_RETIRED", source)
+        self.assertIn("PrincipalBindingConfirmation.model_validate_json", source)
+        self.assertIn("store.principal_binding_commit_context(", source)
+        self.assertIn("adapter.commit(", source)
+        self.assertNotIn("confirm_principal_binding_proposal(", source)
 
     def test_runtime_deploy_pin_and_finalizer_surface_remain_disabled(self) -> None:
         revision = "0006a_worker_lease_arbitration"
@@ -398,7 +397,7 @@ class PrincipalBindingAuthorityBoundaryContractTests(unittest.TestCase):
         self.assertIn("profiles: [operator]", finalizer)
         self.assertIn('restart: "no"', finalizer)
 
-    def test_e5b_kernel_has_no_runtime_adapter_service_or_secret_surface(
+    def test_e5c_runtime_adapter_is_narrow_and_has_no_native_or_bff_expansion(
         self,
     ) -> None:
         runtime_roots = (
@@ -425,7 +424,7 @@ class PrincipalBindingAuthorityBoundaryContractTests(unittest.TestCase):
             ".yaml",
             ".yml",
         }
-        forbidden_runtime_tokens = (
+        forbidden_client_tokens = (
             E5B_COMMIT_FUNCTION,
             "home_agent_identity_binding_kernel",
             "IDENTITY_BINDING_KERNEL_DATABASE_URL",
@@ -438,7 +437,13 @@ class PrincipalBindingAuthorityBoundaryContractTests(unittest.TestCase):
                 if not path.is_file() or path.suffix.lower() not in suffixes:
                     continue
                 source = path.read_text(encoding="utf-8")
-                for token in forbidden_runtime_tokens:
+                if path == ROOT / "stack/services/home-agent-core/app/db.py":
+                    self.assertEqual(source.count(E5B_COMMIT_FUNCTION), 1)
+                    continue
+                if path == API_PATH:
+                    self.assertNotIn(E5B_COMMIT_FUNCTION, source, path)
+                    continue
+                for token in forbidden_client_tokens:
                     self.assertNotIn(token, source, path)
 
         compose = read("stack/home-agent-compose.yml")
@@ -447,6 +452,8 @@ class PrincipalBindingAuthorityBoundaryContractTests(unittest.TestCase):
         self.assertNotIn("home_agent_identity_binding_kernel", compose)
         self.assertNotIn("IDENTITY_BINDING_KERNEL", compose)
         self.assertNotIn("IDENTITY_BINDING_KERNEL", environment)
+        self.assertIn("binding_commit_database_url", compose)
+        self.assertNotIn("principal-binding-proposal/confirm", compose)
 
     def test_legacy_self_confirming_store_has_no_non_test_static_reference(
         self,

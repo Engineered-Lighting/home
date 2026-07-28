@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     port: int = Field(default=8104, ge=1, le=65535)
     database_url: SecretStr
     operator_database_url: SecretStr | None = None
+    binding_commit_database_url: SecretStr | None = None
     runtime_spool_path: Path = Path("/runtime/runtime.sqlite")
     storage_monitor_path: Path = Path("/storage-monitor/durable")
     runtime_spool_key: SecretStr | None = None
@@ -62,7 +63,9 @@ class Settings(BaseSettings):
             raise ValueError("must decode to exactly 32 bytes")
         return value
 
-    @field_validator("database_url", "operator_database_url")
+    @field_validator(
+        "database_url", "operator_database_url", "binding_commit_database_url"
+    )
     @classmethod
     def validate_database_url(cls, value: SecretStr | None) -> SecretStr | None:
         if value is None:
@@ -104,6 +107,14 @@ class Settings(BaseSettings):
             return "postgresql+psycopg://" + url.removeprefix("postgresql://")
         return url
 
+    def async_binding_commit_database_url(self) -> str:
+        if self.binding_commit_database_url is None:
+            raise ValueError("binding committer database role is disabled")
+        url = self.binding_commit_database_url.get_secret_value()
+        if url.startswith("postgresql://"):
+            return "postgresql+psycopg://" + url.removeprefix("postgresql://")
+        return url
+
     @model_validator(mode="after")
     def validate_secret_separation(self) -> "Settings":
         if self.role in {"ingest", "worker", "all"} and self.runtime_spool_key is None:
@@ -134,8 +145,21 @@ class Settings(BaseSettings):
             or self.edge_token is not None
         ):
             raise ValueError("api role may not receive spool, ledger, or edge secrets")
-        if self.role not in {"api", "all"} and self.operator_database_url is not None:
-            raise ValueError("only the api role may receive the operator database URL")
+        if self.role not in {"api", "all"} and (
+            self.operator_database_url is not None
+            or self.binding_commit_database_url is not None
+        ):
+            raise ValueError(
+                "only the api role may receive binding workflow database URLs"
+            )
+        if (
+            self.role in {"api", "all"}
+            and self.binding_commit_database_url is not None
+            and self.operator_database_url is None
+        ):
+            raise ValueError(
+                "binding committer requires the separate staging database role"
+            )
         if self.role == "api" and any(
             value is not None
             for value in (
@@ -155,7 +179,10 @@ class Settings(BaseSettings):
                 "api binding-operator database, bearer, and bootstrap credentials "
                 "must be configured together"
             )
-        if self.role == "api" and self.operator_database_url is not None:
+        if (
+            self.role in {"api", "all"}
+            and self.operator_database_url is not None
+        ):
             raw_operator_url = self.operator_database_url.get_secret_value()
             try:
                 parsed_operator = urlsplit(raw_operator_url)
@@ -182,6 +209,48 @@ class Settings(BaseSettings):
                     "operator database URL must name only the isolated binding "
                     "operator role"
                 )
+        if (
+            self.role in {"api", "all"}
+            and self.binding_commit_database_url is not None
+        ):
+            assert self.operator_database_url is not None
+            raw_commit_url = self.binding_commit_database_url.get_secret_value()
+            try:
+                parsed_commit = urlsplit(raw_commit_url)
+                commit_port = parsed_commit.port
+            except ValueError as exc:
+                raise ValueError("binding commit database URL is invalid") from exc
+            commit_password = parsed_commit.password or ""
+            expected_commit_url = (
+                "postgresql+psycopg://home_agent_binding_committer:"
+                f"{commit_password}@postgres:5432/home_agent"
+            )
+            if (
+                parsed_commit.scheme != "postgresql+psycopg"
+                or parsed_commit.username != "home_agent_binding_committer"
+                or parsed_commit.hostname != "postgres"
+                or commit_port != 5432
+                or parsed_commit.path != "/home_agent"
+                or parsed_commit.query
+                or parsed_commit.fragment
+                or not re.fullmatch(r"[0-9a-f]{64}", commit_password)
+                or raw_commit_url != expected_commit_url
+            ):
+                raise ValueError(
+                    "binding commit database URL must name only the isolated "
+                    "binding committer role"
+                )
+            operator_password = (
+                urlsplit(self.operator_database_url.get_secret_value()).password
+                or ""
+            )
+            primary_password = (
+                urlsplit(self.database_url.get_secret_value()).password or ""
+            )
+            if commit_password in {operator_password, primary_password}:
+                raise ValueError(
+                    "binding staging and commit database credentials must differ"
+                )
         if self.role == "ingest" and (
             self.erasure_ledger_key is not None
             or self.service_token is not None
@@ -206,6 +275,7 @@ class Settings(BaseSettings):
                 self.service_token,
                 self.operator_token,
                 self.bootstrap_token,
+                self.binding_commit_database_url,
             )
         ):
             raise ValueError(
@@ -221,6 +291,7 @@ class Settings(BaseSettings):
                 self.service_token,
                 self.operator_token,
                 self.bootstrap_token,
+                self.binding_commit_database_url,
             )
         ):
             raise ValueError(
@@ -262,6 +333,7 @@ class Settings(BaseSettings):
                 self.service_token,
                 self.operator_token,
                 self.bootstrap_token,
+                self.binding_commit_database_url,
             )
             if value is not None
         ]

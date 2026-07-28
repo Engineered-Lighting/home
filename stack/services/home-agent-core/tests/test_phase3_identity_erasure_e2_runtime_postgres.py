@@ -33,6 +33,9 @@ ROLE_DATABASE_ENVS = {
     "home_agent_binding_operator": (
         "TEST_PHASE3_IDENTITY_ERASURE_E2_BINDING_OPERATOR_DATABASE_URL"
     ),
+    "home_agent_binding_committer": (
+        "TEST_PHASE3_IDENTITY_ERASURE_E2_BINDING_COMMITTER_DATABASE_URL"
+    ),
     "home_agent_ingest": "TEST_PHASE3_IDENTITY_ERASURE_E2_INGEST_DATABASE_URL",
     "home_agent_worker": "TEST_PHASE3_IDENTITY_ERASURE_E2_WORKER_DATABASE_URL",
     "home_agent_erasure": "TEST_PHASE3_IDENTITY_ERASURE_E2_ERASURE_DATABASE_URL",

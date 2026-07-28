@@ -33,6 +33,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 CALLER_ROLE = "home_agent_binding_operator"
+INTERNAL_CALLER_ROLE = "home_agent_binding_committer"
 KERNEL_ROLE = "home_agent_identity_authority_kernel"
 FUNCTION = (
     "operations.evaluate_current_identity_semantic_authority(uuid)"
@@ -122,7 +123,10 @@ DECLARE
   e5_blocked_subject_count bigint;
   e5_affected_rows integer;
 BEGIN
-  IF session_user <> 'home_agent_binding_operator'
+  IF session_user NOT IN (
+       'home_agent_binding_operator',
+       'home_agent_binding_committer'
+     )
      OR current_user <> 'home_agent_identity_authority_kernel'
      OR pg_catalog.pg_has_role(
           session_user, 'home_agent_identity_authority_kernel', 'SET'
@@ -542,7 +546,7 @@ FUNCTION_BODY_SHA256 = hashlib.sha256(FUNCTION_BODY.encode("utf-8")).hexdigest()
 
 def _policy_predicate() -> str:
     return (
-        f"session_user = '{CALLER_ROLE}' "
+        f"session_user IN ('{CALLER_ROLE}','{INTERNAL_CALLER_ROLE}') "
         f"AND current_user = '{KERNEL_ROLE}' "
         "AND NOT pg_catalog.pg_has_role("
         f"session_user, '{KERNEL_ROLE}', 'SET')"

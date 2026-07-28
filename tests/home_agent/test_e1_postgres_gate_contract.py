@@ -206,6 +206,66 @@ def test_e5_pinned_catalog_failure_redacts_unexpected_output(
     assert captured.err == ""
 
 
+def test_catalog_discovery_emits_only_exact_changed_fingerprints(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runner = _load_runner()
+    state = SimpleNamespace(test_image="test-image")
+    phase = SimpleNamespace(name="e4-scaffold", network="e4-network")
+    private_canary = "PRIVATE-CATALOG-CONTEXT-MUST-NOT-BE-EMITTED"
+    e3 = runner.CATALOG_DIGEST_CONTRACTS[0]
+    e4 = runner.CATALOG_DIGEST_CONTRACTS[1]
+    actual_e3 = "1" * 64
+    actual_e4 = "2" * 64
+    results = iter(
+        (
+            SimpleNamespace(
+                returncode=1,
+                stdout=(
+                    f"{private_canary}\nERROR:  {e3[2]}\n"
+                    f"DETAIL:  expected={e3[1]} actual={actual_e3}\n"
+                ),
+            ),
+            SimpleNamespace(
+                returncode=1,
+                stdout=(
+                    f"{private_canary}\nERROR:  {e4[2]}\n"
+                    f"DETAIL:  expected={e4[1]} actual={actual_e4}\n"
+                ),
+            ),
+            SimpleNamespace(
+                returncode=1,
+                stdout=(
+                    "ERROR:  identity cutover E4 activation contract "
+                    "is not installed\n"
+                ),
+            ),
+        )
+    )
+
+    monkeypatch.setattr(
+        runner,
+        "_docker_run",
+        lambda *_args, **_kwargs: next(results),
+    )
+    with pytest.raises(runner.GateFailure, match="review and pin"):
+        runner._discover_changed_catalog_digests(
+            state,
+            phase,
+            Path("."),
+            "home_agent",
+        )
+
+    captured = capsys.readouterr()
+    assert captured.out.splitlines() == [
+        f"CATALOG_DIGEST layer=e3 sha256={actual_e3}",
+        f"CATALOG_DIGEST layer=e4 sha256={actual_e4}",
+    ]
+    assert private_canary not in captured.out
+    assert captured.err == ""
+
+
 def test_runner_refuses_quarantined_docker_daemon_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -467,6 +527,7 @@ def test_e2_phase_uses_secret_file_role_urls_and_guarded_database_recreation() -
     expected = {
         "home_agent_api": "postgres_api_password",
         "home_agent_binding_operator": "postgres_binding_operator_password",
+        "home_agent_binding_committer": "postgres_binding_committer_password",
         "home_agent_ingest": "postgres_ingest_password",
         "home_agent_worker": "postgres_worker_password",
         "home_agent_erasure": "postgres_erasure_password",

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the E1-E5b scaffold gate against disposable PostgreSQL 17."""
+"""Run the E1-E5c scaffold gate against disposable PostgreSQL 17."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import secrets
 import shutil
 import signal
@@ -42,6 +43,7 @@ REVISION_0013 = "0013_identity_finalizer_e3"
 REVISION_0014 = "0014_identity_cutover_e4"
 REVISION_0015 = "0015_current_authority_e5a"
 REVISION_0016 = "0016_principal_binding_e5b"
+REVISION_0017 = "0017_authenticated_binding_e5c"
 E4_SUCCESS_DOCUMENT_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_DOCUMENT_B64"
 E4_SUCCESS_ADMISSION_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_ADMISSION_ID"
 E4_SCAFFOLD_OWNER_DATABASE_ENV = (
@@ -65,8 +67,33 @@ E5_AUTHORITY_DATABASE_ENV = (
 E5B_OWNER_DATABASE_ENV = (
     "TEST_PHASE3_PRINCIPAL_BINDING_KERNEL_E5B_OWNER_DATABASE_URL"
 )
-E5B_BINDING_OPERATOR_DATABASE_ENV = (
-    "TEST_PHASE3_PRINCIPAL_BINDING_KERNEL_E5B_DATABASE_URL"
+E5B_COMMITTER_DATABASE_ENV = (
+    "TEST_PHASE3_PRINCIPAL_BINDING_KERNEL_E5B_COMMITTER_DATABASE_URL"
+)
+E5C_OPERATOR_DATABASE_ENV = (
+    "TEST_PHASE3_PRINCIPAL_BINDING_ADAPTER_E5C_OPERATOR_DATABASE_URL"
+)
+CATALOG_DIGEST_CONTRACTS = (
+    (
+        "e3",
+        "123326a4620d3dd123773819d95255e40813a5a949f406570252ff1f7031f29a",
+        "identity finalizer E3 catalog manifest mismatch",
+    ),
+    (
+        "e4",
+        "a96aeb68c7c5656988088ae74539760c6a811320849f01c122e02141f87eff27",
+        "identity cutover E4 catalog admission is pending reviewed digest",
+    ),
+    (
+        "e5a",
+        "adfd664ccb07372107649fab7275d1d3040ebe498813fc69af27a4e7336cd084",
+        "identity current-authority E5 catalog admission digest mismatch",
+    ),
+    (
+        "e5b",
+        "01c11885e7ae4f5c336ee7e43a15a481396819e40a359124e0330fd113d189fb",
+        "identity principal-binding E5b catalog admission digest mismatch",
+    ),
 )
 RUN_LABEL = "com.engineeredlighting.home-agent-e1.run"
 MANAGED_LABEL = "com.engineeredlighting.home-agent-e1.managed"
@@ -131,6 +158,7 @@ SECRET_NAMES = (
     "postgres_owner_password",
     "postgres_api_password",
     "postgres_binding_operator_password",
+    "postgres_binding_committer_password",
     "postgres_identity_migration_password",
     "postgres_identity_finalizer_password",
     "postgres_identity_cutover_password",
@@ -150,6 +178,11 @@ E2_RUNTIME_ROLE_URLS = (
         "TEST_PHASE3_IDENTITY_ERASURE_E2_BINDING_OPERATOR_DATABASE_URL",
         "home_agent_binding_operator",
         "postgres_binding_operator_password",
+    ),
+    (
+        "TEST_PHASE3_IDENTITY_ERASURE_E2_BINDING_COMMITTER_DATABASE_URL",
+        "home_agent_binding_committer",
+        "postgres_binding_committer_password",
     ),
     (
         "TEST_PHASE3_IDENTITY_ERASURE_E2_INGEST_DATABASE_URL",
@@ -195,6 +228,7 @@ BUILD_CONTEXT_FILES = (
     "stack/home-agent-deploy/materialize-secrets.sh",
     "stack/home-agent-deploy/preflight.sh",
     "stack/home-agent-deploy/add-identity-cutover-role-secrets.sh",
+    "stack/home-agent-deploy/add-binding-committer-role-secrets.sh",
     "stack/home-agent-deploy/preflight-identity-cutover-roles.sh",
     "stack/home-agent-deploy/provision-identity-cutover-roles.sh",
     "stack/home-agent-deploy/provision-identity-binding-kernel-role.sh",
@@ -218,6 +252,8 @@ BUILD_CONTEXT_FILES = (
     "0015_identity_current_authority_e5.py",
     "stack/services/home-agent-core/alembic/versions/"
     "0016_principal_binding_kernel_e5b.py",
+    "stack/services/home-agent-core/alembic/versions/"
+    "0017_authenticated_binding_e5c.py",
     "stack/services/home-agent-core/app/identity_erasure_schema.py",
     "stack/home-agent-deploy/operator/reviewed_identity_payload.py",
     "stack/home-agent-deploy/operator/principal_binding_candidate_staging.py",
@@ -254,6 +290,8 @@ BUILD_CONTEXT_FILES = (
     "tests/home_agent/test_principal_binding_kernel_e5b_deployment_contract.py",
     "tests/home_agent/test_identity_binding_kernel_role_ceremony_contract.py",
     "tests/home_agent/test_principal_binding_authority_boundary_contract.py",
+    "tests/home_agent/"
+    "test_principal_binding_adapter_e5c_deployment_contract.py",
     "tools/run-home-agent-e1-postgres-gate.py",
     ".github/workflows/home-agent-e1-postgres.yml",
 )
@@ -982,6 +1020,82 @@ def _apply_grants_expect_failure(
             print(output, file=sys.stderr)
         raise GateFailure(
             f"{failure_label} failed without the reviewed contract marker"
+        )
+
+
+def _discover_changed_catalog_digests(
+    state: GateState,
+    phase: Phase,
+    secrets_directory: Path,
+    database: str,
+) -> None:
+    """Emit only changed catalog digests, then require a reviewed source pin."""
+    script = "/workspace/stack/home-agent-deploy/apply-grants.sh"
+    temporary_script = "/tmp/apply-grants-catalog-discovery.sh"
+    replacements: dict[str, str] = {}
+    discovered: dict[str, str] = {}
+    activation_stop = "identity cutover E4 activation contract is not installed"
+
+    for _attempt in range(len(CATALOG_DIGEST_CONTRACTS) + 1):
+        commands = [f'cp "{script}" "{temporary_script}"']
+        for expected, actual in replacements.items():
+            commands.append(
+                f"sed -i 's/{expected}/{actual}/g' " f'"{temporary_script}"'
+            )
+        commands.append(f'exec sh "{temporary_script}"')
+        result = _docker_run(
+            state,
+            state.test_image,
+            phase=phase.name,
+            network=phase.network,
+            secrets_directory=secrets_directory,
+            environment=_client_environment(database),
+            command=["sh", "-eu", "-c", "; ".join(commands)],
+            label=f"catalog digest discovery for {database}",
+            check=False,
+        )
+        if result.returncode == 0:
+            raise GateFailure("catalog digest discovery unexpectedly activated E5b")
+        if activation_stop in result.stdout:
+            break
+
+        matches: list[tuple[str, str, str]] = []
+        for layer, expected, message in CATALOG_DIGEST_CONTRACTS:
+            pattern = (
+                rf"ERROR:\s+{re.escape(message)}\r?\n"
+                rf"DETAIL:\s+expected=([0-9a-f]{{64}}) "
+                rf"actual=([0-9a-f]{{64}})(?=\s|$)"
+            )
+            for match in re.finditer(pattern, result.stdout):
+                matches.append((layer, match.group(1), match.group(2)))
+            if layer in discovered and expected not in replacements:
+                raise GateFailure("catalog discovery replacement state is invalid")
+        if len(matches) != 1:
+            raise GateFailure(
+                "catalog digest discovery failed without one exact redacted digest"
+            )
+        layer, observed_expected, actual = matches[0]
+        contract = next(
+            item for item in CATALOG_DIGEST_CONTRACTS if item[0] == layer
+        )
+        source_expected = contract[1]
+        if (
+            layer in discovered
+            or observed_expected != replacements.get(source_expected, source_expected)
+            or actual == observed_expected
+        ):
+            raise GateFailure("catalog digest discovery returned an invalid transition")
+        replacements[source_expected] = actual
+        discovered[layer] = actual
+    else:
+        raise GateFailure("catalog digest discovery exceeded the reviewed layer bound")
+
+    if discovered:
+        for layer in (item[0] for item in CATALOG_DIGEST_CONTRACTS):
+            if layer in discovered:
+                print(f"CATALOG_DIGEST layer={layer} sha256={discovered[layer]}")
+        raise GateFailure(
+            "catalog digests changed; review and pin the emitted fingerprints"
         )
 
 
@@ -2108,7 +2222,7 @@ def _run_e4_scaffold_phase(
     phase: Phase,
     fixture_directory: Path,
 ) -> None:
-    """Run additive dormant E4/E5a/E5b after the historical chain."""
+    """Run dormant E4/E5a/E5b and the separate E5c activation gate."""
     _upgrade_e3_database(state, phase, secrets_directory)
     _provision_identity_cutover_roles(state, phase, secrets_directory)
     _apply_grants(state, phase, secrets_directory, BASE_DATABASE)
@@ -2395,7 +2509,7 @@ def _run_e4_scaffold_phase(
         secrets_directory,
         database=BASE_DATABASE,
         sql=(
-            "ALTER ROLE home_agent_binding_operator "
+            "ALTER ROLE home_agent_binding_committer "
             "SET application_name='e5b-role-config-tamper'"
         ),
         label="add one unreviewed E5b caller role setting",
@@ -2415,7 +2529,7 @@ def _run_e4_scaffold_phase(
         phase,
         secrets_directory,
         database=BASE_DATABASE,
-        sql="ALTER ROLE home_agent_binding_operator RESET application_name",
+        sql="ALTER ROLE home_agent_binding_committer RESET application_name",
         label="remove the unreviewed E5b caller role setting",
     )
     _alembic(
@@ -2440,21 +2554,24 @@ def _run_e4_scaffold_phase(
             "tests/test_phase3_principal_binding_kernel_e5b_schema.py",
             "tests/"
             "test_phase3_principal_binding_kernel_e5b_runtime_postgres.py",
+            "tests/test_principal_binding_adapter_e5c.py",
             "/workspace/tests/home_agent/"
             "test_principal_binding_kernel_e5b_deployment_contract.py",
             "/workspace/tests/home_agent/"
             "test_identity_binding_kernel_role_ceremony_contract.py",
             "/workspace/tests/home_agent/"
             "test_principal_binding_authority_boundary_contract.py",
+            "/workspace/tests/home_agent/"
+            "test_principal_binding_adapter_e5c_deployment_contract.py",
         ],
         url_environment={
             E5B_OWNER_DATABASE_ENV: BASE_DATABASE,
         },
         credential_url_environment={
-            E5B_BINDING_OPERATOR_DATABASE_ENV: (
+            E5B_COMMITTER_DATABASE_ENV: (
                 BASE_DATABASE,
-                "home_agent_binding_operator",
-                "postgres_binding_operator_password",
+                "home_agent_binding_committer",
+                "postgres_binding_committer_password",
             ),
         },
         environment={
@@ -2479,10 +2596,10 @@ def _run_e4_scaffold_phase(
             E5B_OWNER_DATABASE_ENV: BASE_DATABASE,
         },
         credential_url_environment={
-            E5B_BINDING_OPERATOR_DATABASE_ENV: (
+            E5B_COMMITTER_DATABASE_ENV: (
                 BASE_DATABASE,
-                "home_agent_binding_operator",
-                "postgres_binding_operator_password",
+                "home_agent_binding_committer",
+                "postgres_binding_committer_password",
             ),
         },
         environment={
@@ -2514,6 +2631,12 @@ def _run_e4_scaffold_phase(
         secrets_directory,
         BASE_DATABASE,
         REVISION_0016,
+    )
+    _discover_changed_catalog_digests(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
     )
     _apply_grants_expect_failure(
         state,
@@ -2756,6 +2879,63 @@ def _run_e4_scaffold_phase(
             "rejected E5b catalog retained a callable or direct privilege"
         )
 
+    # E5c is a separate reviewed activation boundary. Its migration remains
+    # denial-only; the pinned grant replay restores only the two internal
+    # kernels and the commit-only outer function.
+    _alembic(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+        REVISION_0017,
+    )
+    _assert_database_revision(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+        REVISION_0017,
+    )
+    _apply_grants(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+    )
+    _pytest(
+        state,
+        phase,
+        secrets_directory,
+        nodes=[
+            "tests/test_phase3_authenticated_binding_e5c_schema.py",
+            "tests/test_phase3_principal_binding_kernel_e5b_runtime_postgres.py"
+            "::test_e5c_split_adapter_commits_after_pinned_grant_replay",
+            "/workspace/tests/home_agent/"
+            "test_principal_binding_adapter_e5c_deployment_contract.py",
+        ],
+        url_environment={
+            E5B_OWNER_DATABASE_ENV: BASE_DATABASE,
+        },
+        credential_url_environment={
+            E5B_COMMITTER_DATABASE_ENV: (
+                BASE_DATABASE,
+                "home_agent_binding_committer",
+                "postgres_binding_committer_password",
+            ),
+            E5C_OPERATOR_DATABASE_ENV: (
+                BASE_DATABASE,
+                "home_agent_binding_operator",
+                "postgres_binding_operator_password",
+            ),
+        },
+        environment={
+            SENTINEL_ENV: state.sentinel,
+            SYSTEM_ID_ENV: phase.system_identifier,
+            ALLOWLIST_ENV: BASE_DATABASE,
+        },
+        fail_fast=True,
+    )
+
 
 def _build_test_image(state: GateState, build_context: Path) -> None:
     dockerfile = (
@@ -2788,7 +2968,7 @@ def main() -> int:
     except GateFailure as error:
         print(
             "E1/E2/E3/E4 gate execution quarantine "
-            f"(E5a/E5b included): {error}",
+            f"(E5a/E5b/E5c included): {error}",
             file=sys.stderr,
         )
         return 77
@@ -2883,7 +3063,7 @@ def main() -> int:
             )
             print(
                 "[8/8] Running isolated dormant E4 deployment scaffold "
-                "with E5a/E5b"
+                "with E5a/E5b and the E5c activation boundary"
             )
             _run_phase(
                 state,
@@ -2919,7 +3099,7 @@ def main() -> int:
     if exit_code == 0:
         print(
             "E1/E2/E3/E4 PostgreSQL 17 gate passed; "
-            "E5a/E5b catalog gates passed; "
+            "E5a/E5b catalog gates and E5c split adapter passed; "
             "labeled cleanup verified"
         )
     return exit_code

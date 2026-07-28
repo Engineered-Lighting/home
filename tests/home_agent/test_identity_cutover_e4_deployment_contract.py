@@ -460,6 +460,7 @@ def test_grant_replay_quarantines_e4_and_pins_reviewed_catalog() -> None:
             "0014_identity_cutover_e4",
             "0015_current_authority_e5a",
             "0016_principal_binding_e5b",
+            "0017_authenticated_binding_e5c",
         ]
     assert "identity_authority_e5_select" in admission
     assert "identity cutover E4 reviewed E5 policy mismatch" in admission

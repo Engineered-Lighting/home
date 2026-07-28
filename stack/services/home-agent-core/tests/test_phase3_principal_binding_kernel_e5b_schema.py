@@ -75,7 +75,7 @@ def test_exact_function_signature_role_and_transaction_boundary() -> None:
     )
     assert (
         "identity.commit_authenticated_principal_binding_e5b(\n"
-        "          target_promotion_id uuid,\n"
+        "          target_proposal_id uuid,\n"
         "          authenticated_ha_user_id varchar(64),\n"
         "          target_proposal_digest varchar(64),\n"
         "          confirmation_nonce uuid,\n"
@@ -87,7 +87,7 @@ def test_exact_function_signature_role_and_transaction_boundary() -> None:
     assert "RETURNS timestamptz" in MIGRATION
     assert "SECURITY DEFINER" in MIGRATION
     assert "SET search_path = pg_catalog, pg_temp" in MIGRATION
-    assert "session_user <> 'home_agent_binding_operator'" in body
+    assert "session_user <> 'home_agent_binding_committer'" in body
     assert "current_user <> 'home_agent_identity_binding_kernel'" in body
     assert (
         "session_user, 'home_agent_identity_binding_kernel', 'SET'" in body
@@ -107,17 +107,36 @@ def test_exact_function_signature_role_and_transaction_boundary() -> None:
         "'idle_in_transaction_session_timeout', '15s', true" in body
     )
     assert "pg_catalog.set_config('transaction_timeout', '30s', true)" in body
+    assert body.index(
+        "privacy.lock_identity_semantic_write_fence()"
+    ) < body.index(
+        "FROM identity.principal_binding_proposals AS proposal"
+    )
+    assert body.index(
+        "privacy.lock_identity_semantic_write_fence()"
+    ) < body.index(
+        "FROM operations.semantic_authority_promotions AS promotion"
+    )
+    assert (
+        "proposal.proposal_id = target_proposal_id" in body
+    )
 
 
-def test_e5a_is_the_first_application_data_operation() -> None:
+def test_semantic_fence_precedes_resolution_and_e5a_precedes_graph_reads() -> None:
     body = _literal("FUNCTION_BODY")
+    fence = body.index("privacy.lock_identity_semantic_write_fence()")
+    proposal = body.index(
+        "FROM identity.principal_binding_proposals AS proposal"
+    )
+    promotion = body.index(
+        "FROM operations.semantic_authority_promotions AS promotion"
+    )
     authority = body.index(
         "operations.evaluate_current_identity_semantic_authority("
     )
-    assert body.index("first application-data operation") < authority
+    assert body.index("first application-data operation") < fence
+    assert fence < proposal < promotion < authority
     for marker in (
-        "FROM operations.semantic_authority_promotions",
-        "FROM identity.principal_binding_proposals",
         "FROM identity.principal_binding_requests",
         "FROM identity.people",
         "FROM operations.reviewed_identity_migration_projection_lineage",

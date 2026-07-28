@@ -274,6 +274,8 @@ install_secret provision-roles rollout/postgres_rollout_password \
   postgres_rollout_password 0 0
 install_secret provision-roles binding-operator/postgres_binding_operator_password \
   postgres_binding_operator_password 0 0
+install_secret provision-roles binding-committer/postgres_binding_committer_password \
+  postgres_binding_committer_password 0 0
 install_secret provision-roles identity-migration/postgres_identity_migration_password \
   postgres_identity_migration_password 0 0
 identity_finalizer_master="$master_root/identity-finalizer"
@@ -303,6 +305,8 @@ install_secret migrate database_url_owner database_url 10001 10001
 install_secret core-api database_url_api database_url 10001 10001
 install_secret core-api binding-operator/database_url_binding_operator \
   operator_database_url 10001 10001
+install_secret core-api binding-committer/database_url_binding_committer \
+  binding_commit_database_url 10001 10001
 install_secret core-api knowledge_encryption_key knowledge_encryption_key 10001 10001
 install_secret core-api service_token service_token 10001 10001
 install_secret core-api operator_token operator_token 10001 10001

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import random
 import uuid
+from dataclasses import dataclass
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -10,6 +11,66 @@ from datetime import datetime
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
+
+
+@dataclass(frozen=True, slots=True)
+class PrincipalBindingKernelCall:
+    proposal_id: uuid.UUID
+    authenticated_ha_user_id: str
+    proposal_digest: str
+    confirmation_nonce: uuid.UUID
+    authority_receipt_id: uuid.UUID
+    principal_id: uuid.UUID
+    confirmation_artifact_id: uuid.UUID
+    binding_id: uuid.UUID
+
+
+class PrincipalBindingCommitDatabase:
+    """A commit-only pool whose first transaction statement is the E5b kernel."""
+
+    def __init__(self, url: str) -> None:
+        self.engine: AsyncEngine = create_async_engine(
+            url,
+            pool_pre_ping=True,
+            pool_size=2,
+            max_overflow=0,
+            pool_recycle=300,
+            hide_parameters=True,
+        )
+
+    async def commit(self, value: PrincipalBindingKernelCall) -> datetime:
+        async with self.engine.connect() as raw_connection:
+            connection = await raw_connection.execution_options(
+                isolation_level="SERIALIZABLE"
+            )
+            async with connection.begin():
+                # Keep this as the first statement in the transaction. The
+                # security-definer kernel validates the login role, isolation,
+                # XID state, current authority, privacy, and complete graph.
+                return (
+                    await connection.execute(
+                        text(
+                            "SELECT identity."
+                            "commit_authenticated_principal_binding_e5b("
+                            ":proposal_id,:ha_user_id,:proposal_digest,"
+                            ":confirmation_nonce,:receipt_id,:principal_id,"
+                            ":artifact_id,:binding_id)"
+                        ),
+                        {
+                            "proposal_id": value.proposal_id,
+                            "ha_user_id": value.authenticated_ha_user_id,
+                            "proposal_digest": value.proposal_digest,
+                            "confirmation_nonce": value.confirmation_nonce,
+                            "receipt_id": value.authority_receipt_id,
+                            "principal_id": value.principal_id,
+                            "artifact_id": value.confirmation_artifact_id,
+                            "binding_id": value.binding_id,
+                        },
+                    )
+                ).scalar_one()
+
+    async def close(self) -> None:
+        await self.engine.dispose()
 
 
 class Database:

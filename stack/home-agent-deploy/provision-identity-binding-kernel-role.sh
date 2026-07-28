@@ -168,6 +168,12 @@ BEGIN
          FROM pg_catalog.pg_roles AS role_row
         WHERE role_row.rolname = 'home_agent_binding_operator'
           AND role_row.rolcanlogin
+     )
+     OR NOT EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_roles AS role_row
+        WHERE role_row.rolname = 'home_agent_binding_committer'
+          AND role_row.rolcanlogin
      ) THEN
     RAISE EXCEPTION
       'identity binding kernel role ceremony prerequisite is unavailable'

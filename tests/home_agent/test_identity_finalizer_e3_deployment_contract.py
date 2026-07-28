@@ -112,6 +112,7 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
             "0014_identity_cutover_e4",
             "0015_current_authority_e5a",
             "0016_principal_binding_e5b",
+            "0017_authenticated_binding_e5c",
         ]
     assert (
         "current_revision = ANY (reviewed_e3_catalog_revisions)"
@@ -130,6 +131,7 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
         "0014_identity_cutover_e4",
         "0015_current_authority_e5a",
         "0016_principal_binding_e5b",
+        "0017_authenticated_binding_e5c",
     ]
     assert (
         "login_role.rolvaliduntil =\n"
@@ -183,7 +185,8 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
     assert (
         "WHEN current_revision IN (\n"
         "                '0015_current_authority_e5a',\n"
-        "                '0016_principal_binding_e5b'\n"
+        "                '0016_principal_binding_e5b',\n"
+        "                '0017_authenticated_binding_e5c'\n"
         "              ) THEN 6"
         in admission
     )

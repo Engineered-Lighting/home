@@ -30,7 +30,7 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
-CALLER_ROLE = "home_agent_binding_operator"
+CALLER_ROLE = "home_agent_binding_committer"
 KERNEL_ROLE = "home_agent_identity_binding_kernel"
 FUNCTION = (
     "identity.commit_authenticated_principal_binding_e5b("
@@ -42,7 +42,7 @@ AUTHORITY_FUNCTION = (
 AUTHORITY_KERNEL_ROLE = "home_agent_identity_authority_kernel"
 ERASURE_KERNEL_ROLE = "home_agent_identity_erasure_kernel"
 AUTHORITY_FUNCTION_BODY_SHA256 = (
-    "c731c8e56e8aabe9676685b86a6b3961ec83b83cf2b688138cc4d83a5f75585a"
+    "8da5fa6f3546d667210ce3ef3f45334f73eb2b7700f778925722516e5ce674a9"
 )
 FENCE_LOCK_BODY_SHA256 = (
     "fd6919a406140ac5bc82d1d1dededa1397c5e27dc54916fb572ce7bc33ba22a5"
@@ -135,6 +135,7 @@ ALL_REVOKED_ROLES = (
     "PUBLIC",
     "home_agent_owner",
     "home_agent_api",
+    "home_agent_binding_operator",
     CALLER_ROLE,
     "home_agent_ingest",
     "home_agent_worker",
@@ -215,7 +216,7 @@ DECLARE
   e5b_database_transaction_id bigint;
   e5b_affected_rows integer;
 BEGIN
-  IF session_user <> 'home_agent_binding_operator'
+  IF session_user <> 'home_agent_binding_committer'
      OR current_user <> 'home_agent_identity_binding_kernel'
      OR pg_catalog.pg_has_role(
           session_user, 'home_agent_identity_binding_kernel', 'SET'
@@ -233,7 +234,7 @@ BEGIN
     RAISE EXCEPTION 'principal_binding_e5b_transaction_invalid'
       USING ERRCODE = '25000';
   END IF;
-  IF target_promotion_id IS NULL
+  IF target_proposal_id IS NULL
      OR authenticated_ha_user_id IS NULL
      OR pg_catalog.btrim(authenticated_ha_user_id) = ''
      OR target_proposal_digest IS NULL
@@ -243,8 +244,8 @@ BEGIN
      OR new_principal_id IS NULL
      OR new_confirmation_artifact_id IS NULL
      OR new_binding_id IS NULL
-     OR pg_catalog.substring(target_promotion_id::text, 15, 1) <> '7'
-     OR pg_catalog.substring(target_promotion_id::text, 20, 1)
+     OR pg_catalog.substring(target_proposal_id::text, 15, 1) <> '7'
+     OR pg_catalog.substring(target_proposal_id::text, 20, 1)
         NOT IN ('8','9','a','b')
      OR pg_catalog.substring(new_authority_receipt_id::text, 15, 1) <> '7'
      OR pg_catalog.substring(new_authority_receipt_id::text, 20, 1)
@@ -288,18 +289,26 @@ BEGIN
     pg_catalog.sha256(pg_catalog.uuid_send(confirmation_nonce)), 'hex'
   );
 
-  -- This must remain the first application-data operation. E5a acquires the
-  -- shared identity-semantic write fence and all current-authority locks; the
-  -- locks remain held through this function's binding write and outer commit.
-  SELECT operations.evaluate_current_identity_semantic_authority(
-           target_promotion_id
-         )
-    INTO e5b_authority_result;
-  IF e5b_authority_result IS DISTINCT FROM 'current_database_authority' THEN
-    RAISE EXCEPTION 'principal_binding_e5b_authority_not_current'
-      USING ERRCODE = '55000';
+  -- This must remain the first application-data operation. Resolve no
+  -- proposal, person, or promotion row before the global semantic fence is
+  -- held. E5a reacquires the same fence and retains its current-authority
+  -- locks through this function's binding write and outer commit.
+  PERFORM privacy.lock_identity_semantic_write_fence();
+
+  SELECT proposal.*
+    INTO e5b_proposal
+    FROM identity.principal_binding_proposals AS proposal
+   WHERE proposal.proposal_id = target_proposal_id
+     AND proposal.ha_user_id = authenticated_ha_user_id
+     AND proposal.proposal_digest = target_proposal_digest
+   FOR UPDATE OF proposal;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'principal_binding_e5b_proposal_unavailable'
+      USING ERRCODE = 'P0002';
   END IF;
 
+  -- E4 permits exactly one durable identity-semantics authority promotion.
+  -- Its lineage is bound to this proposal's person below before any write.
   SELECT promotion.promotion_id,
          promotion.authority_scope,
          promotion.run_id,
@@ -308,22 +317,19 @@ BEGIN
          promotion.committed_at
     INTO e5b_promotion
     FROM operations.semantic_authority_promotions AS promotion
-   WHERE promotion.promotion_id = target_promotion_id
-     AND promotion.authority_scope = 'identity_semantics';
+   WHERE promotion.authority_scope = 'identity_semantics';
   IF NOT FOUND THEN
     RAISE EXCEPTION 'principal_binding_e5b_graph_invalid'
       USING ERRCODE = '23514';
   END IF;
 
-  SELECT proposal.*
-    INTO e5b_proposal
-    FROM identity.principal_binding_proposals AS proposal
-   WHERE proposal.ha_user_id = authenticated_ha_user_id
-     AND proposal.proposal_digest = target_proposal_digest
-   FOR UPDATE OF proposal;
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'principal_binding_e5b_proposal_unavailable'
-      USING ERRCODE = 'P0002';
+  SELECT operations.evaluate_current_identity_semantic_authority(
+           e5b_promotion.promotion_id
+         )
+    INTO e5b_authority_result;
+  IF e5b_authority_result IS DISTINCT FROM 'current_database_authority' THEN
+    RAISE EXCEPTION 'principal_binding_e5b_authority_not_current'
+      USING ERRCODE = '55000';
   END IF;
 
   SELECT request.request_id,
@@ -1613,6 +1619,7 @@ def _install_policies_and_grants() -> None:
 
         GRANT EXECUTE ON FUNCTION
           {AUTHORITY_FUNCTION},
+          privacy.lock_identity_semantic_write_fence(),
           privacy.identity_person_is_blocked(uuid),
           privacy.identity_principal_is_blocked(uuid)
           TO {KERNEL_ROLE};
@@ -1657,9 +1664,10 @@ def _install_function() -> None:
     op.execute(
         f"""
         GRANT CREATE ON SCHEMA identity TO {KERNEL_ROLE};
+        GRANT USAGE ON SCHEMA identity TO {CALLER_ROLE};
         SET LOCAL ROLE {KERNEL_ROLE};
         CREATE FUNCTION identity.commit_authenticated_principal_binding_e5b(
-          target_promotion_id uuid,
+          target_proposal_id uuid,
           authenticated_ha_user_id varchar(64),
           target_proposal_digest varchar(64),
           confirmation_nonce uuid,
@@ -1858,6 +1866,11 @@ def _assert_installed_contract() -> None:
              )
              OR pg_catalog.has_schema_privilege(
                '{KERNEL_ROLE}', 'privacy', 'CREATE'
+             )
+             OR NOT pg_catalog.has_function_privilege(
+               '{KERNEL_ROLE}',
+               'privacy.lock_identity_semantic_write_fence()',
+               'EXECUTE'
              ) THEN
             RAISE EXCEPTION 'principal_binding_e5b_acl_contract_invalid'
               USING ERRCODE = '42501';
@@ -1906,6 +1919,7 @@ def downgrade() -> None:
 
     revoked = ", ".join(ALL_REVOKED_ROLES)
     op.execute(f"REVOKE ALL ON FUNCTION {FUNCTION} FROM {revoked}")
+    op.execute(f"REVOKE USAGE ON SCHEMA identity FROM {CALLER_ROLE}")
     op.execute(
         f"""
         SET LOCAL ROLE {KERNEL_ROLE};
@@ -1949,6 +1963,7 @@ def downgrade() -> None:
 
         REVOKE EXECUTE ON FUNCTION
           {AUTHORITY_FUNCTION},
+          privacy.lock_identity_semantic_write_fence(),
           privacy.identity_person_is_blocked(uuid),
           privacy.identity_principal_is_blocked(uuid)
           FROM {KERNEL_ROLE};

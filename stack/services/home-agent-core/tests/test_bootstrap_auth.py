@@ -305,6 +305,41 @@ def test_api_accepts_only_isolated_binding_operator_database_role(tmp_path) -> N
         Settings(**values)
 
 
+def test_api_accepts_only_separate_binding_commit_database_role(tmp_path) -> None:
+    values = settings_for(tmp_path).model_dump()
+    values["binding_commit_database_url"] = SecretStr(
+        "postgresql+psycopg://home_agent_binding_committer:"
+        f"{'c' * 64}@postgres:5432/home_agent"
+    )
+    settings = Settings(**values)
+    assert (
+        "home_agent_binding_committer"
+        in settings.async_binding_commit_database_url()
+    )
+
+    values["binding_commit_database_url"] = SecretStr(
+        "postgresql+psycopg://home_agent_binding_operator:"
+        f"{'c' * 64}@postgres:5432/home_agent"
+    )
+    with pytest.raises(ValidationError, match="isolated binding committer role"):
+        Settings(**values)
+
+    values["binding_commit_database_url"] = SecretStr(
+        "postgresql+psycopg://home_agent_binding_committer:"
+        f"{'d' * 64}@postgres:5432/home_agent"
+    )
+    with pytest.raises(ValidationError, match="credentials must differ"):
+        Settings(**values)
+
+    values["operator_database_url"] = None
+    values["binding_commit_database_url"] = SecretStr(
+        "postgresql+psycopg://home_agent_binding_committer:"
+        f"{'c' * 64}@postgres:5432/home_agent"
+    )
+    with pytest.raises(ValidationError, match="requires the separate staging"):
+        Settings(**values)
+
+
 def test_rollout_policy_defaults_record_only_and_has_no_mutation_route(tmp_path) -> None:
     app = create_app(
         settings_for(tmp_path).model_copy(update={"rollout_mode": "record_only"})

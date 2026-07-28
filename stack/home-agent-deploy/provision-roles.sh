@@ -11,6 +11,7 @@ read_secret() {
 export PGPASSWORD="$(read_secret "$POSTGRES_OWNER_PASSWORD_FILE")"
 api_password="$(read_secret /run/secrets/postgres_api_password)"
 binding_operator_password="$(read_secret /run/secrets/postgres_binding_operator_password)"
+binding_committer_password="$(read_secret /run/secrets/postgres_binding_committer_password)"
 identity_migration_password="$(read_secret /run/secrets/postgres_identity_migration_password)"
 identity_finalizer_password="$(read_secret /run/secrets/postgres_identity_finalizer_password)"
 ingest_password="$(read_secret /run/secrets/postgres_ingest_password)"
@@ -22,6 +23,7 @@ backup_password="$(read_secret /run/secrets/postgres_backup_password)"
 psql -v ON_ERROR_STOP=1 \
   -v api_password="$api_password" \
   -v binding_operator_password="$binding_operator_password" \
+  -v binding_committer_password="$binding_committer_password" \
   -v identity_migration_password="$identity_migration_password" \
   -v identity_finalizer_password="$identity_finalizer_password" \
   -v ingest_password="$ingest_password" \
@@ -33,6 +35,8 @@ SELECT 'CREATE ROLE home_agent_api LOGIN' WHERE NOT EXISTS
   (SELECT 1 FROM pg_roles WHERE rolname='home_agent_api') \gexec
 SELECT 'CREATE ROLE home_agent_binding_operator LOGIN' WHERE NOT EXISTS
   (SELECT 1 FROM pg_roles WHERE rolname='home_agent_binding_operator') \gexec
+SELECT 'CREATE ROLE home_agent_binding_committer LOGIN' WHERE NOT EXISTS
+  (SELECT 1 FROM pg_roles WHERE rolname='home_agent_binding_committer') \gexec
 SELECT 'CREATE ROLE home_agent_identity_kernel NOLOGIN' WHERE NOT EXISTS
   (SELECT 1 FROM pg_roles WHERE rolname='home_agent_identity_kernel') \gexec
 SELECT 'CREATE ROLE home_agent_identity_migration LOGIN' WHERE NOT EXISTS
@@ -59,7 +63,8 @@ FROM pg_auth_members AS membership
 JOIN pg_roles AS parent ON parent.oid = membership.roleid
 JOIN pg_roles AS member ON member.oid = membership.member
 WHERE member.rolname IN (
-  'home_agent_api', 'home_agent_binding_operator', 'home_agent_ingest',
+  'home_agent_api', 'home_agent_binding_operator',
+  'home_agent_binding_committer', 'home_agent_ingest',
   'home_agent_worker', 'home_agent_erasure', 'home_agent_rollout',
   'home_agent_backup', 'home_agent_identity_migration',
   'home_agent_identity_kernel', 'home_agent_identity_finalizer',
@@ -96,6 +101,10 @@ ALTER ROLE home_agent_api PASSWORD :'api_password' NOSUPERUSER NOCREATEDB
 -- post-E3 cutover-role ceremony applies the tighter E5 transaction limits.
 ALTER ROLE home_agent_binding_operator PASSWORD :'binding_operator_password'
   NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
+ALTER ROLE home_agent_binding_committer RESET ALL;
+ALTER ROLE home_agent_binding_committer PASSWORD :'binding_committer_password'
+  NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS
+  CONNECTION LIMIT 8;
 ALTER ROLE home_agent_identity_kernel NOLOGIN NOSUPERUSER NOCREATEDB
   NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS CONNECTION LIMIT 0;
 ALTER ROLE home_agent_identity_migration PASSWORD :'identity_migration_password'
@@ -124,6 +133,11 @@ ALTER ROLE home_agent_backup PASSWORD :'backup_password' NOSUPERUSER NOCREATEDB
 
 ALTER ROLE home_agent_api SET statement_timeout = '15s';
 ALTER ROLE home_agent_binding_operator SET statement_timeout = '15s';
+ALTER ROLE home_agent_binding_committer SET statement_timeout = '15s';
+ALTER ROLE home_agent_binding_committer SET lock_timeout = '5s';
+ALTER ROLE home_agent_binding_committer SET
+  idle_in_transaction_session_timeout = '15s';
+ALTER ROLE home_agent_binding_committer SET transaction_timeout = '30s';
 ALTER ROLE home_agent_identity_migration SET default_transaction_isolation =
   'serializable';
 ALTER ROLE home_agent_identity_migration SET statement_timeout = '120s';
@@ -147,12 +161,15 @@ REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 REVOKE ALL ON DATABASE home_agent FROM PUBLIC;
 GRANT CONNECT ON DATABASE home_agent TO home_agent_api, home_agent_ingest,
   home_agent_worker, home_agent_erasure, home_agent_rollout, home_agent_backup,
-  home_agent_binding_operator, home_agent_identity_migration,
+  home_agent_binding_operator, home_agent_binding_committer,
+  home_agent_identity_migration,
   home_agent_identity_finalizer;
 REVOKE CREATE, TEMPORARY ON DATABASE home_agent
   FROM home_agent_identity_migration;
 REVOKE CREATE, TEMPORARY ON DATABASE home_agent
   FROM home_agent_identity_finalizer;
+REVOKE CREATE, TEMPORARY ON DATABASE home_agent
+  FROM home_agent_binding_committer;
 REVOKE ALL PRIVILEGES ON DATABASE home_agent FROM home_agent_identity_kernel;
 REVOKE ALL PRIVILEGES ON DATABASE home_agent FROM home_agent_identity_finalizer_kernel;
 REVOKE ALL PRIVILEGES ON DATABASE home_agent FROM home_agent_identity_erasure_kernel;
@@ -175,6 +192,7 @@ REVOKE pg_monitor, pg_read_all_settings, pg_read_all_stats,
   pg_read_server_files, pg_write_server_files, pg_execute_server_program,
   pg_checkpoint, pg_maintain, pg_signal_backend
   FROM home_agent_backup, home_agent_rollout, home_agent_binding_operator,
+  home_agent_binding_committer,
   home_agent_identity_migration, home_agent_identity_kernel,
   home_agent_identity_finalizer, home_agent_identity_finalizer_kernel,
   home_agent_identity_erasure_kernel;

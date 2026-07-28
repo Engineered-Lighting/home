@@ -99,7 +99,9 @@ def test_function_has_one_content_free_input_and_closed_result_contract() -> Non
 
 def test_role_transaction_and_input_guards_precede_application_data() -> None:
     body = _literal("FUNCTION_BODY")
-    assert "session_user <> 'home_agent_binding_operator'" in body
+    assert "session_user NOT IN (" in body
+    assert "'home_agent_binding_operator'" in body
+    assert "'home_agent_binding_committer'" in body
     assert "current_user <> 'home_agent_identity_authority_kernel'" in body
     assert (
         "session_user, 'home_agent_identity_authority_kernel', 'SET'" in body

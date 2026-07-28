@@ -919,12 +919,12 @@ immutable stored graph and exact E4 verifier-bundle marker under the pinned
 catalog contracts.
 
 Do not call E5a as a standalone readiness probe or treat its categorical result
-as a binding receipt. Dormant E5b now adds only the database-local
-principal/person binding kernel described below; it invokes E5a and commits
-the binding in the same writable `SERIALIZABLE` transaction. E5b does not
-authenticate Home Assistant identity or expose a live confirmation path.
-Until the separately reviewed E5c adapter exists, semantic identity binding
-remains disabled.
+as a binding receipt. Dormant E5b adds only the database-local principal/person
+binding kernel described below; it invokes E5a and commits the binding in the
+same writable `SERIALIZABLE` transaction. E5b does not authenticate Home
+Assistant identity or expose a live confirmation path. Revision 0017 adds the
+separately gated E5c adapter boundary, but the live record-only deployment
+remains disabled until its hosted acceptance and explicit rollout.
 
 ### Dormant E5b principal-binding kernel
 
@@ -934,7 +934,7 @@ It is still dormant: production remains pinned to
 `0006a_worker_lease_arbitration` in `record_only`, and there is no API, BFF,
 OAuth, Home Assistant, native, web, Compose, or operator activation path.
 
-Only `session_user=home_agent_binding_operator` with
+Only `session_user=home_agent_binding_committer` with
 `current_user=home_agent_identity_binding_kernel` may enter the function.
 The kernel owner is a separate `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS`,
 connection-limit-zero role. Its owner-only provisioning ceremony is additive
@@ -945,12 +945,13 @@ match their reviewed digests.
 
 The caller must open a writable `SERIALIZABLE` transaction and call E5b before
 performing any write or row-locking operation in that transaction. E5b rejects
-an already assigned transaction ID before invoking E5a. E5a is then the first
-application-data operation inside the security-definer boundary and holds the
-semantic fence and current-authority locks through the outer commit. A prior
-plain `SELECT` cannot be proven at the database function boundary; E5c must use
-a separate commit-only login/credential and invoke E5b immediately on a fresh
-transaction rather than reusing the staging connection.
+an already assigned transaction ID, takes the global semantic write fence
+before resolving the proposal or the unique identity-semantics promotion, and
+then invokes E5a. E5a reacquires the fence and holds its current-authority locks
+through the outer commit. A prior plain `SELECT` cannot be proven at the
+database function boundary, so E5c uses a separate commit-only login and calls
+E5b immediately on a fresh transaction rather than reusing the staging
+connection.
 
 One successful call consumes an exact, independently staged proposal. It
 recomputes the person snapshot, stage receipt, and proposal digests; requires
@@ -970,11 +971,43 @@ receipt graph. A changed ID, stale or blocked subject, drifted lineage,
 non-current E5a result, or malformed graph fails closed without returning
 content.
 
-E5b does not authenticate the supplied HA user ID. E5c must add the official
-HA-authenticated adapter, split staging from commit credentials, bind the
-current private gesture to the exact proposal digest, and keep bearer tokens
-outside webview JavaScript. Until that separate gate is reviewed, principal
-binding remains disabled even if a database has been upgraded through E5b.
+E5b does not authenticate the supplied HA user ID. Never expose it directly to
+a client or general service credential.
+
+### Gated E5c authenticated binding adapter
+
+Revision `0017_authenticated_binding_e5c` is the distinct E5c activation
+boundary. Its migration is denial-only: it revokes the E5b caller surface, and
+the pinned grant replay may then restore only the two internal kernels plus
+`USAGE` on `identity` and `EXECUTE` on the exact E5b function for
+`home_agent_binding_committer`.
+
+The API uses three independent database credentials:
+
+- the ordinary API credential for authenticated subject reads;
+- `home_agent_binding_operator` for reviewed proposal staging and an opaque
+  proposal-ID lookup;
+- `home_agent_binding_committer` for one commit-only kernel call.
+
+The committer receives no table, sequence, broad function, schema-creation, or
+kernel-membership privilege. Its first SQL in a writable `SERIALIZABLE`
+transaction is the E5b call. The proposal UUID is resolved and committed in
+separate database transactions, and E5b rebinds it to the fresh HA user ID and
+proposal digest before any write.
+
+The BFF obtains a fresh authenticated Home Assistant `whoami` result for every
+binding route. Client-supplied actor, person, and principal identifiers are
+ignored or rejected. Confirmation accepts only the exact proposal digest and a
+random UUIDv4 gesture nonce. The adapter derives stable, distinct UUIDv7
+authority-receipt, principal, confirmation-artifact, and binding IDs so
+serialization retries and safe request replay cannot create a second graph.
+
+The Core route fails before parsing the body unless its reviewed readiness
+revision is exactly `0017_authenticated_binding_e5c` and both isolated
+credentials are configured. A successful identity binding leaves location
+memory and travel greetings off. Production remains pinned to
+`0006a_worker_lease_arbitration` in `record_only` until the hosted E5c gate and
+an explicit operator rollout are complete.
 
 ## Record-only, shadow, and canary gates
 

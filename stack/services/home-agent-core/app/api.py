@@ -54,6 +54,8 @@ from .models import (
     Phase3ReadinessView,
     PlaceCreate,
     PreferenceUpdate,
+    PrincipalBindingConfirmation,
+    PrincipalBindingConfirmationView,
     PrincipalBindingProposalView,
     PrincipalBindingRequestAction,
     RolloutMode,
@@ -85,6 +87,7 @@ OperatorBindingStore = Annotated[CoreStore, Depends(operator_binding_store_from)
 
 
 PHASE3_SCHEMA_REVISION = "0006a_worker_lease_arbitration"
+PRINCIPAL_BINDING_ADAPTER_REVISION = "0017_authenticated_binding_e5c"
 LEGACY_IDENTITY_IMPORT_RETIRED = (
     "sequential legacy identity import is retired; use the reviewed atomic "
     "identity finalizer"
@@ -279,14 +282,44 @@ def semantic_router() -> APIRouter:
         # subject cannot reach a partial implementation.
         raise CapabilityDisabledError(SOURCE_ENTITY_BINDING_RETIRED)
 
-    @router.post("/principal-binding-proposal/confirm")
-    async def retired_principal_binding_confirmation(
-        _service: Service,
-    ) -> None:
-        # Request/proposal review remains available, but the online API role
-        # has no INSERT authority for principals, artifacts, or HA bindings.
-        # Accept no body/store dependency while that atomic kernel is absent.
-        raise CapabilityDisabledError(PRINCIPAL_BINDING_CONFIRMATION_RETIRED)
+    @router.post(
+        "/principal-binding-proposal/confirm",
+        response_model=PrincipalBindingConfirmationView,
+    )
+    async def principal_binding_confirmation(
+        request: Request,
+        service: Service,
+    ) -> PrincipalBindingConfirmationView:
+        # The deployed 0006a image reaches this branch before reading the body.
+        # Merely provisioning the dormant committer credential cannot activate
+        # binding while the reviewed revision pin remains unchanged.
+        if (
+            request.app.state.settings.readiness_migration
+            != PRINCIPAL_BINDING_ADAPTER_REVISION
+        ):
+            raise CapabilityDisabledError(PRINCIPAL_BINDING_CONFIRMATION_RETIRED)
+        store = request.app.state.operator_store
+        adapter = request.app.state.binding_adapter
+        if store is None or adapter is None:
+            raise CapabilityDisabledError(
+                "principal binding split-credential adapter is unavailable"
+            )
+        raw_body = await request.body()
+        try:
+            value = PrincipalBindingConfirmation.model_validate_json(raw_body)
+        except ValidationError as exc:
+            raise ValidationDomainError(
+                "principal binding confirmation body is invalid"
+            ) from exc
+        context = await store.principal_binding_commit_context(
+            service.ha_user_id,
+            value.proposal_digest,
+        )
+        return await adapter.commit(
+            context=context,
+            ha_user_id=service.ha_user_id,
+            value=value,
+        )
 
     @router.get("/operator-rollout", response_model=RolloutStatus)
     async def operator_rollout(

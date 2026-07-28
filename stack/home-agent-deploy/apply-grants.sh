@@ -131,6 +131,18 @@ ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity
   REVOKE ALL PRIVILEGES ON TABLES FROM home_agent_api;
 ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity
   REVOKE ALL PRIVILEGES ON TABLES FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA
+  public, ingest, identity, knowledge, engagement, privacy, operations, media
+  REVOKE ALL PRIVILEGES ON TABLES FROM home_agent_binding_committer;
+ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA
+  public, ingest, identity, knowledge, engagement, privacy, operations, media
+  REVOKE ALL PRIVILEGES ON SEQUENCES FROM home_agent_binding_committer;
+ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA
+  public, ingest, identity, knowledge, engagement, privacy, operations, media
+  REVOKE ALL PRIVILEGES ON FUNCTIONS FROM home_agent_binding_committer;
+ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA
+  public, ingest, identity, knowledge, engagement, privacy, operations, media
+  REVOKE ALL PRIVILEGES ON TYPES FROM home_agent_binding_committer;
 
 GRANT USAGE ON SCHEMA ingest TO home_agent_ingest, home_agent_api,
   home_agent_worker, home_agent_erasure;
@@ -148,6 +160,21 @@ REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public, ingest, identity,
   FROM home_agent_binding_operator;
 REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA ingest, identity, knowledge,
   engagement, privacy, operations FROM home_agent_binding_operator;
+-- The independent E5c committer never receives table, sequence, or broad
+-- function authority. A reviewed descendant may restore only identity schema
+-- USAGE and EXECUTE on the exact E5b kernel.
+REVOKE USAGE, CREATE ON SCHEMA
+  public, ingest, identity, knowledge, engagement, privacy, operations, media
+  FROM home_agent_binding_committer;
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA
+  public, ingest, identity, knowledge, engagement, privacy, operations, media
+  FROM home_agent_binding_committer;
+REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA
+  public, ingest, identity, knowledge, engagement, privacy, operations, media
+  FROM home_agent_binding_committer;
+REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA
+  public, ingest, identity, knowledge, engagement, privacy, operations, media
+  FROM home_agent_binding_committer;
 GRANT SELECT ON TABLE public.alembic_version
   TO home_agent_api, home_agent_ingest, home_agent_worker, home_agent_erasure,
   home_agent_rollout, home_agent_binding_operator;
@@ -1641,6 +1668,14 @@ BEGIN
     END LOOP;
   END IF;
 
+  IF EXISTS (
+       SELECT 1 FROM pg_catalog.pg_roles
+        WHERE rolname = 'home_agent_binding_committer'
+     ) THEN
+    REVOKE USAGE, CREATE ON SCHEMA identity
+      FROM home_agent_binding_committer CASCADE;
+  END IF;
+
   -- Broad role setup above cannot know about descendant relations and grants
   -- generic API/worker DML. Remove every explicit non-owner receipt grant
   -- before any predecessor admission can fail. The owner keeps only its
@@ -2172,7 +2207,8 @@ DECLARE
   reviewed_e4_overlay_revisions constant text[] := ARRAY[
     '0014_identity_cutover_e4',
     '0015_current_authority_e5a',
-    '0016_principal_binding_e5b'
+    '0016_principal_binding_e5b',
+    '0017_authenticated_binding_e5c'
   ]::text[];
   pre_e3_revisions constant text[] := ARRAY[
     '0001_greenfield_core',
@@ -2199,7 +2235,8 @@ DECLARE
     '0013_identity_finalizer_e3',
     '0014_identity_cutover_e4',
     '0015_current_authority_e5a',
-    '0016_principal_binding_e5b'
+    '0016_principal_binding_e5b',
+    '0017_authenticated_binding_e5c'
   ]::text[];
   expected_e3_catalog_sha256 constant text :=
     '123326a4620d3dd123773819d95255e40813a5a949f406570252ff1f7031f29a';
@@ -2570,13 +2607,17 @@ BEGIN
   END IF;
   IF current_revision IN (
        '0015_current_authority_e5a',
-       '0016_principal_binding_e5b'
+       '0016_principal_binding_e5b',
+       '0017_authenticated_binding_e5c'
      ) THEN
     SELECT oid INTO STRICT authority_kernel_oid
       FROM pg_catalog.pg_roles
      WHERE rolname = 'home_agent_identity_authority_kernel';
   END IF;
-  IF current_revision = '0016_principal_binding_e5b' THEN
+  IF current_revision IN (
+       '0016_principal_binding_e5b',
+       '0017_authenticated_binding_e5c'
+     ) THEN
     SELECT oid INTO STRICT binding_kernel_oid
       FROM pg_catalog.pg_roles
      WHERE rolname = 'home_agent_identity_binding_kernel';
@@ -3062,7 +3103,8 @@ BEGIN
   -- after its independently committed quarantine.
   IF current_revision IN (
        '0015_current_authority_e5a',
-       '0016_principal_binding_e5b'
+       '0016_principal_binding_e5b',
+       '0017_authenticated_binding_e5c'
      )
      AND (
        (
@@ -3141,7 +3183,10 @@ BEGIN
   -- E5b adds a person-lineage support key and two SELECT policies to E3
   -- relations. Validate the exact descendant overlay before projecting it
   -- out of E3's immutable catalog digest.
-  IF current_revision = '0016_principal_binding_e5b'
+  IF current_revision IN (
+       '0016_principal_binding_e5b',
+       '0017_authenticated_binding_e5c'
+     )
      AND (
        NOT EXISTS (
          SELECT 1
@@ -3230,7 +3275,8 @@ BEGIN
        CASE
          WHEN current_revision IN (
                 '0015_current_authority_e5a',
-                '0016_principal_binding_e5b'
+                '0016_principal_binding_e5b',
+                '0017_authenticated_binding_e5c'
               ) THEN 6
          WHEN current_revision = ANY (reviewed_e4_overlay_revisions) THEN 5
          ELSE 4
@@ -3469,7 +3515,10 @@ BEGIN
                   FROM pg_catalog.pg_constraint AS constraint_row
                  WHERE constraint_row.conrelid = relation.oid
                    AND NOT (
-                     current_revision = '0016_principal_binding_e5b'
+                     current_revision IN (
+                       '0016_principal_binding_e5b',
+                       '0017_authenticated_binding_e5c'
+                     )
                      AND relation.oid =
                            'operations.'
                            'reviewed_identity_migration_projection_lineage'
@@ -3503,7 +3552,10 @@ BEGIN
                     ON index_relation.oid = index_state.indexrelid
                  WHERE index_state.indrelid = relation.oid
                    AND NOT (
-                     current_revision = '0016_principal_binding_e5b'
+                     current_revision IN (
+                       '0016_principal_binding_e5b',
+                       '0017_authenticated_binding_e5c'
+                     )
                      AND relation.oid =
                            'operations.'
                            'reviewed_identity_migration_projection_lineage'
@@ -3561,14 +3613,18 @@ BEGIN
                         OR (
                           current_revision IN (
                             '0015_current_authority_e5a',
-                            '0016_principal_binding_e5b'
+                            '0016_principal_binding_e5b',
+                            '0017_authenticated_binding_e5c'
                          )
                          AND policy_row.polname = e5_select_policy
                           AND policy_row.polroles =
                                 ARRAY[authority_kernel_oid]::oid[]
                         )
                         OR (
-                          current_revision = '0016_principal_binding_e5b'
+                          current_revision IN (
+                            '0016_principal_binding_e5b',
+                            '0017_authenticated_binding_e5c'
+                          )
                           AND policy_row.polname = e5b_select_policy
                           AND policy_row.polroles =
                                 ARRAY[binding_kernel_oid]::oid[]
@@ -3624,7 +3680,8 @@ BEGIN
                     OR (
                      current_revision IN (
                        '0015_current_authority_e5a',
-                       '0016_principal_binding_e5b'
+                       '0016_principal_binding_e5b',
+                       '0017_authenticated_binding_e5c'
                      )
                      AND policy_row.polname = e5_run_lock_policy
                      AND policy_row.polrelid =
@@ -4420,7 +4477,8 @@ DECLARE
   reviewed_e4_catalog_revisions constant text[] := ARRAY[
     '0014_identity_cutover_e4',
     '0015_current_authority_e5a',
-    '0016_principal_binding_e5b'
+    '0016_principal_binding_e5b',
+    '0017_authenticated_binding_e5c'
   ]::text[];
   role_count integer;
 BEGIN
@@ -4456,13 +4514,17 @@ BEGIN
    WHERE rolname = 'home_agent_identity_cutover_kernel';
   IF current_revision IN (
        '0015_current_authority_e5a',
-       '0016_principal_binding_e5b'
+       '0016_principal_binding_e5b',
+       '0017_authenticated_binding_e5c'
      ) THEN
     SELECT oid INTO STRICT authority_kernel_oid
       FROM pg_catalog.pg_roles
      WHERE rolname = 'home_agent_identity_authority_kernel';
   END IF;
-  IF current_revision = '0016_principal_binding_e5b' THEN
+  IF current_revision IN (
+       '0016_principal_binding_e5b',
+       '0017_authenticated_binding_e5c'
+     ) THEN
     SELECT oid INTO STRICT binding_kernel_oid
       FROM pg_catalog.pg_roles
      WHERE rolname = 'home_agent_identity_binding_kernel';
@@ -4586,7 +4648,8 @@ BEGIN
   -- manifest. The E5 block below owns and pins the complete verifier catalog.
   IF current_revision IN (
        '0015_current_authority_e5a',
-       '0016_principal_binding_e5b'
+       '0016_principal_binding_e5b',
+       '0017_authenticated_binding_e5c'
      )
      AND (
        (
@@ -4635,7 +4698,10 @@ BEGIN
   -- E5b adds one exact promotion support key and one SELECT policy to the E4
   -- promotion relation. Pin that descendant overlay, then omit it from E4's
   -- still-immutable manifest.
-  IF current_revision = '0016_principal_binding_e5b'
+  IF current_revision IN (
+       '0016_principal_binding_e5b',
+       '0017_authenticated_binding_e5c'
+     )
      AND (
        NOT EXISTS (
          SELECT 1
@@ -4774,8 +4840,10 @@ BEGIN
                                      WHERE constraint_row.conrelid =
                                            target.target_relation
                                        AND NOT (
-                                         current_revision =
-                                           '0016_principal_binding_e5b'
+                                         current_revision IN (
+                                           '0016_principal_binding_e5b',
+                                           '0017_authenticated_binding_e5c'
+                                         )
                                          AND target.target_relation =
                                                promotion_table
                                           AND constraint_row.conname =
@@ -5002,7 +5070,8 @@ BEGIN
                         (
                           current_revision IN (
                             '0015_current_authority_e5a',
-                            '0016_principal_binding_e5b'
+                            '0016_principal_binding_e5b',
+                            '0017_authenticated_binding_e5c'
                           )
                           AND policy_row.polname = e5_select_policy
                           AND policy_row.polrelid IN (
@@ -5016,7 +5085,10 @@ BEGIN
                           AND policy_row.polwithcheck IS NULL
                         )
                         OR (
-                          current_revision = '0016_principal_binding_e5b'
+                          current_revision IN (
+                            '0016_principal_binding_e5b',
+                            '0017_authenticated_binding_e5c'
+                          )
                           AND policy_row.polname = e5b_select_policy
                           AND policy_row.polrelid = promotion_table
                           AND policy_row.polpermissive
@@ -5707,7 +5779,8 @@ DECLARE
   ]::text[];
   reviewed_e5_catalog_revisions constant text[] := ARRAY[
     '0015_current_authority_e5a',
-    '0016_principal_binding_e5b'
+    '0016_principal_binding_e5b',
+    '0017_authenticated_binding_e5c'
   ]::text[];
   rls_relations constant text[] := ARRAY[
     'operations.semantic_authority_promotions',
@@ -5776,7 +5849,10 @@ BEGIN
   SELECT oid INTO STRICT authority_kernel_oid
     FROM pg_catalog.pg_roles
    WHERE rolname = 'home_agent_identity_authority_kernel';
-  IF current_revision = '0016_principal_binding_e5b' THEN
+  IF current_revision IN (
+       '0016_principal_binding_e5b',
+       '0017_authenticated_binding_e5c'
+     ) THEN
     SELECT oid INTO STRICT binding_kernel_oid
       FROM pg_catalog.pg_roles
      WHERE rolname = 'home_agent_identity_binding_kernel';
@@ -5934,7 +6010,10 @@ BEGIN
   -- E5b policy names are intentionally absent from the E5a manifest. Before
   -- projecting them out, prove the complete reviewed relation/command/role
   -- shape and that every permissive policy shares the kernel gate predicate.
-  IF current_revision = '0016_principal_binding_e5b'
+  IF current_revision IN (
+       '0016_principal_binding_e5b',
+       '0017_authenticated_binding_e5c'
+     )
      AND (
        receipt_table IS NULL
        OR (
@@ -6563,6 +6642,14 @@ BEGIN
     END LOOP;
   END IF;
 
+  IF EXISTS (
+       SELECT 1 FROM pg_catalog.pg_roles
+        WHERE rolname = 'home_agent_binding_committer'
+     ) THEN
+    REVOKE USAGE, CREATE ON SCHEMA identity
+      FROM home_agent_binding_committer CASCADE;
+  END IF;
+
   IF receipt_table IS NOT NULL THEN
     SELECT pg_catalog.string_agg(
              pg_catalog.quote_ident(attribute.attname), ', '
@@ -6718,7 +6805,7 @@ DECLARE
   expected_e5b_catalog_sha256 constant text :=
     '01c11885e7ae4f5c336ee7e43a15a481396819e40a359124e0330fd113d189fb';
   expected_function_body_sha256 constant text :=
-    '5bff739f5252d94db6d65453cf40a9071a2612f758dc8f9ce3d956b84113f9b9';
+    '1f0404ad968ce6e1e7f50b72ea7a75193ca50052c1e3c9132da4a87026e7fb38';
   function_name_count integer;
   kernel_owned_object_count integer;
   owner_oid oid;
@@ -6752,7 +6839,7 @@ BEGIN
   SELECT oid INTO STRICT owner_oid
     FROM pg_catalog.pg_roles WHERE rolname = 'home_agent_owner';
   SELECT oid INTO STRICT caller_oid
-    FROM pg_catalog.pg_roles WHERE rolname = 'home_agent_binding_operator';
+    FROM pg_catalog.pg_roles WHERE rolname = 'home_agent_binding_committer';
 
   SELECT pg_catalog.count(*) INTO STRICT function_name_count
     FROM pg_catalog.pg_proc AS function_row
@@ -6799,7 +6886,10 @@ BEGIN
        'edge_privacy_user_blocks_principal_binding_e5b_fence'
      );
 
-  IF current_revision <> '0016_principal_binding_e5b'
+  IF current_revision NOT IN (
+       '0016_principal_binding_e5b',
+       '0017_authenticated_binding_e5c'
+     )
      OR receipt_table IS NULL
      OR binding_function IS NULL
      OR function_name_count <> 1
@@ -7618,7 +7708,7 @@ BEGIN
                  'effective_access',
                  pg_catalog.jsonb_build_array(
                    pg_catalog.has_function_privilege(
-                     'home_agent_binding_operator',
+                     'home_agent_binding_committer',
                      binding_function,
                      'EXECUTE'
                    ),
@@ -7629,7 +7719,7 @@ BEGIN
                      'EXECUTE'
                    ),
                    pg_catalog.pg_has_role(
-                     'home_agent_binding_operator',
+                     'home_agent_binding_committer',
                      'home_agent_identity_binding_kernel',
                      'SET'
                    )
@@ -7655,10 +7745,315 @@ BEGIN
             );
   END IF;
 
-  RAISE EXCEPTION 'identity cutover E4 activation contract is not installed'
-    USING ERRCODE = '55000';
+  IF current_revision = '0016_principal_binding_e5b' THEN
+    RAISE EXCEPTION 'identity cutover E4 activation contract is not installed'
+      USING ERRCODE = '55000';
+  END IF;
 END
 $identity_principal_binding_e5b_acl$;
+
+SELECT (
+  version_num = '0017_authenticated_binding_e5c'
+) AS activate_authenticated_binding_e5c
+FROM public.alembic_version
+\gset
+
+\if :activate_authenticated_binding_e5c
+GRANT USAGE ON SCHEMA operations, privacy
+  TO home_agent_identity_authority_kernel;
+GRANT SELECT ON TABLE
+  operations.semantic_authority_promotions,
+  operations.reviewed_identity_cutover_admissions,
+  operations.enforced_legacy_identity_writer_freezes,
+  operations.reviewed_identity_migration_runs,
+  operations.reviewed_identity_migration_finalizations,
+  operations.reviewed_identity_finalizer_admissions,
+  operations.semantic_authority_cutovers,
+  operations.legacy_identity_writer_evidence,
+  operations.privacy_cutover_check_receipts,
+  operations.reviewed_identity_migration_erasure_impacts,
+  operations.reviewed_identity_migration_projection_lineage,
+  operations.reviewed_identity_migration_projection_subjects,
+  operations.erasure_ledger_state,
+  operations.erasure_replay_receipts
+  TO home_agent_identity_authority_kernel;
+GRANT UPDATE (expires_at)
+  ON operations.reviewed_identity_migration_runs
+  TO home_agent_identity_authority_kernel;
+GRANT UPDATE (updated_at)
+  ON operations.erasure_ledger_state
+  TO home_agent_identity_authority_kernel;
+GRANT EXECUTE ON FUNCTION
+  privacy.lock_identity_semantic_write_fence(),
+  privacy.identity_person_is_blocked(uuid)
+  TO home_agent_identity_authority_kernel;
+
+GRANT USAGE ON SCHEMA identity, operations, privacy
+  TO home_agent_identity_binding_kernel;
+GRANT SELECT (
+  request_id, ha_user_id, review_code, state, expires_at, staged_at,
+  closed_at
+) ON identity.principal_binding_requests
+  TO home_agent_identity_binding_kernel;
+GRANT UPDATE (state, closed_at)
+  ON identity.principal_binding_requests
+  TO home_agent_identity_binding_kernel;
+GRANT SELECT (
+  proposal_id, operator_request_id, request_id, ha_user_id, person_id,
+  reviewed_display_label, person_snapshot_digest, proposal_digest, state,
+  stage_receipt_digest, staged_at, expires_at, consumed_at,
+  result_principal_id, confirmation_artifact_id
+) ON identity.principal_binding_proposals
+  TO home_agent_identity_binding_kernel;
+GRANT UPDATE (
+  state, consumed_at, result_principal_id, confirmation_artifact_id
+) ON identity.principal_binding_proposals
+  TO home_agent_identity_binding_kernel;
+GRANT SELECT (
+  person_id, display_name, status, privacy_scope, legacy_source_sha256,
+  status_source_sha256
+) ON identity.people TO home_agent_identity_binding_kernel;
+GRANT SELECT (principal_id, person_id, kind, status)
+  ON identity.principals TO home_agent_identity_binding_kernel;
+GRANT INSERT (
+  principal_id, person_id, kind, display_label, status, created_at
+) ON identity.principals TO home_agent_identity_binding_kernel;
+GRANT SELECT (
+  artifact_id, principal_id, purpose, proposal_digest, client_nonce_sha256,
+  issued_at, expires_at, consumed_at
+) ON identity.confirmation_artifacts
+  TO home_agent_identity_binding_kernel;
+GRANT INSERT (
+  artifact_id, principal_id, purpose, proposal_digest, client_nonce_sha256,
+  issued_at, expires_at, consumed_at
+) ON identity.confirmation_artifacts
+  TO home_agent_identity_binding_kernel;
+GRANT SELECT (
+  binding_id, proposal_id, authority_receipt_id, ha_user_id, principal_id,
+  person_id, confirmed_by_principal_id, confirmed_at, revoked_at,
+  source_artifact_id
+) ON identity.ha_user_bindings
+  TO home_agent_identity_binding_kernel;
+GRANT INSERT (
+  binding_id, proposal_id, authority_receipt_id, ha_user_id, principal_id,
+  person_id, confirmed_by_principal_id, confirmed_at, revoked_at,
+  source_artifact_id
+) ON identity.ha_user_bindings
+  TO home_agent_identity_binding_kernel;
+GRANT SELECT (
+  artifact_id, artifact_kind, store, external_ref, content_sha256,
+  owner_principal_id, retention_class, status, created_at
+) ON privacy.artifact_registry
+  TO home_agent_identity_binding_kernel;
+GRANT INSERT (
+  artifact_id, artifact_kind, store, external_ref, content_sha256,
+  owner_principal_id, retention_class, status, created_at
+) ON privacy.artifact_registry
+  TO home_agent_identity_binding_kernel;
+GRANT SELECT (
+  promotion_id, authority_scope, run_id, finalization_id, policy_digest,
+  committed_at
+) ON operations.semantic_authority_promotions
+  TO home_agent_identity_binding_kernel;
+GRANT SELECT (
+  lineage_id, run_id, decision_kind, projection_table_kind, projection_id
+) ON operations.reviewed_identity_migration_projection_lineage
+  TO home_agent_identity_binding_kernel;
+GRANT SELECT (lineage_id, person_id, subject_role)
+  ON operations.reviewed_identity_migration_projection_subjects
+  TO home_agent_identity_binding_kernel;
+GRANT SELECT (person_id, directive, enabled)
+  ON identity.privacy_directives TO home_agent_identity_binding_kernel;
+GRANT SELECT (ha_user_id, person_id)
+  ON identity.edge_privacy_user_blocks
+  TO home_agent_identity_binding_kernel;
+GRANT SELECT (
+  receipt_id, binding_id, proposal_id, operator_request_id, request_id,
+  ha_user_id, person_id, person_snapshot_digest, proposal_digest,
+  stage_receipt_digest, proposal_staged_at, proposal_expires_at,
+  principal_id, principal_kind, confirmation_artifact_id,
+  confirmation_purpose, confirmation_nonce_sha256,
+  confirmation_issued_at, confirmation_consumed_at,
+  confirmation_expires_at, promotion_id, promotion_run_id,
+  promotion_finalization_id, promotion_policy_digest,
+  promotion_committed_at, projection_lineage_id,
+  projection_decision_kind, projection_table_kind, projection_id,
+  projection_subject_role, proposal_contract_version, policy_version,
+  authority_result, database_transaction_id, evaluated_at
+) ON operations.principal_binding_authority_receipts
+  TO home_agent_identity_binding_kernel;
+GRANT INSERT (
+  receipt_id, binding_id, proposal_id, operator_request_id, request_id,
+  ha_user_id, person_id, person_snapshot_digest, proposal_digest,
+  stage_receipt_digest, proposal_staged_at, proposal_expires_at,
+  principal_id, principal_kind, confirmation_artifact_id,
+  confirmation_purpose, confirmation_nonce_sha256,
+  confirmation_issued_at, confirmation_consumed_at,
+  confirmation_expires_at, promotion_id, promotion_run_id,
+  promotion_finalization_id, promotion_policy_digest,
+  promotion_committed_at, projection_lineage_id,
+  projection_decision_kind, projection_table_kind, projection_id,
+  projection_subject_role, proposal_contract_version, policy_version,
+  authority_result, database_transaction_id, evaluated_at
+) ON operations.principal_binding_authority_receipts
+  TO home_agent_identity_binding_kernel;
+GRANT EXECUTE ON FUNCTION
+  operations.evaluate_current_identity_semantic_authority(uuid),
+  privacy.lock_identity_semantic_write_fence(),
+  privacy.identity_person_is_blocked(uuid),
+  privacy.identity_principal_is_blocked(uuid)
+  TO home_agent_identity_binding_kernel;
+
+GRANT USAGE ON SCHEMA identity TO home_agent_binding_committer;
+SET LOCAL ROLE home_agent_identity_binding_kernel;
+GRANT EXECUTE ON FUNCTION
+  identity.commit_authenticated_principal_binding_e5b(
+    uuid, varchar, varchar, uuid, uuid, uuid, uuid, uuid
+  )
+  TO home_agent_binding_committer;
+RESET ROLE;
+
+DO $authenticated_binding_e5c_active_acl$
+DECLARE
+  binding_function regprocedure :=
+    'identity.commit_authenticated_principal_binding_e5b('
+    'uuid,character varying,character varying,uuid,uuid,uuid,uuid,uuid)'
+      ::regprocedure;
+  caller_oid oid;
+  kernel_oid oid;
+  owner_oid oid;
+BEGIN
+  SELECT oid INTO STRICT caller_oid
+    FROM pg_catalog.pg_roles
+   WHERE rolname = 'home_agent_binding_committer';
+  SELECT oid INTO STRICT kernel_oid
+    FROM pg_catalog.pg_roles
+   WHERE rolname = 'home_agent_identity_binding_kernel';
+  SELECT oid INTO STRICT owner_oid
+    FROM pg_catalog.pg_roles
+   WHERE rolname = 'home_agent_owner';
+
+  IF NOT pg_catalog.has_schema_privilege(
+       caller_oid, 'identity', 'USAGE'
+     )
+     OR pg_catalog.has_schema_privilege(
+       caller_oid, 'identity', 'CREATE'
+     )
+     OR NOT pg_catalog.has_function_privilege(
+       caller_oid, binding_function, 'EXECUTE'
+     )
+     OR pg_catalog.has_function_privilege(
+       caller_oid,
+       'operations.evaluate_current_identity_semantic_authority(uuid)',
+       'EXECUTE'
+     )
+     OR pg_catalog.pg_has_role(
+       caller_oid, kernel_oid, 'SET'
+     )
+     OR (
+       SELECT pg_catalog.count(*)
+         FROM pg_catalog.pg_namespace AS namespace_row
+         CROSS JOIN LATERAL pg_catalog.aclexplode(namespace_row.nspacl)
+              AS namespace_acl
+        WHERE namespace_acl.grantee = caller_oid
+          AND namespace_row.nspname IN (
+            'ingest','identity','knowledge','engagement','privacy',
+            'operations','media'
+          )
+          AND namespace_acl.privilege_type = 'USAGE'
+          AND namespace_row.nspname = 'identity'
+          AND namespace_acl.grantor = owner_oid
+          AND NOT namespace_acl.is_grantable
+     ) <> 1
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_namespace AS namespace_row
+         CROSS JOIN LATERAL pg_catalog.aclexplode(namespace_row.nspacl)
+              AS namespace_acl
+        WHERE namespace_acl.grantee = caller_oid
+          AND namespace_row.nspname IN (
+            'ingest','identity','knowledge','engagement','privacy',
+            'operations','media'
+          )
+          AND NOT (
+            namespace_row.nspname = 'identity'
+            AND namespace_acl.privilege_type = 'USAGE'
+            AND namespace_acl.grantor = owner_oid
+            AND NOT namespace_acl.is_grantable
+          )
+     )
+     OR (
+       SELECT pg_catalog.count(*)
+         FROM pg_catalog.pg_proc AS function_row
+         JOIN pg_catalog.pg_namespace AS function_namespace
+           ON function_namespace.oid = function_row.pronamespace
+         CROSS JOIN LATERAL pg_catalog.aclexplode(function_row.proacl)
+              AS function_acl
+        WHERE function_acl.grantee = caller_oid
+          AND function_namespace.nspname IN (
+            'ingest','identity','knowledge','engagement','privacy',
+            'operations','media'
+          )
+          AND function_row.oid = binding_function
+          AND function_acl.privilege_type = 'EXECUTE'
+          AND function_acl.grantor = kernel_oid
+          AND NOT function_acl.is_grantable
+     ) <> 1
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_proc AS function_row
+         JOIN pg_catalog.pg_namespace AS function_namespace
+           ON function_namespace.oid = function_row.pronamespace
+         CROSS JOIN LATERAL pg_catalog.aclexplode(function_row.proacl)
+              AS function_acl
+        WHERE function_acl.grantee = caller_oid
+          AND function_namespace.nspname IN (
+            'ingest','identity','knowledge','engagement','privacy',
+            'operations','media'
+          )
+          AND NOT (
+            function_row.oid = binding_function
+            AND function_acl.privilege_type = 'EXECUTE'
+            AND function_acl.grantor = kernel_oid
+            AND NOT function_acl.is_grantable
+          )
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_class AS relation_row
+         JOIN pg_catalog.pg_namespace AS relation_namespace
+           ON relation_namespace.oid = relation_row.relnamespace
+        WHERE relation_namespace.nspname IN (
+          'ingest','identity','knowledge','engagement','privacy',
+          'operations','media'
+        )
+          AND relation_row.relkind IN ('r','p','v','m','f')
+          AND pg_catalog.has_table_privilege(
+            caller_oid, relation_row.oid,
+            'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'
+          )
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_class AS sequence_row
+         JOIN pg_catalog.pg_namespace AS sequence_namespace
+           ON sequence_namespace.oid = sequence_row.relnamespace
+        WHERE sequence_namespace.nspname IN (
+          'ingest','identity','knowledge','engagement','privacy',
+          'operations','media'
+        )
+          AND sequence_row.relkind = 'S'
+          AND pg_catalog.has_sequence_privilege(
+            caller_oid, sequence_row.oid, 'USAGE,SELECT,UPDATE'
+          )
+     ) THEN
+    RAISE EXCEPTION
+      'authenticated binding E5c active ACL contract mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+END
+$authenticated_binding_e5c_active_acl$;
+\endif
 SQL
 
 # The broad role setup above supports old pinned revisions and creates the

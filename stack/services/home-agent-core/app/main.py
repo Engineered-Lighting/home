@@ -22,11 +22,12 @@ from .auth import (
     require_service_identity,
 )
 from .config import Settings
-from .db import Database
+from .db import Database, PrincipalBindingCommitDatabase
 from .errors import DomainError
 from .ledger import EncryptedErasureLedger
 from .maintenance import WorkerMaintenanceInspector
 from .models import HealthView
+from .principal_binding_adapter import AuthenticatedPrincipalBindingAdapter
 from .restore import RestoreQuarantineGate, outbox_health
 from .resources import (
     inspect_disk_budget,
@@ -157,6 +158,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         and settings.role in {"api", "all"}
         else None
     )
+    binding_commit_database = (
+        PrincipalBindingCommitDatabase(
+            settings.async_binding_commit_database_url()
+        )
+        if settings.binding_commit_database_url is not None
+        and settings.role in {"api", "all"}
+        else None
+    )
+    binding_adapter = (
+        AuthenticatedPrincipalBindingAdapter(binding_commit_database)
+        if binding_commit_database is not None
+        else None
+    )
     spool = (
         EncryptedRuntimeSpool(
             settings.runtime_spool_path,
@@ -207,6 +221,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     rollout_gate = RolloutAuthorizationGate(database, settings)
     maintenance_inspector = WorkerMaintenanceInspector(database)
 
+    async def close_database_clients() -> None:
+        if binding_adapter is not None:
+            await binding_adapter.close()
+        if operator_database is not None:
+            await operator_database.close()
+        await database.close()
+
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         stop = asyncio.Event()
@@ -216,9 +237,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             try:
                 spool.close()
             finally:
-                if operator_database is not None:
-                    await operator_database.close()
-                await database.close()
+                await close_database_clients()
             raise RuntimeError(
                 "database migration mismatch: expected "
                 f"{settings.readiness_migration}, received {revision or 'unknown'}"
@@ -229,8 +248,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 try:
                     spool.close()
                 finally:
-                    await operator_database.close()
-                    await database.close()
+                    await close_database_clients()
                 raise RuntimeError(
                     "operator database migration mismatch: expected "
                     f"{settings.readiness_migration}, received "
@@ -241,9 +259,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             try:
                 spool.close()
             finally:
-                if operator_database is not None:
-                    await operator_database.close()
-                await database.close()
+                await close_database_clients()
             raise RuntimeError(
                 "rollout authorization rejected: " + rollout_status.code
             )
@@ -262,9 +278,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 try:
                     spool.close()
                 finally:
-                    if operator_database is not None:
-                        await operator_database.close()
-                    await database.close()
+                    await close_database_clients()
                 raise RuntimeError(
                     "worker restore quarantine rejected: " + restore_status.code
                 )
@@ -283,9 +297,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 with suppress(asyncio.CancelledError):
                     await task
             spool.close()
-            if operator_database is not None:
-                await operator_database.close()
-            await database.close()
+            await close_database_clients()
 
     application = FastAPI(
         title="Home Agent Core",
@@ -298,6 +310,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.settings = settings
     application.state.database = database
     application.state.operator_database = operator_database
+    application.state.binding_commit_database = binding_commit_database
+    application.state.binding_adapter = binding_adapter
     application.state.spool = spool
     application.state.store = store
     application.state.operator_store = operator_store

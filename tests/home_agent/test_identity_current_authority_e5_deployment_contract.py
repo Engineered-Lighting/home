@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 REVISION = "0015_current_authority_e5a"
 DOWN_REVISION = "0014_identity_cutover_e4"
 DESCENDANT_REVISION = "0016_principal_binding_e5b"
+ACTIVATION_REVISION = "0017_authenticated_binding_e5c"
 FUNCTION = "operations.evaluate_current_identity_semantic_authority(uuid)"
 CALLER_ROLE = "home_agent_binding_operator"
 KERNEL_ROLE = "home_agent_identity_authority_kernel"
@@ -65,7 +66,10 @@ def test_e5_role_is_additive_dormant_and_has_no_new_secret() -> None:
         r"NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;",
         historical,
     )
-    assert "CONNECTION LIMIT 8" not in historical
+    operator_role_statement = historical.split(
+        "ALTER ROLE home_agent_binding_operator PASSWORD", 1
+    )[1].split("ALTER ROLE home_agent_binding_committer", 1)[0]
+    assert "CONNECTION LIMIT 8" not in operator_role_statement
     assert (
         "ALTER ROLE home_agent_binding_operator SET "
         "statement_timeout = '15s';" in historical
@@ -179,11 +183,13 @@ def test_e5_overlay_preserves_exact_e3_e4_pins_and_stop_boundary() -> None:
         DOWN_REVISION,
         REVISION,
         DESCENDANT_REVISION,
+        ACTIVATION_REVISION,
     ]
     assert _revision_array(e4, "reviewed_e4_catalog_revisions") == [
         DOWN_REVISION,
         REVISION,
         DESCENDANT_REVISION,
+        ACTIVATION_REVISION,
     ]
     for section, marker in (
         (e3, "identity finalizer E3 reviewed E5 policy mismatch"),
@@ -204,6 +210,7 @@ def test_e5_overlay_preserves_exact_e3_e4_pins_and_stop_boundary() -> None:
     assert "current_revision IN (" in e4
     assert f"'{REVISION}'" in e4
     assert f"'{DESCENDANT_REVISION}'" in e4
+    assert f"'{ACTIVATION_REVISION}'" in e4
     assert e5.count(
         "identity cutover E4 activation contract is not installed"
     ) == 1
@@ -342,6 +349,7 @@ def test_e5_replay_quarantines_and_pins_the_complete_direct_acl_surface() -> Non
     assert _revision_array(admission, "reviewed_e5_catalog_revisions") == [
         REVISION,
         DESCENDANT_REVISION,
+        ACTIVATION_REVISION,
     ]
     assert "NOT current_revision = ANY (reviewed_e5_catalog_revisions)" in (
         admission

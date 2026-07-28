@@ -454,8 +454,8 @@ class PrincipalBindingConfirmation(StrictModel):
     @field_validator("confirmation_nonce")
     @classmethod
     def _random_nonce(cls, value: uuid.UUID) -> uuid.UUID:
-        if value.version not in {4, 7}:
-            raise ValueError("confirmation nonce must be a random UUIDv4 or UUIDv7")
+        if value.version != 4:
+            raise ValueError("confirmation nonce must be a random UUIDv4")
         return value
 
 

@@ -63,6 +63,7 @@ def test_e5b_kernel_role_ceremony_is_separate_owner_only_and_dormant() -> None:
     assert "evaluate_current_identity_semantic_authority" in preflight
     assert "home_agent_identity_authority_kernel" in preflight
     assert "home_agent_binding_operator" in preflight
+    assert "home_agent_binding_committer" in preflight
     assert "operations.principal_binding_authority_receipts" in preflight
     assert "identity.commit_authenticated_principal_binding_e5b(" in preflight
     assert "authority_receipt_id" in preflight
@@ -112,6 +113,7 @@ def test_e5b_kernel_role_ceremony_quarantines_sessions_and_memberships() -> None
         "  WITH ADMIN FALSE, INHERIT FALSE, SET TRUE;"
     ) in source
     assert f"GRANT {ROLE} TO home_agent_binding_operator" not in source
+    assert f"GRANT {ROLE} TO home_agent_binding_committer" not in source
 
 
 def test_e5b_kernel_role_ceremony_scrubs_every_privilege_catalog() -> None:

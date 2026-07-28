@@ -1,4 +1,4 @@
-name: home agent E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g PostgreSQL gate
+name: home agent E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h PostgreSQL gate
 
 on:
   pull_request:
@@ -37,6 +37,7 @@ on:
       - "tests/home_agent/test_principal_binding_kernel_e5b_deployment_contract.py"
       - "tests/home_agent/test_principal_binding_adapter_e5c_deployment_contract.py"
       - "tests/home_agent/test_parent_relationship_adapter_e5g_deployment_contract.py"
+      - "tests/home_agent/test_parent_relationship_status_e5h_deployment_contract.py"
       - "tools/run-home-agent-e1-postgres-gate.py"
   push:
     # Keep the exact integration branch on GitHub-hosted runners until the
@@ -77,6 +78,7 @@ on:
       - "tests/home_agent/test_principal_binding_kernel_e5b_deployment_contract.py"
       - "tests/home_agent/test_principal_binding_adapter_e5c_deployment_contract.py"
       - "tests/home_agent/test_parent_relationship_adapter_e5g_deployment_contract.py"
+      - "tests/home_agent/test_parent_relationship_status_e5h_deployment_contract.py"
       - "tools/run-home-agent-e1-postgres-gate.py"
   workflow_dispatch:
 
@@ -106,7 +108,7 @@ jobs:
           RUNNER_TEMP="$RUNNER_TEMP"
           sh stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh
 
-      - name: Run isolated PostgreSQL 17 E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g authority gate
+      - name: Run isolated PostgreSQL 17 E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h authority gate
         env:
           HOME_AGENT_E1_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: >-

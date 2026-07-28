@@ -114,9 +114,10 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
             "0016_principal_binding_e5b",
             "0017_authenticated_binding_e5c",
                 "0018_parent_relationship_e5d",
-                "0019_parent_stage_e5e",
-                "0020_parent_commit_e5f",
-            ]
+                    "0019_parent_stage_e5e",
+                    "0020_parent_commit_e5f",
+                    "0021_parent_status_e5h",
+                ]
     assert (
         "current_revision = ANY (reviewed_e3_catalog_revisions)"
         in admission
@@ -136,9 +137,10 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
         "0016_principal_binding_e5b",
         "0017_authenticated_binding_e5c",
             "0018_parent_relationship_e5d",
-            "0019_parent_stage_e5e",
-            "0020_parent_commit_e5f",
-        ]
+                "0019_parent_stage_e5e",
+                "0020_parent_commit_e5f",
+                "0021_parent_status_e5h",
+            ]
     assert (
         "login_role.rolvaliduntil =\n"
         "               timestamptz '1970-01-01 00:00:00+00'"
@@ -195,7 +197,8 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
             "                '0017_authenticated_binding_e5c',\n"
             "                '0018_parent_relationship_e5d',\n"
             "                '0019_parent_stage_e5e',\n"
-            "                '0020_parent_commit_e5f'\n"
+            "                '0020_parent_commit_e5f',\n"
+            "                '0021_parent_status_e5h'\n"
             "              ) THEN 6"
         in admission
     )

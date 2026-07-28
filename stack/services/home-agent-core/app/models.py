@@ -185,9 +185,7 @@ class ReviewedRecognitionBindingImport(StrictModel):
 
 
 class ReviewedPrivacyDirectiveImport(StrictModel):
-    directive: Literal[
-        "do_not_track", "ignored", "silent", "private", "auto_expire"
-    ]
+    directive: Literal["do_not_track", "ignored", "silent", "private", "auto_expire"]
     enabled: Literal[True] = True
     expires_at: datetime | None = None
     source_ref: str = Field(min_length=1, max_length=255)
@@ -247,6 +245,7 @@ class OnboardingStatusView(StrictModel):
     qualifying_redacted_envelopes_required: Literal[500] = 500
     phase2_ready: bool
     phase2_blockers: list[OnboardingPhase2Blocker]
+    parent_relationship_confirmation: Literal["disabled", "enabled"] = "disabled"
     location_memory_default_off: Literal[True] = True
     travel_greetings_default_off: Literal[True] = True
 
@@ -403,14 +402,10 @@ class PrincipalBindingRequestAction(StrictModel):
 
 class PrincipalBindingProposalView(StrictModel):
     state: PrincipalBindingSubjectState
-    review_code: str | None = Field(
-        default=None, pattern=r"^[A-HJ-NP-Z2-9]{16}$"
-    )
+    review_code: str | None = Field(default=None, pattern=r"^[A-HJ-NP-Z2-9]{16}$")
     reviewed_display_label: str | None = Field(default=None, max_length=255)
     confirmation_statement: str | None = Field(default=None, max_length=384)
-    proposal_digest: str | None = Field(
-        default=None, pattern=r"^[0-9a-f]{64}$"
-    )
+    proposal_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     expires_at: datetime | None = None
     location_memory_default_off: Literal[True] = True
     travel_greetings_default_off: Literal[True] = True
@@ -507,9 +502,7 @@ class ParentRelationshipPreviewView(StrictModel):
     def _canonical_preview(self) -> "ParentRelationshipPreviewView":
         if [candidate.ordinal for candidate in self.candidates] != [0, 1]:
             raise ValueError("parent candidates must have canonical ordinals")
-        labels = [
-            candidate.reviewed_display_label for candidate in self.candidates
-        ]
+        labels = [candidate.reviewed_display_label for candidate in self.candidates]
         if len({label.casefold() for label in labels}) != 2:
             raise ValueError("parent candidate labels must be distinct")
         expected = (
@@ -545,6 +538,80 @@ class ParentRelationshipConfirmationView(StrictModel):
     travel_greetings_enabled: Literal[False] = False
 
     _confirmed_at = field_validator("confirmed_at")(_aware)
+
+
+class ParentRelationshipStatusView(StrictModel):
+    state: Literal[
+        "not_started",
+        "ready_for_confirmation",
+        "confirmed",
+    ]
+    proposal_id: uuid.UUID | None = None
+    proposal_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    expires_at: datetime | None = None
+    child_display_label: str | None = Field(default=None, max_length=255)
+    candidates: list[ParentRelationshipPreviewCandidate] = Field(
+        default_factory=list,
+        max_length=2,
+    )
+    confirmation_statement: str | None = Field(default=None, max_length=768)
+    confirmed_at: datetime | None = None
+    fact_count: Literal[0, 2] = 0
+    creates_exactly_two_parent_facts: Literal[True] = True
+    does_not_assert_ownership_residence_or_presence: Literal[True] = True
+    location_memory_enabled: Literal[False] = False
+    travel_greetings_enabled: Literal[False] = False
+
+    @field_validator("expires_at", "confirmed_at")
+    @classmethod
+    def _optional_status_time(cls, value: datetime | None) -> datetime | None:
+        return _aware(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def _canonical_status(self) -> "ParentRelationshipStatusView":
+        ready_values = (
+            self.proposal_id,
+            self.proposal_digest,
+            self.expires_at,
+            self.child_display_label,
+            self.confirmation_statement,
+        )
+        if self.state == "ready_for_confirmation":
+            if any(value is None for value in ready_values):
+                raise ValueError("ready parent status is incomplete")
+            if self.proposal_id is None or self.proposal_id.version != 7:
+                raise ValueError("parent proposal ID must be UUIDv7")
+            if [candidate.ordinal for candidate in self.candidates] != [0, 1]:
+                raise ValueError("parent candidates must have canonical ordinals")
+            labels = [candidate.reviewed_display_label for candidate in self.candidates]
+            if len({label.casefold() for label in labels}) != 2:
+                raise ValueError("parent candidate labels must be distinct")
+            expected = (
+                f"Confirm that {labels[0]} and {labels[1]} are parents of "
+                f"{self.child_display_label}."
+            )
+            if self.confirmation_statement != expected:
+                raise ValueError("parent confirmation statement is not canonical")
+            if self.confirmed_at is not None or self.fact_count != 0:
+                raise ValueError("ready parent status cannot be confirmed")
+        elif self.state == "confirmed":
+            if any(value is not None for value in ready_values):
+                raise ValueError(
+                    "confirmed parent status cannot expose preview content"
+                )
+            if self.candidates or self.confirmed_at is None or self.fact_count != 2:
+                raise ValueError("confirmed parent status is incomplete")
+        else:
+            if (
+                any(value is not None for value in ready_values)
+                or self.candidates
+                or self.confirmed_at is not None
+                or self.fact_count != 0
+            ):
+                raise ValueError(
+                    "not-started parent status cannot expose private content"
+                )
+        return self
 
 
 class OperatorPrincipalBindingRequestView(StrictModel):

@@ -565,7 +565,7 @@ test("semantic route allowlist excludes generic proxying", () => {
     routeAllowed("POST", "/api/agent/v1/parent-relationship-proposal/confirm"),
     true,
   );
-  assert.equal(routeAllowed("GET", "/api/agent/v1/parent-relationship-proposal"), false);
+  assert.equal(routeAllowed("GET", "/api/agent/v1/parent-relationship-proposal"), true);
   assert.equal(routeAllowed("POST", "/api/agent/v1/principal-bindings"), false);
   assert.equal(routeAllowed("GET", "/api/agent/v1/people"), false);
   assert.equal(routeAllowed("GET", "/api/agent/v1/snapshot"), true);
@@ -1467,7 +1467,7 @@ test("every binding operation force-revalidates HA and reconstructs authority he
   assert.equal(coreCalls, 4);
 });
 
-test("parent relationship stage and commit revalidate HA and forward no semantic IDs", async () => {
+test("parent relationship status, stage, and commit revalidate HA and forward no semantic IDs", async () => {
   const config = configured({ principalRevalidateMs: 24 * 60 * 60_000 });
   const store = new SessionStore(config);
   const session = store.createSession({
@@ -1482,10 +1482,16 @@ test("parent relationship stage and commit revalidate HA and forward no semantic
   const confirmationNonce = "018f6f42-3a8b-4c11-8123-123456789abc";
   const expected = [
     {
+      method: "GET",
+      path: "/v1/parent-relationship-proposal",
+    },
+    {
+      method: "POST",
       path: "/v1/parent-relationship-proposal",
       body: { ceremony_id: ceremonyId },
     },
     {
+      method: "POST",
       path: "/v1/parent-relationship-proposal/confirm",
       body: {
         proposal_id: proposalId,
@@ -1510,7 +1516,11 @@ test("parent relationship stage and commit revalidate HA and forward no semantic
     assert.equal(init.headers["X-Authenticated-HA-User"], "parent-review-user");
     assert.equal(init.headers["X-Home-Agent-Principal"], undefined);
     assert.equal(init.headers["X-Authenticated-Person"], undefined);
-    assert.deepEqual(JSON.parse(init.body.toString()), operation.body);
+    if (operation.body) {
+      assert.deepEqual(JSON.parse(init.body.toString()), operation.body);
+    } else {
+      assert.equal(init.body, undefined);
+    }
     return new Response('{"state":"ok"}', {
       status: 200,
       headers: { "content-type": "application/json" },
@@ -1529,14 +1539,16 @@ test("parent relationship stage and commit revalidate HA and forward no semantic
 
   for (const operation of expected) {
     const response = await fetch(`${base}/api/agent${operation.path}`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(operation.body),
+      method: operation.method,
+      headers: operation.method === "GET"
+        ? { cookie: headers.cookie }
+        : headers,
+      body: operation.body ? JSON.stringify(operation.body) : undefined,
     });
     assert.equal(response.status, 200);
   }
-  assert.equal(whoamiCalls, 2);
-  assert.equal(coreCalls, 2);
+  assert.equal(whoamiCalls, 3);
+  assert.equal(coreCalls, 3);
 });
 
 test("changed or revoked HA users fail every binding operation before Core", async () => {

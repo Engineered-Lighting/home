@@ -118,8 +118,9 @@ def test_grant_replay_quarantines_then_exactly_admits_e5f() -> None:
     )
     assert quarantine < activation
     assert (
-        "version_num = '0020_parent_commit_e5f'"
-        in GRANTS[activation - 100 : activation]
+        "version_num IN ('0020_parent_commit_e5f', "
+        "'0021_parent_status_e5h')"
+        in GRANTS[activation - 150 : activation]
     )
     assert (
         "GRANT EXECUTE ON FUNCTION\n"

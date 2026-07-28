@@ -2,6 +2,26 @@
 (function initHomeAgentApi(global) {
   "use strict";
 
+  function randomUuid7() {
+    const bytes = new Uint8Array(16);
+    global.crypto.getRandomValues(bytes);
+    let timestamp = BigInt(Date.now());
+    for (let index = 5; index >= 0; index -= 1) {
+      bytes[index] = Number(timestamp & 0xffn);
+      timestamp >>= 8n;
+    }
+    bytes[6] = (bytes[6] & 0x0f) | 0x70;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+    return [
+      hex.slice(0, 8),
+      hex.slice(8, 12),
+      hex.slice(12, 16),
+      hex.slice(16, 20),
+      hex.slice(20),
+    ].join("-");
+  }
+
   class HomeAgentApi {
     constructor(base = "") {
       this.base = String(base || "").replace(/\/$/, "");
@@ -114,6 +134,28 @@
         },
       });
     }
+    parentRelationshipStatus() {
+      if (this.invoke) return Promise.reject(new Error("native_parent_relationship_unavailable"));
+      return this.request("/api/agent/v1/parent-relationship-proposal");
+    }
+    stageParentRelationship() {
+      if (this.invoke) return Promise.reject(new Error("native_parent_relationship_unavailable"));
+      return this.request("/api/agent/v1/parent-relationship-proposal", {
+        method: "POST",
+        body: { ceremony_id: randomUuid7() },
+      });
+    }
+    confirmParentRelationship(proposalId, proposalDigest) {
+      if (this.invoke) return Promise.reject(new Error("native_parent_relationship_unavailable"));
+      return this.request("/api/agent/v1/parent-relationship-proposal/confirm", {
+        method: "POST",
+        body: {
+          proposal_id: proposalId,
+          proposal_digest: proposalDigest,
+          confirmation_nonce: global.crypto.randomUUID(),
+        },
+      });
+    }
     explainDescriptor(placeId) {
       if (!this.invoke) return Promise.reject(new Error("native_transport_required"));
       return this.native("native_agent_explain_descriptor", { placeId })
@@ -222,5 +264,7 @@
   }
 
   global.HomeAgentApi = HomeAgentApi;
-  if (typeof module !== "undefined" && module.exports) module.exports = { HomeAgentApi };
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = { HomeAgentApi, randomUuid7 };
+  }
 })(typeof window !== "undefined" ? window : globalThis);

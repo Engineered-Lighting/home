@@ -53,9 +53,7 @@ class OnboardingStore:
 def settings_for(tmp_path, *, rollout_mode: str = "record_only") -> Settings:
     knowledge_key = base64.urlsafe_b64encode(b"k" * 32).decode().rstrip("=")
     return Settings(
-        database_url=SecretStr(
-            "postgresql+psycopg://unused:unused@127.0.0.1:1/unused"
-        ),
+        database_url=SecretStr("postgresql+psycopg://unused:unused@127.0.0.1:1/unused"),
         runtime_spool_path=tmp_path / "runtime.sqlite",
         storage_monitor_path=tmp_path,
         knowledge_encryption_key=SecretStr(knowledge_key),
@@ -192,9 +190,37 @@ def test_onboarding_state_transitions_are_fail_closed(
     assert body["principal_bound"] is expected_bound
     assert body["phase2_ready"] is expected_ready
     assert body["rollout_mode"] == rollout_mode
+    assert body["parent_relationship_confirmation"] == "disabled"
     assert body["location_memory_default_off"] is True
     assert body["travel_greetings_default_off"] is True
     assert store.phase2_inspector_modes == ["record_only"]
+
+
+def test_onboarding_enables_parent_review_only_for_bound_e5h_subject(
+    tmp_path, monkeypatch
+) -> None:
+    readiness = phase2_readiness(
+        rollout_mode="record_only", qualifying=500, observation_days=8
+    )
+    app, store = app_for(
+        tmp_path,
+        monkeypatch,
+        binding_status="bound",
+        rollout_mode="record_only",
+        readiness=readiness,
+    )
+    store.settings = store.settings.model_copy(
+        update={"readiness_migration": "0021_parent_status_e5h"}
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/v1/onboarding/status",
+            headers=service_headers(),
+        )
+
+    assert response.status_code == 200
+    assert response.json()["parent_relationship_confirmation"] == "enabled"
 
 
 def test_onboarding_uses_only_authenticated_service_identity_and_bounds_content(
@@ -239,6 +265,7 @@ def test_onboarding_uses_only_authenticated_service_identity_and_bounds_content(
             "minimum_observation_window_not_elapsed",
             "qualifying_redacted_envelope_threshold_not_met",
         ],
+        "parent_relationship_confirmation": "disabled",
         "location_memory_default_off": True,
         "travel_greetings_default_off": True,
     }
@@ -272,9 +299,7 @@ def test_onboarding_requires_service_token_and_authenticated_ha_user(
         )
         no_ha_user = client.get(
             "/v1/onboarding/status",
-            headers={
-                "Authorization": "Bearer service-token-with-at-least-32-chars"
-            },
+            headers={"Authorization": "Bearer service-token-with-at-least-32-chars"},
         )
         operator_bootstrap = client.get(
             "/v1/onboarding/status",
@@ -347,9 +372,7 @@ async def test_postgres_onboarding_binding_status_fails_closed(
                         select(
                             schema.ha_user_bindings.c.binding_id,
                             schema.ha_user_bindings.c.source_artifact_id,
-                        ).where(
-                            schema.ha_user_bindings.c.ha_user_id == ha_user_id
-                        )
+                        ).where(schema.ha_user_bindings.c.ha_user_id == ha_user_id)
                     )
                 )
                 .mappings()

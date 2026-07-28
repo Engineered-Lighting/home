@@ -49,6 +49,7 @@ const PARENT_RELATIONSHIP_WRITE_PATHS = new Set([
   PARENT_RELATIONSHIP_CONFIRM_PATH,
 ]);
 const PARENT_RELATIONSHIP_FRESH_AUTH_ROUTES = new Set([
+  `GET ${PARENT_RELATIONSHIP_STAGE_PATH}`,
   `POST ${PARENT_RELATIONSHIP_STAGE_PATH}`,
   `POST ${PARENT_RELATIONSHIP_CONFIRM_PATH}`,
 ]);
@@ -60,6 +61,7 @@ const ROUTES = Object.freeze([
   ["POST", /^\/api\/agent\/v1\/principal-binding-request$/],
   ["POST", /^\/api\/agent\/v1\/principal-binding-request\/cancel$/],
   ["POST", /^\/api\/agent\/v1\/principal-binding-proposal\/confirm$/],
+  ["GET", /^\/api\/agent\/v1\/parent-relationship-proposal$/],
   ["POST", /^\/api\/agent\/v1\/parent-relationship-proposal$/],
   ["POST", /^\/api\/agent\/v1\/parent-relationship-proposal\/confirm$/],
   ["GET", /^\/api\/agent\/v1\/snapshot$/],

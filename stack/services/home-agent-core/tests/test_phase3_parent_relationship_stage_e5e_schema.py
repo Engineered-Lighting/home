@@ -194,10 +194,7 @@ def test_embedded_function_body_digest_matches_source() -> None:
 def test_grant_replay_quarantines_then_restores_only_exact_stage_execute() -> None:
     assert (
         GRANTS.index("DO $parent_relationship_e5e_function_quarantine$")
-        < GRANTS.index(
-            "version_num IN "
-            "('0019_parent_stage_e5e', '0020_parent_commit_e5f')"
-        )
+        < GRANTS.index("AS activate_parent_relationship_stage_e5e")
         < GRANTS.index("DO $parent_relationship_e5e_active_acl$")
     )
     quarantine = GRANTS.split(

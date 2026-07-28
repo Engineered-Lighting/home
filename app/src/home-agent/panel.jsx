@@ -55,6 +55,55 @@ function containedPreferenceState(snapshot) {
   });
 }
 
+function ParentRelationshipCard({ status, busy, onStage, onConfirm }) {
+  const recognized = new Set([
+    "not_started",
+    "ready_for_confirmation",
+    "confirmed",
+  ]).has(status?.state);
+  return (
+    <section className="agent-card" aria-live="polite" aria-busy={busy}>
+      <h2>Private relationship review</h2>
+      {!recognized && <>
+        <h3>Relationship status unavailable</h3>
+        <p>Core did not return a recognized, recoverable state. No relationship can be inferred or confirmed.</p>
+      </>}
+      {status?.state === "not_started" && <>
+        <p>Review the two People records previously classified as Marceloâ€™s parents. Staging creates only a private 15-minute preview.</p>
+        <button disabled={busy} onClick={onStage}>
+          {busy ? "Preparing reviewâ€¦" : "Review parent relationships"}
+        </button>
+      </>}
+      {status?.state === "ready_for_confirmation" && <>
+        <h3>Two reviewed relationships are ready</h3>
+        <p>{status.confirmation_statement}</p>
+        <dl className="agent-grid">
+          {status.candidates?.map((candidate) => (
+            <React.Fragment key={candidate.ordinal}>
+              <dt>Candidate {candidate.ordinal + 1}</dt>
+              <dd>{candidate.reviewed_display_label} <code>{candidate.review_code}</code></dd>
+            </React.Fragment>
+          ))}
+          <dt>Preview expires</dt><dd>{status.expires_at || "unavailable"}</dd>
+        </dl>
+        <p>This creates exactly two private <code>parent_of</code> facts. It does not assert ownership, residence, current presence, or permission to act.</p>
+        <button disabled={busy} onClick={onConfirm}>
+          {busy ? "Confirming bothâ€¦" : "Confirm both parent relationships"}
+        </button>
+      </>}
+      {status?.state === "confirmed" && <>
+        <h3>Parent relationships confirmed</h3>
+        <p>Core atomically committed exactly {status.fact_count} private relationship facts.</p>
+        <dl className="agent-grid">
+          <dt>Confirmed</dt><dd>{status.confirmed_at || "unavailable"}</dd>
+          <dt>Location memory</dt><dd>off</dd>
+          <dt>Travel greetings</dt><dd>off</dd>
+        </dl>
+      </>}
+    </section>
+  );
+}
+
 function HomeAgentPanel() {
   const api = useMemo(() => new window.HomeAgentApi(""), []);
   const activeSubject = useRef(null);
@@ -68,6 +117,8 @@ function HomeAgentPanel() {
   const [onboarding, setOnboarding] = useState(null);
   const [bindingProposal, setBindingProposal] = useState(null);
   const [bindingBusy, setBindingBusy] = useState(false);
+  const [parentRelationship, setParentRelationship] = useState(null);
+  const [parentRelationshipBusy, setParentRelationshipBusy] = useState(false);
   const [snapshot, setSnapshot] = useState(null);
   const [containedPreferences, setContainedPreferences] = useState(null);
   const [relationship, setRelationship] = useState(null);
@@ -83,6 +134,8 @@ function HomeAgentPanel() {
     setOnboarding(null);
     setBindingProposal(null);
     setBindingBusy(false);
+    setParentRelationship(null);
+    setParentRelationshipBusy(false);
     setSnapshot(null);
     setContainedPreferences(null);
     setRelationship(null);
@@ -143,8 +196,17 @@ function HomeAgentPanel() {
           return;
         }
         setOnboarding(nextOnboarding);
+        if (nextOnboarding?.parent_relationship_confirmation === "enabled") {
+          const ticket = beginPrincipalOperation();
+          const nextParentRelationship = await api.parentRelationshipStatus();
+          if (!isCurrent() || !principalOperationCurrent(ticket)) return;
+          setParentRelationship(nextParentRelationship);
+        } else {
+          setParentRelationship(null);
+        }
       } else {
         setOnboarding(null);
+        setParentRelationship(null);
       }
       const nextSnapshot = await api.snapshot();
       if (!isCurrent()) return;
@@ -224,6 +286,40 @@ function HomeAgentPanel() {
       if (!principalOperationCurrent(ticket)) return;
       setBindingBusy(false);
       setError(cause.message || "principal_binding_cancel_failed");
+    }
+  };
+
+  const stageParentRelationship = async () => {
+    const ticket = beginPrincipalOperation();
+    setParentRelationshipBusy(true);
+    setError("");
+    try {
+      const value = await api.stageParentRelationship();
+      if (!principalOperationCurrent(ticket)) return;
+      setParentRelationship(value);
+      setParentRelationshipBusy(false);
+    } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
+      setParentRelationshipBusy(false);
+      setError(cause.message || "parent_relationship_stage_failed");
+    }
+  };
+
+  const confirmParentRelationship = async () => {
+    const ticket = beginPrincipalOperation();
+    setParentRelationshipBusy(true);
+    setError("");
+    try {
+      await api.confirmParentRelationship(
+        parentRelationship?.proposal_id,
+        parentRelationship?.proposal_digest,
+      );
+      if (!principalOperationCurrent(ticket)) return;
+      await refresh();
+    } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
+      setParentRelationshipBusy(false);
+      setError(cause.message || "parent_relationship_confirmation_failed");
     }
   };
 
@@ -459,6 +555,17 @@ function HomeAgentPanel() {
           <p>Enabling either choice remains unavailable in this rollout mode.</p>
           {error && <p className="agent-error" role="alert">{error}</p>}
         </section>
+      )}
+
+      {!api.invoke
+        && onboarding?.parent_relationship_confirmation === "enabled"
+        && new Set(["rollout_contained", "ready"]).has(phase) && (
+        <ParentRelationshipCard
+          status={parentRelationship}
+          busy={parentRelationshipBusy}
+          onStage={stageParentRelationship}
+          onConfirm={confirmParentRelationship}
+        />
       )}
 
       {nativeInstallationMaterial && (

@@ -6,7 +6,10 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from pydantic import ValidationError
 
-from app.db import ParentRelationshipStageKernelResult
+from app.db import (
+    ParentRelationshipStageKernelResult,
+    ParentRelationshipStatusKernelResult,
+)
 from app.ids import uuid7
 from app.models import (
     ParentRelationshipConfirmation,
@@ -22,9 +25,7 @@ from app.parent_relationship_adapter import (
 def _preview(
     ceremony_id: uuid.UUID | None = None,
 ) -> ParentRelationshipPreviewRequest:
-    return ParentRelationshipPreviewRequest(
-        ceremony_id=ceremony_id or uuid7()
-    )
+    return ParentRelationshipPreviewRequest(ceremony_id=ceremony_id or uuid7())
 
 
 def _confirmation(
@@ -181,3 +182,60 @@ async def test_e5g_adapter_commits_only_the_typed_kernel_call() -> None:
     assert result.travel_greetings_enabled is False
     assert len(database.calls) == 1
     assert database.calls[0].authenticated_ha_user_id == "ha-user"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kernel_state", "expected_state", "expected_count"),
+    (
+        ("not_started", "not_started", 0),
+        ("ready_for_confirmation", "ready_for_confirmation", 0),
+        ("confirmed", "confirmed", 2),
+    ),
+)
+async def test_e5h_adapter_recovers_canonical_status(
+    kernel_state: str,
+    expected_state: str,
+    expected_count: int,
+) -> None:
+    now = datetime.now(UTC)
+    proposal_id = uuid7()
+
+    class FakeDatabase:
+        calls = []
+
+        async def status(self, ha_user_id):
+            self.calls.append(ha_user_id)
+            ready = kernel_state == "ready_for_confirmation"
+            confirmed = kernel_state == "confirmed"
+            return ParentRelationshipStatusKernelResult(
+                state=kernel_state,
+                proposal_id=proposal_id if ready else None,
+                proposal_digest="c" * 64 if ready else None,
+                expires_at=now + timedelta(minutes=15) if ready else None,
+                child_display_label="Marcelo" if ready else None,
+                parent_0_display_label="Amelia" if ready else None,
+                parent_0_review_code="ABCDEFGHJKLMNPQR" if ready else None,
+                parent_1_display_label="Marcelo Sr." if ready else None,
+                parent_1_review_code="STUVWXYZ23456789" if ready else None,
+                confirmed_at=now if confirmed else None,
+                fact_count=2 if confirmed else 0,
+            )
+
+    database = FakeDatabase()
+    adapter = AuthenticatedParentRelationshipAdapter(database)  # type: ignore[arg-type]
+    result = await adapter.status(ha_user_id="ha-user")
+
+    assert result.state == expected_state
+    assert result.fact_count == expected_count
+    assert result.location_memory_enabled is False
+    assert result.travel_greetings_enabled is False
+    assert database.calls == ["ha-user"]
+    if kernel_state == "ready_for_confirmation":
+        assert result.confirmation_statement == (
+            "Confirm that Amelia and Marcelo Sr. are parents of Marcelo."
+        )
+        assert [item.reviewed_display_label for item in result.candidates] == [
+            "Amelia",
+            "Marcelo Sr.",
+        ]

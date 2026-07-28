@@ -573,7 +573,11 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertNotIn("/api/agent/v1/principal-bindings", client)
         self.assertNotIn("phase3-readiness", client)
         self.assertNotIn("phase3-readiness", native)
-        self.assertNotIn("confirmParent", client)
+        self.assertIn("parentRelationshipStatus", client)
+        self.assertIn("stageParentRelationship", client)
+        self.assertIn("confirmParentRelationship", client)
+        self.assertNotIn("native_parent_relationship", native)
+        self.assertIn("Private relationship review", panel)
         self.assertIn("seven-day, 500-event record-only gate", panel)
         self.assertIn(
             "Location memory default: off. Travel greetings default: off.", panel

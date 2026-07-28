@@ -51,6 +51,7 @@ from .models import (
     ParentRelationshipConfirmationView,
     ParentRelationshipPreviewRequest,
     ParentRelationshipPreviewView,
+    ParentRelationshipStatusView,
     ParentPresenceView,
     PHASE3_FIXED_READINESS_BLOCKERS,
     Phase2ReadinessView,
@@ -92,7 +93,7 @@ OperatorBindingStore = Annotated[CoreStore, Depends(operator_binding_store_from)
 
 PHASE3_SCHEMA_REVISION = "0006a_worker_lease_arbitration"
 PRINCIPAL_BINDING_ADAPTER_REVISION = "0017_authenticated_binding_e5c"
-PARENT_RELATIONSHIP_ADAPTER_REVISION = "0020_parent_commit_e5f"
+PARENT_RELATIONSHIP_ADAPTER_REVISION = "0021_parent_status_e5h"
 LEGACY_IDENTITY_IMPORT_RETIRED = (
     "sequential legacy identity import is retired; use the reviewed atomic "
     "identity finalizer"
@@ -261,6 +262,15 @@ def semantic_router() -> APIRouter:
             principal_bound=binding_status == "bound",
             phase2_ready=phase2.ready_to_advance,
             phase2_blockers=phase2.blockers,
+            parent_relationship_confirmation=(
+                "enabled"
+                if (
+                    binding_status == "bound"
+                    and store.settings.readiness_migration
+                    == PARENT_RELATIONSHIP_ADAPTER_REVISION
+                )
+                else "disabled"
+            ),
         )
 
     @router.get("/operator-capabilities")
@@ -290,6 +300,26 @@ def semantic_router() -> APIRouter:
         # no principal/person/artifact integrity boundary, so even a valid HA
         # subject cannot reach a partial implementation.
         raise CapabilityDisabledError(SOURCE_ENTITY_BINDING_RETIRED)
+
+    @router.get(
+        "/parent-relationship-proposal",
+        response_model=ParentRelationshipStatusView,
+    )
+    async def parent_relationship_proposal_status(
+        request: Request,
+        service: Service,
+    ) -> ParentRelationshipStatusView:
+        if (
+            request.app.state.settings.readiness_migration
+            != PARENT_RELATIONSHIP_ADAPTER_REVISION
+        ):
+            raise CapabilityDisabledError(PARENT_RELATIONSHIP_CONFIRMATION_RETIRED)
+        adapter = request.app.state.parent_relationship_adapter
+        if adapter is None:
+            raise CapabilityDisabledError(
+                "parent relationship split-credential adapter is unavailable"
+            )
+        return await adapter.status(ha_user_id=service.ha_user_id)
 
     @router.post(
         "/principal-binding-proposal/confirm",
@@ -342,9 +372,7 @@ def semantic_router() -> APIRouter:
             request.app.state.settings.readiness_migration
             != PARENT_RELATIONSHIP_ADAPTER_REVISION
         ):
-            raise CapabilityDisabledError(
-                PARENT_RELATIONSHIP_CONFIRMATION_RETIRED
-            )
+            raise CapabilityDisabledError(PARENT_RELATIONSHIP_CONFIRMATION_RETIRED)
         adapter = request.app.state.parent_relationship_adapter
         if adapter is None:
             raise CapabilityDisabledError(
@@ -352,9 +380,7 @@ def semantic_router() -> APIRouter:
             )
         raw_body = await request.body()
         try:
-            value = ParentRelationshipPreviewRequest.model_validate_json(
-                raw_body
-            )
+            value = ParentRelationshipPreviewRequest.model_validate_json(raw_body)
         except ValidationError as exc:
             raise ValidationDomainError(
                 "parent relationship preview body is invalid"
@@ -376,9 +402,7 @@ def semantic_router() -> APIRouter:
             request.app.state.settings.readiness_migration
             != PARENT_RELATIONSHIP_ADAPTER_REVISION
         ):
-            raise CapabilityDisabledError(
-                PARENT_RELATIONSHIP_CONFIRMATION_RETIRED
-            )
+            raise CapabilityDisabledError(PARENT_RELATIONSHIP_CONFIRMATION_RETIRED)
         adapter = request.app.state.parent_relationship_adapter
         if adapter is None:
             raise CapabilityDisabledError(
@@ -386,9 +410,7 @@ def semantic_router() -> APIRouter:
             )
         raw_body = await request.body()
         try:
-            value = ParentRelationshipConfirmation.model_validate_json(
-                raw_body
-            )
+            value = ParentRelationshipConfirmation.model_validate_json(raw_body)
         except ValidationError as exc:
             raise ValidationDomainError(
                 "parent relationship confirmation body is invalid"
@@ -442,9 +464,7 @@ def semantic_router() -> APIRouter:
             )
         references = [
             ControlledJourneyReference(principal_id=principal_id, visit_id=visit_id)
-            for principal_id, visit_id in zip(
-                principal_ids, journey_ids, strict=True
-            )
+            for principal_id, visit_id in zip(principal_ids, journey_ids, strict=True)
         ]
         return await Phase2GateInspector(
             store.database,

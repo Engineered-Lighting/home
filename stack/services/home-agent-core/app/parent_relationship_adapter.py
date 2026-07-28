@@ -24,6 +24,7 @@ from .models import (
     ParentRelationshipPreviewCandidate,
     ParentRelationshipPreviewRequest,
     ParentRelationshipPreviewView,
+    ParentRelationshipStatusView,
 )
 
 
@@ -71,7 +72,9 @@ def _review_code(
         + b"\0"
         + str(ordinal).encode("ascii")
     ).digest()
-    return "".join(REVIEW_ALPHABET[value % len(REVIEW_ALPHABET)] for value in digest[:16])
+    return "".join(
+        REVIEW_ALPHABET[value % len(REVIEW_ALPHABET)] for value in digest[:16]
+    )
 
 
 def _stage_kernel_call(
@@ -146,10 +149,7 @@ def _commit_kernel_call(
         )
         for domain in domains
     )
-    if (
-        len(set(identifiers)) != len(identifiers)
-        or value.proposal_id in identifiers
-    ):
+    if len(set(identifiers)) != len(identifiers) or value.proposal_id in identifiers:
         raise ConflictError("parent confirmation identity derivation failed")
     return ParentRelationshipCommitKernelCall(
         authenticated_ha_user_id=ha_user_id,
@@ -175,17 +175,13 @@ def _commit_kernel_call(
 def _raise_stage_error(exc: DBAPIError) -> None:
     sqlstate = getattr(exc.orig, "sqlstate", None)
     if sqlstate == "22023":
-        raise ValidationDomainError(
-            "parent preview input is invalid"
-        ) from exc
+        raise ValidationDomainError("parent preview input is invalid") from exc
     if sqlstate == "42501":
         raise CapabilityDisabledError(
             "parent preview authority is unavailable"
         ) from exc
     if sqlstate in {"23505", "23514", "25000", "55000"}:
-        raise ConflictError(
-            "parent preview is not currently available"
-        ) from exc
+        raise ConflictError("parent preview is not currently available") from exc
     raise exc
 
 
@@ -194,16 +190,29 @@ def _raise_commit_error(exc: DBAPIError) -> None:
     if sqlstate == "P0002":
         raise NotFoundError("parent proposal does not exist") from exc
     if sqlstate == "22023":
-        raise ValidationDomainError(
-            "parent confirmation input is invalid"
-        ) from exc
+        raise ValidationDomainError("parent confirmation input is invalid") from exc
     if sqlstate == "42501":
         raise CapabilityDisabledError(
             "parent confirmation authority is unavailable"
         ) from exc
     if sqlstate in {"23505", "23514", "25000", "55000"}:
+        raise ConflictError("parent proposal is no longer confirmable") from exc
+    raise exc
+
+
+def _raise_status_error(exc: DBAPIError) -> None:
+    sqlstate = getattr(exc.orig, "sqlstate", None)
+    if sqlstate == "22023":
+        raise ValidationDomainError(
+            "parent relationship status input is invalid"
+        ) from exc
+    if sqlstate == "42501":
+        raise CapabilityDisabledError(
+            "parent relationship status authority is unavailable"
+        ) from exc
+    if sqlstate in {"23505", "23514", "25000", "55000"}:
         raise ConflictError(
-            "parent proposal is no longer confirmable"
+            "parent relationship status is not safely recoverable"
         ) from exc
     raise exc
 
@@ -263,15 +272,68 @@ class AuthenticatedParentRelationshipAdapter:
         for attempt in range(3):
             try:
                 committed_at = await self.database.commit(call)
-                return ParentRelationshipConfirmationView(
-                    confirmed_at=committed_at
-                )
+                return ParentRelationshipConfirmationView(confirmed_at=committed_at)
             except DBAPIError as exc:
                 sqlstate = getattr(exc.orig, "sqlstate", None)
                 if sqlstate in {"40001", "40P01"} and attempt < 2:
                     continue
                 _raise_commit_error(exc)
         raise ConflictError("parent confirmation did not commit")
+
+    async def status(
+        self,
+        *,
+        ha_user_id: str,
+    ) -> ParentRelationshipStatusView:
+        for attempt in range(3):
+            try:
+                recovered = await self.database.status(ha_user_id)
+                if recovered.state == "ready_for_confirmation":
+                    candidates = [
+                        ParentRelationshipPreviewCandidate(
+                            ordinal=0,
+                            reviewed_display_label=(
+                                recovered.parent_0_display_label or ""
+                            ),
+                            review_code=recovered.parent_0_review_code or "",
+                        ),
+                        ParentRelationshipPreviewCandidate(
+                            ordinal=1,
+                            reviewed_display_label=(
+                                recovered.parent_1_display_label or ""
+                            ),
+                            review_code=recovered.parent_1_review_code or "",
+                        ),
+                    ]
+                    return ParentRelationshipStatusView(
+                        state="ready_for_confirmation",
+                        proposal_id=recovered.proposal_id,
+                        proposal_digest=recovered.proposal_digest,
+                        expires_at=recovered.expires_at,
+                        child_display_label=recovered.child_display_label,
+                        candidates=candidates,
+                        confirmation_statement=(
+                            f"Confirm that "
+                            f"{candidates[0].reviewed_display_label} and "
+                            f"{candidates[1].reviewed_display_label} are "
+                            f"parents of {recovered.child_display_label}."
+                        ),
+                    )
+                if recovered.state == "confirmed":
+                    return ParentRelationshipStatusView(
+                        state="confirmed",
+                        confirmed_at=recovered.confirmed_at,
+                        fact_count=2,
+                    )
+                if recovered.state == "not_started":
+                    return ParentRelationshipStatusView(state="not_started")
+                raise ConflictError("parent relationship status is not recognized")
+            except DBAPIError as exc:
+                sqlstate = getattr(exc.orig, "sqlstate", None)
+                if sqlstate in {"40001", "40P01"} and attempt < 2:
+                    continue
+                _raise_status_error(exc)
+        raise ConflictError("parent relationship status did not recover")
 
     async def close(self) -> None:
         await self.database.close()

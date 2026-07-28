@@ -15,6 +15,7 @@ ADAPTER_PATH = (
 BFF_PATH = "stack/services/home-agent-bff/src/bff.mjs"
 STAGE_FUNCTION = "stage_authenticated_parent_relationship_e5e"
 COMMIT_FUNCTION = "commit_authenticated_parent_relationship_e5f"
+STATUS_FUNCTION = "recover_authenticated_parent_relationship_e5h"
 
 
 def read(path: str) -> str:
@@ -77,11 +78,12 @@ def test_e5g_database_pool_is_table_blind_and_kernel_only() -> None:
         for node in database.body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
-    assert methods == {"__init__", "stage", "commit", "close"}
+    assert methods == {"__init__", "stage", "commit", "status", "close"}
 
     for method_name, kernel_name in (
         ("stage", STAGE_FUNCTION),
         ("commit", COMMIT_FUNCTION),
+        ("status", STATUS_FUNCTION),
     ):
         body = source(
             DB_PATH,
@@ -103,7 +105,7 @@ def test_e5g_database_pool_is_table_blind_and_kernel_only() -> None:
 def test_e5g_core_routes_are_exact_revision_and_identity_gated() -> None:
     api = read(API_PATH)
     assert (
-        'PARENT_RELATIONSHIP_ADAPTER_REVISION = "0020_parent_commit_e5f"'
+        'PARENT_RELATIONSHIP_ADAPTER_REVISION = "0021_parent_status_e5h"'
         in api
     )
     routes = (
@@ -146,6 +148,22 @@ def test_e5g_core_routes_are_exact_revision_and_identity_gated() -> None:
             "actor_id",
         ):
             assert forbidden not in body
+
+    status_node = function(API_PATH, "parent_relationship_proposal_status")
+    status = source(API_PATH, status_node)
+    get_paths = {
+        ast.literal_eval(decorator.args[0])
+        for decorator in status_node.decorator_list
+        if isinstance(decorator, ast.Call)
+        and isinstance(decorator.func, ast.Attribute)
+        and decorator.func.attr == "get"
+        and decorator.args
+        and isinstance(decorator.args[0], ast.Constant)
+    }
+    assert get_paths == {"/parent-relationship-proposal"}
+    assert "readiness_migration" in status
+    assert "adapter.status(ha_user_id=service.ha_user_id)" in status
+    assert "request.body()" not in status
 
 
 def test_e5g_protocol_models_expose_no_semantic_identity_input() -> None:
@@ -227,6 +245,7 @@ def test_e5g_bff_is_browser_only_fresh_and_strict() -> None:
     assert "keys.length !== 1" in bff
     assert "keys.length !== 3" in bff
     assert "forcePrincipalCheck: isFreshIdentityRoute" in bff
+    assert "`GET ${PARENT_RELATIONSHIP_STAGE_PATH}`" in bff
 
 
 def test_e5g_uses_split_credential_and_remains_dormant_in_production() -> None:
@@ -242,4 +261,4 @@ def test_e5g_uses_split_credential_and_remains_dormant_in_production() -> None:
     assert 'DEPLOYABLE_MIGRATION_REVISION="0006a_worker_lease_arbitration"' in (
         entrypoint
     )
-    assert "0020_parent_commit_e5f" not in compose
+    assert "0021_parent_status_e5h" not in compose

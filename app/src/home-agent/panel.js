@@ -343,6 +343,31 @@ function containedPreferenceState(snapshot) {
     opt_out_enabled: snapshot?.capabilities?.preference_opt_out === "enabled"
   });
 }
+function ParentRelationshipCard({
+  status,
+  busy,
+  onStage,
+  onConfirm
+}) {
+  const recognized = new Set(["not_started", "ready_for_confirmation", "confirmed"]).has(status?.state);
+  return React.createElement("section", {
+    className: "agent-card",
+    "aria-live": "polite",
+    "aria-busy": busy
+  }, React.createElement("h2", null, "Private relationship review"), !recognized && React.createElement(React.Fragment, null, React.createElement("h3", null, "Relationship status unavailable"), React.createElement("p", null, "Core did not return a recognized, recoverable state. No relationship can be inferred or confirmed.")), status?.state === "not_started" && React.createElement(React.Fragment, null, React.createElement("p", null, "Review the two People records previously classified as Marcelo\xE2\u20AC\u2122s parents. Staging creates only a private 15-minute preview."), React.createElement("button", {
+    disabled: busy,
+    onClick: onStage
+  }, busy ? "Preparing reviewâ€¦" : "Review parent relationships")), status?.state === "ready_for_confirmation" && React.createElement(React.Fragment, null, React.createElement("h3", null, "Two reviewed relationships are ready"), React.createElement("p", null, status.confirmation_statement), React.createElement("dl", {
+    className: "agent-grid"
+  }, status.candidates?.map(candidate => React.createElement(React.Fragment, {
+    key: candidate.ordinal
+  }, React.createElement("dt", null, "Candidate ", candidate.ordinal + 1), React.createElement("dd", null, candidate.reviewed_display_label, " ", React.createElement("code", null, candidate.review_code)))), React.createElement("dt", null, "Preview expires"), React.createElement("dd", null, status.expires_at || "unavailable")), React.createElement("p", null, "This creates exactly two private ", React.createElement("code", null, "parent_of"), " facts. It does not assert ownership, residence, current presence, or permission to act."), React.createElement("button", {
+    disabled: busy,
+    onClick: onConfirm
+  }, busy ? "Confirming bothâ€¦" : "Confirm both parent relationships")), status?.state === "confirmed" && React.createElement(React.Fragment, null, React.createElement("h3", null, "Parent relationships confirmed"), React.createElement("p", null, "Core atomically committed exactly ", status.fact_count, " private relationship facts."), React.createElement("dl", {
+    className: "agent-grid"
+  }, React.createElement("dt", null, "Confirmed"), React.createElement("dd", null, status.confirmed_at || "unavailable"), React.createElement("dt", null, "Location memory"), React.createElement("dd", null, "off"), React.createElement("dt", null, "Travel greetings"), React.createElement("dd", null, "off"))));
+}
 function HomeAgentPanel() {
   const api = useMemo(() => new window.HomeAgentApi(""), []);
   const activeSubject = useRef(null);
@@ -356,6 +381,8 @@ function HomeAgentPanel() {
   const [onboarding, setOnboarding] = useState(null);
   const [bindingProposal, setBindingProposal] = useState(null);
   const [bindingBusy, setBindingBusy] = useState(false);
+  const [parentRelationship, setParentRelationship] = useState(null);
+  const [parentRelationshipBusy, setParentRelationshipBusy] = useState(false);
   const [snapshot, setSnapshot] = useState(null);
   const [containedPreferences, setContainedPreferences] = useState(null);
   const [relationship, setRelationship] = useState(null);
@@ -370,6 +397,8 @@ function HomeAgentPanel() {
     setOnboarding(null);
     setBindingProposal(null);
     setBindingBusy(false);
+    setParentRelationship(null);
+    setParentRelationshipBusy(false);
     setSnapshot(null);
     setContainedPreferences(null);
     setRelationship(null);
@@ -419,8 +448,17 @@ function HomeAgentPanel() {
           return;
         }
         setOnboarding(nextOnboarding);
+        if (nextOnboarding?.parent_relationship_confirmation === "enabled") {
+          const ticket = beginPrincipalOperation();
+          const nextParentRelationship = await api.parentRelationshipStatus();
+          if (!isCurrent() || !principalOperationCurrent(ticket)) return;
+          setParentRelationship(nextParentRelationship);
+        } else {
+          setParentRelationship(null);
+        }
       } else {
         setOnboarding(null);
+        setParentRelationship(null);
       }
       const nextSnapshot = await api.snapshot();
       if (!isCurrent()) return;
@@ -501,6 +539,35 @@ function HomeAgentPanel() {
       if (!principalOperationCurrent(ticket)) return;
       setBindingBusy(false);
       setError(cause.message || "principal_binding_cancel_failed");
+    }
+  };
+  const stageParentRelationship = async () => {
+    const ticket = beginPrincipalOperation();
+    setParentRelationshipBusy(true);
+    setError("");
+    try {
+      const value = await api.stageParentRelationship();
+      if (!principalOperationCurrent(ticket)) return;
+      setParentRelationship(value);
+      setParentRelationshipBusy(false);
+    } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
+      setParentRelationshipBusy(false);
+      setError(cause.message || "parent_relationship_stage_failed");
+    }
+  };
+  const confirmParentRelationship = async () => {
+    const ticket = beginPrincipalOperation();
+    setParentRelationshipBusy(true);
+    setError("");
+    try {
+      await api.confirmParentRelationship(parentRelationship?.proposal_id, parentRelationship?.proposal_digest);
+      if (!principalOperationCurrent(ticket)) return;
+      await refresh();
+    } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
+      setParentRelationshipBusy(false);
+      setError(cause.message || "parent_relationship_confirmation_failed");
     }
   };
   const propose = async () => {
@@ -707,7 +774,12 @@ function HomeAgentPanel() {
   }, "Disable stored travel greeting choice"), !containedPreferences?.location_memory && !containedPreferences?.travel_greetings && React.createElement("p", null, "No private location opt-in is stored."), React.createElement("p", null, "Enabling either choice remains unavailable in this rollout mode."), error && React.createElement("p", {
     className: "agent-error",
     role: "alert"
-  }, error)), nativeInstallationMaterial && React.createElement("section", {
+  }, error)), !api.invoke && onboarding?.parent_relationship_confirmation === "enabled" && new Set(["rollout_contained", "ready"]).has(phase) && React.createElement(ParentRelationshipCard, {
+    status: parentRelationship,
+    busy: parentRelationshipBusy,
+    onStage: stageParentRelationship,
+    onConfirm: confirmParentRelationship
+  }), nativeInstallationMaterial && React.createElement("section", {
     className: "agent-card"
   }, React.createElement("h2", null, "Public installation enrollment material"), React.createElement("p", null, "This public key material is not proof that enrollment is complete. A private operator must bind it offline to your exact Home Assistant user UUID."), React.createElement("pre", null, JSON.stringify(nativeInstallationMaterial, null, 2))), phase === "onboarding" && React.createElement("section", {
     className: "agent-card agent-warning",

@@ -71,6 +71,21 @@ class ParentRelationshipCommitKernelCall:
     receipt_edge_id_1: uuid.UUID
 
 
+@dataclass(frozen=True, slots=True)
+class ParentRelationshipStatusKernelResult:
+    state: str
+    proposal_id: uuid.UUID | None
+    proposal_digest: str | None
+    expires_at: datetime | None
+    child_display_label: str | None
+    parent_0_display_label: str | None
+    parent_0_review_code: str | None
+    parent_1_display_label: str | None
+    parent_1_review_code: str | None
+    confirmed_at: datetime | None
+    fact_count: int
+
+
 class PrincipalBindingCommitDatabase:
     """A commit-only pool whose first transaction statement is the E5b kernel."""
 
@@ -120,7 +135,7 @@ class PrincipalBindingCommitDatabase:
 
 
 class ParentRelationshipAuthorityDatabase:
-    """A table-blind pool exposing only the E5e and E5f kernels."""
+    """A table-blind pool exposing only reviewed parent-authority kernels."""
 
     def __init__(self, url: str) -> None:
         self.engine: AsyncEngine = create_async_engine(
@@ -141,33 +156,35 @@ class ParentRelationshipAuthorityDatabase:
             )
             async with connection.begin():
                 row = (
-                    await connection.execute(
-                        text(
-                            "SELECT * FROM identity."
-                            "stage_authenticated_parent_relationship_e5e("
-                            "CAST(:ha_user_id AS varchar),:request_id,"
-                            ":proposal_id,:operator_request_id,"
-                            ":proposal_edge_id_0,:proposal_edge_id_1,"
-                            "CAST(:review_code_0 AS varchar),"
-                            "CAST(:review_code_1 AS varchar))"
-                        ),
-                        {
-                            "ha_user_id": value.authenticated_ha_user_id,
-                            "request_id": value.request_id,
-                            "proposal_id": value.proposal_id,
-                            "operator_request_id": value.operator_request_id,
-                            "proposal_edge_id_0": value.proposal_edge_id_0,
-                            "proposal_edge_id_1": value.proposal_edge_id_1,
-                            "review_code_0": value.review_code_0,
-                            "review_code_1": value.review_code_1,
-                        },
+                    (
+                        await connection.execute(
+                            text(
+                                "SELECT * FROM identity."
+                                "stage_authenticated_parent_relationship_e5e("
+                                "CAST(:ha_user_id AS varchar),:request_id,"
+                                ":proposal_id,:operator_request_id,"
+                                ":proposal_edge_id_0,:proposal_edge_id_1,"
+                                "CAST(:review_code_0 AS varchar),"
+                                "CAST(:review_code_1 AS varchar))"
+                            ),
+                            {
+                                "ha_user_id": value.authenticated_ha_user_id,
+                                "request_id": value.request_id,
+                                "proposal_id": value.proposal_id,
+                                "operator_request_id": value.operator_request_id,
+                                "proposal_edge_id_0": value.proposal_edge_id_0,
+                                "proposal_edge_id_1": value.proposal_edge_id_1,
+                                "review_code_0": value.review_code_0,
+                                "review_code_1": value.review_code_1,
+                            },
+                        )
                     )
-                ).mappings().one()
+                    .mappings()
+                    .one()
+                )
         return ParentRelationshipStageKernelResult(**row)
 
-    async def commit(
-        self, value: ParentRelationshipCommitKernelCall
-    ) -> datetime:
+    async def commit(self, value: ParentRelationshipCommitKernelCall) -> datetime:
         async with self.engine.connect() as raw_connection:
             connection = await raw_connection.execution_options(
                 isolation_level="SERIALIZABLE"
@@ -197,9 +214,7 @@ class ParentRelationshipAuthorityDatabase:
                             "confirmation_artifact_id": (
                                 value.confirmation_artifact_id
                             ),
-                            "memory_transaction_id": (
-                                value.memory_transaction_id
-                            ),
+                            "memory_transaction_id": (value.memory_transaction_id),
                             "authority_receipt_id": value.authority_receipt_id,
                             "fact_id_0": value.fact_id_0,
                             "fact_version_id_0": value.fact_version_id_0,
@@ -219,6 +234,30 @@ class ParentRelationshipAuthorityDatabase:
                     )
                 ).one()
         return row.committed_at
+
+    async def status(
+        self, authenticated_ha_user_id: str
+    ) -> ParentRelationshipStatusKernelResult:
+        async with self.engine.connect() as raw_connection:
+            connection = await raw_connection.execution_options(
+                isolation_level="SERIALIZABLE"
+            )
+            async with connection.begin():
+                row = (
+                    (
+                        await connection.execute(
+                            text(
+                                "SELECT * FROM identity."
+                                "recover_authenticated_parent_relationship_e5h("
+                                "CAST(:ha_user_id AS varchar))"
+                            ),
+                            {"ha_user_id": authenticated_ha_user_id},
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+        return ParentRelationshipStatusKernelResult(**row)
 
     async def close(self) -> None:
         await self.engine.dispose()
@@ -278,9 +317,8 @@ class Database:
                         {"principal_id": str(principal_id)},
                     )
                 if ha_user_id is not None:
-                    if (
-                        not 1 <= len(ha_user_id) <= 64
-                        or any(ord(character) < 32 for character in ha_user_id)
+                    if not 1 <= len(ha_user_id) <= 64 or any(
+                        ord(character) < 32 for character in ha_user_id
                     ):
                         raise ValueError("HA user ID is invalid for transaction scope")
                     await connection.execute(

@@ -314,8 +314,8 @@ def test_hosted_gate_exercises_real_secret_lifecycle_and_compose_render() -> Non
     )
     assert workflow.index("Exercise E4 additive secret lifecycle") < (
         workflow.index(
-            "Run isolated PostgreSQL 17 E1/E2/E3/E4/E5a/E5b authority gate"
-        )
+                "Run isolated PostgreSQL 17 E1/E2/E3/E4/E5a/E5b/E5c authority gate"
+            )
     )
 
 

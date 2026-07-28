@@ -3297,6 +3297,7 @@ def _install_shared_write_fence() -> None:
         REVOKE ALL ON FUNCTION {FENCE_FUNCTION},
           {FENCE_TRIGGER_FUNCTION}
           FROM PUBLIC, home_agent_api, home_agent_binding_operator,
+          home_agent_binding_committer,
           home_agent_ingest, home_agent_worker, home_agent_erasure,
           home_agent_rollout, home_agent_backup, home_agent_identity_migration,
           home_agent_identity_kernel, {FINALIZER_ROLE}, {KERNEL_ROLE};
@@ -3381,7 +3382,8 @@ def _install_function_and_acl() -> None:
         SET LOCAL ROLE {KERNEL_ROLE};
         REVOKE ALL ON FUNCTION {FUNCTION}
           FROM PUBLIC, home_agent_owner, home_agent_api,
-          home_agent_binding_operator, home_agent_ingest, home_agent_worker,
+          home_agent_binding_operator, home_agent_binding_committer,
+          home_agent_ingest, home_agent_worker,
           home_agent_erasure, home_agent_rollout, home_agent_backup,
           home_agent_identity_migration, home_agent_identity_kernel,
           {KERNEL_ROLE}, {FINALIZER_ROLE};
@@ -3973,13 +3975,15 @@ def downgrade() -> None:
         SET LOCAL ROLE {KERNEL_ROLE};
         REVOKE ALL ON FUNCTION {FUNCTION}
           FROM PUBLIC, home_agent_owner, home_agent_api,
-          home_agent_binding_operator, home_agent_ingest, home_agent_worker,
+          home_agent_binding_operator, home_agent_binding_committer,
+          home_agent_ingest, home_agent_worker,
           home_agent_erasure, home_agent_rollout, home_agent_backup,
           home_agent_identity_migration, home_agent_identity_kernel,
           {KERNEL_ROLE}, {FINALIZER_ROLE};
         RESET ROLE;
         REVOKE ALL ON FUNCTION {FENCE_FUNCTION}, {FENCE_TRIGGER_FUNCTION}
           FROM PUBLIC, home_agent_api, home_agent_binding_operator,
+          home_agent_binding_committer,
           home_agent_ingest, home_agent_worker, home_agent_erasure,
           home_agent_rollout, home_agent_backup,
           home_agent_identity_migration, home_agent_identity_kernel,

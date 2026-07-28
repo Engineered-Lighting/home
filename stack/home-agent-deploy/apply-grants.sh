@@ -537,6 +537,7 @@ BEGIN
        AND NOT attribute.attisdropped;
     FOREACH target_role IN ARRAY ARRAY[
       'PUBLIC', 'home_agent_api', 'home_agent_binding_operator',
+      'home_agent_binding_committer',
       'home_agent_ingest', 'home_agent_worker', 'home_agent_erasure',
       'home_agent_rollout', 'home_agent_backup',
       'home_agent_identity_migration', 'home_agent_identity_kernel',
@@ -598,6 +599,7 @@ BEGIN
     EXECUTE 'REVOKE ALL PRIVILEGES ON TABLE '
       'operations.reviewed_identity_migration_erasure_operations '
       'FROM PUBLIC, home_agent_api, home_agent_binding_operator, '
+      'home_agent_binding_committer, '
       'home_agent_ingest, home_agent_worker, home_agent_erasure, '
       'home_agent_rollout, home_agent_backup, '
       'home_agent_identity_migration, home_agent_identity_kernel, '
@@ -706,6 +708,7 @@ BEGIN
     EXECUTE 'REVOKE ALL ON FUNCTION '
       'operations.reviewed_identity_migration_capabilities() '
       'FROM PUBLIC, home_agent_api, home_agent_binding_operator, '
+      'home_agent_binding_committer, '
       'home_agent_ingest, home_agent_worker, home_agent_erasure, '
       'home_agent_rollout, home_agent_backup, home_agent_identity_kernel, '
       'home_agent_identity_migration, home_agent_identity_finalizer, '
@@ -717,6 +720,7 @@ BEGIN
     EXECUTE 'REVOKE ALL ON FUNCTION '
       'operations.register_reviewed_identity_migration(jsonb) '
       'FROM PUBLIC, home_agent_api, home_agent_binding_operator, '
+      'home_agent_binding_committer, '
       'home_agent_ingest, home_agent_worker, home_agent_erasure, '
       'home_agent_rollout, home_agent_backup, home_agent_identity_kernel, '
       'home_agent_identity_migration, home_agent_identity_finalizer, '
@@ -728,6 +732,7 @@ BEGIN
     EXECUTE 'REVOKE ALL ON FUNCTION '
       'operations.bump_reviewed_identity_migration_replay_guard() '
       'FROM PUBLIC, home_agent_api, home_agent_binding_operator, '
+      'home_agent_binding_committer, '
       'home_agent_ingest, home_agent_worker, home_agent_erasure, '
       'home_agent_rollout, home_agent_backup, home_agent_identity_kernel, '
       'home_agent_identity_migration, home_agent_identity_finalizer, '
@@ -978,6 +983,7 @@ BEGIN
       'operations.reviewed_identity_migration_capabilities(), '
       'operations.register_reviewed_identity_migration(jsonb) '
       'FROM PUBLIC, home_agent_api, home_agent_binding_operator, '
+      'home_agent_binding_committer, '
       'home_agent_ingest, home_agent_worker, home_agent_erasure, '
       'home_agent_rollout, home_agent_backup, home_agent_identity_kernel, '
       'home_agent_identity_migration, home_agent_identity_finalizer, '

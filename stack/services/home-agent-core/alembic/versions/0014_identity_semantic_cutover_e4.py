@@ -1055,6 +1055,7 @@ ALL_REVOKED_ROLES = (
     "PUBLIC",
     "home_agent_api",
     "home_agent_binding_operator",
+    "home_agent_binding_committer",
     "home_agent_ingest",
     "home_agent_worker",
     "home_agent_erasure",
@@ -1452,7 +1453,8 @@ def _install_function() -> None:
         AS $e4${FUNCTION_BODY}$e4$;
         REVOKE ALL ON FUNCTION {FUNCTION}
           FROM PUBLIC, home_agent_owner, home_agent_api,
-          home_agent_binding_operator, home_agent_ingest, home_agent_worker,
+          home_agent_binding_operator, home_agent_binding_committer,
+          home_agent_ingest, home_agent_worker,
           home_agent_erasure, home_agent_rollout, home_agent_backup,
           home_agent_identity_migration, home_agent_identity_kernel,
           {KERNEL_ROLE}, {FINALIZER_ROLE};
@@ -1695,7 +1697,8 @@ def downgrade() -> None:
         SET LOCAL ROLE {KERNEL_ROLE};
         REVOKE ALL ON FUNCTION {FUNCTION}
           FROM PUBLIC, home_agent_owner, home_agent_api,
-          home_agent_binding_operator, home_agent_ingest, home_agent_worker,
+          home_agent_binding_operator, home_agent_binding_committer,
+          home_agent_ingest, home_agent_worker,
           home_agent_erasure, home_agent_rollout, home_agent_backup,
           home_agent_identity_migration, home_agent_identity_kernel,
           {KERNEL_ROLE}, {FINALIZER_ROLE};

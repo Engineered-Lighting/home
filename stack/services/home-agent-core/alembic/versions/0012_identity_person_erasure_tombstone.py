@@ -43,6 +43,7 @@ RUNTIME_SUPPRESSION_ROLES = (
 
 ALL_MANAGED_ROLES = (
     *RUNTIME_SUPPRESSION_ROLES,
+    "home_agent_binding_committer",
     "home_agent_identity_migration",
     "home_agent_identity_kernel",
     "home_agent_identity_finalizer",

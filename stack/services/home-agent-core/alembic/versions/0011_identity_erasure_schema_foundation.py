@@ -54,6 +54,7 @@ FOUNDATION_TABLES = (PERSON_SCOPE, SUBJECT_BLOCK, ERASURE_RECEIPT)
 RUNTIME_AND_OPERATOR_ROLES = (
     "home_agent_api",
     "home_agent_binding_operator",
+    "home_agent_binding_committer",
     "home_agent_ingest",
     "home_agent_worker",
     "home_agent_erasure",
@@ -490,6 +491,12 @@ def _admit_exact_predecessor() -> None:
                 ('home_agent_binding_operator', true, false, -1,
                  NULL::timestamptz,
                  ARRAY['statement_timeout=15s']::text[]),
+                ('home_agent_binding_committer', true, false, 8,
+                 NULL::timestamptz, ARRAY[
+                   'statement_timeout=15s','lock_timeout=5s',
+                   'idle_in_transaction_session_timeout=15s',
+                   'transaction_timeout=30s'
+                 ]::text[]),
                 ('home_agent_ingest', true, false, -1, NULL::timestamptz,
                  ARRAY['statement_timeout=20s']::text[]),
                 ('home_agent_worker', true, false, -1, NULL::timestamptz,
@@ -586,7 +593,8 @@ def _admit_exact_predecessor() -> None:
                 JOIN pg_catalog.pg_roles AS grantor ON grantor.oid = edge.grantor
                WHERE parent.rolname = ANY (ARRAY[
                        'home_agent_owner','home_agent_api',
-                       'home_agent_binding_operator','home_agent_ingest',
+                       'home_agent_binding_operator',
+                       'home_agent_binding_committer','home_agent_ingest',
                        'home_agent_worker','home_agent_erasure',
                        'home_agent_rollout','home_agent_backup',
                        'home_agent_identity_migration',
@@ -597,7 +605,8 @@ def _admit_exact_predecessor() -> None:
                      ]::name[])
                   OR member.rolname = ANY (ARRAY[
                        'home_agent_owner','home_agent_api',
-                       'home_agent_binding_operator','home_agent_ingest',
+                       'home_agent_binding_operator',
+                       'home_agent_binding_committer','home_agent_ingest',
                        'home_agent_worker','home_agent_erasure',
                        'home_agent_rollout','home_agent_backup',
                        'home_agent_identity_migration',
@@ -633,6 +642,7 @@ def _admit_exact_predecessor() -> None:
                WHERE dependency.deptype = 'o'
                  AND role_row.rolname = ANY (ARRAY[
                    'home_agent_api','home_agent_binding_operator',
+                   'home_agent_binding_committer',
                    'home_agent_ingest','home_agent_worker',
                    'home_agent_erasure','home_agent_rollout',
                    'home_agent_backup','home_agent_identity_migration',
@@ -933,6 +943,7 @@ def _admit_exact_predecessor() -> None:
             SELECT 1
               FROM pg_catalog.unnest(ARRAY[
                 'home_agent_api','home_agent_binding_operator',
+                'home_agent_binding_committer',
                 'home_agent_ingest','home_agent_worker','home_agent_erasure',
                 'home_agent_rollout','home_agent_backup'
               ]::text[]) AS runtime(role_name)
@@ -955,7 +966,8 @@ def _admit_exact_predecessor() -> None:
           ) OR EXISTS (
             SELECT 1
               FROM pg_catalog.unnest(ARRAY[
-                'home_agent_binding_operator','home_agent_ingest',
+                'home_agent_binding_operator','home_agent_binding_committer',
+                'home_agent_ingest',
                 'home_agent_worker','home_agent_erasure','home_agent_rollout',
                 'home_agent_backup'
               ]::text[]) AS runtime(role_name)
@@ -1056,7 +1068,8 @@ def _admit_exact_predecessor() -> None:
              WHERE pg_catalog.left(role_row.rolname::text, 3) <> 'pg_'
                AND role_row.rolname <> ALL (ARRAY[
                  'home_agent_owner','home_agent_api',
-                 'home_agent_binding_operator','home_agent_ingest',
+                 'home_agent_binding_operator',
+                 'home_agent_binding_committer','home_agent_ingest',
                  'home_agent_worker','home_agent_erasure',
                  'home_agent_rollout','home_agent_backup',
                  'home_agent_identity_migration',

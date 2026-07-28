@@ -315,6 +315,33 @@ async def _cleanup(
     staged: StagedBinding,
 ) -> None:
     async with owner_engine.begin() as connection:
+        committed_graph = (
+            (
+                await connection.execute(
+                    text(
+                        "SELECT proposal.result_principal_id, "
+                        "proposal.confirmation_artifact_id "
+                        "FROM identity.principal_binding_proposals proposal "
+                        "WHERE proposal.proposal_id=:proposal_id"
+                    ),
+                    {"proposal_id": staged.proposal_id},
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        committed_principal_id = (
+            committed_graph["result_principal_id"]
+            if committed_graph
+            and committed_graph["result_principal_id"] is not None
+            else staged.principal_id
+        )
+        committed_artifact_id = (
+            committed_graph["confirmation_artifact_id"]
+            if committed_graph
+            and committed_graph["confirmation_artifact_id"] is not None
+            else staged.artifact_id
+        )
         # The owner policy is intentionally SELECT-only on immutable receipts;
         # the disposable gate briefly removes FORCE solely for test teardown.
         await connection.execute(
@@ -340,9 +367,9 @@ async def _cleanup(
         await connection.execute(
             text(
                 "DELETE FROM identity.ha_user_bindings "
-                "WHERE binding_id=:binding_id"
+                "WHERE proposal_id=:proposal_id"
             ),
-            {"binding_id": staged.binding_id},
+            {"proposal_id": staged.proposal_id},
         )
         await connection.execute(
             text(
@@ -357,7 +384,7 @@ async def _cleanup(
                 "DELETE FROM privacy.artifact_registry "
                 "WHERE artifact_id=:artifact_id"
             ),
-            {"artifact_id": staged.artifact_id},
+            {"artifact_id": committed_artifact_id},
         )
         await connection.execute(
             text(
@@ -371,14 +398,14 @@ async def _cleanup(
                 "DELETE FROM identity.confirmation_artifacts "
                 "WHERE artifact_id=:artifact_id"
             ),
-            {"artifact_id": staged.artifact_id},
+            {"artifact_id": committed_artifact_id},
         )
         await connection.execute(
             text(
                 "DELETE FROM identity.principals "
                 "WHERE principal_id=:principal_id"
             ),
-            {"principal_id": staged.principal_id},
+            {"principal_id": committed_principal_id},
         )
         await connection.execute(
             text(

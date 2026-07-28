@@ -6718,7 +6718,7 @@ DECLARE
   expected_e5b_catalog_sha256 constant text :=
     'PENDING_E5B_CATALOG_SHA256';
   expected_function_body_sha256 constant text :=
-    '4186667d8ef1ce260c1e93ad6e30bafdcd159a6c7827b79e2fc06c777f9092cf';
+    '5bff739f5252d94db6d65453cf40a9071a2612f758dc8f9ce3d956b84113f9b9';
   function_name_count integer;
   kernel_owned_object_count integer;
   owner_oid oid;

@@ -406,9 +406,10 @@ async def test_e5b_catalog_role_function_and_rls_contract() -> None:
                         "NOT rolsuper, NOT rolcreatedb, NOT rolcreaterole, "
                         "NOT rolreplication, NOT rolbypassrls, "
                         "rolconnlimit=0, rolvaliduntil IS NULL, "
-                        "rolconfig IS NULL, rolpassword IS NULL "
-                        "FROM pg_catalog.pg_roles "
-                        "WHERE rolname='home_agent_identity_binding_kernel'"
+                        "r.rolconfig IS NULL, a.rolpassword IS NULL "
+                        "FROM pg_catalog.pg_roles AS r "
+                        "JOIN pg_catalog.pg_authid AS a ON a.oid=r.oid "
+                        "WHERE r.rolname='home_agent_identity_binding_kernel'"
                     )
                 )
             ).one()

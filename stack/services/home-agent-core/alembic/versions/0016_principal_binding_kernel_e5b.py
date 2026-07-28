@@ -393,7 +393,7 @@ BEGIN
     ',"display_name":'
       || pg_catalog.to_jsonb(e5b_person.display_name)::text
     || ',"legacy_source_sha256":'
-      || pg_catalog.coalesce(
+      || COALESCE(
            pg_catalog.to_jsonb(e5b_person.legacy_source_sha256)::text,
            'null'
          )
@@ -404,7 +404,7 @@ BEGIN
     || ',"status":'
       || pg_catalog.to_jsonb(e5b_person.status)::text
     || ',"status_source_sha256":'
-      || pg_catalog.coalesce(
+      || COALESCE(
            pg_catalog.to_jsonb(e5b_person.status_source_sha256)::text,
            'null'
          )

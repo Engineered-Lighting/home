@@ -1,4 +1,4 @@
-name: home agent E1/E2/E3/E4/E5a/E5b/E5c/E5d PostgreSQL gate
+name: home agent E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e PostgreSQL gate
 
 on:
   pull_request:
@@ -16,6 +16,7 @@ on:
       - "stack/home-agent-deploy/preflight.sh"
       - "stack/home-agent-deploy/preflight-identity-cutover-roles.sh"
       - "stack/home-agent-deploy/provision-identity-binding-kernel-role.sh"
+      - "stack/home-agent-deploy/provision-parent-relationship-kernel-role.sh"
       - "stack/home-agent-deploy/provision-identity-cutover-roles.sh"
       - "stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh"
       - "stack/home-agent-deploy/identity-api-acl.sql"
@@ -54,6 +55,7 @@ on:
       - "stack/home-agent-deploy/preflight.sh"
       - "stack/home-agent-deploy/preflight-identity-cutover-roles.sh"
       - "stack/home-agent-deploy/provision-identity-binding-kernel-role.sh"
+      - "stack/home-agent-deploy/provision-parent-relationship-kernel-role.sh"
       - "stack/home-agent-deploy/provision-identity-cutover-roles.sh"
       - "stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh"
       - "stack/home-agent-deploy/identity-api-acl.sql"
@@ -102,7 +104,7 @@ jobs:
           RUNNER_TEMP="$RUNNER_TEMP"
           sh stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh
 
-      - name: Run isolated PostgreSQL 17 E1/E2/E3/E4/E5a/E5b/E5c/E5d authority gate
+      - name: Run isolated PostgreSQL 17 E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e authority gate
         env:
           HOME_AGENT_E1_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: >-

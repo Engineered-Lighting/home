@@ -127,6 +127,37 @@ BEGIN
 END
 $identity_principal_binding_e5b_function_quarantine$;
 
+-- E5e is a SECURITY DEFINER staging boundary. Remove every callable path in
+-- its own committed statement; only the exact terminal-revision admission at
+-- the end of this script may restore the table-blind committer's EXECUTE.
+DO $parent_relationship_e5e_function_quarantine$
+DECLARE
+  grantee_sql text;
+  stage_function regprocedure := pg_catalog.to_regprocedure(
+    'identity.stage_authenticated_parent_relationship_e5e('
+    'character varying,uuid,uuid,uuid,uuid,uuid,'
+    'character varying,character varying)'
+  );
+  target_role text;
+BEGIN
+  IF stage_function IS NULL THEN
+    RETURN;
+  END IF;
+  FOR target_role IN
+    SELECT role_row.rolname FROM pg_catalog.pg_roles AS role_row
+    UNION ALL SELECT 'PUBLIC'
+  LOOP
+    grantee_sql := CASE WHEN target_role = 'PUBLIC'
+      THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END;
+    EXECUTE pg_catalog.format(
+      'REVOKE ALL PRIVILEGES ON FUNCTION %s FROM %s CASCADE',
+      stage_function,
+      grantee_sql
+    );
+  END LOOP;
+END
+$parent_relationship_e5e_function_quarantine$;
+
 ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity
   REVOKE ALL PRIVILEGES ON TABLES FROM home_agent_api;
 ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity
@@ -337,18 +368,20 @@ BEGIN
   END LOOP;
 END
 $identity_principal_binding_e5b_receipt_early_quarantine$;
--- E5d is persistence groundwork only. Scrub every table and column privilege
--- from all non-owner roles after the generic operations grants. A later
--- reviewed kernel revision may grant narrowly scoped function execution, but
--- no login role may read or mutate these relations directly.
+-- E5d is owner-only persistence groundwork. E5e adds one NOLOGIN staging
+-- kernel; every login role remains table-blind and receipt tables remain
+-- owner-only. Scrub stale grants immediately after generic operations grants.
 DO $parent_relationship_e5d_early_quarantine$
 DECLARE
+  current_revision text;
   grantee_sql text;
   target_columns text;
   target_relation regclass;
   target_role text;
   target_table text;
 BEGIN
+  SELECT version_num INTO STRICT current_revision
+    FROM public.alembic_version;
   FOREACH target_table IN ARRAY ARRAY[
     'identity.parent_relationship_requests',
     'identity.parent_relationship_proposals',
@@ -374,6 +407,16 @@ BEGIN
       SELECT role_row.rolname
         FROM pg_catalog.pg_roles AS role_row
        WHERE role_row.rolname <> 'home_agent_owner'
+         AND NOT (
+           current_revision = '0019_parent_stage_e5e'
+           AND role_row.rolname =
+               'home_agent_parent_relationship_kernel'
+           AND target_table IN (
+             'identity.parent_relationship_requests',
+             'identity.parent_relationship_proposals',
+             'identity.parent_relationship_proposal_edges'
+           )
+         )
       UNION ALL SELECT 'PUBLIC'
     LOOP
       grantee_sql := CASE WHEN target_role = 'PUBLIC'
@@ -2288,7 +2331,8 @@ DECLARE
     '0015_current_authority_e5a',
     '0016_principal_binding_e5b',
     '0017_authenticated_binding_e5c',
-    '0018_parent_relationship_e5d'
+    '0018_parent_relationship_e5d',
+    '0019_parent_stage_e5e'
   ]::text[];
   pre_e3_revisions constant text[] := ARRAY[
     '0001_greenfield_core',
@@ -2317,7 +2361,8 @@ DECLARE
     '0015_current_authority_e5a',
     '0016_principal_binding_e5b',
     '0017_authenticated_binding_e5c',
-    '0018_parent_relationship_e5d'
+    '0018_parent_relationship_e5d',
+    '0019_parent_stage_e5e'
   ]::text[];
   expected_e3_catalog_sha256 constant text :=
     '123326a4620d3dd123773819d95255e40813a5a949f406570252ff1f7031f29a';
@@ -2690,7 +2735,8 @@ BEGIN
        '0015_current_authority_e5a',
        '0016_principal_binding_e5b',
        '0017_authenticated_binding_e5c',
-       '0018_parent_relationship_e5d'
+       '0018_parent_relationship_e5d',
+       '0019_parent_stage_e5e'
      ) THEN
     SELECT oid INTO STRICT authority_kernel_oid
       FROM pg_catalog.pg_roles
@@ -2699,7 +2745,8 @@ BEGIN
   IF current_revision IN (
        '0016_principal_binding_e5b',
        '0017_authenticated_binding_e5c',
-       '0018_parent_relationship_e5d'
+       '0018_parent_relationship_e5d',
+       '0019_parent_stage_e5e'
      ) THEN
     SELECT oid INTO STRICT binding_kernel_oid
       FROM pg_catalog.pg_roles
@@ -3188,7 +3235,8 @@ BEGIN
        '0015_current_authority_e5a',
        '0016_principal_binding_e5b',
        '0017_authenticated_binding_e5c',
-       '0018_parent_relationship_e5d'
+       '0018_parent_relationship_e5d',
+       '0019_parent_stage_e5e'
      )
      AND (
        (
@@ -3270,7 +3318,8 @@ BEGIN
   IF current_revision IN (
        '0016_principal_binding_e5b',
        '0017_authenticated_binding_e5c',
-       '0018_parent_relationship_e5d'
+       '0018_parent_relationship_e5d',
+       '0019_parent_stage_e5e'
      )
      AND (
        NOT EXISTS (
@@ -3362,7 +3411,8 @@ BEGIN
                 '0015_current_authority_e5a',
                 '0016_principal_binding_e5b',
                 '0017_authenticated_binding_e5c',
-                '0018_parent_relationship_e5d'
+                '0018_parent_relationship_e5d',
+                '0019_parent_stage_e5e'
               ) THEN 6
          WHEN current_revision = ANY (reviewed_e4_overlay_revisions) THEN 5
          ELSE 4
@@ -3604,7 +3654,8 @@ BEGIN
                      current_revision IN (
                        '0016_principal_binding_e5b',
                        '0017_authenticated_binding_e5c',
-                       '0018_parent_relationship_e5d'
+                       '0018_parent_relationship_e5d',
+                       '0019_parent_stage_e5e'
                      )
                      AND relation.oid =
                            'operations.'
@@ -3642,7 +3693,8 @@ BEGIN
                      current_revision IN (
                        '0016_principal_binding_e5b',
                        '0017_authenticated_binding_e5c',
-                       '0018_parent_relationship_e5d'
+                       '0018_parent_relationship_e5d',
+                       '0019_parent_stage_e5e'
                      )
                      AND relation.oid =
                            'operations.'
@@ -3703,7 +3755,8 @@ BEGIN
                             '0015_current_authority_e5a',
                             '0016_principal_binding_e5b',
                             '0017_authenticated_binding_e5c',
-                            '0018_parent_relationship_e5d'
+                            '0018_parent_relationship_e5d',
+                            '0019_parent_stage_e5e'
                          )
                          AND policy_row.polname = e5_select_policy
                           AND policy_row.polroles =
@@ -3713,7 +3766,8 @@ BEGIN
                           current_revision IN (
                             '0016_principal_binding_e5b',
                             '0017_authenticated_binding_e5c',
-                            '0018_parent_relationship_e5d'
+                            '0018_parent_relationship_e5d',
+                            '0019_parent_stage_e5e'
                           )
                           AND policy_row.polname = e5b_select_policy
                           AND policy_row.polroles =
@@ -3772,7 +3826,8 @@ BEGIN
                        '0015_current_authority_e5a',
                        '0016_principal_binding_e5b',
                        '0017_authenticated_binding_e5c',
-                       '0018_parent_relationship_e5d'
+                       '0018_parent_relationship_e5d',
+                       '0019_parent_stage_e5e'
                      )
                      AND policy_row.polname = e5_run_lock_policy
                      AND policy_row.polrelid =
@@ -4570,7 +4625,8 @@ DECLARE
     '0015_current_authority_e5a',
     '0016_principal_binding_e5b',
     '0017_authenticated_binding_e5c',
-    '0018_parent_relationship_e5d'
+    '0018_parent_relationship_e5d',
+    '0019_parent_stage_e5e'
   ]::text[];
   role_count integer;
 BEGIN
@@ -4608,7 +4664,8 @@ BEGIN
        '0015_current_authority_e5a',
        '0016_principal_binding_e5b',
        '0017_authenticated_binding_e5c',
-       '0018_parent_relationship_e5d'
+       '0018_parent_relationship_e5d',
+       '0019_parent_stage_e5e'
      ) THEN
     SELECT oid INTO STRICT authority_kernel_oid
       FROM pg_catalog.pg_roles
@@ -4617,7 +4674,8 @@ BEGIN
   IF current_revision IN (
        '0016_principal_binding_e5b',
        '0017_authenticated_binding_e5c',
-       '0018_parent_relationship_e5d'
+       '0018_parent_relationship_e5d',
+       '0019_parent_stage_e5e'
      ) THEN
     SELECT oid INTO STRICT binding_kernel_oid
       FROM pg_catalog.pg_roles
@@ -4744,7 +4802,8 @@ BEGIN
        '0015_current_authority_e5a',
        '0016_principal_binding_e5b',
        '0017_authenticated_binding_e5c',
-       '0018_parent_relationship_e5d'
+       '0018_parent_relationship_e5d',
+       '0019_parent_stage_e5e'
      )
      AND (
        (
@@ -4796,7 +4855,8 @@ BEGIN
   IF current_revision IN (
        '0016_principal_binding_e5b',
        '0017_authenticated_binding_e5c',
-       '0018_parent_relationship_e5d'
+       '0018_parent_relationship_e5d',
+       '0019_parent_stage_e5e'
      )
      AND (
        NOT EXISTS (
@@ -4939,7 +4999,8 @@ BEGIN
                                          current_revision IN (
                                            '0016_principal_binding_e5b',
                                            '0017_authenticated_binding_e5c',
-                                           '0018_parent_relationship_e5d'
+                                           '0018_parent_relationship_e5d',
+                                           '0019_parent_stage_e5e'
                                          )
                                          AND target.target_relation =
                                                promotion_table
@@ -5169,7 +5230,8 @@ BEGIN
                             '0015_current_authority_e5a',
                             '0016_principal_binding_e5b',
                             '0017_authenticated_binding_e5c',
-                            '0018_parent_relationship_e5d'
+                            '0018_parent_relationship_e5d',
+                            '0019_parent_stage_e5e'
                           )
                           AND policy_row.polname = e5_select_policy
                           AND policy_row.polrelid IN (
@@ -5186,7 +5248,8 @@ BEGIN
                           current_revision IN (
                             '0016_principal_binding_e5b',
                             '0017_authenticated_binding_e5c',
-                            '0018_parent_relationship_e5d'
+                            '0018_parent_relationship_e5d',
+                            '0019_parent_stage_e5e'
                           )
                           AND policy_row.polname = e5b_select_policy
                           AND policy_row.polrelid = promotion_table
@@ -5880,7 +5943,8 @@ DECLARE
     '0015_current_authority_e5a',
     '0016_principal_binding_e5b',
     '0017_authenticated_binding_e5c',
-    '0018_parent_relationship_e5d'
+    '0018_parent_relationship_e5d',
+    '0019_parent_stage_e5e'
   ]::text[];
   rls_relations constant text[] := ARRAY[
     'operations.semantic_authority_promotions',
@@ -5952,7 +6016,8 @@ BEGIN
   IF current_revision IN (
        '0016_principal_binding_e5b',
        '0017_authenticated_binding_e5c',
-       '0018_parent_relationship_e5d'
+       '0018_parent_relationship_e5d',
+       '0019_parent_stage_e5e'
      ) THEN
     SELECT oid INTO STRICT binding_kernel_oid
       FROM pg_catalog.pg_roles
@@ -6114,7 +6179,8 @@ BEGIN
   IF current_revision IN (
        '0016_principal_binding_e5b',
        '0017_authenticated_binding_e5c',
-       '0018_parent_relationship_e5d'
+       '0018_parent_relationship_e5d',
+       '0019_parent_stage_e5e'
      )
      AND (
        receipt_table IS NULL
@@ -6991,7 +7057,8 @@ BEGIN
   IF current_revision NOT IN (
        '0016_principal_binding_e5b',
        '0017_authenticated_binding_e5c',
-       '0018_parent_relationship_e5d'
+       '0018_parent_relationship_e5d',
+       '0019_parent_stage_e5e'
      )
      OR receipt_table IS NULL
      OR binding_function IS NULL
@@ -8189,6 +8256,170 @@ BEGIN
   END IF;
 END
 $authenticated_binding_e5c_active_acl$;
+\endif
+
+SELECT (
+  version_num = '0019_parent_stage_e5e'
+) AS activate_parent_relationship_stage_e5e
+FROM public.alembic_version
+\gset
+
+\if :activate_parent_relationship_stage_e5e
+GRANT USAGE ON SCHEMA identity, knowledge, operations, privacy
+  TO home_agent_parent_relationship_kernel;
+GRANT EXECUTE ON FUNCTION
+  operations.evaluate_current_identity_semantic_authority(uuid),
+  privacy.lock_identity_semantic_write_fence(),
+  privacy.identity_person_is_blocked(uuid),
+  privacy.identity_principal_is_blocked(uuid)
+  TO home_agent_parent_relationship_kernel;
+
+GRANT USAGE ON SCHEMA identity TO home_agent_binding_committer;
+SET ROLE home_agent_parent_relationship_kernel;
+GRANT EXECUTE ON FUNCTION
+  identity.stage_authenticated_parent_relationship_e5e(
+    varchar, uuid, uuid, uuid, uuid, uuid, varchar, varchar
+  )
+  TO home_agent_binding_committer;
+RESET ROLE;
+
+DO $parent_relationship_e5e_active_acl$
+DECLARE
+  caller_oid oid;
+  function_acl_count integer;
+  kernel_oid oid;
+  owner_oid oid;
+  stage_function regprocedure :=
+    'identity.stage_authenticated_parent_relationship_e5e('
+    'character varying,uuid,uuid,uuid,uuid,uuid,'
+    'character varying,character varying)'::regprocedure;
+BEGIN
+  SELECT oid INTO STRICT caller_oid
+    FROM pg_catalog.pg_roles
+   WHERE rolname = 'home_agent_binding_committer';
+  SELECT oid INTO STRICT kernel_oid
+    FROM pg_catalog.pg_roles
+   WHERE rolname = 'home_agent_parent_relationship_kernel';
+  SELECT oid INTO STRICT owner_oid
+    FROM pg_catalog.pg_roles
+   WHERE rolname = 'home_agent_owner';
+
+  SELECT pg_catalog.count(*)
+    INTO STRICT function_acl_count
+    FROM pg_catalog.pg_proc AS function_row
+    CROSS JOIN LATERAL pg_catalog.aclexplode(function_row.proacl)
+         AS function_acl
+   WHERE function_acl.grantee = caller_oid
+     AND function_acl.privilege_type = 'EXECUTE'
+     AND function_row.oid = stage_function
+     AND function_acl.grantor = kernel_oid
+     AND NOT function_acl.is_grantable;
+
+  IF function_acl_count <> 1
+     OR NOT pg_catalog.has_schema_privilege(
+          caller_oid, 'identity', 'USAGE'
+        )
+     OR pg_catalog.has_schema_privilege(
+          caller_oid, 'identity', 'CREATE'
+        )
+     OR NOT pg_catalog.has_function_privilege(
+          caller_oid, stage_function, 'EXECUTE'
+        )
+     OR pg_catalog.pg_has_role(caller_oid, kernel_oid, 'SET')
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_auth_members
+        WHERE roleid = caller_oid OR member = caller_oid
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_class AS relation_row
+         JOIN pg_catalog.pg_namespace AS relation_namespace
+           ON relation_namespace.oid = relation_row.relnamespace
+         CROSS JOIN LATERAL pg_catalog.aclexplode(relation_row.relacl)
+              AS relation_acl
+        WHERE relation_namespace.nspname IN (
+          'ingest','identity','knowledge','engagement','privacy',
+          'operations','media'
+        )
+          AND relation_row.relkind IN ('r','p','v','m','f')
+          AND relation_acl.grantee = caller_oid
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_attribute AS attribute_row
+         JOIN pg_catalog.pg_class AS relation_row
+           ON relation_row.oid = attribute_row.attrelid
+         JOIN pg_catalog.pg_namespace AS relation_namespace
+           ON relation_namespace.oid = relation_row.relnamespace
+         CROSS JOIN LATERAL pg_catalog.aclexplode(attribute_row.attacl)
+              AS attribute_acl
+        WHERE relation_namespace.nspname IN (
+          'ingest','identity','knowledge','engagement','privacy',
+          'operations','media'
+        )
+          AND attribute_acl.grantee = caller_oid
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_proc AS function_row
+         JOIN pg_catalog.pg_namespace AS function_namespace
+           ON function_namespace.oid = function_row.pronamespace
+         CROSS JOIN LATERAL pg_catalog.aclexplode(function_row.proacl)
+              AS function_acl
+        WHERE function_acl.grantee = caller_oid
+          AND function_namespace.nspname IN (
+            'ingest','identity','knowledge','engagement','privacy',
+            'operations','media'
+          )
+          AND function_row.oid <> stage_function
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_proc AS function_row
+         CROSS JOIN LATERAL pg_catalog.aclexplode(function_row.proacl)
+              AS function_acl
+        WHERE function_row.oid = stage_function
+          AND function_acl.grantee NOT IN (caller_oid, kernel_oid)
+     )
+     OR NOT EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_proc
+        WHERE oid = stage_function
+          AND proowner = kernel_oid
+          AND prosecdef
+          AND proconfig @> ARRAY[
+            'search_path=pg_catalog',
+            'row_security=on'
+          ]::text[]
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_shdepend
+        WHERE refobjid = caller_oid
+          AND deptype = 'o'
+     )
+     OR (
+       SELECT pg_catalog.count(*)
+         FROM pg_catalog.pg_namespace AS namespace_row
+         CROSS JOIN LATERAL pg_catalog.aclexplode(namespace_row.nspacl)
+              AS namespace_acl
+        WHERE namespace_acl.grantee = caller_oid
+          AND namespace_row.nspname IN (
+            'ingest','identity','knowledge','engagement','privacy',
+            'operations','media'
+          )
+          AND namespace_acl.privilege_type = 'USAGE'
+          AND namespace_row.nspname = 'identity'
+          AND namespace_acl.grantor = owner_oid
+          AND NOT namespace_acl.is_grantable
+     ) <> 1 THEN
+    RAISE EXCEPTION
+      'parent relationship E5e active ACL contract mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+END
+$parent_relationship_e5e_active_acl$;
 \endif
 SQL
 

@@ -114,6 +114,7 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
             "0016_principal_binding_e5b",
             "0017_authenticated_binding_e5c",
             "0018_parent_relationship_e5d",
+            "0019_parent_stage_e5e",
         ]
     assert (
         "current_revision = ANY (reviewed_e3_catalog_revisions)"
@@ -134,6 +135,7 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
         "0016_principal_binding_e5b",
         "0017_authenticated_binding_e5c",
         "0018_parent_relationship_e5d",
+        "0019_parent_stage_e5e",
     ]
     assert (
         "login_role.rolvaliduntil =\n"
@@ -189,7 +191,8 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
         "                '0015_current_authority_e5a',\n"
         "                '0016_principal_binding_e5b',\n"
         "                '0017_authenticated_binding_e5c',\n"
-        "                '0018_parent_relationship_e5d'\n"
+        "                '0018_parent_relationship_e5d',\n"
+        "                '0019_parent_stage_e5e'\n"
         "              ) THEN 6"
         in admission
     )

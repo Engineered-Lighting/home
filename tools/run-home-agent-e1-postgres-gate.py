@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the E1-E5d scaffold gate against disposable PostgreSQL 17."""
+"""Run the E1-E5e scaffold gate against disposable PostgreSQL 17."""
 
 from __future__ import annotations
 
@@ -45,6 +45,7 @@ REVISION_0015 = "0015_current_authority_e5a"
 REVISION_0016 = "0016_principal_binding_e5b"
 REVISION_0017 = "0017_authenticated_binding_e5c"
 REVISION_0018 = "0018_parent_relationship_e5d"
+REVISION_0019 = "0019_parent_stage_e5e"
 E4_SUCCESS_DOCUMENT_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_DOCUMENT_B64"
 E4_SUCCESS_ADMISSION_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_ADMISSION_ID"
 E4_SCAFFOLD_OWNER_DATABASE_ENV = (
@@ -82,6 +83,15 @@ E5D_COMMITTER_DATABASE_ENV = (
 )
 E5D_OPERATOR_DATABASE_ENV = (
     "TEST_PHASE3_PARENT_RELATIONSHIP_E5D_OPERATOR_DATABASE_URL"
+)
+E5E_OWNER_DATABASE_ENV = (
+    "TEST_PHASE3_PARENT_RELATIONSHIP_E5E_OWNER_DATABASE_URL"
+)
+E5E_COMMITTER_DATABASE_ENV = (
+    "TEST_PHASE3_PARENT_RELATIONSHIP_E5E_COMMITTER_DATABASE_URL"
+)
+E5E_OPERATOR_DATABASE_ENV = (
+    "TEST_PHASE3_PARENT_RELATIONSHIP_E5E_OPERATOR_DATABASE_URL"
 )
 E5B_CLEANUP_DOWNGRADE_EVIDENCE_ENV = (
     "TEST_PHASE3_PRINCIPAL_BINDING_KERNEL_E5B_CLEANUP_DOWNGRADE_EVIDENCE"
@@ -307,6 +317,7 @@ BUILD_CONTEXT_FILES = (
     "stack/home-agent-deploy/preflight-identity-cutover-roles.sh",
     "stack/home-agent-deploy/provision-identity-cutover-roles.sh",
     "stack/home-agent-deploy/provision-identity-binding-kernel-role.sh",
+    "stack/home-agent-deploy/provision-parent-relationship-kernel-role.sh",
     "stack/home-agent-deploy/postgres-pg_hba.conf",
     "stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh",
     "tests/home_agent/test_identity_erasure_kernel_foundation_deployment_contract.py",
@@ -331,6 +342,8 @@ BUILD_CONTEXT_FILES = (
     "0017_authenticated_binding_e5c.py",
     "stack/services/home-agent-core/alembic/versions/"
     "0018_parent_relationship_authority_e5d.py",
+    "stack/services/home-agent-core/alembic/versions/"
+    "0019_parent_relationship_stage_e5e.py",
     "stack/services/home-agent-core/app/identity_erasure_schema.py",
     "stack/home-agent-deploy/operator/reviewed_identity_payload.py",
     "stack/home-agent-deploy/operator/principal_binding_candidate_staging.py",
@@ -373,6 +386,10 @@ BUILD_CONTEXT_FILES = (
     "test_phase3_parent_relationship_authority_e5d_schema.py",
     "stack/services/home-agent-core/tests/"
     "test_phase3_parent_relationship_authority_e5d_runtime_postgres.py",
+    "stack/services/home-agent-core/tests/"
+    "test_phase3_parent_relationship_stage_e5e_schema.py",
+    "stack/services/home-agent-core/tests/"
+    "test_phase3_parent_relationship_stage_e5e_runtime_postgres.py",
     "tools/run-home-agent-e1-postgres-gate.py",
     ".github/workflows/home-agent-e1-postgres.yml",
 )
@@ -1277,6 +1294,32 @@ def _provision_identity_binding_kernel_role(
             "provision-identity-binding-kernel-role.sh",
         ],
         label=f"additive E5b kernel-role ceremony for {phase.name}",
+    )
+
+
+def _provision_parent_relationship_kernel_role(
+    state: GateState,
+    phase: Phase,
+    secrets_directory: Path,
+) -> None:
+    _docker_run(
+        state,
+        state.test_image,
+        phase=phase.name,
+        network=phase.network,
+        secrets_directory=secrets_directory,
+        environment={
+            **_client_environment(BASE_DATABASE),
+            "POSTGRES_OWNER_PASSWORD_FILE": (
+                "/run/secrets/postgres_owner_password"
+            ),
+        },
+        command=[
+            "sh",
+            "/workspace/stack/home-agent-deploy/"
+            "provision-parent-relationship-kernel-role.sh",
+        ],
+        label=f"additive E5e kernel-role ceremony for {phase.name}",
     )
 
 
@@ -2334,7 +2377,7 @@ def _run_e4_scaffold_phase(
     phase: Phase,
     fixture_directory: Path,
 ) -> None:
-    """Run E4/E5a/E5b, E5c activation, and dormant E5d foundation gates."""
+    """Run E4/E5a/E5b, E5c, E5d, and E5e staging gates."""
     _upgrade_e3_database(state, phase, secrets_directory)
     _provision_identity_cutover_roles(state, phase, secrets_directory)
     _apply_grants(state, phase, secrets_directory, BASE_DATABASE)
@@ -3129,6 +3172,66 @@ def _run_e4_scaffold_phase(
         fail_fast=True,
     )
 
+    # E5e admits a dedicated NOLOGIN staging kernel only after the owner-only
+    # E5d catalog has passed. The caller remains table-blind, the older
+    # principal-binding writer stays disabled, and no parent fact can commit.
+    _provision_parent_relationship_kernel_role(
+        state,
+        phase,
+        secrets_directory,
+    )
+    _alembic(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+        REVISION_0019,
+    )
+    _assert_database_revision(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+        REVISION_0019,
+    )
+    _apply_grants(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+    )
+    _pytest(
+        state,
+        phase,
+        secrets_directory,
+        nodes=[
+            "tests/test_phase3_parent_relationship_stage_e5e_schema.py",
+            "tests/"
+            "test_phase3_parent_relationship_stage_e5e_runtime_postgres.py",
+        ],
+        url_environment={
+            E5E_OWNER_DATABASE_ENV: BASE_DATABASE,
+        },
+        credential_url_environment={
+            E5E_COMMITTER_DATABASE_ENV: (
+                BASE_DATABASE,
+                "home_agent_binding_committer",
+                "postgres_binding_committer_password",
+            ),
+            E5E_OPERATOR_DATABASE_ENV: (
+                BASE_DATABASE,
+                "home_agent_binding_operator",
+                "postgres_binding_operator_password",
+            ),
+        },
+        environment={
+            SENTINEL_ENV: state.sentinel,
+            SYSTEM_ID_ENV: phase.system_identifier,
+            ALLOWLIST_ENV: BASE_DATABASE,
+        },
+        fail_fast=True,
+    )
+
 
 def _build_test_image(state: GateState, build_context: Path) -> None:
     dockerfile = (
@@ -3161,7 +3264,7 @@ def main() -> int:
     except GateFailure as error:
         print(
             "E1/E2/E3/E4 gate execution quarantine "
-            f"(E5a/E5b/E5c/E5d included): {error}",
+            f"(E5a/E5b/E5c/E5d/E5e included): {error}",
             file=sys.stderr,
         )
         return 77
@@ -3256,7 +3359,8 @@ def main() -> int:
             )
             print(
                 "[8/8] Running isolated dormant E4 deployment scaffold "
-                "with E5a/E5b, E5c activation, and E5d foundation"
+                "with E5a/E5b, E5c activation, E5d foundation, "
+                "and E5e staging"
             )
             _run_phase(
                 state,
@@ -3292,7 +3396,8 @@ def main() -> int:
     if exit_code == 0:
         print(
             "E1/E2/E3/E4 PostgreSQL 17 gate passed; "
-            "E5a/E5b catalogs, E5c adapter, and E5d foundation passed; "
+            "E5a/E5b catalogs, E5c adapter, E5d foundation, "
+            "and E5e staging passed; "
             "labeled cleanup verified"
         )
     return exit_code

@@ -435,6 +435,8 @@ def test_context_manifest_explicitly_carries_untracked_erasure_test_sources() ->
         "0015_identity_current_authority_e5.py",
         "stack/services/home-agent-core/app/identity_erasure_schema.py",
         "stack/services/home-agent-bff/src/bff.mjs",
+        "app/src/home-agent/api.js",
+        "app/src/home-agent/panel.jsx",
         "stack/home-agent-deploy/postgres-pg_hba.conf",
         "stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh",
         "stack/home-agent-deploy/operator/reviewed_identity_payload.py",

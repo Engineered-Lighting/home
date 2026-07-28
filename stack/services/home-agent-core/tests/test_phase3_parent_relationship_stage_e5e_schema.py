@@ -195,7 +195,8 @@ def test_grant_replay_quarantines_then_restores_only_exact_stage_execute() -> No
     assert (
         GRANTS.index("DO $parent_relationship_e5e_function_quarantine$")
         < GRANTS.index(
-            "version_num = '0019_parent_stage_e5e'"
+            "version_num IN "
+            "('0019_parent_stage_e5e', '0020_parent_commit_e5f')"
         )
         < GRANTS.index("DO $parent_relationship_e5e_active_acl$")
     )
@@ -224,8 +225,11 @@ def test_grant_replay_quarantines_then_restores_only_exact_stage_execute() -> No
     table_quarantine = GRANTS.split(
         "DO $parent_relationship_e5d_early_quarantine$", 1
     )[1].split("$parent_relationship_e5d_early_quarantine$;", 1)[0]
-    assert "current_revision = '0019_parent_stage_e5e'" in (
-        table_quarantine
+    assert (
+        "current_revision IN (\n"
+        "             '0019_parent_stage_e5e',\n"
+        "             '0020_parent_commit_e5f'"
+        in table_quarantine
     )
     assert "home_agent_parent_relationship_kernel" in table_quarantine
     assert "operations.parent_relationship_authority_receipts" in (

@@ -113,9 +113,10 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
             "0015_current_authority_e5a",
             "0016_principal_binding_e5b",
             "0017_authenticated_binding_e5c",
-            "0018_parent_relationship_e5d",
-            "0019_parent_stage_e5e",
-        ]
+                "0018_parent_relationship_e5d",
+                "0019_parent_stage_e5e",
+                "0020_parent_commit_e5f",
+            ]
     assert (
         "current_revision = ANY (reviewed_e3_catalog_revisions)"
         in admission
@@ -134,9 +135,10 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
         "0015_current_authority_e5a",
         "0016_principal_binding_e5b",
         "0017_authenticated_binding_e5c",
-        "0018_parent_relationship_e5d",
-        "0019_parent_stage_e5e",
-    ]
+            "0018_parent_relationship_e5d",
+            "0019_parent_stage_e5e",
+            "0020_parent_commit_e5f",
+        ]
     assert (
         "login_role.rolvaliduntil =\n"
         "               timestamptz '1970-01-01 00:00:00+00'"
@@ -190,10 +192,11 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
         "WHEN current_revision IN (\n"
         "                '0015_current_authority_e5a',\n"
         "                '0016_principal_binding_e5b',\n"
-        "                '0017_authenticated_binding_e5c',\n"
-        "                '0018_parent_relationship_e5d',\n"
-        "                '0019_parent_stage_e5e'\n"
-        "              ) THEN 6"
+            "                '0017_authenticated_binding_e5c',\n"
+            "                '0018_parent_relationship_e5d',\n"
+            "                '0019_parent_stage_e5e',\n"
+            "                '0020_parent_commit_e5f'\n"
+            "              ) THEN 6"
         in admission
     )
     assert "WHEN current_revision = ANY (reviewed_e4_overlay_revisions) THEN 5" in (

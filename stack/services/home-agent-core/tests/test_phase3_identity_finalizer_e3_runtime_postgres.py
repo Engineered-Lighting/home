@@ -281,6 +281,66 @@ def _minimal_projections(
     return [person], [person_id]
 
 
+def _parent_authority_projections(
+    *, label: str, run_id: uuid.UUID
+) -> tuple[list[Projection], list[uuid.UUID]]:
+    child_id, parent_0_id, parent_1_id = uuid7(), uuid7(), uuid7()
+    projections: list[Projection] = []
+    for role, person_id, display_name in (
+        ("child", child_id, f"E3 child {label}"),
+        ("parent-0", parent_0_id, f"E3 parent A {label}"),
+        ("parent-1", parent_1_id, f"E3 parent B {label}"),
+    ):
+        projections.append(
+            _projection(
+                label=f"{label}:person:{role}",
+                run_id=run_id,
+                kind="person",
+                person_id=person_id,
+                record={
+                    "display_name": display_name,
+                    "legacy_source_ref": (
+                        f"legacy://identity/{label}/{role}"
+                    ),
+                    "legacy_source_sha256": _digest(
+                        f"{label}:person-source:{role}"
+                    ),
+                    "legacy_source_version": 1,
+                    "person_id": str(person_id),
+                    "privacy_scope": "private",
+                    "pronouns": None,
+                },
+            )
+        )
+
+    for ordinal, parent_id in enumerate((parent_0_id, parent_1_id)):
+        label_id = uuid7()
+        projections.append(
+            _projection(
+                label=f"{label}:legacy-role:parent-{ordinal}",
+                run_id=run_id,
+                kind="legacy_role_candidate",
+                person_id=parent_id,
+                decision_id=label_id,
+                record={
+                    "label_id": str(label_id),
+                    "perspective": "unknown",
+                    "person_id": str(parent_id),
+                    "role_label": "parent",
+                    "source_ref": (
+                        f"legacy://role/{label}/parent-{ordinal}"
+                    ),
+                    "source_snapshot_sha256": _digest(
+                        f"{label}:role-source:parent-{ordinal}"
+                    ),
+                    "source_version": None,
+                },
+            )
+        )
+
+    return projections, [child_id, parent_0_id, parent_1_id]
+
+
 def _comprehensive_projections(
     *,
     label: str,
@@ -453,6 +513,7 @@ async def _seed_fixture(
     *,
     label: str,
     comprehensive: bool = False,
+    parent_authority: bool = False,
     review_signature_override: str | None = None,
     raw_document_override: bytes | None = None,
     document_mutator: Callable[[dict[str, Any]], None] | None = None,
@@ -464,11 +525,20 @@ async def _seed_fixture(
     review_expires_at = now + timedelta(minutes=10)
     auto_expiry_at = now + timedelta(hours=1)
 
+    if comprehensive and parent_authority:
+        raise ValueError(
+            "comprehensive and parent_authority fixtures are exclusive"
+        )
     if comprehensive:
         projections, person_ids = _comprehensive_projections(
             label=label,
             run_id=run_id,
             auto_expiry_at=auto_expiry_at,
+        )
+    elif parent_authority:
+        projections, person_ids = _parent_authority_projections(
+            label=label,
+            run_id=run_id,
         )
     else:
         projections, person_ids = _minimal_projections(

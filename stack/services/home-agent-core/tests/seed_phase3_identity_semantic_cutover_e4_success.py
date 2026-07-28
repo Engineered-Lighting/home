@@ -175,6 +175,7 @@ async def _seed() -> tuple[bytes, uuid.UUID]:
             fixture = await _seed_fixture(
                 connection,
                 label="github-hosted-e4-synthetic-success",
+                parent_authority=True,
             )
         finalized_id = await _finalize(finalizer_engine, fixture)
         if finalized_id != fixture.run_id:

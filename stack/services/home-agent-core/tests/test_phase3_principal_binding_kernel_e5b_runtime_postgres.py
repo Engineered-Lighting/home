@@ -42,6 +42,9 @@ RETAIN_DOWNGRADE_EVIDENCE_ENV = (
 CLEANUP_DOWNGRADE_EVIDENCE_ENV = (
     "TEST_PHASE3_PRINCIPAL_BINDING_KERNEL_E5B_CLEANUP_DOWNGRADE_EVIDENCE"
 )
+RETAIN_PARENT_AUTHORITY_BINDING_ENV = (
+    "TEST_PHASE3_PARENT_RELATIONSHIP_RETAIN_BINDING"
+)
 FUNCTION = "identity.commit_authenticated_principal_binding_e5b"
 POLICY_VERSION = "home-agent-mvp-v1"
 REVIEW_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -104,6 +107,7 @@ async def _stage_binding(
     expired: bool = False,
     person_id: uuid.UUID | None = None,
     person_offset: int = 0,
+    exclude_parent_candidates: bool = False,
 ) -> StagedBinding:
     request_id = uuid7()
     proposal_id = uuid7()
@@ -145,6 +149,12 @@ async def _stage_binding(
                         "AND l.projection_id=p.person_id "
                         "AND s.subject_role='primary' "
                         "AND p.status='active' "
+                        "AND (NOT :exclude_parent_candidates OR NOT EXISTS ("
+                        "SELECT 1 FROM identity.legacy_role_labels label "
+                        "WHERE label.person_id=p.person_id "
+                        "AND label.role_label='parent' "
+                        "AND label.perspective='unknown'"
+                        ")) "
                         "AND NOT EXISTS ("
                         "SELECT 1 FROM identity.ha_user_bindings b "
                         "WHERE b.person_id=p.person_id "
@@ -155,6 +165,9 @@ async def _stage_binding(
                     {
                         "run_id": promotion.run_id,
                         "person_offset": person_offset,
+                        "exclude_parent_candidates": (
+                            exclude_parent_candidates
+                        ),
                     },
                 )
             ).mappings().one()
@@ -990,7 +1003,14 @@ async def test_e5b_current_edge_privacy_block_is_content_free_denial() -> None:
 )
 async def test_e5c_split_adapter_commits_after_pinned_grant_replay() -> None:
     owner_engine = _engine(OWNER_DATABASE_ENV)
-    staged = await _stage_binding(owner_engine, label="e5c-split-adapter")
+    retain_parent_binding = (
+        os.getenv(RETAIN_PARENT_AUTHORITY_BINDING_ENV) == "1"
+    )
+    staged = await _stage_binding(
+        owner_engine,
+        label="e5c-split-adapter",
+        exclude_parent_candidates=retain_parent_binding,
+    )
     operator_database = Database(os.environ[OPERATOR_DATABASE_ENV])
     commit_database = PrincipalBindingCommitDatabase(
         os.environ[BINDING_DATABASE_ENV]
@@ -1016,7 +1036,8 @@ async def test_e5c_split_adapter_commits_after_pinned_grant_replay() -> None:
         assert result.location_memory_enabled is False
         assert result.travel_greetings_enabled is False
     finally:
-        await _cleanup(owner_engine, staged)
+        if not retain_parent_binding:
+            await _cleanup(owner_engine, staged)
         await adapter.close()
         await operator_database.close()
         await owner_engine.dispose()

@@ -138,7 +138,12 @@ def test_e5c_commit_pool_exposes_only_kernel_call_and_close() -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     assert methods == {"__init__", "commit", "close"}
-    commit = function(path, "commit")
+    commit = next(
+        node
+        for node in commit_class.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "commit"
+    )
     source = ast.get_source_segment(read(path), commit)
     assert source is not None
     assert source.count("connection.execute(") == 1

@@ -47,6 +47,10 @@ from .models import (
     OperatorPrincipalBindingRequestsView,
     MemoryInspection,
     OnboardingStatusView,
+    ParentRelationshipConfirmation,
+    ParentRelationshipConfirmationView,
+    ParentRelationshipPreviewRequest,
+    ParentRelationshipPreviewView,
     ParentPresenceView,
     PHASE3_FIXED_READINESS_BLOCKERS,
     Phase2ReadinessView,
@@ -88,6 +92,7 @@ OperatorBindingStore = Annotated[CoreStore, Depends(operator_binding_store_from)
 
 PHASE3_SCHEMA_REVISION = "0006a_worker_lease_arbitration"
 PRINCIPAL_BINDING_ADAPTER_REVISION = "0017_authenticated_binding_e5c"
+PARENT_RELATIONSHIP_ADAPTER_REVISION = "0020_parent_commit_e5f"
 LEGACY_IDENTITY_IMPORT_RETIRED = (
     "sequential legacy identity import is retired; use the reviewed atomic "
     "identity finalizer"
@@ -99,6 +104,10 @@ SOURCE_ENTITY_BINDING_RETIRED = (
 PRINCIPAL_BINDING_CONFIRMATION_RETIRED = (
     "principal binding confirmation is disabled until its atomic database "
     "kernel enforces the principal, artifact, proposal, and binding graph"
+)
+PARENT_RELATIONSHIP_CONFIRMATION_RETIRED = (
+    "parent relationship confirmation is disabled until its authenticated "
+    "atomic stage and commit kernels are the reviewed deployment revision"
 )
 
 
@@ -317,6 +326,74 @@ def semantic_router() -> APIRouter:
         )
         return await adapter.commit(
             context=context,
+            ha_user_id=service.ha_user_id,
+            value=value,
+        )
+
+    @router.post(
+        "/parent-relationship-proposal",
+        response_model=ParentRelationshipPreviewView,
+    )
+    async def stage_parent_relationship_proposal(
+        request: Request,
+        service: Service,
+    ) -> ParentRelationshipPreviewView:
+        if (
+            request.app.state.settings.readiness_migration
+            != PARENT_RELATIONSHIP_ADAPTER_REVISION
+        ):
+            raise CapabilityDisabledError(
+                PARENT_RELATIONSHIP_CONFIRMATION_RETIRED
+            )
+        adapter = request.app.state.parent_relationship_adapter
+        if adapter is None:
+            raise CapabilityDisabledError(
+                "parent relationship split-credential adapter is unavailable"
+            )
+        raw_body = await request.body()
+        try:
+            value = ParentRelationshipPreviewRequest.model_validate_json(
+                raw_body
+            )
+        except ValidationError as exc:
+            raise ValidationDomainError(
+                "parent relationship preview body is invalid"
+            ) from exc
+        return await adapter.stage(
+            ha_user_id=service.ha_user_id,
+            value=value,
+        )
+
+    @router.post(
+        "/parent-relationship-proposal/confirm",
+        response_model=ParentRelationshipConfirmationView,
+    )
+    async def confirm_parent_relationship_proposal(
+        request: Request,
+        service: Service,
+    ) -> ParentRelationshipConfirmationView:
+        if (
+            request.app.state.settings.readiness_migration
+            != PARENT_RELATIONSHIP_ADAPTER_REVISION
+        ):
+            raise CapabilityDisabledError(
+                PARENT_RELATIONSHIP_CONFIRMATION_RETIRED
+            )
+        adapter = request.app.state.parent_relationship_adapter
+        if adapter is None:
+            raise CapabilityDisabledError(
+                "parent relationship split-credential adapter is unavailable"
+            )
+        raw_body = await request.body()
+        try:
+            value = ParentRelationshipConfirmation.model_validate_json(
+                raw_body
+            )
+        except ValidationError as exc:
+            raise ValidationDomainError(
+                "parent relationship confirmation body is invalid"
+            ) from exc
+        return await adapter.commit(
             ha_user_id=service.ha_user_id,
             value=value,
         )

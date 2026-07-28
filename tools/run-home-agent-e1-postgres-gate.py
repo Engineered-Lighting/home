@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the E1-E5f scaffold gate against disposable PostgreSQL 17."""
+"""Run the E1-E5g scaffold gate against disposable PostgreSQL 17."""
 
 from __future__ import annotations
 
@@ -394,6 +394,8 @@ BUILD_CONTEXT_FILES = (
     "tests/home_agent/test_principal_binding_authority_boundary_contract.py",
     "tests/home_agent/"
     "test_principal_binding_adapter_e5c_deployment_contract.py",
+    "tests/home_agent/"
+    "test_parent_relationship_adapter_e5g_deployment_contract.py",
     "stack/services/home-agent-core/tests/"
     "test_phase3_parent_relationship_authority_e5d_schema.py",
     "stack/services/home-agent-core/tests/"
@@ -3280,6 +3282,9 @@ def _run_e4_scaffold_phase(
             "tests/test_phase3_parent_relationship_commit_e5f_schema.py",
             "tests/"
             "test_phase3_parent_relationship_commit_e5f_runtime_postgres.py",
+            "tests/test_parent_relationship_adapter_e5g.py",
+            "/workspace/tests/home_agent/"
+            "test_parent_relationship_adapter_e5g_deployment_contract.py",
         ],
         url_environment={
             E5F_OWNER_DATABASE_ENV: BASE_DATABASE,
@@ -3336,7 +3341,7 @@ def main() -> int:
     except GateFailure as error:
         print(
             "E1/E2/E3/E4 gate execution quarantine "
-            f"(E5a/E5b/E5c/E5d/E5e/E5f included): {error}",
+            f"(E5a/E5b/E5c/E5d/E5e/E5f/E5g included): {error}",
             file=sys.stderr,
         )
         return 77
@@ -3432,7 +3437,7 @@ def main() -> int:
             print(
                 "[8/8] Running isolated dormant E4 deployment scaffold "
                 "with E5a/E5b, E5c activation, E5d foundation, "
-                "E5e staging, and E5f atomic commit"
+                "E5e staging, E5f atomic commit, and E5g adapter"
             )
             _run_phase(
                 state,
@@ -3469,7 +3474,7 @@ def main() -> int:
         print(
             "E1/E2/E3/E4 PostgreSQL 17 gate passed; "
             "E5a/E5b catalogs, E5c adapter, E5d foundation, "
-            "E5e staging, and E5f atomic commit passed; "
+            "E5e staging, E5f atomic commit, and E5g adapter passed; "
             "labeled cleanup verified"
         )
     return exit_code

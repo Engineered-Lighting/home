@@ -25,6 +25,52 @@ class PrincipalBindingKernelCall:
     binding_id: uuid.UUID
 
 
+@dataclass(frozen=True, slots=True)
+class ParentRelationshipStageKernelCall:
+    authenticated_ha_user_id: str
+    request_id: uuid.UUID
+    proposal_id: uuid.UUID
+    operator_request_id: uuid.UUID
+    proposal_edge_id_0: uuid.UUID
+    proposal_edge_id_1: uuid.UUID
+    review_code_0: str
+    review_code_1: str
+
+
+@dataclass(frozen=True, slots=True)
+class ParentRelationshipStageKernelResult:
+    request_id: uuid.UUID
+    proposal_id: uuid.UUID
+    proposal_digest: str
+    expires_at: datetime
+    child_display_label: str
+    parent_0_display_label: str
+    parent_0_review_code: str
+    parent_1_display_label: str
+    parent_1_review_code: str
+
+
+@dataclass(frozen=True, slots=True)
+class ParentRelationshipCommitKernelCall:
+    authenticated_ha_user_id: str
+    proposal_id: uuid.UUID
+    proposal_digest: str
+    confirmation_nonce: uuid.UUID
+    confirmation_artifact_id: uuid.UUID
+    memory_transaction_id: uuid.UUID
+    authority_receipt_id: uuid.UUID
+    fact_id_0: uuid.UUID
+    fact_version_id_0: uuid.UUID
+    confirmation_support_id_0: uuid.UUID
+    legacy_support_id_0: uuid.UUID
+    receipt_edge_id_0: uuid.UUID
+    fact_id_1: uuid.UUID
+    fact_version_id_1: uuid.UUID
+    confirmation_support_id_1: uuid.UUID
+    legacy_support_id_1: uuid.UUID
+    receipt_edge_id_1: uuid.UUID
+
+
 class PrincipalBindingCommitDatabase:
     """A commit-only pool whose first transaction statement is the E5b kernel."""
 
@@ -68,6 +114,111 @@ class PrincipalBindingCommitDatabase:
                         },
                     )
                 ).scalar_one()
+
+    async def close(self) -> None:
+        await self.engine.dispose()
+
+
+class ParentRelationshipAuthorityDatabase:
+    """A table-blind pool exposing only the E5e and E5f kernels."""
+
+    def __init__(self, url: str) -> None:
+        self.engine: AsyncEngine = create_async_engine(
+            url,
+            pool_pre_ping=True,
+            pool_size=2,
+            max_overflow=0,
+            pool_recycle=300,
+            hide_parameters=True,
+        )
+
+    async def stage(
+        self, value: ParentRelationshipStageKernelCall
+    ) -> ParentRelationshipStageKernelResult:
+        async with self.engine.connect() as raw_connection:
+            connection = await raw_connection.execution_options(
+                isolation_level="SERIALIZABLE"
+            )
+            async with connection.begin():
+                row = (
+                    await connection.execute(
+                        text(
+                            "SELECT * FROM identity."
+                            "stage_authenticated_parent_relationship_e5e("
+                            "CAST(:ha_user_id AS varchar),:request_id,"
+                            ":proposal_id,:operator_request_id,"
+                            ":proposal_edge_id_0,:proposal_edge_id_1,"
+                            "CAST(:review_code_0 AS varchar),"
+                            "CAST(:review_code_1 AS varchar))"
+                        ),
+                        {
+                            "ha_user_id": value.authenticated_ha_user_id,
+                            "request_id": value.request_id,
+                            "proposal_id": value.proposal_id,
+                            "operator_request_id": value.operator_request_id,
+                            "proposal_edge_id_0": value.proposal_edge_id_0,
+                            "proposal_edge_id_1": value.proposal_edge_id_1,
+                            "review_code_0": value.review_code_0,
+                            "review_code_1": value.review_code_1,
+                        },
+                    )
+                ).mappings().one()
+        return ParentRelationshipStageKernelResult(**row)
+
+    async def commit(
+        self, value: ParentRelationshipCommitKernelCall
+    ) -> datetime:
+        async with self.engine.connect() as raw_connection:
+            connection = await raw_connection.execution_options(
+                isolation_level="SERIALIZABLE"
+            )
+            async with connection.begin():
+                row = (
+                    await connection.execute(
+                        text(
+                            "SELECT * FROM identity."
+                            "commit_authenticated_parent_relationship_e5f("
+                            "CAST(:ha_user_id AS varchar),:proposal_id,"
+                            "CAST(:proposal_digest AS varchar),"
+                            ":confirmation_nonce,:confirmation_artifact_id,"
+                            ":memory_transaction_id,:authority_receipt_id,"
+                            ":fact_id_0,:fact_version_id_0,"
+                            ":confirmation_support_id_0,"
+                            ":legacy_support_id_0,:receipt_edge_id_0,"
+                            ":fact_id_1,:fact_version_id_1,"
+                            ":confirmation_support_id_1,"
+                            ":legacy_support_id_1,:receipt_edge_id_1)"
+                        ),
+                        {
+                            "ha_user_id": value.authenticated_ha_user_id,
+                            "proposal_id": value.proposal_id,
+                            "proposal_digest": value.proposal_digest,
+                            "confirmation_nonce": value.confirmation_nonce,
+                            "confirmation_artifact_id": (
+                                value.confirmation_artifact_id
+                            ),
+                            "memory_transaction_id": (
+                                value.memory_transaction_id
+                            ),
+                            "authority_receipt_id": value.authority_receipt_id,
+                            "fact_id_0": value.fact_id_0,
+                            "fact_version_id_0": value.fact_version_id_0,
+                            "confirmation_support_id_0": (
+                                value.confirmation_support_id_0
+                            ),
+                            "legacy_support_id_0": value.legacy_support_id_0,
+                            "receipt_edge_id_0": value.receipt_edge_id_0,
+                            "fact_id_1": value.fact_id_1,
+                            "fact_version_id_1": value.fact_version_id_1,
+                            "confirmation_support_id_1": (
+                                value.confirmation_support_id_1
+                            ),
+                            "legacy_support_id_1": value.legacy_support_id_1,
+                            "receipt_edge_id_1": value.receipt_edge_id_1,
+                        },
+                    )
+                ).one()
+        return row.committed_at
 
     async def close(self) -> None:
         await self.engine.dispose()

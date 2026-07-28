@@ -175,12 +175,16 @@ CSRF proof; request/cancel bodies must be `{}`, and confirmation accepts only
 `proposal_digest` plus `confirmation_nonce`. Browser-supplied HA, person,
 principal, or actor identifiers are rejected and never forwarded to Core.
 
-Direct parent confirmation is absent from both browser and native BFF
-allowlists. Explicit parent facts remain disabled until a separate reviewed
-flow stages the exact candidate set server-side, binds a private preview to a
-digest, and commits the complete reviewed set atomically from one authenticated
-confirmation. A client-supplied parent or child UUID is never confirmation
-authority.
+The E5g parent-confirmation adapter is browser-only and remains dormant unless
+Core is pinned to the exact reviewed E5f database revision. Its two fixed POST
+routes force a current HA `whoami` check plus Origin and CSRF proof. Staging
+accepts only an opaque UUIDv7 ceremony key. Confirmation accepts only the
+returned opaque proposal UUID/digest and a fresh UUIDv4 nonce. Parent, child,
+person, principal, binding, fact, artifact, actor, and relationship IDs are
+never accepted from the browser. Core derives both reviewed candidates and
+commits the complete two-edge set atomically. The routes remain absent from the
+native allowlist, and no UI or persistent status-recovery surface is activated
+by E5g.
 
 All outbound HA and Core fetches set `redirect=error`; access tokens, refresh
 tokens, service credentials, and semantic request bodies are never followed to

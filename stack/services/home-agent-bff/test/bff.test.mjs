@@ -21,6 +21,7 @@ import {
   isAllowedOrigin,
   loadNativeInstallationRegistry,
   nativeRouteAllowed,
+  normalizeParentRelationshipBody,
   normalizePrincipalBindingBody,
   parseCookies,
   randomToken,
@@ -559,6 +560,12 @@ test("semantic route allowlist excludes generic proxying", () => {
   assert.equal(routeAllowed("GET", "/api/agent/v1/principal-binding-request"), false);
   assert.equal(routeAllowed("POST", "/api/agent/v1/principal-binding-request/cancel"), true);
   assert.equal(routeAllowed("POST", "/api/agent/v1/principal-binding-proposal/confirm"), true);
+  assert.equal(routeAllowed("POST", "/api/agent/v1/parent-relationship-proposal"), true);
+  assert.equal(
+    routeAllowed("POST", "/api/agent/v1/parent-relationship-proposal/confirm"),
+    true,
+  );
+  assert.equal(routeAllowed("GET", "/api/agent/v1/parent-relationship-proposal"), false);
   assert.equal(routeAllowed("POST", "/api/agent/v1/principal-bindings"), false);
   assert.equal(routeAllowed("GET", "/api/agent/v1/people"), false);
   assert.equal(routeAllowed("GET", "/api/agent/v1/snapshot"), true);
@@ -598,6 +605,17 @@ test("semantic route allowlist excludes generic proxying", () => {
   assert.equal(nativeRouteAllowed("GET", "/api/agent/native/v1/principal-binding-proposal"), false);
   assert.equal(nativeRouteAllowed("POST", "/api/agent/native/v1/principal-binding-request"), false);
   assert.equal(nativeRouteAllowed("POST", "/api/agent/native/v1/principal-binding-proposal/confirm"), false);
+  assert.equal(
+    nativeRouteAllowed("POST", "/api/agent/native/v1/parent-relationship-proposal"),
+    false,
+  );
+  assert.equal(
+    nativeRouteAllowed(
+      "POST",
+      "/api/agent/native/v1/parent-relationship-proposal/confirm",
+    ),
+    false,
+  );
   assert.equal(nativeRouteAllowed("POST", "/api/agent/native/v1/operator-rollout/authorizations/shadow"), false);
   assert.equal(nativeRouteAllowed("GET", "/api/agent/native/v1/operator-rollout/phase3-readiness"), false);
   assert.equal(nativeRouteAllowed("POST", "/api/agent/native/v1/operator-rollout/phase3-readiness"), false);
@@ -645,6 +663,63 @@ test("principal binding bodies contain no browser-supplied identity authority", 
   ]) assert.throws(
     () => normalizePrincipalBindingBody(path, Buffer.from(JSON.stringify(value))),
     /principal binding/i,
+  );
+});
+
+test("parent relationship bodies contain only opaque ceremony protocol fields", () => {
+  const ceremonyId = "01900000-0000-7000-8000-000000000001";
+  const proposalId = "01900000-0000-7000-8000-000000000002";
+  const digest = "b".repeat(64);
+  const nonce = "018f6f42-3a8b-4c11-8123-123456789abc";
+
+  assert.deepEqual(
+    JSON.parse(normalizeParentRelationshipBody(
+      "/api/agent/v1/parent-relationship-proposal",
+      Buffer.from(JSON.stringify({ ceremony_id: ceremonyId })),
+    ).toString()),
+    { ceremony_id: ceremonyId },
+  );
+  assert.deepEqual(
+    JSON.parse(normalizeParentRelationshipBody(
+      "/api/agent/v1/parent-relationship-proposal/confirm",
+      Buffer.from(JSON.stringify({
+        proposal_id: proposalId,
+        proposal_digest: digest,
+        confirmation_nonce: nonce,
+      })),
+    ).toString()),
+    {
+      proposal_id: proposalId,
+      proposal_digest: digest,
+      confirmation_nonce: nonce,
+    },
+  );
+
+  for (const [path, value] of [
+    ["/api/agent/v1/parent-relationship-proposal", {
+      ceremony_id: ceremonyId,
+      parent_person_id: "forged",
+    }],
+    ["/api/agent/v1/parent-relationship-proposal", {
+      ceremony_id: crypto.randomUUID(),
+    }],
+    ["/api/agent/v1/parent-relationship-proposal/confirm", {
+      proposal_id: proposalId,
+      proposal_digest: digest,
+      confirmation_nonce: nonce,
+      child_person_id: "forged",
+    }],
+    ["/api/agent/v1/parent-relationship-proposal/confirm", {
+      proposal_id: crypto.randomUUID(),
+      proposal_digest: digest,
+      confirmation_nonce: nonce,
+    }],
+  ]) assert.throws(
+    () => normalizeParentRelationshipBody(
+      path,
+      Buffer.from(JSON.stringify(value)),
+    ),
+    /parent relationship/i,
   );
 });
 
@@ -1392,6 +1467,78 @@ test("every binding operation force-revalidates HA and reconstructs authority he
   assert.equal(coreCalls, 4);
 });
 
+test("parent relationship stage and commit revalidate HA and forward no semantic IDs", async () => {
+  const config = configured({ principalRevalidateMs: 24 * 60 * 60_000 });
+  const store = new SessionStore(config);
+  const session = store.createSession({
+    principal: { userId: "parent-review-user", isAdmin: false, isActive: true },
+    accessToken: "parent-review-access",
+    refreshToken: "parent-review-refresh",
+    expiresIn: 3600,
+  });
+  const ceremonyId = "01900000-0000-7000-8000-000000000001";
+  const proposalId = "01900000-0000-7000-8000-000000000002";
+  const proposalDigest = "e".repeat(64);
+  const confirmationNonce = "018f6f42-3a8b-4c11-8123-123456789abc";
+  const expected = [
+    {
+      path: "/v1/parent-relationship-proposal",
+      body: { ceremony_id: ceremonyId },
+    },
+    {
+      path: "/v1/parent-relationship-proposal/confirm",
+      body: {
+        proposal_id: proposalId,
+        proposal_digest: proposalDigest,
+        confirmation_nonce: confirmationNonce,
+      },
+    },
+  ];
+  let whoamiCalls = 0;
+  let coreCalls = 0;
+  const fetchImpl = async (url, init = {}) => {
+    if (String(url).endsWith("/api/home_agent_edge/whoami")) {
+      whoamiCalls += 1;
+      assert.equal(init.headers.get("authorization"), "Bearer parent-review-access");
+      return new Response(JSON.stringify({
+        user_id: "parent-review-user", is_admin: false, is_active: true,
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    const operation = expected[coreCalls];
+    coreCalls += 1;
+    assert.equal(String(url), `http://core.internal:8096${operation.path}`);
+    assert.equal(init.headers["X-Authenticated-HA-User"], "parent-review-user");
+    assert.equal(init.headers["X-Home-Agent-Principal"], undefined);
+    assert.equal(init.headers["X-Authenticated-Person"], undefined);
+    assert.deepEqual(JSON.parse(init.body.toString()), operation.body);
+    return new Response('{"state":"ok"}', {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const base = await listen(createBff(config, { fetchImpl, store }));
+  const headers = {
+    cookie: `${COOKIE_NAME}=${session.id}`,
+    origin: "https://home.test",
+    "x-csrf-token": session.csrf,
+    "content-type": "application/json",
+    "x-authenticated-ha-user": "forged-ha-user",
+    "x-home-agent-principal": "forged-principal",
+    "x-authenticated-person": "forged-person",
+  };
+
+  for (const operation of expected) {
+    const response = await fetch(`${base}/api/agent${operation.path}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(operation.body),
+    });
+    assert.equal(response.status, 200);
+  }
+  assert.equal(whoamiCalls, 2);
+  assert.equal(coreCalls, 2);
+});
+
 test("changed or revoked HA users fail every binding operation before Core", async () => {
   const config = configured({ principalRevalidateMs: 24 * 60 * 60_000 });
   const store = new SessionStore(config);
@@ -1529,7 +1676,7 @@ test("binding routes reject query variants, wrong methods, CSRF, and forged iden
   assert.equal(coreCalls, 0, "forged identities never reach Core");
 });
 
-test("direct browser parent confirmation is not deployable client authority", async () => {
+test("direct browser parent-ID confirmation is not deployable client authority", async () => {
   const config = configured({ principalRevalidateMs: 24 * 60 * 60_000 });
   const store = new SessionStore(config);
   const session = store.createSession({

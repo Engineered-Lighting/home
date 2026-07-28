@@ -22,11 +22,18 @@ from .auth import (
     require_service_identity,
 )
 from .config import Settings
-from .db import Database, PrincipalBindingCommitDatabase
+from .db import (
+    Database,
+    ParentRelationshipAuthorityDatabase,
+    PrincipalBindingCommitDatabase,
+)
 from .errors import DomainError
 from .ledger import EncryptedErasureLedger
 from .maintenance import WorkerMaintenanceInspector
 from .models import HealthView
+from .parent_relationship_adapter import (
+    AuthenticatedParentRelationshipAdapter,
+)
 from .principal_binding_adapter import AuthenticatedPrincipalBindingAdapter
 from .restore import RestoreQuarantineGate, outbox_health
 from .resources import (
@@ -171,6 +178,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if binding_commit_database is not None
         else None
     )
+    parent_relationship_database = (
+        ParentRelationshipAuthorityDatabase(
+            settings.async_binding_commit_database_url()
+        )
+        if settings.binding_commit_database_url is not None
+        and settings.role in {"api", "all"}
+        else None
+    )
+    parent_relationship_adapter = (
+        AuthenticatedParentRelationshipAdapter(
+            parent_relationship_database
+        )
+        if parent_relationship_database is not None
+        else None
+    )
     spool = (
         EncryptedRuntimeSpool(
             settings.runtime_spool_path,
@@ -222,6 +244,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     maintenance_inspector = WorkerMaintenanceInspector(database)
 
     async def close_database_clients() -> None:
+        if parent_relationship_adapter is not None:
+            await parent_relationship_adapter.close()
         if binding_adapter is not None:
             await binding_adapter.close()
         if operator_database is not None:
@@ -312,6 +336,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.operator_database = operator_database
     application.state.binding_commit_database = binding_commit_database
     application.state.binding_adapter = binding_adapter
+    application.state.parent_relationship_database = (
+        parent_relationship_database
+    )
+    application.state.parent_relationship_adapter = (
+        parent_relationship_adapter
+    )
     application.state.spool = spool
     application.state.store = store
     application.state.operator_store = operator_store

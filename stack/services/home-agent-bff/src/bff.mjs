@@ -40,6 +40,18 @@ const PRINCIPAL_BINDING_FRESH_AUTH_ROUTES = new Set([
   "POST /api/agent/v1/principal-binding-request/cancel",
   `POST ${PRINCIPAL_BINDING_CONFIRM_PATH}`,
 ]);
+const PARENT_RELATIONSHIP_STAGE_PATH =
+  "/api/agent/v1/parent-relationship-proposal";
+const PARENT_RELATIONSHIP_CONFIRM_PATH =
+  "/api/agent/v1/parent-relationship-proposal/confirm";
+const PARENT_RELATIONSHIP_WRITE_PATHS = new Set([
+  PARENT_RELATIONSHIP_STAGE_PATH,
+  PARENT_RELATIONSHIP_CONFIRM_PATH,
+]);
+const PARENT_RELATIONSHIP_FRESH_AUTH_ROUTES = new Set([
+  `POST ${PARENT_RELATIONSHIP_STAGE_PATH}`,
+  `POST ${PARENT_RELATIONSHIP_CONFIRM_PATH}`,
+]);
 
 const UUID_PATH = "[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const ROUTES = Object.freeze([
@@ -48,6 +60,8 @@ const ROUTES = Object.freeze([
   ["POST", /^\/api\/agent\/v1\/principal-binding-request$/],
   ["POST", /^\/api\/agent\/v1\/principal-binding-request\/cancel$/],
   ["POST", /^\/api\/agent\/v1\/principal-binding-proposal\/confirm$/],
+  ["POST", /^\/api\/agent\/v1\/parent-relationship-proposal$/],
+  ["POST", /^\/api\/agent\/v1\/parent-relationship-proposal\/confirm$/],
   ["GET", /^\/api\/agent\/v1\/snapshot$/],
   ["POST", /^\/api\/agent\/v1\/memory-transactions$/],
   ["GET", new RegExp(`^/api/agent/v1/memory-transactions/${UUID_PATH}$`, "i")],
@@ -213,6 +227,63 @@ function normalizePrincipalBindingBody(pathname, body) {
     throw error;
   }
   return Buffer.from(JSON.stringify({
+    proposal_digest: value.proposal_digest,
+    confirmation_nonce: value.confirmation_nonce,
+  }));
+}
+
+function normalizeParentRelationshipBody(pathname, body) {
+  if (!PARENT_RELATIONSHIP_WRITE_PATHS.has(pathname)) return body;
+  let value;
+  try {
+    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
+  } catch {
+    const error = new Error("invalid parent relationship request body");
+    error.status = 400;
+    error.code = "invalid_request_body";
+    throw error;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    const error = new Error("invalid parent relationship request body");
+    error.status = 400;
+    error.code = "invalid_request_body";
+    throw error;
+  }
+  const keys = Object.keys(value).sort();
+  const uuid7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  if (pathname === PARENT_RELATIONSHIP_STAGE_PATH) {
+    if (
+      keys.length !== 1 || keys[0] !== "ceremony_id" ||
+      typeof value.ceremony_id !== "string" ||
+      !uuid7.test(value.ceremony_id)
+    ) {
+      const error = new Error("invalid parent relationship preview body");
+      error.status = 400;
+      error.code = "invalid_request_body";
+      throw error;
+    }
+    return Buffer.from(JSON.stringify({ ceremony_id: value.ceremony_id }));
+  }
+  const uuid4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  if (
+    keys.length !== 3 ||
+    keys[0] !== "confirmation_nonce" ||
+    keys[1] !== "proposal_digest" ||
+    keys[2] !== "proposal_id" ||
+    typeof value.proposal_id !== "string" ||
+    typeof value.proposal_digest !== "string" ||
+    typeof value.confirmation_nonce !== "string" ||
+    !uuid7.test(value.proposal_id) ||
+    !/^[0-9a-f]{64}$/.test(value.proposal_digest) ||
+    !uuid4.test(value.confirmation_nonce)
+  ) {
+    const error = new Error("invalid parent relationship confirmation body");
+    error.status = 400;
+    error.code = "invalid_request_body";
+    throw error;
+  }
+  return Buffer.from(JSON.stringify({
+    proposal_id: value.proposal_id,
     proposal_digest: value.proposal_digest,
     confirmation_nonce: value.confirmation_nonce,
   }));
@@ -1596,7 +1667,10 @@ async function proxyCoreRequest(
       : providedRawBody;
     body = rawBody === undefined
       ? undefined
-      : normalizePrincipalBindingBody(url.pathname, rawBody);
+      : normalizeParentRelationshipBody(
+        url.pathname,
+        normalizePrincipalBindingBody(url.pathname, rawBody),
+      );
     const corePath = url.pathname.replace(publicPrefix, "");
     const headers = {
       Authorization: `Bearer ${config.coreToken}`,
@@ -1891,11 +1965,14 @@ function createBff(config, { fetchImpl = fetch, store, attestationStore } = {}) 
       { error: "authentication_required" },
       { "Set-Cookie": clearSessionCookie(config.secureCookie) },
     );
-    const isPrincipalBindingRoute = (
-      !url.search && PRINCIPAL_BINDING_FRESH_AUTH_ROUTES.has(`${req.method} ${url.pathname}`)
+    const isFreshIdentityRoute = (
+      !url.search && (
+        PRINCIPAL_BINDING_FRESH_AUTH_ROUTES.has(`${req.method} ${url.pathname}`) ||
+        PARENT_RELATIONSHIP_FRESH_AUTH_ROUTES.has(`${req.method} ${url.pathname}`)
+      )
     );
     if (
-      isPrincipalBindingRoute && req.method !== "GET" &&
+      isFreshIdentityRoute && req.method !== "GET" &&
       (!requireOrigin(req, config, res) || !requireCsrf(req, session, res))
     ) return;
     try {
@@ -1905,7 +1982,7 @@ function createBff(config, { fetchImpl = fetch, store, attestationStore } = {}) 
         session,
         fetchImpl,
         Date.now(),
-        { forcePrincipalCheck: isPrincipalBindingRoute },
+        { forcePrincipalCheck: isFreshIdentityRoute },
       );
     } catch {
       sessions.scheduleRevocation(sessionId, session, "authentication_revoked");
@@ -1929,7 +2006,7 @@ function createBff(config, { fetchImpl = fetch, store, attestationStore } = {}) 
     if (url.search || !routeAllowed(req.method, url.pathname)) {
       return json(res, 404, { error: "route_not_allowed", request_id: requestId });
     }
-    if (req.method !== "GET" && !isPrincipalBindingRoute) {
+    if (req.method !== "GET" && !isFreshIdentityRoute) {
       if (!requireOrigin(req, config, res) || !requireCsrf(req, session, res)) return;
     }
 
@@ -1973,6 +2050,7 @@ export {
   isAllowedOrigin,
   loadNativeInstallationRegistry,
   nativeRouteAllowed,
+  normalizeParentRelationshipBody,
   normalizePrincipalBindingBody,
   parseCookies,
   randomToken,

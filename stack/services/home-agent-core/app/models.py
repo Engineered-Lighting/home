@@ -468,6 +468,85 @@ class PrincipalBindingConfirmationView(StrictModel):
     _confirmed_at = field_validator("confirmed_at")(_aware)
 
 
+class ParentRelationshipPreviewRequest(StrictModel):
+    ceremony_id: uuid.UUID
+
+    @field_validator("ceremony_id")
+    @classmethod
+    def _uuid7_ceremony(cls, value: uuid.UUID) -> uuid.UUID:
+        if value.version != 7:
+            raise ValueError("parent ceremony ID must be UUIDv7")
+        return value
+
+
+class ParentRelationshipPreviewCandidate(StrictModel):
+    ordinal: Literal[0, 1]
+    reviewed_display_label: str = Field(min_length=1, max_length=255)
+    review_code: str = Field(pattern=r"^[A-HJ-NP-Z2-9]{16}$")
+
+
+class ParentRelationshipPreviewView(StrictModel):
+    state: Literal["ready_for_confirmation"] = "ready_for_confirmation"
+    proposal_id: uuid.UUID
+    proposal_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    expires_at: datetime
+    child_display_label: str = Field(min_length=1, max_length=255)
+    candidates: list[ParentRelationshipPreviewCandidate] = Field(
+        min_length=2,
+        max_length=2,
+    )
+    confirmation_statement: str = Field(min_length=1, max_length=768)
+    creates_exactly_two_parent_facts: Literal[True] = True
+    does_not_assert_ownership_residence_or_presence: Literal[True] = True
+    location_memory_enabled: Literal[False] = False
+    travel_greetings_enabled: Literal[False] = False
+
+    _expires_at = field_validator("expires_at")(_aware)
+
+    @model_validator(mode="after")
+    def _canonical_preview(self) -> "ParentRelationshipPreviewView":
+        if [candidate.ordinal for candidate in self.candidates] != [0, 1]:
+            raise ValueError("parent candidates must have canonical ordinals")
+        labels = [
+            candidate.reviewed_display_label for candidate in self.candidates
+        ]
+        if len({label.casefold() for label in labels}) != 2:
+            raise ValueError("parent candidate labels must be distinct")
+        expected = (
+            f"Confirm that {labels[0]} and {labels[1]} are parents of "
+            f"{self.child_display_label}."
+        )
+        if self.confirmation_statement != expected:
+            raise ValueError("parent confirmation statement is not canonical")
+        if self.proposal_id.version != 7:
+            raise ValueError("parent proposal ID must be UUIDv7")
+        return self
+
+
+class ParentRelationshipConfirmation(StrictModel):
+    proposal_id: uuid.UUID
+    proposal_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    confirmation_nonce: uuid.UUID
+
+    @model_validator(mode="after")
+    def _identifier_versions(self) -> "ParentRelationshipConfirmation":
+        if self.proposal_id.version != 7:
+            raise ValueError("parent proposal ID must be UUIDv7")
+        if self.confirmation_nonce.version != 4:
+            raise ValueError("confirmation nonce must be a random UUIDv4")
+        return self
+
+
+class ParentRelationshipConfirmationView(StrictModel):
+    state: Literal["confirmed"] = "confirmed"
+    confirmed_at: datetime
+    fact_count: Literal[2] = 2
+    location_memory_enabled: Literal[False] = False
+    travel_greetings_enabled: Literal[False] = False
+
+    _confirmed_at = field_validator("confirmed_at")(_aware)
+
+
 class OperatorPrincipalBindingRequestView(StrictModel):
     request_id: uuid.UUID
     review_code: str = Field(pattern=r"^[A-HJ-NP-Z2-9]{16}$")

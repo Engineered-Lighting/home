@@ -41,7 +41,7 @@ KERNEL_ROLE = "home_agent_identity_erasure_kernel"
 # deliberately distinguishes NULL/default ACLs from explicitly rewritten ACLs.
 PINNED_SYSTEM_CATALOG_CONTRACT_ROWS = 6563
 PINNED_SYSTEM_CATALOG_CONTRACT_DIGEST = (
-    "b4e8efc14ec69bc6532a324060b455f0df99311c40120b553b7f00b8ac0994ec"
+    "5f9ee4e902a42d5880545f7d619a8fb95b10b92b203589cd530c60e835fc12a3"
 )
 
 PERSON_SCOPE = "privacy.person_erasure_scopes"

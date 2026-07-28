@@ -14,8 +14,12 @@ area: home-agent
 - Re-runs identity-authority, privacy, retrieval-block, ambiguity, and
   existing-parent-fact checks under the global semantic write fence.
 - Grant replay revokes the staging function before all admission checks and
-  restores only exact `EXECUTE` to the table-blind binding committer at the
+  restores the exact dependency ACL plus exact `EXECUTE` to the table-blind
+  binding committer only after every predecessor catalog pin passes at the
   exact E5e revision.
+- Accepted by the isolated PostgreSQL 17 authority gate in GitHub Actions run
+  `30339428295`; the workstation contract suite also passed with 689 tests
+  and 82 environment-gated skips.
 - No parent fact, confirmation artifact, memory transaction, authority
   receipt, BFF route, or UI activation is included. Production remains pinned
   to revision `0006a_worker_lease_arbitration` in `record_only`.

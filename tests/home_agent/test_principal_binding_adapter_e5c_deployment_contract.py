@@ -27,6 +27,7 @@ def test_e5c_committer_secret_is_additive_atomic_and_independent() -> None:
     source = read(
         "stack/home-agent-deploy/add-binding-committer-role-secrets.sh"
     )
+    bootstrap = read("stack/home-agent-deploy/bootstrap-secrets.sh")
     assert source.startswith("#!/bin/sh\nset -eu\numask 077\n")
     assert "must run as root" in source
     assert 'target="$master_root/binding-committer"' in source
@@ -36,6 +37,11 @@ def test_e5c_committer_secret_is_additive_atomic_and_independent() -> None:
     assert "home_agent_binding_committer" in source
     assert "mv -T --no-clobber" in source
     assert 'echo "$password"' not in source
+    assert 'binding_committer_password="$(hex_secret 32)"' in bootstrap
+    assert (
+        "binding-committer/postgres_binding_committer_password" in bootstrap
+    )
+    assert "binding-committer/database_url_binding_committer" in bootstrap
 
 
 def test_e5c_committer_role_is_login_bounded_and_membership_free() -> None:

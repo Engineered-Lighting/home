@@ -221,6 +221,7 @@ BUILD_CONTEXT_FILES = (
     "stack/services/home-agent-core/docker-entrypoint.sh",
     "stack/home-agent-deploy/provision-roles.sh",
     "stack/home-agent-deploy/apply-grants.sh",
+    "stack/home-agent-deploy/add-binding-committer-role-secrets.sh",
     "stack/home-agent-deploy/identity-api-acl.sql",
     "stack/home-agent-deploy/IDENTITY-ERASURE-KERNEL-ROLE.md",
     "stack/home-agent-deploy/IDENTITY-CUTOVER-ROLE.md",

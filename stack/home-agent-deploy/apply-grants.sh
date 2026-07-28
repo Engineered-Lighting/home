@@ -6721,6 +6721,24 @@ DECLARE
   kernel_owned_object_count integer;
   owner_oid oid;
   policy_count integer;
+  pre_e5b_revisions constant text[] := ARRAY[
+    '0001_greenfield_core',
+    '0002_people_privacy_cutover',
+    '0003_resource_budgets',
+    '0004_rollout_authorizations',
+    '0005_principal_binding_proposals',
+    '0006_worker_maintenance_health',
+    '0006a_worker_lease_arbitration',
+    '0007_phase3_identity_authority',
+    '0008_identity_migration_kernel',
+    '0009_identity_finalizer_base',
+    '0010_identity_erasure_source',
+    '0011_identity_erasure_e1',
+    '0012_identity_erasure_e2',
+    '0013_identity_finalizer_e3',
+    '0014_identity_cutover_e4',
+    '0015_current_authority_e5a'
+  ]::text[];
   receipt_table regclass := pg_catalog.to_regclass(
     'operations.principal_binding_authority_receipts'
   );
@@ -6790,6 +6808,19 @@ BEGIN
      OR pg_catalog.to_regclass(
           'identity.uq_confirmation_artifacts_binding_nonce_e5b'
         ) IS NULL THEN
+    IF receipt_table IS NULL
+       AND binding_function IS NULL
+       AND function_name_count = 0
+       AND binding_column_count = 0
+       AND policy_count = 0
+       AND support_constraint_count = 0
+       AND trigger_count = 0
+       AND pg_catalog.to_regclass(
+             'identity.uq_confirmation_artifacts_binding_nonce_e5b'
+           ) IS NULL
+       AND current_revision = ANY (pre_e5b_revisions) THEN
+      RETURN;
+    END IF;
     RAISE EXCEPTION
       'partial or revision-mismatched principal-binding E5b object set'
       USING ERRCODE = '55000',

@@ -195,6 +195,40 @@ def test_e5b_pending_manifest_pins_complete_denial_only_catalog() -> None:
         _read(GRANTS), "identity_principal_binding_e5b_acl"
     )
 
+    assert _revision_array(admission, "pre_e5b_revisions") == [
+        "0001_greenfield_core",
+        "0002_people_privacy_cutover",
+        "0003_resource_budgets",
+        "0004_rollout_authorizations",
+        "0005_principal_binding_proposals",
+        "0006_worker_maintenance_health",
+        "0006a_worker_lease_arbitration",
+        "0007_phase3_identity_authority",
+        "0008_identity_migration_kernel",
+        "0009_identity_finalizer_base",
+        "0010_identity_erasure_source",
+        "0011_identity_erasure_e1",
+        "0012_identity_erasure_e2",
+        "0013_identity_finalizer_e3",
+        "0014_identity_cutover_e4",
+        "0015_current_authority_e5a",
+    ]
+    for absent_condition in (
+        "receipt_table IS NULL",
+        "binding_function IS NULL",
+        "function_name_count = 0",
+        "binding_column_count = 0",
+        "policy_count = 0",
+        "support_constraint_count = 0",
+        "trigger_count = 0",
+        "current_revision = ANY (pre_e5b_revisions)",
+    ):
+        assert absent_condition in admission
+    assert re.search(
+        r"current_revision = ANY \(pre_e5b_revisions\) THEN\s+RETURN;",
+        admission,
+    )
+
     assert f"current_revision <> '{REVISION}'" in admission
     assert FUNCTION_NAME in admission
     assert FUNCTION_ARGUMENTS in admission

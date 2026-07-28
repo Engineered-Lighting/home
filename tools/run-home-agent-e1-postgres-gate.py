@@ -1094,13 +1094,20 @@ def _discover_changed_catalog_digests(
 ) -> None:
     """Emit only changed catalog digests, then require a reviewed source pin."""
     script = "/workspace/stack/home-agent-deploy/apply-grants.sh"
-    temporary_script = "/tmp/apply-grants-catalog-discovery.sh"
+    acl_contract = "/workspace/stack/home-agent-deploy/identity-api-acl.sql"
+    temporary_root = "/tmp/home-agent-catalog-discovery"
+    temporary_script = f"{temporary_root}/apply-grants.sh"
+    temporary_acl = f"{temporary_root}/identity-api-acl.sql"
     replacements: dict[str, str] = {}
     discovered: dict[str, str] = {}
     activation_stop = "identity cutover E4 activation contract is not installed"
 
     for attempt in range(1, len(CATALOG_DIGEST_CONTRACTS) + 2):
-        commands = [f'cp "{script}" "{temporary_script}"']
+        commands = [
+            f'mkdir -p "{temporary_root}"',
+            f'cp "{script}" "{temporary_script}"',
+            f'cp "{acl_contract}" "{temporary_acl}"',
+        ]
         for expected, actual in replacements.items():
             commands.append(
                 f"sed -i 's/{expected}/{actual}/g' " f'"{temporary_script}"'

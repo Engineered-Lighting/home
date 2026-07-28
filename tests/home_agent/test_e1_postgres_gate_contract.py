@@ -218,6 +218,7 @@ def test_catalog_discovery_emits_only_exact_changed_fingerprints(
     e4 = runner.CATALOG_DIGEST_CONTRACTS[1]
     actual_e3 = "1" * 64
     actual_e4 = "2" * 64
+    commands: list[list[str]] = []
     results = iter(
         (
             SimpleNamespace(
@@ -244,11 +245,11 @@ def test_catalog_discovery_emits_only_exact_changed_fingerprints(
         )
     )
 
-    monkeypatch.setattr(
-        runner,
-        "_docker_run",
-        lambda *_args, **_kwargs: next(results),
-    )
+    def fake_docker_run(*_args, **kwargs):
+        commands.append(kwargs["command"])
+        return next(results)
+
+    monkeypatch.setattr(runner, "_docker_run", fake_docker_run)
     with pytest.raises(runner.GateFailure, match="review and pin"):
         runner._discover_changed_catalog_digests(
             state,
@@ -264,6 +265,11 @@ def test_catalog_discovery_emits_only_exact_changed_fingerprints(
     ]
     assert private_canary not in captured.out
     assert captured.err == ""
+    assert commands
+    assert all(
+        "identity-api-acl.sql" in " ".join(command)
+        for command in commands
+    )
 
 
 def test_catalog_discovery_reports_only_allowlisted_contract_failures(

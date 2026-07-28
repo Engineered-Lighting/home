@@ -1143,6 +1143,14 @@ The complete hosted E1-E5k PostgreSQL 17 authority gate passed in workflow run
 read-only source-plan contract; it does not authorize a production migration
 or create a source-acceptance receipt.
 
+The subsequent live read-only E5k evaluation at documentation commit
+`66f50de` matched all 86 activation-source entries to source-pack digest
+`4ce9ee5cab3e2e43883a54b63adc377fe2116ac47ee0e96a635e776fbca2bff5`.
+The companion E5j preflight found all required production containers ready,
+the rollout still `record_only`, and 220 of 500 qualifying events. The source
+plan retained all five deliberate executor/durability stops and issued no
+receipt. No service, database, migration, or rollout state was changed.
+
 ## Record-only, shadow, and canary gates
 
 Every fresh deployment starts with `HOME_AGENT_ROLLOUT_MODE=record_only`.

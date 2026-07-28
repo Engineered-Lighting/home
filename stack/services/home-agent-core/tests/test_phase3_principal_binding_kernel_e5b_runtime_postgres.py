@@ -39,6 +39,9 @@ HOSTED_GATE_SENTINEL_ENV = "TEST_PHASE3_IDENTITY_ERASURE_E1_RUN_SENTINEL"
 RETAIN_DOWNGRADE_EVIDENCE_ENV = (
     "TEST_PHASE3_PRINCIPAL_BINDING_KERNEL_E5B_RETAIN_DOWNGRADE_EVIDENCE"
 )
+CLEANUP_DOWNGRADE_EVIDENCE_ENV = (
+    "TEST_PHASE3_PRINCIPAL_BINDING_KERNEL_E5B_CLEANUP_DOWNGRADE_EVIDENCE"
+)
 FUNCTION = "identity.commit_authenticated_principal_binding_e5b"
 POLICY_VERSION = "home-agent-mvp-v1"
 REVIEW_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -569,6 +572,95 @@ async def test_e5b_retains_one_graph_for_hosted_downgrade_refusal() -> None:
         if not committed:
             await _cleanup(owner_engine, staged)
         await binding_engine.dispose()
+        await owner_engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not os.getenv(OWNER_DATABASE_ENV)
+    or os.getenv(CLEANUP_DOWNGRADE_EVIDENCE_ENV) != "1",
+    reason="runner-only downgrade evidence cleanup is not requested",
+)
+async def test_e5b_removes_hosted_downgrade_evidence_after_refusal() -> None:
+    """Remove only the synthetic graph after its downgrade proof is complete."""
+
+    owner_engine = _engine(OWNER_DATABASE_ENV)
+    try:
+        async with owner_engine.connect() as connection:
+            rows = (
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT promotion.promotion_id, "
+                            "promotion.run_id, request.request_id, "
+                            "proposal.proposal_id, proposal.person_id, "
+                            "proposal.ha_user_id, proposal.proposal_digest, "
+                            "receipt.receipt_id, receipt.principal_id, "
+                            "receipt.confirmation_artifact_id AS artifact_id, "
+                            "receipt.binding_id "
+                            "FROM identity.principal_binding_proposals proposal "
+                            "JOIN identity.principal_binding_requests request "
+                            "ON request.request_id=proposal.request_id "
+                            "JOIN operations."
+                            "principal_binding_authority_receipts receipt "
+                            "ON receipt.proposal_id=proposal.proposal_id "
+                            "JOIN operations.semantic_authority_promotions "
+                            "promotion "
+                            "ON promotion.promotion_id=receipt.promotion_id "
+                            "WHERE proposal.ha_user_id LIKE "
+                            "'e5b-runtime-downgrade-refusal-%'"
+                        )
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        assert len(rows) == 1
+        retained = rows[0]
+        staged = StagedBinding(
+            promotion_id=retained["promotion_id"],
+            run_id=retained["run_id"],
+            request_id=retained["request_id"],
+            proposal_id=retained["proposal_id"],
+            person_id=retained["person_id"],
+            ha_user_id=retained["ha_user_id"],
+            proposal_digest=retained["proposal_digest"],
+            nonce=uuid.uuid4(),
+            receipt_id=retained["receipt_id"],
+            principal_id=retained["principal_id"],
+            artifact_id=retained["artifact_id"],
+            binding_id=retained["binding_id"],
+        )
+        await _cleanup(owner_engine, staged)
+        async with owner_engine.connect() as connection:
+            remaining = (
+                await connection.execute(
+                    text(
+                        "SELECT "
+                        "(SELECT count(*) FROM identity."
+                        "principal_binding_requests "
+                        "WHERE request_id=:request_id) + "
+                        "(SELECT count(*) FROM identity."
+                        "principal_binding_proposals "
+                        "WHERE proposal_id=:proposal_id) + "
+                        "(SELECT count(*) FROM identity.ha_user_bindings "
+                        "WHERE binding_id=:binding_id) + "
+                        "(SELECT count(*) FROM identity.confirmation_artifacts "
+                        "WHERE artifact_id=:artifact_id) + "
+                        "(SELECT count(*) FROM identity.principals "
+                        "WHERE principal_id=:principal_id)"
+                    ),
+                    {
+                        "request_id": staged.request_id,
+                        "proposal_id": staged.proposal_id,
+                        "binding_id": staged.binding_id,
+                        "artifact_id": staged.artifact_id,
+                        "principal_id": staged.principal_id,
+                    },
+                )
+            ).scalar_one()
+        assert remaining == 0
+    finally:
         await owner_engine.dispose()
 
 

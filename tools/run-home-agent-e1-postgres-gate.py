@@ -73,6 +73,9 @@ E5B_COMMITTER_DATABASE_ENV = (
 E5C_OPERATOR_DATABASE_ENV = (
     "TEST_PHASE3_PRINCIPAL_BINDING_ADAPTER_E5C_OPERATOR_DATABASE_URL"
 )
+E5B_CLEANUP_DOWNGRADE_EVIDENCE_ENV = (
+    "TEST_PHASE3_PRINCIPAL_BINDING_KERNEL_E5B_CLEANUP_DOWNGRADE_EVIDENCE"
+)
 CATALOG_DIGEST_CONTRACTS = (
     (
         "e3",
@@ -2971,6 +2974,31 @@ def _run_e4_scaffold_phase(
         raise GateFailure(
             "rejected E5b catalog retained a callable or direct privilege"
         )
+
+    # The single reviewed E4 fixture person was intentionally bound above to
+    # prove populated E5b downgrade refusal. Preserve that graph through every
+    # quarantine assertion, then remove only the synthetic runner evidence so
+    # the same person can exercise E5c without violating one-active-binding.
+    _pytest(
+        state,
+        phase,
+        secrets_directory,
+        nodes=[
+            "tests/"
+            "test_phase3_principal_binding_kernel_e5b_runtime_postgres.py"
+            "::test_e5b_removes_hosted_downgrade_evidence_after_refusal",
+        ],
+        url_environment={
+            E5B_OWNER_DATABASE_ENV: BASE_DATABASE,
+        },
+        environment={
+            SENTINEL_ENV: state.sentinel,
+            SYSTEM_ID_ENV: phase.system_identifier,
+            ALLOWLIST_ENV: BASE_DATABASE,
+            E5B_CLEANUP_DOWNGRADE_EVIDENCE_ENV: "1",
+        },
+        fail_fast=True,
+    )
 
     # E5c is a separate reviewed activation boundary. Its migration remains
     # denial-only; the pinned grant replay restores only the two internal

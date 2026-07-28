@@ -80,7 +80,10 @@ def test_runner_admits_only_explicit_github_hosted_linux_context() -> None:
             hostname="self-hosted-runner",
             platform="linux",
             arguments=(runner.GITHUB_HOSTED_LINUX_FLAG,),
-            environment={**admitted, runner.GITHUB_HOSTED_LINUX_ENVIRONMENT: "self-hosted"},
+            environment={
+                **admitted,
+                runner.GITHUB_HOSTED_LINUX_ENVIRONMENT: "self-hosted",
+            },
         )
     with pytest.raises(runner.GateFailure, match="valid only"):
         runner._assert_execution_admitted(
@@ -266,10 +269,7 @@ def test_catalog_discovery_emits_only_exact_changed_fingerprints(
     assert private_canary not in captured.out
     assert captured.err == ""
     assert commands
-    assert all(
-        "identity-api-acl.sql" in " ".join(command)
-        for command in commands
-    )
+    assert all("identity-api-acl.sql" in " ".join(command) for command in commands)
 
 
 def test_catalog_discovery_reports_only_allowlisted_contract_failures(
@@ -440,6 +440,7 @@ def test_context_manifest_explicitly_carries_untracked_erasure_test_sources() ->
         "stack/home-agent-deploy/postgres-pg_hba.conf",
         "stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh",
         "stack/home-agent-deploy/operator/reviewed_identity_payload.py",
+        "stack/home-agent-deploy/operator/phase3_activation_preflight.py",
         "stack/home-agent-deploy/operator/REVIEWED-IDENTITY-PAYLOAD.md",
         "stack/services/home-agent-core/tests/test_identity_person_restore_replay.py",
         "stack/services/home-agent-core/tests/test_ledger_versions.py",
@@ -466,8 +467,8 @@ def test_context_manifest_explicitly_carries_untracked_erasure_test_sources() ->
         "test_phase3_identity_current_authority_e5_schema.py",
         "stack/services/home-agent-core/tests/"
         "test_phase3_identity_current_authority_e5_runtime_postgres.py",
-        "tests/home_agent/"
-        "test_identity_current_authority_e5_deployment_contract.py",
+        "tests/home_agent/" "test_identity_current_authority_e5_deployment_contract.py",
+        "tests/home_agent/test_phase3_activation_preflight_e5i.py",
     ):
         assert relative_path in runner.BUILD_CONTEXT_FILES
 
@@ -493,13 +494,9 @@ def test_context_policy_rejects_sensitive_binary_and_git_symlink_paths(
 ) -> None:
     runner = _load_runner()
 
-    runner._validate_context_path_policy(
-        "stack/home-agent-deploy/postgres-pg_hba.conf"
-    )
+    runner._validate_context_path_policy("stack/home-agent-deploy/postgres-pg_hba.conf")
     with pytest.raises(runner.GateFailure, match="unreviewed"):
-        runner._validate_context_path_policy(
-            "stack/home-agent-deploy/unreviewed.conf"
-        )
+        runner._validate_context_path_policy("stack/home-agent-deploy/unreviewed.conf")
     with pytest.raises(runner.GateFailure, match="sensitive"):
         runner._validate_context_path_policy(
             "stack/services/home-agent-core/tests/secrets/canary.py"
@@ -618,8 +615,9 @@ def test_e3_phase_is_guarded_dormant_and_uses_secret_file_role_urls() -> None:
 
     assert "def _upgrade_e3_database(" in source
     assert "_upgrade_e2_database(state, phase, secrets_directory)" in source
-    assert "_alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0013)" in (
-        source
+    assert (
+        "_alembic(state, phase, secrets_directory, BASE_DATABASE, REVISION_0013)"
+        in (source)
     )
     assert "_apply_grants(state, phase, secrets_directory, BASE_DATABASE)" in source
     assert "def _run_e3_phase(" in source
@@ -648,15 +646,11 @@ def test_e4_e5_scaffold_phase_is_fresh_dormant_and_secret_file_only() -> None:
     quarantine = section.index("_apply_grants(", ceremony)
     e4_upgrade = section.index("REVISION_0014", quarantine)
     assert historical_upgrade < ceremony < quarantine < e4_upgrade
-    empty_quarantine = section.index(
-        "_apply_grants_expect_failure(", e4_upgrade
-    )
+    empty_quarantine = section.index("_apply_grants_expect_failure(", e4_upgrade)
     empty_downgrade = section.index("_alembic_downgrade(", e4_upgrade)
     second_upgrade = section.index("_alembic(", empty_downgrade)
     fixture_seed = section.index("_seed_e4_success_fixture(", second_upgrade)
-    login_open = section.index(
-        'role="home_agent_identity_cutover"', fixture_seed
-    )
+    login_open = section.index('role="home_agent_identity_cutover"', fixture_seed)
     assert (
         e4_upgrade
         < empty_quarantine
@@ -683,26 +677,15 @@ def test_e4_e5_scaffold_phase_is_fresh_dormant_and_secret_file_only() -> None:
     assert "test_phase3_identity_semantic_cutover_e4_runtime_postgres.py" in source
     assert "test_identity_cutover_e4_deployment_contract.py" in source
     assert "test_phase3_identity_current_authority_e5_schema.py" in source
-    assert "test_phase3_identity_current_authority_e5_runtime_postgres.py" in (
-        source
-    )
-    assert "test_identity_current_authority_e5_deployment_contract.py" in (
-        source
-    )
+    assert "test_phase3_identity_current_authority_e5_runtime_postgres.py" in (source)
+    assert "test_identity_current_authority_e5_deployment_contract.py" in (source)
     assert "def _alembic_expect_failure(" in source
     assert "SET application_name='e5b-role-config-tamper'" in section
     assert "principal_binding_e5b_caller_role_invalid" in section
     assert "RESET application_name" in section
-    assert (
-        "test_e5b_retains_one_graph_for_hosted_downgrade_refusal" in section
-    )
-    assert (
-        "refusing to remove populated E5b principal-binding authority"
-        in section
-    )
-    assert "TEST_PHASE3_IDENTITY_CURRENT_AUTHORITY_E5_OWNER_DATABASE_URL" in (
-        source
-    )
+    assert "test_e5b_retains_one_graph_for_hosted_downgrade_refusal" in section
+    assert "refusing to remove populated E5b principal-binding authority" in section
+    assert "TEST_PHASE3_IDENTITY_CURRENT_AUTHORITY_E5_OWNER_DATABASE_URL" in (source)
     assert "TEST_PHASE3_IDENTITY_CURRENT_AUTHORITY_E5_DATABASE_URL" in source
     assert "def _set_disposable_e4_role_login(" in source
     assert 'role="home_agent_identity_finalizer"' in section
@@ -716,13 +699,9 @@ def test_e4_e5_scaffold_phase_is_fresh_dormant_and_secret_file_only() -> None:
     assert "empty E4 quarantine before downgrade" in source
     assert "pinned dormant E4 catalog" in source
     assert (
-        section.count("identity cutover E4 activation contract is not installed")
-        == 2
+        section.count("identity cutover E4 activation contract is not installed") == 2
     )
-    assert (
-        "identity principal-binding E5b catalog admission is pending "
-        not in section
-    )
+    assert "identity principal-binding E5b catalog admission is pending " not in section
     e5_upgrade = section.index("REVISION_0015", login_open)
     e5_downgrade = section.index("_alembic_downgrade(", e5_upgrade)
     e5_reupgrade = section.index("_alembic(", e5_downgrade)
@@ -905,8 +884,7 @@ def test_e4_fixture_seed_uses_fixed_core_module_import_boundary(
         document_path = fixture_directory / runner.E4_FIXTURE_DOCUMENT_FILE
         admission_path = fixture_directory / runner.E4_FIXTURE_ADMISSION_FILE
         document_path.write_text(
-            runner.base64.b64encode(b'{"synthetic":true}').decode("ascii")
-            + "\n",
+            runner.base64.b64encode(b'{"synthetic":true}').decode("ascii") + "\n",
             encoding="ascii",
         )
         admission_path.write_text(
@@ -936,14 +914,10 @@ def test_e4_fixture_seed_uses_fixed_core_module_import_boundary(
     shell = command[3]
     assert isinstance(shell, str)
     assert f'cd "{runner.CORE_CONTAINER_ROOT}";' in shell
-    assert (
-        f'export PYTHONPATH="{runner.CORE_CONTAINER_ROOT}";'
-        in shell
-    )
+    assert f'export PYTHONPATH="{runner.CORE_CONTAINER_ROOT}";' in shell
     assert (
         "exec python -m "
-        "tests.seed_phase3_identity_semantic_cutover_e4_success"
-        in shell
+        "tests.seed_phase3_identity_semantic_cutover_e4_success" in shell
     )
     assert "python tests/" not in shell
     assert ".py" not in shell
@@ -960,13 +934,11 @@ def test_e4_fixture_seed_uses_fixed_core_module_import_boundary(
 def test_hosted_e4_success_fixture_has_a_non_skippable_contract() -> None:
     runner_source = RUNNER.read_text(encoding="utf-8")
     seeder_source = (
-        ROOT
-        / "stack/services/home-agent-core/tests/"
+        ROOT / "stack/services/home-agent-core/tests/"
         "seed_phase3_identity_semantic_cutover_e4_success.py"
     ).read_text(encoding="utf-8")
     runtime_source = (
-        ROOT
-        / "stack/services/home-agent-core/tests/"
+        ROOT / "stack/services/home-agent-core/tests/"
         "test_phase3_identity_semantic_cutover_e4_runtime_postgres.py"
     ).read_text(encoding="utf-8")
 
@@ -976,30 +948,20 @@ def test_hosted_e4_success_fixture_has_a_non_skippable_contract() -> None:
     assert "TEST_PHASE3_IDENTITY_ERASURE_E1_RUN_SENTINEL" in runtime_source
     assert "base64.b64decode(encoded_document, validate=True)" in runtime_source
     assert "admission_id.version == 7" in runtime_source
-    assert (
-        "tests.seed_phase3_identity_semantic_cutover_e4_success"
-        in runner_source
-    )
+    assert "tests.seed_phase3_identity_semantic_cutover_e4_success" in runner_source
     assert "CORE_CONTAINER_ROOT" in runner_source
     assert "export PYTHONPATH=" in runner_source
-    assert (
-        "E4_SUCCESS_DOCUMENT_ENV: E4_FIXTURE_DOCUMENT_FILE"
-        in runner_source
-    )
-    assert (
-        "E4_SUCCESS_ADMISSION_ENV: E4_FIXTURE_ADMISSION_FILE"
-        in runner_source
-    )
+    assert "E4_SUCCESS_DOCUMENT_ENV: E4_FIXTURE_DOCUMENT_FILE" in runner_source
+    assert "E4_SUCCESS_ADMISSION_ENV: E4_FIXTURE_ADMISSION_FILE" in runner_source
     assert "_seed_fixture" in seeder_source
     assert "_finalize" in seeder_source
     assert "LEDGER_WORKER_DATABASE_ENV" in seeder_source
     assert "DurableWorker._advance_ledger_state(" in seeder_source
     assert "LedgerHead(epoch=0, head_hash=ZERO_HASH)" in seeder_source
-    assert (
-        seeder_source.index("DurableWorker._advance_ledger_state(")
-        < seeder_source.index("fixture = await _seed_fixture(")
-    )
-    assert "evidence[\"recorded_epoch\"] != 0" in seeder_source
+    assert seeder_source.index(
+        "DurableWorker._advance_ledger_state("
+    ) < seeder_source.index("fixture = await _seed_fixture(")
+    assert 'evidence["recorded_epoch"] != 0' in seeder_source
     assert 'evidence["recorded_head_hash"] != ZERO_HASH' in seeder_source
     assert "INSERT INTO operations.erasure_ledger_state" not in seeder_source
     assert "insert(schema.erasure_ledger_state)" not in seeder_source

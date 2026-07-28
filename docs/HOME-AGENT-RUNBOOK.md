@@ -1010,6 +1010,55 @@ memory and travel greetings off. Production remains pinned to
 `0006a_worker_lease_arbitration` in `record_only`. The hosted E5c gate passed
 in workflow run `30329873575`; an explicit operator rollout is still required.
 
+### Dormant E5i Phase 3 activation preflight
+
+E5i adds a read-only operator diagnostic; it does not install the missing E4
+activation contract. Run it only from the exact reviewed checkout:
+
+```sh
+cd /opt/home/home-agent-integration-test
+sudo python3 \
+  stack/home-agent-deploy/operator/phase3_activation_preflight.py
+```
+
+The diagnostic accepts no arguments, opens no database connection, and invokes
+only fixed `docker exec`/`docker inspect` reads. It calls the existing
+operator-only Phase 2 and Phase 3 Core diagnostics from inside the Core API
+container, reads pgBackRest `info --output=json`, checks the six required
+container health states, and binds hosted acceptance to the clean checkout's
+exact Git commit. It never runs Compose, Alembic, `psql`, a backup, a restore,
+or a rollout writer.
+
+Exit status `0` means only that the non-authoritative preflight packet is
+complete. Status `3` means canonical admission blockers remain, and `78` means
+the probe could not establish a trusted read boundary. Every JSON result keeps
+`authoritative=false`, `enables_writes=false`,
+`changes_rollout_mode=false`, and `runs_migrations=false`, including a passing
+result.
+
+The following optional root-owned, mode-`0600`, single-link receipts are
+recognized beneath `/srv/home-agent/config`:
+
+- `phase3-restore-drill-e5i.json`, for a current isolated restore of the exact
+  newest completed full backup plus current erasure-ledger replay;
+- `phase3-off-host-backup-e5i.json`, for a checksum-verified encrypted copy of
+  that same backup at an operator-controlled off-host destination; and
+- `phase3-source-acceptance-e5i.json`, binding the target revision, clean source
+  commit, hosted PostgreSQL/web runs, and the future reviewed activation
+  contract.
+
+The preflight does not create these receipts, and an operator must not fabricate
+them to clear a blocker. Their strict content-minimized formats are exercised
+by the E5i contract tests. The active pgBackRest topology may remain `local`;
+off-host durability is represented by its separate label-bound receipt rather
+than forcing the retired SFTP topology back into production.
+
+Production remains pinned to `0006a_worker_lease_arbitration` in `record_only`.
+Even after the 500-event evidence threshold is met, an actual Phase 3
+deployment still requires separately reviewed receipt writers, the E4
+activation contract, a rollback/restore ceremony, and an explicit operator
+decision.
+
 ## Record-only, shadow, and canary gates
 
 Every fresh deployment starts with `HOME_AGENT_ROLLOUT_MODE=record_only`.

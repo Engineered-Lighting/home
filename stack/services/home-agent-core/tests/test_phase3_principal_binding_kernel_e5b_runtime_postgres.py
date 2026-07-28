@@ -142,6 +142,11 @@ async def _stage_binding(
                         "AND l.projection_id=p.person_id "
                         "AND s.subject_role='primary' "
                         "AND p.status='active' "
+                        "AND NOT EXISTS ("
+                        "SELECT 1 FROM identity.ha_user_bindings b "
+                        "WHERE b.person_id=p.person_id "
+                        "AND b.revoked_at IS NULL"
+                        ") "
                         "ORDER BY p.person_id LIMIT 1 OFFSET :person_offset"
                     ),
                     {

@@ -441,6 +441,7 @@ def test_context_manifest_explicitly_carries_untracked_erasure_test_sources() ->
         "stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh",
         "stack/home-agent-deploy/operator/reviewed_identity_payload.py",
         "stack/home-agent-deploy/operator/phase3_activation_preflight.py",
+        "stack/home-agent-deploy/operator/phase3_activation_source_plan.py",
         "stack/home-agent-deploy/operator/phase3_evidence_receipts.py",
         "stack/home-agent-deploy/operator/isolated_restore_drill.sh",
         "stack/home-agent-deploy/operator/REVIEWED-IDENTITY-PAYLOAD.md",
@@ -471,6 +472,7 @@ def test_context_manifest_explicitly_carries_untracked_erasure_test_sources() ->
         "test_phase3_identity_current_authority_e5_runtime_postgres.py",
         "tests/home_agent/" "test_identity_current_authority_e5_deployment_contract.py",
         "tests/home_agent/test_phase3_activation_preflight_e5j.py",
+        "tests/home_agent/test_phase3_activation_source_plan_e5k.py",
         "tests/home_agent/test_phase3_evidence_receipts_e5j.py",
     ):
         assert relative_path in runner.BUILD_CONTEXT_FILES

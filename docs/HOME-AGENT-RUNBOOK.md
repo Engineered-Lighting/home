@@ -1100,6 +1100,43 @@ off-host database-backup receipt, an isolated restore receipt, a separate
 current erasure-gate receipt, and reviewed activation-source admission. No
 receipt writer, restore, migration, restart, or rollout mutation was run.
 
+### Dormant E5k activation source plan
+
+E5k content-addresses the activation-relevant source that passed the hosted
+E1–E5j PostgreSQL gate. It is not the missing activation executor and cannot
+create the source-acceptance receipt:
+
+```sh
+cd /opt/home/home-agent-integration-test
+python3 \
+  stack/home-agent-deploy/operator/phase3_activation_source_plan.py
+```
+
+The verifier accepts no arguments and runs fixed, read-only Git commands only.
+It requires the current clean checkout to descend from accepted commit
+`26862863c017e77099203e945aa8cdc7d56d9f5a`, then proves that every tracked
+activation path is byte-for-byte and mode-for-mode unchanged from the source
+pack exercised by hosted PostgreSQL run `30394033276`. It rejects symlinks,
+non-regular Git modes, missing objects, path traversal, duplicate/disordered
+tree entries, source drift, an unrelated checkout, and an unavailable accepted
+commit.
+
+A trusted result still exits `3` and always reports
+`source_acceptance_receipt_issuable=false`, `authoritative=false`,
+`enables_writes=false`, `runs_migrations=false`, and
+`changes_rollout_mode=false`. The result also names the five deliberate
+remaining stops:
+
+- the production image has no Phase 3 migration entrypoint;
+- normal grant replay still rejects the absent E4 activation contract;
+- the identity finalizer service remains non-callable;
+- the semantic cutover service remains non-callable; and
+- no off-host PostgreSQL backup writer is installed.
+
+E5k does not weaken any of those boundaries. Its purpose is to prevent the
+future executable ceremony from silently changing or omitting an already
+hosted-tested dependency.
+
 ## Record-only, shadow, and canary gates
 
 Every fresh deployment starts with `HOME_AGENT_ROLLOUT_MODE=record_only`.

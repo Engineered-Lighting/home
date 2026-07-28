@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the E1-E5k scaffold gate against disposable PostgreSQL 17."""
+"""Run the E1-E5l scaffold gate against disposable PostgreSQL 17."""
 
 from __future__ import annotations
 
@@ -389,6 +389,7 @@ BUILD_CONTEXT_FILES = (
     "tests/home_agent/test_phase3_activation_preflight_e5j.py",
     "tests/home_agent/test_phase3_activation_source_plan_e5k.py",
     "tests/home_agent/test_phase3_evidence_receipts_e5j.py",
+    "tests/home_agent/test_phase3_fixed_migration_entrypoints_e5l.py",
     "stack/services/home-agent-core/tests/"
     "test_phase3_parent_relationship_authority_e5d_schema.py",
     "stack/services/home-agent-core/tests/"
@@ -3300,6 +3301,8 @@ def _run_e4_scaffold_phase(
             "/workspace/tests/home_agent/"
             "test_phase3_activation_source_plan_e5k.py",
             "/workspace/tests/home_agent/" "test_phase3_evidence_receipts_e5j.py",
+            "/workspace/tests/home_agent/"
+            "test_phase3_fixed_migration_entrypoints_e5l.py",
         ],
         url_environment={
             E5H_OWNER_DATABASE_ENV: BASE_DATABASE,
@@ -3351,7 +3354,7 @@ def main() -> int:
     except GateFailure as error:
         print(
             "E1/E2/E3/E4 gate execution quarantine "
-            f"(E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k included): {error}",
+            f"(E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l included): {error}",
             file=sys.stderr,
         )
         return 77

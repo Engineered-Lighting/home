@@ -1151,6 +1151,35 @@ the rollout still `record_only`, and 220 of 500 qualifying events. The source
 plan retained all five deliberate executor/durability stops and issued no
 receipt. No service, database, migration, or rollout state was changed.
 
+### Dormant E5l fixed migration entrypoints
+
+E5l installs exact image entrypoints for the five reviewed Phase 3 schema
+checkpoints:
+
+- `phase3-migrate-finalizer` targets `0013_identity_finalizer_e3`;
+- `phase3-migrate-current-authority` targets
+  `0015_current_authority_e5a`;
+- `phase3-migrate-authenticated-binding` targets
+  `0017_authenticated_binding_e5c`;
+- `phase3-migrate-parent-authority` targets
+  `0018_parent_relationship_e5d`; and
+- `phase3-migrate-parent-status` targets `0021_parent_status_e5h`.
+
+These are image entrypoints, not a production activation procedure. They
+accept no target or extra argument, reject `HOME_AGENT_RUN_MIGRATIONS=1`, run
+the exact Alembic revision followed by the existing exact-revision guard, and
+have no service in `home-agent-compose.yml`. The ordinary `migrate` role
+remains restricted to `0006a_worker_lease_arbitration`.
+
+The checkpoints preserve the required ordering. The E4 cutover and current
+authority roles are provisioned after 0013 and before 0015; the binding kernel
+role is provisioned after 0015 and before 0017; Marcelo's authenticated
+principal binding is completed at 0017; and the parent relationship kernel
+role is provisioned at 0018 before the final 0021 migration. No operator should
+invoke any E5l entrypoint until a later root-controlled sequencer validates all
+E5j evidence receipts, installs the grant activation contract, and provides
+tested forward-recovery and rollback behavior.
+
 ## Record-only, shadow, and canary gates
 
 Every fresh deployment starts with `HOME_AGENT_ROLLOUT_MODE=record_only`.

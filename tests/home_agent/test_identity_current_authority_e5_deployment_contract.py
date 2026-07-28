@@ -513,13 +513,13 @@ def test_hosted_runner_provisions_before_0015_and_enforces_pinned_catalog() -> N
         assert f"pg_catalog.{catalog}" in phase
 
     assert (
-            "home agent E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k "
+            "home agent E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l "
             "PostgreSQL gate"
         in workflow
     )
     assert (
             "Run isolated PostgreSQL 17 "
-            "E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k authority gate"
+            "E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l authority gate"
             in workflow
     )
     assert (

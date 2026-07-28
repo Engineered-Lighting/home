@@ -40,6 +40,11 @@ load_secret HOME_AGENT_OPERATOR_TOKEN "${HOME_AGENT_OPERATOR_TOKEN_FILE:-}" "${H
 load_secret HOME_AGENT_BOOTSTRAP_TOKEN "${HOME_AGENT_BOOTSTRAP_TOKEN_FILE:-}" "${HOME_AGENT_BOOTSTRAP_TOKEN:-}"
 
 DEPLOYABLE_MIGRATION_REVISION="0006a_worker_lease_arbitration"
+PHASE3_FINALIZER_REVISION="0013_identity_finalizer_e3"
+PHASE3_CURRENT_AUTHORITY_REVISION="0015_current_authority_e5a"
+PHASE3_AUTHENTICATED_BINDING_REVISION="0017_authenticated_binding_e5c"
+PHASE3_PARENT_AUTHORITY_REVISION="0018_parent_relationship_e5d"
+PHASE3_PARENT_STATUS_REVISION="0021_parent_status_e5h"
 
 required_migration_target() {
   target="${HOME_AGENT_EXPECTED_DB_REVISION:-}"
@@ -54,16 +59,50 @@ required_migration_target() {
   printf '%s' "$target"
 }
 
-run_migration() {
-  migration_target="$(required_migration_target)"
+run_exact_migration() {
+  if [ "$#" -ne 1 ]; then
+    echo "exact migration target is required" >&2
+    exit 64
+  fi
+  migration_target="$1"
+  if [ -z "$migration_target" ]; then
+    echo "exact migration target is required" >&2
+    exit 64
+  fi
   alembic upgrade "$migration_target"
   python -m app.migration_guard "$migration_target"
+}
+
+run_migration() {
+  migration_target="$(required_migration_target)"
+  run_exact_migration "$migration_target"
+}
+
+run_phase3_migration() {
+  if [ "$#" -ne 1 ]; then
+    echo "phase3 migration accepts one fixed target" >&2
+    exit 64
+  fi
+  migration_target="$1"
+  if [ "${HOME_AGENT_RUN_MIGRATIONS:-0}" = "1" ]; then
+    echo "phase3 migration cannot use automatic startup migration" >&2
+    exit 78
+  fi
+  run_exact_migration "$migration_target"
 }
 
 role="${1:-${HOME_AGENT_ROLE:-api}}"
 
 if [ "${HOME_AGENT_RUN_MIGRATIONS:-0}" = "1" ] && [ "$role" != "migrate" ]; then
-  run_migration
+  case "$role" in
+    phase3-migrate-*)
+      echo "phase3 migration cannot use automatic startup migration" >&2
+      exit 78
+      ;;
+    *)
+      run_migration
+      ;;
+  esac
 fi
 
 case "$role" in
@@ -72,6 +111,41 @@ case "$role" in
     ;;
   migrate)
     run_migration
+    ;;
+  phase3-migrate-finalizer)
+    [ "$#" -eq 1 ] || {
+      echo "phase3 finalizer migration accepts no arguments" >&2
+      exit 64
+    }
+    run_phase3_migration "$PHASE3_FINALIZER_REVISION"
+    ;;
+  phase3-migrate-current-authority)
+    [ "$#" -eq 1 ] || {
+      echo "phase3 current-authority migration accepts no arguments" >&2
+      exit 64
+    }
+    run_phase3_migration "$PHASE3_CURRENT_AUTHORITY_REVISION"
+    ;;
+  phase3-migrate-authenticated-binding)
+    [ "$#" -eq 1 ] || {
+      echo "phase3 authenticated-binding migration accepts no arguments" >&2
+      exit 64
+    }
+    run_phase3_migration "$PHASE3_AUTHENTICATED_BINDING_REVISION"
+    ;;
+  phase3-migrate-parent-authority)
+    [ "$#" -eq 1 ] || {
+      echo "phase3 parent-authority migration accepts no arguments" >&2
+      exit 64
+    }
+    run_phase3_migration "$PHASE3_PARENT_AUTHORITY_REVISION"
+    ;;
+  phase3-migrate-parent-status)
+    [ "$#" -eq 1 ] || {
+      echo "phase3 parent-status migration accepts no arguments" >&2
+      exit 64
+    }
+    run_phase3_migration "$PHASE3_PARENT_STATUS_REVISION"
     ;;
   ledger-init)
     exec python -m app.cli ledger-init

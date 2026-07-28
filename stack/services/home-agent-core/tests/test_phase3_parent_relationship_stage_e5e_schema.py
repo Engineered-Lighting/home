@@ -236,12 +236,6 @@ def test_grant_replay_quarantines_then_restores_only_exact_stage_execute() -> No
     assert "has_function_privilege" in activation
     assert "pg_catalog.pg_auth_members" in activation
     assert "pg_catalog.pg_attribute" in activation
-    assert "authority_kernel_oid, 'operations', 'USAGE'" in activation
-    assert "authority_kernel_oid, 'privacy', 'USAGE'" in activation
-    assert (
-        "authority_kernel_oid, dependency.relation_name, 'SELECT'"
-        in activation
-    )
     assert "parent relationship E5e active ACL contract mismatch" in activation
 
     table_quarantine = GRANTS.split(

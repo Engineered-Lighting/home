@@ -37,6 +37,9 @@ def test_e5c_migration_quarantines_only_the_outer_caller_surface() -> None:
     assert "authenticated_binding_e5c_quarantine_failed" in MIGRATION
     assert "pg_has_role(" in MIGRATION
     assert "'SET'" in MIGRATION
+    assert "caller_oid, function_oid, 'EXECUTE'" in MIGRATION
+    assert "caller_oid, identity_schema_oid, 'USAGE'" in MIGRATION
+    assert "caller_oid, identity_schema_oid, 'CREATE'" in MIGRATION
 
 
 def test_e5c_upgrade_and_downgrade_are_both_fail_closed() -> None:

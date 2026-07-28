@@ -93,15 +93,27 @@ def _quarantine(*, expected_revision: str) -> None:
           FROM {CALLER_ROLE} CASCADE;
 
         DO $e5c_quarantine$
+        DECLARE
+          caller_oid oid;
+          function_oid oid;
+          identity_schema_oid oid;
         BEGIN
+          SELECT oid INTO STRICT caller_oid
+            FROM pg_catalog.pg_roles WHERE rolname = '{CALLER_ROLE}';
+          SELECT oid INTO STRICT identity_schema_oid
+            FROM pg_catalog.pg_namespace WHERE nspname = 'identity';
+          SELECT function_row.oid INTO STRICT function_oid
+            FROM pg_catalog.pg_proc AS function_row
+           WHERE function_row.oid = '{FUNCTION}'::regprocedure;
+
           IF pg_catalog.has_function_privilege(
-               '{CALLER_ROLE}', '{FUNCTION}', 'EXECUTE'
+               caller_oid, function_oid, 'EXECUTE'
              )
              OR pg_catalog.has_schema_privilege(
-               '{CALLER_ROLE}', 'identity', 'USAGE'
+               caller_oid, identity_schema_oid, 'USAGE'
              )
              OR pg_catalog.has_schema_privilege(
-               '{CALLER_ROLE}', 'identity', 'CREATE'
+               caller_oid, identity_schema_oid, 'CREATE'
              ) THEN
             RAISE EXCEPTION 'authenticated_binding_e5c_quarantine_failed'
               USING ERRCODE = '42501';

@@ -219,6 +219,7 @@ BUILD_CONTEXT_FILES = (
     "stack/services/home-agent-core/requirements.txt",
     "stack/services/home-agent-core/requirements-dev.txt",
     "stack/services/home-agent-core/docker-entrypoint.sh",
+    "stack/services/home-agent-bff/src/bff.mjs",
     "stack/home-agent-deploy/provision-roles.sh",
     "stack/home-agent-deploy/apply-grants.sh",
     "stack/home-agent-deploy/add-binding-committer-role-secrets.sh",
@@ -319,6 +320,7 @@ REVIEWED_CONTEXT_SUFFIXES = {
 }
 REVIEWED_CONTEXT_FILENAMES = {
     "Dockerfile.postgres-test",
+    "bff.mjs",
     "home-agent.env.example",
     "postgres-pg_hba.conf",
 }

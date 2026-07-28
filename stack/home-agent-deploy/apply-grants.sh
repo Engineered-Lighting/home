@@ -5034,15 +5034,44 @@ BEGIN
        )
        OR (
          SELECT pg_catalog.count(*)
-           FROM pg_catalog.pg_class AS relation_row
-           CROSS JOIN LATERAL pg_catalog.aclexplode(relation_row.relacl)
-                AS relation_acl
-          WHERE relation_row.oid = promotion_table
-            AND relation_acl.grantee = parent_relationship_kernel_oid
-            AND relation_acl.grantor = owner_oid
-            AND relation_acl.privilege_type = 'SELECT'
-            AND NOT relation_acl.is_grantable
-       ) <> 1
+           FROM pg_catalog.pg_attribute AS attribute_row
+           CROSS JOIN LATERAL pg_catalog.aclexplode(attribute_row.attacl)
+                AS attribute_acl
+          WHERE attribute_row.attrelid = promotion_table
+            AND attribute_row.attname IN (
+              'promotion_id',
+              'authority_scope',
+              'run_id',
+              'finalization_id',
+              'policy_digest',
+              'committed_at'
+            )
+            AND attribute_acl.grantee = parent_relationship_kernel_oid
+            AND attribute_acl.grantor = owner_oid
+            AND attribute_acl.privilege_type = 'SELECT'
+            AND NOT attribute_acl.is_grantable
+       ) <> 6
+       OR EXISTS (
+         SELECT 1
+           FROM pg_catalog.pg_attribute AS attribute_row
+           CROSS JOIN LATERAL pg_catalog.aclexplode(attribute_row.attacl)
+                AS attribute_acl
+          WHERE attribute_row.attrelid = promotion_table
+            AND attribute_acl.grantee = parent_relationship_kernel_oid
+            AND (
+              attribute_row.attname NOT IN (
+                'promotion_id',
+                'authority_scope',
+                'run_id',
+                'finalization_id',
+                'policy_digest',
+                'committed_at'
+              )
+              OR attribute_acl.grantor <> owner_oid
+              OR attribute_acl.privilege_type <> 'SELECT'
+              OR attribute_acl.is_grantable
+            )
+       )
      ) THEN
     RAISE EXCEPTION
       'identity cutover E4 reviewed E5e overlay mismatch'
@@ -5214,18 +5243,6 @@ BEGIN
                                              )
                                            )
                                          ) AS relation_acl
-                                   WHERE NOT (
-                                     current_revision =
-                                       '0019_parent_stage_e5e'
-                                     AND target.target_relation =
-                                           promotion_table
-                                     AND relation_acl.grantee =
-                                           parent_relationship_kernel_oid
-                                     AND relation_acl.grantor = owner_oid
-                                     AND relation_acl.privilege_type =
-                                           'SELECT'
-                                     AND NOT relation_acl.is_grantable
-                                   )
                                 ),
                                 'column_acl',
                                 (
@@ -5262,6 +5279,26 @@ BEGIN
                                          target.target_relation
                                      AND attribute.attnum > 0
                                      AND NOT attribute.attisdropped
+                                     AND NOT (
+                                       current_revision =
+                                         '0019_parent_stage_e5e'
+                                       AND target.target_relation =
+                                             promotion_table
+                                       AND attribute.attname IN (
+                                         'promotion_id',
+                                         'authority_scope',
+                                         'run_id',
+                                         'finalization_id',
+                                         'policy_digest',
+                                         'committed_at'
+                                       )
+                                       AND column_acl.grantee =
+                                             parent_relationship_kernel_oid
+                                       AND column_acl.grantor = owner_oid
+                                       AND column_acl.privilege_type =
+                                             'SELECT'
+                                       AND NOT column_acl.is_grantable
+                                     )
                                 )
                               )
                             )

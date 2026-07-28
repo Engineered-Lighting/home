@@ -248,7 +248,17 @@ def test_grant_replay_projects_e5e_out_of_pinned_predecessor_catalogs() -> None:
     )[0]
     assert "identity cutover E4 reviewed E5e overlay mismatch" in e4
     assert "parent_relationship_stage_e5e_r07_select" in e4
-    assert "relation_acl.grantee = parent_relationship_kernel_oid" in e4
+    assert "attribute_acl.grantee = parent_relationship_kernel_oid" in e4
+    assert "column_acl.grantee =" in e4
+    for promotion_column in (
+        "promotion_id",
+        "authority_scope",
+        "run_id",
+        "finalization_id",
+        "policy_digest",
+        "committed_at",
+    ):
+        assert f"'{promotion_column}'" in e4
     assert "expected_e4_catalog_sha256" in e4
 
     activation = GRANTS.split(

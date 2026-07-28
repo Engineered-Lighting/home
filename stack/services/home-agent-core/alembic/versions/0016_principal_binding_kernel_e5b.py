@@ -926,14 +926,13 @@ def _assert_prerequisites() -> None:
 
           IF EXISTS (
                SELECT 1
-                 FROM pg_catalog.pg_roles
+                 FROM pg_catalog.pg_authid
                 WHERE oid = kernel_oid
                   AND (
                     rolcanlogin OR rolinherit OR rolsuper OR rolcreatedb
                     OR rolcreaterole OR rolreplication OR rolbypassrls
                     OR rolconnlimit <> 0
                     OR rolvaliduntil IS NOT NULL
-                    OR rolconfig IS NOT NULL
                     OR rolpassword IS NOT NULL
                   )
              )

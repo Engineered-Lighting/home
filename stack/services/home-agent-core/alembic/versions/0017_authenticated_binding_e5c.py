@@ -79,6 +79,10 @@ def _quarantine(*, expected_revision: str) -> None:
              OR EXISTS (
                SELECT 1 FROM pg_catalog.pg_shdepend
                 WHERE refobjid = caller_oid AND deptype = 'o'
+             )
+             OR EXISTS (
+               SELECT 1 FROM pg_catalog.pg_auth_members
+                WHERE roleid = caller_oid OR member = caller_oid
              ) THEN
             RAISE EXCEPTION 'authenticated_binding_e5c_authority_invalid'
               USING ERRCODE = '42501';
@@ -104,16 +108,41 @@ def _quarantine(*, expected_revision: str) -> None:
             FROM pg_catalog.pg_namespace WHERE nspname = 'identity';
           SELECT function_row.oid INTO STRICT function_oid
             FROM pg_catalog.pg_proc AS function_row
-           WHERE function_row.oid = '{FUNCTION}'::regprocedure;
+            JOIN pg_catalog.pg_namespace AS function_namespace
+              ON function_namespace.oid = function_row.pronamespace
+           WHERE function_namespace.nspname = 'identity'
+             AND function_row.proname =
+                   'commit_authenticated_principal_binding_e5b'
+             AND function_row.proargtypes = ARRAY[
+                   'uuid'::regtype::oid,
+                   'varchar'::regtype::oid,
+                   'varchar'::regtype::oid,
+                   'uuid'::regtype::oid,
+                   'uuid'::regtype::oid,
+                   'uuid'::regtype::oid,
+                   'uuid'::regtype::oid,
+                   'uuid'::regtype::oid
+                 ]::oidvector;
 
-          IF pg_catalog.has_function_privilege(
-               caller_oid, function_oid, 'EXECUTE'
+          IF EXISTS (
+               SELECT 1
+                 FROM pg_catalog.pg_proc AS function_row
+                 CROSS JOIN LATERAL pg_catalog.aclexplode(
+                   function_row.proacl
+                 ) AS function_acl
+                WHERE function_row.oid = function_oid
+                  AND function_acl.grantee IN (0, caller_oid)
+                  AND function_acl.privilege_type = 'EXECUTE'
              )
-             OR pg_catalog.has_schema_privilege(
-               caller_oid, identity_schema_oid, 'USAGE'
-             )
-             OR pg_catalog.has_schema_privilege(
-               caller_oid, identity_schema_oid, 'CREATE'
+             OR EXISTS (
+               SELECT 1
+                 FROM pg_catalog.pg_namespace AS namespace_row
+                 CROSS JOIN LATERAL pg_catalog.aclexplode(
+                   namespace_row.nspacl
+                 ) AS namespace_acl
+                WHERE namespace_row.oid = identity_schema_oid
+                  AND namespace_acl.grantee IN (0, caller_oid)
+                  AND namespace_acl.privilege_type IN ('USAGE', 'CREATE')
              ) THEN
             RAISE EXCEPTION 'authenticated_binding_e5c_quarantine_failed'
               USING ERRCODE = '42501';

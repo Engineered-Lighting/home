@@ -43,6 +43,9 @@ ROLE_DATABASE_ENVS = {
     "home_agent_backup": "TEST_PHASE3_IDENTITY_ERASURE_E2_BACKUP_DATABASE_URL",
 }
 RUNTIME_ROLES = tuple(ROLE_DATABASE_ENVS)
+SUPPRESSION_ROLES = tuple(
+    role for role in RUNTIME_ROLES if role != "home_agent_binding_committer"
+)
 MANDATORY_RESIDUALS = (
     "live_identity_rows_retained",
     "semantic_dependencies_not_evaluated",
@@ -881,7 +884,7 @@ async def _assert_catalog_boundary(connection) -> None:
         assert row["polcmd"] == "*"
         assert row["has_using"] is True
         assert row["has_check"] is True
-        assert set(row["roles"]) == set(RUNTIME_ROLES)
+        assert set(row["roles"]) == set(SUPPRESSION_ROLES)
 
         trigger_name = f"{schema_name}_{table_name}_e2_anti_resurrection"
         trigger_count = (

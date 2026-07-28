@@ -86,12 +86,12 @@ CATALOG_DIGEST_CONTRACTS = (
     ),
     (
         "e5a",
-        "adfd664ccb07372107649fab7275d1d3040ebe498813fc69af27a4e7336cd084",
+        "e90689e66cc5ca2131d08b597e21651a9f99e0d3f1ab1b1bfd20c399cf1bc3c7",
         "identity current-authority E5 catalog admission digest mismatch",
     ),
     (
         "e5b",
-        "01c11885e7ae4f5c336ee7e43a15a481396819e40a359124e0330fd113d189fb",
+        "67c8250dae2a14daab17cdee3b63214494f115a0c67260b1b4b9c5a48632d8ac",
         "identity principal-binding E5b catalog admission digest mismatch",
     ),
 )

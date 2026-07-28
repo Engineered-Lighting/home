@@ -5758,7 +5758,7 @@ DECLARE
     'transaction_timeout=30s'
   ]::text[];
   expected_e5_catalog_sha256 constant text :=
-    'adfd664ccb07372107649fab7275d1d3040ebe498813fc69af27a4e7336cd084';
+    'e90689e66cc5ca2131d08b597e21651a9f99e0d3f1ab1b1bfd20c399cf1bc3c7';
   function_name_count integer;
   kernel_owned_object_count integer;
   owner_oid oid;
@@ -6809,7 +6809,7 @@ DECLARE
   current_revision text;
   database_oid oid;
   expected_e5b_catalog_sha256 constant text :=
-    '01c11885e7ae4f5c336ee7e43a15a481396819e40a359124e0330fd113d189fb';
+    '67c8250dae2a14daab17cdee3b63214494f115a0c67260b1b4b9c5a48632d8ac';
   expected_function_body_sha256 constant text :=
     '1f0404ad968ce6e1e7f50b72ea7a75193ca50052c1e3c9132da4a87026e7fb38';
   function_name_count integer;

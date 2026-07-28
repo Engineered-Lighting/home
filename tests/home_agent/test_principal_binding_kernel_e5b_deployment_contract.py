@@ -121,6 +121,16 @@ def test_e5b_descendant_overlays_preserve_predecessor_catalog_pins() -> None:
         assert expected in e3
     assert e3.count("identity_projection_lineage_e5b_exact_person") >= 3
     assert "index_state.indislive" in e3
+    for late_bound_relation in (
+        "operations.reviewed_identity_migration_projection_lineage",
+        "operations.enforced_legacy_identity_writer_freezes",
+    ):
+        assert re.search(
+            r"pg_catalog\.to_regclass\(\s*'operations\.'\s*'"
+            + late_bound_relation.removeprefix("operations.")
+            + r"'\s*\)",
+            e3,
+        )
 
     for expected in (
         "semantic_authority_promotions_e5b_exact_authority",

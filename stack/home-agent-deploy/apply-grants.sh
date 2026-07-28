@@ -3600,13 +3600,15 @@ BEGIN
                                 WHEN policy_row.polname =
                                        e5b_select_policy
                                 THEN
-                                  'operations.'
-                                  'reviewed_identity_migration_projection_lineage'
-                                    ::regclass
+                                  pg_catalog.to_regclass(
+                                    'operations.'
+                                    'reviewed_identity_migration_projection_lineage'
+                                  )
                                 ELSE
-                                  'operations.'
-                                  'enforced_legacy_identity_writer_freezes'
-                                    ::regclass
+                                  pg_catalog.to_regclass(
+                                    'operations.'
+                                    'enforced_legacy_identity_writer_freezes'
+                                  )
                               END
                           AND reference_policy.polname =
                                 policy_row.polname

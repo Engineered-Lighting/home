@@ -7956,6 +7956,16 @@ BEGIN
      OR pg_catalog.pg_has_role(
        caller_oid, kernel_oid, 'SET'
      )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_auth_members
+        WHERE roleid = caller_oid OR member = caller_oid
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_shdepend
+        WHERE refobjid = caller_oid AND deptype = 'o'
+     )
      OR (
        SELECT pg_catalog.count(*)
          FROM pg_catalog.pg_namespace AS namespace_row
@@ -8029,14 +8039,36 @@ BEGIN
          FROM pg_catalog.pg_class AS relation_row
          JOIN pg_catalog.pg_namespace AS relation_namespace
            ON relation_namespace.oid = relation_row.relnamespace
+         CROSS JOIN LATERAL pg_catalog.aclexplode(relation_row.relacl)
+              AS relation_acl
         WHERE relation_namespace.nspname IN (
           'ingest','identity','knowledge','engagement','privacy',
           'operations','media'
         )
           AND relation_row.relkind IN ('r','p','v','m','f')
-          AND pg_catalog.has_table_privilege(
-            caller_oid, relation_row.oid,
-            'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'
+          AND relation_acl.grantee = caller_oid
+          AND relation_acl.privilege_type IN (
+            'SELECT','INSERT','UPDATE','DELETE','TRUNCATE',
+            'REFERENCES','TRIGGER'
+          )
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_attribute AS attribute_row
+         JOIN pg_catalog.pg_class AS relation_row
+           ON relation_row.oid = attribute_row.attrelid
+         JOIN pg_catalog.pg_namespace AS relation_namespace
+           ON relation_namespace.oid = relation_row.relnamespace
+         CROSS JOIN LATERAL pg_catalog.aclexplode(attribute_row.attacl)
+              AS attribute_acl
+        WHERE relation_namespace.nspname IN (
+          'ingest','identity','knowledge','engagement','privacy',
+          'operations','media'
+        )
+          AND relation_row.relkind IN ('r','p','v','m','f')
+          AND attribute_acl.grantee = caller_oid
+          AND attribute_acl.privilege_type IN (
+            'SELECT','INSERT','UPDATE','REFERENCES'
           )
      )
      OR EXISTS (
@@ -8044,14 +8076,15 @@ BEGIN
          FROM pg_catalog.pg_class AS sequence_row
          JOIN pg_catalog.pg_namespace AS sequence_namespace
            ON sequence_namespace.oid = sequence_row.relnamespace
+         CROSS JOIN LATERAL pg_catalog.aclexplode(sequence_row.relacl)
+              AS sequence_acl
         WHERE sequence_namespace.nspname IN (
           'ingest','identity','knowledge','engagement','privacy',
           'operations','media'
         )
           AND sequence_row.relkind = 'S'
-          AND pg_catalog.has_sequence_privilege(
-            caller_oid, sequence_row.oid, 'USAGE,SELECT,UPDATE'
-          )
+          AND sequence_acl.grantee = caller_oid
+          AND sequence_acl.privilege_type IN ('USAGE','SELECT','UPDATE')
      ) THEN
     RAISE EXCEPTION
       'authenticated binding E5c active ACL contract mismatch'

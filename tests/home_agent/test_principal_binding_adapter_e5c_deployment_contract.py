@@ -191,6 +191,16 @@ def test_e5c_activation_is_a_distinct_pinned_grant_boundary() -> None:
         "TO home_agent_binding_committer;\nRESET ROLE;" in grants
     )
     assert "authenticated binding E5c active ACL contract mismatch" in grants
+    active_acl = grants.split(
+        "DO $authenticated_binding_e5c_active_acl$", 1
+    )[1].split("$authenticated_binding_e5c_active_acl$", 1)[0]
+    assert "WHERE roleid = caller_oid OR member = caller_oid" in active_acl
+    assert "WHERE refobjid = caller_oid AND deptype = 'o'" in active_acl
+    assert "relation_acl.grantee = caller_oid" in active_acl
+    assert "attribute_acl.grantee = caller_oid" in active_acl
+    assert "sequence_acl.grantee = caller_oid" in active_acl
+    assert "has_table_privilege(" not in active_acl
+    assert "has_sequence_privilege(" not in active_acl
     assert (
         "GRANT SELECT ON TABLE" not in "\n".join(
             line

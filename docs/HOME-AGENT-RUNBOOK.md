@@ -1092,6 +1092,14 @@ The complete hosted E1–E5j PostgreSQL 17 authority gate passed in workflow run
 `30394033276` at source commit `2686286`. This acceptance does not authorize a
 production migration or create any missing live receipt.
 
+The subsequent live read-only E5j evaluation at accepted documentation commit
+`c913eb3` found all required containers ready, the encrypted local backup
+repository healthy at full label `20260728-102702F`, and 220 of 500 qualifying
+record-only events. The remaining blockers were the event threshold, an
+off-host database-backup receipt, an isolated restore receipt, a separate
+current erasure-gate receipt, and reviewed activation-source admission. No
+receipt writer, restore, migration, restart, or rollout mutation was run.
+
 ## Record-only, shadow, and canary gates
 
 Every fresh deployment starts with `HOME_AGENT_ROLLOUT_MODE=record_only`.

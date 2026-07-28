@@ -42,5 +42,6 @@ LockPersonality=true
 MemoryDenyWriteExecute=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadWritePaths=/srv/home-agent/restore-drills
+ReadWritePaths=/srv/home-agent/config
 ReadWritePaths=/run/lock
 ReadWritePaths=/var/run/docker.sock

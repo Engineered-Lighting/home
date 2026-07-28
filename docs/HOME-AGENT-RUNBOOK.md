@@ -1010,10 +1010,13 @@ memory and travel greetings off. Production remains pinned to
 `0006a_worker_lease_arbitration` in `record_only`. The hosted E5c gate passed
 in workflow run `30329873575`; an explicit operator rollout is still required.
 
-### Dormant E5i Phase 3 activation preflight
+### Dormant E5j Phase 3 evidence preflight
 
-E5i adds a read-only operator diagnostic; it does not install the missing E4
-activation contract. Run it only from the exact reviewed checkout:
+E5j supersedes E5i's placeholder receipt boundary. It keeps the read-only
+operator diagnostic and separates database-restore evidence from erasure-gate
+evidence; neither proof may claim the other. E5j still does not install the
+missing E4 activation contract. Run the preflight only from the exact reviewed
+checkout:
 
 ```sh
 cd /opt/home/home-agent-integration-test
@@ -1040,24 +1043,49 @@ result.
 The following optional root-owned, mode-`0600`, single-link receipts are
 recognized beneath `/srv/home-agent/config`:
 
-- `phase3-restore-drill-e5i.json`, for a current isolated restore of the exact
-  newest completed full backup plus current erasure-ledger replay;
-- `phase3-off-host-backup-e5i.json`, for a checksum-verified encrypted copy of
+- `phase3-restore-drill-e5j.json`, written only after the isolated database
+  restore, schema dump, clean shutdown, and page-checksum ceremony passes for
+  the exact newest completed full backup;
+- `phase3-erasure-current-e5j.json`, written only after the existing Core
+  restore gate reports that the database epoch exactly equals the current
+  independent erasure-ledger head;
+- `phase3-off-host-backup-e5j.json`, for a checksum-verified encrypted copy of
   that same backup at an operator-controlled off-host destination; and
-- `phase3-source-acceptance-e5i.json`, binding the target revision, clean source
+- `phase3-source-acceptance-e5j.json`, binding the target revision, clean source
   commit, hosted PostgreSQL/web runs, and the future reviewed activation
   contract.
 
-The preflight does not create these receipts, and an operator must not fabricate
-them to clear a blocker. Their strict content-minimized formats are exercised
-by the E5i contract tests. The active pgBackRest topology may remain `local`;
-off-host durability is represented by its separate label-bound receipt rather
-than forcing the retired SFTP topology back into production.
+The guarded restore drill now creates only the restore receipt. It deliberately
+does not claim erasure replay or erasure currency. After that receipt exists,
+the separate read-only erasure ceremony is:
+
+```sh
+cd /opt/home/home-agent-integration-test
+sudo python3 \
+  stack/home-agent-deploy/operator/phase3_evidence_receipts.py \
+  erasure-current
+```
+
+That command uses the pinned local image with `--pull never`, runs only Core's
+existing `restore-verify` command, requires its exact content-minimized result
+to match the current UID/GID-10001 ledger head, and atomically writes the
+second receipt. It does not replay a lagging ledger. A restored database that
+needs replay remains quarantined until the separately governed
+`restore-replay` recovery ceremony succeeds; then `erasure-current` may be
+rerun.
+
+E5j has no writer for the off-host PostgreSQL or source-acceptance receipts
+because their required evidence does not yet exist: no operator-controlled
+off-host database-backup destination is configured, and the E4 activation
+contract is not installed. Those blockers therefore cannot be cleared by E5j.
+The active pgBackRest topology may remain `local`; later off-host durability
+will be represented by its separate label-bound receipt rather than forcing
+the retired SFTP topology back into production.
 
 Production remains pinned to `0006a_worker_lease_arbitration` in `record_only`.
 Even after the 500-event evidence threshold is met, an actual Phase 3
-deployment still requires separately reviewed receipt writers, the E4
-activation contract, a rollback/restore ceremony, and an explicit operator
+deployment still requires a reviewed off-host writer, the E4 activation and
+source-acceptance contracts, a rollback ceremony, and an explicit operator
 decision.
 
 ## Record-only, shadow, and canary gates

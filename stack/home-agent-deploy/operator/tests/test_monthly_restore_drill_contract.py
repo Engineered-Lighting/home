@@ -55,6 +55,7 @@ class MonthlyRestoreDrillContractTests(unittest.TestCase):
         self.assertIn("TimeoutStartSec=2h", service)
         self.assertIn("ProtectSystem=strict", service)
         self.assertIn("ReadWritePaths=/srv/home-agent/restore-drills", service)
+        self.assertIn("ReadWritePaths=/srv/home-agent/config", service)
         self.assertIn("ConditionHost=!EngineeredLightingServer1", service)
         self.assertIn("ConditionHost=!home-app", service)
         self.assertIn("CPUQuota=100%", service)

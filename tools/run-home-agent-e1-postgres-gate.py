@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the E1-E5i scaffold gate against disposable PostgreSQL 17."""
+"""Run the E1-E5j scaffold gate against disposable PostgreSQL 17."""
 
 from __future__ import annotations
 
@@ -347,6 +347,8 @@ BUILD_CONTEXT_FILES = (
     "stack/home-agent-deploy/operator/reviewed_identity_payload.py",
     "stack/home-agent-deploy/operator/principal_binding_candidate_staging.py",
     "stack/home-agent-deploy/operator/phase3_activation_preflight.py",
+    "stack/home-agent-deploy/operator/phase3_evidence_receipts.py",
+    "stack/home-agent-deploy/operator/isolated_restore_drill.sh",
     "stack/home-agent-deploy/operator/REVIEWED-IDENTITY-PAYLOAD.md",
     "stack/services/home-agent-core/tests/test_identity_person_restore_replay.py",
     "stack/services/home-agent-core/tests/test_ledger_versions.py",
@@ -383,7 +385,8 @@ BUILD_CONTEXT_FILES = (
     "tests/home_agent/" "test_principal_binding_adapter_e5c_deployment_contract.py",
     "tests/home_agent/" "test_parent_relationship_adapter_e5g_deployment_contract.py",
     "tests/home_agent/" "test_parent_relationship_status_e5h_deployment_contract.py",
-    "tests/home_agent/test_phase3_activation_preflight_e5i.py",
+    "tests/home_agent/test_phase3_activation_preflight_e5j.py",
+    "tests/home_agent/test_phase3_evidence_receipts_e5j.py",
     "stack/services/home-agent-core/tests/"
     "test_phase3_parent_relationship_authority_e5d_schema.py",
     "stack/services/home-agent-core/tests/"
@@ -3291,7 +3294,8 @@ def _run_e4_scaffold_phase(
             "tests/" "test_phase3_parent_relationship_status_e5h_runtime_postgres.py",
             "/workspace/tests/home_agent/"
             "test_parent_relationship_status_e5h_deployment_contract.py",
-            "/workspace/tests/home_agent/" "test_phase3_activation_preflight_e5i.py",
+            "/workspace/tests/home_agent/" "test_phase3_activation_preflight_e5j.py",
+            "/workspace/tests/home_agent/" "test_phase3_evidence_receipts_e5j.py",
         ],
         url_environment={
             E5H_OWNER_DATABASE_ENV: BASE_DATABASE,
@@ -3343,7 +3347,7 @@ def main() -> int:
     except GateFailure as error:
         print(
             "E1/E2/E3/E4 gate execution quarantine "
-            f"(E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i included): {error}",
+            f"(E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j included): {error}",
             file=sys.stderr,
         )
         return 77

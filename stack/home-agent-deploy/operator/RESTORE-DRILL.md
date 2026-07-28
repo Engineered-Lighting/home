@@ -86,7 +86,11 @@ The script takes an exclusive workspace lock and performs these stages:
    revision, all seven domain schemas, and a successful schema-only `pg_dump`.
 8. Stop PostgreSQL cleanly and run offline `pg_checksums --check` across the
    restored cluster.
-9. Remove named containers and the exact guarded workspace. The temporary SSH
+9. Atomically write the root-owned, mode-`0600`
+   `/srv/home-agent/config/phase3-restore-drill-e5j.json` receipt, bound to the
+   immutable backup label, restored database system identifier, and exact
+   source schema revision.
+10. Remove named containers and the exact guarded workspace. The temporary SSH
    key and cipher-bearing local config are scrubbed on every exit path.
 
 No backup passphrase, database password, or private key is placed in an
@@ -137,7 +141,10 @@ HOME_AGENT_RESTORE_MIN_FREE_KIB=2097152
 ```
 
 This database drill does not replace the independent erasure-ledger replay gate
-or a full isolated Home Assistant application restore.
+or a full isolated Home Assistant application restore. Its receipt deliberately
+contains no erasure-replay claim. After independently establishing that the
+database and external ledger are current, the root operator may run the E5j
+`erasure-current` receipt ceremony documented in `HOME-AGENT-RUNBOOK.md`.
 
 ## Monthly execution
 

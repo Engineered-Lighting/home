@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only E5i admission preflight for the dormant Phase 3 deployment.
+"""Read-only E5j admission preflight for the dormant Phase 3 deployment.
 
 This command is deliberately not an activation command. It reads the existing
 operator-only Core diagnostics and local deployment metadata, verifies
@@ -21,21 +21,26 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping, Sequence
 
 
-CONTRACT = "phase3-activation-preflight-e5i-v1"
+CONTRACT = "phase3-activation-preflight-e5j-v1"
 SOURCE_REVISION = "0006a_worker_lease_arbitration"
 TARGET_REVISION = "0021_parent_status_e5h"
 PHASE2_CONTRACT = "phase2-record-only-gate-v3"
 PHASE2_RULE = "record-only-envelope-worker-gate-v3"
 PHASE3_CONTRACT = "phase3-readiness-diagnostic-v0"
-RESTORE_RECEIPT_CONTRACT = "phase3-restore-drill-receipt-e5i-v1"
-OFF_HOST_RECEIPT_CONTRACT = "phase3-off-host-backup-receipt-e5i-v1"
-SOURCE_ACCEPTANCE_CONTRACT = "phase3-source-acceptance-e5i-v1"
+RESTORE_RECEIPT_CONTRACT = "phase3-restore-drill-receipt-e5j-v1"
+ERASURE_RECEIPT_CONTRACT = "phase3-erasure-current-receipt-e5j-v1"
+OFF_HOST_RECEIPT_CONTRACT = "phase3-off-host-backup-receipt-e5j-v1"
+SOURCE_ACCEPTANCE_CONTRACT = "phase3-source-acceptance-e5j-v1"
 ENVIRONMENT_PATH = Path("/srv/home-agent/config/home-agent.env")
-RESTORE_RECEIPT_PATH = Path("/srv/home-agent/config/phase3-restore-drill-e5i.json")
-SOURCE_ACCEPTANCE_PATH = Path(
-    "/srv/home-agent/config/phase3-source-acceptance-e5i.json"
+RESTORE_RECEIPT_PATH = Path("/srv/home-agent/config/phase3-restore-drill-e5j.json")
+ERASURE_RECEIPT_PATH = Path(
+    "/srv/home-agent/config/phase3-erasure-current-e5j.json"
 )
-OFF_HOST_RECEIPT_PATH = Path("/srv/home-agent/config/phase3-off-host-backup-e5i.json")
+SOURCE_ACCEPTANCE_PATH = Path(
+    "/srv/home-agent/config/phase3-source-acceptance-e5j.json"
+)
+OFF_HOST_RECEIPT_PATH = Path("/srv/home-agent/config/phase3-off-host-backup-e5j.json")
+LEDGER_HEAD_PATH = Path("/srv/home-agent/erasure-ledger/ledger.head.json")
 SOURCE_ROOT = Path(__file__).resolve().parents[3]
 CORE_CONTAINER = "home-agent-core-api-1"
 POSTGRES_CONTAINER = "home-agent-postgres-1"
@@ -52,6 +57,8 @@ MAX_RECEIPT_AGE = timedelta(days=35)
 BACKUP_LABEL = re.compile(r"^[0-9]{8}-[0-9]{6}F$")
 COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 RUN_ID = re.compile(r"^[1-9][0-9]{5,19}$")
+SYSTEM_IDENTIFIER = re.compile(r"^[1-9][0-9]{9,19}$")
+HEAD_HASH = re.compile(r"^[0-9a-f]{64}$")
 
 CORE_PROBE = r"""
 import json
@@ -175,18 +182,79 @@ def _valid_restore_receipt(
             "contract",
             "backup_label",
             "schema_revision",
+            "database_system_identifier",
             "completed_at",
             "restore_status",
-            "erasure_ledger_replay_status",
         }
         and receipt.get("contract") == RESTORE_RECEIPT_CONTRACT
         and latest_backup_label is not None
         and receipt.get("backup_label") == latest_backup_label
         and receipt.get("schema_revision") == SOURCE_REVISION
+        and isinstance(receipt.get("database_system_identifier"), str)
+        and SYSTEM_IDENTIFIER.fullmatch(receipt["database_system_identifier"])
+        is not None
         and receipt.get("restore_status") == "passed"
-        and receipt.get("erasure_ledger_replay_status") == "current"
         and completed_at <= now
         and now - completed_at <= MAX_RECEIPT_AGE
+    )
+
+
+def _valid_ledger_head(value: Any) -> bool:
+    return (
+        isinstance(value, Mapping)
+        and set(value) == {"version", "epoch", "head_hash"}
+        and value.get("version") == 1
+        and not isinstance(value.get("epoch"), bool)
+        and isinstance(value.get("epoch"), int)
+        and value["epoch"] >= 0
+        and isinstance(value.get("head_hash"), str)
+        and HEAD_HASH.fullmatch(value["head_hash"]) is not None
+        and (value["epoch"] != 0 or value["head_hash"] == "0" * 64)
+    )
+
+
+def _valid_erasure_receipt(
+    receipt: Any,
+    *,
+    restore_receipt: Any,
+    ledger_head: Any,
+    latest_backup_label: str | None,
+    now: datetime,
+) -> bool:
+    if (
+        not isinstance(receipt, Mapping)
+        or not isinstance(restore_receipt, Mapping)
+        or not _valid_ledger_head(ledger_head)
+        or not _valid_restore_receipt(
+            restore_receipt,
+            latest_backup_label=latest_backup_label,
+            now=now,
+        )
+    ):
+        return False
+    try:
+        verified_at = _aware_utc(receipt.get("verified_at"))
+    except PreflightError:
+        return False
+    return (
+        set(receipt)
+        == {
+            "contract",
+            "backup_label",
+            "schema_revision",
+            "ledger_epoch",
+            "ledger_head_hash",
+            "verified_at",
+            "gate_status",
+        }
+        and receipt.get("contract") == ERASURE_RECEIPT_CONTRACT
+        and receipt.get("backup_label") == restore_receipt.get("backup_label")
+        and receipt.get("schema_revision") == SOURCE_REVISION
+        and receipt.get("ledger_epoch") == ledger_head.get("epoch")
+        and receipt.get("ledger_head_hash") == ledger_head.get("head_hash")
+        and receipt.get("gate_status") == "current"
+        and verified_at <= now
+        and now - verified_at <= MAX_RECEIPT_AGE
     )
 
 
@@ -259,13 +327,15 @@ def evaluate(
     backup_info: Any,
     container_health: Mapping[str, str],
     restore_receipt: Any,
+    erasure_receipt: Any,
+    ledger_head: Any,
     off_host_receipt: Any,
     source_acceptance: Any,
     source_commit: str,
     source_tree_clean: bool,
     now: datetime,
 ) -> dict[str, Any]:
-    """Return the canonical, non-authoritative E5i admission report."""
+    """Return the canonical, non-authoritative E5j admission report."""
 
     if now.tzinfo is None or now.utcoffset() is None:
         raise PreflightError("evaluation time must be timezone-aware")
@@ -324,6 +394,14 @@ def evaluate(
         now=evaluated_at,
     ):
         blockers.append("current_backup_restore_receipt_missing")
+    if not _valid_erasure_receipt(
+        erasure_receipt,
+        restore_receipt=restore_receipt,
+        ledger_head=ledger_head,
+        latest_backup_label=latest_backup_label,
+        now=evaluated_at,
+    ):
+        blockers.append("current_erasure_gate_receipt_missing")
     source_accepted = (
         source_tree_clean
         and COMMIT_SHA.fullmatch(source_commit) is not None
@@ -384,6 +462,17 @@ def evaluate(
                 )
                 else "missing_or_invalid"
             ),
+            "current_erasure_gate_receipt": (
+                "valid"
+                if _valid_erasure_receipt(
+                    erasure_receipt,
+                    restore_receipt=restore_receipt,
+                    ledger_head=ledger_head,
+                    latest_backup_label=latest_backup_label,
+                    now=evaluated_at,
+                )
+                else "missing_or_invalid"
+            ),
         },
         "source_acceptance": "valid" if source_accepted else "missing_or_invalid",
         "source_tree_clean": source_tree_clean,
@@ -411,7 +500,13 @@ def _run(command: Sequence[str], *, timeout: int = 15) -> str:
     return result.stdout
 
 
-def _root_file(path: Path, *, required: bool) -> Any:
+def _protected_file(
+    path: Path,
+    *,
+    required: bool,
+    expected_uid: int,
+    expected_gid: int,
+) -> Any:
     try:
         details = path.lstat()
     except FileNotFoundError:
@@ -420,8 +515,8 @@ def _root_file(path: Path, *, required: bool) -> Any:
         return None
     if (
         not stat.S_ISREG(details.st_mode)
-        or details.st_uid != 0
-        or details.st_gid != 0
+        or details.st_uid != expected_uid
+        or details.st_gid != expected_gid
         or stat.S_IMODE(details.st_mode) != 0o600
         or details.st_nlink != 1
     ):
@@ -496,9 +591,36 @@ def live_report(*, now: datetime | None = None) -> dict[str, Any]:
         core_probe=core_probe,
         backup_info=backup_info,
         container_health=health,
-        restore_receipt=_root_file(RESTORE_RECEIPT_PATH, required=False),
-        off_host_receipt=_root_file(OFF_HOST_RECEIPT_PATH, required=False),
-        source_acceptance=_root_file(SOURCE_ACCEPTANCE_PATH, required=False),
+        restore_receipt=_protected_file(
+            RESTORE_RECEIPT_PATH,
+            required=False,
+            expected_uid=0,
+            expected_gid=0,
+        ),
+        erasure_receipt=_protected_file(
+            ERASURE_RECEIPT_PATH,
+            required=False,
+            expected_uid=0,
+            expected_gid=0,
+        ),
+        ledger_head=_protected_file(
+            LEDGER_HEAD_PATH,
+            required=True,
+            expected_uid=10001,
+            expected_gid=10001,
+        ),
+        off_host_receipt=_protected_file(
+            OFF_HOST_RECEIPT_PATH,
+            required=False,
+            expected_uid=0,
+            expected_gid=0,
+        ),
+        source_acceptance=_protected_file(
+            SOURCE_ACCEPTANCE_PATH,
+            required=False,
+            expected_uid=0,
+            expected_gid=0,
+        ),
         source_commit=source_commit,
         source_tree_clean=source_tree_clean,
         now=now or datetime.now(UTC),

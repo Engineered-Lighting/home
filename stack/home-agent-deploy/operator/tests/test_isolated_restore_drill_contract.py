@@ -151,6 +151,22 @@ class IsolatedRestoreDrillContractTests(unittest.TestCase):
         ):
             self.assertIn(value, self.script)
 
+    def test_success_writes_only_the_separate_restore_receipt(self) -> None:
+        self.assertIn(
+            'receipt_writer="$operator_dir/phase3_evidence_receipts.py"',
+            self.script,
+        )
+        self.assertIn('python3 "$receipt_writer" restore', self.script)
+        self.assertIn(
+            '--database-system-identifier "$restored_system_id"',
+            self.script,
+        )
+        self.assertNotIn("erasure_ledger_replay_status", self.script)
+        self.assertLess(
+            self.script.index("pg_checksums"),
+            self.script.index('python3 "$receipt_writer" restore'),
+        )
+
     def test_environment_preflight_and_image_label_support_the_drill(self) -> None:
         environment = read("stack/home-agent.env.example")
         preflight = read("stack/home-agent-deploy/preflight.sh")

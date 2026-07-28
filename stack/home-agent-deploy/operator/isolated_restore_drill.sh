@@ -204,7 +204,9 @@ done
 
 operator_dir="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
 repository_guard="$operator_dir/pgbackrest_repository_guard.py"
+receipt_writer="$operator_dir/phase3_evidence_receipts.py"
 require_regular_nonsymlink "$repository_guard"
+require_regular_nonsymlink "$receipt_writer"
 
 env_file="$1"
 backup_label="$2"
@@ -696,4 +698,8 @@ timeout --signal=TERM --kill-after=30s "$phase_timeout" \
 forget_container "$checksum_container"
 
 drill_succeeded=1
+python3 "$receipt_writer" restore \
+  --backup-label "$backup_label" \
+  --schema-revision "$HOME_AGENT_EXPECTED_DB_REVISION" \
+  --database-system-identifier "$restored_system_id"
 info "isolated restore drill passed for $backup_label at revision $HOME_AGENT_EXPECTED_DB_REVISION"

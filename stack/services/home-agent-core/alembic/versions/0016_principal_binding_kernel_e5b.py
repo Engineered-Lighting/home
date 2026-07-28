@@ -839,6 +839,7 @@ def _assert_prerequisites() -> None:
         DECLARE
           owner_oid oid;
           caller_oid oid;
+          staging_operator_oid oid;
           kernel_oid oid;
           authority_kernel_oid oid;
           erasure_kernel_oid oid;
@@ -870,6 +871,9 @@ def _assert_prerequisites() -> None:
           SELECT oid INTO STRICT caller_oid
             FROM pg_catalog.pg_roles
            WHERE rolname = '{CALLER_ROLE}';
+          SELECT oid INTO STRICT staging_operator_oid
+            FROM pg_catalog.pg_roles
+           WHERE rolname = 'home_agent_binding_operator';
           SELECT oid INTO STRICT kernel_oid
             FROM pg_catalog.pg_roles
            WHERE rolname = '{KERNEL_ROLE}';
@@ -1091,7 +1095,7 @@ def _assert_prerequisites() -> None:
                  ) AS acl
                 WHERE function_row.oid = authority_function_oid
                   AND acl.privilege_type = 'EXECUTE'
-                  AND acl.grantee = caller_oid
+                  AND acl.grantee = staging_operator_oid
                   AND acl.grantor = authority_kernel_oid
                   AND NOT acl.is_grantable
              ) <> 1
@@ -1117,7 +1121,7 @@ def _assert_prerequisites() -> None:
                   AND acl.privilege_type = 'EXECUTE'
                   AND (
                     acl.grantee NOT IN (
-                      caller_oid, authority_kernel_oid
+                      staging_operator_oid, authority_kernel_oid
                     )
                     OR acl.grantor <> authority_kernel_oid
                     OR acl.is_grantable

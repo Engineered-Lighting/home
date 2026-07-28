@@ -212,7 +212,7 @@ def test_caller_and_dependency_authority_contracts_are_revalidated() -> None:
         "function_row.provolatile = 'v'",
         "'pg_catalog.varchar'::regtype",
         "{AUTHORITY_FUNCTION_BODY_SHA256}",
-        "acl.grantee = caller_oid",
+        "acl.grantee = staging_operator_oid",
         "acl.grantee = authority_kernel_oid",
         "acl.grantor = authority_kernel_oid",
         "principal_binding_e5b_authority_dependency_invalid",
@@ -231,6 +231,7 @@ def test_caller_and_dependency_authority_contracts_are_revalidated() -> None:
         "principal_binding_e5b_privacy_dependency_invalid",
     ):
         assert marker in preconditions
+    assert "staging_operator_oid, authority_kernel_oid" in preconditions
     assert "home_agent_identity_erasure_kernel" in (
         MIGRATION_MODULE.ALL_REVOKED_ROLES
     )

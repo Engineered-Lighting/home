@@ -181,7 +181,6 @@ def test_e5b_kernel_role_validation_proves_exact_inert_shape() -> None:
         "NOT role_row.rolbypassrls",
         "role_row.rolconnlimit = 0",
         "role_row.rolpassword IS NULL",
-        "role_row.rolconfig IS NULL",
         "NOT membership.admin_option",
         "NOT membership.inherit_option",
         "membership.set_option",
@@ -195,6 +194,8 @@ def test_e5b_kernel_role_validation_proves_exact_inert_shape() -> None:
         assert expected in validation
 
     assert "FROM pg_catalog.pg_authid AS role_row" in validation
+    assert "role_row.rolconfig" not in validation
+    assert "FROM pg_catalog.pg_db_role_setting AS setting_row" in validation
     assert validation.count("privilege_row.grantee = binding_kernel_oid") == 8
     assert (
         "WHERE membership.roleid = binding_kernel_oid" in validation

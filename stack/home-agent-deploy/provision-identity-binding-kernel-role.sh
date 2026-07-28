@@ -456,7 +456,6 @@ BEGIN
           AND NOT role_row.rolbypassrls
           AND role_row.rolconnlimit = 0
           AND role_row.rolpassword IS NULL
-          AND role_row.rolconfig IS NULL
      )
      OR (
        SELECT pg_catalog.count(*)

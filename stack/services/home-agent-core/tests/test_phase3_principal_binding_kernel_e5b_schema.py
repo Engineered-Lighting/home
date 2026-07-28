@@ -215,6 +215,15 @@ def test_caller_and_dependency_authority_contracts_are_revalidated() -> None:
     assert "home_agent_identity_erasure_kernel" in (
         MIGRATION_MODULE.ALL_REVOKED_ROLES
     )
+    assert MIGRATION_MODULE.KERNEL_ROLE in MIGRATION_MODULE.ALL_REVOKED_ROLES
+    assert (
+        MIGRATION_MODULE.KERNEL_ROLE
+        not in MIGRATION_MODULE.FUNCTION_REVOKED_ROLES
+    )
+    assert set(MIGRATION_MODULE.FUNCTION_REVOKED_ROLES) == (
+        set(MIGRATION_MODULE.ALL_REVOKED_ROLES)
+        - {MIGRATION_MODULE.KERNEL_ROLE}
+    )
 
 
 def test_receipt_has_exact_immutable_normalized_authority_shape() -> None:

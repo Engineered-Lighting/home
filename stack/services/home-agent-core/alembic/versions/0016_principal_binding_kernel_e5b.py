@@ -151,6 +151,9 @@ ALL_REVOKED_ROLES = (
     "home_agent_identity_erasure_kernel",
     KERNEL_ROLE,
 )
+FUNCTION_REVOKED_ROLES = tuple(
+    role for role in ALL_REVOKED_ROLES if role != KERNEL_ROLE
+)
 
 RECEIPT_COLUMNS = (
     "receipt_id",
@@ -1647,7 +1650,10 @@ def _install_fence_extensions() -> None:
 
 
 def _install_function() -> None:
-    revoked = ", ".join(ALL_REVOKED_ROLES)
+    # Preserve the explicit owner EXECUTE entry created with the function.
+    # The post-install and grant-replay manifests require exactly the kernel
+    # owner plus the authenticated caller, both granted by the kernel.
+    revoked = ", ".join(FUNCTION_REVOKED_ROLES)
     op.execute(
         f"""
         GRANT CREATE ON SCHEMA identity TO {KERNEL_ROLE};

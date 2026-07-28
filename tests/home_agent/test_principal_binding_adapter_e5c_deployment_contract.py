@@ -118,6 +118,9 @@ def test_e5c_kernel_caller_is_committer_not_staging_operator() -> None:
     assert "session_user <> 'home_agent_binding_operator'" not in migration
     assert '"home_agent_binding_operator",\n    CALLER_ROLE,' in migration
     assert "GRANT USAGE ON SCHEMA identity TO {CALLER_ROLE}" in migration
+    grants = read("stack/home-agent-deploy/apply-grants.sh")
+    assert "'target_proposal_id'," in grants
+    assert "'target_promotion_id'," not in grants
 
 
 def test_e5c_commit_pool_exposes_only_kernel_call_and_close() -> None:

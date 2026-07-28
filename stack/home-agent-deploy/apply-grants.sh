@@ -7037,7 +7037,7 @@ BEGIN
                 'uuid'::regtype::oid
               ]::oidvector
           AND function_row.proargnames = ARRAY[
-                'target_promotion_id',
+                'target_proposal_id',
                 'authenticated_ha_user_id',
                 'target_proposal_digest',
                 'confirmation_nonce',

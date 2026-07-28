@@ -445,6 +445,430 @@ Index(
     postgresql_where=principal_binding_proposals.c.state == "ready",
 )
 
+parent_relationship_requests = Table(
+    "parent_relationship_requests",
+    metadata,
+    Column("request_id", UUID_PK, primary_key=True),
+    Column(
+        "principal_id",
+        UUID_PK,
+        ForeignKey("identity.principals.principal_id"),
+        nullable=False,
+    ),
+    Column(
+        "child_person_id",
+        UUID_PK,
+        ForeignKey("identity.people.person_id"),
+        nullable=False,
+    ),
+    Column(
+        "binding_id",
+        UUID_PK,
+        ForeignKey("identity.ha_user_bindings.binding_id"),
+        nullable=False,
+    ),
+    Column("state", String(32), nullable=False, server_default="pending"),
+    Column("requested_at", DateTime(timezone=True), nullable=False, server_default=NOW),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("staged_at", DateTime(timezone=True)),
+    Column("closed_at", DateTime(timezone=True)),
+    UniqueConstraint(
+        "request_id",
+        "principal_id",
+        "child_person_id",
+        name="parent_request_subject",
+    ),
+    CheckConstraint(_uuidv7_shape("request_id"), name="parent_request_uuidv7"),
+    CheckConstraint(
+        "state IN ('pending','staged','consumed','cancelled','expired')",
+        name="parent_request_state",
+    ),
+    CheckConstraint(
+        "expires_at > requested_at AND "
+        "(staged_at IS NULL OR "
+        "(staged_at >= requested_at AND staged_at < expires_at)) AND "
+        "(closed_at IS NULL OR closed_at >= requested_at)",
+        name="parent_request_temporal_order",
+    ),
+    CheckConstraint(
+        "(state = 'pending' AND staged_at IS NULL AND closed_at IS NULL) OR "
+        "(state = 'staged' AND staged_at IS NOT NULL AND closed_at IS NULL) OR "
+        "(state = 'consumed' AND staged_at IS NOT NULL AND "
+        "closed_at IS NOT NULL AND closed_at <= expires_at) OR "
+        "(state = 'cancelled' AND closed_at IS NOT NULL) OR "
+        "(state = 'expired' AND closed_at IS NOT NULL AND closed_at >= expires_at)",
+        name="parent_request_state_shape",
+    ),
+    schema="identity",
+)
+Index(
+    "uq_parent_relationship_requests_active_principal",
+    parent_relationship_requests.c.principal_id,
+    unique=True,
+    postgresql_where=parent_relationship_requests.c.state.in_(
+        ("pending", "staged")
+    ),
+)
+Index(
+    "uq_parent_relationship_requests_active_child",
+    parent_relationship_requests.c.child_person_id,
+    unique=True,
+    postgresql_where=parent_relationship_requests.c.state.in_(
+        ("pending", "staged")
+    ),
+)
+
+parent_relationship_proposals = Table(
+    "parent_relationship_proposals",
+    metadata,
+    Column("proposal_id", UUID_PK, primary_key=True),
+    Column("operator_request_id", UUID_PK, nullable=False, unique=True),
+    Column("request_id", UUID_PK, nullable=False, unique=True),
+    Column("principal_id", UUID_PK, nullable=False),
+    Column("child_person_id", UUID_PK, nullable=False),
+    Column("contract_version", String(64), nullable=False),
+    Column("candidate_count", Integer, nullable=False),
+    Column("candidate_set_commitment", String(64), nullable=False),
+    Column("open_parent_fact_set_digest", String(64), nullable=False),
+    Column("proposal_digest", String(64), nullable=False, unique=True),
+    Column("policy_version", String(128), nullable=False),
+    Column("policy_digest", String(64), nullable=False),
+    Column("state", String(32), nullable=False, server_default="ready"),
+    Column("staged_at", DateTime(timezone=True), nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("consumed_at", DateTime(timezone=True)),
+    Column(
+        "confirmation_artifact_id",
+        UUID_PK,
+        ForeignKey("identity.confirmation_artifacts.artifact_id"),
+    ),
+    Column(
+        "memory_transaction_id",
+        UUID_PK,
+        ForeignKey("knowledge.memory_transactions.transaction_id"),
+    ),
+    UniqueConstraint(
+        "proposal_id",
+        "child_person_id",
+        name="parent_proposal_child",
+    ),
+    UniqueConstraint(
+        "confirmation_artifact_id",
+        name="parent_proposal_confirmation_once",
+    ),
+    UniqueConstraint(
+        "memory_transaction_id",
+        name="parent_proposal_memory_transaction_once",
+    ),
+    ForeignKeyConstraint(
+        ["request_id", "principal_id", "child_person_id"],
+        [
+            "identity.parent_relationship_requests.request_id",
+            "identity.parent_relationship_requests.principal_id",
+            "identity.parent_relationship_requests.child_person_id",
+        ],
+        name="parent_proposal_request_subject",
+        ondelete="CASCADE",
+    ),
+    CheckConstraint(
+        f"{_uuidv7_shape('proposal_id')} AND "
+        f"{_uuidv7_shape('operator_request_id')}",
+        name="parent_proposal_uuidv7",
+    ),
+    CheckConstraint(
+        "contract_version = 'parent-relationship-authority-v2' "
+        "AND candidate_count = 2",
+        name="parent_proposal_contract",
+    ),
+    CheckConstraint(
+        _hex64(
+            "candidate_set_commitment",
+            "open_parent_fact_set_digest",
+            "proposal_digest",
+            "policy_digest",
+        ),
+        name="parent_proposal_digests",
+    ),
+    CheckConstraint(
+        "policy_version ~ '^[a-z0-9][a-z0-9._-]{0,127}$'",
+        name="parent_proposal_policy_version",
+    ),
+    CheckConstraint(
+        "state IN ('ready','consumed','cancelled','expired')",
+        name="parent_proposal_state",
+    ),
+    CheckConstraint(
+        "expires_at > staged_at AND "
+        "expires_at <= staged_at + interval '15 minutes' AND "
+        "(consumed_at IS NULL OR "
+        "(consumed_at >= staged_at AND consumed_at <= expires_at))",
+        name="parent_proposal_temporal_order",
+    ),
+    CheckConstraint(
+        "(state = 'ready' AND consumed_at IS NULL AND "
+        "confirmation_artifact_id IS NULL AND memory_transaction_id IS NULL) OR "
+        "(state = 'consumed' AND consumed_at IS NOT NULL AND "
+        "confirmation_artifact_id IS NOT NULL AND "
+        "memory_transaction_id IS NOT NULL) OR "
+        "(state IN ('cancelled','expired') AND consumed_at IS NULL AND "
+        "confirmation_artifact_id IS NULL AND memory_transaction_id IS NULL)",
+        name="parent_proposal_state_shape",
+    ),
+    schema="identity",
+)
+Index(
+    "uq_parent_relationship_proposals_ready_principal",
+    parent_relationship_proposals.c.principal_id,
+    unique=True,
+    postgresql_where=parent_relationship_proposals.c.state == "ready",
+)
+Index(
+    "uq_parent_relationship_proposals_ready_child",
+    parent_relationship_proposals.c.child_person_id,
+    unique=True,
+    postgresql_where=parent_relationship_proposals.c.state == "ready",
+)
+
+parent_relationship_proposal_edges = Table(
+    "parent_relationship_proposal_edges",
+    metadata,
+    Column("proposal_edge_id", UUID_PK, primary_key=True),
+    Column("proposal_id", UUID_PK, nullable=False),
+    Column("ordinal", Integer, nullable=False),
+    Column(
+        "parent_person_id",
+        UUID_PK,
+        ForeignKey("identity.people.person_id"),
+        nullable=False,
+    ),
+    Column("child_person_id", UUID_PK, nullable=False),
+    Column(
+        "legacy_label_id",
+        UUID_PK,
+        ForeignKey("identity.legacy_role_labels.label_id"),
+        nullable=False,
+    ),
+    Column("review_code", String(16), nullable=False),
+    Column("person_snapshot_digest", String(64), nullable=False),
+    Column("role_snapshot_digest", String(64), nullable=False),
+    Column("edge_commitment", String(64), nullable=False),
+    Column("predicate", String(128), nullable=False),
+    Column("legacy_role_label", String(64), nullable=False),
+    Column("legacy_perspective", String(32), nullable=False),
+    Column("legacy_authoritative", Boolean, nullable=False),
+    Column("required_authority", String(32), nullable=False),
+    Column("required_support", String(32), nullable=False),
+    Column("required_contradiction", String(32), nullable=False),
+    Column("required_freshness", String(32), nullable=False),
+    Column("required_coverage", String(32), nullable=False),
+    Column("required_resolution", String(32), nullable=False),
+    Column("privacy_scope", String(32), nullable=False),
+    UniqueConstraint(
+        "proposal_id",
+        "ordinal",
+        name="parent_proposal_edge_ordinal",
+    ),
+    UniqueConstraint(
+        "proposal_id",
+        "parent_person_id",
+        name="parent_proposal_edge_parent",
+    ),
+    UniqueConstraint(
+        "proposal_id",
+        "legacy_label_id",
+        name="parent_proposal_edge_legacy_label",
+    ),
+    UniqueConstraint(
+        "proposal_id",
+        "review_code",
+        name="parent_proposal_edge_review_code",
+    ),
+    ForeignKeyConstraint(
+        ["proposal_id", "child_person_id"],
+        [
+            "identity.parent_relationship_proposals.proposal_id",
+            "identity.parent_relationship_proposals.child_person_id",
+        ],
+        name="parent_proposal_edge_proposal_child",
+        ondelete="CASCADE",
+    ),
+    CheckConstraint(_uuidv7_shape("proposal_edge_id"), name="parent_edge_uuidv7"),
+    CheckConstraint("ordinal IN (0,1)", name="parent_edge_ordinal"),
+    CheckConstraint(
+        "parent_person_id <> child_person_id",
+        name="parent_edge_not_self",
+    ),
+    CheckConstraint(
+        "review_code ~ '^[A-HJ-NP-Z2-9]{16}$'",
+        name="parent_edge_review_code",
+    ),
+    CheckConstraint(
+        _hex64(
+            "person_snapshot_digest",
+            "role_snapshot_digest",
+            "edge_commitment",
+        ),
+        name="parent_edge_digests",
+    ),
+    CheckConstraint(
+        "predicate = 'parent_of' "
+        "AND legacy_role_label = 'parent' "
+        "AND legacy_perspective = 'unknown' "
+        "AND legacy_authoritative = false",
+        name="parent_edge_legacy_context",
+    ),
+    CheckConstraint(
+        "required_authority = 'explicit_related_party' "
+        "AND required_support = 'explicit_authority' "
+        "AND required_contradiction = 'none' "
+        "AND required_freshness = 'not_applicable' "
+        "AND required_coverage = 'not_applicable' "
+        "AND required_resolution = 'accepted' "
+        "AND privacy_scope = 'private'",
+        name="parent_edge_fact_axes",
+    ),
+    schema="identity",
+)
+
+parent_relationship_authority_receipts = Table(
+    "parent_relationship_authority_receipts",
+    metadata,
+    Column("receipt_id", UUID_PK, primary_key=True),
+    Column(
+        "proposal_id",
+        UUID_PK,
+        ForeignKey("identity.parent_relationship_proposals.proposal_id"),
+        nullable=False,
+        unique=True,
+    ),
+    Column(
+        "request_id",
+        UUID_PK,
+        ForeignKey("identity.parent_relationship_requests.request_id"),
+        nullable=False,
+        unique=True,
+    ),
+    Column(
+        "principal_id",
+        UUID_PK,
+        ForeignKey("identity.principals.principal_id"),
+        nullable=False,
+    ),
+    Column(
+        "child_person_id",
+        UUID_PK,
+        ForeignKey("identity.people.person_id"),
+        nullable=False,
+    ),
+    Column(
+        "binding_id",
+        UUID_PK,
+        ForeignKey("identity.ha_user_bindings.binding_id"),
+        nullable=False,
+    ),
+    Column(
+        "confirmation_artifact_id",
+        UUID_PK,
+        ForeignKey("identity.confirmation_artifacts.artifact_id"),
+        nullable=False,
+        unique=True,
+    ),
+    Column(
+        "memory_transaction_id",
+        UUID_PK,
+        ForeignKey("knowledge.memory_transactions.transaction_id"),
+        nullable=False,
+        unique=True,
+    ),
+    Column("contract_version", String(64), nullable=False),
+    Column("edge_count", Integer, nullable=False),
+    Column("proposal_digest", String(64), nullable=False),
+    Column("policy_version", String(128), nullable=False),
+    Column("policy_digest", String(64), nullable=False),
+    Column("authority_result", String(32), nullable=False),
+    Column("database_transaction_id", BigInteger, nullable=False),
+    Column("receipt_commitment", String(64), nullable=False, unique=True),
+    Column(
+        "committed_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("transaction_timestamp()"),
+    ),
+    CheckConstraint(_uuidv7_shape("receipt_id"), name="parent_receipt_uuidv7"),
+    CheckConstraint(
+        "contract_version = 'parent-relationship-authority-v2' "
+        "AND edge_count = 2 "
+        "AND authority_result = 'committed'",
+        name="parent_receipt_contract",
+    ),
+    CheckConstraint(
+        _hex64("proposal_digest", "policy_digest", "receipt_commitment"),
+        name="parent_receipt_digests",
+    ),
+    CheckConstraint(
+        "policy_version ~ '^[a-z0-9][a-z0-9._-]{0,127}$' "
+        "AND database_transaction_id > 0",
+        name="parent_receipt_metadata",
+    ),
+    schema="operations",
+)
+
+parent_relationship_authority_receipt_edges = Table(
+    "parent_relationship_authority_receipt_edges",
+    metadata,
+    Column("receipt_edge_id", UUID_PK, primary_key=True),
+    Column(
+        "receipt_id",
+        UUID_PK,
+        ForeignKey(
+            "operations.parent_relationship_authority_receipts.receipt_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    ),
+    Column("ordinal", Integer, nullable=False),
+    Column(
+        "proposal_edge_id",
+        UUID_PK,
+        ForeignKey("identity.parent_relationship_proposal_edges.proposal_edge_id"),
+        nullable=False,
+        unique=True,
+    ),
+    Column(
+        "fact_version_id",
+        UUID_PK,
+        ForeignKey("knowledge.fact_versions.fact_version_id"),
+        nullable=False,
+        unique=True,
+    ),
+    Column(
+        "confirmation_support_id",
+        UUID_PK,
+        ForeignKey("knowledge.fact_support.support_id"),
+        nullable=False,
+        unique=True,
+    ),
+    Column(
+        "legacy_support_id",
+        UUID_PK,
+        ForeignKey("knowledge.fact_support.support_id"),
+        nullable=False,
+        unique=True,
+    ),
+    UniqueConstraint(
+        "receipt_id",
+        "ordinal",
+        name="parent_receipt_edge_ordinal",
+    ),
+    CheckConstraint(_uuidv7_shape("receipt_edge_id"), name="parent_receipt_edge_uuidv7"),
+    CheckConstraint("ordinal IN (0,1)", name="parent_receipt_edge_ordinal_value"),
+    CheckConstraint(
+        "confirmation_support_id <> legacy_support_id",
+        name="parent_receipt_edge_distinct_support",
+    ),
+    schema="operations",
+)
+
 source_entity_bindings = Table(
     "source_entity_bindings",
     metadata,

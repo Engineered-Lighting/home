@@ -1024,10 +1024,11 @@ sudo python3 \
 The diagnostic accepts no arguments, opens no database connection, and invokes
 only fixed `docker exec`/`docker inspect` reads. It calls the existing
 operator-only Phase 2 and Phase 3 Core diagnostics from inside the Core API
-container, reads pgBackRest `info --output=json`, checks the six required
-container health states, and binds hosted acceptance to the clean checkout's
-exact Git commit. It never runs Compose, Alembic, `psql`, a backup, a restore,
-or a rollout writer.
+container, reads pgBackRest `info --output=json`, checks five required
+container health states plus the healthcheck-free edge ingress's exact
+`running` state, and binds hosted acceptance to the clean checkout's exact Git
+commit. It never runs Compose, Alembic, `psql`, a backup, a restore, or a
+rollout writer.
 
 Exit status `0` means only that the non-authoritative preflight packet is
 complete. Status `3` means canonical admission blockers remain, and `78` means

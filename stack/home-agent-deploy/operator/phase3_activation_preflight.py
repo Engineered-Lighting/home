@@ -39,14 +39,15 @@ OFF_HOST_RECEIPT_PATH = Path("/srv/home-agent/config/phase3-off-host-backup-e5i.
 SOURCE_ROOT = Path(__file__).resolve().parents[3]
 CORE_CONTAINER = "home-agent-core-api-1"
 POSTGRES_CONTAINER = "home-agent-postgres-1"
-REQUIRED_HEALTHY_CONTAINERS = (
-    "home-agent-postgres-1",
-    "home-agent-core-api-1",
-    "home-agent-core-ingest-1",
-    "home-agent-core-worker-1",
-    "home-agent-bff-1",
-    "home-agent-edge-ingress-1",
-)
+REQUIRED_CONTAINER_STATES = {
+    "home-agent-postgres-1": "healthy",
+    "home-agent-core-api-1": "healthy",
+    "home-agent-core-ingest-1": "healthy",
+    "home-agent-core-worker-1": "healthy",
+    "home-agent-bff-1": "healthy",
+    # nginx edge-ingress intentionally has no Docker healthcheck.
+    "home-agent-edge-ingress-1": "running",
+}
 MAX_RECEIPT_AGE = timedelta(days=35)
 BACKUP_LABEL = re.compile(r"^[0-9]{8}-[0-9]{6}F$")
 COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -292,10 +293,10 @@ def evaluate(
         and phase3.get("ready_to_advance") is False
     )
     latest_backup_label, backup_healthy = _latest_full_backup(backup_info)
-    unhealthy_containers = sorted(
+    unready_containers = sorted(
         name
-        for name in REQUIRED_HEALTHY_CONTAINERS
-        if container_health.get(name) != "healthy"
+        for name, required_state in REQUIRED_CONTAINER_STATES.items()
+        if container_health.get(name) != required_state
     )
 
     blockers: list[str] = []
@@ -307,8 +308,8 @@ def evaluate(
         blockers.append("core_admission_diagnostic_invalid")
     elif phase2.get("ready_to_advance") is not True:
         blockers.append("record_only_evidence_not_ready")
-    if unhealthy_containers:
-        blockers.append("required_container_not_healthy")
+    if unready_containers:
+        blockers.append("required_container_not_ready")
     if not backup_healthy:
         blockers.append("encrypted_backup_repository_not_healthy")
     if not _valid_off_host_receipt(
@@ -358,8 +359,8 @@ def evaluate(
         "phase2": phase2_summary,
         "deployment": {
             "rollout_mode": environment.get("HOME_AGENT_ROLLOUT_MODE", "unknown"),
-            "required_containers_healthy": not unhealthy_containers,
-            "unhealthy_containers": unhealthy_containers,
+            "required_containers_ready": not unready_containers,
+            "unready_containers": unready_containers,
         },
         "backup": {
             "repository_healthy": backup_healthy,
@@ -470,12 +471,22 @@ def live_report(*, now: datetime | None = None) -> dict[str, Any]:
             timeout=30,
         )
     )
-    health = {
-        name: _run(
-            ["docker", "inspect", "--format={{.State.Health.Status}}", name]
-        ).strip()
-        for name in REQUIRED_HEALTHY_CONTAINERS
-    }
+    health: dict[str, str] = {}
+    for name, required_state in REQUIRED_CONTAINER_STATES.items():
+        state = json.loads(
+            _run(["docker", "inspect", "--format={{json .State}}", name])
+        )
+        if not isinstance(state, Mapping):
+            raise PreflightError("container state is invalid")
+        if required_state == "healthy":
+            health_state = state.get("Health")
+            health[name] = (
+                str(health_state.get("Status"))
+                if isinstance(health_state, Mapping)
+                else "missing"
+            )
+        else:
+            health[name] = str(state.get("Status", "missing"))
     source_commit = _run(["git", "-C", str(SOURCE_ROOT), "rev-parse", "HEAD"]).strip()
     source_tree_clean = (
         _run(["git", "-C", str(SOURCE_ROOT), "status", "--porcelain"]).strip() == ""

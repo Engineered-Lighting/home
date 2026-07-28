@@ -77,8 +77,8 @@ def _backup_info(*, healthy: bool = True) -> list[dict[str, object]]:
 def _health(*, unhealthy: str | None = None) -> dict[str, str]:
     module = _module()
     return {
-        name: "unhealthy" if name == unhealthy else "healthy"
-        for name in module.REQUIRED_HEALTHY_CONTAINERS
+        name: "unhealthy" if name == unhealthy else required_state
+        for name, required_state in module.REQUIRED_CONTAINER_STATES.items()
     }
 
 
@@ -200,7 +200,7 @@ def test_invalid_core_backup_health_and_container_state_fail_closed() -> None:
 
     assert report["blockers"] == [
         "core_admission_diagnostic_invalid",
-        "required_container_not_healthy",
+        "required_container_not_ready",
         "encrypted_backup_repository_not_healthy",
         "off_host_backup_receipt_missing",
         "current_backup_restore_receipt_missing",

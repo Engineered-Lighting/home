@@ -7001,7 +7001,7 @@ BEGIN
           AND index_state.indisvalid
           AND index_state.indisready
           AND index_state.indislive
-          AND index_state.indpred IS NOT NULL
+          AND index_state.indpred IS NULL
      ) THEN
     RAISE EXCEPTION
       'principal-binding E5b support graph contract mismatch'

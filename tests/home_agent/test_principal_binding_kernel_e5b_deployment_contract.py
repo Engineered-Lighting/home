@@ -250,6 +250,8 @@ def test_e5b_pending_manifest_pins_complete_denial_only_catalog() -> None:
     assert "trigger_count <> 3" in admission
     assert "kernel_owned_object_count <> 1" in admission
     assert f"'{_migration_function_body_sha256()}'" in admission
+    assert "index_state.indpred IS NULL" in admission
+    assert "index_state.indpred IS NOT NULL" not in admission
 
     for object_name in (
         "principal_binding_proposals_e5b_exact_authority",

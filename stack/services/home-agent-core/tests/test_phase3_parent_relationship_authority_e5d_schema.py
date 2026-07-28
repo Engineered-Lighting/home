@@ -11,6 +11,9 @@ ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = (
     ROOT / "alembic/versions/0018_parent_relationship_authority_e5d.py"
 ).read_text(encoding="utf-8")
+GRANTS = (
+    ROOT.parents[1] / "home-agent-deploy/apply-grants.sh"
+).read_text(encoding="utf-8")
 
 TABLES = (
     schema.parent_relationship_requests,
@@ -270,3 +273,27 @@ def test_foundation_has_no_runtime_mount_or_writer() -> None:
         assert "parent_relationship_requests" not in source
         assert "parent_relationship_proposals" not in source
         assert "parent_relationship_authority_receipts" not in source
+
+
+def test_grant_replay_keeps_every_e5d_relation_owner_only() -> None:
+    api_grants = GRANTS.split(
+        "DO $identity_api_operations_grants$", 1
+    )[1].split("$identity_api_operations_grants$;", 1)[0]
+    worker_grants = GRANTS.split(
+        "DO $identity_worker_operations_grants$", 1
+    )[1].split("$identity_worker_operations_grants$;", 1)[0]
+    for section in (api_grants, worker_grants):
+        assert "parent_relationship_authority_receipts" in section
+        assert "parent_relationship_authority_receipt_edges" in section
+        assert section.count("relation_row.oid IS DISTINCT FROM") >= 3
+
+    quarantine = GRANTS.split(
+        "DO $parent_relationship_e5d_early_quarantine$", 1
+    )[1].split("$parent_relationship_e5d_early_quarantine$;", 1)[0]
+    for table in TABLES:
+        assert f"'{table.schema}.{table.name}'" in quarantine
+    assert "role_row.rolname <> 'home_agent_owner'" in quarantine
+    assert "UNION ALL SELECT 'PUBLIC'" in quarantine
+    assert "REVOKE ALL PRIVILEGES ON TABLE %s FROM %s CASCADE" in quarantine
+    assert "REFERENCES (%1$s)" in quarantine
+    assert "GRANT" not in quarantine

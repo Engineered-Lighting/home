@@ -223,6 +223,14 @@ BEGIN
              pg_catalog.to_regclass(
                'operations.principal_binding_authority_receipts'
              )::oid
+       AND relation_row.oid IS DISTINCT FROM
+             pg_catalog.to_regclass(
+               'operations.parent_relationship_authority_receipts'
+             )::oid
+       AND relation_row.oid IS DISTINCT FROM
+             pg_catalog.to_regclass(
+               'operations.parent_relationship_authority_receipt_edges'
+             )::oid
   LOOP
     EXECUTE pg_catalog.format(
       'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE %s TO home_agent_api',
@@ -264,6 +272,14 @@ BEGIN
        AND relation_row.oid IS DISTINCT FROM
              pg_catalog.to_regclass(
                'operations.principal_binding_authority_receipts'
+             )::oid
+       AND relation_row.oid IS DISTINCT FROM
+             pg_catalog.to_regclass(
+               'operations.parent_relationship_authority_receipts'
+             )::oid
+       AND relation_row.oid IS DISTINCT FROM
+             pg_catalog.to_regclass(
+               'operations.parent_relationship_authority_receipt_edges'
              )::oid
   LOOP
     EXECUTE pg_catalog.format(
@@ -321,6 +337,63 @@ BEGIN
   END LOOP;
 END
 $identity_principal_binding_e5b_receipt_early_quarantine$;
+-- E5d is persistence groundwork only. Scrub every table and column privilege
+-- from all non-owner roles after the generic operations grants. A later
+-- reviewed kernel revision may grant narrowly scoped function execution, but
+-- no login role may read or mutate these relations directly.
+DO $parent_relationship_e5d_early_quarantine$
+DECLARE
+  grantee_sql text;
+  target_columns text;
+  target_relation regclass;
+  target_role text;
+  target_table text;
+BEGIN
+  FOREACH target_table IN ARRAY ARRAY[
+    'identity.parent_relationship_requests',
+    'identity.parent_relationship_proposals',
+    'identity.parent_relationship_proposal_edges',
+    'operations.parent_relationship_authority_receipts',
+    'operations.parent_relationship_authority_receipt_edges'
+  ]::text[]
+  LOOP
+    target_relation := pg_catalog.to_regclass(target_table);
+    IF target_relation IS NULL THEN
+      CONTINUE;
+    END IF;
+    SELECT pg_catalog.string_agg(
+             pg_catalog.quote_ident(attribute.attname), ', '
+             ORDER BY attribute.attnum
+           )
+      INTO STRICT target_columns
+      FROM pg_catalog.pg_attribute AS attribute
+     WHERE attribute.attrelid = target_relation
+       AND attribute.attnum > 0
+       AND NOT attribute.attisdropped;
+    FOR target_role IN
+      SELECT role_row.rolname
+        FROM pg_catalog.pg_roles AS role_row
+       WHERE role_row.rolname <> 'home_agent_owner'
+      UNION ALL SELECT 'PUBLIC'
+    LOOP
+      grantee_sql := CASE WHEN target_role = 'PUBLIC'
+        THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END;
+      EXECUTE pg_catalog.format(
+        'REVOKE ALL PRIVILEGES ON TABLE %s FROM %s CASCADE',
+        target_relation,
+        grantee_sql
+      );
+      EXECUTE pg_catalog.format(
+        'REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s), '
+        'REFERENCES (%1$s) ON TABLE %2$s FROM %3$s CASCADE',
+        target_columns,
+        target_relation,
+        grantee_sql
+      );
+    END LOOP;
+  END LOOP;
+END
+$parent_relationship_e5d_early_quarantine$;
 -- A worker may prove maintenance only by calling the fenced database kernels.
 -- Revoke schema-wide/default DML again so no online credential can forge the
 -- singleton row, including the worker credential itself.

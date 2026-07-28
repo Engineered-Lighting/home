@@ -10,4 +10,5 @@ promotes exactly two reviewed legacy `parent` labels into two explicit
 edge and future fact axis to one 15-minute proposal, and reserves normalized
 content-free authority receipts for the all-or-nothing commit. No runtime role
 receives access and production remains pinned to revision 0006a in record-only
-mode.
+mode. PostgreSQL 17 migration, forced-RLS, grant-replay, and runtime-denial
+acceptance passed in hosted workflow run `30331727607`.

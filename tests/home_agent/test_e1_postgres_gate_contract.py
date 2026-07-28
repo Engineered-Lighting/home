@@ -266,6 +266,41 @@ def test_catalog_discovery_emits_only_exact_changed_fingerprints(
     assert captured.err == ""
 
 
+def test_catalog_discovery_reports_only_allowlisted_contract_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runner = _load_runner()
+    private_canary = "PRIVATE-CATALOG-CONTEXT-MUST-NOT-BE-EMITTED"
+    safe_failure = "current-authority E5 policy contract mismatch"
+    monkeypatch.setattr(
+        runner,
+        "_docker_run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout=(
+                f"{private_canary}\npsql: ERROR:  {safe_failure}\n"
+                "DETAIL: private context remains redacted\n"
+            ),
+        ),
+    )
+
+    with pytest.raises(
+        runner.GateFailure,
+        match=f"reviewed contract: {safe_failure}",
+    ):
+        runner._discover_changed_catalog_digests(
+            SimpleNamespace(test_image="test-image"),
+            SimpleNamespace(name="e4-scaffold", network="e4-network"),
+            Path("."),
+            "home_agent",
+        )
+
+    captured = capsys.readouterr()
+    assert private_canary not in captured.out
+    assert private_canary not in captured.err
+
+
 def test_runner_refuses_quarantined_docker_daemon_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

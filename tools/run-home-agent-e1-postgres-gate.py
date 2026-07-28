@@ -95,6 +95,25 @@ CATALOG_DIGEST_CONTRACTS = (
         "identity principal-binding E5b catalog admission digest mismatch",
     ),
 )
+CATALOG_DISCOVERY_SAFE_FAILURES = (
+    "identity cutover E4 role ceremony was omitted",
+    "partial identity cutover E4 role pair",
+    "identity cutover E4 dormant role contract mismatch",
+    "identity cutover E4 reviewed E5 policy mismatch",
+    "current-authority E5 caller role contract mismatch",
+    "current-authority E5 dormant role contract mismatch",
+    "current-authority E5 ownership contract mismatch",
+    "current-authority E5 policy contract mismatch",
+    "current-authority E5 quarantine mismatch",
+    "partial or revision-mismatched principal-binding E5b object set",
+    "principal-binding E5b dormant role contract mismatch",
+    "principal-binding E5b ownership contract mismatch",
+    "principal-binding E5b function contract mismatch",
+    "principal-binding E5b support graph contract mismatch",
+    "principal-binding E5b fence trigger contract mismatch",
+    "principal-binding E5b receipt quarantine mismatch",
+    "principal-binding E5b broad quarantine mismatch",
+)
 RUN_LABEL = "com.engineeredlighting.home-agent-e1.run"
 MANAGED_LABEL = "com.engineeredlighting.home-agent-e1.managed"
 PHASE_LABEL = "com.engineeredlighting.home-agent-e1.phase"
@@ -1068,6 +1087,20 @@ def _discover_changed_catalog_digests(
             result.stdout,
         )
         if len(digest_matches) != 1:
+            safe_failures = [
+                message
+                for message in CATALOG_DISCOVERY_SAFE_FAILURES
+                if re.search(
+                    rf"ERROR:\s+{re.escape(message)}\s*$",
+                    result.stdout,
+                    re.MULTILINE,
+                )
+            ]
+            if len(safe_failures) == 1:
+                raise GateFailure(
+                    "catalog digest discovery stopped at reviewed contract: "
+                    f"{safe_failures[0]}"
+                )
             raise GateFailure(
                 "catalog digest discovery failed without one exact redacted digest"
             )

@@ -27,6 +27,9 @@ PINNED_E4 = (
 PINNED_E5A = (
     "adfd664ccb07372107649fab7275d1d3040ebe498813fc69af27a4e7336cd084"
 )
+PINNED_E5B = (
+    "01c11885e7ae4f5c336ee7e43a15a481396819e40a359124e0330fd113d189fb"
+)
 
 
 def _read(relative_path: str) -> str:
@@ -200,7 +203,7 @@ def test_e5b_quarantine_is_before_admission_and_has_no_positive_grants() -> None
     assert "GRANT " not in admission
 
 
-def test_e5b_pending_manifest_pins_complete_denial_only_catalog() -> None:
+def test_e5b_manifest_pins_complete_denial_only_catalog() -> None:
     admission = _block(
         _read(GRANTS), "identity_principal_binding_e5b_acl"
     )
@@ -299,11 +302,9 @@ def test_e5b_pending_manifest_pins_complete_denial_only_catalog() -> None:
         assert f"pg_catalog.{catalog}" in admission
         assert acl_column in admission
 
-    assert "'PENDING_E5B_CATALOG_SHA256'" in admission
-    assert (
-        "identity principal-binding E5b catalog admission is pending "
-        "reviewed digest" in admission
-    )
+    assert f"'{PINNED_E5B}'" in admission
+    assert "PENDING_E5B_CATALOG_SHA256" not in admission
+    assert "catalog admission is pending reviewed digest" not in admission
     assert "'expected=%s actual=%s'" in admission
     assert (
         "identity principal-binding E5b catalog admission digest mismatch"

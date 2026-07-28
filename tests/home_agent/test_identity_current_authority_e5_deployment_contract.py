@@ -451,12 +451,12 @@ def test_hosted_runner_provisions_before_0015_and_enforces_pinned_catalog() -> N
     assert "_alembic_downgrade(" in phase
     assert phase.count(
         "identity cutover E4 activation contract is not installed"
-    ) == 1
-    assert "identity principal-binding E5b catalog admission is pending " in (
+    ) == 2
+    assert "identity principal-binding E5b catalog admission is pending " not in (
         phase
     )
-    assert '"reviewed digest"' in phase
-    assert "unpinned dormant E5b catalog" in phase
+    assert "pinned dormant E5b catalog" in phase
+    assert "unpinned dormant E5b catalog" not in phase
     assert "capture_e5_catalog_digest" not in runner
     assert "PENDING_E5_CATALOG_SHA256" not in runner
     assert "pending_e5_catalog_digest" not in runner
@@ -464,6 +464,12 @@ def test_hosted_runner_provisions_before_0015_and_enforces_pinned_catalog() -> N
     assert "_classify_e5_catalog_failure" not in runner
     assert "E5_CATALOG_FAILURE_CODES" not in runner
     assert "E5_CATALOG_SHA256=" not in runner
+    assert "pending_e5b_catalog_digest" not in runner
+    assert "_extract_e5b_catalog_digest" not in runner
+    assert "_classify_e5b_catalog_failure" not in runner
+    assert "E5B_CATALOG_FAILURE_CODES" not in runner
+    assert "capture_e5b_catalog_digest" not in runner
+    assert "E5B_CATALOG_SHA256=" not in runner
     assert runner.index("if cleanup_failure is not None:") < runner.index(
         '"E1/E2/E3/E4 PostgreSQL 17 gate passed; "'
     )

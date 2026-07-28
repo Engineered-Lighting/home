@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path, PurePosixPath
-import re
 import secrets
 import shutil
 import signal
@@ -69,68 +68,6 @@ E5B_OWNER_DATABASE_ENV = (
 E5B_BINDING_OPERATOR_DATABASE_ENV = (
     "TEST_PHASE3_PRINCIPAL_BINDING_KERNEL_E5B_DATABASE_URL"
 )
-E5B_CATALOG_FAILURE_CODES = {
-    "identity finalizer E3 reviewed descendant policy mismatch": (
-        "e3_reviewed_descendant_policy_mismatch"
-    ),
-    "identity finalizer E3 reviewed E5 policy mismatch": (
-        "e3_reviewed_e5_policy_mismatch"
-    ),
-    "identity finalizer E3 catalog manifest mismatch": (
-        "e3_catalog_manifest_mismatch"
-    ),
-    "identity cutover E4 reviewed E5 policy mismatch": (
-        "e4_reviewed_e5_policy_mismatch"
-    ),
-    "identity cutover E4 catalog admission is pending reviewed digest": (
-        "e4_catalog_digest_mismatch"
-    ),
-    "partial or revision-mismatched current-authority E5 object set": (
-        "e5_object_set_mismatch"
-    ),
-    "current-authority E5 policy contract mismatch": (
-        "e5_policy_mismatch"
-    ),
-    "current-authority E5 quarantine mismatch": (
-        "e5_quarantine_mismatch"
-    ),
-    "identity finalizer E3 reviewed E5b overlay mismatch": (
-        "e3_reviewed_e5b_overlay_mismatch"
-    ),
-    "identity cutover E4 reviewed E5b overlay mismatch": (
-        "e4_reviewed_e5b_overlay_mismatch"
-    ),
-    "current-authority E5 reviewed E5b policy overlay mismatch": (
-        "e5_reviewed_e5b_overlay_mismatch"
-    ),
-    "partial or revision-mismatched principal-binding E5b object set": (
-        "e5b_object_set_mismatch"
-    ),
-    "principal-binding E5b dormant role contract mismatch": (
-        "e5b_role_contract_mismatch"
-    ),
-    "principal-binding E5b ownership contract mismatch": (
-        "e5b_ownership_contract_mismatch"
-    ),
-    "principal-binding E5b function contract mismatch": (
-        "e5b_function_contract_mismatch"
-    ),
-    "principal-binding E5b support graph contract mismatch": (
-        "e5b_support_graph_contract_mismatch"
-    ),
-    "principal-binding E5b fence trigger contract mismatch": (
-        "e5b_fence_trigger_contract_mismatch"
-    ),
-    "principal-binding E5b receipt quarantine mismatch": (
-        "e5b_receipt_quarantine_mismatch"
-    ),
-    "principal-binding E5b broad quarantine mismatch": (
-        "e5b_broad_quarantine_mismatch"
-    ),
-    "identity principal-binding E5b catalog admission digest mismatch": (
-        "e5b_catalog_digest_mismatch"
-    ),
-}
 RUN_LABEL = "com.engineeredlighting.home-agent-e1.run"
 MANAGED_LABEL = "com.engineeredlighting.home-agent-e1.managed"
 PHASE_LABEL = "com.engineeredlighting.home-agent-e1.phase"
@@ -390,7 +327,6 @@ class GateState:
     client_sequence: int = 0
     interrupted: bool = False
     phases: set[str] = field(default_factory=set)
-    pending_e5b_catalog_digest: str | None = None
 
     @property
     def name_prefix(self) -> str:
@@ -1026,7 +962,6 @@ def _apply_grants_expect_failure(
     expected_output: str,
     failure_label: str = "tampered E2 helper",
     redact_output: bool = False,
-    capture_e5b_catalog_digest: bool = False,
 ) -> None:
     result = _docker_run(
         state,
@@ -1043,50 +978,11 @@ def _apply_grants_expect_failure(
         raise GateFailure(f"{failure_label} unexpectedly passed grant replay")
     if expected_output not in result.stdout:
         output = result.stdout.rstrip()
-        if output and not (redact_output or capture_e5b_catalog_digest):
+        if output and not redact_output:
             print(output, file=sys.stderr)
-        if capture_e5b_catalog_digest:
-            failure_code = _classify_e5b_catalog_failure(result.stdout)
-            if failure_code is not None:
-                raise GateFailure(f"{failure_label} blocked by {failure_code}")
         raise GateFailure(
             f"{failure_label} failed without the reviewed contract marker"
         )
-    if capture_e5b_catalog_digest:
-        if state.pending_e5b_catalog_digest is not None:
-            raise GateFailure("E5b catalog digest was captured more than once")
-        state.pending_e5b_catalog_digest = _extract_e5b_catalog_digest(
-            result.stdout
-        )
-
-
-def _classify_e5b_catalog_failure(output: str) -> str | None:
-    matches = [
-        failure_code
-        for exception_message, failure_code in E5B_CATALOG_FAILURE_CODES.items()
-        for _match in re.finditer(
-            r"^(?:psql:[^\r\n]*:\d+:\s+)?ERROR:\s+"
-            rf"{re.escape(exception_message)}\r?$",
-            output,
-            re.MULTILINE,
-        )
-    ]
-    if len(matches) != 1:
-        return None
-    return matches[0]
-
-
-def _extract_e5b_catalog_digest(output: str) -> str:
-    matches = re.findall(
-        r"DETAIL:\s+expected=PENDING_E5B_CATALOG_SHA256 "
-        r"actual=([0-9a-f]{64})(?=\s|$)",
-        output,
-    )
-    if len(matches) != 1:
-        raise GateFailure(
-            "unpinned E5b catalog failed without one exact redacted digest"
-        )
-    return matches[0]
 
 
 def _provision_roles(
@@ -2625,12 +2521,10 @@ def _run_e4_scaffold_phase(
         secrets_directory,
         BASE_DATABASE,
         expected_output=(
-            "identity principal-binding E5b catalog admission is pending "
-            "reviewed digest"
+            "identity cutover E4 activation contract is not installed"
         ),
-        failure_label="unpinned dormant E5b catalog",
+        failure_label="pinned dormant E5b catalog",
         redact_output=True,
-        capture_e5b_catalog_digest=True,
     )
     quarantined_acl = _psql(
         state,
@@ -3023,16 +2917,9 @@ def main() -> int:
         print(f"E1 gate cleanup failed: {cleanup_failure}", file=sys.stderr)
         return 1
     if exit_code == 0:
-        if state.pending_e5b_catalog_digest is None:
-            print(
-                "E1 gate failed: E5b catalog digest was not captured",
-                file=sys.stderr,
-            )
-            return 1
-        print(f"E5B_CATALOG_SHA256={state.pending_e5b_catalog_digest}")
         print(
             "E1/E2/E3/E4 PostgreSQL 17 gate passed; "
-            "E5a catalog gate passed; E5b discovery gate passed; "
+            "E5a/E5b catalog gates passed; "
             "labeled cleanup verified"
         )
     return exit_code

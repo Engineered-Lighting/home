@@ -596,15 +596,12 @@ def test_e4_e5_scaffold_phase_is_fresh_dormant_and_secret_file_only() -> None:
     assert "pinned dormant E4 catalog" in source
     assert (
         section.count("identity cutover E4 activation contract is not installed")
-        == 1
+        == 2
     )
     assert (
-        section.count(
-            "identity principal-binding E5b catalog admission is pending "
-        )
-        == 1
+        "identity principal-binding E5b catalog admission is pending "
+        not in section
     )
-    assert '"reviewed digest"' in section
     e5_upgrade = section.index("REVISION_0015", login_open)
     e5_downgrade = section.index("_alembic_downgrade(", e5_upgrade)
     e5_reupgrade = section.index("_alembic(", e5_downgrade)
@@ -621,7 +618,14 @@ def test_e4_e5_scaffold_phase_is_fresh_dormant_and_secret_file_only() -> None:
     assert "E5_CATALOG_FAILURE_CODES" not in source
     assert "capture_e5_catalog_digest" not in source
     assert "E5_CATALOG_SHA256=" not in source
-    assert "unpinned dormant E5b catalog" in section
+    assert "pending_e5b_catalog_digest" not in source
+    assert "_extract_e5b_catalog_digest" not in source
+    assert "_classify_e5b_catalog_failure" not in source
+    assert "E5B_CATALOG_FAILURE_CODES" not in source
+    assert "capture_e5b_catalog_digest" not in source
+    assert "E5B_CATALOG_SHA256=" not in source
+    assert "pinned dormant E5b catalog" in section
+    assert "unpinned dormant E5b catalog" not in section
     assert "if cleanup_failure is not None:" in source
     assert source.index("if cleanup_failure is not None:") < source.index(
         '"E1/E2/E3/E4 PostgreSQL 17 gate passed; "'

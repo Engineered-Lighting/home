@@ -6700,9 +6700,9 @@ BEGIN
 END
 $identity_principal_binding_e5b_quarantine$;
 
--- Admit only the exact, post-quarantine E5b catalog. This revision is still
--- dormant: the reviewed digest is intentionally pending and no capability is
--- granted back by this block.
+-- Admit only the exact, post-quarantine E5b catalog. This revision remains
+-- dormant: the reviewed digest is pinned, but this block grants no capability
+-- and terminates at the unchanged E4 activation boundary.
 DO $identity_principal_binding_e5b_acl$
 DECLARE
   actual_e5b_catalog_sha256 text;
@@ -6716,7 +6716,7 @@ DECLARE
   current_revision text;
   database_oid oid;
   expected_e5b_catalog_sha256 constant text :=
-    'PENDING_E5B_CATALOG_SHA256';
+    '01c11885e7ae4f5c336ee7e43a15a481396819e40a359124e0330fd113d189fb';
   expected_function_body_sha256 constant text :=
     '5bff739f5252d94db6d65453cf40a9071a2612f758dc8f9ce3d956b84113f9b9';
   function_name_count integer;
@@ -7643,17 +7643,6 @@ BEGIN
          )
     INTO STRICT actual_e5b_catalog_sha256;
 
-  IF expected_e5b_catalog_sha256 =
-       'PENDING_E5B_CATALOG_SHA256' THEN
-    RAISE EXCEPTION
-      'identity principal-binding E5b catalog admission is pending reviewed digest'
-      USING ERRCODE = '42501',
-            DETAIL = pg_catalog.format(
-              'expected=%s actual=%s',
-              expected_e5b_catalog_sha256,
-              actual_e5b_catalog_sha256
-            );
-  END IF;
   IF expected_e5b_catalog_sha256 !~ '^[0-9a-f]{64}$'
      OR actual_e5b_catalog_sha256 <> expected_e5b_catalog_sha256 THEN
     RAISE EXCEPTION

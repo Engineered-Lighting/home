@@ -1088,6 +1088,10 @@ deployment still requires a reviewed off-host writer, the E4 activation and
 source-acceptance contracts, a rollback ceremony, and an explicit operator
 decision.
 
+The complete hosted E1–E5j PostgreSQL 17 authority gate passed in workflow run
+`30394033276` at source commit `2686286`. This acceptance does not authorize a
+production migration or create any missing live receipt.
+
 ## Record-only, shadow, and canary gates
 
 Every fresh deployment starts with `HOME_AGENT_ROLLOUT_MODE=record_only`.

@@ -746,7 +746,9 @@ async def _assert_catalog_boundary(connection) -> None:
         )
         assert role_capabilities == {
             "helper_execute": role in initiative_fact_visibility_roles,
-            "privacy_usage": True,
+            # The E5c committer stays table- and helper-blind until its
+            # separate 0017 outer-function activation.
+            "privacy_usage": role != "home_agent_binding_committer",
         }
 
     kernel_fact_acl = (

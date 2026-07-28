@@ -472,6 +472,22 @@ def test_context_manifest_explicitly_carries_untracked_erasure_test_sources() ->
         assert relative_path in runner.BUILD_CONTEXT_FILES
 
 
+def test_postgres_test_image_copies_exact_e5h_browser_contract_sources() -> None:
+    dockerfile = (
+        ROOT / "stack/services/home-agent-core/Dockerfile.postgres-test"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        "COPY app/src/home-agent/api.js /workspace/app/src/home-agent/api.js"
+        in dockerfile
+    )
+    assert (
+        "COPY app/src/home-agent/panel.jsx /workspace/app/src/home-agent/panel.jsx"
+        in dockerfile
+    )
+    assert "COPY app/ /workspace/app/" not in dockerfile
+
+
 def test_context_policy_rejects_sensitive_binary_and_git_symlink_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

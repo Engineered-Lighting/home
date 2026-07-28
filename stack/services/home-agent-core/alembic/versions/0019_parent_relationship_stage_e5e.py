@@ -819,9 +819,7 @@ def _install_function() -> None:
         SECURITY DEFINER
         SET search_path = pg_catalog
         SET row_security = on
-        AS $parent_relationship_stage_e5e$
-        {FUNCTION_BODY}
-        $parent_relationship_stage_e5e$;
+        AS $parent_relationship_stage_e5e${FUNCTION_BODY}$parent_relationship_stage_e5e$;
 
         ALTER FUNCTION {FUNCTION} OWNER TO {KERNEL_ROLE};
         REVOKE ALL PRIVILEGES ON FUNCTION {FUNCTION} FROM {revoked};

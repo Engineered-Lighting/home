@@ -1137,6 +1137,12 @@ E5k does not weaken any of those boundaries. Its purpose is to prevent the
 future executable ceremony from silently changing or omitting an already
 hosted-tested dependency.
 
+The complete hosted E1-E5k PostgreSQL 17 authority gate passed in workflow run
+`30394892306` at source commit
+`ba9edab82261000761c71760833ed97d81bb90f9`. This acceptance verifies E5k's
+read-only source-plan contract; it does not authorize a production migration
+or create a source-acceptance receipt.
+
 ## Record-only, shadow, and canary gates
 
 Every fresh deployment starts with `HOME_AGENT_ROLLOUT_MODE=record_only`.

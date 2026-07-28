@@ -8784,6 +8784,12 @@ GRANT SELECT, INSERT ON knowledge.memory_transactions
   TO home_agent_parent_relationship_kernel;
 GRANT INSERT ON knowledge.fact_versions
   TO home_agent_parent_relationship_kernel;
+GRANT SELECT (
+  fact_id, version, subject_type, valid_range, authority, support,
+  contradiction, freshness, coverage, privacy_scope,
+  memory_transaction_id, committed_at
+) ON knowledge.fact_versions
+  TO home_agent_parent_relationship_kernel;
 GRANT SELECT, INSERT ON knowledge.fact_support
   TO home_agent_parent_relationship_kernel;
 GRANT SELECT, INSERT

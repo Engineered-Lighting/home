@@ -1103,6 +1103,11 @@ def _install_policies_and_grants() -> None:
         GRANT SELECT, INSERT ON knowledge.memory_transactions
           TO {KERNEL_ROLE};
         GRANT INSERT ON knowledge.fact_versions TO {KERNEL_ROLE};
+        GRANT SELECT (
+          fact_id, version, subject_type, valid_range, authority, support,
+          contradiction, freshness, coverage, privacy_scope,
+          memory_transaction_id, committed_at
+        ) ON knowledge.fact_versions TO {KERNEL_ROLE};
         GRANT SELECT, INSERT ON knowledge.fact_support TO {KERNEL_ROLE};
         GRANT SELECT, INSERT
           ON operations.parent_relationship_authority_receipts
@@ -1282,6 +1287,11 @@ def downgrade() -> None:
         REVOKE SELECT, INSERT ON knowledge.memory_transactions
           FROM {KERNEL_ROLE};
         REVOKE INSERT ON knowledge.fact_versions FROM {KERNEL_ROLE};
+        REVOKE SELECT (
+          fact_id, version, subject_type, valid_range, authority, support,
+          contradiction, freshness, coverage, privacy_scope,
+          memory_transaction_id, committed_at
+        ) ON knowledge.fact_versions FROM {KERNEL_ROLE};
         REVOKE SELECT, INSERT ON knowledge.fact_support FROM {KERNEL_ROLE};
         REVOKE SELECT, INSERT
           ON operations.parent_relationship_authority_receipts

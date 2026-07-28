@@ -135,6 +135,25 @@ def test_grant_replay_quarantines_then_exactly_admits_e5f() -> None:
         in GRANTS[activation:]
     )
     assert (
+        "GRANT SELECT (\n"
+        "  fact_id, version, subject_type, valid_range, authority, support,\n"
+        "  contradiction, freshness, coverage, privacy_scope,\n"
+        "  memory_transaction_id, committed_at\n"
+        ") ON knowledge.fact_versions"
+        in GRANTS[activation:]
+    )
+    assert (
         "parent relationship E5f active ACL contract mismatch"
         in GRANTS[activation:]
     )
+
+
+def test_e5f_replay_can_read_only_its_additional_fact_columns() -> None:
+    columns = (
+        "fact_id, version, subject_type, valid_range, authority, support,\n"
+        "          contradiction, freshness, coverage, privacy_scope,\n"
+        "          memory_transaction_id, committed_at"
+    )
+    assert f"GRANT SELECT (\n          {columns}" in MIGRATION
+    assert f"REVOKE SELECT (\n          {columns}" in MIGRATION
+    assert "GRANT SELECT ON knowledge.fact_versions" not in MIGRATION

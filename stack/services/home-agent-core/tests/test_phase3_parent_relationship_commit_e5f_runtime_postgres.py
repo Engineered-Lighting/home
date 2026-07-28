@@ -254,6 +254,24 @@ async def test_e5f_catalog_is_split_credential_and_table_blind() -> None:
                 )
             ).one()
             assert authority_dependencies == (True, True, True, True)
+            fact_replay_columns = (
+                await connection.execute(
+                    text(
+                        "SELECT bool_and("
+                        "pg_catalog.has_column_privilege("
+                        "'home_agent_parent_relationship_kernel',"
+                        "'knowledge.fact_versions',"
+                        "column_name,'SELECT')) "
+                        "FROM unnest(ARRAY["
+                        "'fact_id','version','subject_type','valid_range',"
+                        "'authority','support','contradiction','freshness',"
+                        "'coverage','privacy_scope',"
+                        "'memory_transaction_id','committed_at'"
+                        "]) AS column_name"
+                    )
+                )
+            ).scalar_one()
+            assert fact_replay_columns is True
             privileges = (
                 await connection.execute(
                     text(

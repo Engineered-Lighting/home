@@ -231,3 +231,31 @@ def test_grant_replay_quarantines_then_restores_only_exact_stage_execute() -> No
     assert "operations.parent_relationship_authority_receipts" in (
         table_quarantine
     )
+
+
+def test_grant_replay_projects_e5e_out_of_pinned_predecessor_catalogs() -> None:
+    e3 = GRANTS.split("DO $identity_finalizer_e3_acl$", 1)[1].split(
+        "$identity_finalizer_e3_acl$;", 1
+    )[0]
+    assert "identity finalizer E3 reviewed E5e overlay mismatch" in e3
+    assert "parent_relationship_stage_e5e_r08_select" in e3
+    assert "parent_relationship_stage_e5e_r09_select" in e3
+    assert "ANY (e5e_e3_policy_names)" in e3
+    assert "expected_e3_catalog_sha256" in e3
+
+    e4 = GRANTS.split("DO $identity_cutover_e4_acl$", 1)[1].split(
+        "$identity_cutover_e4_acl$;", 1
+    )[0]
+    assert "identity cutover E4 reviewed E5e overlay mismatch" in e4
+    assert "parent_relationship_stage_e5e_r07_select" in e4
+    assert "relation_acl.grantee = parent_relationship_kernel_oid" in e4
+    assert "expected_e4_catalog_sha256" in e4
+
+    activation = GRANTS.split(
+        "DO $parent_relationship_e5e_active_acl$", 1
+    )[1].split("$parent_relationship_e5e_active_acl$;", 1)[0]
+    assert (
+        "ce75886310acf9f9790be2d4d98ae3ac8e61f9dd0af67756ce2a1e3f3c8defa1"
+        in activation
+    )
+    assert "pg_catalog.convert_to(prosrc, 'UTF8')" in activation

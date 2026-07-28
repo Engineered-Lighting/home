@@ -2326,6 +2326,14 @@ DECLARE
     'operations.reviewed_identity_migration_projection_lineage',
     'operations.reviewed_identity_migration_projection_subjects'
   ]::text[];
+  e5e_e3_policy_relations constant text[] := ARRAY[
+    'operations.reviewed_identity_migration_projection_lineage',
+    'operations.reviewed_identity_migration_projection_subjects'
+  ]::text[];
+  e5e_e3_policy_names constant text[] := ARRAY[
+    'parent_relationship_stage_e5e_r08_select',
+    'parent_relationship_stage_e5e_r09_select'
+  ]::text[];
   reviewed_e4_overlay_revisions constant text[] := ARRAY[
     '0014_identity_cutover_e4',
     '0015_current_authority_e5a',
@@ -2392,6 +2400,7 @@ DECLARE
   e5_select_policy constant text := 'identity_authority_e5_select';
   e5_run_lock_policy constant text := 'identity_authority_e5_run_lock';
   e5b_select_policy constant text := 'principal_binding_e5b_select';
+  parent_relationship_kernel_oid oid;
   authority_kernel_oid oid;
   migration_run_lock_policy constant text :=
     'identity_finalizer_e3_migration_run_lock';
@@ -2751,6 +2760,11 @@ BEGIN
     SELECT oid INTO STRICT binding_kernel_oid
       FROM pg_catalog.pg_roles
      WHERE rolname = 'home_agent_identity_binding_kernel';
+  END IF;
+  IF current_revision = '0019_parent_stage_e5e' THEN
+    SELECT oid INTO STRICT parent_relationship_kernel_oid
+      FROM pg_catalog.pg_roles
+     WHERE rolname = 'home_agent_parent_relationship_kernel';
   END IF;
   SELECT oid INTO STRICT database_oid
     FROM pg_catalog.pg_database
@@ -3401,6 +3415,59 @@ BEGIN
       USING ERRCODE = '42501';
   END IF;
 
+  -- E5e reads the two reviewed lineage relations through a dedicated
+  -- SECURITY DEFINER kernel. Validate that exact overlay before excluding it
+  -- from E3's immutable catalog proof.
+  IF current_revision = '0019_parent_stage_e5e'
+     AND (
+       (
+         SELECT pg_catalog.count(*)
+           FROM pg_catalog.pg_policy AS policy_row
+          WHERE policy_row.polrelid IN (
+                  SELECT pg_catalog.to_regclass(target.target_name)
+                    FROM pg_catalog.unnest(
+                           e5e_e3_policy_relations
+                         ) AS target(target_name)
+                )
+            AND policy_row.polname = ANY (e5e_e3_policy_names)
+            AND policy_row.polpermissive
+            AND policy_row.polcmd = 'r'
+            AND policy_row.polroles =
+                  ARRAY[parent_relationship_kernel_oid]::oid[]
+            AND policy_row.polqual IS NOT NULL
+            AND policy_row.polwithcheck IS NULL
+       ) <> 2
+       OR EXISTS (
+         SELECT 1
+           FROM (
+             VALUES
+               (
+                 'operations.reviewed_identity_migration_projection_lineage',
+                 'parent_relationship_stage_e5e_r08_select'
+               ),
+               (
+                 'operations.reviewed_identity_migration_projection_subjects',
+                 'parent_relationship_stage_e5e_r09_select'
+               )
+           ) AS expected(target_name, policy_name)
+           LEFT JOIN pg_catalog.pg_policy AS policy_row
+             ON policy_row.polrelid =
+                  pg_catalog.to_regclass(expected.target_name)
+            AND policy_row.polname = expected.policy_name
+          WHERE policy_row.oid IS NULL
+             OR NOT policy_row.polpermissive
+             OR policy_row.polcmd <> 'r'
+             OR policy_row.polroles <>
+                  ARRAY[parent_relationship_kernel_oid]::oid[]
+             OR policy_row.polqual IS NULL
+             OR policy_row.polwithcheck IS NOT NULL
+       )
+     ) THEN
+    RAISE EXCEPTION
+      'identity finalizer E3 reviewed E5e overlay mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
   IF (
        SELECT pg_catalog.count(*)
          FROM pg_catalog.pg_policy
@@ -3778,6 +3845,21 @@ BEGIN
                                    )
                               FROM pg_catalog.unnest(
                                      e5b_e3_policy_relations
+                                   ) AS descendant(target_name)
+                          )
+                        )
+                        OR (
+                          current_revision = '0019_parent_stage_e5e'
+                          AND policy_row.polname =
+                                ANY (e5e_e3_policy_names)
+                          AND policy_row.polroles =
+                                ARRAY[parent_relationship_kernel_oid]::oid[]
+                          AND policy_row.polrelid IN (
+                            SELECT pg_catalog.to_regclass(
+                                     descendant.target_name
+                                   )
+                              FROM pg_catalog.unnest(
+                                     e5e_e3_policy_relations
                                    ) AS descendant(target_name)
                           )
                         )
@@ -4604,6 +4686,9 @@ DECLARE
   );
   e5_select_policy constant text := 'identity_authority_e5_select';
   e5b_select_policy constant text := 'principal_binding_e5b_select';
+  e5e_promotion_select_policy constant text :=
+    'parent_relationship_stage_e5e_r07_select';
+  parent_relationship_kernel_oid oid;
   pre_e4_revisions constant text[] := ARRAY[
     '0001_greenfield_core',
     '0002_people_privacy_cutover',
@@ -4680,6 +4765,11 @@ BEGIN
     SELECT oid INTO STRICT binding_kernel_oid
       FROM pg_catalog.pg_roles
      WHERE rolname = 'home_agent_identity_binding_kernel';
+  END IF;
+  IF current_revision = '0019_parent_stage_e5e' THEN
+    SELECT oid INTO STRICT parent_relationship_kernel_oid
+      FROM pg_catalog.pg_roles
+     WHERE rolname = 'home_agent_parent_relationship_kernel';
   END IF;
   SELECT oid INTO STRICT database_oid
     FROM pg_catalog.pg_database
@@ -4921,6 +5011,40 @@ BEGIN
       USING ERRCODE = '42501';
   END IF;
 
+  -- E5e reads the current promotion through its own kernel. Pin that exact
+  -- descendant policy/grant pair, then project it out of the immutable E4
+  -- manifest.
+  IF current_revision = '0019_parent_stage_e5e'
+     AND (
+       NOT EXISTS (
+         SELECT 1
+           FROM pg_catalog.pg_policy AS policy_row
+          WHERE policy_row.polrelid = promotion_table
+            AND policy_row.polname = e5e_promotion_select_policy
+            AND policy_row.polpermissive
+            AND policy_row.polcmd = 'r'
+            AND policy_row.polroles =
+                  ARRAY[parent_relationship_kernel_oid]::oid[]
+            AND policy_row.polqual IS NOT NULL
+            AND policy_row.polwithcheck IS NULL
+       )
+       OR (
+         SELECT pg_catalog.count(*)
+           FROM pg_catalog.pg_class AS relation_row
+           CROSS JOIN LATERAL pg_catalog.aclexplode(relation_row.relacl)
+                AS relation_acl
+          WHERE relation_row.oid = promotion_table
+            AND relation_acl.grantee = parent_relationship_kernel_oid
+            AND relation_acl.grantor = owner_oid
+            AND relation_acl.privilege_type = 'SELECT'
+            AND NOT relation_acl.is_grantable
+       ) <> 1
+     ) THEN
+    RAISE EXCEPTION
+      'identity cutover E4 reviewed E5e overlay mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
   -- Hash the post-quarantine catalog, not the migration's temporarily
   -- callable state. A later activation needs a distinct reviewed manifest.
   -- The manifest includes ownership/RLS, normalized policies and ACLs, plus
@@ -5086,6 +5210,18 @@ BEGIN
                                              )
                                            )
                                          ) AS relation_acl
+                                   WHERE NOT (
+                                     current_revision =
+                                       '0019_parent_stage_e5e'
+                                     AND target.target_relation =
+                                           promotion_table
+                                     AND relation_acl.grantee =
+                                           parent_relationship_kernel_oid
+                                     AND relation_acl.grantor = owner_oid
+                                     AND relation_acl.privilege_type =
+                                           'SELECT'
+                                     AND NOT relation_acl.is_grantable
+                                   )
                                 ),
                                 'column_acl',
                                 (
@@ -5257,6 +5393,18 @@ BEGIN
                           AND policy_row.polcmd = 'r'
                           AND policy_row.polroles =
                                 ARRAY[binding_kernel_oid]::oid[]
+                          AND policy_row.polqual IS NOT NULL
+                          AND policy_row.polwithcheck IS NULL
+                        )
+                        OR (
+                          current_revision = '0019_parent_stage_e5e'
+                          AND policy_row.polname =
+                                e5e_promotion_select_policy
+                          AND policy_row.polrelid = promotion_table
+                          AND policy_row.polpermissive
+                          AND policy_row.polcmd = 'r'
+                          AND policy_row.polroles =
+                                ARRAY[parent_relationship_kernel_oid]::oid[]
                           AND policy_row.polqual IS NOT NULL
                           AND policy_row.polwithcheck IS NULL
                         )
@@ -8286,6 +8434,8 @@ RESET ROLE;
 DO $parent_relationship_e5e_active_acl$
 DECLARE
   caller_oid oid;
+  expected_function_body_sha256 constant text :=
+    'ce75886310acf9f9790be2d4d98ae3ac8e61f9dd0af67756ce2a1e3f3c8defa1';
   function_acl_count integer;
   kernel_oid oid;
   owner_oid oid;
@@ -8392,6 +8542,12 @@ BEGIN
             'search_path=pg_catalog',
             'row_security=on'
           ]::text[]
+          AND pg_catalog.encode(
+                pg_catalog.sha256(
+                  pg_catalog.convert_to(prosrc, 'UTF8')
+                ),
+                'hex'
+              ) = expected_function_body_sha256
      )
      OR EXISTS (
        SELECT 1

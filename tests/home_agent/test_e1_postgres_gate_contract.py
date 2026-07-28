@@ -568,6 +568,17 @@ def test_e4_e5_scaffold_phase_is_fresh_dormant_and_secret_file_only() -> None:
     assert "test_identity_current_authority_e5_deployment_contract.py" in (
         source
     )
+    assert "def _alembic_expect_failure(" in source
+    assert "SET application_name='e5b-role-config-tamper'" in section
+    assert "principal_binding_e5b_caller_role_invalid" in section
+    assert "RESET application_name" in section
+    assert (
+        "test_e5b_retains_one_graph_for_hosted_downgrade_refusal" in section
+    )
+    assert (
+        "refusing to remove populated E5b principal-binding authority"
+        in section
+    )
     assert "TEST_PHASE3_IDENTITY_CURRENT_AUTHORITY_E5_OWNER_DATABASE_URL" in (
         source
     )
@@ -585,8 +596,15 @@ def test_e4_e5_scaffold_phase_is_fresh_dormant_and_secret_file_only() -> None:
     assert "pinned dormant E4 catalog" in source
     assert (
         section.count("identity cutover E4 activation contract is not installed")
-        == 2
+        == 1
     )
+    assert (
+        section.count(
+            "identity principal-binding E5b catalog admission is pending "
+        )
+        == 1
+    )
+    assert '"reviewed digest"' in section
     e5_upgrade = section.index("REVISION_0015", login_open)
     e5_downgrade = section.index("_alembic_downgrade(", e5_upgrade)
     e5_reupgrade = section.index("_alembic(", e5_downgrade)
@@ -603,7 +621,7 @@ def test_e4_e5_scaffold_phase_is_fresh_dormant_and_secret_file_only() -> None:
     assert "E5_CATALOG_FAILURE_CODES" not in source
     assert "capture_e5_catalog_digest" not in source
     assert "E5_CATALOG_SHA256=" not in source
-    assert "pinned dormant E5 catalog" in section
+    assert "unpinned dormant E5b catalog" in section
     assert "if cleanup_failure is not None:" in source
     assert source.index("if cleanup_failure is not None:") < source.index(
         '"E1/E2/E3/E4 PostgreSQL 17 gate passed; "'

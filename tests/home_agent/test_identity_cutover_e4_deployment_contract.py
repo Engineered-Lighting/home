@@ -314,7 +314,7 @@ def test_hosted_gate_exercises_real_secret_lifecycle_and_compose_render() -> Non
     )
     assert workflow.index("Exercise E4 additive secret lifecycle") < (
         workflow.index(
-            "Run isolated PostgreSQL 17 E1/E2/E3/E4/E5 authority gate"
+            "Run isolated PostgreSQL 17 E1/E2/E3/E4/E5a/E5b authority gate"
         )
     )
 
@@ -456,10 +456,11 @@ def test_grant_replay_quarantines_e4_and_pins_reviewed_catalog() -> None:
     assert reviewed_revisions is not None
     assert re.findall(
         r"'([0-9a-z_]+)'", reviewed_revisions.group(1)
-    ) == [
-        "0014_identity_cutover_e4",
-        "0015_current_authority_e5a",
-    ]
+        ) == [
+            "0014_identity_cutover_e4",
+            "0015_current_authority_e5a",
+            "0016_principal_binding_e5b",
+        ]
     assert "identity_authority_e5_select" in admission
     assert "identity cutover E4 reviewed E5 policy mismatch" in admission
     assert "object_count = 0" in admission

@@ -13,6 +13,7 @@ STAGING_PATH = Path(
 PRINCIPAL_PATH = Path("stack/services/home-agent-core/app/principal_binding.py")
 API_PATH = Path("stack/services/home-agent-core/app/api.py")
 STORE_PATH = Path("stack/services/home-agent-core/app/store.py")
+E5B_COMMIT_FUNCTION = "commit_authenticated_principal_binding_e5b"
 
 
 def read(path: str | Path) -> str:
@@ -396,6 +397,56 @@ class PrincipalBindingAuthorityBoundaryContractTests(unittest.TestCase):
         self.assertEqual(entrypoint_lines, ['entrypoint: ["/bin/sh", "-c"]'])
         self.assertIn("profiles: [operator]", finalizer)
         self.assertIn('restart: "no"', finalizer)
+
+    def test_e5b_kernel_has_no_runtime_adapter_service_or_secret_surface(
+        self,
+    ) -> None:
+        runtime_roots = (
+            ROOT / "stack/services/home-agent-core/app",
+            ROOT / "stack/services/home-agent-bff",
+            ROOT / "app/src",
+            ROOT / "app/src-tauri/src",
+            ROOT / "web-gateway",
+            ROOT / "ha-config/home_agent_edge",
+        )
+        suffixes = {
+            ".html",
+            ".js",
+            ".json",
+            ".jsx",
+            ".mjs",
+            ".py",
+            ".rs",
+            ".sh",
+            ".sql",
+            ".toml",
+            ".ts",
+            ".tsx",
+            ".yaml",
+            ".yml",
+        }
+        forbidden_runtime_tokens = (
+            E5B_COMMIT_FUNCTION,
+            "home_agent_identity_binding_kernel",
+            "IDENTITY_BINDING_KERNEL_DATABASE_URL",
+            "PRINCIPAL_BINDING_KERNEL_E5B",
+        )
+        for root in runtime_roots:
+            if not root.exists():
+                continue
+            for path in root.rglob("*"):
+                if not path.is_file() or path.suffix.lower() not in suffixes:
+                    continue
+                source = path.read_text(encoding="utf-8")
+                for token in forbidden_runtime_tokens:
+                    self.assertNotIn(token, source, path)
+
+        compose = read("stack/home-agent-compose.yml")
+        environment = read("stack/home-agent.env.example")
+        self.assertNotIn(E5B_COMMIT_FUNCTION, compose)
+        self.assertNotIn("home_agent_identity_binding_kernel", compose)
+        self.assertNotIn("IDENTITY_BINDING_KERNEL", compose)
+        self.assertNotIn("IDENTITY_BINDING_KERNEL", environment)
 
     def test_legacy_self_confirming_store_has_no_non_test_static_reference(
         self,

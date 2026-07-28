@@ -1,4 +1,4 @@
-name: home agent E1/E2/E3/E4/E5 PostgreSQL gate
+name: home agent E1/E2/E3/E4/E5a/E5b PostgreSQL gate
 
 on:
   pull_request:
@@ -14,6 +14,7 @@ on:
       - "stack/home-agent-deploy/postgres-pg_hba.conf"
       - "stack/home-agent-deploy/preflight.sh"
       - "stack/home-agent-deploy/preflight-identity-cutover-roles.sh"
+      - "stack/home-agent-deploy/provision-identity-binding-kernel-role.sh"
       - "stack/home-agent-deploy/provision-identity-cutover-roles.sh"
       - "stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh"
       - "stack/home-agent-deploy/identity-api-acl.sql"
@@ -29,6 +30,9 @@ on:
       - "tests/home_agent/test_identity_finalizer_foundation_deployment_contract.py"
       - "tests/home_agent/test_identity_cutover_e4_deployment_contract.py"
       - "tests/home_agent/test_identity_current_authority_e5_deployment_contract.py"
+      - "tests/home_agent/test_identity_binding_kernel_role_ceremony_contract.py"
+      - "tests/home_agent/test_principal_binding_authority_boundary_contract.py"
+      - "tests/home_agent/test_principal_binding_kernel_e5b_deployment_contract.py"
       - "tools/run-home-agent-e1-postgres-gate.py"
   push:
     # Keep the exact integration branch on GitHub-hosted runners until the
@@ -46,6 +50,7 @@ on:
       - "stack/home-agent-deploy/postgres-pg_hba.conf"
       - "stack/home-agent-deploy/preflight.sh"
       - "stack/home-agent-deploy/preflight-identity-cutover-roles.sh"
+      - "stack/home-agent-deploy/provision-identity-binding-kernel-role.sh"
       - "stack/home-agent-deploy/provision-identity-cutover-roles.sh"
       - "stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh"
       - "stack/home-agent-deploy/identity-api-acl.sql"
@@ -61,6 +66,9 @@ on:
       - "tests/home_agent/test_identity_finalizer_foundation_deployment_contract.py"
       - "tests/home_agent/test_identity_cutover_e4_deployment_contract.py"
       - "tests/home_agent/test_identity_current_authority_e5_deployment_contract.py"
+      - "tests/home_agent/test_identity_binding_kernel_role_ceremony_contract.py"
+      - "tests/home_agent/test_principal_binding_authority_boundary_contract.py"
+      - "tests/home_agent/test_principal_binding_kernel_e5b_deployment_contract.py"
       - "tools/run-home-agent-e1-postgres-gate.py"
   workflow_dispatch:
 
@@ -90,7 +98,7 @@ jobs:
           RUNNER_TEMP="$RUNNER_TEMP"
           sh stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh
 
-      - name: Run isolated PostgreSQL 17 E1/E2/E3/E4/E5 authority gate
+      - name: Run isolated PostgreSQL 17 E1/E2/E3/E4/E5a/E5b authority gate
         env:
           HOME_AGENT_E1_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: >-

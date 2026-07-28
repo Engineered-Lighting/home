@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 REVISION = "0015_current_authority_e5a"
 DOWN_REVISION = "0014_identity_cutover_e4"
+DESCENDANT_REVISION = "0016_principal_binding_e5b"
 FUNCTION = "operations.evaluate_current_identity_semantic_authority(uuid)"
 CALLER_ROLE = "home_agent_binding_operator"
 KERNEL_ROLE = "home_agent_identity_authority_kernel"
@@ -177,10 +178,12 @@ def test_e5_overlay_preserves_exact_e3_e4_pins_and_stop_boundary() -> None:
         "0013_identity_finalizer_e3",
         DOWN_REVISION,
         REVISION,
+        DESCENDANT_REVISION,
     ]
     assert _revision_array(e4, "reviewed_e4_catalog_revisions") == [
         DOWN_REVISION,
         REVISION,
+        DESCENDANT_REVISION,
     ]
     for section, marker in (
         (e3, "identity finalizer E3 reviewed E5 policy mismatch"),
@@ -198,7 +201,9 @@ def test_e5_overlay_preserves_exact_e3_e4_pins_and_stop_boundary() -> None:
         r"'identity cutover E4 activation contract is not installed'",
         e4,
     )
-    assert f"current_revision = '{REVISION}'" in e4
+    assert "current_revision IN (" in e4
+    assert f"'{REVISION}'" in e4
+    assert f"'{DESCENDANT_REVISION}'" in e4
     assert e5.count(
         "identity cutover E4 activation contract is not installed"
     ) == 1
@@ -257,9 +262,9 @@ def test_e5_run_lock_is_validated_before_e3_manifest_projection() -> None:
     ) in validation
 
     assert "policy_row.polname = e5_run_lock_policy" in manifest
-    assert "current_revision = '0015_current_authority_e5a'" in (
-        run_lock_projection
-    )
+    assert "current_revision IN (" in run_lock_projection
+    assert f"'{REVISION}'" in run_lock_projection
+    assert f"'{DESCENDANT_REVISION}'" in run_lock_projection
     assert re.search(
         r"'operations\.reviewed_identity_migration_runs'\s+::regclass",
         run_lock_projection,
@@ -334,7 +339,13 @@ def test_e5_replay_quarantines_and_pins_the_complete_direct_acl_surface() -> Non
     assert "identity_authority_e5_select" in quarantine
     assert "identity_authority_e5_run_lock" in quarantine
 
-    assert f"current_revision <> '{REVISION}'" in admission
+    assert _revision_array(admission, "reviewed_e5_catalog_revisions") == [
+        REVISION,
+        DESCENDANT_REVISION,
+    ]
+    assert "NOT current_revision = ANY (reviewed_e5_catalog_revisions)" in (
+        admission
+    )
     assert "function_name_count <> 1" in admission
     assert "policy_count <> 13" in admission
     assert "kernel_owned_object_count <> 1" in admission
@@ -440,8 +451,12 @@ def test_hosted_runner_provisions_before_0015_and_enforces_pinned_catalog() -> N
     assert "_alembic_downgrade(" in phase
     assert phase.count(
         "identity cutover E4 activation contract is not installed"
-    ) == 2
-    assert "pinned dormant E5 catalog" in phase
+    ) == 1
+    assert "identity principal-binding E5b catalog admission is pending " in (
+        phase
+    )
+    assert '"reviewed digest"' in phase
+    assert "unpinned dormant E5b catalog" in phase
     assert "capture_e5_catalog_digest" not in runner
     assert "PENDING_E5_CATALOG_SHA256" not in runner
     assert "pending_e5_catalog_digest" not in runner
@@ -467,8 +482,8 @@ def test_hosted_runner_provisions_before_0015_and_enforces_pinned_catalog() -> N
     ):
         assert f"pg_catalog.{catalog}" in phase
 
-    assert "home agent E1/E2/E3/E4/E5 PostgreSQL gate" in workflow
-    assert "Run isolated PostgreSQL 17 E1/E2/E3/E4/E5 authority gate" in (
+    assert "home agent E1/E2/E3/E4/E5a/E5b PostgreSQL gate" in workflow
+    assert "Run isolated PostgreSQL 17 E1/E2/E3/E4/E5a/E5b authority gate" in (
         workflow
     )
     assert (

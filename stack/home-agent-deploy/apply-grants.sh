@@ -96,6 +96,37 @@ BEGIN
 END
 $identity_erasure_e2_function_quarantine$;
 
+-- E5b is a same-owner principal-binding commit boundary. Remove every
+-- callable path in its own committed statement before generic grants or any
+-- descendant catalog admission can fail. A partial object set is handled by
+-- the later exact E5b admission; this first block is denial-only.
+DO $identity_principal_binding_e5b_function_quarantine$
+DECLARE
+  binding_function regprocedure := pg_catalog.to_regprocedure(
+    'identity.commit_authenticated_principal_binding_e5b('
+    'uuid,character varying,character varying,uuid,uuid,uuid,uuid,uuid)'
+  );
+  grantee_sql text;
+  target_role text;
+BEGIN
+  IF binding_function IS NULL THEN
+    RETURN;
+  END IF;
+  FOR target_role IN
+    SELECT role_row.rolname FROM pg_catalog.pg_roles AS role_row
+    UNION ALL SELECT 'PUBLIC'
+  LOOP
+    grantee_sql := CASE WHEN target_role = 'PUBLIC'
+      THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END;
+    EXECUTE pg_catalog.format(
+      'REVOKE ALL PRIVILEGES ON FUNCTION %s FROM %s CASCADE',
+      binding_function,
+      grantee_sql
+    );
+  END LOOP;
+END
+$identity_principal_binding_e5b_function_quarantine$;
+
 ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity
   REVOKE ALL PRIVILEGES ON TABLES FROM home_agent_api;
 ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA identity
@@ -149,7 +180,30 @@ GRANT SELECT ON TABLE operations.erasure_ledger_state TO home_agent_rollout;
 GRANT SELECT ON TABLE operations.rollout_authorizations TO home_agent_ingest;
 GRANT SELECT ON ALL TABLES IN SCHEMA ingest TO home_agent_api;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA knowledge,
-  engagement, privacy, operations TO home_agent_api;
+  engagement, privacy TO home_agent_api;
+DO $identity_api_operations_grants$
+DECLARE
+  target_relation regclass;
+BEGIN
+  FOR target_relation IN
+    SELECT relation_row.oid::regclass
+      FROM pg_catalog.pg_class AS relation_row
+      JOIN pg_catalog.pg_namespace AS relation_namespace
+        ON relation_namespace.oid = relation_row.relnamespace
+     WHERE relation_namespace.nspname = 'operations'
+       AND relation_row.relkind IN ('r','p','v','m','f')
+       AND relation_row.oid IS DISTINCT FROM
+             pg_catalog.to_regclass(
+               'operations.principal_binding_authority_receipts'
+             )::oid
+  LOOP
+    EXECUTE pg_catalog.format(
+      'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE %s TO home_agent_api',
+      target_relation
+    );
+  END LOOP;
+END
+$identity_api_operations_grants$;
 -- Principal binding is a two-party workflow. Operator access is scoped by the
 -- unforgeable PostgreSQL session_user. Online subject grants are added only by
 -- the final identity-api-acl.sql contract.
@@ -169,7 +223,77 @@ GRANT SELECT ON TABLE identity.people, identity.principals,
   identity.ha_user_bindings, identity.edge_privacy_user_blocks,
   identity.privacy_directives
   TO home_agent_binding_operator;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA operations TO home_agent_worker;
+DO $identity_worker_operations_grants$
+DECLARE
+  target_relation regclass;
+BEGIN
+  FOR target_relation IN
+    SELECT relation_row.oid::regclass
+      FROM pg_catalog.pg_class AS relation_row
+      JOIN pg_catalog.pg_namespace AS relation_namespace
+        ON relation_namespace.oid = relation_row.relnamespace
+     WHERE relation_namespace.nspname = 'operations'
+       AND relation_row.relkind IN ('r','p','v','m','f')
+       AND relation_row.oid IS DISTINCT FROM
+             pg_catalog.to_regclass(
+               'operations.principal_binding_authority_receipts'
+             )::oid
+  LOOP
+    EXECUTE pg_catalog.format(
+      'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE %s '
+      'TO home_agent_worker',
+      target_relation
+    );
+  END LOOP;
+END
+$identity_worker_operations_grants$;
+-- A descendant receipt relation is never part of the generic operations
+-- surface. Scrub it immediately after the final schema-wide grant so any
+-- later E1/E2/E3/E4/E5 admission failure still leaves it non-forgeable.
+DO $identity_principal_binding_e5b_receipt_early_quarantine$
+DECLARE
+  grantee_sql text;
+  receipt_columns text;
+  receipt_table regclass := pg_catalog.to_regclass(
+    'operations.principal_binding_authority_receipts'
+  );
+  target_role text;
+BEGIN
+  IF receipt_table IS NULL THEN
+    RETURN;
+  END IF;
+  SELECT pg_catalog.string_agg(
+           pg_catalog.quote_ident(attribute.attname), ', '
+           ORDER BY attribute.attnum
+         )
+    INTO STRICT receipt_columns
+    FROM pg_catalog.pg_attribute AS attribute
+   WHERE attribute.attrelid = receipt_table
+     AND attribute.attnum > 0
+     AND NOT attribute.attisdropped;
+  FOR target_role IN
+    SELECT role_row.rolname
+      FROM pg_catalog.pg_roles AS role_row
+     WHERE role_row.rolname <> 'home_agent_owner'
+    UNION ALL SELECT 'PUBLIC'
+  LOOP
+    grantee_sql := CASE WHEN target_role = 'PUBLIC'
+      THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END;
+    EXECUTE pg_catalog.format(
+      'REVOKE ALL PRIVILEGES ON TABLE %s FROM %s CASCADE',
+      receipt_table,
+      grantee_sql
+    );
+    EXECUTE pg_catalog.format(
+      'REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s), '
+      'REFERENCES (%1$s) ON TABLE %2$s FROM %3$s CASCADE',
+      receipt_columns,
+      receipt_table,
+      grantee_sql
+    );
+  END LOOP;
+END
+$identity_principal_binding_e5b_receipt_early_quarantine$;
 -- A worker may prove maintenance only by calling the fenced database kernels.
 -- Revoke schema-wide/default DML again so no online credential can forge the
 -- singleton row, including the worker credential itself.
@@ -1482,6 +1606,206 @@ BEGIN
 END
 $identity_erasure_e2_acl$;
 
+-- Revision 0016 adds a second dormant kernel and policies to relations whose
+-- E3/E4/E5a manifests remain independently pinned. Quarantine every direct
+-- capability before those predecessor manifests run. Their admission blocks
+-- validate the exact E5b overlays and project them out; the complete E5b
+-- quarantine runs again after E5a.
+DO $identity_principal_binding_e5b_overlay_quarantine$
+DECLARE
+  binding_function regprocedure := pg_catalog.to_regprocedure(
+    'identity.commit_authenticated_principal_binding_e5b('
+    'uuid,character varying,character varying,uuid,uuid,uuid,uuid,uuid)'
+  );
+  grantee_sql text;
+  receipt_columns text;
+  receipt_table regclass := pg_catalog.to_regclass(
+    'operations.principal_binding_authority_receipts'
+  );
+  target_role text;
+  target_table record;
+  type_entry record;
+BEGIN
+  IF binding_function IS NOT NULL THEN
+    FOR target_role IN
+      SELECT role_row.rolname FROM pg_catalog.pg_roles AS role_row
+      UNION ALL SELECT 'PUBLIC'
+    LOOP
+      grantee_sql := CASE WHEN target_role = 'PUBLIC'
+        THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END;
+      EXECUTE pg_catalog.format(
+        'REVOKE ALL PRIVILEGES ON FUNCTION %s FROM %s CASCADE',
+        binding_function,
+        grantee_sql
+      );
+    END LOOP;
+  END IF;
+
+  -- Broad role setup above cannot know about descendant relations and grants
+  -- generic API/worker DML. Remove every explicit non-owner receipt grant
+  -- before any predecessor admission can fail. The owner keeps only its
+  -- migration-reviewed SELECT ACL; ownership itself is not delegated.
+  IF receipt_table IS NOT NULL THEN
+    SELECT pg_catalog.string_agg(
+             pg_catalog.quote_ident(attribute.attname), ', '
+             ORDER BY attribute.attnum
+           )
+      INTO STRICT receipt_columns
+      FROM pg_catalog.pg_attribute AS attribute
+     WHERE attribute.attrelid = receipt_table
+       AND attribute.attnum > 0
+       AND NOT attribute.attisdropped;
+    FOR target_role IN
+      SELECT role_row.rolname
+        FROM pg_catalog.pg_roles AS role_row
+       WHERE role_row.rolname <> 'home_agent_owner'
+      UNION ALL SELECT 'PUBLIC'
+    LOOP
+      grantee_sql := CASE WHEN target_role = 'PUBLIC'
+        THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END;
+      EXECUTE pg_catalog.format(
+        'REVOKE ALL PRIVILEGES ON TABLE %s FROM %s CASCADE',
+        receipt_table,
+        grantee_sql
+      );
+      EXECUTE pg_catalog.format(
+        'REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s), '
+        'REFERENCES (%1$s) ON TABLE %2$s FROM %3$s CASCADE',
+        receipt_columns,
+        receipt_table,
+        grantee_sql
+      );
+    END LOOP;
+  END IF;
+
+  IF NOT EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_roles AS role_row
+        WHERE role_row.rolname = 'home_agent_identity_binding_kernel'
+     ) THEN
+    RETURN;
+  END IF;
+
+  EXECUTE pg_catalog.format(
+    'REVOKE ALL PRIVILEGES ON DATABASE %I '
+    'FROM home_agent_identity_binding_kernel CASCADE',
+    pg_catalog.current_database()
+  );
+  FOR target_table IN
+    SELECT table_namespace.nspname,
+           candidate_table.relname,
+           pg_catalog.string_agg(
+             pg_catalog.quote_ident(attribute.attname), ', '
+             ORDER BY attribute.attnum
+           ) AS column_list
+      FROM pg_catalog.pg_class AS candidate_table
+      JOIN pg_catalog.pg_namespace AS table_namespace
+        ON table_namespace.oid = candidate_table.relnamespace
+      JOIN pg_catalog.pg_attribute AS attribute
+        ON attribute.attrelid = candidate_table.oid
+       AND attribute.attnum > 0
+       AND NOT attribute.attisdropped
+     WHERE table_namespace.nspname IN (
+       'public','ingest','identity','knowledge','engagement','privacy',
+       'operations','media'
+     )
+       AND candidate_table.relkind IN ('r','p','v','m','f')
+     GROUP BY table_namespace.nspname, candidate_table.relname
+  LOOP
+    EXECUTE pg_catalog.format(
+      'REVOKE ALL PRIVILEGES ON TABLE %I.%I '
+      'FROM home_agent_identity_binding_kernel CASCADE',
+      target_table.nspname,
+      target_table.relname
+    );
+    EXECUTE pg_catalog.format(
+      'REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s), '
+      'REFERENCES (%1$s) ON TABLE %2$I.%3$I '
+      'FROM home_agent_identity_binding_kernel CASCADE',
+      target_table.column_list,
+      target_table.nspname,
+      target_table.relname
+    );
+  END LOOP;
+  REVOKE USAGE, CREATE ON SCHEMA
+    public, ingest, identity, knowledge, engagement, privacy, operations,
+    media
+    FROM home_agent_identity_binding_kernel CASCADE;
+  REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA
+    public, ingest, identity, knowledge, engagement, privacy, operations,
+    media
+    FROM home_agent_identity_binding_kernel CASCADE;
+  REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA
+    public, ingest, identity, knowledge, engagement, privacy, operations,
+    media
+    FROM home_agent_identity_binding_kernel CASCADE;
+  FOR type_entry IN
+    SELECT type_namespace.nspname, candidate_type.typname
+      FROM pg_catalog.pg_type AS candidate_type
+      JOIN pg_catalog.pg_namespace AS type_namespace
+        ON type_namespace.oid = candidate_type.typnamespace
+     WHERE type_namespace.nspname IN (
+       'public','ingest','identity','knowledge','engagement','privacy',
+       'operations','media'
+     )
+       AND candidate_type.typisdefined
+       AND candidate_type.typrelid = 0
+       AND candidate_type.typelem = 0
+  LOOP
+    EXECUTE pg_catalog.format(
+      'REVOKE USAGE ON TYPE %I.%I '
+      'FROM home_agent_identity_binding_kernel CASCADE',
+      type_entry.nspname,
+      type_entry.typname
+    );
+  END LOOP;
+  ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA
+    public, ingest, identity, knowledge, engagement, privacy, operations,
+    media
+    REVOKE ALL PRIVILEGES ON TABLES
+    FROM home_agent_identity_binding_kernel CASCADE;
+  ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA
+    public, ingest, identity, knowledge, engagement, privacy, operations,
+    media
+    REVOKE ALL PRIVILEGES ON SEQUENCES
+    FROM home_agent_identity_binding_kernel CASCADE;
+  ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA
+    public, ingest, identity, knowledge, engagement, privacy, operations,
+    media
+    REVOKE ALL PRIVILEGES ON FUNCTIONS
+    FROM home_agent_identity_binding_kernel CASCADE;
+  ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA
+    public, ingest, identity, knowledge, engagement, privacy, operations,
+    media
+    REVOKE ALL PRIVILEGES ON TYPES
+    FROM home_agent_identity_binding_kernel CASCADE;
+
+  -- The nested E5a call is a migration-time bridge only. Grant replay never
+  -- leaves it callable.
+  FOR binding_function IN
+    SELECT function_row.oid::regprocedure
+      FROM pg_catalog.pg_proc AS function_row
+      JOIN pg_catalog.pg_namespace AS function_namespace
+        ON function_namespace.oid = function_row.pronamespace
+     WHERE (
+       function_namespace.nspname = 'identity'
+       AND function_row.proname =
+             'commit_authenticated_principal_binding_e5b'
+     ) OR (
+       function_namespace.nspname = 'operations'
+       AND function_row.proname =
+             'evaluate_current_identity_semantic_authority'
+     )
+  LOOP
+    EXECUTE pg_catalog.format(
+      'REVOKE ALL PRIVILEGES ON FUNCTION %s '
+      'FROM home_agent_identity_binding_kernel CASCADE',
+      binding_function
+    );
+  END LOOP;
+END
+$identity_principal_binding_e5b_overlay_quarantine$;
+
 -- Revision 0015 adds an E5 policy/ACL overlay to relations owned by the
 -- already-pinned E3 and E4 catalogs. Quarantine its exact migration grants
 -- before either older manifest is evaluated; their blocks then validate and
@@ -1804,6 +2128,7 @@ DECLARE
   finalizer_oid oid;
   kernel_oid oid;
   cutover_kernel_oid oid;
+  binding_kernel_oid oid;
   owner_oid oid;
   erasure_kernel_oid oid;
   database_oid oid;
@@ -1840,9 +2165,14 @@ DECLARE
     'operations.reviewed_identity_migration_projection_lineage',
     'operations.reviewed_identity_migration_projection_subjects'
   ]::text[];
+  e5b_e3_policy_relations constant text[] := ARRAY[
+    'operations.reviewed_identity_migration_projection_lineage',
+    'operations.reviewed_identity_migration_projection_subjects'
+  ]::text[];
   reviewed_e4_overlay_revisions constant text[] := ARRAY[
     '0014_identity_cutover_e4',
-    '0015_current_authority_e5a'
+    '0015_current_authority_e5a',
+    '0016_principal_binding_e5b'
   ]::text[];
   pre_e3_revisions constant text[] := ARRAY[
     '0001_greenfield_core',
@@ -1859,7 +2189,8 @@ DECLARE
     '0011_identity_erasure_e1',
     '0012_identity_erasure_e2'
   ]::text[];
-  -- E4 and the function-only E5a verifier are the only reviewed descendants
+  -- E4, the function-only E5a verifier, and dormant E5b binding kernel are
+  -- the only reviewed descendants
   -- whose migrations preserve the exact E3 relations, functions, ownership,
   -- and ACL contract validated below. Their additive policies are validated
   -- and projected out explicitly. Every later revision must be admitted
@@ -1867,7 +2198,8 @@ DECLARE
   reviewed_e3_catalog_revisions constant text[] := ARRAY[
     '0013_identity_finalizer_e3',
     '0014_identity_cutover_e4',
-    '0015_current_authority_e5a'
+    '0015_current_authority_e5a',
+    '0016_principal_binding_e5b'
   ]::text[];
   expected_e3_catalog_sha256 constant text :=
     '123326a4620d3dd123773819d95255e40813a5a949f406570252ff1f7031f29a';
@@ -1896,6 +2228,7 @@ DECLARE
   e4_select_policy constant text := 'identity_cutover_e4_select';
   e5_select_policy constant text := 'identity_authority_e5_select';
   e5_run_lock_policy constant text := 'identity_authority_e5_run_lock';
+  e5b_select_policy constant text := 'principal_binding_e5b_select';
   authority_kernel_oid oid;
   migration_run_lock_policy constant text :=
     'identity_finalizer_e3_migration_run_lock';
@@ -2235,10 +2568,18 @@ BEGIN
       FROM pg_catalog.pg_roles
      WHERE rolname = 'home_agent_identity_cutover_kernel';
   END IF;
-  IF current_revision = '0015_current_authority_e5a' THEN
+  IF current_revision IN (
+       '0015_current_authority_e5a',
+       '0016_principal_binding_e5b'
+     ) THEN
     SELECT oid INTO STRICT authority_kernel_oid
       FROM pg_catalog.pg_roles
      WHERE rolname = 'home_agent_identity_authority_kernel';
+  END IF;
+  IF current_revision = '0016_principal_binding_e5b' THEN
+    SELECT oid INTO STRICT binding_kernel_oid
+      FROM pg_catalog.pg_roles
+     WHERE rolname = 'home_agent_identity_binding_kernel';
   END IF;
   SELECT oid INTO STRICT database_oid
     FROM pg_catalog.pg_database
@@ -2719,7 +3060,10 @@ BEGIN
   -- run. Validate every policy against the E5-owned SELECT reference before
   -- projecting it out. The E5 block below pins the complete verifier catalog
   -- after its independently committed quarantine.
-  IF current_revision = '0015_current_authority_e5a'
+  IF current_revision IN (
+       '0015_current_authority_e5a',
+       '0016_principal_binding_e5b'
+     )
      AND (
        (
          SELECT pg_catalog.count(*)
@@ -2794,13 +3138,100 @@ BEGIN
       USING ERRCODE = '42501';
   END IF;
 
+  -- E5b adds a person-lineage support key and two SELECT policies to E3
+  -- relations. Validate the exact descendant overlay before projecting it
+  -- out of E3's immutable catalog digest.
+  IF current_revision = '0016_principal_binding_e5b'
+     AND (
+       NOT EXISTS (
+         SELECT 1
+           FROM pg_catalog.pg_constraint AS constraint_row
+           JOIN pg_catalog.pg_index AS index_state
+             ON index_state.indexrelid = constraint_row.conindid
+           JOIN pg_catalog.pg_class AS index_relation
+             ON index_relation.oid = constraint_row.conindid
+          WHERE constraint_row.conrelid =
+                'operations.reviewed_identity_migration_projection_lineage'
+                  ::regclass
+            AND constraint_row.conname =
+                'identity_projection_lineage_e5b_exact_person'
+            AND constraint_row.contype = 'u'
+            AND NOT constraint_row.condeferrable
+            AND NOT constraint_row.condeferred
+            AND constraint_row.convalidated
+            AND pg_catalog.pg_get_constraintdef(
+                  constraint_row.oid, true
+                ) =
+                'UNIQUE (run_id, lineage_id, decision_kind, '
+                'projection_table_kind, projection_id)'
+            AND index_relation.relname =
+                'identity_projection_lineage_e5b_exact_person'
+            AND index_state.indisunique
+            AND NOT index_state.indisprimary
+            AND NOT index_state.indisexclusion
+            AND index_state.indimmediate
+            AND index_state.indisvalid
+            AND index_state.indisready
+            AND index_state.indislive
+       )
+       OR (
+         SELECT pg_catalog.count(*)
+           FROM pg_catalog.pg_policy AS policy_row
+          WHERE policy_row.polname = e5b_select_policy
+            AND policy_row.polrelid IN (
+              SELECT pg_catalog.to_regclass(target.target_name)
+                FROM pg_catalog.unnest(
+                       e5b_e3_policy_relations
+                     ) AS target(target_name)
+            )
+       ) <> pg_catalog.cardinality(e5b_e3_policy_relations)
+       OR EXISTS (
+         SELECT 1
+           FROM pg_catalog.unnest(
+                  e5b_e3_policy_relations
+                ) AS target(target_name)
+           LEFT JOIN pg_catalog.pg_policy AS policy_row
+             ON policy_row.polrelid =
+                  pg_catalog.to_regclass(target.target_name)
+            AND policy_row.polname = e5b_select_policy
+           LEFT JOIN pg_catalog.pg_policy AS reference_policy
+             ON reference_policy.polrelid =
+                  'operations.reviewed_identity_migration_projection_lineage'
+                    ::regclass
+            AND reference_policy.polname = e5b_select_policy
+          WHERE policy_row.oid IS NULL
+             OR reference_policy.oid IS NULL
+             OR NOT policy_row.polpermissive
+             OR policy_row.polcmd <> 'r'
+             OR policy_row.polroles <>
+                  ARRAY[binding_kernel_oid]::oid[]
+             OR policy_row.polqual IS NULL
+             OR policy_row.polwithcheck IS NOT NULL
+             OR NOT reference_policy.polpermissive
+             OR reference_policy.polcmd <> 'r'
+             OR reference_policy.polroles <>
+                  ARRAY[binding_kernel_oid]::oid[]
+             OR reference_policy.polqual IS NULL
+             OR reference_policy.polwithcheck IS NOT NULL
+             OR policy_row.polqual::text <>
+                  reference_policy.polqual::text
+       )
+     ) THEN
+    RAISE EXCEPTION
+      'identity finalizer E3 reviewed E5b overlay mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
   IF (
        SELECT pg_catalog.count(*)
          FROM pg_catalog.pg_policy
         WHERE polrelid = admission_table
      ) <> (
        CASE
-         WHEN current_revision = '0015_current_authority_e5a' THEN 6
+         WHEN current_revision IN (
+                '0015_current_authority_e5a',
+                '0016_principal_binding_e5b'
+              ) THEN 6
          WHEN current_revision = ANY (reviewed_e4_overlay_revisions) THEN 5
          ELSE 4
        END
@@ -3035,8 +3466,17 @@ BEGIN
                         ),
                         '[]'::jsonb
                       )
-                 FROM pg_catalog.pg_constraint AS constraint_row
-                WHERE constraint_row.conrelid = relation.oid
+                  FROM pg_catalog.pg_constraint AS constraint_row
+                 WHERE constraint_row.conrelid = relation.oid
+                   AND NOT (
+                     current_revision = '0016_principal_binding_e5b'
+                     AND relation.oid =
+                           'operations.'
+                           'reviewed_identity_migration_projection_lineage'
+                             ::regclass
+                     AND constraint_row.conname =
+                           'identity_projection_lineage_e5b_exact_person'
+                   )
              ),
              'indexes', (
                SELECT coalesce(
@@ -3059,9 +3499,18 @@ BEGIN
                         '[]'::jsonb
                       )
                  FROM pg_catalog.pg_index AS index_state
-                 JOIN pg_catalog.pg_class AS index_relation
-                   ON index_relation.oid = index_state.indexrelid
-                WHERE index_state.indrelid = relation.oid
+                  JOIN pg_catalog.pg_class AS index_relation
+                    ON index_relation.oid = index_state.indexrelid
+                 WHERE index_state.indrelid = relation.oid
+                   AND NOT (
+                     current_revision = '0016_principal_binding_e5b'
+                     AND relation.oid =
+                           'operations.'
+                           'reviewed_identity_migration_projection_lineage'
+                             ::regclass
+                     AND index_relation.relname =
+                           'identity_projection_lineage_e5b_exact_person'
+                   )
              ),
              'policies', (
                SELECT coalesce(
@@ -3109,13 +3558,30 @@ BEGIN
                          AND policy_row.polroles =
                                ARRAY[cutover_kernel_oid]::oid[]
                        )
-                       OR (
-                         current_revision = '0015_current_authority_e5a'
+                        OR (
+                          current_revision IN (
+                            '0015_current_authority_e5a',
+                            '0016_principal_binding_e5b'
+                         )
                          AND policy_row.polname = e5_select_policy
-                         AND policy_row.polroles =
-                               ARRAY[authority_kernel_oid]::oid[]
-                       )
-                     )
+                          AND policy_row.polroles =
+                                ARRAY[authority_kernel_oid]::oid[]
+                        )
+                        OR (
+                          current_revision = '0016_principal_binding_e5b'
+                          AND policy_row.polname = e5b_select_policy
+                          AND policy_row.polroles =
+                                ARRAY[binding_kernel_oid]::oid[]
+                          AND policy_row.polrelid IN (
+                            SELECT pg_catalog.to_regclass(
+                                     descendant.target_name
+                                   )
+                              FROM pg_catalog.unnest(
+                                     e5b_e3_policy_relations
+                                   ) AS descendant(target_name)
+                          )
+                        )
+                      )
                      AND policy_row.polrelid IN (
                        SELECT pg_catalog.to_regclass(target.target_name)
                          FROM pg_catalog.unnest(
@@ -3130,9 +3596,18 @@ BEGIN
                        SELECT 1
                          FROM pg_catalog.pg_policy AS reference_policy
                         WHERE reference_policy.polrelid =
-                              pg_catalog.to_regclass(
-                                'operations.enforced_legacy_identity_writer_freezes'
-                              )
+                              CASE
+                                WHEN policy_row.polname =
+                                       e5b_select_policy
+                                THEN
+                                  'operations.'
+                                  'reviewed_identity_migration_projection_lineage'
+                                    ::regclass
+                                ELSE
+                                  'operations.'
+                                  'enforced_legacy_identity_writer_freezes'
+                                    ::regclass
+                              END
                           AND reference_policy.polname =
                                 policy_row.polname
                           AND reference_policy.polpermissive
@@ -3145,7 +3620,10 @@ BEGIN
                                 policy_row.polqual::text
                       )
                     OR (
-                     current_revision = '0015_current_authority_e5a'
+                     current_revision IN (
+                       '0015_current_authority_e5a',
+                       '0016_principal_binding_e5b'
+                     )
                      AND policy_row.polname = e5_run_lock_policy
                      AND policy_row.polrelid =
                            'operations.reviewed_identity_migration_runs'
@@ -3906,6 +4384,7 @@ DECLARE
   );
   cutover_oid oid;
   authority_kernel_oid oid;
+  binding_kernel_oid oid;
   database_oid oid;
   expected_e4_catalog_sha256 constant text :=
     'a96aeb68c7c5656988088ae74539760c6a811320849f01c122e02141f87eff27';
@@ -3919,6 +4398,7 @@ DECLARE
     'operations.semantic_authority_promotions'
   );
   e5_select_policy constant text := 'identity_authority_e5_select';
+  e5b_select_policy constant text := 'principal_binding_e5b_select';
   pre_e4_revisions constant text[] := ARRAY[
     '0001_greenfield_core',
     '0002_people_privacy_cutover',
@@ -3937,7 +4417,8 @@ DECLARE
   ]::text[];
   reviewed_e4_catalog_revisions constant text[] := ARRAY[
     '0014_identity_cutover_e4',
-    '0015_current_authority_e5a'
+    '0015_current_authority_e5a',
+    '0016_principal_binding_e5b'
   ]::text[];
   role_count integer;
 BEGIN
@@ -3971,10 +4452,18 @@ BEGIN
   SELECT oid INTO STRICT kernel_oid
     FROM pg_catalog.pg_roles
    WHERE rolname = 'home_agent_identity_cutover_kernel';
-  IF current_revision = '0015_current_authority_e5a' THEN
+  IF current_revision IN (
+       '0015_current_authority_e5a',
+       '0016_principal_binding_e5b'
+     ) THEN
     SELECT oid INTO STRICT authority_kernel_oid
       FROM pg_catalog.pg_roles
      WHERE rolname = 'home_agent_identity_authority_kernel';
+  END IF;
+  IF current_revision = '0016_principal_binding_e5b' THEN
+    SELECT oid INTO STRICT binding_kernel_oid
+      FROM pg_catalog.pg_roles
+     WHERE rolname = 'home_agent_identity_binding_kernel';
   END IF;
   SELECT oid INTO STRICT database_oid
     FROM pg_catalog.pg_database
@@ -4093,7 +4582,10 @@ BEGIN
   -- E5a adds one separately owned SELECT policy to each E4 relation. Admit
   -- only the exact reviewed overlay and project it out of the still-pinned E4
   -- manifest. The E5 block below owns and pins the complete verifier catalog.
-  IF current_revision = '0015_current_authority_e5a'
+  IF current_revision IN (
+       '0015_current_authority_e5a',
+       '0016_principal_binding_e5b'
+     )
      AND (
        (
          SELECT pg_catalog.count(*)
@@ -4135,6 +4627,73 @@ BEGIN
        )
      ) THEN
     RAISE EXCEPTION 'identity cutover E4 reviewed E5 policy mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
+  -- E5b adds one exact promotion support key and one SELECT policy to the E4
+  -- promotion relation. Pin that descendant overlay, then omit it from E4's
+  -- still-immutable manifest.
+  IF current_revision = '0016_principal_binding_e5b'
+     AND (
+       NOT EXISTS (
+         SELECT 1
+           FROM pg_catalog.pg_constraint AS constraint_row
+           JOIN pg_catalog.pg_index AS index_state
+             ON index_state.indexrelid = constraint_row.conindid
+           JOIN pg_catalog.pg_class AS index_relation
+             ON index_relation.oid = constraint_row.conindid
+          WHERE constraint_row.conrelid = promotion_table
+            AND constraint_row.conname =
+                'semantic_authority_promotions_e5b_exact_authority'
+            AND constraint_row.contype = 'u'
+            AND NOT constraint_row.condeferrable
+            AND NOT constraint_row.condeferred
+            AND constraint_row.convalidated
+            AND pg_catalog.pg_get_constraintdef(
+                  constraint_row.oid, true
+                ) =
+                'UNIQUE (promotion_id, run_id, finalization_id, '
+                'policy_digest, committed_at)'
+            AND index_relation.relname =
+                'semantic_authority_promotions_e5b_exact_authority'
+            AND index_state.indisunique
+            AND NOT index_state.indisprimary
+            AND NOT index_state.indisexclusion
+            AND index_state.indimmediate
+            AND index_state.indisvalid
+            AND index_state.indisready
+            AND index_state.indislive
+       )
+       OR (
+         SELECT pg_catalog.count(*)
+           FROM pg_catalog.pg_policy AS policy_row
+          WHERE policy_row.polrelid = promotion_table
+            AND policy_row.polname = e5b_select_policy
+            AND policy_row.polpermissive
+            AND policy_row.polcmd = 'r'
+            AND policy_row.polroles =
+                  ARRAY[binding_kernel_oid]::oid[]
+            AND policy_row.polqual IS NOT NULL
+            AND policy_row.polwithcheck IS NULL
+       ) <> 1
+       OR NOT EXISTS (
+         SELECT 1
+           FROM pg_catalog.pg_policy AS policy_row
+           JOIN pg_catalog.pg_policy AS reference_policy
+             ON reference_policy.polrelid =
+                  'operations.reviewed_identity_migration_projection_lineage'
+                    ::regclass
+            AND reference_policy.polname = e5b_select_policy
+          WHERE policy_row.polrelid = promotion_table
+            AND policy_row.polname = e5b_select_policy
+            AND reference_policy.polroles =
+                  ARRAY[binding_kernel_oid]::oid[]
+            AND policy_row.polqual::text =
+                  reference_policy.polqual::text
+       )
+     ) THEN
+    RAISE EXCEPTION
+      'identity cutover E4 reviewed E5b overlay mismatch'
       USING ERRCODE = '42501';
   END IF;
 
@@ -4208,10 +4767,18 @@ BEGIN
                                            ),
                                            '[]'::jsonb
                                          )
-                                    FROM pg_catalog.pg_constraint
-                                         AS constraint_row
-                                    WHERE constraint_row.conrelid =
-                                          target.target_relation
+                                     FROM pg_catalog.pg_constraint
+                                          AS constraint_row
+                                     WHERE constraint_row.conrelid =
+                                           target.target_relation
+                                       AND NOT (
+                                         current_revision =
+                                           '0016_principal_binding_e5b'
+                                         AND target.target_relation =
+                                               promotion_table
+                                          AND constraint_row.conname =
+                                           'semantic_authority_promotions_e5b_exact_authority'
+                                       )
                                  ),
                                  'user_triggers',
                                  (
@@ -4430,17 +4997,33 @@ BEGIN
                           )
                           )
                       AND NOT (
-                        current_revision = '0015_current_authority_e5a'
-                        AND policy_row.polname = e5_select_policy
-                        AND policy_row.polrelid IN (
-                          freeze_table, admission_table, promotion_table
+                        (
+                          current_revision IN (
+                            '0015_current_authority_e5a',
+                            '0016_principal_binding_e5b'
+                          )
+                          AND policy_row.polname = e5_select_policy
+                          AND policy_row.polrelid IN (
+                            freeze_table, admission_table, promotion_table
+                          )
+                          AND policy_row.polpermissive
+                          AND policy_row.polcmd = 'r'
+                          AND policy_row.polroles =
+                                ARRAY[authority_kernel_oid]::oid[]
+                          AND policy_row.polqual IS NOT NULL
+                          AND policy_row.polwithcheck IS NULL
                         )
-                        AND policy_row.polpermissive
-                        AND policy_row.polcmd = 'r'
-                        AND policy_row.polroles =
-                              ARRAY[authority_kernel_oid]::oid[]
-                        AND policy_row.polqual IS NOT NULL
-                        AND policy_row.polwithcheck IS NULL
+                        OR (
+                          current_revision = '0016_principal_binding_e5b'
+                          AND policy_row.polname = e5b_select_policy
+                          AND policy_row.polrelid = promotion_table
+                          AND policy_row.polpermissive
+                          AND policy_row.polcmd = 'r'
+                          AND policy_row.polroles =
+                                ARRAY[binding_kernel_oid]::oid[]
+                          AND policy_row.polqual IS NOT NULL
+                          AND policy_row.polwithcheck IS NULL
+                        )
                       )
                  ),
                  'function',
@@ -5084,6 +5667,7 @@ DECLARE
     'operations.evaluate_current_identity_semantic_authority(uuid)'
   );
   authority_kernel_oid oid;
+  binding_kernel_oid oid;
   caller_oid oid;
   current_revision text;
   database_oid oid;
@@ -5099,6 +5683,9 @@ DECLARE
   kernel_owned_object_count integer;
   owner_oid oid;
   policy_count integer;
+  receipt_table regclass := pg_catalog.to_regclass(
+    'operations.principal_binding_authority_receipts'
+  );
   pre_e5_revisions constant text[] := ARRAY[
     '0001_greenfield_core',
     '0002_people_privacy_cutover',
@@ -5116,6 +5703,10 @@ DECLARE
     '0013_identity_finalizer_e3',
     '0014_identity_cutover_e4'
   ]::text[];
+  reviewed_e5_catalog_revisions constant text[] := ARRAY[
+    '0015_current_authority_e5a',
+    '0016_principal_binding_e5b'
+  ]::text[];
   rls_relations constant text[] := ARRAY[
     'operations.semantic_authority_promotions',
     'operations.reviewed_identity_cutover_admissions',
@@ -5132,6 +5723,17 @@ DECLARE
   ]::text[];
   select_policy constant text := 'identity_authority_e5_select';
   run_lock_policy constant text := 'identity_authority_e5_run_lock';
+  e5b_select_policy constant text := 'principal_binding_e5b_select';
+  e5b_insert_policy constant text := 'principal_binding_e5b_insert';
+  e5b_update_policy constant text := 'principal_binding_e5b_update';
+  e5b_suppression_policy constant text :=
+    'principal_binding_e5b_suppression';
+  e5b_receipt_owner_policy constant text :=
+    'principal_binding_authority_receipts_owner_select';
+  e5b_receipt_select_policy constant text :=
+    'principal_binding_authority_receipts_e5b_select';
+  e5b_receipt_insert_policy constant text :=
+    'principal_binding_authority_receipts_e5b_insert';
 BEGIN
   SELECT version_num INTO STRICT current_revision
     FROM public.alembic_version;
@@ -5149,7 +5751,7 @@ BEGIN
   IF authority_function IS NULL
      OR function_name_count <> 1
      OR policy_count <> 13
-     OR current_revision <> '0015_current_authority_e5a' THEN
+     OR NOT current_revision = ANY (reviewed_e5_catalog_revisions) THEN
     IF authority_function IS NULL
        AND function_name_count = 0
        AND policy_count = 0
@@ -5172,6 +5774,11 @@ BEGIN
   SELECT oid INTO STRICT authority_kernel_oid
     FROM pg_catalog.pg_roles
    WHERE rolname = 'home_agent_identity_authority_kernel';
+  IF current_revision = '0016_principal_binding_e5b' THEN
+    SELECT oid INTO STRICT binding_kernel_oid
+      FROM pg_catalog.pg_roles
+     WHERE rolname = 'home_agent_identity_binding_kernel';
+  END IF;
   SELECT oid INTO STRICT database_oid
     FROM pg_catalog.pg_database
    WHERE datname = pg_catalog.current_database();
@@ -5319,6 +5926,158 @@ BEGIN
           )
      ) THEN
     RAISE EXCEPTION 'current-authority E5 policy contract mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
+  -- E5b policy names are intentionally absent from the E5a manifest. Before
+  -- projecting them out, prove the complete reviewed relation/command/role
+  -- shape and that every permissive policy shares the kernel gate predicate.
+  IF current_revision = '0016_principal_binding_e5b'
+     AND (
+       receipt_table IS NULL
+       OR (
+         SELECT pg_catalog.count(*)
+           FROM pg_catalog.pg_policy AS policy_row
+          WHERE policy_row.polname IN (
+            e5b_select_policy,
+            e5b_insert_policy,
+            e5b_update_policy,
+            e5b_suppression_policy,
+            e5b_receipt_owner_policy,
+            e5b_receipt_select_policy,
+            e5b_receipt_insert_policy
+          )
+       ) <> 26
+       OR EXISTS (
+         WITH expected_policy(relation_name, policy_name, command_code) AS (
+           VALUES
+             ('identity.principal_binding_requests',
+              e5b_select_policy, 'r'::"char"),
+             ('identity.principal_binding_requests',
+              e5b_update_policy, 'w'::"char"),
+             ('identity.principal_binding_proposals',
+              e5b_select_policy, 'r'::"char"),
+             ('identity.principal_binding_proposals',
+              e5b_update_policy, 'w'::"char"),
+             ('identity.people', e5b_select_policy, 'r'::"char"),
+             ('identity.principals', e5b_select_policy, 'r'::"char"),
+             ('identity.principals', e5b_insert_policy, 'a'::"char"),
+             ('identity.confirmation_artifacts',
+              e5b_select_policy, 'r'::"char"),
+             ('identity.confirmation_artifacts',
+              e5b_insert_policy, 'a'::"char"),
+             ('identity.ha_user_bindings',
+              e5b_select_policy, 'r'::"char"),
+             ('identity.ha_user_bindings',
+              e5b_insert_policy, 'a'::"char"),
+             ('privacy.artifact_registry',
+              e5b_select_policy, 'r'::"char"),
+             ('privacy.artifact_registry',
+              e5b_insert_policy, 'a'::"char"),
+             ('operations.semantic_authority_promotions',
+              e5b_select_policy, 'r'::"char"),
+             ('operations.reviewed_identity_migration_projection_lineage',
+              e5b_select_policy, 'r'::"char"),
+             ('operations.reviewed_identity_migration_projection_subjects',
+              e5b_select_policy, 'r'::"char"),
+             ('operations.principal_binding_authority_receipts',
+              e5b_receipt_select_policy, 'r'::"char"),
+             ('operations.principal_binding_authority_receipts',
+              e5b_receipt_insert_policy, 'a'::"char")
+         )
+         SELECT 1
+           FROM expected_policy AS expected
+           LEFT JOIN pg_catalog.pg_policy AS policy_row
+             ON policy_row.polrelid =
+                  pg_catalog.to_regclass(expected.relation_name)
+            AND policy_row.polname = expected.policy_name
+           CROSS JOIN pg_catalog.pg_policy AS reference_policy
+          WHERE reference_policy.polrelid =
+                'operations.reviewed_identity_migration_projection_lineage'
+                  ::regclass
+            AND reference_policy.polname = e5b_select_policy
+            AND (
+              policy_row.oid IS NULL
+              OR NOT policy_row.polpermissive
+              OR policy_row.polcmd <> expected.command_code
+              OR policy_row.polroles <>
+                   ARRAY[binding_kernel_oid]::oid[]
+              OR reference_policy.polroles <>
+                   ARRAY[binding_kernel_oid]::oid[]
+              OR reference_policy.polqual IS NULL
+              OR reference_policy.polwithcheck IS NOT NULL
+              OR (
+                expected.command_code = 'r'
+                AND (
+                  policy_row.polqual IS NULL
+                  OR policy_row.polwithcheck IS NOT NULL
+                  OR policy_row.polqual::text <>
+                       reference_policy.polqual::text
+                )
+              )
+              OR (
+                expected.command_code = 'a'
+                AND (
+                  policy_row.polqual IS NOT NULL
+                  OR policy_row.polwithcheck IS NULL
+                  OR policy_row.polwithcheck::text <>
+                       reference_policy.polqual::text
+                )
+              )
+              OR (
+                expected.command_code = 'w'
+                AND (
+                  policy_row.polqual IS NULL
+                  OR policy_row.polwithcheck IS NULL
+                  OR policy_row.polqual::text <>
+                       reference_policy.polqual::text
+                  OR policy_row.polwithcheck::text <>
+                       reference_policy.polqual::text
+                )
+              )
+            )
+       )
+       OR EXISTS (
+         WITH expected_suppression(relation_name) AS (
+           VALUES
+             ('identity.principal_binding_proposals'),
+             ('identity.people'),
+             ('identity.principals'),
+             ('identity.confirmation_artifacts'),
+             ('identity.ha_user_bindings'),
+             ('privacy.artifact_registry'),
+             ('operations.principal_binding_authority_receipts')
+         )
+         SELECT 1
+           FROM expected_suppression AS expected
+           LEFT JOIN pg_catalog.pg_policy AS policy_row
+             ON policy_row.polrelid =
+                  pg_catalog.to_regclass(expected.relation_name)
+            AND policy_row.polname = e5b_suppression_policy
+          WHERE policy_row.oid IS NULL
+             OR policy_row.polpermissive
+             OR policy_row.polcmd <> '*'
+             OR policy_row.polroles <>
+                  ARRAY[binding_kernel_oid]::oid[]
+             OR policy_row.polqual IS NULL
+             OR policy_row.polwithcheck IS NULL
+             OR policy_row.polqual::text <>
+                  policy_row.polwithcheck::text
+       )
+       OR NOT EXISTS (
+         SELECT 1
+           FROM pg_catalog.pg_policy AS policy_row
+          WHERE policy_row.polrelid = receipt_table
+            AND policy_row.polname = e5b_receipt_owner_policy
+            AND policy_row.polpermissive
+            AND policy_row.polcmd = 'r'
+            AND policy_row.polroles = ARRAY[owner_oid]::oid[]
+            AND policy_row.polqual IS NOT NULL
+            AND policy_row.polwithcheck IS NULL
+       )
+     ) THEN
+    RAISE EXCEPTION
+      'current-authority E5 reviewed E5b policy overlay mismatch'
       USING ERRCODE = '42501';
   END IF;
 
@@ -5759,12 +6518,1125 @@ BEGIN
             );
   END IF;
 
-  -- E5 adds no activation. Even a matching verifier catalog remains behind
-  -- the unchanged E4 semantic-authority activation boundary.
+  -- E5a itself adds no activation. At its terminal revision, even a matching
+  -- verifier catalog remains behind the unchanged E4 boundary. The reviewed
+  -- E5b descendant continues into its own independently pinned quarantine.
+  IF current_revision = '0015_current_authority_e5a' THEN
+    RAISE EXCEPTION 'identity cutover E4 activation contract is not installed'
+      USING ERRCODE = '55000';
+  END IF;
+END
+$identity_current_authority_e5_acl$;
+
+-- E5b remains a dormant, denial-only catalog. Repeat the complete quarantine
+-- after every predecessor manifest so no migration-time bridge, generic
+-- relation grant, default ACL, or replay race survives the pending admission.
+DO $identity_principal_binding_e5b_quarantine$
+DECLARE
+  binding_function regprocedure := pg_catalog.to_regprocedure(
+    'identity.commit_authenticated_principal_binding_e5b('
+    'uuid,character varying,character varying,uuid,uuid,uuid,uuid,uuid)'
+  );
+  grantee_sql text;
+  receipt_columns text;
+  receipt_table regclass := pg_catalog.to_regclass(
+    'operations.principal_binding_authority_receipts'
+  );
+  target_role text;
+  target_table record;
+  type_entry record;
+BEGIN
+  IF binding_function IS NOT NULL THEN
+    FOR target_role IN
+      SELECT role_row.rolname FROM pg_catalog.pg_roles AS role_row
+      UNION ALL SELECT 'PUBLIC'
+    LOOP
+      grantee_sql := CASE WHEN target_role = 'PUBLIC'
+        THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END;
+      EXECUTE pg_catalog.format(
+        'REVOKE ALL PRIVILEGES ON FUNCTION %s FROM %s CASCADE',
+        binding_function,
+        grantee_sql
+      );
+    END LOOP;
+  END IF;
+
+  IF receipt_table IS NOT NULL THEN
+    SELECT pg_catalog.string_agg(
+             pg_catalog.quote_ident(attribute.attname), ', '
+             ORDER BY attribute.attnum
+           )
+      INTO STRICT receipt_columns
+      FROM pg_catalog.pg_attribute AS attribute
+     WHERE attribute.attrelid = receipt_table
+       AND attribute.attnum > 0
+       AND NOT attribute.attisdropped;
+    FOR target_role IN
+      SELECT role_row.rolname
+        FROM pg_catalog.pg_roles AS role_row
+       WHERE role_row.rolname <> 'home_agent_owner'
+      UNION ALL SELECT 'PUBLIC'
+    LOOP
+      grantee_sql := CASE WHEN target_role = 'PUBLIC'
+        THEN 'PUBLIC' ELSE pg_catalog.quote_ident(target_role) END;
+      EXECUTE pg_catalog.format(
+        'REVOKE ALL PRIVILEGES ON TABLE %s FROM %s CASCADE',
+        receipt_table,
+        grantee_sql
+      );
+      EXECUTE pg_catalog.format(
+        'REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s), '
+        'REFERENCES (%1$s) ON TABLE %2$s FROM %3$s CASCADE',
+        receipt_columns,
+        receipt_table,
+        grantee_sql
+      );
+    END LOOP;
+  END IF;
+
+  IF NOT EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_roles AS role_row
+        WHERE role_row.rolname = 'home_agent_identity_binding_kernel'
+     ) THEN
+    RETURN;
+  END IF;
+
+  EXECUTE pg_catalog.format(
+    'REVOKE ALL PRIVILEGES ON DATABASE %I '
+    'FROM home_agent_identity_binding_kernel CASCADE',
+    pg_catalog.current_database()
+  );
+  FOR target_table IN
+    SELECT table_namespace.nspname,
+           candidate_table.relname,
+           pg_catalog.string_agg(
+             pg_catalog.quote_ident(attribute.attname), ', '
+             ORDER BY attribute.attnum
+           ) AS column_list
+      FROM pg_catalog.pg_class AS candidate_table
+      JOIN pg_catalog.pg_namespace AS table_namespace
+        ON table_namespace.oid = candidate_table.relnamespace
+      JOIN pg_catalog.pg_attribute AS attribute
+        ON attribute.attrelid = candidate_table.oid
+       AND attribute.attnum > 0
+       AND NOT attribute.attisdropped
+     WHERE table_namespace.nspname IN (
+       'public','ingest','identity','knowledge','engagement','privacy',
+       'operations','media'
+     )
+       AND candidate_table.relkind IN ('r','p','v','m','f')
+     GROUP BY table_namespace.nspname, candidate_table.relname
+  LOOP
+    EXECUTE pg_catalog.format(
+      'REVOKE ALL PRIVILEGES ON TABLE %I.%I '
+      'FROM home_agent_identity_binding_kernel CASCADE',
+      target_table.nspname,
+      target_table.relname
+    );
+    EXECUTE pg_catalog.format(
+      'REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s), '
+      'REFERENCES (%1$s) ON TABLE %2$I.%3$I '
+      'FROM home_agent_identity_binding_kernel CASCADE',
+      target_table.column_list,
+      target_table.nspname,
+      target_table.relname
+    );
+  END LOOP;
+  REVOKE USAGE, CREATE ON SCHEMA
+    public, ingest, identity, knowledge, engagement, privacy, operations,
+    media
+    FROM home_agent_identity_binding_kernel CASCADE;
+  REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA
+    public, ingest, identity, knowledge, engagement, privacy, operations,
+    media
+    FROM home_agent_identity_binding_kernel CASCADE;
+  REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA
+    public, ingest, identity, knowledge, engagement, privacy, operations,
+    media
+    FROM home_agent_identity_binding_kernel CASCADE;
+  FOR type_entry IN
+    SELECT type_namespace.nspname, candidate_type.typname
+      FROM pg_catalog.pg_type AS candidate_type
+      JOIN pg_catalog.pg_namespace AS type_namespace
+        ON type_namespace.oid = candidate_type.typnamespace
+     WHERE type_namespace.nspname IN (
+       'public','ingest','identity','knowledge','engagement','privacy',
+       'operations','media'
+     )
+       AND candidate_type.typisdefined
+       AND candidate_type.typrelid = 0
+       AND candidate_type.typelem = 0
+  LOOP
+    EXECUTE pg_catalog.format(
+      'REVOKE USAGE ON TYPE %I.%I '
+      'FROM home_agent_identity_binding_kernel CASCADE',
+      type_entry.nspname,
+      type_entry.typname
+    );
+  END LOOP;
+  ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA
+    public, ingest, identity, knowledge, engagement, privacy, operations,
+    media
+    REVOKE ALL PRIVILEGES ON TABLES
+    FROM home_agent_identity_binding_kernel CASCADE;
+  ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA
+    public, ingest, identity, knowledge, engagement, privacy, operations,
+    media
+    REVOKE ALL PRIVILEGES ON SEQUENCES
+    FROM home_agent_identity_binding_kernel CASCADE;
+  ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA
+    public, ingest, identity, knowledge, engagement, privacy, operations,
+    media
+    REVOKE ALL PRIVILEGES ON FUNCTIONS
+    FROM home_agent_identity_binding_kernel CASCADE;
+  ALTER DEFAULT PRIVILEGES FOR ROLE home_agent_owner IN SCHEMA
+    public, ingest, identity, knowledge, engagement, privacy, operations,
+    media
+    REVOKE ALL PRIVILEGES ON TYPES
+    FROM home_agent_identity_binding_kernel CASCADE;
+END
+$identity_principal_binding_e5b_quarantine$;
+
+-- Admit only the exact, post-quarantine E5b catalog. This revision is still
+-- dormant: the reviewed digest is intentionally pending and no capability is
+-- granted back by this block.
+DO $identity_principal_binding_e5b_acl$
+DECLARE
+  actual_e5b_catalog_sha256 text;
+  binding_column_count integer;
+  binding_function regprocedure := pg_catalog.to_regprocedure(
+    'identity.commit_authenticated_principal_binding_e5b('
+    'uuid,character varying,character varying,uuid,uuid,uuid,uuid,uuid)'
+  );
+  binding_kernel_oid oid;
+  caller_oid oid;
+  current_revision text;
+  database_oid oid;
+  expected_e5b_catalog_sha256 constant text :=
+    'PENDING_E5B_CATALOG_SHA256';
+  expected_function_body_sha256 constant text :=
+    '4186667d8ef1ce260c1e93ad6e30bafdcd159a6c7827b79e2fc06c777f9092cf';
+  function_name_count integer;
+  kernel_owned_object_count integer;
+  owner_oid oid;
+  policy_count integer;
+  receipt_table regclass := pg_catalog.to_regclass(
+    'operations.principal_binding_authority_receipts'
+  );
+  support_constraint_count integer;
+  trigger_count integer;
+BEGIN
+  SELECT version_num INTO STRICT current_revision
+    FROM public.alembic_version;
+  SELECT oid INTO STRICT owner_oid
+    FROM pg_catalog.pg_roles WHERE rolname = 'home_agent_owner';
+  SELECT oid INTO STRICT caller_oid
+    FROM pg_catalog.pg_roles WHERE rolname = 'home_agent_binding_operator';
+
+  SELECT pg_catalog.count(*) INTO STRICT function_name_count
+    FROM pg_catalog.pg_proc AS function_row
+    JOIN pg_catalog.pg_namespace AS function_namespace
+      ON function_namespace.oid = function_row.pronamespace
+   WHERE function_namespace.nspname = 'identity'
+     AND function_row.proname =
+           'commit_authenticated_principal_binding_e5b';
+  SELECT pg_catalog.count(*) INTO STRICT binding_column_count
+    FROM pg_catalog.pg_attribute AS attribute_row
+   WHERE attribute_row.attrelid =
+         pg_catalog.to_regclass('identity.ha_user_bindings')
+     AND attribute_row.attname = 'authority_receipt_id'
+     AND attribute_row.attnum > 0
+     AND NOT attribute_row.attisdropped;
+  SELECT pg_catalog.count(*) INTO STRICT policy_count
+    FROM pg_catalog.pg_policy AS policy_row
+   WHERE policy_row.polname IN (
+     'principal_binding_e5b_select',
+     'principal_binding_e5b_insert',
+     'principal_binding_e5b_update',
+     'principal_binding_e5b_suppression',
+     'principal_binding_authority_receipts_owner_select',
+     'principal_binding_authority_receipts_e5b_select',
+     'principal_binding_authority_receipts_e5b_insert'
+   );
+  SELECT pg_catalog.count(*) INTO STRICT support_constraint_count
+    FROM pg_catalog.pg_constraint AS constraint_row
+   WHERE constraint_row.conname IN (
+     'principal_binding_proposals_e5b_exact_authority',
+     'confirmation_artifacts_e5b_exact_authority',
+     'semantic_authority_promotions_e5b_exact_authority',
+     'identity_projection_lineage_e5b_exact_person',
+     'principal_binding_receipts_e5b_binding_graph',
+     'uq_ha_user_bindings_authority_receipt_id',
+     'fk_ha_user_bindings_e5b_authority_receipt'
+   );
+  SELECT pg_catalog.count(*) INTO STRICT trigger_count
+    FROM pg_catalog.pg_trigger AS trigger_row
+   WHERE NOT trigger_row.tgisinternal
+     AND trigger_row.tgname IN (
+       'people_principal_binding_e5b_fence',
+       'privacy_directives_principal_binding_e5b_fence',
+       'edge_privacy_user_blocks_principal_binding_e5b_fence'
+     );
+
+  IF current_revision <> '0016_principal_binding_e5b'
+     OR receipt_table IS NULL
+     OR binding_function IS NULL
+     OR function_name_count <> 1
+     OR binding_column_count <> 1
+     OR policy_count <> 26
+     OR support_constraint_count <> 7
+     OR trigger_count <> 3
+     OR pg_catalog.to_regclass(
+          'identity.uq_confirmation_artifacts_binding_nonce_e5b'
+        ) IS NULL THEN
+    RAISE EXCEPTION
+      'partial or revision-mismatched principal-binding E5b object set'
+      USING ERRCODE = '55000',
+            DETAIL = pg_catalog.format(
+              'revision=%s function_names=%s binding_columns=%s '
+              'policies=%s support_constraints=%s triggers=%s',
+              current_revision,
+              function_name_count,
+              binding_column_count,
+              policy_count,
+              support_constraint_count,
+              trigger_count
+            );
+  END IF;
+
+  SELECT oid INTO STRICT binding_kernel_oid
+    FROM pg_catalog.pg_roles
+   WHERE rolname = 'home_agent_identity_binding_kernel';
+  SELECT oid INTO STRICT database_oid
+    FROM pg_catalog.pg_database
+   WHERE datname = pg_catalog.current_database();
+
+  IF NOT EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_roles AS kernel_role
+        WHERE kernel_role.oid = binding_kernel_oid
+          AND NOT kernel_role.rolcanlogin
+          AND NOT kernel_role.rolinherit
+          AND NOT kernel_role.rolsuper
+          AND NOT kernel_role.rolcreatedb
+          AND NOT kernel_role.rolcreaterole
+          AND NOT kernel_role.rolreplication
+          AND NOT kernel_role.rolbypassrls
+          AND kernel_role.rolconnlimit = 0
+          AND kernel_role.rolvaliduntil IS NULL
+          AND kernel_role.rolconfig IS NULL
+     )
+     OR (
+       SELECT pg_catalog.count(*)
+         FROM pg_catalog.pg_auth_members AS membership
+        WHERE membership.roleid = binding_kernel_oid
+          AND membership.member = owner_oid
+          AND NOT membership.admin_option
+          AND NOT membership.inherit_option
+          AND membership.set_option
+     ) <> 1
+     OR (
+       SELECT pg_catalog.count(*)
+         FROM pg_catalog.pg_auth_members AS membership
+        WHERE membership.roleid = binding_kernel_oid
+     ) <> 1
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_auth_members AS membership
+        WHERE membership.member = binding_kernel_oid
+     )
+     OR pg_catalog.pg_has_role(
+          caller_oid, binding_kernel_oid, 'SET'
+        )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_db_role_setting AS database_setting
+        WHERE database_setting.setrole = binding_kernel_oid
+     ) THEN
+    RAISE EXCEPTION
+      'principal-binding E5b dormant role contract mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
+  SELECT pg_catalog.count(*) INTO STRICT kernel_owned_object_count
+    FROM pg_catalog.pg_shdepend AS owned_object
+   WHERE owned_object.refobjid = binding_kernel_oid
+     AND owned_object.deptype = 'o';
+  IF kernel_owned_object_count <> 1
+     OR NOT EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_shdepend AS owned_object
+        WHERE owned_object.refobjid = binding_kernel_oid
+          AND owned_object.deptype = 'o'
+          AND owned_object.dbid = database_oid
+          AND owned_object.classid = 'pg_catalog.pg_proc'::regclass
+          AND owned_object.objid = binding_function::oid
+          AND owned_object.objsubid = 0
+     ) THEN
+    RAISE EXCEPTION
+      'principal-binding E5b ownership contract mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF NOT EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_proc AS function_row
+         JOIN pg_catalog.pg_language AS function_language
+           ON function_language.oid = function_row.prolang
+        WHERE function_row.oid = binding_function
+          AND function_row.proowner = binding_kernel_oid
+          AND function_language.lanname = 'plpgsql'
+          AND function_row.prosecdef
+          AND function_row.prokind = 'f'
+          AND function_row.provolatile = 'v'
+          AND function_row.prorettype = 'timestamptz'::regtype
+          AND NOT function_row.proretset
+          AND NOT function_row.proisstrict
+          AND NOT function_row.proleakproof
+          AND function_row.proparallel = 'u'
+          AND function_row.pronargs = 8
+          AND function_row.pronargdefaults = 0
+          AND function_row.proargtypes = ARRAY[
+                'uuid'::regtype::oid,
+                'varchar'::regtype::oid,
+                'varchar'::regtype::oid,
+                'uuid'::regtype::oid,
+                'uuid'::regtype::oid,
+                'uuid'::regtype::oid,
+                'uuid'::regtype::oid,
+                'uuid'::regtype::oid
+              ]::oidvector
+          AND function_row.proargnames = ARRAY[
+                'target_promotion_id',
+                'authenticated_ha_user_id',
+                'target_proposal_digest',
+                'confirmation_nonce',
+                'new_authority_receipt_id',
+                'new_principal_id',
+                'new_confirmation_artifact_id',
+                'new_binding_id'
+              ]::text[]
+          AND function_row.proconfig =
+                ARRAY['search_path=pg_catalog, pg_temp']::text[]
+          AND pg_catalog.encode(
+                pg_catalog.sha256(
+                  pg_catalog.convert_to(function_row.prosrc, 'UTF8')
+                ),
+                'hex'
+              ) = expected_function_body_sha256
+     ) THEN
+    RAISE EXCEPTION
+      'principal-binding E5b function contract mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF NOT EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_class AS relation_row
+        WHERE relation_row.oid = receipt_table
+          AND relation_row.relowner = owner_oid
+          AND relation_row.relkind = 'r'
+          AND relation_row.relpersistence = 'p'
+          AND relation_row.relrowsecurity
+          AND relation_row.relforcerowsecurity
+          AND NOT relation_row.relispartition
+     )
+     OR NOT EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_attribute AS attribute_row
+        WHERE attribute_row.attrelid =
+              'identity.ha_user_bindings'::regclass
+          AND attribute_row.attname = 'authority_receipt_id'
+          AND attribute_row.atttypid = 'uuid'::regtype
+          AND attribute_row.attnotnull
+          AND attribute_row.attidentity = ''
+          AND attribute_row.attgenerated = ''
+     )
+     OR NOT EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_index AS index_state
+         JOIN pg_catalog.pg_class AS index_relation
+           ON index_relation.oid = index_state.indexrelid
+        WHERE index_state.indrelid =
+              'identity.confirmation_artifacts'::regclass
+          AND index_relation.relname =
+              'uq_confirmation_artifacts_binding_nonce_e5b'
+          AND index_state.indisunique
+          AND NOT index_state.indisprimary
+          AND NOT index_state.indisexclusion
+          AND index_state.indisvalid
+          AND index_state.indisready
+          AND index_state.indislive
+          AND index_state.indpred IS NOT NULL
+     ) THEN
+    RAISE EXCEPTION
+      'principal-binding E5b support graph contract mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF (
+       SELECT pg_catalog.count(*)
+         FROM pg_catalog.pg_trigger AS trigger_row
+        WHERE NOT trigger_row.tgisinternal
+          AND trigger_row.tgenabled = 'O'
+          AND trigger_row.tgfoid =
+                'privacy.fence_identity_tombstone_write()'::regprocedure
+          AND (
+            (
+              trigger_row.tgrelid = 'identity.people'::regclass
+              AND trigger_row.tgname =
+                    'people_principal_binding_e5b_fence'
+              AND trigger_row.tgtype = 19
+            )
+            OR (
+              trigger_row.tgrelid =
+                    'identity.privacy_directives'::regclass
+              AND trigger_row.tgname =
+                    'privacy_directives_principal_binding_e5b_fence'
+              AND trigger_row.tgtype = 23
+            )
+            OR (
+              trigger_row.tgrelid =
+                    'identity.edge_privacy_user_blocks'::regclass
+              AND trigger_row.tgname =
+                    'edge_privacy_user_blocks_principal_binding_e5b_fence'
+              AND trigger_row.tgtype = 23
+            )
+          )
+          AND trigger_row.tgnargs = 0
+          AND trigger_row.tgargs = ''::bytea
+          AND trigger_row.tgqual IS NULL
+          AND trigger_row.tgoldtable IS NULL
+          AND trigger_row.tgnewtable IS NULL
+     ) <> 3 THEN
+    RAISE EXCEPTION
+      'principal-binding E5b fence trigger contract mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
+  -- Receipt content is owner-readable for governed inspection, but no online
+  -- or dormant kernel role may retain an explicit table/column grant.
+  IF (
+       SELECT pg_catalog.count(*)
+         FROM pg_catalog.pg_class AS relation_row
+         CROSS JOIN LATERAL pg_catalog.aclexplode(relation_row.relacl)
+              AS relation_acl
+        WHERE relation_row.oid = receipt_table
+          AND relation_acl.grantee = owner_oid
+          AND relation_acl.grantor = owner_oid
+          AND relation_acl.privilege_type = 'SELECT'
+          AND NOT relation_acl.is_grantable
+     ) <> 1
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_class AS relation_row
+         CROSS JOIN LATERAL pg_catalog.aclexplode(relation_row.relacl)
+              AS relation_acl
+        WHERE relation_row.oid = receipt_table
+          AND (
+            relation_acl.grantee <> owner_oid
+            OR relation_acl.grantor <> owner_oid
+            OR relation_acl.privilege_type <> 'SELECT'
+            OR relation_acl.is_grantable
+          )
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_attribute AS attribute_row
+         CROSS JOIN LATERAL pg_catalog.aclexplode(attribute_row.attacl)
+              AS column_acl
+        WHERE attribute_row.attrelid = receipt_table
+     ) THEN
+    RAISE EXCEPTION
+      'principal-binding E5b receipt quarantine mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_database AS database_row
+         CROSS JOIN LATERAL pg_catalog.aclexplode(database_row.datacl)
+              AS database_acl
+        WHERE database_acl.grantee = binding_kernel_oid
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_namespace AS namespace_row
+         CROSS JOIN LATERAL pg_catalog.aclexplode(namespace_row.nspacl)
+              AS namespace_acl
+        WHERE namespace_acl.grantee = binding_kernel_oid
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_class AS relation_row
+         CROSS JOIN LATERAL pg_catalog.aclexplode(relation_row.relacl)
+              AS relation_acl
+        WHERE relation_acl.grantee = binding_kernel_oid
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_attribute AS attribute_row
+         CROSS JOIN LATERAL pg_catalog.aclexplode(attribute_row.attacl)
+              AS column_acl
+        WHERE column_acl.grantee = binding_kernel_oid
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_proc AS function_row
+         CROSS JOIN LATERAL pg_catalog.aclexplode(function_row.proacl)
+              AS function_acl
+        WHERE function_acl.grantee = binding_kernel_oid
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_type AS type_row
+         CROSS JOIN LATERAL pg_catalog.aclexplode(type_row.typacl)
+              AS type_acl
+        WHERE type_acl.grantee = binding_kernel_oid
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_default_acl AS default_acl
+         CROSS JOIN LATERAL pg_catalog.aclexplode(default_acl.defaclacl)
+              AS exploded_acl
+        WHERE exploded_acl.grantee = binding_kernel_oid
+     )
+     OR EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_parameter_acl AS parameter_acl
+         CROSS JOIN LATERAL pg_catalog.aclexplode(parameter_acl.paracl)
+              AS exploded_acl
+        WHERE exploded_acl.grantee = binding_kernel_oid
+     )
+     OR pg_catalog.has_function_privilege(
+          caller_oid, binding_function, 'EXECUTE'
+        )
+     OR pg_catalog.has_function_privilege(
+          binding_kernel_oid,
+          'operations.evaluate_current_identity_semantic_authority(uuid)',
+          'EXECUTE'
+        ) THEN
+    RAISE EXCEPTION
+      'principal-binding E5b broad quarantine mismatch'
+      USING ERRCODE = '42501';
+  END IF;
+
+  SELECT pg_catalog.encode(
+           pg_catalog.sha256(
+             pg_catalog.convert_to(
+               pg_catalog.jsonb_build_object(
+                 'function',
+                 (
+                   SELECT pg_catalog.jsonb_build_object(
+                            'identity',
+                            function_row.oid::regprocedure::text,
+                            'owner',
+                            function_row.proowner::regrole::text,
+                            'language',
+                            function_language.lanname,
+                            'returns',
+                            pg_catalog.pg_get_function_result(
+                              function_row.oid
+                            ),
+                            'arguments',
+                            pg_catalog.pg_get_function_identity_arguments(
+                              function_row.oid
+                            ),
+                            'security_definer', function_row.prosecdef,
+                            'volatility', function_row.provolatile::text,
+                            'strict', function_row.proisstrict,
+                            'leakproof', function_row.proleakproof,
+                            'parallel', function_row.proparallel::text,
+                            'configuration', function_row.proconfig,
+                            'body_sha256',
+                            pg_catalog.encode(
+                              pg_catalog.sha256(
+                                pg_catalog.convert_to(
+                                  function_row.prosrc, 'UTF8'
+                                )
+                              ),
+                              'hex'
+                            ),
+                            'acl',
+                            (
+                              SELECT coalesce(
+                                       pg_catalog.jsonb_agg(
+                                         pg_catalog.jsonb_build_array(
+                                           CASE
+                                             WHEN function_acl.grantee = 0
+                                             THEN 'PUBLIC'
+                                             ELSE function_acl.grantee
+                                                    ::regrole::text
+                                           END,
+                                           function_acl.grantor
+                                             ::regrole::text,
+                                           function_acl.privilege_type,
+                                           function_acl.is_grantable
+                                         )
+                                         ORDER BY
+                                           function_acl.grantee,
+                                           function_acl.grantor,
+                                           function_acl.privilege_type
+                                       ),
+                                       '[]'::jsonb
+                                     )
+                                FROM pg_catalog.aclexplode(
+                                       function_row.proacl
+                                     ) AS function_acl
+                            )
+                          )
+                     FROM pg_catalog.pg_proc AS function_row
+                     JOIN pg_catalog.pg_language AS function_language
+                       ON function_language.oid = function_row.prolang
+                    WHERE function_row.oid = binding_function
+                 ),
+                 'receipt_relation',
+                 (
+                   SELECT pg_catalog.jsonb_build_object(
+                            'owner', relation_row.relowner::regrole::text,
+                            'kind', relation_row.relkind::text,
+                            'persistence',
+                            relation_row.relpersistence::text,
+                            'rls', relation_row.relrowsecurity,
+                            'force_rls', relation_row.relforcerowsecurity,
+                            'columns',
+                            (
+                              SELECT pg_catalog.jsonb_agg(
+                                       pg_catalog.jsonb_build_array(
+                                         attribute.attnum,
+                                         attribute.attname,
+                                         pg_catalog.format_type(
+                                           attribute.atttypid,
+                                           attribute.atttypmod
+                                         ),
+                                         attribute.attnotnull,
+                                         attribute.attidentity,
+                                         attribute.attgenerated,
+                                         pg_catalog.pg_get_expr(
+                                           default_row.adbin,
+                                           default_row.adrelid,
+                                           true
+                                         )
+                                       )
+                                       ORDER BY attribute.attnum
+                                     )
+                                FROM pg_catalog.pg_attribute AS attribute
+                                LEFT JOIN pg_catalog.pg_attrdef AS default_row
+                                  ON default_row.adrelid =
+                                       attribute.attrelid
+                                 AND default_row.adnum = attribute.attnum
+                               WHERE attribute.attrelid = receipt_table
+                                 AND attribute.attnum > 0
+                                 AND NOT attribute.attisdropped
+                            ),
+                            'acl',
+                            (
+                              SELECT coalesce(
+                                       pg_catalog.jsonb_agg(
+                                         pg_catalog.jsonb_build_array(
+                                           CASE
+                                             WHEN relation_acl.grantee = 0
+                                             THEN 'PUBLIC'
+                                             ELSE relation_acl.grantee
+                                                    ::regrole::text
+                                           END,
+                                           relation_acl.grantor
+                                             ::regrole::text,
+                                           relation_acl.privilege_type,
+                                           relation_acl.is_grantable
+                                         )
+                                         ORDER BY
+                                           relation_acl.grantee,
+                                           relation_acl.grantor,
+                                           relation_acl.privilege_type
+                                       ),
+                                       '[]'::jsonb
+                                     )
+                                FROM pg_catalog.aclexplode(
+                                       relation_row.relacl
+                                     ) AS relation_acl
+                            )
+                          )
+                     FROM pg_catalog.pg_class AS relation_row
+                    WHERE relation_row.oid = receipt_table
+                 ),
+                 'constraints',
+                 (
+                   SELECT pg_catalog.jsonb_agg(
+                            pg_catalog.jsonb_build_array(
+                              constraint_row.conrelid::regclass::text,
+                              constraint_row.conname,
+                              constraint_row.contype::text,
+                              constraint_row.condeferrable,
+                              constraint_row.condeferred,
+                              constraint_row.convalidated,
+                              pg_catalog.pg_get_constraintdef(
+                                constraint_row.oid, true
+                              )
+                            )
+                            ORDER BY
+                              constraint_row.conrelid::regclass::text,
+                              constraint_row.conname
+                          )
+                     FROM pg_catalog.pg_constraint AS constraint_row
+                    WHERE constraint_row.conrelid = receipt_table
+                       OR constraint_row.conname IN (
+                         'principal_binding_proposals_e5b_exact_authority',
+                         'confirmation_artifacts_e5b_exact_authority',
+                         'semantic_authority_promotions_e5b_exact_authority',
+                         'identity_projection_lineage_e5b_exact_person',
+                         'uq_ha_user_bindings_authority_receipt_id',
+                         'fk_ha_user_bindings_e5b_authority_receipt'
+                       )
+                 ),
+                 'indexes',
+                 (
+                   SELECT pg_catalog.jsonb_agg(
+                            pg_catalog.jsonb_build_array(
+                              index_state.indrelid::regclass::text,
+                              index_relation.relname,
+                              index_state.indisunique,
+                              index_state.indisprimary,
+                              index_state.indisexclusion,
+                              index_state.indimmediate,
+                              index_state.indisvalid,
+                              index_state.indisready,
+                              index_state.indislive,
+                              pg_catalog.pg_get_indexdef(
+                                index_relation.oid, 0, true
+                              ),
+                              pg_catalog.pg_get_expr(
+                                index_state.indpred,
+                                index_state.indrelid,
+                                true
+                              )
+                            )
+                            ORDER BY
+                              index_state.indrelid::regclass::text,
+                              index_relation.relname
+                          )
+                     FROM pg_catalog.pg_index AS index_state
+                     JOIN pg_catalog.pg_class AS index_relation
+                       ON index_relation.oid = index_state.indexrelid
+                    WHERE index_state.indrelid = receipt_table
+                       OR index_relation.relname IN (
+                         'principal_binding_proposals_e5b_exact_authority',
+                         'confirmation_artifacts_e5b_exact_authority',
+                         'semantic_authority_promotions_e5b_exact_authority',
+                         'identity_projection_lineage_e5b_exact_person',
+                         'uq_ha_user_bindings_authority_receipt_id',
+                         'uq_confirmation_artifacts_binding_nonce_e5b'
+                       )
+                 ),
+                 'policies',
+                 (
+                   SELECT pg_catalog.jsonb_agg(
+                            pg_catalog.jsonb_build_array(
+                              policy_row.polrelid::regclass::text,
+                              policy_row.polname,
+                              policy_row.polpermissive,
+                              policy_row.polcmd::text,
+                              (
+                                SELECT pg_catalog.jsonb_agg(
+                                         CASE
+                                           WHEN policy_role.role_oid = 0
+                                           THEN 'PUBLIC'
+                                           ELSE policy_role.role_oid
+                                                  ::regrole::text
+                                         END
+                                         ORDER BY policy_role.role_oid
+                                       )
+                                  FROM pg_catalog.unnest(
+                                         policy_row.polroles
+                                       ) AS policy_role(role_oid)
+                              ),
+                              pg_catalog.pg_get_expr(
+                                policy_row.polqual,
+                                policy_row.polrelid,
+                                true
+                              ),
+                              pg_catalog.pg_get_expr(
+                                policy_row.polwithcheck,
+                                policy_row.polrelid,
+                                true
+                              )
+                            )
+                            ORDER BY
+                              policy_row.polrelid::regclass::text,
+                              policy_row.polname
+                          )
+                     FROM pg_catalog.pg_policy AS policy_row
+                    WHERE policy_row.polname IN (
+                      'principal_binding_e5b_select',
+                      'principal_binding_e5b_insert',
+                      'principal_binding_e5b_update',
+                      'principal_binding_e5b_suppression',
+                      'principal_binding_authority_receipts_owner_select',
+                      'principal_binding_authority_receipts_e5b_select',
+                      'principal_binding_authority_receipts_e5b_insert'
+                    )
+                 ),
+                 'fence_triggers',
+                 (
+                   SELECT pg_catalog.jsonb_agg(
+                            pg_catalog.jsonb_build_array(
+                              trigger_row.tgrelid::regclass::text,
+                              trigger_row.tgname,
+                              trigger_row.tgenabled::text,
+                              trigger_row.tgtype,
+                              trigger_row.tgattr::text,
+                              trigger_row.tgargs,
+                              trigger_row.tgfoid::regprocedure::text,
+                              pg_catalog.pg_get_triggerdef(
+                                trigger_row.oid, true
+                              )
+                            )
+                            ORDER BY
+                              trigger_row.tgrelid::regclass::text,
+                              trigger_row.tgname
+                          )
+                     FROM pg_catalog.pg_trigger AS trigger_row
+                    WHERE NOT trigger_row.tgisinternal
+                      AND trigger_row.tgname IN (
+                        'people_principal_binding_e5b_fence',
+                        'privacy_directives_principal_binding_e5b_fence',
+                        'edge_privacy_user_blocks_principal_binding_e5b_fence'
+                      )
+                 ),
+                 'kernel_role',
+                 (
+                   SELECT pg_catalog.jsonb_build_array(
+                            role_row.rolname,
+                            role_row.rolcanlogin,
+                            role_row.rolinherit,
+                            role_row.rolsuper,
+                            role_row.rolcreatedb,
+                            role_row.rolcreaterole,
+                            role_row.rolreplication,
+                            role_row.rolbypassrls,
+                            role_row.rolconnlimit,
+                            role_row.rolvaliduntil,
+                            role_row.rolconfig
+                          )
+                     FROM pg_catalog.pg_roles AS role_row
+                    WHERE role_row.oid = binding_kernel_oid
+                 ),
+                 'owner_membership',
+                 (
+                   SELECT pg_catalog.jsonb_build_array(
+                            member_role.rolname,
+                            parent_role.rolname,
+                            membership.admin_option,
+                            membership.inherit_option,
+                            membership.set_option
+                          )
+                     FROM pg_catalog.pg_auth_members AS membership
+                     JOIN pg_catalog.pg_roles AS member_role
+                       ON member_role.oid = membership.member
+                     JOIN pg_catalog.pg_roles AS parent_role
+                       ON parent_role.oid = membership.roleid
+                    WHERE membership.roleid = binding_kernel_oid
+                 ),
+                 'binding_column',
+                 (
+                   SELECT pg_catalog.jsonb_build_array(
+                            attribute_row.attname,
+                            pg_catalog.format_type(
+                              attribute_row.atttypid,
+                              attribute_row.atttypmod
+                            ),
+                            attribute_row.attnotnull,
+                            attribute_row.attidentity,
+                            attribute_row.attgenerated
+                          )
+                     FROM pg_catalog.pg_attribute AS attribute_row
+                    WHERE attribute_row.attrelid =
+                          'identity.ha_user_bindings'::regclass
+                      AND attribute_row.attname = 'authority_receipt_id'
+                      AND attribute_row.attnum > 0
+                      AND NOT attribute_row.attisdropped
+                 ),
+                 'dependencies',
+                 (
+                   SELECT pg_catalog.jsonb_agg(
+                            pg_catalog.jsonb_build_array(
+                              dependency_function.oid::regprocedure::text,
+                              dependency_function.proowner::regrole::text,
+                              dependency_function.prosecdef,
+                              dependency_function.provolatile::text,
+                              dependency_function.proconfig,
+                              pg_catalog.encode(
+                                pg_catalog.sha256(
+                                  pg_catalog.convert_to(
+                                    dependency_function.prosrc, 'UTF8'
+                                  )
+                                ),
+                                'hex'
+                              )
+                            )
+                            ORDER BY
+                              dependency_function.oid::regprocedure::text
+                          )
+                     FROM pg_catalog.pg_proc AS dependency_function
+                    WHERE dependency_function.oid IN (
+                      'operations.'
+                      'evaluate_current_identity_semantic_authority(uuid)'
+                        ::regprocedure,
+                      'privacy.lock_identity_semantic_write_fence()'
+                        ::regprocedure,
+                      'privacy.fence_identity_tombstone_write()'
+                        ::regprocedure,
+                      'privacy.identity_person_is_blocked(uuid)'
+                        ::regprocedure,
+                      'privacy.identity_principal_is_blocked(uuid)'
+                        ::regprocedure
+                    )
+                 ),
+                 'kernel_acl_inventory',
+                 (
+                   SELECT coalesce(
+                            pg_catalog.jsonb_agg(
+                              pg_catalog.jsonb_build_array(
+                                direct_acl.object_kind,
+                                direct_acl.object_identity,
+                                direct_acl.privilege_type,
+                                direct_acl.is_grantable
+                              )
+                              ORDER BY
+                                direct_acl.object_kind,
+                                direct_acl.object_identity,
+                                direct_acl.privilege_type
+                            ),
+                            '[]'::jsonb
+                          )
+                     FROM (
+                       SELECT
+                         'database'::text AS object_kind,
+                         database_row.datname::text AS object_identity,
+                         database_acl.privilege_type::text AS privilege_type,
+                         database_acl.is_grantable
+                       FROM pg_catalog.pg_database AS database_row
+                       CROSS JOIN LATERAL pg_catalog.aclexplode(
+                         database_row.datacl
+                       ) AS database_acl
+                      WHERE database_acl.grantee = binding_kernel_oid
+                       UNION ALL
+                       SELECT
+                         'schema',
+                         namespace_row.nspname,
+                         namespace_acl.privilege_type,
+                         namespace_acl.is_grantable
+                       FROM pg_catalog.pg_namespace AS namespace_row
+                       CROSS JOIN LATERAL pg_catalog.aclexplode(
+                         namespace_row.nspacl
+                       ) AS namespace_acl
+                      WHERE namespace_acl.grantee = binding_kernel_oid
+                       UNION ALL
+                       SELECT
+                         'relation',
+                         relation_row.oid::regclass::text,
+                         relation_acl.privilege_type,
+                         relation_acl.is_grantable
+                       FROM pg_catalog.pg_class AS relation_row
+                       CROSS JOIN LATERAL pg_catalog.aclexplode(
+                         relation_row.relacl
+                       ) AS relation_acl
+                      WHERE relation_acl.grantee = binding_kernel_oid
+                       UNION ALL
+                       SELECT
+                         'column',
+                         pg_catalog.format(
+                           '%s.%I',
+                           attribute_row.attrelid::regclass::text,
+                           attribute_row.attname
+                         ),
+                         column_acl.privilege_type,
+                         column_acl.is_grantable
+                       FROM pg_catalog.pg_attribute AS attribute_row
+                       CROSS JOIN LATERAL pg_catalog.aclexplode(
+                         attribute_row.attacl
+                       ) AS column_acl
+                      WHERE column_acl.grantee = binding_kernel_oid
+                       UNION ALL
+                       SELECT
+                         'function',
+                         function_row.oid::regprocedure::text,
+                         function_acl.privilege_type,
+                         function_acl.is_grantable
+                       FROM pg_catalog.pg_proc AS function_row
+                       CROSS JOIN LATERAL pg_catalog.aclexplode(
+                         function_row.proacl
+                       ) AS function_acl
+                      WHERE function_acl.grantee = binding_kernel_oid
+                       UNION ALL
+                       SELECT
+                         'type',
+                         type_row.oid::regtype::text,
+                         type_acl.privilege_type,
+                         type_acl.is_grantable
+                       FROM pg_catalog.pg_type AS type_row
+                       CROSS JOIN LATERAL pg_catalog.aclexplode(
+                         type_row.typacl
+                       ) AS type_acl
+                      WHERE type_acl.grantee = binding_kernel_oid
+                     ) AS direct_acl
+                 ),
+                 'effective_access',
+                 pg_catalog.jsonb_build_array(
+                   pg_catalog.has_function_privilege(
+                     'home_agent_binding_operator',
+                     binding_function,
+                     'EXECUTE'
+                   ),
+                   pg_catalog.has_function_privilege(
+                     'home_agent_identity_binding_kernel',
+                     'operations.'
+                     'evaluate_current_identity_semantic_authority(uuid)',
+                     'EXECUTE'
+                   ),
+                   pg_catalog.pg_has_role(
+                     'home_agent_binding_operator',
+                     'home_agent_identity_binding_kernel',
+                     'SET'
+                   )
+                 ),
+                 'owned_object_count', kernel_owned_object_count
+               )::text,
+               'UTF8'
+             )
+           ),
+           'hex'
+         )
+    INTO STRICT actual_e5b_catalog_sha256;
+
+  IF expected_e5b_catalog_sha256 =
+       'PENDING_E5B_CATALOG_SHA256' THEN
+    RAISE EXCEPTION
+      'identity principal-binding E5b catalog admission is pending reviewed digest'
+      USING ERRCODE = '42501',
+            DETAIL = pg_catalog.format(
+              'expected=%s actual=%s',
+              expected_e5b_catalog_sha256,
+              actual_e5b_catalog_sha256
+            );
+  END IF;
+  IF expected_e5b_catalog_sha256 !~ '^[0-9a-f]{64}$'
+     OR actual_e5b_catalog_sha256 <> expected_e5b_catalog_sha256 THEN
+    RAISE EXCEPTION
+      'identity principal-binding E5b catalog admission digest mismatch'
+      USING ERRCODE = '42501',
+            DETAIL = pg_catalog.format(
+              'expected=%s actual=%s',
+              expected_e5b_catalog_sha256,
+              actual_e5b_catalog_sha256
+            );
+  END IF;
+
   RAISE EXCEPTION 'identity cutover E4 activation contract is not installed'
     USING ERRCODE = '55000';
 END
-$identity_current_authority_e5_acl$;
+$identity_principal_binding_e5b_acl$;
 SQL
 
 # The broad role setup above supports old pinned revisions and creates the

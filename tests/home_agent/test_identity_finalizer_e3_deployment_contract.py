@@ -107,16 +107,16 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
     assert re.findall(
         r"'([0-9a-z_]+)'",
         reviewed_revisions.group(1),
-    ) == [
-        "0013_identity_finalizer_e3",
-        "0014_identity_cutover_e4",
-        "0015_current_authority_e5a",
-    ]
+        ) == [
+            "0013_identity_finalizer_e3",
+            "0014_identity_cutover_e4",
+            "0015_current_authority_e5a",
+            "0016_principal_binding_e5b",
+        ]
     assert (
         "current_revision = ANY (reviewed_e3_catalog_revisions)"
         in admission
     )
-    assert "0016_" not in reviewed_revisions.group(1)
     overlay_revisions = re.search(
         r"reviewed_e4_overlay_revisions constant text\[\] := ARRAY\["
         r"(.*?)\]\:\:text\[\]",
@@ -129,6 +129,7 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
     ) == [
         "0014_identity_cutover_e4",
         "0015_current_authority_e5a",
+        "0016_principal_binding_e5b",
     ]
     assert (
         "login_role.rolvaliduntil =\n"
@@ -180,7 +181,10 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
     assert "policy_row.polqual::text <>" in admission
     assert "reference_policy.polqual::text" in admission
     assert (
-        "WHEN current_revision = '0015_current_authority_e5a' THEN 6"
+        "WHEN current_revision IN (\n"
+        "                '0015_current_authority_e5a',\n"
+        "                '0016_principal_binding_e5b'\n"
+        "              ) THEN 6"
         in admission
     )
     assert "WHEN current_revision = ANY (reviewed_e4_overlay_revisions) THEN 5" in (

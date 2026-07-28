@@ -919,11 +919,62 @@ immutable stored graph and exact E4 verifier-bundle marker under the pinned
 catalog contracts.
 
 Do not call E5a as a standalone readiness probe or treat its categorical result
-as a binding receipt. Future E5b must add the private, authenticated Home
-Assistant confirmation and principal/person binding kernel. That kernel must
-invoke E5a and commit the binding in the same writable `SERIALIZABLE`
-transaction; until that separately reviewed work exists, semantic identity
-binding remains disabled.
+as a binding receipt. Dormant E5b now adds only the database-local
+principal/person binding kernel described below; it invokes E5a and commits
+the binding in the same writable `SERIALIZABLE` transaction. E5b does not
+authenticate Home Assistant identity or expose a live confirmation path.
+Until the separately reviewed E5c adapter exists, semantic identity binding
+remains disabled.
+
+### Dormant E5b principal-binding kernel
+
+Revision `0016_principal_binding_e5b` adds the database-only function
+`identity.commit_authenticated_principal_binding_e5b(uuid,varchar,varchar,uuid,uuid,uuid,uuid,uuid)`.
+It is still dormant: production remains pinned to
+`0006a_worker_lease_arbitration` in `record_only`, and there is no API, BFF,
+OAuth, Home Assistant, native, web, Compose, or operator activation path.
+
+Only `session_user=home_agent_binding_operator` with
+`current_user=home_agent_identity_binding_kernel` may enter the function.
+The kernel owner is a separate `NOLOGIN`, `NOINHERIT`, `NOBYPASSRLS`,
+connection-limit-zero role. Its owner-only provisioning ceremony is additive
+at revision `0015_current_authority_e5a`; it grants no callable capability.
+Grant replay keeps the function, nested E5a call, kernel role, and receipt
+catalog quarantined unless the exact E3, E4, E5a, and E5b catalog manifests
+match their reviewed digests.
+
+The caller must open a writable `SERIALIZABLE` transaction and call E5b before
+performing any write or row-locking operation in that transaction. E5b rejects
+an already assigned transaction ID before invoking E5a. E5a is then the first
+application-data operation inside the security-definer boundary and holds the
+semantic fence and current-authority locks through the outer commit. A prior
+plain `SELECT` cannot be proven at the database function boundary; E5c must use
+a separate commit-only login/credential and invoke E5b immediately on a fresh
+transaction rather than reusing the staging connection.
+
+One successful call consumes an exact, independently staged proposal. It
+recomputes the person snapshot, stage receipt, and proposal digests; requires
+one promoted primary People lineage; rechecks current privacy directives,
+edge privacy blocks, current erasure authority, and the active principal
+graph; and creates the principal, confirmation artifact, binding, artifact
+registry row, and normalized authority receipt atomically. The receipt records
+only typed IDs, hashes, policy versions, lineage, transaction ID, and
+timestamps. It contains no display name, token, utterance, coordinate, or
+camera content.
+
+Confirmation nonce commitments are globally single-use across every
+confirmation-artifact purpose, preventing cross-domain gesture replay.
+Idempotent retry is exact: the promotion, authenticated HA user, proposal
+digest, nonce, and all four caller-supplied output IDs must match the committed
+receipt graph. A changed ID, stale or blocked subject, drifted lineage,
+non-current E5a result, or malformed graph fails closed without returning
+content.
+
+E5b does not authenticate the supplied HA user ID. E5c must add the official
+HA-authenticated adapter, split staging from commit credentials, bind the
+current private gesture to the exact proposal digest, and keep bearer tokens
+outside webview JavaScript. Until that separate gate is reviewed, principal
+binding remains disabled even if a database has been upgraded through E5b.
 
 ## Record-only, shadow, and canary gates
 

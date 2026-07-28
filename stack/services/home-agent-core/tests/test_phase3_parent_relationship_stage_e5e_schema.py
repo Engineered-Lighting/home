@@ -249,7 +249,7 @@ def test_grant_replay_projects_e5e_out_of_pinned_predecessor_catalogs() -> None:
     assert "identity cutover E4 reviewed E5e overlay mismatch" in e4
     assert "parent_relationship_stage_e5e_r07_select" in e4
     assert "attribute_acl.grantee = parent_relationship_kernel_oid" in e4
-    assert "column_acl.grantee =" in e4
+    assert "e5e_promotion_column_acl_count <> 0" in e4
     for promotion_column in (
         "promotion_id",
         "authority_scope",
@@ -269,3 +269,23 @@ def test_grant_replay_projects_e5e_out_of_pinned_predecessor_catalogs() -> None:
         in activation
     )
     assert "pg_catalog.convert_to(prosrc, 'UTF8')" in activation
+
+    terminal_grants = GRANTS.split(
+        "\\if :activate_parent_relationship_stage_e5e", 1
+    )[1].split("DO $parent_relationship_e5e_active_acl$", 1)[0]
+    for dependency in (
+        "identity.ha_user_bindings",
+        "identity.principals",
+        "identity.people",
+        "identity.privacy_directives",
+        "identity.edge_privacy_user_blocks",
+        "identity.legacy_role_labels",
+        "knowledge.fact_versions",
+        "operations.semantic_authority_promotions",
+        "operations.reviewed_identity_migration_projection_lineage",
+        "operations.reviewed_identity_migration_projection_subjects",
+        "identity.parent_relationship_requests",
+        "identity.parent_relationship_proposals",
+        "identity.parent_relationship_proposal_edges",
+    ):
+        assert dependency in terminal_grants

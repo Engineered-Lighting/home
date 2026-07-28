@@ -5019,9 +5019,10 @@ BEGIN
       USING ERRCODE = '42501';
   END IF;
 
-  -- E5e reads the current promotion through its own kernel. Pin that exact
-  -- descendant policy/grant pair, then project it out of the immutable E4
-  -- manifest.
+  -- E5e adds one read policy to the current-promotion relation. Dependency
+  -- ACLs must still be empty at this predecessor boundary; the terminal E5e
+  -- activation below restores its exact column grants only after every
+  -- immutable predecessor manifest has passed.
   IF current_revision = '0019_parent_stage_e5e' THEN
     SELECT EXISTS (
          SELECT 1
@@ -5087,7 +5088,7 @@ BEGIN
       INTO STRICT e5e_promotion_table_acl_present;
 
     IF NOT e5e_promotion_policy_valid
-       OR e5e_promotion_column_acl_count <> 6
+       OR e5e_promotion_column_acl_count <> 0
        OR e5e_promotion_column_acl_invalid
        OR e5e_promotion_table_acl_present THEN
       RAISE EXCEPTION
@@ -5305,26 +5306,6 @@ BEGIN
                                          target.target_relation
                                      AND attribute.attnum > 0
                                      AND NOT attribute.attisdropped
-                                     AND NOT (
-                                       current_revision =
-                                         '0019_parent_stage_e5e'
-                                       AND target.target_relation =
-                                             promotion_table
-                                       AND attribute.attname IN (
-                                         'promotion_id',
-                                         'authority_scope',
-                                         'run_id',
-                                         'finalization_id',
-                                         'policy_digest',
-                                         'committed_at'
-                                       )
-                                       AND column_acl.grantee =
-                                             parent_relationship_kernel_oid
-                                       AND column_acl.grantor = owner_oid
-                                       AND column_acl.privilege_type =
-                                             'SELECT'
-                                       AND NOT column_acl.is_grantable
-                                     )
                                 )
                               )
                             )
@@ -8481,6 +8462,54 @@ FROM public.alembic_version
 
 \if :activate_parent_relationship_stage_e5e
 GRANT USAGE ON SCHEMA identity, knowledge, operations, privacy
+  TO home_agent_parent_relationship_kernel;
+GRANT SELECT (
+  binding_id, ha_user_id, principal_id, person_id, revoked_at
+) ON identity.ha_user_bindings TO home_agent_parent_relationship_kernel;
+GRANT SELECT (
+  principal_id, person_id, kind, display_label, status
+) ON identity.principals TO home_agent_parent_relationship_kernel;
+GRANT SELECT (
+  person_id, display_name, status, privacy_scope,
+  legacy_source_sha256, status_source_sha256
+) ON identity.people TO home_agent_parent_relationship_kernel;
+GRANT SELECT (person_id, directive, enabled)
+  ON identity.privacy_directives TO home_agent_parent_relationship_kernel;
+GRANT SELECT (ha_user_id, person_id)
+  ON identity.edge_privacy_user_blocks
+  TO home_agent_parent_relationship_kernel;
+GRANT SELECT (
+  label_id, person_id, role_label, perspective, source_snapshot_sha256
+) ON identity.legacy_role_labels TO home_agent_parent_relationship_kernel;
+GRANT SELECT (
+  fact_version_id, subject_id, predicate, object,
+  perspective_principal_id, system_range, resolution
+) ON knowledge.fact_versions TO home_agent_parent_relationship_kernel;
+GRANT SELECT (
+  promotion_id, authority_scope, run_id, finalization_id,
+  policy_digest, committed_at
+) ON operations.semantic_authority_promotions
+  TO home_agent_parent_relationship_kernel;
+GRANT SELECT (
+  lineage_id, run_id, decision_kind, projection_table_kind, projection_id
+) ON operations.reviewed_identity_migration_projection_lineage
+  TO home_agent_parent_relationship_kernel;
+GRANT SELECT (lineage_id, person_id, subject_role)
+  ON operations.reviewed_identity_migration_projection_subjects
+  TO home_agent_parent_relationship_kernel;
+GRANT SELECT (
+  request_id, principal_id, child_person_id, binding_id, state,
+  requested_at, expires_at, staged_at, closed_at
+) ON identity.parent_relationship_requests
+  TO home_agent_parent_relationship_kernel;
+GRANT INSERT (
+  request_id, principal_id, child_person_id, binding_id, state,
+  requested_at, expires_at, staged_at, closed_at
+) ON identity.parent_relationship_requests
+  TO home_agent_parent_relationship_kernel;
+GRANT SELECT, INSERT ON
+  identity.parent_relationship_proposals,
+  identity.parent_relationship_proposal_edges
   TO home_agent_parent_relationship_kernel;
 GRANT EXECUTE ON FUNCTION
   operations.evaluate_current_identity_semantic_authority(uuid),

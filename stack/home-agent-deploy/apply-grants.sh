@@ -3848,21 +3848,6 @@ BEGIN
                                    ) AS descendant(target_name)
                           )
                         )
-                        OR (
-                          current_revision = '0019_parent_stage_e5e'
-                          AND policy_row.polname =
-                                ANY (e5e_e3_policy_names)
-                          AND policy_row.polroles =
-                                ARRAY[parent_relationship_kernel_oid]::oid[]
-                          AND policy_row.polrelid IN (
-                            SELECT pg_catalog.to_regclass(
-                                     descendant.target_name
-                                   )
-                              FROM pg_catalog.unnest(
-                                     e5e_e3_policy_relations
-                                   ) AS descendant(target_name)
-                          )
-                        )
                       )
                      AND policy_row.polrelid IN (
                        SELECT pg_catalog.to_regclass(target.target_name)
@@ -3900,9 +3885,28 @@ BEGIN
                                 policy_row.polroles
                           AND reference_policy.polqual IS NOT NULL
                           AND reference_policy.polwithcheck IS NULL
-                          AND reference_policy.polqual::text =
-                                policy_row.polqual::text
+                           AND reference_policy.polqual::text =
+                                 policy_row.polqual::text
+                       )
+                    OR (
+                      current_revision = '0019_parent_stage_e5e'
+                      AND policy_row.polname =
+                            ANY (e5e_e3_policy_names)
+                      AND policy_row.polroles =
+                            ARRAY[parent_relationship_kernel_oid]::oid[]
+                      AND policy_row.polrelid IN (
+                        SELECT pg_catalog.to_regclass(
+                                 descendant.target_name
+                               )
+                          FROM pg_catalog.unnest(
+                                 e5e_e3_policy_relations
+                               ) AS descendant(target_name)
                       )
+                      AND policy_row.polpermissive
+                      AND policy_row.polcmd = 'r'
+                      AND policy_row.polqual IS NOT NULL
+                      AND policy_row.polwithcheck IS NULL
+                    )
                     OR (
                      current_revision IN (
                        '0015_current_authority_e5a',

@@ -1113,10 +1113,10 @@ python3 \
 ```
 
 The verifier accepts no arguments and runs fixed, read-only Git commands only.
-It requires the current clean checkout to descend from accepted commit
-`26862863c017e77099203e945aa8cdc7d56d9f5a`, then proves that every tracked
-activation path is byte-for-byte and mode-for-mode unchanged from the source
-pack exercised by hosted PostgreSQL run `30394033276`. It rejects symlinks,
+It requires the current clean checkout to descend from the latest accepted
+source-pack commit, then proves that every tracked activation path is
+byte-for-byte and mode-for-mode unchanged from that hosted PostgreSQL run. It
+rejects symlinks,
 non-regular Git modes, missing objects, path traversal, duplicate/disordered
 tree entries, source drift, an unrelated checkout, and an unavailable accepted
 commit.
@@ -1127,7 +1127,7 @@ A trusted result still exits `3` and always reports
 `changes_rollout_mode=false`. The result also names the five deliberate
 remaining stops:
 
-- the production image has no Phase 3 migration entrypoint;
+- no root-controlled Phase 3 activation sequencer is installed;
 - normal grant replay still rejects the absent E4 activation contract;
 - the identity finalizer service remains non-callable;
 - the semantic cutover service remains non-callable; and
@@ -1179,6 +1179,13 @@ role is provisioned at 0018 before the final 0021 migration. No operator should
 invoke any E5l entrypoint until a later root-controlled sequencer validates all
 E5j evidence receipts, installs the grant activation contract, and provides
 tested forward-recovery and rollback behavior.
+
+The complete hosted E1-E5l PostgreSQL 17 authority gate passed in workflow run
+`30395870684` at source commit
+`74c751628f0559452215897d1fd251e7277f0f51`. The E5k source verifier is bound to
+that accepted source pack and now reports the fixed migration entrypoints as
+installed. The sequencer, grant activation contract, identity finalizer
+executor, identity cutover executor, and off-host backup writer remain absent.
 
 ## Record-only, shadow, and canary gates
 

@@ -46,9 +46,10 @@ def test_exact_hosted_source_pack_can_be_verified_but_never_activated() -> None:
 
     assert entries == 2
     assert report["contract"] == "phase3-activation-source-plan-e5k-v1"
-    assert report["accepted_commit"] == "26862863c017e77099203e945aa8cdc7d56d9f5a"
-    assert report["accepted_postgres_run_id"] == "30394033276"
+    assert report["accepted_commit"] == "74c751628f0559452215897d1fd251e7277f0f51"
+    assert report["accepted_postgres_run_id"] == "30395870684"
     assert report["source_pack_matches_hosted_acceptance"] is True
+    assert report["fixed_migration_entrypoints_installed"] is True
     assert report["activation_executor_installed"] is False
     assert report["source_acceptance_receipt_issuable"] is False
     assert report["authoritative"] is False
@@ -87,6 +88,7 @@ def test_any_source_uncertainty_fails_closed(values, expected: str) -> None:
     report = module.evaluate(**arguments)
 
     assert report["source_pack_matches_hosted_acceptance"] is False
+    assert report["fixed_migration_entrypoints_installed"] is False
     assert report["source_pack_digest"] is None
     assert report["source_pack_entries"] is None
     assert report["blockers"][0] == expected

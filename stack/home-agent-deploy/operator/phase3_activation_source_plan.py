@@ -19,8 +19,8 @@ from typing import Any, Mapping, Sequence
 
 
 CONTRACT = "phase3-activation-source-plan-e5k-v1"
-ACCEPTED_COMMIT = "26862863c017e77099203e945aa8cdc7d56d9f5a"
-ACCEPTED_POSTGRES_RUN_ID = "30394033276"
+ACCEPTED_COMMIT = "74c751628f0559452215897d1fd251e7277f0f51"
+ACCEPTED_POSTGRES_RUN_ID = "30395870684"
 SOURCE_REVISION = "0006a_worker_lease_arbitration"
 TARGET_REVISION = "0021_parent_status_e5h"
 SOURCE_ROOT = Path(__file__).resolve().parents[3]
@@ -60,7 +60,7 @@ ACTIVATION_PATHS = (
     "stack/services/home-agent-core/docker-entrypoint.sh",
 )
 MISSING_EXECUTABLE_BOUNDARIES = (
-    "activation_migration_entrypoint_not_installed",
+    "activation_sequencer_not_installed",
     "activation_grant_contract_not_installed",
     "identity_finalizer_executor_not_installed",
     "identity_cutover_executor_not_installed",
@@ -127,6 +127,7 @@ def evaluate(
         "source_pack_digest": source_pack_digest if trusted else None,
         "source_pack_entries": tree_entries if trusted else None,
         "source_pack_matches_hosted_acceptance": trusted,
+        "fixed_migration_entrypoints_installed": trusted,
         "activation_executor_installed": False,
         "source_acceptance_receipt_issuable": False,
         "authoritative": False,

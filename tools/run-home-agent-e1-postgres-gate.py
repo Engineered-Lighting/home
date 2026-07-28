@@ -96,14 +96,41 @@ CATALOG_DIGEST_CONTRACTS = (
     ),
 )
 CATALOG_DISCOVERY_SAFE_FAILURES = (
+    "identity finalizer E3 inert bootstrap contract mismatch",
+    "identity finalizer E3 dormant role contract mismatch",
+    "identity finalizer E3 ownership dependency mismatch",
+    "identity finalizer E3 evidence relation contract mismatch",
+    "identity finalizer E3 function contract mismatch",
+    "identity finalizer E3 write-fence contract mismatch",
+    "identity finalizer E3 reviewed descendant policy mismatch",
+    "identity finalizer E3 reviewed E5 policy mismatch",
+    "identity finalizer E3 reviewed E5b overlay mismatch",
+    "identity finalizer E3 control policy set mismatch",
+    "identity finalizer E3 evidence policy set mismatch",
+    "identity finalizer E3 schema ACL mismatch",
+    "identity finalizer E3 table ACL mismatch",
+    "identity finalizer E3 column ACL mismatch",
+    "identity finalizer E3 function ACL mismatch",
+    "identity finalizer E3 grant option detected",
+    "identity finalizer E3 effective schema ACL mismatch",
+    "identity finalizer E3 effective table ACL mismatch",
+    "identity finalizer E3 effective function ACL mismatch",
+    "identity finalizer E3 sequence/type ACL mismatch",
+    "identity finalizer E3 default ACL mismatch",
+    "identity finalizer E3 PUBLIC ACL mismatch",
     "identity cutover E4 role ceremony was omitted",
     "partial identity cutover E4 role pair",
     "identity cutover E4 dormant role contract mismatch",
+    "identity cutover E4 pre-migration ownership mismatch",
+    "partial or revision-mismatched identity cutover E4 object set",
     "identity cutover E4 reviewed E5 policy mismatch",
+    "identity cutover E4 reviewed E5b overlay mismatch",
+    "partial or revision-mismatched current-authority E5 object set",
     "current-authority E5 caller role contract mismatch",
     "current-authority E5 dormant role contract mismatch",
     "current-authority E5 ownership contract mismatch",
     "current-authority E5 policy contract mismatch",
+    "current-authority E5 reviewed E5b policy overlay mismatch",
     "current-authority E5 quarantine mismatch",
     "partial or revision-mismatched principal-binding E5b object set",
     "principal-binding E5b dormant role contract mismatch",
@@ -1058,7 +1085,7 @@ def _discover_changed_catalog_digests(
     discovered: dict[str, str] = {}
     activation_stop = "identity cutover E4 activation contract is not installed"
 
-    for _attempt in range(len(CATALOG_DIGEST_CONTRACTS) + 1):
+    for attempt in range(1, len(CATALOG_DIGEST_CONTRACTS) + 2):
         commands = [f'cp "{script}" "{temporary_script}"']
         for expected, actual in replacements.items():
             commands.append(
@@ -1099,10 +1126,13 @@ def _discover_changed_catalog_digests(
             if len(safe_failures) == 1:
                 raise GateFailure(
                     "catalog digest discovery stopped at reviewed contract: "
-                    f"{safe_failures[0]}"
+                    f"{safe_failures[0]}; attempt={attempt}; "
+                    f"discovered={','.join(discovered) or 'none'}"
                 )
             raise GateFailure(
-                "catalog digest discovery failed without one exact redacted digest"
+                "catalog digest discovery failed without one exact redacted "
+                f"digest; attempt={attempt}; "
+                f"discovered={','.join(discovered) or 'none'}"
             )
         observed_expected, actual = digest_matches[0]
         candidates = [

@@ -923,8 +923,9 @@ as a binding receipt. Dormant E5b adds only the database-local principal/person
 binding kernel described below; it invokes E5a and commits the binding in the
 same writable `SERIALIZABLE` transaction. E5b does not authenticate Home
 Assistant identity or expose a live confirmation path. Revision 0017 adds the
-separately gated E5c adapter boundary, but the live record-only deployment
-remains disabled until its hosted acceptance and explicit rollout.
+separately gated E5c adapter boundary. Its hosted PostgreSQL 17 acceptance
+passed in workflow run `30329873575` at commit `74ffb07`; the live record-only
+deployment remains disabled until an explicit operator rollout.
 
 ### Dormant E5b principal-binding kernel
 
@@ -1006,8 +1007,8 @@ The Core route fails before parsing the body unless its reviewed readiness
 revision is exactly `0017_authenticated_binding_e5c` and both isolated
 credentials are configured. A successful identity binding leaves location
 memory and travel greetings off. Production remains pinned to
-`0006a_worker_lease_arbitration` in `record_only` until the hosted E5c gate and
-an explicit operator rollout are complete.
+`0006a_worker_lease_arbitration` in `record_only`. The hosted E5c gate passed
+in workflow run `30329873575`; an explicit operator rollout is still required.
 
 ## Record-only, shadow, and canary gates
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the E1-E5c scaffold gate against disposable PostgreSQL 17."""
+"""Run the E1-E5d scaffold gate against disposable PostgreSQL 17."""
 
 from __future__ import annotations
 
@@ -44,6 +44,7 @@ REVISION_0014 = "0014_identity_cutover_e4"
 REVISION_0015 = "0015_current_authority_e5a"
 REVISION_0016 = "0016_principal_binding_e5b"
 REVISION_0017 = "0017_authenticated_binding_e5c"
+REVISION_0018 = "0018_parent_relationship_e5d"
 E4_SUCCESS_DOCUMENT_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_DOCUMENT_B64"
 E4_SUCCESS_ADMISSION_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_ADMISSION_ID"
 E4_SCAFFOLD_OWNER_DATABASE_ENV = (
@@ -72,6 +73,15 @@ E5B_COMMITTER_DATABASE_ENV = (
 )
 E5C_OPERATOR_DATABASE_ENV = (
     "TEST_PHASE3_PRINCIPAL_BINDING_ADAPTER_E5C_OPERATOR_DATABASE_URL"
+)
+E5D_OWNER_DATABASE_ENV = (
+    "TEST_PHASE3_PARENT_RELATIONSHIP_E5D_OWNER_DATABASE_URL"
+)
+E5D_COMMITTER_DATABASE_ENV = (
+    "TEST_PHASE3_PARENT_RELATIONSHIP_E5D_COMMITTER_DATABASE_URL"
+)
+E5D_OPERATOR_DATABASE_ENV = (
+    "TEST_PHASE3_PARENT_RELATIONSHIP_E5D_OPERATOR_DATABASE_URL"
 )
 E5B_CLEANUP_DOWNGRADE_EVIDENCE_ENV = (
     "TEST_PHASE3_PRINCIPAL_BINDING_KERNEL_E5B_CLEANUP_DOWNGRADE_EVIDENCE"
@@ -319,6 +329,8 @@ BUILD_CONTEXT_FILES = (
     "0016_principal_binding_kernel_e5b.py",
     "stack/services/home-agent-core/alembic/versions/"
     "0017_authenticated_binding_e5c.py",
+    "stack/services/home-agent-core/alembic/versions/"
+    "0018_parent_relationship_authority_e5d.py",
     "stack/services/home-agent-core/app/identity_erasure_schema.py",
     "stack/home-agent-deploy/operator/reviewed_identity_payload.py",
     "stack/home-agent-deploy/operator/principal_binding_candidate_staging.py",
@@ -357,6 +369,10 @@ BUILD_CONTEXT_FILES = (
     "tests/home_agent/test_principal_binding_authority_boundary_contract.py",
     "tests/home_agent/"
     "test_principal_binding_adapter_e5c_deployment_contract.py",
+    "stack/services/home-agent-core/tests/"
+    "test_phase3_parent_relationship_authority_e5d_schema.py",
+    "stack/services/home-agent-core/tests/"
+    "test_phase3_parent_relationship_authority_e5d_runtime_postgres.py",
     "tools/run-home-agent-e1-postgres-gate.py",
     ".github/workflows/home-agent-e1-postgres.yml",
 )
@@ -2318,7 +2334,7 @@ def _run_e4_scaffold_phase(
     phase: Phase,
     fixture_directory: Path,
 ) -> None:
-    """Run dormant E4/E5a/E5b and the separate E5c activation gate."""
+    """Run E4/E5a/E5b, E5c activation, and dormant E5d foundation gates."""
     _upgrade_e3_database(state, phase, secrets_directory)
     _provision_identity_cutover_roles(state, phase, secrets_directory)
     _apply_grants(state, phase, secrets_directory, BASE_DATABASE)
@@ -2709,6 +2725,7 @@ def _run_e4_scaffold_phase(
         },
         fail_fast=True,
     )
+
     _alembic_expect_failure(
         state,
         phase,
@@ -3057,6 +3074,61 @@ def _run_e4_scaffold_phase(
         fail_fast=True,
     )
 
+    # E5d is owner-only persistence groundwork. Grant replay admits the
+    # reviewed descendant catalog but must leave E5c and every parent writer
+    # quarantined at the new revision.
+    _alembic(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+        REVISION_0018,
+    )
+    _assert_database_revision(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+        REVISION_0018,
+    )
+    _apply_grants(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+    )
+    _pytest(
+        state,
+        phase,
+        secrets_directory,
+        nodes=[
+            "tests/test_phase3_parent_relationship_authority_e5d_schema.py",
+            "tests/"
+            "test_phase3_parent_relationship_authority_e5d_runtime_postgres.py",
+        ],
+        url_environment={
+            E5D_OWNER_DATABASE_ENV: BASE_DATABASE,
+        },
+        credential_url_environment={
+            E5D_COMMITTER_DATABASE_ENV: (
+                BASE_DATABASE,
+                "home_agent_binding_committer",
+                "postgres_binding_committer_password",
+            ),
+            E5D_OPERATOR_DATABASE_ENV: (
+                BASE_DATABASE,
+                "home_agent_binding_operator",
+                "postgres_binding_operator_password",
+            ),
+        },
+        environment={
+            SENTINEL_ENV: state.sentinel,
+            SYSTEM_ID_ENV: phase.system_identifier,
+            ALLOWLIST_ENV: BASE_DATABASE,
+        },
+        fail_fast=True,
+    )
+
 
 def _build_test_image(state: GateState, build_context: Path) -> None:
     dockerfile = (
@@ -3089,7 +3161,7 @@ def main() -> int:
     except GateFailure as error:
         print(
             "E1/E2/E3/E4 gate execution quarantine "
-            f"(E5a/E5b/E5c included): {error}",
+            f"(E5a/E5b/E5c/E5d included): {error}",
             file=sys.stderr,
         )
         return 77
@@ -3184,7 +3256,7 @@ def main() -> int:
             )
             print(
                 "[8/8] Running isolated dormant E4 deployment scaffold "
-                "with E5a/E5b and the E5c activation boundary"
+                "with E5a/E5b, E5c activation, and E5d foundation"
             )
             _run_phase(
                 state,
@@ -3220,7 +3292,7 @@ def main() -> int:
     if exit_code == 0:
         print(
             "E1/E2/E3/E4 PostgreSQL 17 gate passed; "
-            "E5a/E5b catalog gates and E5c split adapter passed; "
+            "E5a/E5b catalogs, E5c adapter, and E5d foundation passed; "
             "labeled cleanup verified"
         )
     return exit_code

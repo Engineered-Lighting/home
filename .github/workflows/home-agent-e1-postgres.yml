@@ -1,4 +1,4 @@
-name: home agent E1/E2/E3/E4/E5a/E5b/E5c PostgreSQL gate
+name: home agent E1/E2/E3/E4/E5a/E5b/E5c/E5d PostgreSQL gate
 
 on:
   pull_request:
@@ -102,7 +102,7 @@ jobs:
           RUNNER_TEMP="$RUNNER_TEMP"
           sh stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh
 
-      - name: Run isolated PostgreSQL 17 E1/E2/E3/E4/E5a/E5b/E5c authority gate
+      - name: Run isolated PostgreSQL 17 E1/E2/E3/E4/E5a/E5b/E5c/E5d authority gate
         env:
           HOME_AGENT_E1_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: >-

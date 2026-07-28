@@ -9,6 +9,7 @@ REVISION = "0015_current_authority_e5a"
 DOWN_REVISION = "0014_identity_cutover_e4"
 DESCENDANT_REVISION = "0016_principal_binding_e5b"
 ACTIVATION_REVISION = "0017_authenticated_binding_e5c"
+FOUNDATION_REVISION = "0018_parent_relationship_e5d"
 FUNCTION = "operations.evaluate_current_identity_semantic_authority(uuid)"
 CALLER_ROLE = "home_agent_binding_operator"
 KERNEL_ROLE = "home_agent_identity_authority_kernel"
@@ -184,12 +185,14 @@ def test_e5_overlay_preserves_exact_e3_e4_pins_and_stop_boundary() -> None:
         REVISION,
         DESCENDANT_REVISION,
         ACTIVATION_REVISION,
+        FOUNDATION_REVISION,
     ]
     assert _revision_array(e4, "reviewed_e4_catalog_revisions") == [
         DOWN_REVISION,
         REVISION,
         DESCENDANT_REVISION,
         ACTIVATION_REVISION,
+        FOUNDATION_REVISION,
     ]
     for section, marker in (
         (e3, "identity finalizer E3 reviewed E5 policy mismatch"),
@@ -350,6 +353,7 @@ def test_e5_replay_quarantines_and_pins_the_complete_direct_acl_surface() -> Non
         REVISION,
         DESCENDANT_REVISION,
         ACTIVATION_REVISION,
+        FOUNDATION_REVISION,
     ]
     assert "NOT current_revision = ANY (reviewed_e5_catalog_revisions)" in (
         admission
@@ -496,9 +500,14 @@ def test_hosted_runner_provisions_before_0015_and_enforces_pinned_catalog() -> N
     ):
         assert f"pg_catalog.{catalog}" in phase
 
-    assert "home agent E1/E2/E3/E4/E5a/E5b/E5c PostgreSQL gate" in workflow
-    assert "Run isolated PostgreSQL 17 E1/E2/E3/E4/E5a/E5b/E5c authority gate" in (
-        workflow
+    assert (
+        "home agent E1/E2/E3/E4/E5a/E5b/E5c/E5d PostgreSQL gate"
+        in workflow
+    )
+    assert (
+        "Run isolated PostgreSQL 17 "
+        "E1/E2/E3/E4/E5a/E5b/E5c/E5d authority gate"
+        in workflow
     )
     assert (
         workflow.count(

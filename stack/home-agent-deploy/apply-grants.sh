@@ -2214,7 +2214,8 @@ DECLARE
     '0014_identity_cutover_e4',
     '0015_current_authority_e5a',
     '0016_principal_binding_e5b',
-    '0017_authenticated_binding_e5c'
+    '0017_authenticated_binding_e5c',
+    '0018_parent_relationship_e5d'
   ]::text[];
   pre_e3_revisions constant text[] := ARRAY[
     '0001_greenfield_core',
@@ -2242,7 +2243,8 @@ DECLARE
     '0014_identity_cutover_e4',
     '0015_current_authority_e5a',
     '0016_principal_binding_e5b',
-    '0017_authenticated_binding_e5c'
+    '0017_authenticated_binding_e5c',
+    '0018_parent_relationship_e5d'
   ]::text[];
   expected_e3_catalog_sha256 constant text :=
     '123326a4620d3dd123773819d95255e40813a5a949f406570252ff1f7031f29a';
@@ -2614,7 +2616,8 @@ BEGIN
   IF current_revision IN (
        '0015_current_authority_e5a',
        '0016_principal_binding_e5b',
-       '0017_authenticated_binding_e5c'
+       '0017_authenticated_binding_e5c',
+       '0018_parent_relationship_e5d'
      ) THEN
     SELECT oid INTO STRICT authority_kernel_oid
       FROM pg_catalog.pg_roles
@@ -2622,7 +2625,8 @@ BEGIN
   END IF;
   IF current_revision IN (
        '0016_principal_binding_e5b',
-       '0017_authenticated_binding_e5c'
+       '0017_authenticated_binding_e5c',
+       '0018_parent_relationship_e5d'
      ) THEN
     SELECT oid INTO STRICT binding_kernel_oid
       FROM pg_catalog.pg_roles
@@ -3110,7 +3114,8 @@ BEGIN
   IF current_revision IN (
        '0015_current_authority_e5a',
        '0016_principal_binding_e5b',
-       '0017_authenticated_binding_e5c'
+       '0017_authenticated_binding_e5c',
+       '0018_parent_relationship_e5d'
      )
      AND (
        (
@@ -3191,7 +3196,8 @@ BEGIN
   -- out of E3's immutable catalog digest.
   IF current_revision IN (
        '0016_principal_binding_e5b',
-       '0017_authenticated_binding_e5c'
+       '0017_authenticated_binding_e5c',
+       '0018_parent_relationship_e5d'
      )
      AND (
        NOT EXISTS (
@@ -3282,7 +3288,8 @@ BEGIN
          WHEN current_revision IN (
                 '0015_current_authority_e5a',
                 '0016_principal_binding_e5b',
-                '0017_authenticated_binding_e5c'
+                '0017_authenticated_binding_e5c',
+                '0018_parent_relationship_e5d'
               ) THEN 6
          WHEN current_revision = ANY (reviewed_e4_overlay_revisions) THEN 5
          ELSE 4
@@ -3523,7 +3530,8 @@ BEGIN
                    AND NOT (
                      current_revision IN (
                        '0016_principal_binding_e5b',
-                       '0017_authenticated_binding_e5c'
+                       '0017_authenticated_binding_e5c',
+                       '0018_parent_relationship_e5d'
                      )
                      AND relation.oid =
                            'operations.'
@@ -3560,7 +3568,8 @@ BEGIN
                    AND NOT (
                      current_revision IN (
                        '0016_principal_binding_e5b',
-                       '0017_authenticated_binding_e5c'
+                       '0017_authenticated_binding_e5c',
+                       '0018_parent_relationship_e5d'
                      )
                      AND relation.oid =
                            'operations.'
@@ -3620,7 +3629,8 @@ BEGIN
                           current_revision IN (
                             '0015_current_authority_e5a',
                             '0016_principal_binding_e5b',
-                            '0017_authenticated_binding_e5c'
+                            '0017_authenticated_binding_e5c',
+                            '0018_parent_relationship_e5d'
                          )
                          AND policy_row.polname = e5_select_policy
                           AND policy_row.polroles =
@@ -3629,7 +3639,8 @@ BEGIN
                         OR (
                           current_revision IN (
                             '0016_principal_binding_e5b',
-                            '0017_authenticated_binding_e5c'
+                            '0017_authenticated_binding_e5c',
+                            '0018_parent_relationship_e5d'
                           )
                           AND policy_row.polname = e5b_select_policy
                           AND policy_row.polroles =
@@ -3687,7 +3698,8 @@ BEGIN
                      current_revision IN (
                        '0015_current_authority_e5a',
                        '0016_principal_binding_e5b',
-                       '0017_authenticated_binding_e5c'
+                       '0017_authenticated_binding_e5c',
+                       '0018_parent_relationship_e5d'
                      )
                      AND policy_row.polname = e5_run_lock_policy
                      AND policy_row.polrelid =
@@ -4484,7 +4496,8 @@ DECLARE
     '0014_identity_cutover_e4',
     '0015_current_authority_e5a',
     '0016_principal_binding_e5b',
-    '0017_authenticated_binding_e5c'
+    '0017_authenticated_binding_e5c',
+    '0018_parent_relationship_e5d'
   ]::text[];
   role_count integer;
 BEGIN
@@ -4521,7 +4534,8 @@ BEGIN
   IF current_revision IN (
        '0015_current_authority_e5a',
        '0016_principal_binding_e5b',
-       '0017_authenticated_binding_e5c'
+       '0017_authenticated_binding_e5c',
+       '0018_parent_relationship_e5d'
      ) THEN
     SELECT oid INTO STRICT authority_kernel_oid
       FROM pg_catalog.pg_roles
@@ -4529,7 +4543,8 @@ BEGIN
   END IF;
   IF current_revision IN (
        '0016_principal_binding_e5b',
-       '0017_authenticated_binding_e5c'
+       '0017_authenticated_binding_e5c',
+       '0018_parent_relationship_e5d'
      ) THEN
     SELECT oid INTO STRICT binding_kernel_oid
       FROM pg_catalog.pg_roles
@@ -4655,7 +4670,8 @@ BEGIN
   IF current_revision IN (
        '0015_current_authority_e5a',
        '0016_principal_binding_e5b',
-       '0017_authenticated_binding_e5c'
+       '0017_authenticated_binding_e5c',
+       '0018_parent_relationship_e5d'
      )
      AND (
        (
@@ -4706,7 +4722,8 @@ BEGIN
   -- still-immutable manifest.
   IF current_revision IN (
        '0016_principal_binding_e5b',
-       '0017_authenticated_binding_e5c'
+       '0017_authenticated_binding_e5c',
+       '0018_parent_relationship_e5d'
      )
      AND (
        NOT EXISTS (
@@ -4848,7 +4865,8 @@ BEGIN
                                        AND NOT (
                                          current_revision IN (
                                            '0016_principal_binding_e5b',
-                                           '0017_authenticated_binding_e5c'
+                                           '0017_authenticated_binding_e5c',
+                                           '0018_parent_relationship_e5d'
                                          )
                                          AND target.target_relation =
                                                promotion_table
@@ -5077,7 +5095,8 @@ BEGIN
                           current_revision IN (
                             '0015_current_authority_e5a',
                             '0016_principal_binding_e5b',
-                            '0017_authenticated_binding_e5c'
+                            '0017_authenticated_binding_e5c',
+                            '0018_parent_relationship_e5d'
                           )
                           AND policy_row.polname = e5_select_policy
                           AND policy_row.polrelid IN (
@@ -5093,7 +5112,8 @@ BEGIN
                         OR (
                           current_revision IN (
                             '0016_principal_binding_e5b',
-                            '0017_authenticated_binding_e5c'
+                            '0017_authenticated_binding_e5c',
+                            '0018_parent_relationship_e5d'
                           )
                           AND policy_row.polname = e5b_select_policy
                           AND policy_row.polrelid = promotion_table
@@ -5786,7 +5806,8 @@ DECLARE
   reviewed_e5_catalog_revisions constant text[] := ARRAY[
     '0015_current_authority_e5a',
     '0016_principal_binding_e5b',
-    '0017_authenticated_binding_e5c'
+    '0017_authenticated_binding_e5c',
+    '0018_parent_relationship_e5d'
   ]::text[];
   rls_relations constant text[] := ARRAY[
     'operations.semantic_authority_promotions',
@@ -5857,7 +5878,8 @@ BEGIN
    WHERE rolname = 'home_agent_identity_authority_kernel';
   IF current_revision IN (
        '0016_principal_binding_e5b',
-       '0017_authenticated_binding_e5c'
+       '0017_authenticated_binding_e5c',
+       '0018_parent_relationship_e5d'
      ) THEN
     SELECT oid INTO STRICT binding_kernel_oid
       FROM pg_catalog.pg_roles
@@ -6018,7 +6040,8 @@ BEGIN
   -- shape and that every permissive policy shares the kernel gate predicate.
   IF current_revision IN (
        '0016_principal_binding_e5b',
-       '0017_authenticated_binding_e5c'
+       '0017_authenticated_binding_e5c',
+       '0018_parent_relationship_e5d'
      )
      AND (
        receipt_table IS NULL
@@ -6894,7 +6917,8 @@ BEGIN
 
   IF current_revision NOT IN (
        '0016_principal_binding_e5b',
-       '0017_authenticated_binding_e5c'
+       '0017_authenticated_binding_e5c',
+       '0018_parent_relationship_e5d'
      )
      OR receipt_table IS NULL
      OR binding_function IS NULL

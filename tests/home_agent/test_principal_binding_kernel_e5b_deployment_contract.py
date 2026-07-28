@@ -115,7 +115,7 @@ def test_e5b_descendant_overlays_preserve_predecessor_catalog_pins() -> None:
         _revision_array(e5a, "reviewed_e5_catalog_revisions"),
     ):
         assert REVISION in revisions
-        assert revisions[-1] == "0017_authenticated_binding_e5c"
+        assert revisions[-1] == "0018_parent_relationship_e5d"
     assert f"'{PINNED_E3}'" in e3
     assert f"'{PINNED_E4}'" in e4
     assert f"'{PINNED_E5A}'" in e5a

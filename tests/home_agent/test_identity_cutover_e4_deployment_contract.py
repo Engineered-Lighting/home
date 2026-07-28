@@ -314,8 +314,9 @@ def test_hosted_gate_exercises_real_secret_lifecycle_and_compose_render() -> Non
     )
     assert workflow.index("Exercise E4 additive secret lifecycle") < (
         workflow.index(
-                "Run isolated PostgreSQL 17 E1/E2/E3/E4/E5a/E5b/E5c authority gate"
-            )
+            "Run isolated PostgreSQL 17 "
+            "E1/E2/E3/E4/E5a/E5b/E5c/E5d authority gate"
+        )
     )
 
 
@@ -461,6 +462,7 @@ def test_grant_replay_quarantines_e4_and_pins_reviewed_catalog() -> None:
             "0015_current_authority_e5a",
             "0016_principal_binding_e5b",
             "0017_authenticated_binding_e5c",
+            "0018_parent_relationship_e5d",
         ]
     assert "identity_authority_e5_select" in admission
     assert "identity cutover E4 reviewed E5 policy mismatch" in admission

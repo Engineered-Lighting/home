@@ -162,6 +162,8 @@ def test_caller_and_dependency_authority_contracts_are_revalidated() -> None:
     assert "FROM pg_catalog.pg_authid" in preconditions
     assert "OR rolpassword IS NOT NULL" in preconditions
     assert "rolconfig IS NOT NULL" not in preconditions
+    assert preconditions.count("'pg_catalog.bool'::regtype") == 2
+    assert "'pg_catalog.boolean'::regtype" not in preconditions
 
     assert MIGRATION_MODULE.AUTHORITY_FUNCTION_BODY_SHA256 == hashlib.sha256(
         _source_literal(E5A_MIGRATION, "FUNCTION_BODY").encode("utf-8")

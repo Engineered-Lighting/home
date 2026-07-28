@@ -1148,7 +1148,7 @@ def _assert_prerequisites() -> None:
                      (
                        person_block_oid,
                        erasure_kernel_oid,
-                       'pg_catalog.boolean'::regtype,
+                       'pg_catalog.bool'::regtype,
                        'sql'::name,
                        's'::"char",
                        ARRAY['search_path=pg_catalog']::text[],
@@ -1157,7 +1157,7 @@ def _assert_prerequisites() -> None:
                      (
                        principal_block_oid,
                        erasure_kernel_oid,
-                       'pg_catalog.boolean'::regtype,
+                       'pg_catalog.bool'::regtype,
                        'sql'::name,
                        's'::"char",
                        ARRAY['search_path=pg_catalog']::text[],

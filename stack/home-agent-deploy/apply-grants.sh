@@ -4692,6 +4692,10 @@ DECLARE
   e5b_select_policy constant text := 'principal_binding_e5b_select';
   e5e_promotion_select_policy constant text :=
     'parent_relationship_stage_e5e_r07_select';
+  e5e_promotion_column_acl_count bigint;
+  e5e_promotion_column_acl_invalid boolean;
+  e5e_promotion_policy_valid boolean;
+  e5e_promotion_table_acl_present boolean;
   parent_relationship_kernel_oid oid;
   pre_e4_revisions constant text[] := ARRAY[
     '0001_greenfield_core',
@@ -5018,9 +5022,8 @@ BEGIN
   -- E5e reads the current promotion through its own kernel. Pin that exact
   -- descendant policy/grant pair, then project it out of the immutable E4
   -- manifest.
-  IF current_revision = '0019_parent_stage_e5e'
-     AND (
-       NOT EXISTS (
+  IF current_revision = '0019_parent_stage_e5e' THEN
+    SELECT EXISTS (
          SELECT 1
            FROM pg_catalog.pg_policy AS policy_row
           WHERE policy_row.polrelid = promotion_table
@@ -5032,50 +5035,73 @@ BEGIN
             AND policy_row.polqual IS NOT NULL
             AND policy_row.polwithcheck IS NULL
        )
-       OR (
-         SELECT pg_catalog.count(*)
-           FROM pg_catalog.pg_attribute AS attribute_row
-           CROSS JOIN LATERAL pg_catalog.aclexplode(attribute_row.attacl)
-                AS attribute_acl
-          WHERE attribute_row.attrelid = promotion_table
-            AND attribute_row.attname IN (
-              'promotion_id',
-              'authority_scope',
-              'run_id',
-              'finalization_id',
-              'policy_digest',
-              'committed_at'
-            )
-            AND attribute_acl.grantee = parent_relationship_kernel_oid
-            AND attribute_acl.grantor = owner_oid
-            AND attribute_acl.privilege_type = 'SELECT'
-            AND NOT attribute_acl.is_grantable
-       ) <> 6
-       OR EXISTS (
-         SELECT 1
-           FROM pg_catalog.pg_attribute AS attribute_row
-           CROSS JOIN LATERAL pg_catalog.aclexplode(attribute_row.attacl)
-                AS attribute_acl
-          WHERE attribute_row.attrelid = promotion_table
-            AND attribute_acl.grantee = parent_relationship_kernel_oid
-            AND (
-              attribute_row.attname NOT IN (
-                'promotion_id',
-                'authority_scope',
-                'run_id',
-                'finalization_id',
-                'policy_digest',
-                'committed_at'
-              )
-              OR attribute_acl.grantor <> owner_oid
-              OR attribute_acl.privilege_type <> 'SELECT'
-              OR attribute_acl.is_grantable
-            )
+      INTO STRICT e5e_promotion_policy_valid;
+    SELECT pg_catalog.count(*)
+      INTO STRICT e5e_promotion_column_acl_count
+      FROM pg_catalog.pg_attribute AS attribute_row
+      CROSS JOIN LATERAL pg_catalog.aclexplode(attribute_row.attacl)
+           AS attribute_acl
+     WHERE attribute_row.attrelid = promotion_table
+       AND attribute_row.attname IN (
+         'promotion_id',
+         'authority_scope',
+         'run_id',
+         'finalization_id',
+         'policy_digest',
+         'committed_at'
        )
-     ) THEN
-    RAISE EXCEPTION
-      'identity cutover E4 reviewed E5e overlay mismatch'
-      USING ERRCODE = '42501';
+       AND attribute_acl.grantee = parent_relationship_kernel_oid
+       AND attribute_acl.grantor = owner_oid
+       AND attribute_acl.privilege_type = 'SELECT'
+       AND NOT attribute_acl.is_grantable;
+    SELECT EXISTS (
+           SELECT 1
+             FROM pg_catalog.pg_attribute AS attribute_row
+             CROSS JOIN LATERAL pg_catalog.aclexplode(attribute_row.attacl)
+                  AS attribute_acl
+            WHERE attribute_row.attrelid = promotion_table
+              AND attribute_acl.grantee = parent_relationship_kernel_oid
+              AND (
+                attribute_row.attname NOT IN (
+                  'promotion_id',
+                  'authority_scope',
+                  'run_id',
+                  'finalization_id',
+                  'policy_digest',
+                  'committed_at'
+                )
+                OR attribute_acl.grantor <> owner_oid
+                OR attribute_acl.privilege_type <> 'SELECT'
+                OR attribute_acl.is_grantable
+              )
+         )
+      INTO STRICT e5e_promotion_column_acl_invalid;
+    SELECT EXISTS (
+           SELECT 1
+             FROM pg_catalog.pg_class AS relation_row
+             CROSS JOIN LATERAL pg_catalog.aclexplode(relation_row.relacl)
+                  AS relation_acl
+            WHERE relation_row.oid = promotion_table
+              AND relation_acl.grantee = parent_relationship_kernel_oid
+         )
+      INTO STRICT e5e_promotion_table_acl_present;
+
+    IF NOT e5e_promotion_policy_valid
+       OR e5e_promotion_column_acl_count <> 6
+       OR e5e_promotion_column_acl_invalid
+       OR e5e_promotion_table_acl_present THEN
+      RAISE EXCEPTION
+        'identity cutover E4 reviewed E5e overlay mismatch'
+        USING ERRCODE = '42501',
+              DETAIL = pg_catalog.format(
+                'policy_valid=%s column_acl_count=%s '
+                'column_acl_invalid=%s table_acl_present=%s',
+                e5e_promotion_policy_valid,
+                e5e_promotion_column_acl_count,
+                e5e_promotion_column_acl_invalid,
+                e5e_promotion_table_acl_present
+              );
+    END IF;
   END IF;
 
   -- Hash the post-quarantine catalog, not the migration's temporarily

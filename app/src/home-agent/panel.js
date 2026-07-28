@@ -354,17 +354,17 @@ function ParentRelationshipCard({
     className: "agent-card",
     "aria-live": "polite",
     "aria-busy": busy
-  }, React.createElement("h2", null, "Private relationship review"), !recognized && React.createElement(React.Fragment, null, React.createElement("h3", null, "Relationship status unavailable"), React.createElement("p", null, "Core did not return a recognized, recoverable state. No relationship can be inferred or confirmed.")), status?.state === "not_started" && React.createElement(React.Fragment, null, React.createElement("p", null, "Review the two People records previously classified as Marcelo\xE2\u20AC\u2122s parents. Staging creates only a private 15-minute preview."), React.createElement("button", {
+  }, React.createElement("h2", null, "Private relationship review"), !recognized && React.createElement(React.Fragment, null, React.createElement("h3", null, "Relationship status unavailable"), React.createElement("p", null, "Core did not return a recognized, recoverable state. No relationship can be inferred or confirmed.")), status?.state === "not_started" && React.createElement(React.Fragment, null, React.createElement("p", null, "Review the two People records previously classified as Marcelo\u2019s parents. Staging creates only a private 15-minute preview."), React.createElement("button", {
     disabled: busy,
     onClick: onStage
-  }, busy ? "Preparing reviewâ€¦" : "Review parent relationships")), status?.state === "ready_for_confirmation" && React.createElement(React.Fragment, null, React.createElement("h3", null, "Two reviewed relationships are ready"), React.createElement("p", null, status.confirmation_statement), React.createElement("dl", {
+  }, busy ? "Preparing review…" : "Review parent relationships")), status?.state === "ready_for_confirmation" && React.createElement(React.Fragment, null, React.createElement("h3", null, "Two reviewed relationships are ready"), React.createElement("p", null, status.confirmation_statement), React.createElement("dl", {
     className: "agent-grid"
   }, status.candidates?.map(candidate => React.createElement(React.Fragment, {
     key: candidate.ordinal
   }, React.createElement("dt", null, "Candidate ", candidate.ordinal + 1), React.createElement("dd", null, candidate.reviewed_display_label, " ", React.createElement("code", null, candidate.review_code)))), React.createElement("dt", null, "Preview expires"), React.createElement("dd", null, status.expires_at || "unavailable")), React.createElement("p", null, "This creates exactly two private ", React.createElement("code", null, "parent_of"), " facts. It does not assert ownership, residence, current presence, or permission to act."), React.createElement("button", {
     disabled: busy,
     onClick: onConfirm
-  }, busy ? "Confirming bothâ€¦" : "Confirm both parent relationships")), status?.state === "confirmed" && React.createElement(React.Fragment, null, React.createElement("h3", null, "Parent relationships confirmed"), React.createElement("p", null, "Core atomically committed exactly ", status.fact_count, " private relationship facts."), React.createElement("dl", {
+  }, busy ? "Confirming both…" : "Confirm both parent relationships")), status?.state === "confirmed" && React.createElement(React.Fragment, null, React.createElement("h3", null, "Parent relationships confirmed"), React.createElement("p", null, "Core atomically committed exactly ", status.fact_count, " private relationship facts."), React.createElement("dl", {
     className: "agent-grid"
   }, React.createElement("dt", null, "Confirmed"), React.createElement("dd", null, status.confirmed_at || "unavailable"), React.createElement("dt", null, "Location memory"), React.createElement("dd", null, "off"), React.createElement("dt", null, "Travel greetings"), React.createElement("dd", null, "off"))));
 }

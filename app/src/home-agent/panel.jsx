@@ -69,9 +69,9 @@ function ParentRelationshipCard({ status, busy, onStage, onConfirm }) {
         <p>Core did not return a recognized, recoverable state. No relationship can be inferred or confirmed.</p>
       </>}
       {status?.state === "not_started" && <>
-        <p>Review the two People records previously classified as Marceloâ€™s parents. Staging creates only a private 15-minute preview.</p>
+        <p>Review the two People records previously classified as Marcelo’s parents. Staging creates only a private 15-minute preview.</p>
         <button disabled={busy} onClick={onStage}>
-          {busy ? "Preparing reviewâ€¦" : "Review parent relationships"}
+          {busy ? "Preparing review…" : "Review parent relationships"}
         </button>
       </>}
       {status?.state === "ready_for_confirmation" && <>
@@ -88,7 +88,7 @@ function ParentRelationshipCard({ status, busy, onStage, onConfirm }) {
         </dl>
         <p>This creates exactly two private <code>parent_of</code> facts. It does not assert ownership, residence, current presence, or permission to act.</p>
         <button disabled={busy} onClick={onConfirm}>
-          {busy ? "Confirming bothâ€¦" : "Confirm both parent relationships"}
+          {busy ? "Confirming both…" : "Confirm both parent relationships"}
         </button>
       </>}
       {status?.state === "confirmed" && <>

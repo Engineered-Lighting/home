@@ -74,6 +74,19 @@ async function behaviorTest() {
     catch (error) { rejected = error.message === "native_principal_binding_unavailable"; }
     assert("native client rejects browser-only principal binding authority", rejected);
   }
+  for (const operation of [
+    () => api.parentRelationshipStatus(),
+    () => api.stageParentRelationship(),
+    () => api.confirmParentRelationship(
+      "00000000-0000-4000-8000-000000000000",
+      "a".repeat(64),
+    ),
+  ]) {
+    let rejected = false;
+    try { await operation(); }
+    catch (error) { rejected = error.message === "native_parent_relationship_unavailable"; }
+    assert("native client rejects browser-only parent relationship authority", rejected);
+  }
   await api.returnHome();
   assert("native webview uses typed Rust invokes and never fetch", calls.map((item) => item.command).join(",") === [
     "native_auth_status",
@@ -92,7 +105,7 @@ async function behaviorTest() {
   assert("native client exposes typed place queries but no initiative or generic mutation",
     ["explainDescriptor", "queryParentPresence"].every((name) => methods.includes(name)) &&
     !["initiatives", "claimInitiative"].some((name) => methods.includes(name)) &&
-    !methods.some((name) => /(createPlace|confirmParent|generic)/i.test(name)), methods);
+    !methods.some((name) => /(createPlace|generic)/i.test(name)), methods);
 }
 
 async function browserBindingBehaviorTest() {
@@ -191,7 +204,7 @@ async function browserPreferenceOptOutBehaviorTest() {
 }
 
 function principalOperationBoundaryTest() {
-  const prelude = agentPanel.slice(0, agentPanel.indexOf("function HomeAgentPanel"));
+  const prelude = agentPanel.slice(0, agentPanel.indexOf("function ParentRelationshipCard"));
   const context = vm.createContext({ React: {} });
   vm.runInContext(prelude, context, { filename: "panel-security-prelude.js" });
   const result = vm.runInContext(`(() => {
@@ -254,6 +267,8 @@ function principalOperationBoundaryTest() {
   const handlers = [
     "requestPrincipalBinding",
     "cancelPrincipalBindingRequest",
+    "stageParentRelationship",
+    "confirmParentRelationship",
     "propose",
     "confirm",
     "enablePreference",

@@ -1062,29 +1062,29 @@ def _discover_changed_catalog_digests(
         if activation_stop in result.stdout:
             break
 
-        matches: list[tuple[str, str, str]] = []
-        for layer, expected, message in CATALOG_DIGEST_CONTRACTS:
-            pattern = (
-                rf"ERROR:\s+{re.escape(message)}\r?\n"
-                rf"DETAIL:\s+expected=([0-9a-f]{{64}}) "
-                rf"actual=([0-9a-f]{{64}})(?=\s|$)"
-            )
-            for match in re.finditer(pattern, result.stdout):
-                matches.append((layer, match.group(1), match.group(2)))
-            if layer in discovered and expected not in replacements:
-                raise GateFailure("catalog discovery replacement state is invalid")
-        if len(matches) != 1:
+        digest_matches = re.findall(
+            r"DETAIL:\s+expected=([0-9a-f]{64}) "
+            r"actual=([0-9a-f]{64})(?=\s|$)",
+            result.stdout,
+        )
+        if len(digest_matches) != 1:
             raise GateFailure(
                 "catalog digest discovery failed without one exact redacted digest"
             )
-        layer, observed_expected, actual = matches[0]
-        contract = next(
-            item for item in CATALOG_DIGEST_CONTRACTS if item[0] == layer
-        )
-        source_expected = contract[1]
+        observed_expected, actual = digest_matches[0]
+        candidates = [
+            (layer, source_expected)
+            for layer, source_expected, _message in CATALOG_DIGEST_CONTRACTS
+            if observed_expected
+            == replacements.get(source_expected, source_expected)
+        ]
+        if len(candidates) != 1:
+            raise GateFailure(
+                "catalog digest discovery returned an unknown expected digest"
+            )
+        layer, source_expected = candidates[0]
         if (
             layer in discovered
-            or observed_expected != replacements.get(source_expected, source_expected)
             or actual == observed_expected
         ):
             raise GateFailure("catalog digest discovery returned an invalid transition")

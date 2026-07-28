@@ -223,8 +223,8 @@ def test_catalog_discovery_emits_only_exact_changed_fingerprints(
             SimpleNamespace(
                 returncode=1,
                 stdout=(
-                    f"{private_canary}\nERROR:  {e3[2]}\n"
-                    f"DETAIL:  expected={e3[1]} actual={actual_e3}\n"
+                    f"{private_canary}\npsql: ERROR:  {e3[2]}\n"
+                    f"psql: DETAIL:  expected={e3[1]} actual={actual_e3}\n"
                 ),
             ),
             SimpleNamespace(

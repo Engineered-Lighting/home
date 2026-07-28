@@ -90,9 +90,15 @@ def _quarantine(*, expected_revision: str) -> None:
         END
         $e5c_preconditions$;
 
+        -- Grant replay at revision 0016 may already have removed the
+        -- NOLOGIN kernel's schema USAGE. Restore it only inside this
+        -- uncommitted migration transaction so the function owner can revoke
+        -- the caller ACL, then remove it again before the boundary commits.
+        GRANT USAGE ON SCHEMA identity TO {KERNEL_ROLE};
         SET LOCAL ROLE {KERNEL_ROLE};
         REVOKE ALL ON FUNCTION {FUNCTION} FROM {CALLER_ROLE} CASCADE;
         RESET ROLE;
+        REVOKE USAGE ON SCHEMA identity FROM {KERNEL_ROLE};
         REVOKE USAGE, CREATE ON SCHEMA identity
           FROM {CALLER_ROLE} CASCADE;
 
@@ -101,9 +107,12 @@ def _quarantine(*, expected_revision: str) -> None:
           caller_oid oid;
           function_oid oid;
           identity_schema_oid oid;
+          kernel_oid oid;
         BEGIN
           SELECT oid INTO STRICT caller_oid
             FROM pg_catalog.pg_roles WHERE rolname = '{CALLER_ROLE}';
+          SELECT oid INTO STRICT kernel_oid
+            FROM pg_catalog.pg_roles WHERE rolname = '{KERNEL_ROLE}';
           SELECT oid INTO STRICT identity_schema_oid
             FROM pg_catalog.pg_namespace WHERE nspname = 'identity';
           SELECT function_row.oid INTO STRICT function_oid
@@ -141,7 +150,9 @@ def _quarantine(*, expected_revision: str) -> None:
                    namespace_row.nspacl
                  ) AS namespace_acl
                 WHERE namespace_row.oid = identity_schema_oid
-                  AND namespace_acl.grantee IN (0, caller_oid)
+                  AND namespace_acl.grantee IN (
+                    0, caller_oid, kernel_oid
+                  )
                   AND namespace_acl.privilege_type IN ('USAGE', 'CREATE')
              ) THEN
             RAISE EXCEPTION 'authenticated_binding_e5c_quarantine_failed'

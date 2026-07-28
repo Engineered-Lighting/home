@@ -30,9 +30,11 @@ def test_e5c_migration_quarantines_only_the_outer_caller_surface() -> None:
     assert 'CALLER_ROLE = "home_agent_binding_committer"' in MIGRATION
     assert 'KERNEL_ROLE = "home_agent_identity_binding_kernel"' in MIGRATION
     assert "SET LOCAL ROLE {KERNEL_ROLE}" in MIGRATION
+    assert "GRANT USAGE ON SCHEMA identity TO {KERNEL_ROLE}" in MIGRATION
     assert "REVOKE ALL ON FUNCTION {FUNCTION} FROM {CALLER_ROLE} CASCADE" in (
         MIGRATION
     )
+    assert "REVOKE USAGE ON SCHEMA identity FROM {KERNEL_ROLE}" in MIGRATION
     assert "REVOKE USAGE, CREATE ON SCHEMA identity" in MIGRATION
     assert "authenticated_binding_e5c_quarantine_failed" in MIGRATION
     assert "pg_has_role(" in MIGRATION
@@ -40,7 +42,7 @@ def test_e5c_migration_quarantines_only_the_outer_caller_surface() -> None:
     assert "WHERE roleid = caller_oid OR member = caller_oid" in MIGRATION
     assert "function_acl.grantee IN (0, caller_oid)" in MIGRATION
     assert "function_acl.privilege_type = 'EXECUTE'" in MIGRATION
-    assert "namespace_acl.grantee IN (0, caller_oid)" in MIGRATION
+    assert "0, caller_oid, kernel_oid" in MIGRATION
     assert "namespace_acl.privilege_type IN ('USAGE', 'CREATE')" in MIGRATION
 
 

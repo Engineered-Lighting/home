@@ -97,6 +97,17 @@ def test_e5c_secrets_reach_only_provisioner_and_core_api() -> None:
     assert "HOME_AGENT_BINDING_COMMIT_DATABASE_URL" in entrypoint
 
 
+def test_e5c_hosted_image_contains_bff_contract_source() -> None:
+    dockerfile = read(
+        "stack/services/home-agent-core/Dockerfile.postgres-test"
+    )
+    assert (
+        "COPY stack/services/home-agent-bff/src/bff.mjs "
+        "/workspace/stack/services/home-agent-bff/src/bff.mjs"
+        in dockerfile
+    )
+
+
 def test_e5c_kernel_caller_is_committer_not_staging_operator() -> None:
     migration = read(
         "stack/services/home-agent-core/alembic/versions/"

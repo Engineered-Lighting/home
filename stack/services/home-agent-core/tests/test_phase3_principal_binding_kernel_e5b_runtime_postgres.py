@@ -683,27 +683,20 @@ async def test_e5b_rejects_wrong_role_isolation_and_snapshot_drift() -> None:
     not _runtime_configured(),
     reason="E5b PostgreSQL owner/binding-operator URLs are not configured",
 )
-async def test_e5b_rejects_prior_caller_dml_in_the_same_transaction() -> None:
+async def test_e5b_rejects_prior_caller_transaction_assignment() -> None:
     owner_engine = _engine(OWNER_DATABASE_ENV)
     binding_engine = _engine(BINDING_DATABASE_ENV, serializable=True)
-    staged = await _stage_binding(owner_engine, label="same-transaction-dml")
+    staged = await _stage_binding(owner_engine, label="prior-transaction-id")
     try:
         with pytest.raises(DBAPIError) as transaction_error:
             async with binding_engine.begin() as connection:
-                # This models staging/mutating authority evidence and then
-                # attempting to consume it without a committed boundary.
                 await connection.execute(
-                    text(
-                        "UPDATE identity.principal_binding_requests "
-                        "SET expires_at=expires_at "
-                        "WHERE request_id=:request_id"
-                    ),
-                    {"request_id": staged.request_id},
+                    text("SELECT pg_catalog.pg_current_xact_id()")
                 )
                 await connection.execute(
-                        text(
-                            f"SELECT {FUNCTION}("
-                            ":proposal_id,CAST(:ha_user_id AS varchar(64)),"
+                    text(
+                        f"SELECT {FUNCTION}("
+                        ":proposal_id,CAST(:ha_user_id AS varchar(64)),"
                         "CAST(:proposal_digest AS varchar(64)),:nonce,"
                         ":receipt_id,:principal_id,:artifact_id,:binding_id)"
                     ),
@@ -724,12 +717,39 @@ async def test_e5b_rejects_prior_caller_dml_in_the_same_transaction() -> None:
     not _runtime_configured(),
     reason="E5b PostgreSQL owner/binding-operator URLs are not configured",
 )
-async def test_e5b_rejects_prior_caller_row_lock() -> None:
+async def test_e5c_committer_cannot_mutate_staging_rows() -> None:
     owner_engine = _engine(OWNER_DATABASE_ENV)
     binding_engine = _engine(BINDING_DATABASE_ENV, serializable=True)
-    staged = await _stage_binding(owner_engine, label="prior-row-lock")
+    staged = await _stage_binding(owner_engine, label="committer-dml-denied")
     try:
-        with pytest.raises(DBAPIError) as transaction_error:
+        with pytest.raises(DBAPIError) as privilege_error:
+            async with binding_engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "UPDATE identity.principal_binding_requests "
+                        "SET expires_at=expires_at "
+                        "WHERE request_id=:request_id"
+                    ),
+                    {"request_id": staged.request_id},
+                )
+        assert _sqlstate(privilege_error.value) == "42501"
+    finally:
+        await _cleanup(owner_engine, staged)
+        await binding_engine.dispose()
+        await owner_engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not _runtime_configured(),
+    reason="E5b PostgreSQL owner/binding-operator URLs are not configured",
+)
+async def test_e5c_committer_cannot_lock_staging_rows() -> None:
+    owner_engine = _engine(OWNER_DATABASE_ENV)
+    binding_engine = _engine(BINDING_DATABASE_ENV, serializable=True)
+    staged = await _stage_binding(owner_engine, label="committer-lock-denied")
+    try:
+        with pytest.raises(DBAPIError) as privilege_error:
             async with binding_engine.begin() as connection:
                 await connection.execute(
                     text(
@@ -739,19 +759,7 @@ async def test_e5b_rejects_prior_caller_row_lock() -> None:
                     ),
                     {"request_id": staged.request_id},
                 )
-                await connection.execute(
-                        text(
-                            f"SELECT {FUNCTION}("
-                            ":proposal_id,CAST(:ha_user_id AS varchar(64)),"
-                        "CAST(:proposal_digest AS varchar(64)),:nonce,"
-                        ":receipt_id,:principal_id,:artifact_id,:binding_id)"
-                    ),
-                    _commit_values(staged),
-                )
-        assert _sqlstate(transaction_error.value) == "25000"
-        assert "principal_binding_e5b_transaction_invalid" in str(
-            transaction_error.value.orig
-        )
+        assert _sqlstate(privilege_error.value) == "42501"
     finally:
         await _cleanup(owner_engine, staged)
         await binding_engine.dispose()

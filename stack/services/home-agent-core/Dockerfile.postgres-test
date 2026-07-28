@@ -24,6 +24,7 @@ RUN pip install --no-cache-dir \
 COPY stack/services/home-agent-core/ /workspace/stack/services/home-agent-core/
 COPY stack/home-agent-compose.yml stack/home-agent.env.example /workspace/stack/
 COPY stack/home-agent-deploy/ /workspace/stack/home-agent-deploy/
+COPY stack/services/home-agent-bff/src/bff.mjs /workspace/stack/services/home-agent-bff/src/bff.mjs
 COPY tests/home_agent/ /workspace/tests/home_agent/
 COPY tools/run-home-agent-e1-postgres-gate.py /workspace/tools/
 COPY .github/workflows/home-agent-e1-postgres.yml /workspace/.github/workflows/

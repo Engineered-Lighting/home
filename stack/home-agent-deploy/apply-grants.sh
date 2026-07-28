@@ -8784,7 +8784,7 @@ DECLARE
     'uuid,uuid,uuid,uuid,uuid,uuid,uuid,uuid,'
     'uuid,uuid,uuid,uuid,uuid)'::regprocedure;
   expected_function_body_sha256 constant text :=
-    'd75a58f54320432c32caa53a944018b810df1d973ee51405e89c63e6a86ca737';
+    '6133594f3b50e73d45b49105b593065edd1d6ccd45e721877a46234b1b751ed5';
   function_acl_count integer;
   kernel_oid oid;
   stage_function regprocedure :=

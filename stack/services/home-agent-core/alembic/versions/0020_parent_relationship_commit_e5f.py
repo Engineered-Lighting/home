@@ -564,6 +564,34 @@ BEGIN
       INTO e5f_receipt
       FROM operations.parent_relationship_authority_receipts AS receipt
      WHERE receipt.proposal_id = e5f_proposal.proposal_id;
+    e5f_receipt_commitment := pg_catalog.encode(
+      pg_catalog.sha256(
+        pg_catalog.convert_to(
+          pg_catalog.jsonb_build_object(
+            'binding_id', e5f_binding.binding_id::text,
+            'child_person_id', e5f_binding.child_person_id::text,
+            'confirmation_artifact_id',
+            new_confirmation_artifact_id::text,
+            'contract', 'parent-relationship-authority-v2',
+            'database_transaction_id',
+            e5f_receipt.database_transaction_id,
+            'fact_version_ids',
+            ARRAY[
+              new_fact_version_id_0::text,
+              new_fact_version_id_1::text
+            ],
+            'memory_transaction_id',
+            new_memory_transaction_id::text,
+            'policy_digest', e5f_promotion.policy_digest,
+            'principal_id', e5f_binding.principal_id::text,
+            'proposal_digest', e5f_proposal.proposal_digest,
+            'receipt_id', new_authority_receipt_id::text
+          )::text,
+          'UTF8'
+        )
+      ),
+      'hex'
+    );
     IF e5f_request.state <> 'consumed'
        OR e5f_proposal.consumed_at IS NULL
        OR e5f_request.closed_at IS DISTINCT FROM
@@ -582,12 +610,18 @@ BEGIN
           new_confirmation_artifact_id
        OR e5f_receipt.memory_transaction_id IS DISTINCT FROM
           new_memory_transaction_id
+       OR e5f_receipt.contract_version <>
+          'parent-relationship-authority-v2'
+       OR e5f_receipt.edge_count <> 2
        OR e5f_receipt.proposal_digest IS DISTINCT FROM
           e5f_proposal.proposal_digest
        OR e5f_receipt.policy_version <> 'home-agent-mvp-v1'
        OR e5f_receipt.policy_digest IS DISTINCT FROM
           e5f_promotion.policy_digest
        OR e5f_receipt.authority_result <> 'committed'
+       OR e5f_receipt.database_transaction_id <= 0
+       OR e5f_receipt.receipt_commitment IS DISTINCT FROM
+          e5f_receipt_commitment
        OR e5f_receipt.committed_at IS DISTINCT FROM
           e5f_proposal.consumed_at
        OR e5f_proposal.confirmation_artifact_id IS DISTINCT FROM
@@ -606,6 +640,8 @@ BEGIN
                 e5f_confirmation_nonce_sha256
             AND artifact.issued_at = e5f_receipt.committed_at
             AND artifact.consumed_at = e5f_receipt.committed_at
+            AND artifact.expires_at =
+                e5f_receipt.committed_at + interval '5 minutes'
        )
        OR NOT EXISTS (
          SELECT 1
@@ -638,6 +674,25 @@ BEGIN
             AND memory.confirmation_digest =
                 e5f_confirmation_digest
             AND memory.confirmed_at = e5f_receipt.committed_at
+            AND memory.candidate = pg_catalog.jsonb_build_object(
+                  'contract', 'parent-relationship-authority-v2',
+                  'edge_count', 2,
+                  'proposal_digest', e5f_proposal.proposal_digest
+                )
+            AND memory.preview = pg_catalog.jsonb_build_object(
+                  'candidate_set_commitment',
+                  e5f_proposal.candidate_set_commitment,
+                  'contract', 'parent-relationship-preview-v1'
+                )
+            AND memory.verifier_results =
+                pg_catalog.jsonb_build_array(
+                  pg_catalog.jsonb_build_object(
+                    'result', 'passed',
+                    'rule',
+                    'authenticated_related_party_confirmation',
+                    'rule_version', 'e5f-v1'
+                  )
+                )
        )
        OR (
          SELECT pg_catalog.count(*)
@@ -670,6 +725,21 @@ BEGIN
                 )
             AND fact.perspective_principal_id =
                 e5f_binding.principal_id
+            AND pg_catalog.lower(fact.valid_range) =
+                e5f_receipt.committed_at
+            AND pg_catalog.lower_inc(fact.valid_range)
+            AND pg_catalog.upper_inf(fact.valid_range)
+            AND pg_catalog.lower(fact.system_range) =
+                e5f_receipt.committed_at
+            AND pg_catalog.lower_inc(fact.system_range)
+            AND pg_catalog.upper_inf(fact.system_range)
+            AND fact.authority = 'explicit_related_party'
+            AND fact.support = 'explicit_authority'
+            AND fact.contradiction = 'none'
+            AND fact.freshness = 'not_applicable'
+            AND fact.coverage = 'not_applicable'
+            AND fact.resolution = 'accepted'
+            AND fact.privacy_scope = 'private'
             AND fact.memory_transaction_id =
                 new_memory_transaction_id
             AND fact.committed_at = e5f_receipt.committed_at
@@ -684,6 +754,9 @@ BEGIN
             AND confirmation_support.dependency_domain =
                 'authenticated_confirmation'
             AND confirmation_support.support_role = 'confirmation'
+            AND confirmation_support.root_observation_id IS NULL
+            AND confirmation_support.created_at =
+                e5f_receipt.committed_at
             AND legacy_support.support_id =
                 e5f_legacy_support_ids[receipt_edge.ordinal + 1]
             AND legacy_support.fact_version_id =
@@ -695,6 +768,8 @@ BEGIN
             AND legacy_support.dependency_domain =
                 'identity_migration'
             AND legacy_support.support_role = 'legacy_context'
+            AND legacy_support.root_observation_id IS NULL
+            AND legacy_support.created_at = e5f_receipt.committed_at
        ) <> 2 THEN
       RAISE EXCEPTION 'parent_relationship_e5f_replay_drift'
         USING ERRCODE = '23514';

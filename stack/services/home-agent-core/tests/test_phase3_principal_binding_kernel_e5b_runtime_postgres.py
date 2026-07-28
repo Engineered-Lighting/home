@@ -402,10 +402,11 @@ async def test_e5b_catalog_role_function_and_rls_contract() -> None:
             role = (
                 await connection.execute(
                     text(
-                        "SELECT NOT rolcanlogin, NOT rolinherit, "
-                        "NOT rolsuper, NOT rolcreatedb, NOT rolcreaterole, "
-                        "NOT rolreplication, NOT rolbypassrls, "
-                        "rolconnlimit=0, rolvaliduntil IS NULL, "
+                        "SELECT NOT r.rolcanlogin, NOT r.rolinherit, "
+                        "NOT r.rolsuper, NOT r.rolcreatedb, "
+                        "NOT r.rolcreaterole, NOT r.rolreplication, "
+                        "NOT r.rolbypassrls, r.rolconnlimit=0, "
+                        "r.rolvaliduntil IS NULL, "
                         "r.rolconfig IS NULL, a.rolpassword IS NULL "
                         "FROM pg_catalog.pg_roles AS r "
                         "JOIN pg_catalog.pg_authid AS a ON a.oid=r.oid "

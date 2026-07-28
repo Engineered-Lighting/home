@@ -96,10 +96,21 @@ CATALOG_DIGEST_CONTRACTS = (
     ),
 )
 CATALOG_DISCOVERY_SAFE_FAILURES = (
+    "partial Phase 3 identity authority table set",
+    "partial identity migration kernel function set",
+    "identity migration kernel ownership contract mismatch",
+    "identity migration kernel ownership dependency mismatch",
+    "identity migration replay guard trigger mismatch",
+    "identity migration kernel ACL contract mismatch",
+    "identity erasure kernel ownership/membership invalid",
+    "partial identity erasure E2 object set",
+    "identity erasure E2 function ownership invalid",
+    "identity finalizer E3 object set absent at unknown revision",
     "identity finalizer E3 inert bootstrap contract mismatch",
+    "partial identity finalizer E3 object set",
     "identity finalizer E3 dormant role contract mismatch",
     "identity finalizer E3 ownership dependency mismatch",
-    "identity finalizer E3 evidence relation contract mismatch",
+    "identity finalizer E3 evidence relation contract mismatch: %",
     "identity finalizer E3 function contract mismatch",
     "identity finalizer E3 write-fence contract mismatch",
     "identity finalizer E3 reviewed descendant policy mismatch",
@@ -140,6 +151,9 @@ CATALOG_DISCOVERY_SAFE_FAILURES = (
     "principal-binding E5b fence trigger contract mismatch",
     "principal-binding E5b receipt quarantine mismatch",
     "principal-binding E5b broad quarantine mismatch",
+    "authenticated binding E5c active ACL contract mismatch",
+    "identity API ACL contract is missing",
+    "empty owner password",
 )
 RUN_LABEL = "com.engineeredlighting.home-agent-e1.run"
 MANAGED_LABEL = "com.engineeredlighting.home-agent-e1.managed"
@@ -1118,7 +1132,13 @@ def _discover_changed_catalog_digests(
                 message
                 for message in CATALOG_DISCOVERY_SAFE_FAILURES
                 if re.search(
-                    rf"ERROR:\s+{re.escape(message)}\s*$",
+                    (
+                        r"(?:ERROR:\s+)?"
+                        + re.escape(message).replace(
+                            re.escape("%"), r"[^\r\n]*"
+                        )
+                        + r"\s*$"
+                    ),
                     result.stdout,
                     re.MULTILINE,
                 )

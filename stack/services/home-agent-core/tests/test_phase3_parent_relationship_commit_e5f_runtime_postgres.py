@@ -215,6 +215,45 @@ async def test_e5f_catalog_is_split_credential_and_table_blind() -> None:
                 "search_path=pg_catalog",
                 "row_security=on",
             }
+            authority_dependencies = (
+                await connection.execute(
+                    text(
+                        "SELECT "
+                        "pg_catalog.has_schema_privilege("
+                        "'home_agent_identity_authority_kernel',"
+                        "'operations','USAGE'),"
+                        "pg_catalog.has_schema_privilege("
+                        "'home_agent_identity_authority_kernel',"
+                        "'privacy','USAGE'),"
+                        "NOT pg_catalog.has_schema_privilege("
+                        "'home_agent_identity_authority_kernel',"
+                        "'operations','CREATE'),"
+                        "bool_and(pg_catalog.has_table_privilege("
+                        "'home_agent_identity_authority_kernel',"
+                        "dependency.relation_name,'SELECT')) "
+                        "FROM (VALUES "
+                        "('operations.semantic_authority_promotions'),"
+                        "('operations.reviewed_identity_cutover_admissions'),"
+                        "('operations.enforced_legacy_identity_writer_freezes'),"
+                        "('operations.reviewed_identity_migration_runs'),"
+                        "('operations.reviewed_identity_migration_finalizations'),"
+                        "('operations.reviewed_identity_finalizer_admissions'),"
+                        "('operations.semantic_authority_cutovers'),"
+                        "('operations.legacy_identity_writer_evidence'),"
+                        "('operations.privacy_cutover_check_receipts'),"
+                        "('operations."
+                        "reviewed_identity_migration_erasure_impacts'),"
+                        "('operations."
+                        "reviewed_identity_migration_projection_lineage'),"
+                        "('operations."
+                        "reviewed_identity_migration_projection_subjects'),"
+                        "('operations.erasure_ledger_state'),"
+                        "('operations.erasure_replay_receipts')"
+                        ") AS dependency(relation_name)"
+                    )
+                )
+            ).one()
+            assert authority_dependencies == (True, True, True, True)
             privileges = (
                 await connection.execute(
                     text(
@@ -347,4 +386,3 @@ async def test_e5f_two_edge_commit_is_atomic_race_safe_and_replayable() -> None:
         await first.dispose()
         await staging.dispose()
         await owner.dispose()
-

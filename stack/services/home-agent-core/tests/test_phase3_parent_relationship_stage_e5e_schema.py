@@ -211,6 +211,22 @@ def test_grant_replay_quarantines_then_restores_only_exact_stage_execute() -> No
     activation = GRANTS.split(
         "\\if :activate_parent_relationship_stage_e5e", 1
     )[1].split("\\endif", 1)[0]
+    assert (
+        "GRANT USAGE ON SCHEMA operations, privacy\n"
+        "  TO home_agent_identity_authority_kernel"
+    ) in activation
+    assert (
+        "operations.semantic_authority_promotions,\n"
+        "  operations.reviewed_identity_cutover_admissions"
+    ) in activation
+    assert (
+        "GRANT UPDATE (expires_at)\n"
+        "  ON operations.reviewed_identity_migration_runs"
+    ) in activation
+    assert (
+        "privacy.lock_identity_semantic_write_fence(),\n"
+        "  privacy.identity_person_is_blocked(uuid)"
+    ) in activation
     assert "GRANT USAGE ON SCHEMA identity TO home_agent_binding_committer" in (
         activation
     )
@@ -220,6 +236,12 @@ def test_grant_replay_quarantines_then_restores_only_exact_stage_execute() -> No
     assert "has_function_privilege" in activation
     assert "pg_catalog.pg_auth_members" in activation
     assert "pg_catalog.pg_attribute" in activation
+    assert "authority_kernel_oid, 'operations', 'USAGE'" in activation
+    assert "authority_kernel_oid, 'privacy', 'USAGE'" in activation
+    assert (
+        "authority_kernel_oid, dependency.relation_name, 'SELECT'"
+        in activation
+    )
     assert "parent relationship E5e active ACL contract mismatch" in activation
 
     table_quarantine = GRANTS.split(

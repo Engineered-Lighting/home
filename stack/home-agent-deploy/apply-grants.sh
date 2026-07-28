@@ -8523,6 +8523,39 @@ FROM public.alembic_version
 \gset
 
 \if :activate_parent_relationship_stage_e5e
+-- The E5e/E5f parent kernel invokes the E5a authority verifier inside the
+-- caller's SERIALIZABLE transaction. Grant replay deliberately strips every
+-- historical ACL first, so restore the verifier owner's reviewed dependencies
+-- before exposing either parent entry point.
+GRANT USAGE ON SCHEMA operations, privacy
+  TO home_agent_identity_authority_kernel;
+GRANT SELECT ON TABLE
+  operations.semantic_authority_promotions,
+  operations.reviewed_identity_cutover_admissions,
+  operations.enforced_legacy_identity_writer_freezes,
+  operations.reviewed_identity_migration_runs,
+  operations.reviewed_identity_migration_finalizations,
+  operations.reviewed_identity_finalizer_admissions,
+  operations.semantic_authority_cutovers,
+  operations.legacy_identity_writer_evidence,
+  operations.privacy_cutover_check_receipts,
+  operations.reviewed_identity_migration_erasure_impacts,
+  operations.reviewed_identity_migration_projection_lineage,
+  operations.reviewed_identity_migration_projection_subjects,
+  operations.erasure_ledger_state,
+  operations.erasure_replay_receipts
+  TO home_agent_identity_authority_kernel;
+GRANT UPDATE (expires_at)
+  ON operations.reviewed_identity_migration_runs
+  TO home_agent_identity_authority_kernel;
+GRANT UPDATE (updated_at)
+  ON operations.erasure_ledger_state
+  TO home_agent_identity_authority_kernel;
+GRANT EXECUTE ON FUNCTION
+  privacy.lock_identity_semantic_write_fence(),
+  privacy.identity_person_is_blocked(uuid)
+  TO home_agent_identity_authority_kernel;
+
 GRANT USAGE ON SCHEMA identity, knowledge, operations, privacy
   TO home_agent_parent_relationship_kernel;
 GRANT SELECT (
@@ -8591,6 +8624,10 @@ RESET ROLE;
 
 DO $parent_relationship_e5e_active_acl$
 DECLARE
+  authority_function regprocedure :=
+    'operations.evaluate_current_identity_semantic_authority(uuid)'
+      ::regprocedure;
+  authority_kernel_oid oid;
   caller_oid oid;
   expected_function_body_sha256 constant text :=
     'ce75886310acf9f9790be2d4d98ae3ac8e61f9dd0af67756ce2a1e3f3c8defa1';
@@ -8602,6 +8639,9 @@ DECLARE
     'character varying,uuid,uuid,uuid,uuid,uuid,'
     'character varying,character varying)'::regprocedure;
 BEGIN
+  SELECT oid INTO STRICT authority_kernel_oid
+    FROM pg_catalog.pg_roles
+   WHERE rolname = 'home_agent_identity_authority_kernel';
   SELECT oid INTO STRICT caller_oid
     FROM pg_catalog.pg_roles
    WHERE rolname = 'home_agent_binding_committer';
@@ -8623,7 +8663,67 @@ BEGIN
      AND function_acl.grantor = kernel_oid
      AND NOT function_acl.is_grantable;
 
-  IF function_acl_count <> 1
+  IF NOT pg_catalog.has_schema_privilege(
+       authority_kernel_oid, 'operations', 'USAGE'
+     )
+     OR NOT pg_catalog.has_schema_privilege(
+          authority_kernel_oid, 'privacy', 'USAGE'
+        )
+     OR pg_catalog.has_schema_privilege(
+          authority_kernel_oid, 'operations', 'CREATE'
+        )
+     OR pg_catalog.has_schema_privilege(
+          authority_kernel_oid, 'privacy', 'CREATE'
+        )
+     OR EXISTS (
+       SELECT 1
+         FROM (
+           VALUES
+             ('operations.semantic_authority_promotions'),
+             ('operations.reviewed_identity_cutover_admissions'),
+             ('operations.enforced_legacy_identity_writer_freezes'),
+             ('operations.reviewed_identity_migration_runs'),
+             ('operations.reviewed_identity_migration_finalizations'),
+             ('operations.reviewed_identity_finalizer_admissions'),
+             ('operations.semantic_authority_cutovers'),
+             ('operations.legacy_identity_writer_evidence'),
+             ('operations.privacy_cutover_check_receipts'),
+             ('operations.reviewed_identity_migration_erasure_impacts'),
+             ('operations.reviewed_identity_migration_projection_lineage'),
+             ('operations.reviewed_identity_migration_projection_subjects'),
+             ('operations.erasure_ledger_state'),
+             ('operations.erasure_replay_receipts')
+         ) AS dependency(relation_name)
+        WHERE NOT pg_catalog.has_table_privilege(
+          authority_kernel_oid, dependency.relation_name, 'SELECT'
+        )
+     )
+     OR NOT pg_catalog.has_column_privilege(
+          authority_kernel_oid,
+          'operations.reviewed_identity_migration_runs',
+          'expires_at',
+          'UPDATE'
+        )
+     OR NOT pg_catalog.has_column_privilege(
+          authority_kernel_oid,
+          'operations.erasure_ledger_state',
+          'updated_at',
+          'UPDATE'
+        )
+     OR NOT pg_catalog.has_function_privilege(
+          authority_kernel_oid,
+          'privacy.lock_identity_semantic_write_fence()',
+          'EXECUTE'
+        )
+     OR NOT pg_catalog.has_function_privilege(
+          authority_kernel_oid,
+          'privacy.identity_person_is_blocked(uuid)',
+          'EXECUTE'
+        )
+     OR pg_catalog.has_function_privilege(
+          authority_kernel_oid, authority_function, 'EXECUTE'
+        ) IS FALSE
+     OR function_acl_count <> 1
      OR NOT pg_catalog.has_schema_privilege(
           caller_oid, 'identity', 'USAGE'
         )

@@ -464,18 +464,20 @@ def test_e3_replay_validates_effective_and_direct_acl_surfaces() -> None:
     ) not in admission
 
 
-def test_e3_compose_surface_is_still_an_expired_non_callable_tombstone() -> None:
+def test_e3_compose_surface_is_an_expired_stdin_only_executor() -> None:
     service = _service(COMPOSE.read_text(encoding="utf-8"), "identity-finalizer")
 
     assert "profiles: [operator]" in service
     assert 'restart: "no"' in service
-    assert 'entrypoint: ["/bin/sh", "-c"]' in service
-    assert "identity finalizer kernel is dormant and not activated" in service
-    assert "exit 78" in service
+    assert "command: [identity-finalize]" in service
+    assert "stdin_open: true" in service
+    assert "tty: false" in service
+    assert "HOME_AGENT_DATABASE_URL_FILE: /run/secrets/database_url" in service
     assert "/run/secrets/database_url" in service
     assert "grant-runtime: {condition: service_completed_successfully}" in service
     assert "api-net" not in service
     assert "edge-net" not in service
+    assert "VALID UNTIL" not in service
     assert not re.search(r"(?m)^\s+ports:", service)
 
 

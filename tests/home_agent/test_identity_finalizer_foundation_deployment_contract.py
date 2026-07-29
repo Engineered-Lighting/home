@@ -163,10 +163,12 @@ class IdentityFinalizerFoundationDeploymentContractTests(unittest.TestCase):
         )
         self.assertIn("driver: none", service)
         self.assertIn("read_only: true", service)
+        self.assertIn("command: [identity-finalize]", service)
+        self.assertIn("stdin_open: true", service)
+        self.assertIn("tty: false", service)
         self.assertIn(
-            "identity finalizer kernel is dormant and not activated", service
+            "HOME_AGENT_DATABASE_URL_FILE: /run/secrets/database_url", service
         )
-        self.assertIn("exit 78", service)
         self.assertNotIn("api-net", service)
         self.assertNotIn("edge-net", service)
         self.assertNotRegex(service, r"(?m)^\s+ports:")

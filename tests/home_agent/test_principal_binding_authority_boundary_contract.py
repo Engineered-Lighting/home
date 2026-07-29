@@ -349,7 +349,7 @@ class PrincipalBindingAuthorityBoundaryContractTests(unittest.TestCase):
         self.assertIn("adapter.commit(", source)
         self.assertNotIn("confirm_principal_binding_proposal(", source)
 
-    def test_runtime_deploy_pin_and_finalizer_surface_remain_disabled(self) -> None:
+    def test_runtime_deploy_pin_and_finalizer_role_remain_disabled(self) -> None:
         revision = "0006a_worker_lease_arbitration"
         self.assertEqual(
             class_annotated_literal(
@@ -381,19 +381,20 @@ class PrincipalBindingAuthorityBoundaryContractTests(unittest.TestCase):
             for line in finalizer.splitlines()
             if line.strip().startswith("command:")
         ]
-        self.assertEqual(
-            command_lines,
-            [
-                "command: [\"echo 'identity finalizer kernel is dormant and not "
-                'activated\' >&2; exit 78"]'
-            ],
-        )
+        self.assertEqual(command_lines, ["command: [identity-finalize]"])
         entrypoint_lines = [
             line.strip()
             for line in finalizer.splitlines()
             if line.strip().startswith("entrypoint:")
         ]
-        self.assertEqual(entrypoint_lines, ['entrypoint: ["/bin/sh", "-c"]'])
+        self.assertEqual(entrypoint_lines, [])
+        self.assertIn("stdin_open: true", finalizer)
+        self.assertIn("tty: false", finalizer)
+        self.assertIn(
+            "HOME_AGENT_DATABASE_URL_FILE: /run/secrets/database_url",
+            finalizer,
+        )
+        self.assertNotIn("VALID UNTIL", finalizer)
         self.assertIn("profiles: [operator]", finalizer)
         self.assertIn('restart: "no"', finalizer)
 

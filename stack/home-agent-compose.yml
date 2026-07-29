@@ -598,17 +598,18 @@ services:
   identity-finalizer:
     image: engineered-lighting/home-agent-core:local
     profiles: [operator]
-    # This deployment surface remains deliberately non-callable. The dormant
-    # database kernel is not activated, provisioning keeps its login expired,
-    # and this entrypoint exits before reading the persisted database URL.
+    # The executor is callable only while the independently provisioned login
+    # has a root-controlled, bounded activation. The default 1970 expiry keeps
+    # this surface inert even though the private stdin protocol is installed.
     restart: "no"
     user: "10001:10001"
     read_only: true
     init: true
-    entrypoint: ["/bin/sh", "-c"]
-    command: ["echo 'identity finalizer kernel is dormant and not activated' >&2; exit 78"]
+    stdin_open: true
+    tty: false
+    command: [identity-finalize]
     environment:
-      HOME_AGENT_FINALIZER_DATABASE_URL_FILE: /run/secrets/database_url
+      HOME_AGENT_DATABASE_URL_FILE: /run/secrets/database_url
     security_opt:
       - no-new-privileges:true
     cap_drop: [ALL]
@@ -627,16 +628,18 @@ services:
   identity-cutover:
     image: engineered-lighting/home-agent-core:local
     profiles: [operator]
-    # The E4 database and external-writer freeze contracts are not yet jointly
-    # admitted. This service always exits before reading its isolated URL.
+    # The executor accepts one private stdin document. The role remains expired
+    # until a later root-controlled ceremony has verified writer freeze and
+    # every E4 admission receipt.
     restart: "no"
     user: "10001:10001"
     read_only: true
     init: true
-    entrypoint: ["/bin/sh", "-c"]
-    command: ["echo 'identity semantic-authority cutover is dormant and not activated' >&2; exit 78"]
+    stdin_open: true
+    tty: false
+    command: [identity-cutover]
     environment:
-      HOME_AGENT_IDENTITY_CUTOVER_DATABASE_URL_FILE: /run/secrets/database_url
+      HOME_AGENT_DATABASE_URL_FILE: /run/secrets/database_url
     security_opt:
       - no-new-privileges:true
     cap_drop: [ALL]

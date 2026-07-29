@@ -315,7 +315,7 @@ def test_hosted_gate_exercises_real_secret_lifecycle_and_compose_render() -> Non
     assert workflow.index("Exercise E4 additive secret lifecycle") < (
         workflow.index(
                 "Run isolated PostgreSQL 17 "
-                "E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m authority gate"
+                "E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n authority gate"
         )
     )
 
@@ -330,8 +330,10 @@ def test_operator_services_separate_additive_ceremony_from_inert_surface() -> No
     assert "profiles: [operator]" in service
     assert "/run/secrets/database_url" in service
     assert "database_url_identity_cutover_identity_cutover" in service
-    assert "identity semantic-authority cutover is dormant" in service
-    assert "exit 78" in service
+    assert "command: [identity-cutover]" in service
+    assert "stdin_open: true" in service
+    assert "tty: false" in service
+    assert "HOME_AGENT_DATABASE_URL_FILE: /run/secrets/database_url" in service
     assert "networks: [postgres-net]" in service
     assert "grant-runtime: {condition: service_completed_successfully}" in service
     assert "read_only: true" in service

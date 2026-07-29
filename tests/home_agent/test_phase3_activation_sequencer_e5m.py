@@ -198,5 +198,5 @@ def test_e5m_is_carried_by_the_filtered_hosted_gate() -> None:
     assert "test_phase3_activation_sequencer_e5m.py" in workflow
     assert "phase3_activation_sequencer.py" in runner
     assert "test_phase3_activation_sequencer_e5m.py" in runner
-    assert "E5k/E5l/E5m PostgreSQL gate" in workflow
-    assert "E5k/E5l/E5m authority gate" in workflow
+    assert "E5k/E5l/E5m/E5n PostgreSQL gate" in workflow
+    assert "E5k/E5l/E5m/E5n authority gate" in workflow

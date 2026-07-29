@@ -159,6 +159,20 @@ case "$role" in
     shift
     exec python -m app.cli authorize-shadow "$@"
     ;;
+  identity-finalize)
+    [ "$#" -eq 1 ] || {
+      echo "identity finalizer accepts no arguments" >&2
+      exit 64
+    }
+    exec python -m app.identity_authority_executor finalize
+    ;;
+  identity-cutover)
+    [ "$#" -eq 1 ] || {
+      echo "identity cutover accepts no arguments" >&2
+      exit 64
+    }
+    exec python -m app.identity_authority_executor cutover
+    ;;
   *)
     echo "unsupported HOME_AGENT_ROLE: $role" >&2
     exit 64

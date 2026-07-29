@@ -1235,6 +1235,30 @@ E5m publishes the deterministic activation sequence for review but keeps
 legacy-writer freeze, cutover, staged migration executor, and off-host writer
 remain separate required milestones.
 
+### E5n identity authority executors
+
+E5n installs two content-minimized, operator-profile execution surfaces:
+
+- `identity-finalize` calls only
+  `operations.finalize_reviewed_identity_migration(bytea,uuid)`.
+- `identity-cutover` calls only
+  `operations.commit_reviewed_identity_cutover(bytea,uuid)`.
+
+Each accepts one bounded JSON request on private stdin containing the exact
+contract, a UUIDv7 admission ID, and a canonical base64 document. The document
+is never accepted through argv or environment variables and the service emits
+only the resulting UUID receipt. Each connection is pinned to its dedicated
+database role, uses a complete `SERIALIZABLE` transaction, disables parameter
+logging on errors, and retries only complete transactions for `40001`,
+`40P01`, or `55P03`.
+
+Installing these entrypoints does not make either authority callable in the
+normal deployment. Provisioning continues to expire both disposable logins at
+1970, the services have no application network or port, and no role-activation
+helper is installed yet. Do not manually alter `VALID UNTIL`; the later
+root-controlled ceremony must bind role activation, the one-time admission,
+executor invocation, immediate re-expiry, and zero-session verification.
+
 ## Record-only, shadow, and canary gates
 
 Every fresh deployment starts with `HOME_AGENT_ROLLOUT_MODE=record_only`.

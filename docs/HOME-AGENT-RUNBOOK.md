@@ -1316,6 +1316,37 @@ compares byte count and SHA-256. Only an exact match publishes
 archive is removed on success or failure. A successful copy is not a substitute
 for the separate restore and erasure-current receipts.
 
+### E5t bounded migration executor
+
+E5t installs `operator/phase3_migration_executor.py`, but does not arm or run
+it. The executor accepts only these five exact commands:
+
+```sh
+sudo python3 stack/home-agent-deploy/operator/phase3_migration_executor.py \
+  migrate-finalizer
+sudo python3 stack/home-agent-deploy/operator/phase3_migration_executor.py \
+  migrate-current-authority
+sudo python3 stack/home-agent-deploy/operator/phase3_migration_executor.py \
+  migrate-authenticated-binding
+sudo python3 stack/home-agent-deploy/operator/phase3_migration_executor.py \
+  migrate-parent-authority
+sudo python3 stack/home-agent-deploy/operator/phase3_migration_executor.py \
+  migrate-parent-status
+```
+
+Every invocation requires root on Linux, a clean hosted-tested source pack, a
+root-owned E5m permit armed within the preceding four hours, the shared
+activation lock, and all application-facing Core/BFF/Edge services stopped.
+It verifies the exact source revision with the migration guard, invokes one
+fixed `phase3-migrate-*` image entrypoint with `--no-deps`, then verifies the
+exact target revision. It cannot accept an arbitrary revision, build or pull
+an image, stop or start a service, or promote rollout mode.
+
+Do not invoke it on the live deployment yet. The E5j preflight must first pass,
+the later admission and disposable-role ceremonies must be installed and
+hosted-tested, and the complete activation sequence must receive a separate
+operator review. The source-plan blocker for those later boundaries remains.
+
 ## Record-only, shadow, and canary gates
 
 Every fresh deployment starts with `HOME_AGENT_ROLLOUT_MODE=record_only`.

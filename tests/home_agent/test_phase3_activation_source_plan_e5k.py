@@ -54,7 +54,7 @@ def test_exact_hosted_source_pack_can_be_verified_but_never_activated() -> None:
     assert report["activation_grant_contract_installed"] is True
     assert report["identity_finalizer_executor_installed"] is True
     assert report["identity_cutover_executor_installed"] is True
-    assert report["activation_executor_installed"] is False
+    assert report["activation_executor_installed"] is True
     assert report["source_acceptance_receipt_issuable"] is True
     assert report["authoritative"] is False
     assert report["enables_writes"] is False
@@ -167,5 +167,5 @@ def test_e5k_is_carried_by_the_filtered_hosted_gate() -> None:
     assert "tests/home_agent/test_phase3_activation_source_plan_e5k.py" in runner
     assert "phase3_activation_source_plan.py" in workflow
     assert "test_phase3_activation_source_plan_e5k.py" in workflow
-    assert "E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s PostgreSQL gate" in workflow
-    assert "E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s authority gate" in workflow
+    assert "E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t PostgreSQL gate" in workflow
+    assert "E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t authority gate" in workflow

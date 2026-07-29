@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the E1-E5s scaffold gate against disposable PostgreSQL 17."""
+"""Run the E1-E5t scaffold gate against disposable PostgreSQL 17."""
 
 from __future__ import annotations
 
@@ -356,6 +356,7 @@ BUILD_CONTEXT_FILES = (
     "stack/home-agent-deploy/operator/phase3_activation_preflight.py",
     "stack/home-agent-deploy/operator/phase3_activation_source_plan.py",
     "stack/home-agent-deploy/operator/phase3_activation_sequencer.py",
+    "stack/home-agent-deploy/operator/phase3_migration_executor.py",
     "stack/home-agent-deploy/operator/off_host_backup_writer.py",
     "stack/home-agent-deploy/operator/phase3_evidence_receipts.py",
     "stack/home-agent-deploy/operator/isolated_restore_drill.sh",
@@ -405,6 +406,7 @@ BUILD_CONTEXT_FILES = (
     "tests/home_agent/test_off_host_backup_writer_e5o.py",
     "tests/home_agent/test_live_restore_snapshot_e5p.py",
     "tests/home_agent/test_phase3_source_pin_bootstrap_e5q.py",
+    "tests/home_agent/test_phase3_migration_executor_e5t.py",
     "tests/home_agent/test_phase3_evidence_receipts_e5j.py",
     "tests/home_agent/test_phase3_fixed_migration_entrypoints_e5l.py",
     "stack/services/home-agent-core/tests/"
@@ -3352,6 +3354,8 @@ def _run_e4_scaffold_phase(
             "test_live_restore_snapshot_e5p.py",
             "/workspace/tests/home_agent/"
             "test_phase3_source_pin_bootstrap_e5q.py",
+            "/workspace/tests/home_agent/"
+            "test_phase3_migration_executor_e5t.py",
             "/workspace/tests/home_agent/" "test_phase3_evidence_receipts_e5j.py",
             "/workspace/tests/home_agent/"
             "test_phase3_fixed_migration_entrypoints_e5l.py",
@@ -3406,7 +3410,7 @@ def main() -> int:
     except GateFailure as error:
         print(
             "E1/E2/E3/E4 gate execution quarantine "
-            f"(E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s included): {error}",
+            f"(E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t included): {error}",
             file=sys.stderr,
         )
         return 77

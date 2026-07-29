@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Verify the E5k hosted-tested Phase 3 source pack without activating it.
+"""Verify the hosted-tested Phase 3 source pack without activating it.
 
 This is a source-plan verifier, not a migration or receipt writer. It proves
 that every activation-relevant tracked path still has the exact tree accepted
-by the E1-E5j hosted gate, then reports the deliberately missing executable
-boundaries. No successful result from this command can authorize a rollout.
+by the hosted gate. A later pin-only commit may change exactly the accepted
+commit and run-ID literals in this file; all executable content must remain
+byte-identical after those two literals are normalized. No successful result
+from this command can authorize a rollout.
 """
 
 from __future__ import annotations
@@ -19,12 +21,22 @@ from typing import Any, Mapping, Sequence
 
 
 CONTRACT = "phase3-activation-source-plan-e5k-v1"
+SOURCE_PIN_BOOTSTRAP_CONTRACT = "phase3-source-pin-bootstrap-e5q-v1"
 ACCEPTED_COMMIT = "f918c091405e481c69c820f96181d08754999787"
 ACCEPTED_POSTGRES_RUN_ID = "30468702387"
 SOURCE_REVISION = "0006a_worker_lease_arbitration"
 TARGET_REVISION = "0021_parent_status_e5h"
 SOURCE_ROOT = Path(__file__).resolve().parents[3]
 COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+SOURCE_PLAN_RELATIVE_PATH = (
+    "stack/home-agent-deploy/operator/phase3_activation_source_plan.py"
+)
+ACCEPTED_COMMIT_LITERAL = re.compile(
+    rb'(?m)^ACCEPTED_COMMIT = "[0-9a-f]{40}"$'
+)
+ACCEPTED_RUN_LITERAL = re.compile(
+    rb'(?m)^ACCEPTED_POSTGRES_RUN_ID = "[1-9][0-9]{5,19}"$'
+)
 TREE_ENTRY = re.compile(
     rb"^(100644|100755) blob ([0-9a-f]{40})\t([A-Za-z0-9._/-]+)$"
 )
@@ -72,6 +84,37 @@ MISSING_EXECUTABLE_BOUNDARIES = (
 
 class SourcePlanError(RuntimeError):
     """The accepted source boundary could not be established."""
+
+
+def normalize_source_plan_pins(raw: bytes) -> bytes:
+    if not raw or len(raw) > 256 * 1024 or b"\0" in raw:
+        raise SourcePlanError("source-plan pin file is invalid")
+    commit_matches = ACCEPTED_COMMIT_LITERAL.findall(raw)
+    run_matches = ACCEPTED_RUN_LITERAL.findall(raw)
+    if len(commit_matches) != 1 or len(run_matches) != 1:
+        raise SourcePlanError("source-plan pin file is invalid")
+    normalized = ACCEPTED_COMMIT_LITERAL.sub(
+        b'ACCEPTED_COMMIT = "' + (b"0" * 40) + b'"',
+        raw,
+        count=1,
+    )
+    normalized = ACCEPTED_RUN_LITERAL.sub(
+        b'ACCEPTED_POSTGRES_RUN_ID = "0"',
+        normalized,
+        count=1,
+    )
+    return normalized
+
+
+def source_plan_matches_accepted_pin_only(
+    accepted_raw: bytes, current_raw: bytes
+) -> bool:
+    try:
+        return normalize_source_plan_pins(accepted_raw) == normalize_source_plan_pins(
+            current_raw
+        )
+    except SourcePlanError:
+        return False
 
 
 def parse_tree(raw: bytes) -> tuple[int, str]:
@@ -129,6 +172,8 @@ def evaluate(
         "source_pack_digest": source_pack_digest if trusted else None,
         "source_pack_entries": tree_entries if trusted else None,
         "source_pack_matches_hosted_acceptance": trusted,
+        "source_pin_bootstrap_contract": SOURCE_PIN_BOOTSTRAP_CONTRACT,
+        "source_pin_bootstrap_installed": trusted,
         "fixed_migration_entrypoints_installed": trusted,
         "activation_grant_contract_installed": trusted,
         "identity_finalizer_executor_installed": trusted,
@@ -197,8 +242,31 @@ def live_report() -> Mapping[str, Any]:
         ["git", "merge-base", "--is-ancestor", ACCEPTED_COMMIT, "HEAD"]
     )
     source_diff_clean = _succeeds(
-        ["git", "diff", "--quiet", ACCEPTED_COMMIT, "--", *ACTIVATION_PATHS]
+        [
+            "git",
+            "diff",
+            "--quiet",
+            ACCEPTED_COMMIT,
+            "--",
+            *(
+                path
+                for path in ACTIVATION_PATHS
+                if path != SOURCE_PLAN_RELATIVE_PATH
+            ),
+        ]
     )
+    accepted_plan = _run(
+        ["git", "show", f"{ACCEPTED_COMMIT}:{SOURCE_PLAN_RELATIVE_PATH}"],
+        text=False,
+    )
+    try:
+        current_plan = (SOURCE_ROOT / SOURCE_PLAN_RELATIVE_PATH).read_bytes()
+    except OSError as error:
+        raise SourcePlanError("source-plan pin file is unavailable") from error
+    if not isinstance(accepted_plan, bytes) or not source_plan_matches_accepted_pin_only(
+        accepted_plan, current_plan
+    ):
+        source_diff_clean = False
     tree = _run(
         [
             "git",

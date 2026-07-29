@@ -129,7 +129,7 @@ def test_live_verifier_is_git_only_read_only_and_has_no_receipt_writer() -> None
         '"git", "rev-parse", "HEAD"',
         '"git", "status", "--porcelain", "--untracked-files=all"',
         '"git", "merge-base", "--is-ancestor"',
-        '"git", "diff", "--quiet"',
+        '"diff",',
         '"ls-tree"',
         '"-r"',
         '"-z"',
@@ -166,5 +166,5 @@ def test_e5k_is_carried_by_the_filtered_hosted_gate() -> None:
     assert "tests/home_agent/test_phase3_activation_source_plan_e5k.py" in runner
     assert "phase3_activation_source_plan.py" in workflow
     assert "test_phase3_activation_source_plan_e5k.py" in workflow
-    assert "E5j/E5k/E5l/E5m/E5n/E5o/E5p PostgreSQL gate" in workflow
-    assert "E5j/E5k/E5l/E5m/E5n/E5o/E5p authority gate" in workflow
+    assert "E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q PostgreSQL gate" in workflow
+    assert "E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q authority gate" in workflow

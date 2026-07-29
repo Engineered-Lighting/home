@@ -1,4 +1,4 @@
-name: home agent E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o PostgreSQL gate
+name: home agent E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o/E5p PostgreSQL gate
 
 on:
   pull_request:
@@ -50,6 +50,7 @@ on:
       - "tests/home_agent/test_phase3_activation_sequencer_e5m.py"
       - "tests/home_agent/test_identity_authority_executor_e5n.py"
       - "tests/home_agent/test_off_host_backup_writer_e5o.py"
+      - "tests/home_agent/test_live_restore_snapshot_e5p.py"
       - "tests/home_agent/test_phase3_evidence_receipts_e5j.py"
       - "tests/home_agent/test_phase3_fixed_migration_entrypoints_e5l.py"
       - "tools/run-home-agent-e1-postgres-gate.py"
@@ -105,6 +106,7 @@ on:
       - "tests/home_agent/test_phase3_activation_sequencer_e5m.py"
       - "tests/home_agent/test_identity_authority_executor_e5n.py"
       - "tests/home_agent/test_off_host_backup_writer_e5o.py"
+      - "tests/home_agent/test_live_restore_snapshot_e5p.py"
       - "tests/home_agent/test_phase3_evidence_receipts_e5j.py"
       - "tests/home_agent/test_phase3_fixed_migration_entrypoints_e5l.py"
       - "tools/run-home-agent-e1-postgres-gate.py"
@@ -136,7 +138,7 @@ jobs:
           RUNNER_TEMP="$RUNNER_TEMP"
           sh stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh
 
-      - name: Run isolated PostgreSQL 17 E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o authority gate
+      - name: Run isolated PostgreSQL 17 E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o/E5p authority gate
         env:
           HOME_AGENT_E1_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: >-

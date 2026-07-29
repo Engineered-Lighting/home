@@ -132,6 +132,32 @@ class IsolatedRestoreDrillContractTests(unittest.TestCase):
             self.script,
         )
 
+    def test_local_repository_is_staged_behind_the_shared_lock(self) -> None:
+        local_block = self.script.split(
+            'if [[ "$HOME_AGENT_BACKUP_TOPOLOGY" == local ]]; then', 2
+        )[-1].split("else", 1)[0]
+        for value in (
+            'production_postgres_container=home-agent-postgres-1',
+            'flock -n -x 8',
+            'grep -Fxq "$HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT|/repository"',
+            'grep -Fxq "$HOME_AGENT_PGBACKREST_LOCK_FILE|/run/home-agent-locks/repository.lock"',
+            'repo_local="$workspace/stage/pgbackrest-repository"',
+            "cp --archive --one-file-system --reflink=auto",
+            'flock -u 8',
+            'exec 8>&-',
+        ):
+            self.assertIn(value, local_block)
+        self.assertIn(
+            "an unreviewed running container mounts protected Home Agent storage",
+            local_block,
+        )
+        self.assertLess(local_block.index("flock -n -x 8"), local_block.index("cp --archive"))
+        self.assertLess(local_block.index("cp --archive"), local_block.index("flock -u 8"))
+        self.assertNotIn(
+            "requires PostgreSQL and every repository writer to be stopped",
+            local_block,
+        )
+
     def test_recovery_contract_checks_revision_schema_dump_and_checksums(self) -> None:
         for value in (
             "HOME_AGENT_EXPECTED_DB_REVISION",
@@ -196,6 +222,9 @@ class IsolatedRestoreDrillContractTests(unittest.TestCase):
         self.assertIn("network_mode=none", documentation)
         self.assertIn("post-migration full backup", documentation)
         self.assertIn("full isolated Home Assistant application restore", documentation)
+        normalized = " ".join(documentation.split())
+        self.assertIn("PostgreSQL may remain online", normalized)
+        self.assertIn("shared coordination lock", normalized)
         self.assertIn("run --rm --no-deps --pull never", documentation)
         self.assertIn("up -d --no-deps --no-build --pull never", documentation)
         self.assertIn("Do not use `docker compose start core-api`", documentation)

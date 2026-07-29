@@ -49,6 +49,7 @@ ACTIVATION_PATHS = (
     "stack/home-agent-deploy/provision-parent-relationship-kernel-role.sh",
     "stack/home-agent-deploy/provision-roles.sh",
     "stack/home-agent-deploy/operator/identity_finalizer_compatibility.py",
+    "stack/home-agent-deploy/operator/isolated_restore_drill.sh",
     "stack/home-agent-deploy/operator/off_host_backup_writer.py",
     "stack/home-agent-deploy/operator/parent_confirmation_staging.py",
     "stack/home-agent-deploy/operator/phase3_activation_preflight.py",

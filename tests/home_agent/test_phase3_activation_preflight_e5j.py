@@ -361,8 +361,8 @@ def test_e5j_is_carried_by_the_filtered_hosted_gate() -> None:
     assert "tests/home_agent/test_phase3_evidence_receipts_e5j.py" in runner
     assert "test_phase3_activation_preflight_e5j.py" in workflow
     assert "test_phase3_evidence_receipts_e5j.py" in workflow
-    assert "E5j/E5k/E5l/E5m/E5n/E5o PostgreSQL gate" in workflow
-    assert "E5j/E5k/E5l/E5m/E5n/E5o authority gate" in workflow
+    assert "E5j/E5k/E5l/E5m/E5n/E5o/E5p PostgreSQL gate" in workflow
+    assert "E5j/E5k/E5l/E5m/E5n/E5o/E5p authority gate" in workflow
 
 
 def test_environment_parser_selects_no_secret_or_arbitrary_shell_value() -> None:

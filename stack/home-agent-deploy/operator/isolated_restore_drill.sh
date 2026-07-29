@@ -3,9 +3,10 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 umask 077
 
-# Local restore drills mount repo1 read-only. Legacy SFTP drills use native
-# OpenSSH to stage a host-key-pinned encrypted snapshot. Every pgBackRest and
-# PostgreSQL operation then runs with Docker network_mode=none.
+# Local restore drills stage repo1 while holding the deployment's exclusive
+# repository lock. Legacy SFTP drills use native OpenSSH to stage a
+# host-key-pinned encrypted snapshot. Every pgBackRest and PostgreSQL operation
+# against the staged copy then runs with Docker network_mode=none.
 
 readonly EX_USAGE=64
 readonly EX_UNAVAILABLE=69
@@ -197,7 +198,7 @@ trap cleanup EXIT HUP INT TERM
 [[ $# == 2 ]] || usage
 [[ "$(id -u)" == 0 ]] || die "must run as root"
 
-for command in awk chmod chown date df dirname docker find findmnt flock grep install \
+for command in awk chmod chown cp date df dirname docker find findmnt flock grep install \
   mktemp mountpoint python3 readlink rm rmdir sleep stat timeout; do
   require_command "$command"
 done
@@ -418,21 +419,58 @@ install -d -m 0700 -o root -g root "$workspace/ssh" "$workspace/stage"
 if [[ "$HOME_AGENT_BACKUP_TOPOLOGY" == local ]]; then
   exec 8>>"$HOME_AGENT_PGBACKREST_LOCK_FILE"
   flock -n -x 8 || die "repository writer or another local restore holds the coordination lock"
-  if pgrep -x pgbackrest >/dev/null 2>&1; then
-    die "local repository drill requires every pgBackRest process to be stopped"
-  fi
+  production_postgres_container=home-agent-postgres-1
+  production_postgres_running=0
   for running_container in $(docker ps -q); do
     running_mounts="$(docker inspect --format '{{range .Mounts}}{{println .Source}}{{end}}' "$running_container")"
-    if printf '%s\n' "$running_mounts" | grep -Fxq "$production_data" ||
-       printf '%s\n' "$running_mounts" | grep -Fxq "$HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT"; then
-      die "local repository drill requires PostgreSQL and every repository writer to be stopped"
+    running_name="$(docker inspect --format '{{.Name}}' "$running_container")"
+    running_name="${running_name#/}"
+    mounts_repository=0
+    mounts_production_data=0
+    printf '%s\n' "$running_mounts" |
+      grep -Fxq "$HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT" &&
+      mounts_repository=1
+    printf '%s\n' "$running_mounts" |
+      grep -Fxq "$production_data" &&
+      mounts_production_data=1
+    if ((mounts_repository == 1 || mounts_production_data == 1)); then
+      [[ "$running_name" == "$production_postgres_container" ]] ||
+        die "an unreviewed running container mounts protected Home Agent storage"
+      ((mounts_repository == 1 && mounts_production_data == 1)) ||
+        die "production PostgreSQL protected-storage mounts drifted"
+      production_postgres_running=1
+      running_mount_pairs="$(
+        docker inspect --format \
+          '{{range .Mounts}}{{println .Source "|" .Destination}}{{end}}' \
+          "$running_container"
+      )"
+      printf '%s\n' "$running_mount_pairs" |
+        grep -Fxq "$HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT|/repository" ||
+        die "production PostgreSQL repository mount drifted"
+      printf '%s\n' "$running_mount_pairs" |
+        grep -Fxq "$production_data|/var/lib/postgresql/data" ||
+        die "production PostgreSQL data mount drifted"
+      printf '%s\n' "$running_mount_pairs" |
+        grep -Fxq "$HOME_AGENT_PGBACKREST_LOCK_FILE|/run/home-agent-locks/repository.lock" ||
+        die "production PostgreSQL repository lock mount drifted"
     fi
   done
-  repo_local="$(readlink -f -- "$HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT")"
-  [[ -n "$repo_local" ]] || die "cannot canonicalize local repository"
-  assert_disjoint_paths "$production_data" "$repo_local"
-  assert_disjoint_paths "$restore_root" "$repo_local"
-  info "using the encrypted local repository read-only"
+  repository_source="$(readlink -f -- "$HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT")"
+  [[ -n "$repository_source" ]] || die "cannot canonicalize local repository"
+  assert_disjoint_paths "$production_data" "$repository_source"
+  assert_disjoint_paths "$restore_root" "$repository_source"
+  repo_local="$workspace/stage/pgbackrest-repository"
+  install -d -m 0700 -o 999 -g 999 "$repo_local"
+  info "staging a locked encrypted repository snapshot"
+  cp --archive --one-file-system --reflink=auto \
+    "$repository_source/." "$repo_local/"
+  require_stat 999:999:700 "$repo_local"
+  flock -u 8
+  exec 8>&-
+  if ((production_postgres_running == 1)); then
+    info "production PostgreSQL remained online behind the repository lock"
+  fi
+  info "using the staged encrypted local repository read-only"
 else
   temporary_key="$workspace/ssh/id_ed25519"
   temporary_known_hosts="$workspace/ssh/known_hosts"

@@ -10,9 +10,10 @@ hung after `EAGAIN`/`BAD_USE` transport failures against the Windows OpenSSH
 repository. Instead, native OpenSSH `sftp` copies the encrypted repository to
 temporary encrypted storage. The selected backup is then verified and restored
 from a local read-only POSIX repository with Docker `network_mode=none`. Active
-`local` mode instead mounts the encrypted repo1 read-only and writes only to the
-guarded restore workspace. PostgreSQL and every repository writer must be
-stopped first so the repository is a coherent source.
+`local` mode briefly takes the deployment's exclusive repository lock and
+copies encrypted repo1 into the guarded restore workspace. PostgreSQL may remain
+online because its archive command and every reviewed backup writer take the
+same lock. The lock is released before verification and restore begin.
 
 ## Required deployment inputs
 
@@ -69,8 +70,11 @@ The script takes an exclusive workspace lock and performs these stages:
 
 1. Validate root ownership, mapper placement, exact path separation, minimum
    free space, source-file modes, image digests, and the known-host fingerprint.
-2. Mount local repo1 read-only after proving no production/repository writer is
-   running, or copy a legacy SFTP repository with native OpenSSH batch SFTP.
+2. For local repo1, reject unreviewed containers that mount protected storage,
+   verify the running production PostgreSQL container's exact data, repository,
+   and coordination-lock mounts, then stage the encrypted repository while
+   holding that lock. Alternatively, copy a legacy SFTP repository with native
+   OpenSSH batch SFTP.
 3. Reject special files and every link except pgBackRest's exact
    `backup/home-agent/latest` symlink. That one link must use a relative full
    backup label and resolve to an existing non-symlink directory in the same
@@ -125,12 +129,12 @@ material. Set this only for a supervised investigation:
 HOME_AGENT_RESTORE_KEEP_FAILED=1
 ```
 
-When enabled, the partial restored cluster (and a staged legacy repository, if
-used) stays under the mode-0700 encrypted drill root, but temporary credential
-material is still removed. The active local repository is never copied,
-chowned, chmodded, or deleted by cleanup. Delete retained workspaces only
-after resolving their canonical path and confirming their nearest mount is the
-approved encrypted restore mount. Never use a wildcard recursive removal.
+When enabled, the partial restored cluster and staged encrypted repository stay
+under the mode-0700 encrypted drill root, but temporary credential material is
+still removed. The active local repository is never chowned, chmodded, or
+deleted by cleanup. Delete retained workspaces only after resolving their
+canonical path and confirming their nearest mount is the approved encrypted
+restore mount. Never use a wildcard recursive removal.
 
 Optional timeout and capacity inputs are:
 
@@ -161,13 +165,12 @@ both names before process start, and the selector independently checks the
 process hostname and Docker daemon name. There is no environment override for
 that scheduled path.
 
-The scheduled selector is therefore not a local-topology execution path: it
-queries a running PostgreSQL container, while a coherent local-repository drill
-requires that container stopped. Do not schedule local drills. This reviewed
-local-only path permits one supervised, offline, resource-bounded manual drill
-after the WAL cutover is stable and while the exclusive repository lock is
-held. It does not lift the E1/E2 runner, image-build, stress-test, or scheduled
-restore quarantines.
+The local-topology drill can now query a running PostgreSQL container, stage a
+coherent encrypted repository snapshot behind the shared coordination lock,
+and leave production online. The scheduled path remains disabled on
+`EngineeredLightingServer1` / `home-app`; this change does not lift the E1/E2
+runner, image-build, stress-test, or scheduled-restore quarantines. On that host
+the path remains a supervised, resource-bounded manual recovery proof.
 
 The timer runs on the first Sunday of each month after the normal daily backup
 window. It is deliberately non-persistent: a missed run does not catch up

@@ -314,7 +314,8 @@ sudo docker compose --env-file /srv/home-agent/config/home-agent.env \
 
 Do **not** issue an all-service `compose up` on an existing cluster when a WAL
 segment is still `.ready`, the archive topology has changed, or the repository
-has no verified baseline. With PostgreSQL and every pgBackRest writer stopped:
+has no verified baseline. For this one-time WAL repair, with PostgreSQL and
+every pgBackRest writer stopped:
 
 1. Copy the exact pending WAL segment into a root-only incident-evidence
    directory on the encrypted mapper and record its SHA-256. Never rename the
@@ -412,13 +413,14 @@ After installing and attesting the digest-labeled PostgreSQL/pgBackRest image, r
 restore drill for one explicit completed backup label. For a supervised legacy
 recovery, direct libssh2 restore is not an acceptance path: stage the encrypted
 repository with native host-key-pinned OpenSSH SFTP. For active `local` mode,
-mount the selected
-repository read-only and restore only into a separate root-owned scratch tree;
-never target live PostgreSQL data. Stop PostgreSQL and every pgBackRest writer
-before a local drill; the script fails closed if a running container still
-mounts production data or the repository. In either topology the drill
-verifies, restores, and boots only isolated scratch data with
-`network_mode=none` and no published ports.
+the drill takes the deployment's exclusive repository lock, validates the exact
+production PostgreSQL mounts, and stages only the encrypted repository into a
+separate root-owned scratch tree. PostgreSQL may remain online because its
+archive command and every reviewed backup writer honor that same lock. An
+unreviewed container mounting production data or the repository fails closed.
+In either topology the drill never targets live PostgreSQL data and verifies,
+restores, and boots only isolated scratch data with `network_mode=none` and no
+published ports.
 
 ```sh
 sudo bash home-agent-deploy/operator/isolated_restore_drill.sh \

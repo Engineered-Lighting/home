@@ -1378,6 +1378,39 @@ consumes it while its disposable login is briefly active.
 The live deployment remains untouched. The remaining source-plan blocker is
 the bounded disposable-role activation ceremony.
 
+### E5v bounded identity-authority ceremony
+
+E5v closes the final source-plan executable boundary with one root-only
+ceremony:
+
+```sh
+sudo python3 \
+  stack/home-agent-deploy/operator/phase3_identity_authority_ceremony.py \
+  finalize < /root/reviewed-finalizer-request.json
+sudo python3 \
+  stack/home-agent-deploy/operator/phase3_identity_authority_ceremony.py \
+  cutover < /root/reviewed-cutover-request.json
+```
+
+The ceremony requires the accepted source pack, fresh E5m permit, activation
+lock, stopped application-facing services, and exact revision
+`0015_current_authority_e5a`. It activates only the selected nonprivileged
+database login for at most two minutes, passes the private request to one fixed
+image entrypoint, and re-expires the login in a `finally` path. Deactivation
+also terminates any remaining session and proves both the expiry and zero
+sessions before returning.
+
+The owner credential is isolated in a distinct operator-only Compose service.
+The private request is accepted only on stdin; the service has no public port,
+no application network, no logs, a read-only filesystem, dropped
+capabilities, and fixed resource limits. The hosted PostgreSQL gate proves both
+authority logins work only inside the bounded window and reject a new
+connection after re-expiry.
+
+Installing E5v does not migrate the live database, admit a document, change
+rollout mode, or enable semantic writes. The record-only evidence and off-host
+backup gates still fail closed independently.
+
 ## Record-only, shadow, and canary gates
 
 Every fresh deployment starts with `HOME_AGENT_ROLLOUT_MODE=record_only`.

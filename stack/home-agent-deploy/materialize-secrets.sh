@@ -297,6 +297,8 @@ fi
 install_secret grant-runtime postgres_owner_password postgres_owner_password 0 0
 install_secret grant-phase3-activation \
   postgres_owner_password postgres_owner_password 0 0
+install_secret identity-role-activation \
+  postgres_owner_password postgres_owner_password 0 0
 
 # pgBackRest authenticates as a dedicated non-superuser over the shared Unix
 # socket. It never receives the bootstrap owner password.

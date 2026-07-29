@@ -123,7 +123,7 @@ def test_source_plan_tracks_the_writer_and_removes_only_its_missing_boundary() -
     assert "off_host_backup_writer_not_installed" not in source
     assert "activation_migration_executor_not_installed" not in source
     assert "identity_authority_admission_writer_not_installed" not in source
-    assert "identity_disposable_role_activation_not_installed" in source
+    assert "identity_disposable_role_activation_not_installed" not in source
 
 
 def test_e5o_is_carried_by_the_hosted_gate() -> None:

@@ -192,7 +192,7 @@ def test_source_plan_tracks_admission_writer_and_retains_role_boundary() -> None
     source = SOURCE_PLAN.read_text(encoding="utf-8")
     assert "phase3_authority_admission.py" in source
     assert "identity_authority_admission_writer_not_installed" not in source
-    assert "identity_disposable_role_activation_not_installed" in source
+    assert "identity_disposable_role_activation_not_installed" not in source
     assert '"identity_authority_admission_writer_installed": trusted' in source
 
 
@@ -203,5 +203,5 @@ def test_e5u_is_carried_by_the_filtered_hosted_gate() -> None:
     assert "phase3_authority_admission.py" in runner
     assert "test_identity_admission_writer_e5u.py" in runner
     assert "test_identity_admission_writer_e5u.py" in workflow
-    assert "E5t/E5u PostgreSQL gate" in workflow
-    assert "E5t/E5u authority gate" in workflow
+    assert "E5t/E5u/E5v PostgreSQL gate" in workflow
+    assert "E5t/E5u/E5v authority gate" in workflow

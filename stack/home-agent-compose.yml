@@ -300,6 +300,40 @@ services:
     logging:
       driver: none
 
+  identity-role-activation:
+    image: "${HOME_AGENT_POSTGRES_IMAGE:-postgres:17.10-bookworm@sha256:17b6c778de50f4bb9a878c36e736110fbcd9b7020377d6fdfdf20f7c0347e40a}"
+    platform: linux/amd64
+    profiles: [operator]
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    entrypoint:
+      ["/bin/sh", "/deploy/activate-identity-authority-role.sh"]
+    command: ["status", "finalizer"]
+    environment:
+      PGHOST: postgres
+      PGDATABASE: home_agent
+      PGUSER: home_agent_owner
+      POSTGRES_OWNER_PASSWORD_FILE: /run/secrets/postgres_owner_password
+      HOME_AGENT_PHASE3_GRANT_PERMIT_FILE: /run/secrets/phase3_grant_permit
+    secrets:
+      - source: postgres_owner_password_identity_role_activation
+        target: postgres_owner_password
+      - source: phase3_grant_permit_identity_role_activation
+        target: phase3_grant_permit
+    volumes:
+      - ./home-agent-deploy:/deploy:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    networks: [postgres-net]
+    depends_on:
+      postgres: {condition: service_healthy}
+    mem_limit: 128m
+    pids_limit: 64
+    logging:
+      driver: none
+
   core-api:
     <<: *core-service
     command: ["api"]
@@ -676,6 +710,8 @@ secrets:
   postgres_owner_password_grant: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/grant-runtime/postgres_owner_password"}
   postgres_owner_password_phase3_activation: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/grant-phase3-activation/postgres_owner_password"}
   phase3_grant_permit_phase3_activation: {file: "${HOME_AGENT_PHASE3_GRANT_PERMIT_PATH:-/srv/home-agent/config/phase3-grant-permit-e5m.txt}"}
+  postgres_owner_password_identity_role_activation: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/identity-role-activation/postgres_owner_password"}
+  phase3_grant_permit_identity_role_activation: {file: "${HOME_AGENT_PHASE3_GRANT_PERMIT_PATH:-/srv/home-agent/config/phase3-grant-permit-e5m.txt}"}
   postgres_owner_password_identity_cutover_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-identity-cutover-roles/postgres_owner_password"}
   postgres_identity_cutover_password_identity_cutover_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-identity-cutover-roles/postgres_identity_cutover_password"}
   database_url_owner_migrate: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/migrate/database_url"}

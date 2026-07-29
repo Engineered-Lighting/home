@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the E1-E5u scaffold gate against disposable PostgreSQL 17."""
+"""Run the E1-E5v scaffold gate against disposable PostgreSQL 17."""
 
 from __future__ import annotations
 
@@ -319,6 +319,7 @@ BUILD_CONTEXT_FILES = (
     "stack/home-agent-deploy/provision-identity-cutover-roles.sh",
     "stack/home-agent-deploy/provision-identity-binding-kernel-role.sh",
     "stack/home-agent-deploy/provision-parent-relationship-kernel-role.sh",
+    "stack/home-agent-deploy/activate-identity-authority-role.sh",
     "stack/home-agent-deploy/postgres-pg_hba.conf",
     "stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh",
     "tests/home_agent/test_identity_erasure_kernel_foundation_deployment_contract.py",
@@ -359,6 +360,7 @@ BUILD_CONTEXT_FILES = (
     "stack/home-agent-deploy/operator/phase3_activation_sequencer.py",
     "stack/home-agent-deploy/operator/phase3_migration_executor.py",
     "stack/home-agent-deploy/operator/phase3_authority_admission.py",
+    "stack/home-agent-deploy/operator/phase3_identity_authority_ceremony.py",
     "stack/home-agent-deploy/operator/off_host_backup_writer.py",
     "stack/home-agent-deploy/operator/phase3_evidence_receipts.py",
     "stack/home-agent-deploy/operator/isolated_restore_drill.sh",
@@ -410,6 +412,7 @@ BUILD_CONTEXT_FILES = (
     "tests/home_agent/test_phase3_source_pin_bootstrap_e5q.py",
     "tests/home_agent/test_phase3_migration_executor_e5t.py",
     "tests/home_agent/test_identity_admission_writer_e5u.py",
+    "tests/home_agent/test_identity_authority_role_ceremony_e5v.py",
     "tests/home_agent/test_phase3_evidence_receipts_e5j.py",
     "tests/home_agent/test_phase3_fixed_migration_entrypoints_e5l.py",
     "stack/services/home-agent-core/tests/"
@@ -1362,6 +1365,124 @@ def _provision_parent_relationship_kernel_role(
         ],
         label=f"additive E5e kernel-role ceremony for {phase.name}",
     )
+
+
+def _exercise_identity_authority_role_ceremony(
+    state: GateState,
+    phase: Phase,
+    secrets_directory: Path,
+) -> None:
+    script = "/workspace/stack/home-agent-deploy/activate-identity-authority-role.sh"
+    environment = {
+        **_client_environment(BASE_DATABASE),
+        "HOME_AGENT_PHASE3_GRANT_PERMIT_FILE": (
+            "/run/secrets/phase3_grant_permit"
+        ),
+    }
+    for authority, role, password_secret in (
+        (
+            "finalizer",
+            "home_agent_identity_finalizer",
+            "postgres_identity_finalizer_password",
+        ),
+        (
+            "cutover",
+            "home_agent_identity_cutover",
+            "postgres_identity_cutover_password",
+        ),
+    ):
+        _docker_run(
+            state,
+            state.test_image,
+            phase=phase.name,
+            network=phase.network,
+            secrets_directory=secrets_directory,
+            environment=environment,
+            command=["sh", script, "status", authority],
+            label=f"verify dormant E5v {authority} login",
+        )
+        _docker_run(
+            state,
+            state.test_image,
+            phase=phase.name,
+            network=phase.network,
+            secrets_directory=secrets_directory,
+            environment=environment,
+            command=["sh", script, "activate", authority],
+            label=f"activate bounded E5v {authority} login",
+        )
+        _docker_run(
+            state,
+            state.test_image,
+            phase=phase.name,
+            network=phase.network,
+            secrets_directory=secrets_directory,
+            environment={
+                "PGHOST": "postgres",
+                "PGPORT": "5432",
+                "PGDATABASE": BASE_DATABASE,
+                "PGUSER": role,
+                "ROLE_PASSWORD_FILE": f"/run/secrets/{password_secret}",
+            },
+            command=[
+                "sh",
+                "-eu",
+                "-c",
+                "export PGPASSWORD=\"$(tr -d '\\r\\n' < "
+                '"$ROLE_PASSWORD_FILE")"; '
+                "test \"$(psql -AtX -v ON_ERROR_STOP=1 "
+                "-c 'SELECT current_user')\" = \"$PGUSER\"",
+            ],
+            label=f"prove bounded E5v {authority} login",
+        )
+        _docker_run(
+            state,
+            state.test_image,
+            phase=phase.name,
+            network=phase.network,
+            secrets_directory=secrets_directory,
+            environment=environment,
+            command=["sh", script, "deactivate", authority],
+            label=f"re-expire E5v {authority} login",
+        )
+        rejected = _docker_run(
+            state,
+            state.test_image,
+            phase=phase.name,
+            network=phase.network,
+            secrets_directory=secrets_directory,
+            environment={
+                "PGHOST": "postgres",
+                "PGPORT": "5432",
+                "PGDATABASE": BASE_DATABASE,
+                "PGUSER": role,
+                "ROLE_PASSWORD_FILE": f"/run/secrets/{password_secret}",
+            },
+            command=[
+                "sh",
+                "-eu",
+                "-c",
+                "export PGPASSWORD=\"$(tr -d '\\r\\n' < "
+                '"$ROLE_PASSWORD_FILE")"; '
+                "psql -AtX -v ON_ERROR_STOP=1 -c 'SELECT current_user'",
+            ],
+            label=f"reject expired E5v {authority} login",
+            check=False,
+        )
+        if rejected.returncode == 0:
+            raise GateFailure(
+                f"expired E5v {authority} login remained callable"
+            )
+        _docker_run(
+            state,
+            state.test_image,
+            phase=phase.name,
+            network=phase.network,
+            secrets_directory=secrets_directory,
+            environment=environment,
+            command=["sh", script, "status", authority],
+            label=f"verify re-expired E5v {authority} login",
+        )
 
 
 def _database_url_shell_export(
@@ -2648,6 +2769,11 @@ def _run_e4_scaffold_phase(
         BASE_DATABASE,
         REVISION_0015,
     )
+    _exercise_identity_authority_role_ceremony(
+        state,
+        phase,
+        secrets_directory,
+    )
 
     # E5b adds a separately owned, database-only principal-binding commit
     # kernel. Its cluster-wide NOLOGIN role is admitted only after the pinned
@@ -3361,6 +3487,8 @@ def _run_e4_scaffold_phase(
             "test_phase3_migration_executor_e5t.py",
             "/workspace/tests/home_agent/"
             "test_identity_admission_writer_e5u.py",
+            "/workspace/tests/home_agent/"
+            "test_identity_authority_role_ceremony_e5v.py",
             "/workspace/tests/home_agent/" "test_phase3_evidence_receipts_e5j.py",
             "/workspace/tests/home_agent/"
             "test_phase3_fixed_migration_entrypoints_e5l.py",
@@ -3415,7 +3543,7 @@ def main() -> int:
     except GateFailure as error:
         print(
             "E1/E2/E3/E4 gate execution quarantine "
-            f"(E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u included): {error}",
+            f"(E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v included): {error}",
             file=sys.stderr,
         )
         return 77

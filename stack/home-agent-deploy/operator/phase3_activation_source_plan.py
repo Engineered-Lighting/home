@@ -53,6 +53,7 @@ ACTIVATION_PATHS = (
     "stack/home-agent-deploy/add-identity-finalizer-role-secrets.sh",
     "stack/home-agent-deploy/add-identity-migration-role-secrets.sh",
     "stack/home-agent-deploy/apply-grants.sh",
+    "stack/home-agent-deploy/activate-identity-authority-role.sh",
     "stack/home-agent-deploy/identity-api-acl.sql",
     "stack/home-agent-deploy/materialize-secrets.sh",
     "stack/home-agent-deploy/off-host-backup-destination.e5o.example.json",
@@ -69,6 +70,7 @@ ACTIVATION_PATHS = (
     "stack/home-agent-deploy/operator/off_host_backup_writer.py",
     "stack/home-agent-deploy/operator/parent_confirmation_staging.py",
     "stack/home-agent-deploy/operator/phase3_authority_admission.py",
+    "stack/home-agent-deploy/operator/phase3_identity_authority_ceremony.py",
     "stack/home-agent-deploy/operator/phase3_migration_executor.py",
     "stack/home-agent-deploy/operator/phase3_activation_preflight.py",
     "stack/home-agent-deploy/operator/phase3_activation_sequencer.py",
@@ -82,7 +84,6 @@ ACTIVATION_PATHS = (
     "stack/services/home-agent-core/docker-entrypoint.sh",
 )
 MISSING_EXECUTABLE_BOUNDARIES = (
-    "identity_disposable_role_activation_not_installed",
 )
 
 
@@ -194,6 +195,7 @@ def evaluate(
         "identity_finalizer_executor_installed": trusted,
         "identity_cutover_executor_installed": trusted,
         "identity_authority_admission_writer_installed": trusted,
+        "identity_disposable_role_activation_installed": trusted,
         "off_host_backup_writer_installed": trusted,
         "activation_executor_installed": trusted,
         "source_acceptance_receipt_issuable": trusted,

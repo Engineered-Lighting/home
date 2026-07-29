@@ -1,4 +1,4 @@
-name: home agent E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u PostgreSQL gate
+name: home agent E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v PostgreSQL gate
 
 on:
   pull_request:
@@ -21,6 +21,7 @@ on:
       - "stack/home-agent-deploy/provision-parent-relationship-kernel-role.sh"
       - "stack/home-agent-deploy/provision-identity-cutover-roles.sh"
       - "stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh"
+      - "stack/home-agent-deploy/activate-identity-authority-role.sh"
       - "stack/home-agent-deploy/identity-api-acl.sql"
       - "stack/home-agent-deploy/operator/REVIEWED-IDENTITY-PAYLOAD.md"
       - "stack/home-agent-deploy/operator/reviewed_identity_payload.py"
@@ -29,6 +30,7 @@ on:
       - "stack/home-agent-deploy/operator/phase3_activation_sequencer.py"
       - "stack/home-agent-deploy/operator/phase3_migration_executor.py"
       - "stack/home-agent-deploy/operator/phase3_authority_admission.py"
+      - "stack/home-agent-deploy/operator/phase3_identity_authority_ceremony.py"
       - "stack/home-agent-deploy/operator/off_host_backup_writer.py"
       - "stack/home-agent-deploy/operator/phase3_evidence_receipts.py"
       - "stack/home-agent-deploy/operator/isolated_restore_drill.sh"
@@ -58,6 +60,7 @@ on:
       - "tests/home_agent/test_phase3_source_pin_bootstrap_e5q.py"
       - "tests/home_agent/test_phase3_migration_executor_e5t.py"
       - "tests/home_agent/test_identity_admission_writer_e5u.py"
+      - "tests/home_agent/test_identity_authority_role_ceremony_e5v.py"
       - "tests/home_agent/test_phase3_evidence_receipts_e5j.py"
       - "tests/home_agent/test_phase3_fixed_migration_entrypoints_e5l.py"
       - "tools/run-home-agent-e1-postgres-gate.py"
@@ -84,6 +87,7 @@ on:
       - "stack/home-agent-deploy/provision-parent-relationship-kernel-role.sh"
       - "stack/home-agent-deploy/provision-identity-cutover-roles.sh"
       - "stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh"
+      - "stack/home-agent-deploy/activate-identity-authority-role.sh"
       - "stack/home-agent-deploy/identity-api-acl.sql"
       - "stack/home-agent-deploy/operator/REVIEWED-IDENTITY-PAYLOAD.md"
       - "stack/home-agent-deploy/operator/reviewed_identity_payload.py"
@@ -92,6 +96,7 @@ on:
       - "stack/home-agent-deploy/operator/phase3_activation_sequencer.py"
       - "stack/home-agent-deploy/operator/phase3_migration_executor.py"
       - "stack/home-agent-deploy/operator/phase3_authority_admission.py"
+      - "stack/home-agent-deploy/operator/phase3_identity_authority_ceremony.py"
       - "stack/home-agent-deploy/operator/off_host_backup_writer.py"
       - "stack/home-agent-deploy/operator/phase3_evidence_receipts.py"
       - "stack/home-agent-deploy/operator/isolated_restore_drill.sh"
@@ -121,6 +126,7 @@ on:
       - "tests/home_agent/test_phase3_source_pin_bootstrap_e5q.py"
       - "tests/home_agent/test_phase3_migration_executor_e5t.py"
       - "tests/home_agent/test_identity_admission_writer_e5u.py"
+      - "tests/home_agent/test_identity_authority_role_ceremony_e5v.py"
       - "tests/home_agent/test_phase3_evidence_receipts_e5j.py"
       - "tests/home_agent/test_phase3_fixed_migration_entrypoints_e5l.py"
       - "tools/run-home-agent-e1-postgres-gate.py"
@@ -152,7 +158,7 @@ jobs:
           RUNNER_TEMP="$RUNNER_TEMP"
           sh stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh
 
-      - name: Run isolated PostgreSQL 17 E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u authority gate
+      - name: Run isolated PostgreSQL 17 E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v authority gate
         env:
           HOME_AGENT_E1_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: >-

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the E1-E5l scaffold gate against disposable PostgreSQL 17."""
+"""Run the E1-E5m scaffold gate against disposable PostgreSQL 17."""
 
 from __future__ import annotations
 
@@ -244,6 +244,10 @@ SECRET_NAMES = (
     "postgres_rollout_password",
     "postgres_backup_password",
 )
+PHASE3_GRANT_PERMIT = (
+    "phase3-grant-permit-e5m-v1:"
+    "0017_authenticated_binding_e5c:0021_parent_status_e5h"
+)
 E2_RUNTIME_ROLE_URLS = (
     (
         "TEST_PHASE3_IDENTITY_ERASURE_E2_API_DATABASE_URL",
@@ -348,6 +352,7 @@ BUILD_CONTEXT_FILES = (
     "stack/home-agent-deploy/operator/principal_binding_candidate_staging.py",
     "stack/home-agent-deploy/operator/phase3_activation_preflight.py",
     "stack/home-agent-deploy/operator/phase3_activation_source_plan.py",
+    "stack/home-agent-deploy/operator/phase3_activation_sequencer.py",
     "stack/home-agent-deploy/operator/phase3_evidence_receipts.py",
     "stack/home-agent-deploy/operator/isolated_restore_drill.sh",
     "stack/home-agent-deploy/operator/REVIEWED-IDENTITY-PAYLOAD.md",
@@ -388,6 +393,7 @@ BUILD_CONTEXT_FILES = (
     "tests/home_agent/" "test_parent_relationship_status_e5h_deployment_contract.py",
     "tests/home_agent/test_phase3_activation_preflight_e5j.py",
     "tests/home_agent/test_phase3_activation_source_plan_e5k.py",
+    "tests/home_agent/test_phase3_activation_sequencer_e5m.py",
     "tests/home_agent/test_phase3_evidence_receipts_e5j.py",
     "tests/home_agent/test_phase3_fixed_migration_entrypoints_e5l.py",
     "stack/services/home-agent-core/tests/"
@@ -862,6 +868,12 @@ def _write_secrets(directory: Path) -> None:
             path.chmod(0o400)
         except OSError:
             pass
+    permit = directory / "phase3_grant_permit"
+    permit.write_text(PHASE3_GRANT_PERMIT + "\n", encoding="ascii")
+    try:
+        permit.chmod(0o600)
+    except OSError:
+        pass
 
 
 def _labels(state: GateState, phase: str) -> list[str]:
@@ -941,6 +953,7 @@ def _client_environment(database: str) -> dict[str, str]:
         "PGDATABASE": database,
         "PGUSER": OWNER,
         "POSTGRES_OWNER_PASSWORD_FILE": "/run/secrets/postgres_owner_password",
+        "HOME_AGENT_PHASE3_GRANT_PERMIT_FILE": "/run/phase3-activation/permit",
     }
 
 
@@ -1094,7 +1107,15 @@ def _apply_grants(
         network=phase.network,
         secrets_directory=secrets_directory,
         environment=_client_environment(database),
-        command=["sh", "/workspace/stack/home-agent-deploy/apply-grants.sh"],
+        command=[
+            "sh",
+            "-eu",
+            "-c",
+            "install -d -m 0700 /run/phase3-activation; "
+            "install -m 0600 /run/secrets/phase3_grant_permit "
+            "/run/phase3-activation/permit; "
+            "exec sh /workspace/stack/home-agent-deploy/apply-grants.sh",
+        ],
         label=f"grant application for {database}",
     )
 
@@ -1116,7 +1137,15 @@ def _apply_grants_expect_failure(
         network=phase.network,
         secrets_directory=secrets_directory,
         environment=_client_environment(database),
-        command=["sh", "/workspace/stack/home-agent-deploy/apply-grants.sh"],
+        command=[
+            "sh",
+            "-eu",
+            "-c",
+            "install -d -m 0700 /run/phase3-activation; "
+            "install -m 0600 /run/secrets/phase3_grant_permit "
+            "/run/phase3-activation/permit; "
+            "exec sh /workspace/stack/home-agent-deploy/apply-grants.sh",
+        ],
         label=f"rejected grant application for {database}",
         check=False,
     )
@@ -3300,6 +3329,8 @@ def _run_e4_scaffold_phase(
             "/workspace/tests/home_agent/" "test_phase3_activation_preflight_e5j.py",
             "/workspace/tests/home_agent/"
             "test_phase3_activation_source_plan_e5k.py",
+            "/workspace/tests/home_agent/"
+            "test_phase3_activation_sequencer_e5m.py",
             "/workspace/tests/home_agent/" "test_phase3_evidence_receipts_e5j.py",
             "/workspace/tests/home_agent/"
             "test_phase3_fixed_migration_entrypoints_e5l.py",
@@ -3354,7 +3385,7 @@ def main() -> int:
     except GateFailure as error:
         print(
             "E1/E2/E3/E4 gate execution quarantine "
-            f"(E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l included): {error}",
+            f"(E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m included): {error}",
             file=sys.stderr,
         )
         return 77

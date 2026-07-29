@@ -10,6 +10,39 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 export PGPASSWORD="$(tr -d '\r\n' < "$POSTGRES_OWNER_PASSWORD_FILE")"
 [ -n "$PGPASSWORD" ] || { echo "empty owner password" >&2; exit 78; }
 
+current_revision="$(
+  psql -At -v ON_ERROR_STOP=1 \
+    -c 'SELECT version_num FROM public.alembic_version'
+)"
+case "$current_revision" in
+  0017_authenticated_binding_e5c|\
+  0018_parent_relationship_e5d|\
+  0019_parent_stage_e5e|\
+  0020_parent_commit_e5f|\
+  0021_parent_status_e5h)
+    permit_path="${HOME_AGENT_PHASE3_GRANT_PERMIT_FILE:-}"
+    [ "$permit_path" = "/run/phase3-activation/permit" ] || {
+      echo "phase3 grant activation permit is not mounted" >&2
+      exit 78
+    }
+    [ -f "$permit_path" ] && [ ! -L "$permit_path" ] || {
+      echo "phase3 grant activation permit is unsafe" >&2
+      exit 78
+    }
+    permit_metadata="$(stat -Lc '%u:%g:%a:%h' -- "$permit_path")"
+    [ "$permit_metadata" = "0:0:600:1" ] || {
+      echo "phase3 grant activation permit is unsafe" >&2
+      exit 78
+    }
+    permit_value="$(tr -d '\r\n' < "$permit_path")"
+    [ "$permit_value" = \
+      "phase3-grant-permit-e5m-v1:0017_authenticated_binding_e5c:0021_parent_status_e5h" ] || {
+      echo "phase3 grant activation permit is invalid" >&2
+      exit 78
+    }
+    ;;
+esac
+
 psql -v ON_ERROR_STOP=1 <<'SQL'
 -- First committed statement: remove any stale identity authority before any
 -- other grant work can fail. The separate exact ACL file only adds reviewed

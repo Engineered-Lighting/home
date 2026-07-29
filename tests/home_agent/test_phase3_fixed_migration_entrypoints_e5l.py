@@ -77,5 +77,5 @@ def test_e5l_is_carried_by_the_hosted_gate() -> None:
 
     assert "test_phase3_fixed_migration_entrypoints_e5l.py" in workflow
     assert "test_phase3_fixed_migration_entrypoints_e5l.py" in runner
-    assert "E5j/E5k/E5l PostgreSQL gate" in workflow
-    assert "E5j/E5k/E5l authority gate" in workflow
+    assert "E5j/E5k/E5l/E5m PostgreSQL gate" in workflow
+    assert "E5j/E5k/E5l/E5m authority gate" in workflow

@@ -1194,6 +1194,47 @@ routes. The live source verifier matched 86 entries at digest
 No database connection, container restart, migration, receipt write, or
 rollout change occurred.
 
+### E5m source admission and grant arming
+
+E5m adds a root-only sequencer with four commands:
+
+```sh
+cd /opt/home/home-agent-integration-test
+sudo python3 \
+  stack/home-agent-deploy/operator/phase3_activation_sequencer.py status
+sudo python3 \
+  stack/home-agent-deploy/operator/phase3_activation_sequencer.py admit-source
+sudo python3 \
+  stack/home-agent-deploy/operator/phase3_activation_sequencer.py arm-grants
+sudo python3 \
+  stack/home-agent-deploy/operator/phase3_activation_sequencer.py disarm-grants
+```
+
+`admit-source` writes the existing exact E5j source-acceptance receipt only
+when the E5k verifier matches the current checkout to its hosted-tested source
+pack, the five fixed E5l entrypoints are present, and the E5m grant contract is
+installed. The receipt binds the current clean commit, accepted PostgreSQL
+run, accepted web-boundary run, target revision, and installed contract.
+
+`arm-grants` cannot write its root-owned, mode-0600, single-link permit until
+the full E5j preflight has no blockers. The permit is not a secret and grants
+no authority by existence alone. Only the operator-profile
+`grant-phase3-activation` service receives it and a distinct materialized
+owner-password copy. The service has no port or application network, copies
+the permit into a root-owned tmpfs, and runs the reviewed grant contract with
+logging disabled.
+
+At revisions 0017 through 0021, `apply-grants.sh` now validates the exact
+permit path, root ownership, mode, link count, and fixed value before its first
+ACL statement. Normal revision-0006a grant replay is unchanged. Revisions
+0014 through 0016 retain their earlier explicit E4 activation stop.
+
+E5m publishes the deterministic activation sequence for review but keeps
+`migration_executor_enabled=false`, `runs_migrations=false`,
+`enables_writes=false`, and `changes_rollout_mode=false`. The finalizer,
+legacy-writer freeze, cutover, staged migration executor, and off-host writer
+remain separate required milestones.
+
 ## Record-only, shadow, and canary gates
 
 Every fresh deployment starts with `HOME_AGENT_ROLLOUT_MODE=record_only`.

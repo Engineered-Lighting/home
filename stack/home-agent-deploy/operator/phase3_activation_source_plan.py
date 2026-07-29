@@ -50,6 +50,7 @@ ACTIVATION_PATHS = (
     "stack/home-agent-deploy/operator/identity_finalizer_compatibility.py",
     "stack/home-agent-deploy/operator/parent_confirmation_staging.py",
     "stack/home-agent-deploy/operator/phase3_activation_preflight.py",
+    "stack/home-agent-deploy/operator/phase3_activation_sequencer.py",
     "stack/home-agent-deploy/operator/phase3_evidence_receipts.py",
     "stack/home-agent-deploy/operator/principal_binding_candidate_staging.py",
     "stack/home-agent-deploy/operator/reviewed_identity_payload.py",

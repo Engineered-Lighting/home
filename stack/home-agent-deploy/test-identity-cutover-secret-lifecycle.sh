@@ -363,7 +363,8 @@ expect_status 70 matching-resume \
 
 # Compose interpolation is checked without pulling an image or contacting the
 # daemon. The rendered operator services must point only to the disposable
-# mode-0400 E4 files and remain inert.
+# mode-0400 E4 files. The installed stdin executor remains inert because this
+# lifecycle never activates the disposable database login.
 mkdir "$workspace/compose-data" "$workspace/compose-runtime" \
   "$workspace/compose-ledger" "$workspace/compose-tls" \
   "$workspace/compose-pgbackrest-repository" \
@@ -463,9 +464,14 @@ if surface_secrets != {
         "database_url",
 }:
     raise SystemExit("rendered E4 surface secret set mismatch")
-rendered_command = " ".join(surface.get("command", []))
-if "cutover is dormant" not in rendered_command or "exit 78" not in rendered_command:
-    raise SystemExit("rendered E4 surface is not inert")
+if surface.get("command") != ["identity-cutover"]:
+    raise SystemExit("rendered E4 surface command mismatch")
+if surface.get("environment") != {
+    "HOME_AGENT_DATABASE_URL_FILE": "/run/secrets/database_url"
+}:
+    raise SystemExit("rendered E4 surface environment mismatch")
+if surface.get("stdin_open") is not True or surface.get("tty") is not False:
+    raise SystemExit("rendered E4 surface is not stdin-only")
 if surface.get("logging", {}).get("driver") != "none":
     raise SystemExit("rendered E4 surface logging is enabled")
 PY

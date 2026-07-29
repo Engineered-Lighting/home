@@ -166,5 +166,5 @@ def test_e5k_is_carried_by_the_filtered_hosted_gate() -> None:
     assert "tests/home_agent/test_phase3_activation_source_plan_e5k.py" in runner
     assert "phase3_activation_source_plan.py" in workflow
     assert "test_phase3_activation_source_plan_e5k.py" in workflow
-    assert "E5j/E5k/E5l/E5m/E5n PostgreSQL gate" in workflow
-    assert "E5j/E5k/E5l/E5m/E5n authority gate" in workflow
+    assert "E5j/E5k/E5l/E5m/E5n/E5o PostgreSQL gate" in workflow
+    assert "E5j/E5k/E5l/E5m/E5n/E5o authority gate" in workflow

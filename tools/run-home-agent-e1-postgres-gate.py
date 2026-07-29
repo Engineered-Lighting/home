@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the E1-E5n scaffold gate against disposable PostgreSQL 17."""
+"""Run the E1-E5o scaffold gate against disposable PostgreSQL 17."""
 
 from __future__ import annotations
 
@@ -310,6 +310,7 @@ BUILD_CONTEXT_FILES = (
     "stack/home-agent-deploy/IDENTITY-CUTOVER-ROLE.md",
     "stack/home-agent-deploy/bootstrap-secrets.sh",
     "stack/home-agent-deploy/materialize-secrets.sh",
+    "stack/home-agent-deploy/off-host-backup-destination.e5o.example.json",
     "stack/home-agent-deploy/preflight.sh",
     "stack/home-agent-deploy/add-identity-cutover-role-secrets.sh",
     "stack/home-agent-deploy/add-binding-committer-role-secrets.sh",
@@ -354,6 +355,7 @@ BUILD_CONTEXT_FILES = (
     "stack/home-agent-deploy/operator/phase3_activation_preflight.py",
     "stack/home-agent-deploy/operator/phase3_activation_source_plan.py",
     "stack/home-agent-deploy/operator/phase3_activation_sequencer.py",
+    "stack/home-agent-deploy/operator/off_host_backup_writer.py",
     "stack/home-agent-deploy/operator/phase3_evidence_receipts.py",
     "stack/home-agent-deploy/operator/isolated_restore_drill.sh",
     "stack/home-agent-deploy/operator/REVIEWED-IDENTITY-PAYLOAD.md",
@@ -398,6 +400,7 @@ BUILD_CONTEXT_FILES = (
     "tests/home_agent/test_phase3_activation_source_plan_e5k.py",
     "tests/home_agent/test_phase3_activation_sequencer_e5m.py",
     "tests/home_agent/test_identity_authority_executor_e5n.py",
+    "tests/home_agent/test_off_host_backup_writer_e5o.py",
     "tests/home_agent/test_phase3_evidence_receipts_e5j.py",
     "tests/home_agent/test_phase3_fixed_migration_entrypoints_e5l.py",
     "stack/services/home-agent-core/tests/"
@@ -441,6 +444,7 @@ REVIEWED_CONTEXT_FILENAMES = {
     "api.js",
     "bff.mjs",
     "home-agent.env.example",
+    "off-host-backup-destination.e5o.example.json",
     "panel.jsx",
     "postgres-pg_hba.conf",
 }
@@ -3338,6 +3342,8 @@ def _run_e4_scaffold_phase(
             "test_phase3_activation_sequencer_e5m.py",
             "/workspace/tests/home_agent/"
             "test_identity_authority_executor_e5n.py",
+            "/workspace/tests/home_agent/"
+            "test_off_host_backup_writer_e5o.py",
             "/workspace/tests/home_agent/" "test_phase3_evidence_receipts_e5j.py",
             "/workspace/tests/home_agent/"
             "test_phase3_fixed_migration_entrypoints_e5l.py",
@@ -3392,7 +3398,7 @@ def main() -> int:
     except GateFailure as error:
         print(
             "E1/E2/E3/E4 gate execution quarantine "
-            f"(E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n included): {error}",
+            f"(E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o included): {error}",
             file=sys.stderr,
         )
         return 77

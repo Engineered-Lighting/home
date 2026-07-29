@@ -1,4 +1,4 @@
-name: home agent E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n PostgreSQL gate
+name: home agent E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o PostgreSQL gate
 
 on:
   pull_request:
@@ -12,6 +12,7 @@ on:
       - "stack/home-agent-deploy/bootstrap-secrets.sh"
       - "stack/home-agent-deploy/IDENTITY-CUTOVER-ROLE.md"
       - "stack/home-agent-deploy/materialize-secrets.sh"
+      - "stack/home-agent-deploy/off-host-backup-destination.e5o.example.json"
       - "stack/home-agent-deploy/postgres-pg_hba.conf"
       - "stack/home-agent-deploy/preflight.sh"
       - "stack/home-agent-deploy/preflight-identity-cutover-roles.sh"
@@ -25,6 +26,7 @@ on:
       - "stack/home-agent-deploy/operator/phase3_activation_preflight.py"
       - "stack/home-agent-deploy/operator/phase3_activation_source_plan.py"
       - "stack/home-agent-deploy/operator/phase3_activation_sequencer.py"
+      - "stack/home-agent-deploy/operator/off_host_backup_writer.py"
       - "stack/home-agent-deploy/operator/phase3_evidence_receipts.py"
       - "stack/home-agent-deploy/operator/isolated_restore_drill.sh"
       - "stack/home-agent-deploy/provision-roles.sh"
@@ -47,6 +49,7 @@ on:
       - "tests/home_agent/test_phase3_activation_source_plan_e5k.py"
       - "tests/home_agent/test_phase3_activation_sequencer_e5m.py"
       - "tests/home_agent/test_identity_authority_executor_e5n.py"
+      - "tests/home_agent/test_off_host_backup_writer_e5o.py"
       - "tests/home_agent/test_phase3_evidence_receipts_e5j.py"
       - "tests/home_agent/test_phase3_fixed_migration_entrypoints_e5l.py"
       - "tools/run-home-agent-e1-postgres-gate.py"
@@ -64,6 +67,7 @@ on:
       - "stack/home-agent-deploy/bootstrap-secrets.sh"
       - "stack/home-agent-deploy/IDENTITY-CUTOVER-ROLE.md"
       - "stack/home-agent-deploy/materialize-secrets.sh"
+      - "stack/home-agent-deploy/off-host-backup-destination.e5o.example.json"
       - "stack/home-agent-deploy/postgres-pg_hba.conf"
       - "stack/home-agent-deploy/preflight.sh"
       - "stack/home-agent-deploy/preflight-identity-cutover-roles.sh"
@@ -77,6 +81,7 @@ on:
       - "stack/home-agent-deploy/operator/phase3_activation_preflight.py"
       - "stack/home-agent-deploy/operator/phase3_activation_source_plan.py"
       - "stack/home-agent-deploy/operator/phase3_activation_sequencer.py"
+      - "stack/home-agent-deploy/operator/off_host_backup_writer.py"
       - "stack/home-agent-deploy/operator/phase3_evidence_receipts.py"
       - "stack/home-agent-deploy/operator/isolated_restore_drill.sh"
       - "stack/home-agent-deploy/provision-roles.sh"
@@ -99,6 +104,7 @@ on:
       - "tests/home_agent/test_phase3_activation_source_plan_e5k.py"
       - "tests/home_agent/test_phase3_activation_sequencer_e5m.py"
       - "tests/home_agent/test_identity_authority_executor_e5n.py"
+      - "tests/home_agent/test_off_host_backup_writer_e5o.py"
       - "tests/home_agent/test_phase3_evidence_receipts_e5j.py"
       - "tests/home_agent/test_phase3_fixed_migration_entrypoints_e5l.py"
       - "tools/run-home-agent-e1-postgres-gate.py"
@@ -130,7 +136,7 @@ jobs:
           RUNNER_TEMP="$RUNNER_TEMP"
           sh stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh
 
-      - name: Run isolated PostgreSQL 17 E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n authority gate
+      - name: Run isolated PostgreSQL 17 E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o authority gate
         env:
           HOME_AGENT_E1_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: >-

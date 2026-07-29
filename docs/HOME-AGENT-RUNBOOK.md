@@ -1259,6 +1259,61 @@ helper is installed yet. Do not manually alter `VALID UNTIL`; the later
 root-controlled ceremony must bind role activation, the one-time admission,
 executor invocation, immediate re-expiry, and zero-session verification.
 
+### E5o encrypted OneDrive copy
+
+E5o adds `operator/off_host_backup_writer.py`. It accepts no arguments and is
+fixed to the rclone remote `home-agent-offhost:HomeAgent/pgBackRest`. Configure
+that remote as a dedicated OneDrive connection; do not reuse a broad personal
+rclone configuration.
+
+One-time preparation on the Ubuntu host:
+
+```sh
+sudo install -d -o root -g root -m 0700 \
+  /srv/home-agent/secrets/offhost-rclone \
+  /srv/home-agent/durable/off-host-export-e5o
+sudo install -o root -g root -m 0600 /dev/null \
+  /srv/home-agent/secrets/offhost-rclone/rclone.conf
+sudo rclone config \
+  --config /srv/home-agent/secrets/offhost-rclone/rclone.conf
+```
+
+Create exactly one remote named `home-agent-offhost`, select Microsoft
+OneDrive, and restrict its purpose to Home Agent backup storage. The OAuth
+browser step is the only interactive part. Afterward, confirm the config is a
+root-owned, single-link mode-0600 regular file and store its recovery material
+separately from the Ubuntu disk.
+
+Install the fixed destination descriptor from the reviewed example:
+
+```sh
+sudo install -o root -g root -m 0600 \
+  stack/home-agent-deploy/off-host-backup-destination.e5o.example.json \
+  /srv/home-agent/config/off-host-backup-destination-e5o.json
+```
+
+Confirm the target is owned `root:root`, mode `0600`, with one hard link. Then
+run from the clean accepted checkout:
+
+```sh
+cd /opt/home/home-agent-integration-test
+sudo python3 \
+  stack/home-agent-deploy/operator/off_host_backup_writer.py
+```
+
+The writer gets the latest healthy full-backup label from the E5j preflight,
+holds the repository coordination lock exclusively, structurally validates the
+repository, and creates a deterministic tar archive on the encrypted volume.
+Only that encrypted repository archive is uploaded. The raw observation spool,
+live PostgreSQL directory, erasure ledger, pgBackRest cipher passphrase, and
+Home Assistant credentials are never read.
+
+After upload, the writer streams the remote archive back through rclone and
+compares byte count and SHA-256. Only an exact match publishes
+`/srv/home-agent/config/phase3-off-host-backup-e5j.json`. The local staging
+archive is removed on success or failure. A successful copy is not a substitute
+for the separate restore and erasure-current receipts.
+
 ## Record-only, shadow, and canary gates
 
 Every fresh deployment starts with `HOME_AGENT_ROLLOUT_MODE=record_only`.

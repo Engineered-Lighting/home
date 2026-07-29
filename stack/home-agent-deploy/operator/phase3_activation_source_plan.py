@@ -39,6 +39,7 @@ ACTIVATION_PATHS = (
     "stack/home-agent-deploy/apply-grants.sh",
     "stack/home-agent-deploy/identity-api-acl.sql",
     "stack/home-agent-deploy/materialize-secrets.sh",
+    "stack/home-agent-deploy/off-host-backup-destination.e5o.example.json",
     "stack/home-agent-deploy/policy/home-agent-mvp-v1.json",
     "stack/home-agent-deploy/postgres-pg_hba.conf",
     "stack/home-agent-deploy/preflight-identity-cutover-roles.sh",
@@ -48,6 +49,7 @@ ACTIVATION_PATHS = (
     "stack/home-agent-deploy/provision-parent-relationship-kernel-role.sh",
     "stack/home-agent-deploy/provision-roles.sh",
     "stack/home-agent-deploy/operator/identity_finalizer_compatibility.py",
+    "stack/home-agent-deploy/operator/off_host_backup_writer.py",
     "stack/home-agent-deploy/operator/parent_confirmation_staging.py",
     "stack/home-agent-deploy/operator/phase3_activation_preflight.py",
     "stack/home-agent-deploy/operator/phase3_activation_sequencer.py",
@@ -64,7 +66,6 @@ MISSING_EXECUTABLE_BOUNDARIES = (
     "activation_migration_executor_not_installed",
     "identity_authority_admission_writer_not_installed",
     "identity_disposable_role_activation_not_installed",
-    "off_host_backup_writer_not_installed",
 )
 
 
@@ -131,6 +132,7 @@ def evaluate(
         "activation_grant_contract_installed": trusted,
         "identity_finalizer_executor_installed": trusted,
         "identity_cutover_executor_installed": trusted,
+        "off_host_backup_writer_installed": trusted,
         "activation_executor_installed": False,
         "source_acceptance_receipt_issuable": trusted,
         "authoritative": False,

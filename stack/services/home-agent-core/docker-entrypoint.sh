@@ -173,6 +173,20 @@ case "$role" in
     }
     exec python -m app.identity_authority_executor cutover
     ;;
+  identity-admit-finalizer)
+    [ "$#" -eq 1 ] || {
+      echo "identity finalizer admission accepts no arguments" >&2
+      exit 64
+    }
+    exec python -m app.identity_admission_writer finalizer
+    ;;
+  identity-admit-cutover)
+    [ "$#" -eq 1 ] || {
+      echo "identity cutover admission accepts no arguments" >&2
+      exit 64
+    }
+    exec python -m app.identity_admission_writer cutover
+    ;;
   *)
     echo "unsupported HOME_AGENT_ROLE: $role" >&2
     exit 64

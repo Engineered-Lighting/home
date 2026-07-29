@@ -1343,9 +1343,40 @@ exact target revision. It cannot accept an arbitrary revision, build or pull
 an image, stop or start a service, or promote rollout mode.
 
 Do not invoke it on the live deployment yet. The E5j preflight must first pass,
-the later admission and disposable-role ceremonies must be installed and
-hosted-tested, and the complete activation sequence must receive a separate
-operator review. The source-plan blocker for those later boundaries remains.
+the disposable-role ceremony must be installed and hosted-tested, and the
+complete activation sequence must receive a separate operator review.
+
+### E5u one-time authority admission writers
+
+E5u adds two private image entrypoints and a root-only host bridge:
+
+```sh
+sudo python3 \
+  stack/home-agent-deploy/operator/phase3_authority_admission.py \
+  admit-finalizer < /root/reviewed-finalizer-admission.json
+sudo python3 \
+  stack/home-agent-deploy/operator/phase3_authority_admission.py \
+  admit-cutover < /root/reviewed-cutover-admission.json
+```
+
+Each input contains only an exact contract, UUIDv7 admission ID, and canonical
+private document encoded on stdin. The host bridge requires the hosted-tested
+source pack, a fresh E5m permit, the shared activation lock, stopped
+application-facing services, and revision `0015_current_authority_e5a`. It
+passes the request to one fixed entrypoint in the already installed Core image
+using the owner credential already isolated to the migration service.
+
+The image writer rejects duplicate keys, malformed canonical identifiers,
+unbounded input, digest or contract drift, and database evidence mismatches.
+It performs one `SERIALIZABLE`, first-statement `INSERT ... SELECT`, gives the
+admission a maximum 15-minute lifetime, and accepts only an exact idempotent
+replay. Private document bytes never enter argv, environment variables, normal
+output, or logs. The resulting content-minimized row is still not authority:
+the dedicated finalizer or cutover database kernel independently validates and
+consumes it while its disposable login is briefly active.
+
+The live deployment remains untouched. The remaining source-plan blocker is
+the bounded disposable-role activation ceremony.
 
 ## Record-only, shadow, and canary gates
 

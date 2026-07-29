@@ -158,7 +158,7 @@ def test_source_plan_tracks_executor_and_retains_later_boundaries() -> None:
     source = SOURCE_PLAN.read_text(encoding="utf-8")
     assert "phase3_migration_executor.py" in source
     assert "activation_migration_executor_not_installed" not in source
-    assert "identity_authority_admission_writer_not_installed" in source
+    assert "identity_authority_admission_writer_not_installed" not in source
     assert "identity_disposable_role_activation_not_installed" in source
     assert '"activation_executor_installed": trusted' in source
 
@@ -169,5 +169,5 @@ def test_e5t_is_carried_by_the_filtered_hosted_gate() -> None:
     assert "phase3_migration_executor.py" in runner
     assert "test_phase3_migration_executor_e5t.py" in runner
     assert "test_phase3_migration_executor_e5t.py" in workflow
-    assert "E5s/E5t PostgreSQL gate" in workflow
-    assert "E5s/E5t authority gate" in workflow
+    assert "E5s/E5t/E5u PostgreSQL gate" in workflow
+    assert "E5s/E5t/E5u authority gate" in workflow

@@ -68,6 +68,7 @@ ACTIVATION_PATHS = (
     "stack/home-agent-deploy/operator/isolated_restore_drill.sh",
     "stack/home-agent-deploy/operator/off_host_backup_writer.py",
     "stack/home-agent-deploy/operator/parent_confirmation_staging.py",
+    "stack/home-agent-deploy/operator/phase3_authority_admission.py",
     "stack/home-agent-deploy/operator/phase3_migration_executor.py",
     "stack/home-agent-deploy/operator/phase3_activation_preflight.py",
     "stack/home-agent-deploy/operator/phase3_activation_sequencer.py",
@@ -81,7 +82,6 @@ ACTIVATION_PATHS = (
     "stack/services/home-agent-core/docker-entrypoint.sh",
 )
 MISSING_EXECUTABLE_BOUNDARIES = (
-    "identity_authority_admission_writer_not_installed",
     "identity_disposable_role_activation_not_installed",
 )
 
@@ -193,6 +193,7 @@ def evaluate(
         "activation_grant_contract_installed": trusted,
         "identity_finalizer_executor_installed": trusted,
         "identity_cutover_executor_installed": trusted,
+        "identity_authority_admission_writer_installed": trusted,
         "off_host_backup_writer_installed": trusted,
         "activation_executor_installed": trusted,
         "source_acceptance_receipt_issuable": trusted,

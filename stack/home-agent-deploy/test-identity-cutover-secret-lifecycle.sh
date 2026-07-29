@@ -470,7 +470,9 @@ if surface.get("environment") != {
     "HOME_AGENT_DATABASE_URL_FILE": "/run/secrets/database_url"
 }:
     raise SystemExit("rendered E4 surface environment mismatch")
-if surface.get("stdin_open") is not True or surface.get("tty") is not False:
+# Compose may omit an explicitly false default from rendered JSON. Absence and
+# boolean false are equivalent here; true remains forbidden.
+if surface.get("stdin_open") is not True or surface.get("tty", False) is not False:
     raise SystemExit("rendered E4 surface is not stdin-only")
 if surface.get("logging", {}).get("driver") != "none":
     raise SystemExit("rendered E4 surface logging is enabled")

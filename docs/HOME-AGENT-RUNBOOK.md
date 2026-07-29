@@ -1187,6 +1187,13 @@ that accepted source pack and now reports the fixed migration entrypoints as
 installed. The sequencer, grant activation contract, identity finalizer
 executor, identity cutover executor, and off-host backup writer remain absent.
 
+The subsequent Ubuntu verification at source-plan commit `be02ad3` substituted
+`echo` for both Alembic and Python, then proved all five role-to-revision
+routes. The live source verifier matched 86 entries at digest
+`9862ecd4b6d0368d6324106b376a619224d12bab1855149bbb7223c944d58f73`.
+No database connection, container restart, migration, receipt write, or
+rollout change occurred.
+
 ## Record-only, shadow, and canary gates
 
 Every fresh deployment starts with `HOME_AGENT_ROLLOUT_MODE=record_only`.

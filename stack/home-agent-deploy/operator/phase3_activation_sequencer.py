@@ -25,7 +25,6 @@ CONTRACT = "phase3-activation-sequencer-e5m-v1"
 SOURCE_RECEIPT_CONTRACT = "phase3-source-acceptance-e5j-v1"
 GRANT_PERMIT_CONTRACT = "phase3-grant-permit-e5m-v1"
 TARGET_REVISION = "0021_parent_status_e5h"
-WEB_BOUNDARY_RUN_ID = "30387665230"
 CONFIG_ROOT = Path("/srv/home-agent/config")
 ENVIRONMENT_PATH = CONFIG_ROOT / "home-agent.env"
 SOURCE_RECEIPT_PATH = CONFIG_ROOT / "phase3-source-acceptance-e5j.json"
@@ -222,6 +221,7 @@ def grant_contract_installed() -> bool:
 def build_source_receipt(plan: Mapping[str, Any]) -> dict[str, str]:
     commit = plan.get("current_commit")
     run_id = plan.get("accepted_postgres_run_id")
+    web_run_id = plan.get("accepted_web_run_id")
     if (
         plan.get("source_pack_matches_hosted_acceptance") is not True
         or plan.get("fixed_migration_entrypoints_installed") is not True
@@ -229,6 +229,8 @@ def build_source_receipt(plan: Mapping[str, Any]) -> dict[str, str]:
         or COMMIT_SHA.fullmatch(commit) is None
         or not isinstance(run_id, str)
         or RUN_ID.fullmatch(run_id) is None
+        or not isinstance(web_run_id, str)
+        or RUN_ID.fullmatch(web_run_id) is None
         or not grant_contract_installed()
     ):
         raise SequencerError("hosted activation source is not admitted")
@@ -238,7 +240,7 @@ def build_source_receipt(plan: Mapping[str, Any]) -> dict[str, str]:
         "source_commit": commit,
         "postgres_authority_run_id": run_id,
         "postgres_authority_status": "success",
-        "web_boundary_run_id": WEB_BOUNDARY_RUN_ID,
+        "web_boundary_run_id": web_run_id,
         "web_boundary_status": "success",
         "activation_contract_status": "installed",
     }

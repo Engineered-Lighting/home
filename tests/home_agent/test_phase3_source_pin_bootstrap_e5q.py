@@ -31,12 +31,14 @@ def test_pin_normalization_accepts_only_commit_and_run_literal_changes() -> None
         b'CONTRACT = "unchanged"\n'
         b'ACCEPTED_COMMIT = "1111111111111111111111111111111111111111"\n'
         b'ACCEPTED_POSTGRES_RUN_ID = "123456"\n'
+        b'ACCEPTED_WEB_RUN_ID = "123457"\n'
         b'VALUE = "still executable"\n'
     )
     repinned = (
         b'CONTRACT = "unchanged"\n'
         b'ACCEPTED_COMMIT = "2222222222222222222222222222222222222222"\n'
         b'ACCEPTED_POSTGRES_RUN_ID = "987654321"\n'
+        b'ACCEPTED_WEB_RUN_ID = "987654322"\n'
         b'VALUE = "still executable"\n'
     )
     changed = repinned.replace(b"still executable", b"changed executable")
@@ -51,11 +53,14 @@ def test_pin_normalization_rejects_missing_duplicate_and_malformed_literals() ->
     valid = (
         b'ACCEPTED_COMMIT = "1111111111111111111111111111111111111111"\n'
         b'ACCEPTED_POSTGRES_RUN_ID = "123456"\n'
+        b'ACCEPTED_WEB_RUN_ID = "123457"\n'
     )
     invalid_values = (
         b"",
         valid + b'ACCEPTED_POSTGRES_RUN_ID = "999999"\n',
+        valid + b'ACCEPTED_WEB_RUN_ID = "999999"\n',
         valid.replace(b"123456", b"0"),
+        valid.replace(b"123457", b"0"),
         valid.replace(b"1" * 40, b"z" * 40),
         valid + b"\0",
     )
@@ -80,7 +85,7 @@ def test_source_pin_bootstrap_is_hosted_gate_input() -> None:
     workflow = read(".github/workflows/home-agent-e1-postgres.yml")
     runner = read("tools/run-home-agent-e1-postgres-gate.py")
 
-    assert "E5o/E5p/E5q/E5r PostgreSQL gate" in workflow
-    assert "E5o/E5p/E5q/E5r authority gate" in workflow
+    assert "E5o/E5p/E5q/E5r/E5s PostgreSQL gate" in workflow
+    assert "E5o/E5p/E5q/E5r/E5s authority gate" in workflow
     assert "test_phase3_source_pin_bootstrap_e5q.py" in workflow
     assert "test_phase3_source_pin_bootstrap_e5q.py" in runner

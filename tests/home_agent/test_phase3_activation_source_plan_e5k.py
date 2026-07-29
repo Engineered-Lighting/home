@@ -48,6 +48,7 @@ def test_exact_hosted_source_pack_can_be_verified_but_never_activated() -> None:
     assert report["contract"] == "phase3-activation-source-plan-e5k-v1"
     assert report["accepted_commit"] == "36aa4409cc004e13c8b9f7ef214ee06777c667ec"
     assert report["accepted_postgres_run_id"] == "30472326127"
+    assert report["accepted_web_run_id"] == "30387665230"
     assert report["source_pack_matches_hosted_acceptance"] is True
     assert report["fixed_migration_entrypoints_installed"] is True
     assert report["activation_grant_contract_installed"] is True
@@ -166,5 +167,5 @@ def test_e5k_is_carried_by_the_filtered_hosted_gate() -> None:
     assert "tests/home_agent/test_phase3_activation_source_plan_e5k.py" in runner
     assert "phase3_activation_source_plan.py" in workflow
     assert "test_phase3_activation_source_plan_e5k.py" in workflow
-    assert "E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r PostgreSQL gate" in workflow
-    assert "E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r authority gate" in workflow
+    assert "E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s PostgreSQL gate" in workflow
+    assert "E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s authority gate" in workflow

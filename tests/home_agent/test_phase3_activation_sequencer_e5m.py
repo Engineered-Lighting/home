@@ -35,6 +35,7 @@ def _trusted_plan() -> dict[str, object]:
         "fixed_migration_entrypoints_installed": True,
         "current_commit": "a" * 40,
         "accepted_postgres_run_id": "30396371133",
+        "accepted_web_run_id": "30473087421",
     }
 
 
@@ -63,7 +64,7 @@ def test_source_receipt_binds_exact_hosted_and_web_acceptance(monkeypatch) -> No
         "source_commit": "a" * 40,
         "postgres_authority_run_id": "30396371133",
         "postgres_authority_status": "success",
-        "web_boundary_run_id": "30387665230",
+        "web_boundary_run_id": "30473087421",
         "web_boundary_status": "success",
         "activation_contract_status": "installed",
     }
@@ -76,6 +77,7 @@ def test_source_receipt_binds_exact_hosted_and_web_acceptance(monkeypatch) -> No
         {"fixed_migration_entrypoints_installed": False},
         {"current_commit": "not-a-commit"},
         {"accepted_postgres_run_id": "queued"},
+        {"accepted_web_run_id": "queued"},
     ),
 )
 def test_source_admission_fails_closed(change, monkeypatch) -> None:
@@ -198,5 +200,5 @@ def test_e5m_is_carried_by_the_filtered_hosted_gate() -> None:
     assert "test_phase3_activation_sequencer_e5m.py" in workflow
     assert "phase3_activation_sequencer.py" in runner
     assert "test_phase3_activation_sequencer_e5m.py" in runner
-    assert "E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r PostgreSQL gate" in workflow
-    assert "E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r authority gate" in workflow
+    assert "E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s PostgreSQL gate" in workflow
+    assert "E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s authority gate" in workflow

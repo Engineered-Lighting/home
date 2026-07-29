@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the E1-E5r scaffold gate against disposable PostgreSQL 17."""
+"""Run the E1-E5s scaffold gate against disposable PostgreSQL 17."""
 
 from __future__ import annotations
 
@@ -3406,7 +3406,7 @@ def main() -> int:
     except GateFailure as error:
         print(
             "E1/E2/E3/E4 gate execution quarantine "
-            f"(E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r included): {error}",
+            f"(E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s included): {error}",
             file=sys.stderr,
         )
         return 77

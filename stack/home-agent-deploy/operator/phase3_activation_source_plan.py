@@ -3,10 +3,10 @@
 
 This is a source-plan verifier, not a migration or receipt writer. It proves
 that every activation-relevant tracked path still has the exact tree accepted
-by the hosted gate. A later pin-only commit may change exactly the accepted
-commit and run-ID literals in this file; all executable content must remain
-byte-identical after those two literals are normalized. No successful result
-from this command can authorize a rollout.
+by the hosted gates. A later pin-only commit may change exactly the accepted
+commit, PostgreSQL-run, and web-run literals in this file; all executable
+content must remain byte-identical after those three literals are normalized.
+No successful result from this command can authorize a rollout.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ CONTRACT = "phase3-activation-source-plan-e5k-v1"
 SOURCE_PIN_BOOTSTRAP_CONTRACT = "phase3-source-pin-bootstrap-e5q-v1"
 ACCEPTED_COMMIT = "36aa4409cc004e13c8b9f7ef214ee06777c667ec"
 ACCEPTED_POSTGRES_RUN_ID = "30472326127"
+ACCEPTED_WEB_RUN_ID = "30387665230"
 SOURCE_REVISION = "0006a_worker_lease_arbitration"
 TARGET_REVISION = "0021_parent_status_e5h"
 SOURCE_ROOT = Path(__file__).resolve().parents[3]
@@ -36,6 +37,9 @@ ACCEPTED_COMMIT_LITERAL = re.compile(
 )
 ACCEPTED_RUN_LITERAL = re.compile(
     rb'(?m)^ACCEPTED_POSTGRES_RUN_ID = "[1-9][0-9]{5,19}"$'
+)
+ACCEPTED_WEB_RUN_LITERAL = re.compile(
+    rb'(?m)^ACCEPTED_WEB_RUN_ID = "[1-9][0-9]{5,19}"$'
 )
 TREE_ENTRY = re.compile(
     rb"^(100644|100755) blob ([0-9a-f]{40})\t([A-Za-z0-9._/-]+)$"
@@ -91,7 +95,12 @@ def normalize_source_plan_pins(raw: bytes) -> bytes:
         raise SourcePlanError("source-plan pin file is invalid")
     commit_matches = ACCEPTED_COMMIT_LITERAL.findall(raw)
     run_matches = ACCEPTED_RUN_LITERAL.findall(raw)
-    if len(commit_matches) != 1 or len(run_matches) != 1:
+    web_run_matches = ACCEPTED_WEB_RUN_LITERAL.findall(raw)
+    if (
+        len(commit_matches) != 1
+        or len(run_matches) != 1
+        or len(web_run_matches) != 1
+    ):
         raise SourcePlanError("source-plan pin file is invalid")
     normalized = ACCEPTED_COMMIT_LITERAL.sub(
         b'ACCEPTED_COMMIT = "' + (b"0" * 40) + b'"',
@@ -100,6 +109,11 @@ def normalize_source_plan_pins(raw: bytes) -> bytes:
     )
     normalized = ACCEPTED_RUN_LITERAL.sub(
         b'ACCEPTED_POSTGRES_RUN_ID = "0"',
+        normalized,
+        count=1,
+    )
+    normalized = ACCEPTED_WEB_RUN_LITERAL.sub(
+        b'ACCEPTED_WEB_RUN_ID = "0"',
         normalized,
         count=1,
     )
@@ -168,6 +182,7 @@ def evaluate(
         "target_revision": TARGET_REVISION,
         "accepted_commit": ACCEPTED_COMMIT,
         "accepted_postgres_run_id": ACCEPTED_POSTGRES_RUN_ID,
+        "accepted_web_run_id": ACCEPTED_WEB_RUN_ID,
         "current_commit": head_commit if COMMIT_SHA.fullmatch(head_commit) else None,
         "source_pack_digest": source_pack_digest if trusted else None,
         "source_pack_entries": tree_entries if trusted else None,

@@ -80,7 +80,7 @@ def test_source_pin_bootstrap_is_hosted_gate_input() -> None:
     workflow = read(".github/workflows/home-agent-e1-postgres.yml")
     runner = read("tools/run-home-agent-e1-postgres-gate.py")
 
-    assert "E5o/E5p/E5q PostgreSQL gate" in workflow
-    assert "E5o/E5p/E5q authority gate" in workflow
+    assert "E5o/E5p/E5q/E5r PostgreSQL gate" in workflow
+    assert "E5o/E5p/E5q/E5r authority gate" in workflow
     assert "test_phase3_source_pin_bootstrap_e5q.py" in workflow
     assert "test_phase3_source_pin_bootstrap_e5q.py" in runner

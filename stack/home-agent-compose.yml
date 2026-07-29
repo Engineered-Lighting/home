@@ -439,6 +439,7 @@ services:
     restart: "no"
     command: ["restore-replay"]
     environment:
+      <<: *core-environment
       HOME_AGENT_ROLE: restore
       HOME_AGENT_DATABASE_URL_FILE: /run/secrets/database_url
       HOME_AGENT_ERASURE_LEDGER_PATH: /erasure-ledger/ledger.jsonl

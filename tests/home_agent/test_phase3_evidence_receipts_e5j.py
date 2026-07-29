@@ -143,8 +143,12 @@ def test_writer_has_fixed_root_owned_atomic_receipt_boundaries() -> None:
 
 def test_erasure_writer_runs_only_the_read_only_existing_gate() -> None:
     source = WRITER.read_text(encoding="utf-8")
+    compose = (ROOT / "stack/home-agent-compose.yml").read_text(encoding="utf-8")
     command = source.split("def _verify_erasure_current()", 1)[1].split(
         "def write_restore", 1
+    )[0]
+    restore_service = compose.split("  restore-replay:", 1)[1].split(
+        "\n  rollout-authorize:", 1
     )[0]
 
     for value in (
@@ -167,6 +171,10 @@ def test_erasure_writer_runs_only_the_read_only_existing_gate() -> None:
         "docker build",
     ):
         assert forbidden not in command
+    assert "environment:\n      <<: *core-environment" in restore_service
+    assert "HOME_AGENT_POLICY_DIGEST" in compose.split(
+        "x-core-environment:", 1
+    )[1].split("\nx-core-service:", 1)[0]
 
 
 def test_restore_drill_writes_only_after_database_and_page_checks_pass() -> None:

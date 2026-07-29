@@ -30,5 +30,6 @@ COPY app/src/home-agent/panel.jsx /workspace/app/src/home-agent/panel.jsx
 COPY tests/home_agent/ /workspace/tests/home_agent/
 COPY tools/run-home-agent-e1-postgres-gate.py /workspace/tools/
 COPY .github/workflows/home-agent-e1-postgres.yml /workspace/.github/workflows/
+COPY docs/HOME-AGENT-RUNBOOK.md /workspace/docs/HOME-AGENT-RUNBOOK.md
 
 CMD ["python", "-m", "pytest", "-q"]

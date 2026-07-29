@@ -46,6 +46,9 @@ def test_local_restore_stages_encrypted_repository_under_exclusive_lock() -> Non
 def test_live_snapshot_is_part_of_the_hosted_and_source_acceptance_boundaries() -> None:
     workflow = read(".github/workflows/home-agent-e1-postgres.yml")
     runner = read("tools/run-home-agent-e1-postgres-gate.py")
+    dockerfile = read(
+        "stack/services/home-agent-core/Dockerfile.postgres-test"
+    )
     source_plan = read(
         "stack/home-agent-deploy/operator/phase3_activation_source_plan.py"
     )
@@ -54,6 +57,10 @@ def test_live_snapshot_is_part_of_the_hosted_and_source_acceptance_boundaries() 
     assert "E5n/E5o/E5p/E5q authority gate" in workflow
     assert "test_live_restore_snapshot_e5p.py" in workflow
     assert "test_live_restore_snapshot_e5p.py" in runner
+    assert (
+        "COPY docs/HOME-AGENT-RUNBOOK.md /workspace/docs/HOME-AGENT-RUNBOOK.md"
+        in dockerfile
+    )
     assert (
         '"stack/home-agent-deploy/operator/isolated_restore_drill.sh",'
         in source_plan

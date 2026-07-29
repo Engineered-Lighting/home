@@ -20,6 +20,7 @@ def test_local_restore_stages_encrypted_repository_under_exclusive_lock() -> Non
         'production_postgres_container=home-agent-postgres-1',
         'exec 8>>"$HOME_AGENT_PGBACKREST_LOCK_FILE"',
         "flock -n -x 8",
+        '{{printf "%s|%s\\n" .Source .Destination}}',
         'grep -Fxq "$HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT|/repository"',
         'grep -Fxq "$production_data|/var/lib/postgresql/data"',
         'grep -Fxq "$HOME_AGENT_PGBACKREST_LOCK_FILE|/run/home-agent-locks/repository.lock"',

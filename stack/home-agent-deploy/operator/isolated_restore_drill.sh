@@ -441,7 +441,7 @@ if [[ "$HOME_AGENT_BACKUP_TOPOLOGY" == local ]]; then
       production_postgres_running=1
       running_mount_pairs="$(
         docker inspect --format \
-          '{{range .Mounts}}{{println .Source "|" .Destination}}{{end}}' \
+          '{{range .Mounts}}{{printf "%s|%s\n" .Source .Destination}}{{end}}' \
           "$running_container"
       )"
       printf '%s\n' "$running_mount_pairs" |

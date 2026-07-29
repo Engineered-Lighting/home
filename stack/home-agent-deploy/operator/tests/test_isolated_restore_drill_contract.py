@@ -139,6 +139,7 @@ class IsolatedRestoreDrillContractTests(unittest.TestCase):
         for value in (
             'production_postgres_container=home-agent-postgres-1',
             'flock -n -x 8',
+            '{{printf "%s|%s\\n" .Source .Destination}}',
             'grep -Fxq "$HOME_AGENT_PGBACKREST_LOCAL_REPO_ROOT|/repository"',
             'grep -Fxq "$HOME_AGENT_PGBACKREST_LOCK_FILE|/run/home-agent-locks/repository.lock"',
             'repo_local="$workspace/stage/pgbackrest-repository"',

@@ -619,7 +619,7 @@ function HomeHeader({
   theme, onToggleTheme, voice, connection, sidecarOnline, bridgeOnline,
   bridgeHealth, visionSidecarOnline, visionHealth, frigateMetrics, cameraLabels,
   sim, muteState, onUnmuteClick, onOpenPeople, onOpenIntelligence,
-  onOpenVideoLabeler, onOpenApartment, onOpenLights, onOpenSimulationControls, aiStackState, metrics,
+  onOpenVideoLabeler, onOpenApartment, onOpenBench, benchVerified, onOpenLights, onOpenSimulationControls, aiStackState, metrics,
   serviceProfile, onOpenRemoteProfile, peopleButtonRef, mobile = false,
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -1040,6 +1040,31 @@ function HomeHeader({
             onMouseLeave={(e) => { e.currentTarget.style.color = "var(--hg-fg-1)"; }}
           >
             <span>{mobile ? "apt" : "apartment"}</span>
+          </button>
+        )}
+        {/* The bench console. A link out, not an embed: the console is a
+            safety-audited surface with its own eight test suites, and an
+            iframe of it would be a hub client whenever Home is running -
+            permanently satisfying the dead-man that exists to disarm a board
+            nobody is watching. It opens in its own tab and stays itself. */}
+        {onOpenBench && (
+          <button
+            type="button"
+            aria-label="Open bench console"
+            title={benchVerified
+              ? "gimbal - the bench commissioning console on this machine"
+              : "gimbal - opens the bench console on this machine, if one is running (cannot be checked from a https page)"}
+            className="hg-focusable hg-mobile-touch"
+            onClick={onOpenBench}
+            style={navChipBtn}
+            onMouseEnter={hoverBright}
+            onMouseLeave={(e) => { e.currentTarget.style.color = "var(--hg-fg-1)"; }}
+          >
+            <svg width="12" height="12" viewBox="0 0 400 400" aria-hidden="true" style={{ marginRight: 5 }}>
+              <circle cx="130" cy="230" r="38" fill="currentColor" />
+              <rect x="192" y="130" width="76" height="200" rx="38" fill="currentColor" />
+            </svg>
+            <span>gimbal</span>
           </button>
         )}
         {!mobile && actionMenu}
@@ -4996,6 +5021,44 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   // S79: the active Simulation Mode header pill opens this local controls
   // dialog for switching scenarios, resetting fixtures, or returning live.
   const [simulationControlsOpen, setSimulationControlsOpen] = useState(false);
+  // The bench commissioning console. It binds 127.0.0.1 by design - full
+  // control of a machine that can move belongs to whoever is standing at its
+  // port - so this is a way IN, never a proxy: the Home app offers the door
+  // and the console stays the only thing behind it.
+  //
+  // Three states, not two, and the third is the interesting one. Over HTTPS on
+  // the tailnet a fetch to http://127.0.0.1 is mixed content and the browser
+  // blocks it before it leaves the page, so "no console here" and "cannot ask
+  // from here" arrive identically as a rejected promise. Treating them the
+  // same would hide the chip on the one machine that has a console. So: probed
+  // and answered -> offer it; probed and refused -> hide it; unable to probe
+  // -> offer it, and say in the tooltip that it has not been verified.
+  const [benchConsole, setBenchConsole] = useState("down");
+  useEffect(() => {
+    let live = true;
+    const url = "http://127.0.0.1:8765";
+    const canProbe = !(window.HG_WEB_MODE && window.location.protocol === "https:");
+    if (!canProbe) { setBenchConsole("unprobed"); return undefined; }
+    const probe = async () => {
+      try {
+        const f = (window.IS_TAURI || window.__TAURI__) && window.tauriFetch ? window.tauriFetch : fetch;
+        const r = await f(`${url}/healthz`, { cache: "no-store" });
+        const j = r.ok ? await r.json() : null;
+        // The service name, not just a 200. Something else answering on 8765
+        // would otherwise light a control that opens a page which is not the
+        // console.
+        if (live) setBenchConsole(j && j.service === "bench-console" ? "up" : "down");
+      } catch {
+        if (live) setBenchConsole("down");
+      }
+    };
+    probe();
+    const iv = setInterval(probe, 15000);
+    return () => { live = false; clearInterval(iv); };
+  }, []);
+  const openBenchConsole = useCallback(() => {
+    window.open("http://127.0.0.1:8765/", "_blank", "noopener");
+  }, []);
   // Phase 0.5 "Thinking with Visual Primitives" — /look drawer state.
   // lookInitial seeds the drawer from the command args; its `nonce`
   // re-keys the drawer so a repeated /look re-runs cleanly.
@@ -10849,6 +10912,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         onOpenIntelligence={isSpatialWide ? null : openIntelligenceFeature}
         onOpenVideoLabeler={isSpatialWide || !videoLabelerAvailable ? null : openVideoLabelerFeature}
         onOpenApartment={isSpatialWide ? null : openApartmentFromHeader}
+        onOpenBench={benchConsole === "down" ? null : openBenchConsole}
+        benchVerified={benchConsole === "up"}
         onOpenLights={isSpatialWide ? null : openLightsFeature}
         onOpenSimulationControls={() => setSimulationControlsOpen(true)}
         aiStackState={aiStackState}

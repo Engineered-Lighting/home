@@ -901,6 +901,12 @@ class OutboxTests(unittest.TestCase):
             conn.commit()
         finally:
             conn.close()
+        # sqlite3 honors the process umask when it creates this legacy fixture.
+        # Production correctly refuses a group/world-readable spool, so make
+        # the fixture model an admissible pre-existing private database on
+        # POSIX runners instead of weakening the runtime permission check.
+        if os.name == "posix":
+            legacy_path.chmod(0o600)
 
         migrated = EdgeOutbox(
             legacy_path,

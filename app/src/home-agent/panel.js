@@ -340,7 +340,8 @@ function containedPreferenceState(snapshot) {
     rollout_mode: rolloutMode,
     location_memory: snapshot?.preferences?.location_memory === true,
     travel_greetings: snapshot?.preferences?.travel_greetings === true,
-    opt_out_enabled: snapshot?.capabilities?.preference_opt_out === "enabled"
+    opt_out_enabled: snapshot?.capabilities?.preference_opt_out === "enabled",
+    private_locality_approval: snapshot?.capabilities?.private_locality_approval
   });
 }
 function ParentRelationshipCard({
@@ -376,6 +377,8 @@ function HomeAgentPanel() {
   const onboardingStatusRef = useRef(null);
   const bindingStatusRef = useRef(null);
   const bindingFocusPending = useRef(false);
+  const initiativePresentationInFlight = useRef(false);
+  const initiativePresentationRetry = useRef(false);
   const [phase, setPhase] = useState("loading");
   const [session, setSession] = useState(null);
   const [onboarding, setOnboarding] = useState(null);
@@ -392,6 +395,19 @@ function HomeAgentPanel() {
   const [transaction, setTransaction] = useState(null);
   const [correctionText, setCorrectionText] = useState(DEFAULT_DESCRIPTOR_TEXT);
   const [lifecycle, setLifecycle] = useState(null);
+  const [arrivalGreeting, setArrivalGreeting] = useState(null);
+  const [arrivalGreetingDismissed, setArrivalGreetingDismissed] = useState(false);
+  const [arrivalGreetingCheck, setArrivalGreetingCheck] = useState(0);
+  const [localityStatus, setLocalityStatus] = useState(null);
+  const [localityDraft, setLocalityDraft] = useState({
+    canonicalName: "Itaipava",
+    latitude: "",
+    longitude: "",
+    radiusM: "",
+    travelGreetingEligible: false
+  });
+  const [localityPreview, setLocalityPreview] = useState(null);
+  const [localityBusy, setLocalityBusy] = useState(false);
   const clearPrincipalState = () => {
     authorityGeneration.current += 1;
     setOnboarding(null);
@@ -407,6 +423,19 @@ function HomeAgentPanel() {
     setTransaction(null);
     setCorrectionText(DEFAULT_DESCRIPTOR_TEXT);
     setLifecycle(null);
+    setArrivalGreeting(null);
+    setArrivalGreetingDismissed(false);
+    initiativePresentationRetry.current = false;
+    setLocalityStatus(null);
+    setLocalityDraft({
+      canonicalName: "Itaipava",
+      latitude: "",
+      longitude: "",
+      radiusM: "",
+      travelGreetingEligible: false
+    });
+    setLocalityPreview(null);
+    setLocalityBusy(false);
   };
   const beginPrincipalOperation = () => capturePrincipalOperation(activeSubject.current, authorityGeneration.current);
   const principalOperationCurrent = ticket => principalOperationIsCurrent(ticket, activeSubject.current, authorityGeneration.current);
@@ -462,6 +491,13 @@ function HomeAgentPanel() {
       }
       const nextSnapshot = await api.snapshot();
       if (!isCurrent()) return;
+      if (api.invoke && nextSnapshot?.capabilities?.private_locality_approval === "attested_native_confirmation_gated") {
+        const nextLocalityStatus = await api.privateLocalities();
+        if (!isCurrent()) return;
+        setLocalityStatus(nextLocalityStatus);
+      } else {
+        setLocalityStatus(null);
+      }
       if (!fullAgentCapabilityEnabled(nextSnapshot)) {
         setSnapshot(null);
         setContainedPreferences(containedPreferenceState(nextSnapshot));
@@ -470,6 +506,7 @@ function HomeAgentPanel() {
       }
       setContainedPreferences(null);
       setSnapshot(nextSnapshot);
+      setArrivalGreetingCheck(current => current + 1);
       setPhase("ready");
     } catch (cause) {
       if (!isCurrent()) return;
@@ -511,6 +548,42 @@ function HomeAgentPanel() {
     bindingFocusPending.current = false;
     target.focus();
   }, [phase, onboarding?.state, bindingProposal?.state]);
+  useEffect(() => {
+    const authorized = phase === "ready" && snapshot?.capabilities?.private_initiatives === "attested_native_consent_gated" && snapshot?.preferences?.location_memory === true && snapshot?.preferences?.travel_greetings === true;
+    const sameVisit = !arrivalGreeting || snapshot?.latest_visit?.visit_id === arrivalGreeting.visit_id;
+    if (!authorized || !sameVisit) {
+      setArrivalGreeting(null);
+      setArrivalGreetingDismissed(false);
+    }
+  }, [phase, snapshot?.capabilities?.private_initiatives, snapshot?.preferences?.location_memory, snapshot?.preferences?.travel_greetings, snapshot?.latest_visit?.visit_id, arrivalGreeting?.visit_id]);
+  useEffect(() => {
+    if (!api.invoke || phase !== "ready" || arrivalGreeting || arrivalGreetingDismissed || snapshot?.capabilities?.private_initiatives !== "attested_native_consent_gated" || snapshot?.preferences?.location_memory !== true || snapshot?.preferences?.travel_greetings !== true) return;
+    if (initiativePresentationInFlight.current) {
+      initiativePresentationRetry.current = true;
+      return;
+    }
+    const ticket = beginPrincipalOperation();
+    initiativePresentationInFlight.current = true;
+    (async () => {
+      try {
+        const pending = await api.initiatives();
+        const initiativeId = Array.isArray(pending) ? pending[0]?.initiative_id : null;
+        if (!initiativeId || !principalOperationCurrent(ticket)) return;
+        const claimed = await api.claimInitiative(initiativeId);
+        if (principalOperationCurrent(ticket)) setArrivalGreeting(claimed);
+      } catch (cause) {
+        if (principalOperationCurrent(ticket) && cause?.status !== 409) {
+          setError(cause?.message || "private_greeting_unavailable");
+        }
+      } finally {
+        initiativePresentationInFlight.current = false;
+        if (initiativePresentationRetry.current) {
+          initiativePresentationRetry.current = false;
+          setArrivalGreetingCheck(current => current + 1);
+        }
+      }
+    })();
+  }, [api, phase, snapshot?.capabilities?.private_initiatives, snapshot?.preferences?.location_memory, snapshot?.preferences?.travel_greetings, arrivalGreeting, arrivalGreetingDismissed, arrivalGreetingCheck]);
   const requestPrincipalBinding = async () => {
     const ticket = beginPrincipalOperation();
     setBindingBusy(true);
@@ -524,6 +597,68 @@ function HomeAgentPanel() {
       if (!principalOperationCurrent(ticket)) return;
       setBindingBusy(false);
       setError(cause.message || "principal_binding_request_failed");
+    }
+  };
+  const updateLocalityDraft = (field, value) => {
+    setLocalityDraft(current => ({
+      ...current,
+      [field]: value
+    }));
+    setLocalityPreview(null);
+  };
+  const previewLocality = async () => {
+    const ticket = beginPrincipalOperation();
+    const latitude = Number(localityDraft.latitude);
+    const longitude = Number(localityDraft.longitude);
+    const radiusM = Number(localityDraft.radiusM);
+    if (!localityDraft.canonicalName.trim() || !Number.isFinite(latitude) || !Number.isFinite(longitude) || !Number.isInteger(radiusM) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180 || radiusM < 1 || radiusM > 50000) {
+      setError("private_locality_geometry_invalid");
+      return;
+    }
+    setLocalityBusy(true);
+    setError("");
+    try {
+      const value = await api.previewPrivateLocality({
+        canonicalName: localityDraft.canonicalName.trim(),
+        latitude,
+        longitude,
+        radiusM,
+        travelGreetingEligible: localityDraft.travelGreetingEligible
+      });
+      if (!principalOperationCurrent(ticket)) return;
+      setLocalityPreview(value);
+    } catch (cause) {
+      if (principalOperationCurrent(ticket)) {
+        setError(cause.message || "private_locality_preview_failed");
+      }
+    } finally {
+      if (principalOperationCurrent(ticket)) setLocalityBusy(false);
+    }
+  };
+  const confirmLocality = async () => {
+    const ticket = beginPrincipalOperation();
+    if (localityPreview?.state !== "needs_confirmation" || !localityPreview?.preview_digest || !localityPreview?.confirmation_nonce) return setError("private_locality_preview_invalid");
+    setLocalityBusy(true);
+    setError("");
+    try {
+      await api.confirmPrivateLocality({
+        canonicalName: localityPreview.canonical_name,
+        latitude: localityPreview.locator.latitude,
+        longitude: localityPreview.locator.longitude,
+        radiusM: localityPreview.locator.radius_m,
+        travelGreetingEligible: localityPreview.travel_greeting_eligible,
+        confirmationNonce: localityPreview.confirmation_nonce,
+        previewDigest: localityPreview.preview_digest
+      });
+      if (!principalOperationCurrent(ticket)) return;
+      setLocalityPreview(null);
+      setLocalityBusy(false);
+      await refresh();
+    } catch (cause) {
+      if (principalOperationCurrent(ticket)) {
+        setError(cause.message || "private_locality_confirmation_failed");
+        setLocalityBusy(false);
+      }
     }
   };
   const cancelPrincipalBindingRequest = async () => {
@@ -781,7 +916,49 @@ function HomeAgentPanel() {
     onConfirm: confirmParentRelationship
   }), nativeInstallationMaterial && React.createElement("section", {
     className: "agent-card"
-  }, React.createElement("h2", null, "Public installation enrollment material"), React.createElement("p", null, "This public key material is not proof that enrollment is complete. A private operator must bind it offline to your exact Home Assistant user UUID."), React.createElement("pre", null, JSON.stringify(nativeInstallationMaterial, null, 2))), phase === "onboarding" && React.createElement("section", {
+  }, React.createElement("h2", null, "Public installation enrollment material"), React.createElement("p", null, "This public key material is not proof that enrollment is complete. A private operator must bind it offline to your exact Home Assistant user UUID."), React.createElement("pre", null, JSON.stringify(nativeInstallationMaterial, null, 2))), api.invoke && new Set(["rollout_contained", "ready"]).has(phase) && (snapshot?.capabilities?.private_locality_approval || containedPreferences?.private_locality_approval) === "attested_native_confirmation_gated" && React.createElement("section", {
+    className: "agent-card",
+    "aria-live": "polite",
+    "aria-busy": localityBusy
+  }, React.createElement("h2", null, "Private locality approval"), localityStatus?.state === "configured" ? React.createElement(React.Fragment, null, React.createElement("p", null, "The following reviewed private locality is configured:"), React.createElement("ul", null, localityStatus.localities.map(locality => React.createElement("li", {
+    key: locality.place_id
+  }, locality.canonical_name, " \u2014 travel greeting eligibility ", locality.travel_greeting_eligible ? "allowed" : "off"))), React.createElement("p", null, "Eligibility is not consent. Location memory and travel greetings remain separate, default-off choices.")) : React.createElement(React.Fragment, null, React.createElement("p", null, "Approve one circular locality only in this private native window. Core encrypts the exact center and retains no ownership, residence, presence, or action claim."), React.createElement("label", null, "Locality name", React.createElement("input", {
+    value: localityDraft.canonicalName,
+    onChange: event => updateLocalityDraft("canonicalName", event.target.value)
+  })), React.createElement("label", null, "Latitude", React.createElement("input", {
+    type: "number",
+    min: "-90",
+    max: "90",
+    step: "any",
+    value: localityDraft.latitude,
+    onChange: event => updateLocalityDraft("latitude", event.target.value)
+  })), React.createElement("label", null, "Longitude", React.createElement("input", {
+    type: "number",
+    min: "-180",
+    max: "180",
+    step: "any",
+    value: localityDraft.longitude,
+    onChange: event => updateLocalityDraft("longitude", event.target.value)
+  })), React.createElement("label", null, "Radius in meters", React.createElement("input", {
+    type: "number",
+    min: "1",
+    max: "50000",
+    step: "1",
+    value: localityDraft.radiusM,
+    onChange: event => updateLocalityDraft("radiusM", event.target.value)
+  })), React.createElement("label", null, React.createElement("input", {
+    type: "checkbox",
+    checked: localityDraft.travelGreetingEligible,
+    onChange: event => updateLocalityDraft("travelGreetingEligible", event.target.checked)
+  }), "Permit this locality to become greeting-eligible after the separate opt-ins"), React.createElement("button", {
+    disabled: localityBusy,
+    onClick: previewLocality
+  }, "Review exact private geometry"), localityPreview && React.createElement(React.Fragment, null, React.createElement("dl", {
+    className: "agent-grid"
+  }, React.createElement("dt", null, "Name"), React.createElement("dd", null, localityPreview.canonical_name), React.createElement("dt", null, "Exact center"), React.createElement("dd", null, localityPreview.locator.latitude, ", ", localityPreview.locator.longitude), React.createElement("dt", null, "Radius"), React.createElement("dd", null, localityPreview.locator.radius_m, " m"), React.createElement("dt", null, "Retention"), React.createElement("dd", null, localityPreview.locator.retention), React.createElement("dt", null, "Greeting eligibility"), React.createElement("dd", null, localityPreview.travel_greeting_eligible ? "allowed after opt-in" : "off")), React.createElement("p", null, "Does not create: ", localityPreview.does_not_create.join(", "), "."), React.createElement("button", {
+    disabled: localityBusy,
+    onClick: confirmLocality
+  }, "Confirm this exact private locality")))), phase === "onboarding" && React.createElement("section", {
     className: "agent-card agent-warning",
     ref: onboardingStatusRef,
     tabIndex: "-1",
@@ -812,7 +989,13 @@ function HomeAgentPanel() {
   }, "Cancel identity review request")), bindingProposal?.state === "unavailable" && React.createElement(React.Fragment, null, React.createElement("h3", null, "Identity review unavailable"), React.createElement("p", null, "Core cannot safely offer or confirm a reviewed identity for this account. No replacement mapping will be inferred.")), !new Set(["not_requested", "awaiting_operator_review", "ready_for_confirmation", "unavailable"]).has(bindingProposal?.state) && React.createElement(React.Fragment, null, React.createElement("h3", null, "Identity review unavailable"), React.createElement("p", null, "The binding workflow failed closed because its status was not recognized.")))), onboarding?.state === "contained" && React.createElement("p", null, "An existing binding is unavailable under governance or privacy policy. Core will not create a replacement automatically."), onboarding?.state === "bound" && React.createElement("p", null, "The identity binding remains usable for reviewed rollout work; preferences, teaching, and initiatives stay unavailable here until canary authorization."), React.createElement("p", null, "Location memory default: off. Travel greetings default: off."), React.createElement("p", null, "Exact activity counts, timestamps, and evidence content are intentionally omitted from this user-facing status."), React.createElement("code", null, onboarding?.phase2_blockers?.join(", ") || "no gate blockers"), error && React.createElement("p", {
     className: "agent-error",
     role: "alert"
-  }, error)), phase === "ready" && React.createElement(React.Fragment, null, React.createElement("section", {
+  }, error)), phase === "ready" && React.createElement(React.Fragment, null, api.invoke && arrivalGreeting && !arrivalGreetingDismissed && React.createElement("section", {
+    className: "agent-card",
+    role: "status",
+    "aria-live": "polite"
+  }, React.createElement("h2", null, "Private arrival greeting"), React.createElement("p", null, arrivalGreeting.message), React.createElement("p", null, "This was shown once for this visit after fresh location and consent were rechecked."), React.createElement("button", {
+    onClick: () => setArrivalGreetingDismissed(true)
+  }, "Dismiss")), React.createElement("section", {
     className: "agent-card"
   }, React.createElement("h2", null, "Current snapshot"), React.createElement("dl", {
     className: "agent-grid"

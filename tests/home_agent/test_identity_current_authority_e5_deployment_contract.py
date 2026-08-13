@@ -38,8 +38,7 @@ def _grant_section(marker: str) -> str:
 
 def _revision_array(section: str, name: str) -> list[str]:
     match = re.search(
-        rf"{re.escape(name)} constant text\[\] := ARRAY\[(.*?)\]"
-        r"::text\[\]",
+        rf"{re.escape(name)} constant text\[\] := ARRAY\[(.*?)\]" r"::text\[\]",
         section,
         re.DOTALL,
     )
@@ -49,9 +48,7 @@ def _revision_array(section: str, name: str) -> list[str]:
 
 def test_e5_role_is_additive_dormant_and_has_no_new_secret() -> None:
     historical = _read("stack/home-agent-deploy/provision-roles.sh")
-    provisioner = _read(
-        "stack/home-agent-deploy/provision-identity-cutover-roles.sh"
-    )
+    provisioner = _read("stack/home-agent-deploy/provision-identity-cutover-roles.sh")
     migration = _read(
         "stack/services/home-agent-core/alembic/versions/"
         "0015_identity_current_authority_e5.py"
@@ -78,10 +75,7 @@ def test_e5_role_is_additive_dormant_and_has_no_new_secret() -> None:
         "ALTER ROLE home_agent_binding_operator SET "
         "statement_timeout = '15s';" in historical
     )
-    assert (
-        "ALTER ROLE home_agent_binding_operator SET lock_timeout"
-        not in historical
-    )
+    assert "ALTER ROLE home_agent_binding_operator SET lock_timeout" not in historical
     assert (
         "ALTER ROLE home_agent_binding_operator SET\n"
         "  idle_in_transaction_session_timeout" not in historical
@@ -166,16 +160,12 @@ def test_e5_overlay_preserves_exact_e3_e4_pins_and_stop_boundary() -> None:
     assert source.index("DO $identity_cutover_e4_acl$") < source.index(
         "DO $identity_current_authority_e5_quarantine$"
     )
-    assert source.index(
-        "DO $identity_current_authority_e5_quarantine$"
-    ) < source.index("DO $identity_current_authority_e5_acl$")
-    assert (
-        "GRANT USAGE ON SCHEMA identity TO home_agent_binding_operator;"
-        in source
+    assert source.index("DO $identity_current_authority_e5_quarantine$") < source.index(
+        "DO $identity_current_authority_e5_acl$"
     )
+    assert "GRANT USAGE ON SCHEMA identity TO home_agent_binding_operator;" in source
     assert (
-        "GRANT USAGE ON SCHEMA operations TO home_agent_binding_operator"
-        not in source
+        "GRANT USAGE ON SCHEMA operations TO home_agent_binding_operator" not in source
     )
 
     assert f"'{PINNED_E3_CATALOG_SHA256}'" in e3
@@ -223,9 +213,7 @@ def test_e5_overlay_preserves_exact_e3_e4_pins_and_stop_boundary() -> None:
     assert f"'{REVISION}'" in e4
     assert f"'{DESCENDANT_REVISION}'" in e4
     assert f"'{ACTIVATION_REVISION}'" in e4
-    assert e5.count(
-        "identity cutover E4 activation contract is not installed"
-    ) == 1
+    assert e5.count("identity cutover E4 activation contract is not installed") == 1
     assert "GRANT " not in e5
 
 
@@ -233,14 +221,10 @@ def test_e5_run_lock_is_validated_before_e3_manifest_projection() -> None:
     e3 = _grant_section("identity_finalizer_e3_acl")
     validation = e3.split(
         "-- Revision 0015 adds a second, separately owned SELECT overlay", 1
-    )[1].split(
-        "identity finalizer E3 reviewed E5 policy mismatch", 1
-    )[0]
+    )[1].split("identity finalizer E3 reviewed E5 policy mismatch", 1)[0]
     manifest = e3.split("'policies',", 1)[1].split("'triggers',", 1)[0]
     run_lock_projection = manifest.rsplit("OR (", 1)[1]
-    relation_filter = manifest.index(
-        "WHERE policy_row.polrelid = relation.oid"
-    )
+    relation_filter = manifest.index("WHERE policy_row.polrelid = relation.oid")
     not_start = manifest.index("AND NOT (")
     not_open = manifest.index("(", not_start)
     depth = 0
@@ -255,15 +239,11 @@ def test_e5_run_lock_is_validated_before_e3_manifest_projection() -> None:
                 break
 
     assert (
-        "e5_run_lock_policy constant text := "
-        "'identity_authority_e5_run_lock'"
+        "e5_run_lock_policy constant text := " "'identity_authority_e5_run_lock'"
     ) in e3
     assert "pg_catalog.count(*)" in validation
     assert "WHERE policy_row.polname = e5_run_lock_policy" in validation
-    assert (
-        "'operations.reviewed_identity_migration_runs'::regclass"
-        in validation
-    )
+    assert "'operations.reviewed_identity_migration_runs'::regclass" in validation
     assert "lock_policy.polcmd = 'w'" in validation
     assert (
         "lock_policy.polroles =\n"
@@ -271,10 +251,7 @@ def test_e5_run_lock_is_validated_before_e3_manifest_projection() -> None:
     ) in validation
     assert "lock_policy.polqual IS NOT NULL" in validation
     assert "lock_policy.polwithcheck IS NOT NULL" in validation
-    assert (
-        "lock_policy.polqual::text = select_policy.polqual::text"
-        in validation
-    )
+    assert "lock_policy.polqual::text = select_policy.polqual::text" in validation
     assert (
         "lock_policy.polwithcheck::text =\n"
         "                  select_policy.polqual::text"
@@ -297,28 +274,20 @@ def test_e5_run_lock_is_validated_before_e3_manifest_projection() -> None:
     assert "policy_row.polqual IS NOT NULL" in run_lock_projection
     assert "policy_row.polwithcheck IS NOT NULL" in run_lock_projection
     assert re.search(
-        r"policy_row\.polqual::text =\s+"
-        r"policy_row\.polwithcheck::text",
+        r"policy_row\.polqual::text =\s+" r"policy_row\.polwithcheck::text",
         run_lock_projection,
     )
-    assert (
-        "reference_policy.polname = e5_select_policy"
-        in run_lock_projection
-    )
+    assert "reference_policy.polname = e5_select_policy" in run_lock_projection
     assert relation_filter < not_start
     assert not_close is not None
-    assert manifest.index(
-        "policy_row.polname = e5_run_lock_policy"
-    ) < not_close
-    assert e3.index(
-        "identity finalizer E3 reviewed E5 policy mismatch"
-    ) < e3.index("WITH target_relations(target_name, relation_oid)")
+    assert manifest.index("policy_row.polname = e5_run_lock_policy") < not_close
+    assert e3.index("identity finalizer E3 reviewed E5 policy mismatch") < e3.index(
+        "WITH target_relations(target_name, relation_oid)"
+    )
 
 
 def test_e5_replay_quarantines_and_pins_the_complete_direct_acl_surface() -> None:
-    overlay = _grant_section(
-        "identity_current_authority_e5_overlay_quarantine"
-    )
+    overlay = _grant_section("identity_current_authority_e5_overlay_quarantine")
     quarantine = _grant_section("identity_current_authority_e5_quarantine")
     admission = _grant_section("identity_current_authority_e5_acl")
 
@@ -367,9 +336,7 @@ def test_e5_replay_quarantines_and_pins_the_complete_direct_acl_surface() -> Non
         COMMIT_REVISION,
         STATUS_REVISION,
     ]
-    assert "NOT current_revision = ANY (reviewed_e5_catalog_revisions)" in (
-        admission
-    )
+    assert "NOT current_revision = ANY (reviewed_e5_catalog_revisions)" in (admission)
     assert "function_name_count <> 1" in admission
     assert "policy_count <> 13" in admission
     assert "kernel_owned_object_count <> 1" in admission
@@ -435,16 +402,12 @@ def test_e5_replay_quarantines_and_pins_the_complete_direct_acl_surface() -> Non
     assert "caller_role.rolconnlimit" in caller_manifest
     assert "caller_role.rolvaliduntil" in caller_manifest
     assert "caller_role.rolconfig" in caller_manifest
-    assert (
-        "caller_oid, 'operations', 'USAGE,CREATE'" in admission
-    )
+    assert "caller_oid, 'operations', 'USAGE,CREATE'" in admission
     assert "caller_oid, 'privacy', 'USAGE,CREATE'" in admission
-    caller_access_manifest = admission.split(
-        "'caller_effective_access',", 1
-    )[1].split("'effective_execute',", 1)[0]
-    assert caller_access_manifest.count(
-        "'home_agent_binding_operator'"
-    ) == 5
+    caller_access_manifest = admission.split("'caller_effective_access',", 1)[1].split(
+        "'effective_execute',", 1
+    )[0]
+    assert caller_access_manifest.count("'home_agent_binding_operator'") == 5
     assert "'operations'" in caller_access_manifest
     assert "'privacy'" in caller_access_manifest
     assert "GRANT " not in admission
@@ -462,23 +425,14 @@ def test_hosted_runner_provisions_before_0015_and_enforces_pinned_catalog() -> N
     e5_upgrade = phase.index("REVISION_0015", e4_upgrade)
     assert provision < e4_upgrade < e5_upgrade
     assert "test_phase3_identity_current_authority_e5_schema.py" in phase
-    assert "test_phase3_identity_current_authority_e5_runtime_postgres.py" in (
-        phase
-    )
+    assert "test_phase3_identity_current_authority_e5_runtime_postgres.py" in (phase)
     assert "test_identity_current_authority_e5_deployment_contract.py" in phase
-    assert (
-        "TEST_PHASE3_IDENTITY_CURRENT_AUTHORITY_E5_OWNER_DATABASE_URL"
-        in runner
-    )
+    assert "TEST_PHASE3_IDENTITY_CURRENT_AUTHORITY_E5_OWNER_DATABASE_URL" in runner
     assert "TEST_PHASE3_IDENTITY_CURRENT_AUTHORITY_E5_DATABASE_URL" in runner
     assert phase.count("REVISION_0015") >= 4
     assert "_alembic_downgrade(" in phase
-    assert phase.count(
-        "identity cutover E4 activation contract is not installed"
-    ) == 2
-    assert "identity principal-binding E5b catalog admission is pending " not in (
-        phase
-    )
+    assert phase.count("identity cutover E4 activation contract is not installed") == 2
+    assert "identity principal-binding E5b catalog admission is pending " not in (phase)
     assert "pinned dormant E5b catalog" in phase
     assert "unpinned dormant E5b catalog" not in phase
     assert "capture_e5_catalog_digest" not in runner
@@ -513,14 +467,13 @@ def test_hosted_runner_provisions_before_0015_and_enforces_pinned_catalog() -> N
         assert f"pg_catalog.{catalog}" in phase
 
     assert (
-            "home agent E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v "
-            "PostgreSQL gate"
-        in workflow
+        "home agent E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v/E5w/E5x "
+        "PostgreSQL gate" in workflow
     )
     assert (
-            "Run isolated PostgreSQL 17 "
-            "E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v authority gate"
-            in workflow
+        "Run isolated PostgreSQL 17 "
+        "E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v/E5w/E5x authority gate"
+        in workflow
     )
     assert (
         workflow.count(
@@ -531,7 +484,6 @@ def test_hosted_runner_provisions_before_0015_and_enforces_pinned_catalog() -> N
     )
     production = _read("stack/home-agent.env.example")
     assert (
-        "HOME_AGENT_EXPECTED_DB_REVISION=0006a_worker_lease_arbitration"
-        in production
+        "HOME_AGENT_EXPECTED_DB_REVISION=0006a_worker_lease_arbitration" in production
     )
     assert "HOME_AGENT_ROLLOUT_MODE=record_only" in production

@@ -7,7 +7,10 @@ import asyncio
 from datetime import datetime, timezone
 import hashlib
 import hmac
+import importlib.machinery
+import importlib.util
 import json
+import os
 from pathlib import Path
 import sqlite3
 import sys
@@ -38,14 +41,54 @@ homeassistant_core = types.ModuleType("homeassistant.core")
 homeassistant_core.Event = object
 homeassistant_core.HomeAssistant = object
 homeassistant_core.callback = lambda function: function
+homeassistant_components = types.ModuleType("homeassistant.components")
+homeassistant_http = types.ModuleType("homeassistant.components.http")
+homeassistant_http.HomeAssistantView = object
+homeassistant_config_entries = types.ModuleType("homeassistant.config_entries")
+homeassistant_config_entries.ConfigEntry = object
+homeassistant_exceptions = types.ModuleType("homeassistant.exceptions")
+
+
+class ConfigEntryNotReady(Exception):
+    """HA retry signal stand-in."""
+
+
+homeassistant_exceptions.ConfigEntryNotReady = ConfigEntryNotReady
+homeassistant_helpers = types.ModuleType("homeassistant.helpers")
+homeassistant_event = types.ModuleType("homeassistant.helpers.event")
+homeassistant_event.async_track_time_interval = lambda *_args: lambda: None
 sys.modules.setdefault("homeassistant", homeassistant)
+sys.modules.setdefault("homeassistant.components", homeassistant_components)
+sys.modules.setdefault("homeassistant.components.http", homeassistant_http)
+sys.modules.setdefault("homeassistant.config_entries", homeassistant_config_entries)
 sys.modules.setdefault("homeassistant.const", homeassistant_const)
 sys.modules.setdefault("homeassistant.core", homeassistant_core)
+sys.modules.setdefault("homeassistant.exceptions", homeassistant_exceptions)
+sys.modules.setdefault("homeassistant.helpers", homeassistant_helpers)
+sys.modules.setdefault("homeassistant.helpers.event", homeassistant_event)
 transport_stub = types.ModuleType("home_agent_edge.transport")
 transport_stub.MutualTLSTransport = object
 sys.modules.setdefault("home_agent_edge.transport", transport_stub)
 
-from home_agent_edge.runtime import EdgeRuntime  # noqa: E402
+from home_agent_edge.runtime import (  # noqa: E402
+    CorePrivacyPolicyUnavailable,
+    EdgeRuntime,
+    _write_privacy_policy_receipt,
+)
+
+integration_loader = importlib.machinery.SourceFileLoader(
+    "home_agent_edge.integration_entrypoint",
+    str(Path(__file__).resolve().parent / "__init__.py"),
+)
+integration_spec = importlib.util.spec_from_loader(
+    "home_agent_edge.integration_entrypoint",
+    integration_loader,
+    is_package=False,
+)
+if integration_spec is None or integration_spec.loader is None:
+    raise RuntimeError("Home Agent Edge integration entrypoint is unavailable")
+integration_entrypoint = importlib.util.module_from_spec(integration_spec)
+integration_spec.loader.exec_module(integration_entrypoint)
 
 
 class XorCodec:
@@ -55,10 +98,15 @@ class XorCodec:
 
     def encode(self, envelope):
         raw = json.dumps(dict(envelope), sort_keys=True).encode("utf-8")
-        return bytes(value ^ self.key[index % len(self.key)] for index, value in enumerate(raw))
+        return bytes(
+            value ^ self.key[index % len(self.key)] for index, value in enumerate(raw)
+        )
 
     def decode(self, payload):
-        raw = bytes(value ^ self.key[index % len(self.key)] for index, value in enumerate(payload))
+        raw = bytes(
+            value ^ self.key[index % len(self.key)]
+            for index, value in enumerate(payload)
+        )
         value = json.loads(raw)
         if not isinstance(value, dict):
             raise ValueError("object required")
@@ -92,12 +140,17 @@ class EdgePolicyTests(unittest.TestCase):
         )
 
     def test_exact_allowlist_and_do_not_track(self):
-        self.assertIsNone(self.policy.normalize_event(
-            "state_changed", {"entity_id": "light.kitchen", "new_state": {"state": "on"}}
-        ))
-        self.assertIsNone(self.policy.normalize_event(
-            "state_changed", {"entity_id": "zone.home", "new_state": {"state": "1"}}
-        ))
+        self.assertIsNone(
+            self.policy.normalize_event(
+                "state_changed",
+                {"entity_id": "light.kitchen", "new_state": {"state": "on"}},
+            )
+        )
+        self.assertIsNone(
+            self.policy.normalize_event(
+                "state_changed", {"entity_id": "zone.home", "new_state": {"state": "1"}}
+            )
+        )
 
     def test_location_keeps_only_reviewed_attributes(self):
         result = self.policy.normalize_event(
@@ -125,7 +178,9 @@ class EdgePolicyTests(unittest.TestCase):
         )
         self.assertIsNotNone(result)
         attrs = result["new_state"]["attributes"]
-        self.assertEqual({"gps_accuracy", "latitude", "longitude", "source"}, set(attrs))
+        self.assertEqual(
+            {"gps_accuracy", "latitude", "longitude", "source"}, set(attrs)
+        )
         self.assertEqual("transition", result["observation_kind"])
         self.assertEqual("precise_location", result["privacy"]["classification"])
 
@@ -193,9 +248,9 @@ class EdgePolicyTests(unittest.TestCase):
         document = {
             **material,
             "policy_digest": hashlib.sha256(
-                json.dumps(
-                    material, separators=(",", ":"), sort_keys=True
-                ).encode("utf-8")
+                json.dumps(material, separators=(",", ":"), sort_keys=True).encode(
+                    "utf-8"
+                )
             ).hexdigest(),
         }
         policy = self.policy.with_core_privacy_policy(document)
@@ -261,6 +316,7 @@ class RuntimePrivacyPolicyTests(unittest.IsolatedAsyncioTestCase):
 
             def suppress_privacy_subjects(self, entities, users):
                 self.calls.append((entities, users))
+                return 0
 
         class Transport:
             def __init__(self, documents):
@@ -347,8 +403,10 @@ class RuntimePrivacyPolicyTests(unittest.IsolatedAsyncioTestCase):
 
             def suppress_privacy_subjects(self, entities, users):
                 self.purges.append((set(entities), set(users)))
+                replaced = len(self.envelopes)
                 if "device_tracker.reviewed" in entities:
                     self.envelopes.clear()
+                return replaced
 
             def quarantine(self, *_args):
                 raise AssertionError("reviewed fixture must not quarantine")
@@ -409,9 +467,277 @@ class RuntimePrivacyPolicyTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(first, second)
         self.assertEqual(2, transport.calls)
         self.assertEqual([], outbox.envelopes)
-        self.assertIn(
-            "device_tracker.reviewed", runtime.policy.blocked_entity_ids
+        self.assertIn("device_tracker.reviewed", runtime.policy.blocked_entity_ids)
+
+    async def test_start_prepares_tls_material_through_executor(self):
+        calls = []
+
+        class Bus:
+            def async_listen(self, _event_type, _callback):
+                return lambda: None
+
+        class States:
+            @staticmethod
+            def get(_entity_id):
+                return None
+
+        class Hass:
+            bus = Bus()
+            states = States()
+
+            async def async_add_executor_job(self, function, *args):
+                calls.append(function.__name__)
+                return function(*args)
+
+            @staticmethod
+            def async_create_task(coroutine):
+                coroutine.close()
+
+        class Outbox:
+            def initialize(self):
+                calls.append("outbox_initialized")
+
+            def suppress_privacy_subjects(self, _entities, _users):
+                calls.append("privacy_applied")
+                return 0
+
+            def begin_runtime(self):
+                calls.append("runtime_begun")
+
+            def end_runtime(self):
+                calls.append("runtime_ended")
+
+            def close(self):
+                calls.append("outbox_closed")
+
+        class Transport:
+            prepared = False
+
+            def prepare(self):
+                self.prepared = True
+                calls.append("transport_prepared")
+
+            async def start(self):
+                self.assert_prepared()
+                calls.append("transport_started")
+
+            def assert_prepared(self):
+                if not self.prepared:
+                    raise AssertionError("transport started before TLS preparation")
+
+            async def fetch_privacy_policy(self):
+                return RuntimePrivacyPolicyTests._document([], [])
+
+            async def close(self):
+                calls.append("transport_closed")
+
+        runtime = EdgeRuntime(
+            Hass(),
+            EdgePolicy.from_values(["device_tracker.reviewed"]),
+            Outbox(),
+            Transport(),
+            batch_size=10,
         )
+        await runtime.async_start()
+        self.assertLess(calls.index("prepare"), calls.index("transport_started"))
+        self.assertIn("transport_prepared", calls)
+        self.assertIn("runtime_begun", calls)
+        await runtime.async_close()
+        self.assertIn("runtime_ended", calls)
+
+    async def test_startup_receiver_outage_is_retryable_and_does_not_open_runtime(self):
+        calls = []
+
+        class Hass:
+            async def async_add_executor_job(self, function, *args):
+                return function(*args)
+
+        class Outbox:
+            def initialize(self):
+                calls.append("initialized")
+
+            def begin_runtime(self):
+                calls.append("runtime_begun")
+
+            def close(self):
+                calls.append("closed")
+
+        class Transport:
+            def prepare(self):
+                calls.append("prepared")
+
+            async def start(self):
+                calls.append("started")
+
+            async def fetch_privacy_policy(self):
+                raise ConnectionError("receiver offline")
+
+            async def close(self):
+                calls.append("transport_closed")
+
+        runtime = EdgeRuntime(
+            Hass(),
+            EdgePolicy.from_values(["device_tracker.reviewed"]),
+            Outbox(),
+            Transport(),
+            batch_size=10,
+        )
+        with self.assertRaises(CorePrivacyPolicyUnavailable):
+            await runtime.async_start()
+        self.assertNotIn("runtime_begun", calls)
+        await runtime.async_close()
+        self.assertNotIn("runtime_ended", calls)
+        self.assertIn("transport_closed", calls)
+
+
+class PrivacyPolicyReceiptTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "POSIX mode enforcement is tested on HA/Linux")
+    def test_receipt_is_content_free_canonical_and_private(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary) / "private"
+            parent.mkdir(mode=0o700)
+            os.chmod(parent, 0o700)
+            path = parent / "privacy.json"
+
+            _write_privacy_policy_receipt(
+                path,
+                "a" * 64,
+                2,
+                1,
+                3,
+                "purged_before_accept",
+            )
+
+            raw = path.read_bytes()
+            value = json.loads(raw)
+            self.assertEqual(
+                {
+                    "blocked_entity_count",
+                    "blocked_user_count",
+                    "contract",
+                    "policy_digest",
+                    "purge_result",
+                    "purged_payload_count",
+                    "refreshed_at",
+                },
+                set(value),
+            )
+            self.assertEqual(
+                "home-agent-edge-privacy-policy-receipt-v1", value["contract"]
+            )
+            self.assertEqual("a" * 64, value["policy_digest"])
+            self.assertEqual(2, value["blocked_entity_count"])
+            self.assertEqual(1, value["blocked_user_count"])
+            self.assertEqual(3, value["purged_payload_count"])
+            self.assertEqual("purged_before_accept", value["purge_result"])
+            self.assertEqual(
+                raw,
+                json.dumps(
+                    value,
+                    ensure_ascii=False,
+                    allow_nan=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8"),
+            )
+            self.assertEqual(0, path.stat().st_mode & 0o077)
+            self.assertNotIn(b"device_tracker", raw)
+            self.assertNotIn(b"user-", raw)
+
+    def test_receipt_rejects_invalid_or_unsafe_inputs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary) / "private"
+            parent.mkdir(mode=0o700)
+            os.chmod(parent, 0o700)
+            path = parent / "privacy.json"
+            with self.assertRaises(ValueError):
+                _write_privacy_policy_receipt(
+                    path, "not-a-digest", 0, 0, 0, "purged_before_accept"
+                )
+            with self.assertRaises(ValueError):
+                _write_privacy_policy_receipt(
+                    path, "b" * 64, True, 0, 0, "purged_before_accept"
+                )
+            with self.assertRaises(ValueError):
+                _write_privacy_policy_receipt(path, "b" * 64, 0, 0, 0, "unverified")
+
+            path.write_text("{}", encoding="utf-8")
+            os.chmod(path, 0o644)
+            with self.assertRaises(PermissionError):
+                _write_privacy_policy_receipt(
+                    path, "b" * 64, 0, 0, 0, "unchanged_verified_policy"
+                )
+
+
+class IntegrationSetupRetryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_receiver_outage_raises_config_entry_not_ready(self):
+        closed = []
+
+        class PolicyFactory:
+            @staticmethod
+            def from_values(*_args, **_kwargs):
+                return object()
+
+        class Outbox:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+        class Transport:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+        class Runtime:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            async def async_start(self):
+                raise CorePrivacyPolicyUnavailable("receiver offline")
+
+            async def async_close(self):
+                closed.append(True)
+
+        class Hass:
+            async def async_add_executor_job(self, function, *args):
+                return function(*args)
+
+        class Entry:
+            options = {}
+            entry_id = "entry"
+            data = {
+                integration_entrypoint.CONF_ENTITY_IDS: ["device_tracker.iphone"],
+                integration_entrypoint.CONF_SPOOL_PATH: "/tmp/edge.sqlite",
+                integration_entrypoint.CONF_SPOOL_KEY_PATH: "/tmp/key",
+                integration_entrypoint.CONF_ENDPOINT: "https://receiver.example/v1/ingest/envelopes",
+                integration_entrypoint.CONF_CLIENT_CERT: "/tmp/client.crt",
+                integration_entrypoint.CONF_CLIENT_KEY: "/tmp/client.key",
+                integration_entrypoint.CONF_CA_CERT: "/tmp/ca.crt",
+                integration_entrypoint.CONF_EDGE_TOKEN_PATH: "/tmp/token",
+            }
+
+        original = (
+            integration_entrypoint.EdgePolicy,
+            integration_entrypoint.EdgeOutbox,
+            integration_entrypoint.MutualTLSTransport,
+            integration_entrypoint.EdgeRuntime,
+            integration_entrypoint._load_spool_codec,
+        )
+        try:
+            integration_entrypoint.EdgePolicy = PolicyFactory
+            integration_entrypoint.EdgeOutbox = Outbox
+            integration_entrypoint.MutualTLSTransport = Transport
+            integration_entrypoint.EdgeRuntime = Runtime
+            integration_entrypoint._load_spool_codec = lambda *_args: object()
+            with self.assertRaises(ConfigEntryNotReady):
+                await integration_entrypoint.async_setup_entry(Hass(), Entry())
+        finally:
+            (
+                integration_entrypoint.EdgePolicy,
+                integration_entrypoint.EdgeOutbox,
+                integration_entrypoint.MutualTLSTransport,
+                integration_entrypoint.EdgeRuntime,
+                integration_entrypoint._load_spool_codec,
+            ) = original
+        self.assertEqual([True], closed)
 
 
 class OutboxTests(unittest.TestCase):
@@ -477,8 +803,11 @@ class OutboxTests(unittest.TestCase):
 
         # Reopening the spool continues the same epoch and sequence.
         reopened = EdgeOutbox(
-            self.path, XorCodec(), max_bytes=64 * 1024,
-            max_age_seconds=60, now=self.clock,
+            self.path,
+            XorCodec(),
+            max_bytes=64 * 1024,
+            max_age_seconds=60,
+            now=self.clock,
         )
         reopened.initialize()
         self.assertEqual(3, reopened.enqueue(self._event("third")))
@@ -498,9 +827,7 @@ class OutboxTests(unittest.TestCase):
         self.outbox.enqueue(self._event("private-location"))
         self.assertEqual(
             1,
-            self.outbox.suppress_privacy_subjects(
-                {"device_tracker.iphone"}, set()
-            ),
+            self.outbox.suppress_privacy_subjects({"device_tracker.iphone"}, set()),
         )
         item = self.outbox.read_batch().items[0]
         self.assertEqual(EVENT_GAP, item.payload["source_event_type"])
@@ -560,7 +887,9 @@ class OutboxTests(unittest.TestCase):
         )
         self.assertEqual(physical, stats["physical_bytes"])
         self.assertLessEqual(physical, 64 * 1024)
-        self.assertEqual(EVENT_GAP, self.outbox.read_batch().items[0].payload["source_event_type"])
+        self.assertEqual(
+            EVENT_GAP, self.outbox.read_batch().items[0].payload["source_event_type"]
+        )
 
     def test_existing_spool_is_safely_migrated_to_full_auto_vacuum(self):
         legacy_path = Path(self.temp.name) / "legacy.sqlite"
@@ -613,9 +942,7 @@ class OutboxTests(unittest.TestCase):
             connection.execute(
                 "ALTER TABLE outbox RENAME COLUMN user_scope_tag TO user_id"
             )
-            connection.execute(
-                "UPDATE outbox SET user_id='private-ha-user-uuid'"
-            )
+            connection.execute("UPDATE outbox SET user_id='private-ha-user-uuid'")
 
         migrated = EdgeOutbox(
             legacy_path,
@@ -626,9 +953,7 @@ class OutboxTests(unittest.TestCase):
         )
         migrated.initialize()
         with migrated._connect() as checked:  # pylint: disable=protected-access
-            columns = {
-                row[1] for row in checked.execute("PRAGMA table_info(outbox)")
-            }
+            columns = {row[1] for row in checked.execute("PRAGMA table_info(outbox)")}
             self.assertIn("user_scope_tag", columns)
             self.assertNotIn("user_id", columns)
         self.assertNotIn(b"private-ha-user-uuid", legacy_path.read_bytes())
@@ -676,8 +1001,15 @@ class OutboxTests(unittest.TestCase):
         batch = self.outbox.read_batch()
         self.assertEqual(2, len(batch.items))
         self.assertEqual((1, 2), (batch.first_sequence, batch.last_sequence))
-        self.assertTrue(all(item.payload["source_event_type"] == EVENT_GAP for item in batch.items))
-        self.assertTrue(all(item.payload["reason_code"] == "retention_expired" for item in batch.items))
+        self.assertTrue(
+            all(item.payload["source_event_type"] == EVENT_GAP for item in batch.items)
+        )
+        self.assertTrue(
+            all(
+                item.payload["reason_code"] == "retention_expired"
+                for item in batch.items
+            )
+        )
 
     def test_corrupt_ciphertext_becomes_gap_not_acknowledged_data(self):
         self.outbox.enqueue(self._event("one"))
@@ -705,28 +1037,36 @@ class OutboxTests(unittest.TestCase):
             },
         }
         for entity_id in ("device_tracker.iphone", "person.engineeredlighting"):
-            self.outbox.enqueue({
-                "schema_version": 1,
-                "source_event_type": "state_changed",
-                "observation_kind": "transition",
-                "entity_id": entity_id,
-                "occurred_at": "2026-07-11T12:00:00Z",
-                "received_at": "2026-07-11T12:00:01Z",
-                "context": {"id": f"context-{entity_id}"},
-                "new_state": shared_state,
-            })
+            self.outbox.enqueue(
+                {
+                    "schema_version": 1,
+                    "source_event_type": "state_changed",
+                    "observation_kind": "transition",
+                    "entity_id": entity_id,
+                    "occurred_at": "2026-07-11T12:00:00Z",
+                    "received_at": "2026-07-11T12:00:01Z",
+                    "context": {"id": f"context-{entity_id}"},
+                    "new_state": shared_state,
+                }
+            )
         envelopes = self.outbox.read_batch().as_request()["envelopes"]
-        self.assertEqual(envelopes[0]["root_observation_id"], envelopes[1]["root_observation_id"])
-        self.assertEqual(envelopes[0]["evidence_family_id"], envelopes[1]["evidence_family_id"])
+        self.assertEqual(
+            envelopes[0]["root_observation_id"], envelopes[1]["root_observation_id"]
+        )
+        self.assertEqual(
+            envelopes[0]["evidence_family_id"], envelopes[1]["evidence_family_id"]
+        )
         self.assertEqual(
             "home_assistant.location:device_tracker.iphone",
             envelopes[0]["dependency_domain"],
         )
-        coordinate_oracle = str(uuid.uuid5(
-            uuid.NAMESPACE_URL,
-            "home-agent-edge/location/device_tracker.iphone/"
-            "2026-07-11T12:00:00Z/-22.4/-43.1",
-        ))
+        coordinate_oracle = str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                "home-agent-edge/location/device_tracker.iphone/"
+                "2026-07-11T12:00:00Z/-22.4/-43.1",
+            )
+        )
         self.assertNotEqual(coordinate_oracle, envelopes[0]["root_observation_id"])
 
         changed_coordinates = dict(shared_state)
@@ -735,16 +1075,18 @@ class OutboxTests(unittest.TestCase):
             "latitude": -22.5,
             "longitude": -43.2,
         }
-        self.outbox.enqueue({
-            "schema_version": 1,
-            "source_event_type": "state_changed",
-            "observation_kind": "transition",
-            "entity_id": "device_tracker.iphone",
-            "occurred_at": "2026-07-11T12:00:00Z",
-            "received_at": "2026-07-11T12:00:02Z",
-            "context": {"id": "contradictory-copy"},
-            "new_state": changed_coordinates,
-        })
+        self.outbox.enqueue(
+            {
+                "schema_version": 1,
+                "source_event_type": "state_changed",
+                "observation_kind": "transition",
+                "entity_id": "device_tracker.iphone",
+                "occurred_at": "2026-07-11T12:00:00Z",
+                "received_at": "2026-07-11T12:00:02Z",
+                "context": {"id": "contradictory-copy"},
+                "new_state": changed_coordinates,
+            }
+        )
         all_envelopes = self.outbox.read_batch().as_request()["envelopes"]
         self.assertEqual(
             envelopes[0]["root_observation_id"],
@@ -791,8 +1133,11 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.clock = FakeClock()
         self.outbox = EdgeOutbox(
-            Path(self.temp.name) / "edge.sqlite", XorCodec(),
-            max_bytes=64 * 1024, max_age_seconds=60, now=self.clock,
+            Path(self.temp.name) / "edge.sqlite",
+            XorCodec(),
+            max_bytes=64 * 1024,
+            max_age_seconds=60,
+            now=self.clock,
         )
         self.outbox.initialize()
         self.outbox.enqueue(
@@ -809,10 +1154,15 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_valid_ack_removes_only_durable_batch(self):
         key = f"{self.outbox.edge_instance_id}:home_assistant"
-        transport = FakeTransport({
-            "accepted": 1, "duplicates": 0, "quarantined": 0,
-            "acknowledgements": {key: 1}, "opened_gaps": [],
-        })
+        transport = FakeTransport(
+            {
+                "accepted": 1,
+                "duplicates": 0,
+                "quarantined": 0,
+                "acknowledgements": {key: 1},
+                "opened_gaps": [],
+            }
+        )
         result = await DeliveryCoordinator(self.outbox, transport).deliver_once()
         self.assertEqual("acknowledged", result.status)
         self.assertEqual(0, self.outbox.stats()["pending_rows"])
@@ -821,21 +1171,41 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         envelope = request["envelopes"][0]
         self.assertEqual(1, envelope["sequence"])
         self.assertEqual("home_assistant", envelope["source_name"])
-        self.assertEqual({
-            "edge_instance_id", "source_name", "epoch", "sequence",
-            "event_type", "entity_id", "source_event_id", "source_observed_at",
-            "edge_received_at", "payload", "root_observation_id",
-            "evidence_family_id", "dependency_domain", "coverage",
-            "clock_state", "ha_context", "metadata",
-        }, set(envelope))
+        self.assertEqual(
+            {
+                "edge_instance_id",
+                "source_name",
+                "epoch",
+                "sequence",
+                "event_type",
+                "entity_id",
+                "source_event_id",
+                "source_observed_at",
+                "edge_received_at",
+                "payload",
+                "root_observation_id",
+                "evidence_family_id",
+                "dependency_domain",
+                "coverage",
+                "clock_state",
+                "ha_context",
+                "metadata",
+            },
+            set(envelope),
+        )
         uuid.UUID(envelope["epoch"])
 
     async def test_out_of_range_ack_fails_closed_and_retries(self):
         key = f"{self.outbox.edge_instance_id}:home_assistant"
-        transport = FakeTransport({
-            "accepted": 1, "duplicates": 0, "quarantined": 0,
-            "acknowledgements": {key: 999}, "opened_gaps": [],
-        })
+        transport = FakeTransport(
+            {
+                "accepted": 1,
+                "duplicates": 0,
+                "quarantined": 0,
+                "acknowledgements": {key: 999},
+                "opened_gaps": [],
+            }
+        )
         result = await DeliveryCoordinator(self.outbox, transport).deliver_once()
         self.assertEqual("retry_scheduled", result.status)
         self.assertEqual("ValueError", result.error_code)
@@ -852,10 +1222,15 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, self.outbox.stats()["max_attempt_count"])
 
         key = f"{self.outbox.edge_instance_id}:home_assistant"
-        reconnected = FakeTransport({
-            "accepted": 1, "duplicates": 0, "quarantined": 0,
-            "acknowledgements": {key: 1}, "opened_gaps": [],
-        })
+        reconnected = FakeTransport(
+            {
+                "accepted": 1,
+                "duplicates": 0,
+                "quarantined": 0,
+                "acknowledgements": {key: 1},
+                "opened_gaps": [],
+            }
+        )
         # A disconnect intentionally schedules bounded backoff; reconnecting
         # must retain the batch, then deliver it once that durable delay ends.
         self.clock.advance(10)

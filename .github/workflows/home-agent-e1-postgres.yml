@@ -1,4 +1,4 @@
-name: home agent E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v PostgreSQL gate
+name: home agent E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v/E5w/E5x PostgreSQL gate
 
 on:
   pull_request:
@@ -25,12 +25,34 @@ on:
       - "stack/home-agent-deploy/identity-api-acl.sql"
       - "stack/home-agent-deploy/operator/REVIEWED-IDENTITY-PAYLOAD.md"
       - "stack/home-agent-deploy/operator/reviewed_identity_payload.py"
+      - "stack/home-agent-deploy/operator/migrate_legacy_identity.py"
       - "stack/home-agent-deploy/operator/phase3_activation_preflight.py"
+      - "stack/home-agent-deploy/operator/phase3_activation_runner.py"
       - "stack/home-agent-deploy/operator/phase3_activation_source_plan.py"
       - "stack/home-agent-deploy/operator/phase3_activation_sequencer.py"
       - "stack/home-agent-deploy/operator/phase3_migration_executor.py"
       - "stack/home-agent-deploy/operator/phase3_authority_admission.py"
       - "stack/home-agent-deploy/operator/phase3_identity_authority_ceremony.py"
+      - "stack/home-agent-deploy/operator/phase3_reviewed_people_packet.py"
+      - "stack/home-agent-deploy/operator/reviewed_identity_packet_compiler.py"
+      - "stack/home-agent-deploy/operator/phase3_identity_signing_ceremony.py"
+      - "stack/home-agent-deploy/operator/phase3_identity_credential_provisioner.py"
+      - "stack/home-agent-deploy/operator/phase3_identity_credential_provisioner.sh"
+      - "stack/home-agent-deploy/operator/phase3_identity_signing.sh"
+      - "stack/home-agent-deploy/install-phase3-identity-signing.sh"
+      - "stack/home-agent-deploy/operator/phase3_writer_freeze_ceremony.py"
+      - "stack/home-agent-deploy/operator/phase3_writer_freeze_evidence.py"
+      - "stack/home-agent-deploy/operator/phase3_privacy_cutover_ceremony.py"
+      - "stack/home-agent-deploy/operator/phase3_privacy_cutover_evidence.py"
+      - "stack/home-agent-deploy/operator/phase3_privacy_cutover_observer.py"
+      - "stack/home-agent-deploy/operator/phase3_semantic_cutover_ceremony.py"
+      - "stack/home-agent-deploy/operator/phase3_semantic_cutover_packet.py"
+      - "ha-config/extended_openai_conversation/collect_legacy_identity_freeze_observation.py"
+      - "ha-config/extended_openai_conversation/freeze_legacy_identity_semantics.py"
+      - "ha-config/extended_openai_conversation/identity_store.py"
+      - "ha-config/extended_openai_conversation/legacy_identity_fence.py"
+      - "ha-config/home_agent_edge/**"
+      - "stack/home-agent-deploy/operator/phase3_capture_legacy_identity_snapshot.py"
       - "stack/home-agent-deploy/operator/off_host_backup_writer.py"
       - "stack/home-agent-deploy/operator/phase3_evidence_receipts.py"
       - "stack/home-agent-deploy/operator/isolated_restore_drill.sh"
@@ -52,6 +74,7 @@ on:
       - "tests/home_agent/test_parent_relationship_adapter_e5g_deployment_contract.py"
       - "tests/home_agent/test_parent_relationship_status_e5h_deployment_contract.py"
       - "tests/home_agent/test_phase3_activation_preflight_e5j.py"
+      - "tests/home_agent/test_phase3_activation_runner_e5ad.py"
       - "tests/home_agent/test_phase3_activation_source_plan_e5k.py"
       - "tests/home_agent/test_phase3_activation_sequencer_e5m.py"
       - "tests/home_agent/test_identity_authority_executor_e5n.py"
@@ -61,6 +84,13 @@ on:
       - "tests/home_agent/test_phase3_migration_executor_e5t.py"
       - "tests/home_agent/test_identity_admission_writer_e5u.py"
       - "tests/home_agent/test_identity_authority_role_ceremony_e5v.py"
+      - "tests/home_agent/test_phase3_reviewed_people_packet_e5x.py"
+      - "tests/home_agent/test_reviewed_identity_packet_compiler_e5x.py"
+      - "tests/home_agent/test_phase3_identity_signing_ceremony_e5y.py"
+      - "tests/home_agent/test_phase3_identity_credential_provisioner_e5ae.py"
+      - "tests/home_agent/test_phase3_privacy_cutover_observer_e5ac.py"
+      - "tests/home_agent/test_collect_legacy_identity_freeze_observation_e5z.py"
+      - "tests/home_agent/test_phase3_capture_legacy_identity_snapshot_e5x.py"
       - "tests/home_agent/test_phase3_evidence_receipts_e5j.py"
       - "tests/home_agent/test_phase3_fixed_migration_entrypoints_e5l.py"
       - "tools/run-home-agent-e1-postgres-gate.py"
@@ -91,12 +121,34 @@ on:
       - "stack/home-agent-deploy/identity-api-acl.sql"
       - "stack/home-agent-deploy/operator/REVIEWED-IDENTITY-PAYLOAD.md"
       - "stack/home-agent-deploy/operator/reviewed_identity_payload.py"
+      - "stack/home-agent-deploy/operator/migrate_legacy_identity.py"
       - "stack/home-agent-deploy/operator/phase3_activation_preflight.py"
+      - "stack/home-agent-deploy/operator/phase3_activation_runner.py"
       - "stack/home-agent-deploy/operator/phase3_activation_source_plan.py"
       - "stack/home-agent-deploy/operator/phase3_activation_sequencer.py"
       - "stack/home-agent-deploy/operator/phase3_migration_executor.py"
       - "stack/home-agent-deploy/operator/phase3_authority_admission.py"
       - "stack/home-agent-deploy/operator/phase3_identity_authority_ceremony.py"
+      - "stack/home-agent-deploy/operator/phase3_reviewed_people_packet.py"
+      - "stack/home-agent-deploy/operator/reviewed_identity_packet_compiler.py"
+      - "stack/home-agent-deploy/operator/phase3_identity_signing_ceremony.py"
+      - "stack/home-agent-deploy/operator/phase3_identity_credential_provisioner.py"
+      - "stack/home-agent-deploy/operator/phase3_identity_credential_provisioner.sh"
+      - "stack/home-agent-deploy/operator/phase3_identity_signing.sh"
+      - "stack/home-agent-deploy/install-phase3-identity-signing.sh"
+      - "stack/home-agent-deploy/operator/phase3_writer_freeze_ceremony.py"
+      - "stack/home-agent-deploy/operator/phase3_writer_freeze_evidence.py"
+      - "stack/home-agent-deploy/operator/phase3_privacy_cutover_ceremony.py"
+      - "stack/home-agent-deploy/operator/phase3_privacy_cutover_evidence.py"
+      - "stack/home-agent-deploy/operator/phase3_privacy_cutover_observer.py"
+      - "stack/home-agent-deploy/operator/phase3_semantic_cutover_ceremony.py"
+      - "stack/home-agent-deploy/operator/phase3_semantic_cutover_packet.py"
+      - "ha-config/extended_openai_conversation/collect_legacy_identity_freeze_observation.py"
+      - "ha-config/extended_openai_conversation/freeze_legacy_identity_semantics.py"
+      - "ha-config/extended_openai_conversation/identity_store.py"
+      - "ha-config/extended_openai_conversation/legacy_identity_fence.py"
+      - "ha-config/home_agent_edge/**"
+      - "stack/home-agent-deploy/operator/phase3_capture_legacy_identity_snapshot.py"
       - "stack/home-agent-deploy/operator/off_host_backup_writer.py"
       - "stack/home-agent-deploy/operator/phase3_evidence_receipts.py"
       - "stack/home-agent-deploy/operator/isolated_restore_drill.sh"
@@ -118,6 +170,7 @@ on:
       - "tests/home_agent/test_parent_relationship_adapter_e5g_deployment_contract.py"
       - "tests/home_agent/test_parent_relationship_status_e5h_deployment_contract.py"
       - "tests/home_agent/test_phase3_activation_preflight_e5j.py"
+      - "tests/home_agent/test_phase3_activation_runner_e5ad.py"
       - "tests/home_agent/test_phase3_activation_source_plan_e5k.py"
       - "tests/home_agent/test_phase3_activation_sequencer_e5m.py"
       - "tests/home_agent/test_identity_authority_executor_e5n.py"
@@ -127,6 +180,13 @@ on:
       - "tests/home_agent/test_phase3_migration_executor_e5t.py"
       - "tests/home_agent/test_identity_admission_writer_e5u.py"
       - "tests/home_agent/test_identity_authority_role_ceremony_e5v.py"
+      - "tests/home_agent/test_phase3_reviewed_people_packet_e5x.py"
+      - "tests/home_agent/test_reviewed_identity_packet_compiler_e5x.py"
+      - "tests/home_agent/test_phase3_identity_signing_ceremony_e5y.py"
+      - "tests/home_agent/test_phase3_identity_credential_provisioner_e5ae.py"
+      - "tests/home_agent/test_phase3_privacy_cutover_observer_e5ac.py"
+      - "tests/home_agent/test_collect_legacy_identity_freeze_observation_e5z.py"
+      - "tests/home_agent/test_phase3_capture_legacy_identity_snapshot_e5x.py"
       - "tests/home_agent/test_phase3_evidence_receipts_e5j.py"
       - "tests/home_agent/test_phase3_fixed_migration_entrypoints_e5l.py"
       - "tools/run-home-agent-e1-postgres-gate.py"
@@ -139,14 +199,46 @@ concurrency:
   group: home-agent-e1-postgres-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  PYTHON_IMAGE: python:3.12-slim@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36
+  PYTHON_LINUX_AMD64_DIGEST: sha256:d657ab0ade19f404a6ccc883ab399540de667aff751748ce23c07330c5a89e64
+  CORE_IMAGE: engineered-lighting/home-agent-core:ci-${{ github.sha }}
+  CORE_DEPLOYMENT_IMAGE: engineered-lighting/home-agent-core:local
+
 jobs:
   erasure-gate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
 
     steps:
       # actions/checkout v4.3.1
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Verify the pinned Python Linux AMD64 manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          index_json="$(mktemp "${RUNNER_TEMP}/home-agent-python-index.XXXXXX.json")"
+          trap 'rm -f -- "${index_json}"' EXIT
+          docker buildx imagetools inspect "${PYTHON_IMAGE}" --raw >"${index_json}"
+          PYTHON_INDEX_JSON="${index_json}" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          index = json.loads(
+              Path(os.environ["PYTHON_INDEX_JSON"]).read_text(encoding="utf-8")
+          )
+          digests = [
+              item.get("digest")
+              for item in index.get("manifests", [])
+              if item.get("platform", {}).get("os") == "linux"
+              and item.get("platform", {}).get("architecture") == "amd64"
+              and not item.get("platform", {}).get("variant")
+          ]
+          if digests != [os.environ["PYTHON_LINUX_AMD64_DIGEST"]]:
+              raise SystemExit("pinned Python Linux AMD64 manifest mismatch")
+          PY
 
       - name: Exercise E4 additive secret lifecycle
         env:
@@ -158,9 +250,216 @@ jobs:
           RUNNER_TEMP="$RUNNER_TEMP"
           sh stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh
 
-      - name: Run isolated PostgreSQL 17 E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v authority gate
+      - name: Run isolated PostgreSQL 17 E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v/E5w/E5x authority gate
         env:
           HOME_AGENT_E1_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: >-
           python3 tools/run-home-agent-e1-postgres-gate.py
           --github-hosted-linux
+
+      - name: Build and smoke the production Core candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --platform linux/amd64 \
+            --pull \
+            --provenance=false \
+            --build-arg "PYTHON_BASE_IMAGE=${PYTHON_IMAGE}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --load \
+            -t "${CORE_IMAGE}" \
+            stack/services/home-agent-core
+          test "$(docker image inspect "${CORE_IMAGE}" \
+            --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" \
+            = "${GITHUB_SHA}"
+          test "$(docker image inspect "${CORE_IMAGE}" --format '{{.Config.User}}')" \
+            = "homeagent"
+          docker run --rm \
+            --network none \
+            --read-only \
+            --tmpfs /tmp:size=16m,mode=1777 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --memory 256m \
+            --memory-swap 256m \
+            --cpus 1 \
+            --pids-limit 64 \
+            --entrypoint python \
+            "${CORE_IMAGE}" -c \
+            'import os; assert os.getuid() == 10001; import app.main; import app.phase3_signing_material'
+
+  deployable-core-image:
+    needs: erasure-gate
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+
+    steps:
+      # actions/checkout v4.3.1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Verify the pinned Python Linux AMD64 manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          index_json="$(mktemp "${RUNNER_TEMP}/home-agent-python-index.XXXXXX.json")"
+          trap 'rm -f -- "${index_json}"' EXIT
+          docker buildx imagetools inspect "${PYTHON_IMAGE}" --raw >"${index_json}"
+          PYTHON_INDEX_JSON="${index_json}" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          index = json.loads(
+              Path(os.environ["PYTHON_INDEX_JSON"]).read_text(encoding="utf-8")
+          )
+          digests = [
+              item.get("digest")
+              for item in index.get("manifests", [])
+              if item.get("platform", {}).get("os") == "linux"
+              and item.get("platform", {}).get("architecture") == "amd64"
+              and not item.get("platform", {}).get("variant")
+          ]
+          if digests != [os.environ["PYTHON_LINUX_AMD64_DIGEST"]]:
+              raise SystemExit("pinned Python Linux AMD64 manifest mismatch")
+          PY
+
+      - name: Rebuild and smoke the exact deployable Core image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --platform linux/amd64 \
+            --pull \
+            --provenance=false \
+            --build-arg "PYTHON_BASE_IMAGE=${PYTHON_IMAGE}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --load \
+            -t "${CORE_IMAGE}" \
+            stack/services/home-agent-core
+          test "$(docker image inspect "${CORE_IMAGE}" \
+            --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" \
+            = "${GITHUB_SHA}"
+          test "$(docker image inspect "${CORE_IMAGE}" --format '{{.Config.User}}')" \
+            = "homeagent"
+          docker run --rm \
+            --network none \
+            --read-only \
+            --tmpfs /tmp:size=16m,mode=1777 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --memory 256m \
+            --memory-swap 256m \
+            --cpus 1 \
+            --pids-limit 64 \
+            --entrypoint python \
+            "${CORE_IMAGE}" -c \
+            'import os; assert os.getuid() == 10001; import app.main; import app.phase3_signing_material'
+
+      - name: Export the immutable Core image bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          export CORE_IMAGE_ID
+          export CORE_ARCHIVE_SHA256
+          CORE_IMAGE_ID="$(docker image inspect "${CORE_IMAGE}" --format '{{.Id}}')"
+          docker save "${CORE_IMAGE}" \
+            | gzip -n -9 >dist/home-agent-core-linux-amd64.tar.gz
+          CORE_ARCHIVE_SHA256="$(
+            sha256sum dist/home-agent-core-linux-amd64.tar.gz | cut -d' ' -f1
+          )"
+          python3 - <<'PY'
+          import json
+          import os
+          import tarfile
+          from pathlib import Path
+
+          archive = Path("dist/home-agent-core-linux-amd64.tar.gz")
+          expected_config = os.environ["CORE_IMAGE_ID"].removeprefix("sha256:")
+          with tarfile.open(archive, mode="r:gz") as bundle:
+              member = bundle.extractfile("manifest.json")
+              if member is None:
+                  raise SystemExit("Core Docker manifest missing")
+              records = json.load(member)
+          configs = {
+              Path(str(record.get("Config", ""))).name.removesuffix(".json")
+              for record in records
+          }
+          tags = {
+              tag
+              for record in records
+              for tag in (record.get("RepoTags") or [])
+          }
+          if configs != {expected_config} or tags != {os.environ["CORE_IMAGE"]}:
+              raise SystemExit("Core image identity or tag contract mismatch")
+
+          payload = {
+              "schema_version": 1,
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "source_ref": os.environ["GITHUB_REF"],
+              "source_commit": os.environ["GITHUB_SHA"],
+              "workflow_run_id": os.environ["GITHUB_RUN_ID"],
+              "platform": "linux/amd64",
+              "base_image": {
+                  "reference": "python:3.12-slim",
+                  "index_digest": os.environ["PYTHON_IMAGE"].split("@", 1)[1],
+                  "linux_amd64_digest": os.environ[
+                      "PYTHON_LINUX_AMD64_DIGEST"
+                  ],
+              },
+              "image": {
+                  "source_tag": os.environ["CORE_IMAGE"],
+                  "deployment_tag": os.environ["CORE_DEPLOYMENT_IMAGE"],
+                  "image_id": os.environ["CORE_IMAGE_ID"],
+                  "archive": archive.name,
+                  "archive_sha256": os.environ["CORE_ARCHIVE_SHA256"],
+                  "revision_label": os.environ["GITHUB_SHA"],
+              },
+          }
+          Path("dist/manifest.json").write_text(
+              json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          (
+            cd dist
+            sha256sum home-agent-core-linux-amd64.tar.gz manifest.json \
+              >SHA256SUMS
+            sha256sum --strict --check SHA256SUMS
+          )
+
+      - name: Attest the deployable Core archive and manifest
+        id: attest
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6
+        with:
+          subject-path: |
+            dist/home-agent-core-linux-amd64.tar.gz
+            dist/manifest.json
+            dist/SHA256SUMS
+
+      - name: Add the offline provenance bundle
+        shell: bash
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          test -s "${BUNDLE_PATH}"
+          cp "${BUNDLE_PATH}" dist/provenance.sigstore.json
+
+      - name: Upload the attested Core deployment bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: home-agent-core-image-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

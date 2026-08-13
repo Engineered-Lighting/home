@@ -59,6 +59,26 @@ async function behaviorTest() {
   await api.session();
   await api.login();
   await api.snapshot();
+  await api.initiatives();
+  await api.claimInitiative("01900000-0000-7000-8000-000000000001");
+  await api.privateLocalities();
+  await api.previewPrivateLocality({
+    canonicalName: "Itaipava",
+    latitude: -22.4,
+    longitude: -43.14,
+    radiusM: 1000,
+    travelGreetingEligible: true,
+    confirmationNonce: "00000000-0000-4000-8000-000000000000",
+  });
+  await api.confirmPrivateLocality({
+    canonicalName: "Itaipava",
+    latitude: -22.4,
+    longitude: -43.14,
+    radiusM: 1000,
+    travelGreetingEligible: true,
+    confirmationNonce: "00000000-0000-4000-8000-000000000000",
+    previewDigest: "a".repeat(64),
+  });
   await api.explainDescriptor("01900000-0000-7000-8000-000000000002");
   await api.queryParentPresence("01900000-0000-7000-8000-000000000002");
   await api.setPreference("location_memory", true);
@@ -92,6 +112,11 @@ async function behaviorTest() {
     "native_auth_status",
     "native_auth_login",
     "native_agent_snapshot",
+    "native_agent_list_initiatives",
+    "native_agent_claim_initiative",
+    "native_agent_list_private_localities",
+    "native_agent_preview_private_locality",
+    "native_agent_confirm_private_locality",
     "native_agent_explain_descriptor",
     "native_agent_query_parent_presence",
     "native_agent_set_preference",
@@ -102,9 +127,12 @@ async function behaviorTest() {
     calls.find((item) => item.command === "native_agent_set_preference" &&
       item.args?.key === "travel_greetings")?.args?.enabled === false, calls);
   const methods = Object.getOwnPropertyNames(window.HomeAgentApi.prototype);
-  assert("native client exposes typed place queries but no initiative or generic mutation",
-    ["explainDescriptor", "queryParentPresence"].every((name) => methods.includes(name)) &&
-    !["initiatives", "claimInitiative"].some((name) => methods.includes(name)) &&
+  assert("native client exposes only typed initiative, locality, and place operations",
+    [
+      "initiatives", "claimInitiative", "privateLocalities",
+      "previewPrivateLocality", "confirmPrivateLocality",
+      "explainDescriptor", "queryParentPresence",
+    ].every((name) => methods.includes(name)) &&
     !methods.some((name) => /(createPlace|generic)/i.test(name)), methods);
 }
 
@@ -368,9 +396,15 @@ function principalOperationBoundaryTest() {
     !agentPanel.includes("native_contained") &&
     !agentPanel.includes("!snapshot?.preferences?.location_memory") &&
     !agentPanel.includes("!snapshot?.preferences?.travel_greetings"));
-  assert("deployed Agent client has no initiative listing, claim, or presentation path",
-    !/\b(?:initiatives|claimInitiative)\s*\(/.test(read("app/src/home-agent/api.js")) &&
-    !/(native_agent_(?:list|claim)_initiative|Private travel greeting|Present once)/.test(agentSources));
+  assert("private greeting presentation is native-attested and doubly consent-gated",
+    read("app/src/home-agent/api.js").includes('if (!this.invoke) return Promise.reject(new Error("native_transport_required"));') &&
+    read("app/src/home-agent/api.js").includes('this.native("native_agent_list_initiatives")') &&
+    read("app/src/home-agent/api.js").includes('this.native("native_agent_claim_initiative"') &&
+    agentPanel.includes('snapshot?.capabilities?.private_initiatives === "attested_native_consent_gated"') &&
+    agentPanel.includes('snapshot?.preferences?.location_memory === true') &&
+    agentPanel.includes('snapshot?.preferences?.travel_greetings === true') &&
+    agentPanel.includes('await api.claimInitiative(initiativeId)') &&
+    agentPanel.includes('cause?.status !== 409'));
   assert("browser identity preview is fixed, explicit, and keeps confirmation disabled",
     agentPanel.includes('id="principal-binding-preview">{bindingProposal.confirmation_statement}</p>') &&
     agentPanel.includes("Review code <code>{bindingProposal.review_code}</code>") &&

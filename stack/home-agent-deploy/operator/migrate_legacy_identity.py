@@ -27,9 +27,7 @@ import urllib.request
 import uuid
 
 
-_ALLOWED_CORE_BASES = frozenset(
-    {"http://127.0.0.1:8104", "http://core-api:8104"}
-)
+_ALLOWED_CORE_BASES = frozenset({"http://127.0.0.1:8104", "http://core-api:8104"})
 SUPPORTED_SCHEMA_VERSION = 1
 PERSON_ENDPOINT = "/v1/people"
 ROLE_ENDPOINT = "/v1/people/legacy-role-labels"
@@ -37,12 +35,8 @@ CAPABILITIES_ENDPOINT = "/v1/operator-capabilities"
 ROLLOUT_ENDPOINT = "/v1/operator-rollout"
 VERIFY_PERSON_ENDPOINT = "/v1/people/verify-reviewed"
 ALIAS_ENDPOINT_TEMPLATE = "/v1/people/{person_id}/aliases"
-RECOGNITION_BINDING_ENDPOINT_TEMPLATE = (
-    "/v1/people/{person_id}/recognition-bindings"
-)
-PRIVACY_DIRECTIVE_ENDPOINT_TEMPLATE = (
-    "/v1/people/{person_id}/privacy-directives"
-)
+RECOGNITION_BINDING_ENDPOINT_TEMPLATE = "/v1/people/{person_id}/recognition-bindings"
+PRIVACY_DIRECTIVE_ENDPOINT_TEMPLATE = "/v1/people/{person_id}/privacy-directives"
 PERSON_STATUS_ENDPOINT_TEMPLATE = "/v1/people/{person_id}/status-import"
 RELATIONSHIP_CANDIDATE_ENDPOINT = "/v1/people/legacy-relationship-candidates"
 EXPECTED_CAPABILITY_CONTRACT: Mapping[str, Any] = {
@@ -102,6 +96,34 @@ EXPECTED_CAPABILITY_CONTRACT: Mapping[str, Any] = {
         "source_digest_field": "source_snapshot_sha256",
         "idempotency": "exact-projection-v1",
     },
+}
+SOURCE_PROJECTION_CONTRACT: Mapping[str, Any] = {
+    "contract": "legacy-identity-source-projection-v1",
+    "source_schema_version": SUPPORTED_SCHEMA_VERSION,
+    "source_tables": [
+        "schema_meta",
+        "identities",
+        "identity_aliases",
+        "enrollments",
+        "relationships",
+    ],
+    "projection_kinds": [
+        "person",
+        "privacy_directive",
+        "person_status",
+        "alias",
+        "recognition_binding",
+        "legacy_role_candidate",
+        "legacy_relationship_candidate",
+        "explicit_omission",
+    ],
+    "prohibited_authority": [
+        "parent_of_fact",
+        "ownership",
+        "residence",
+        "presence",
+    ],
+    "idempotency": "exact-projection-v1",
 }
 EXPECTED_SHADOW_ROLLOUT_CONTRACT: Mapping[str, Any] = {
     "mode": "shadow",
@@ -301,6 +323,15 @@ class MigrationPlan:
 
 
 @dataclass(frozen=True, slots=True)
+class LegacySourceInventoryRow:
+    """One minimized row from the fixed legacy source projection."""
+
+    source_table_kind: str
+    row_key: Mapping[str, Any]
+    values: Mapping[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
 class ApplyOperation:
     kind: str
     candidate_id: str
@@ -410,7 +441,9 @@ def _validate_schema(connection: sqlite3.Connection) -> int:
         raise MigrationError("legacy Identity Store objects must be tables")
     for table, required in _REQUIRED_TABLE_COLUMNS.items():
         if not required.issubset(_schema_columns(connection, table)):
-            raise MigrationError(f"legacy Identity Store table is incompatible: {table}")
+            raise MigrationError(
+                f"legacy Identity Store table is incompatible: {table}"
+            )
     row = connection.execute(
         "SELECT value FROM schema_meta WHERE key = 'schema_version'"
     ).fetchone()
@@ -419,7 +452,9 @@ def _validate_schema(connection: sqlite3.Connection) -> int:
     try:
         version = int(row[0])
     except (TypeError, ValueError) as error:
-        raise MigrationError("legacy Identity Store schema version is invalid") from error
+        raise MigrationError(
+            "legacy Identity Store schema version is invalid"
+        ) from error
     if version != SUPPORTED_SCHEMA_VERSION:
         raise MigrationError(
             f"unsupported legacy Identity Store schema version: {version}"
@@ -460,13 +495,15 @@ def _open_read_only(path: Path) -> sqlite3.Connection:
         )
     try:
         connection = sqlite3.connect(
-            f"{resolved.as_uri()}?mode=ro",
+            f"{resolved.as_uri()}?mode=ro&immutable=1",
             uri=True,
             isolation_level=None,
             timeout=5,
         )
     except sqlite3.Error as error:
-        raise MigrationError("legacy Identity Store could not be opened read-only") from error
+        raise MigrationError(
+            "legacy Identity Store could not be opened read-only"
+        ) from error
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA query_only = ON")
     connection.execute("BEGIN")
@@ -586,9 +623,7 @@ def _roles(
             ("relationship_subrole", row["relationship_subrole"]),
         )
         for source_field, raw_label in candidates:
-            label = _bounded_text(
-                raw_label, "legacy role", maximum=64, optional=True
-            )
+            label = _bounded_text(raw_label, "legacy role", maximum=64, optional=True)
             if label in (None, "unknown", "do_not_identify"):
                 continue
             snapshot = {
@@ -627,9 +662,7 @@ def _relationships(
         status_value = _bounded_text(row["status"], "relationship status", maximum=16)
         if status_value not in {"active", "ended", "paused"}:
             raise MigrationError("unsupported relationship status")
-        label = str(
-            _bounded_text(row["rel_type"], "relationship label", maximum=64)
-        )
+        label = str(_bounded_text(row["rel_type"], "relationship label", maximum=64))
         safe_snapshot = {
             "legacy_row_id": int(row["id"]),
             "from_person_id": from_id,
@@ -644,9 +677,7 @@ def _relationships(
                 to_person_id=to_id,
                 relationship_label=label,
                 status=str(status_value),
-                snapshot_sha256=hashlib.sha256(
-                    _canonical(safe_snapshot)
-                ).hexdigest(),
+                snapshot_sha256=hashlib.sha256(_canonical(safe_snapshot)).hexdigest(),
                 candidate_id=_digest("legacy_relationship_candidate", safe_snapshot),
             )
         )
@@ -715,7 +746,9 @@ def load_plan(path: Path) -> MigrationPlan:
         roles = _roles(connection, person_map)
         relationships = _relationships(connection, set(person_map))
     except sqlite3.DatabaseError as error:
-        raise MigrationError("legacy Identity Store read was denied or invalid") from error
+        raise MigrationError(
+            "legacy Identity Store read was denied or invalid"
+        ) from error
     finally:
         connection.close()
     material = _plan_material(
@@ -730,6 +763,106 @@ def load_plan(path: Path) -> MigrationPlan:
         relationship_candidates=relationships,
         digest=hashlib.sha256(_canonical(material)).hexdigest(),
     )
+
+
+def load_source_inventory(path: Path) -> tuple[LegacySourceInventoryRow, ...]:
+    """Read every selected source row through the fixed query-only allowlist.
+
+    The returned content is private compiler input.  It includes rows that the
+    semantic projection intentionally suppresses so a reviewed packet must
+    record an explicit omission instead of silently losing them.
+    """
+
+    connection = _open_read_only(path)
+    try:
+        _validate_schema(connection)
+        _install_authorizer(connection)
+        queries = (
+            (
+                "schema_meta",
+                "SELECT key, value FROM schema_meta ORDER BY key",
+                lambda row: {"key": str(row["key"])},
+                lambda row: {"key": str(row["key"]), "value": str(row["value"])},
+            ),
+            (
+                "identities",
+                "SELECT uuid, display_name, pronouns, relationship_type, "
+                "relationship_subrole, is_private, is_silent, is_ignored, "
+                "is_archived, do_not_track, auto_expire_at, version "
+                "FROM identities ORDER BY uuid",
+                lambda row: {"uuid": _stable_uuid(row["uuid"], "identity")},
+                lambda row: {
+                    "uuid": _stable_uuid(row["uuid"], "identity"),
+                    "display_name": row["display_name"],
+                    "pronouns": row["pronouns"],
+                    "relationship_type": row["relationship_type"],
+                    "relationship_subrole": row["relationship_subrole"],
+                    "is_private": row["is_private"],
+                    "is_silent": row["is_silent"],
+                    "is_ignored": row["is_ignored"],
+                    "is_archived": row["is_archived"],
+                    "do_not_track": row["do_not_track"],
+                    "auto_expire_at": row["auto_expire_at"],
+                    "version": row["version"],
+                },
+            ),
+            (
+                "identity_aliases",
+                "SELECT id, identity_uuid, alias, alias_kind "
+                "FROM identity_aliases ORDER BY id",
+                lambda row: {"id": int(row["id"])},
+                lambda row: {
+                    "id": int(row["id"]),
+                    "identity_uuid": _stable_uuid(row["identity_uuid"], "alias"),
+                    "alias": row["alias"],
+                    "alias_kind": row["alias_kind"],
+                },
+            ),
+            (
+                "enrollments",
+                "SELECT id, identity_uuid, frigate_person_name, retired_at "
+                "FROM enrollments ORDER BY id",
+                lambda row: {"id": int(row["id"])},
+                lambda row: {
+                    "id": int(row["id"]),
+                    "identity_uuid": _stable_uuid(row["identity_uuid"], "enrollment"),
+                    "frigate_person_name": row["frigate_person_name"],
+                    "retired_at": row["retired_at"],
+                },
+            ),
+            (
+                "relationships",
+                "SELECT id, from_uuid, to_uuid, rel_type, status "
+                "FROM relationships ORDER BY id",
+                lambda row: {"id": int(row["id"])},
+                lambda row: {
+                    "id": int(row["id"]),
+                    "from_uuid": _stable_uuid(row["from_uuid"], "relationship"),
+                    "to_uuid": _stable_uuid(row["to_uuid"], "relationship"),
+                    "rel_type": row["rel_type"],
+                    "status": row["status"],
+                },
+            ),
+        )
+        inventory: list[LegacySourceInventoryRow] = []
+        for table, query, row_key, values in queries:
+            for row in connection.execute(query).fetchall():
+                inventory.append(
+                    LegacySourceInventoryRow(
+                        source_table_kind=table,
+                        row_key=row_key(row),
+                        values=values(row),
+                    )
+                )
+    except (sqlite3.DatabaseError, TypeError, ValueError) as error:
+        raise MigrationError(
+            "legacy Identity Store inventory was denied or invalid"
+        ) from error
+    finally:
+        connection.close()
+    if not inventory:
+        raise MigrationError("legacy Identity Store inventory is empty")
+    return tuple(inventory)
 
 
 def review_report(plan: MigrationPlan) -> Mapping[str, Any]:
@@ -750,8 +883,16 @@ def review_report(plan: MigrationPlan) -> Mapping[str, Any]:
             1
             for item in plan.aliases
             if (
-                next(person for person in plan.people if person.person_id == item.person_id).is_ignored
-                or next(person for person in plan.people if person.person_id == item.person_id).do_not_identify
+                next(
+                    person
+                    for person in plan.people
+                    if person.person_id == item.person_id
+                ).is_ignored
+                or next(
+                    person
+                    for person in plan.people
+                    if person.person_id == item.person_id
+                ).do_not_identify
             )
         ),
         "frigate_external_bindings": len(plan.external_bindings),
@@ -759,8 +900,16 @@ def review_report(plan: MigrationPlan) -> Mapping[str, Any]:
             1
             for item in plan.external_bindings
             if (
-                next(person for person in plan.people if person.person_id == item.person_id).is_ignored
-                or next(person for person in plan.people if person.person_id == item.person_id).do_not_identify
+                next(
+                    person
+                    for person in plan.people
+                    if person.person_id == item.person_id
+                ).is_ignored
+                or next(
+                    person
+                    for person in plan.people
+                    if person.person_id == item.person_id
+                ).do_not_identify
             )
         ),
         "privacy_directives": privacy_items,
@@ -824,7 +973,9 @@ def prepare_apply(
     capabilities: frozenset[tuple[str, str]],
 ) -> ApplyPreparation:
     if ("post", PERSON_ENDPOINT) not in capabilities:
-        raise MigrationError(f"required typed Core endpoint is absent: POST {PERSON_ENDPOINT}")
+        raise MigrationError(
+            f"required typed Core endpoint is absent: POST {PERSON_ENDPOINT}"
+        )
     if ("field", "PersonCreate.legacy_source_sha256") not in capabilities:
         raise MigrationError(
             "Core PersonCreate lacks required exact-idempotency source digest"
@@ -1185,7 +1336,9 @@ def prepare_apply(
         )
 
     if any(item.path in PROHIBITED_MIGRATION_PATHS for item in operations):
-        raise MigrationError("a prohibited authoritative relationship operation was built")
+        raise MigrationError(
+            "a prohibited authoritative relationship operation was built"
+        )
     return ApplyPreparation(
         operations=tuple(operations),
         blocked_people=0,
@@ -1206,7 +1359,9 @@ def collect_confirmations(
         raise MigrationError("overall confirmation did not match; no Core writes sent")
     for operation in preparation.operations:
         output_fn(json.dumps(operation.review, ensure_ascii=False, sort_keys=True))
-        item_phrase = f"APPLY REVIEWED {operation.kind.upper()} {operation.candidate_id}"
+        item_phrase = (
+            f"APPLY REVIEWED {operation.kind.upper()} {operation.candidate_id}"
+        )
         output_fn(f"Type exactly: {item_phrase}")
         if input_fn("> ").strip() != item_phrase:
             raise MigrationError("item confirmation did not match; no Core writes sent")
@@ -1267,7 +1422,9 @@ class HttpCoreClient:
             "HOME_AGENT_MIGRATION_CORE_URL", "http://127.0.0.1:8104"
         ).rstrip("/")
         if self._core_base not in _ALLOWED_CORE_BASES:
-            raise MigrationError("migration Core URL is not an allowlisted local endpoint")
+            raise MigrationError(
+                "migration Core URL is not an allowlisted local endpoint"
+            )
         self._service_token = _read_secret("operator_token")
         self._bootstrap_token = _read_secret("bootstrap_token")
         # Never honor host/container proxy variables for credentialed bootstrap
@@ -1363,12 +1520,16 @@ class HttpCoreClient:
             except (ValueError, AttributeError):
                 allowed = False
             else:
-                allowed = parts[4] in {
-                    "aliases",
-                    "recognition-bindings",
-                    "privacy-directives",
-                    "status-import",
-                } and parts[5] == ""
+                allowed = (
+                    parts[4]
+                    in {
+                        "aliases",
+                        "recognition-bindings",
+                        "privacy-directives",
+                        "status-import",
+                    }
+                    and parts[5] == ""
+                )
         # Normal generated paths do not carry a trailing slash.
         if not allowed and len(parts) == 5 and parts[:3] == ["", "v1", "people"]:
             try:
@@ -1409,14 +1570,19 @@ def main() -> int:
     report = review_report(plan)
     _print_review(report)
 
-    if input("Write a minimized mode-0600 review artifact? [y/N]: ").strip().lower() == "y":
+    if (
+        input("Write a minimized mode-0600 review artifact? [y/N]: ").strip().lower()
+        == "y"
+    ):
         artifact_text = input("New review artifact path: ").strip()
         if not artifact_text:
             raise MigrationError("review artifact path is required")
         try:
             write_review_artifact(Path(artifact_text), report)
         except OSError as error:
-            raise MigrationError("review artifact could not be created safely") from error
+            raise MigrationError(
+                "review artifact could not be created safely"
+            ) from error
         print("Minimized review artifact written")
 
     if input("Enter reviewed apply mode? [y/N]: ").strip().lower() != "y":

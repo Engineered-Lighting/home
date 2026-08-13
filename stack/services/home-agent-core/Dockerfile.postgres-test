@@ -18,8 +18,9 @@ WORKDIR /workspace/stack/services/home-agent-core
 
 COPY stack/services/home-agent-core/requirements.txt /tmp/requirements.txt
 COPY stack/services/home-agent-core/requirements-dev.txt /tmp/requirements-dev.txt
-RUN pip install --no-cache-dir \
-      -r /tmp/requirements.txt -r /tmp/requirements-dev.txt
+COPY stack/services/home-agent-core/requirements-dev.lock /tmp/requirements-dev.lock
+RUN pip install --no-cache-dir --require-hashes \
+      -r /tmp/requirements-dev.lock
 
 COPY stack/services/home-agent-core/ /workspace/stack/services/home-agent-core/
 COPY stack/home-agent-compose.yml stack/home-agent.env.example /workspace/stack/
@@ -27,6 +28,7 @@ COPY stack/home-agent-deploy/ /workspace/stack/home-agent-deploy/
 COPY stack/services/home-agent-bff/src/bff.mjs /workspace/stack/services/home-agent-bff/src/bff.mjs
 COPY app/src/home-agent/api.js /workspace/app/src/home-agent/api.js
 COPY app/src/home-agent/panel.jsx /workspace/app/src/home-agent/panel.jsx
+COPY ha-config/home_agent_edge/ /workspace/ha-config/home_agent_edge/
 COPY tests/home_agent/ /workspace/tests/home_agent/
 COPY tools/run-home-agent-e1-postgres-gate.py /workspace/tools/
 COPY .github/workflows/home-agent-e1-postgres.yml /workspace/.github/workflows/

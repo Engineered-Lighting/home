@@ -11,15 +11,11 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "stack/home-agent-deploy/activate-identity-authority-role.sh"
 CEREMONY = (
-    ROOT
-    / "stack/home-agent-deploy/operator/phase3_identity_authority_ceremony.py"
+    ROOT / "stack/home-agent-deploy/operator/phase3_identity_authority_ceremony.py"
 )
 COMPOSE = ROOT / "stack/home-agent-compose.yml"
 MATERIALIZE = ROOT / "stack/home-agent-deploy/materialize-secrets.sh"
-SOURCE_PLAN = (
-    ROOT
-    / "stack/home-agent-deploy/operator/phase3_activation_source_plan.py"
-)
+SOURCE_PLAN = ROOT / "stack/home-agent-deploy/operator/phase3_activation_source_plan.py"
 RUNNER = ROOT / "tools/run-home-agent-e1-postgres-gate.py"
 WORKFLOW = ROOT / ".github/workflows/home-agent-e1-postgres.yml"
 
@@ -64,9 +60,9 @@ def test_role_script_is_fixed_bounded_and_force_reexpires_sessions() -> None:
 
 def test_compose_role_surface_is_operator_only_and_owner_isolated() -> None:
     source = COMPOSE.read_text(encoding="utf-8")
-    block = source.split("  identity-role-activation:", 1)[1].split(
-        "\n  core-api:", 1
-    )[0]
+    block = source.split("  identity-role-activation:", 1)[1].split("\n  core-api:", 1)[
+        0
+    ]
     assert "profiles: [operator]" in block
     assert 'restart: "no"' in block
     assert "read_only: true" in block
@@ -95,8 +91,8 @@ def test_root_ceremony_binds_private_request_to_activation_and_cleanup() -> None
     assert '"identity-finalizer"' in source
     assert '"identity-cutover"' in source
     assert '"--no-deps"' in source
-    assert "_role_ceremony(\"activate\", command.name)" in source
-    assert "_role_ceremony(\"deactivate\", command.name)" in source
+    assert '_role_ceremony("activate", command.name)' in source
+    assert '_role_ceremony("deactivate", command.name)' in source
     assert "finally:" in source
     assert 'activation._guard_revision("0015_current_authority_e5a")' in source
     assert "activation._require_trusted_source()" in source
@@ -114,9 +110,7 @@ def test_root_ceremony_orders_guards_activation_invocation_and_reexpiry(
     module = _module()
     calls: list[str] = []
     activation = module.activation
-    monkeypatch.setattr(
-        activation, "_require_root_linux", lambda: calls.append("root")
-    )
+    monkeypatch.setattr(activation, "_require_root_linux", lambda: calls.append("root"))
     monkeypatch.setattr(
         activation, "_require_trusted_source", lambda: calls.append("source")
     )
@@ -131,9 +125,7 @@ def test_root_ceremony_orders_guards_activation_invocation_and_reexpiry(
         "_unlock_activation",
         lambda descriptor: calls.append(f"unlock:{descriptor}"),
     )
-    monkeypatch.setattr(
-        activation, "_running_protected_services", lambda: frozenset()
-    )
+    monkeypatch.setattr(activation, "_running_protected_services", lambda: frozenset())
     monkeypatch.setattr(
         activation,
         "_guard_revision",
@@ -179,9 +171,7 @@ def test_root_ceremony_reexpires_after_invocation_failure(monkeypatch) -> None:
     monkeypatch.setattr(activation, "_require_fresh_permit", lambda now: None)
     monkeypatch.setattr(activation, "_activation_lock", lambda: 123)
     monkeypatch.setattr(activation, "_unlock_activation", lambda descriptor: None)
-    monkeypatch.setattr(
-        activation, "_running_protected_services", lambda: frozenset()
-    )
+    monkeypatch.setattr(activation, "_running_protected_services", lambda: frozenset())
     monkeypatch.setattr(activation, "_guard_revision", lambda revision: None)
     monkeypatch.setattr(module, "_request", lambda: b"private")
     monkeypatch.setattr(
@@ -221,5 +211,5 @@ def test_e5v_is_exercised_by_the_filtered_hosted_gate() -> None:
     assert workflow.count("test_identity_authority_role_ceremony_e5v.py") == 2
     assert workflow.count("activate-identity-authority-role.sh") == 2
     assert workflow.count("phase3_identity_authority_ceremony.py") == 2
-    assert "E5u/E5v PostgreSQL gate" in workflow
-    assert "E5u/E5v authority gate" in workflow
+    assert "E5u/E5v/E5w/E5x PostgreSQL gate" in workflow
+    assert "E5u/E5v/E5w/E5x authority gate" in workflow

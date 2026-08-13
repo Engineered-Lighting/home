@@ -696,6 +696,64 @@ class PlaceCreate(StrictModel):
     travel_greeting_eligible: bool = False
 
 
+class PrivateLocalityPreviewRequest(StrictModel):
+    canonical_name: str = Field(min_length=1, max_length=255)
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    radius_m: int = Field(ge=1, le=50_000)
+    travel_greeting_eligible: bool = False
+    confirmation_nonce: uuid.UUID
+
+    @field_validator("canonical_name")
+    @classmethod
+    def _reviewed_locality_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or any(ord(character) < 32 for character in normalized):
+            raise ValueError("canonical locality name is invalid")
+        return normalized
+
+
+class PrivateLocalityConfirmRequest(PrivateLocalityPreviewRequest):
+    preview_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class PrivateLocalityLocatorPreview(StrictModel):
+    latitude: float
+    longitude: float
+    radius_m: int
+    retention: Literal["encrypted_until_erased"]
+
+
+class PrivateLocalityPreviewView(StrictModel):
+    state: Literal["needs_confirmation"]
+    canonical_name: str
+    privacy_scope: Literal["private"]
+    travel_greeting_eligible: bool
+    locator: PrivateLocalityLocatorPreview
+    preview_digest: str
+    creates: list[str]
+    does_not_create: list[str]
+
+
+class PrivateLocalityCommitView(StrictModel):
+    state: Literal["committed"]
+    place_id: uuid.UUID
+    canonical_name: str
+    privacy_scope: Literal["private"]
+    travel_greeting_eligible: bool
+
+
+class PrivateLocalitySummaryView(StrictModel):
+    place_id: uuid.UUID
+    canonical_name: str
+    travel_greeting_eligible: bool
+
+
+class PrivateLocalityStatusView(StrictModel):
+    state: Literal["not_configured", "configured"]
+    localities: list[PrivateLocalitySummaryView]
+
+
 class PreferenceUpdate(StrictModel):
     key: Literal["location_memory", "travel_greetings"]
     enabled: bool
@@ -899,6 +957,8 @@ class HealthView(StrictModel):
             "disabled",
             "operator_and_confirmation_gated",
             "principal_consent_gated",
+            "attested_native_consent_gated",
+            "attested_native_confirmation_gated",
             "record_only",
             "shadow",
         ],
@@ -918,7 +978,15 @@ class AgentSnapshot(StrictModel):
     latest_visit: dict[str, Any] | None
     pending_initiatives: list[InitiativeView]
     coverage_gaps: list[dict[str, Any]]
-    capabilities: dict[str, Literal["enabled", "disabled"]]
+    capabilities: dict[
+        str,
+        Literal[
+            "enabled",
+            "disabled",
+            "attested_native_consent_gated",
+            "attested_native_confirmation_gated",
+        ],
+    ]
 
 
 class MemoryInspection(StrictModel):

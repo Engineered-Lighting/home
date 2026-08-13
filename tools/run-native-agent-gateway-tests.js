@@ -309,6 +309,11 @@ async function waitForGateway(port, child) {
 
     for (const allowed of [
       ["POST", "/api/agent/native/v1/attestation/challenge"],
+      ["GET", "/api/agent/native/v1/initiatives"],
+      ["POST", "/api/agent/native/v1/initiatives/01900000-0000-7000-8000-000000000001/claim"],
+      ["GET", "/api/agent/native/v1/private-localities"],
+      ["POST", "/api/agent/native/v1/private-localities/preview"],
+      ["POST", "/api/agent/native/v1/private-localities/confirm"],
       ["GET", "/api/agent/native/v1/places/01900000-0000-7000-8000-000000000002/descriptor-relationship"],
       ["GET", "/api/agent/native/v1/places/01900000-0000-7000-8000-000000000002/parents/current-presence"],
     ]) {
@@ -376,8 +381,8 @@ async function waitForGateway(port, child) {
 
     for (const forbidden of [
       "/api/agent/native/v1/initiatives/claim",
-      "/api/agent/native/v1/initiatives",
       "/api/agent/native/v1/initiatives/01900000-0000-7000-8000-000000000001/claim",
+      "/api/agent/native/v1/private-localities/unknown",
       "/api/agent/native/v1/places",
       "/api/agent/native/v1/parent-confirmations",
       "/api/agent/native/v1/relationships/parent-confirmations",

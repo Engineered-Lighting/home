@@ -1,0 +1,1481 @@
+#!/usr/bin/env python3
+"""Restart-safe, split-phase Phase 3 identity activation runner.
+
+The runner executes only fixed, separately reviewed boundaries. It advances
+until it reaches a private human confirmation, completes, or contains a
+failure. Its journal contains only random IDs, step codes, source revision,
+and categorical outcomes. It never records people, HA users, relationships,
+coordinates, utterances, or credentials.
+
+There is deliberately no rollback to legacy semantic authority. Once the HA
+writer fence is installed, failure handling stops Agent-facing services and
+restores ordinary HA device control with the legacy store still fenced.
+"""
+
+from __future__ import annotations
+
+import base64
+from datetime import UTC, datetime
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import stat
+import subprocess
+import sys
+import time
+from typing import Any, Callable, Mapping, Sequence
+import uuid
+
+import phase3_activation_sequencer as sequencer
+import phase3_activation_source_plan as source_plan
+import phase3_activation_preflight as activation_preflight
+import phase3_capture_legacy_identity_snapshot as ha_transport
+from reviewed_identity_payload import (
+    VerificationError,
+    canonical_bytes,
+    parse_canonical_json,
+)
+
+
+CONTRACT = "phase3-authoritative-split-activation-runner-e5ad-v1"
+STATE_ROOT = Path("/srv/home-agent/private/phase3-activation")
+STATE_PATH = STATE_ROOT / "runner-state-e5ad.json"
+LOCK_PATH = Path("/srv/home-agent/locks/phase3-runner.lock")
+PRIVATE_IDENTITY_ROOT = Path("/srv/home-agent/private/phase3-identity")
+ENVIRONMENT_PATH = Path("/srv/home-agent/config/home-agent.env")
+SOURCE_ROOT = Path(__file__).resolve().parents[3]
+COMPOSE_PATH = SOURCE_ROOT / "stack/home-agent-compose.yml"
+OPERATOR_ROOT = Path(__file__).resolve().parent
+SIGNING_LAUNCHER = Path("/usr/local/sbin/home-agent-identity-signing")
+CREDENTIAL_PROVISIONER = Path(
+    "/usr/local/sbin/home-agent-provision-identity-signing-credentials"
+)
+LOCAL_BACKUP = Path("/usr/local/libexec/home-agent/local-backup.sh")
+OFFHOST_BACKUP = OPERATOR_ROOT / "off_host_backup_writer.py"
+RESTORE_DRILL = OPERATOR_ROOT / "isolated_restore_drill.sh"
+ERASURE_RECEIPTS = OPERATOR_ROOT / "phase3_evidence_receipts.py"
+MIGRATION_EXECUTOR = OPERATOR_ROOT / "phase3_migration_executor.py"
+AUTHORITY_ADMISSION = OPERATOR_ROOT / "phase3_authority_admission.py"
+AUTHORITY_CEREMONY = OPERATOR_ROOT / "phase3_identity_authority_ceremony.py"
+PRIVACY_OBSERVER = OPERATOR_ROOT / "phase3_privacy_cutover_observer.py"
+FINALIZER_DOCUMENT = PRIVATE_IDENTITY_ROOT / "identity-finalizer-document-e5y.json"
+FINALIZER_RECEIPT = PRIVATE_IDENTITY_ROOT / "identity-signing-receipt-e5y.json"
+IDENTITY_SIGNING_STATE = PRIVATE_IDENTITY_ROOT / "identity-signing-state-e5y.json"
+EDGE_RECEIPT = PRIVATE_IDENTITY_ROOT / "edge-privacy-policy-receipt-e5ac.json"
+WRITER_OBSERVATION = PRIVATE_IDENTITY_ROOT / "writer-freeze-observation-e5z.json"
+PRIVACY_OBSERVATION = PRIVATE_IDENTITY_ROOT / "privacy-cutover-observation-e5aa.json"
+CUTOVER_PACKET = PRIVATE_IDENTITY_ROOT / "semantic-cutover-packet-e5ab.json"
+CUTOVER_RECEIPT = PRIVATE_IDENTITY_ROOT / "semantic-cutover-packet-receipt-e5ab.json"
+COMPLETION_RECEIPT = STATE_ROOT / "runner-completion-e5ad.json"
+CREDENTIAL_RECEIPT = Path(
+    "/srv/home-agent/config/phase3-identity-signing-credentials-e5ae.json"
+)
+SHADOW_AUTHORIZATION_RECEIPT = Path(
+    "/srv/home-agent/config/phase3-shadow-authorization-e5ae.json"
+)
+KEY_SOURCE_RECEIPT = Path(
+    "/srv/home-agent/config/phase3-signing-key-source-e5ae.json"
+)
+CREDENTIAL_TARGETS = tuple(
+    Path("/etc/credstore.encrypted") / name
+    for name in (
+        "home-agent-identity-policy.cred",
+        "home-agent-identity-commitment.cred",
+        "home-agent-identity-review.cred",
+        "home-agent-identity-finalization.cred",
+        "home-agent-identity-writer-freeze-policy.cred",
+        "home-agent-identity-writer-freeze.cred",
+        "home-agent-identity-privacy-probe-policy.cred",
+        "home-agent-identity-privacy-probe.cred",
+        "home-agent-identity-semantic-cutover-policy.cred",
+        "home-agent-identity-semantic-cutover.cred",
+    )
+)
+REMOTE_EDGE_RECEIPT = "/config/.storage/home_agent_edge_privacy_policy_receipt.json"
+REMOTE_IDENTITY_DB = "/config/extended_openai_conversation/identity.db"
+REMOTE_FREEZE = (
+    "/config/extended_openai_conversation/freeze_legacy_identity_semantics.py"
+)
+REMOTE_OBSERVER = (
+    "/config/extended_openai_conversation/collect_legacy_identity_freeze_observation.py"
+)
+MAX_OUTPUT = 6 * 1024 * 1024
+APPLICATION_SERVICES = (
+    "core-api",
+    "core-ingest",
+    "core-worker",
+    "bff",
+    "edge-ingress",
+)
+REQUIRED_CONTAINER_STATES = {
+    "home-agent-core-api-1": "healthy",
+    "home-agent-core-ingest-1": "healthy",
+    "home-agent-core-worker-1": "healthy",
+    "home-agent-bff-1": "healthy",
+    "home-agent-edge-ingress-1": "running",
+}
+STEPS = (
+    "admit_source",
+    "validate_pre_authorization_prerequisites",
+    "authorize_shadow",
+    "provision_signing_credentials",
+    "await_reviewed_people_packet",
+    "validate_live_prerequisites",
+    "local_backup",
+    "offhost_backup",
+    "restore_drill",
+    "erasure_current",
+    "arm_initial_permit",
+    "stop_agent_services",
+    "migrate_finalizer",
+    "provision_cutover_roles",
+    "migrate_current_authority",
+    "provision_binding_kernel",
+    "commit_finalizer",
+    "capture_edge_privacy_receipt",
+    "stop_home_assistant",
+    "freeze_legacy_writer",
+    "sign_writer_evidence",
+    "sign_privacy_evidence",
+    "commit_semantic_cutover",
+    "restart_home_assistant",
+    "migrate_authenticated_binding",
+    "grant_and_start_binding_stage",
+    "await_authenticated_binding",
+    "stop_binding_stage",
+    "rearm_parent_permit",
+    "migrate_parent_authority",
+    "provision_parent_kernel",
+    "migrate_parent_status",
+    "grant_and_start_parent_stage",
+    "await_parent_confirmation",
+    "seal_completion",
+)
+PAUSE_STEPS = frozenset(
+    {
+        "await_reviewed_people_packet",
+        "validate_live_prerequisites",
+        "commit_finalizer",
+        "await_authenticated_binding",
+        "await_parent_confirmation",
+    }
+)
+OPERATION_ID_STEPS = frozenset({"authorize_shadow", "commit_finalizer"})
+
+
+class ActivationRunnerError(RuntimeError):
+    """The split activation runner failed closed."""
+
+
+class ActivationPause(RuntimeError):
+    """The runner is safely waiting for a private human confirmation."""
+
+
+def uuid7() -> uuid.UUID:
+    timestamp_ms = int(datetime.now(UTC).timestamp() * 1000)
+    random_bits = secrets.randbits(74)
+    value = timestamp_ms << 80
+    value |= 0x7 << 76
+    value |= ((random_bits >> 62) & 0xFFF) << 64
+    value |= 0b10 << 62
+    value |= random_bits & ((1 << 62) - 1)
+    return uuid.UUID(int=value)
+
+
+def _utc() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def new_state(commit: str) -> dict[str, Any]:
+    if source_plan.COMMIT_SHA.fullmatch(commit) is None:
+        raise ActivationRunnerError("activation source commit is invalid")
+    return {
+        "contract": CONTRACT,
+        "runner_id": str(uuid7()),
+        "source_commit": commit,
+        "status": "active",
+        "next_step": STEPS[0],
+        "completed_steps": [],
+        "attempt_counts": {},
+        "operation_ids": {},
+        "pause_code": "none",
+        "last_error_code": "none",
+        "updated_at": _utc(),
+    }
+
+
+def validate_state(value: Any) -> dict[str, Any]:
+    keys = {
+        "contract",
+        "runner_id",
+        "source_commit",
+        "status",
+        "next_step",
+        "completed_steps",
+        "attempt_counts",
+        "operation_ids",
+        "pause_code",
+        "last_error_code",
+        "updated_at",
+    }
+    if not isinstance(value, Mapping) or set(value) != keys:
+        raise ActivationRunnerError("activation journal shape is invalid")
+    state = dict(value)
+    try:
+        runner_id = uuid.UUID(str(state["runner_id"]))
+    except (ValueError, TypeError, AttributeError) as error:
+        raise ActivationRunnerError(
+            "activation runner identifier is invalid"
+        ) from error
+    if runner_id.version != 7 or str(runner_id) != state["runner_id"]:
+        raise ActivationRunnerError("activation runner identifier is invalid")
+    if source_plan.COMMIT_SHA.fullmatch(str(state["source_commit"])) is None:
+        raise ActivationRunnerError("activation journal source is invalid")
+    completed = state["completed_steps"]
+    if (
+        not isinstance(completed, list)
+        or completed != list(STEPS[: len(completed)])
+        or len(completed) > len(STEPS)
+    ):
+        raise ActivationRunnerError("activation journal sequence is invalid")
+    expected_next = "none" if len(completed) == len(STEPS) else STEPS[len(completed)]
+    if state["next_step"] != expected_next:
+        raise ActivationRunnerError("activation journal cursor is invalid")
+    if state["status"] not in {
+        "active",
+        "running",
+        "paused",
+        "contained",
+        "complete",
+    }:
+        raise ActivationRunnerError("activation journal status is invalid")
+    attempts = state["attempt_counts"]
+    if not isinstance(attempts, Mapping) or any(
+        key not in STEPS or type(count) is not int or count < 1
+        for key, count in attempts.items()
+    ):
+        raise ActivationRunnerError("activation attempt journal is invalid")
+    operations = state["operation_ids"]
+    if not isinstance(operations, Mapping) or set(operations) - OPERATION_ID_STEPS:
+        raise ActivationRunnerError("activation operation journal is invalid")
+    for key, raw_id in operations.items():
+        try:
+            parsed = uuid.UUID(str(raw_id))
+        except (ValueError, TypeError, AttributeError) as error:
+            raise ActivationRunnerError("activation operation ID is invalid") from error
+        if (
+            parsed.version != 7
+            or str(parsed) != raw_id
+            or key not in completed + [expected_next]
+        ):
+            raise ActivationRunnerError("activation operation ID is invalid")
+    for key in ("pause_code", "last_error_code"):
+        value_text = state[key]
+        if (
+            not isinstance(value_text, str)
+            or not value_text
+            or len(value_text) > 96
+            or any(
+                character not in "abcdefghijklmnopqrstuvwxyz_0123456789"
+                for character in value_text
+            )
+        ):
+            raise ActivationRunnerError("activation journal code is invalid")
+    try:
+        parsed_time = datetime.fromisoformat(str(state["updated_at"])[:-1] + "+00:00")
+    except ValueError as error:
+        raise ActivationRunnerError(
+            "activation journal timestamp is invalid"
+        ) from error
+    if (
+        not str(state["updated_at"]).endswith("Z")
+        or parsed_time.strftime("%Y-%m-%dT%H:%M:%S.%fZ") != state["updated_at"]
+    ):
+        raise ActivationRunnerError("activation journal timestamp is invalid")
+    if state["status"] == "complete" and expected_next != "none":
+        raise ActivationRunnerError("activation completion journal is invalid")
+    return state
+
+
+def completion_receipt(state: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "contract": "phase3-activation-completion-receipt-e5ad-v1",
+        "runner_id": state["runner_id"],
+        "source_commit": state["source_commit"],
+        "completed_step_count": len(STEPS),
+        "step_set_sha256": hashlib.sha256(canonical_bytes(list(STEPS))).hexdigest(),
+        "status": "complete",
+    }
+
+
+class StateStore:
+    def prepare(self) -> None:
+        STATE_ROOT.mkdir(parents=True, mode=0o700, exist_ok=True)
+        details = STATE_ROOT.lstat()
+        if (
+            not stat.S_ISDIR(details.st_mode)
+            or details.st_uid != 0
+            or details.st_gid != 0
+            or stat.S_IMODE(details.st_mode) != 0o700
+        ):
+            raise ActivationRunnerError("activation journal directory is unsafe")
+
+    def load(self) -> dict[str, Any] | None:
+        self.prepare()
+        if not STATE_PATH.exists() and not STATE_PATH.is_symlink():
+            if COMPLETION_RECEIPT.exists() or COMPLETION_RECEIPT.is_symlink():
+                raise ActivationRunnerError("activation completion state is unsafe")
+            return None
+        try:
+            details = STATE_PATH.lstat()
+            raw = STATE_PATH.read_bytes()
+            value = parse_canonical_json(raw, maximum=256 * 1024)
+        except (OSError, VerificationError) as error:
+            raise ActivationRunnerError("activation journal is unreadable") from error
+        if (
+            not stat.S_ISREG(details.st_mode)
+            or details.st_uid != 0
+            or details.st_gid != 0
+            or stat.S_IMODE(details.st_mode) != 0o600
+            or details.st_nlink != 1
+        ):
+            raise ActivationRunnerError("activation journal is unsafe")
+        state = validate_state(value)
+        completion_exists = (
+            COMPLETION_RECEIPT.exists() or COMPLETION_RECEIPT.is_symlink()
+        )
+        if completion_exists:
+            try:
+                completion_details = COMPLETION_RECEIPT.lstat()
+                completion_raw = COMPLETION_RECEIPT.read_bytes()
+            except OSError as error:
+                raise ActivationRunnerError(
+                    "activation completion state is unsafe"
+                ) from error
+            expected = canonical_bytes(completion_receipt(state)) + b"\n"
+            if (
+                not stat.S_ISREG(completion_details.st_mode)
+                or completion_details.st_uid != 0
+                or completion_details.st_gid != 0
+                or stat.S_IMODE(completion_details.st_mode) != 0o600
+                or completion_details.st_nlink != 1
+                or not secrets.compare_digest(completion_raw, expected)
+                or state["next_step"] not in {"seal_completion", "none"}
+            ):
+                raise ActivationRunnerError("activation completion state is unsafe")
+        elif state["status"] == "complete":
+            raise ActivationRunnerError("activation completion receipt is missing")
+        return state
+
+    def save(self, state: Mapping[str, Any]) -> None:
+        self.prepare()
+        raw = canonical_bytes(validate_state(state))
+        temporary = STATE_PATH.with_name(
+            f".{STATE_PATH.name}.new.{secrets.token_hex(12)}"
+        )
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            with os.fdopen(descriptor, "wb", closefd=True) as stream:
+                descriptor = -1
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chown(temporary, 0, 0)
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, STATE_PATH)
+            directory = os.open(STATE_ROOT, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+
+
+class Backend:
+    """Fixed production actions; every method is independently fail-closed."""
+
+    def __init__(self) -> None:
+        self.backup_label: str | None = None
+
+    @staticmethod
+    def _run(
+        command: Sequence[str],
+        *,
+        input_bytes: bytes | None = None,
+        timeout: int = 900,
+        accepted: frozenset[int] = frozenset({0}),
+    ) -> bytes:
+        try:
+            result = subprocess.run(
+                list(command),
+                cwd=SOURCE_ROOT,
+                check=False,
+                input=input_bytes,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=timeout,
+                shell=False,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise ActivationRunnerError("activation subprocess failed") from error
+        if (
+            result.returncode not in accepted
+            or len(result.stdout) > MAX_OUTPUT
+            or b"\0" in result.stdout
+        ):
+            raise ActivationRunnerError("activation subprocess failed")
+        return result.stdout
+
+    @classmethod
+    def _json(cls, command: Sequence[str], **kwargs: Any) -> Mapping[str, Any]:
+        raw = cls._run(command, **kwargs)
+        try:
+            value = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ActivationRunnerError(
+                "activation subprocess result is invalid"
+            ) from error
+        if not isinstance(value, Mapping):
+            raise ActivationRunnerError("activation subprocess result is invalid")
+        return value
+
+    @staticmethod
+    def _run_interactive(command: Sequence[str], *, timeout: int) -> None:
+        if not sys.stdin.isatty() or not sys.stdout.isatty():
+            raise ActivationPause("awaiting_private_finalization_tty")
+        try:
+            result = subprocess.run(
+                list(command),
+                cwd=SOURCE_ROOT,
+                check=False,
+                timeout=timeout,
+                shell=False,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise ActivationRunnerError(
+                "private finalization command failed"
+            ) from error
+        if result.returncode != 0:
+            raise ActivationRunnerError("private finalization command failed")
+
+    @staticmethod
+    def _compose(*arguments: str) -> list[str]:
+        return [
+            "docker",
+            "compose",
+            "--env-file",
+            str(ENVIRONMENT_PATH),
+            "-f",
+            str(COMPOSE_PATH),
+            "--profile",
+            "operator",
+            *arguments,
+        ]
+
+    @staticmethod
+    def _atomic_private(path: Path, raw: bytes) -> None:
+        if not raw or len(raw) > MAX_OUTPUT or b"\0" in raw:
+            raise ActivationRunnerError("activation private artifact is unsafe")
+        normalized = raw.rstrip(b"\n") + b"\n"
+        if path.exists() or path.is_symlink():
+            try:
+                details = path.lstat()
+                existing = path.read_bytes()
+            except OSError as error:
+                raise ActivationRunnerError(
+                    "activation private artifact is unsafe"
+                ) from error
+            if (
+                not stat.S_ISREG(details.st_mode)
+                or details.st_uid != 0
+                or details.st_gid != 0
+                or stat.S_IMODE(details.st_mode) != 0o600
+                or details.st_nlink != 1
+                or not secrets.compare_digest(existing, normalized)
+            ):
+                raise ActivationRunnerError(
+                    "activation private artifact already differs"
+                )
+            return
+        temporary = path.with_name(f".{path.name}.new.{secrets.token_hex(12)}")
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            with os.fdopen(descriptor, "wb", closefd=True) as stream:
+                descriptor = -1
+                stream.write(normalized)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chown(temporary, 0, 0)
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, path)
+            directory = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+
+    @staticmethod
+    def _private_document(path: Path) -> bytes:
+        try:
+            details = path.lstat()
+            raw = path.read_bytes().rstrip(b"\n")
+            parse_canonical_json(raw, maximum=MAX_OUTPUT)
+        except (OSError, VerificationError) as error:
+            raise ActivationRunnerError(
+                "activation private document is invalid"
+            ) from error
+        if (
+            not stat.S_ISREG(details.st_mode)
+            or details.st_uid != 0
+            or details.st_gid != 0
+            or stat.S_IMODE(details.st_mode) not in {0o400, 0o440, 0o600}
+            or details.st_nlink != 1
+        ):
+            raise ActivationRunnerError("activation private document is unsafe")
+        return raw
+
+    @staticmethod
+    def _require_root_executable(path: Path) -> None:
+        try:
+            details = path.lstat()
+        except OSError as error:
+            raise ActivationRunnerError(
+                "activation executable is unavailable"
+            ) from error
+        mode = stat.S_IMODE(details.st_mode)
+        if (
+            not stat.S_ISREG(details.st_mode)
+            or details.st_uid != 0
+            or details.st_gid != 0
+            or details.st_nlink != 1
+            or mode & 0o022
+            or not mode & stat.S_IXUSR
+        ):
+            raise ActivationRunnerError("activation executable is unsafe")
+
+    @staticmethod
+    def _request(contract: str, admission_id: str, document: bytes) -> bytes:
+        return canonical_bytes(
+            {
+                "contract": contract,
+                "admission_id": admission_id,
+                "document_b64": base64.b64encode(document).decode("ascii"),
+            }
+        )
+
+    def _probe(self, name: str) -> Mapping[str, Any]:
+        return self._json(
+            self._compose(
+                "run",
+                "--rm",
+                "--no-deps",
+                "migrate",
+                "phase3-activation-probe",
+                name,
+            ),
+            timeout=180,
+        )
+
+    def _migrate(self, command: str, target: str) -> None:
+        try:
+            self._run(
+                self._compose(
+                    "run",
+                    "--rm",
+                    "--no-deps",
+                    "--entrypoint",
+                    "python",
+                    "migrate",
+                    "-m",
+                    "app.migration_guard",
+                    target,
+                ),
+                timeout=180,
+            )
+            return
+        except ActivationRunnerError:
+            pass
+        self._json([sys.executable, str(MIGRATION_EXECUTOR), command], timeout=1200)
+
+    @staticmethod
+    def _rewrite_environment(revision: str) -> None:
+        try:
+            details = ENVIRONMENT_PATH.lstat()
+            text = ENVIRONMENT_PATH.read_text(encoding="utf-8")
+        except OSError as error:
+            raise ActivationRunnerError(
+                "activation environment is unavailable"
+            ) from error
+        if (
+            not stat.S_ISREG(details.st_mode)
+            or details.st_uid != 0
+            or details.st_gid != 0
+            or details.st_nlink != 1
+            or stat.S_IMODE(details.st_mode) & 0o022
+        ):
+            raise ActivationRunnerError("activation environment is unsafe")
+        replacements = {
+            "HOME_AGENT_EXPECTED_DB_REVISION": revision,
+            "HOME_AGENT_ROLLOUT_MODE": "shadow",
+        }
+        found: set[str] = set()
+        lines = []
+        for line in text.splitlines():
+            name = line.split("=", 1)[0] if "=" in line else ""
+            if name in replacements:
+                if name in found:
+                    raise ActivationRunnerError("activation environment is ambiguous")
+                found.add(name)
+                lines.append(f"{name}={replacements[name]}")
+            else:
+                lines.append(line)
+        if found != set(replacements):
+            raise ActivationRunnerError("activation environment is incomplete")
+        raw = ("\n".join(lines) + "\n").encode("utf-8")
+        temporary = ENVIRONMENT_PATH.with_name(
+            f".{ENVIRONMENT_PATH.name}.new.{secrets.token_hex(12)}"
+        )
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        try:
+            with os.fdopen(descriptor, "wb", closefd=True) as stream:
+                descriptor = -1
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chown(temporary, 0, 0)
+            os.chmod(temporary, stat.S_IMODE(details.st_mode))
+            os.replace(temporary, ENVIRONMENT_PATH)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+
+    def _stop_agents(self) -> None:
+        self._run(self._compose("stop", *APPLICATION_SERVICES), timeout=180)
+
+    def _start_agents(self, revision: str) -> None:
+        self._rewrite_environment(revision)
+        self._run(
+            self._compose("up", "-d", "--no-deps", *APPLICATION_SERVICES),
+            timeout=300,
+        )
+        self._wait_agents_ready()
+
+    def _wait_agents_ready(self) -> None:
+        deadline = time.monotonic() + 240
+        while time.monotonic() < deadline:
+            ready = True
+            for name, required in REQUIRED_CONTAINER_STATES.items():
+                try:
+                    state = self._json(
+                        ["docker", "inspect", "--format={{json .State}}", name],
+                        timeout=15,
+                    )
+                except ActivationRunnerError:
+                    ready = False
+                    break
+                if required == "healthy":
+                    health = state.get("Health")
+                    actual = (
+                        health.get("Status") if isinstance(health, Mapping) else None
+                    )
+                else:
+                    actual = state.get("Status")
+                if actual != required:
+                    ready = False
+                    break
+            if ready:
+                return
+            time.sleep(3)
+        raise ActivationRunnerError("activation services did not become ready")
+
+    def _apply_grants(self) -> None:
+        self._run(
+            self._compose("run", "--rm", "--no-deps", "grant-phase3-activation"),
+            timeout=300,
+        )
+
+    def perform(self, step: str, state: Mapping[str, Any]) -> None:
+        actions: dict[str, Callable[[Mapping[str, Any]], None]] = {
+            "admit_source": self._admit_source,
+            "validate_pre_authorization_prerequisites": (
+                self._validate_pre_authorization_prerequisites
+            ),
+            "authorize_shadow": self._authorize_shadow,
+            "provision_signing_credentials": self._provision_signing_credentials,
+            "await_reviewed_people_packet": self._await_reviewed_packet,
+            "validate_live_prerequisites": self._validate_live_prerequisites,
+            "local_backup": self._local_backup,
+            "offhost_backup": self._offhost_backup,
+            "restore_drill": self._restore_drill,
+            "erasure_current": self._erasure_current,
+            "arm_initial_permit": self._arm_initial_permit,
+            "stop_agent_services": lambda _state: self._stop_agents(),
+            "migrate_finalizer": lambda _state: self._migrate(
+                "migrate-finalizer", "0013_identity_finalizer_e3"
+            ),
+            "provision_cutover_roles": lambda _state: self._run(
+                self._compose(
+                    "run", "--rm", "--no-deps", "provision-identity-cutover-roles"
+                ),
+                timeout=300,
+            ),
+            "migrate_current_authority": lambda _state: self._migrate(
+                "migrate-current-authority", "0015_current_authority_e5a"
+            ),
+            "provision_binding_kernel": lambda _state: self._run(
+                self._compose(
+                    "run",
+                    "--rm",
+                    "--no-deps",
+                    "provision-identity-binding-kernel-role",
+                ),
+                timeout=300,
+            ),
+            "commit_finalizer": self._commit_finalizer,
+            "capture_edge_privacy_receipt": self._capture_edge_receipt,
+            "stop_home_assistant": lambda _state: self._stop_ha(),
+            "freeze_legacy_writer": self._freeze_legacy_writer,
+            "sign_writer_evidence": lambda _state: self._json(
+                [str(SIGNING_LAUNCHER), "freeze-evidence"], timeout=900
+            ),
+            "sign_privacy_evidence": self._sign_privacy_evidence,
+            "commit_semantic_cutover": self._commit_semantic_cutover,
+            "restart_home_assistant": lambda _state: self._restart_ha(),
+            "migrate_authenticated_binding": lambda _state: self._migrate(
+                "migrate-authenticated-binding", "0017_authenticated_binding_e5c"
+            ),
+            "grant_and_start_binding_stage": lambda _state: self._grant_start(
+                "0017_authenticated_binding_e5c"
+            ),
+            "await_authenticated_binding": self._await_binding,
+            "stop_binding_stage": lambda _state: self._stop_agents(),
+            "rearm_parent_permit": self._rearm_parent_permit,
+            "migrate_parent_authority": lambda _state: self._migrate(
+                "migrate-parent-authority", "0018_parent_relationship_e5d"
+            ),
+            "provision_parent_kernel": lambda _state: self._run(
+                self._compose(
+                    "run",
+                    "--rm",
+                    "--no-deps",
+                    "provision-parent-relationship-kernel-role",
+                ),
+                timeout=300,
+            ),
+            "migrate_parent_status": lambda _state: self._migrate(
+                "migrate-parent-status", "0021_parent_status_e5h"
+            ),
+            "grant_and_start_parent_stage": lambda _state: self._grant_start(
+                "0021_parent_status_e5h"
+            ),
+            "await_parent_confirmation": self._await_parents,
+            "seal_completion": self._seal_completion,
+        }
+        try:
+            action = actions[step]
+        except KeyError as error:
+            raise ActivationRunnerError("activation step is unsupported") from error
+        action(state)
+
+    def _admit_source(self, _state: Mapping[str, Any]) -> None:
+        self._json(
+            [
+                sys.executable,
+                str(OPERATOR_ROOT / "phase3_activation_sequencer.py"),
+                "admit-source",
+            ],
+            timeout=120,
+        )
+
+    def _validate_pre_authorization_prerequisites(
+        self, _state: Mapping[str, Any]
+    ) -> None:
+        self._require_root_executable(SIGNING_LAUNCHER)
+        self._require_root_executable(CREDENTIAL_PROVISIONER)
+        self._require_root_executable(LOCAL_BACKUP)
+        try:
+            key_source = parse_canonical_json(
+                self._private_document(KEY_SOURCE_RECEIPT), maximum=4096
+            )
+        except (ActivationRunnerError, VerificationError) as error:
+            raise ActivationPause(
+                "awaiting_signing_key_source_confirmation"
+            ) from error
+        if (
+            not isinstance(key_source, Mapping)
+            or set(key_source) != {"contract", "with_key"}
+            or key_source.get("contract")
+            != "phase3-signing-key-source-e5ae-v1"
+            or key_source.get("with_key") not in {"host", "tpm2", "host+tpm2"}
+        ):
+            raise ActivationPause("awaiting_signing_key_source_confirmation")
+        self._run(self._compose("config", "--quiet"), timeout=120)
+        try:
+            ha_transport._remote("true", timeout=15)
+        except Exception as error:
+            raise ActivationPause("awaiting_ha_ssh_prerequisite") from error
+        ha_transport._remote("python3", "--version", timeout=15)
+        ha_transport._remote("test", "-f", REMOTE_EDGE_RECEIPT, timeout=15)
+        ha_transport._remote("test", "-f", REMOTE_FREEZE, timeout=15)
+        ha_transport._remote("test", "-f", REMOTE_OBSERVER, timeout=15)
+        report = self._json(
+            [sys.executable, str(OPERATOR_ROOT / "phase3_activation_preflight.py")],
+            timeout=180,
+            accepted=frozenset({0, 3}),
+        )
+        if (
+            report.get("preflight_passed") is not True
+            or report.get("blockers") != []
+            or report.get("authoritative") is not False
+            or report.get("enables_writes") is not False
+            or report.get("runs_migrations") is not False
+            or report.get("changes_rollout_mode") is not False
+        ):
+            raise ActivationPause("awaiting_current_activation_preflight")
+
+    def _authorize_shadow(self, state: Mapping[str, Any]) -> None:
+        core_probe = self._json(
+            [
+                "docker",
+                "exec",
+                activation_preflight.CORE_CONTAINER,
+                "python",
+                "-c",
+                activation_preflight.CORE_PROBE,
+            ],
+            timeout=180,
+        )
+        phase2 = core_probe.get("phase2")
+        if (
+            not isinstance(phase2, Mapping)
+            or phase2.get("contract") != activation_preflight.PHASE2_CONTRACT
+            or phase2.get("rule_version") != activation_preflight.PHASE2_RULE
+            or phase2.get("ready_to_advance") is not True
+            or phase2.get("blockers") != []
+            or not isinstance(phase2.get("policy_version"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", str(phase2.get("policy_digest", "")))
+            is None
+            or re.fullmatch(r"[0-9a-f]{64}", str(phase2.get("input_digest", "")))
+            is None
+        ):
+            raise ActivationRunnerError("shadow authorization evidence is invalid")
+        request = {
+            "operator_request_id": state["operation_ids"]["authorize_shadow"],
+            "expected_rule_version": phase2["rule_version"],
+            "expected_policy_version": phase2["policy_version"],
+            "expected_policy_digest": phase2["policy_digest"],
+            "expected_input_digest": phase2["input_digest"],
+        }
+        if (
+            SHADOW_AUTHORIZATION_RECEIPT.exists()
+            or SHADOW_AUTHORIZATION_RECEIPT.is_symlink()
+        ):
+            receipt = parse_canonical_json(
+                self._private_document(SHADOW_AUTHORIZATION_RECEIPT),
+                maximum=MAX_OUTPUT,
+            )
+        else:
+            receipt = self._json(
+                self._compose("run", "--rm", "-T", "rollout-authorize"),
+                input_bytes=canonical_bytes(request),
+                timeout=300,
+            )
+            self._atomic_private(
+                SHADOW_AUTHORIZATION_RECEIPT, canonical_bytes(receipt)
+            )
+        expected_receipt_keys = {
+            "contract",
+            "authorization_id",
+            "operator_request_id",
+            "from_mode",
+            "to_mode",
+            "rule_version",
+            "policy_version",
+            "policy_digest",
+            "input_digest",
+            "worker_kernel_version",
+            "worker_success_sequence",
+            "worker_proof_digest",
+            "readiness_evaluated_at",
+            "authorized_at",
+        }
+        if (
+            not isinstance(receipt, Mapping)
+            or set(receipt) != expected_receipt_keys
+            or receipt.get("contract") != "rollout-authorization-receipt-v2"
+            or receipt.get("operator_request_id") != request["operator_request_id"]
+            or receipt.get("from_mode") != "record_only"
+            or receipt.get("to_mode") != "shadow"
+            or receipt.get("rule_version") != request["expected_rule_version"]
+            or receipt.get("policy_version") != request["expected_policy_version"]
+            or receipt.get("policy_digest") != request["expected_policy_digest"]
+            or receipt.get("input_digest") != request["expected_input_digest"]
+            or receipt.get("worker_kernel_version")
+            != "worker-maintenance-cycle-v1"
+            or not isinstance(receipt.get("worker_success_sequence"), int)
+            or receipt["worker_success_sequence"] < 1
+            or re.fullmatch(
+                r"[0-9a-f]{64}", str(receipt.get("worker_proof_digest", ""))
+            )
+            is None
+        ):
+            raise ActivationRunnerError("shadow authorization receipt is invalid")
+        for key in ("authorization_id", "operator_request_id"):
+            try:
+                value = uuid.UUID(str(receipt[key]))
+            except (TypeError, ValueError, AttributeError) as error:
+                raise ActivationRunnerError(
+                    "shadow authorization receipt is invalid"
+                ) from error
+            if value.version not in {4, 7}:
+                raise ActivationRunnerError("shadow authorization receipt is invalid")
+
+    def _provision_signing_credentials(self, _state: Mapping[str, Any]) -> None:
+        result = self._json([str(CREDENTIAL_PROVISIONER)], timeout=900)
+        if (
+            result.get("contract")
+            != "phase3-identity-credential-receipt-e5ae-v1"
+            or result.get("status") != "provisioned"
+            or result.get("credential_count") != len(CREDENTIAL_TARGETS)
+            or result.get("provisioning_status") not in {"completed", "resumed"}
+        ):
+            raise ActivationRunnerError("identity credential provisioning failed")
+
+    def _await_reviewed_packet(self, _state: Mapping[str, Any]) -> None:
+        if (
+            not IDENTITY_SIGNING_STATE.exists()
+            and not IDENTITY_SIGNING_STATE.is_symlink()
+        ):
+            raise ActivationPause("awaiting_private_people_packet")
+        raw = self._private_document(IDENTITY_SIGNING_STATE)
+        try:
+            state = parse_canonical_json(raw, maximum=MAX_OUTPUT)
+        except VerificationError as error:
+            raise ActivationRunnerError(
+                "private People signing state is invalid"
+            ) from error
+        if (
+            not isinstance(state, Mapping)
+            or state.get("contract") != "phase3-identity-signing-state-e5y-v1"
+        ):
+            raise ActivationRunnerError("private People signing state is invalid")
+        phase = state.get("phase")
+        if phase == "staged":
+            raise ActivationPause("awaiting_private_people_review")
+        if phase not in {"review_signed", "finalized"}:
+            raise ActivationRunnerError("private People signing state is invalid")
+        if phase == "review_signed" and (
+            not sys.stdin.isatty() or not sys.stdout.isatty()
+        ):
+            raise ActivationPause("awaiting_private_finalization_tty")
+
+    def _validate_live_prerequisites(self, state: Mapping[str, Any]) -> None:
+        self._require_root_executable(SIGNING_LAUNCHER)
+        self._require_root_executable(CREDENTIAL_PROVISIONER)
+        self._require_root_executable(LOCAL_BACKUP)
+        credential_raw = self._private_document(CREDENTIAL_RECEIPT)
+        try:
+            credential = parse_canonical_json(credential_raw, maximum=MAX_OUTPUT)
+        except VerificationError as error:
+            raise ActivationRunnerError(
+                "identity credential receipt is invalid"
+            ) from error
+        expected_keys = {
+            "contract",
+            "operation_id",
+            "source_commit",
+            "release_manifest_digest",
+            "migration_tool_bundle_digest",
+            "core_oci_manifest_digest",
+            "core_schema_digest",
+            "core_capability_digest",
+            "source_projection_contract_digest",
+            "policy_version",
+            "policy_digest",
+            "shadow_authorization_id",
+            "review_key_fingerprint",
+            "finalization_key_fingerprint",
+            "writer_freeze_key_fingerprint",
+            "privacy_probe_key_fingerprint",
+            "semantic_cutover_key_fingerprint",
+            "commitment_key_fingerprint",
+            "commitment_key_epoch",
+            "credential_count",
+            "status",
+            "key_source",
+        }
+        digest_keys = {
+            key
+            for key in expected_keys
+            if key.endswith("_digest") or key.endswith("_fingerprint")
+        }
+        report = source_plan.live_report()
+        if (
+            not isinstance(credential, Mapping)
+            or set(credential) != expected_keys
+            or credential.get("contract")
+            != "phase3-identity-credential-receipt-e5ae-v1"
+            or credential.get("source_commit") != state["source_commit"]
+            or credential.get("source_commit") != report.get("current_commit")
+            or credential.get("release_manifest_digest")
+            != report.get("source_pack_digest")
+            or credential.get("credential_count") != len(CREDENTIAL_TARGETS)
+            or credential.get("commitment_key_epoch") != 1
+            or credential.get("status") != "provisioned"
+            or credential.get("key_source") not in {"host", "tpm2", "host+tpm2"}
+            or any(
+                not isinstance(credential.get(key), str)
+                or re.fullmatch(r"[0-9a-f]{64}", credential[key]) is None
+                for key in digest_keys
+            )
+        ):
+            raise ActivationRunnerError("identity credential receipt is invalid")
+        try:
+            operation_id = uuid.UUID(str(credential["operation_id"]))
+            shadow_id = uuid.UUID(str(credential["shadow_authorization_id"]))
+        except (ValueError, TypeError, AttributeError) as error:
+            raise ActivationRunnerError(
+                "identity credential receipt is invalid"
+            ) from error
+        fingerprints = {
+            credential[key] for key in digest_keys if key.endswith("_fingerprint")
+        }
+        if (
+            operation_id.version != 7
+            or shadow_id.version not in {4, 7}
+            or len(fingerprints) != 6
+        ):
+            raise ActivationRunnerError("identity credential receipt is invalid")
+        for target in CREDENTIAL_TARGETS:
+            try:
+                details = target.lstat()
+            except OSError as error:
+                raise ActivationRunnerError(
+                    "identity signing credential is unavailable"
+                ) from error
+            if (
+                not stat.S_ISREG(details.st_mode)
+                or details.st_uid != 0
+                or details.st_gid != 0
+                or stat.S_IMODE(details.st_mode) != 0o600
+                or details.st_nlink != 1
+            ):
+                raise ActivationRunnerError(
+                    "identity signing credential is unsafe"
+                )
+        self._validate_pre_authorization_prerequisites(state)
+
+    def _local_backup(self, _state: Mapping[str, Any]) -> None:
+        self._run([str(LOCAL_BACKUP), str(ENVIRONMENT_PATH)], timeout=1800)
+        report = self._json(
+            [sys.executable, str(OPERATOR_ROOT / "phase3_activation_preflight.py")],
+            timeout=180,
+            accepted=frozenset({0, 3}),
+        )
+        label = report.get("latest_full_backup_label")
+        if not isinstance(label, str):
+            raise ActivationRunnerError("fresh backup label is unavailable")
+        self.backup_label = label
+
+    def _offhost_backup(self, _state: Mapping[str, Any]) -> None:
+        self._json([sys.executable, str(OFFHOST_BACKUP)], timeout=3600)
+
+    def _restore_drill(self, _state: Mapping[str, Any]) -> None:
+        if self.backup_label is None:
+            report = self._json(
+                [sys.executable, str(OPERATOR_ROOT / "phase3_activation_preflight.py")],
+                timeout=180,
+                accepted=frozenset({0, 3}),
+            )
+            value = report.get("latest_full_backup_label")
+            if not isinstance(value, str):
+                raise ActivationRunnerError("restore backup label is unavailable")
+            self.backup_label = value
+        self._run(
+            [str(RESTORE_DRILL), str(ENVIRONMENT_PATH), self.backup_label],
+            timeout=3600,
+        )
+
+    def _erasure_current(self, _state: Mapping[str, Any]) -> None:
+        self._json(
+            [sys.executable, str(ERASURE_RECEIPTS), "erasure-current"], timeout=600
+        )
+
+    def _arm_initial_permit(self, _state: Mapping[str, Any]) -> None:
+        self._json(
+            [
+                sys.executable,
+                str(OPERATOR_ROOT / "phase3_activation_sequencer.py"),
+                "arm-grants",
+            ],
+            timeout=180,
+        )
+
+    def _commit_finalizer(self, state: Mapping[str, Any]) -> None:
+        if not (
+            FINALIZER_DOCUMENT.exists()
+            and not FINALIZER_DOCUMENT.is_symlink()
+            and FINALIZER_RECEIPT.exists()
+            and not FINALIZER_RECEIPT.is_symlink()
+        ):
+            self._run_interactive([str(SIGNING_LAUNCHER), "finalize"], timeout=900)
+        document = self._private_document(FINALIZER_DOCUMENT)
+        receipt = parse_canonical_json(
+            self._private_document(FINALIZER_RECEIPT), maximum=MAX_OUTPUT
+        )
+        if (
+            not isinstance(receipt, Mapping)
+            or receipt.get("finalizer_document_sha256")
+            != hashlib.sha256(document).hexdigest()
+        ):
+            raise ActivationRunnerError("finalizer receipt does not match")
+        admission_id = str(state["operation_ids"]["commit_finalizer"])
+        admission = self._request(
+            "identity-finalizer-admission-e5u-v1", admission_id, document
+        )
+        self._json(
+            [sys.executable, str(AUTHORITY_ADMISSION), "admit-finalizer"],
+            input_bytes=admission,
+            timeout=300,
+        )
+        execution = self._request(
+            "identity-finalizer-execution-e5n-v1", admission_id, document
+        )
+        self._json(
+            [sys.executable, str(AUTHORITY_CEREMONY), "finalize"],
+            input_bytes=execution,
+            timeout=300,
+        )
+
+    def _capture_edge_receipt(self, _state: Mapping[str, Any]) -> None:
+        if EDGE_RECEIPT.exists() or EDGE_RECEIPT.is_symlink():
+            self._private_document(EDGE_RECEIPT)
+            return
+        raw = ha_transport._remote("cat", "--", REMOTE_EDGE_RECEIPT, timeout=30)
+        self._atomic_private(EDGE_RECEIPT, raw)
+
+    @staticmethod
+    def _stop_ha() -> None:
+        try:
+            ha_transport._remote("ha", "core", "stop", timeout=90)
+        except Exception:
+            # A lost SSH response is ambiguous: HA Core may already be stopped.
+            # The stopped-database probe below is the authoritative condition.
+            try:
+                ha_transport._require_remote_stopped_database()
+            except Exception as error:
+                raise ActivationRunnerError(
+                    "Home Assistant could not be stopped"
+                ) from error
+
+    def _freeze_legacy_writer(self, _state: Mapping[str, Any]) -> None:
+        if WRITER_OBSERVATION.exists() or WRITER_OBSERVATION.is_symlink():
+            self._private_document(WRITER_OBSERVATION)
+            return
+        ha_transport._remote(
+            "python3",
+            REMOTE_FREEZE,
+            "--database",
+            REMOTE_IDENTITY_DB,
+            timeout=600,
+        )
+        raw = ha_transport._remote("python3", REMOTE_OBSERVER, timeout=300)
+        self._atomic_private(WRITER_OBSERVATION, raw)
+
+    def _sign_privacy_evidence(self, _state: Mapping[str, Any]) -> None:
+        if PRIVACY_OBSERVATION.exists() or PRIVACY_OBSERVATION.is_symlink():
+            self._private_document(PRIVACY_OBSERVATION)
+        else:
+            self._json([sys.executable, str(PRIVACY_OBSERVER)], timeout=180)
+        self._json([str(SIGNING_LAUNCHER), "privacy-evidence"], timeout=900)
+
+    def _commit_semantic_cutover(self, _state: Mapping[str, Any]) -> None:
+        probe = self._probe("authority")
+        if probe.get("semantic_authority_current") is True:
+            return
+        self._json([str(SIGNING_LAUNCHER), "cutover-packet"], timeout=900)
+        packet_raw = self._private_document(CUTOVER_PACKET)
+        receipt = parse_canonical_json(
+            self._private_document(CUTOVER_RECEIPT), maximum=MAX_OUTPUT
+        )
+        packet = parse_canonical_json(packet_raw, maximum=MAX_OUTPUT)
+        if not isinstance(packet, Mapping) or not isinstance(receipt, Mapping):
+            raise ActivationRunnerError("semantic cutover packet is invalid")
+        document_value = packet.get("cutover_document")
+        if not isinstance(document_value, Mapping):
+            raise ActivationRunnerError("semantic cutover document is invalid")
+        document = canonical_bytes(document_value)
+        admission_id = document_value.get("admission_id")
+        if (
+            not isinstance(admission_id, str)
+            or receipt.get("admission_id") != admission_id
+            or receipt.get("cutover_packet_sha256")
+            != hashlib.sha256(packet_raw).hexdigest()
+            or receipt.get("cutover_document_sha256")
+            != hashlib.sha256(document).hexdigest()
+        ):
+            raise ActivationRunnerError("semantic cutover receipt does not match")
+        admission = self._request(
+            "identity-cutover-admission-e5u-v1", admission_id, document
+        )
+        self._json(
+            [sys.executable, str(AUTHORITY_ADMISSION), "admit-cutover"],
+            input_bytes=admission,
+            timeout=300,
+        )
+        execution = self._request(
+            "identity-cutover-execution-e5n-v1", admission_id, document
+        )
+        self._json(
+            [sys.executable, str(AUTHORITY_CEREMONY), "cutover"],
+            input_bytes=execution,
+            timeout=300,
+        )
+        if self._probe("authority").get("semantic_authority_current") is not True:
+            raise ActivationRunnerError("semantic authority did not become current")
+
+    @staticmethod
+    def _restart_ha() -> None:
+        ha_transport._start_home_assistant()
+        ha_transport._wait_home_assistant_ready()
+
+    def _grant_start(self, revision: str) -> None:
+        self._apply_grants()
+        self._start_agents(revision)
+
+    def _await_binding(self, _state: Mapping[str, Any]) -> None:
+        if self._probe("binding").get("authenticated_binding_confirmed") is not True:
+            raise ActivationPause("awaiting_authenticated_binding")
+
+    def _rearm_parent_permit(self, _state: Mapping[str, Any]) -> None:
+        report = source_plan.live_report()
+        if (
+            report.get("source_acceptance_receipt_issuable") is not True
+            or report.get("blockers") != []
+            or self._probe("binding").get("authenticated_binding_confirmed") is not True
+        ):
+            raise ActivationRunnerError("parent migration permit cannot be refreshed")
+        sequencer._atomic_write(
+            sequencer.GRANT_PERMIT_PATH,
+            (sequencer.GRANT_PERMIT_VALUE + "\n").encode("ascii"),
+        )
+
+    def _await_parents(self, _state: Mapping[str, Any]) -> None:
+        if (
+            self._probe("parents").get("exact_parent_relationship_confirmed")
+            is not True
+        ):
+            raise ActivationPause("awaiting_parent_confirmation")
+
+    def _seal_completion(self, state: Mapping[str, Any]) -> None:
+        receipt = canonical_bytes(completion_receipt(state))
+        self._atomic_private(COMPLETION_RECEIPT, receipt)
+
+    def contain(self) -> None:
+        try:
+            self._stop_agents()
+        finally:
+            try:
+                self._restart_ha()
+            except Exception:
+                pass
+
+
+class Runner:
+    def __init__(self, backend: Backend, store: StateStore) -> None:
+        self.backend = backend
+        self.store = store
+
+    def _initial_state(self) -> dict[str, Any]:
+        try:
+            report = source_plan.live_report()
+        except source_plan.SourcePlanError as error:
+            raise ActivationRunnerError(
+                "activation source is not hosted-accepted"
+            ) from error
+        commit = report.get("current_commit")
+        if (
+            report.get("source_acceptance_receipt_issuable") is not True
+            or report.get("blockers") != []
+            or not isinstance(commit, str)
+        ):
+            raise ActivationRunnerError("activation source is not hosted-accepted")
+        return new_state(commit)
+
+    def status(self) -> dict[str, Any]:
+        state = self.store.load()
+        if state is None:
+            return {
+                "contract": CONTRACT,
+                "status": "not_started",
+                "next_step": STEPS[0],
+                "completed_step_count": 0,
+                "pause_code": "none",
+                "last_error_code": "none",
+            }
+        return {
+            "contract": CONTRACT,
+            "status": state["status"],
+            "next_step": state["next_step"],
+            "completed_step_count": len(state["completed_steps"]),
+            "pause_code": state["pause_code"],
+            "last_error_code": state["last_error_code"],
+        }
+
+    def advance(self) -> dict[str, Any]:
+        state = self.store.load() or self._initial_state()
+        if state["status"] == "complete":
+            return self.status()
+        state["status"] = "active"
+        state["pause_code"] = "none"
+        state["last_error_code"] = "none"
+        self.store.save(state)
+        while state["next_step"] != "none":
+            step = state["next_step"]
+            state["status"] = "running"
+            state["attempt_counts"][step] = state["attempt_counts"].get(step, 0) + 1
+            if step in OPERATION_ID_STEPS and step not in state["operation_ids"]:
+                state["operation_ids"][step] = str(uuid7())
+            state["updated_at"] = _utc()
+            self.store.save(state)
+            try:
+                self.backend.perform(step, state)
+            except ActivationPause as pause:
+                state["status"] = "paused"
+                state["pause_code"] = str(pause)
+                state["updated_at"] = _utc()
+                self.store.save(state)
+                return self.status()
+            except Exception as error:
+                state["last_error_code"] = type(error).__name__.lower()[:96]
+                if STEPS.index(step) >= STEPS.index("stop_home_assistant"):
+                    try:
+                        self.backend.contain()
+                    finally:
+                        state["status"] = "contained"
+                else:
+                    state["status"] = "paused"
+                    state["pause_code"] = "operator_recovery_required"
+                state["updated_at"] = _utc()
+                self.store.save(state)
+                raise ActivationRunnerError(
+                    "activation advance failed closed"
+                ) from error
+            state["completed_steps"].append(step)
+            next_index = len(state["completed_steps"])
+            state["next_step"] = (
+                "none" if next_index == len(STEPS) else STEPS[next_index]
+            )
+            state["status"] = "complete" if state["next_step"] == "none" else "active"
+            state["pause_code"] = "none"
+            state["last_error_code"] = "none"
+            state["updated_at"] = _utc()
+            self.store.save(state)
+        return self.status()
+
+    def contain(self) -> dict[str, Any]:
+        state = self.store.load()
+        if state is None:
+            raise ActivationRunnerError("activation has not started")
+        self.backend.contain()
+        state["status"] = "contained"
+        state["pause_code"] = "operator_recovery_required"
+        state["updated_at"] = _utc()
+        self.store.save(state)
+        return self.status()
+
+
+def _lock() -> int:
+    import fcntl
+
+    parent = LOCK_PATH.parent.lstat()
+    if (
+        not stat.S_ISDIR(parent.st_mode)
+        or parent.st_uid != 0
+        or parent.st_gid != 0
+        or stat.S_IMODE(parent.st_mode) & 0o022
+    ):
+        raise ActivationRunnerError("activation runner lock directory is unsafe")
+    descriptor = os.open(
+        LOCK_PATH,
+        os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        details = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(details.st_mode)
+            or details.st_uid != 0
+            or details.st_gid != 0
+            or stat.S_IMODE(details.st_mode) != 0o600
+            or details.st_nlink != 1
+        ):
+            raise ActivationRunnerError("activation runner lock is unsafe")
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except Exception:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def main() -> int:
+    if len(sys.argv) != 2 or sys.argv[1] not in {"status", "advance", "contain"}:
+        print(
+            "phase3 activation runner requires status, advance, or contain",
+            file=sys.stderr,
+        )
+        return 64
+    if sys.platform != "linux" or os.geteuid() != 0:
+        print("phase3 activation runner requires root on Linux", file=sys.stderr)
+        return 77
+    descriptor = -1
+    try:
+        descriptor = _lock()
+        runner = Runner(Backend(), StateStore())
+        result = getattr(runner, sys.argv[1])()
+    except (ActivationRunnerError, OSError):
+        print("phase3 activation runner failed closed", file=sys.stderr)
+        return 78
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    print(json.dumps(result, separators=(",", ":"), sort_keys=True))
+    return 0 if result["status"] in {"not_started", "complete"} else 3
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

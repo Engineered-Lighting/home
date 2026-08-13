@@ -535,7 +535,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     else "disabled"
                 ),
                 "preference_opt_out": "enabled",
-                "private_initiatives": "disabled",
+                "private_locality_approval": (
+                    "attested_native_confirmation_gated"
+                    if settings.rollout_mode in {"shadow", "canary"}
+                    else "disabled"
+                ),
+                "private_initiatives": (
+                    "attested_native_consent_gated"
+                    if settings.rollout_mode == "canary"
+                    else "disabled"
+                ),
                 "physical_actions": "disabled",
                 "active_room": "disabled",
                 "learning": "disabled",

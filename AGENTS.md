@@ -40,10 +40,23 @@ If a change intentionally has no release note, mark the PR with the
 ## Ubuntu AI Host Quarantine
 
 - Never run the Home Agent E1/E2 PostgreSQL Docker gate, image builds, broad
-  integration suites, or model/GPU workloads on `EngineeredLightingServer1` /
-  `home-app` while the 2026-07-12 unclean halt remains unresolved.
+  integration suites, stress tests, or model/GPU workloads on
+  `EngineeredLightingServer1` / `home-app`. The 2026-07-12 unclean halt remains
+  permanently relevant to high-churn work even after the replacement-platform
+  review documented in
+  `docs/UBUNTU-AI-HOST-STABILITY-REVIEW-2026-08-13.md`.
 - Do not bypass or weaken the runner's host, Linux-execution, Docker-endpoint,
   daemon-identity, or resource-limit checks.
-- Use lightweight read-only diagnostics only when the host is needed. Run
-  deterministic unit/contract tests on the workstation and heavy database
-  gates on the pinned GitHub-hosted workflow.
+- Deterministic unit/contract tests belong on the workstation and heavy
+  database gates belong on the pinned GitHub-hosted workflow.
+- Tauri authority changes require the pinned `home-agent-native-boundary`
+  Windows workflow; do not treat a workstation without the pinned Rust
+  toolchain or an ad hoc release build as native acceptance.
+- Reviewed production-maintenance paths may run on the replacement platform:
+  the installed resource-bounded local backup, checksum-verified off-host
+  copy, one supervised resource-bounded manual restore drill, and ordinary
+  service operations required by the Home Agent runbook. Before each such
+  operation, confirm `systemctl is-system-running` is `running`, required
+  containers are healthy, storage has safe headroom, temperatures are normal,
+  and the current boot has no new MCE, hardware-error, lockup, thermal, OOM,
+  panic, I/O, or segfault record. Abort on any failed check.

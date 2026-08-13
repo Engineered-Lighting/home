@@ -34,9 +34,7 @@ def _grant_section(marker: str) -> str:
 
 def test_cutover_role_pair_is_distinct_expired_and_non_escalatable() -> None:
     historical_roles = _read("stack/home-agent-deploy/provision-roles.sh")
-    roles = _read(
-        "stack/home-agent-deploy/provision-identity-cutover-roles.sh"
-    )
+    roles = _read("stack/home-agent-deploy/provision-identity-cutover-roles.sh")
     hba = _read("stack/home-agent-deploy/postgres-pg_hba.conf")
 
     assert LOGIN_ROLE not in historical_roles
@@ -84,21 +82,19 @@ def test_cutover_role_pair_is_distinct_expired_and_non_escalatable() -> None:
         f"  FROM {LOGIN_ROLE}, {KERNEL_ROLE},\n"
         f"       {AUTHORITY_KERNEL_ROLE};"
     ) in roles
-    cleanup = roles.split(
-        "DO $identity_cutover_role_session_cleanup$", 1
-    )[1].split("$identity_cutover_role_session_cleanup$;", 1)[0]
+    cleanup = roles.split("DO $identity_cutover_role_session_cleanup$", 1)[1].split(
+        "$identity_cutover_role_session_cleanup$;", 1
+    )[0]
     assert roles.index("ALTER ROLE %I VALID UNTIL %L") < roles.index(
         "DO $identity_cutover_role_ceremony_preflight$"
     )
     assert "pg_catalog.pg_terminate_backend(activity.pid, 5000)" in cleanup
     assert "FROM pg_catalog.pg_stat_activity AS activity" in cleanup
     assert "remaining_sessions <> 0" in cleanup
-    assert (
-        "identity cutover role session cleanup could not be proven" in cleanup
-    )
-    validation = roles.split(
-        "DO $identity_cutover_role_ceremony_validation$", 1
-    )[1].split("$identity_cutover_role_ceremony_validation$;", 1)[0]
+    assert "identity cutover role session cleanup could not be proven" in cleanup
+    validation = roles.split("DO $identity_cutover_role_ceremony_validation$", 1)[
+        1
+    ].split("$identity_cutover_role_ceremony_validation$;", 1)[0]
     assert "FROM pg_catalog.pg_stat_activity AS activity" in validation
     assert f"activity.usename = '{LOGIN_ROLE}'" in validation
 
@@ -129,13 +125,9 @@ def test_cutover_role_pair_is_distinct_expired_and_non_escalatable() -> None:
 
 def test_cutover_secret_pair_is_independent_atomic_and_exactly_materialized() -> None:
     bootstrap = _read("stack/home-agent-deploy/bootstrap-secrets.sh")
-    additive = _read(
-        "stack/home-agent-deploy/add-identity-cutover-role-secrets.sh"
-    )
+    additive = _read("stack/home-agent-deploy/add-identity-cutover-role-secrets.sh")
     materializer = _read("stack/home-agent-deploy/materialize-secrets.sh")
-    preflight = _read(
-        "stack/home-agent-deploy/preflight-identity-cutover-roles.sh"
-    )
+    preflight = _read("stack/home-agent-deploy/preflight-identity-cutover-roles.sh")
     main_preflight = _read("stack/home-agent-deploy/preflight.sh")
 
     assert "identity_cutover_password" not in bootstrap
@@ -164,21 +156,14 @@ def test_cutover_secret_pair_is_independent_atomic_and_exactly_materialized() ->
         assert other_secret in additive
 
     assert "identity-cutover/postgres_identity_cutover_password" in materializer
-    assert (
-        "install_exact_single_secret_service identity-cutover" in materializer
-    )
-    assert (
-        "identity-cutover/database_url_identity_cutover database_url"
-        in materializer
-    )
+    assert "install_exact_single_secret_service identity-cutover" in materializer
+    assert "identity-cutover/database_url_identity_cutover database_url" in materializer
     assert (
         "install_exact_secret_pair_service "
         "provision-identity-cutover-roles" in materializer
     )
     assert "postgres_owner_password postgres_owner_password" in materializer
-    assert (
-        "identity-cutover/postgres_identity_cutover_password" in materializer
-    )
+    assert "identity-cutover/postgres_identity_cutover_password" in materializer
 
     for expected in (
         "identity cutover master secret directory must contain exactly two files",
@@ -196,26 +181,19 @@ def test_cutover_secret_pair_is_independent_atomic_and_exactly_materialized() ->
 
 
 def test_cutover_secret_publication_has_non_regenerating_resume_contract() -> None:
-    additive = _read(
-        "stack/home-agent-deploy/add-identity-cutover-role-secrets.sh"
-    )
+    additive = _read("stack/home-agent-deploy/add-identity-cutover-role-secrets.sh")
     materializer = _read("stack/home-agent-deploy/materialize-secrets.sh")
-    preflight = _read(
-        "stack/home-agent-deploy/preflight-identity-cutover-roles.sh"
-    )
+    preflight = _read("stack/home-agent-deploy/preflight-identity-cutover-roles.sh")
     docs = _read("stack/home-agent-deploy/IDENTITY-CUTOVER-ROLE.md")
 
     assert "--resume-existing" in additive
     assert "validate_published_cutover_pair" in additive
     assert "validate_existing_role_passwords" in additive
     assert "identity cutover master secret set is preserved" in additive
-    assert (
-        additive.index('if [ "$resume_existing" -eq 1 ]')
-        < additive.index("password=\"$(openssl rand -hex 32)\"")
+    assert additive.index('if [ "$resume_existing" -eq 1 ]') < additive.index(
+        'password="$(openssl rand -hex 32)"'
     )
-    create_branch = additive.split(
-        'if [ "$resume_existing" -eq 1 ]; then', 1
-    )[1]
+    create_branch = additive.split('if [ "$resume_existing" -eq 1 ]; then', 1)[1]
     resume_arm, create_arm = create_branch.split("else", 1)
     assert "validate_published_cutover_pair" in resume_arm
     assert "openssl" not in resume_arm
@@ -226,9 +204,7 @@ def test_cutover_secret_publication_has_non_regenerating_resume_contract() -> No
     assert "stale identity cutover runtime publication exists" in additive
     assert ".identity-cutover.previous.*" in additive
     for source in (materializer, preflight):
-        assert "orphaned identity cutover runtime exists without its master" in (
-            source
-        )
+        assert "orphaned identity cutover runtime exists without its master" in (source)
         assert "-name '.identity-cutover.previous.*'" in source
         assert "-name 'provision-identity-cutover-roles'" in source
     assert "role-secret preflight passed (not installed)" in preflight
@@ -238,7 +214,7 @@ def test_cutover_secret_publication_has_non_regenerating_resume_contract() -> No
         assert '[ ! -L "$master_root" ]' in source
         assert '[ ! -L "$runtime_root" ]' in source
     assert "stale runtime publication exists" in materializer
-    assert "-name \".$service.previous.*\"" in materializer
+    assert '-name ".$service.previous.*"' in materializer
 
     assert "Safe recovery after master publication" in docs
     assert '"$secrets_root" --resume-existing' in docs
@@ -294,28 +270,22 @@ def test_hosted_gate_exercises_real_secret_lifecycle_and_compose_render() -> Non
     )
     assert required_compose_environment
     assert not {
-        name
-        for name in required_compose_environment
-        if f"{name}=" not in lifecycle
+        name for name in required_compose_environment if f"{name}=" not in lifecycle
     }
 
     lifecycle_path = (
-        "stack/home-agent-deploy/"
-        "test-identity-cutover-secret-lifecycle.sh"
+        "stack/home-agent-deploy/" "test-identity-cutover-secret-lifecycle.sh"
     )
     assert workflow.count(f'- "{lifecycle_path}"') == 2
-    assert workflow.count(
-        '- "stack/home-agent-deploy/postgres-pg_hba.conf"'
-    ) == 2
+    assert workflow.count('- "stack/home-agent-deploy/postgres-pg_hba.conf"') == 2
     assert "Exercise E4 additive secret lifecycle" in workflow
     assert (
-        "sudo --non-interactive env" in workflow
-        and f"sh {lifecycle_path}" in workflow
+        "sudo --non-interactive env" in workflow and f"sh {lifecycle_path}" in workflow
     )
     assert workflow.index("Exercise E4 additive secret lifecycle") < (
         workflow.index(
-                "Run isolated PostgreSQL 17 "
-                "E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v authority gate"
+            "Run isolated PostgreSQL 17 "
+            "E1/E2/E3/E4/E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v/E5w/E5x authority gate"
         )
     )
 
@@ -323,9 +293,7 @@ def test_hosted_gate_exercises_real_secret_lifecycle_and_compose_render() -> Non
 def test_operator_services_separate_additive_ceremony_from_inert_surface() -> None:
     compose = _read("stack/home-agent-compose.yml")
     service = _compose_service(compose, SERVICE)
-    provisioner = _compose_service(
-        compose, "provision-identity-cutover-roles"
-    )
+    provisioner = _compose_service(compose, "provision-identity-cutover-roles")
 
     assert "profiles: [operator]" in service
     assert "/run/secrets/database_url" in service
@@ -359,8 +327,7 @@ def test_operator_services_separate_additive_ceremony_from_inert_surface() -> No
     assert "/deploy/provision-identity-cutover-roles.sh" in provisioner
     assert "postgres_owner_password_identity_cutover_provision" in provisioner
     assert (
-        "postgres_identity_cutover_password_identity_cutover_provision"
-        in provisioner
+        "postgres_identity_cutover_password_identity_cutover_provision" in provisioner
     )
     assert "networks: [postgres-net]" in provisioner
     assert "no-new-privileges:true" in provisioner
@@ -381,14 +348,10 @@ def test_grant_replay_quarantines_e4_and_pins_reviewed_catalog() -> None:
     assert "REVOKE ALL PRIVILEGES ON TABLE %I.%I" in quarantine
     assert "REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s)" in quarantine
     assert "REFERENCES (%1$s)" in quarantine
-    assert (
-        "operations.reviewed_identity_cutover_admissions" in quarantine
-    )
+    assert "operations.reviewed_identity_cutover_admissions" in quarantine
     assert "operations.enforced_legacy_identity_writer_freezes" in quarantine
     assert "operations.semantic_authority_promotions" in quarantine
-    assert (
-        "operations.commit_reviewed_identity_cutover(bytea,uuid)" in quarantine
-    )
+    assert "operations.commit_reviewed_identity_cutover(bytea,uuid)" in quarantine
     assert "SELECT role_row.rolname FROM pg_catalog.pg_roles" in quarantine
     assert "UNION ALL SELECT 'PUBLIC'" in quarantine
     assert "role_row.rolname IN (" in quarantine
@@ -457,30 +420,24 @@ def test_grant_replay_quarantines_e4_and_pins_reviewed_catalog() -> None:
         re.DOTALL,
     )
     assert reviewed_revisions is not None
-    assert re.findall(
-        r"'([0-9a-z_]+)'", reviewed_revisions.group(1)
-        ) == [
-            "0014_identity_cutover_e4",
-            "0015_current_authority_e5a",
-            "0016_principal_binding_e5b",
-                "0017_authenticated_binding_e5c",
-                    "0018_parent_relationship_e5d",
-                        "0019_parent_stage_e5e",
-                        "0020_parent_commit_e5f",
-                        "0021_parent_status_e5h",
-                    ]
+    assert re.findall(r"'([0-9a-z_]+)'", reviewed_revisions.group(1)) == [
+        "0014_identity_cutover_e4",
+        "0015_current_authority_e5a",
+        "0016_principal_binding_e5b",
+        "0017_authenticated_binding_e5c",
+        "0018_parent_relationship_e5d",
+        "0019_parent_stage_e5e",
+        "0020_parent_commit_e5f",
+        "0021_parent_status_e5h",
+    ]
     assert "identity_authority_e5_select" in admission
     assert "identity cutover E4 reviewed E5 policy mismatch" in admission
     assert "object_count = 0" in admission
     assert "object_count <> 4" in admission
     assert "current_revision = ANY (pre_e4_revisions)" in admission
+    assert "partial or revision-mismatched identity cutover E4 object set" in admission
     assert (
-        "partial or revision-mismatched identity cutover E4 object set"
-        in admission
-    )
-    assert (
-        "identity cutover E4 catalog admission is pending reviewed digest"
-        in admission
+        "identity cutover E4 catalog admission is pending reviewed digest" in admission
     )
     assert re.search(
         r"IF current_revision = '0014_identity_cutover_e4' THEN\s+"
@@ -511,9 +468,7 @@ def test_production_pin_and_rollout_mode_remain_inert() -> None:
     docs = _read("stack/home-agent-deploy/IDENTITY-CUTOVER-ROLE.md")
     normalized_docs = " ".join(docs.split())
 
-    assert (
-        "HOME_AGENT_EXPECTED_DB_REVISION=0006a_worker_lease_arbitration" in env
-    )
+    assert "HOME_AGENT_EXPECTED_DB_REVISION=0006a_worker_lease_arbitration" in env
     assert "HOME_AGENT_ROLLOUT_MODE=record_only" in env
     assert PINNED_E4_CATALOG_SHA256 in docs
     assert "PENDING_E4_CATALOG_SHA256" not in docs

@@ -115,9 +115,10 @@ oversized challenge cannot retain BFF resources indefinitely.
 
 The browser semantic allowlist does not include place creation or initiative
 claiming. A separate `/api/agent/native/v1/*` allowlist exists for the Windows
-client. Initiative listing and claiming are intentionally absent too. Every
-native request must carry a current HA OAuth access token and a per-request
-installation proof. The BFF validates the bearer through authenticated HA
+client. That native list includes only initiative listing and single-use claim,
+in addition to the existing typed private operations. Every native request must
+carry a current HA OAuth access token and a per-request installation proof. The
+BFF validates the bearer through authenticated HA
 `whoami` both when issuing a challenge and when consuming the proof. It then
 discards the bearer/proof copies and forwards only the trusted HA UUID, the
 offline-authorized installation UUID, and its server-held Core credential.
@@ -163,8 +164,12 @@ actor, DPoP, or bearer headers are never copied to Core. Native requests with an
 Origin or Cookie are rejected and neither HA nor Core redirects are followed.
 The allowlist otherwise contains only snapshot/consent/typed memory lifecycle
 operations and the two typed descriptor-relationship/current-parent-presence
-queries. It has no generic URL/method/header command and no initiative, place
-mutation, parent confirmation, stack, camera, model, or physical-action route.
+queries. Initiative routes are limited to pending-summary list and atomic claim;
+there is no dismiss, arbitrary presentation, or browser equivalent. The only
+place-authority route is the attested native private-locality status plus exact
+preview/confirm ceremony; direct place creation remains absent. It has no
+generic URL/method/header command, parent confirmation, stack, camera, model,
+or physical-action route.
 
 The staged principal-binding workflow is browser-only. Its four fixed routes
 allow a subject to request/cancel review, read only their own opaque review

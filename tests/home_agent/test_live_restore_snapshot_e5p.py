@@ -17,7 +17,7 @@ def test_local_restore_stages_encrypted_repository_under_exclusive_lock() -> Non
     )[-1].split("else", 1)[0]
 
     expected = (
-        'production_postgres_container=home-agent-postgres-1',
+        "production_postgres_container=home-agent-postgres-1",
         'exec 8>>"$HOME_AGENT_PGBACKREST_LOCK_FILE"',
         "flock -n -x 8",
         '{{printf "%s|%s\\n" .Source .Destination}}',
@@ -26,8 +26,8 @@ def test_local_restore_stages_encrypted_repository_under_exclusive_lock() -> Non
         'grep -Fxq "$HOME_AGENT_PGBACKREST_LOCK_FILE|/run/home-agent-locks/repository.lock"',
         'repo_local="$workspace/stage/pgbackrest-repository"',
         "cp --archive --one-file-system --reflink=auto",
-        'flock -u 8',
-        'exec 8>&-',
+        "flock -u 8",
+        "exec 8>&-",
     )
     for value in expected:
         assert value in local_block
@@ -47,15 +47,13 @@ def test_local_restore_stages_encrypted_repository_under_exclusive_lock() -> Non
 def test_live_snapshot_is_part_of_the_hosted_and_source_acceptance_boundaries() -> None:
     workflow = read(".github/workflows/home-agent-e1-postgres.yml")
     runner = read("tools/run-home-agent-e1-postgres-gate.py")
-    dockerfile = read(
-        "stack/services/home-agent-core/Dockerfile.postgres-test"
-    )
+    dockerfile = read("stack/services/home-agent-core/Dockerfile.postgres-test")
     source_plan = read(
         "stack/home-agent-deploy/operator/phase3_activation_source_plan.py"
     )
 
-    assert "E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v PostgreSQL gate" in workflow
-    assert "E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v authority gate" in workflow
+    assert "E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v/E5w/E5x PostgreSQL gate" in workflow
+    assert "E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v/E5w/E5x authority gate" in workflow
     assert "test_live_restore_snapshot_e5p.py" in workflow
     assert "test_live_restore_snapshot_e5p.py" in runner
     assert (
@@ -63,8 +61,7 @@ def test_live_snapshot_is_part_of_the_hosted_and_source_acceptance_boundaries() 
         in dockerfile
     )
     assert (
-        '"stack/home-agent-deploy/operator/isolated_restore_drill.sh",'
-        in source_plan
+        '"stack/home-agent-deploy/operator/isolated_restore_drill.sh",' in source_plan
     )
 
 

@@ -187,6 +187,24 @@ case "$role" in
     }
     exec python -m app.identity_admission_writer cutover
     ;;
+  phase3-activation-probe)
+    [ "$#" -eq 2 ] || {
+      echo "phase3 activation probe requires one fixed operation" >&2
+      exit 64
+    }
+    exec python -m app.phase3_activation_probe "$2"
+    ;;
+  phase3-signing-material)
+    [ "$#" -eq 1 ] || {
+      echo "phase3 signing-material probe accepts no arguments" >&2
+      exit 64
+    }
+    [ "${HOME_AGENT_ROLE:-}" = "api" ] || {
+      echo "phase3 signing-material probe requires the API role" >&2
+      exit 78
+    }
+    exec python -m app.phase3_signing_material
+    ;;
   *)
     echo "unsupported HOME_AGENT_ROLE: $role" >&2
     exit 64

@@ -93,7 +93,17 @@ class NativeAttestationDeploymentContractTests(unittest.TestCase):
             "]);", 1
         )[0]
         self.assertIn('/^\\/native\\/v1\\/attestation\\/challenge$/', native_block)
-        self.assertNotIn("initiatives", native_block)
+        self.assertIn('/^\\/native\\/v1\\/initiatives$/', native_block)
+        self.assertIn(
+            "^/native/v1/initiatives/${UUID_PATH}/claim$", native_block
+        )
+        self.assertIn('/^\\/native\\/v1\\/private-localities$/', native_block)
+        self.assertIn(
+            '/^\\/native\\/v1\\/private-localities\\/(preview|confirm)$/',
+            native_block,
+        )
+        self.assertNotIn('/^\\/native\\/v1\\/places$/', native_block)
+        self.assertNotIn('/^\\/native\\/v1\\/initiatives\\/claim$/', native_block)
         header_block = gateway.split(
             'if (route.prefix === "/api/agent" && suffix.startsWith("/native/"))',
             1,
@@ -126,13 +136,15 @@ class NativeAttestationDeploymentContractTests(unittest.TestCase):
         self.assertIn("x_home_agent_installation", auth)
         self.assertNotIn('x_home_agent_channel,\n        "private_tauri",', auth)
         self.assertIn("ATTESTED_NATIVE_CHANNEL", main)
-        self.assertEqual(
-            api.count(
-                "private initiative presentation requires a separate reviewed gate"
-            ),
-            2,
-        )
-        self.assertIn('"private_initiatives": "disabled"', store)
+        self.assertIn("value: InitiativeClaim", api)
+        self.assertEqual(api.count("principal: NativePrincipal"), 7)
+        self.assertIn("store.list_initiatives(principal)", api)
+        self.assertIn("store.claim_initiative(principal, initiative_id, value)", api)
+        self.assertIn('"attested_native_consent_gated"', main)
+        self.assertIn('"attested_native_consent_gated"', store)
+        self.assertIn("/private-localities/preview", api)
+        self.assertIn("/private-localities/confirm", api)
+        self.assertNotIn('@router.post("/places"', api)
 
 
 if __name__ == "__main__":

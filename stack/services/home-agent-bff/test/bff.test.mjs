@@ -570,6 +570,9 @@ test("semantic route allowlist excludes generic proxying", () => {
   assert.equal(routeAllowed("GET", "/api/agent/v1/people"), false);
   assert.equal(routeAllowed("GET", "/api/agent/v1/snapshot"), true);
   assert.equal(routeAllowed("GET", "/api/agent/v1/initiatives"), false);
+  assert.equal(routeAllowed("GET", "/api/agent/v1/private-localities"), false);
+  assert.equal(routeAllowed("POST", "/api/agent/v1/private-localities/preview"), false);
+  assert.equal(routeAllowed("POST", "/api/agent/v1/private-localities/confirm"), false);
   assert.equal(routeAllowed("POST", "/api/agent/v1/memory-transactions"), true);
   assert.equal(routeAllowed("POST", "/api/agent/v1/places"), false);
   assert.equal(routeAllowed("POST", "/api/agent/v1/relationships/parent-confirmations"), false);
@@ -595,8 +598,13 @@ test("semantic route allowlist excludes generic proxying", () => {
   assert.equal(routeAllowed("GET", "/api/frigate/events"), false);
   assert.equal(routeAllowed("POST", "/api/stack/stop"), false);
   assert.equal(nativeRouteAllowed("GET", "/api/agent/native/v1/snapshot"), true);
-  assert.equal(nativeRouteAllowed("GET", "/api/agent/native/v1/initiatives"), false);
-  assert.equal(nativeRouteAllowed("POST", `/api/agent/native/v1/initiatives/${factId}/claim`), false);
+  assert.equal(nativeRouteAllowed("GET", "/api/agent/native/v1/initiatives"), true);
+  assert.equal(nativeRouteAllowed("POST", `/api/agent/native/v1/initiatives/${factId}/claim`), true);
+  assert.equal(nativeRouteAllowed("POST", `/api/agent/native/v1/initiatives/${factId}/dismiss`), false);
+  assert.equal(nativeRouteAllowed("GET", "/api/agent/native/v1/private-localities"), true);
+  assert.equal(nativeRouteAllowed("POST", "/api/agent/native/v1/private-localities/preview"), true);
+  assert.equal(nativeRouteAllowed("POST", "/api/agent/native/v1/private-localities/confirm"), true);
+  assert.equal(nativeRouteAllowed("POST", "/api/agent/native/v1/private-localities/delete"), false);
   assert.equal(nativeRouteAllowed("GET", `/api/agent/native/v1/places/${factId}/descriptor-relationship`), true);
   assert.equal(nativeRouteAllowed("GET", `/api/agent/native/v1/places/${factId}/parents/current-presence`), true);
   assert.equal(nativeRouteAllowed("POST", "/api/agent/native/v1/memory-transactions"), true);
@@ -1787,14 +1795,164 @@ test("native Agent routes require per-install proof and emit only server-constru
   const initiative = await fetch(`${base}/api/agent/native/v1/initiatives`, {
     headers: { authorization: "Bearer native-ha-access-canary" },
   });
-  assert.equal(initiative.status, 404);
+  assert.equal(initiative.status, 401);
+  assert.equal((await initiative.json()).error, "native_attestation_required");
   const initiativeClaim = await fetch(
     `${base}/api/agent/native/v1/initiatives/${crypto.randomUUID()}/claim`,
     { method: "POST", headers: { authorization: "Bearer native-ha-access-canary" } },
   );
-  assert.equal(initiativeClaim.status, 404);
-  assert.equal(calls.filter(({ url }) => url.endsWith("/api/home_agent_edge/whoami")).length, 3);
+  assert.equal(initiativeClaim.status, 401);
+  assert.equal((await initiativeClaim.json()).error, "native_attestation_required");
+  assert.equal(calls.filter(({ url }) => url.endsWith("/api/home_agent_edge/whoami")).length, 5);
   assert.equal(calls.filter(({ url }) => url.startsWith(config.coreUrl)).length, 1);
+});
+
+test("attested native initiative routes proxy only list and serializable claim", async () => {
+  const fixture = nativeFixture();
+  const config = configured({
+    nativeInstallations: fixture.installations,
+    nativeAttestationConfigured: true,
+  });
+  const initiativeId = crypto.randomUUID();
+  const sessionId = crypto.randomUUID();
+  const upstream = [];
+  const fetchImpl = async (url, init = {}) => {
+    if (String(url).endsWith("/api/home_agent_edge/whoami")) {
+      return new Response(JSON.stringify({
+        user_id: fixture.userId, is_admin: false, is_active: true,
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    upstream.push({ url: String(url), init });
+    assert.equal(init.headers.Authorization, "Bearer internal-secret");
+    assert.equal(init.headers["X-Authenticated-HA-User"], fixture.userId);
+    assert.equal(init.headers["X-Home-Agent-Channel"], NATIVE_ATTESTED_CHANNEL);
+    assert.equal(init.headers["X-Home-Agent-Installation"], fixture.installationId);
+    if (String(url).endsWith("/v1/initiatives")) {
+      assert.equal(init.method, "GET");
+      return new Response(JSON.stringify([{ initiative_id: initiativeId }]), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    }
+    assert.equal(String(url), `http://core.internal:8096/v1/initiatives/${initiativeId}/claim`);
+    assert.equal(init.method, "POST");
+    assert.deepEqual(JSON.parse(init.body), {
+      session_id: sessionId,
+      surface: "private_tauri",
+    });
+    return new Response(JSON.stringify({ state: "claimed" }), {
+      status: 200, headers: { "content-type": "application/json" },
+    });
+  };
+  const base = await listen(createBff(config, { fetchImpl }));
+  const listed = await attestedNativeFetch(base, {
+    fixture,
+    token: "native-ha-access-canary",
+    pathname: "/api/agent/native/v1/initiatives",
+  });
+  assert.equal(listed.status, 200);
+  assert.deepEqual(await listed.json(), [{ initiative_id: initiativeId }]);
+
+  const claimBody = JSON.stringify({
+    session_id: sessionId,
+    surface: "private_tauri",
+  });
+  const claimed = await attestedNativeFetch(base, {
+    fixture,
+    token: "native-ha-access-canary",
+    method: "POST",
+    pathname: `/api/agent/native/v1/initiatives/${initiativeId}/claim`,
+    body: claimBody,
+  });
+  assert.equal(claimed.status, 200);
+  assert.deepEqual(await claimed.json(), { state: "claimed" });
+  assert.equal(upstream.length, 2);
+
+  const dismissed = await fetch(
+    `${base}/api/agent/native/v1/initiatives/${initiativeId}/dismiss`,
+    { method: "POST", headers: { authorization: "Bearer native-ha-access-canary" } },
+  );
+  assert.equal(dismissed.status, 404);
+  assert.equal(upstream.length, 2);
+});
+
+test("attested native locality ceremony proxies exact status preview and confirm only", async () => {
+  const fixture = nativeFixture();
+  const config = configured({
+    nativeInstallations: fixture.installations,
+    nativeAttestationConfigured: true,
+  });
+  const confirmationNonce = crypto.randomUUID();
+  const previewDigest = "a".repeat(64);
+  const common = {
+    canonical_name: "Itaipava",
+    latitude: -22.4,
+    longitude: -43.14,
+    radius_m: 1000,
+    travel_greeting_eligible: true,
+    confirmation_nonce: confirmationNonce,
+  };
+  const upstream = [];
+  const fetchImpl = async (url, init = {}) => {
+    if (String(url).endsWith("/api/home_agent_edge/whoami")) {
+      return new Response(JSON.stringify({
+        user_id: fixture.userId, is_admin: false, is_active: true,
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    upstream.push({ url: String(url), init });
+    assert.equal(init.headers["X-Home-Agent-Channel"], NATIVE_ATTESTED_CHANNEL);
+    assert.equal(init.headers["X-Home-Agent-Installation"], fixture.installationId);
+    if (String(url).endsWith("/v1/private-localities")) {
+      assert.equal(init.method, "GET");
+      return new Response(JSON.stringify({ state: "not_configured", localities: [] }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    }
+    const body = JSON.parse(init.body);
+    if (String(url).endsWith("/v1/private-localities/preview")) {
+      assert.deepEqual(body, common);
+      return new Response(JSON.stringify({ state: "needs_confirmation", preview_digest: previewDigest }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    }
+    assert.equal(String(url), "http://core.internal:8096/v1/private-localities/confirm");
+    assert.deepEqual(body, { ...common, preview_digest: previewDigest });
+    return new Response(JSON.stringify({ state: "committed" }), {
+      status: 201, headers: { "content-type": "application/json" },
+    });
+  };
+  const base = await listen(createBff(config, { fetchImpl }));
+  const statusResponse = await attestedNativeFetch(base, {
+    fixture,
+    token: "native-ha-access-canary",
+    pathname: "/api/agent/native/v1/private-localities",
+  });
+  assert.equal(statusResponse.status, 200);
+
+  const preview = await attestedNativeFetch(base, {
+    fixture,
+    token: "native-ha-access-canary",
+    method: "POST",
+    pathname: "/api/agent/native/v1/private-localities/preview",
+    body: JSON.stringify(common),
+  });
+  assert.equal(preview.status, 200);
+
+  const confirmed = await attestedNativeFetch(base, {
+    fixture,
+    token: "native-ha-access-canary",
+    method: "POST",
+    pathname: "/api/agent/native/v1/private-localities/confirm",
+    body: JSON.stringify({ ...common, preview_digest: previewDigest }),
+  });
+  assert.equal(confirmed.status, 201);
+  assert.equal(upstream.length, 3);
+
+  const directCreate = await fetch(`${base}/api/agent/native/v1/places`, {
+    method: "POST",
+    headers: { authorization: "Bearer native-ha-access-canary" },
+  });
+  assert.equal(directCreate.status, 404);
+  assert.equal(upstream.length, 3);
 });
 
 test("missing native registry contains native semantics without disabling browser OAuth", async () => {
@@ -1992,7 +2150,7 @@ test("native proof binds key, nonce, method, path, body, bearer, expiry fields, 
   const initiativeChallenge = await nativeChallenge(base, {
     fixture, token: tokenA, method: "GET", pathname: "/api/agent/native/v1/initiatives",
   });
-  assert.equal(initiativeChallenge.status, 400);
+  assert.equal(initiativeChallenge.status, 200);
 
   const wrongKeyChallenge = await challengeFor();
   const wrongKey = await send({

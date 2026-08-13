@@ -49,9 +49,10 @@ def test_e5l_rejects_startup_migration_and_extra_arguments() -> None:
     source = _read(ENTRYPOINT)
 
     assert 'if [ "${HOME_AGENT_RUN_MIGRATIONS:-0}" = "1" ]; then' in source
-    assert source.count(
-        'echo "phase3 migration cannot use automatic startup migration"'
-    ) == 2
+    assert (
+        source.count('echo "phase3 migration cannot use automatic startup migration"')
+        == 2
+    )
     for label in (
         "finalizer",
         "current-authority",
@@ -77,5 +78,11 @@ def test_e5l_is_carried_by_the_hosted_gate() -> None:
 
     assert "test_phase3_fixed_migration_entrypoints_e5l.py" in workflow
     assert "test_phase3_fixed_migration_entrypoints_e5l.py" in runner
-    assert "E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v PostgreSQL gate" in workflow
-    assert "E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v authority gate" in workflow
+    assert (
+        "E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v/E5w/E5x PostgreSQL gate"
+        in workflow
+    )
+    assert (
+        "E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v/E5w/E5x authority gate"
+        in workflow
+    )

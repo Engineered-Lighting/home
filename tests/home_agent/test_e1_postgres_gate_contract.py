@@ -11,15 +11,39 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 RUNNER = ROOT / "tools/run-home-agent-e1-postgres-gate.py"
 TEST_IMAGE = ROOT / "stack/services/home-agent-core/Dockerfile.postgres-test"
+PRODUCTION_IMAGE = ROOT / "stack/services/home-agent-core/Dockerfile"
 WORKFLOW = ROOT / ".github/workflows/home-agent-e1-postgres.yml"
+SOURCE_PLAN = (
+    ROOT
+    / "stack/home-agent-deploy/operator/phase3_activation_source_plan.py"
+)
 ROLE_DOC = ROOT / "stack/home-agent-deploy/IDENTITY-ERASURE-KERNEL-ROLE.md"
 HARNESS = ROOT / "stack/services/home-agent-core/tests/e1_postgres_harness.py"
 PINNED_DIGEST = "17b6c778de50f4bb9a878c36e736110fbcd9b7020377d6fdfdf20f7c0347e40a"
 CHECKOUT_SHA = "34e114876b0b11c390a56381ad16ebd13914f8d5"
+ATTEST_SHA = "f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6"
+UPLOAD_SHA = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+PYTHON_INDEX_DIGEST = (
+    "229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36"
+)
+PYTHON_AMD64_DIGEST = (
+    "d657ab0ade19f404a6ccc883ab399540de667aff751748ce23c07330c5a89e64"
+)
 
 
 def _load_runner():
     spec = importlib.util.spec_from_file_location("home_agent_e1_runner", RUNNER)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_source_plan():
+    spec = importlib.util.spec_from_file_location(
+        "home_agent_phase3_source_plan_gate_contract", SOURCE_PLAN
+    )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -1053,6 +1077,8 @@ def test_test_image_and_ci_pin_the_reviewed_top_level_inputs() -> None:
     assert PINNED_DIGEST in dockerfile
     assert "requirements.txt" in dockerfile
     assert "requirements-dev.txt" in dockerfile
+    assert "requirements-dev.lock" in dockerfile
+    assert "--require-hashes" in dockerfile
     assert "python3 -m venv" in dockerfile
     assert "COPY stack/home-agent-deploy/" in dockerfile
     assert (
@@ -1094,3 +1120,118 @@ def test_operator_documentation_states_precise_cleanup_limits() -> None:
     assert "filtered build context" in role_doc
     assert "EngineeredLightingServer1" in role_doc
     assert "no environment-variable bypass" in role_doc
+
+
+def test_production_core_image_is_hosted_built_attested_and_main_only() -> None:
+    dockerfile = PRODUCTION_IMAGE.read_text(encoding="utf-8")
+    lock = (
+        ROOT / "stack/services/home-agent-core/requirements.lock"
+    ).read_text(encoding="utf-8")
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    package = workflow.split("  deployable-core-image:", 1)[1]
+
+    assert (
+        "ARG PYTHON_BASE_IMAGE=python:3.12-slim@sha256:"
+        + PYTHON_INDEX_DIGEST
+    ) in dockerfile
+    assert "FROM ${PYTHON_BASE_IMAGE} AS runtime" in dockerfile
+    assert "COPY requirements.txt requirements.lock ./" in dockerfile
+    assert (
+        "RUN pip install --no-cache-dir --require-hashes -r requirements.lock"
+        in dockerfile
+    )
+    assert lock.count("--hash=sha256:") >= 50
+    for requirement in (
+        "alembic==1.14.0",
+        "cryptography==44.0.0",
+        "fastapi==0.115.4",
+        "psycopg==3.2.3",
+        "pydantic==2.10.2",
+        "pydantic-settings==2.6.1",
+        "sqlalchemy==2.0.36",
+        "uvicorn==0.32.0",
+    ):
+        assert requirement in lock
+    assert " @ " not in lock
+    assert "--editable" not in lock
+    for token in (
+        "runs-on: ubuntu-24.04",
+        "pinned Python Linux AMD64 manifest mismatch",
+        "github.ref == 'refs/heads/main'",
+        "github.event_name == 'push'",
+        "github.event_name == 'workflow_dispatch'",
+        "id-token: write",
+        "attestations: write",
+        "artifact-metadata: write",
+        f"actions/attest@{ATTEST_SHA}",
+        f"actions/upload-artifact@{UPLOAD_SHA}",
+        "home-agent-core-linux-amd64.tar.gz",
+        "home-agent-core-image-${{ github.sha }}",
+        "manifest.json",
+        "SHA256SUMS",
+        "provenance.sigstore.json",
+        "workflow_run_id",
+        "source_commit",
+        "revision_label",
+        'docker save "${CORE_IMAGE}"',
+        "tarfile.open(archive, mode=\"r:gz\")",
+        "retention-days: 14",
+        "compression-level: 0",
+    ):
+        assert token in package
+    assert f"python:3.12-slim@sha256:{PYTHON_INDEX_DIGEST}" in workflow
+    assert f"sha256:{PYTHON_AMD64_DIGEST}" in workflow
+    assert package.count("docker buildx build") == 1
+    assert '--build-arg "PYTHON_BASE_IMAGE=${PYTHON_IMAGE}"' in package
+    assert '--label "org.opencontainers.image.revision=${GITHUB_SHA}"' in package
+    assert "--network none" in package
+    assert "--read-only" in package
+    assert "--cap-drop ALL" in package
+    assert "--security-opt no-new-privileges" in package
+    assert "--memory 256m" in package
+    assert "--pids-limit 64" in package
+    assert "packages: write" not in package
+    assert "${{ secrets." not in package
+    assert "docker tag " not in package
+    assert "${CORE_DEPLOYMENT_IMAGE}" not in package
+    assert package.count('os.environ["CORE_DEPLOYMENT_IMAGE"]') == 1
+
+
+def test_every_nonweb_activation_source_is_in_the_hosted_gate_context() -> None:
+    runner = _load_runner()
+    source_plan = _load_source_plan()
+    explicit = set(runner.BUILD_CONTEXT_FILES)
+    trees = tuple(path.rstrip("/") + "/" for path in runner.BUILD_CONTEXT_TREES)
+    web_roots = (
+        "app/src/home-agent",
+        "stack/services/home-agent-bff/src",
+    )
+
+    def covered(path: str) -> bool:
+        return path in explicit or any(path.startswith(prefix) for prefix in trees)
+
+    uncovered: list[str] = []
+    for relative in source_plan.ACTIVATION_PATHS:
+        if relative in web_roots:
+            continue
+        source = ROOT / relative
+        if source.is_file():
+            candidates = (relative,)
+        else:
+            candidates = tuple(
+                path.relative_to(ROOT).as_posix()
+                for path in source.rglob("*")
+                if path.is_file()
+                and not any(
+                    part in runner.IGNORED_CONTEXT_NAMES
+                    for part in path.relative_to(ROOT).parts
+                )
+            )
+        uncovered.extend(path for path in candidates if not covered(path))
+
+    assert uncovered == []
+    web_workflow = (
+        ROOT / ".github/workflows/home-agent-web-boundary.yml"
+    ).read_text(encoding="utf-8")
+    assert web_workflow.count('- "app/src/home-agent/**"') == 2
+    assert web_workflow.count('- "stack/services/home-agent-bff/**"') == 2

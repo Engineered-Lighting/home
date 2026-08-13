@@ -696,6 +696,10 @@ for name in postgres_owner_password postgres_api_password postgres_binding_opera
   verify_secret 0:0:400 "$HOME_AGENT_SECRETS_DIR/runtime/provision-roles/$name"
 done
 verify_secret 0:0:400 "$HOME_AGENT_SECRETS_DIR/runtime/grant-runtime/postgres_owner_password"
+verify_secret 0:0:400 "$HOME_AGENT_SECRETS_DIR/runtime/grant-phase3-activation/postgres_owner_password"
+verify_secret 0:0:400 "$HOME_AGENT_SECRETS_DIR/runtime/identity-role-activation/postgres_owner_password"
+verify_secret 0:0:400 "$HOME_AGENT_SECRETS_DIR/runtime/provision-identity-binding-kernel-role/postgres_owner_password"
+verify_secret 0:0:400 "$HOME_AGENT_SECRETS_DIR/runtime/provision-parent-relationship-kernel-role/postgres_owner_password"
 verify_secret 999:999:400 "$HOME_AGENT_SECRETS_DIR/runtime/backup-gate/postgres_backup_password"
 verify_secret 10001:10001:400 "$HOME_AGENT_SECRETS_DIR/runtime/migrate/database_url"
 for name in database_url operator_database_url binding_commit_database_url knowledge_encryption_key service_token operator_token bootstrap_token; do

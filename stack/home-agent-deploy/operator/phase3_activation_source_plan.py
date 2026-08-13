@@ -32,26 +32,29 @@ COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 SOURCE_PLAN_RELATIVE_PATH = (
     "stack/home-agent-deploy/operator/phase3_activation_source_plan.py"
 )
-ACCEPTED_COMMIT_LITERAL = re.compile(
-    rb'(?m)^ACCEPTED_COMMIT = "[0-9a-f]{40}"$'
-)
+ACCEPTED_COMMIT_LITERAL = re.compile(rb'(?m)^ACCEPTED_COMMIT = "[0-9a-f]{40}"$')
 ACCEPTED_RUN_LITERAL = re.compile(
     rb'(?m)^ACCEPTED_POSTGRES_RUN_ID = "[1-9][0-9]{5,19}"$'
 )
 ACCEPTED_WEB_RUN_LITERAL = re.compile(
     rb'(?m)^ACCEPTED_WEB_RUN_ID = "[1-9][0-9]{5,19}"$'
 )
-TREE_ENTRY = re.compile(
-    rb"^(100644|100755) blob ([0-9a-f]{40})\t([A-Za-z0-9._/-]+)$"
-)
+TREE_ENTRY = re.compile(rb"^(100644|100755) blob ([0-9a-f]{40})\t([A-Za-z0-9._/-]+)$")
 ACTIVATION_PATHS = (
+    ".github/workflows/home-agent-e1-postgres.yml",
     "app/src/home-agent",
+    "ha-config/home_agent_edge",
+    "ha-config/extended_openai_conversation/collect_legacy_identity_freeze_observation.py",
+    "ha-config/extended_openai_conversation/freeze_legacy_identity_semantics.py",
+    "ha-config/extended_openai_conversation/identity_store.py",
+    "ha-config/extended_openai_conversation/legacy_identity_fence.py",
     "stack/home-agent-compose.yml",
     "stack/home-agent.env.example",
     "stack/home-agent-deploy/add-binding-committer-role-secrets.sh",
     "stack/home-agent-deploy/add-identity-cutover-role-secrets.sh",
     "stack/home-agent-deploy/add-identity-finalizer-role-secrets.sh",
     "stack/home-agent-deploy/add-identity-migration-role-secrets.sh",
+    "stack/home-agent-deploy/install-phase3-identity-signing.sh",
     "stack/home-agent-deploy/apply-grants.sh",
     "stack/home-agent-deploy/activate-identity-authority-role.sh",
     "stack/home-agent-deploy/identity-api-acl.sql",
@@ -66,25 +69,46 @@ ACTIVATION_PATHS = (
     "stack/home-agent-deploy/provision-parent-relationship-kernel-role.sh",
     "stack/home-agent-deploy/provision-roles.sh",
     "stack/home-agent-deploy/operator/identity_finalizer_compatibility.py",
+    "stack/home-agent-deploy/operator/migrate_legacy_identity.py",
     "stack/home-agent-deploy/operator/isolated_restore_drill.sh",
     "stack/home-agent-deploy/operator/off_host_backup_writer.py",
     "stack/home-agent-deploy/operator/parent_confirmation_staging.py",
+    "stack/home-agent-deploy/operator/phase3_capture_legacy_identity_snapshot.py",
     "stack/home-agent-deploy/operator/phase3_authority_admission.py",
     "stack/home-agent-deploy/operator/phase3_identity_authority_ceremony.py",
+    "stack/home-agent-deploy/operator/phase3_identity_signing.sh",
+    "stack/home-agent-deploy/operator/phase3_identity_signing_ceremony.py",
+    "stack/home-agent-deploy/operator/phase3_identity_credential_provisioner.py",
+    "stack/home-agent-deploy/operator/phase3_identity_credential_provisioner.sh",
+    "stack/home-agent-deploy/operator/phase3_writer_freeze_ceremony.py",
+    "stack/home-agent-deploy/operator/phase3_writer_freeze_evidence.py",
+    "stack/home-agent-deploy/operator/phase3_privacy_cutover_ceremony.py",
+    "stack/home-agent-deploy/operator/phase3_privacy_cutover_evidence.py",
+    "stack/home-agent-deploy/operator/phase3_privacy_cutover_observer.py",
+    "stack/home-agent-deploy/operator/phase3_semantic_cutover_ceremony.py",
+    "stack/home-agent-deploy/operator/phase3_semantic_cutover_packet.py",
+    "stack/home-agent-deploy/operator/phase3_reviewed_people_packet.py",
+    "stack/home-agent-deploy/operator/reviewed_identity_packet_compiler.py",
     "stack/home-agent-deploy/operator/phase3_migration_executor.py",
     "stack/home-agent-deploy/operator/phase3_activation_preflight.py",
+    "stack/home-agent-deploy/operator/phase3_activation_runner.py",
     "stack/home-agent-deploy/operator/phase3_activation_sequencer.py",
     "stack/home-agent-deploy/operator/phase3_evidence_receipts.py",
     "stack/home-agent-deploy/operator/principal_binding_candidate_staging.py",
     "stack/home-agent-deploy/operator/reviewed_identity_payload.py",
     "stack/services/home-agent-bff/src",
+    "stack/services/home-agent-core/.dockerignore",
     "stack/services/home-agent-core/Dockerfile",
+    "stack/services/home-agent-core/alembic.ini",
     "stack/services/home-agent-core/alembic",
     "stack/services/home-agent-core/app",
     "stack/services/home-agent-core/docker-entrypoint.sh",
+    "stack/services/home-agent-core/requirements.lock",
+    "stack/services/home-agent-core/requirements-dev.lock",
+    "stack/services/home-agent-core/requirements.txt",
+    "tools/run-home-agent-e1-postgres-gate.py",
 )
-MISSING_EXECUTABLE_BOUNDARIES = (
-)
+MISSING_EXECUTABLE_BOUNDARIES: tuple[str, ...] = ()
 
 
 class SourcePlanError(RuntimeError):
@@ -97,11 +121,7 @@ def normalize_source_plan_pins(raw: bytes) -> bytes:
     commit_matches = ACCEPTED_COMMIT_LITERAL.findall(raw)
     run_matches = ACCEPTED_RUN_LITERAL.findall(raw)
     web_run_matches = ACCEPTED_WEB_RUN_LITERAL.findall(raw)
-    if (
-        len(commit_matches) != 1
-        or len(run_matches) != 1
-        or len(web_run_matches) != 1
-    ):
+    if len(commit_matches) != 1 or len(run_matches) != 1 or len(web_run_matches) != 1:
         raise SourcePlanError("source-plan pin file is invalid")
     normalized = ACCEPTED_COMMIT_LITERAL.sub(
         b'ACCEPTED_COMMIT = "' + (b"0" * 40) + b'"',
@@ -196,9 +216,17 @@ def evaluate(
         "identity_cutover_executor_installed": trusted,
         "identity_authority_admission_writer_installed": trusted,
         "identity_disposable_role_activation_installed": trusted,
+        "reviewed_identity_packet_compiler_installed": trusted,
+        "reviewed_identity_distinct_purpose_signing_ceremony_installed": trusted,
+        "identity_signing_credential_provisioner_installed": trusted,
+        "identity_writer_freeze_evidence_writer_installed": trusted,
+        "identity_privacy_cutover_evidence_writer_installed": trusted,
+        "identity_privacy_cutover_observer_installed": trusted,
+        "identity_semantic_cutover_packet_compiler_installed": trusted,
         "off_host_backup_writer_installed": trusted,
         "activation_executor_installed": trusted,
-        "source_acceptance_receipt_issuable": trusted,
+        "authoritative_split_phase_activation_runner_installed": trusted,
+        "source_acceptance_receipt_issuable": trusted and not blockers,
         "authoritative": False,
         "enables_writes": False,
         "runs_migrations": False,
@@ -248,9 +276,10 @@ def _succeeds(command: Sequence[str], *, timeout: int = 20) -> bool:
 
 def live_report() -> Mapping[str, Any]:
     head = str(_run(["git", "rev-parse", "HEAD"])).strip()
-    clean = str(
-        _run(["git", "status", "--porcelain", "--untracked-files=all"])
-    ).strip() == ""
+    clean = (
+        str(_run(["git", "status", "--porcelain", "--untracked-files=all"])).strip()
+        == ""
+    )
     accepted_exists = _succeeds(
         ["git", "cat-file", "-e", f"{ACCEPTED_COMMIT}^{{commit}}"]
     )
@@ -266,11 +295,7 @@ def live_report() -> Mapping[str, Any]:
             "--quiet",
             ACCEPTED_COMMIT,
             "--",
-            *(
-                path
-                for path in ACTIVATION_PATHS
-                if path != SOURCE_PLAN_RELATIVE_PATH
-            ),
+            *(path for path in ACTIVATION_PATHS if path != SOURCE_PLAN_RELATIVE_PATH),
         ]
     )
     accepted_plan = _run(
@@ -281,9 +306,9 @@ def live_report() -> Mapping[str, Any]:
         current_plan = (SOURCE_ROOT / SOURCE_PLAN_RELATIVE_PATH).read_bytes()
     except OSError as error:
         raise SourcePlanError("source-plan pin file is unavailable") from error
-    if not isinstance(accepted_plan, bytes) or not source_plan_matches_accepted_pin_only(
-        accepted_plan, current_plan
-    ):
+    if not isinstance(
+        accepted_plan, bytes
+    ) or not source_plan_matches_accepted_pin_only(accepted_plan, current_plan):
         source_diff_clean = False
     tree = _run(
         [

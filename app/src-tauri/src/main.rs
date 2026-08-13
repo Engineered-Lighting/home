@@ -8,11 +8,19 @@ mod windows_credentials;
 use native_auth::{
     AgentOperation, NativeAgentResponse, NativeAuthState, NativeAuthStatus, NativeLoginStarted,
 };
-use std::sync::Arc;
+use serde_json::Value;
+use std::sync::{Arc, OnceLock};
 use tauri::Manager;
 use uuid::Uuid;
 
 const AGENT_WINDOW_LABEL: &str = "agent";
+static NATIVE_AGENT_SESSION_ID: OnceLock<String> = OnceLock::new();
+
+fn native_agent_session_id() -> String {
+    NATIVE_AGENT_SESSION_ID
+        .get_or_init(|| Uuid::new_v4().to_string())
+        .clone()
+}
 
 fn native_authority_window(label: &str) -> bool {
     label == AGENT_WINDOW_LABEL
@@ -83,6 +91,30 @@ fn validated_digest(value: String) -> Result<String, String> {
     Ok(value.to_ascii_lowercase())
 }
 
+fn validated_locality_name(value: String) -> Result<String, String> {
+    let value = validated_text(value)?;
+    if value.len() > 255 || value.chars().any(char::is_control) {
+        return Err("native_agent_locality_invalid".to_string());
+    }
+    Ok(value)
+}
+
+fn validated_locality_geometry(
+    latitude: f64,
+    longitude: f64,
+    radius_m: u32,
+) -> Result<(f64, f64, u32), String> {
+    if !latitude.is_finite()
+        || !longitude.is_finite()
+        || !(-90.0..=90.0).contains(&latitude)
+        || !(-180.0..=180.0).contains(&longitude)
+        || !(1..=50_000).contains(&radius_m)
+    {
+        return Err("native_agent_locality_invalid".to_string());
+    }
+    Ok((latitude, longitude, radius_m))
+}
+
 async fn run_agent(
     state: Arc<NativeAuthState>,
     operation: AgentOperation,
@@ -133,6 +165,117 @@ async fn native_agent_snapshot(
 ) -> Result<NativeAgentResponse, String> {
     require_agent_window(&window)?;
     run_agent(Arc::clone(state.inner()), AgentOperation::Snapshot).await
+}
+
+#[tauri::command]
+async fn native_agent_list_initiatives(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<NativeAuthState>>,
+) -> Result<NativeAgentResponse, String> {
+    require_agent_window(&window)?;
+    run_agent(
+        Arc::clone(state.inner()),
+        AgentOperation::ListInitiatives,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn native_agent_claim_initiative(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<NativeAuthState>>,
+    initiative_id: String,
+) -> Result<NativeAgentResponse, String> {
+    require_agent_window(&window)?;
+    run_agent(
+        Arc::clone(state.inner()),
+        AgentOperation::ClaimInitiative {
+            initiative_id: validated_uuid(initiative_id)?,
+            session_id: native_agent_session_id(),
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+async fn native_agent_list_private_localities(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<NativeAuthState>>,
+) -> Result<NativeAgentResponse, String> {
+    require_agent_window(&window)?;
+    run_agent(
+        Arc::clone(state.inner()),
+        AgentOperation::ListPrivateLocalities,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn native_agent_preview_private_locality(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<NativeAuthState>>,
+    canonical_name: String,
+    latitude: f64,
+    longitude: f64,
+    radius_m: u32,
+    travel_greeting_eligible: bool,
+) -> Result<NativeAgentResponse, String> {
+    require_agent_window(&window)?;
+    let (latitude, longitude, radius_m) =
+        validated_locality_geometry(latitude, longitude, radius_m)?;
+    let confirmation_nonce = Uuid::new_v4().to_string();
+    let mut response = run_agent(
+        Arc::clone(state.inner()),
+        AgentOperation::PreviewPrivateLocality {
+            canonical_name: validated_locality_name(canonical_name)?,
+            latitude,
+            longitude,
+            radius_m,
+            travel_greeting_eligible,
+            confirmation_nonce: confirmation_nonce.clone(),
+        },
+    )
+    .await?;
+    if (200..300).contains(&response.status) {
+        let Value::Object(payload) = &mut response.payload else {
+            return Err("native_agent_response_invalid".to_string());
+        };
+        payload.insert(
+            "confirmation_nonce".to_string(),
+            Value::String(confirmation_nonce),
+        );
+    }
+    Ok(response)
+}
+
+#[tauri::command]
+async fn native_agent_confirm_private_locality(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<NativeAuthState>>,
+    canonical_name: String,
+    latitude: f64,
+    longitude: f64,
+    radius_m: u32,
+    travel_greeting_eligible: bool,
+    confirmation_nonce: String,
+    preview_digest: String,
+) -> Result<NativeAgentResponse, String> {
+    require_agent_window(&window)?;
+    let (latitude, longitude, radius_m) =
+        validated_locality_geometry(latitude, longitude, radius_m)?;
+    run_agent(
+        Arc::clone(state.inner()),
+        AgentOperation::ConfirmPrivateLocality {
+            canonical_name: validated_locality_name(canonical_name)?,
+            latitude,
+            longitude,
+            radius_m,
+            travel_greeting_eligible,
+            confirmation_nonce: validated_uuid(confirmation_nonce)?,
+            preview_digest: validated_digest(preview_digest)?,
+        },
+    )
+    .await
 }
 
 #[tauri::command]
@@ -391,6 +534,11 @@ fn main() {
             native_auth_login,
             native_auth_logout,
             native_agent_snapshot,
+            native_agent_list_initiatives,
+            native_agent_claim_initiative,
+            native_agent_list_private_localities,
+            native_agent_preview_private_locality,
+            native_agent_confirm_private_locality,
             native_agent_explain_descriptor,
             native_agent_query_parent_presence,
             native_agent_set_preference,
@@ -437,6 +585,11 @@ mod tests {
             "native_auth_login",
             "native_auth_logout",
             "native_agent_snapshot",
+            "native_agent_list_initiatives",
+            "native_agent_claim_initiative",
+            "native_agent_list_private_localities",
+            "native_agent_preview_private_locality",
+            "native_agent_confirm_private_locality",
             "native_agent_explain_descriptor",
             "native_agent_query_parent_presence",
             "native_agent_set_preference",
@@ -453,8 +606,9 @@ mod tests {
             assert!(MAIN_RS.contains(command), "missing {command}");
         }
         assert!(!MAIN_RS.contains(&["fn native_agent_", "request"].concat()));
-        assert!(!MAIN_RS.contains(&["native_agent_list_", "initiatives"].concat()));
-        assert!(!MAIN_RS.contains(&["native_agent_claim_", "initiative"].concat()));
+        assert!(MAIN_RS.contains(&["native_agent_list_", "initiatives"].concat()));
+        assert!(MAIN_RS.contains(&["native_agent_claim_", "initiative"].concat()));
+        assert!(MAIN_RS.contains("NATIVE_AGENT_SESSION_ID"));
     }
 
     #[test]

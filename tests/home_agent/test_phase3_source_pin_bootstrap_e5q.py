@@ -70,9 +70,7 @@ def test_pin_normalization_rejects_missing_duplicate_and_malformed_literals() ->
 
 
 def test_source_plan_excludes_only_its_pin_file_from_the_plain_git_diff() -> None:
-    source = read(
-        "stack/home-agent-deploy/operator/phase3_activation_source_plan.py"
-    )
+    source = read("stack/home-agent-deploy/operator/phase3_activation_source_plan.py")
 
     assert "SOURCE_PIN_BOOTSTRAP_CONTRACT" in source
     assert "source_plan_matches_accepted_pin_only" in source
@@ -85,7 +83,7 @@ def test_source_pin_bootstrap_is_hosted_gate_input() -> None:
     workflow = read(".github/workflows/home-agent-e1-postgres.yml")
     runner = read("tools/run-home-agent-e1-postgres-gate.py")
 
-    assert "E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v PostgreSQL gate" in workflow
-    assert "E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v authority gate" in workflow
+    assert "E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v/E5w/E5x PostgreSQL gate" in workflow
+    assert "E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v/E5w/E5x authority gate" in workflow
     assert "test_phase3_source_pin_bootstrap_e5q.py" in workflow
     assert "test_phase3_source_pin_bootstrap_e5q.py" in runner

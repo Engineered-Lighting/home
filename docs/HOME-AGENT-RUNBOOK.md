@@ -27,9 +27,10 @@ adding broad proxy routes or mounting legacy databases.
 - A separate `/home-agent/` surface for consent, typed preview, explicit commit,
   and status, plus a Windows-native authorization-code transport with a
   pre-bound, one-time-state loopback callback isolated in its own Tauri window.
-  The deployed browser and native clients contain no initiative list, claim,
-  or presentation path. Initiative domain logic remains isolated future work,
-  not an exposed capability.
+  The browser contains no initiative list, claim, or presentation path. The
+  native client has a fixed attested list/claim path that remains disabled
+  outside an authorized canary and requires both private location choices plus
+  claim-time evidence and privacy revalidation.
 - Legacy containment: browser secrets/history are purged, model action tools
   are recursively denied, Intelligence is loopback/read-only with generated
   memory and capture off, and contentful metrics tracing is off.
@@ -302,6 +303,84 @@ preflight require the running BFF's top-level Docker image ID to match the
 reviewed value. A mutable tag alone is never provenance or deployment approval;
 any failed check leaves the current tags and services untouched.
 
+## Hosted immutable Core image handoff
+
+Ubuntu is also import-only for the Home Agent Core image. The hosted PostgreSQL
+workflow builds and smoke-tests a production candidate on every accepted source
+run, but only the `deployable-core-image` job from a successful `main` push or
+workflow-dispatch run creates a deployable artifact. A branch result is test
+evidence only. Never run Docker/Compose build or pull for Core on Ubuntu.
+
+On a trusted administration workstation, select the exact successful
+main-branch run whose head SHA is the source commit admitted by Phase 3. Download
+only `home-agent-core-image-<source-commit>`. The bundle must contain exactly:
+
+```text
+home-agent-core-linux-amd64.tar.gz
+manifest.json
+provenance.sigstore.json
+SHA256SUMS
+```
+
+Verify all three attested subjects against the exact repository, signer
+workflow, main ref, commit, and GitHub-hosted runner, then verify the checksums:
+
+```sh
+export REPO=Engineered-Lighting/home
+export WORKFLOW=.github/workflows/home-agent-e1-postgres.yml
+export SOURCE_COMMIT=REPLACE_WITH_40_CHARACTER_MAIN_COMMIT
+for subject in \
+  home-agent-core-linux-amd64.tar.gz manifest.json SHA256SUMS
+do
+  gh attestation verify "$subject" \
+    --bundle provenance.sigstore.json \
+    --repo "$REPO" \
+    --signer-workflow "$REPO/$WORKFLOW" \
+    --source-ref refs/heads/main \
+    --source-digest "$SOURCE_COMMIT" \
+    --deny-self-hosted-runners
+done
+sha256sum --strict --check SHA256SUMS
+```
+
+Parse `manifest.json` with duplicate-key rejection and require its exact schema.
+It must identify the selected repository, `refs/heads/main`, source commit,
+workflow run, `linux/amd64`, the pinned Python index
+`sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36`,
+Linux AMD64 manifest
+`sha256:d657ab0ade19f404a6ccc883ab399540de667aff751748ce23c07330c5a89e64`,
+source tag `engineered-lighting/home-agent-core:ci-<source-commit>`, deployment
+tag `engineered-lighting/home-agent-core:local`, immutable image ID, archive
+name/checksum, and revision label equal to the source commit. Any additional,
+missing, duplicated, or mismatched field rejects the bundle.
+
+Transfer the complete read-only bundle to a root-controlled directory on the
+encrypted Ubuntu volume. Re-run the checksum and exact-manifest checks there,
+archive the current `:local` image and image ID for rollback, and load only the
+verified archive. Compare the loaded source tag's top-level ID and revision
+label with the manifest before moving the deployment tag:
+
+```sh
+sudo docker image load --input home-agent-core-linux-amd64.tar.gz
+CORE_SOURCE="engineered-lighting/home-agent-core:ci-${SOURCE_COMMIT}"
+test "$(sudo docker image inspect "$CORE_SOURCE" --format '{{.Id}}')" \
+  = "$(python3 -c 'import json; print(json.load(open("manifest.json"))["image"]["image_id"])')"
+test "$(sudo docker image inspect "$CORE_SOURCE" \
+  --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" \
+  = "$SOURCE_COMMIT"
+sudo docker image tag "$CORE_SOURCE" \
+  engineered-lighting/home-agent-core:local
+test "$(sudo docker image inspect \
+  engineered-lighting/home-agent-core:local --format '{{.Id}}')" \
+  = "$(sudo docker image inspect "$CORE_SOURCE" --format '{{.Id}}')"
+```
+
+Loading and tagging do not authorize a rollout. The Phase 3 signing-material
+probe independently requires one image ID shared by API, ingest, and worker,
+recomputes the in-image schema/capability contract, and binds that ID into the
+root-only credential receipt. A failed attestation, checksum, manifest, load,
+ID, label, or shared-role check leaves the old deployment active.
+
 ## WAL continuity and staged start
 
 Validate the dedicated Compose project without building or pulling a replacement
@@ -548,6 +627,12 @@ The code and tokens never enter the webview. Treat a hostile browser extension
 or local process that can read callback URLs as outside this canary's threat
 model; leave native login disabled on an untrusted Windows profile.
 
+Before packaging or enrolling a native build, require a passing
+`home-agent-native-boundary.yml` run for its exact commit. The hosted
+`windows-2025` job uses the repository-pinned Rust 1.88.0 toolchain, verifies
+the generated private panel, checks `rustfmt`, and runs the locked Rust tests.
+Do not substitute a release workflow that skipped this boundary gate.
+
 The dedicated native web-gateway host publishes `/native-oauth-client` without
 Basic auth; that sub-10 KiB document contains the exact HA client-metadata
 redirect link and no application/session data. Exact typed native Agent routes
@@ -702,9 +787,12 @@ and is disabled with the rest of that protocol. Do not run
 `operator/provision_identity.py` as a workaround. HA-user-to-person binding
 remains unavailable until the atomic finalizer has committed reviewed People
 and the binding ceremony has a replacement read-only, receipt-bound lookup.
-Tracker binding, explicit parent facts, and the private Itaipava locality also
-remain disabled pending their separate reviewed flows. Do not use implicit
-legacy `parent` labels as `parent_of` facts.
+Tracker binding and explicit parent facts remain disabled pending their
+separate reviewed flows. After the authenticated principal binding exists in
+shadow, the enrolled native Agent may run the private-locality status and exact
+preview/confirm ceremony. Direct `/v1/places` creation is absent: never forge an
+HA UUID with a service or bootstrap credential. Do not use implicit legacy
+`parent` labels as `parent_of` facts.
 
 The operator-only `principal_binding_candidate_staging.py` compiler may be
 exercised with synthetic canonical fixtures while live services remain offline.
@@ -762,9 +850,10 @@ surface. Precise-location retention, visit projection, teaching, and both
 opt-ins remain disabled until a separately authorized canary. If an enabled
 value survived a rollback, browser and native clients retain no visit or
 principal identifiers from the snapshot and offer only a direction-fixed
-Disable control. Travel greetings also have no deployed list, claim, or
-presentation path; a separate reviewed initiative-capability gate is still
-required. A later canary place-teaching UI must still require a current
+Disable control. Travel greeting list/claim is accepted only from an enrolled,
+installation-attested native client in an authorized canary; it remains
+unreachable from browser, voice, shared displays, and every contained rollout.
+A canary place-teaching UI must still require a current
 supported visit and a second explicit preview confirmation.
 
 ## Reviewed legacy Identity Store migration
@@ -1021,7 +1110,7 @@ missing E4 activation contract. Run the preflight only from the exact reviewed
 checkout:
 
 ```sh
-cd /opt/home/home-agent-integration-test
+cd /opt/home/home-github
 sudo python3 \
   stack/home-agent-deploy/operator/phase3_activation_preflight.py
 ```
@@ -1103,6 +1192,13 @@ current erasure-gate receipt, and reviewed activation-source admission. No
 receipt writer, restore, migration, restart, or rollout mutation was run.
 
 ### Dormant E5k activation source plan
+
+> Current supersession: E5ad now implements the final split-phase runner and
+> removes the deliberate executable-boundary list from the source verifier.
+> On an exact clean, subsequently hosted-accepted pin, E5k may report
+> `source_acceptance_receipt_issuable=true`; it remains read-only and never
+> authorizes or performs a rollout itself. The historical details below explain
+> the earlier fail-closed state.
 
 E5k content-addresses the activation-relevant source that passed the hosted
 E1–E5j PostgreSQL gate. It is not the missing activation executor and cannot
@@ -1411,6 +1507,66 @@ Installing E5v does not migrate the live database, admit a document, change
 rollout mode, or enable semantic writes. The record-only evidence and off-host
 backup gates still fail closed independently.
 
+### E5ad authoritative split-phase activation runner
+
+E5ad joins the already reviewed source admission, backup, restore, erasure,
+migration, authority, writer-freeze, privacy, and private-confirmation
+boundaries without weakening any of them. It accepts only `status`, `advance`,
+or `contain`:
+
+```sh
+cd /opt/home/home-agent-integration-test
+sudo python3 \
+  stack/home-agent-deploy/operator/phase3_activation_runner.py status
+sudo python3 \
+  stack/home-agent-deploy/operator/phase3_activation_runner.py advance
+sudo python3 \
+  stack/home-agent-deploy/operator/phase3_activation_runner.py contain
+```
+
+Do not invoke `advance` from an unaccepted checkout. Before any rollout write,
+the runner requires the approved signing key-source file, Ubuntu-to-HA SSH,
+healthy current services, and the complete read-only activation preflight. It
+then issues or exactly resumes the single content-free shadow authorization,
+provisions the host-bound signing credentials, and pauses for the private
+People snapshot/review ceremony. A missing packet, incomplete review, or
+non-private finalization terminal produces a content-free pause before the
+fresh activation backup or service changes.
+
+Run `advance` from a private interactive terminal because distinct
+finalization approval requires a TTY. The runner then takes and binds a new
+local/off-host backup, performs the isolated restore and erasure checks, stops
+Agent-facing services, advances only through exact schema checkpoints, and
+commits the signed finalizer and semantic cutover. It briefly stops Home
+Assistant only for the physical legacy-writer fence and restarts it before the
+authenticated account-binding stage.
+
+The command intentionally pauses at four human boundaries:
+
+- hardware/root-bound signing key-source confirmation;
+- private People packet review/finalization;
+- authenticated HA user to Marcelo confirmation; and
+- atomic confirmation of the two reviewed parent candidates.
+
+Rerun the same `advance` command after completing the requested private action.
+The root-owned journal at
+`/srv/home-agent/private/phase3-activation/runner-state-e5ad.json` keeps only
+random identifiers, the accepted source commit, ordered step codes, attempt
+counts, and categorical pause/error codes. It contains no people, HA-user,
+relationship, coordinate, utterance, or credential data.
+
+After every staged service start, the runner requires Core API, ingest, worker,
+and BFF to become healthy and Edge ingress to be running. A failure at or after
+the Home Assistant stop boundary triggers forward-only containment: Agent
+services remain stopped and ordinary Home Assistant control is restored. It
+never reactivates the legacy semantic authority. `contain` is the manual form
+of that same safe state; it is not rollback.
+
+Successful completion writes the content-free, root-only
+`runner-completion-e5ad.json` receipt next to the journal. Completion still
+leaves location memory, travel greetings, cameras/learning, and model physical
+actions disabled; those require their later, separate milestones.
+
 ## Record-only, shadow, and canary gates
 
 Every fresh deployment starts with `HOME_AGENT_ROLLOUT_MODE=record_only`.
@@ -1428,8 +1584,9 @@ Confirm:
   and shadow, even if a stale enabled preference row survived rollback;
 - authenticated opt-out remains available in every rollout mode, while the
   clients expose no non-canary enable control;
-- private initiatives are absent from web snapshots and every deployed client;
-  no bearer-authenticated list, claim, or presentation route is accepted;
+- private initiatives are absent from web snapshots and every browser route;
+  the native list/claim path remains disabled outside authorized canary and
+  rejects a bearer without installation-bound per-request proof;
 - a tracker switch opens conflict rather than silently merging evidence;
 - stale or insufficient fixes never create a specific property anchor.
 
@@ -1521,6 +1678,78 @@ are content-free—never names, entities, payloads, or coordinates. No online
 authorization endpoint exists, and the one-shot never changes
 `HOME_AGENT_ROLLOUT_MODE`.
 
+### Phase 3 signing credential ceremony
+
+The authoritative identity activation does not accept hand-entered keys or
+operator-supplied build digests. After the source pack has passed both hosted
+acceptance gates, is pin-only admitted, and the exact Core image is installed,
+install the immutable signing bundle:
+
+```sh
+cd /opt/home/home-github
+sudo stack/home-agent-deploy/install-phase3-identity-signing.sh
+```
+
+Before the one-time credential command can run, a root operator must choose the
+hardware/root-bound systemd credential source. This is the only operator input
+and contains no key material. Prefer TPM-only binding when the platform's TPM
+is healthy; it avoids creating or copying a separate host credential secret:
+
+```sh
+sudo install -d -o root -g root -m 0750 /srv/home-agent/config
+sudoedit /srv/home-agent/config/phase3-signing-key-source-e5ae.json
+sudo chown root:root /srv/home-agent/config/phase3-signing-key-source-e5ae.json
+sudo chmod 0600 /srv/home-agent/config/phase3-signing-key-source-e5ae.json
+```
+
+The recommended canonical file is:
+
+```json
+{"contract":"phase3-signing-key-source-e5ae-v1","with_key":"tpm2"}
+```
+
+The accepted fallbacks are:
+
+```json
+{"contract":"phase3-signing-key-source-e5ae-v1","with_key":"host+tpm2"}
+```
+
+```json
+{"contract":"phase3-signing-key-source-e5ae-v1","with_key":"host"}
+```
+
+Use `host` only after explicitly accepting that a copied host credential key
+could decrypt the blobs; use `host+tpm2` when both secrets should be required.
+The provisioner runs `systemd-creds has-tpm2` before TPM-backed generation and
+fails closed if hardware sealing is unavailable. Then run:
+
+```sh
+sudo /usr/local/sbin/home-agent-provision-identity-signing-credentials
+```
+
+The command accepts no arguments. It runs an in-image, read-only probe that
+recomputes the stable Phase 2 evidence and verifies the one durable
+`record_only` to `shadow` authorization. It also checks the accepted source
+receipt, deployment policy digest, exact image ID shared by all Core roles,
+installed signing-tool manifest, source-vs-image schema digest, and migration
+capability contract. Any mismatch fails closed.
+
+Five Ed25519 purpose keys and one commitment key are generated only in memory.
+Plaintext travels to `systemd-creds encrypt` over stdin; only host-bound
+encrypted blobs are staged beneath `/etc/credstore.encrypted`. Publication is
+restart-safe: a crash before publication discards the incomplete staging set,
+while a crash after the publishing fence resumes by decrypting and hashing
+each staged or already-published blob. Existing untracked credentials are
+never overwritten.
+
+Successful provisioning writes the content-free, root-owned receipt
+`/srv/home-agent/config/phase3-identity-signing-credentials-e5ae.json`. It
+contains random IDs, public key fingerprints, source/build/policy digests, key
+epoch/source, and status only—never private key bytes, names, HA user IDs,
+coordinates, or People content. The activation runner refuses to proceed past
+live prerequisites unless this receipt matches its exact accepted source and
+all ten encrypted credentials are protected root-only regular files.
+
 Core health exposes the locked resource budget. Durable-volume free space is
 `warn` at 20%, suspends optional API mutations at 15%, and enters
 privacy-essential/read-only degraded mode at 10%; ingest then receives 507 and
@@ -1561,12 +1790,14 @@ startup. A later separately reviewed canary-authorization design must bind the
 shadow acceptance evidence without weakening this gate. Return to `shadow` or
 `record_only` on any failed gate; never reactivate legacy semantic authority.
 
-Initiative presentation is not part of the supervised canary. Per-install
-attestation narrows the remaining native typed calls but does not authorize a
-new initiative capability or its presentation policy. Deployed browser/native
-clients have no list or claim method and the BFF accepts no initiative route.
-Core may retain isolated future-domain tests for freshness, deduplication, and
-one-time claims; those tests are not deployment authority.
+Initiative presentation is the final supervised canary step, after identity,
+parent relationships, a confirmed specific-place descriptor, location-memory
+opt-in, and the separate travel-greeting opt-in. Per-install attestation narrows
+transport but does not itself authorize a greeting. Core rechecks both choices,
+privacy directives, fresh sufficient visit evidence, the exact locator, and the
+active descriptor while atomically claiming one presentation per visit. The
+browser, voice, shared-display, camera, model, and physical-action paths remain
+absent.
 
 An unresolved teaching anchor remains `needs_confirmation` with
 `location_unresolved`. The private preview shows the complete digest-bound
@@ -1687,9 +1918,10 @@ the timer.
   private HTTPS gateway configuration, plus explicit verification that the
   deployed HA authorization-code behavior still matches the documented
   no-PKCE limitation and the native-machine threat model is acceptable.
-  Semantic relationship/presence query routes remain on the exact native
-  allowlist. Initiative list/claim methods are absent from the deployed client
-  and BFF pending a separate initiative-capability and rollout review.
+  Semantic relationship/presence and consent-gated initiative list/claim routes
+  remain on the exact native allowlist. Live greeting acceptance additionally
+  requires enrolled installation attestation and the supervised canary gates;
+  source presence alone is not rollout authority.
 - Live credential rotation, firewall application, LUKS/key provisioning, HA
   OAuth registration, certificates, independently replicated backup and
   erasure-ledger destinations, seven-day observation, and human confirmations

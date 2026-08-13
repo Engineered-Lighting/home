@@ -4,6 +4,7 @@ import asyncio
 import base64
 from types import SimpleNamespace
 import uuid
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import Request
@@ -13,6 +14,7 @@ from pydantic import SecretStr, ValidationError
 from app.config import Settings
 from app.auth import ATTESTED_NATIVE_CHANNEL, require_native_service_identity
 from app.errors import AuthenticationError
+from app.maintenance import WorkerMaintenanceStatus
 from app.main import create_app
 from app.restore import RestoreGateStatus
 from app.rollout import RolloutAuthorizationStatus
@@ -26,6 +28,11 @@ class CurrentRestoreGate:
 class CurrentRolloutGate:
     async def status(self, *, force: bool = False) -> RolloutAuthorizationStatus:
         return RolloutAuthorizationStatus(True, "authorized")
+
+
+class CurrentMaintenance:
+    async def inspect(self, **_kwargs) -> WorkerMaintenanceStatus:
+        return WorkerMaintenanceStatus("current")
 
 
 def settings_for(tmp_path) -> Settings:
@@ -95,6 +102,30 @@ def test_private_initiatives_require_native_channel_attestation(tmp_path) -> Non
     app = create_app(settings_for(tmp_path).model_copy(update={"rollout_mode": "canary"}))
     app.state.restore_gate = CurrentRestoreGate()
     app.state.rollout_gate = CurrentRolloutGate()
+    app.state.maintenance_inspector = CurrentMaintenance()
+    app.state.store.resolve_principal = AsyncMock(
+        return_value={"principal_id": uuid.uuid4(), "person_id": uuid.uuid4()}
+    )
+    app.state.store.list_initiatives = AsyncMock(return_value=[])
+    initiative_id = uuid.uuid4()
+    visit_id = uuid.uuid4()
+    app.state.store.claim_initiative = AsyncMock(
+        return_value={
+            "initiative_id": initiative_id,
+            "visit_id": visit_id,
+            "state": "claimed",
+            "purpose": "travel_arrival",
+            "template_key": "travel_arrival_v1",
+            "message": "Welcome back.",
+            "expires_at": "2030-01-01T00:00:00Z",
+        }
+    )
+    native_headers = {
+        "Authorization": "Bearer service-token-with-at-least-32-chars",
+        "X-Authenticated-HA-User": "marcelo-ha-user",
+        "X-Home-Agent-Channel": ATTESTED_NATIVE_CHANNEL,
+        "X-Home-Agent-Installation": "018f6f42-3a8b-4c11-8123-123456789abc",
+    }
     with TestClient(app) as client:
         response = client.get(
             "/v1/initiatives",
@@ -105,20 +136,123 @@ def test_private_initiatives_require_native_channel_attestation(tmp_path) -> Non
         )
         contained = client.get(
             "/v1/initiatives",
-            headers={
-                "Authorization": "Bearer service-token-with-at-least-32-chars",
-                "X-Authenticated-HA-User": "marcelo-ha-user",
-                "X-Home-Agent-Channel": ATTESTED_NATIVE_CHANNEL,
-                "X-Home-Agent-Installation": (
-                    "018f6f42-3a8b-4c11-8123-123456789abc"
-                ),
+            headers=native_headers,
+        )
+        claimed = client.post(
+            f"/v1/initiatives/{initiative_id}/claim",
+            headers=native_headers,
+            json={
+                "session_id": "private-native-process-session",
+                "surface": "private_tauri",
             },
         )
 
     assert response.status_code == 401
     assert response.json()["error"]["message"] == "private native channel is required"
-    assert contained.status_code == 409
-    assert contained.json()["error"]["code"] == "capability_disabled"
+    assert contained.status_code == 200
+    assert contained.json() == []
+    app.state.store.list_initiatives.assert_awaited_once()
+    assert claimed.status_code == 200
+    assert claimed.json()["state"] == "claimed"
+    claim_args = app.state.store.claim_initiative.await_args.args
+    assert claim_args[1] == initiative_id
+    assert claim_args[2].session_id == "private-native-process-session"
+    assert claim_args[2].surface == "private_tauri"
+
+
+def test_private_locality_ceremony_requires_native_channel(tmp_path) -> None:
+    app = create_app(settings_for(tmp_path))
+    app.state.restore_gate = CurrentRestoreGate()
+    app.state.rollout_gate = CurrentRolloutGate()
+    app.state.maintenance_inspector = CurrentMaintenance()
+    principal = {"principal_id": uuid.uuid4(), "person_id": uuid.uuid4()}
+    place_id = uuid.uuid4()
+    app.state.store.resolve_principal = AsyncMock(return_value=principal)
+    app.state.store.private_locality_status = AsyncMock(
+        return_value={"state": "not_configured", "localities": []}
+    )
+    preview_digest = "a" * 64
+    app.state.store.preview_private_locality = MagicMock(
+        return_value={
+            "state": "needs_confirmation",
+            "canonical_name": "Itaipava",
+            "privacy_scope": "private",
+            "travel_greeting_eligible": True,
+            "locator": {
+                "latitude": -22.4,
+                "longitude": -43.14,
+                "radius_m": 1000,
+                "retention": "encrypted_until_erased",
+            },
+            "preview_digest": preview_digest,
+            "creates": ["one private locality"],
+            "does_not_create": ["property ownership"],
+        }
+    )
+    app.state.store.confirm_private_locality = AsyncMock(
+        return_value={
+            "state": "committed",
+            "place_id": place_id,
+            "canonical_name": "Itaipava",
+            "privacy_scope": "private",
+            "travel_greeting_eligible": True,
+        }
+    )
+    native_headers = {
+        "Authorization": "Bearer service-token-with-at-least-32-chars",
+        "X-Authenticated-HA-User": "marcelo-ha-user",
+        "X-Home-Agent-Channel": ATTESTED_NATIVE_CHANNEL,
+        "X-Home-Agent-Installation": "018f6f42-3a8b-4c11-8123-123456789abc",
+    }
+    preview_body = {
+        "canonical_name": "Itaipava",
+        "latitude": -22.4,
+        "longitude": -43.14,
+        "radius_m": 1000,
+        "travel_greeting_eligible": True,
+        "confirmation_nonce": "018f6f42-3a8b-4c11-8123-123456789abc",
+    }
+    with TestClient(app) as client:
+        rejected = client.post(
+            "/v1/private-localities/preview",
+            headers={
+                "Authorization": "Bearer service-token-with-at-least-32-chars",
+                "X-Authenticated-HA-User": "marcelo-ha-user",
+            },
+            json=preview_body,
+        )
+        status_response = client.get(
+            "/v1/private-localities", headers=native_headers
+        )
+        preview_response = client.post(
+            "/v1/private-localities/preview",
+            headers=native_headers,
+            json=preview_body,
+        )
+        confirm_response = client.post(
+            "/v1/private-localities/confirm",
+            headers=native_headers,
+            json={**preview_body, "preview_digest": preview_digest},
+        )
+        retired_direct_create = client.post(
+            "/v1/places",
+            headers={
+                **native_headers,
+                "X-Home-Agent-Bootstrap": "bootstrap-token-with-at-least-32-chars",
+            },
+            json={"place_type": "locality"},
+        )
+
+    assert rejected.status_code == 401
+    assert status_response.status_code == 200
+    assert preview_response.status_code == 200
+    assert preview_response.json()["preview_digest"] == preview_digest
+    assert confirm_response.status_code == 201
+    assert confirm_response.json()["place_id"] == str(place_id)
+    assert retired_direct_create.status_code == 404
+    app.state.store.private_locality_status.assert_awaited_once_with(principal)
+    app.state.store.preview_private_locality.assert_called_once()
+    app.state.store.confirm_private_locality.assert_awaited_once()
 
 
 def test_core_accepts_only_versioned_attested_native_channel() -> None:

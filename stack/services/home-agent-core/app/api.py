@@ -39,6 +39,7 @@ from .models import (
     IngestEnvelope,
     IngestResult,
     EdgePrivacyPolicyView,
+    InitiativeClaim,
     InitiativeSummaryView,
     InitiativeView,
     MemoryTransactionView,
@@ -57,7 +58,11 @@ from .models import (
     Phase2ReadinessView,
     Phase3ReadinessBlocker,
     Phase3ReadinessView,
-    PlaceCreate,
+    PrivateLocalityCommitView,
+    PrivateLocalityConfirmRequest,
+    PrivateLocalityPreviewRequest,
+    PrivateLocalityPreviewView,
+    PrivateLocalityStatusView,
     PreferenceUpdate,
     PrincipalBindingConfirmation,
     PrincipalBindingConfirmationView,
@@ -627,17 +632,34 @@ def semantic_router() -> APIRouter:
             lambda: store.set_preference(principal, value)
         )
 
-    @router.post("/places", status_code=status.HTTP_201_CREATED)
-    async def create_place(
-        value: PlaceCreate,
-        principal: Principal,
+    @router.post(
+        "/private-localities/preview", response_model=PrivateLocalityPreviewView
+    )
+    async def preview_private_locality(
+        value: PrivateLocalityPreviewRequest,
+        principal: NativePrincipal,
         store: Store,
-        _bootstrap: None = Depends(require_bootstrap),
-    ) -> dict[str, uuid.UUID]:
-        place_id = await store.database.run_serializable(
-            lambda: store.create_place(principal, value)
-        )
-        return {"place_id": place_id}
+    ) -> PrivateLocalityPreviewView:
+        return store.preview_private_locality(principal, value)
+
+    @router.get("/private-localities", response_model=PrivateLocalityStatusView)
+    async def private_localities(
+        principal: NativePrincipal,
+        store: Store,
+    ) -> PrivateLocalityStatusView:
+        return await store.private_locality_status(principal)
+
+    @router.post(
+        "/private-localities/confirm",
+        response_model=PrivateLocalityCommitView,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def confirm_private_locality(
+        value: PrivateLocalityConfirmRequest,
+        principal: NativePrincipal,
+        store: Store,
+    ) -> PrivateLocalityCommitView:
+        return await store.confirm_private_locality(principal, value)
 
     @router.post(
         "/visits", response_model=VisitView, status_code=status.HTTP_201_CREATED
@@ -658,11 +680,10 @@ def semantic_router() -> APIRouter:
 
     @router.get("/initiatives", response_model=list[InitiativeSummaryView])
     async def list_initiatives(
-        _service: NativeService,
+        principal: NativePrincipal,
+        store: Store,
     ) -> list[InitiativeSummaryView]:
-        raise CapabilityDisabledError(
-            "private initiative presentation requires a separate reviewed gate"
-        )
+        return await store.list_initiatives(principal)
 
     @router.get(
         "/places/{place_id}/descriptor-relationship",
@@ -800,12 +821,14 @@ def semantic_router() -> APIRouter:
     @router.post("/initiatives/{initiative_id}/claim", response_model=InitiativeView)
     async def claim_initiative(
         initiative_id: uuid.UUID,
-        _service: NativeService,
+        value: InitiativeClaim,
+        principal: NativePrincipal,
+        store: Store,
     ) -> InitiativeView:
-        del initiative_id
-        raise CapabilityDisabledError(
-            "private initiative presentation requires a separate reviewed gate"
-        )
+        # CoreStore performs the claim, revalidation, and presentation receipt
+        # in one SERIALIZABLE transaction. Do not wrap it in a second retrying
+        # transaction here.
+        return await store.claim_initiative(principal, initiative_id, value)
 
     @router.post("/facts/{fact_id}/forget-preview", response_model=ForgetPreview)
     async def preview_forget(

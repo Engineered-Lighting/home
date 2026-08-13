@@ -85,6 +85,10 @@ const ROUTES = Object.freeze([
 // NATIVE_AGENT_ROUTES through contract tests.
 const NATIVE_ROUTES = Object.freeze([
   ["GET", /^\/api\/agent\/v1\/snapshot$/],
+  ["GET", /^\/api\/agent\/v1\/initiatives$/],
+  ["POST", new RegExp(`^/api/agent/v1/initiatives/${UUID_PATH}/claim$`, "i")],
+  ["GET", /^\/api\/agent\/v1\/private-localities$/],
+  ["POST", /^\/api\/agent\/v1\/private-localities\/(preview|confirm)$/],
   ["GET", new RegExp(`^/api/agent/v1/places/${UUID_PATH}/descriptor-relationship$`, "i")],
   ["GET", new RegExp(`^/api/agent/v1/places/${UUID_PATH}/parents/current-presence$`, "i")],
   ["POST", /^\/api\/agent\/v1\/memory-transactions$/],

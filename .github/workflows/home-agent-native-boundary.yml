@@ -1,0 +1,67 @@
+name: home agent native boundary gate
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/home-agent-native-boundary.yml"
+      - "app/src-tauri/**"
+      - "app/src/home-agent/**"
+      - "app/src/vendor/babel-7.29.0/**"
+      - "rust-toolchain.toml"
+      - "tests/home_agent/test_native_attestation_deployment_contract.py"
+      - "tests/home_agent/test_panel_build_contract.py"
+      - "tests/home_agent/test_repository_contract.py"
+      - "tools/build-home-agent-panel.js"
+  push:
+    branches: [main, codex/home-agent-integration]
+    paths:
+      - ".github/workflows/home-agent-native-boundary.yml"
+      - "app/src-tauri/**"
+      - "app/src/home-agent/**"
+      - "app/src/vendor/babel-7.29.0/**"
+      - "rust-toolchain.toml"
+      - "tests/home_agent/test_native_attestation_deployment_contract.py"
+      - "tests/home_agent/test_panel_build_contract.py"
+      - "tests/home_agent/test_repository_contract.py"
+      - "tools/build-home-agent-panel.js"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: home-agent-native-boundary-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-boundary-gate:
+    runs-on: windows-2025
+    timeout-minutes: 25
+
+    steps:
+      # actions/checkout v4.3.1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Verify pinned Rust toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $release = rustc --version --verbose |
+            Select-String '^release: ' |
+            ForEach-Object { $_.Line.Substring(9) }
+          if ($release -ne "1.88.0") {
+            throw "expected rustc 1.88.0, found $release"
+          }
+          cargo --version
+
+      - name: Verify generated private Agent panel
+        run: node tools/build-home-agent-panel.js --check
+
+      - name: Verify native workflow contract
+        run: python tests/home_agent/test_home_agent_native_boundary_gate_contract.py
+
+      - name: Verify Rust formatting
+        run: cargo fmt --manifest-path app/src-tauri/Cargo.toml --check
+
+      - name: Test native authority boundary
+        run: cargo test --manifest-path app/src-tauri/Cargo.toml --locked

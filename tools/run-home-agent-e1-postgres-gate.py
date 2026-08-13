@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the E1-E5v scaffold gate against disposable PostgreSQL 17."""
+"""Run the E1-E5x scaffold gate against disposable PostgreSQL 17."""
 
 from __future__ import annotations
 
@@ -295,17 +295,23 @@ BUILD_CONTEXT_FILES = (
     "stack/home-agent-compose.yml",
     "stack/home-agent.env.example",
     "stack/services/home-agent-core/Dockerfile.postgres-test",
+    "stack/services/home-agent-core/.dockerignore",
     "stack/services/home-agent-core/alembic.ini",
     "stack/services/home-agent-core/pytest.ini",
     "stack/services/home-agent-core/requirements.txt",
+    "stack/services/home-agent-core/requirements.lock",
     "stack/services/home-agent-core/requirements-dev.txt",
+    "stack/services/home-agent-core/requirements-dev.lock",
     "stack/services/home-agent-core/docker-entrypoint.sh",
+    "stack/services/home-agent-core/Dockerfile",
     "stack/services/home-agent-bff/src/bff.mjs",
     "app/src/home-agent/api.js",
     "app/src/home-agent/panel.jsx",
     "stack/home-agent-deploy/provision-roles.sh",
     "stack/home-agent-deploy/apply-grants.sh",
     "stack/home-agent-deploy/add-binding-committer-role-secrets.sh",
+    "stack/home-agent-deploy/add-identity-finalizer-role-secrets.sh",
+    "stack/home-agent-deploy/add-identity-migration-role-secrets.sh",
     "stack/home-agent-deploy/identity-api-acl.sql",
     "stack/home-agent-deploy/IDENTITY-ERASURE-KERNEL-ROLE.md",
     "stack/home-agent-deploy/IDENTITY-CUTOVER-ROLE.md",
@@ -320,6 +326,7 @@ BUILD_CONTEXT_FILES = (
     "stack/home-agent-deploy/provision-identity-binding-kernel-role.sh",
     "stack/home-agent-deploy/provision-parent-relationship-kernel-role.sh",
     "stack/home-agent-deploy/activate-identity-authority-role.sh",
+    "stack/home-agent-deploy/policy/home-agent-mvp-v1.json",
     "stack/home-agent-deploy/postgres-pg_hba.conf",
     "stack/home-agent-deploy/test-identity-cutover-secret-lifecycle.sh",
     "tests/home_agent/test_identity_erasure_kernel_foundation_deployment_contract.py",
@@ -353,14 +360,38 @@ BUILD_CONTEXT_FILES = (
     "stack/services/home-agent-core/app/identity_erasure_schema.py",
     "stack/services/home-agent-core/app/identity_authority_executor.py",
     "stack/services/home-agent-core/app/identity_admission_writer.py",
+    "stack/services/home-agent-core/app/phase3_signing_material.py",
     "stack/home-agent-deploy/operator/reviewed_identity_payload.py",
+    "stack/home-agent-deploy/operator/migrate_legacy_identity.py",
+    "stack/home-agent-deploy/operator/identity_finalizer_compatibility.py",
+    "stack/home-agent-deploy/operator/parent_confirmation_staging.py",
     "stack/home-agent-deploy/operator/principal_binding_candidate_staging.py",
     "stack/home-agent-deploy/operator/phase3_activation_preflight.py",
+    "stack/home-agent-deploy/operator/phase3_activation_runner.py",
     "stack/home-agent-deploy/operator/phase3_activation_source_plan.py",
     "stack/home-agent-deploy/operator/phase3_activation_sequencer.py",
     "stack/home-agent-deploy/operator/phase3_migration_executor.py",
     "stack/home-agent-deploy/operator/phase3_authority_admission.py",
     "stack/home-agent-deploy/operator/phase3_identity_authority_ceremony.py",
+    "stack/home-agent-deploy/operator/phase3_reviewed_people_packet.py",
+    "stack/home-agent-deploy/operator/reviewed_identity_packet_compiler.py",
+    "stack/home-agent-deploy/operator/phase3_identity_signing_ceremony.py",
+    "stack/home-agent-deploy/operator/phase3_identity_credential_provisioner.py",
+    "stack/home-agent-deploy/operator/phase3_identity_credential_provisioner.sh",
+    "stack/home-agent-deploy/operator/phase3_identity_signing.sh",
+    "stack/home-agent-deploy/install-phase3-identity-signing.sh",
+    "stack/home-agent-deploy/operator/phase3_writer_freeze_ceremony.py",
+    "stack/home-agent-deploy/operator/phase3_writer_freeze_evidence.py",
+    "stack/home-agent-deploy/operator/phase3_privacy_cutover_ceremony.py",
+    "stack/home-agent-deploy/operator/phase3_privacy_cutover_evidence.py",
+    "stack/home-agent-deploy/operator/phase3_privacy_cutover_observer.py",
+    "stack/home-agent-deploy/operator/phase3_semantic_cutover_ceremony.py",
+    "stack/home-agent-deploy/operator/phase3_semantic_cutover_packet.py",
+    "ha-config/extended_openai_conversation/collect_legacy_identity_freeze_observation.py",
+    "ha-config/extended_openai_conversation/freeze_legacy_identity_semantics.py",
+    "ha-config/extended_openai_conversation/identity_store.py",
+    "ha-config/extended_openai_conversation/legacy_identity_fence.py",
+    "stack/home-agent-deploy/operator/phase3_capture_legacy_identity_snapshot.py",
     "stack/home-agent-deploy/operator/off_host_backup_writer.py",
     "stack/home-agent-deploy/operator/phase3_evidence_receipts.py",
     "stack/home-agent-deploy/operator/isolated_restore_drill.sh",
@@ -404,6 +435,7 @@ BUILD_CONTEXT_FILES = (
     "tests/home_agent/" "test_parent_relationship_adapter_e5g_deployment_contract.py",
     "tests/home_agent/" "test_parent_relationship_status_e5h_deployment_contract.py",
     "tests/home_agent/test_phase3_activation_preflight_e5j.py",
+    "tests/home_agent/test_phase3_activation_runner_e5ad.py",
     "tests/home_agent/test_phase3_activation_source_plan_e5k.py",
     "tests/home_agent/test_phase3_activation_sequencer_e5m.py",
     "tests/home_agent/test_identity_authority_executor_e5n.py",
@@ -413,6 +445,13 @@ BUILD_CONTEXT_FILES = (
     "tests/home_agent/test_phase3_migration_executor_e5t.py",
     "tests/home_agent/test_identity_admission_writer_e5u.py",
     "tests/home_agent/test_identity_authority_role_ceremony_e5v.py",
+    "tests/home_agent/test_phase3_reviewed_people_packet_e5x.py",
+    "tests/home_agent/test_reviewed_identity_packet_compiler_e5x.py",
+    "tests/home_agent/test_phase3_identity_signing_ceremony_e5y.py",
+    "tests/home_agent/test_phase3_identity_credential_provisioner_e5ae.py",
+    "tests/home_agent/test_phase3_privacy_cutover_observer_e5ac.py",
+    "tests/home_agent/test_collect_legacy_identity_freeze_observation_e5z.py",
+    "tests/home_agent/test_phase3_capture_legacy_identity_snapshot_e5x.py",
     "tests/home_agent/test_phase3_evidence_receipts_e5j.py",
     "tests/home_agent/test_phase3_fixed_migration_entrypoints_e5l.py",
     "stack/services/home-agent-core/tests/"
@@ -431,6 +470,7 @@ BUILD_CONTEXT_FILES = (
     ".github/workflows/home-agent-e1-postgres.yml",
 )
 BUILD_CONTEXT_TREES = (
+    "ha-config/home_agent_edge",
     "stack/services/home-agent-core/app",
     "stack/services/home-agent-core/alembic",
     "stack/services/home-agent-core/tests",
@@ -452,13 +492,21 @@ REVIEWED_CONTEXT_SUFFIXES = {
     ".yml",
 }
 REVIEWED_CONTEXT_FILENAMES = {
+    ".dockerignore",
+    "Dockerfile",
     "Dockerfile.postgres-test",
     "api.js",
     "bff.mjs",
     "home-agent.env.example",
+    "home-agent-mvp-v1.json",
+    "manifest.json",
     "off-host-backup-destination.e5o.example.json",
     "panel.jsx",
     "postgres-pg_hba.conf",
+    "requirements.lock",
+    "requirements-dev.lock",
+    "strings.json",
+    "en.json",
 }
 SENSITIVE_CONTEXT_COMPONENTS = {
     ".gnupg",
@@ -1375,9 +1423,7 @@ def _exercise_identity_authority_role_ceremony(
     script = "/workspace/stack/home-agent-deploy/activate-identity-authority-role.sh"
     environment = {
         **_client_environment(BASE_DATABASE),
-        "HOME_AGENT_PHASE3_GRANT_PERMIT_FILE": (
-            "/run/secrets/phase3_grant_permit"
-        ),
+        "HOME_AGENT_PHASE3_GRANT_PERMIT_FILE": ("/run/secrets/phase3_grant_permit"),
     }
     for authority, role, password_secret in (
         (
@@ -1430,8 +1476,8 @@ def _exercise_identity_authority_role_ceremony(
                 "-c",
                 "export PGPASSWORD=\"$(tr -d '\\r\\n' < "
                 '"$ROLE_PASSWORD_FILE")"; '
-                "test \"$(psql -AtX -v ON_ERROR_STOP=1 "
-                "-c 'SELECT current_user')\" = \"$PGUSER\"",
+                'test "$(psql -AtX -v ON_ERROR_STOP=1 '
+                '-c \'SELECT current_user\')" = "$PGUSER"',
             ],
             label=f"prove bounded E5v {authority} login",
         )
@@ -1470,9 +1516,7 @@ def _exercise_identity_authority_role_ceremony(
             check=False,
         )
         if rejected.returncode == 0:
-            raise GateFailure(
-                f"expired E5v {authority} login remained callable"
-            )
+            raise GateFailure(f"expired E5v {authority} login remained callable")
         _docker_run(
             state,
             state.test_image,
@@ -3466,29 +3510,38 @@ def _run_e4_scaffold_phase(
         phase,
         secrets_directory,
         nodes=[
+            "tests/test_private_locality.py",
+            "tests/test_postgres_vertical_slice.py::"
+            "test_complete_itaipava_commit_and_scoped_forgetting",
             "tests/test_phase3_parent_relationship_status_e5h_schema.py",
             "tests/" "test_phase3_parent_relationship_status_e5h_runtime_postgres.py",
             "/workspace/tests/home_agent/"
             "test_parent_relationship_status_e5h_deployment_contract.py",
             "/workspace/tests/home_agent/" "test_phase3_activation_preflight_e5j.py",
-            "/workspace/tests/home_agent/"
-            "test_phase3_activation_source_plan_e5k.py",
-            "/workspace/tests/home_agent/"
-            "test_phase3_activation_sequencer_e5m.py",
-            "/workspace/tests/home_agent/"
-            "test_identity_authority_executor_e5n.py",
-            "/workspace/tests/home_agent/"
-            "test_off_host_backup_writer_e5o.py",
-            "/workspace/tests/home_agent/"
-            "test_live_restore_snapshot_e5p.py",
-            "/workspace/tests/home_agent/"
-            "test_phase3_source_pin_bootstrap_e5q.py",
-            "/workspace/tests/home_agent/"
-            "test_phase3_migration_executor_e5t.py",
-            "/workspace/tests/home_agent/"
-            "test_identity_admission_writer_e5u.py",
+            "/workspace/tests/home_agent/" "test_phase3_activation_runner_e5ad.py",
+            "/workspace/tests/home_agent/" "test_phase3_activation_source_plan_e5k.py",
+            "/workspace/tests/home_agent/" "test_phase3_activation_sequencer_e5m.py",
+            "/workspace/tests/home_agent/" "test_identity_authority_executor_e5n.py",
+            "/workspace/tests/home_agent/" "test_off_host_backup_writer_e5o.py",
+            "/workspace/tests/home_agent/" "test_live_restore_snapshot_e5p.py",
+            "/workspace/tests/home_agent/" "test_phase3_source_pin_bootstrap_e5q.py",
+            "/workspace/tests/home_agent/" "test_phase3_migration_executor_e5t.py",
+            "/workspace/tests/home_agent/" "test_identity_admission_writer_e5u.py",
             "/workspace/tests/home_agent/"
             "test_identity_authority_role_ceremony_e5v.py",
+            "/workspace/tests/home_agent/" "test_phase3_reviewed_people_packet_e5x.py",
+            "/workspace/tests/home_agent/"
+            "test_reviewed_identity_packet_compiler_e5x.py",
+            "/workspace/tests/home_agent/"
+            "test_phase3_identity_signing_ceremony_e5y.py",
+            "/workspace/tests/home_agent/"
+            "test_phase3_identity_credential_provisioner_e5ae.py",
+            "/workspace/tests/home_agent/"
+            "test_phase3_privacy_cutover_observer_e5ac.py",
+            "/workspace/tests/home_agent/"
+            "test_collect_legacy_identity_freeze_observation_e5z.py",
+            "/workspace/tests/home_agent/"
+            "test_phase3_capture_legacy_identity_snapshot_e5x.py",
             "/workspace/tests/home_agent/" "test_phase3_evidence_receipts_e5j.py",
             "/workspace/tests/home_agent/"
             "test_phase3_fixed_migration_entrypoints_e5l.py",
@@ -3537,13 +3590,44 @@ def _build_test_image(state: GateState, build_context: Path) -> None:
     )
 
 
+def _run_edge_source_contracts(state: GateState) -> None:
+    """Run HA Edge contracts in isolated processes without HA or secrets."""
+
+    _run(
+        state.docker(
+            "run",
+            "--rm",
+            *_labels(state, "shared"),
+            *CLIENT_CONTAINER_LIMITS,
+            "--network",
+            "none",
+            "--read-only",
+            "--tmpfs",
+            "/tmp:size=64m,mode=1777",
+            "--cap-drop",
+            "ALL",
+            "--user",
+            "65534:65534",
+            "--workdir",
+            "/workspace",
+            state.test_image,
+            "sh",
+            "-eu",
+            "-c",
+            "python ha-config/home_agent_edge/test_edge.py && "
+            "python ha-config/home_agent_edge/test_transport.py",
+        ),
+        label="HA Edge standalone source contracts",
+        timeout=300,
+        environment=state.docker_environment,
+    )
 def main() -> int:
     try:
         _assert_execution_admitted()
     except GateFailure as error:
         print(
             "E1/E2/E3/E4 gate execution quarantine "
-            f"(E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v included): {error}",
+            f"(E5a/E5b/E5c/E5d/E5e/E5f/E5g/E5h/E5i/E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v/E5w/E5x included): {error}",
             file=sys.stderr,
         )
         return 77
@@ -3601,6 +3685,7 @@ def main() -> int:
             _write_secrets(secrets_directory)
             print("[2/8] Building the labeled pinned PostgreSQL 17 test image")
             _build_test_image(state, build_context)
+            _run_edge_source_contracts(state)
             print("[3/8] Running the production-shaped behavioral cluster")
             _run_phase(
                 state,

@@ -102,6 +102,31 @@
       if (this.invoke) return this.native("native_agent_snapshot").then((value) => this.nativePayload(value));
       return this.request("/api/agent/v1/snapshot");
     }
+    initiatives() {
+      if (!this.invoke) return Promise.reject(new Error("native_transport_required"));
+      return this.native("native_agent_list_initiatives")
+        .then((value) => this.nativePayload(value));
+    }
+    claimInitiative(initiativeId) {
+      if (!this.invoke) return Promise.reject(new Error("native_transport_required"));
+      return this.native("native_agent_claim_initiative", { initiativeId })
+        .then((value) => this.nativePayload(value));
+    }
+    privateLocalities() {
+      if (!this.invoke) return Promise.reject(new Error("native_transport_required"));
+      return this.native("native_agent_list_private_localities")
+        .then((value) => this.nativePayload(value));
+    }
+    previewPrivateLocality(value) {
+      if (!this.invoke) return Promise.reject(new Error("native_transport_required"));
+      return this.native("native_agent_preview_private_locality", value)
+        .then((response) => this.nativePayload(response));
+    }
+    confirmPrivateLocality(value) {
+      if (!this.invoke) return Promise.reject(new Error("native_transport_required"));
+      return this.native("native_agent_confirm_private_locality", value)
+        .then((response) => this.nativePayload(response));
+    }
     onboardingStatus() {
       if (this.invoke) return Promise.reject(new Error("native_onboarding_status_unavailable"));
       return this.request("/api/agent/v1/onboarding/status");

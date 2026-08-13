@@ -239,9 +239,14 @@ def test_non_canary_health_reports_location_disabled_but_opt_out_available(
     assert capabilities["location_retention"] == "disabled"
     assert capabilities["preference_opt_in"] == "disabled"
     assert capabilities["preference_opt_out"] == "enabled"
+    assert capabilities["private_locality_approval"] == (
+        "attested_native_confirmation_gated"
+        if rollout_mode == "shadow"
+        else "disabled"
+    )
 
 
-def test_canary_health_keeps_private_initiatives_disabled(
+def test_canary_health_advertises_attested_native_initiatives(
     tmp_path, monkeypatch
 ) -> None:
     app = main_module.create_app(_api_settings(tmp_path, rollout_mode="canary"))
@@ -259,7 +264,11 @@ def test_canary_health_keeps_private_initiatives_disabled(
     assert capabilities["location_retention"] == "principal_consent_gated"
     assert capabilities["preference_opt_in"] == "principal_consent_gated"
     assert capabilities["preference_opt_out"] == "enabled"
-    assert capabilities["private_initiatives"] == "disabled"
+    assert (
+        capabilities["private_locality_approval"]
+        == "attested_native_confirmation_gated"
+    )
+    assert capabilities["private_initiatives"] == "attested_native_consent_gated"
 
 
 def test_shadow_trusted_mutation_is_gated_but_partial_credentials_keep_401(

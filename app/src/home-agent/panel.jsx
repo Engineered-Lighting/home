@@ -52,6 +52,7 @@ function containedPreferenceState(snapshot) {
     location_memory: snapshot?.preferences?.location_memory === true,
     travel_greetings: snapshot?.preferences?.travel_greetings === true,
     opt_out_enabled: snapshot?.capabilities?.preference_opt_out === "enabled",
+    private_locality_approval: snapshot?.capabilities?.private_locality_approval,
   });
 }
 
@@ -112,6 +113,8 @@ function HomeAgentPanel() {
   const onboardingStatusRef = useRef(null);
   const bindingStatusRef = useRef(null);
   const bindingFocusPending = useRef(false);
+  const initiativePresentationInFlight = useRef(false);
+  const initiativePresentationRetry = useRef(false);
   const [phase, setPhase] = useState("loading");
   const [session, setSession] = useState(null);
   const [onboarding, setOnboarding] = useState(null);
@@ -128,6 +131,19 @@ function HomeAgentPanel() {
   const [transaction, setTransaction] = useState(null);
   const [correctionText, setCorrectionText] = useState(DEFAULT_DESCRIPTOR_TEXT);
   const [lifecycle, setLifecycle] = useState(null);
+  const [arrivalGreeting, setArrivalGreeting] = useState(null);
+  const [arrivalGreetingDismissed, setArrivalGreetingDismissed] = useState(false);
+  const [arrivalGreetingCheck, setArrivalGreetingCheck] = useState(0);
+  const [localityStatus, setLocalityStatus] = useState(null);
+  const [localityDraft, setLocalityDraft] = useState({
+    canonicalName: "Itaipava",
+    latitude: "",
+    longitude: "",
+    radiusM: "",
+    travelGreetingEligible: false,
+  });
+  const [localityPreview, setLocalityPreview] = useState(null);
+  const [localityBusy, setLocalityBusy] = useState(false);
 
   const clearPrincipalState = () => {
     authorityGeneration.current += 1;
@@ -144,6 +160,19 @@ function HomeAgentPanel() {
     setTransaction(null);
     setCorrectionText(DEFAULT_DESCRIPTOR_TEXT);
     setLifecycle(null);
+    setArrivalGreeting(null);
+    setArrivalGreetingDismissed(false);
+    initiativePresentationRetry.current = false;
+    setLocalityStatus(null);
+    setLocalityDraft({
+      canonicalName: "Itaipava",
+      latitude: "",
+      longitude: "",
+      radiusM: "",
+      travelGreetingEligible: false,
+    });
+    setLocalityPreview(null);
+    setLocalityBusy(false);
   };
 
   const beginPrincipalOperation = () => capturePrincipalOperation(
@@ -210,6 +239,17 @@ function HomeAgentPanel() {
       }
       const nextSnapshot = await api.snapshot();
       if (!isCurrent()) return;
+      if (
+        api.invoke
+        && nextSnapshot?.capabilities?.private_locality_approval
+          === "attested_native_confirmation_gated"
+      ) {
+        const nextLocalityStatus = await api.privateLocalities();
+        if (!isCurrent()) return;
+        setLocalityStatus(nextLocalityStatus);
+      } else {
+        setLocalityStatus(null);
+      }
       if (!fullAgentCapabilityEnabled(nextSnapshot)) {
         setSnapshot(null);
         setContainedPreferences(containedPreferenceState(nextSnapshot));
@@ -218,6 +258,7 @@ function HomeAgentPanel() {
       }
       setContainedPreferences(null);
       setSnapshot(nextSnapshot);
+      setArrivalGreetingCheck((current) => current + 1);
       setPhase("ready");
     } catch (cause) {
       if (!isCurrent()) return;
@@ -257,6 +298,74 @@ function HomeAgentPanel() {
     target.focus();
   }, [phase, onboarding?.state, bindingProposal?.state]);
 
+  useEffect(() => {
+    const authorized = phase === "ready"
+      && snapshot?.capabilities?.private_initiatives === "attested_native_consent_gated"
+      && snapshot?.preferences?.location_memory === true
+      && snapshot?.preferences?.travel_greetings === true;
+    const sameVisit = !arrivalGreeting
+      || snapshot?.latest_visit?.visit_id === arrivalGreeting.visit_id;
+    if (!authorized || !sameVisit) {
+      setArrivalGreeting(null);
+      setArrivalGreetingDismissed(false);
+    }
+  }, [
+    phase,
+    snapshot?.capabilities?.private_initiatives,
+    snapshot?.preferences?.location_memory,
+    snapshot?.preferences?.travel_greetings,
+    snapshot?.latest_visit?.visit_id,
+    arrivalGreeting?.visit_id,
+  ]);
+
+  useEffect(() => {
+    if (
+      !api.invoke
+      || phase !== "ready"
+      || arrivalGreeting
+      || arrivalGreetingDismissed
+      || snapshot?.capabilities?.private_initiatives !== "attested_native_consent_gated"
+      || snapshot?.preferences?.location_memory !== true
+      || snapshot?.preferences?.travel_greetings !== true
+    ) return;
+    if (initiativePresentationInFlight.current) {
+      initiativePresentationRetry.current = true;
+      return;
+    }
+    const ticket = beginPrincipalOperation();
+    initiativePresentationInFlight.current = true;
+    (async () => {
+      try {
+        const pending = await api.initiatives();
+        const initiativeId = Array.isArray(pending) ? pending[0]?.initiative_id : null;
+        if (!initiativeId || !principalOperationCurrent(ticket)) return;
+        const claimed = await api.claimInitiative(initiativeId);
+        if (principalOperationCurrent(ticket)) setArrivalGreeting(claimed);
+      } catch (cause) {
+        // A 409 means another private native session won the one-per-visit
+        // claim. It is an expected privacy/dedupe outcome, not a user error.
+        if (principalOperationCurrent(ticket) && cause?.status !== 409) {
+          setError(cause?.message || "private_greeting_unavailable");
+        }
+      } finally {
+        initiativePresentationInFlight.current = false;
+        if (initiativePresentationRetry.current) {
+          initiativePresentationRetry.current = false;
+          setArrivalGreetingCheck((current) => current + 1);
+        }
+      }
+    })();
+  }, [
+    api,
+    phase,
+    snapshot?.capabilities?.private_initiatives,
+    snapshot?.preferences?.location_memory,
+    snapshot?.preferences?.travel_greetings,
+    arrivalGreeting,
+    arrivalGreetingDismissed,
+    arrivalGreetingCheck,
+  ]);
+
   const requestPrincipalBinding = async () => {
     const ticket = beginPrincipalOperation();
     setBindingBusy(true);
@@ -270,6 +379,83 @@ function HomeAgentPanel() {
       if (!principalOperationCurrent(ticket)) return;
       setBindingBusy(false);
       setError(cause.message || "principal_binding_request_failed");
+    }
+  };
+
+  const updateLocalityDraft = (field, value) => {
+    setLocalityDraft((current) => ({ ...current, [field]: value }));
+    setLocalityPreview(null);
+  };
+
+  const previewLocality = async () => {
+    const ticket = beginPrincipalOperation();
+    const latitude = Number(localityDraft.latitude);
+    const longitude = Number(localityDraft.longitude);
+    const radiusM = Number(localityDraft.radiusM);
+    if (
+      !localityDraft.canonicalName.trim()
+      || !Number.isFinite(latitude)
+      || !Number.isFinite(longitude)
+      || !Number.isInteger(radiusM)
+      || latitude < -90
+      || latitude > 90
+      || longitude < -180
+      || longitude > 180
+      || radiusM < 1
+      || radiusM > 50000
+    ) {
+      setError("private_locality_geometry_invalid");
+      return;
+    }
+    setLocalityBusy(true);
+    setError("");
+    try {
+      const value = await api.previewPrivateLocality({
+        canonicalName: localityDraft.canonicalName.trim(),
+        latitude,
+        longitude,
+        radiusM,
+        travelGreetingEligible: localityDraft.travelGreetingEligible,
+      });
+      if (!principalOperationCurrent(ticket)) return;
+      setLocalityPreview(value);
+    } catch (cause) {
+      if (principalOperationCurrent(ticket)) {
+        setError(cause.message || "private_locality_preview_failed");
+      }
+    } finally {
+      if (principalOperationCurrent(ticket)) setLocalityBusy(false);
+    }
+  };
+
+  const confirmLocality = async () => {
+    const ticket = beginPrincipalOperation();
+    if (
+      localityPreview?.state !== "needs_confirmation"
+      || !localityPreview?.preview_digest
+      || !localityPreview?.confirmation_nonce
+    ) return setError("private_locality_preview_invalid");
+    setLocalityBusy(true);
+    setError("");
+    try {
+      await api.confirmPrivateLocality({
+        canonicalName: localityPreview.canonical_name,
+        latitude: localityPreview.locator.latitude,
+        longitude: localityPreview.locator.longitude,
+        radiusM: localityPreview.locator.radius_m,
+        travelGreetingEligible: localityPreview.travel_greeting_eligible,
+        confirmationNonce: localityPreview.confirmation_nonce,
+        previewDigest: localityPreview.preview_digest,
+      });
+      if (!principalOperationCurrent(ticket)) return;
+      setLocalityPreview(null);
+      setLocalityBusy(false);
+      await refresh();
+    } catch (cause) {
+      if (principalOperationCurrent(ticket)) {
+        setError(cause.message || "private_locality_confirmation_failed");
+        setLocalityBusy(false);
+      }
     }
   };
 
@@ -576,6 +762,57 @@ function HomeAgentPanel() {
         </section>
       )}
 
+      {api.invoke
+        && new Set(["rollout_contained", "ready"]).has(phase)
+        && (snapshot?.capabilities?.private_locality_approval
+          || containedPreferences?.private_locality_approval)
+          === "attested_native_confirmation_gated" && (
+        <section className="agent-card" aria-live="polite" aria-busy={localityBusy}>
+          <h2>Private locality approval</h2>
+          {localityStatus?.state === "configured" ? <>
+            <p>The following reviewed private locality is configured:</p>
+            <ul>
+              {localityStatus.localities.map((locality) => (
+                <li key={locality.place_id}>
+                  {locality.canonical_name} — travel greeting eligibility {locality.travel_greeting_eligible ? "allowed" : "off"}
+                </li>
+              ))}
+            </ul>
+            <p>Eligibility is not consent. Location memory and travel greetings remain separate, default-off choices.</p>
+          </> : <>
+            <p>Approve one circular locality only in this private native window. Core encrypts the exact center and retains no ownership, residence, presence, or action claim.</p>
+            <label>Locality name
+              <input value={localityDraft.canonicalName} onChange={(event) => updateLocalityDraft("canonicalName", event.target.value)} />
+            </label>
+            <label>Latitude
+              <input type="number" min="-90" max="90" step="any" value={localityDraft.latitude} onChange={(event) => updateLocalityDraft("latitude", event.target.value)} />
+            </label>
+            <label>Longitude
+              <input type="number" min="-180" max="180" step="any" value={localityDraft.longitude} onChange={(event) => updateLocalityDraft("longitude", event.target.value)} />
+            </label>
+            <label>Radius in meters
+              <input type="number" min="1" max="50000" step="1" value={localityDraft.radiusM} onChange={(event) => updateLocalityDraft("radiusM", event.target.value)} />
+            </label>
+            <label>
+              <input type="checkbox" checked={localityDraft.travelGreetingEligible} onChange={(event) => updateLocalityDraft("travelGreetingEligible", event.target.checked)} />
+              Permit this locality to become greeting-eligible after the separate opt-ins
+            </label>
+            <button disabled={localityBusy} onClick={previewLocality}>Review exact private geometry</button>
+            {localityPreview && <>
+              <dl className="agent-grid">
+                <dt>Name</dt><dd>{localityPreview.canonical_name}</dd>
+                <dt>Exact center</dt><dd>{localityPreview.locator.latitude}, {localityPreview.locator.longitude}</dd>
+                <dt>Radius</dt><dd>{localityPreview.locator.radius_m} m</dd>
+                <dt>Retention</dt><dd>{localityPreview.locator.retention}</dd>
+                <dt>Greeting eligibility</dt><dd>{localityPreview.travel_greeting_eligible ? "allowed after opt-in" : "off"}</dd>
+              </dl>
+              <p>Does not create: {localityPreview.does_not_create.join(", ")}.</p>
+              <button disabled={localityBusy} onClick={confirmLocality}>Confirm this exact private locality</button>
+            </>}
+          </>}
+        </section>
+      )}
+
       {phase === "onboarding" && (
         <section
           className="agent-card agent-warning"
@@ -675,6 +912,14 @@ function HomeAgentPanel() {
 
       {phase === "ready" && (
         <>
+          {api.invoke && arrivalGreeting && !arrivalGreetingDismissed && (
+            <section className="agent-card" role="status" aria-live="polite">
+              <h2>Private arrival greeting</h2>
+              <p>{arrivalGreeting.message}</p>
+              <p>This was shown once for this visit after fresh location and consent were rechecked.</p>
+              <button onClick={() => setArrivalGreetingDismissed(true)}>Dismiss</button>
+            </section>
+          )}
           <section className="agent-card">
             <h2>Current snapshot</h2>
             <dl className="agent-grid">

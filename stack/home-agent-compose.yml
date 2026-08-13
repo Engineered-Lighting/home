@@ -228,6 +228,62 @@ services:
     logging:
       driver: none
 
+  provision-identity-binding-kernel-role:
+    image: "${HOME_AGENT_POSTGRES_IMAGE:-postgres:17.10-bookworm@sha256:17b6c778de50f4bb9a878c36e736110fbcd9b7020377d6fdfdf20f7c0347e40a}"
+    platform: linux/amd64
+    profiles: [operator]
+    restart: "no"
+    entrypoint:
+      ["/bin/sh", "/deploy/provision-identity-binding-kernel-role.sh"]
+    environment:
+      PGHOST: postgres
+      PGDATABASE: home_agent
+      PGUSER: home_agent_owner
+      POSTGRES_OWNER_PASSWORD_FILE: /run/secrets/postgres_owner_password
+    secrets:
+      - source: postgres_owner_password_identity_binding_kernel_provision
+        target: postgres_owner_password
+    volumes:
+      - ./home-agent-deploy:/deploy:ro
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    tmpfs: [/tmp:size=16m,mode=1777]
+    networks: [postgres-net]
+    depends_on:
+      postgres: {condition: service_healthy}
+    mem_limit: 128m
+    pids_limit: 64
+    logging: {driver: none}
+
+  provision-parent-relationship-kernel-role:
+    image: "${HOME_AGENT_POSTGRES_IMAGE:-postgres:17.10-bookworm@sha256:17b6c778de50f4bb9a878c36e736110fbcd9b7020377d6fdfdf20f7c0347e40a}"
+    platform: linux/amd64
+    profiles: [operator]
+    restart: "no"
+    entrypoint:
+      ["/bin/sh", "/deploy/provision-parent-relationship-kernel-role.sh"]
+    environment:
+      PGHOST: postgres
+      PGDATABASE: home_agent
+      PGUSER: home_agent_owner
+      POSTGRES_OWNER_PASSWORD_FILE: /run/secrets/postgres_owner_password
+    secrets:
+      - source: postgres_owner_password_parent_relationship_kernel_provision
+        target: postgres_owner_password
+    volumes:
+      - ./home-agent-deploy:/deploy:ro
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    tmpfs: [/tmp:size=16m,mode=1777]
+    networks: [postgres-net]
+    depends_on:
+      postgres: {condition: service_healthy}
+    mem_limit: 128m
+    pids_limit: 64
+    logging: {driver: none}
+
   migrate:
     <<: *core-service
     restart: "no"
@@ -714,6 +770,8 @@ secrets:
   phase3_grant_permit_identity_role_activation: {file: "${HOME_AGENT_PHASE3_GRANT_PERMIT_PATH:-/srv/home-agent/config/phase3-grant-permit-e5m.txt}"}
   postgres_owner_password_identity_cutover_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-identity-cutover-roles/postgres_owner_password"}
   postgres_identity_cutover_password_identity_cutover_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-identity-cutover-roles/postgres_identity_cutover_password"}
+  postgres_owner_password_identity_binding_kernel_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-identity-binding-kernel-role/postgres_owner_password"}
+  postgres_owner_password_parent_relationship_kernel_provision: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/provision-parent-relationship-kernel-role/postgres_owner_password"}
   database_url_owner_migrate: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/migrate/database_url"}
   database_url_api_core_api: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-api/database_url"}
   database_url_binding_operator_core_api: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-api/operator_database_url"}

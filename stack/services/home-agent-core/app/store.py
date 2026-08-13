@@ -66,6 +66,14 @@ from .models import (
     PersonCreate,
     PersonView,
     PlaceCreate,
+    PlaceLocatorInput,
+    PrivateLocalityCommitView,
+    PrivateLocalityConfirmRequest,
+    PrivateLocalityLocatorPreview,
+    PrivateLocalityPreviewRequest,
+    PrivateLocalityPreviewView,
+    PrivateLocalityStatusView,
+    PrivateLocalitySummaryView,
     PreferenceUpdate,
     PrincipalBindingConfirmation,
     PrincipalBindingConfirmationView,
@@ -3608,6 +3616,8 @@ class CoreStore:
             )
         if value.place_type == "locality" and value.locator is None:
             raise ConflictError("a reviewed locality requires an encrypted locator")
+        if value.parent_place_id is not None or value.privacy_scope != "private":
+            raise ConflictError("a reviewed locality must be a root private place")
         place_id = uuid7()
         locator_id = uuid7() if value.locator else None
         sealed_locator = (
@@ -3629,21 +3639,72 @@ class CoreStore:
         async with self.database.transaction(
             principal_id=principal["principal_id"], serializable=True
         ) as connection:
+            existing_localities = (
+                (
+                    await connection.execute(
+                        select(
+                            schema.places.c.canonical_name,
+                            schema.place_locators.c.locator_id,
+                            schema.place_locators.c.nonce,
+                            schema.place_locators.c.ciphertext,
+                            schema.place_locators.c.locator_sha256,
+                            schema.place_locators.c.radius_m,
+                        )
+                        .select_from(
+                            schema.places.join(
+                                schema.place_locators,
+                                schema.place_locators.c.place_id
+                                == schema.places.c.place_id,
+                            )
+                        )
+                        .where(
+                            schema.places.c.owner_principal_id
+                            == principal["principal_id"],
+                            schema.places.c.place_type == "locality",
+                            schema.places.c.status == "active",
+                            func.upper(schema.place_locators.c.valid_range).is_(None),
+                        )
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            for existing in existing_localities:
+                if str(existing["canonical_name"] or "").casefold() == (
+                    value.canonical_name.casefold()
+                ):
+                    raise ConflictError("an active locality with that name exists")
+                try:
+                    decoded = json.loads(
+                        self.knowledge_cipher.open(
+                            SealedValue(
+                                nonce=bytes(existing["nonce"]),
+                                ciphertext=bytes(existing["ciphertext"]),
+                                sha256=existing["locator_sha256"],
+                            ),
+                            purpose="place-locator",
+                            artifact_id=str(existing["locator_id"]),
+                        )
+                    )
+                    distance = haversine_m(
+                        float(value.locator.latitude),
+                        float(value.locator.longitude),
+                        float(decoded["latitude"]),
+                        float(decoded["longitude"]),
+                    )
+                except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                    raise ConflictError(
+                        "existing private locality geometry is unavailable"
+                    ) from exc
+                if distance <= float(value.locator.radius_m) + float(
+                    existing["radius_m"]
+                ):
+                    raise ConflictError("private locality geometry overlaps")
             confirmation_artifact_id = await self._mint_authenticated_confirmation(
                 connection,
                 principal_id=principal["principal_id"],
                 purpose="private_locality.confirm",
-                proposal_digest=sha256_json(
-                    {
-                        "canonical_name": value.canonical_name,
-                        "place_type": value.place_type,
-                        "privacy_scope": value.privacy_scope,
-                        "travel_greeting_eligible": value.travel_greeting_eligible,
-                        "locator": value.locator.model_dump(mode="json")
-                        if value.locator
-                        else None,
-                    }
-                ),
+                proposal_digest=self._private_locality_digest(value),
                 client_nonce=value.locator.confirmation_artifact_id,
             )
             await connection.execute(
@@ -3708,6 +3769,123 @@ class CoreStore:
                     ],
                 )
         return place_id
+
+    @staticmethod
+    def _private_locality_place(
+        value: PrivateLocalityPreviewRequest | PrivateLocalityConfirmRequest,
+    ) -> PlaceCreate:
+        return PlaceCreate(
+            canonical_name=value.canonical_name,
+            place_type="locality",
+            privacy_scope="private",
+            locator=PlaceLocatorInput(
+                latitude=value.latitude,
+                longitude=value.longitude,
+                radius_m=value.radius_m,
+                confirmation_artifact_id=value.confirmation_nonce,
+            ),
+            travel_greeting_eligible=value.travel_greeting_eligible,
+        )
+
+    @staticmethod
+    def _private_locality_digest(value: PlaceCreate) -> str:
+        return sha256_json(
+            {
+                "canonical_name": value.canonical_name,
+                "place_type": value.place_type,
+                "privacy_scope": value.privacy_scope,
+                "travel_greeting_eligible": value.travel_greeting_eligible,
+                "locator": (
+                    value.locator.model_dump(mode="json") if value.locator else None
+                ),
+            }
+        )
+
+    def preview_private_locality(
+        self,
+        principal: dict[str, Any],
+        value: PrivateLocalityPreviewRequest,
+    ) -> PrivateLocalityPreviewView:
+        self._require_rollout("shadow", "private_locality_approval")
+        if not principal.get("principal_id") or not principal.get("person_id"):
+            raise ForbiddenError("confirmed principal is required")
+        place = self._private_locality_place(value)
+        return PrivateLocalityPreviewView(
+            state="needs_confirmation",
+            canonical_name=place.canonical_name,
+            privacy_scope="private",
+            travel_greeting_eligible=place.travel_greeting_eligible,
+            locator=PrivateLocalityLocatorPreview(
+                latitude=value.latitude,
+                longitude=value.longitude,
+                radius_m=value.radius_m,
+                retention="encrypted_until_erased",
+            ),
+            preview_digest=self._private_locality_digest(place),
+            creates=[
+                "one private locality",
+                "one envelope-encrypted circular locator",
+            ],
+            does_not_create=[
+                "property ownership",
+                "residence",
+                "current person presence",
+                "permission for physical action",
+            ],
+        )
+
+    async def private_locality_status(
+        self,
+        principal: dict[str, Any],
+    ) -> PrivateLocalityStatusView:
+        self._require_rollout("shadow", "private_locality_approval")
+        async with self.database.transaction(
+            principal_id=principal["principal_id"]
+        ) as connection:
+            rows = (
+                (
+                    await connection.execute(
+                        select(
+                            schema.places.c.place_id,
+                            schema.places.c.canonical_name,
+                            schema.places.c.travel_greeting_eligible,
+                        )
+                        .where(
+                            schema.places.c.owner_principal_id
+                            == principal["principal_id"],
+                            schema.places.c.place_type == "locality",
+                            schema.places.c.privacy_scope == "private",
+                            schema.places.c.status == "active",
+                        )
+                        .order_by(schema.places.c.created_at, schema.places.c.place_id)
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        localities = [PrivateLocalitySummaryView(**dict(row)) for row in rows]
+        return PrivateLocalityStatusView(
+            state="configured" if localities else "not_configured",
+            localities=localities,
+        )
+
+    async def confirm_private_locality(
+        self,
+        principal: dict[str, Any],
+        value: PrivateLocalityConfirmRequest,
+    ) -> PrivateLocalityCommitView:
+        preview = self.preview_private_locality(principal, value)
+        if not hmac.compare_digest(preview.preview_digest, value.preview_digest):
+            raise ConflictError("private locality preview digest changed")
+        place = self._private_locality_place(value)
+        place_id = await self.create_place(principal, place)
+        return PrivateLocalityCommitView(
+            state="committed",
+            place_id=place_id,
+            canonical_name=place.canonical_name,
+            privacy_scope="private",
+            travel_greeting_eligible=place.travel_greeting_eligible,
+        )
 
     async def create_visit(
         self, principal: dict[str, Any], value: VisitCreate
@@ -5267,11 +5445,19 @@ class CoreStore:
                 # Authenticated opt-out is privacy-essential and survives a
                 # rollback even when every corresponding capability is off.
                 "preference_opt_out": "enabled",
-                # Installation attestation narrows native transport; it does
-                # not authorize initiative presentation. The store retains
-                # synthetic domain methods for future review, but deployed
-                # API routes and capability discovery stay locked off.
-                "private_initiatives": "disabled",
+                "private_locality_approval": (
+                    "attested_native_confirmation_gated"
+                    if self.settings.rollout_mode in {"shadow", "canary"}
+                    else "disabled"
+                ),
+                # Discovery is safe in the principal snapshot, but listing or
+                # claiming still requires the separately attested native API,
+                # both explicit preferences, and claim-time evidence checks.
+                "private_initiatives": (
+                    "attested_native_consent_gated"
+                    if self.settings.rollout_mode == "canary"
+                    else "disabled"
+                ),
                 "physical_actions": "disabled",
                 "active_room": "disabled",
                 "learning": "disabled",

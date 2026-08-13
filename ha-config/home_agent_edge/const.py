@@ -30,6 +30,9 @@ DEFAULT_ENTITY_IDS = (
 DEFAULT_SPOOL_PATH = "/tmp/home_agent_edge/runtime.sqlite"
 DEFAULT_SPOOL_KEY_PATH = "/config/.storage/home_agent_edge_spool.key"
 DEFAULT_EDGE_TOKEN_PATH = "/config/secrets/home_agent_edge_token"
+DEFAULT_PRIVACY_RECEIPT_PATH = (
+    "/config/.storage/home_agent_edge_privacy_policy_receipt.json"
+)
 DEFAULT_SPOOL_MAX_BYTES = 100 * 1024 * 1024
 DEFAULT_SPOOL_MAX_AGE_SECONDS = 24 * 60 * 60
 DELIVERY_INTERVAL_SECONDS = 5

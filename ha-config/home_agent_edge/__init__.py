@@ -10,6 +10,7 @@ from typing import Any
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.event import async_track_time_interval
 
 from .const import (
@@ -29,6 +30,7 @@ from .const import (
     DATA_VIEW_REGISTERED,
     DEFAULT_SPOOL_MAX_AGE_SECONDS,
     DEFAULT_SPOOL_MAX_BYTES,
+    DEFAULT_PRIVACY_RECEIPT_PATH,
     DELIVERY_BATCH_SIZE,
     DELIVERY_INTERVAL_SECONDS,
     DOMAIN,
@@ -39,7 +41,7 @@ from .const import (
 from .crypto import EncryptedEnvelopeCodec
 from .model import EdgePolicy
 from .outbox import EdgeOutbox
-from .runtime import EdgeRuntime
+from .runtime import CorePrivacyPolicyUnavailable, EdgeRuntime
 from .transport import MutualTLSTransport
 
 _LOGGER = logging.getLogger(__name__)
@@ -81,6 +83,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Start one durable edge stream."""
     data = {**entry.data, **entry.options}
+    runtime: EdgeRuntime | None = None
     try:
         policy = EdgePolicy.from_values(
             data[CONF_ENTITY_IDS],
@@ -100,7 +103,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             spool_path,
             codec,
             max_bytes=int(data.get(CONF_SPOOL_MAX_BYTES, DEFAULT_SPOOL_MAX_BYTES)),
-            max_age_seconds=int(data.get(CONF_SPOOL_MAX_AGE_SECONDS, DEFAULT_SPOOL_MAX_AGE_SECONDS)),
+            max_age_seconds=int(
+                data.get(CONF_SPOOL_MAX_AGE_SECONDS, DEFAULT_SPOOL_MAX_AGE_SECONDS)
+            ),
         )
         transport = MutualTLSTransport(
             data[CONF_ENDPOINT],
@@ -110,10 +115,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             edge_token_path=data[CONF_EDGE_TOKEN_PATH],
         )
         runtime = EdgeRuntime(
-            hass, policy, outbox, transport, batch_size=DELIVERY_BATCH_SIZE
+            hass,
+            policy,
+            outbox,
+            transport,
+            batch_size=DELIVERY_BATCH_SIZE,
+            privacy_receipt_path=Path(DEFAULT_PRIVACY_RECEIPT_PATH),
         )
         await runtime.async_start()
+    except CorePrivacyPolicyUnavailable as exc:
+        if runtime is not None:
+            await runtime.async_close()
+        # A receiver reboot or network outage is temporary. ConfigEntryNotReady
+        # lets HA retry with bounded backoff and recover without a manual reload.
+        raise ConfigEntryNotReady("Home Agent Core is temporarily unavailable") from exc
     except Exception as exc:
+        if runtime is not None:
+            await runtime.async_close()
         _LOGGER.error("Home Agent Edge setup failed closed: %s", type(exc).__name__)
         return False
 
@@ -141,9 +159,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-def _load_spool_codec(
-    spool_path: Path, spool_key_path: Path
-) -> EncryptedEnvelopeCodec:
+def _load_spool_codec(spool_path: Path, spool_key_path: Path) -> EncryptedEnvelopeCodec:
     if spool_path.exists() and not spool_key_path.exists():
         raise RuntimeError("encrypted spool exists but its key is unavailable")
     return EncryptedEnvelopeCodec.from_key_file(spool_key_path)

@@ -192,7 +192,9 @@ Core semantic API (the BFF exposes only its narrower explicit allowlist):
 - `POST /v1/source-entity-bindings` (no-write `capability_disabled` tombstone
   until database provenance constraints exist)
 - `PUT /v1/preferences/{key}` (disable in every rollout; enable only in canary)
-- `POST /v1/places`
+- `GET /v1/private-localities` (attested native only)
+- `POST /v1/private-localities/preview` (attested native only)
+- `POST /v1/private-localities/confirm` (attested native only)
 - `POST /v1/visits`
 - `POST /v1/memory-transactions` (typed Itaipava descriptor proposal)
 - `GET /v1/memory-transactions/{id}`
@@ -389,9 +391,10 @@ An insufficient property anchor keeps its teaching transaction in
 encrypted-locator retention summary covered by its digest, but confirmation is
 blocked until the client obtains precise evidence and creates a fresh preview.
 
-People creation, direct place/visit creation, and legacy imports are not BFF
-routes. They require the appropriate reviewed offline operator/migration
-workflow. Source-entity binding is disabled rather than delegated to an unsafe
+People creation, direct place creation, direct visit creation, and legacy
+imports are not BFF routes. Private locality authority uses only the enrolled
+native exact-preview/confirm ceremony; properties still require teaching and
+visits remain evidence-derived. Source-entity binding is disabled rather than delegated to an unsafe
 offline shortcut. Direct principal binding no longer exists:
 authenticated subjects can request, inspect, and cancel through exact BFF
 routes; confirmation is a no-body/no-store tombstone. Proposal staging uses the separate

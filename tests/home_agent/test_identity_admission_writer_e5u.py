@@ -11,19 +11,10 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-WRITER = (
-    ROOT
-    / "stack/services/home-agent-core/app/identity_admission_writer.py"
-)
-BRIDGE = (
-    ROOT
-    / "stack/home-agent-deploy/operator/phase3_authority_admission.py"
-)
+WRITER = ROOT / "stack/services/home-agent-core/app/identity_admission_writer.py"
+BRIDGE = ROOT / "stack/home-agent-deploy/operator/phase3_authority_admission.py"
 ENTRYPOINT = ROOT / "stack/services/home-agent-core/docker-entrypoint.sh"
-SOURCE_PLAN = (
-    ROOT
-    / "stack/home-agent-deploy/operator/phase3_activation_source_plan.py"
-)
+SOURCE_PLAN = ROOT / "stack/home-agent-deploy/operator/phase3_activation_source_plan.py"
 RUNNER = ROOT / "tools/run-home-agent-e1-postgres-gate.py"
 WORKFLOW = ROOT / ".github/workflows/home-agent-e1-postgres.yml"
 
@@ -117,9 +108,15 @@ def test_cutover_request_derives_only_content_minimized_parameters() -> None:
 @pytest.mark.parametrize(
     "mutator",
     (
-        lambda raw: raw.replace(b'"semantic_generation":"1"', b'"semantic_generation":"01"'),
-        lambda raw: raw.replace(b'"authority_scope":"identity_semantics"', b'"authority_scope":"other"'),
-        lambda raw: raw.replace(b'"verifier_bundle_digest":"eae0', b'"verifier_bundle_digest":"0ae0'),
+        lambda raw: raw.replace(
+            b'"semantic_generation":"1"', b'"semantic_generation":"01"'
+        ),
+        lambda raw: raw.replace(
+            b'"authority_scope":"identity_semantics"', b'"authority_scope":"other"'
+        ),
+        lambda raw: raw.replace(
+            b'"verifier_bundle_digest":"eae0', b'"verifier_bundle_digest":"0ae0'
+        ),
         lambda raw: raw[:-1] + b',"admission_id":"duplicate"}',
     ),
 )
@@ -141,8 +138,7 @@ def test_cutover_request_fails_closed_on_drift(mutator) -> None:
 def test_writer_database_url_is_pinned_to_owner(monkeypatch) -> None:
     module = _module()
     expected = (
-        f"postgresql+psycopg://home_agent_owner:{'a' * 64}"
-        "@postgres:5432/home_agent"
+        f"postgresql+psycopg://home_agent_owner:{'a' * 64}" "@postgres:5432/home_agent"
     )
     monkeypatch.setenv("HOME_AGENT_DATABASE_URL", expected)
     assert module.database_url() == expected
@@ -203,5 +199,5 @@ def test_e5u_is_carried_by_the_filtered_hosted_gate() -> None:
     assert "phase3_authority_admission.py" in runner
     assert "test_identity_admission_writer_e5u.py" in runner
     assert "test_identity_admission_writer_e5u.py" in workflow
-    assert "E5t/E5u/E5v PostgreSQL gate" in workflow
-    assert "E5t/E5u/E5v authority gate" in workflow
+    assert "E5t/E5u/E5v/E5w/E5x PostgreSQL gate" in workflow
+    assert "E5t/E5u/E5v/E5w/E5x authority gate" in workflow

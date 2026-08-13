@@ -38,8 +38,7 @@ COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 RUN_ID = re.compile(r"^[1-9][0-9]{5,19}$")
 MAX_JSON_BYTES = 64 * 1024
 GRANT_PERMIT_VALUE = (
-    f"{GRANT_PERMIT_CONTRACT}:"
-    "0017_authenticated_binding_e5c:0021_parent_status_e5h"
+    f"{GRANT_PERMIT_CONTRACT}:" "0017_authenticated_binding_e5c:0021_parent_status_e5h"
 )
 ACTIVATION_SEQUENCE = (
     "validate_e5j_preflight",
@@ -203,7 +202,7 @@ def grant_contract_installed() -> bool:
     except OSError:
         return False
     required_grants = (
-        'HOME_AGENT_PHASE3_GRANT_PERMIT_FILE',
+        "HOME_AGENT_PHASE3_GRANT_PERMIT_FILE",
         '"/run/phase3-activation/permit"',
         GRANT_PERMIT_VALUE,
         "phase3 grant activation permit is not mounted",
@@ -225,6 +224,8 @@ def build_source_receipt(plan: Mapping[str, Any]) -> dict[str, str]:
     if (
         plan.get("source_pack_matches_hosted_acceptance") is not True
         or plan.get("fixed_migration_entrypoints_installed") is not True
+        or plan.get("source_acceptance_receipt_issuable") is not True
+        or plan.get("blockers") != []
         or not isinstance(commit, str)
         or COMMIT_SHA.fullmatch(commit) is None
         or not isinstance(run_id, str)
@@ -301,6 +302,10 @@ def status() -> dict[str, Any]:
         ),
         "fixed_migration_entrypoints_installed": (
             plan.get("fixed_migration_entrypoints_installed") is True
+        ),
+        "activation_source_blockers": list(plan.get("blockers", [])),
+        "source_acceptance_receipt_issuable": (
+            plan.get("source_acceptance_receipt_issuable") is True
         ),
         "grant_activation_contract_installed": grant_contract_installed(),
         "source_admitted": source_admitted,

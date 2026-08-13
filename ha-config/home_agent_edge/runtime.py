@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from datetime import UTC, datetime
+import json
 import logging
+import os
+from pathlib import Path
+import secrets
 from typing import Any
 
 from homeassistant.const import EVENT_STATE_CHANGED
@@ -19,6 +24,10 @@ from .transport import MutualTLSTransport
 _LOGGER = logging.getLogger(__name__)
 
 
+class CorePrivacyPolicyUnavailable(RuntimeError):
+    """The receiver cannot currently provide its executable privacy policy."""
+
+
 class EdgeRuntime:
     """Subscribe, normalize, spool, and deliver reviewed HA events."""
 
@@ -30,6 +39,7 @@ class EdgeRuntime:
         transport: MutualTLSTransport,
         *,
         batch_size: int,
+        privacy_receipt_path: Path | None = None,
     ) -> None:
         self.hass = hass
         self._configured_policy = policy
@@ -47,14 +57,22 @@ class EdgeRuntime:
         self._privacy_policy_lock = asyncio.Lock()
         self._privacy_policy_digest: str | None = None
         self._closed = False
+        self._runtime_started = False
         self._privacy_policy_current = False
+        self._privacy_receipt_path = privacy_receipt_path
         self.last_delivery_result = DeliveryResult("not_started")
 
     async def async_start(self) -> None:
         await self.hass.async_add_executor_job(self.outbox.initialize)
+        # ssl.create_default_context, load_verify_locations, load_cert_chain,
+        # and credential reads all perform blocking filesystem work. HA 2026.8
+        # detects these calls when they occur on the event loop.
+        await self.hass.async_add_executor_job(self.transport.prepare)
         await self.transport.start()
-        if not await self._async_refresh_privacy_policy():
-            raise RuntimeError("Core privacy policy is unavailable")
+        if not await self._async_refresh_privacy_policy(log_failure=False):
+            raise CorePrivacyPolicyUnavailable(
+                "Core privacy policy is temporarily unavailable"
+            )
 
         # Subscribe before taking the startup snapshot.  A transition racing
         # the snapshot remains a distinct, time-stamped envelope; the core is
@@ -70,6 +88,7 @@ class EdgeRuntime:
         )
 
         await self.hass.async_add_executor_job(self.outbox.begin_runtime)
+        self._runtime_started = True
 
         for entity_id in sorted(self.policy.entity_ids):
             if entity_id in self.policy.blocked_entity_ids:
@@ -78,7 +97,12 @@ class EdgeRuntime:
             if state is not None:
                 await self._async_ingest(
                     EVENT_STATE_CHANGED,
-                    {"entity_id": entity_id, "old_state": None, "new_state": state, "_snapshot": True},
+                    {
+                        "entity_id": entity_id,
+                        "old_state": None,
+                        "new_state": state,
+                        "_snapshot": True,
+                    },
                     getattr(state, "context", None),
                     getattr(state, "last_updated", None),
                 )
@@ -191,15 +215,19 @@ class EdgeRuntime:
             await self.hass.async_add_executor_job(self.outbox.heartbeat)
             await self.hass.async_add_executor_job(self.outbox.maintain)
 
-    async def _async_refresh_privacy_policy(self) -> bool:
+    async def _async_refresh_privacy_policy(self, *, log_failure: bool = True) -> bool:
         if self._closed:
             return False
         # Fetch, validate, purge, and assignment are one serialized transition.
         # This prevents a slower older response from rolling back a newer policy.
         async with self._privacy_policy_lock:
-            return await self._async_refresh_privacy_policy_locked()
+            return await self._async_refresh_privacy_policy_locked(
+                log_failure=log_failure
+            )
 
-    async def _async_refresh_privacy_policy_locked(self) -> bool:
+    async def _async_refresh_privacy_policy_locked(
+        self, *, log_failure: bool = True
+    ) -> bool:
         """Refresh while the caller owns ``_privacy_policy_lock``."""
 
         try:
@@ -207,21 +235,38 @@ class EdgeRuntime:
             updated = self._configured_policy.with_core_privacy_policy(document)
             digest = str(document["policy_digest"])
             if digest != self._privacy_policy_digest:
-                await self.hass.async_add_executor_job(
+                purged_payload_count = await self.hass.async_add_executor_job(
                     self.outbox.suppress_privacy_subjects,
                     set(updated.blocked_entity_ids),
                     set(updated.blocked_user_ids),
                 )
+                if type(purged_payload_count) is not int or purged_payload_count < 0:
+                    raise ValueError("edge privacy purge result is invalid")
                 self.policy = updated
                 self._privacy_policy_digest = digest
+                purge_result = "purged_before_accept"
+            else:
+                purged_payload_count = 0
+                purge_result = "unchanged_verified_policy"
+            if self._privacy_receipt_path is not None:
+                await self.hass.async_add_executor_job(
+                    _write_privacy_policy_receipt,
+                    self._privacy_receipt_path,
+                    digest,
+                    len(updated.blocked_entity_ids),
+                    len(updated.blocked_user_ids),
+                    purged_payload_count,
+                    purge_result,
+                )
             self._privacy_policy_current = True
             return True
         except Exception as exc:
             self._privacy_policy_current = False
-            _LOGGER.error(
-                "Home Agent Edge privacy policy refresh failed closed: %s",
-                type(exc).__name__,
-            )
+            if log_failure:
+                _LOGGER.error(
+                    "Home Agent Edge privacy policy refresh failed closed: %s",
+                    type(exc).__name__,
+                )
             return False
 
     async def async_close(self) -> None:
@@ -230,5 +275,83 @@ class EdgeRuntime:
             unsubscribe()
         self._unsubscribers.clear()
         await self.transport.close()
-        await self.hass.async_add_executor_job(self.outbox.end_runtime)
+        if self._runtime_started:
+            await self.hass.async_add_executor_job(self.outbox.end_runtime)
+            self._runtime_started = False
         await self.hass.async_add_executor_job(self.outbox.close)
+
+
+def _write_privacy_policy_receipt(
+    path: Path,
+    policy_digest: str,
+    blocked_entity_count: int,
+    blocked_user_count: int,
+    purged_payload_count: int,
+    purge_result: str,
+) -> None:
+    """Atomically persist only content-free proof of the accepted edge policy."""
+
+    if (
+        not isinstance(policy_digest, str)
+        or len(policy_digest) != 64
+        or any(character not in "0123456789abcdef" for character in policy_digest)
+        or type(blocked_entity_count) is not int
+        or blocked_entity_count < 0
+        or type(blocked_user_count) is not int
+        or blocked_user_count < 0
+        or type(purged_payload_count) is not int
+        or purged_payload_count < 0
+        or purge_result not in {"purged_before_accept", "unchanged_verified_policy"}
+    ):
+        raise ValueError("edge privacy receipt input is invalid")
+    parent = path.parent
+    parent_details = parent.lstat()
+    if not parent.is_dir() or parent_details.st_mode & 0o022:
+        raise PermissionError("edge privacy receipt directory is unsafe")
+    if path.exists() or path.is_symlink():
+        details = path.lstat()
+        if not path.is_file() or details.st_nlink != 1 or details.st_mode & 0o077:
+            raise PermissionError("edge privacy receipt is unsafe")
+    value = {
+        "contract": "home-agent-edge-privacy-policy-receipt-v1",
+        "policy_digest": policy_digest,
+        "blocked_entity_count": blocked_entity_count,
+        "blocked_user_count": blocked_user_count,
+        "purged_payload_count": purged_payload_count,
+        "purge_result": purge_result,
+        "refreshed_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+    }
+    raw = json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    temporary = path.with_name(f".{path.name}.new.{secrets.token_hex(12)}")
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        with os.fdopen(descriptor, "wb", closefd=True) as stream:
+            descriptor = -1
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+        directory = os.open(parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass

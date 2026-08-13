@@ -10,13 +10,8 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-EXECUTOR = (
-    ROOT / "stack/home-agent-deploy/operator/phase3_migration_executor.py"
-)
-SOURCE_PLAN = (
-    ROOT
-    / "stack/home-agent-deploy/operator/phase3_activation_source_plan.py"
-)
+EXECUTOR = ROOT / "stack/home-agent-deploy/operator/phase3_migration_executor.py"
+SOURCE_PLAN = ROOT / "stack/home-agent-deploy/operator/phase3_activation_source_plan.py"
 RUNNER = ROOT / "tools/run-home-agent-e1-postgres-gate.py"
 WORKFLOW = ROOT / ".github/workflows/home-agent-e1-postgres.yml"
 
@@ -84,9 +79,7 @@ def test_execution_orders_source_permit_stop_and_revision_guards(
         lambda now: calls.append(f"permit:{now.isoformat()}"),
     )
     monkeypatch.setattr(module, "_activation_lock", lambda: 123)
-    monkeypatch.setattr(
-        module, "_unlock_activation", lambda descriptor: None
-    )
+    monkeypatch.setattr(module, "_unlock_activation", lambda descriptor: None)
     monkeypatch.setattr(module, "_running_protected_services", lambda: frozenset())
     monkeypatch.setattr(
         module, "_guard_revision", lambda revision: calls.append(f"guard:{revision}")
@@ -117,9 +110,7 @@ def test_execution_refuses_to_migrate_while_any_private_surface_runs(
     monkeypatch.setattr(module, "_require_trusted_source", lambda: {})
     monkeypatch.setattr(module, "_require_fresh_permit", lambda now: None)
     monkeypatch.setattr(module, "_activation_lock", lambda: 123)
-    monkeypatch.setattr(
-        module, "_unlock_activation", lambda descriptor: None
-    )
+    monkeypatch.setattr(module, "_unlock_activation", lambda descriptor: None)
     monkeypatch.setattr(
         module, "_running_protected_services", lambda: frozenset({"core-api"})
     )
@@ -169,5 +160,5 @@ def test_e5t_is_carried_by_the_filtered_hosted_gate() -> None:
     assert "phase3_migration_executor.py" in runner
     assert "test_phase3_migration_executor_e5t.py" in runner
     assert "test_phase3_migration_executor_e5t.py" in workflow
-    assert "E5s/E5t/E5u/E5v PostgreSQL gate" in workflow
-    assert "E5s/E5t/E5u/E5v authority gate" in workflow
+    assert "E5s/E5t/E5u/E5v/E5w/E5x PostgreSQL gate" in workflow
+    assert "E5s/E5t/E5u/E5v/E5w/E5x authority gate" in workflow

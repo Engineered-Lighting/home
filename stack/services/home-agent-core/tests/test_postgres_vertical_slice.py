@@ -35,6 +35,8 @@ from app.models import (
     PersonCreate,
     PlaceCreate,
     PlaceLocatorInput,
+    PrivateLocalityConfirmRequest,
+    PrivateLocalityPreviewRequest,
     PreferenceUpdate,
     ReviewedPersonVerify,
     SourceEntityBindingCreate,
@@ -344,20 +346,76 @@ async def test_complete_itaipava_commit_and_scoped_forgetting(tmp_path) -> None:
                 .values(enabled=False)
             )
 
-        itaipava_id = await store.create_place(
+        locality_nonce = uuid.uuid4()
+        locality_preview = store.preview_private_locality(
             principal,
-            PlaceCreate(
+            PrivateLocalityPreviewRequest(
                 canonical_name="Itaipava",
-                place_type="locality",
+                latitude=-22.4,
+                longitude=-43.14,
+                radius_m=1_000,
                 travel_greeting_eligible=True,
-                locator=PlaceLocatorInput(
-                    latitude=-22.4,
-                    longitude=-43.14,
-                    radius_m=1_000,
-                    confirmation_artifact_id=uuid.uuid4(),
-                ),
+                confirmation_nonce=locality_nonce,
             ),
         )
+        locality_commit = await store.confirm_private_locality(
+            principal,
+            PrivateLocalityConfirmRequest(
+                canonical_name="Itaipava",
+                latitude=-22.4,
+                longitude=-43.14,
+                radius_m=1_000,
+                travel_greeting_eligible=True,
+                confirmation_nonce=locality_nonce,
+                preview_digest=locality_preview.preview_digest,
+            ),
+        )
+        itaipava_id = locality_commit.place_id
+        locality_status = await store.private_locality_status(principal)
+        assert locality_status.state == "configured"
+        assert [item.canonical_name for item in locality_status.localities] == [
+            "Itaipava"
+        ]
+        with pytest.raises(ConflictError, match="that name exists"):
+            duplicate_nonce = uuid.uuid4()
+            duplicate = PrivateLocalityConfirmRequest(
+                canonical_name="itaipava",
+                latitude=-21.0,
+                longitude=-42.0,
+                radius_m=500,
+                confirmation_nonce=duplicate_nonce,
+                preview_digest=store.preview_private_locality(
+                    principal,
+                    PrivateLocalityPreviewRequest(
+                        canonical_name="itaipava",
+                        latitude=-21.0,
+                        longitude=-42.0,
+                        radius_m=500,
+                        confirmation_nonce=duplicate_nonce,
+                    ),
+                ).preview_digest,
+            )
+            await store.confirm_private_locality(principal, duplicate)
+        with pytest.raises(ConflictError, match="geometry overlaps"):
+            overlap_nonce = uuid.uuid4()
+            overlap = PrivateLocalityConfirmRequest(
+                canonical_name="Neighbor locality",
+                latitude=-22.4001,
+                longitude=-43.1401,
+                radius_m=500,
+                confirmation_nonce=overlap_nonce,
+                preview_digest=store.preview_private_locality(
+                    principal,
+                    PrivateLocalityPreviewRequest(
+                        canonical_name="Neighbor locality",
+                        latitude=-22.4001,
+                        longitude=-43.1401,
+                        radius_m=500,
+                        confirmation_nonce=overlap_nonce,
+                    ),
+                ).preview_digest,
+            )
+            await store.confirm_private_locality(principal, overlap)
         start = datetime.now(UTC) - timedelta(minutes=11)
         location_envelopes = []
         for sequence, observed_at, latitude in (
@@ -2772,6 +2830,14 @@ async def test_rollout_rollback_suppresses_stale_location_and_keeps_opt_out(
         assert canary_snapshot.capabilities["location_visits"] == "enabled"
         assert canary_snapshot.capabilities["preference_opt_in"] == "enabled"
         assert canary_snapshot.capabilities["preference_opt_out"] == "enabled"
+        assert (
+            canary_snapshot.capabilities["private_locality_approval"]
+            == "attested_native_confirmation_gated"
+        )
+        assert (
+            canary_snapshot.capabilities["private_initiatives"]
+            == "attested_native_consent_gated"
+        )
 
         for contained_mode in ("record_only", "shadow"):
             contained_store = CoreStore(
@@ -2793,6 +2859,11 @@ async def test_rollout_rollback_suppresses_stale_location_and_keeps_opt_out(
             assert contained_snapshot.capabilities["location_visits"] == "disabled"
             assert contained_snapshot.capabilities["preference_opt_in"] == "disabled"
             assert contained_snapshot.capabilities["preference_opt_out"] == "enabled"
+            assert contained_snapshot.capabilities["private_locality_approval"] == (
+                "attested_native_confirmation_gated"
+                if contained_mode == "shadow"
+                else "disabled"
+            )
     finally:
         await _reset_test_authority(database)
         spool.close()

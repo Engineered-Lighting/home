@@ -238,6 +238,29 @@ pub struct NativeAgentResponse {
 
 pub enum AgentOperation {
     Snapshot,
+    ListInitiatives,
+    ClaimInitiative {
+        initiative_id: String,
+        session_id: String,
+    },
+    ListPrivateLocalities,
+    PreviewPrivateLocality {
+        canonical_name: String,
+        latitude: f64,
+        longitude: f64,
+        radius_m: u32,
+        travel_greeting_eligible: bool,
+        confirmation_nonce: String,
+    },
+    ConfirmPrivateLocality {
+        canonical_name: String,
+        latitude: f64,
+        longitude: f64,
+        radius_m: u32,
+        travel_greeting_eligible: bool,
+        confirmation_nonce: String,
+        preview_digest: String,
+    },
     ExplainDescriptor {
         place_id: String,
     },
@@ -292,6 +315,67 @@ impl AgentOperation {
         use serde_json::json;
         match self {
             Self::Snapshot => (Method::GET, "/api/agent/native/v1/snapshot".into(), None),
+            Self::ListInitiatives => (
+                Method::GET,
+                "/api/agent/native/v1/initiatives".into(),
+                None,
+            ),
+            Self::ClaimInitiative {
+                initiative_id,
+                session_id,
+            } => (
+                Method::POST,
+                format!("/api/agent/native/v1/initiatives/{initiative_id}/claim"),
+                Some(json!({
+                    "session_id": session_id,
+                    "surface": "private_tauri",
+                })),
+            ),
+            Self::ListPrivateLocalities => (
+                Method::GET,
+                "/api/agent/native/v1/private-localities".into(),
+                None,
+            ),
+            Self::PreviewPrivateLocality {
+                canonical_name,
+                latitude,
+                longitude,
+                radius_m,
+                travel_greeting_eligible,
+                confirmation_nonce,
+            } => (
+                Method::POST,
+                "/api/agent/native/v1/private-localities/preview".into(),
+                Some(json!({
+                    "canonical_name": canonical_name,
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "radius_m": radius_m,
+                    "travel_greeting_eligible": travel_greeting_eligible,
+                    "confirmation_nonce": confirmation_nonce,
+                })),
+            ),
+            Self::ConfirmPrivateLocality {
+                canonical_name,
+                latitude,
+                longitude,
+                radius_m,
+                travel_greeting_eligible,
+                confirmation_nonce,
+                preview_digest,
+            } => (
+                Method::POST,
+                "/api/agent/native/v1/private-localities/confirm".into(),
+                Some(json!({
+                    "canonical_name": canonical_name,
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "radius_m": radius_m,
+                    "travel_greeting_eligible": travel_greeting_eligible,
+                    "confirmation_nonce": confirmation_nonce,
+                    "preview_digest": preview_digest,
+                })),
+            ),
             Self::ExplainDescriptor { place_id } => (
                 Method::GET,
                 format!("/api/agent/native/v1/places/{place_id}/descriptor-relationship"),
@@ -1385,7 +1469,49 @@ mod tests {
         }
         .into_request();
         assert_eq!(path, "/api/agent/native/v1/facts/id/forget-preview");
-        assert!(!path.contains("initiatives"));
+        let (method, path, body) = AgentOperation::ListInitiatives.into_request();
+        assert_eq!(method, Method::GET);
+        assert_eq!(path, "/api/agent/native/v1/initiatives");
+        assert!(body.is_none());
+        let (method, path, body) = AgentOperation::ClaimInitiative {
+            initiative_id: "initiative-id".into(),
+            session_id: "process-session-id".into(),
+        }
+        .into_request();
+        assert_eq!(method, Method::POST);
+        assert_eq!(
+            path,
+            "/api/agent/native/v1/initiatives/initiative-id/claim"
+        );
+        assert_eq!(
+            body,
+            Some(serde_json::json!({
+                "session_id": "process-session-id",
+                "surface": "private_tauri",
+            }))
+        );
+        let (method, path, body) = AgentOperation::PreviewPrivateLocality {
+            canonical_name: "Itaipava".into(),
+            latitude: -22.4,
+            longitude: -43.14,
+            radius_m: 1_000,
+            travel_greeting_eligible: true,
+            confirmation_nonce: "confirmation-nonce".into(),
+        }
+        .into_request();
+        assert_eq!(method, Method::POST);
+        assert_eq!(path, "/api/agent/native/v1/private-localities/preview");
+        assert_eq!(
+            body,
+            Some(serde_json::json!({
+                "canonical_name": "Itaipava",
+                "latitude": -22.4,
+                "longitude": -43.14,
+                "radius_m": 1_000,
+                "travel_greeting_eligible": true,
+                "confirmation_nonce": "confirmation-nonce",
+            }))
+        );
     }
 
     #[test]

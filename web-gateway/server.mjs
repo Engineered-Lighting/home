@@ -172,6 +172,10 @@ const UUID_PATH = "[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0
 const NATIVE_AGENT_ROUTES = Object.freeze([
   ["POST", /^\/native\/v1\/attestation\/challenge$/],
   ["GET", /^\/native\/v1\/snapshot$/],
+  ["GET", /^\/native\/v1\/initiatives$/],
+  ["POST", new RegExp(`^/native/v1/initiatives/${UUID_PATH}/claim$`, "i")],
+  ["GET", /^\/native\/v1\/private-localities$/],
+  ["POST", /^\/native\/v1\/private-localities\/(preview|confirm)$/],
   ["GET", new RegExp(`^/native/v1/places/${UUID_PATH}/descriptor-relationship$`, "i")],
   ["GET", new RegExp(`^/native/v1/places/${UUID_PATH}/parents/current-presence$`, "i")],
   ["POST", /^\/native\/v1\/memory-transactions$/],

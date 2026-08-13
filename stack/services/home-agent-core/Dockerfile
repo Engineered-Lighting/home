@@ -1,4 +1,5 @@
-FROM python:3.12-slim AS runtime
+ARG PYTHON_BASE_IMAGE=python:3.12-slim@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36
+FROM ${PYTHON_BASE_IMAGE} AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -10,8 +11,8 @@ RUN groupadd --system --gid 10001 homeagent \
     && chown homeagent:homeagent /runtime
 
 WORKDIR /app
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt requirements.lock ./
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
 COPY --chown=homeagent:homeagent alembic.ini ./
 COPY --chown=homeagent:homeagent alembic ./alembic

@@ -36,7 +36,9 @@ class MutualTLSTransport:
             or parsed.query
             or parsed.path != "/v1/ingest/envelopes"
         ):
-            raise ValueError("Home Agent Edge endpoint may not contain credentials or fragments")
+            raise ValueError(
+                "Home Agent Edge endpoint may not contain credentials or fragments"
+            )
         self.endpoint = endpoint
         self.privacy_policy_endpoint = urlunparse(
             parsed._replace(path="/v1/ingest/privacy-policy", query="", fragment="")
@@ -47,10 +49,13 @@ class MutualTLSTransport:
         self.edge_token_path = edge_token_path
         self.timeout_seconds = timeout_seconds
         self._session: ClientSession | None = None
+        self._ssl_context: ssl.SSLContext | None = None
         self._edge_token: str | None = None
 
-    async def start(self) -> None:
-        if self._session is not None:
+    def prepare(self) -> None:
+        """Load private files and construct TLS state outside HA's event loop."""
+
+        if self._ssl_context is not None and self._edge_token is not None:
             return
         client_key_file = Path(self.client_key)
         token_file = Path(self.edge_token_path)
@@ -61,8 +66,12 @@ class MutualTLSTransport:
             if not private_file.is_file():
                 raise ValueError(f"Home Agent Edge {label} file is unavailable")
             if os.name == "posix" and stat.S_IMODE(private_file.stat().st_mode) & 0o077:
-                raise ValueError(f"Home Agent Edge {label} file must be mode 0600 or stricter")
-        context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH, cafile=self.ca_cert)
+                raise ValueError(
+                    f"Home Agent Edge {label} file must be mode 0600 or stricter"
+                )
+        context = ssl.create_default_context(
+            ssl.Purpose.SERVER_AUTH, cafile=self.ca_cert
+        )
         context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.check_hostname = True
         context.verify_mode = ssl.CERT_REQUIRED
@@ -70,9 +79,18 @@ class MutualTLSTransport:
         token = token_file.read_text(encoding="utf-8").strip()
         if len(token) < 32 or any(character.isspace() for character in token):
             raise ValueError("Home Agent Edge bearer credential is invalid")
+        self._ssl_context = context
         self._edge_token = token
+
+    async def start(self) -> None:
+        """Create the async HTTP session from already-prepared TLS state."""
+
+        if self._session is not None:
+            return
+        if self._ssl_context is None or self._edge_token is None:
+            raise RuntimeError("mTLS transport has not been prepared")
         self._session = ClientSession(
-            connector=TCPConnector(ssl=context),
+            connector=TCPConnector(ssl=self._ssl_context),
             timeout=ClientTimeout(total=self.timeout_seconds),
             raise_for_status=False,
         )
@@ -93,7 +111,10 @@ class MutualTLSTransport:
         ) as response:
             if response.status < 200 or response.status >= 300:
                 raise RuntimeError(f"edge_receiver_http_{response.status}")
-            if response.content_length is not None and response.content_length > 64 * 1024:
+            if (
+                response.content_length is not None
+                and response.content_length > 64 * 1024
+            ):
                 raise RuntimeError("edge_receiver_response_too_large")
             body = await response.read()
             if len(body) > 64 * 1024:
@@ -134,4 +155,5 @@ class MutualTLSTransport:
         if self._session is not None:
             await self._session.close()
             self._session = None
+        self._ssl_context = None
         self._edge_token = None

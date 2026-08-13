@@ -8,10 +8,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PLAN = (
-    ROOT
-    / "stack/home-agent-deploy/operator/phase3_activation_source_plan.py"
-)
+PLAN = ROOT / "stack/home-agent-deploy/operator/phase3_activation_source_plan.py"
 
 
 def _module() -> ModuleType:
@@ -55,12 +52,22 @@ def test_exact_hosted_source_pack_can_be_verified_but_never_activated() -> None:
     assert report["identity_finalizer_executor_installed"] is True
     assert report["identity_cutover_executor_installed"] is True
     assert report["activation_executor_installed"] is True
+    assert report["authoritative_split_phase_activation_runner_installed"] is True
     assert report["source_acceptance_receipt_issuable"] is True
+    assert report["reviewed_identity_packet_compiler_installed"] is True
+    assert (
+        report["reviewed_identity_distinct_purpose_signing_ceremony_installed"] is True
+    )
+    assert report["identity_signing_credential_provisioner_installed"] is True
+    assert report["identity_writer_freeze_evidence_writer_installed"] is True
+    assert report["identity_privacy_cutover_evidence_writer_installed"] is True
+    assert report["identity_privacy_cutover_observer_installed"] is True
+    assert report["identity_semantic_cutover_packet_compiler_installed"] is True
     assert report["authoritative"] is False
     assert report["enables_writes"] is False
     assert report["runs_migrations"] is False
     assert report["changes_rollout_mode"] is False
-    assert report["blockers"] == list(module.MISSING_EXECUTABLE_BOUNDARIES)
+    assert report["blockers"] == []
 
 
 @pytest.mark.parametrize(
@@ -72,9 +79,15 @@ def test_exact_hosted_source_pack_can_be_verified_but_never_activated() -> None:
             "hosted_accepted_source_pack_not_established",
         ),
         ({"source_diff_clean": False}, "hosted_accepted_source_pack_not_established"),
-        ({"head_commit": "not-a-commit"}, "hosted_accepted_source_pack_not_established"),
+        (
+            {"head_commit": "not-a-commit"},
+            "hosted_accepted_source_pack_not_established",
+        ),
         ({"tree_entries": 0}, "hosted_accepted_source_pack_not_established"),
-        ({"source_pack_digest": "not-a-digest"}, "hosted_accepted_source_pack_not_established"),
+        (
+            {"source_pack_digest": "not-a-digest"},
+            "hosted_accepted_source_pack_not_established",
+        ),
     ],
 )
 def test_any_source_uncertainty_fails_closed(values, expected: str) -> None:
@@ -164,8 +177,23 @@ def test_e5k_is_carried_by_the_filtered_hosted_gate() -> None:
     assert "stack/home-agent-deploy/operator/phase3_activation_source_plan.py" in (
         runner
     )
+    assert "stack/home-agent-deploy/operator/phase3_activation_runner.py" in runner
     assert "tests/home_agent/test_phase3_activation_source_plan_e5k.py" in runner
+    assert "tests/home_agent/test_phase3_activation_runner_e5ad.py" in runner
+    assert "stack/home-agent-deploy/operator/migrate_legacy_identity.py" in runner
     assert "phase3_activation_source_plan.py" in workflow
+    assert "phase3_activation_runner.py" in workflow
     assert "test_phase3_activation_source_plan_e5k.py" in workflow
-    assert "E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v PostgreSQL gate" in workflow
-    assert "E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v authority gate" in workflow
+    assert "test_phase3_activation_runner_e5ad.py" in workflow
+    assert "operator/migrate_legacy_identity.py" in workflow
+    assert "stack/home-agent-deploy/operator/migrate_legacy_identity.py" in (
+        _module().ACTIVATION_PATHS
+    )
+    assert (
+        "E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v/E5w/E5x PostgreSQL gate"
+        in workflow
+    )
+    assert (
+        "E5j/E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v/E5w/E5x authority gate"
+        in workflow
+    )

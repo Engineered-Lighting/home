@@ -8,10 +8,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SEQUENCER = (
-    ROOT
-    / "stack/home-agent-deploy/operator/phase3_activation_sequencer.py"
-)
+SEQUENCER = ROOT / "stack/home-agent-deploy/operator/phase3_activation_sequencer.py"
 GRANTS = ROOT / "stack/home-agent-deploy/apply-grants.sh"
 COMPOSE = ROOT / "stack/home-agent-compose.yml"
 RUNNER = ROOT / "tools/run-home-agent-e1-postgres-gate.py"
@@ -36,6 +33,8 @@ def _trusted_plan() -> dict[str, object]:
         "current_commit": "a" * 40,
         "accepted_postgres_run_id": "30396371133",
         "accepted_web_run_id": "30473087421",
+        "source_acceptance_receipt_issuable": True,
+        "blockers": [],
     }
 
 
@@ -78,6 +77,8 @@ def test_source_receipt_binds_exact_hosted_and_web_acceptance(monkeypatch) -> No
         {"current_commit": "not-a-commit"},
         {"accepted_postgres_run_id": "queued"},
         {"accepted_web_run_id": "queued"},
+        {"source_acceptance_receipt_issuable": False},
+        {"blockers": ["private_activation_boundary_missing"]},
     ),
 )
 def test_source_admission_fails_closed(change, monkeypatch) -> None:
@@ -95,7 +96,9 @@ def test_grant_arming_requires_the_complete_non_authoritative_preflight(
 ) -> None:
     module = _module()
     writes: list[tuple[Path, bytes]] = []
-    monkeypatch.setattr(module, "_atomic_write", lambda path, raw: writes.append((path, raw)))
+    monkeypatch.setattr(
+        module, "_atomic_write", lambda path, raw: writes.append((path, raw))
+    )
 
     monkeypatch.setattr(module, "preflight", _passing_preflight)
     module.arm_grants()
@@ -134,6 +137,8 @@ def test_status_is_content_minimized_and_never_claims_execution(monkeypatch) -> 
     assert report["source_admitted"] is True
     assert report["grant_activation_contract_installed"] is True
     assert report["grant_permit_armed"] is False
+    assert report["activation_source_blockers"] == []
+    assert report["source_acceptance_receipt_issuable"] is True
     assert report["migration_executor_enabled"] is False
     assert report["authoritative"] is False
     assert report["enables_writes"] is False
@@ -200,5 +205,11 @@ def test_e5m_is_carried_by_the_filtered_hosted_gate() -> None:
     assert "test_phase3_activation_sequencer_e5m.py" in workflow
     assert "phase3_activation_sequencer.py" in runner
     assert "test_phase3_activation_sequencer_e5m.py" in runner
-    assert "E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v PostgreSQL gate" in workflow
-    assert "E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v authority gate" in workflow
+    assert (
+        "E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v/E5w/E5x PostgreSQL gate"
+        in workflow
+    )
+    assert (
+        "E5k/E5l/E5m/E5n/E5o/E5p/E5q/E5r/E5s/E5t/E5u/E5v/E5w/E5x authority gate"
+        in workflow
+    )

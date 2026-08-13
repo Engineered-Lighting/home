@@ -128,6 +128,7 @@ def test_collector_rejects_source_installation_witness_tamper(
         '"source_installation_id":"not-a-uuid"}',
         encoding="utf-8",
     )
+    installation.chmod(0o600)
     monkeypatch.setattr(collector.sys, "platform", "linux")
     monkeypatch.setattr(collector.os, "geteuid", lambda: 0, raising=False)
     with pytest.raises(collector.FreezeObservationError, match="identifier is invalid"):

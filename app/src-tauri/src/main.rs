@@ -618,8 +618,8 @@ mod tests {
             .contains("Global\\\\EngineeredLighting.HomeAgent.InstallationAttestation.v1"));
         assert!(!MAIN_RS.contains(&["access_", "token"].concat()));
         assert!(!MAIN_RS.contains(&["refresh_", "token"].concat()));
-        assert!(!MAIN_RS.contains("DPoP"));
-        assert!(!MAIN_RS.contains("private_key"));
+        assert!(!MAIN_RS.contains(&["D", "PoP"].concat()));
+        assert!(!MAIN_RS.contains(&["private_", "key"].concat()));
         assert!(NATIVE_ATTESTATION_RS.contains("InstallationAttestation"));
         assert!(NATIVE_ATTESTATION_RS.contains("windows_credentials::write"));
         assert!(NATIVE_ATTESTATION_RS.contains("Zeroizing<String>"));

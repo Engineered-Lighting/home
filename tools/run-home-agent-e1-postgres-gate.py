@@ -291,6 +291,7 @@ E2_RUNTIME_ROLE_URLS = (
     ),
 )
 BUILD_CONTEXT_FILES = (
+    ".github/workflows/home-agent-web-boundary.yml",
     "docs/HOME-AGENT-RUNBOOK.md",
     "stack/home-agent-compose.yml",
     "stack/home-agent.env.example",

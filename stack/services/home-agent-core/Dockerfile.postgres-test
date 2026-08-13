@@ -28,10 +28,11 @@ COPY stack/home-agent-deploy/ /workspace/stack/home-agent-deploy/
 COPY stack/services/home-agent-bff/src/bff.mjs /workspace/stack/services/home-agent-bff/src/bff.mjs
 COPY app/src/home-agent/api.js /workspace/app/src/home-agent/api.js
 COPY app/src/home-agent/panel.jsx /workspace/app/src/home-agent/panel.jsx
+COPY ha-config/extended_openai_conversation/ /workspace/ha-config/extended_openai_conversation/
 COPY ha-config/home_agent_edge/ /workspace/ha-config/home_agent_edge/
 COPY tests/home_agent/ /workspace/tests/home_agent/
 COPY tools/run-home-agent-e1-postgres-gate.py /workspace/tools/
-COPY .github/workflows/home-agent-e1-postgres.yml /workspace/.github/workflows/
+COPY .github/workflows/home-agent-e1-postgres.yml .github/workflows/home-agent-web-boundary.yml /workspace/.github/workflows/
 COPY docs/HOME-AGENT-RUNBOOK.md /workspace/docs/HOME-AGENT-RUNBOOK.md
 
 CMD ["python", "-m", "pytest", "-q"]

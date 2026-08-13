@@ -173,11 +173,7 @@ async fn native_agent_list_initiatives(
     state: tauri::State<'_, Arc<NativeAuthState>>,
 ) -> Result<NativeAgentResponse, String> {
     require_agent_window(&window)?;
-    run_agent(
-        Arc::clone(state.inner()),
-        AgentOperation::ListInitiatives,
-    )
-    .await
+    run_agent(Arc::clone(state.inner()), AgentOperation::ListInitiatives).await
 }
 
 #[tauri::command]

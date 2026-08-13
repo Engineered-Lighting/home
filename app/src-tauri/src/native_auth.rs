@@ -315,11 +315,7 @@ impl AgentOperation {
         use serde_json::json;
         match self {
             Self::Snapshot => (Method::GET, "/api/agent/native/v1/snapshot".into(), None),
-            Self::ListInitiatives => (
-                Method::GET,
-                "/api/agent/native/v1/initiatives".into(),
-                None,
-            ),
+            Self::ListInitiatives => (Method::GET, "/api/agent/native/v1/initiatives".into(), None),
             Self::ClaimInitiative {
                 initiative_id,
                 session_id,
@@ -1479,10 +1475,7 @@ mod tests {
         }
         .into_request();
         assert_eq!(method, Method::POST);
-        assert_eq!(
-            path,
-            "/api/agent/native/v1/initiatives/initiative-id/claim"
-        );
+        assert_eq!(path, "/api/agent/native/v1/initiatives/initiative-id/claim");
         assert_eq!(
             body,
             Some(serde_json::json!({

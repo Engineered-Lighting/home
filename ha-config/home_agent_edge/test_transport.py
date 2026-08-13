@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import ssl
 import sys
@@ -70,6 +71,9 @@ class TransportPreparationTests(unittest.IsolatedAsyncioTestCase):
         for path in (self.ca, self.cert, self.key):
             path.write_text("fixture", encoding="utf-8")
         self.token.write_text("t" * 48, encoding="utf-8")
+        if os.name == "posix":
+            self.key.chmod(0o600)
+            self.token.chmod(0o600)
 
     def tearDown(self):
         self.temp.cleanup()

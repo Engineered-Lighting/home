@@ -1,4 +1,8 @@
-### Home Agent Phase 3 signed finalization envelope
+---
+title: Sign the Home Agent Phase 3 finalization envelope
+target: internal
+type: changed
+---
 
 - Replaced the incomplete semantic-finalizer document with a separately signed,
   immutable finalization proposal that remains non-authoritative.

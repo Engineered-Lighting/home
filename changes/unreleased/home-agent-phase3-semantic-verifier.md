@@ -1,4 +1,8 @@
-### Home Agent Phase 3 semantic verifier foundation
+---
+title: Add the Home Agent Phase 3 semantic verifier foundation
+target: internal
+type: added
+---
 
 - Added an offline, network-free verifier for canonical reviewed identity
   projection bundles.

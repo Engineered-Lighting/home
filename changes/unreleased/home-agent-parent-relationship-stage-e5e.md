@@ -1,6 +1,7 @@
 ---
 title: Add the authenticated two-parent staging kernel
-area: home-agent
+target: backend
+type: added
 ---
 
 - Added revision `0019_parent_stage_e5e`, which stages one

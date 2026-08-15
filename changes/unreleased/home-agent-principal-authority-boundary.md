@@ -1,7 +1,7 @@
 ---
 title: Guard the dormant principal authority boundary
 target: internal
-type: security
+type: changed
 ---
 
 Adds a negative cross-contract suite that guards the current direct integration

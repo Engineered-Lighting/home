@@ -1,8 +1,9 @@
 ---
-category: Security
+title: Contain grounded vision proxy access
+target: web
+type: changed
 ---
 
-- Put the legacy Home UI's grounded-camera request compatibility surface behind
-  an explicit operator flag and constrain it to reviewed methods and paths.
-- Keep authenticated read-only annotated camera results on a separate narrow
-  route so generic Vision APIs remain unavailable.
+The legacy Home UI's grounded-camera compatibility surface now requires an
+explicit operator flag and permits only reviewed methods and paths. Authenticated
+read-only annotated camera results remain on a separate narrow route.

@@ -1,4 +1,8 @@
-### Home Agent online identity authority containment
+---
+title: Contain Home Agent online identity authority
+target: backend
+type: changed
+---
 
 - Reset the online API's identity-schema ACL after every grant replay and
   replaced schema-wide/default DML with exact current-table reads and

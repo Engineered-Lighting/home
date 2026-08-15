@@ -1,5 +1,7 @@
 ---
-category: security
+title: Add the Phase 3 erasure-operation foundation
+target: backend
+type: added
 ---
 
 - Add a dormant, owner-only Phase 3 erasure-operation source foundation so

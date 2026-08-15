@@ -1,7 +1,7 @@
 ---
 title: Authenticate dormant parent candidate provenance
 target: internal
-type: security
+type: added
 ---
 
 Adds an offline, non-deployable compiler that re-verifies the signed reviewed

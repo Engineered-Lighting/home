@@ -1,7 +1,7 @@
 ---
 title: Bind identity finalization to erasure state offline
 target: internal
-type: security
+type: changed
 ---
 
 Adds a dormant compatibility compiler that re-verifies signed identity

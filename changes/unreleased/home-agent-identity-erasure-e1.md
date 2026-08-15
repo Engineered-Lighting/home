@@ -1,6 +1,7 @@
 ---
-category: security
 title: Add dormant identity-erasure schema foundation
+target: backend
+type: added
 ---
 
 Add a fail-closed Phase 3 schema foundation for confirmed person-erasure

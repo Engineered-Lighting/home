@@ -1,7 +1,7 @@
 ---
 title: Authenticate dormant principal nominee provenance
 target: internal
-type: security
+type: added
 ---
 
 Adds an offline, non-deployable compiler that re-verifies the signed reviewed

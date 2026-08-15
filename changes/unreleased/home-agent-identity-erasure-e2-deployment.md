@@ -1,6 +1,7 @@
 ---
-category: security
 title: Contract identity-erasure restore authority
+target: backend
+type: changed
 ---
 
 Replace the restore credential's schema-wide identity, knowledge, engagement,

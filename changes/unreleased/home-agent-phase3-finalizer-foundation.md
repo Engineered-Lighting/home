@@ -1,4 +1,8 @@
-### Home Agent Phase 3 finalizer foundation
+---
+title: Add the Home Agent Phase 3 finalizer foundation
+target: backend
+type: added
+---
 
 - Added revision `0009_identity_finalizer_base` with normalized,
   content-minimized lineage from one reviewed apply receipt to one typed

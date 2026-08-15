@@ -22,9 +22,9 @@ from typing import Any, Mapping, Sequence
 
 CONTRACT = "phase3-activation-source-plan-e5k-v1"
 SOURCE_PIN_BOOTSTRAP_CONTRACT = "phase3-source-pin-bootstrap-e5q-v1"
-ACCEPTED_COMMIT = "42eba8c70d0e922ed8693f5037eda8531a311f3d"
-ACCEPTED_POSTGRES_RUN_ID = "30475676176"
-ACCEPTED_WEB_RUN_ID = "30475675910"
+ACCEPTED_COMMIT = "5fdc4d1e865c9cb37c343ff552cc371093143836"
+ACCEPTED_POSTGRES_RUN_ID = "31904637016"
+ACCEPTED_WEB_RUN_ID = "31904636983"
 SOURCE_REVISION = "0006a_worker_lease_arbitration"
 TARGET_REVISION = "0021_parent_status_e5h"
 SOURCE_ROOT = Path(__file__).resolve().parents[3]

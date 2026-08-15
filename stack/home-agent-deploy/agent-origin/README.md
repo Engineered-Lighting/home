@@ -240,7 +240,7 @@ deployment images:
 ```sh
 export REPO=Engineered-Lighting/home
 export SOURCE_COMMIT=REPLACE_WITH_THE_SAME_40_CHARACTER_MAIN_COMMIT
-export BUNDLE_DIR="/srv/home-agent/image-bundles/${SOURCE_COMMIT}"
+export BUNDLE_DIR="/srv/home-agent/image-bundles/${SOURCE_COMMIT}/web"
 export ROLLBACK_DIR="/srv/home-agent/image-rollback/$(date -u +%Y%m%dT%H%M%SZ)-before-${SOURCE_COMMIT}"
 export BASE_ENV=/srv/home-agent/config/home-agent.env
 export ORIGIN_ENV=REPLACE_WITH_ABSOLUTE_PATH_TO_PRIVATE_HOME_AGENT_ORIGIN_ENV
@@ -270,46 +270,49 @@ archive_image engineered-lighting/home-agent-origin:local origin
 sudo chmod -R go-rwx "$ROLLBACK_DIR"
 ```
 
-Load the two verified archives without pulling. Compare each loaded top-level
-source tag to the manifest image ID. Only after **both** comparisons succeed
-may the mutable deployment tags be moved:
+Load the two verified archives without pulling. The signed manifest `image_id`
+is the image config digest. Classic Docker stores expose it as `.Id`, while a
+containerd-backed store can expose a translated manifest digest. Use the
+reviewed verifier to bind the loaded source tag, config bytes, revision label,
+and rootfs diff IDs to the signed config digest and return the immutable local
+store ID. Only after **both** verifications succeed may the mutable deployment
+tags be moved:
 
 ```sh
 BFF_SOURCE="engineered-lighting/home-agent-bff:ci-${SOURCE_COMMIT}"
 ORIGIN_SOURCE="engineered-lighting/home-agent-origin:ci-${SOURCE_COMMIT}"
-BFF_EXPECTED_ID="$(
-  python3 -c 'import json; print(json.load(open("manifest.json"))["images"]["bff"]["image_id"])'
-)"
-ORIGIN_EXPECTED_ID="$(
-  python3 -c 'import json; print(json.load(open("manifest.json"))["images"]["origin"]["image_id"])'
-)"
+ACTIVATION_ROOT=/opt/home/home-agent-integration-test
+IDENTITY_VERIFIER="$ACTIVATION_ROOT/stack/home-agent-deploy/operator/imported_image_identity.py"
 
 sudo docker image load --input home-agent-bff-linux-amd64.tar.gz
 sudo docker image load --input home-agent-origin-linux-amd64.tar.gz
-BFF_ACTUAL_ID="$(sudo docker image inspect "$BFF_SOURCE" --format '{{.Id}}')"
-ORIGIN_ACTUAL_ID="$(sudo docker image inspect "$ORIGIN_SOURCE" --format '{{.Id}}')"
-test "$BFF_ACTUAL_ID" = "$BFF_EXPECTED_ID"
-test "$ORIGIN_ACTUAL_ID" = "$ORIGIN_EXPECTED_ID"
+BFF_IDENTITY_JSON="$(sudo python3 "$IDENTITY_VERIFIER" bff "$BUNDLE_DIR/manifest.json")"
+ORIGIN_IDENTITY_JSON="$(sudo python3 "$IDENTITY_VERIFIER" origin "$BUNDLE_DIR/manifest.json")"
+BFF_ACTUAL_ID="$(printf '%s' "$BFF_IDENTITY_JSON" | python3 -c \
+  'import json,sys; print(json.load(sys.stdin)["local_image_id"])')"
+ORIGIN_ACTUAL_ID="$(printf '%s' "$ORIGIN_IDENTITY_JSON" | python3 -c \
+  'import json,sys; print(json.load(sys.stdin)["local_image_id"])')"
 
 sudo docker image tag "$BFF_SOURCE" engineered-lighting/home-agent-bff:local
 sudo docker image tag "$ORIGIN_SOURCE" engineered-lighting/home-agent-origin:local
 test "$(sudo docker image inspect engineered-lighting/home-agent-bff:local \
-  --format '{{.Id}}')" = "$BFF_EXPECTED_ID"
+  --format '{{.Id}}')" = "$BFF_ACTUAL_ID"
 test "$(sudo docker image inspect engineered-lighting/home-agent-origin:local \
-  --format '{{.Id}}')" = "$ORIGIN_EXPECTED_ID"
+  --format '{{.Id}}')" = "$ORIGIN_ACTUAL_ID"
 
-printf 'Set HOME_AGENT_BFF_IMAGE_ID=%s\n' "$BFF_EXPECTED_ID"
-printf 'Set HOME_AGENT_WEB_IMAGE_ID=%s\n' "$ORIGIN_EXPECTED_ID"
+printf 'Set HOME_AGENT_BFF_IMAGE_ID=%s\n' "$BFF_ACTUAL_ID"
+printf 'Set HOME_AGENT_WEB_IMAGE_ID=%s\n' "$ORIGIN_ACTUAL_ID"
 sudoedit "$BASE_ENV"
 sudoedit "$ORIGIN_ENV"
 ```
 
-Set `HOME_AGENT_BFF_IMAGE_ID` to the printed, verified BFF ID in the base
-environment and `HOME_AGENT_WEB_IMAGE_ID` to the printed, verified origin ID
-before running network preflight. A `:local`, `:main`, or any other mutable tag
-by itself is never provenance or deployment approval. If any attestation,
-checksum, manifest, load, or ID comparison fails, do not tag or start either
-image; preserve the bundle and failure output for review.
+Set `HOME_AGENT_BFF_IMAGE_ID` to the printed, verified BFF local ID in the base
+environment and `HOME_AGENT_WEB_IMAGE_ID` to the printed, verified origin local
+ID before running network preflight. Preserve both content-free identity JSON
+receipts with the activation evidence. A `:local`, `:main`, or any other
+mutable tag by itself is never provenance or deployment approval. If any
+attestation, checksum, manifest, load, or identity verification fails, do not
+tag or start either image; preserve the bundle and failure output for review.
 
 ## One-time network pinning
 

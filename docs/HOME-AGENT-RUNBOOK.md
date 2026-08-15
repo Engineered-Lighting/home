@@ -291,11 +291,16 @@ either image on the workstation.
 On Ubuntu, store the same bundle in a root-controlled directory on the
 encrypted volume, repeat the checksum and exact-manifest checks, and archive
 the existing BFF/origin images and IDs before loading either verified tarball.
-After loading, compare both source-tag top-level IDs with the manifest. Only
-after both match may the `:local` deployment tags move. Set
-`HOME_AGENT_BFF_IMAGE_ID` to the verified BFF ID and
-`HOME_AGENT_WEB_IMAGE_ID` to the verified origin ID before preflight. Preflight
-always requires the running BFF's exact
+The signed manifest `image_id` is the Docker config digest. Classic Docker
+stores expose that digest as `.Id`; containerd-backed Docker stores can expose
+a translated manifest digest instead. After loading, run the reviewed
+`imported_image_identity.py` verifier for both source tags. It re-exports each
+loaded image and binds its config bytes, revision label, rootfs diff IDs, and
+source tag to the signed config digest before returning the local store's
+immutable `local_image_id`. Only after both verifications succeed may the
+`:local` deployment tags move. Set `HOME_AGENT_BFF_IMAGE_ID` to the verified
+BFF `local_image_id` and `HOME_AGENT_WEB_IMAGE_ID` to the verified origin
+`local_image_id` before preflight. Preflight always requires the running BFF's exact
 `engineered-lighting/home-agent-bff:local` configuration reference. Candidate
 mode runs before BFF recreation, so it validates the new ID's syntax but permits
 the old running content ID; post-recreate normal and `--require-origin`
@@ -357,29 +362,34 @@ missing, duplicated, or mismatched field rejects the bundle.
 Transfer the complete read-only bundle to a root-controlled directory on the
 encrypted Ubuntu volume. Re-run the checksum and exact-manifest checks there,
 archive the current `:local` image and image ID for rollback, and load only the
-verified archive. Compare the loaded source tag's top-level ID and revision
-label with the manifest before moving the deployment tag:
+verified archive. The manifest `image_id` is the signed config digest; it is
+not assumed to equal `.Id` on a containerd-backed Docker image store. Run the
+reviewed cross-store verifier before moving the deployment tag:
 
 ```sh
+export ACTIVATION_ROOT=/opt/home/home-agent-integration-test
+export BUNDLE_DIR="/srv/home-agent/image-bundles/${SOURCE_COMMIT}/core"
 sudo docker image load --input home-agent-core-linux-amd64.tar.gz
 CORE_SOURCE="engineered-lighting/home-agent-core:ci-${SOURCE_COMMIT}"
-test "$(sudo docker image inspect "$CORE_SOURCE" --format '{{.Id}}')" \
-  = "$(python3 -c 'import json; print(json.load(open("manifest.json"))["image"]["image_id"])')"
-test "$(sudo docker image inspect "$CORE_SOURCE" \
-  --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" \
-  = "$SOURCE_COMMIT"
+CORE_IDENTITY_JSON="$(sudo python3 \
+  "$ACTIVATION_ROOT/stack/home-agent-deploy/operator/imported_image_identity.py" \
+  core "$BUNDLE_DIR/manifest.json")"
+CORE_LOCAL_ID="$(printf '%s' "$CORE_IDENTITY_JSON" | python3 -c \
+  'import json,sys; print(json.load(sys.stdin)["local_image_id"])')"
 sudo docker image tag "$CORE_SOURCE" \
   engineered-lighting/home-agent-core:local
 test "$(sudo docker image inspect \
   engineered-lighting/home-agent-core:local --format '{{.Id}}')" \
-  = "$(sudo docker image inspect "$CORE_SOURCE" --format '{{.Id}}')"
+  = "$CORE_LOCAL_ID"
 ```
 
 Loading and tagging do not authorize a rollout. The Phase 3 signing-material
 probe independently requires one image ID shared by API, ingest, and worker,
 recomputes the in-image schema/capability contract, and binds that ID into the
-root-only credential receipt. A failed attestation, checksum, manifest, load,
-ID, label, or shared-role check leaves the old deployment active.
+root-only credential receipt. Preserve the verifier's content-free JSON with
+the activation evidence. A failed attestation, checksum, manifest, load,
+cross-store identity, label, or shared-role check leaves the old deployment
+active.
 
 ## WAL continuity and staged start
 

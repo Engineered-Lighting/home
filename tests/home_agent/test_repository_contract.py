@@ -516,7 +516,7 @@ class RepositoryBoundaryTests(unittest.TestCase):
             "sudo docker image load --input home-agent-bff-linux-amd64.tar.gz"
         )
         compare_at = origin_runbook.index(
-            'test "$BFF_ACTUAL_ID" = "$BFF_EXPECTED_ID"'
+            'BFF_IDENTITY_JSON="$(sudo python3 "$IDENTITY_VERIFIER"'
         )
         tag_at = origin_runbook.index(
             'sudo docker image tag "$BFF_SOURCE" '
@@ -525,6 +525,12 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertLess(archive_at, load_at)
         self.assertLess(load_at, compare_at)
         self.assertLess(compare_at, tag_at)
+        self.assertIn(
+            "stack/home-agent-deploy/operator/imported_image_identity.py",
+            hosted_workflow,
+        )
+        self.assertIn("rootfs diff IDs", normalized_origin_runbook)
+        self.assertIn("local_image_id", origin_runbook)
         self.assertIn(
             "Every non-native HTTP route on the native host is denied before "
             "legacy authentication, proxy selection, or static fallback.",

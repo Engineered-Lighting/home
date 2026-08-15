@@ -38,7 +38,10 @@ RECEIPT_CONTRACT = "phase3-identity-credential-receipt-e5ae-v1"
 KEY_SOURCE_CONTRACT = "phase3-signing-key-source-e5ae-v1"
 MATERIAL_CONTRACT = "phase3-signing-material-e5ae-v1"
 SOURCE_ACCEPTANCE_CONTRACT = "phase3-source-acceptance-e5j-v1"
-SOURCE_ROOT = Path("/opt/home/home-github")
+# Phase 3 is admitted from a detached, clean activation checkout.  The live
+# development checkout may contain unrelated operator work and is never a
+# trusted signing source.
+SOURCE_ROOT = Path("/opt/home/home-agent-integration-test")
 OPERATOR_ROOT = SOURCE_ROOT / "stack/home-agent-deploy/operator"
 CORE_ROOT = SOURCE_ROOT / "stack/services/home-agent-core"
 POLICY_PATH = SOURCE_ROOT / "stack/home-agent-deploy/policy/home-agent-mvp-v1.json"

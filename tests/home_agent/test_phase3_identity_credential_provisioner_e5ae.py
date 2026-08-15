@@ -265,6 +265,8 @@ def test_production_boundary_is_fixed_host_bound_restart_safe_and_admitted() -> 
     runner = RUNNER.read_text(encoding="utf-8")
     source_plan = SOURCE_PLAN.read_text(encoding="utf-8")
 
+    assert module.SOURCE_ROOT == Path("/opt/home/home-agent-integration-test")
+    assert "/opt/home/home-github" not in provisioner
     assert "systemd-creds" in provisioner
     assert '"-",\n            "-"' in provisioner
     assert "--with-key=" in provisioner

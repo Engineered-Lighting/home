@@ -1696,7 +1696,7 @@ acceptance gates, is pin-only admitted, and the exact Core image is installed,
 install the immutable signing bundle:
 
 ```sh
-cd /opt/home/home-github
+cd /opt/home/home-agent-integration-test
 sudo stack/home-agent-deploy/install-phase3-identity-signing.sh
 ```
 

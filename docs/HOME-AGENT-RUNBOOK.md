@@ -1543,6 +1543,13 @@ People snapshot/review ceremony. A missing packet, incomplete review, or
 non-private finalization terminal produces a content-free pause before the
 fresh activation backup or service changes.
 
+On HAOS, configure the official Terminal & SSH app with `python3` in its
+`apks` option and restart that app before invoking `advance`. Verify
+`python3 --version` through the same purpose-specific Ubuntu-to-HA SSH key the
+runner uses. The fixed writer-freeze and observation programs execute inside
+that protected app against `/config`; an interactive, non-persistent
+`apk add` is not an activation prerequisite and will be lost on app restart.
+
 Run `advance` from a private interactive terminal because distinct
 finalization approval requires a TTY. The runner then takes and binds a new
 local/off-host backup, performs the isolated restore and erasure checks, stops

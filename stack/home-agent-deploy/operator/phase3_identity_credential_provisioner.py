@@ -386,7 +386,7 @@ def _safe_file(path: Path, *, mode: int = 0o600) -> bytes:
 def _environment() -> Mapping[str, str]:
     raw = _safe_file(ENVIRONMENT_PATH)
     selected: dict[str, str] = {}
-    expected = {"HOME_AGENT_POLICY_VERSION", "HOME_AGENT_POLICY_DIGEST"}
+    expected = {"HOME_AGENT_POLICY_DIGEST"}
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as error:
@@ -810,10 +810,13 @@ def execute() -> Mapping[str, Any]:
 
     source = _source_report()
     environment = _environment()
-    policy = _json(POLICY_PATH.read_bytes())
+    policy_raw = POLICY_PATH.read_bytes()
+    policy = _json(policy_raw)
+    policy_version = policy.get("policy_version")
     if (
-        policy.get("policy_version") != environment["HOME_AGENT_POLICY_VERSION"]
-        or _canonical_digest(policy) != environment["HOME_AGENT_POLICY_DIGEST"]
+        not isinstance(policy_version, str)
+        or not 1 <= len(policy_version) <= 128
+        or _sha256(policy_raw) != environment["HOME_AGENT_POLICY_DIGEST"]
     ):
         raise CredentialProvisioningError("deployment policy digest does not match")
     material = _json(
@@ -834,7 +837,7 @@ def execute() -> Mapping[str, Any]:
         source_pack_digest=str(source["source_pack_digest"]),
         migration_tool_bundle_digest=_installed_bundle_digest(),
         core_oci_manifest_digest=_image_digest(str(source["current_commit"])),
-        expected_policy_version=environment["HOME_AGENT_POLICY_VERSION"],
+        expected_policy_version=policy_version,
         expected_policy_digest=environment["HOME_AGENT_POLICY_DIGEST"],
         expected_source_projection_digest=_canonical_digest(
             migration.SOURCE_PROJECTION_CONTRACT

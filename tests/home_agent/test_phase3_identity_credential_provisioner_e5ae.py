@@ -20,6 +20,7 @@ INSTALLER = ROOT / "stack/home-agent-deploy/install-phase3-identity-signing.sh"
 ENTRYPOINT = CORE / "docker-entrypoint.sh"
 RUNNER = OPERATOR / "phase3_activation_runner.py"
 SOURCE_PLAN = OPERATOR / "phase3_activation_source_plan.py"
+POLICY = ROOT / "stack/home-agent-deploy/policy/home-agent-mvp-v1.json"
 
 
 def _load(name: str, path: Path, search: Path) -> ModuleType:
@@ -256,6 +257,41 @@ def test_installed_core_image_requires_one_id_and_exact_source_revision(
         module._image_digest("b" * 40)
 
 
+def test_environment_uses_the_reviewed_raw_policy_digest_without_a_duplicate_version(
+    monkeypatch,
+) -> None:
+    module = _provisioner()
+    raw_policy = POLICY.read_bytes()
+    digest = module._sha256(raw_policy)
+    monkeypatch.setattr(
+        module,
+        "_safe_file",
+        lambda path: f"HOME_AGENT_POLICY_DIGEST={digest}\n".encode(),
+    )
+
+    assert module._environment() == {"HOME_AGENT_POLICY_DIGEST": digest}
+    policy = module._json(raw_policy)
+    assert policy["policy_version"] == "home-agent-mvp-v1"
+    assert "HOME_AGENT_POLICY_VERSION=" not in (
+        ROOT / "stack/home-agent.env.example"
+    ).read_text(encoding="utf-8")
+
+
+def test_environment_rejects_duplicate_or_missing_policy_digest(monkeypatch) -> None:
+    module = _provisioner()
+    digest = _digest("policy")
+    for raw in (
+        b"HOME_AGENT_ROLLOUT_MODE=record_only\n",
+        (
+            f"HOME_AGENT_POLICY_DIGEST={digest}\n"
+            f"HOME_AGENT_POLICY_DIGEST={digest}\n"
+        ).encode(),
+    ):
+        monkeypatch.setattr(module, "_safe_file", lambda _path, value=raw: value)
+        with pytest.raises(module.CredentialProvisioningError):
+            module._environment()
+
+
 def test_production_boundary_is_fixed_host_bound_restart_safe_and_admitted() -> None:
     module = _provisioner()
     provisioner = PROVISIONER.read_text(encoding="utf-8")
@@ -281,6 +317,8 @@ def test_production_boundary_is_fixed_host_bound_restart_safe_and_admitted() -> 
     assert "execute_services" not in provisioner
     assert "org.opencontainers.image.revision" in provisioner
     assert "installed Core source revision differs" in provisioner
+    assert 'expected = {"HOME_AGENT_POLICY_DIGEST"}' in provisioner
+    assert "_sha256(policy_raw)" in provisioner
 
     assert "[[ $# -eq 0 ]]" in launcher
     assert "sha256sum --check --status" in launcher

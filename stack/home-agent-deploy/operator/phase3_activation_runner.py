@@ -43,6 +43,7 @@ from reviewed_identity_payload import (
 CONTRACT = "phase3-authoritative-split-activation-runner-e5ad-v1"
 STATE_ROOT = Path("/srv/home-agent/private/phase3-activation")
 STATE_PATH = STATE_ROOT / "runner-state-e5ad.json"
+SOURCE_TRANSITION_ROOT = STATE_ROOT / "source-transitions"
 LOCK_PATH = Path("/srv/home-agent/locks/phase3-runner.lock")
 PRIVATE_IDENTITY_ROOT = Path("/srv/home-agent/private/phase3-identity")
 ENVIRONMENT_PATH = Path("/srv/home-agent/config/home-agent.env")
@@ -93,6 +94,19 @@ CREDENTIAL_TARGETS = tuple(
         "home-agent-identity-semantic-cutover-policy.cred",
         "home-agent-identity-semantic-cutover.cred",
     )
+)
+SOURCE_REFRESH_FORBIDDEN_PATHS = (
+    CREDENTIAL_RECEIPT,
+    *CREDENTIAL_TARGETS,
+    IDENTITY_SIGNING_STATE,
+    FINALIZER_DOCUMENT,
+    FINALIZER_RECEIPT,
+    EDGE_RECEIPT,
+    WRITER_OBSERVATION,
+    PRIVACY_OBSERVATION,
+    CUTOVER_PACKET,
+    CUTOVER_RECEIPT,
+    COMPLETION_RECEIPT,
 )
 REMOTE_EDGE_RECEIPT = "/config/.storage/home_agent_edge_privacy_policy_receipt.json"
 REMOTE_IDENTITY_DB = "/config/extended_openai_conversation/identity.db"
@@ -392,6 +406,89 @@ class StateStore:
             os.chmod(temporary, 0o600)
             os.replace(temporary, STATE_PATH)
             directory = os.open(STATE_ROOT, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+
+    def record_source_transition(
+        self,
+        state: Mapping[str, Any],
+        new_commit: str,
+    ) -> None:
+        old_commit = str(state["source_commit"])
+        if (
+            source_plan.COMMIT_SHA.fullmatch(old_commit) is None
+            or source_plan.COMMIT_SHA.fullmatch(new_commit) is None
+            or old_commit == new_commit
+        ):
+            raise ActivationRunnerError("activation source transition is invalid")
+        SOURCE_TRANSITION_ROOT.mkdir(parents=False, mode=0o700, exist_ok=True)
+        details = SOURCE_TRANSITION_ROOT.lstat()
+        if (
+            not stat.S_ISDIR(details.st_mode)
+            or details.st_uid != 0
+            or details.st_gid != 0
+            or stat.S_IMODE(details.st_mode) != 0o700
+        ):
+            raise ActivationRunnerError("activation source transition directory is unsafe")
+        path = SOURCE_TRANSITION_ROOT / f"{old_commit}-{new_commit}.json"
+        expected_static = {
+            "contract": "phase3-activation-source-transition-e5af-v1",
+            "runner_id": state["runner_id"],
+            "from_source_commit": old_commit,
+            "to_source_commit": new_commit,
+            "completed_step_count": 3,
+            "next_step": "provision_signing_credentials",
+        }
+        if path.exists() or path.is_symlink():
+            try:
+                existing_details = path.lstat()
+                existing = parse_canonical_json(path.read_bytes(), maximum=4096)
+            except (OSError, VerificationError) as error:
+                raise ActivationRunnerError(
+                    "activation source transition receipt is unsafe"
+                ) from error
+            if (
+                not stat.S_ISREG(existing_details.st_mode)
+                or existing_details.st_uid != 0
+                or existing_details.st_gid != 0
+                or stat.S_IMODE(existing_details.st_mode) != 0o600
+                or existing_details.st_nlink != 1
+                or not isinstance(existing, Mapping)
+                or set(existing) != set(expected_static) | {"recorded_at"}
+                or any(existing.get(key) != value for key, value in expected_static.items())
+                or not isinstance(existing.get("recorded_at"), str)
+            ):
+                raise ActivationRunnerError(
+                    "activation source transition receipt is unsafe"
+                )
+            return
+        receipt = {**expected_static, "recorded_at": _utc()}
+        temporary = path.with_name(f".{path.name}.new.{secrets.token_hex(12)}")
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            with os.fdopen(descriptor, "wb", closefd=True) as stream:
+                descriptor = -1
+                stream.write(canonical_bytes(receipt))
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chown(temporary, 0, 0)
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, path)
+            directory = os.open(SOURCE_TRANSITION_ROOT, os.O_RDONLY)
             try:
                 os.fsync(directory)
             finally:
@@ -1356,6 +1453,46 @@ class Runner:
             "last_error_code": state["last_error_code"],
         }
 
+    def refresh_source(self) -> dict[str, Any]:
+        state = self.store.load()
+        if state is None:
+            raise ActivationRunnerError("activation has not started")
+        if (
+            state["completed_steps"] != list(STEPS[:3])
+            or state["next_step"] != "provision_signing_credentials"
+            or state["status"] not in {"active", "paused"}
+            or any(path.exists() or path.is_symlink() for path in SOURCE_REFRESH_FORBIDDEN_PATHS)
+        ):
+            raise ActivationRunnerError(
+                "activation source cannot be refreshed at this boundary"
+            )
+        try:
+            report = source_plan.live_report()
+        except source_plan.SourcePlanError as error:
+            raise ActivationRunnerError(
+                "activation source is not hosted-accepted"
+            ) from error
+        commit = report.get("current_commit")
+        if (
+            report.get("source_acceptance_receipt_issuable") is not True
+            or report.get("blockers") != []
+            or not isinstance(commit, str)
+            or source_plan.COMMIT_SHA.fullmatch(commit) is None
+        ):
+            raise ActivationRunnerError("activation source is not hosted-accepted")
+        if commit == state["source_commit"]:
+            return self.status()
+        for step in STEPS[:3]:
+            self.backend.perform(step, state)
+        self.store.record_source_transition(state, commit)
+        state["source_commit"] = commit
+        state["status"] = "active"
+        state["pause_code"] = "none"
+        state["last_error_code"] = "none"
+        state["updated_at"] = _utc()
+        self.store.save(state)
+        return self.status()
+
     def advance(self) -> dict[str, Any]:
         state = self.store.load() or self._initial_state()
         if state["status"] == "complete":
@@ -1453,9 +1590,14 @@ def _lock() -> int:
 
 
 def main() -> int:
-    if len(sys.argv) != 2 or sys.argv[1] not in {"status", "advance", "contain"}:
+    if len(sys.argv) != 2 or sys.argv[1] not in {
+        "status",
+        "advance",
+        "contain",
+        "refresh-source",
+    }:
         print(
-            "phase3 activation runner requires status, advance, or contain",
+            "phase3 activation runner requires status, advance, contain, or refresh-source",
             file=sys.stderr,
         )
         return 64
@@ -1466,7 +1608,8 @@ def main() -> int:
     try:
         descriptor = _lock()
         runner = Runner(Backend(), StateStore())
-        result = getattr(runner, sys.argv[1])()
+        action = "refresh_source" if sys.argv[1] == "refresh-source" else sys.argv[1]
+        result = getattr(runner, action)()
     except (ActivationRunnerError, OSError):
         print("phase3 activation runner failed closed", file=sys.stderr)
         return 78
@@ -1474,7 +1617,12 @@ def main() -> int:
         if descriptor >= 0:
             os.close(descriptor)
     print(json.dumps(result, separators=(",", ":"), sort_keys=True))
-    return 0 if result["status"] in {"not_started", "complete"} else 3
+    return (
+        0
+        if sys.argv[1] == "refresh-source"
+        or result["status"] in {"not_started", "complete"}
+        else 3
+    )
 
 
 if __name__ == "__main__":

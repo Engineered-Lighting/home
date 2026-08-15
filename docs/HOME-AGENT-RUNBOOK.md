@@ -1565,6 +1565,17 @@ The command intentionally pauses at four human boundaries:
 - authenticated HA user to Marcelo confirmation; and
 - atomic confirmation of the two reviewed parent candidates.
 
+If a newly hosted-accepted source revision is required after shadow
+authorization but before signing credentials exist, run the activation runner
+once with `refresh-source`. This command is available only while the first
+three fixed steps are complete and `provision_signing_credentials` is next. It
+requires every credential, private People packet, finalizer, cutover artifact,
+and completion receipt to be absent; replays source admission, the
+pre-authorization prerequisites, and the existing shadow-authorization receipt
+under the new source; then writes a root-only content-free source-transition
+receipt before updating the journal. It cannot rebase an activation after
+credential provisioning or any later boundary.
+
 Rerun the same `advance` command after completing the requested private action.
 The root-owned journal at
 `/srv/home-agent/private/phase3-activation/runner-state-e5ad.json` keeps only

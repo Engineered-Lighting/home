@@ -44,6 +44,12 @@ class MemoryStore:
     def save(self, state):
         self.value = copy.deepcopy(self.module.validate_state(state))
 
+    def record_source_transition(self, state, new_commit):
+        self.transition = {
+            "from": state["source_commit"],
+            "to": new_commit,
+        }
+
 
 class FakeBackend:
     def __init__(self, module: ModuleType) -> None:
@@ -166,6 +172,66 @@ def test_missing_ha_ssh_pauses_before_backup_or_service_change(monkeypatch) -> N
         "validate_pre_authorization_prerequisites",
     ]
     assert "local_backup" not in backend.calls
+
+
+def test_source_refresh_replays_only_precredential_checks(monkeypatch) -> None:
+    module = _module()
+    new_commit = "c" * 40
+    monkeypatch.setattr(
+        module.source_plan,
+        "live_report",
+        lambda: {
+            "current_commit": new_commit,
+            "source_acceptance_receipt_issuable": True,
+            "blockers": [],
+        },
+    )
+    monkeypatch.setattr(module, "SOURCE_REFRESH_FORBIDDEN_PATHS", ())
+    store = MemoryStore(module)
+    state = module.new_state("b" * 40)
+    state["completed_steps"] = list(module.STEPS[:3])
+    state["next_step"] = "provision_signing_credentials"
+    state["status"] = "paused"
+    state["pause_code"] = "operator_recovery_required"
+    state["last_error_code"] = "activationrunnererror"
+    state["operation_ids"]["authorize_shadow"] = (
+        "00000000-0000-7000-8000-000000000321"
+    )
+    store.save(state)
+    backend = FakeBackend(module)
+
+    result = module.Runner(backend, store).refresh_source()
+
+    assert backend.calls == list(module.STEPS[:3])
+    assert store.transition == {"from": "b" * 40, "to": new_commit}
+    assert store.value["source_commit"] == new_commit
+    assert store.value["completed_steps"] == list(module.STEPS[:3])
+    assert store.value["next_step"] == "provision_signing_credentials"
+    assert result["status"] == "active"
+    assert result["pause_code"] == "none"
+    assert result["last_error_code"] == "none"
+
+
+def test_source_refresh_rejects_late_or_dirty_boundary(monkeypatch, tmp_path) -> None:
+    module = _module()
+    _trusted_source(module, monkeypatch)
+    store = MemoryStore(module)
+    backend = FakeBackend(module)
+    state = module.new_state("b" * 40)
+    state["completed_steps"] = list(module.STEPS[:4])
+    state["next_step"] = "await_reviewed_people_packet"
+    store.save(state)
+    with pytest.raises(module.ActivationRunnerError):
+        module.Runner(backend, store).refresh_source()
+
+    artifact = tmp_path / "credential.json"
+    artifact.write_text("present", encoding="utf-8")
+    monkeypatch.setattr(module, "SOURCE_REFRESH_FORBIDDEN_PATHS", (artifact,))
+    state["completed_steps"] = list(module.STEPS[:3])
+    state["next_step"] = "provision_signing_credentials"
+    store.save(state)
+    with pytest.raises(module.ActivationRunnerError):
+        module.Runner(backend, store).refresh_source()
 
 
 def test_finalizer_operation_id_survives_failure_and_resume(monkeypatch) -> None:
@@ -326,6 +392,8 @@ def test_runner_contract_is_fixed_restart_safe_and_action_free() -> None:
     assert '"authorize_shadow"' in source
     assert '"rollout-authorize"' in source
     assert "phase3-shadow-authorization-e5ae.json" in source
+    assert '"refresh-source"' in source
+    assert "phase3-activation-source-transition-e5af-v1" in source
 
 
 def test_kernel_provisioners_have_distinct_isolated_compose_surfaces() -> None:

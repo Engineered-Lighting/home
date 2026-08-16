@@ -183,6 +183,112 @@ disk headroom; installed transformers version; subentry tool-spec audit
 (zero-arg tools, `$ref`); labeler schema validated against xgrammar's
 unsupported-feature list.
 
+## Phase 0 — RESULTS (collected 2026-08-16, admission check green)
+
+Collector: `tools/qwen38-phase0-archive.sh` (read-only, re-runnable).
+Archive: `/srv/data/eval/migration/phase0/` (178+ files, `MANIFEST.txt`).
+Nothing in the live stack was stopped, restarted, or reconfigured.
+
+**Engine baseline (incumbent, util 0.70).** Image digest
+`sha256:70a098d90dba…` == the running image ID (pin holds). vLLM 0.20.2,
+transformers 5.8.0 (exactly R7's floor), torch 2.11.0+cu130, CUDA 13.0.2.
+Startup: `GPU KV cache size: 366,816 tokens`, max concurrency 11.19× at
+32768. CUDA graphs capture (0.06 GiB).
+
+- ⚠ **R7 correction — the attention backend is `FLASH_ATTN`, not
+  FlashInfer.** vLLM picks FLASH_ATTN out of `['FLASH_ATTN', 'FLASHINFER',
+  'TRITON_ATTN', 'FLEX_ATTENTION']`, and the FP8 MoE backend is TRITON (not
+  DEEPGEMM). R7's "check the attention backend is actually FlashInfer"
+  assumed a state that has never been live. Phase 3 compares against
+  FLASH_ATTN as the incumbent baseline; switching backends is a *separate*
+  change and must not be bundled into the cutover.
+- ⚠ **`VLLM_USE_DEEP_GEMM` is not set today.** Adding `=0` at cutover per R7
+  changes two variables at once (model + engine env). Either set it in a
+  Phase-3 cell first, or accept and record the confound. DeepGEMM is not
+  the selected backend anyway, so the flag is likely inert here.
+- The compose comment justifying util 0.70 ("Moshi listener is sitting at
+  ~24 GB") is **stale** — the s2s profile is not running.
+
+**VRAM tenant map (measured).** vLLM 68,244 MiB · chatterbox 5,282 ·
+parakeet 3,392 · kokoro 1,422 · host 662 → 80,160 / 97,887 MiB. Non-vLLM
+tenants total ≈ 11.6 GiB, not the ~24 GB the compose comment assumes. At
+util 0.80 the engine would claim 78,310 MiB, leaving ≈ 7.5 GiB headroom —
+feasible, and the number to re-verify in Phase 3 rather than assume.
+
+**R1 CONFIRMED exactly, from the cached checkpoint config (offline).**
+64 layers, `full_attention_interval: 4` → **16 full-attention layers**, 48
+GDN linear-attention layers; `num_key_value_heads: 4`, `head_dim: 256` ⇒
+16 × 2 × 4 × 256 × 2 B = **65,536 B = 64 KiB/token bf16** (32 fp8), exactly
+as R1 predicted. 131072 ctx = 8.0 GiB, 262144 = 16.0 GiB. GDN recurrent
+state = **144 MiB per sequence** (48 × 48 vheads × 128 × 128 × 4 B), the
+top of R1's 75–150 MiB band. `mtp_num_hidden_layers: 1` confirms the MTP
+head; `max_position_embeddings: 262144` confirms D10's ceiling.
+Note the checkpoint declares `mamba_ssm_dtype: float32` — R3's proposed
+`--mamba-*-dtype float16` is a deliberate deviation from the checkpoint
+default, not a neutral setting.
+
+**Both weight sets cached** (incumbent 31 G, candidate 29 G) with 554 G
+free — the rollback precondition holds. No cache pruning until soak exit.
+
+**EOC live subentry frozen** (HA storage is truth; no file copy):
+`context_threshold: 24000` — **repo's 40000 is wrong, live wins**;
+`max_tokens: 2000`; `chat_model: qwen3-vl-30b` (served-name freeze intact);
+prompt 33,760 chars (sha256 `dad9d3cb…`); functions 21,671 chars
+(sha256 `5526a526…`). Entry title still reads "Local Qwen3.6" (cosmetic).
+- ⚠ **`max_function_calls_per_conversation: 3`** — the live ceiling on
+  multi-step tool use. Roadmap C1's "raise scenario `max_tool_calls` 6→10"
+  is a *harness* number; production stops at 3. Raising the harness alone
+  would test a capability production cannot execute.
+
+**Subentry tool-spec audit** (`tools/qwen38-toolspec-audit.py`): 23 tools,
+**2 gate-blocking hazards** — `get_all_rooms_state` and `areas_in_home` are
+zero-argument tools, exactly the vllm#50989 doom-loop shape under
+`qwen3_coder` (R6). Plus 5 tools with properties but empty `required`
+(`execute_services`, `get_history`, `find_clips`, `recap`,
+`clear_presence_override`) which the model can satisfy with `{}` — the same
+shape. No xgrammar-unsupported features (`$ref`/`allOf`/`oneOf`) anywhere,
+so structured output compiles. **These two tools are now a mandatory named
+case in the G3-pre streaming replay and the V1 matrix cell.**
+
+**Consumer-timeout inventory vs D1** (live EOC component + sidecar):
+`PERCEPTION_AUTO_TIMEOUT_S = 6.0` · `REFRESH_PERCEPTION_TIMEOUT_S = 8` ·
+room-binding `_TTL_SEC = 90.0` (the wrong-room actuation path) ·
+`GROUNDED_LOOK_TIMEOUT_S = 150` · `FIND_CLIPS_TIMEOUT_S = 6.0` ·
+`DESCRIBE_CLIP_TIMEOUT_S = 30.0` · `RECAP_TIMEOUT_S = 8.0` ·
+`DEVICE_CONV_TTL_SEC = 900` · sidecar `within_ms = 30_000` ·
+`DESCRIBE_CLIP_MAX_FRAMES = 8` · app `processingGuardMs = 30000` ·
+`VISION_MAX_TOKENS = 200` · labeler `VLM_TIMEOUT_S = 180`,
+`VLM_KEEP_ALIVE = 30m` live (source default says 10m).
+
+**Never-deploy list — divergence confirmed by archived evidence.** The live
+EOC component has **no `MODEL_TOOL_CATALOG_ENABLED` constant at all**, while
+the repo copy (`ha-config/extended_openai_conversation/const.py:555`) pins
+it to `False` under `test_action_containment.py`. Deploying the repo copy
+zeroes the 23-tool catalog. Live sources for metrics-sidecar,
+vision-sidecar, intelligence, video-labeler and the EOC component are
+archived under `live-sources/`.
+
+**ntfy is PUBLIC `https://ntfy.sh/`** — no self-hosted instance on this
+host, topic `nut-engineeredlightingserver1-…` (an unlisted public topic is
+the only access control). Current senders are text-only, no attachments.
+⇒ The soak alarm rule resolves to **no names, no images**, and roadmap E1's
+"ntfy + snapshot" design would be cloud egress of camera imagery — barred by
+the never-do list until a self-hosted instance exists.
+
+**`/run/ha-maintenance`**: absent (no maintenance in progress). Honoured by
+`/usr/local/sbin/ha-reachable` and `/usr/local/sbin/ha-health`, both of
+which exit 0 early when it exists — it suppresses paging, and nothing else.
+
+⚠ **New trap — clock skew.** vLLM container logs are **UTC**; the host
+journal and baseline CSV are **PDT (UTC−7)**. Correlating a latency spike
+across the two without converting reads as a 7-hour-old event. Recorded in
+`clock-skew.txt`.
+
+**Still open from Phase 0:** held-task-0.4 confirmation, ceremony-journal
+status, labeler schema vs xgrammar's unsupported list (the *labeler* schema;
+the subentry specs are clean), traffic-week artifact freeze, and the
+`apply_chat_template` offline kwarg-inertness check.
+
 ## Phase 3 — latency matrix (each session is a mini maintenance window)
 
 Session protocol: flag up → quiesce labeler AND ambient loop → admission

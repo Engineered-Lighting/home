@@ -9,13 +9,30 @@
 
 **Hard gates before anything here ships:**
 - The migration soak has exited clean (see migration doc).
-- **V1**: live Frigate recording state verified (repo example says
-  `record.enabled: false`; ~36 GB in `/media/frigate` suggests otherwise —
-  everything in group A hinges on the answer). If recording is off, enabling
-  it is a standalone privacy + disk decision (D8), never a roadmap side
-  effect. Also verify the face-recognition per-camera overrides: the repo
-  example nests the driveway exclusion under `dining_room` (inverted vs the
-  documented policy).
+- **V1 — ANSWERED 2026-08-16 (Phase 0). Recording is OFF, and it blocks A1
+  as designed.** All five cameras (`living_room`, `dining_room`, `kitchen`,
+  `back_door`, `driveway`) carry `record: enabled: false`; there is no
+  global `record:` block. `/media/frigate/recordings` is **empty (4 KB)** —
+  the 34.4 GB is `clips/`, and it holds **0 `.mp4` files against 202,373
+  `.jpg`** plus `.webp`. Those are event *snapshots* (`snapshots.enabled:
+  true`, `bounding_box: true`), not clips. The "~36 GB suggests recording is
+  on" hypothesis is refuted: disk usage never distinguished the two.
+  **Consequence:** Frigate builds event clips from recording segments, so
+  `has_clip` is false for every event and there is no `clip.mp4` to fetch.
+  A1's first validation step can never pass today, and A1 + the package
+  query + the evening digest + A3 + E1's narrative all inherit the block.
+  Enabling recording remains a standalone privacy + disk decision (**D8**;
+  the HA media disk has 802 GB free), never a roadmap side effect. See
+  "A1 — snapshot-first correction" below for the unblocked slice.
+- **Face-recognition overrides — ANSWERED.** The live Frigate config
+  mentions `face` **zero times**: face recognition is not configured at all.
+  The inverted driveway exclusion is a **repo-example-only defect** that
+  never reached live; fix it in the example, but it is not a live risk.
+  Names still reach model context by a different route — this stack writes
+  `sub_label`s back to Frigate itself (`frigate_sync.py`,
+  `identity_store.py`), so D3 enforcement at the tool layer is still
+  required and `find_clips` still carries `sub_label` unconditionally
+  (confirmed live in `functions/frigate.py`).
 - **D3 (identity policy)** hard-gates A1, E1, and the evening digest: one
   written policy over the four current stances (labeler prompt forbids
   identity; ambient/world-state names people ≥0.70 confidence indoors by
@@ -49,15 +66,35 @@ grow the intelligence held-out set toward the 50-audited-item prompt gate.
 `DESCRIBE_CLIP_MAX_FRAMES=8` contradiction (live already runs 8).
 
 **E0 — guardianship recap (read-only).** Daily recap over existing live
-labeler rows + the read-only `soak-review` endpoint, delivered via ntfy —
-only after Phase-0 verifies ntfy is self-hosted/LAN-only; payload rule: no
-names, no images otherwise. No intelligence containment flags are touched
+labeler rows + the read-only `soak-review` endpoint, delivered via ntfy.
+**Phase 0 answered the precondition: ntfy is the PUBLIC `https://ntfy.sh/`**
+— no self-hosted instance exists, and an unlisted topic is the only access
+control. The payload rule therefore binds at its strict setting: **no names,
+no images, ever**, for E0, for the soak alarms, and for E1. Current senders
+are already text-only. Self-hosting ntfy is the prerequisite for relaxing
+this, and it is not on this roadmap. No intelligence containment flags are touched
 (they are contract-test-pinned literals; changing them is a reviewed
 policy + test change, deferred to Run).
 
 ## Walk (months 1–2)
 
-**A1 — past-event describe ("did the package come?").** New
+**A1 — past-event describe ("did the package come?").**
+
+> **Snapshot-first correction (Phase 0, 2026-08-16).** The clip-based design
+> below is **blocked on D8** — with recording off there is no `clip.mp4` and
+> `has_clip` is false for every event (see V1). Do **not** wait on D8 to
+> ship the story. Frigate holds **202k event snapshots** with boxes already
+> drawn, retained for months, on a disk with 802 GB free. A snapshot-first
+> `describe_event` — single frame, `GET /api/events/<id>/snapshot.jpg`, no
+> ffmpeg, no RTSP, no 50 MB fetch, no exposure to the >2 GB-video segfault
+> (#46589) — answers "did the package come?" today and is strictly smaller,
+> cheaper, and safer. It also needs no new token math: one 768² frame ≈ 576
+> tokens against the multi-thousand-token clip path.
+> Ship order: **A1a snapshot-first (unblocked now)** → D8 decision → **A1b
+> clip path (the design below) only if D8 enables recording**. The seven
+> app/web touchpoints, the D3 `sub_label` stripping, and the EOC subentry
+> tool addition are identical for both and are done once in A1a.
+
 `POST /describe_event {event_id, question?}` in the **vision-sidecar** (it
 already has ffmpeg, RTSP creds, the vLLM client): validate `has_clip` +
 duration ≤ 60 s → fetch Frigate `clip.mp4` (≤ 50 MB — vLLM 0.20.2 has an
@@ -99,6 +136,13 @@ mapping table (video-labeler 23-class / intelligence 13-value / lighting
 
 **C1 — multi-step voice.** Run the DOC-S58..S68 planning contracts live;
 raise scenario `max_tool_calls` 6→10; add 2–3 multi-turn golden scenarios.
+⚠ **Phase 0: the live subentry caps `max_function_calls_per_conversation`
+at 3.** Raising only the harness number tests a chain production cannot
+execute. The live option must be raised in the same slice (a subentry edit,
+so `tools/patch-subentry-function-tools.py` territory — dry-run diff first),
+and the raise interacts with every timeout in the retune row below: three
+extra tool round-trips is exactly what pushes a turn past
+`processingGuardMs` (30 s) and the 90 s room-binding TTL.
 **Gated on the consumer-timeout retune row in the migration doc** (the 30 s
 processing guard, 90 s room-binding TTL, and 6/8 s perception timeouts all
 mis-fire on longer chains — the room-binding expiry is a wrong-room
@@ -109,8 +153,11 @@ Cross-modal investigation: a golden scenario over existing tools
 with Frigate audio events (bark/glass/doorbell classifiers already
 configured) → find_clips → describe_event correlation.
 
-**A2 — native-video trial.** `video: 0 → 1` behind
-`VIDEO_INPUT_MODE=native`. NOT an offline experiment: changing the mm limit
+**A2 — native-video trial.** ⚠ **Also blocked on D8:** with recording off
+there is no video on disk to trial against (V1). A2 cannot start until
+either D8 enables recording or the trial is re-scoped to synthesised clips
+from snapshot sequences, which would not test the thing A2 exists to test.
+`video: 0 → 1` behind `VIDEO_INPUT_MODE=native`. NOT an offline experiment: changing the mm limit
 shrinks the KV pool via the startup profiling reservation and needs an
 engine restart → a maintenance-window change with the KV floor re-assert
 (or a temporary reduced-util engine). Base64 `video_url` part first (URL
@@ -156,8 +203,11 @@ people-data slice names its consent gate. Zero edits to
 ACTIVATION_PATHS from this workstream, ever.
 
 **E1 — guardianship v2 (report-only).** Anomaly narration (driveway
-loitering via Frigate events → describe_event narrative → ntfy + snapshot;
-no outdoor naming — enforced at the tool layer per D3). Left-running
+loitering via Frigate events → describe_event narrative → ntfy, **text
+only**; no outdoor naming — enforced at the tool layer per D3). ⚠ The
+original "ntfy + snapshot" would push camera imagery to public ntfy.sh —
+cloud egress of camera imagery, which the not-doing list bars. Ship the
+narration without the image, or self-host ntfy first. Left-running
 detection (stove on + kitchen empty 40 min → optional confirm frame →
 ntfy). Physical response stays behind the future Safety Kernel.
 
@@ -183,8 +233,24 @@ output (classifier/pilot machinery only).
 ## Open owner decisions referenced here
 
 - **D3** identity policy (precondition for A1/E1/digest) — includes fixing
-  the example-config inversion and per-surface regression fixtures.
-- **D8** Frigate recording/retention (if V1 finds recording off).
+  the example-config inversion (repo-only; live has no face-recognition
+  block at all) and per-surface regression fixtures. The live `sub_label`
+  path through `find_clips` is confirmed and still needs tool-layer
+  enforcement.
+- **D8** Frigate recording/retention — **PROMOTED from conditional to
+  blocking (Phase 0, V1).** Recording is off on all five cameras and there
+  are zero video files; this now hard-blocks A1b, A2, A3, and E1's clip
+  narrative. Concrete options for the owner:
+  **(a)** leave recording off and ship **A1a snapshot-first** only — zero
+  privacy delta, zero disk delta, delivers the package query today;
+  **(b)** enable recording on the two outdoor cameras (`driveway`,
+  `back_door`) with a short retention (e.g. 7 days, events-only) — unblocks
+  A1b/E1 for the cameras that motivate them, at a bounded disk cost against
+  802 GB free; **(c)** enable everywhere — largest capability gain, largest
+  privacy and disk change, and it puts continuous indoor video on disk.
+  Recommendation: **(a) now, decide (b) after A1a proves the story's
+  value** — it keeps the roadmap moving without spending a privacy decision
+  on an unvalidated feature.
 - **D11** `/trace` retention acknowledgment covering F0 prelabel payloads,
   G2 replay, and matrix image traffic.
 - **D12** browser/mobile exposure of `describe_event` (the vision POST

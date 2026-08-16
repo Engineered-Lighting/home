@@ -80,8 +80,16 @@ policy + test change, deferred to Run).
 
 **A1 — past-event describe ("did the package come?").**
 
-> **Snapshot-first correction (Phase 0, 2026-08-16).** The clip-based design
-> below is **blocked on D8** — with recording off there is no `clip.mp4` and
+> **UNBLOCKED by D8 (owner decision, 2026-08-16): recording is being
+> enabled with a 48 h rolling window — see group G.** Once G1 lands,
+> `has_clip` becomes true and the clip design below works as written.
+> Ship order is unchanged and still starts with the snapshot slice:
+> **A1a snapshot-first** needs no video, can be built while recording
+> accumulates, and shares every app/web touchpoint with the clip path —
+> so A1b becomes a backend swap rather than a new story.
+>
+> **Snapshot-first rationale (Phase 0, 2026-08-16).** The clip-based design
+> below *was* blocked — with recording off there is no `clip.mp4` and
 > `has_clip` is false for every event (see V1). Do **not** wait on D8 to
 > ship the story. Frigate holds **202k event snapshots** with boxes already
 > drawn, retained for months, on a disk with 802 GB free. A snapshot-first
@@ -153,10 +161,8 @@ Cross-modal investigation: a golden scenario over existing tools
 with Frigate audio events (bark/glass/doorbell classifiers already
 configured) → find_clips → describe_event correlation.
 
-**A2 — native-video trial.** ⚠ **Also blocked on D8:** with recording off
-there is no video on disk to trial against (V1). A2 cannot start until
-either D8 enables recording or the trial is re-scoped to synthesised clips
-from snapshot sequences, which would not test the thing A2 exists to test.
+**A2 — native-video trial.** Unblocked once group G1 lands (D8 enables
+recording); until then there is no video on disk to trial against.
 `video: 0 → 1` behind `VIDEO_INPUT_MODE=native`. NOT an offline experiment: changing the mm limit
 shrinks the KV pool via the startup profiling reservation and needs an
 engine restart → a maintenance-window change with the KV floor re-assert
@@ -217,10 +223,109 @@ labeled clips — zero risk, a good soak exercise). Workshop copilot
 last). Gesture vocabulary revival (its capture tool is deny-listed —
 needs a propose-only design first).
 
+## Group G — rolling video buffer + nightly distillation (owner-directed)
+
+**The idea.** Record continuously with a 48-hour rolling window. Every
+night between 03:00 and 08:00, the VLM reads what accumulated and writes
+durable *observations*; the video then ages out at 48 h. Memory survives,
+footage does not. This is the roadmap's hierarchical-summarisation story
+(A1 → digest → A3) with a real substrate under it.
+
+**G1 — enable recording (owner-run, reversible).** `record.enabled: true`
+per camera plus a 48 h retention policy. The plumbing already exists: every
+camera's `record` role is already bound to its main `stream1` in the live
+config, so this is a config flip, not a re-architecture.
+
+⚠ **Measure before committing the retention number.** Enable recording on
+**one** camera for one hour, measure the segment bytes, then multiply. The
+planning estimate below is an estimate, and a storage decision taken on an
+estimate is how disks fill at 3 a.m.
+- Planning figure: consumer main streams typically run 2–4 Mbps ⇒
+  0.9–1.8 GB/camera-hour ⇒ **5 cameras × 48 h ≈ 215–430 GB**.
+
+⚠ **The storage goes on the HA box, and the new SSD is not needed for it.**
+Frigate writes to `/media/frigate` on the HA machine, which has **802 GB
+free** — comfortably more than 48 h needs. The 2 TB NVMe on the AI box is
+already mounted at **`/srv/data` with 1.6 TB free** (it holds 217 GB of
+ollama models). Pointing Frigate at it would mean NFS-mounting AI-box
+storage into HA and putting continuous recording on the network path — a
+well-known source of Frigate segment corruption. **Record locally on HA;
+give the AI-box SSD the job it is actually good for: the durable
+observation store and any clips pulled for parsing.** Those are small and
+permanent, which is the opposite of video.
+- Cameras sit on an isolated subnet (192.168.251.x) reachable only from the
+  HA box via go2rtc — the AI box cannot pull RTSP directly and must go
+  through Frigate's API. Verified 2026-08-16.
+
+**G2 — nightly distillation lane (03:00–08:00).**
+
+⚠ **Parsing "all the stored video" is not feasible, and is not what you
+want.** 48 h across 5 cameras is 240 camera-hours ≈ 13 M frames. Measured
+on the live incumbent, one 1280×720 frame costs **0.32 s** end-to-end
+(913 prompt tokens, production path); the candidate is 2.4–2.6× slower on
+decode, so budget ~0.8 s/frame. The 5-hour window, at 50% duty to leave
+production responsive, buys roughly **11,000 frames a night**. Brute force
+is off by three orders of magnitude.
+
+What fits, and reads better:
+1. **Event-anchored pass (primary).** Frigate already knows where the
+   interesting seconds are — ~1,700 events/day, inferred from 202k
+   snapshots over ~4 months. Parse only event segments, 2–4 frames each:
+   **≈ 3,400–6,800 frames ⇒ 45–90 min.**
+2. **Ambient sweep (gap coverage).** One frame per camera per 5 minutes
+   over the same window catches what the detector missed:
+   **≈ 2,880 frames ⇒ ~40 min.**
+3. **Hierarchical roll-up.** Per-event captions → per-camera hourly
+   summaries → one nightly narrative. A handful of text-only calls.
+
+Total ≈ 1.5–2 h inside a 5 h window, with headroom for the candidate's
+slower decode and for a night that is busier than average. **Each segment
+is parsed once, roughly 24 h after recording, leaving a second 24 h as
+margin before it ages out** — so a failed night is recoverable, not lost.
+
+**G3 — the observation store.** Writes go to a new, **non-authoritative**
+observations store on `/srv/data`, NOT to Home Agent memory.
+
+⚠ **This is the one place the request collides with a standing guardrail.**
+Group D's rule is absolute: *the model never writes memory.* Nightly
+distillation is the model writing down what it saw, so it must land
+somewhere that is explicitly not memory: append-only, timestamped,
+queryable, and clearly marked as model-generated observation. Promotion
+from observation to durable memory stays human- or ceremony-governed,
+exactly as group D specifies. That keeps the capability and the guardrail
+both intact; collapsing the two would quietly hand the model the write path
+the kill-switch exists to deny.
+
+**G4 — privacy consequences, stated plainly.** This is a real posture
+change and should be adopted with eyes open, not as a side effect:
+- Continuous recording now covers **indoor** rooms (living room, kitchen,
+  dining room), not just approaches.
+- **"Wiped after 48 h" no longer means "forgotten."** The observations are
+  the point, and they outlive the footage indefinitely. The retention
+  decision is therefore about the observation store, not the video.
+- **D3 identity policy binds the observations**, not just the tool layer:
+  no naming on outdoor cameras, do-not-track flags honoured, and a
+  regression fixture per surface. Frigate's own face recognition is off
+  (verified), but this stack writes `sub_label`s back itself, so names can
+  still reach a caption.
+- Nothing here is exported: the observation store is local, and the ntfy
+  payload rule (no names, no images — ntfy is public) is unchanged.
+
+**G5 — sequencing.** Recording (G1) is independent of the model migration
+and can be enabled as soon as the one-camera measurement lands; doing it
+early means a real corpus exists by the time the candidate does. The
+**nightly lane (G2) must not start before soak exit** — it is a large new
+GPU consumer sharing `--max-num-seqs 4` with production, and it joins the
+migration rollback quiesce list alongside F0 and the ambient loop.
+
 ## Not-doing list
 
 No `add_automation` / free-text standing intents (the model-action
-kill-switch is intentional and untouchable) · no conversation-tee
+kill-switch is intentional and untouchable) · **no model writes into Home
+Agent memory — group G's nightly distillation writes observations to a
+separate non-authoritative store, and promotion to memory stays governed**
+· no recording to network-mounted storage (Frigate segment corruption; the
+48 h buffer stays on the HA box's local disk) · no conversation-tee
 re-enable (requires the authenticated redesign its lock comment demands) ·
 no vLLM version bump bundled with anything · no fp8 KV outside the
 garble-gated cell · no cloud video egress (ntfy payload rule included) ·
@@ -237,13 +342,12 @@ output (classifier/pilot machinery only).
   block at all) and per-surface regression fixtures. The live `sub_label`
   path through `find_clips` is confirmed and still needs tool-layer
   enforcement.
-- **D8** Frigate recording/retention — **DECIDED 2026-08-16: option (a).**
-  Recording stays OFF. Group A ships as **A1a snapshot-first**; the clip
-  path (A1b), A2, A3, and E1's clip narrative stay parked until A1a has
-  proven the story is worth a privacy and disk decision. Nothing on the
-  live host changes as a result of this decision — it is a decision *not*
-  to change Frigate. Revisit only with A1a usage evidence in hand.
-  Options as they stood (kept for the revisit):
+- **D8** Frigate recording/retention — **DECIDED 2026-08-16 by the owner:
+  ENABLE, 48-hour rolling retention, with nightly distillation into
+  durable observations before footage is wiped.** This supersedes the
+  earlier same-day recommendation to leave recording off. The design is
+  **group G** below; it unblocks A1b, A2, A3 and E1's clip narrative.
+  Earlier options are kept only as a record of what was weighed:
   **(a)** leave recording off and ship **A1a snapshot-first** only — zero
   privacy delta, zero disk delta, delivers the package query today;
   **(b)** enable recording on the two outdoor cameras (`driveway`,
@@ -251,9 +355,10 @@ output (classifier/pilot machinery only).
   A1b/E1 for the cameras that motivate them, at a bounded disk cost against
   802 GB free; **(c)** enable everywhere — largest capability gain, largest
   privacy and disk change, and it puts continuous indoor video on disk.
-  Rationale for (a): it keeps the roadmap moving without spending a privacy
-  decision on an unvalidated feature, and 202k retained snapshots already
-  carry the package query.
+  The owner chose a fourth option not on this list: **enable everywhere
+  with a 48 h rolling window and distil to durable observations nightly**,
+  which trades the disk cost for a capability none of (a)–(c) offered —
+  the house remembers what it saw without keeping the video. See group G.
 - **D11** `/trace` retention acknowledgment covering F0 prelabel payloads,
   G2 replay, and matrix image traffic.
 - **D12** browser/mobile exposure of `describe_event` (the vision POST

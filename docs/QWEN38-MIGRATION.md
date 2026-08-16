@@ -464,13 +464,45 @@ allowance would let a 6 s tail become a 15 s tail unnoticed — which is
 exactly the user harm the budget existed to prevent. 1.25× caps degradation
 without demanding the candidate fix an inherited fault.
 
-**G6-d — TRACKED PRE-EXISTING DEFECT (not a gate, must not block cutover,
-must not be closed silently): voice p95 6.12 s on multi-tool reads.**
-Reproduced at n=5 (6.20 s) and n=30 (6.12 s). Attribution is *not* the LLM
-leg — the same engine serves ambient at 0.176 s p95, voice-under-clip-
-prefill at 0.69 s p95, and TTFT at 0.049 s warm. The time is going into the
-HA conversation pipeline, tool round-trips, or entity fan-out. Next step is
-a span breakdown of one slow turn; until that exists, nobody should guess.
+**G6-d — TRACKED PRE-EXISTING DEFECT: voice p95 6.12 s on multi-tool
+reads. ⚠ DIAGNOSED 2026-08-16 — and the first attribution was wrong.**
+
+The earlier note here guessed "HA conversation pipeline, tool round-trips,
+or entity fan-out". Measuring against the engine's own counters settled it,
+and the answer was none of those:
+
+| turn | total | LLM calls | LLM e2e | decode | NOT-LLM |
+|---|---|---|---|---|---|
+| fast | 0.99 s | 2 | 0.82 s | 0.71 s | 0.18 s |
+| slow | 7.04 s | 7 | 6.77 s | **6.06 s** | 0.28 s |
+
+**Non-LLM overhead is 0.1–1.4 s and roughly constant. The variance is
+decode, and decode is reply length**: turn duration correlates with
+generated tokens at **r = 0.981** (n=8). It is not the pipeline at all.
+
+**Root cause: the model recites state instead of summarising it.** Asked
+"are any lights on", it names all twelve entities — sometimes as a markdown
+bullet list, read aloud by TTS — and volunteers colour temperatures and
+brightness percentages nobody asked for.
+
+**The prompt already forbids this.** "## How to speak" says *"Never use
+markdown, bullets… One short sentence is the default."* It is obeyed
+everywhere else in the same session — `areas_in_home` answers in 33 chars
+and 0.38 s. It fails **only** on live-state queries, and the reason is
+positional: **`RULE 0.7b` is the last thing in the 8,682-token prompt**, it
+commands the model to check state before answering, and it says nothing
+about how to report what it finds. Recency wins.
+
+So the fix is not another brevity rule — one exists and loses. It is a
+reporting clause inside the rule that causes the enumeration:
+`tools/patch-subentry-prompt.py` (+545 chars to RULE 0.7b, dry-run by
+default, timestamped backup, config-entry reload with no HA restart,
+`--revert` to undo).
+
+⚠ **This is a prompt-surface edit and therefore OWNER-RUN.** It also
+invalidates the V-cell baseline the moment it lands, so the sequence is:
+apply → re-run the V cell → replace the G6-d and G6-b/c reference numbers
+here. Do not apply it during a soak.
 
 ⚠ **Instrument correction.** D1 named HA `/api/conversation/process` as the
 TTFT instrument. **It cannot be** — that endpoint returns a finished

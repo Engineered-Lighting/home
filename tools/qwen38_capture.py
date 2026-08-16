@@ -47,6 +47,11 @@ MEASUREMENT_POINTS = {
 # prefix cache; "busted" means the caller actively defeated it.
 CACHE_STATES = ("cold", "warm", "busted", "unknown")
 
+# Streaming deltas can carry reasoning under either field name (R5's
+# rename). Captured separately so a leak never counts as first content and
+# never silently inflates TTFT.
+REASONING_FIELDS_STREAM = ("reasoning", "reasoning_content")
+
 
 @dataclass
 class CapturedTurn:
@@ -174,6 +179,84 @@ class Capturer:
                 status="error", error=f"{type(e).__name__}: {e}",
                 request=_redact_request(body), meta=meta or {})
 
+        self.turns.append(turn)
+        return turn
+
+    def chat_stream(self, messages: list[dict], cell: str, cache_state: str,
+                    meta: dict | None = None, **params) -> CapturedTurn:
+        """Streaming completion, so TTFT can be measured.
+
+        D1 budgets TTFT ≤ 1.2 s and names HA `/api/conversation/process` as
+        the instrument — but that endpoint returns a finished response and
+        cannot expose a first token. TTFT is therefore measurable only on
+        the LLM leg, here, and a TTFT number must say so rather than imply
+        it covers the whole pipeline.
+        """
+        body = {"model": self.model, "messages": messages, "stream": True}
+        body.update(params)
+        payload = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(
+            self.endpoint, data=payload,
+            headers={"Content-Type": "application/json"})
+
+        t0 = time.time()
+        ttft, pieces, finish, usage = None, [], None, {}
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                for raw in r:
+                    line = raw.decode("utf-8", "replace").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except ValueError:
+                        continue
+                    if chunk.get("usage"):
+                        usage = chunk["usage"]
+                    choice = (chunk.get("choices") or [{}])[0]
+                    delta = choice.get("delta") or {}
+                    if choice.get("finish_reason"):
+                        finish = choice["finish_reason"]
+                    # Reasoning deltas are a G5 leak and must not be
+                    # mistaken for first content.
+                    for field in REASONING_FIELDS_STREAM:
+                        if delta.get(field):
+                            pieces.append({"_leak_field": field,
+                                           "text": delta[field]})
+                    if delta.get("content"):
+                        if ttft is None:
+                            ttft = time.time() - t0
+                        pieces.append({"text": delta["content"]})
+            latency = time.time() - t0
+            content = "".join(p["text"] for p in pieces if "_leak_field" not in p)
+            leaked = {p["_leak_field"]: "".join(
+                q["text"] for q in pieces if q.get("_leak_field") == p["_leak_field"])
+                for p in pieces if "_leak_field" in p}
+            message = {"role": "assistant", "content": content}
+            message.update(leaked)
+            details = (usage or {}).get("prompt_tokens_details") or {}
+            turn = CapturedTurn(
+                cell=cell, measurement_point=self.measurement_point,
+                cache_state=cache_state, latency_s=latency,
+                prompt_tokens=usage.get("prompt_tokens"),
+                completion_tokens=usage.get("completion_tokens"),
+                cached_tokens=details.get("cached_tokens"),
+                finish_reason=finish,
+                request=_redact_request(body),
+                response={"choices": [{"message": message,
+                                       "finish_reason": finish}],
+                          "usage": usage},
+                meta={**(meta or {}), "ttft_s": ttft, "streamed": True})
+        except (urllib.error.URLError, TimeoutError) as e:
+            turn = CapturedTurn(
+                cell=cell, measurement_point=self.measurement_point,
+                cache_state=cache_state, latency_s=time.time() - t0,
+                status="error", error=f"{type(e).__name__}: {e}",
+                request=_redact_request(body),
+                meta={**(meta or {}), "ttft_s": None, "streamed": True})
         self.turns.append(turn)
         return turn
 

@@ -61,13 +61,24 @@ PHASE0 = pathlib.Path("/srv/data/eval/migration/phase0")
 G4_CORPUS = pathlib.Path("/srv/data/eval/migration/g4-corpus")
 LIVE_PROMPT = PHASE0 / "eoc" / "prompt.live.txt"
 
-# D1, binding. Every threshold in the report is checked against these.
+# D1 as AMENDED 2026-08-16 (owner chose option (a) after the incumbent was
+# measured breaching the original voice p95). Every threshold below is
+# checked against these, and the voice tail is deliberately NOT an absolute
+# number — see G6-c.
 BUDGET = {
-    "ambient_p95_s": 1.5,
-    "voice_e2e_p95_s": 4.0,
-    "voice_ttft_p95_s": 1.2,
-    "clip4_p95_s": 6.0,
+    "ambient_p95_s": 1.5,          # G6-a; incumbent 0.176 s
+    "clip4_p95_s": 6.0,            # G6-a; incumbent 0.46 s
+    "voice_ttft_p95_s": 1.2,       # G6-a; LLM leg at the sidecar, NOT HA
+    "voice_e2e_p50_s": 2.5,        # G6-b; incumbent worst utterance 1.84 s
+    "voice_e2e_p95_ratio": 1.25,   # G6-c; PAIRED against the incumbent's p95
+                                   #       in the same session
 }
+
+# G6-d: a tracked pre-existing defect, deliberately not a gate. The
+# incumbent runs 6.12 s p95 on multi-tool voice reads (n=30, reproducible).
+# Recording it here keeps it visible in every session report instead of
+# quietly becoming the new normal once G6-c starts measuring ratios.
+KNOWN_DEFECT_VOICE_P95_S = 6.12
 
 
 def load_system_prompt() -> str:
@@ -397,11 +408,29 @@ def cell_voice_ha(cap, args, ctx) -> dict:
                     "last_speech": speech[:160]})
     allp95 = capture.percentile(
         [x for r in out for x in ([r["p95"]] if r["p95"] else [])], 95)
-    return {"utterances": out, "measurement_point": "ha_conversation",
-            "worst_p95": allp95, "budget_s": BUDGET["voice_e2e_p95_s"],
-            "within_budget": allp95 is not None and allp95 <= BUDGET["voice_e2e_p95_s"],
-            "note": "zero-argument tool `areas_in_home` is exercised first — "
-                    "the vllm#50989 doom-loop shape flagged in Phase 0"}
+    worst_p50 = capture.percentile(
+        [x for r in out for x in ([r["p50"]] if r["p50"] else [])], 100)
+    rec = {
+        "utterances": out, "measurement_point": "ha_conversation",
+        "worst_p50": worst_p50, "worst_p95": allp95,
+        # G6-b: absolute, and the number a user meets on nearly every turn.
+        "g6b_p50_budget_s": BUDGET["voice_e2e_p50_s"],
+        "g6b_pass": worst_p50 is not None and worst_p50 <= BUDGET["voice_e2e_p50_s"],
+        # G6-c: paired. Absolute tails are polluted by the tracked defect,
+        # so this can only be scored against an incumbent arm from the SAME
+        # session; a lone run reports the raw number and withholds a verdict
+        # rather than inventing one.
+        "g6c_ratio_cap": BUDGET["voice_e2e_p95_ratio"],
+        "g6c_pass": None,
+        "g6c_note": "paired gate — score with `report --incumbent SESSION`; "
+                    "a single arm cannot pass or fail it",
+        "known_defect_p95_s": KNOWN_DEFECT_VOICE_P95_S,
+        "note": "zero-argument tool `areas_in_home` is exercised first — "
+                "the vllm#50989 doom-loop shape flagged in Phase 0",
+    }
+    if allp95 is not None and allp95 > KNOWN_DEFECT_VOICE_P95_S * 1.05:
+        rec["tail_regressed_vs_known_defect"] = True
+    return rec
 
 
 CELLS = {
@@ -516,8 +545,59 @@ def cmd_run(args) -> int:
     return 0 if session["drift"]["valid"] else 3
 
 
+def score_g6c(candidate: dict, incumbent: dict) -> dict:
+    """G6-c: the paired voice tail gate.
+
+    Absolute tails are polluted by the tracked pre-existing defect (G6-d),
+    so the only honest question is how much WORSE the candidate is than the
+    incumbent measured the same way. Both sessions must be valid — comparing
+    against a drifted session would let GPU contention masquerade as a
+    model regression, or hide one.
+    """
+    cv, iv = candidate.get("cells", {}).get("V"), incumbent.get("cells", {}).get("V")
+    if not cv or not iv:
+        return {"scored": False, "why": "both sessions need a V cell"}
+    for name, sess in (("candidate", candidate), ("incumbent", incumbent)):
+        if not (sess.get("drift") or {}).get("valid", True):
+            return {"scored": False,
+                    "why": f"the {name} session drifted >10% and is invalid"}
+
+    ci = {u["utterance"]: u for u in cv["utterances"]}
+    ii = {u["utterance"]: u for u in iv["utterances"]}
+    shared = [u for u in ci if u in ii]
+    rows, worst = [], 0.0
+    for u in shared:
+        c95, i95 = ci[u].get("p95"), ii[u].get("p95")
+        if not c95 or not i95:
+            continue
+        ratio = c95 / i95
+        worst = max(worst, ratio)
+        rows.append({"utterance": u, "incumbent_p95": i95,
+                     "candidate_p95": c95, "ratio": round(ratio, 3),
+                     "pass": ratio <= BUDGET["voice_e2e_p95_ratio"]})
+    return {"scored": True, "cap": BUDGET["voice_e2e_p95_ratio"],
+            "worst_ratio": round(worst, 3),
+            "pass": bool(rows) and worst <= BUDGET["voice_e2e_p95_ratio"],
+            "per_utterance": rows}
+
+
 def cmd_report(args) -> int:
     s = json.loads((pathlib.Path(args.session) / "session.json").read_text())
+    if args.incumbent:
+        inc = json.loads((pathlib.Path(args.incumbent) / "session.json").read_text())
+        g6c = score_g6c(s, inc)
+        print("=== G6-c (paired voice tail vs the incumbent) ===")
+        if not g6c["scored"]:
+            print(f"  not scored: {g6c['why']}")
+        else:
+            for r in g6c["per_utterance"]:
+                print(f"  {'PASS' if r['pass'] else 'FAIL'}  x{r['ratio']:.2f}  "
+                      f"{r['incumbent_p95']:.2f}s -> {r['candidate_p95']:.2f}s  "
+                      f"{r['utterance']!r}")
+            print(f"  worst ratio {g6c['worst_ratio']}x against a "
+                  f"{g6c['cap']}x cap -> "
+                  f"{'PASS' if g6c['pass'] else 'FAIL'}")
+        print()
     print(f"=== matrix session {s.get('started')} ===")
     print(f"engine: {s.get('engine', {}).get('served_model')} "
           f"cache_dtype={s.get('engine', {}).get('cache_dtype')}")
@@ -558,6 +638,8 @@ def main() -> int:
 
     p = sub.add_parser("report", help="summarise a session")
     p.add_argument("session")
+    p.add_argument("--incumbent", help="an incumbent session to score the "
+                                       "paired G6-c voice-tail gate against")
     p.set_defaults(func=cmd_report)
 
     args = ap.parse_args()

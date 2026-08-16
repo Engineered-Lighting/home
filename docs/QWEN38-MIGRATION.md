@@ -87,10 +87,16 @@ builds on the quarantined host (D9).
 
 ## Decided owner decisions
 
-- **D1 — latency budget (binding for gate G6):** ambient p95 ≤ 1.5 s
-  (instrument: vision-sidecar request log / vLLM Prometheus histogram diff —
-  ambient bypasses the proxy), voice e2e p95 ≤ 4 s with TTFT ≤ 1.2 s
-  (instrument: HA `/api/conversation/process`), 4-frame clip ≤ 6 s. The
+- **D1 — latency budget (binding for gate G6). ⚠ AMENDED 2026-08-16 after
+  measurement — see "D1 AMENDMENT + G6 restated" below.** Ambient p95
+  ≤ 1.5 s (instrument: vision-sidecar request log / vLLM Prometheus
+  histogram diff — ambient bypasses the proxy), 4-frame clip ≤ 6 s, and
+  TTFT ≤ 1.2 s — all three **unchanged and met by the incumbent**. The
+  voice clause changed: the original "e2e p95 ≤ 4 s" is **already breached
+  by the incumbent at 6.12 s**, so it is replaced by **p50 ≤ 2.5 s plus a
+  paired tail cap of 1.25× the incumbent measured in the same session**,
+  with the 6.12 s tail tracked as a pre-existing defect (G6-d). TTFT's
+  instrument is corrected: HA `/api/conversation/process` cannot measure it. The
   deep-look multi-pass shape (3 cams × 2 `/reason_zoom` passes; up to 4
   passes per `grounded_look` with illumination retry) gets its own budget
   line or an explicit owner exclusion in the same memo.
@@ -425,15 +431,60 @@ touching anything. Three consequences:
    clip-prefill at 0.69 s p95. The 6.1 s is being spent in the HA
    conversation pipeline, the tool round-trips, or entity fan-out — none of
    which the model swap changes. Measure the split before blaming a model.
-3. **D1 needs an owner decision**, since D1 is recorded as DECIDED and this
-   contradicts it. Options: **(a)** re-scope G6 to p50 plus a stated tail
-   allowance, with the tail tracked separately as a pre-existing defect;
-   **(b)** keep the 4 s p95 and treat "fix the voice tail" as a
-   pre-cutover blocker in its own right; **(c)** keep the budget but scope
-   it to utterance classes the house actually uses at volume.
-   **Recommendation: (a).** It is the only one that neither waives a real
-   problem nor blocks a model migration on a fault the model did not cause,
-   and it keeps the tail visible instead of folding it into a pass.
+3. **D1 amended — owner chose (a), 2026-08-16.** G6 is re-scoped to a p50
+   budget plus a *bounded* tail allowance, and the 6.12 s tail is tracked
+   as a pre-existing defect in its own right rather than folded into a
+   pass. The restatement is below.
+
+### D1 AMENDMENT + G6 restated (owner decision, 2026-08-16)
+
+Every threshold below is set from measured incumbent behaviour, so the gate
+can be passed by a healthy candidate and failed by an unhealthy one — which
+the original could do neither of.
+
+**G6-a — absolute budgets (binding, unchanged where the incumbent meets
+them):**
+| measure | budget | incumbent | headroom |
+|---|---|---|---|
+| ambient p95 | ≤ 1.5 s | 0.176 s | 12% used |
+| 4-frame clip p95 | ≤ 6 s | 0.46 s | 8% used |
+| voice TTFT p95 | ≤ 1.2 s | 0.049 s warm / 0.337 s cache-broken | 4–28% used |
+
+**G6-b — voice end-to-end p50 ≤ 2.5 s (binding).** The incumbent's worst
+utterance sits at 1.84 s p50, so this is "no material regression on the
+typical turn" with room for the candidate's slower decode. The p50 is the
+number a user experiences on almost every turn, and it is not contaminated
+by the tail defect.
+
+**G6-c — voice end-to-end tail, PAIRED (binding): candidate p95 ≤ 1.25 ×
+the incumbent p95 measured in the SAME session, on the same utterance
+set.** Deliberately relative, never absolute: the absolute number is
+polluted by a defect the migration did not cause, but an *unbounded* tail
+allowance would let a 6 s tail become a 15 s tail unnoticed — which is
+exactly the user harm the budget existed to prevent. 1.25× caps degradation
+without demanding the candidate fix an inherited fault.
+
+**G6-d — TRACKED PRE-EXISTING DEFECT (not a gate, must not block cutover,
+must not be closed silently): voice p95 6.12 s on multi-tool reads.**
+Reproduced at n=5 (6.20 s) and n=30 (6.12 s). Attribution is *not* the LLM
+leg — the same engine serves ambient at 0.176 s p95, voice-under-clip-
+prefill at 0.69 s p95, and TTFT at 0.049 s warm. The time is going into the
+HA conversation pipeline, tool round-trips, or entity fan-out. Next step is
+a span breakdown of one slow turn; until that exists, nobody should guess.
+
+⚠ **Instrument correction.** D1 named HA `/api/conversation/process` as the
+TTFT instrument. **It cannot be** — that endpoint returns a finished
+response and never exposes a first token. TTFT is measurable only on the
+LLM leg, via streaming at the sidecar (`Capturer.chat_stream`), and any
+TTFT figure must say so instead of implying pipeline coverage. HA remains
+the correct instrument for voice **end-to-end**, which is what G6-b/c use.
+
+**One number worth keeping in view:** TTFT is 0.037 s warm against 0.332 s
+with the cache broken — a **9× swing, entirely prefill**. If R4 is right
+that prefix caching goes inert on the candidate's hybrid attention, TTFT
+starts from the 0.33 s figure before the candidate's slower prefill is
+applied. That is still inside the 1.2 s budget at 3× degradation, but it is
+the clause with the least margin, and the D-cells are what will tell us.
 
 **Incumbent baseline session, 2026-08-16** (n=100 per p95-gated cell as the
 doc requires; V cell n=30/utterance). Drift 2.4% → valid. Canary clean.
@@ -679,7 +730,7 @@ Effort pin iff C1→A1 shows benefit. Reasoning parser iff RP clean.
 | G3-live (SOAK-EXIT) | 20 scenarios × 5 ≥ 4/5 each; zero unsafe_tool_call; regression >1 scenario 2 days = rollback | includes `/recap` + `/find-clips` prose-invocation re-tests |
 | G4 hallucination-on-negatives | false-presence ≤ incumbent, paired | 25 empty/night/cup-misfire negatives + 10 quiet-literal sentinels |
 | G5 reasoning leakage | ZERO — `<think>` in content + BOTH `reasoning`/`reasoning_content` fields | all transcripts + adversarial canaries |
-| G6 latency | D1 numbers, binding | headline = B-real + B-worst; DL budgeted or excluded |
+| G6 latency | ⚠ **RESTATED 2026-08-16 (owner chose option a).** G6-a absolute: ambient p95 ≤ 1.5 s, clip4 p95 ≤ 6 s, TTFT p95 ≤ 1.2 s. G6-b voice e2e **p50 ≤ 2.5 s**. G6-c voice e2e **p95 ≤ 1.25× the incumbent's p95 in the same session** (paired — the absolute tail is polluted by a pre-existing defect). G6-d tracks that defect separately and does not gate | headline = B-real + B-worst; DL budgeted or excluded; TTFT is the LLM leg at the sidecar, NOT HA — that endpoint cannot expose a first token |
 | G7 grounded-box compat | ⚠ **RESTATED — see "G7 baseline measured" above.** The incumbent extracts 0/13 under the deployed prompt, so paired non-inferiority cannot discriminate. Score the candidate against an ABSOLUTE threshold on the frozen corpus (extraction ≥ X%, app-strippers clean ≥ Y%, runaway ≤ incumbent), with X/Y set from the v1-prompt evidence at sign-off | production parser scoring, NOT the probe's tolerant one (`--production-parser`); pass requires BOTH the sidecar parser and the two app stripper regexes; fail path: `bbox_2d` branch in sidecar + app strippers, or grammar json_schema boxes |
 
 Winner-config rule: the final Phase-3 session runs the declared shipping

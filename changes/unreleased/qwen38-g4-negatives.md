@@ -30,3 +30,15 @@ sentinels quiet, no reasoning leaks. The corpus is proposed rather than
 confirmed — its ground truth is the detector's opinion, and three of the
 five false presences may be a real person it missed in the dark — so the
 runner refuses unverified frames unless explicitly asked for a dry run.
+
+The corpus is now verified: the owner confirmed all thirty-five frames are
+person-free, which resolves the ambiguity in the direction that makes the
+gate real — the incumbent's three "a person is sitting in the living room"
+captions are genuine hallucinations rather than a detector that missed
+someone in the dark. Each lands at importance 90, a notification the owner
+would actually receive.
+
+The review sheet's wording is also corrected. It asked whether a frame was
+"empty", which invites second-guessing on a photograph of a full kitchen;
+the judgement is only whether a person, pet or package is present, and
+clutter is the point rather than a problem.

@@ -422,20 +422,35 @@ notable finding on a frame where nothing happened?*
    extracted answer — the incumbent files **8/10**. A gate that asks a
    prompt for a phrase it never requested measures nothing.
 
-**Incumbent baseline** (2026-08-16, production path, cold cache, n=35):
-**false presence 5/35**; **quiet sentinels 8/10**; **zero G5 leaks**;
-p50 0.15 s, p95 0.30 s. The two sentinel misses were "Door open, light on."
-and an "open door and potential tripping hazard" reading of a chair.
+**Corpus VERIFIED by the owner 2026-08-16: all 35 frames confirmed
+person-free.** The ambiguity is therefore resolved in the direction that
+makes the gate real — the incumbent's person claims are **genuine
+hallucinations**, not a detector that missed someone in the dark.
 
-⚠ **The corpus is PROPOSED, not confirmed.** Ground truth is "Frigate saw
-no person", which is a detector's opinion; a missed person would hand the
-gate a frame that is not negative and fail an honest model. Three of the
-five incumbent false-presences are night `living_room` frames captioned "a
-person is sitting in a chair" — plausibly a real person the detector missed
-at 02:4x in the dark. **`gate-g4-negatives.py verify` must be run by the
-owner before this corpus is gate evidence**; the runner refuses unverified
-frames unless `--include-unverified` is passed, which labels the result a
-dry run.
+**Incumbent baseline** (2026-08-16, production path, cold cache, n=35,
+verified corpus): **false presence 5/35**; **quiet sentinels 8/10**;
+**zero G5 leaks**; p50 0.16 s, p95 0.33 s.
+
+| frame | category | importance | caption |
+|---|---|---|---|
+| night_014_living_room | person | 90 | "A person is sitting in the living room, partially visible behind a TV." |
+| night_017_living_room | person | 90 | "A person is sitting in a chair in the living room." |
+| sentinel_031_dining_room | person | 90 | "Open doorway with person visible inside." |
+| sentinel_033_dining_room | hazard | 100 | "Open door and potential tripping hazard in hallway." |
+| cup_misfire_009_kitchen | activity | 55 | "A cup is on a shelf in the kitchen." |
+
+**The incumbent invents a person on 3 of 35 empty frames, twice in a dark
+living room and once in a doorway** — each at importance 90, which is a
+notification the owner would actually receive. This is a pre-existing
+production behaviour, measured for the first time here, and it is the
+number the candidate has to beat rather than a bar set by assumption.
+
+⚠ One honest caveat on precision: `cup_misfire_009` is an **accurate**
+caption ("a cup is on a shelf") that the classifier files as `activity`
+only because "shelf" is not in its inventory vocabulary. So the absolute
+5/35 slightly over-counts. It does **not** bias the gate: G4 is paired, the
+same classifier scores both arms, and a systematic vocabulary gap cancels
+between them. It adds noise to the absolute rate, not to the comparison.
 
 ### ⚠ G2 has no request log either — restated as a keyframe replay
 

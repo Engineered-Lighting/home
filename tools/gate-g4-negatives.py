@@ -346,8 +346,8 @@ def write_sheet(root: pathlib.Path, man: dict) -> list[pathlib.Path]:
               &middot; detector fired on <b>{esc(fr['label'])}</b></div>
           {cap_html}
           <div class="btns">
-            <button class="y" onclick="mark(this,'y')">empty &#10003;</button>
-            <button class="n" onclick="mark(this,'n')">something IS there &#10007;</button>
+            <button class="y" onclick="mark(this,'y')">nobody there &#10003;</button>
+            <button class="n" onclick="mark(this,'n')">a person/pet/package IS there &#10007;</button>
           </div>
         </div>
       </div>""")
@@ -386,14 +386,18 @@ def write_sheet(root: pathlib.Path, man: dict) -> list[pathlib.Path]:
          font-size:12px; max-height:90px; overflow:auto; }}
  .hint {{ color:#999; font-size:12px; margin-bottom:6px; }}
 </style>
-<h1>G4 negatives &mdash; confirm each frame is really empty</h1>
-<p class="lead">A frame belongs in this corpus only if <b>nothing is
-happening</b>: no person, no pet, no package. Parked cars and bags are fine
-&mdash; they are recorded and excluded from scoring per frame. Cards
-outlined in red are ones a model already claimed to see something in; those
-are the ones that matter most. If a person really was there and the
-detector missed them, mark it <b>&#10007;</b> &mdash; leaving it in would
-fail an honest model for being right.</p>
+<h1>G4 negatives &mdash; confirm nobody is in these frames</h1>
+<p class="lead"><b>You are judging one thing only: is there a person, a pet,
+or a package?</b> Furniture, sinks, cups, dishes, chairs, bicycles &mdash;
+all expected, all fine. A cluttered kitchen still counts as a valid frame.
+The corpus is built from moments where a detector fired on a static object
+and <i>nothing was happening</i>; the clutter is the point, not a problem.</p>
+<p class="lead">Cards outlined in red are ones a model already claimed to see
+something in &mdash; those are the ones that matter most. If a person really
+was there and the detector missed them, mark it <b>&#10007;</b>: leaving it
+in would fail an honest model for being right. If the room had no people in
+it, mark it <b>&#10003;</b> and the model's claim is recorded as a genuine
+hallucination.</p>
 <p class="lead">Mark what you can, then copy the command at the bottom and
 run it. Images stay on this machine.</p>
 <div class="grid">{''.join(cards)}</div>
@@ -501,9 +505,9 @@ def cmd_verify(args) -> int:
     else:
         return 0
 
-    print("Confirm each frame really is a negative: no person, no pet, no "
-          "package, nothing happening.")
-    print("  y = negative (keep)   n = something IS there (reject)")
+    print("Judging ONE thing: is there a person, a pet, or a package?")
+    print("Furniture, sinks, cups, dishes and clutter are expected and fine.")
+    print("  y = nobody there (keep)   n = a person/pet/package IS there (reject)")
     print("  s = skip   q = save and quit\n")
     for fr in man["frames"]:
         if fr.get("verified") is not None and not args.redo:

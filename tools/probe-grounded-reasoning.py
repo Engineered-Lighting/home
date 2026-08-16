@@ -29,6 +29,20 @@ Usage:
   --model NAME     served model name (default qwen3-vl-30b)
   --max-tokens N   generation budget for the reasoning trace (default 1500)
   --out FILE       annotated-image output path (default probe-out.jpg)
+
+GATE MODE (--production-parser), added for migration gate G7
+(docs/QWEN38-MIGRATION.md). The tolerant `parse_boxes` below exists to
+DISCOVER whatever format a model happens to emit; scoring a gate with it
+would pass a model whose output production cannot consume. In gate mode the
+trace is scored with the two real consumers instead, via tools/qwen38_gates:
+
+  * the vision-sidecar's `parse_primitives` (extraction), and
+  * the app's two stripper regexes from app/src/home-look.jsx (rendering).
+
+These two DISAGREE by construction — the sidecar was widened to accept
+Qwen3-VL's bracketed `<box>[[x1,y1,x2,y2]]</box>` and a bare '>' close, the
+app strippers never were. Output using either variant parses server-side and
+still renders as raw markup to the user, so G7 requires BOTH to accept it.
 """
 from __future__ import annotations
 
@@ -47,6 +61,12 @@ import urllib.request
 DEFAULT_ENDPOINT = "http://192.168.0.100:8000/v1/chat/completions"
 DEFAULT_MODEL = "qwen3-vl-30b"
 HA_URL = "http://192.168.0.125:8123"
+
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+try:
+    import qwen38_gates as _gates          # G7 production scoring
+except ImportError:                        # pragma: no cover
+    _gates = None
 
 # ── Candidate prompts - THIS is what Step A iterates ──────────────────────
 # Each entry is (system, user_template); {q} is replaced by the question.
@@ -230,10 +250,16 @@ def main():
                          "cache misses - makes --runs independent samples")
     ap.add_argument("--tally-only", action="store_true",
                     help="with --runs >1, print only the SUMMARY line")
+    ap.add_argument("--production-parser", action="store_true",
+                    help="GATE G7 mode: score with the sidecar's real "
+                         "parse_primitives AND the app's stripper regexes "
+                         "instead of the tolerant discovery parser")
     ap.add_argument("--out", default="probe-out.jpg")
     args = ap.parse_args()
     if not args.image and not args.camera:
         ap.error("need --image FILE or --camera NAME")
+    if args.production_parser and _gates is None:
+        ap.error("--production-parser needs tools/qwen38_gates.py on the path")
 
     img = load_image(args)
     system, user_tmpl = PROMPTS[args.prompt]
@@ -249,16 +275,28 @@ def main():
                 args.presence_penalty, args.temperature)
         except urllib.error.URLError as e:
             sys.exit(f"vLLM call failed ({args.endpoint}): {e}")
-        boxes = parse_boxes(content)
-        n_sent, max_rep = runaway_score(content)
-        runaway = max_rep >= 4 or len(content) > 1400
-        results.append((content, latency, boxes, n_sent, max_rep, runaway))
+        if args.production_parser:
+            g7 = _gates.score_g7(content)
+            boxes = [tuple(p["bbox_1000"]) for p in _gates.parse_primitives(content)]
+            n_sent, max_rep, runaway = g7.n_sentences, g7.max_prefix_repeat, g7.runaway
+        else:
+            g7 = None
+            boxes = parse_boxes(content)
+            n_sent, max_rep = runaway_score(content)
+            runaway = max_rep >= 4 or len(content) > 1400
+        results.append((content, latency, boxes, n_sent, max_rep, runaway, g7))
         prefix = f"run {run_i}/{runs} " if runs > 1 else ""
         line = (f"{prefix}[fp={args.freq_penalty} pp={args.presence_penalty} "
                 f"temp={args.temperature}] {args.question!r} -> {latency:.1f}s "
                 f"boxes={len(boxes)} chars={len(content)} sentences={n_sent} "
                 f"max_prefix_repeat={max_rep} "
                 f"runaway={'YES' if runaway else 'no'}")
+        if g7 is not None:
+            line += (f" answer_line={'yes' if g7.has_answer_line else 'NO'}"
+                     f" app_clean={'yes' if g7.app_clean else 'NO'}"
+                     f" G7={'pass' if g7.passed else 'FAIL'}")
+            if not g7.app_clean:
+                line += f" residual={g7.residual_markup[:3]}"
         if (args.brief or runs > 1) and not args.tally_only:
             print(line)
 
@@ -270,9 +308,24 @@ def main():
               f"runaway={n_runaway}/{runs}  boxes min={box_counts[0]} "
               f"median={box_counts[len(box_counts) // 2]} "
               f"max={box_counts[-1]}")
+        if args.production_parser:
+            g7s = [r[6] for r in results]
+            n_extract = sum(1 for g in g7s if g.extracted)
+            n_app = sum(1 for g in g7s if g.app_clean)
+            n_ans = sum(1 for g in g7s if g.has_answer_line)
+            n_single = sum(1 for g in g7s if g.n_primitives == 1)
+            n_pass = sum(1 for g in g7s if g.passed)
+            print(f"  G7 [production parsers] extraction={n_extract}/{runs} "
+                  f"app_strippers_clean={n_app}/{runs} answer_line={n_ans}/{runs} "
+                  f"single_box={n_single}/{runs} runaway={n_runaway}/{runs} "
+                  f"-> G7 pass {n_pass}/{runs}")
+            if n_app < runs:
+                print("  G7 NOTE: the app strippers rejected output the sidecar "
+                      "parsed. That is a UI-visible raw-markup regression, not "
+                      "a parsing nicety — see the fail path in the migration doc.")
         return 0
 
-    content, latency, boxes, n_sent, max_rep, runaway = results[0]
+    content, latency, boxes, n_sent, max_rep, runaway, g7 = results[0]
     summary = (f"[fp={args.freq_penalty} pp={args.presence_penalty} "
                f"temp={args.temperature}] {args.question!r} -> {latency:.1f}s "
                f"boxes={len(boxes)} chars={len(content)} sentences={n_sent} "
@@ -290,6 +343,17 @@ def main():
         print(f"  {i + 1}: {b}")
     annotate(img, boxes, args.out)
     print("\n" + summary)
+    if g7 is not None:
+        print("\n--- G7 (production parsers) ---")
+        print(f"  sidecar parse_primitives : {g7.n_primitives} primitive(s)"
+              f"  -> {'OK' if g7.extracted else 'NO EXTRACTION'}")
+        print(f"  app stripper regexes     : "
+              f"{'clean' if g7.app_clean else 'RESIDUAL MARKUP ' + str(g7.residual_markup)}")
+        print(f"  ANSWER: line             : {'present' if g7.has_answer_line else 'absent'}")
+        print(f"  runaway                  : {'YES' if g7.runaway else 'no'}")
+        print(f"  G7 verdict               : {'PASS' if g7.passed else 'FAIL'}")
+        print("\n  what the app would render:")
+        print("    " + (_gates.app_render(content)[:300] or "(empty)"))
     print("\nEYEBALL CHECK (the gate): are the boxes LOAD-BEARING - does the "
           "reasoning use them to reach the answer (enumerated to count, "
           "coordinates to compare) - or just decorative? Do they land on the "

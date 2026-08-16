@@ -52,6 +52,18 @@ consents to the actual number of evenings.
   model-independent one-line fix for a gate-blind regression**); tray
   ttft/turn pill thresholds retuned to D1; Lab `verySlowRatio` note/retune;
   home for G7 stripper edits; stale tooltip; sim-fixture latency scaling.
+  **Added after Phase-0 measurement (all model-independent, all shippable
+  before the candidate exists):**
+  1. **Widen the two app stripper regexes** in `app/src/home-look.jsx`
+     (`lkPlain`, `lkRenderReasoning`) to match the tolerance the sidecar
+     already has — square-bracketed coordinates, a bare `>` close, and an
+     UNCLOSED trailing `<box`/`<ref` from generation-cap truncation. Today
+     a truncated trace renders `<box>` raw to the user; observed live on
+     the incumbent, not hypothetical.
+  2. **Repair the deployed `/reason` prompt's grounding** (v3 extracts
+     0/13; v1 extracts 5/6 on the same frame). This is a prompt-surface
+     change, so it lands **before cutover** or waits until Phase 2 — never
+     during the soak, and never bundled with the model swap.
 
 ## Never-deploy list (repo ≠ live host; live is truth)
 
@@ -60,7 +72,7 @@ Phase-0 archive inventory is the authoritative list; verified so far:
 
 | Surface | Repo state | Live state |
 |---|---|---|
-| metrics-sidecar | no `/trace`; conversation tee containment-locked | restored `/trace` NDJSON — the instrumentation every gate uses |
+| metrics-sidecar | no `/trace`; conversation tee containment-locked | `/trace` ingest + `traces.ndjson` exist, but ⚠ **no live producer** — see the Phase-0 `/trace` finding; it is not "the instrumentation every gate uses" |
 | EOC custom component | zero-tool containment refactor (`MODEL_TOOL_CATALOG_ENABLED=False`, routing off, single-turn) | 23 tools, routing, multi-turn memory, `context_threshold` 24000 |
 | vision-sidecar | `HA_TOKEN:""`, `image:4` | ambient loop live (~350/day), image limit 8 |
 | intelligence | containment flags `"0"`, quarantine network (contract-test-pinned literals) | labeler active (~98% schema-valid post-fixes) |
@@ -289,6 +301,100 @@ status, labeler schema vs xgrammar's unsupported list (the *labeler* schema;
 the subentry specs are clean), traffic-week artifact freeze, and the
 `apply_chat_template` offline kwarg-inertness check.
 
+### ⚠ `/trace` has no producer — the gates' primary instrument is dead
+
+The never-deploy table calls live `/trace` NDJSON "the instrumentation every
+gate uses". Measured 2026-08-16, it is not instrumenting anything:
+
+- `/app/data/traces.ndjson` holds **170 records, newest 2026-05-17** — three
+  months stale. Every record is voice-latency telemetry; **none carries a
+  message body**, because the conversation tee is containment-locked (and
+  the roadmap's not-doing list bars re-enabling it).
+- `prompt_tokens` and `cached_tokens` are present in the schema and **zero
+  in all 169 records** — the token accounting was never populated.
+- **Root cause:** the only producer is `hav-personaplex-bridge`
+  (`main.py:3942`, fire-and-forget POST to the sidecar's `/trace`). That
+  bridge is the **s2s path**, which by policy never starts. It is currently
+  stuck reconnecting to `ws://moshi-listener:8899` — a service that does not
+  exist — logging ~28.6k lines/day to no effect. Production voice
+  (Voice PE → Parakeet → HA → EOC → vLLM → Chatterbox) never touches it, so
+  `/trace` cannot record a production turn.
+
+Consequences, all of which change the plan rather than the schedule:
+
+1. **G5 has no live transcript source.** `gate-g5-leak-grep.py` returns
+   exit 2 (INCONCLUSIVE, deliberately not PASS) against the live file. G5
+   must be scored on **harness-captured responses** — the Phase-3 matrix
+   driver's own saved completions — not on `/trace`.
+2. **G6 must use the instrument D1 already names** — HA
+   `/api/conversation/process` for voice, the vision-sidecar request log for
+   ambient. Delete the "`/trace` scan" line from the soak section; it would
+   scan a file nothing writes.
+3. **R4's `num_cached_tokens` instrumentation does not exist yet.** "Instrument
+   from day one" is a build task, not a switch: capture `usage.prompt_tokens`
+   and `usage.prompt_tokens_details.cached_tokens` in the harness itself.
+   (The harness already proves this works — a control request measured
+   `prompt_tokens=913` with an image vs `31` without.)
+4. **D11 (`/trace` retention acknowledgment) is moot as written** — nothing
+   is being retained. It should be restated to cover the harness's own
+   captured payloads, which is where the image traffic will actually land.
+5. Separately, the bridge's reconnect loop is worth an owner decision on its
+   own (log churn on a quarantined host); it is **owner-run** and out of
+   scope here.
+
+### G7 baseline measured on the incumbent — the gate must be restated
+
+Measured 2026-08-16 with `probe-grounded-reasoning.py --production-parser`
+against the live stack (measurement point: metrics-sidecar
+`127.0.0.1:8000` → vllm, cache busted per run via one-pixel perturbation;
+`temperature=0.2`), plus the production `POST /reason` endpoint on the live
+vision-sidecar. Real camera frame (`camera.kitchen`, 1280×720) and a sim
+frame, incumbent `Qwen3-VL-30B-A3B-Instruct-FP8`.
+
+| prompt | extraction | app-strippers clean | ANSWER line | G7 pass |
+|---|---|---|---|---|
+| v1 (explicit box-while-reasoning) | 5/6 | 3/6 | 3/6 | 2/6 |
+| v2 (terse) | 2/4 | 4/4 | 0/4 | 1/4 |
+| **v3 — the DEPLOYED `/reason` prompt** | **0/13** | 13/13 | 13/13 | **0/13** |
+
+Production `POST /reason` on `camera.kitchen` returns
+`primitives: []` — confirmed against the live sidecar, not just the probe.
+
+1. ⚠ **The incumbent grounds at zero under the deployed prompt.** The model
+   is capable — v1 extracts 5/6 on the same frame — so this is the prompt,
+   not the checkpoint. The deployed v3 prompt's "Be decisive and concise —
+   a few sentences, not a long list" appears to suppress the per-object
+   boxing that v1 elicits.
+2. ⚠ **Therefore G7 as written cannot fail.** "Extraction non-inferior to
+   incumbent, tolerance from incumbent re-run variance" against a baseline
+   of 0/13 with zero variance is satisfied by a candidate that also emits
+   nothing. **G7 must be restated before it gates anything**: either
+   (a) repair the deployed prompt first so a real baseline exists, then run
+   G7 as a paired non-inferiority test; or (b) restate G7 as an ABSOLUTE
+   threshold on the candidate (e.g. extraction ≥ X% and app-strippers clean
+   ≥ Y% on the frozen corpus), decoupled from the incumbent. Recommendation:
+   **(b) for the cutover** — the prompt repair is a Phase-2 prompt-surface
+   change and must not be bundled into the model migration — **plus a
+   separate, model-independent fix for (a)**, tracked below.
+3. ⚠ **Live grounded-look is silently degraded today, independent of this
+   migration.** `/reason` returns no primitives, so `annotate_frame` draws
+   nothing and the `/look` drawer's ref-chips render nothing. Whatever the
+   migration does, this is a pre-existing production regression and it
+   should not be discovered mid-cutover and misattributed to the candidate.
+4. ⚠ **The app-stripper divergence is real and was observed live.** Runs
+   that hit the generation cap mid-markup leave a dangling `<box>` with no
+   close; the app's `/<box>[\d,\s]*<\/box>/gi` requires the close, so the
+   tag renders raw to the user (`residual=['<box>']`, runs 4–5 of 6 at
+   `max_tokens=500`). This is the trap-index entry "test max_tokens
+   truncating structured output", now with a UI-visible consequence.
+   Separately and still latent: the sidecar was widened to accept
+   `<box>[[x,y,z,w]]</box>` and a bare `>` close, and the app strippers
+   never were — proven by unit test in `tools/test-qwen38-gates.py`. If the
+   candidate prefers either variant, every grounded look renders raw markup
+   while the server-side parse looks perfectly healthy.
+   **G7 pass therefore requires both consumers, which is why
+   `--production-parser` scores both.**
+
 ## Phase 3 — latency matrix (each session is a mini maintenance window)
 
 Session protocol: flag up → quiesce labeler AND ambient loop → admission
@@ -326,7 +432,7 @@ Effort pin iff C1→A1 shows benefit. Reasoning parser iff RP clean.
 | G4 hallucination-on-negatives | false-presence ≤ incumbent, paired | 25 empty/night/cup-misfire negatives + 10 quiet-literal sentinels |
 | G5 reasoning leakage | ZERO — `<think>` in content + BOTH `reasoning`/`reasoning_content` fields | all transcripts + adversarial canaries |
 | G6 latency | D1 numbers, binding | headline = B-real + B-worst; DL budgeted or excluded |
-| G7 grounded-box compat | extraction/runaway/ANSWER/single-box with tolerance from incumbent re-run variance; pass ALSO requires the two app stripper regexes to accept candidate output | production parser scoring, NOT the probe's tolerant one; fail path: `bbox_2d` branch in sidecar + app strippers, or grammar json_schema boxes |
+| G7 grounded-box compat | ⚠ **RESTATED — see "G7 baseline measured" above.** The incumbent extracts 0/13 under the deployed prompt, so paired non-inferiority cannot discriminate. Score the candidate against an ABSOLUTE threshold on the frozen corpus (extraction ≥ X%, app-strippers clean ≥ Y%, runaway ≤ incumbent), with X/Y set from the v1-prompt evidence at sign-off | production parser scoring, NOT the probe's tolerant one (`--production-parser`); pass requires BOTH the sidecar parser and the two app stripper regexes; fail path: `bbox_2d` branch in sidecar + app strippers, or grammar json_schema boxes |
 
 Winner-config rule: the final Phase-3 session runs the declared shipping
 config end-to-end and re-collects G1/G4/G7 + a fresh G5 on it; any config

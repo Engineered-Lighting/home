@@ -84,6 +84,30 @@ function sliceBetween(source, startNeedle, endNeedle) {
   return end >= 0 ? source.slice(start, end) : source.slice(start);
 }
 
+process.stdout.write("\napartment_network_priority_contract_test\n");
+const metricsPollBlock = sliceBetween(appSource, "/* ── Metrics polling", "/* ── HA conversation");
+const sidecarSseBlock = sliceBetween(appSource, "/* ── Single source of truth", "/* ── Phase B F0-08");
+const serviceHealthBlock = sliceBetween(appSource, "/* ── Phase B F0-08", "/* ── Voice PE activity");
+const roomPollBlock = sliceBetween(appSource, "/* ── Tray v3: bridge /rooms", "/* ── Phase 2: vision-sidecar");
+const visionPollBlock = sliceBetween(appSource, "/* ── Phase 2: vision-sidecar", "const isSpatialWide");
+assert("web Apartment state owns an explicit network-priority gate",
+  appSource.includes("const apartmentNetworkPriority = !!window.HG_WEB_MODE && (apartmentOpen || spatialLayout);"));
+assert("optional metrics and chat SSE pause while Apartment has priority",
+  metricsPollBlock.includes("if (apartmentNetworkPriority) return undefined;") &&
+    sidecarSseBlock.includes("if (apartmentNetworkPriority) return undefined;") &&
+    metricsPollBlock.includes("apartmentNetworkPriority]") &&
+    sidecarSseBlock.includes("apartmentNetworkPriority]"));
+assert("optional service, room, and vision health polls pause while Apartment has priority",
+  serviceHealthBlock.includes("if (apartmentNetworkPriority) return undefined;") &&
+    roomPollBlock.includes("if (apartmentNetworkPriority) return undefined;") &&
+    visionPollBlock.includes("if (apartmentNetworkPriority) return undefined;"));
+assert("queued optional fetches abort when Apartment opens",
+  [metricsPollBlock, serviceHealthBlock, roomPollBlock, visionPollBlock].every((block) =>
+    block.includes("new AbortController()") &&
+    block.includes("signal: controller.signal") &&
+    block.includes("controller?.abort()")
+  ));
+
 process.stdout.write("\nfeature_loader_recovery_contract_test\n");
 const loadingSurfaceSource = sliceBetween(appSource, "function FeatureLoadingSurface", "function InputRow");
 assert("failed lazy features expose an explicit retry action",

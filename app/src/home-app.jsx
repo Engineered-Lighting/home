@@ -5215,6 +5215,11 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       return window.localStorage?.getItem("hg-layout-v2") === "spatial";
     } catch (e) { return false; }
   });
+  // Browser HTTP/1.1 limits can let optional offline-service polls queue ahead
+  // of authoritative Apartment model reads and writes. While Apartment owns
+  // the web surface, pause and abort only those optional HTTP/SSE consumers;
+  // the HA and tracker WebSockets remain connected for live model data.
+  const apartmentNetworkPriority = !!window.HG_WEB_MODE && (apartmentOpen || spatialLayout);
   const [spatialOpsDockOpen, setSpatialOpsDockOpen] = useState(true);
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -6434,16 +6439,22 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   /* ── Metrics polling ──────────────────────────────────────────────── */
   useEffect(() => {
     if (sim.active) return undefined; // Sim Mode: fixtures injected directly
+    if (apartmentNetworkPriority) return undefined;
     if (connection !== "online") return undefined;
     const base = metricsBase || metricsBaseFromEndpoint(endpoint);
     let cancelled = false;
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    const requestOptions = {
+      cache: "no-store",
+      ...(controller ? { signal: controller.signal } : {}),
+    };
     const tick = async () => {
       try {
         // cache: "no-store" — the WebView2 HTTP stack can otherwise
         // serve a cached body and the metrics would look frozen even
         // when the sidecar is returning fresh samples. The bridge
         // /healthz poll already does this; the metrics poll must too.
-        const r = await tauriFetch(`${base}/metrics`, { cache: "no-store" });
+        const r = await tauriFetch(`${base}/metrics`, requestOptions);
         if (!r.ok) {
           if (!cancelled) {
             setSidecarOnline(false);
@@ -6632,8 +6643,13 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         tHandle = setInterval(tick, intervalMs);
       }
     }, 1000);
-    return () => { cancelled = true; clearInterval(tHandle); clearInterval(adapter); };
-  }, [connection, endpoint, metricsBase, sim.active]);
+    return () => {
+      cancelled = true;
+      controller?.abort();
+      clearInterval(tHandle);
+      clearInterval(adapter);
+    };
+  }, [connection, endpoint, metricsBase, sim.active, apartmentNetworkPriority]);
 
   /* ── HA conversation: send text via assist_pipeline/run ────────────── */
   const sendToHA = useCallback(async (text, options = {}) => {
@@ -9384,6 +9400,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   const seenSsEvents = useRef(new Set());
   useEffect(() => {
     if (sim.active) return undefined; // Sim Mode: no SSE subscription
+    if (apartmentNetworkPriority) return undefined;
     if (connection !== "online") return undefined;
     const base = metricsBase || metricsBaseFromEndpoint(endpoint);
     // Phase 1.5 one-time warning: if the saved metricsBase points at the
@@ -9710,7 +9727,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       console.warn("[sse] error — will auto-reconnect");
     };
     return () => { try { es.close(); } catch {} };
-  }, [connection, endpoint, metricsBase]);
+  }, [connection, endpoint, metricsBase, apartmentNetworkPriority]);
 
   /* ── Phase B F0-08: sidecar + bridge healthz poll ─────────────────────
    *
@@ -9725,9 +9742,15 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    */
   useEffect(() => {
     if (sim.active) return undefined; // Sim Mode: no real health polls
+    if (apartmentNetworkPriority) return undefined;
     const base = metricsBase || metricsBaseFromEndpoint(endpoint);
     if (!base) return undefined;
     let cancelled = false;
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    const requestOptions = {
+      cache: "no-store",
+      ...(controller ? { signal: controller.signal } : {}),
+    };
 
     // Derive bridge URL: same host as sidecar, port 8094.
     // Derive supervisor URL: same host as sidecar, port 8093 (AI Stack Control).
@@ -9755,16 +9778,18 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       // through Tauri's HTTP plugin (no webview CORS).
       // Sidecar
       try {
-        const r = await tauriFetch(`${base}/healthz`, { cache: "no-store" });
+        const r = await tauriFetch(`${base}/healthz`, requestOptions);
         if (!cancelled) setSidecarOnline(r.ok);
       } catch (e) {
-        if (!cancelled) setSidecarOnline(false);
-        console.warn("[health] sidecar poll failed:", e?.message || e);
+        if (!cancelled) {
+          setSidecarOnline(false);
+          console.warn("[health] sidecar poll failed:", e?.message || e);
+        }
       }
       // Bridge — also capture full body for MetricsStrip
       if (bridgeUrl) {
         try {
-          const r2 = await tauriFetch(`${bridgeUrl}/healthz`, { cache: "no-store" });
+          const r2 = await tauriFetch(`${bridgeUrl}/healthz`, requestOptions);
           if (!cancelled) {
             setBridgeOnline(r2.ok);
             if (r2.ok) {
@@ -9779,7 +9804,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             setBridgeOnline(false);
             setBridgeHealth(null);
           }
-          console.warn("[health] bridge poll failed:", e?.message || e);
+          if (!cancelled) console.warn("[health] bridge poll failed:", e?.message || e);
         }
       }
       // Stack supervisor (port 8093) — runs OUTSIDE docker-compose as a
@@ -9789,6 +9814,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       // configured we still probe /healthz so the UI can show "supervisor
       // is up, but token not configured" instead of "supervisor offline".
       const warnSupervisorHealth = (key, message, detail) => {
+        if (cancelled) return;
         if (aiStackHealthWarnRef.current === key) return;
         aiStackHealthWarnRef.current = key;
         if (detail != null) console.warn(message, detail);
@@ -9799,7 +9825,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       };
       if (supervisorUrl) {
         try {
-          const rh = await tauriFetch(`${supervisorUrl}/healthz`, { cache: "no-store" });
+          const rh = await tauriFetch(`${supervisorUrl}/healthz`, requestOptions);
           if (!cancelled) {
             setAiStackOnline(rh.ok);
             if (!rh.ok) {
@@ -9810,7 +9836,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           if (rh.ok && stackToken) {
             try {
               const rs = await tauriFetch(`${supervisorUrl}/api/stack/status`, {
-                cache: "no-store",
+                ...requestOptions,
                 headers: { Authorization: `Bearer ${stackToken}` },
               });
               if (rs.ok) {
@@ -9875,8 +9901,12 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
 
     poll();  // immediate
     const id = setInterval(poll, 15000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [metricsBase, endpoint, sim.active]);
+    return () => {
+      cancelled = true;
+      controller?.abort();
+      clearInterval(id);
+    };
+  }, [metricsBase, endpoint, sim.active, apartmentNetworkPriority]);
 
   /* ── Voice PE activity indicator (header + voice state) ──────────────
    *
@@ -10592,14 +10622,20 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   /* ── Tray v3: bridge /rooms endpoint poll (occupancy + visual age) ── */
   useEffect(() => {
     if (sim.active) return undefined;
+    if (apartmentNetworkPriority) return undefined;
     const base = metricsBase || metricsBaseFromEndpoint(endpoint);
     if (!base) return undefined;
     const bridgeUrl = s2sBaseFromEndpoint(endpoint);
     if (!bridgeUrl) return undefined;
     let cancelled = false;
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    const requestOptions = {
+      cache: "no-store",
+      ...(controller ? { signal: controller.signal } : {}),
+    };
     const tick = async () => {
       try {
-        const r = await tauriFetch(`${bridgeUrl}/rooms`, { cache: "no-store" });
+        const r = await tauriFetch(`${bridgeUrl}/rooms`, requestOptions);
         if (cancelled) return;
         if (!r.ok) {
           setRoomContext(null);
@@ -10613,20 +10649,30 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     };
     tick();
     const id = setInterval(tick, 8000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [metricsBase, endpoint]);
+    return () => {
+      cancelled = true;
+      controller?.abort();
+      clearInterval(id);
+    };
+  }, [metricsBase, endpoint, apartmentNetworkPriority]);
 
   /* ── Phase 2: vision-sidecar health (phash hit rate, cameras cached) ── */
   useEffect(() => {
     if (sim.active) return undefined;
+    if (apartmentNetworkPriority) return undefined;
     const base = metricsBase || metricsBaseFromEndpoint(endpoint);
     if (!base) return undefined;
     let cancelled = false;
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    const requestOptions = {
+      cache: "no-store",
+      ...(controller ? { signal: controller.signal } : {}),
+    };
     const visionUrl = visionBaseFromEndpoint(base, endpoint);
     const tick = async () => {
       if (!visionUrl) return;
       try {
-        const r = await tauriFetch(`${visionUrl}/healthz`, { cache: "no-store" });
+        const r = await tauriFetch(`${visionUrl}/healthz`, requestOptions);
         if (!cancelled) {
           setVisionSidecarOnline(r.ok);
           if (r.ok) {
@@ -10641,13 +10687,17 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           setVisionSidecarOnline(false);
           setVisionHealth(null);
         }
-        console.warn("[vision] healthz poll failed:", e?.message || e);
+        if (!cancelled) console.warn("[vision] healthz poll failed:", e?.message || e);
       }
     };
     tick();
     const id = setInterval(tick, 10000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [metricsBase, endpoint]);
+    return () => {
+      cancelled = true;
+      controller?.abort();
+      clearInterval(id);
+    };
+  }, [metricsBase, endpoint, apartmentNetworkPriority]);
 
   const isSpatialWide = spatialLayout && wideMode;
   const spatialRailWidth = wideMode ? SPATIAL_CHAT_RAIL_WIDTH : "100%";

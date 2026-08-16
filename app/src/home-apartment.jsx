@@ -11,7 +11,7 @@
  * cached on window.__APT_ENGINE for instant warm reopen.
  */
 
-const { useState, useEffect, useRef, useCallback } = React;
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
 const APT_FONT_MONO = '"Geist Mono", "JetBrains Mono", monospace';
 const APT_FONT_SANS = '"Geist", "Inter", sans-serif';
@@ -682,7 +682,7 @@ function AptUndistortedFeed({ src, snapshotSrc, snapshotIntervalMs = 0, alt, int
   );
 }
 
-function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = false }) {
+function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "disconnected", embedded = false }) {
   const viewport = useAptViewport();
   const mobile = viewport.mobile;
   const hostRef = useRef(null);
@@ -703,8 +703,11 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const [azIdx, setAzIdx] = useState(1);
   const [editing, setEditing] = useState(false);
   const [model, setModel] = useState(window.HomeApartmentData.EMPTY_MODEL);
+  const [seedModel, setSeedModel] = useState(null);
   const [registry, setRegistry] = useState({ entities: [], areas: [], devices: [], states: {} });
   const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState({ state: "idle", detail: "not edited" });
+  const [liveReview, setLiveReview] = useState({ state: "idle", live: null, detail: "" });
   const [track, setTrack] = useState(null);          // primary person track
   const [trackerStatus, setTrackerStatus] = useState("connecting");
   const [, setServicePulse] = useState(0);
@@ -725,6 +728,13 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const simActive = !!(sim && sim.active);
   const [serviceEpoch, setServiceEpoch] = useState(0);
   const modePrewarmRef = useRef(null);
+  const sourceMeta = window.HomeApartmentData.modelSourceMeta?.(model)
+    || { kind: simActive ? "simulation" : "empty", label: simActive ? "Simulation" : "No model" };
+  const liveComparison = useMemo(() => (
+    liveReview.state === "ready" && liveReview.live
+      ? window.HomeApartmentData.compareApartmentModels?.(model, liveReview.live) || null
+      : null
+  ), [model, liveReview]);
 
   useEffect(() => {
     const bump = () => setServiceEpoch((n) => n + 1);
@@ -736,6 +746,12 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     setToast(text);
     setTimeout(() => setToast(null), 2800);
   }, []);
+
+  const markModelDirty = useCallback(() => {
+    setSaveStatus(simActive
+      ? { state: "simulation", detail: "unsaved simulation change · live model untouched" }
+      : { state: "unsaved", detail: "changes not yet saved" });
+  }, [simActive]);
 
   useEffect(() => {
     if (!embedded) return undefined;
@@ -942,7 +958,11 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   useEffect(() => {
     if (!open) return undefined;
     let dead = false;
+    setLiveReview({ state: "idle", live: null, detail: "" });
     (async () => {
+      const seed = await window.HomeApartmentData.getSeedModel?.();
+      if (!dead) setSeedModel(seed || null);
+      if (simActive && !dead) setRegistry({ entities: [], areas: [], devices: [], states: {} });
       // retry until a true remote load lands — the first attempt can race
       // tauriFetch readiness and fall back to a cached/seed copy, which the
       // user reads as "my saves were overwritten"
@@ -950,19 +970,43 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         const m = await window.HomeApartmentData.getModel({ endpoint, token, sim: simActive });
         if (dead) return;
         setModel(m);
-        const fromRemote = typeof m.revision === "number" && !m.remote_cached
-          && !m.offline_draft && !m.seeded;
+        const meta = window.HomeApartmentData.modelSourceMeta?.(m) || {};
+        setSaveStatus(meta.kind === "simulation"
+          ? { state: "simulation", detail: "isolated · cannot save live" }
+          : meta.kind === "live_ha_model"
+            ? { state: "saved", detail: `revision ${m.revision}` }
+            : meta.kind === "local_draft"
+              ? { state: "offline", detail: "local draft · not saved to Home Assistant" }
+              : { state: "idle", detail: meta.label || "loaded" });
+        const fromRemote = meta.kind === "live_ha_model"
+          || (meta.kind === "seed_model" && Number.isInteger(m.source_detail?.authoritative_revision));
         if (fromRemote || simActive || !token) break;
         await new Promise((r) => setTimeout(r, 2500));
-      }
-      const client = window.__hav_haClient;
-      if (client && !simActive) {
-        const reg = await window.HomeApartmentData.getRegistry(client);
-        if (!dead) setRegistry(reg);
       }
     })();
     return () => { dead = true; };
   }, [open, endpoint, token, simActive]);
+
+  /* Registry inventory follows the authenticated HA connection separately
+     from the Apartment document. Reconnecting must refresh all real lights,
+     but must never reload the model over unsaved editor changes. */
+  useEffect(() => {
+    if (!open) return undefined;
+    if (simActive) {
+      setRegistry({ entities: [], areas: [], devices: [], states: {} });
+      return undefined;
+    }
+    if (connection !== "online") return undefined;
+    const client = window.__hav_haClient;
+    if (!client) return undefined;
+    let dead = false;
+    window.HomeApartmentData.getRegistry(client).then((nextRegistry) => {
+      if (!dead) setRegistry(nextRegistry);
+    }).catch(() => {
+      if (!dead) setRegistry({ entities: [], areas: [], devices: [], states: {} });
+    });
+    return () => { dead = true; };
+  }, [open, simActive, connection, endpoint, token, serviceEpoch]);
 
   /* correspondence pick: NATIVE capture-phase listener — the rig's input
      handlers stop propagation, so React synthetic events never fire on the
@@ -1059,6 +1103,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     if (!engine || phase !== "ready") return;
     engine.overlay.setDevices(model.devices || []);
     engine.overlay.setZones(model.zones || []);
+    engine.overlay.setTargets?.(model.targets || []);
     for (const [eid, st] of Object.entries(statesRef.current)) {
       const dev = (model.devices || []).find((d) => d.ha_entity_id === eid);
       if (dev) engine.overlay.setDeviceState(dev.id, st);
@@ -1309,22 +1354,87 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     }
   }, [simActive, showToast, model.devices]);
 
-  const saveModel = useCallback(async () => {
+  const compareLiveModel = useCallback(async () => {
+    if (simActive) return { ok: false, sim: true };
+    if (connection !== "online" || !endpoint || !token) {
+      const detail = "connect Home Assistant with a valid long-lived token first";
+      setLiveReview({ state: "error", live: null, detail });
+      setSaveStatus({ state: "offline", detail: `local draft preserved · ${detail}` });
+      showToast("connect Home Assistant before comparing the live model");
+      return { ok: false, credentials_required: true };
+    }
+    setLiveReview({ state: "loading", live: null, detail: "reading authoritative Apartment model" });
+    const result = await window.HomeApartmentData.getAuthoritativeModel({ endpoint, token });
+    if (!result.ok) {
+      const detail = result.status === 401
+        ? "Home Assistant rejected the token"
+        : result.error || "live Apartment model unavailable";
+      setLiveReview({ state: "error", live: null, detail });
+      setSaveStatus({ state: "offline", detail: `local draft preserved · ${detail}` });
+      showToast(`live comparison failed · ${detail}`);
+      return result;
+    }
+    const comparison = window.HomeApartmentData.compareApartmentModels(model, result.model);
+    setLiveReview({ state: "ready", live: result.model, detail: "read-only comparison complete" });
+    if (comparison.sameRevision) {
+      setSaveStatus({ state: "reviewed", detail: `live revision ${comparison.liveRevision} reviewed · ready for explicit publish` });
+      showToast(`live revision ${comparison.liveRevision} reviewed · publish is now available`);
+    } else {
+      setSaveStatus({ state: "conflict", detail: `draft revision ${comparison.localRevision} · live revision ${comparison.liveRevision} · no write performed` });
+      showToast("revision conflict · local draft preserved; nothing was written");
+    }
+    return { ...result, comparison };
+  }, [simActive, connection, endpoint, token, model, showToast]);
+
+  const saveModel = useCallback(async ({ reviewedDraft = false } = {}) => {
+    const currentSource = window.HomeApartmentData.modelSourceMeta?.(model) || {};
+    if (currentSource.kind === "local_draft" && connection === "online" && !reviewedDraft) {
+      return compareLiveModel();
+    }
+    if (currentSource.kind === "local_draft" && reviewedDraft) {
+      if (liveReview.state !== "ready" || !liveReview.live) return compareLiveModel();
+      const comparison = window.HomeApartmentData.compareApartmentModels(model, liveReview.live);
+      if (!comparison.sameRevision) {
+        setSaveStatus({ state: "conflict", detail: `draft revision ${comparison.localRevision} · live revision ${comparison.liveRevision} · no write performed` });
+        showToast("live revision changed · compare again before publishing");
+        return { ok: false, conflict: true, stored: liveReview.live };
+      }
+    }
     setSaving(true);
+    setSaveStatus({ state: "saving", detail: "writing authoritative Apartment model" });
     const res = await window.HomeApartmentData.saveModel(model, { endpoint, token, sim: simActive });
     setSaving(false);
     if (res.ok) {
-      setModel((m) => ({ ...m, revision: res.revision }));
+      setModel((m) => ({
+        ...m, revision: res.revision, updated_at: res.updated_at,
+        source_kind: "live_ha_model",
+        source_detail: { endpoint, revision: res.revision },
+      }));
+      setLiveReview({ state: "idle", live: null, detail: "" });
+      setSaveStatus({ state: "saved", detail: `revision ${res.revision}` });
       showToast(`saved · revision ${res.revision}`);
     } else if (res.conflict) {
-      showToast("model changed elsewhere — reloaded server copy (your draft is kept locally)");
-      setModel(res.stored);
+      setSaveStatus({ state: "conflict", detail: `server revision ${res.stored?.revision ?? "changed"} · local draft preserved` });
+      showToast("model changed elsewhere · local draft preserved; nothing was overwritten");
+      if (res.stored) {
+        setLiveReview({
+          state: "ready",
+          live: { ...res.stored, source_kind: "live_ha_model",
+            source_detail: { endpoint, revision: res.stored?.revision, read_only: true } },
+          detail: "server conflict copy loaded for read-only comparison",
+        });
+      }
     } else if (res.offline || res.sim) {
+      setSaveStatus(res.sim
+        ? { state: "simulation", detail: "isolated · live model untouched" }
+        : { state: "offline", detail: "local draft · Home Assistant unavailable" });
       showToast("offline — kept as local draft");
     } else {
+      setSaveStatus({ state: "offline", detail: res.error || "save failed · local draft preserved" });
       showToast(`save failed — ${res.error}`);
     }
-  }, [model, endpoint, token, simActive, showToast]);
+    return res;
+  }, [model, endpoint, token, simActive, connection, liveReview, compareLiveModel, showToast]);
 
   const revealCameraFeedWhenReady = useCallback((dev, seq) => {
     const started = performance.now();
@@ -1444,6 +1554,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         fit: engineRef.current?.debugFit?.() || null,
         modes: engineRef.current?.modes?.debugInfo?.() || null,
       }),
+      modelSnapshot: () => JSON.parse(JSON.stringify(model)),
       apartmentFit: () => engineRef.current?.debugFit?.() || null,
       setMode: pickMode,
       zoomIn: () => zoomApartment(1),
@@ -1477,7 +1588,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     return () => {
       if (window.__havApartmentDebug === api) delete window.__havApartmentDebug;
     };
-  }, [open, phase, mode, liveOn, liveFeedStatus, liveCam, cameraPoseReady, mobile, viewport, model.devices, pickMode, zoomApartment, flyToDeviceView]);
+  }, [open, phase, mode, liveOn, liveFeedStatus, liveCam, cameraPoseReady, mobile, viewport, model, pickMode, zoomApartment, flyToDeviceView]);
 
   const liveHaEntity = aptCameraEntity(liveCam);
   const liveHaBase = endpoint || aptServiceBase("homeAssistantUrl", "HG_DEFAULT_HA_BASE", "http://192.168.0.125:8123");
@@ -1586,6 +1697,11 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     ? liveCam?.camera?.intrinsics || null
     : null;
   const liveSnapshotIntervalMs = liveSnapshotSrc ? 1100 : 0;
+  const sourceColor = sourceMeta.kind === "live_ha_model" ? "#91e6bd"
+    : sourceMeta.kind === "simulation" ? "var(--hg-warn)"
+      : sourceMeta.kind === "tracker_live" ? "var(--hg-ice)"
+        : sourceMeta.kind === "seed_model" ? "#f2cf87" : "var(--hg-fg-4)";
+  const revisionLabel = Number.isInteger(model.revision) ? ` · rev ${model.revision}` : "";
 
   return (
     <div
@@ -1645,6 +1761,31 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
             <span style={{ fontFamily: APT_FONT_MONO, fontSize: 9, letterSpacing: "0.12em",
                            color: "var(--hg-warn)", border: "1px solid var(--hg-border-soft)",
                            padding: "3px 8px", marginLeft: 6 }}>sim</span>
+          )}
+          {!mobileCameraSnap && (
+            <span style={{ fontFamily: APT_FONT_MONO, fontSize: 8.5, letterSpacing: "0.08em",
+              color: sourceColor, border: `1px solid ${sourceColor}`,
+              padding: "3px 7px", maxWidth: mobile ? "100%" : 260,
+              whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+              title={`${sourceMeta.label}${revisionLabel}`}>
+              source · {sourceMeta.label}{revisionLabel}
+            </span>
+          )}
+          {!mobileCameraSnap && sourceMeta.kind !== "simulation" && (
+            <span style={{ fontFamily: APT_FONT_MONO, fontSize: 8.5, letterSpacing: "0.08em",
+              color: connection === "online" ? "#91e6bd" : "var(--hg-fg-5)" }}>
+              ha · {connection === "online" ? "connected" : connection}
+            </span>
+          )}
+          {!mobileCameraSnap && (
+            <span style={{ fontFamily: APT_FONT_MONO, fontSize: 8.5, letterSpacing: "0.08em",
+              color: saveStatus.state === "conflict" ? "var(--hg-crit)"
+                : saveStatus.state === "saved" ? "#91e6bd"
+                  : saveStatus.state === "unsaved" || saveStatus.state === "offline"
+                    ? "var(--hg-warn)" : "var(--hg-fg-5)" }}
+              title={saveStatus.detail}>
+              save · {saveStatus.state}
+            </span>
           )}
           <span style={{ fontFamily: APT_FONT_MONO, fontSize: 8.5, letterSpacing: "0.1em",
                          color: trackerStatus === "live" ? "var(--hg-ice)" : "var(--hg-fg-5)",
@@ -1949,11 +2090,19 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
           engine={engineRef.current}
           model={model}
           onModel={setModel}
+          seedModel={seedModel}
           registry={registry}
           onSave={saveModel}
+          onDirtyChange={markModelDirty}
           onExit={() => setEditing(false)}
           sim={simActive}
+          connection={connection}
+          sourceMeta={sourceMeta}
+          saveStatus={saveStatus}
           saving={saving}
+          liveReview={liveReview}
+          liveComparison={liveComparison}
+          onCompareLive={compareLiveModel}
         />
       )}
 

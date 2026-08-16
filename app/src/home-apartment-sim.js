@@ -22,6 +22,17 @@
         frigate_camera: "workshop",
         floor_polygon: [[0.4, 0.6], [3.8, 0.6], [3.8, 3.4], [0.4, 3.4]] },
     ],
+    targets: [
+      { id: "target-sim-dining-table", name: "dining table", category: "table", shape: "surface",
+        pos: [5.6, 5.7, 0.75], normal: [0, 0, 1], up: [0, 1, 0], size_m: [1.85, 0.9],
+        room_id: "dining_room", confidence: 1, source: "sim" },
+      { id: "target-sim-kitchen-island", name: "kitchen island", category: "island", shape: "surface",
+        pos: [5.6, 2.4, 0.9], normal: [0, 0, 1], up: [0, 1, 0], size_m: [1.2, 0.65],
+        room_id: "kitchen", confidence: 1, source: "sim" },
+      { id: "target-sim-art", name: "living room art", category: "art", shape: "surface",
+        pos: [13.75, 5.1, 1.45], normal: [-1, 0, 0], up: [0, 0, 1], size_m: [1.2, 0.8],
+        room_id: "living_room", confidence: 1, source: "sim" },
+    ],
     devices: [
       { id: "dev-light-living", type: "light", name: "living lights",
         ha_entity_id: "light.living_room", pos: [10.5, 4.0, 2.35], yaw_rad: 0,

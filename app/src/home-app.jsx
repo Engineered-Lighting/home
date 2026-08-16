@@ -3615,8 +3615,10 @@ function FirstRun({
                     "connect to your home";
   const subhead =
     isAuthInvalid ? "double-check the long-lived access token, then try again" :
-    isOffline     ? "check the url and token. in browser mode, also make sure home assistant allows this local origin" :
-                    "use a home assistant long-lived access token. desktop mode can use the same token without browser cors";
+    isOffline     ? (window.HG_WEB_MODE
+                      ? "check the long-lived token and the local Home gateway connection"
+                      : "check the url and token. direct browser connections may also require home assistant cors") :
+                    "use a home assistant long-lived access token. the local web gateway avoids browser cors";
 
   const borderTone = (isOffline || isAuthInvalid) ? "var(--hg-warn)" : "var(--hg-border)";
 
@@ -3710,7 +3712,7 @@ function FirstRun({
         lineHeight: 1.55,
       }}>
         <div><span style={{ color: "var(--hg-fg-2)" }}>token</span> profile / security / long-lived access tokens</div>
-        <div><span style={{ color: "var(--hg-fg-2)" }}>browser</span> allow http://127.0.0.1:5180 in HA cors if requests fail</div>
+        <div><span style={{ color: "var(--hg-fg-2)" }}>browser</span> local web mode uses the same-origin /proxy/ha gateway; no HA cors change is needed</div>
         <div><span style={{ color: "var(--hg-fg-2)" }}>desktop</span> tauri avoids browser cors and keeps the token in app storage</div>
         {onSimulation && (
           <button
@@ -10807,6 +10809,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             endpoint={endpoint}
             token={token}
             sim={sim}
+            connection={connection}
           />
           <SpatialModeRail
             active={spatialActiveSurface}
@@ -11018,6 +11021,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           endpoint={endpoint}
           token={token}
           sim={sim}
+          connection={connection}
         />
       )}
       {window.HomeLightsDrawer && (

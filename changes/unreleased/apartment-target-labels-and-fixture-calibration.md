@@ -1,0 +1,7 @@
+---
+title: Add Apartment aiming targets and fixture tape calibration
+target: web
+type: added
+---
+
+Apartment edit mode now supports direct move, rotation, and sizing of table, island, art, and custom 3D aiming targets, with an explicit add/finish/cancel workflow. Room zones are also directly editable: drag a boundary corner, drag a shaded zone to move it, enter exact corner coordinates, or add and remove corners through an explicit zone workflow. The editor opens directly in a correctly fitted isometric survey view; short mouse drags and bottom arrow controls orbit the room during placement, art reliably attaches to vertical mesh faces, and offline saves reopen as visible local drafts until an authoritative save succeeds. Publishing a recovered draft now requires a read-only live comparison and explicit confirmation; revision mismatches and server conflicts preserve the displayed local work without writing. It records two-wall plus vertical tape measurements for every ceiling fixture, uses fixture bottoms as practical aiming origins, identifies simulation/draft/seed/live/tracker sources, and reconciles mapped fixtures with the full Home Assistant light inventory through the authoritative revisioned Apartment model.

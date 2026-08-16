@@ -33,6 +33,31 @@ export function createPicking(camera, hostEl) {
             return raycaster.intersectObjects(objects, true);
         },
 
+        /* Screen point -> exact apartment-frame mesh hit. The point and face
+         * normal are both converted back into the shared Z-up apartment
+         * frame, so edit tools can place horizontal work surfaces and
+         * vertical art/custom aim planes directly on the runtime mesh. */
+        surfaceHit(apartmentRoot, objects, clientX, clientY) {
+            const hits = this.pick(objects || [], clientX, clientY);
+            const hit = hits.find((candidate) => candidate.point);
+            if (!hit) return null;
+            apartmentRoot.updateMatrixWorld(true);
+            hit.object.updateMatrixWorld(true);
+            const point = apartmentRoot.worldToLocal(hit.point.clone());
+            let normal = new THREE.Vector3(0, 0, 1);
+            if (hit.face?.normal) {
+                normal.copy(hit.face.normal).transformDirection(hit.object.matrixWorld);
+                const rootQ = new THREE.Quaternion();
+                apartmentRoot.getWorldQuaternion(rootQ);
+                normal.applyQuaternion(rootQ.invert()).normalize();
+            }
+            return {
+                point: [point.x, point.y, point.z],
+                normal: [normal.x, normal.y, normal.z],
+                object: hit.object,
+            };
+        },
+
         /* Screen point -> apartment-frame floor coords [x, y] (Z-up, z=0).
          * Ray ∩ world floor plane (y=0 after the root conversion), then into
          * the root's object space. Returns null when the ray misses. */

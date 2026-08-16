@@ -13,6 +13,11 @@ const MODES = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "modes.js
 const ENGINE = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "engine.js"), "utf8");
 const RIG = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "rig.js"), "utf8");
 const PREWARM = fs.readFileSync(path.join(REPO, "app", "src", "home-apartment-prewarm.js"), "utf8");
+const EDIT = fs.readFileSync(path.join(REPO, "app", "src", "home-apartment-edit.jsx"), "utf8");
+const MARKERS = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "markers.js"), "utf8");
+const PICKING = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "picking.js"), "utf8");
+const ASSETS = fs.readFileSync(path.join(REPO, "app", "src", "home-3d", "assets.js"), "utf8");
+const SEED = JSON.parse(fs.readFileSync(path.join(REPO, "app", "src", "assets", "apartment", "seed-model.json"), "utf8"));
 
 let pass = 0;
 let fail = 0;
@@ -121,11 +126,124 @@ assert("data layer has a tracker model fallback", DATA.includes("async function 
 assert("tracker fallback converts websocket bases to http", DATA.includes("function toHttpBase") && DATA.includes('clean.startsWith("ws://")'));
 assert("tracker fallback fetches live /model", DATA.includes('fetcher(`${base}/model`, { cache: "no-store" })'));
 assert("tracker model is tried before local remote cache", DATA.indexOf("const trackerModel = await fetchTrackerModel();") > 0
-  && DATA.indexOf("const trackerModel = await fetchTrackerModel();") < DATA.indexOf('localStorage.getItem("apartment3d.remoteCache")'));
+  && DATA.indexOf("const trackerModel = await fetchTrackerModel();") < DATA.indexOf("localStorage.getItem(REMOTE_CACHE_KEY)"));
 assert("HA model can be enriched from tracker calibration", DATA.includes("function mergeTrackerCameraCalibration")
   && DATA.includes("calibration_enriched: true"));
 assert("tracker enrichment is limited to cameras missing calibration", DATA.includes("const camerasNeedCalibration = (model.devices || []).some")
   && DATA.includes("!cameraCalibrationComplete(d)"));
+
+process.stdout.write("\napartment_named_targets_contract_test\n");
+assert("apartment model normalizes a targets collection", DATA.includes("function ensureModelShape")
+  && DATA.includes("targets: Array.isArray(src.targets) ? src.targets : []"));
+assert("edit mode offers table, island, art, custom point, and custom surface targets",
+  EDIT.includes('{ category: "table"') && EDIT.includes('{ category: "island"')
+    && EDIT.includes('{ category: "art"') && EDIT.includes('label: "custom point"')
+    && EDIT.includes('label: "custom surface"'));
+assert("target placement uses an exact mesh point and face normal", EDIT.includes("engine.picking.surfaceHit")
+  && PICKING.includes("surfaceHit(apartmentRoot, objects, clientX, clientY)"));
+assert("surface targets fail closed when the collision mesh is unavailable",
+  EDIT.includes('if (!hit && placingTarget.shape !== "point")'));
+assert("target overlay renders named point/surface geometry", MARKERS.includes("function buildTarget")
+  && MARKERS.includes("makeTagSprite(target.name") && MARKERS.includes("targetPickObjects()"));
+assert("target editor exposes direct move, rotate, resize, finish, and cancel controls",
+  EDIT.includes('"move on surface"') && EDIT.includes('aria-label="target rotation"')
+    && EDIT.includes('label="Finish placement"') && EDIT.includes('label="Cancel"')
+    && EDIT.includes('aria-label={`target ${axis}`}'));
+assert("target drag preserves surface-plane rotation", EDIT.includes("targetRotationDegrees(target)")
+  && EDIT.includes("targetUpForRotation(target.normal || d.last.normal, previousRotation)"));
+assert("direct target drag preserves horizontal-table and vertical-art constraints",
+  EDIT.includes('target.category === "art" && (!hit || Math.abs(hit.normal[2]) > 0.65)')
+    && EDIT.includes('["table", "island"].includes(target.category) && hit && Math.abs(hit.normal[2]) < 0.65'));
+assert("edit survey pose remains orbitable and restores the previous view",
+  RIG.includes("let editReturn = null") && RIG.includes("clearAbsolutePose();")
+    && RIG.includes("goTo({ az: state.az, el: 0, zoom: 0, dur })")
+    && RIG.includes("goTo(previous ? { ...previous, dur } : { dur })")
+    && RIG.includes("const COMMIT_PX = 24") && EDIT.includes("syncSurveyView"));
+assert("target placement distinguishes a click from an orbit drag",
+  EDIT.includes("placementGestureRef") && EDIT.includes("Math.hypot(")
+    && EDIT.includes("placeTargetAt(e.clientX, e.clientY)")
+    && EDIT.includes("engine.rig.dragPreview(dx, dy") && EDIT.includes("engine.rig.dragRelease(dx, dy"));
+assert("edit UI provides bottom left and right orbit controls",
+  EDIT.includes('aria-label="Apartment edit orbit controls"')
+    && EDIT.includes('ariaLabel="Orbit room left"') && EDIT.includes('ariaLabel="Orbit room right"')
+    && EDIT.includes("engine?.rig.stepAzimuth(-1)") && EDIT.includes("engine?.rig.stepAzimuth(1)"));
+assert("local static preview resolves the real runtime mesh service before web fallback",
+  ASSETS.indexOf("if (loopback") > 0
+    && ASSETS.indexOf("if (loopback") < ASSETS.indexOf("if (window.HG_WEB_MODE"));
+assert("view syncs first-class targets into the 3D overlay", APT.includes("engine.overlay.setTargets?.(model.targets || [])"));
+assert("seed contains table, island, and art target categories", ["table", "island", "art"].every((category) =>
+  SEED.targets.some((target) => target.category === category)));
+
+process.stdout.write("\napartment_zone_editing_contract_test\n");
+assert("zone overlay exposes pickable shaded bodies and draggable vertex handles",
+  MARKERS.includes("zonePickObjects()") && MARKERS.includes("zonePart = 'body'")
+    && MARKERS.includes("zonePart = 'vertex'") && MARKERS.includes("zoneVertexIndex"));
+assert("zone editor distinguishes whole-boundary and individual-corner drags",
+  EDIT.includes('kind: vertexIndex == null ? "zone-body" : "zone-vertex"')
+    && EDIT.includes('d.kind === "zone-vertex" || d.kind === "zone-body"')
+    && EDIT.includes("engine.overlay.previewZone?.(d.id, poly)"));
+assert("zone rail explains direct manipulation and offers an explicit new-zone workflow",
+  EDIT.includes("Drag a round corner to reshape it") && EDIT.includes("Drag inside the shade to move the whole room")
+    && EDIT.includes('label="+ new zone"') && EDIT.includes('label="Finish zone"')
+    && EDIT.includes('label="Cancel"'));
+assert("zone inspector supports exact corner coordinates and topology changes",
+  EDIT.includes("updateZoneVertex") && EDIT.includes('label="add corner"')
+    && EDIT.includes('label="remove selected"') && EDIT.includes("selectedZoneVertex"));
+assert("new-zone clicks have a visible 3D draft and cannot accidentally drag an existing room",
+  MARKERS.includes("function setZoneDraft(poly)") && EDIT.includes("engine.overlay.setZoneDraft")
+    && EDIT.indexOf("if (zoneDrawing && fp)") < EDIT.indexOf("const zoneHit = engine.picking.pick"));
+assert("zone boundary changes refresh target and device room assignments",
+  EDIT.includes("function refreshRoomAssignments(model)")
+    && EDIT.includes("for (const item of [...(model.devices || []), ...(model.targets || [])])"));
+
+process.stdout.write("\napartment_live_mapping_contract_test\n");
+assert("editor identifies model source, revision, HA connection, and save state",
+  EDIT.includes("data-apartment-source") && EDIT.includes("sourceMeta?.label")
+    && EDIT.includes("HA {connection") && EDIT.includes('save · {sim ? "simulation cannot save"'));
+assert("fixture mapping distinguishes mapped, unplaced, and non-fixture lights",
+  EDIT.includes("Mapped fixtures") && EDIT.includes("Unplaced Home Assistant lights")
+    && EDIT.includes("Other mapped lights"));
+assert("fixture links are deliberate and duplicate placement is blocked",
+  EDIT.includes("Home Assistant link") && EDIT.includes("confirm remove link")
+    && EDIT.includes("duplicate blocked") && EDIT.includes("position and calibration were preserved"));
+assert("placing a light requires an explicit ceiling-fixture or other-light choice",
+  EDIT.includes('label="ceiling fixture"') && EDIT.includes('"other light"')
+    && EDIT.includes('placement_kind: "ceiling_fixture"'));
+assert("simulation saves are disabled before local draft persistence",
+  DATA.indexOf("if (sim)") > 0 && DATA.indexOf("if (sim)") < DATA.indexOf("localStorage.setItem(DRAFT_KEY"));
+assert("local drafts require a read-only live comparison before explicit publish",
+  DATA.includes("async function getAuthoritativeModel")
+    && DATA.includes("function compareApartmentModels")
+    && EDIT.includes("data-apartment-live-reconciliation")
+    && EDIT.includes("Publish reviewed draft")
+    && APT.includes("currentSource.kind === \"local_draft\" && connection === \"online\" && !reviewedDraft"));
+assert("save conflicts preserve the displayed local draft and load only a comparison copy",
+  APT.includes("local draft preserved; nothing was overwritten")
+    && APT.includes("server conflict copy loaded for read-only comparison")
+    && !APT.includes("reloaded server copy (your draft is kept locally)"));
+assert("Apartment diagnostics expose a read-only model snapshot for verified backups",
+  APT.includes("modelSnapshot: () => JSON.parse(JSON.stringify(model))"));
+
+process.stdout.write("\napartment_fixture_tape_contract_test\n");
+assert("ceiling lights normalize a fixture-bottom calibration worksheet", DATA.includes("function ensureFixtureCalibration")
+  && DATA.includes('aiming_origin: "fixture_bottom"') && DATA.includes("floor_to_bottom_verification_m"));
+assert("two perpendicular wall measurements solve fixture x/y", DATA.includes("function reconcileFixturePosition")
+  && DATA.includes("wallCoordinate + sign * measurement.distance_m"));
+assert("floor/ceiling and fixture drop solve practical aim height", DATA.includes("derived_floor_to_bottom_m")
+  && DATA.includes("pos[2] = calibration.derived_floor_to_bottom_m"));
+assert("edit UI captures two wall tapes and vertical verification", EDIT.includes("wall_distances[index]")
+  && EDIT.includes('label="floor → ceiling"') && EDIT.includes('label="ceiling → fixture bottom"')
+  && EDIT.includes('label="floor → fixture bottom" optional'));
+assert("edit rails sit above the WebGL host and receive pointer input", EDIT.includes("zIndex: 4,")
+  && EDIT.includes('data-apt-edit-ui="targets-and-palette"')
+  && EDIT.includes('closest?.("[data-apt-edit-ui]")'));
+assert("fixture overlay uses a distinct survey color and labels", MARKERS.includes("const SURVEY")
+  && MARKERS.includes("function setFixtureCalibration") && MARKERS.includes("floor → ceiling"));
+assert("all seeded ceiling lights carry a proposed worksheet", SEED.devices
+  .filter((device) => device.type === "light" && device.ha_entity_id.startsWith("light."))
+  .every((device) => device.aiming_origin === "fixture_bottom"
+    && device.fixture_calibration?.status === "proposed"
+    && device.fixture_calibration?.wall_distances?.length === 2));
 
 if (fail) {
   process.stdout.write(`\n${pass} pass . ${fail} fail\n`);

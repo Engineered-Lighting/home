@@ -518,12 +518,12 @@ The authoritative frontend load graph is the `files = [...]` array in `app/src/i
 | `simulation-timeline.jsx` | Simulation timeline/event scheduler | scenario timeline cancellation and event injection | `tools/run-simulation-command-tests.js` |
 | `simulation-data.jsx` | Simulation scenario registry and fixtures | 62 scenario ids, outage labels, explain/world-state/spatial/camera/clip fixtures | `tools/run-simulation-scenario-tests.js` |
 | `simulation.jsx` | Simulation Mode runtime and slash command surface | `/simulation`, `/sim`, browser URL boot, session-only persistence | `tools/run-simulation-command-tests.js` |
-| `home-apartment-data.js` | `/apartment` data layer | model load/save/cache/draft/seed priority, HA registry palette, tracker WebSocket | `tools/run-apartment-data-tests.js` |
+| `home-apartment-data.js` | `/apartment` data layer | explicit simulation/draft/seed/live/tracker model sources, authoritative revisioned load/save, HA registry and fixture reconciliation, tracker WebSocket | `tools/run-apartment-data-tests.js` |
 | `home-apartment-sim.js` | `/apartment` Simulation Mode tracks and fixtures | sim tracks, no live tracker dependency | `tools/run-apartment-data-tests.js` |
 | `home-apartment-cards.jsx` | Apartment info/control cards | apartment state summaries and card rendering | `tools/run-apartment-data-tests.js` plus JSX parse |
 | `home-apartment-calibrate.jsx` | Camera calibration overlay | Frigate snapshots, 2D/3D point pairing, tracker base URL | `tools/run-apartment-data-tests.js` plus JSX parse |
-| `home-apartment-edit.jsx` | Apartment edit/drawing tools | model geometry, undo/redo, save flow | `tools/run-apartment-data-tests.js` plus JSX parse |
-| `home-apartment.jsx` | `/apartment` 3D apartment surface | Three.js engine bridge, HA state binding, spatial tracker, calibration/edit overlays | `tools/run-apartment-data-tests.js` |
+| `home-apartment-edit.jsx` | Apartment edit/drawing tools | direct target move/rotate/resize and add/finish/cancel, fixture-bottom tape calibration, HA fixture/entity mapping, duplicate-link guards, undo/redo/save states | `tools/run-apartment-data-tests.js` plus JSX parse |
+| `home-apartment.jsx` | `/apartment` 3D apartment surface | Three.js engine bridge, explicit model-source/save status, complete HA registry binding, spatial tracker, named target and calibration/edit overlays | `tools/run-apartment-data-tests.js` |
 | `home-video-labeler-data.js` | Video-labeler API/data layer | video-labeler service, drafts, media URLs, ontology axes, Simulation Mode guard | `tools/run-video-labeler-data-tests.js` |
 | `home-video-labeler-timeline.jsx` | Video-labeler timeline editor | segment math, drag snapshots, lane rendering | `tools/run-video-labeler-data-tests.js` plus JSX parse |
 | `home-video-labeler.jsx` | `/labeler`/`/vl` video-labeling surface | video-labeler service, import/manual flows, timeline, drafts | `tools/run-video-labeler-data-tests.js` |

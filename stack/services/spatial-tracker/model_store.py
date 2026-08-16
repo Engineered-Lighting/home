@@ -11,7 +11,9 @@ around the raw model dict providing shapely zone polygons and camera lookup.
 Tests use it directly; the async poller (:class:`ModelStore`) is only wired
 in ``main.py``.
 
-Coordinate frame: right-handed, Z-up, meters, floor at z=0.
+Coordinate frame: right-handed, Z-up, meters, floor at z=0. Named targets and
+fixture calibration records are preserved even though tracking currently only
+indexes zones, devices, and cameras.
 """
 from __future__ import annotations
 
@@ -41,6 +43,7 @@ class ApartmentModel:
         self.schema_version = self.raw.get("schema_version")
         self.zones: list[dict] = list(self.raw.get("zones") or [])
         self.devices: list[dict] = list(self.raw.get("devices") or [])
+        self.targets: list[dict] = list(self.raw.get("targets") or [])
 
         self.zone_polys: dict[str, Polygon] = {}
         self._camera_to_zone: dict[str, str] = {}

@@ -994,8 +994,9 @@ class ApartmentModelView(CORSHomeAssistantView):
     POST /api/extended_openai_conversation/apartment_model
 
     The 3D apartment spatial model (apartment_model v1, Z-up metric):
-    zones, devices, camera calibrations, light influence polygons. Backs the
-    Home app's /apartment screen. Coexists with the legacy spatial_model.
+    zones, devices, named aim targets, fixture/camera calibrations, and light
+    influence polygons. Backs the Home app's /apartment screen. Coexists with
+    the legacy spatial_model.
 
     GET never 500s — absent file returns {"exists": false, "revision": 0}.
 
@@ -1016,14 +1017,14 @@ class ApartmentModelView(CORSHomeAssistantView):
         def _read() -> dict:
             if not _APARTMENT_MODEL_PATH.is_file():
                 return {"exists": False, "revision": 0, "schema_version": 1,
-                        "zones": [], "devices": []}
+                        "zones": [], "devices": [], "targets": []}
             try:
                 model = json.loads(
                     _APARTMENT_MODEL_PATH.read_text(encoding="utf-8"))
             except (OSError, PermissionError, json.JSONDecodeError) as e:
                 _LOGGER.debug("apartment_model view: read failed: %s", e)
                 return {"exists": False, "revision": 0, "schema_version": 1,
-                        "zones": [], "devices": [],
+                        "zones": [], "devices": [], "targets": [],
                         "reason": f"read failed: {e}"}
             model["exists"] = True
             return model
@@ -1049,6 +1050,9 @@ class ApartmentModelView(CORSHomeAssistantView):
             if not isinstance(body.get(key), list):
                 return self.json({"error": f"{key} array required"},
                                  status_code=400)
+        if "targets" in body and not isinstance(body.get("targets"), list):
+            return self.json({"error": "targets array required"},
+                             status_code=400)
 
         def _write() -> tuple[dict, int]:
             from datetime import datetime, timezone

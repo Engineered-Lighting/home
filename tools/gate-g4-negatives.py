@@ -283,12 +283,188 @@ def cmd_build(args) -> int:
     return 0
 
 
+def _captions_by_frame(root: pathlib.Path) -> dict[str, dict]:
+    """Any arm already run — shown on the sheet so the reviewer can see what
+    the model claimed, which is the whole reason a frame is in dispute."""
+    out: dict[str, dict] = {}
+    for p in sorted(root.glob("g4.*.json")):
+        if p.name.startswith("g4.turns"):
+            continue
+        try:
+            doc = json.loads(p.read_text(encoding="utf-8"))
+        except ValueError:
+            continue
+        for r in doc.get("results", []):
+            out.setdefault(r["frame"], {})[doc.get("arm", p.stem)] = r
+    return out
+
+
+def write_sheet(root: pathlib.Path, man: dict) -> pathlib.Path:
+    """A local contact sheet: every frame, big enough to judge, in one page.
+
+    Deliberately a plain file on disk with RELATIVE image paths — these are
+    interior photographs of the owner's home, so they never leave the host.
+    Nothing here uploads, embeds, or phones anywhere.
+    """
+    caps = _captions_by_frame(root)
+    esc = lambda s: (str(s).replace("&", "&amp;").replace("<", "&lt;")  # noqa: E731
+                     .replace(">", "&gt;").replace('"', "&quot;"))
+    cards = []
+    for fr in man["frames"]:
+        seen = caps.get(fr["id"], {})
+        cap_html = "".join(
+            f'<div class="cap {"fp" if r.get("false_presence") else ""}">'
+            f'<b>{esc(arm)}</b> <span class="cat">[{esc(r.get("category"))}]</span> '
+            f'{esc(r.get("caption", ""))[:200]}</div>'
+            for arm, r in sorted(seen.items()))
+        disputed = any(r.get("false_presence") for r in seen.values())
+        state = fr.get("verified")
+        cards.append(f"""
+      <div class="card{' disputed' if disputed else ''}" data-id="{esc(fr['id'])}"
+           data-state="{'' if state is None else ('y' if state else 'n')}">
+        <img src="frames/{esc(fr['id'])}.jpg" alt="{esc(fr['id'])}" loading="lazy">
+        <div class="meta">
+          <div class="id">{esc(fr['id'])}{' &nbsp;<span class="flag">MODEL SAW SOMETHING</span>' if disputed else ''}</div>
+          <div class="sub">{esc(fr['camera'])} &middot; {esc(fr['local_time'])}
+              &middot; detector fired on <b>{esc(fr['label'])}</b></div>
+          {cap_html}
+          <div class="btns">
+            <button class="y" onclick="mark(this,'y')">empty &#10003;</button>
+            <button class="n" onclick="mark(this,'n')">something IS there &#10007;</button>
+          </div>
+        </div>
+      </div>""")
+
+    html = f"""<!doctype html>
+<meta charset="utf-8"><title>G4 negatives &mdash; verify</title>
+<style>
+ :root {{ color-scheme: dark; }}
+ body {{ background:#111; color:#e8e8e8; font:14px/1.5 system-ui,sans-serif;
+        margin:0; padding:20px 20px 180px; }}
+ h1 {{ font-size:18px; margin:0 0 4px; }}
+ p.lead {{ color:#aaa; max-width:70ch; }}
+ .grid {{ display:grid; gap:16px;
+          grid-template-columns:repeat(auto-fill,minmax(430px,1fr)); }}
+ .card {{ background:#1b1b1b; border:1px solid #2c2c2c; border-radius:8px;
+          overflow:hidden; }}
+ .card.disputed {{ border-color:#a55; }}
+ .card[data-state="y"] {{ border-color:#4a4; box-shadow:0 0 0 1px #4a4 inset; }}
+ .card[data-state="n"] {{ border-color:#c55; box-shadow:0 0 0 1px #c55 inset; }}
+ img {{ width:100%; display:block; background:#000; }}
+ .meta {{ padding:10px 12px; }}
+ .id {{ font-weight:600; }}
+ .flag {{ color:#f88; font-size:11px; letter-spacing:.06em; }}
+ .sub {{ color:#999; font-size:12px; margin-bottom:6px; }}
+ .cap {{ font-size:12px; color:#ccc; margin:3px 0; }}
+ .cap.fp {{ color:#f9a; }}
+ .cat {{ color:#7ab; }}
+ .btns {{ margin-top:8px; display:flex; gap:8px; }}
+ button {{ flex:1; padding:7px; border-radius:6px; border:1px solid #444;
+           background:#222; color:#ddd; cursor:pointer; font-size:13px; }}
+ button.y:hover {{ border-color:#4a4; }} button.n:hover {{ border-color:#c55; }}
+ footer {{ position:fixed; left:0; right:0; bottom:0; background:#0c0c0c;
+           border-top:1px solid #333; padding:12px 20px; }}
+ code {{ display:block; white-space:pre-wrap; word-break:break-all;
+         background:#000; padding:10px; border-radius:6px; color:#9d9;
+         font-size:12px; max-height:90px; overflow:auto; }}
+ .hint {{ color:#999; font-size:12px; margin-bottom:6px; }}
+</style>
+<h1>G4 negatives &mdash; confirm each frame is really empty</h1>
+<p class="lead">A frame belongs in this corpus only if <b>nothing is
+happening</b>: no person, no pet, no package. Parked cars and bags are fine
+&mdash; they are recorded and excluded from scoring per frame. Cards
+outlined in red are ones a model already claimed to see something in; those
+are the ones that matter most. If a person really was there and the
+detector missed them, mark it <b>&#10007;</b> &mdash; leaving it in would
+fail an honest model for being right.</p>
+<p class="lead">Mark what you can, then copy the command at the bottom and
+run it. Images stay on this machine.</p>
+<div class="grid">{''.join(cards)}</div>
+<footer>
+  <div class="hint">Run this to record your answers (unmarked frames are left alone):</div>
+  <code id="cmd">mark some frames above&hellip;</code>
+</footer>
+<script>
+const CORPUS = {json.dumps(str(root))};
+function mark(btn, v) {{
+  const card = btn.closest('.card');
+  card.dataset.state = card.dataset.state === v ? '' : v;
+  render();
+}}
+function render() {{
+  const keep = [], rej = [];
+  document.querySelectorAll('.card').forEach(c => {{
+    if (c.dataset.state === 'y') keep.push(c.dataset.id);
+    if (c.dataset.state === 'n') rej.push(c.dataset.id);
+  }});
+  const parts = [];
+  if (rej.length) parts.push('--reject ' + rej.join(','));
+  if (keep.length) parts.push('--accept ' + keep.join(','));
+  document.getElementById('cmd').textContent = parts.length
+    ? 'python3 tools/gate-g4-negatives.py verify ' + CORPUS + ' ' + parts.join(' ')
+    : 'mark some frames above\\u2026';
+}}
+render();
+</script>
+"""
+    out = root / "verify.html"
+    out.write_text(html, encoding="utf-8")
+    return out
+
+
 def cmd_verify(args) -> int:
     root = pathlib.Path(args.corpus)
     mpath = root / "manifest.json"
     if not mpath.exists():
         sys.exit(f"no manifest at {mpath} — run `build` first.")
     man = json.loads(mpath.read_text(encoding="utf-8"))
+    by_id = {f["id"]: f for f in man["frames"]}
+
+    # Non-interactive path: record verdicts straight from the sheet.
+    if args.reject or args.accept or args.accept_rest:
+        def apply(ids, value):
+            n = 0
+            for fid in [i.strip() for i in ids.split(",") if i.strip()]:
+                if fid not in by_id:
+                    print(f"  unknown frame id: {fid}")
+                    continue
+                by_id[fid]["verified"] = value
+                n += 1
+            return n
+        nr = apply(args.reject or "", False)
+        na = apply(args.accept or "", True)
+        if args.accept_rest:
+            for f in man["frames"]:
+                if f.get("verified") is None:
+                    f["verified"] = True
+                    na += 1
+        mpath.write_text(json.dumps(man, indent=2), encoding="utf-8")
+        ok = sum(1 for f in man["frames"] if f.get("verified") is True)
+        no = sum(1 for f in man["frames"] if f.get("verified") is False)
+        pend = sum(1 for f in man["frames"] if f.get("verified") is None)
+        print(f"recorded: {na} confirmed, {nr} rejected")
+        print(f"corpus now: confirmed={ok} rejected={no} unreviewed={pend}")
+        if pend:
+            print(f"  ({pend} still unreviewed — they will be excluded from "
+                  "gate runs until marked)")
+        return 0
+
+    # Default: write the contact sheet. A terminal cannot show 35 JPEGs, and
+    # printing 35 file paths is not review, it is homework.
+    sheet = write_sheet(root, man)
+    print(f"contact sheet -> {sheet}")
+    print(f"\n  open it:  xdg-open {sheet}")
+    print(f"            (or browse to file://{sheet})\n")
+    print("Every frame is on one page at a size you can actually judge, with "
+          "the caption each model gave it. Frames a model claimed to see "
+          "something in are outlined in red — those are the ones that decide "
+          "whether the corpus is honest.")
+    print("\nMark them in the page, then copy the command it builds at the "
+          "bottom. Images never leave this machine.")
+    if args.interactive:
+        print("\n--- falling through to the one-at-a-time prompt ---\n")
+    else:
+        return 0
 
     print("Confirm each frame really is a negative: no person, no pet, no "
           "package, nothing happening.")
@@ -483,6 +659,14 @@ def main() -> int:
 
     v = sub.add_parser("verify", help="human confirmation of each negative")
     v.add_argument("corpus")
+    v.add_argument("--reject", help="comma-separated frame ids that are NOT "
+                                    "negatives (something really was there)")
+    v.add_argument("--accept", help="comma-separated frame ids confirmed empty")
+    v.add_argument("--accept-rest", action="store_true",
+                   help="confirm every frame not already marked; use only "
+                        "after actually looking at the sheet")
+    v.add_argument("--interactive", action="store_true",
+                   help="also step through frames one at a time in the terminal")
     v.add_argument("--redo", action="store_true")
     v.set_defaults(func=cmd_verify)
 

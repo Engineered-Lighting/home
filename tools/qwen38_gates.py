@@ -428,9 +428,14 @@ _LOOK_BRANCHES: tuple[tuple[str, re.Pattern], ...] = (
         r"\b(smoke|fire|water|leak|flood|fallen|fall|broken|hazard|spill|"
         r"sparks?|alarm)\b")),
     ("package", re.compile(r"\b(package|parcel|delivery|box)\b")),
+    # Keyed on human NOUNS, not posture gerunds — see the matching comment
+    # in home-natural-look.js. Furniture stands and sits; only people are
+    # called a man or a woman. Measured cost of the old form on 50 real
+    # daylight frames: 6 missed people, 2 phantom alerts from a bicycle.
     ("person", re.compile(
-        r"\b(person|people|someone|human|standing|walking|sitting|motion|"
-        r"moving)\b")),
+        r"\b(person|people|someone|somebody|human|man|men|woman|women|"
+        r"child|children|kid|kids|guy|girl|boy|toddler|baby|"
+        r"walking|walks|motion|moving)\b")),
     ("pet", re.compile(r"\b(dog|cat|pet)\b")),
     ("vehicle", re.compile(r"\b(vehicle|car|truck|van|bus|driveway|parked)\b")),
     ("door_window", re.compile(

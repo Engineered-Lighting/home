@@ -252,6 +252,21 @@ check("paraphrased quiet via looks/appears",
 check("empty answer is quiet", cls("") == "quiet")
 check("person is person", cls("A person is standing by the sink.") == "person")
 check("someone counts as person", cls("Someone walked past.") == "person")
+# Measured on 50 daylight frames: the old gerund-keyed branch missed every
+# caption that named a human as a noun, and fired on furniture that
+# "stands". Both directions are asserted here and mirrored in the JS suite.
+check("`a man` is a person", cls("A man in a cap stands in the kitchen.") == "person")
+check("`a woman` is a person", cls("A woman walks past the door.") == "person")
+check("`man` does not match inside `woman`",
+      cls("A woman is here.") == "person")
+check("a child is a person", cls("A child is at the table.") == "person")
+check("a furniture item that STANDS is not a person",
+      cls("A living room with a couch, coffee table, and a pink bicycle standing upright.")
+      != "person")
+check("a cup SITTING on a counter is not a person",
+      cls("A cup is sitting on the kitchen counter.") != "person")
+check("an explicit person standing is still a person",
+      cls("A person is standing by the sink.") == "person")
 check("package is package", cls("A delivery box sits by the door.") == "package")
 check("pet is pet", cls("The cat is on the couch.") == "pet")
 check("vehicle is vehicle", cls("A car is parked outside.") == "vehicle")

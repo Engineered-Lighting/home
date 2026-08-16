@@ -135,6 +135,15 @@ function loadAppDeepLookHelpers() {
         ["The room appears empty.", "quiet"],
         ["", "quiet"],
         ["A person is standing by the sink.", "person"],
+        ["A man in a cap stands in the kitchen.", "person"],
+        ["A woman walks past the door.", "person"],
+        ["A child is at the table.", "person"],
+        ["A man in a white t-shirt walks through a dining room with a surfboard.", "person"],
+        ["A living room with a couch, coffee table, and a pink bicycle standing upright.", "inventory"],
+        /* The point is that furniture "sitting" no longer reads as a person;
+         * it lands on activity rather than inventory only because "counter"
+         * is not in the inventory vocabulary. */
+        ["A cup is sitting on the kitchen counter.", "activity"],
         ["Someone walked past.", "person"],
         ["A delivery box sits by the door.", "package"],
         ["The cat is on the couch.", "pet"],

@@ -242,7 +242,16 @@
     if (/\b(unclear|not sure|hard to tell|cannot tell|can't tell|blurry|blocked|obscured|dark|low light)\b/.test(s)) return "uncertain";
     if (/\b(smoke|fire|water|leak|flood|fallen|fall|broken|hazard|spill|sparks?|alarm)\b/.test(s)) return "hazard";
     if (/\b(package|parcel|delivery|box)\b/.test(s)) return "package";
-    if (/\b(person|people|someone|human|standing|walking|sitting|motion|moving)\b/.test(s)) return "person";
+    // Keyed on human NOUNS, not posture gerunds. The original matched
+    // "standing" and "sitting" — which furniture does too — while missing
+    // "man", "woman", "stands" and "walks" entirely. Measured on 50 real
+    // daylight frames that cost 6 missed people (three filed at importance
+    // 10, i.e. "nothing to report", including "a man in a white t-shirt
+    // walks through a dining room") and 2 phantom alerts at importance 90
+    // from "a pink bicycle standing upright". Nouns fix both directions:
+    // the gerunds were redundant whenever a human was named, and harmful
+    // whenever one was not. "walking" survives — objects do not walk.
+    if (/\b(person|people|someone|somebody|human|man|men|woman|women|child|children|kid|kids|guy|girl|boy|toddler|baby|walking|walks|motion|moving)\b/.test(s)) return "person";
     if (/\b(dog|cat|pet)\b/.test(s)) return "pet";
     if (/\b(vehicle|car|truck|van|bus|driveway|parked)\b/.test(s)) return "vehicle";
     if (/\b(door\s+open|open\s+door|window\s+open|open\s+window|garage\s+open)\b/.test(s)) return "door_window";

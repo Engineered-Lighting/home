@@ -275,7 +275,17 @@ _APP_REF_RE = re.compile(r"<ref>([\s\S]*?)</ref>\s*(?:<box>[\d,\s]*</box>)?",  #
                          re.IGNORECASE)
 _APP_ANSWER_RE = re.compile(r"\n*ANSWER:[\s\S]*$", re.IGNORECASE)
 
-_ANY_MARKUP_RE = re.compile(r"</?(?:ref|box)\b[^>]*>", re.IGNORECASE)
+# Residual markup the app would render raw. Two alternatives, because
+# truncation at the generation cap can stop ANYWHERE:
+#   1. a complete but unpaired tag, e.g. a `<box>` whose `</box>` never
+#      arrived — this is the case observed live on the incumbent; and
+#   2. a tag cut off before its own '>', e.g. a trailing `<box` or `<re`.
+# Matching only the first would report "clean" for a trace truncated one
+# character earlier, which is the same defect wearing a different hat.
+_ANY_MARKUP_RE = re.compile(
+    r"</?(?:ref|box)\b[^>]*>"          # complete tag
+    r"|<\/?(?:r(?:e(?:f)?)?|b(?:o(?:x)?)?)$",   # tag truncated before '>'
+    re.IGNORECASE)
 
 
 def _clamp1000(v: int) -> int:

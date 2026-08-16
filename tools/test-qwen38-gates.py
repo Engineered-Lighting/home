@@ -177,6 +177,22 @@ check("sidecar accepts the bare '>' close", len(G.parse_primitives(bare_close)) 
 check("app LEAVES the bare '>' close on screen",
       G.app_residual_markup(bare_close) != [])
 
+# Observed live on the incumbent at max_tokens=500: generation stops
+# mid-markup, the close tag never arrives, and the app renders the opener.
+truncated = "I see a mug on the left of the counter. <box>"
+check("unpaired <box> is residual markup",
+      G.app_residual_markup(truncated) != [])
+check("unpaired <box> fails G7", not G.score_g7(truncated).passed)
+# ...and truncation one character earlier must not read as clean.
+for tail in ("<box", "<bo", "<b", "<ref", "<re", "</box", "</ref"):
+    check(f"tag truncated as {tail!r} is still residual",
+          G.app_residual_markup("prose " + tail) != [],
+          f"missed {tail!r}")
+check("a lone '<' in prose is not markup",
+      G.app_residual_markup("5 < 6 mugs") == [])
+check("an unrelated tag is not counted",
+      G.app_residual_markup("prose <b>bold</b>") == [])
+
 check("degenerate zero-area boxes are dropped",
       G.parse_primitives("<ref>x</ref><box>10,20,10,20</box>") == [])
 check("coords are clamped to 0-1000",

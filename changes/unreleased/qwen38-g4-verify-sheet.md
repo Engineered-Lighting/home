@@ -15,3 +15,8 @@ the verdicts, and `--reject` / `--accept` also work directly.
 The sheet is a plain file with relative image paths and no external
 references. These are interior photographs of the owner's home, and nothing
 about reviewing them sends them anywhere.
+
+The sheet is also self-contained and written into the home directory. The
+browser on this host is a snap, and snap confinement blocks it from reading
+anything outside the home directory, so a sheet under `/srv` with relative
+image paths could not be opened at all.

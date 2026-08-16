@@ -299,13 +299,30 @@ def _captions_by_frame(root: pathlib.Path) -> dict[str, dict]:
     return out
 
 
-def write_sheet(root: pathlib.Path, man: dict) -> pathlib.Path:
+def _data_uri(root: pathlib.Path, frame_id: str) -> str:
+    import base64
+    p = root / "frames" / f"{frame_id}.jpg"
+    try:
+        return "data:image/jpeg;base64," + base64.b64encode(
+            p.read_bytes()).decode("ascii")
+    except OSError:
+        return ""
+
+
+def write_sheet(root: pathlib.Path, man: dict) -> list[pathlib.Path]:
     """A local contact sheet: every frame, big enough to judge, in one page.
 
-    Deliberately a plain file on disk with RELATIVE image paths — these are
-    interior photographs of the owner's home, so they never leave the host.
-    Nothing here uploads, embeds, or phones anywhere.
+    The images are embedded as data URIs so the page is a SINGLE
+    self-contained file. That is not cosmetic: the browser here is a snap,
+    and snap confinement blocks it from reading anything outside $HOME — a
+    sheet under /srv with relative image paths simply fails to open. A
+    self-contained file can be dropped in $HOME and works regardless of
+    where the corpus lives.
+
+    Everything stays on this machine. No external references of any kind:
+    these are interior photographs of the owner's home.
     """
+    import base64
     caps = _captions_by_frame(root)
     esc = lambda s: (str(s).replace("&", "&amp;").replace("<", "&lt;")  # noqa: E731
                      .replace(">", "&gt;").replace('"', "&quot;"))
@@ -322,7 +339,7 @@ def write_sheet(root: pathlib.Path, man: dict) -> pathlib.Path:
         cards.append(f"""
       <div class="card{' disputed' if disputed else ''}" data-id="{esc(fr['id'])}"
            data-state="{'' if state is None else ('y' if state else 'n')}">
-        <img src="frames/{esc(fr['id'])}.jpg" alt="{esc(fr['id'])}" loading="lazy">
+        <img src="{_data_uri(root, fr['id'])}" alt="{esc(fr['id'])}" loading="lazy">
         <div class="meta">
           <div class="id">{esc(fr['id'])}{' &nbsp;<span class="flag">MODEL SAW SOMETHING</span>' if disputed else ''}</div>
           <div class="sub">{esc(fr['camera'])} &middot; {esc(fr['local_time'])}
@@ -407,9 +424,19 @@ function render() {{
 render();
 </script>
 """
+    written = []
     out = root / "verify.html"
     out.write_text(html, encoding="utf-8")
-    return out
+    written.append(out)
+    # A copy inside $HOME, because the browser on this host is snap-confined
+    # and cannot read /srv at all.
+    home = pathlib.Path.home() / f"g4-verify-{root.name}.html"
+    try:
+        home.write_text(html, encoding="utf-8")
+        written.append(home)
+    except OSError as e:
+        print(f"  (could not write the $HOME copy: {e})")
+    return written
 
 
 def cmd_verify(args) -> int:
@@ -451,10 +478,18 @@ def cmd_verify(args) -> int:
 
     # Default: write the contact sheet. A terminal cannot show 35 JPEGs, and
     # printing 35 file paths is not review, it is homework.
-    sheet = write_sheet(root, man)
-    print(f"contact sheet -> {sheet}")
-    print(f"\n  open it:  xdg-open {sheet}")
-    print(f"            (or browse to file://{sheet})\n")
+    sheets = write_sheet(root, man)
+    openable = sheets[-1]
+    size_mb = openable.stat().st_size / 2**20
+    for s_ in sheets:
+        print(f"contact sheet -> {s_}  ({s_.stat().st_size / 2**20:.1f} MB)")
+    print(f"\n  open it:  xdg-open {openable}")
+    print(f"            (or browse to file://{openable})\n")
+    if len(sheets) > 1:
+        print("  The $HOME copy is the one to open: the browser here is a "
+              "snap and snap confinement blocks it from reading /srv.")
+    if size_mb > 12:
+        print(f"  (the page is {size_mb:.0f} MB — it may take a moment to render)")
     print("Every frame is on one page at a size you can actually judge, with "
           "the caption each model gave it. Frames a model claimed to see "
           "something in are outlined in red — those are the ones that decide "

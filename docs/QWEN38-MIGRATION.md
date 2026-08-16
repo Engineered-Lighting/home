@@ -382,6 +382,58 @@ Consequences, all of which change the plan rather than the schedule:
    own (log churn on a quarantined host); it is **owner-run** and out of
    scope here.
 
+### Matrix driver built; incumbent D/A cells measured
+
+`tools/qwen38-matrix-driver.py`. It changes nothing about the engine — it
+measures whatever is running and records what that was. The session
+protocol is enforced rather than remembered: a **leakage canary aborts the
+session** before cells run (numbers from a config that cannot ship are
+worthless), an **anchor runs first and last** with >10% p50 drift
+invalidating the session, and every latency carries its measurement point
+and cache state.
+
+Cells P0 (MTP), K (fp8 KV) and RP (reasoning parser) are declared but
+**refuse to run** unless the engine already reports that config, so a
+session cannot claim a cell it did not exercise.
+
+**Incumbent smoke session, 2026-08-16** (n=12 — a smoke run; the doc
+requires **n≥100** for any p95-gated cell). Drift 3.6% → valid. Canary
+clean.
+
+**D-cells — does prefix caching work?** The Prometheus counter delta is a
+clean instrument: it reads **0.0% hits** on the busted arm and **99.9%** on
+the warm arm, exactly as it should.
+
+| arm | p50 | p95 | prefix-cache hit rate |
+|---|---|---|---|
+| warm (identical prompt) | 0.068 s | 0.069 s | 99.88% |
+| **shared-prefix (the real voice shape)** | **0.161 s** | 0.164 s | 98.84% |
+| busted (unique prefix) | 0.354 s | 0.481 s | 0.00% |
+
+**Warm-vs-busted speedup 5.22×**, confirming the Phase-0 figure
+independently. The middle row is the number that matters: a real voice turn
+shares the 8,682-token system prompt and varies only the question, and it
+costs **0.161 s** against **0.354 s** with no cache. **That 0.19 s gap is
+what R4 says may vanish on the candidate's hybrid attention** — before the
+candidate's 2.4–2.6× slower decode is applied to what remains.
+
+**A-cell — ambient:** p50 0.139 s, p95 0.156 s against D1's 1.5 s budget.
+The incumbent uses **10%** of the ambient budget, so there is real headroom
+here; voice is where the budget is tight.
+
+⚠ **Voice is already close to budget on the INCUMBENT.** Measured at the HA
+conversation endpoint (D1's named instrument): "What rooms are in my home?"
+1.20 s, "Are any lights on right now?" **3.43 s** against a **4.0 s** p95
+budget. A multi-tool read is at 86% of budget before the candidate is
+involved. This makes the D-cell result decisive rather than interesting:
+if APC goes inert, the voice budget is not reachable.
+
+Also measured: `areas_in_home` — one of the two zero-argument tools Phase 0
+flagged — completes cleanly on the incumbent (1.20 s, `action_done`). The
+vllm#50989 doom-loop risk is specific to switching the parser to
+`qwen3_coder`, so this is the before-picture that makes the V1 cell's
+after-picture meaningful.
+
 ### G4 corpus built from live Frigate, and the incumbent baselined
 
 `tools/gate-g4-negatives.py`. Corpus at `/srv/data/eval/migration/g4-corpus`:

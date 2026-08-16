@@ -382,6 +382,61 @@ Consequences, all of which change the plan rather than the schedule:
    own (log churn on a quarantined host); it is **owner-run** and out of
    scope here.
 
+### G4 corpus built from live Frigate, and the incumbent baselined
+
+`tools/gate-g4-negatives.py`. Corpus at `/srv/data/eval/migration/g4-corpus`:
+**35 frames = 25 negatives (12 cup-misfire + 6 night + 7 empty) + 10
+quiet-literal sentinels**, exactly the gate's spec, drawn from real Frigate
+event snapshots across kitchen / dining_room / living_room.
+
+**The negatives are real, not authored.** Frigate emits ~2,300 `cup` events
+in six hours — it re-detects a cup on the kitchen counter continuously. A
+frame where the detector fired and nothing happened is precisely the
+negative this gate wants, and there are thousands to draw from.
+
+**Scoring is production's verdict, not taste.** Every caption goes through
+`classifyLookFinding`, the app's own classifier (ported in `qwen38_gates`,
+cross-asserted against the JS in `run-look-tests.js` — 17 shared cases).
+G4 therefore answers the operational question: *would the app have raised a
+notable finding on a frame where nothing happened?*
+
+**Two design corrections found by building it:**
+
+1. ⚠ **A parked car is not a hallucination.** The first corpus drew a night
+   driveway frame from a `car` event; "a car is parked outside" is TRUE
+   there, and scoring it as false presence would have penalised an accurate
+   caption. Fixed by splitting the mask: living things must be **absent**
+   for a frame to qualify at all, while tolerated objects (vehicles, bags)
+   may be present and are recorded per frame, so that category stops
+   counting as false presence **for that frame only**. Discarding those
+   frames instead would have deleted the driveway — the camera most likely
+   to invent a person or a package — from the corpus entirely.
+2. ⚠ **The sentinels were pointed at the wrong prompt surface.** Measured
+   against `/describe`, the incumbent filed **0/10** as quiet — because
+   `/describe` says "describe directly", so it answers with room
+   inventories and never emits the phrase. The quiet literal is asked for
+   by the **deep-look** path ("If nothing important is happening, say
+   exactly: No obvious activity."). Pointed at that surface — composed as
+   production does, `buildFocusedLookQuestion` wrapped in the sidecar's
+   `REASON_SYSTEM`/`REASON_USER_TMPL`, and scored on the sidecar's own
+   extracted answer — the incumbent files **8/10**. A gate that asks a
+   prompt for a phrase it never requested measures nothing.
+
+**Incumbent baseline** (2026-08-16, production path, cold cache, n=35):
+**false presence 5/35**; **quiet sentinels 8/10**; **zero G5 leaks**;
+p50 0.15 s, p95 0.30 s. The two sentinel misses were "Door open, light on."
+and an "open door and potential tripping hazard" reading of a chair.
+
+⚠ **The corpus is PROPOSED, not confirmed.** Ground truth is "Frigate saw
+no person", which is a detector's opinion; a missed person would hand the
+gate a frame that is not negative and fail an honest model. Three of the
+five incumbent false-presences are night `living_room` frames captioned "a
+person is sitting in a chair" — plausibly a real person the detector missed
+at 02:4x in the dark. **`gate-g4-negatives.py verify` must be run by the
+owner before this corpus is gate evidence**; the runner refuses unverified
+frames unless `--include-unverified` is passed, which labels the result a
+dry run.
+
 ### ⚠ G2 has no request log either — restated as a keyframe replay
 
 The third data source checked, and the third that does not hold what the

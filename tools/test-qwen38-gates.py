@@ -238,6 +238,95 @@ check("runaway trace fails G7", not G.score_g7(runaway).passed)
 check("runaway is detected by prefix repetition",
       G.score_g7(runaway).max_prefix_repeat >= 4)
 
+# ── G4 production classifier parity ──────────────────────────────────────
+# These cases are mirrored in tools/run-look-tests.js against the real JS,
+# so a one-sided edit to either classifier fails a suite.
+print("\ng4_look_classifier_parity")
+cls = G.classify_look_finding
+check("the exact quiet literal", cls("No obvious activity.") == "quiet")
+# The PR-1a fix: padded phrasing must still be quiet, not activity(55).
+check("padded quiet literal stays quiet",
+      cls("No obvious activity right now in the kitchen.") == "quiet")
+check("paraphrased quiet via looks/appears",
+      cls("The room appears empty.") == "quiet")
+check("empty answer is quiet", cls("") == "quiet")
+check("person is person", cls("A person is standing by the sink.") == "person")
+check("someone counts as person", cls("Someone walked past.") == "person")
+check("package is package", cls("A delivery box sits by the door.") == "package")
+check("pet is pet", cls("The cat is on the couch.") == "pet")
+check("vehicle is vehicle", cls("A car is parked outside.") == "vehicle")
+check("hazard is hazard", cls("There is smoke near the stove.") == "hazard")
+
+# Branch ORDER is load-bearing: the JS returns on first match, so "dark"
+# reaches `uncertain` before the `light` branch sees it. A reordered port
+# would silently reclassify every night frame.
+check("`dark` resolves to uncertain, not light",
+      cls("The room is dark.") == "uncertain")
+check("`hard to tell` is uncertain", cls("It is hard to tell.") == "uncertain")
+check("adjacent `lights on` is light", cls("Kitchen lights on.") == "light")
+check("`lit` is light", cls("The room is lit.") == "light")
+# The JS requires the state word to sit immediately after the noun, so
+# "lights ARE on" misses the light branch and falls through to activity.
+# Faithful ports keep production's quirks, they do not improve on them.
+check("non-adjacent `lights are on` falls through to activity",
+      cls("The lights are on.") == "activity")
+check("a listy answer is inventory",
+      cls("A couch, a coffee table, and a plant.") == "inventory")
+check("a plain statement is activity", cls("The kettle is boiling.") == "activity")
+
+print("\ng4_scoring_helpers")
+check("person on an empty frame is false presence",
+      G.is_false_presence("A person is standing there."))
+check("quiet is not false presence", not G.is_false_presence("No obvious activity."))
+check("inventory is not false presence",
+      not G.is_false_presence("A couch, a table, and a chair."))
+# `activity` at importance 55 IS the pre-fix regression, so it must count.
+check("bare activity counts as false presence",
+      G.is_false_presence("The kettle is boiling."))
+check("uncertain is not false presence — a dark frame is honest",
+      not G.is_false_presence("The room is dark."))
+check("quiet-literal sentinel accepts the padded form",
+      G.is_quiet_literal("No obvious activity right now."))
+check("quiet-literal sentinel rejects an invented person",
+      not G.is_quiet_literal("A person is standing by the sink."))
+check("importance table matches the app", G.look_importance("person") == 90
+      and G.look_importance("quiet") == 0 and G.look_importance("activity") == 55)
+check("unknown category importance falls back to 20",
+      G.look_importance("nonsense") == 20)
+
+print("\ng4_answer_extraction_and_low_signal")
+# /reason returns the EXTRACTED answer; classifying the raw trace would
+# score reasoning prose and markup the user never sees.
+ex = G.sidecar_extract_answer
+check("ANSWER line is extracted",
+      ex("I look around.\nANSWER: No obvious activity.") == "No obvious activity.")
+check("markup is stripped from the answer",
+      ex("ANSWER: A <ref>cup</ref><box>1,1,9,9</box> is here.")
+      == "A is here." or "cup" not in ex("ANSWER: A <ref>cup</ref><box>1,1,9,9</box> is here."))
+check("no ANSWER line falls back to stripped prose",
+      ex("A <ref>mug</ref><box>1,1,9,9</box> sits there.") == "sits there."
+      or "box" not in ex("A <ref>mug</ref><box>1,1,9,9</box> sits there."))
+check("empty input yields empty string", ex("") == "")
+# A trace whose ANSWER line is only markup must fall back, not return "".
+check("markup-only ANSWER falls back to the prose before it",
+      ex("The room is empty.\nANSWER: <box>1,1,9,9</box>") == "The room is empty.")
+
+# The sentinel surface yields `quiet`; the ambient surface yields
+# `inventory`. Both are operationally silent — isLowSignalFinding treats
+# them the same — so the gate reports both rather than failing an ambient
+# caption for not saying a phrase its prompt never asked for.
+check("quiet is low signal", G.is_low_signal("No obvious activity."))
+check("inventory is low signal", G.is_low_signal("A couch, a table, and a chair."))
+check("person is not low signal", not G.is_low_signal("A person is standing there."))
+check("bare activity is not low signal", not G.is_low_signal("The kettle is boiling."))
+
+check("normalizer lowercases and collapses whitespace",
+      G.deep_look_normalize("  No   OBVIOUS   Activity  ") == "no obvious activity")
+check("normalizer folds curly apostrophes",
+      G.deep_look_normalize("can’t tell") == "can't tell")
+check("normalizer turns underscores into spaces",
+      G.deep_look_normalize("living_room") == "living room")
+
 print()
 if FAILURES:
     print(f"qwen38 gate-core tests: {len(FAILURES)} FAILED -> {FAILURES}")

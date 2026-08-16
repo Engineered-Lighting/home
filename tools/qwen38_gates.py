@@ -342,6 +342,43 @@ def extract_answer_line(text: str) -> str | None:
     return m.group(1).strip() if m else None
 
 
+def _strip_primitives(text: str) -> str:
+    """Port of the sidecar's `_strip_primitives`."""
+    t = re.sub(r"<ref>.*?</ref>", "", str(text or ""), flags=re.IGNORECASE)
+    t = re.sub(r"<box>.*?(?:</box>|>)", "", t, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def sidecar_extract_answer(text: str) -> str:
+    """Port of the vision-sidecar's `_extract_answer`.
+
+    This is what `/reason` actually returns as `answer`, and therefore what
+    the app's classifier sees. Classifying the raw trace instead would
+    score markup and reasoning prose the user never reads.
+    """
+    m = re.search(r"ANSWER:\s*(.+)", str(text or ""), re.IGNORECASE)
+    if m:
+        answer = _strip_primitives(m.group(1))
+        if answer:
+            return answer
+        before = str(text)[:m.start()].strip()
+        if before:
+            return _strip_primitives(before)
+    return _strip_primitives(text)
+
+
+# `isLowSignalFinding` in home-natural-look.js: quiet AND inventory both
+# count as "nothing worth surfacing" outside detailed_scan. The distinction
+# matters for the G4 sentinels — the ambient prompt yields inventories, the
+# deep-look prompt yields the quiet literal, and both are operationally
+# silent even though only one is literally "quiet".
+LOW_SIGNAL_CATEGORIES = frozenset({"quiet", "inventory"})
+
+
+def is_low_signal(answer: str) -> bool:
+    return classify_look_finding(answer) in LOW_SIGNAL_CATEGORIES
+
+
 @dataclass
 class G7Score:
     n_primitives: int
@@ -363,6 +400,101 @@ class G7Score:
     def passed(self) -> bool:
         """G7 needs BOTH consumers to accept the output, plus no runaway."""
         return self.extracted and self.app_clean and not self.runaway
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# G4 — hallucination on negatives, scored by the PRODUCTION classifier
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Ported from `classifyLookFinding` in app/src/home-natural-look.js. Scoring
+# G4 on "does the caption sound wrong" would be a judgement call; scoring it
+# on this classifier asks the question that matters operationally — **would
+# the app have raised a notable finding on a frame where nothing happened?**
+#
+# Order is load-bearing: the JS returns on the first match, so `dark` lands
+# in `uncertain` before the `light` branch can claim it. Keep these branches
+# in the same sequence as the source.
+#
+# ⚠ PARITY: if `classifyLookFinding` changes, change this too.
+# `tools/run-look-tests.js` and `tools/test-qwen38-gates.py` assert the same
+# cases on both sides so a one-sided edit fails a suite.
+
+_LOOK_BRANCHES: tuple[tuple[str, re.Pattern], ...] = (
+    ("quiet", re.compile(r"\bno obvious activity\b")),
+    ("uncertain", re.compile(
+        r"\b(unclear|not sure|hard to tell|cannot tell|can't tell|blurry|"
+        r"blocked|obscured|dark|low light)\b")),
+    ("hazard", re.compile(
+        r"\b(smoke|fire|water|leak|flood|fallen|fall|broken|hazard|spill|"
+        r"sparks?|alarm)\b")),
+    ("package", re.compile(r"\b(package|parcel|delivery|box)\b")),
+    ("person", re.compile(
+        r"\b(person|people|someone|human|standing|walking|sitting|motion|"
+        r"moving)\b")),
+    ("pet", re.compile(r"\b(dog|cat|pet)\b")),
+    ("vehicle", re.compile(r"\b(vehicle|car|truck|van|bus|driveway|parked)\b")),
+    ("door_window", re.compile(
+        r"\b(door\s+open|open\s+door|window\s+open|open\s+window|"
+        r"garage\s+open)\b")),
+    ("light", re.compile(
+        r"\b(light(?:s)?\s+(?:on|off)|lamp(?:s)?\s+(?:on|off)|lit|dark)\b")),
+    ("quiet", re.compile(r"\b(looks|seems|appears)\s+(normal|quiet|empty|clear)\b")),
+)
+
+_INVENTORY_RE = re.compile(
+    r"\b(couch|coffee table|table|chair|chairs|plant|bicycle|painting|"
+    r"cabinet|sink|stove|island|window|speaker|surfboard|floor)\b")
+
+LOOK_IMPORTANCE = {
+    "hazard": 100, "person": 90, "package": 80, "door_window": 76,
+    "pet": 72, "vehicle": 68, "light": 62, "activity": 55,
+    "uncertain": 30, "inventory": 10, "quiet": 0,
+}
+
+# A negative frame is "hallucinated on" when the app would surface it as one
+# of these. `activity` is included deliberately: at importance 55 it is what
+# the pre-PR-1a quiet-literal bug produced on every idle camera.
+FALSE_PRESENCE_CATEGORIES = frozenset(
+    {"person", "package", "pet", "vehicle", "hazard", "door_window", "activity"})
+
+
+def deep_look_normalize(text: str) -> str:
+    """Port of `deepLookNormalize`."""
+    t = str(text or "").lower()
+    t = re.sub(r"[‘’ʼ＇`]", "'", t)
+    t = re.sub(r"[_-]+", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def classify_look_finding(answer: str) -> str:
+    """Port of `classifyLookFinding` — the app's own verdict on a caption."""
+    s = deep_look_normalize(answer)
+    if not s:
+        return "quiet"
+    for category, pattern in _LOOK_BRANCHES:
+        if pattern.search(s):
+            return category
+    many = len(re.findall(r",", s)) >= 2 or bool(_INVENTORY_RE.search(s))
+    return "inventory" if many else "activity"
+
+
+def look_importance(category: str) -> int:
+    return LOOK_IMPORTANCE.get(category, 20)
+
+
+def is_false_presence(answer: str) -> bool:
+    """True when the app would raise a notable finding for this caption."""
+    return classify_look_finding(answer) in FALSE_PRESENCE_CATEGORIES
+
+
+def is_quiet_literal(answer: str) -> bool:
+    """True when the app would file this caption as 'nothing to report'.
+
+    This is the quiet-literal sentinel condition: on an empty frame a
+    non-quiet verdict re-reports an idle camera as a finding, which is the
+    regression the PR-1a regex relax fixed.
+    """
+    return classify_look_finding(answer) == "quiet"
 
 
 def runaway_score(text: str) -> tuple[int, int]:

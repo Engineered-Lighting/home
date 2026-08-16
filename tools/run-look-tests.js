@@ -118,6 +118,44 @@ function loadAppDeepLookHelpers() {
     source.includes("LK_BOX_TAG_SRC") && !/const re = \/<ref>\(\[\\s\\S\]\*\?\)<\\\/ref>\\s\*\(\?:<box>\[\\d,\\s\]\*<\\\/box>\)\?\/gi/.test(source),
     "lkRenderReasoning must build its regex from LK_BOX_TAG_SRC, not the old narrow literal");
 
+  process.stdout.write("\nlook_finding_classifier_parity_test\n");
+  /* Gate G4 scores hallucination-on-negatives with this classifier, via a
+   * Python port in tools/qwen38_gates.py. These cases are asserted on BOTH
+   * sides, so a one-sided edit fails a suite instead of silently making the
+   * gate measure something production does not do. */
+  {
+    const cls = loadAppDeepLookHelpers().classifyLookFinding;
+    if (typeof cls !== "function") {
+      assert("classifyLookFinding is exported for parity testing", false,
+        "home-natural-look.js must export classifyLookFinding");
+    } else {
+      const cases = [
+        ["No obvious activity.", "quiet"],
+        ["No obvious activity right now in the kitchen.", "quiet"],
+        ["The room appears empty.", "quiet"],
+        ["", "quiet"],
+        ["A person is standing by the sink.", "person"],
+        ["Someone walked past.", "person"],
+        ["A delivery box sits by the door.", "package"],
+        ["The cat is on the couch.", "pet"],
+        ["A car is parked outside.", "vehicle"],
+        ["There is smoke near the stove.", "hazard"],
+        ["The room is dark.", "uncertain"],
+        ["It is hard to tell.", "uncertain"],
+        ["Kitchen lights on.", "light"],
+        ["The room is lit.", "light"],
+        ["The lights are on.", "activity"],
+        ["A couch, a coffee table, and a plant.", "inventory"],
+        ["The kettle is boiling.", "activity"],
+      ];
+      for (const [text, want] of cases) {
+        const got = cls(text);
+        assert(`classify ${JSON.stringify(text).slice(0, 46)} -> ${want}`,
+          got === want, `got ${got}`);
+      }
+    }
+  }
+
   process.stdout.write("\nlook_vision_url_test\n");
   assert("http metrics base maps to sidecar port", api.lkVisionUrl("http://192.168.0.100:8092") === "http://192.168.0.100:8091", api.lkVisionUrl("http://192.168.0.100:8092"));
   assert("https metrics base maps to https sidecar port", api.lkVisionUrl("https://ai-box.local:8092/path") === "https://ai-box.local:8091", api.lkVisionUrl("https://ai-box.local:8092/path"));

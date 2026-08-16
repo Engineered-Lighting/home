@@ -24,15 +24,34 @@
   Enabling recording remains a standalone privacy + disk decision (**D8**;
   the HA media disk has 802 GB free), never a roadmap side effect. See
   "A1 — snapshot-first correction" below for the unblocked slice.
-- **Face-recognition overrides — ANSWERED.** The live Frigate config
-  mentions `face` **zero times**: face recognition is not configured at all.
-  The inverted driveway exclusion is a **repo-example-only defect** that
-  never reached live; fix it in the example, but it is not a live risk.
-  Names still reach model context by a different route — this stack writes
+- **Face-recognition overrides — CORRECTED 2026-08-16.** An earlier
+  same-day entry here claimed face recognition was "not configured at all".
+  **That was wrong**: it came from `/addon_configs/ccab4aaf_frigate/`, which
+  is a **stale, inactive** addon directory (Apr 28, 3 KB, cameras on a
+  192.168.251.x subnet that no longer exists). The config in force is
+  **`/addon_configs/ccab4aaf_frigate-fa/`** (Jul 10, 8.8 KB), and the
+  authority is Frigate's own `GET /api/config`.
+  Running truth: **face recognition is ENABLED** (`model_size: small`,
+  `recognition_threshold: 0.85`, `unknown_score: 0.8`, `min_faces: 2`) on
+  `living_room`, `dining_room`, `kitchen`, `workshop` — and **explicitly
+  disabled on `driveway`**. The documented policy is therefore correctly
+  implemented live; the inversion is a repo-example-only defect. Also
+  running: `semantic_search: enabled` (the CLIP index A3 assumes), `lpr`
+  and `genai` off.
+  Names still reach model context by a second route — this stack writes
   `sub_label`s back to Frigate itself (`frigate_sync.py`,
-  `identity_store.py`), so D3 enforcement at the tool layer is still
+  `identity_store.py`) — so D3 enforcement at the tool layer is still
   required and `find_clips` still carries `sub_label` unconditionally
   (confirmed live in `functions/frigate.py`).
+- **Camera roster — CORRECTED.** The live cameras are `living_room`,
+  `dining_room`, `kitchen`, `workshop`, `driveway`. There is **no
+  `back_door`** camera; that name came from the stale file.
+- **Camera uptime — RESOLVED 2026-08-16.** `living_room` and `dining_room`
+  were found offline (`camera_fps: 0.0`, TCP refused on :554); the owner
+  reconnected them and all five now stream at ~10 fps. Keep the lesson:
+  `enabled: true` in the config means CONFIGURED, not STREAMING, and a
+  capacity estimate taken off the config list alone was wrong by 40% here.
+  Cross-check `GET /api/stats` for `camera_fps` before sizing anything.
 - **D3 (identity policy)** hard-gates A1, E1, and the evening digest: one
   written policy over the four current stances (labeler prompt forbids
   identity; ambient/world-state names people ≥0.70 confidence indoors by
@@ -232,16 +251,50 @@ footage does not. This is the roadmap's hierarchical-summarisation story
 (A1 → digest → A3) with a real substrate under it.
 
 **G1 — enable recording (owner-run, reversible).** `record.enabled: true`
-per camera plus a 48 h retention policy. The plumbing already exists: every
-camera's `record` role is already bound to its main `stream1` in the live
-config, so this is a config flip, not a re-architecture.
+plus a 48 h retention policy. The plumbing already exists: every camera's
+`record` role is already bound to its main `stream1`, so this is a config
+flip, not a re-architecture.
 
-⚠ **Measure before committing the retention number.** Enable recording on
-**one** camera for one hour, measure the segment bytes, then multiply. The
-planning estimate below is an estimate, and a storage decision taken on an
-estimate is how disks fill at 3 a.m.
-- Planning figure: consumer main streams typically run 2–4 Mbps ⇒
-  0.9–1.8 GB/camera-hour ⇒ **5 cameras × 48 h ≈ 215–430 GB**.
+⚠ **Edit the RIGHT file: `/addon_configs/ccab4aaf_frigate-fa/config.yaml`.**
+The sibling `/addon_configs/ccab4aaf_frigate/` is stale and inactive;
+editing it changes nothing and looks like it worked. Verify every change
+against `GET /api/config` on the running service, which is what
+`tools/qwen38-frigate-summary.py` reads.
+
+Current global record block already carries `alerts`/`detections` with
+`pre_capture: 5, post_capture: 5, retain: {days: 10, mode: motion}`. A 48 h
+continuous buffer means `record.enabled: true` with
+`retain: {days: 2, mode: all}`; leaving the per-event 10-day retention as-is
+would keep motion segments far longer than the buffer, which is a different
+policy than the one being chosen — decide both numbers together.
+
+✅ **MEASURED 2026-08-16 — no recording needed to get the number.** Rather
+than enable recording and wait an hour, each main stream was pulled through
+go2rtc for 30 s with `ffmpeg -c copy`, which is byte-for-byte what Frigate
+writes (Frigate stream-copies; it does not re-encode).
+
+All five cameras, measured after the owner brought `living_room` and
+`dining_room` back online:
+
+| camera | resolution | bitrate | per hour |
+|---|---|---|---|
+| living_room | 1920×1080 h264 | 1.26 Mbps | 0.53 GB |
+| dining_room | 1920×1080 h264 | 1.21 Mbps | 0.51 GB |
+| workshop | 1920×1080 h264 | 1.21 Mbps | 0.51 GB |
+| driveway | 1920×1080 h264 | 1.19 Mbps | 0.50 GB |
+| kitchen | 2304×1296 h264 | 1.15 Mbps | 0.48 GB |
+
+- **Combined: 2.53 GB/hour = 61 GB/day.**
+- **48 h buffer = 121 GB.** With 2× headroom for daylight and motion on
+  variable-bitrate H.264, **~243 GB worst case = 30% of the 802 GB free.**
+
+The earlier 215–430 GB planning estimate was **~3× too high**: these
+cameras encode at ~1.2 Mbps, not the 2–4 Mbps assumed. Disk is not a
+constraint — **7 days of all five is ≈ 420 GB** and still fits. Retention
+is now a privacy question, not a storage question.
+
+⚠ Caveat: 20–30 s samples taken overnight. Re-measure across a full day
+before choosing any window longer than a week.
 
 ⚠ **The storage goes on the HA box, and the new SSD is not needed for it.**
 Frigate writes to `/media/frigate` on the HA machine, which has **802 GB
@@ -267,21 +320,51 @@ decode, so budget ~0.8 s/frame. The 5-hour window, at 50% duty to leave
 production responsive, buys roughly **11,000 frames a night**. Brute force
 is off by three orders of magnitude.
 
-What fits, and reads better:
-1. **Event-anchored pass (primary).** Frigate already knows where the
-   interesting seconds are — ~1,700 events/day, inferred from 202k
-   snapshots over ~4 months. Parse only event segments, 2–4 frames each:
-   **≈ 3,400–6,800 frames ⇒ 45–90 min.**
-2. **Ambient sweep (gap coverage).** One frame per camera per 5 minutes
-   over the same window catches what the detector missed:
-   **≈ 2,880 frames ⇒ ~40 min.**
-3. **Hierarchical roll-up.** Per-event captions → per-camera hourly
+⚠ **"Parse every Frigate event" also does not fit — and measuring showed
+why.** Live event rates (6-hour sample, all five cameras streaming):
+
+- **6,620 events in 6 hours** (>10,000/day, the API cap). But merged into
+  distinct moments they collapse to **12 scenes**. Frigate emits one event
+  per tracked object and re-detects stationary ones continuously.
+- **49% of all events are furniture**: `cup` 2,319, `bottle` 274, `sink`
+  230, `suitcase` 139, `chair` 49 — in 6 hours. The kitchen camera is
+  detecting a cup on the counter over and over. (This is the same
+  "cup-misfire" the migration doc's G4 negatives already name, now
+  quantified: it is not an edge case, it is half the event stream.)
+- Actual activity: `car` 3,234, `person` 155 in 6 hours.
+
+Costed against the measured 0.32 s/frame incumbent and ~0.8 s/frame
+candidate, at one frame per 10 s of scene:
+
+| lane | scenes/day | footage/day | frames/day | candidate cost |
+|---|---|---|---|---|
+| every event merged | 24 | 2,908 min | 17,449 | **233 min** ✗ |
+| activity classes only | 108 | 2,385 min | 14,308 | **191 min** ~ |
+| **person-anchored** | 212 | 1,004 min | 6,025 | **80 min** ✓ |
+
+**The lane is person-anchored, not event-anchored.** Static-object labels
+are excluded outright; vehicles enter only as arrival/departure
+transitions, never as parked-car persistence, which is what inflates the
+"activity" row into near-continuous footage.
+
+1. **Person-anchored pass (primary).** ~212 scenes/day, ~1,000 min of
+   footage, one frame per 10 s ⇒ **≈ 6,000 frames ⇒ ~80 min on the
+   candidate.**
+2. **Ambient sweep (gap coverage).** One frame per camera per 5 min:
+   1,440 frames ⇒ **~19 min.** Catches what the detector missed.
+3. **Hierarchical roll-up.** Per-scene captions → per-camera hourly
    summaries → one nightly narrative. A handful of text-only calls.
 
-Total ≈ 1.5–2 h inside a 5 h window, with headroom for the candidate's
-slower decode and for a night that is busier than average. **Each segment
-is parsed once, roughly 24 h after recording, leaving a second 24 h as
-margin before it ages out** — so a failed night is recoverable, not lost.
+**Total ≈ 100 min inside a 5-hour window** — roughly a third of the budget,
+which leaves room for a busy day, for the candidate being slower than
+projected, and for production staying responsive. **Each segment is parsed
+once, ~24 h after recording, leaving a second 24 h of margin before it ages
+out**, so a failed night is recoverable rather than lost.
+
+⚠ Re-derive these counts after a week of five-camera uptime. `living_room`
+and `dining_room` were offline for most of the sampled window (10 and 13
+events against driveway's 3,495), so indoor activity is under-represented
+here and the person-anchored lane will grow.
 
 **G3 — the observation store.** Writes go to a new, **non-authoritative**
 observations store on `/srv/data`, NOT to Home Agent memory.

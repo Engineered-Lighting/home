@@ -32,3 +32,23 @@ than estimates where measurements exist:
   observations outlive it by design, so the retention question moves to the
   observation store, and the identity policy binds captions as well as
   tools.
+
+Measured rather than estimated, after the owner brought two offline cameras
+back online: all five streams run about 1.2 Mbps, so a 48-hour buffer is
+121 GB (roughly 243 GB allowing for daylight and motion), against 802 GB
+free. Storage is not the constraint; retention is a privacy question.
+
+The nightly lane was re-scoped by the same measurement. Frigate emits more
+than 10,000 events a day, but half are stationary furniture — 2,319 cup
+detections in six hours — and merging the rest into distinct moments leaves
+about 24. Parsing every event would need 233 minutes on the new model;
+anchoring on people instead needs about 80, and the lane is defined that
+way. Vehicles enter only as arrivals and departures, never as parked-car
+persistence.
+
+Also corrects two Phase-0 findings that were read from a stale, inactive
+Frigate addon config: face recognition is enabled on the four indoor
+cameras and correctly disabled on the driveway, and the camera roster has
+no back_door. Adds tools/qwen38-frigate-summary.py, which reads the running
+service's config rather than a file on disk, and points the Phase-0
+collector at it.

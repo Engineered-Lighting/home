@@ -22,6 +22,7 @@ OUT="${1:-/srv/data/eval/migration/phase0}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE=/opt/home-ai-voice/docker-compose.yml
 ENVFILE=/opt/home-ai-voice/.env
+FRIGATE_API="${FRIGATE_API:-http://192.168.0.125:5000}"
 HA_SSH="ssh -o BatchMode=yes -o ConnectTimeout=10 -p 22222 root@homeassistant.local"
 
 mkdir -p "$OUT" || { echo "FATAL: cannot create $OUT" >&2; exit 1; }
@@ -288,6 +289,20 @@ section "8. Frigate record state (roadmap V1) + face recognition"
   echo "# recording segments, so with record disabled there is no clip.mp4"
   echo "# to fetch and has_clip is false for every event."
   echo
+  echo "## RUNNING config, straight from Frigate's API — the file on disk"
+  echo "## may not be the one in force. There are two addon config dirs on"
+  echo "## this host and the INACTIVE one is three months stale; a Phase-0"
+  echo "## pass that reads the wrong file gets the camera list AND the"
+  echo "## face-recognition posture wrong. Ask the running service."
+  curl -s -m 10 "$FRIGATE_API/api/config" -o "$OUT/frigate-config.running.json" 2>/dev/null
+  python3 "$REPO_ROOT/tools/qwen38-frigate-summary.py" "$OUT/frigate-config.running.json" 2>&1
+  echo
+  echo "## which config file is actually in force"
+  $HA_SSH 'for d in /addon_configs/ccab4aaf_frigate /addon_configs/ccab4aaf_frigate-fa; do
+      [ -f "$d/config.yaml" ] || continue
+      echo "  $d: $(stat -c %y "$d/config.yaml" | cut -d. -f1), $(stat -c %s "$d/config.yaml") bytes"
+    done'
+  echo
   $HA_SSH '
     echo "== du /media/frigate =="
     du -sh /media/frigate/recordings /media/frigate/clips 2>/dev/null
@@ -295,28 +310,13 @@ section "8. Frigate record state (roadmap V1) + face recognition"
     echo "== file types under clips/ (the decisive evidence) =="
     printf "mp4 files: "; find /media/frigate/clips -type f -name "*.mp4" 2>/dev/null | wc -l
     printf "jpg files: "; find /media/frigate/clips -type f -name "*.jpg" 2>/dev/null | wc -l
-    printf "webp files: "; find /media/frigate/clips -type f -name "*.webp" 2>/dev/null | wc -l
-    echo
-    echo "== cameras =="
-    sed -n "/^cameras:/,/^[a-z]/p" /addon_configs/ccab4aaf_frigate/config.yaml | grep -E "^  [a-z_]+:"
-    echo
-    echo "== per-camera record/snapshots state =="
-    grep -nE "^\s*(record|snapshots|detect):" -A 3 /addon_configs/ccab4aaf_frigate/config.yaml 2>/dev/null
-    echo
-    echo "== global record: block =="
-    grep -nE "^record:" -A 12 /addon_configs/ccab4aaf_frigate/config.yaml 2>/dev/null || echo "(none — record is set per camera)"
-    echo
-    echo "== face_recognition (roadmap D3 / example-config inversion) =="
-    n=$(grep -c "face" /addon_configs/ccab4aaf_frigate/config.yaml 2>/dev/null)
-    echo "lines mentioning face: $n"
-    grep -n "face" /addon_configs/ccab4aaf_frigate/config.yaml 2>/dev/null || echo "(face recognition is NOT configured live at all)"
     echo
     echo "== disk headroom for a D8 recording decision =="
     df -h /media 2>/dev/null
   ' 2>&1
 } > "$OUT/frigate-record-state.txt" 2>&1
 echo "frigate      -> frigate-record-state.txt"
-grep -E "mp4 files|jpg files|enabled: false|lines mentioning face" "$OUT/frigate-record-state.txt" | head -8
+grep -E "mp4 files|jpg files|record=|face_recognition" "$OUT/frigate-record-state.txt" | head -10
 
 # ── 8b. EOC live subentry + tool-spec audit ──────────────────────────────
 section "8b. EOC subentry (storage is truth) + tool-spec audit"

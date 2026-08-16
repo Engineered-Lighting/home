@@ -54,7 +54,10 @@ import qwen38_gates as gates  # noqa: E402
 
 HA_URL = "http://192.168.0.125:8123"
 DEFAULT_ENDPOINT = "http://127.0.0.1:8000/v1/chat/completions"
-CAMERAS = ["living_room", "dining_room", "kitchen", "back_door", "driveway"]
+# The LIVE roster, from Frigate's running config — not the stale addon file
+# that lists a `back_door` this house does not have and omits `workshop`.
+# Verified 2026-08-16 against GET /api/config.
+CAMERAS = ["living_room", "dining_room", "kitchen", "workshop", "driveway"]
 
 # Byte-identical to the live vision-sidecar /describe handler.
 DESCRIBE_SYSTEM = (

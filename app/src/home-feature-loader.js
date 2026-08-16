@@ -127,27 +127,32 @@
     document.head.appendChild(script);
   }
 
-  async function loadFile(feature, name, isBabel) {
-    if (loadedFiles.has(name)) return;
+  async function fetchFile(feature, name, isBabel) {
+    if (loadedFiles.has(name)) return null;
     const fetchStart = now();
     const text = await fetchWithRetry(name, 3);
     window.__homePerf?.recordBootFile?.(name, "feature-fetch", now() - fetchStart, { feature });
-    let code = text;
-    if (isBabel) {
+    return { name, isBabel, text };
+  }
+
+  function executeFile(feature, file) {
+    if (!file || loadedFiles.has(file.name)) return;
+    let code = file.text;
+    if (file.isBabel) {
       const transformStart = now();
-      code = Babel.transform(text, {
-        filename: name,
+      code = Babel.transform(file.text, {
+        filename: file.name,
         presets: ["react", "env"],
         plugins: BABEL_PLUGINS,
         sourceMaps: "inline",
-        sourceFileName: name,
+        sourceFileName: file.name,
       }).code;
-      window.__homePerf?.recordBootFile?.(name, "feature-transform", now() - transformStart, { feature });
+      window.__homePerf?.recordBootFile?.(file.name, "feature-transform", now() - transformStart, { feature });
     }
     const executeStart = now();
-    execute(name, code);
-    window.__homePerf?.recordBootFile?.(name, "feature-execute", now() - executeStart, { feature });
-    loadedFiles.add(name);
+    execute(file.name, code);
+    window.__homePerf?.recordBootFile?.(file.name, "feature-execute", now() - executeStart, { feature });
+    loadedFiles.add(file.name);
   }
 
   function setStoredState(feature, state, patch) {
@@ -186,7 +191,14 @@
     window.__homePerf?.recordFeature?.(feature, "load:start", null, { reason: reason || "load" });
     promises[feature] = (async () => {
       try {
-        for (const item of def.files) await loadFile(feature, item[0], item[1]);
+        // Fetch the feature bundle concurrently so an optional-service outage
+        // cannot repeatedly edge individual module requests out of the
+        // browser's limited HTTP/1.1 connection pool. Execute in declaration
+        // order to preserve the globals each JSX file depends on.
+        const files = await Promise.all(
+          def.files.map((item) => fetchFile(feature, item[0], item[1])),
+        );
+        for (const file of files) executeFile(feature, file);
         if (def.ready && !def.ready()) throw new Error(def.label + " loaded but did not register its window export");
         const next = emit(feature, "loaded", {
           error: null,

@@ -4067,7 +4067,7 @@ function availableSlashCommands({ mobile = false } = {}) {
   return mobile ? SLASH_CMDS.filter((c) => !isMobileHiddenCommand(c.cmd)) : SLASH_CMDS;
 }
 
-function FeatureLoadingSurface({ open, title, status, error, onClose, mobile = false, fullscreen = true }) {
+function FeatureLoadingSurface({ open, title, status, error, onClose, onRetry, mobile = false, fullscreen = true }) {
   if (!open) return null;
   const state = status?.state || "idle";
   const pending = state === "loading" || state === "idle";
@@ -4127,8 +4127,20 @@ function FeatureLoadingSurface({ open, title, status, error, onClose, mobile = f
           {pending ? "loading" : "could not load"}
         </div>
         <div style={{ marginTop: 10, color: error ? "var(--hg-warn)" : "var(--hg-fg-3)", fontSize: 12, lineHeight: 1.5 }}>
-          {error || status?.error || (pending ? "pulling this feature module into the running app." : "try again, or use /perf lazy off and reload.")}
+          {error || status?.error || (pending ? "pulling this feature module into the running app." : "the module request failed. retry when the local gateway is available.")}
         </div>
+        {!pending && onRetry && (
+          <button type="button" onClick={onRetry} style={{
+            marginTop: 16,
+            border: "1px solid var(--hg-accent)",
+            background: "var(--hg-accent)",
+            color: "#07101a",
+            padding: "9px 14px",
+            fontFamily: "'Geist Mono', monospace",
+            fontSize: 11,
+            cursor: "pointer",
+          }}>retry</button>
+        )}
       </div>
     </div>
   );
@@ -10890,6 +10902,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             title="apartment"
             status={featureStatusFor("apartment")}
             error={featureLoadErrors.apartment}
+            onRetry={() => ensureFeature("apartment", "apartment", "retry")}
             mobile={mobile}
             fullscreen={false}
           />
@@ -10967,6 +10980,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           status={featureStatusFor("people")}
           error={featureLoadErrors.people}
           onClose={closePeopleOverlay}
+          onRetry={() => ensureFeature("people", "people", "retry")}
           mobile={mobile}
         />
       )}
@@ -10989,6 +11003,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           status={featureStatusFor("intelligence")}
           error={featureLoadErrors.intelligence}
           onClose={() => setIntelligenceOpen(false)}
+          onRetry={() => ensureFeature("intelligence", "intelligence", "retry")}
           mobile={mobile}
         />
       )}
@@ -11010,6 +11025,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           status={featureStatusFor("videoLabeler")}
           error={featureLoadErrors.videoLabeler}
           onClose={() => setVideoLabelerOpen(false)}
+          onRetry={() => ensureFeature("videoLabeler", "video labeler", "retry")}
           mobile={mobile}
         />
       )}
@@ -11072,6 +11088,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           status={featureStatusFor("lights")}
           error={featureLoadErrors.lights}
           onClose={() => setLightsOpen(false)}
+          onRetry={() => ensureFeature("lights", "lights", "retry")}
           mobile={mobile}
         />
       )}
@@ -11096,6 +11113,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           status={featureStatusFor("world")}
           error={featureLoadErrors.world}
           onClose={() => setWorldStateDrawerOpen(false)}
+          onRetry={() => ensureFeature("world", "world state", "retry")}
           mobile={mobile}
         />
       )}
@@ -11117,6 +11135,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           status={featureStatusFor("spatial")}
           error={featureLoadErrors.spatial}
           onClose={() => setSpatialDrawerOpen(false)}
+          onRetry={() => ensureFeature("spatial", "spatial", "retry")}
           mobile={mobile}
         />
       )}
@@ -11130,6 +11149,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           endpoint={endpoint}
           token={token}
           sim={sim}
+          connection={connection}
         />
       )}
       {apartmentOpen && !spatialLayout && !window.HomeApartmentView && (
@@ -11139,6 +11159,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           status={featureStatusFor("apartment")}
           error={featureLoadErrors.apartment}
           onClose={() => setApartmentOpen(false)}
+          onRetry={() => ensureFeature("apartment", "apartment", "retry")}
           mobile={mobile}
         />
       )}
@@ -11180,6 +11201,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           status={featureStatusFor("look")}
           error={featureLoadErrors.look}
           onClose={() => setLookDrawerOpen(false)}
+          onRetry={() => ensureFeature("look", "look", "retry")}
           mobile={mobile}
         />
       )}

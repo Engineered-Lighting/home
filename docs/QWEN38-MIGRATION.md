@@ -54,12 +54,15 @@ consents to the actual number of evenings.
   home for G7 stripper edits; stale tooltip; sim-fixture latency scaling.
   **Added after Phase-0 measurement (all model-independent, all shippable
   before the candidate exists):**
-  1. **Widen the two app stripper regexes** in `app/src/home-look.jsx`
-     (`lkPlain`, `lkRenderReasoning`) to match the tolerance the sidecar
-     already has — square-bracketed coordinates, a bare `>` close, and an
-     UNCLOSED trailing `<box`/`<ref` from generation-cap truncation. Today
-     a truncated trace renders `<box>` raw to the user; observed live on
-     the incumbent, not hypothetical.
+  1. ✅ **LANDED 2026-08-16 — app stripper regexes widened.**
+     `app/src/home-look.jsx` now shares one `LK_BOX_TAG_SRC` /
+     `lkStripMarkup` between `lkPlain` and `lkRenderReasoning`, matching
+     the sidecar's tolerance (square-bracketed coordinates, a bare `>`
+     close) plus an unclosed trailing `<box`/`<ref` from generation-cap
+     truncation. 16 new cases in `tools/run-look-tests.js`; the Python
+     port in `qwen38_gates.py` is held to the same cases so a one-sided
+     edit fails a suite instead of silently un-syncing the gate from
+     production.
   2. **Repair the deployed `/reason` prompt's grounding** (v3 extracts
      0/13; v1 extracts 5/6 on the same frame). This is a prompt-surface
      change, so it lands **before cutover** or waits until Phase 2 — never
@@ -408,11 +411,29 @@ Production `POST /reason` on `camera.kitchen` returns
    nothing. **G7 must be restated before it gates anything**: either
    (a) repair the deployed prompt first so a real baseline exists, then run
    G7 as a paired non-inferiority test; or (b) restate G7 as an ABSOLUTE
-   threshold on the candidate (e.g. extraction ≥ X% and app-strippers clean
-   ≥ Y% on the frozen corpus), decoupled from the incumbent. Recommendation:
-   **(b) for the cutover** — the prompt repair is a Phase-2 prompt-surface
-   change and must not be bundled into the model migration — **plus a
-   separate, model-independent fix for (a)**, tracked below.
+   threshold on the candidate, decoupled from the incumbent.
+   **DECIDED 2026-08-16: (b) for the cutover, with (a) tracked separately.**
+   The prompt repair is a prompt-surface change and must not ride along
+   with the model swap.
+
+   **G7 thresholds, set from the measured evidence** (frozen corpus, the
+   deployed v3 prompt, production parsers, `--production-parser`):
+   - **app-strippers clean ≥ 99%** — near-absolute, because a failure here
+     is raw markup on the user's screen. The app side is now widened to the
+     sidecar's tolerance (PR 1a-ter item 1, landed), so the only remaining
+     way to fail is a form neither consumer knows.
+   - **runaway ≤ incumbent** on the same corpus, paired — the incumbent
+     measured 0/13 runaway on v3, so this is a real constraint.
+   - **ANSWER-line rate ≥ 95%** — incumbent measured 13/13 on v3.
+   - **extraction: REPORT-ONLY at cutover, not gating.** The deployed
+     prompt yields 0/13 on the incumbent, so there is no honest bar to hold
+     the candidate to while that prompt ships. Extraction becomes gating in
+     the same change that repairs the prompt, at which point the bar is set
+     from the repaired prompt's incumbent baseline.
+
+   Stating it plainly: **G7 at cutover verifies that grounded output which
+   IS produced is consumable end-to-end, not that grounding happens.** The
+   latter is a prompt problem this migration deliberately does not solve.
 3. ⚠ **Live grounded-look is silently degraded today, independent of this
    migration.** `/reason` returns no primitives, so `annotate_frame` draws
    nothing and the `/look` drawer's ref-chips render nothing. Whatever the

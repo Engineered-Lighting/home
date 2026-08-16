@@ -167,12 +167,40 @@ async function lkReasonRequest(opts) {
   };
 }
 
+/* Box markup in EVERY form that can reach us. The narrower
+ * /<box>[\d,\s]*<\/box>/ this replaces accepted only the canonical form,
+ * while the sidecar's parser (services/vision/app.py, _BOX_INNER) was
+ * widened long ago to also accept Qwen3-VL's native bracketed variant
+ * <box>[[x1,y1,x2,y2]]</box> and a bare '>' close. Anything the sidecar
+ * parses but we do not strip renders to the user as raw markup, with the
+ * server-side parse looking perfectly healthy — measured live on
+ * 2026-08-16, where a trace truncated at the generation cap left a
+ * dangling '<box>' on screen.
+ *
+ * Three shapes, in order: a complete box tag with optional brackets and
+ * either close; a complete <ref>/<box> tag of any other form; and a tag
+ * the generation cap cut off before its own '>'. */
+const LK_BOX_TAG_SRC = "<box>\\s*\\[*\\s*[\\d,\\s]*\\s*\\]*\\s*(?:<\\/box>|>)";
+const LK_MARKUP_RE = new RegExp(
+  LK_BOX_TAG_SRC
+  + "|<\\/?(?:ref|box)\\b[^>]*>"
+  + "|<\\/?(?:r(?:e(?:f)?)?|b(?:o(?:x)?)?)$",
+  "gi",
+);
+
+/* Strip every box/ref artefact from a plain text segment. Pure and
+ * exported so tools/run-look-tests.js can hold it to the sidecar's
+ * tolerance without rendering React. */
+function lkStripMarkup(s) {
+  return String(s == null ? "" : s).replace(LK_MARKUP_RE, "");
+}
+
 /* A plain text segment of a reasoning trace, with any stray bare <box>
  * tags (boxes not paired with a <ref>) removed. */
 function lkPlain(s, key) {
   return (
     <React.Fragment key={key}>
-      {String(s).replace(/<box>[\d,\s]*<\/box>/gi, "")}
+      {lkStripMarkup(s)}
     </React.Fragment>
   );
 }
@@ -183,7 +211,11 @@ function lkPlain(s, key) {
 function lkRenderReasoning(text) {
   const t = String(text || "").replace(/\n*ANSWER:[\s\S]*$/i, "").trim();
   const out = [];
-  const re = /<ref>([\s\S]*?)<\/ref>\s*(?:<box>[\d,\s]*<\/box>)?/gi;
+  /* Same tolerance as lkStripMarkup: a <ref> may be followed by a box in
+   * any accepted form, so the pair is consumed together and the label
+   * becomes a chip. Without the widened tail the box survived the match
+   * and rendered raw next to its own chip. */
+  const re = new RegExp("<ref>([\\s\\S]*?)<\\/ref>\\s*(?:" + LK_BOX_TAG_SRC + ")?", "gi");
   let last = 0, m, k = 0;
   while ((m = re.exec(t)) !== null) {
     if (m.index > last) out.push(lkPlain(t.slice(last, m.index), "p" + k));

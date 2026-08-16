@@ -163,35 +163,50 @@ check("label and coords extracted",
       prims[0]["label"] == "mug" and prims[0]["bbox_1000"] == [100, 200, 300, 400])
 check("app strips canonical markup cleanly", G.app_residual_markup(canonical) == [])
 
-# THE divergence this gate exists to catch: the sidecar was widened for
-# Qwen3-VL's bracketed form, the app strippers never were.
+# The divergence this gate exists to catch: the sidecar accepts Qwen3-VL's
+# bracketed form and a bare '>' close. Until 2026-08-16 the app strippers
+# did not, so this markup rendered raw while the server parse looked
+# healthy. Both sides are now widened — these cases assert PARITY, and they
+# mirror tools/run-look-tests.js so a one-sided edit fails a suite.
 bracketed = "A cat <ref>cat</ref><box>[[10,20,30,40]]</box> sits."
 check("sidecar accepts the bracketed variant", len(G.parse_primitives(bracketed)) == 1)
-check("app LEAVES the bracketed variant on screen",
-      G.app_residual_markup(bracketed) != [],
-      "app strippers unexpectedly handled brackets")
-check("bracketed variant therefore FAILS G7", not G.score_g7(bracketed).passed)
+check("app now strips the bracketed variant too",
+      G.app_residual_markup(bracketed) == [],
+      f"residual: {G.app_residual_markup(bracketed)}")
+check("bracketed variant therefore passes G7", G.score_g7(bracketed).passed)
 
 bare_close = "A dog <ref>dog</ref><box>10,20,30,40> runs."
 check("sidecar accepts the bare '>' close", len(G.parse_primitives(bare_close)) == 1)
-check("app LEAVES the bare '>' close on screen",
-      G.app_residual_markup(bare_close) != [])
+check("app now strips the bare '>' close too",
+      G.app_residual_markup(bare_close) == [],
+      f"residual: {G.app_residual_markup(bare_close)}")
+check("single-bracket variant strips on both sides",
+      len(G.parse_primitives("<ref>x</ref><box>[10,20,30,40]</box>")) == 1
+      and G.app_residual_markup("<ref>x</ref><box>[10,20,30,40]</box>") == [])
 
 # Observed live on the incumbent at max_tokens=500: generation stops
-# mid-markup, the close tag never arrives, and the app renders the opener.
+# mid-markup and the close tag never arrives. Before the 2026-08-16
+# widening the app rendered the dangling opener; it now strips it, at every
+# cut point — including one character earlier, which is the same defect
+# wearing a different hat.
 truncated = "I see a mug on the left of the counter. <box>"
-check("unpaired <box> is residual markup",
-      G.app_residual_markup(truncated) != [])
-check("unpaired <box> fails G7", not G.score_g7(truncated).passed)
-# ...and truncation one character earlier must not read as clean.
+check("unpaired <box> is stripped, not rendered",
+      G.app_residual_markup(truncated) == [],
+      f"residual: {G.app_residual_markup(truncated)}")
+# It still fails G7 — on EXTRACTION, because a truncated box parses to no
+# primitive. The gate must fail here for the right reason.
+s = G.score_g7(truncated)
+check("truncated trace still fails G7", not s.passed)
+check("...and fails on extraction, not on residual markup",
+      not s.extracted and s.app_clean)
 for tail in ("<box", "<bo", "<b", "<ref", "<re", "</box", "</ref"):
-    check(f"tag truncated as {tail!r} is still residual",
-          G.app_residual_markup("prose " + tail) != [],
-          f"missed {tail!r}")
-check("a lone '<' in prose is not markup",
-      G.app_residual_markup("5 < 6 mugs") == [])
-check("an unrelated tag is not counted",
-      G.app_residual_markup("prose <b>bold</b>") == [])
+    check(f"tag truncated as {tail!r} is stripped",
+          G.app_residual_markup("prose " + tail) == [],
+          f"residual: {G.app_residual_markup('prose ' + tail)}")
+check("a lone '<' in prose is left alone",
+      G.app_render("5 < 6 mugs") == "5 < 6 mugs")
+check("an unrelated tag is left alone",
+      "<b>bold</b>" in G.app_render("prose <b>bold</b>"))
 
 check("degenerate zero-area boxes are dropped",
       G.parse_primitives("<ref>x</ref><box>10,20,10,20</box>") == [])

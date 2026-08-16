@@ -265,14 +265,26 @@ _BOX_INNER = (r"<box>\s*\[*\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)"
 _REF_BOX_RE = re.compile(r"<ref>\s*(.*?)\s*</ref>\s*" + _BOX_INNER, re.IGNORECASE)
 _BARE_BOX_RE = re.compile(_BOX_INNER, re.IGNORECASE)
 
-# The app's TWO stripper regexes, translated from app/src/home-look.jsx
-# with their character classes preserved exactly. They accept ONLY
-# `<box>digits, commas, whitespace</box>` — no square brackets, no bare '>'
-# close — so they are strictly stricter than the sidecar above. Output the
-# sidecar parses happily can still render as raw markup in the UI.
-_APP_BARE_BOX_RE = re.compile(r"<box>[\d,\s]*</box>", re.IGNORECASE)          # lkPlain
-_APP_REF_RE = re.compile(r"<ref>([\s\S]*?)</ref>\s*(?:<box>[\d,\s]*</box>)?",  # lkRenderReasoning
-                         re.IGNORECASE)
+# The app's stripper regexes, kept in lockstep with app/src/home-look.jsx
+# (`LK_BOX_TAG_SRC` / `LK_MARKUP_RE` / `lkStripMarkup`). Until 2026-08-16
+# the app accepted ONLY `<box>digits, commas, whitespace</box>`, which made
+# it strictly stricter than the sidecar: bracketed coordinates, a bare '>'
+# close, and generation-cap truncation all rendered as raw markup to the
+# user while the server-side parse looked healthy. Both sides are now
+# widened to the same tolerance.
+#
+# ⚠ PARITY: if `LK_BOX_TAG_SRC` in home-look.jsx changes, change this too.
+# `tools/run-look-tests.js` holds the JS side to the same cases as
+# `tools/test-qwen38-gates.py` holds this one, so a one-sided edit fails a
+# suite rather than silently un-syncing the gate from production.
+_APP_BOX_TAG = r"<box>\s*\[*\s*[\d,\s]*\s*\]*\s*(?:</box>|>)"
+_APP_MARKUP_RE = re.compile(                                   # lkStripMarkup
+    _APP_BOX_TAG
+    + r"|</?(?:ref|box)\b[^>]*>"
+    + r"|</?(?:r(?:e(?:f)?)?|b(?:o(?:x)?)?)$",
+    re.IGNORECASE)
+_APP_REF_RE = re.compile(                                      # lkRenderReasoning
+    r"<ref>([\s\S]*?)</ref>\s*(?:" + _APP_BOX_TAG + r")?", re.IGNORECASE)
 _APP_ANSWER_RE = re.compile(r"\n*ANSWER:[\s\S]*$", re.IGNORECASE)
 
 # Residual markup the app would render raw. Two alternatives, because
@@ -311,11 +323,11 @@ def parse_primitives(text: str) -> list[dict]:
 
 
 def app_render(text: str) -> str:
-    """What the app would actually show, applying its two stripper regexes
-    in the same order as `lkRenderReasoning` then `lkPlain`."""
+    """What the app would actually show, applying its strippers in the same
+    order as `lkRenderReasoning` then `lkStripMarkup`."""
     t = _APP_ANSWER_RE.sub("", str(text or "")).strip()
     t = _APP_REF_RE.sub(lambda m: (m.group(1) or "").strip(), t)
-    return _APP_BARE_BOX_RE.sub("", t)
+    return _APP_MARKUP_RE.sub("", t)
 
 
 def app_residual_markup(text: str) -> list[str]:

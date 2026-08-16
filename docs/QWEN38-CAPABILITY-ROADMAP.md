@@ -237,10 +237,13 @@ output (classifier/pilot machinery only).
   block at all) and per-surface regression fixtures. The live `sub_label`
   path through `find_clips` is confirmed and still needs tool-layer
   enforcement.
-- **D8** Frigate recording/retention — **PROMOTED from conditional to
-  blocking (Phase 0, V1).** Recording is off on all five cameras and there
-  are zero video files; this now hard-blocks A1b, A2, A3, and E1's clip
-  narrative. Concrete options for the owner:
+- **D8** Frigate recording/retention — **DECIDED 2026-08-16: option (a).**
+  Recording stays OFF. Group A ships as **A1a snapshot-first**; the clip
+  path (A1b), A2, A3, and E1's clip narrative stay parked until A1a has
+  proven the story is worth a privacy and disk decision. Nothing on the
+  live host changes as a result of this decision — it is a decision *not*
+  to change Frigate. Revisit only with A1a usage evidence in hand.
+  Options as they stood (kept for the revisit):
   **(a)** leave recording off and ship **A1a snapshot-first** only — zero
   privacy delta, zero disk delta, delivers the package query today;
   **(b)** enable recording on the two outdoor cameras (`driveway`,
@@ -248,9 +251,9 @@ output (classifier/pilot machinery only).
   A1b/E1 for the cameras that motivate them, at a bounded disk cost against
   802 GB free; **(c)** enable everywhere — largest capability gain, largest
   privacy and disk change, and it puts continuous indoor video on disk.
-  Recommendation: **(a) now, decide (b) after A1a proves the story's
-  value** — it keeps the roadmap moving without spending a privacy decision
-  on an unvalidated feature.
+  Rationale for (a): it keeps the roadmap moving without spending a privacy
+  decision on an unvalidated feature, and 202k retained snapshots already
+  carry the package query.
 - **D11** `/trace` retention acknowledgment covering F0 prelabel payloads,
   G2 replay, and matrix image traffic.
 - **D12** browser/mobile exposure of `describe_event` (the vision POST

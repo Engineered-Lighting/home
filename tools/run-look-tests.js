@@ -41,7 +41,7 @@ function loadHelpers(cameras, extraWindow) {
   const end = source.indexOf("/* A plain text segment", start);
   if (start < 0 || end < 0) throw new Error("home-look helper block not found");
   const script = source.slice(start, end)
-    + "\nObject.assign(window, { LK_CAMERAS, lkParseArg, lkVisionUrl, lkReasonRequest, lkReasonZoomRequest });";
+    + "\nObject.assign(window, { LK_CAMERAS, lkParseArg, lkVisionUrl, lkReasonRequest, lkReasonZoomRequest, lkStripMarkup, LK_BOX_TAG_SRC });";
   const sandbox = {
     window: { ...(cameras ? { HG_CAMERAS: cameras } : {}), ...(extraWindow || {}) },
     React: {
@@ -91,6 +91,32 @@ function loadAppDeepLookHelpers() {
   assert("longest camera prefix wins", JSON.stringify(custom.lkParseArg("living room what changed")) === JSON.stringify({ camera: "living_room", question: "what changed" }), custom.lkParseArg("living room what changed"));
   assert("custom entity_id prefix is parsed", JSON.stringify(custom.lkParseArg("camera.front_door is the package there")) === JSON.stringify({ camera: "front_door", question: "is the package there" }), custom.lkParseArg("camera.front_door is the package there"));
   assert("camera id space variant is parsed", JSON.stringify(custom.lkParseArg("front door is open")) === JSON.stringify({ camera: "front_door", question: "is open" }), custom.lkParseArg("front door is open"));
+
+  process.stdout.write("\nlook_box_markup_stripper_test\n");
+  /* The sidecar's parser accepts more box forms than this renderer used to
+   * strip, so output that parses cleanly server-side could still reach the
+   * user as raw markup. Measured live 2026-08-16: a trace truncated at the
+   * generation cap left a dangling "<box>" on screen. These cases mirror
+   * services/vision/app.py _BOX_INNER exactly. */
+  const strip = api.lkStripMarkup;
+  assert("canonical box tag is stripped", strip("a <box>1,2,3,4</box> b") === "a  b", strip("a <box>1,2,3,4</box> b"));
+  assert("bracketed variant is stripped", strip("a <box>[[1,2,3,4]]</box> b") === "a  b", strip("a <box>[[1,2,3,4]]</box> b"));
+  assert("single-bracket variant is stripped", strip("a <box>[1,2,3,4]</box> b") === "a  b", strip("a <box>[1,2,3,4]</box> b"));
+  assert("bare '>' close is stripped", strip("a <box>1,2,3,4> b") === "a  b", strip("a <box>1,2,3,4> b"));
+  assert("bracketed with bare close is stripped", strip("a <box>[[1,2,3,4]]> b") === "a  b", strip("a <box>[[1,2,3,4]]> b"));
+  assert("stray ref tags are stripped", strip("a <ref>mug</ref> b") === "a mug b", strip("a <ref>mug</ref> b"));
+  assert("truncated trailing <box is stripped", strip("counting mugs <box") === "counting mugs ", strip("counting mugs <box"));
+  assert("truncated trailing <ref is stripped", strip("counting mugs <re") === "counting mugs ", strip("counting mugs <re"));
+  assert("truncated trailing </box is stripped", strip("mugs </box") === "mugs ", strip("mugs </box"));
+  assert("whitespace inside the tag is tolerated", strip("a <box> 1 , 2 , 3 , 4 </box> b") === "a  b", strip("a <box> 1 , 2 , 3 , 4 </box> b"));
+  assert("prose comparison operator survives", strip("5 < 6 mugs") === "5 < 6 mugs", strip("5 < 6 mugs"));
+  assert("unrelated markup survives", strip("a <b>bold</b> c") === "a <b>bold</b> c", strip("a <b>bold</b> c"));
+  assert("plain prose is unchanged", strip("two mugs on the counter") === "two mugs on the counter");
+  assert("null input yields empty string", strip(null) === "", strip(null));
+  assert("undefined input yields empty string", strip(undefined) === "", strip(undefined));
+  assert("reasoning renderer shares the widened box pattern",
+    source.includes("LK_BOX_TAG_SRC") && !/const re = \/<ref>\(\[\\s\\S\]\*\?\)<\\\/ref>\\s\*\(\?:<box>\[\\d,\\s\]\*<\\\/box>\)\?\/gi/.test(source),
+    "lkRenderReasoning must build its regex from LK_BOX_TAG_SRC, not the old narrow literal");
 
   process.stdout.write("\nlook_vision_url_test\n");
   assert("http metrics base maps to sidecar port", api.lkVisionUrl("http://192.168.0.100:8092") === "http://192.168.0.100:8091", api.lkVisionUrl("http://192.168.0.100:8092"));

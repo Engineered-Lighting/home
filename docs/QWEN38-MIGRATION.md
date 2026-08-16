@@ -300,9 +300,9 @@ across the two without converting reads as a 7-hour-old event. Recorded in
 `clock-skew.txt`.
 
 **Still open from Phase 0:** held-task-0.4 confirmation, ceremony-journal
-status, labeler schema vs xgrammar's unsupported list (the *labeler* schema;
-the subentry specs are clean), traffic-week artifact freeze, and the
-`apply_chat_template` offline kwarg-inertness check.
+status, traffic-week artifact freeze, and the `apply_chat_template` offline
+kwarg-inertness check. (Labeler-schema-vs-xgrammar is **closed**: the
+labeler uses `json_object`, so no grammar is compiled — see the G2 section.)
 
 ### R4 measured on the incumbent — prefix caching works, and it is worth 5×
 
@@ -381,6 +381,46 @@ Consequences, all of which change the plan rather than the schedule:
 5. Separately, the bridge's reconnect loop is worth an owner decision on its
    own (log churn on a quarantined host); it is **owner-run** and out of
    scope here.
+
+### ⚠ G2 has no request log either — restated as a keyframe replay
+
+The third data source checked, and the third that does not hold what the
+plan assumed. Verified 2026-08-16 against the live labeler DB
+(`/opt/home-ai-voice/video-labeler-data/videolabeler.db`):
+
+- **No `request_json`** — not a table, not a column, nowhere in the schema
+  or the source. Raw model requests are never persisted.
+- **No "last-14-days live rows"**: the newest row is **2026-06-12**, and
+  the whole prelabel corpus was written in one ~9.5-hour batch that day.
+- **The stored prelabels came from `qwen2.5vl:32b`**, not the incumbent
+  (`prelabel_status: done:labeler-qwen2.5vl-32b:v1|v2`), so they are not an
+  incumbent baseline for anything.
+
+What survives is better than a request log: the labeler retains
+**keyframes per analysis window** — **683 windows × 9 frames**, the exact
+model input, plus `evidence_json` carrying each prior structured output.
+G2 therefore becomes a **true paired replay**: run both arms over the same
+683 windows with the live two-pass prompt and compare validity. n=683
+clears the n≥500 bar without needing live traffic, and it is repeatable,
+which live traffic never was. This is the plan's own "dormant fallback",
+promoted to the primary path.
+
+**Also resolves an open Phase-0 item.** The live labeler sends
+`response_format: {"type": "json_object"}` — **not `json_schema`**. Nothing
+is grammar-constrained today, so **xgrammar's unsupported-feature list does
+not apply to the labeler**, and "schema validity" means "the reply parses
+and conforms", checked in Python by `vlm/schema.py`. Grammar-constrained
+output arrives with labeler v2 in Phase 2; the xgrammar check belongs
+there, not here. (The *subentry* tool specs were separately audited and are
+clean — see the tool-spec audit above.)
+
+Harness parity: `gate-g2-labeler-replay.py` imports the live `ontology`
+enums and the live prompt builders rather than copying them, and
+`tools/test-qwen38-g2-replay.py` asserts the live `Pass2Result` field set is
+unchanged — so a labeler edit fails a test instead of silently making this
+gate measure the wrong contract. Smoke-tested against the incumbent
+2026-08-16: 3/3 valid, zero leaks, pass-2 p50 1.01 s (measured at the
+sidecar, cold cache).
 
 ### G7 baseline measured on the incumbent — the gate must be restated
 
@@ -489,7 +529,7 @@ Effort pin iff C1→A1 shows benefit. Reasoning parser iff RP clean.
 | Gate | Threshold | Notes |
 |---|---|---|
 | G1 ambient caption quality | one-sided non-inferiority α=0.05, binomial critical value on the actual non-tied count; hallucinated objects paired one-sided | 50 frozen frames × both models, blinded, +10 incumbent-vs-incumbent decoys |
-| G2 labeler validity | non-inferior by McNemar at n≥500 replayed `request_json` rows | re-baseline from last-14-days live rows AFTER held-task-0.4 fixes; dormant fallback: replay same rows vs incumbent |
+| G2 labeler validity | ⚠ **RESTATED — see "G2 has no request log" below.** Non-inferior by McNemar over **n=683 stored analysis windows replayed through both arms** | `tools/gate-g2-labeler-replay.py`; the dormant fallback is now the primary path — there is no request log and no recent live traffic to re-baseline from |
 | G3-pre (CUTOVER) | parsed-args exact, zero ParseArgumentsFailed, incl. R-edge cases | streaming replay + V1 cell; `qwen3_xml` staged |
 | G3-live (SOAK-EXIT) | 20 scenarios × 5 ≥ 4/5 each; zero unsafe_tool_call; regression >1 scenario 2 days = rollback | includes `/recap` + `/find-clips` prose-invocation re-tests |
 | G4 hallucination-on-negatives | false-presence ≤ incumbent, paired | 25 empty/night/cup-misfire negatives + 10 quiet-literal sentinels |

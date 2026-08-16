@@ -396,43 +396,66 @@ Cells P0 (MTP), K (fp8 KV) and RP (reasoning parser) are declared but
 **refuse to run** unless the engine already reports that config, so a
 session cannot claim a cell it did not exercise.
 
-**Incumbent smoke session, 2026-08-16** (n=12 — a smoke run; the doc
-requires **n≥100** for any p95-gated cell). Drift 3.6% → valid. Canary
-clean.
+### ⚠ G6 FAILS ON THE INCUMBENT — D1's voice budget is already breached
 
-**D-cells — does prefix caching work?** The Prometheus counter delta is a
-clean instrument: it reads **0.0% hits** on the busted arm and **99.9%** on
-the warm arm, exactly as it should.
+Measured 2026-08-16 at D1's own named instrument (HA
+`/api/conversation/process`), n=30 per utterance, quiet house, session
+drift 1.6%:
 
-| arm | p50 | p95 | prefix-cache hit rate |
+| utterance | p50 | p95 | budget |
 |---|---|---|---|
-| warm (identical prompt) | 0.068 s | 0.069 s | 99.88% |
-| **shared-prefix (the real voice shape)** | **0.161 s** | 0.164 s | 98.84% |
-| busted (unique prefix) | 0.354 s | 0.481 s | 0.00% |
+| "What rooms are in my home?" (zero-arg tool) | 0.57 s | 0.91 s | ✅ |
+| **"Are any lights on right now?"** | 1.84 s | **6.12 s** | ❌ **4.0 s** |
+| "What is the temperature in the kitchen?" | 0.17 s | 0.48 s | ✅ |
 
-**Warm-vs-busted speedup 5.22×**, confirming the Phase-0 figure
-independently. The middle row is the number that matters: a real voice turn
-shares the 8,682-token system prompt and varies only the question, and it
-costs **0.161 s** against **0.354 s** with no cache. **That 0.19 s gap is
-what R4 says may vanish on the candidate's hybrid attention** — before the
-candidate's 2.4–2.6× slower decode is applied to what remains.
+**The incumbent exceeds the voice p95 budget by 53% on a routine multi-tool
+read**, reproducibly — first seen at n=5 (6.20 s) and confirmed at n=30
+(6.12 s). The p50 is healthy at 1.84 s; the failure is entirely in the tail.
 
-**A-cell — ambient:** p50 0.139 s, p95 0.156 s against D1's 1.5 s budget.
-The incumbent uses **10%** of the ambient budget, so there is real headroom
-here; voice is where the budget is tight.
+This is a **pre-existing production characteristic, not a migration
+regression**, and finding it now is the whole point of baselining before
+touching anything. Three consequences:
 
-⚠ **Voice is already close to budget on the INCUMBENT.** Measured at the HA
-conversation endpoint (D1's named instrument): "What rooms are in my home?"
-1.20 s, "Are any lights on right now?" **3.43 s** against a **4.0 s** p95
-budget. A multi-tool read is at 86% of budget before the candidate is
-involved. This makes the D-cell result decisive rather than interesting:
-if APC goes inert, the voice budget is not reachable.
+1. **G6 as written would fail the incumbent.** A gate the current system
+   cannot pass cannot be used to judge a candidate — it would either be
+   waived under pressure on cutover day, or it would reject a candidate for
+   a fault it inherited.
+2. **The tail must be attributed before cutover.** The LLM leg is not the
+   suspect: the same engine serves ambient at 0.176 s p95 and voice-under-
+   clip-prefill at 0.69 s p95. The 6.1 s is being spent in the HA
+   conversation pipeline, the tool round-trips, or entity fan-out — none of
+   which the model swap changes. Measure the split before blaming a model.
+3. **D1 needs an owner decision**, since D1 is recorded as DECIDED and this
+   contradicts it. Options: **(a)** re-scope G6 to p50 plus a stated tail
+   allowance, with the tail tracked separately as a pre-existing defect;
+   **(b)** keep the 4 s p95 and treat "fix the voice tail" as a
+   pre-cutover blocker in its own right; **(c)** keep the budget but scope
+   it to utterance classes the house actually uses at volume.
+   **Recommendation: (a).** It is the only one that neither waives a real
+   problem nor blocks a model migration on a fault the model did not cause,
+   and it keeps the tail visible instead of folding it into a pass.
 
-Also measured: `areas_in_home` — one of the two zero-argument tools Phase 0
-flagged — completes cleanly on the incumbent (1.20 s, `action_done`). The
-vllm#50989 doom-loop risk is specific to switching the parser to
-`qwen3_coder`, so this is the before-picture that makes the V1 cell's
-after-picture meaningful.
+**Incumbent baseline session, 2026-08-16** (n=100 per p95-gated cell as the
+doc requires; V cell n=30/utterance). Drift 2.4% → valid. Canary clean.
+518 completions archived at
+`/srv/data/eval/migration/matrix-incumbent-baseline/`.
+
+| cell | p50 | p95 | budget | verdict |
+|---|---|---|---|---|
+| D warm | 0.068 s | 0.070 s | — | 99.9% cache hit |
+| D shared-prefix (real voice shape) | 0.070 s | 0.205 s | — | 98.7% hit |
+| D busted | 0.356 s | 0.491 s | — | 0.1% hit |
+| A ambient | 0.149 s | 0.176 s | 1.5 s | ✅ 12% of budget |
+| E clip2 / clip4 / clip8 | 0.27 / 0.44 / 0.78 s | 0.32 / 0.46 / 0.82 s | 6 s (clip4) | ✅ 8% of budget |
+| B-worst (voice during clip prefill) | 0.66 s | 0.69 s | 4 s | ✅ LLM leg only |
+| Q quiet sentinels | — | — | — | 7/10 quiet |
+| **V voice e2e (HA)** | 1.84 s | **6.12 s** | 4 s | ❌ **see above** |
+
+Read together these say something specific: **every cell that measures the
+model is comfortably inside budget, and the only breach is in the cell that
+measures the pipeline around it.** The candidate's 2.4–2.6× slower decode
+therefore applies to legs that currently use 8–12% of their budgets — and
+the one number at risk is a tail the model is not causing.
 
 ### G4 corpus built from live Frigate, and the incumbent baselined
 

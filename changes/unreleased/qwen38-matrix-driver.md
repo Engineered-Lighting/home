@@ -27,3 +27,13 @@ disappear on the new model's attention design.
 Ambient captioning uses a tenth of its budget, but voice is already at 86
 percent of its four-second budget on the current model, which is what makes
 the cache result decisive rather than merely interesting.
+
+The full baseline at the sizes the plan requires found that the latency gate
+already fails on the current model. Measured at the gate's own named
+instrument over thirty samples, a routine multi-tool voice query sits at 6.1
+seconds against a four-second budget, reproducibly, while its median is a
+healthy 1.8. Every cell that measures the model is comfortably inside
+budget — ambient uses a tenth of its allowance, clips an eighth — so the
+breach is in the pipeline around the model rather than the model itself.
+Recorded as a decision the owner needs to make, because a gate the current
+system cannot pass cannot judge a replacement.

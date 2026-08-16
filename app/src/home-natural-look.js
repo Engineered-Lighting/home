@@ -234,7 +234,11 @@
 
   function classifyLookFinding(answer) {
     const s = deepLookNormalize(answer);
-    if (!s || /^no obvious activity\.?$/.test(s)) return "quiet";
+    // Unanchored on purpose: the prompt asks for the exact sentence, but a
+    // model that pads it ("No obvious activity right now.") must still land
+    // in "quiet" — an anchored miss reclassifies every idle camera as a
+    // notable "activity" finding (importance 0 -> 55).
+    if (!s || /\bno obvious activity\b/.test(s)) return "quiet";
     if (/\b(unclear|not sure|hard to tell|cannot tell|can't tell|blurry|blocked|obscured|dark|low light)\b/.test(s)) return "uncertain";
     if (/\b(smoke|fire|water|leak|flood|fallen|fall|broken|hazard|spill|sparks?|alarm)\b/.test(s)) return "hazard";
     if (/\b(package|parcel|delivery|box)\b/.test(s)) return "package";

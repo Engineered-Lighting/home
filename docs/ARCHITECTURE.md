@@ -82,10 +82,12 @@ so Voice PE keeps its mic open after each turn for follow-ups. Optional
 
 ### vLLM
 
-OpenAI-compatible serving of a quantized Qwen 3 model. Uses the
-`qwen3_xml` tool-call parser so HA's tool definitions dispatch
-correctly. Streams tokens back via SSE when HA asks (which it does for
-`intent-progress`).
+OpenAI-compatible serving of a quantized Qwen 3 model
+(Qwen3-VL-30B-A3B-Instruct-FP8 today; Qwen3.8-27B-FP8 planned behind
+acceptance gates — see `docs/QWEN38-MIGRATION.md`). The tool-call parser
+must match the served model: `hermes` for the current Qwen3-VL model,
+`qwen3_coder` for the planned Qwen3.8 migration. Streams tokens back via
+SSE when HA asks (which it does for `intent-progress`).
 
 ### Wyoming Parakeet (STT)
 

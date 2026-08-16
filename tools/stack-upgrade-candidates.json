@@ -23,18 +23,22 @@
       "productionSafe": false,
       "candidates": [
         "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8 baseline",
-        "nvidia/Qwen3.6-27B-NVFP4",
-        "Qwen/Qwen3-Coder-30B-A3B-Instruct where coding/dev-agent use is isolated from home control"
+        "Qwen/Qwen3.8-27B-FP8 (ACTIVE candidate — qualified 2026-08-15; plan and gates in docs/QWEN38-MIGRATION.md; ADR-005)",
+        "huginnfork/Qwen3.8-27B-FP8 quality-contingency requant (MLP-only W8A8, BF16 attention/MTP head) — only if the official FP8 shows quality loss"
       ],
-      "goal": "Improve tool-call reliability and latency without weakening Home safety.",
+      "goal": "Improve tool-call reliability, long-horizon tool calling, and video understanding without weakening Home safety.",
       "promotionGates": [
         "No duplicated assistant messages across repeated scenario runs.",
         "STOP clears automatically after final response.",
         "Travel Mode blocks 100% of light-on/write attempts.",
         "Tool calls produce one natural final answer.",
-        "p95 latency is equal or better than baseline, or the tradeoff is explicitly accepted."
+        "Streaming tool-call replay is exact, including single-delta, zero-argument, and whitespace edge cases (G3-pre in docs/QWEN38-MIGRATION.md).",
+        "Zero reasoning leakage in content and in both reasoning response fields (G5).",
+        "Labeler json_schema validity non-inferior on an n>=500 stored-contract replay (G2).",
+        "p95 latency within the decided owner budget: ambient p95 <= 1.5s, voice e2e p95 <= 4s / TTFT <= 1.2s, 4-frame clip <= 6s (G6), or the tradeoff is explicitly accepted.",
+        "Failure default is stay-on-incumbent; served-model-name qwen3-vl-30b is preserved (ADR-004/ADR-005)."
       ],
-      "rollback": "Restore previous vLLM model ID, served model name, compose/env values, and container image."
+      "rollback": "Restore previous vLLM model ID, served model name, compose/env values, and container image. Both weight sets stay cached through the soak; rollback is the stashed pre-migration compose plus one container recreate."
     },
     {
       "id": "llm-vision",
@@ -43,14 +47,15 @@
       "productionSafe": false,
       "candidates": [
         "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8 baseline",
-        "Qwen3.6 vision-capable NVFP4 variants if available",
+        "Qwen/Qwen3.8-27B-FP8 (ACTIVE candidate — same checkpoint serves text and vision; vision path is nobody's published verification matrix, so this repo qualifies it itself via G1/G7)",
         "Qwen3-Omni experimental only"
       ],
-      "goal": "Improve camera reasoning, segmentation, and abstract /look behavior.",
+      "goal": "Improve camera reasoning, grounded looks, and unlock past-event/video understanding per docs/QWEN38-CAPABILITY-ROADMAP.md.",
       "promotionGates": [
         "Abstract visual prompts route to /look.",
-        "Vision quality is equal or better than Qwen3-VL baseline.",
-        "Segmentation images are useful and readable.",
+        "Ambient caption quality non-inferior on a 50-frame blinded pairwise judgment with decoy calibration (G1).",
+        "Grounded-box output parses with the PRODUCTION regexes (sidecar parse_primitives AND the app strippers), with runaway and ANSWER-line rates non-inferior (G7).",
+        "Hallucination on empty/negative frames not worse than baseline (G4).",
         "Camera/perception media does not flicker blank images.",
         "VRAM headroom remains safe under normal stack load."
       ],

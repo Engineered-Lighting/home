@@ -6,7 +6,10 @@
 
 services:
   # =========================================================
-  # LLM: Qwen3.6-27B-FP8 served via vLLM (OpenAI-compatible).
+  # LLM: Qwen/Qwen3-VL-30B-A3B-Instruct-FP8 served as qwen3-vl-30b via vLLM (OpenAI-compatible).
+  # Migration to Qwen3.8-27B-FP8 is planned behind acceptance gates —
+  # see docs/QWEN38-MIGRATION.md (ADR-005). The live deploy is the
+  # source of truth for currently-running flags.
   # Reachable at  http://${UBUNTU_IP}:8000/v1
   # =========================================================
   vllm:

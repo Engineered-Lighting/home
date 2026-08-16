@@ -38,18 +38,21 @@ less ominous.
 
 ### Model sizing
 
-The default unified model is `Qwen/Qwen2.5-VL-32B-Instruct-AWQ`
-(~20 GB VRAM, INT4 quantized). It handles text chat, tool calls,
-*and* image inputs for camera-aware intents in one process.
+The default unified model is `Qwen/Qwen3-VL-30B-A3B-Instruct-FP8`
+(~30 GB weights, FP8, MoE with ~3B active params per token). It handles
+text chat, tool calls, *and* image inputs for camera-aware intents in one
+process. A migration to `Qwen/Qwen3.8-27B-FP8` is planned behind
+acceptance gates — see `docs/QWEN38-MIGRATION.md`.
 
 | Model                                        | VRAM   | Where it fits | Notes                                        |
 |----------------------------------------------|-------:|---------------|----------------------------------------------|
-| Qwen/Qwen2.5-VL-32B-Instruct-AWQ (default)   | ~20 GB | RTX 4090 / 6000 | Vision + text + tool calls in one process |
-| Qwen/Qwen2.5-VL-7B-Instruct-AWQ              |  ~5 GB | 12 GB+ GPUs   | Smaller; weaker on multi-step intents        |
-| Qwen/Qwen2.5-VL-72B-Instruct-AWQ             | ~40 GB | 48 GB+ GPUs   | Flagship; slowest TTFT                       |
+| Qwen/Qwen3-VL-30B-A3B-Instruct-FP8 (default) | ~30 GB weights + KV | 48 GB+ GPUs | Vision + text + tool calls; MoE so decode stays fast |
+| Qwen/Qwen3.8-27B-FP8 (planned)               | ~29 GB weights + KV | 48 GB+ GPUs | Dense hybrid-attention; native video; slower decode |
+| Qwen/Qwen2.5-VL-7B-Instruct-AWQ              |  ~5 GB | 12 GB+ GPUs   | Small-GPU fallback; weaker on multi-step intents |
 
-To swap, edit the `--model` and `--served-model-name` lines in
-`stack/docker-compose.yml`. (Env-var overrides return in v0.2.)
+To swap, edit the `--model` line in `stack/docker-compose.yml` and keep
+`--served-model-name` stable (every stack consumer pins the served name —
+see ADR-004/ADR-005 in `docs/ARCHITECTURE_DECISIONS.md`).
 
 ---
 
@@ -96,15 +99,16 @@ Devices & Services → Add Integration → Extended OpenAI Conversation.
 Configure:
 - **Base URL:** `http://<ai-box-ip>:8000/v1`
 - **API Key:** any non-empty string (vLLM ignores it)
-- **Model:** `qwen2.5-vl-32b` (matches the `--served-model-name`
-  in `stack/docker-compose.yml`)
+- **Model:** `qwen3-vl-30b` (matches the `--served-model-name`
+  in `stack/docker-compose.yml` — this name deliberately stays stable
+  across model swaps; see ADR-004/ADR-005)
 - **Temperature:** 0.4 (lower = more deterministic device actions)
 - **Max tokens:** 512
 
-If you previously had this configured for `qwen3.6-27b`, just change
-the model name field and reload the integration (Settings → Devices
-& Services → Extended OpenAI Conversation → ⋮ → Reload). HA picks up
-the new model name without needing a full restart.
+If you previously had this configured for another served name, just
+change the model name field and reload the integration (Settings →
+Devices & Services → Extended OpenAI Conversation → ⋮ → Reload). HA
+picks up the new model name without needing a full restart.
 
 The default system prompt covers most home-automation intents.
 

@@ -31,11 +31,15 @@ Same root cause as vLLM. We ship a rebuilt Kokoro image at
 ### vLLM tool-calls return empty `tool_calls: []`
 Symptom: HA's intent classification works but no device actions fire.
 
-Cause: vLLM defaulted to the `hermes` tool-call parser, which doesn't
-match Qwen 3's output format.
+Cause: the vLLM tool-call parser doesn't match the served model's output
+format.
 
-Fix: set `--tool-call-parser qwen3_xml` in the vLLM command (already in
-the compose).
+Fix: the parser must match the model generation. The current
+Qwen3-VL-30B-A3B model emits Hermes-format tool calls and the compose uses
+`--tool-call-parser hermes`. The planned Qwen3.8-27B migration switches to
+`--tool-call-parser qwen3_coder` (its template emits
+`<tool_call><function=...>` XML) — see `docs/QWEN38-MIGRATION.md`.
+`qwen3_xml` also exists in the pinned vLLM as an escape hatch.
 
 ### Tailscale subnet route hijacks LAN
 Symptom: HA loses contact with the AI box on the same LAN after

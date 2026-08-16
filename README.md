@@ -40,7 +40,7 @@ entirely on your hardware — your voice, your model, your data.
 
 | Piece                     | Purpose                                     | Notes                                                                 |
 |---------------------------|---------------------------------------------|-----------------------------------------------------------------------|
-| Linux box w/ NVIDIA GPU   | Runs the LLM + STT + TTS stack              | RTX 4090 / 6000 / A6000 (≥ 24 GB VRAM for qwen3-32b; smaller is fine) |
+| Linux box w/ NVIDIA GPU   | Runs the LLM + STT + TTS stack              | RTX 4090 / 6000 / A6000 (48 GB+ VRAM for the default 30B model; smaller models fit smaller GPUs) |
 | Home Assistant            | Your home's brain (HAOS / Yellow / Green)   | Any recent HA release with HACS support                               |
 | Home Assistant Voice PE   | Optional voice satellite                    | Hands-free wake-word. Not required — desktop app works standalone     |
 | LAN or Tailscale          | Connection between desktop app and AI box   | Don't expose any of this to the public internet                       |
@@ -70,7 +70,7 @@ entirely on your hardware — your voice, your model, your data.
         │ HTTP 8092             │       ▼            ▼          │
         │ metrics               │  ┌────────────┐ ┌──────────┐  │
         │                       │  │   vLLM     │ │ Parakeet │  │
-        │                       │  │  qwen3-27b │ │   STT    │  │
+        │                       │  │qwen3-vl-30b│ │   STT    │  │
         │                       │  └────────────┘ └──────────┘  │
         │                       │            ┌──────────┐       │
         │                       │            │  Kokoro  │       │

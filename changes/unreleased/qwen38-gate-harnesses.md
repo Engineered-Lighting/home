@@ -31,3 +31,14 @@ The harnesses also confirmed that the app's two grounded-box stripper
 regexes reject output the sidecar accepts, so a truncated trace renders raw
 `<box>` markup to the user. The widening fix is queued in the app
 workstream.
+
+Adds `tools/qwen38_capture.py`, the measurement instrument that replaces
+the dead `/trace`: it refuses to record a latency without its measurement
+point and cache state, distinguishes "no cache hit" from "nobody measured",
+and reads the engine's prefix-cache counters. Measuring the incumbent with
+the real 33,760-character production prompt shows prefix caching is worth
+about 5x on the LLM leg of a voice turn (0.07s warm against 0.36s with the
+cache defeated), which is why the matrix now runs its cache cells first.
+The engine does not report cached tokens in the response body, so the
+research finding's instrumentation instruction is corrected to the
+Prometheus counters that do exist.

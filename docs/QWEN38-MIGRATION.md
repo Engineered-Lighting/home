@@ -301,6 +301,43 @@ status, labeler schema vs xgrammar's unsupported list (the *labeler* schema;
 the subentry specs are clean), traffic-week artifact freeze, and the
 `apply_chat_template` offline kwarg-inertness check.
 
+### R4 measured on the incumbent — prefix caching works, and it is worth 5×
+
+Measured 2026-08-16 via `tools/qwen38_capture.py` against the live stack,
+using the **real 33,760-char EOC system prompt** from the Phase-0 freeze.
+Measurement point: metrics-sidecar `127.0.0.1:8000` → vllm (the production
+path). Archive: `phase0/r4-apc-incumbent.ndjson`.
+
+- **The live prompt is 8,682 prompt tokens** — the plan's "~8.5k-token
+  prefill" estimate is confirmed to within 2%.
+- **Warm (identical prefix, cache hit): p50 0.07 s.**
+  **Busted (unique prefix per request): p50 0.36 s.** Same prompt, same
+  engine, same everything else: prefix caching is worth roughly **5× on the
+  LLM leg** of a voice turn on the incumbent.
+- Lifetime engine counters: `vllm:prefix_cache_hits_total` 152,864 /
+  `queries_total` 419,783 = **36.4%**; multimodal `mm_cache` 136/368 =
+  **37.0%**. `cache_config_info` confirms `enable_prefix_caching="True"`,
+  `block_size=32`, `num_gpu_blocks=11463` (× 32 = 366,816 tokens, exactly
+  the startup KV line — the two agree).
+
+⚠ **Correction to R4's instrumentation instruction.** vLLM 0.20.2 does
+**not** emit `usage.prompt_tokens_details.cached_tokens` — verified across
+7 captured turns, the field is absent, not zero. "Instrument
+`num_cached_tokens` from day one" cannot be done from the response body.
+The instrument that exists is the Prometheus counter pair, read either side
+of a cell and differenced (`read_cache_counters` / `cache_hit_delta` in
+`qwen38_capture.py`); a lifetime rate averages over months and says nothing
+about a cell.
+
+**Why this sharpens the migration's central risk.** R4 predicts prefix
+caching may be INERT on the candidate's hybrid attention. We can now price
+that: if it is inert, every voice turn moves from the warm path to the
+busted path. On the incumbent that is 0.07 s → 0.36 s *before* accounting
+for the candidate's 2.4–2.6× slower decode. The D-cells ("does APC work at
+all?") are therefore not informational — they are the single measurement
+that most determines whether D1's voice budget is reachable, and they
+should run **first** in the matrix, not in the middle.
+
 ### ⚠ `/trace` has no producer — the gates' primary instrument is dead
 
 The never-deploy table calls live `/trace` NDJSON "the instrumentation every
@@ -404,6 +441,11 @@ exists) → cells → **mandatory incumbent restore + incumbent smoke +
 supervisor `ready` before clearing the flag**. Candidate windows are
 excluded from G2's re-baseline window. Session 1 entry gate = the
 `stream=True` qualification tool replay.
+
+⚠ **Run the D-cells FIRST** (Phase-0 R4 measurement above): prefix caching
+is worth ~5× on the incumbent's LLM leg, so whether it survives on the
+hybrid decides whether D1's voice budget is reachable at all. A matrix that
+discovers this last has spent its evenings tuning around the wrong lever.
 
 Cells: P0 MTP viability (off-vs-off control → semantic garble gate; MTP ×
 json_schema mandatory; long-session >26k) · K (fp8-KV garble-gated) ·

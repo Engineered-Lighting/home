@@ -11,7 +11,37 @@ Artefacts: `/srv/data/eval/arch/`.
 
 ---
 
-## ⚠ OPEN — voice is down, and it is not the LLM (found 2026-08-16 23:06 PDT)
+## ✅ RESOLVED — voice was down, and it was not the LLM
+
+**Found 2026-08-16 23:06 PDT · fixed by an owner-run `ha core restart`
+2026-08-17 ~01:00 PDT.** Diagnosis held exactly: correct on disk, stale in
+memory, `reload_config_entry` insufficient, restart sufficient.
+
+Verified after the restart, through the production path
+(`/api/conversation/process`, agent `conversation.extended_openai_conversation`):
+
+```
+n=12  empty=0  leaks=0
+voice e2e p50=0.87s p95=2.48s max=3.41s   [HA conversation API; quiet house]
+sidecar LLM calls during the check: 5 for the first 3 turns (was 0 when broken)
+```
+
+Real answers, including live tool calls — *"Your home has 9 areas
+configured…"*, *"Yes, several lights are on: Dining Table Left, …"*. Against
+the documented baseline (p50 1.84 s busy / 3.73 s quiet, p95 6.12 s busy) this
+is comfortably inside budget; the house was quiet and the prefix cache warm.
+
+Honest bound on the sample: n=12 would miss a 15%-intermittent fault with
+p=0.14, so this establishes voice works, not that no rare fault remains.
+
+**The diagnostic that mattered** — and the one to reuse next time — is the
+traffic correlation, not the response body. A broken EOC returns
+`action_done` with empty speech in 0.01 s and moves the sidecar's
+`chat/completions` counter by **zero**. Any "is voice up?" check that does not
+compare that counter before and after can be fooled by a well-formed empty
+response.
+
+Original report, kept for the record:
 
 **This predates tonight's experiments and survived them. It needs one command
 from the owner.**
@@ -43,7 +73,7 @@ was correct (sha256-verified) but HA holds it in memory, and a
 `reload_config_entry` is NOT equivalent to a restart."* Tonight's reload
 reproduced that finding on the nose.
 
-**Remedy (owner):** restart HA Core.
+**Remedy (owner):** restart HA Core. ← done 2026-08-17 ~01:00 PDT, worked.
 
 ```bash
 ssh -p 22222 root@homeassistant.local 'ha core restart'
@@ -352,6 +382,7 @@ flag → quiesce → stash compose → change one line → measure → restore �
 verify voice → clear flag. It should be batched with E4/E5 in one window
 rather than taken three times.
 
-**Blocked first:** the voice outage at the top of this document. E4a's
-verification step is "voice returns real text", which cannot pass until HA
-Core is restarted.
+**No longer blocked.** The voice outage at the top of this document is
+resolved, so E4a's exit criterion — voice returning real text — can pass
+again. Its post-change baseline is the n=12 figures recorded above (p50
+0.87 s, p95 2.48 s, quiet house), not the older busy-house numbers.

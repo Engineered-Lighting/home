@@ -454,8 +454,20 @@ _LOOK_BRANCHES: tuple[tuple[str, re.Pattern], ...] = (
         r"garage\s+open)\b")),
     ("light", re.compile(
         r"\b(light(?:s)?\s+(?:on|off)|lamp(?:s)?\s+(?:on|off)|lit|dark)\b")),
-    ("quiet", re.compile(r"\b(looks|seems|appears)\s+(normal|quiet|empty|clear)\b")),
+    ("quiet", re.compile(
+        r"\b(?:looks|seems|appears|is|are|all)\s+(?:normal|quiet|empty|clear)\b")),
 )
+
+# Negated presence must not read as presence. The `person` branch matches
+# motion words, and "no one moving" / "nothing is moving" / "no motion
+# detected" all contain one, so without this they file as person at
+# importance 90 on a camera reporting nothing is there. Window capped at two
+# filler words so a real subject is never swallowed ("no dog but a man is
+# walking" keeps its man). Mirrors `negatedPresence` in home-natural-look.js.
+_NEGATED_PRESENCE_RE = re.compile(
+    r"\b(?:no|not|nobody|nothing|without|none)\b(?:\s+\w+){0,2}\s*\b"
+    r"(?:one|body|person|persons|people|human|humans|man|men|woman|women|"
+    r"motion|movement|moving|walking|walks|activity)\b")
 
 _INVENTORY_RE = re.compile(
     r"\b(couch|coffee table|table|chair|chairs|plant|bicycle|painting|"
@@ -488,7 +500,8 @@ def classify_look_finding(answer: str) -> str:
     if not s:
         return "quiet"
     for category, pattern in _LOOK_BRANCHES:
-        if pattern.search(s):
+        probe = _NEGATED_PRESENCE_RE.sub(" ", s) if category == "person" else s
+        if pattern.search(probe):
             return category
     many = len(re.findall(r",", s)) >= 2 or bool(_INVENTORY_RE.search(s))
     return "inventory" if many else "activity"

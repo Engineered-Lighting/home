@@ -251,12 +251,25 @@
     // from "a pink bicycle standing upright". Nouns fix both directions:
     // the gerunds were redundant whenever a human was named, and harmful
     // whenever one was not. "walking" survives — objects do not walk.
-    if (/\b(person|people|someone|somebody|human|man|men|woman|women|child|children|kid|kids|guy|girl|boy|toddler|baby|walking|walks|motion|moving)\b/.test(s)) return "person";
+    // Negated presence must not read as presence. The branch matches motion
+    // words, and "no one moving" / "nothing is moving" / "no motion detected"
+    // all contain one — so without this they file as person at importance 90,
+    // the tier that wakes someone, on a camera reporting nothing is there.
+    // The filler window is capped at two words so a real subject is never
+    // swallowed: "no dog but a man is walking" keeps its man.
+    const negatedPresence = /\b(?:no|not|nobody|nothing|without|none)\b(?:\s+\w+){0,2}\s*\b(?:one|body|person|persons|people|human|humans|man|men|woman|women|motion|movement|moving|walking|walks|activity)\b/g;
+    const presence = s.replace(negatedPresence, " ");
+    if (/\b(person|people|someone|somebody|human|man|men|woman|women|child|children|kid|kids|guy|girl|boy|toddler|baby|walking|walks|motion|moving)\b/.test(presence)) return "person";
     if (/\b(dog|cat|pet)\b/.test(s)) return "pet";
     if (/\b(vehicle|car|truck|van|bus|driveway|parked)\b/.test(s)) return "vehicle";
     if (/\b(door\s+open|open\s+door|window\s+open|open\s+window|garage\s+open)\b/.test(s)) return "door_window";
     if (/\b(light(?:s)?\s+(?:on|off)|lamp(?:s)?\s+(?:on|off)|lit|dark)\b/.test(s)) return "light";
-    if (/\b(looks|seems|appears)\s+(normal|quiet|empty|clear)\b/.test(s)) return "quiet";
+    // "is/are/all" as well as the perception verbs: a caption that plainly
+    // states "The room is quiet." described an idle camera, but the narrower
+    // form missed it and filed it as a notable "activity" finding at
+    // importance 55. Only reachable once person/pet/vehicle/hazard have all
+    // declined, so widening it cannot silence a real subject.
+    if (/\b(?:looks|seems|appears|is|are|all)\s+(?:normal|quiet|empty|clear)\b/.test(s)) return "quiet";
     const hasManyObjects = (s.match(/,/g) || []).length >= 2 ||
       /\b(couch|coffee table|table|chair|chairs|plant|bicycle|painting|cabinet|sink|stove|island|window|speaker|surfboard|floor)\b/.test(s);
     return hasManyObjects ? "inventory" : "activity";

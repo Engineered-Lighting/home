@@ -532,9 +532,40 @@ that repo's own `changes/unreleased/`. The two copies of
 `home-natural-look.js` are now functionally identical; `tools/run-look-tests.js`
 passes 83/0. **Live immediately** — no gateway restart required.
 
-The negation defect (`"no one moving"` → `person`/90, `"The room is quiet."` →
-`activity`/55) is still present in both copies and is **not** fixed here. It is
-a separate change with a separate risk profile, and one variable at a time.
+**The negation defect is also now fixed** (owner-authorized), as a separate
+change in both copies — `home-el` and `code/home` `2917d4d`. A negation guard
+blanks a negated presence clause before the person test, and the quiet branch
+widens to accept "is/are/all quiet".
+
+An ablation showed the two halves are only effective **together**, which is why
+they ship as one change:
+
+| variant | G1 people missed | G1 phantom | G4 4B false presence |
+|---|---|---|---|
+| baseline | 1/19 | 0 | 11/25 |
+| + negation guard only | 1/19 | 0 | 11/25 |
+| + wider quiet only | 1/19 | 0 | 11/25 |
+| **+ both** | **1/19** | **0** | **7/25** |
+
+With only the guard, the caption clears `person` and falls through the narrow
+quiet branch to `activity`/55. With only the wider quiet branch, `person`
+matches "moving" first and returns 90 before quiet is reached. Together,
+`"The living room is quiet with no one moving."` reaches `quiet`/0.
+
+Importance-90 findings on verified-empty frames drop 7 → 3 for the arm that
+uses this phrasing. The incumbent does not phrase captions this way, so its
+numbers are unchanged (3/25, 2/25) — the fix is insurance against a model that
+does, not a correction to today's alerting.
+
+Guard verified in both directions: `"There is no dog but a man is walking."`
+still files as `person`, because the filler window is capped at two words.
+`tools/qwen38_gates.py` was updated in step so G4 keeps scoring production
+behaviour. Both suites pass — `run-look-tests.js` 83/0, gate-core all passed.
+
+Deliberately left: bare negations with no quiet word (`"Nothing is moving."`,
+`"No motion detected."`) land at `activity`/55, not `quiet`/0. 55 wakes nobody,
+and going further would mean tuning against invented phrasings rather than
+measured ones — the brief's own warning about iterating on wording.
 
 > **A caution for the trap index.** `home-el` is not what runs the web app.
 > Two closely-related repos with overlapping `changes/unreleased/` filenames

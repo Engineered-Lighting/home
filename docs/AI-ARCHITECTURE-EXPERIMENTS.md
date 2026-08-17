@@ -272,7 +272,32 @@ separately from the pool.
 - The incumbent, more strongly than before. It is fast, and on the house's own
   prompt and tools it is 24/24 faithful with zero fabrications.
 
-### The single next experiment
+### Owner decisions, 2026-08-17
+
+Taken after reading the session-2 results.
+
+| decision | |
+|---|---|
+| **Qwen3.8's role** | A second, **non-voice** instance serving `grounded_look` and nightly video work. It does not go on the voice path. |
+| **Incumbent KV pool** | Move to `--gpu-memory-utilization 0.50`, **in the same window that brings up the sidecar** — not as a standalone change. One window, one change, verified immediately. |
+| **MTP** | Deprioritized. Best realistic case (~2×) still leaves Qwen3.8 ~9× off the incumbent on voice, so it cannot change the routing decision. Kept on the shelf, not the critical path. |
+| **HA Core restart** | Pre-authorized for autonomous sessions **when voice is already broken and on-disk config is intact** — repair only, never to enable an experiment. |
+| **Look classifier** | Owner to identify the deployed copy; fix source + gate port together once live impact is confirmed. |
+
+**So the next experiment is E6′, not E5:** stand up Qwen3.8-27B as a grounding
+sidecar. Concretely — incumbent to util 0.50 in the same window, Qwen3.8 on its
+own port with thinking ON + `--reasoning-parser qwen3` (the only faithful
+config, and grounding is latency-tolerant), then score G7 grounded-box
+extraction against the incumbent's captured 0/13. Route only `grounded_look`
+and video work to it; voice stays on the incumbent, enforced at the
+metrics-sidecar (E7's choke point).
+
+Footprint is already measured, so the window needs no exploration: 28.51 GiB
+weights + ~3.4 GiB overhead + KV at 73.3 KiB/token, and **budget the CUDA-graph
+capture separately** — it allocates outside the utilisation budget and OOM'd
+twice tonight with ~900 MiB of GPU-wide slack.
+
+### Shelved — E5, MTP on Qwen3.8
 
 **E5 — MTP on Qwen3.8, to attack the 3.24 s.** Thinking-ON is the only faithful
 config and its cost is decode-bound (median 151 completion tokens vs 28 with
@@ -466,12 +491,23 @@ measures.
    `no obvious activity`, so a plain `The room is quiet.` falls through to
    **`activity`, importance 55** — which G4 counts as false presence.
 
-Present at `app/src/home-natural-look.js:254` and faithfully ported in
-`tools/qwen38_gates.py`. **I could not locate a deployed copy** — it is not in
-`/config/www/engineered-lighting-card.js` (28 KB, Mar 27, no match) nor in
-`hav-intelligence`, `hav-vision-sidecar`, `home-agent-bff` or
-`home-agent-origin`. So I am **not** claiming a live outage; I am claiming a
-defect in the repo source and in the gate's scoring, and asking where it ships.
+Present at `app/src/home-natural-look.js:254`, faithfully ported in
+`tools/qwen38_gates.py`, and **also present in the sibling `home` repo**
+(`/home/marcelo-lima/code/home`, last commit 962a3ab, 2026-07-17).
+`app/src/index.html:220` loads it as a plain script, so it ships with the web
+app.
+
+**The deployed copy was not found.** Ruled out: `/config/www/` (only
+`engineered-lighting-card.js`, 28 KB, Mar 27, no match), `hav-intelligence`,
+`hav-vision-sidecar`, `home-agent-bff`, `home-agent-origin`, and the Home Agent
+containers' bind mounts (`origin`, `bff`, `edge-ingress` carry only secrets,
+TLS and nginx config). No nginx config on this host references it. The
+remaining candidates are a Windows-hosted deploy (`tools/deploy-*.ps1`) or the
+Tauri/remote app.
+
+So this is **not** a claim of a live outage — it is a defect in the repo source
+and in the gate's scoring, with the deployment path an open question for the
+owner. Fix is authorized once that path is known.
 
 **Effect on E2's verdict: none.** Re-scoring G4 with a negation guard moves
 those four frames from `person` (90) to `activity` (55) — both are false

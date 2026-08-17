@@ -45,3 +45,10 @@ Adds `docs/AI-ARCHITECTURE-RESTORE.md`, written before the first live change,
 because these experiments swap models in VRAM. The incumbent was restored
 byte-identical afterwards and voice verified through the conversation API with
 real tool-backed answers.
+
+Records the owner's decisions taken on these results: Qwen3.8 becomes a
+second, non-voice instance for grounding and nightly video rather than a
+replacement for the incumbent; the KV pool moves to 0.50 in the same window
+that brings that sidecar up rather than as a standalone change; and MTP is
+shelved, since even a 2x gain leaves it about nine times off the incumbent on
+voice and so cannot change the routing decision.

@@ -78,12 +78,22 @@ Write that filename down. It is the whole safety net.
 
 ## 3. Edit four lines in the `vllm:` service
 
+**Three lines. Not four.**
+
 | from | to |
 |---|---|
 | `--model Qwen/Qwen3-VL-30B-A3B-Instruct-FP8` | `--model Qwen/Qwen3.8-27B-FP8` |
 | `--tool-call-parser hermes` | `--tool-call-parser qwen3_coder` |
 | `'{"enable_thinking": false}'` | `'{"enable_thinking": false, "preserve_thinking": false}'` |
-| — | add `- --generation-config` / `- vllm` |
+
+⚠ **Do NOT add `--generation-config vllm`.** Attempt 1 (2026-08-16) added it
+and had to be rolled back. The migration doc lists that flag as
+**conditional** on a Phase-3 MTP winner, not as part of a plain cutover, and
+adding it makes the engine ignore the checkpoint's own
+`generation_config.json` — which pins `top_k: 20`, `top_p: 0.95` and a
+two-token stop set. Attempt 1 produced repeated answers with `</think>`
+between them, and this is the most likely contributor. It was a
+self-inflicted extra variable in a change that is supposed to have three.
 
 **Change nothing else.** Leave the image digest, the served name
 `qwen3-vl-30b`, `--gpu-memory-utilization 0.70`, `--max-model-len 32768`,

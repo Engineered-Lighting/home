@@ -188,7 +188,16 @@ def main() -> int:
                     rt = d.get("response", {}).get("response_type")
                     leak = gates.find_reasoning_leaks({"content": sp})
                     if leak:
-                        fatal("reasoning leaked into a SPOKEN reply", sp[:70])
+                        # Show the MATCHED excerpt, never the reply's first
+                        # 70 chars. On the 2026-08-16 attempt the leak sat
+                        # ~150 chars in, so the prefix looked like a
+                        # perfectly good answer and the alarm read as a
+                        # false positive. An operator who dismisses a
+                        # correct rollback signal because the evidence was
+                        # cropped is worse off than one with no check.
+                        fatal("reasoning leaked into a SPOKEN reply",
+                              f"[{leak[0].where}] matched {leak[0].pattern!r} in "
+                              f"a {len(sp)}-char reply: …{leak[0].excerpt.strip()[:110]}…")
                     elif rt == "error" or not sp:
                         fatal(f"voice turn failed: {utt!r}", str(rt))
                     elif dt > 20:

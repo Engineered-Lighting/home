@@ -204,6 +204,87 @@ disk headroom; installed transformers version; subentry tool-spec audit
 (zero-arg tools, `$ref`); labeler schema validated against xgrammar's
 unsupported-feature list.
 
+## ⚠ CUTOVER ATTEMPTED AND ROLLED BACK — 2026-08-16 17:29–17:40 PDT
+
+**Outcome: the candidate ran, most gates passed, and it was rolled back on
+G5 reasoning leakage reaching spoken output.** The house is back on the
+incumbent. Total exposure ≈ 10 minutes, under the maintenance flag, with
+ambient quiesced.
+
+**What passed — and some of it is genuinely better than the incumbent:**
+
+| assertion | candidate | incumbent |
+|---|---|---|
+| served name `qwen3-vl-30b` | ✅ | ✅ |
+| **GPU KV cache pool** | **497,097 tokens** | 366,816 |
+| **zero-arg tool (vllm#50989)** | ✅ **0.4 s, no doom loop** | 1.20 s |
+| grounded boxes extracted | ✅ **3/3** | **0/13** |
+| app strippers clean | ✅ 3/3 | 3/3 |
+| ambient caption | ✅ 0.60 s, sensible | 0.18 s |
+| short-completion p95 | 0.07 s | 0.05 s |
+| leakage canary (8 direct probes) | ✅ clean | ✅ clean |
+
+**R1 is now confirmed on real hardware.** 497,097 tokens is exactly the
+64 KiB/token geometry — *more* KV headroom than the incumbent despite a
+larger dense model, because only 16 of 64 layers hold paged KV. Every VRAM
+and long-context conclusion in this plan stands.
+
+**vllm#50989 did not reproduce.** `get_all_rooms_state` returned a clean
+tool call in 0.4 s under `qwen3_coder`. The zero-arg hazard is real in
+principle but is not triggered by this checkpoint at this call site.
+
+**G7 improved dramatically.** The candidate extracted grounding boxes on
+3/3 frames where the incumbent extracts **0/13** under the same deployed
+prompt. The "restate G7 as an absolute threshold" decision was right, and
+the candidate would clear it.
+
+### The blocker: `</think>` in spoken content, answer triplicated
+
+The direct 8-probe canary passed. The failure only appeared **through the
+Home Assistant conversation path**:
+
+```
+"You've got nine areas set up: Kitchen, Living Room, …
+</think>
+
+Your home has nine areas: Kitchen, Living Room, …
+</think>
+
+Your home has nine areas: Kitchen, Living Room, …"
+```
+
+Literal `</think>` delimiters in `speech.plain.speech` — which TTS reads
+aloud as "slash think" — and the whole answer generated **three times**.
+Intermittent: the very next query ("are any lights on") was clean, which is
+worse than a consistent failure, not better; in daily use it would surface
+as the assistant randomly stuttering its answer three times with markup.
+
+**Why the canary missed it and the HA path caught it:** the canary sends
+bare completions. The leak needs the EOC path's chat-template rendering with
+tools and a long system prompt. **A smoke that only probed the engine
+directly would have shipped this.**
+
+**Leading hypothesis — the trap index called this exact shot.** "vLLM
+silently filters unknown chat-template kwargs (verified in `renderers/hf.py`
+at the tag — assertions must be behavioral)." `enable_thinking:false` and
+`preserve_thinking:false` were passed via `--default-chat-template-kwargs`;
+if this checkpoint's template does not accept those names, they are dropped
+without error and thinking stays on. The candidate is a thinking model in a
+way the incumbent is not, so nothing suppressed the delimiters.
+
+**Next attempt should, in order:**
+1. Render the chat template offline against the candidate and confirm
+   whether `enable_thinking` / `preserve_thinking` are actually consumed —
+   the plan's pre-day "`apply_chat_template` offline check", now clearly
+   mandatory rather than optional.
+2. If the kwargs are inert, use `--reasoning-parser qwen3` (plan cell RP),
+   which routes think blocks into a separate field instead of content — with
+   the same-session grammar re-verify that cell requires (#44012/#50948).
+3. Re-run the smoke, **including the HA path**, before going live.
+
+**Do not retry by adding the reasoning parser blind.** That changes two
+things at once and the cell exists for a reason.
+
 ## Phase 0 — RESULTS (collected 2026-08-16, admission check green)
 
 Collector: `tools/qwen38-phase0-archive.sh` (read-only, re-runnable).

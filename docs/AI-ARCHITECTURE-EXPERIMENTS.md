@@ -491,23 +491,56 @@ measures.
    `no obvious activity`, so a plain `The room is quiet.` falls through to
    **`activity`, importance 55** — which G4 counts as false presence.
 
-Present at `app/src/home-natural-look.js:254`, faithfully ported in
-`tools/qwen38_gates.py`, and **also present in the sibling `home` repo**
-(`/home/marcelo-lima/code/home`, last commit 962a3ab, 2026-07-17).
-`app/src/index.html:220` loads it as a plain script, so it ships with the web
-app.
+### ⚠ The deployed copy was found, and it was worse — FIXED 2026-08-17
 
-**The deployed copy was not found.** Ruled out: `/config/www/` (only
-`engineered-lighting-card.js`, 28 KB, Mar 27, no match), `hav-intelligence`,
-`hav-vision-sidecar`, `home-agent-bff`, `home-agent-origin`, and the Home Agent
-containers' bind mounts (`origin`, `bff`, `edge-ingress` carry only secrets,
-TLS and nginx config). No nginx config on this host references it. The
-remaining candidates are a Windows-hosted deploy (`tools/deploy-*.ps1`) or the
-Tauri/remote app.
+The owner identified the hosting: the app is served from this Linux box and
+reached over Tailscale. That is `home-web-gateway.service`, whose
+`WorkingDirectory` is **`/home/marcelo-lima/code/home`** — the *sibling* repo,
+not `home-el`. It serves `APP_DIR = <that repo>/app/src` with
+`fs.readFileSync` per request and `private, no-cache`, so that repo's file **is**
+the live behaviour, and editing it takes effect without a restart.
 
-So this is **not** a claim of a live outage — it is a defect in the repo source
-and in the gate's scoring, with the deployment path an open question for the
-owner. Fix is authorized once that path is known.
+The served copy was not the version analysed above. It was the **pre-`7ce30b0`**
+version, and its person branch keyed only on posture gerunds:
+
+```js
+/\b(person|people|someone|human|standing|walking|sitting|motion|moving)\b/
+```
+
+No human nouns at all — no `man`, `woman`, `child` — and `walking` but not
+`walks`. Measured on the frozen G1 corpus using the deployed model's own
+captions, of 19 frames that plainly describe a person:
+
+| | before | after fix |
+|---|---|---|
+| **people MISSED** | **6/19** | **1/19** |
+| phantom person alerts at importance 90 | 2 | **0** |
+| G4 false presence (25 verified-empty) | 3/25 | 3/25 — no regression |
+| G4 person@90 | 2/25 | 2/25 — no regression |
+
+Concretely: *"A man in a white t-shirt walks through a dining room"* filed as
+`inventory`, **importance 10** — the "nothing to report" tier. And a pink
+bicycle *"standing upright"* filed as `person`, **importance 90**.
+
+So the live defect was the opposite of the one first suspected: not
+over-alerting on negations, but **failing to report roughly a third of the
+people who appear on camera**, while alerting on furniture. `7ce30b0` fixed
+this in `home-el` and it was never carried to the repo that serves the app.
+
+Fixed in `/home/marcelo-lima/code/home` as `abd85e7`, with a fragment under
+that repo's own `changes/unreleased/`. The two copies of
+`home-natural-look.js` are now functionally identical; `tools/run-look-tests.js`
+passes 83/0. **Live immediately** — no gateway restart required.
+
+The negation defect (`"no one moving"` → `person`/90, `"The room is quiet."` →
+`activity`/55) is still present in both copies and is **not** fixed here. It is
+a separate change with a separate risk profile, and one variable at a time.
+
+> **A caution for the trap index.** `home-el` is not what runs the web app.
+> Two closely-related repos with overlapping `changes/unreleased/` filenames
+> serve different roles, and a fix landing in the wrong one looks committed,
+> tested and shipped while the house keeps running the old code — for a month,
+> in this case. Any app-layer fix needs to state which repo the gateway serves.
 
 **Effect on E2's verdict: none.** Re-scoring G4 with a negation guard moves
 those four frames from `person` (90) to `activity` (55) — both are false

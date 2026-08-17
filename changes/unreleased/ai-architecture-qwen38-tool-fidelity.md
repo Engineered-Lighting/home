@@ -52,3 +52,18 @@ replacement for the incumbent; the KV pool moves to 0.50 in the same window
 that brings that sidecar up rather than as a standalone change; and MTP is
 shelved, since even a 2x gain leaves it about nine times off the incumbent on
 voice and so cannot change the routing decision.
+
+The look classifier's deployed copy was then located, and it was worse than the
+repo version. `home-web-gateway.service` serves `app/src` from the sibling
+`/home/marcelo-lima/code/home` repo, not from here, and that copy was still
+pre-`7ce30b0`: the person branch keyed only on posture gerunds, with no human
+nouns and `walking` but not `walks`. On the frozen 50-frame daylight corpus,
+using the deployed model's own captions, it missed 6 of 19 people — one filed at
+importance 10, the "nothing to report" tier — while a pink bicycle "standing
+upright" raised 2 alerts at importance 90. Fixed in that repo as `abd85e7`:
+missed people 6 → 1, phantom alerts 2 → 0, with the negatives corpus
+unchanged at 3/25. So the live defect was the opposite of the one first
+suspected — under-reporting people, not over-reporting negations.
+
+The negation defect stays open in both copies, deliberately, as a separate
+change with a separate risk profile.

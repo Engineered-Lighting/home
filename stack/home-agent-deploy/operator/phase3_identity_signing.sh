@@ -85,6 +85,12 @@ case "$phase" in
       --property="LoadCredentialEncrypted=semantic-cutover.key:$semantic_cutover_credential"
     )
     ;;
+  supersede-expired)
+    unit=home-agent-identity-packet-supersede.service
+    program=$install_root/phase3_identity_signing_ceremony.py
+    program_arguments=(supersede-expired)
+    purpose_credential=()
+    ;;
   *) fail ;;
 esac
 

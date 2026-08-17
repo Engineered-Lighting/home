@@ -104,6 +104,22 @@ signing bytes even when given a backdated clock. These modes are solely for a
 database kernel to compare against an already committed finalization after a
 lost response. First admission remains fail-closed after expiry.
 
+An expired packet that never received its review signature is retired only
+through the ceremony's `supersede-expired` phase, which holds no signing key.
+It archives the staged state byte-exactly next to an append-only receipt with
+contract `phase3-identity-packet-supersession-receipt-e5aj-v1`, keyed by the
+superseded packet `run_id` and carrying only `status`, `reason_code`
+(`review_window_expired_unsigned`), `run_id`, `review_payload_sha256`, the
+lapsed `expires_at`, `private_review_sha256`, `ceremony_policy_sha256`,
+`superseded_state_sha256`, `archived_state_name`, and `created_at`. The
+receipt is validated, never rewritten, on resumed attempts; the archive is
+lineage, not erasure, and stays under the same root-only private directory
+until a governed erasure mechanism covers it. A later `stage` compiles a
+fresh packet with new identifiers and a fresh ten-minute window from the
+unchanged snapshot and private review; supersession never extends, weakens,
+or transfers an authorization window and never touches a `review_signed` or
+`finalized` state.
+
 The output never emits raw source rows or accepts actor, principal, authority,
 cutover, parent-fact, memory, place, initiative, action, or model fields.
 

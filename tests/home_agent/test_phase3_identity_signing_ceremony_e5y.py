@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from datetime import UTC, datetime, timedelta
 import hashlib
 import importlib.util
@@ -658,4 +659,248 @@ def test_physical_writer_freeze_is_bound_to_reviewed_source_and_distinct_key(
             semantic_cutover_private_key=privacy_private,
             now=NOW,
             id_factory=_Ids(),
+        )
+
+
+def _staged_packet(tmp_path, *, now=NOW):
+    database = tmp_path / "identity.db"
+    _database(database)
+    review_private = Ed25519PrivateKey.generate()
+    finalization_private = Ed25519PrivateKey.generate()
+    policy = _policy(review_private, finalization_private, now=now)
+    packet = compiler.compile_unsigned_packet(
+        migration.load_plan(database),
+        migration.load_source_inventory(database),
+        private_review_sha256="f" * 64,
+        policy=policy,
+        id_factory=_Ids(),
+        now=now,
+    )
+    staged = ceremony.stage_state(packet, policy=policy)
+    raw = verifier.canonical_bytes(staged) + b"\n"
+    return staged, raw, review_private, finalization_private
+
+
+def test_supersession_receipt_is_content_free_and_binds_digests(tmp_path) -> None:
+    staged, raw, _review, _finalization = _staged_packet(tmp_path)
+    lapsed = NOW + timedelta(minutes=11)
+    receipt = ceremony.build_supersession_receipt(staged, raw, now=lapsed)
+
+    assert set(receipt) == {
+        "contract",
+        "status",
+        "reason_code",
+        "run_id",
+        "review_payload_sha256",
+        "expires_at",
+        "private_review_sha256",
+        "ceremony_policy_sha256",
+        "superseded_state_sha256",
+        "archived_state_name",
+        "created_at",
+    }
+    packet_state = staged["unsigned_packet"]
+    assert receipt["contract"] == ceremony.SUPERSESSION_CONTRACT
+    assert receipt["status"] == "superseded"
+    assert receipt["reason_code"] == "review_window_expired_unsigned"
+    assert receipt["run_id"] == packet_state["run_id"]
+    assert (
+        receipt["review_payload_sha256"]
+        == packet_state["review_signing_payload_sha256"]
+    )
+    assert receipt["expires_at"] == packet_state["unsigned_run"]["expires_at"]
+    assert receipt["expires_at"] == (NOW + timedelta(minutes=10)).strftime(
+        "%Y-%m-%dT%H:%M:%S.%fZ"
+    )
+    assert receipt["private_review_sha256"] == "f" * 64
+    assert receipt["ceremony_policy_sha256"] == staged["ceremony_policy_sha256"]
+    assert receipt["superseded_state_sha256"] == hashlib.sha256(raw).hexdigest()
+    assert receipt["archived_state_name"] == ceremony.supersession_archive_name(
+        packet_state["run_id"]
+    )
+    assert "Marcelo" not in repr(receipt)
+    assert "Amelia" not in repr(receipt)
+    assert "Mom" not in repr(receipt)
+
+    ceremony.validate_supersession_receipt(receipt, state=staged, state_raw=raw)
+
+    tampered = dict(receipt)
+    tampered["superseded_state_sha256"] = "0" * 64
+    with pytest.raises(ceremony.SigningCeremonyError, match="inconsistent"):
+        ceremony.validate_supersession_receipt(tampered, state=staged, state_raw=raw)
+
+    widened = dict(receipt)
+    widened["note"] = "extra"
+    with pytest.raises(ceremony.SigningCeremonyError, match="inconsistent"):
+        ceremony.validate_supersession_receipt(widened, state=staged, state_raw=raw)
+
+    noncanonical = dict(receipt)
+    noncanonical["created_at"] = "2026-08-16T00:00:00Z"
+    with pytest.raises(ceremony.SigningCeremonyError, match="inconsistent"):
+        ceremony.validate_supersession_receipt(
+            noncanonical, state=staged, state_raw=raw
+        )
+
+
+def test_expired_review_fails_closed_without_any_state_mutation(tmp_path) -> None:
+    staged, _raw, review_private, finalization_private = _staged_packet(tmp_path)
+    assert ceremony.state_expires_at(staged) == NOW + timedelta(minutes=10)
+
+    lapsed_policy = _policy(
+        review_private, finalization_private, now=NOW + timedelta(minutes=11)
+    )
+    snapshot = copy.deepcopy(dict(staged))
+    token = ceremony.review_approval_token(staged, lapsed_policy)
+    with pytest.raises(ceremony.SigningCeremonyError, match="did not verify"):
+        ceremony.approve_review(
+            staged,
+            policy=lapsed_policy,
+            review_private_key=review_private,
+            approval=token,
+        )
+    assert dict(staged) == snapshot
+
+
+def test_state_expiry_parser_rejects_noncanonical_timestamps() -> None:
+    for value in (
+        "2026-08-16T00:00:00Z",
+        "2026-08-16 00:00:00.000000Z",
+        "2026-08-16T00:00:00.000000+00:00",
+        "",
+        None,
+        123,
+    ):
+        broken = {"unsigned_packet": {"unsigned_run": {"expires_at": value}}}
+        with pytest.raises(ceremony.SigningCeremonyError, match="window is invalid"):
+            ceremony.state_expires_at(broken)
+
+
+def test_supersede_phase_is_least_privilege_and_dispatch_closed() -> None:
+    assert ceremony.PHASES == frozenset(
+        {"stage", "review", "finalize", "supersede-expired"}
+    )
+    assert set(ceremony.PHASES) == set(ceremony.UNIT_NAMES)
+    assert set(ceremony.PHASES) == set(ceremony.PHASE_CREDENTIALS)
+    assert ceremony.PHASE_CREDENTIALS["supersede-expired"] == frozenset(
+        {"policy.json", "commitment.key"}
+    )
+    assert (
+        ceremony.UNIT_NAMES["supersede-expired"]
+        == "home-agent-identity-packet-supersede.service"
+    )
+
+    launcher = LAUNCHER.read_text(encoding="utf-8")
+    supersede_case = launcher.split("supersede-expired)", 1)[1].split(";;", 1)[0]
+    for forbidden in (
+        "review.key",
+        "finalization.key",
+        "writer-freeze.key",
+        "privacy-probe.key",
+        "semantic-cutover.key",
+    ):
+        assert forbidden not in supersede_case
+    assert "phase3_identity_signing_ceremony.py" in supersede_case
+    assert "home-agent-identity-packet-supersede.service" in supersede_case
+    assert launcher.index("supersede-expired)") > launcher.index("cutover-packet)")
+
+    source = (OPERATOR / "phase3_identity_signing_ceremony.py").read_text(
+        encoding="utf-8"
+    )
+    supersede_body = source.split("def _run_supersede", 1)[1].split(
+        "\ndef _run_stage", 1
+    )[0]
+    assert "_acquire_runner_lock()" in supersede_body
+    assert supersede_body.index("_runner_journal_for_supersession()") < (
+        supersede_body.index("build_supersession_receipt(state, raw")
+    )
+    assert supersede_body.index("build_supersession_receipt(state, raw") < (
+        supersede_body.index("os.replace(STATE_PATH, archive_path)")
+    )
+    assert supersede_body.index("staged review window is still live") < (
+        supersede_body.index("os.replace(STATE_PATH, archive_path)")
+    )
+    assert "validate_supersession_receipt(existing, state=state, state_raw=raw)" in (
+        supersede_body
+    )
+    assert "supersession archive already differs" in supersede_body
+    assert "except (SigningCeremonyError, OSError):" in source
+    assert '"supersede-expired"' in source
+    assert "supersession lineage is incomplete" in source
+    assert 'name.startswith(".")' in source
+
+
+def test_review_and_stage_probe_expiry_before_prompt() -> None:
+    assert ceremony.REVIEW_WINDOW_MINIMUM_SECONDS == 60
+    source = (OPERATOR / "phase3_identity_signing_ceremony.py").read_text(
+        encoding="utf-8"
+    )
+    review_body = source.split("def _run_review", 1)[1].split(
+        "\ndef _write_final_artifacts", 1
+    )[0]
+    assert review_body.index("staged review window has expired") < review_body.index(
+        "_private_approval"
+    )
+    assert "Review window remaining" in review_body
+    stage_body = source.split("def _run_stage", 1)[1].split(
+        "\ndef _private_approval", 1
+    )[0]
+    assert "staged review window has expired" in stage_body
+    assert 'result["expires_at"]' in stage_body
+    assert '"expires_at": state["unsigned_packet"]' in stage_body
+
+
+def test_fresh_stage_after_supersession_produces_new_digest_and_window(
+    tmp_path,
+) -> None:
+    database = tmp_path / "identity.db"
+    _database(database)
+    review_private = Ed25519PrivateKey.generate()
+    finalization_private = Ed25519PrivateKey.generate()
+    policy = _policy(review_private, finalization_private)
+    plan = migration.load_plan(database)
+    inventory = migration.load_source_inventory(database)
+    first = compiler.compile_unsigned_packet(
+        plan,
+        inventory,
+        private_review_sha256="f" * 64,
+        policy=policy,
+        id_factory=_Ids(),
+        now=NOW,
+    )
+    later = NOW + timedelta(hours=1)
+    second_ids = _Ids()
+    second_ids.value = 4096
+    second = compiler.compile_unsigned_packet(
+        plan,
+        inventory,
+        private_review_sha256="f" * 64,
+        policy=policy,
+        id_factory=second_ids,
+        now=later,
+    )
+    first_state = ceremony.stage_state(first, policy=policy)
+    second_state = ceremony.stage_state(second, policy=policy)
+    first_raw = verifier.canonical_bytes(first_state) + b"\n"
+
+    assert str(first.run_id) != str(second.run_id)
+    assert hashlib.sha256(first.review_signing_payload).hexdigest() != (
+        hashlib.sha256(second.review_signing_payload).hexdigest()
+    )
+    assert ceremony.state_expires_at(first_state) == NOW + timedelta(minutes=10)
+    assert ceremony.state_expires_at(second_state) == later + timedelta(minutes=10)
+    assert first.private_review_sha256 == second.private_review_sha256
+    assert (
+        first_state["ceremony_policy_sha256"]
+        == second_state["ceremony_policy_sha256"]
+    )
+    assert verifier.canonical_bytes(first_state) + b"\n" == first_raw
+
+    first_receipt = ceremony.build_supersession_receipt(
+        first_state, first_raw, now=later
+    )
+    with pytest.raises(ceremony.SigningCeremonyError, match="inconsistent"):
+        ceremony.validate_supersession_receipt(
+            first_receipt,
+            state=second_state,
+            state_raw=verifier.canonical_bytes(second_state) + b"\n",
         )

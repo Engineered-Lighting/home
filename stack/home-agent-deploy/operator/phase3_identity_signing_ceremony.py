@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Run the distinct-purpose Phase 3 identity signing ceremony.
 
-The ceremony has three fixed phases: ``stage``, ``review``, and ``finalize``.
-It never accepts a content path or credential path.  A root-only launcher gives
-each phase a systemd credential directory containing the public policy and
-commitment key plus, for a signing phase, exactly one purpose-specific Ed25519
-private key.  The review key is unavailable to finalization and vice versa.
+The ceremony has four fixed phases: ``stage``, ``review``, ``finalize``, and
+``supersede-expired``.  It never accepts a content path or credential path.  A
+root-only launcher gives each phase a systemd credential directory containing
+the public policy and commitment key plus, for a signing phase, exactly one
+purpose-specific Ed25519 private key.  The review key is unavailable to
+finalization and vice versa.  ``supersede-expired`` holds no signing key at
+all: it can only retire an expired, entirely unsigned staged packet by
+archiving it next to an append-only, content-free supersession receipt so a
+later ``stage`` can mint a fresh packet with a fresh review window.
 
 Private, resumable state is atomically fsynced below
 ``/srv/home-agent/private/phase3-identity``.  The only public output is a
@@ -44,6 +48,7 @@ from migrate_legacy_identity import (
 from reviewed_identity_packet_compiler import (
     PacketCompilerError,
     UnsignedReviewedIdentityPacket,
+    _utc_text,
     compile_unsigned_packet,
     restore_unsigned_packet,
     verify_assembled_packet,
@@ -51,6 +56,7 @@ from reviewed_identity_packet_compiler import (
 from reviewed_identity_payload import (
     VerificationError,
     VerificationPolicy,
+    _canonical_time,
     canonical_bytes,
     parse_canonical_json,
     verify_expired_finalization_replay,
@@ -69,20 +75,66 @@ STATE_PATH = PRIVATE_ROOT / "identity-signing-state-e5y.json"
 DOCUMENT_PATH = PRIVATE_ROOT / "identity-finalizer-document-e5y.json"
 RECEIPT_PATH = PRIVATE_ROOT / "identity-signing-receipt-e5y.json"
 LOCK_PATH = PRIVATE_ROOT / ".identity-signing-e5y.lock"
+EDGE_RECEIPT_PATH = PRIVATE_ROOT / "edge-privacy-policy-receipt-e5ac.json"
+WRITER_OBSERVATION_PATH = PRIVATE_ROOT / "writer-freeze-observation-e5z.json"
+PRIVACY_OBSERVATION_PATH = PRIVATE_ROOT / "privacy-cutover-observation-e5aa.json"
+CUTOVER_PACKET_PATH = PRIVATE_ROOT / "semantic-cutover-packet-e5ab.json"
+CUTOVER_RECEIPT_PATH = PRIVATE_ROOT / "semantic-cutover-packet-receipt-e5ab.json"
+SUPERSESSION_CONTRACT = "phase3-identity-packet-supersession-receipt-e5aj-v1"
+SUPERSESSION_REASON = "review_window_expired_unsigned"
+SUPERSESSION_ARCHIVE_PREFIX = "identity-signing-state-e5y.superseded-"
+SUPERSESSION_RECEIPT_PREFIX = "identity-signing-supersession-"
+SUPERSESSION_RECEIPT_SUFFIX = "-e5aj.json"
+REVIEW_WINDOW_MINIMUM_SECONDS = 60
+ACTIVATION_PRIVATE_ROOT = Path("/srv/home-agent/private/phase3-activation")
+RUNNER_JOURNAL_PATH = ACTIVATION_PRIVATE_ROOT / "runner-state-e5ad.json"
+RUNNER_COMPLETION_PATH = ACTIVATION_PRIVATE_ROOT / "runner-completion-e5ad.json"
+RUNNER_JOURNAL_CONTRACT = "phase3-authoritative-split-activation-runner-e5ad-v1"
+RUNNER_COMPLETED_PREFIX = (
+    "admit_source",
+    "validate_pre_authorization_prerequisites",
+    "authorize_shadow",
+    "provision_signing_credentials",
+)
+RUNNER_AWAIT_STEP = "await_reviewed_people_packet"
+RUNNER_PAUSE_CODES = frozenset(
+    {"awaiting_private_people_review", "awaiting_private_people_packet", "none"}
+)
+RUNNER_LOCK_PATH = Path("/srv/home-agent/locks/phase3-runner.lock")
+ENVIRONMENT_PATH = Path("/srv/home-agent/config/home-agent.env")
+EXPECTED_DB_REVISION = "0006a_worker_lease_arbitration"
+EXPECTED_ROLLOUT_MODE = "record_only"
+CREDENTIAL_RECEIPT_PATH = Path(
+    "/srv/home-agent/config/phase3-identity-signing-credentials-e5ae.json"
+)
+CREDENTIAL_RECEIPT_CONTRACT = "phase3-identity-credential-receipt-e5ae-v1"
+CREDENTIAL_RECEIPT_COUNT = 10
 MAX_PRIVATE_BYTES = 4 * 1024 * 1024
 MAX_POLICY_BYTES = 32 * 1024
 MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024 * 1024
-PHASES = frozenset({"stage", "review", "finalize"})
+PHASES = frozenset({"stage", "review", "finalize", "supersede-expired"})
 UNIT_NAMES = {
     "stage": "home-agent-identity-packet-stage.service",
     "review": "home-agent-identity-packet-review.service",
     "finalize": "home-agent-identity-packet-finalize.service",
+    "supersede-expired": "home-agent-identity-packet-supersede.service",
 }
 PHASE_CREDENTIALS = {
     "stage": frozenset({"policy.json", "commitment.key"}),
     "review": frozenset({"policy.json", "commitment.key", "review.key"}),
     "finalize": frozenset({"policy.json", "commitment.key", "finalization.key"}),
+    "supersede-expired": frozenset({"policy.json", "commitment.key"}),
 }
+SUPERSESSION_ABSENT_PATHS = (
+    DOCUMENT_PATH,
+    RECEIPT_PATH,
+    EDGE_RECEIPT_PATH,
+    WRITER_OBSERVATION_PATH,
+    PRIVACY_OBSERVATION_PATH,
+    CUTOVER_PACKET_PATH,
+    CUTOVER_RECEIPT_PATH,
+    RUNNER_COMPLETION_PATH,
+)
 POLICY_KEYS = frozenset(
     {
         "contract",
@@ -441,6 +493,77 @@ def content_free_receipt(
     }
 
 
+def state_expires_at(state: Mapping[str, Any]) -> datetime:
+    """Return the staged packet's canonical review-window expiry instant."""
+
+    packet = state.get("unsigned_packet") if isinstance(state, Mapping) else None
+    run = packet.get("unsigned_run") if isinstance(packet, Mapping) else None
+    value = run.get("expires_at") if isinstance(run, Mapping) else None
+    try:
+        return _canonical_time(value, "review window")
+    except VerificationError as error:
+        raise SigningCeremonyError("staged review window is invalid") from error
+
+
+def supersession_archive_name(run_id: str) -> str:
+    return f"{SUPERSESSION_ARCHIVE_PREFIX}{run_id}.json"
+
+
+def supersession_receipt_name(run_id: str) -> str:
+    return f"{SUPERSESSION_RECEIPT_PREFIX}{run_id}{SUPERSESSION_RECEIPT_SUFFIX}"
+
+
+def supersession_receipt_static(
+    state: Mapping[str, Any], state_raw: bytes
+) -> Mapping[str, Any]:
+    """Deterministic receipt fields, reproducible on every resumed attempt."""
+
+    packet = state["unsigned_packet"]
+    run_id = str(packet["run_id"])
+    return {
+        "contract": SUPERSESSION_CONTRACT,
+        "status": "superseded",
+        "reason_code": SUPERSESSION_REASON,
+        "run_id": run_id,
+        "review_payload_sha256": packet["review_signing_payload_sha256"],
+        "expires_at": packet["unsigned_run"]["expires_at"],
+        "private_review_sha256": packet["private_review_sha256"],
+        "ceremony_policy_sha256": state["ceremony_policy_sha256"],
+        "superseded_state_sha256": _sha256(state_raw),
+        "archived_state_name": supersession_archive_name(run_id),
+    }
+
+
+def build_supersession_receipt(
+    state: Mapping[str, Any], state_raw: bytes, *, now: datetime
+) -> Mapping[str, Any]:
+    return {
+        **supersession_receipt_static(state, state_raw),
+        "created_at": _utc_text(now),
+    }
+
+
+def validate_supersession_receipt(
+    receipt: Mapping[str, Any],
+    *,
+    state: Mapping[str, Any],
+    state_raw: bytes,
+) -> None:
+    """Accept only a byte-consistent prior receipt; never rewrite one."""
+
+    expected = supersession_receipt_static(state, state_raw)
+    if (
+        not isinstance(receipt, Mapping)
+        or set(receipt) != set(expected) | {"created_at"}
+        or any(receipt.get(key) != value for key, value in expected.items())
+    ):
+        raise SigningCeremonyError("supersession receipt is inconsistent")
+    try:
+        _canonical_time(receipt["created_at"], "supersession receipt")
+    except VerificationError as error:
+        raise SigningCeremonyError("supersession receipt is inconsistent") from error
+
+
 def _require_root_linux() -> None:
     if sys.platform != "linux" or os.geteuid() != 0:
         raise SigningCeremonyError("identity signing requires root on Linux")
@@ -723,6 +846,274 @@ def _acquire_lock() -> int:
     return descriptor
 
 
+def _require_absent(path: Path) -> None:
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise SigningCeremonyError("signing chain artifact is unavailable") from error
+    raise SigningCeremonyError("signing chain artifact already exists")
+
+
+def _acquire_runner_lock() -> int:
+    if fcntl is None:  # constructor-level guard for non-Linux imports
+        raise SigningCeremonyError("identity signing lock requires Linux")
+    try:
+        descriptor = os.open(
+            RUNNER_LOCK_PATH, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        )
+    except OSError as error:
+        raise SigningCeremonyError("activation runner lock is unavailable") from error
+    details = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(details.st_mode)
+        or details.st_uid != 0
+        or details.st_gid != 0
+        or stat.S_IMODE(details.st_mode) != 0o600
+        or details.st_nlink != 1
+    ):
+        os.close(descriptor)
+        raise SigningCeremonyError("activation runner lock is unsafe")
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as error:
+        os.close(descriptor)
+        raise SigningCeremonyError("activation runner is active") from error
+    return descriptor
+
+
+def _runner_journal_for_supersession() -> None:
+    journal = _parse_private_json(
+        _read_root_file(
+            RUNNER_JOURNAL_PATH, maximum=MAX_PRIVATE_BYTES, modes=frozenset({0o600})
+        )
+    )
+    if (
+        journal.get("contract") != RUNNER_JOURNAL_CONTRACT
+        or journal.get("completed_steps") != list(RUNNER_COMPLETED_PREFIX)
+        or journal.get("next_step") != RUNNER_AWAIT_STEP
+        or journal.get("status") not in {"active", "paused", "running"}
+        or journal.get("pause_code") not in RUNNER_PAUSE_CODES
+    ):
+        raise SigningCeremonyError("activation boundary refuses supersession")
+
+
+def _environment_for_supersession() -> None:
+    try:
+        details = os.lstat(ENVIRONMENT_PATH)
+    except OSError as error:
+        raise SigningCeremonyError("activation environment is unavailable") from error
+    if (
+        not stat.S_ISREG(details.st_mode)
+        or details.st_uid != 0
+        or details.st_gid != 0
+        or details.st_nlink != 1
+        or stat.S_IMODE(details.st_mode) & 0o022
+    ):
+        raise SigningCeremonyError("activation environment is unsafe")
+    try:
+        text = ENVIRONMENT_PATH.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise SigningCeremonyError("activation environment is unavailable") from error
+    expected = {
+        "HOME_AGENT_EXPECTED_DB_REVISION": EXPECTED_DB_REVISION,
+        "HOME_AGENT_ROLLOUT_MODE": EXPECTED_ROLLOUT_MODE,
+    }
+    counts = dict.fromkeys(expected, 0)
+    for line in text.splitlines():
+        name, separator, value = line.partition("=")
+        if separator and name in expected:
+            counts[name] += 1
+            if value != expected[name]:
+                raise SigningCeremonyError(
+                    "activation environment refuses supersession"
+                )
+    if any(count != 1 for count in counts.values()):
+        raise SigningCeremonyError("activation environment refuses supersession")
+
+
+def _credential_receipt_for_supersession(policy: VerificationPolicy) -> None:
+    receipt = _parse_private_json(
+        _read_root_file(
+            CREDENTIAL_RECEIPT_PATH,
+            maximum=MAX_PRIVATE_BYTES,
+            modes=frozenset({0o400, 0o440, 0o600}),
+        )
+    )
+    manifest = policy_manifest(policy)
+    bound_keys = (
+        "review_key_fingerprint",
+        "finalization_key_fingerprint",
+        "commitment_key_fingerprint",
+        "commitment_key_epoch",
+        "policy_version",
+        "policy_digest",
+        "source_projection_contract_digest",
+        "release_manifest_digest",
+        "migration_tool_bundle_digest",
+        "core_oci_manifest_digest",
+        "core_schema_digest",
+        "core_capability_digest",
+        "shadow_authorization_id",
+    )
+    if (
+        receipt.get("contract") != CREDENTIAL_RECEIPT_CONTRACT
+        or receipt.get("status") != "provisioned"
+        or receipt.get("credential_count") != CREDENTIAL_RECEIPT_COUNT
+        or receipt.get("key_source") not in {"host", "tpm2", "host+tpm2"}
+        or any(receipt.get(key) != manifest[key] for key in bound_keys)
+    ):
+        raise SigningCeremonyError("identity credential receipt refuses supersession")
+
+
+def _superseded_pairs(
+    policy: VerificationPolicy,
+) -> list[tuple[str, Mapping[str, Any]]]:
+    try:
+        names = sorted(item.name for item in PRIVATE_ROOT.iterdir())
+    except OSError as error:
+        raise SigningCeremonyError(
+            "private identity directory is unavailable"
+        ) from error
+    archives: dict[str, str] = {}
+    receipts: dict[str, str] = {}
+    for name in names:
+        if name.startswith("."):
+            continue
+        if name.startswith(SUPERSESSION_ARCHIVE_PREFIX) and name.endswith(".json"):
+            archives[name[len(SUPERSESSION_ARCHIVE_PREFIX) : -len(".json")]] = name
+        elif name.startswith(SUPERSESSION_RECEIPT_PREFIX) and name.endswith(
+            SUPERSESSION_RECEIPT_SUFFIX
+        ):
+            receipts[
+                name[len(SUPERSESSION_RECEIPT_PREFIX) : -len(SUPERSESSION_RECEIPT_SUFFIX)]
+            ] = name
+    if not archives or set(archives) != set(receipts):
+        raise SigningCeremonyError("supersession lineage is incomplete")
+    pairs: list[tuple[str, Mapping[str, Any]]] = []
+    for run_id in sorted(archives):
+        archive_raw = _read_root_file(
+            PRIVATE_ROOT / archives[run_id],
+            maximum=MAX_PRIVATE_BYTES,
+            modes=frozenset({0o600}),
+        )
+        archived_state = _parse_private_json(archive_raw)
+        if (
+            _validate_state(archived_state, policy) != "staged"
+            or str(archived_state["unsigned_packet"]["run_id"]) != run_id
+        ):
+            raise SigningCeremonyError("supersession lineage is inconsistent")
+        receipt = _parse_private_json(
+            _read_root_file(
+                PRIVATE_ROOT / receipts[run_id],
+                maximum=MAX_PRIVATE_BYTES,
+                modes=frozenset({0o600}),
+            )
+        )
+        validate_supersession_receipt(
+            receipt, state=archived_state, state_raw=archive_raw
+        )
+        pairs.append((run_id, receipt))
+    return pairs
+
+
+def _run_supersede(policy: VerificationPolicy) -> Mapping[str, Any]:
+    runner_lock = _acquire_runner_lock()
+    try:
+        try:
+            os.lstat(STATE_PATH)
+        except FileNotFoundError:
+            pairs = _superseded_pairs(policy)
+            run_id, receipt = pairs[-1]
+            return {
+                "contract": CONTRACT,
+                "phase": "superseded",
+                "run_id": run_id,
+                "review_payload_sha256": receipt["review_payload_sha256"],
+                "superseded_packet_count": len(pairs),
+                "status": "already_superseded",
+            }
+        except OSError as error:
+            raise SigningCeremonyError(
+                "private ceremony file is unavailable"
+            ) from error
+        raw = _read_root_file(
+            STATE_PATH, maximum=MAX_PRIVATE_BYTES, modes=frozenset({0o600})
+        )
+        state = _parse_private_json(raw)
+        if _validate_state(state, policy) != "staged":
+            raise SigningCeremonyError("supersession is not valid in this phase")
+        for path in SUPERSESSION_ABSENT_PATHS:
+            _require_absent(path)
+        _runner_journal_for_supersession()
+        _environment_for_supersession()
+        _credential_receipt_for_supersession(policy)
+        packet = _packet_from_state(state, policy)
+        if packet.private_review_sha256 != _review_sha256():
+            raise SigningCeremonyError("private People review drifted")
+        now = policy.now()
+        if state_expires_at(state) > now:
+            raise SigningCeremonyError("staged review window is still live")
+        run_id = str(packet.run_id)
+        receipt_path = PRIVATE_ROOT / supersession_receipt_name(run_id)
+        archive_path = PRIVATE_ROOT / supersession_archive_name(run_id)
+        try:
+            os.lstat(receipt_path)
+        except FileNotFoundError:
+            fresh = build_supersession_receipt(state, raw, now=now)
+            _atomic_exact(
+                receipt_path, canonical_bytes(fresh) + b"\n", replace=False
+            )
+        except OSError as error:
+            raise SigningCeremonyError(
+                "private ceremony file is unavailable"
+            ) from error
+        else:
+            existing = _parse_private_json(
+                _read_root_file(
+                    receipt_path,
+                    maximum=MAX_PRIVATE_BYTES,
+                    modes=frozenset({0o600}),
+                )
+            )
+            validate_supersession_receipt(existing, state=state, state_raw=raw)
+        try:
+            os.lstat(archive_path)
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            raise SigningCeremonyError(
+                "private ceremony file is unavailable"
+            ) from error
+        else:
+            existing_archive = _read_root_file(
+                archive_path, maximum=MAX_PRIVATE_BYTES, modes=frozenset({0o600})
+            )
+            if not secrets.compare_digest(existing_archive, raw):
+                raise SigningCeremonyError("supersession archive already differs")
+        try:
+            os.replace(STATE_PATH, archive_path)
+            directory = os.open(PRIVATE_ROOT, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        except OSError as error:
+            raise SigningCeremonyError("supersession archive failed") from error
+        return {
+            "contract": CONTRACT,
+            "phase": "superseded",
+            "run_id": run_id,
+            "review_payload_sha256": state["unsigned_packet"][
+                "review_signing_payload_sha256"
+            ],
+            "status": "superseded_review_window_expired",
+        }
+    finally:
+        os.close(runner_lock)
+
+
 def _run_stage(policy: VerificationPolicy) -> Mapping[str, Any]:
     try:
         state = _load_state(policy)
@@ -730,12 +1121,19 @@ def _run_stage(policy: VerificationPolicy) -> Mapping[str, Any]:
         if STATE_PATH.exists():
             raise
     else:
-        return {
+        result = {
             "contract": CONTRACT,
             "phase": state["phase"],
             "run_id": state["unsigned_packet"]["run_id"],
             "status": "resumed",
         }
+        if state["phase"] == "staged":
+            if state_expires_at(state) <= policy.now():
+                raise SigningCeremonyError("staged review window has expired")
+            result["expires_at"] = state["unsigned_packet"]["unsigned_run"][
+                "expires_at"
+            ]
+        return result
     review_digest = _review_sha256()
     try:
         plan = load_plan(SOURCE_PATH)
@@ -755,6 +1153,7 @@ def _run_stage(policy: VerificationPolicy) -> Mapping[str, Any]:
         "phase": "staged",
         "run_id": str(packet.run_id),
         "review_payload_sha256": _sha256(packet.review_signing_payload),
+        "expires_at": state["unsigned_packet"]["unsigned_run"]["expires_at"],
         "status": "awaiting_private_review_approval",
     }
 
@@ -773,10 +1172,14 @@ def _run_review(policy: VerificationPolicy, directory: Path) -> Mapping[str, Any
     packet = _packet_from_state(state, policy)
     if packet.private_review_sha256 != _review_sha256():
         raise SigningCeremonyError("private People review drifted")
+    remaining = int((state_expires_at(state) - policy.now()).total_seconds())
+    if remaining < REVIEW_WINDOW_MINIMUM_SECONDS:
+        raise SigningCeremonyError("staged review window has expired")
     token = review_approval_token(state, policy)
     approval = _private_approval(
         "Review the private People packet, then approve only this exact digest:\n"
         + token
+        + f"\nReview window remaining: {remaining}s"
     )
     updated = approve_review(
         state,
@@ -842,7 +1245,11 @@ def run(phase: str) -> Mapping[str, Any]:
             return _run_stage(policy)
         if phase == "review":
             return _run_review(policy, directory)
-        return _run_finalize(policy, directory)
+        if phase == "finalize":
+            return _run_finalize(policy, directory)
+        if phase == "supersede-expired":
+            return _run_supersede(policy)
+        raise SigningCeremonyError("identity signing phase is unsupported")
     finally:
         os.close(descriptor)
 
@@ -853,7 +1260,7 @@ def main() -> int:
         return 64
     try:
         result = run(sys.argv[1])
-    except SigningCeremonyError:
+    except (SigningCeremonyError, OSError):
         print("identity signing ceremony failed closed", file=sys.stderr)
         return 78
     print(json.dumps(result, separators=(",", ":"), sort_keys=True))

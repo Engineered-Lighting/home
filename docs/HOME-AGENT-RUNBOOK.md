@@ -1565,6 +1565,10 @@ The command intentionally pauses at four human boundaries:
 - authenticated HA user to Marcelo confirmation; and
 - atomic confirmation of the two reviewed parent candidates.
 
+`validate_live_prerequisites` is additionally pause-capable: it re-runs the
+pre-authorization checks and emits the same content-free pause codes when a
+prerequisite regressed after the People packet was accepted.
+
 If a newly hosted-accepted source revision is required after shadow
 authorization but before signing credentials exist, run the activation runner
 once with `refresh-source`. This command is available only while the first
@@ -1575,6 +1579,90 @@ pre-authorization prerequisites, and the existing shadow-authorization receipt
 under the new source; then writes a root-only content-free source-transition
 receipt before updating the journal. It cannot rebase an activation after
 credential provisioning or any later boundary.
+
+### E5y private People packet signing ceremony
+
+While the runner is paused at `await_reviewed_people_packet`, the operator
+performs the People signing ceremony out-of-band through the installed
+launcher, never through a checkout copy:
+
+```sh
+sudo /usr/local/sbin/home-agent-identity-signing stage
+sudo /usr/local/sbin/home-agent-identity-signing review
+sudo /usr/local/sbin/home-agent-identity-signing finalize
+```
+
+`stage` compiles the unsigned packet from the private snapshot and reviewed
+People artifact and reports the packet digest plus its exact `expires_at`.
+`review` prompts on a private TTY for the exact `REVIEW <digest>` line and
+records the review-purpose signature. `finalize` prompts for the distinct
+`FINALIZE <digest>` line under the separate finalization key. Review and
+finalization approvals are never combined.
+
+**Hard single-session rule:** the packet's authorization window is a fixed
+ten minutes from `stage`, and finalization is bound to the same window. Run
+`stage`, `review`, and `finalize` to completion inside one private TTY
+session of at most ten minutes. The runner's later `commit_finalizer` step
+only admits the already-finalized document through exact expired replay; it
+cannot first-admit an expired packet. `review` refuses to prompt when fewer
+than sixty seconds remain. Between `review` and `finalize`, the only
+permitted runner verb is `status`.
+
+### Expired review-window recovery (supersede and rebind)
+
+If the window lapses before `review` (or between `review` being refused and
+a retry), the staged packet is permanently unsignable, `stage` fails closed
+instead of resuming it, and recovery uses the governed supersession path.
+Never remove, edit, or copy anything under
+`/srv/home-agent/private/phase3-identity` by hand, never run the credential
+provisioner between a lapse and its supersession, and never lengthen the
+window. In order:
+
+1. Complete the standard premaintenance checks, then confirm the runner
+   reports exactly four completed steps and
+   `await_reviewed_people_packet`, and the activation preflight passes with
+   zero blockers.
+2. If a corrected source pin is being adopted, update the integration
+   checkout to the pinned commit, re-run
+   `stack/home-agent-deploy/install-phase3-identity-signing.sh`, and verify
+   the source plan reports the new commit as hosted-accepted with zero
+   blockers. Run no signing verb between the checkout move and the
+   reinstall.
+3. `sudo /usr/local/sbin/home-agent-identity-signing supersede-expired`
+   retires the expired packet. It holds both the ceremony and runner locks;
+   requires the signing state to be exactly `staged` with every signature
+   field null and genuinely expired; requires the runner journal, pinned
+   database revision, `record_only` rollout, credential receipt, and
+   sealed-policy binding to match; then writes an append-only content-free
+   supersession receipt and archives the state file byte-exactly as
+   `identity-signing-state-e5y.superseded-<run_id>.json`. It signs nothing,
+   deletes nothing, and never overwrites. Interrupted runs are resumed by
+   re-running the same command; after completion a re-run reports the
+   existing lineage and changes nothing. An expired but review-signed state
+   is out of scope and fails closed for separate owner review.
+4. If the source pin moved, run the activation runner once with
+   `rebind-source`. It is available only at the four-step
+   `await_reviewed_people_packet` boundary with the signing chain absent;
+   it revalidates the immutable credential receipt against the recorded
+   rebind chain (never rewriting or reprovisioning credentials), verifies
+   the durable shadow-authorization receipt on disk, replays source
+   admission and the pre-authorization prerequisites under the new source,
+   then writes an append-only receipt under
+   `source-rebinds/` before updating the journal. Each accepted commit may
+   have at most one outgoing rebind receipt; when a rollback has already
+   consumed a commit's outgoing edge, roll forward through the previously
+   accepted commit instead, or stop and escalate for separate review.
+5. Only when the owner is at a private TTY and ready to complete the full
+   ceremony inside ten minutes, run `stage`, report the fresh digest and
+   exact expiry, and complete `review` and `finalize` in that same session.
+   If the window lapses again, nothing was signed: repeat step 3 (no rebind
+   is needed when the commit is unchanged) and reschedule.
+
+The reinstall in step 2 normalizes permissions on the encrypted credential
+blobs; it is not a credential rotation. The supersession archive stays under
+the private root with the same protection as the original state and remains
+subject to the same future governed erasure; its receipt records the
+archived name and content digest so any later erasure is verifiable.
 
 Rerun the same `advance` command after completing the requested private action.
 The root-owned journal at

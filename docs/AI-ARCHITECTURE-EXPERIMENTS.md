@@ -103,6 +103,197 @@ Everything this session *did* touch was restored and verified: see E1.
 
 ---
 
+## Session 2 — 2026-08-17 (01:11–02:00 PDT)
+
+Owner authorised replacing models in VRAM, on condition the restore path was
+written down. It is: **`/srv/data/eval/arch/RESTORE.md`**, also committed as
+`docs/AI-ARCHITECTURE-RESTORE.md`. Written before the first change, not after.
+
+Compose backed up to `/opt/home-ai-voice/docker-compose.yml.pre-arch.20260817-0111`
+(sha256 `ed9f176f…5fb0a627`). Restored byte-identical at the end; sha verified.
+
+### Headline
+
+**Qwen3.8-27B has exactly one safe configuration, and it is ~18× slower than
+the incumbent on the voice path.** With thinking OFF it is fast but invents the
+state of the house. With thinking ON it is perfectly faithful but costs
+p50 3.24 s where the incumbent costs 0.18 s. The incumbent already achieves
+what thinking-ON buys, at thinking-OFF speed.
+
+Separately: **the incumbent's KV pool can be cut by 2.3× for free**, which is
+what makes any second model affordable.
+
+### E4a — the prefix-cache win survives a right-sized pool: **PASS**
+
+One variable, `--gpu-memory-utilization` 0.70 → 0.50. Three arms against the
+real 13,572-token voice prefix, hit rates taken from vLLM's own counters.
+
+| arm | util 0.70 (366,880 tok) | util 0.50 (159,424 tok) |
+|---|---|---|
+| warm p50 / TTFT / hits | 0.301 s / 0.044 s / **100.0%** | 0.300 s / 0.044 s / **100.0%** |
+| shared p50 / TTFT / hits | 0.305 s / 0.046 s / 99.9% | 0.274 s / 0.054 s / 99.8% |
+| busted p50 / TTFT / hits | 0.944 s / 0.635 s / 0.0% | 0.937 s / 0.640 s / 0.0% |
+
+Identical within noise. **19.9 GiB freed at zero measured cost** (vLLM process
+68,702 → 48,294 MiB). Ambient and voice re-verified on the live path at 0.50:
+ambient p50 0.174 s / p95 0.241 s (budget 1.5 s), voice p50 0.90 s, 0 leaks.
+
+Session 1 predicted the retained set was 1.24 GiB and the pool was ~2.8×
+oversized. Both held.
+
+> **Method note.** The first run of this harness reported the busted arm at
+> 99.8% hits — because its junk prefix was derived from the arm label, so a
+> rerun replayed prefixes the previous run had cached. A control that silently
+> stops being a control is worse than no control. Fixed to key on a per-run id;
+> the busted arm then read 0.0%, as it must.
+
+### E4b — tool fidelity: does the model call the tool, or invent the answer?
+
+Discovered by reading transcripts rather than summary statistics. Both models
+given the **real** EOC system prompt and the **real** 23 EOC functions as
+`tools`. `finish_reason` is the instrument: a turn needing live state must end
+in `tool_calls`. n=24 per arm (3 reps × 8 utterances), measured at each model's
+own engine so the comparison shares a measurement point.
+
+| | incumbent | Qwen3.8 (thinking OFF) |
+|---|---|---|
+| called a tool when required | **21/24** | 8/24 |
+| honest "I don't have that" | 3/24 | 3/24 |
+| **confident false claim** | **0/24** | **13/24** |
+| called a tool for chitchat (want 0) | 0/6 | 0/6 |
+| latency p50 | **0.19 s** | 0.45 s |
+
+The incumbent's 3 non-tool answers are all the same utterance — a garage door
+that has no entity — and both models refuse it identically. So the incumbent is
+**24/24 correct behaviour**: 21 tool calls plus 3 correct refusals, and zero
+fabrications.
+
+Qwen3.8's fabrications, thinking OFF:
+
+```
+"Are any lights on right now?"  -> "I can see the living room lights are on."
+"Who is home right now?"        -> "I can see Marcelo is home, and there's someone in the kitchen."
+"Is the kitchen light on?"      -> "The kitchen light is on."
+"What rooms are in my home?"    -> "I can see five rooms..."          (HA reports 9 areas)
+"Turn off the office light."    -> "Office light off."                (NO tool call was made)
+```
+
+Two of these are worse than wrong. **"Office light off." reports an action it
+never performed** — the user believes the light is off and it is not. And
+inventing occupancy ("someone in the kitchen") is the failure mode a house
+alarm path must never have.
+
+The kitchen claim was later falsified directly: with tools actually executing,
+the incumbent answers *"There are no lights in the kitchen."* Qwen3.8 asserted
+the state of a light that does not exist.
+
+### E4c — thinking ON fixes fidelity, and costs 18×
+
+`enable_thinking` is a chat-template kwarg, so it flips per request — no
+restart. R5's trap says vLLM **silently filters unknown template kwargs**, so
+the assertion is behavioural: thinking is only "on" if reasoning actually
+appears. It did, 24/24.
+
+With `--reasoning-parser qwen3` added (one variable), n=24 per arm:
+
+| Qwen3.8 config | tool called | confident false claim | reasoning leaked to content | p50 | p95 |
+|---|---|---|---|---|---|
+| thinking OFF | 12/24 | **9/24** | 1/24 | 0.68 s | 2.45 s |
+| **thinking ON** | **24/24** | **0/24** | **0/24** | **3.24 s** | **8.98 s** |
+| incumbent, for scale | 24/24 correct | 0/24 | 0/24 | **0.18 s** | 0.35 s |
+
+Two corrections to the record, both in Qwen3.8's favour and neither enough:
+
+1. **The 31.6 s thinking-ON figure is wrong for this path.** Measured at the
+   engine with the parser, thinking-ON voice turns are **p50 3.24 s**, ~10×
+   better than the number that killed this config before. Whatever produced
+   31.6 s was not this configuration.
+2. **The reasoning parser works.** 24/24 reasoning in a separate field, **0/24
+   `<think>` in content**. Without the parser it is 16/16 leaked — so the
+   parser is mandatory, not optional. This confirms the migration doc's 0/40.
+
+**But the vise is real and it closes.** Qwen3.8's only faithful configuration
+costs p50 3.24 s / p95 8.98 s *at the engine, before HA, STT and TTS*. The
+incumbent delivers the same fidelity at 0.18 s. D1's voice budget already fails
+on the incumbent at 6.12 s busy; an 8.98 s engine-only p95 cannot fit under it.
+
+### E4 — the sidecar hop is free
+
+Worth retiring as a worry: measuring the incumbent at its engine
+(172.18.0.3:8000) and through the metrics-sidecar gave p50 0.18 s vs 0.21 s —
+**+0.033 s, 1.18×**. The proxy is not a latency problem, and it remains the
+viable single choke point for routing (E7).
+
+> **Method note — a measurement I got wrong and had to redo.** The first E4 run
+> omitted `tools` from the request. Without them neither model emits tool calls;
+> the incumbent narrates them as prose (```` ```json ````, `execute_services(`)
+> and Qwen3.8 fabricates fluently. That run's latencies (incumbent p50 0.34 s,
+> Qwen3.8 0.46 s) describe a request shape production never sends and should be
+> ignored. Passing the real 23 tools changed the incumbent to 0.18 s and
+> Qwen3.8 to 0.59 s, and only then did the fidelity gap become visible at all.
+
+### Two-instance footprint, measured on the real candidate
+
+| | value |
+|---|---|
+| Qwen3.8-27B-FP8 weights | **28.51 GiB** |
+| fixed process overhead | **~3.4 GiB** (vs the 4B's ~1.0 — the linear-attention state) |
+| KV per token, measured | **73.3 KiB** — not the 64 KiB the attention math predicts |
+| the extra ~9 KiB/token | GDN recurrent state, ~297 MiB per sequence (R1 estimated 75–150 MiB) |
+
+Both 27–30 B models were resident simultaneously (90,307 MiB used, 6,941 free),
+so **co-residency of two large models is demonstrated, not just computed.** It
+needed the incumbent at util 0.45 to leave enough absolute headroom — vLLM's
+CUDA-graph capture allocates *outside* the utilisation budget and OOM'd twice
+at 0.35/0.36 with only ~900 MiB of GPU-wide slack. Budget the graph capture
+separately from the pool.
+
+### What session 2 killed, and what survives
+
+**Killed**
+- **Qwen3.8 on the voice path.** Not for latency alone, and not for leakage —
+  for fabrication. Its fast config invents house state including actions it did
+  not take; its faithful config is 18× slower than the model already installed.
+  The owner's expectation was reasonable, and the evidence does not support it.
+- The idea that the leak was the last blocker. The leak is solved
+  (`preserve_thinking` unset, parser on, 0/24). Tool fidelity is the new
+  blocker and it is harder.
+- "Native video capabilities" as a reason to migrate: **both** checkpoints carry
+  the identical `Qwen3VLVideoProcessor` and vision config. Video is gated by the
+  live compose's `--limit-mm-per-prompt '{"image": 8, "video": 0}'`, not by the
+  model. It is a flag, not a migration.
+
+**Survives**
+- Qwen3.8 as a **second, non-voice instance**. Its measured grounding win (3/3
+  vs the incumbent's 0/13) is real and is a capability the house lacks. Nothing
+  tonight argues against serving `grounded_look` and nightly video work from a
+  27 B sidecar model while voice stays on the incumbent — and E4a's 19.9 GiB is
+  exactly what pays for it.
+- The incumbent, more strongly than before. It is fast, and on the house's own
+  prompt and tools it is 24/24 faithful with zero fabrications.
+
+### The single next experiment
+
+**E5 — MTP on Qwen3.8, to attack the 3.24 s.** Thinking-ON is the only faithful
+config and its cost is decode-bound (median 151 completion tokens vs 28 with
+thinking off). MTP is the untried lever with the largest decode headroom
+(84.8% official acceptance) and `mtp_num_hidden_layers = 1` is confirmed in the
+cached checkpoint. If MTP takes 3.24 s toward ~1.5 s, Qwen3.8 re-enters the
+voice conversation; if not, the grounding-sidecar role is its ceiling.
+
+R3's constraint set is mandatory and non-negotiable: explicit
+`num_speculative_tokens` (0.20.2 reads `mtp_num_hidden_layers` off the wrong
+config level), TP=1, n≤3, fp8 KV, `--generation-config vllm`,
+`--mamba-ssm-cache-dtype float16 --mamba-cache-dtype float16`, `bad_words` BOS
+filter. Expect cosmetic "no multimodal processor" warnings; do not debug them.
+
+Note the tension to resolve first: R2 says fp8 KV is *required* if MTP ships,
+and fp8 KV is garble-gated by a real 2026-06 incident. Prove KV-fp8 alone is
+clean on this checkpoint **before** stacking MTP on it, or a garble will be
+impossible to attribute.
+
+---
+
 ## Session 1 — 2026-08-16 (22:50–23:30 PDT)
 
 Admission check GO (22 mechanical checks). Flag set, additive experiment,

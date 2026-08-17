@@ -78,13 +78,40 @@ Write that filename down. It is the whole safety net.
 
 ## 3. Edit four lines in the `vllm:` service
 
-**Three lines. Not four.**
+**Four lines — and the fourth is NOT the one attempt 1 used.**
+
+⚠ **Diagnosed 2026-08-16, third window.** `enable_thinking: false` and
+`--reasoning-parser qwen3` are **contradictory**, and using the first alone
+is what broke attempts 1 and 2. With thinking suppressed, the template
+pre-fills an already-closed `<think></think>` block in the PROMPT — so the
+model's output contains no opening tag, the reasoning parser never engages
+(`reasoning` stays empty), and the stray `</think>` the model emits anyway
+lands in `content`, which EOC forwards straight to TTS.
+
+Measured, ablating one ingredient at a time
+(`tools/qwen38-leak-repro.py`, n=20 each):
+
+| config | leak rate | `reasoning` field |
+|---|---|---|
+| thinking suppressed, no parser | **3/20 (15%)** | never populated |
+| thinking suppressed + parser | **2/20 (10%)** | never populated |
+| **thinking ON + parser** | **0/40** | **populated** |
+
+The trigger is streaming **plus the 23-tool catalogue** — the long prompt
+alone never leaked. It fires on the first turn, while the model decides
+whether to call a tool.
+
+⚠ Thinking is now genuinely ON, so the model generates reasoning tokens it
+previously did not. **Latency must be re-measured before going live** — the
+candidate is already 2.4–2.6× slower at decode, and this adds work on top.
+
 
 | from | to |
 |---|---|
 | `--model Qwen/Qwen3-VL-30B-A3B-Instruct-FP8` | `--model Qwen/Qwen3.8-27B-FP8` |
 | `--tool-call-parser hermes` | `--tool-call-parser qwen3_coder` |
-| `'{"enable_thinking": false}'` | `'{"enable_thinking": false, "preserve_thinking": false}'` |
+| `'{"enable_thinking": false}'` | `'{"preserve_thinking": false}'` — thinking stays ON |
+| — | add `- --reasoning-parser` / `- qwen3` |
 
 ⚠ **Do NOT add `--generation-config vllm`.** Attempt 1 (2026-08-16) added it
 and had to be rolled back. The migration doc lists that flag as
@@ -98,10 +125,14 @@ self-inflicted extra variable in a change that is supposed to have three.
 **Change nothing else.** Leave the image digest, the served name
 `qwen3-vl-30b`, `--gpu-memory-utilization 0.70`, `--max-model-len 32768`,
 `--max-num-seqs 4`, `--limit-mm-per-prompt`, and `--enable-prefix-caching`
-exactly as they are. Do **not** add `--kv-cache-dtype fp8`,
-`--speculative-config`, or `--reasoning-parser` — each is a separate
-experiment, and bundling them means you will not know which one broke
-something.
+exactly as they are. Do **not** add `--kv-cache-dtype fp8` or
+`--speculative-config` — each is a separate experiment, and bundling them
+means you will not know which one broke something.
+
+(`--reasoning-parser qwen3` **is** required now, per the table above. It was
+on the do-not-add list until the third diagnostic window showed it is half
+of the only configuration that does not leak — the other half being leaving
+thinking enabled so the parser has something to parse.)
 
 ---
 

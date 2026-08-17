@@ -204,6 +204,53 @@ disk headroom; installed transformers version; subentry tool-spec audit
 (zero-arg tools, `$ref`); labeler schema validated against xgrammar's
 unsupported-feature list.
 
+## ⛔ RECOMMENDATION: STAY ON THE INCUMBENT (2026-08-16)
+
+**After four windows, the candidate has no configuration that is both
+leak-free and usable for voice.** D2's recorded failure default —
+stay-on-incumbent — is the correct outcome, and this is the evidence for
+invoking it rather than retrying.
+
+The bind is structural, not a tuning problem:
+
+| config | reasoning leak | ambient p95 | **voice p50** |
+|---|---|---|---|
+| thinking OFF, no parser | **3/20 (15%)** to TTS | 0.18 s ✅ | — |
+| thinking ON + parser | **0/40** ✅ | 4.22 s ❌ | — |
+| ON + parser + sidecar routing | **0/40** ✅ | **0.87 s ✅** | **31.6 s** ⛔ |
+| …plus `reasoning_effort: low` | ✅ | — | ~20 s ⛔ *(session drifted 14.3%, invalid — directional only)* |
+
+Budget is **2.5 s p50**; the incumbent does the same query in **1.84 s**.
+31.6 s is **17× the incumbent** and exceeds the app's own 30 s
+`processingGuardMs`, so the turn would be abandoned client-side before it
+returned.
+
+**Why it cannot be tuned away.** The model must think to stop leaking
+`</think>` into spoken output — that is the only configuration measured at
+0/40. Thinking on the tool path is what costs 31.6 s. The two requirements
+are the same knob in opposite directions. `reasoning_effort: low` moves it
+by single-digit percent, not by the order of magnitude required.
+
+**What DID work, and is worth keeping regardless:**
+- The sidecar thinking-routing patch **rescued ambient** — 4.22 s → **0.87 s
+  p95**, inside the 1.5 s budget — by suppressing thinking on the ~1,400/day
+  tool-free requests that never needed it. Tested, reversible, and a no-op
+  on the incumbent. It is not wasted: it is the right design if this
+  checkpoint is ever revisited, and it is independently correct.
+- The candidate is genuinely **better** where thinking is not required:
+  grounded boxes 3/3 vs the incumbent's 0/13, KV pool 497k vs 366k, no
+  zero-arg tool hang.
+
+**What would have to change before retrying:** a checkpoint or engine build
+where suppressing thinking does not leak with a tool catalogue attached —
+i.e. an upstream fix, a different quantisation, or a vLLM version that
+routes the stray delimiter. None of those is a knob available here today,
+and all of them are outside this migration's pinned-engine constraint.
+
+**Cost of the attempt: ~4 short windows, zero damage, no data loss.** Every
+window ended with the incumbent restored and verified. The harnesses,
+corpora, and baselines all remain valid for a future attempt.
+
 ## ⚠ CUTOVER ATTEMPTED AND ROLLED BACK — 2026-08-16 17:29–17:40 PDT
 
 **Outcome: the candidate ran, most gates passed, and it was rolled back on

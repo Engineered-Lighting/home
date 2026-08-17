@@ -404,6 +404,9 @@ def test_runner_contract_is_fixed_restart_safe_and_action_free() -> None:
     assert '"rebind-source"' in source
     assert "phase3-activation-source-rebind-e5ak-v1" in source
     assert "activation source rebind chain is ambiguous" in source
+    assert 'value.get("runner_id") != runner_id' in source
+    assert "for _ in range(REBIND_MAX_HOPS):" in source
+    assert "for _ in range(REBIND_MAX_HOPS + 1):" not in source
 
 
 def test_kernel_provisioners_have_distinct_isolated_compose_surfaces() -> None:
@@ -642,6 +645,30 @@ def test_rebind_source_rejects_wrong_boundary_or_present_artifacts(
     store.save(_rebind_boundary_state(module))
     with pytest.raises(module.ActivationRunnerError):
         module.Runner(FakeBackend(module), store).rebind_source()
+    monkeypatch.setattr(module, "validate_shadow_receipt_on_disk", lambda state: None)
+
+    saturated = {}
+    previous = "b" * 40
+    previous_digest = "1" * 64
+    for index in range(module.REBIND_MAX_HOPS):
+        commit = f"{index + 1:040x}"
+        digest = f"{index + 32:064x}"
+        saturated[previous] = _hop(
+            "b" * 40, previous, commit, previous_digest, digest
+        )
+        previous = commit
+        previous_digest = digest
+    monkeypatch.setattr(
+        module, "read_rebind_receipts", lambda runner_id, digest: saturated
+    )
+    store = MemoryStore(module)
+    exhausted = _rebind_boundary_state(module)
+    exhausted["source_commit"] = previous
+    store.save(exhausted)
+    saturated_backend = FakeBackend(module)
+    with pytest.raises(module.ActivationRunnerError):
+        module.Runner(saturated_backend, store).rebind_source()
+    assert saturated_backend.calls == []
 
 
 def test_refresh_source_still_rejects_the_await_boundary(monkeypatch) -> None:
@@ -698,6 +725,23 @@ def test_live_prerequisites_accept_single_and_multi_hop_rebind_chain() -> None:
     }
     assert module.credential_source_binding_valid(
         credential, two_state, two_report, two_chain
+    )
+
+    full_chain = {}
+    previous = "a" * 40
+    previous_digest = "1" * 64
+    for index in range(module.REBIND_MAX_HOPS):
+        commit = f"{index + 1:040x}"
+        digest = f"{index + 32:064x}"
+        full_chain[previous] = _hop(
+            "a" * 40, previous, commit, previous_digest, digest
+        )
+        previous = commit
+        previous_digest = digest
+    full_state = {"source_commit": previous}
+    full_report = {"current_commit": previous, "source_pack_digest": previous_digest}
+    assert module.credential_source_binding_valid(
+        credential, full_state, full_report, full_chain
     )
 
 
@@ -858,7 +902,7 @@ def test_ceremony_supersession_literals_match_runner_contract() -> None:
     assert ceremony.EXPECTED_ROLLOUT_MODE == "record_only"
     assert ceremony.CREDENTIAL_RECEIPT_COUNT == len(module.CREDENTIAL_TARGETS)
     assert ceremony.RUNNER_PAUSE_CODES == frozenset(
-        {"awaiting_private_people_review", "awaiting_private_people_packet"}
+        {"awaiting_private_people_review", "awaiting_private_people_packet", "none"}
     )
     assert set(ceremony.SUPERSESSION_ABSENT_PATHS) == {
         module.FINALIZER_DOCUMENT,

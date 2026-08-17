@@ -499,7 +499,13 @@ def credential_source_binding_valid(
 def read_rebind_receipts(
     runner_id: str, credential_receipt_sha256: str
 ) -> dict[str, dict[str, Any]]:
-    """Load the append-only rebind chain, refusing ambiguity and tampering."""
+    """Load this activation's append-only rebind chain.
+
+    Receipts recorded by a different runner identifier are earlier-activation
+    lineage: they stay on disk untouched and are excluded from the chain, so
+    a fresh activation is never poisoned by an abandoned one. Ambiguity and
+    tampering within this activation's own chain remain fail-closed.
+    """
 
     if not SOURCE_REBIND_ROOT.exists() and not SOURCE_REBIND_ROOT.is_symlink():
         return {}
@@ -533,6 +539,8 @@ def read_rebind_receipts(
             or entry_details.st_nlink != 1
         ):
             raise ActivationRunnerError("activation source rebind receipt is unsafe")
+        if isinstance(value, Mapping) and value.get("runner_id") != runner_id:
+            continue
         receipt = validate_rebind_receipt(
             value,
             name=name,
@@ -1865,7 +1873,7 @@ class Runner:
         commit = origin
         digest = str(credential["release_manifest_digest"])
         visited = {commit}
-        for _ in range(REBIND_MAX_HOPS + 1):
+        for _ in range(REBIND_MAX_HOPS):
             if commit == state["source_commit"]:
                 break
             receipt = receipts.get(commit)

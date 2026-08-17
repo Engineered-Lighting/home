@@ -98,7 +98,7 @@ RUNNER_COMPLETED_PREFIX = (
 )
 RUNNER_AWAIT_STEP = "await_reviewed_people_packet"
 RUNNER_PAUSE_CODES = frozenset(
-    {"awaiting_private_people_review", "awaiting_private_people_packet"}
+    {"awaiting_private_people_review", "awaiting_private_people_packet", "none"}
 )
 RUNNER_LOCK_PATH = Path("/srv/home-agent/locks/phase3-runner.lock")
 ENVIRONMENT_PATH = Path("/srv/home-agent/config/home-agent.env")
@@ -893,7 +893,7 @@ def _runner_journal_for_supersession() -> None:
         journal.get("contract") != RUNNER_JOURNAL_CONTRACT
         or journal.get("completed_steps") != list(RUNNER_COMPLETED_PREFIX)
         or journal.get("next_step") != RUNNER_AWAIT_STEP
-        or journal.get("status") not in {"active", "paused"}
+        or journal.get("status") not in {"active", "paused", "running"}
         or journal.get("pause_code") not in RUNNER_PAUSE_CODES
     ):
         raise SigningCeremonyError("activation boundary refuses supersession")

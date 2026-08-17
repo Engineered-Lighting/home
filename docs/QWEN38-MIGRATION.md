@@ -204,14 +204,57 @@ disk headroom; installed transformers version; subentry tool-spec audit
 (zero-arg tools, `$ref`); labeler schema validated against xgrammar's
 unsupported-feature list.
 
-## ⛔ RECOMMENDATION: STAY ON THE INCUMBENT (2026-08-16)
+## ⚠ RECOMMENDATION RETRACTED — the "structural bind" was not structural
 
-**After four windows, the candidate has no configuration that is both
-leak-free and usable for voice.** D2's recorded failure default —
-stay-on-incumbent — is the correct outcome, and this is the evidence for
-invoking it rather than retrying.
+**An earlier version of this section recommended abandoning the candidate
+on the grounds that thinking-for-correctness and thinking-off-for-latency
+are the same knob in opposite directions. That framing was wrong, and it
+was reached after testing ONE of the three levers this plan itself names.**
 
-The bind is structural, not a tuning problem:
+The plan's own summary line reads: "levers: MTP, reasoning-effort pin,
+prompt shrink." Only reasoning-effort was tested. **MTP was never tried** —
+and the checkpoint ships an MTP head (`mtp_num_hidden_layers: 1`, 84.8%
+official FP8 acceptance) that attacks decode directly, which is exactly the
+axis that failed. Prompt shrink was never tried either.
+
+**And a cheaper option was dismissed without testing it.** The leak is a
+literal delimiter in the response text, and the metrics-sidecar already
+proxies every completion. Recovering the final segment downstream does what
+a reasoning parser does upstream — and works precisely where the parser
+cannot, because the template pre-fills a closed block so the parser never
+engages.
+
+Validated offline against the **real captured leaked outputs** from attempts
+1 and 2 (no window needed):
+
+| | result |
+|---|---|
+| real leaks recovered to clean, non-duplicated text | **3/3** |
+| clean outputs damaged | **0/3** |
+
+That opens a fourth configuration nobody measured: **thinking OFF
+everywhere (fast) + downstream recovery of the ~15% that leak**. If it
+holds at scale it is both fast and clean, which is the combination this
+section wrongly declared impossible.
+
+**Still unmeasured, and required before any conclusion either way:**
+1. Voice latency with thinking OFF on the candidate — never measured; the
+   only voice numbers are from thinking-ON configs.
+2. Recovery at scale via `qwen38-leak-repro.py`, not 3 hand-checked samples.
+3. Whether the last segment is always the best answer — in all three real
+   samples the model re-answers after the delimiter, but a model that
+   trails off instead would lose content. Testable, not assumed.
+4. MTP (cell P0) and prompt shrink.
+
+**Do not retire this candidate on the evidence gathered so far.** It is
+better than the incumbent wherever thinking is not required — grounded
+boxes 3/3 vs 0/13, KV pool 497k vs 366k, no zero-arg hang — and the reason
+for abandoning it has not actually been established.
+
+### The measurements that stand (and what they did show)
+
+The latency figures below are real; only the conclusion drawn from them was
+premature. Each was taken with thinking ON, which is the expensive branch:
 
 | config | reasoning leak | ambient p95 | **voice p50** |
 |---|---|---|---|
@@ -225,11 +268,11 @@ Budget is **2.5 s p50**; the incumbent does the same query in **1.84 s**.
 `processingGuardMs`, so the turn would be abandoned client-side before it
 returned.
 
-**Why it cannot be tuned away.** The model must think to stop leaking
-`</think>` into spoken output — that is the only configuration measured at
-0/40. Thinking on the tool path is what costs 31.6 s. The two requirements
-are the same knob in opposite directions. `reasoning_effort: low` moves it
-by single-digit percent, not by the order of magnitude required.
+**Why thinking-ON cannot be tuned into budget.** 31.6 s against a 2.5 s
+target is an order of magnitude, and `reasoning_effort: low` moves it by
+single digits. That much stands. What does NOT follow is that the candidate
+is unusable — it only rules out the thinking-ON branch, and the leak is
+addressable downstream instead (see the retraction above).
 
 **What DID work, and is worth keeping regardless:**
 - The sidecar thinking-routing patch **rescued ambient** — 4.22 s → **0.87 s
@@ -241,11 +284,12 @@ by single-digit percent, not by the order of magnitude required.
   grounded boxes 3/3 vs the incumbent's 0/13, KV pool 497k vs 366k, no
   zero-arg tool hang.
 
-**What would have to change before retrying:** a checkpoint or engine build
-where suppressing thinking does not leak with a tool catalogue attached —
-i.e. an upstream fix, a different quantisation, or a vLLM version that
-routes the stray delimiter. None of those is a knob available here today,
-and all of them are outside this migration's pinned-engine constraint.
+**Next steps, in cost order** (all cheap, none needs a cutover):
+1. Extend the sidecar patch with downstream recovery; validate at scale
+   with `qwen38-leak-repro.py` against thinking-OFF.
+2. Measure voice latency with thinking OFF — the number that decides this.
+3. If still short, try MTP (cell P0) and prompt shrink, the two named
+   levers never tested.
 
 **Cost of the attempt: ~4 short windows, zero damage, no data loss.** Every
 window ended with the incumbent restored and verified. The harnesses,

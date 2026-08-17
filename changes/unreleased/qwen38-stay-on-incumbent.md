@@ -1,31 +1,29 @@
 ---
-title: Recommend staying on the current model after measuring the candidate
+title: Retract the premature recommendation to abandon the candidate model
 target: internal
-type: changed
+type: fixed
 ---
 
-Four short windows established that the candidate has no configuration that
-is both leak-free and usable for voice, so the migration's recorded failure
-default — stay on the current model — is the right outcome.
+An earlier entry recommended abandoning the candidate on the grounds that
+reasoning-for-correctness and reasoning-off-for-latency are the same control
+in opposite directions. That conclusion was drawn after testing one of the
+three levers this plan itself names, and it was wrong.
 
-The bind is structural rather than a tuning problem. The model must reason
-in order to stop emitting closing think tags into spoken output, and
-reasoning on the tool-bearing voice path costs about thirty seconds per
-turn against a budget of two and a half, seventeen times the current model,
-and beyond the app's own processing guard. Lowering the reasoning effort
-moves that by single digits, not by the order of magnitude required.
+Speculative decoding was never tried, despite the checkpoint shipping the
+head for it and despite decode being exactly the axis that failed. Prompt
+shrink was never tried. And a cheaper option was dismissed without a test:
+the leak is a literal delimiter in the response text, and the sidecar
+already proxies every completion, so recovering the final segment
+downstream does what a reasoning parser does upstream — and works precisely
+where the parser cannot, because the template pre-fills a closed block that
+leaves the parser nothing to match.
 
-The sidecar routing patch is kept and remains correct: it rescued
-background captioning from over four seconds to under one by suppressing
-reasoning on the fourteen-hundred daily requests that never needed it. It is
-a no-op on the current model and would be the right design if this
-checkpoint is revisited.
+Validated offline against the real leaked outputs captured during the two
+failed attempts: three of three recovered to clean, non-duplicated text,
+and none of three already-clean outputs was damaged. That opens a
+configuration nobody measured — reasoning off everywhere, which is the fast
+path, with downstream recovery of the fraction that leak.
 
-The candidate is genuinely better where reasoning is not required —
-grounded boxes on three of three frames where the current model manages
-none, more cache headroom, and no tool hang. What would have to change is
-upstream: a checkpoint or engine build where suppressing thinking does not
-leak with tools attached.
-
-Every window ended with the current model restored and verified. All
-harnesses, corpora and baselines remain valid for a future attempt.
+The latency measurements stand; only the conclusion drawn from them was
+premature. They rule out the expensive branch, not the model. The candidate
+remains better than the current one wherever reasoning is not required.

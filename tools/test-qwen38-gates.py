@@ -154,6 +154,24 @@ check("scan_response covers streaming deltas",
       len(G.scan_response({"choices": [{"delta": {"reasoning": "a"}}]})) == 1)
 check("scan_response on empty response", G.scan_response({}) == [])
 
+# The routed posture: with --reasoning-parser the model is MEANT to reason,
+# into a field the conversation path never reads. Flagging that would fail
+# the only configuration measured not to leak (0/40 vs a 15% baseline).
+# Content stays strict either way — that is what the user hears.
+routed = {"content": "Your home has nine areas.", "reasoning": "user asks about areas..."}
+check("routed: populated reasoning field is NOT a leak",
+      G.find_reasoning_leaks(routed, thinking_routed=True) == [])
+check("suppressed: the same message IS a leak",
+      len(G.find_reasoning_leaks(routed, thinking_routed=False)) == 1)
+check("routed: markup in CONTENT is still a leak",
+      any(l.where == "content" for l in G.find_reasoning_leaks(
+          {"content": "answer</think> answer", "reasoning": "x"}, thinking_routed=True)))
+check("routed: scan_response threads the flag",
+      G.scan_response({"choices": [{"delta": {"reasoning": "a"}}]},
+                      thinking_routed=True) == [])
+check("default is the strict posture",
+      len(G.find_reasoning_leaks({"content": "ok", "reasoning": "x"})) == 1)
+
 # ── G7 production parsers ────────────────────────────────────────────────
 print("\ng7_production_parsers")
 canonical = "The mug <ref>mug</ref><box>100,200,300,400</box> is on the counter."

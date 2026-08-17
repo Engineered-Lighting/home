@@ -204,19 +204,29 @@ class Leak:
     excerpt: str
 
 
-def find_reasoning_leaks(message: dict) -> list[Leak]:
-    """G5: ZERO tolerance. Returns every leak found in one message.
+def find_reasoning_leaks(message: dict, thinking_routed: bool = False) -> list[Leak]:
+    """G5: ZERO tolerance on anything the USER can hear.
 
-    Three independent surfaces leak differently and all three are checked:
-      * `content` carrying literal <think> markup — the app renders it
-        verbatim, so this reaches the user and, via TTS, is spoken;
-      * `reasoning` — the pinned engine's field name;
-      * `reasoning_content` — the pre-rename field name.
+    `content` carrying reasoning markup is always a leak: the app renders it
+    verbatim and TTS speaks it aloud.
 
-    A NON-EMPTY reasoning field is itself a leak even without <think>
-    markup: it means `enable_thinking:false` was not honoured, which is the
-    condition G5 exists to detect. Checking only for markup would pass a
-    model that reasons into a structured field.
+    The reasoning FIELDS are conditional, and getting this wrong in either
+    direction is expensive:
+
+      * `thinking_routed=False` (the default, and the shipping posture until
+        2026-08-16): thinking is meant to be suppressed, so a populated
+        `reasoning` field means suppression failed — a leak, even with no
+        markup, because checking only for markup would pass a model that
+        reasons into a structured field.
+      * `thinking_routed=True`: the engine runs `--reasoning-parser qwen3`
+        and thinking is deliberately ON. A populated `reasoning` field is
+        then the fix WORKING — it is where reasoning is supposed to go, and
+        the live conversation path reads only `delta.content`
+        (`entity.py:437`), so it never reaches TTS. Flagging it would fail
+        the only configuration measured not to leak.
+
+    The invariant is "nothing the user hears contains reasoning", not "the
+    model never reasons". `content` is checked strictly either way.
     """
     leaks: list[Leak] = []
     if not isinstance(message, dict):
@@ -235,22 +245,23 @@ def find_reasoning_leaks(message: dict) -> list[Leak]:
                 leaks.append(Leak("content", pat.pattern,
                                   content[start:m.end() + 80]))
 
-    for field_name in REASONING_FIELDS:
-        value = message.get(field_name)
-        if isinstance(value, str) and value.strip():
-            leaks.append(Leak(field_name, "<non-empty>", value[:160]))
+    if not thinking_routed:
+        for field_name in REASONING_FIELDS:
+            value = message.get(field_name)
+            if isinstance(value, str) and value.strip():
+                leaks.append(Leak(field_name, "<non-empty>", value[:160]))
 
     return leaks
 
 
-def scan_response(response: dict) -> list[Leak]:
+def scan_response(response: dict, thinking_routed: bool = False) -> list[Leak]:
     """Apply `find_reasoning_leaks` across every choice of a chat response,
     for both buffered (`message`) and streaming (`delta`) shapes."""
     leaks: list[Leak] = []
     for choice in (response or {}).get("choices", []) or []:
         for key in ("message", "delta"):
             if isinstance(choice.get(key), dict):
-                leaks.extend(find_reasoning_leaks(choice[key]))
+                leaks.extend(find_reasoning_leaks(choice[key], thinking_routed))
     return leaks
 
 

@@ -160,7 +160,7 @@ def cell_leakage_canary(cap, args, ctx) -> dict:
         for _ in range(max(1, args.canary_n)):
             t = cap.chat(msgs, cell="canary", cache_state="busted",
                          meta={"probe": name}, max_tokens=200, temperature=0.7)
-            found = gates.scan_response(t.response)
+            found = gates.scan_response(t.response, ctx.get('thinking_routed', False))
             if found:
                 leaks.append({"probe": name,
                               "where": [f.where for f in found],
@@ -461,7 +461,10 @@ def cmd_list(args) -> int:
 def cmd_run(args) -> int:
     root = pathlib.Path(args.out)
     root.mkdir(parents=True, exist_ok=True)
-    ctx = {"ha_token": args.ha_token}
+    # Whether the engine routes thinking into a separate field decides what
+    # counts as a leak. Detected, not assumed.
+    ctx = {"ha_token": args.ha_token,
+           "thinking_routed": bool(args.thinking_routed)}
     if not ctx["ha_token"]:
         envf = pathlib.Path("/opt/home-ai-voice/.env")
         if envf.exists():
@@ -632,6 +635,10 @@ def main() -> int:
     r.add_argument("--model", default="qwen3-vl-30b")
     r.add_argument("--measurement-point", default="sidecar",
                    choices=sorted(capture.MEASUREMENT_POINTS))
+    r.add_argument("--thinking-routed", action="store_true",
+                   help="the engine runs --reasoning-parser, so a populated "
+                        "reasoning field is correct routing rather than a "
+                        "leak; content is still checked strictly")
     r.add_argument("--ha-token", default=None)
     r.add_argument("--ha-agent", default="conversation.extended_openai_conversation")
     r.set_defaults(func=cmd_run)

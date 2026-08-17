@@ -103,6 +103,107 @@ Everything this session *did* touch was restored and verified: see E1.
 
 ---
 
+## Session 3 — 2026-08-17 — the grounding sidecar is up
+
+### ⚠ PROCEDURE CORRECTION — a vllm restart kills voice until HA Core restarts
+
+Established **twice, deterministically**, this session. Recreating the `vllm`
+container leaves `conversation.extended_openai_conversation` dead: well-formed
+`action_done`, empty speech, ~0.01 s, **zero** LLM calls. Ambient captioning
+keeps working (177 ms), so `healthz`, container status and every caption check
+pass while the house is mute. `reload_config_entry` returns 200 and does not fix
+it. Only `ha core restart` does.
+
+**This retroactively explains the 2026-08-16 outage.** It was never a
+`.storage`-write problem: the vllm container had restarted at ~22:16 PDT and
+voice was found dead at 23:06. The storage hypothesis was wrong.
+
+**Correct order for any model work, now in the restore runbook as a mandatory
+step:** change vllm → verify the engine answers → **restart HA Core** → verify
+voice with a real question.
+
+### The sidecar
+
+`vllm-grounding` added to the live compose — Qwen3.8-27B-FP8 as
+`qwen38-grounding`, port 8003, `--reasoning-parser qwen3` mandatory,
+`--limit-mm-per-prompt '{"image": 8}'` because grounding is a vision task.
+Funded by the incumbent moving to util 0.50 (KV 14.6 GiB / 159,424 tokens).
+
+Measured footprint: weights 28.51 GiB, KV 2.51 GiB / 30,947 tokens at
+`--max-model-len 16384`, 1.89× concurrency. GPU 93,827 / 97,887 MiB used.
+
+`depends_on: vllm: service_healthy` is deliberate. 47.8 + 33.5 + 11.6 = 92.9 of
+95.6 GiB fits **only if they profile in order**; on a simultaneous cold boot
+they race and the loser OOMs. Serialising makes the loser deterministic, and
+makes it the instance that does not carry voice.
+
+### ⚠ The grounding gap is mostly a PROMPT, not the model
+
+The decisive comparison, and it is not the one the roadmap implied. Same frame,
+same question, same production parsers, `--bust-cache`, n=6 per cell:
+
+| model | prompt | extraction | G7 pass |
+|---|---|---|---|
+| incumbent | **v3 — the deployed prompt** | **0/6** | 0/6 |
+| incumbent | v1 | **5/6** | 5/6 |
+| **qwen3.8** | **v3 — the deployed prompt** | **4/6** | 4/6 |
+| qwen3.8 | v1 | **6/6** | 6/6 |
+
+The incumbent's 0/6 under v3 reproduces the documented 0/13 exactly, and its
+5/6 under v1 reproduces the documented 5/6. So:
+
+- **Rewording one instruction takes grounding from 0/6 to 5/6 on the model
+  already running, for free.** No second model, no VRAM. That is the cheapest
+  capability recovery available anywhere in this project.
+- Qwen3.8 is genuinely better *and* better **under the deployed prompt**, which
+  is the robust position — it does not depend on a prompt fix landing.
+- Doing both gives 6/6.
+
+Stated plainly: comparing Qwen3.8's grounding to "the incumbent's 0/13" was
+apples-to-oranges, because 0/13 is a prompt artefact and not a capability
+ceiling. The sidecar still earns its place, but it is an *addition* to the
+prompt fix, not a substitute for it. Per the migration doc's own decision the
+prompt repair must not ride along with a model change, so they stay separate.
+
+### ⚠ Routing has no choke point — E7's premise is wrong for vision
+
+The vision-sidecar calls `vllm:8000` **directly** (`VLLM_URL=http://vllm:8000`),
+not through the metrics-sidecar. Verified behaviourally: a real
+`POST /describe` returned a caption in 224 ms while the metrics-sidecar's
+`chat/completions` counter moved by **zero**.
+
+So `thinking_routing.py` proving the metrics-sidecar is a viable choke point
+proves it only for the *conversation* path. Vision and grounding bypass it. The
+sidecar is therefore **standing but wired to nothing** — it holds 33.5 GiB and
+serves no traffic yet.
+
+Its `VLLM_URL` / `VISION_MODEL` are single env vars covering `/describe`,
+`/describe_clip`, `/reason` and `/reason_zoom` alike, so there is no way to send
+only grounding elsewhere by configuration. Options, none free:
+
+1. **Bind-mount a patched live `/reason` handler** taking a separate
+   `REASON_VLLM_URL` / `REASON_MODEL`. The brief sanctions this mechanism
+   explicitly ("bind-mount a patched file for experiments") and it keeps live
+   as truth. Smallest change that routes only grounding.
+2. **Point the whole vision-sidecar at the metrics-sidecar** and route there by
+   request shape. Restores a single choke point for all vision, but puts the
+   proxy in the ambient hot path — which currently runs 8.5× inside budget, so
+   the +0.033 s measured proxy cost is affordable.
+3. **Do the prompt fix instead** and leave grounding on the incumbent. Cheapest
+   of all; forgoes the 4/6-under-deployed-prompt robustness.
+
+### The single next experiment
+
+**Fix the deployed grounding prompt on the incumbent (option 3), measured.**
+It is free, it recovers 0/6 → 5/6 on the model already serving, and it needs no
+routing decision. It also establishes the honest baseline that G7 currently
+lacks — the migration doc notes G7 "cannot fail" against a 0/13 baseline, and
+this is what repairs that. Only then is routing worth spending a window on,
+because only then is the sidecar's marginal value known against a real number
+rather than against zero.
+
+---
+
 ## Session 2 — 2026-08-17 (01:11–02:00 PDT)
 
 Owner authorised replacing models in VRAM, on condition the restore path was

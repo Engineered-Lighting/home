@@ -57,6 +57,33 @@ told when something is.
 docker start hav-personaplex-bridge
 ```
 
+## 4b. ⚠ MANDATORY after ANY vllm restart — restart HA Core
+
+**Established 2026-08-17, twice, deterministically. This is not optional and it
+is not a "sometimes".**
+
+Recreating or restarting the `vllm` container leaves Home Assistant's
+`conversation.extended_openai_conversation` agent permanently dead: it returns a
+well-formed `action_done` with empty speech in ~0.01 s and makes **zero** calls
+to the LLM. Ambient captioning is unaffected and keeps working normally, which
+is exactly what makes this easy to miss — the stack looks healthy from every
+angle except an actual spoken question.
+
+`reload_config_entry` returns HTTP 200 and does **not** fix it. Only a Core
+restart does.
+
+```bash
+ssh -p 22222 root@homeassistant.local 'ha core restart'
+```
+
+This also explains the original 2026-08-16 outage: the vllm container had
+restarted at ~22:16 PDT and voice was found dead at 23:06. It was never a
+storage-write problem.
+
+**So the correct order for any model work is: change vllm → verify the engine
+answers → restart HA Core → verify voice with a real question.** Skipping the
+HA restart leaves the house mute while every health check passes.
+
 ## 5. Verify — a real answer, not a health check
 
 A broken conversation agent returns a **well-formed** empty response in 0.01 s.

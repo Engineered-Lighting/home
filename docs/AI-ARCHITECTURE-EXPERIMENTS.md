@@ -105,22 +105,71 @@ Everything this session *did* touch was restored and verified: see E1.
 
 ## Session 3 — 2026-08-17 — the grounding sidecar is up
 
-### ⚠ PROCEDURE CORRECTION — a vllm restart kills voice until HA Core restarts
+### ⚠⚠ RETRACTED — "a vllm restart kills voice" was WRONG. Voice was MUTED.
 
-Established **twice, deterministically**, this session. Recreating the `vllm`
-container leaves `conversation.extended_openai_conversation` dead: well-formed
-`action_done`, empty speech, ~0.01 s, **zero** LLM calls. Ambient captioning
-keeps working (177 ms), so `healthz`, container status and every caption check
-pass while the house is mute. `reload_config_entry` returns 200 and does not fix
-it. Only `ha core restart` does.
+**I claimed this twice and was wrong twice. The record is corrected here.**
 
-**This retroactively explains the 2026-08-16 outage.** It was never a
-`.storage`-write problem: the vllm container had restarted at ~22:16 PDT and
-voice was found dead at 23:06. The storage hypothesis was wrong.
+`conversation.extended_openai_conversation` returning a well-formed
+`action_done` with empty speech in ~0.01 s and **zero** LLM calls is not a
+failure signature at all. It is the **documented, intended** behaviour of the
+Jarvis mute gate (`conversation.py`, "Addendum 9"):
 
-**Correct order for any model work, now in the restore runbook as a mandatory
-step:** change vllm → verify the engine answers → **restart HA Core** → verify
-voice with a real question.
+> When muted, the agent returns an empty silent response with
+> `continue_conversation=False` to close Voice PE's mic.
+
+Proved by the component's own instrumentation. All twelve probes of the
+"outage" appear in `/config/asr_debug.log` as:
+
+```
+1787004369.845 JARVIS_MUTED_DROP 'Are any lights on right now?'
+1787004369.858 JARVIS_MUTED_DROP 'What rooms are in my home?'
+...
+```
+
+Mute is composite — `binary_sensor.jarvis_muted_effective_2` = explicit toggle
+OR timer OR movie mode OR **TV active** — and `input_boolean.jarvis_auto_mute_tv`
+is on with `media_player.lg_tv` and `media_player.tx_rz30` both on. With the
+sensor back to `off`, the identical probes returned real answers in 0.54–4.09 s
+with 5 LLM calls. Nothing was ever broken.
+
+**What this invalidates:**
+
+1. "Recreating `vllm` kills the conversation agent." **Unsupported.** Both
+   observations were mute. Session 2 recreated `vllm` repeatedly and voice
+   worked immediately afterwards, which should have falsified this at the time
+   and did not.
+2. "This retroactively explains the 2026-08-16 outage." **Withdrawn.**
+   `asr_debug.log` only retains entries from after today's restart, so last
+   night's cause is **unknown**. Mute is plausible and unverifiable. The
+   `.storage` hypothesis in the migration doc is equally unproven — I replaced
+   one unverified theory with another and asserted it more strongly.
+3. "An HA Core restart fixes it." **Coincidence.** The restart at ~01:00 PDT
+   was followed by working voice because the mute condition had lapsed, not
+   because of the restart.
+4. **The traffic-counter diagnostic is insufficient on its own.** A zero
+   `chat/completions` delta cannot distinguish "muted, working as designed"
+   from "broken". That is precisely how this was misread twice.
+
+**The correct check, before concluding anything about voice:**
+
+```bash
+# 1. Is it muted? (composite: explicit / timer / movie mode / TV on)
+#    curl .../api/states/binary_sensor.jarvis_muted_effective_2
+# 2. Did the gate drop the turn? The component says so itself:
+ssh -p 22222 root@homeassistant.local 'tail -20 /config/asr_debug.log'
+#    JARVIS_MUTED_DROP => working as designed, stop debugging.
+```
+
+Only if the sensor is `off` AND no `JARVIS_MUTED_DROP` appears is an empty
+response evidence of a real fault.
+
+**Method note.** Two independent instruments existed and I used neither before
+asserting a cause: `binary_sensor.jarvis_muted_effective_2` and
+`/config/asr_debug.log`, the latter written specifically because
+"`ha core logs` doesn't reliably surface `_LOGGER.warning` from
+custom-component code paths". The brief's own first rule — *verify every data
+source before building on it; open the file before writing the harness* — would
+have caught this in one command.
 
 ### The sidecar
 

@@ -57,32 +57,33 @@ told when something is.
 docker start hav-personaplex-bridge
 ```
 
-## 4b. ⚠ MANDATORY after ANY vllm restart — restart HA Core
+## 4b. ⚠ BEFORE you debug "voice is dead" — check whether it is MUTED
 
-**Established 2026-08-17, twice, deterministically. This is not optional and it
-is not a "sometimes".**
+**An earlier version of this runbook told you to restart HA Core after any vllm
+change. That was wrong and is retracted.** Voice was muted, not broken, on both
+occasions it looked dead.
 
-Recreating or restarting the `vllm` container leaves Home Assistant's
-`conversation.extended_openai_conversation` agent permanently dead: it returns a
-well-formed `action_done` with empty speech in ~0.01 s and makes **zero** calls
-to the LLM. Ambient captioning is unaffected and keeps working normally, which
-is exactly what makes this easy to miss — the stack looks healthy from every
-angle except an actual spoken question.
-
-`reload_config_entry` returns HTTP 200 and does **not** fix it. Only a Core
-restart does.
+An empty `action_done` in ~0.01 s with **zero** LLM calls is the *intended*
+signature of the Jarvis mute gate, which returns silence to close Voice PE's
+mic. It is indistinguishable from a fault unless you check:
 
 ```bash
-ssh -p 22222 root@homeassistant.local 'ha core restart'
+# 1. composite mute: explicit toggle OR timer OR movie mode OR TV active
+curl -s -H "Authorization: Bearer $TOK" \
+  http://192.168.0.125:8123/api/states/binary_sensor.jarvis_muted_effective_2
+
+# 2. the component's own marker — authoritative
+ssh -p 22222 root@homeassistant.local 'tail -20 /config/asr_debug.log'
 ```
 
-This also explains the original 2026-08-16 outage: the vllm container had
-restarted at ~22:16 PDT and voice was found dead at 23:06. It was never a
-storage-write problem.
+`JARVIS_MUTED_DROP 'your question'` means **working as designed — stop
+debugging**. `input_boolean.jarvis_auto_mute_tv` is on, so an active TV or
+receiver mutes the assistant.
 
-**So the correct order for any model work is: change vllm → verify the engine
-answers → restart HA Core → verify voice with a real question.** Skipping the
-HA restart leaves the house mute while every health check passes.
+Only if the sensor reads `off` **and** no `JARVIS_MUTED_DROP` line appears for
+your turn is an empty response evidence of a real fault. A restart is not
+routinely required after a vllm change: session 2 recreated `vllm` several times
+and voice answered immediately afterwards each time.
 
 ## 5. Verify — a real answer, not a health check
 

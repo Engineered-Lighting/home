@@ -188,7 +188,7 @@ function HomeApartmentEdit({
   onExit, sim, connection, sourceMeta, saveStatus, saving,
   liveReview, liveComparison, onCompareLive,
 }) {
-  const [tool, setTool] = useState("select");          // select | add | targets | measure | zones
+  const [tool, setTool] = useState("select");          // select | add | targets | links | measure | zones
   const [placing, setPlacing] = useState(null);        // palette item being placed
   const [placingTarget, setPlacingTarget] = useState(null);
   const [selectedId, setSelectedId] = useState(null);  // device id
@@ -577,7 +577,7 @@ function HomeApartmentEdit({
         setSelectedId(id);
         setSelectedTargetId(null);
         setSelectedZone(null);
-        dragRef.current = { id, kind: "device", moved: false };
+        dragRef.current = tool === "select" ? { id, kind: "device", moved: false } : null;
         e.stopPropagation();
       } else {
         const targetHits = engine.picking.pick(engine.overlay.targetPickObjects?.() || [], e.clientX, e.clientY);
@@ -588,9 +588,11 @@ function HomeApartmentEdit({
           setSelectedZone(null);
           setPlacingTarget(null);
           setMoveTargetId(null);
-          dragRef.current = { id, kind: "target", moved: false };
-          try { host.setPointerCapture?.(e.pointerId); } catch (err) { /* optional */ }
-          e.preventDefault();
+          dragRef.current = tool === "select" ? { id, kind: "target", moved: false } : null;
+          if (tool === "select") {
+            try { host.setPointerCapture?.(e.pointerId); } catch (err) { /* optional */ }
+            e.preventDefault();
+          }
           e.stopPropagation();
         } else {
           setSelectedId(null);
@@ -897,36 +899,45 @@ function HomeApartmentEdit({
   const applySelectedLink = () => {
     if (!selected || selected.type !== "light") return;
     const nextEntity = String(pendingLinkEntity || "").trim() || null;
-    const duplicate = nextEntity && (model.devices || []).find((device) =>
-      device.id !== selected.id && device.ha_entity_id === nextEntity);
-    if (duplicate) {
-      setNotice(`${nextEntity} is already linked to ${duplicate.name} · duplicate blocked`);
+    const timestamp = new Date().toISOString();
+    const result = window.HomeApartmentData.reconcileFixtureEntityLink(
+      model, selected.id, nextEntity, timestamp,
+    );
+    if (!result.ok) {
+      setNotice(`${result.error} · no changes made`);
       return;
     }
     mutate((m) => {
-      const device = (m.devices || []).find((candidate) => candidate.id === selected.id);
-      if (!device) return;
-      device.ha_entity_id = nextEntity;
-      device.link_updated_at = new Date().toISOString();
-      if (nextEntity) delete device.suggested_ha_entity_id;
+      const applied = window.HomeApartmentData.reconcileFixtureEntityLink(
+        m, selected.id, nextEntity, timestamp,
+      );
+      if (applied.ok) Object.assign(m, applied.model);
     });
     setConfirmUnlink(false);
-    setNotice(nextEntity ? `linked ${selected.name} → ${nextEntity}` : `${selected.name} link removed`);
+    setNotice(nextEntity
+      ? `linked ${selected.name} → ${nextEntity} · geometry unchanged`
+      : `${selected.name} link removed · geometry unchanged`);
   };
 
   const removeSelectedLink = () => {
     if (!selected || selected.type !== "light" || !selected.ha_entity_id) return;
-    const previousEntity = selected.ha_entity_id;
+    const timestamp = new Date().toISOString();
+    const result = window.HomeApartmentData.reconcileFixtureEntityLink(
+      model, selected.id, null, timestamp,
+    );
+    if (!result.ok) {
+      setNotice(`${result.error} · no changes made`);
+      return;
+    }
     mutate((m) => {
-      const device = (m.devices || []).find((candidate) => candidate.id === selected.id);
-      if (!device) return;
-      device.ha_entity_id = null;
-      device.suggested_ha_entity_id = previousEntity;
-      device.link_updated_at = new Date().toISOString();
+      const applied = window.HomeApartmentData.reconcileFixtureEntityLink(
+        m, selected.id, null, timestamp,
+      );
+      if (applied.ok) Object.assign(m, applied.model);
     });
     setPendingLinkEntity("");
     setConfirmUnlink(false);
-    setNotice(`${selected.name} link removed · its position and calibration were preserved`);
+    setNotice(`${selected.name} link removed · its position and calibration were preserved · geometry unchanged`);
   };
 
   const wallAxisConflict = selected?.fixture_calibration?.wall_distances?.length >= 2
@@ -984,7 +995,15 @@ function HomeApartmentEdit({
           setTool("targets"); setPlacing(null); setSelectedId(null); setSelectedZone(null);
           setMoveTargetId(null); setNotice("Step 1 · choose a target type");
         }} />
-        <EdButton label="fixture tape" active={tool === "measure"} onClick={() => {
+        <EdButton label="fixture links" active={tool === "links"} onClick={() => {
+          setTool("links"); setPlacing(null); setPlacingTarget(null); setSelectedTargetId(null);
+          setSelectedZone(null); setMoveTargetId(null);
+          setSelectedId((current) => ceilingLights.some((light) => light.id === current)
+            ? current : (ceilingLights[0]?.id || null));
+          setNotice("geometry locked · reconcile identity without moving the saved layout");
+        }} />
+        <EdButton label="fixture position" title="Measure a ceiling light from two walls and set its fixture-bottom height"
+          active={tool === "measure"} onClick={() => {
           setTool("measure"); setPlacing(null); setPlacingTarget(null); setSelectedTargetId(null);
           setSelectedZone(null); setMoveTargetId(null);
           setSelectedId((current) => ceilingLights.some((light) => light.id === current)
@@ -1148,13 +1167,21 @@ function HomeApartmentEdit({
               </button>
             ))}
           </>
-        ) : tool === "measure" ? (
+        ) : tool === "measure" || tool === "links" ? (
           <>
             <div style={heading}>Mapped fixtures · {fixtureMapping.mappedFixtures.length}</div>
             <div style={{ fontFamily: ED_SANS, fontSize: 10, lineHeight: 1.45, color: "var(--hg-fg-3)", marginBottom: 9 }}>
-              Measure from two perpendicular walls, then establish the fixture-bottom aiming origin vertically.
+              {tool === "links"
+                ? "Geometry locked. Link real Home Assistant identities to these exact placed fixtures; names are suggestions only."
+                : "Measure from two perpendicular walls, then establish the fixture-bottom aiming origin vertically."}
             </div>
-            <div style={{ display: "grid", gap: 4, marginBottom: 9, paddingBottom: 8,
+            {tool === "links" && <div data-apartment-geometry-lock="active" style={{
+              padding: "7px 8px", marginBottom: 9, border: "1px solid rgba(145,230,189,0.34)",
+              background: "rgba(145,230,189,0.05)", color: "#91e6bd", fontSize: 8, lineHeight: 1.5,
+            }}>
+              fixture, target, zone, and tape geometry cannot be changed in this workflow
+            </div>}
+            {tool === "measure" && <div style={{ display: "grid", gap: 4, marginBottom: 9, paddingBottom: 8,
               borderBottom: "1px solid var(--hg-border-soft)" }}>
               {Object.entries(FIXTURE_STATUS).map(([status, meta]) => (
                 <div key={status} style={{ display: "grid", gridTemplateColumns: "10px 58px 1fr", gap: 5,
@@ -1164,7 +1191,7 @@ function HomeApartmentEdit({
                   <span>{meta.detail}</span>
                 </div>
               ))}
-            </div>
+            </div>}
             {ceilingLights.map((light) => {
               const status = light.fixture_calibration?.status || "proposed";
               const statusMeta = FIXTURE_STATUS[status] || FIXTURE_STATUS.proposed;
@@ -1235,8 +1262,12 @@ function HomeApartmentEdit({
                 <div style={{ color: "var(--hg-fg-5)", fontSize: 7.2, margin: "2px 0 5px",
                   overflow: "hidden", textOverflow: "ellipsis" }}>{entity.entity_id} · {entity.area_name}</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                  <EdButton label="place fixture" onClick={() => beginPlaceLight(entity, "ceiling_fixture")} />
-                  <EdButton label="place other" onClick={() => beginPlaceLight(entity, "other_light")} />
+                  {tool === "links" ? (
+                    <span style={{ color: "var(--hg-fg-5)", fontSize: 7.8 }}>unplaced · no geometry created</span>
+                  ) : <>
+                    <EdButton label="place fixture" onClick={() => beginPlaceLight(entity, "ceiling_fixture")} />
+                    <EdButton label="place other" onClick={() => beginPlaceLight(entity, "other_light")} />
+                  </>}
                 </div>
               </div>
             ))}
@@ -1526,7 +1557,7 @@ function HomeApartmentEdit({
         ) : selected ? (
           <>
             <div style={heading}>device</div>
-            <input value={selected.name}
+            <input value={selected.name} disabled={tool === "links"}
               onChange={(e) => mutate((m) => {
                 const d = m.devices.find((x) => x.id === selectedId); if (d) d.name = e.target.value;
               }, { undoable: false })}
@@ -1590,9 +1621,19 @@ function HomeApartmentEdit({
                 )}
               </>
             )}
-            {window.HomeApartmentData.isCeilingLight(selected) ? (
+            {tool === "links" ? (
+              <div data-apartment-selected-geometry-lock="active" style={{
+                marginTop: 10, padding: "8px", border: "1px solid rgba(145,230,189,0.34)",
+                color: "#91e6bd", fontSize: 8.5, lineHeight: 1.5,
+              }}>
+                geometry locked<br />
+                position · {selected.pos.map((value) => (+value).toFixed(3)).join(" · ")} m<br />
+                room · {selected.room_id || "—"}<br />
+                tape · {selected.fixture_calibration?.status || "not applicable"}
+              </div>
+            ) : window.HomeApartmentData.isCeilingLight(selected) ? (
               <>
-                <div style={{ ...heading, color: SURVEY_ORANGE }}>fixture tape calibration</div>
+                <div style={{ ...heading, color: SURVEY_ORANGE }}>fixture position</div>
                 <div style={{ padding: "8px", border: "1px solid rgba(255,180,95,0.35)",
                               background: "rgba(255,180,95,0.06)", marginBottom: 9 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 8, color: SURVEY_ORANGE, fontSize: 9 }}>
@@ -1602,7 +1643,7 @@ function HomeApartmentEdit({
                     </span>
                   </div>
                   <div style={{ color: "var(--hg-fg-4)", fontFamily: ED_SANS, fontSize: 9, lineHeight: 1.45, marginTop: 5 }}>
-                    Position {selected.pos.map((v) => (+v).toFixed(3)).join(" · ")} m. Tape values move this practical origin; the ceiling mount is not the aim point.
+                    These measurements set the light's exact 3D position. Two walls set its floor location; ceiling height and fixture drop set the practical aiming origin at the fixture bottom.
                   </div>
                   <div style={{ color: "var(--hg-fg-5)", fontSize: 8, lineHeight: 1.4, marginTop: 5 }}>
                     {(FIXTURE_STATUS[fixtureStatus] || FIXTURE_STATUS.proposed).detail}
@@ -1691,12 +1732,12 @@ function HomeApartmentEdit({
                 </div>
               </>
             )}
-            <div style={{ marginTop: 14 }}>
+            {tool !== "links" && <div style={{ marginTop: 14 }}>
               <EdButton label="delete device" danger onClick={() => {
                 mutate((m) => { m.devices = m.devices.filter((x) => x.id !== selectedId); });
                 setSelectedId(null);
               }} />
-            </div>
+            </div>}
           </>
         ) : zone ? (
           <>

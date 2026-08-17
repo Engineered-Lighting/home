@@ -16,15 +16,16 @@ const easeInOutCubic = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2
 export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidates, fetchFrame, getPoints, scene, renderer, camera }) {
     const candidates = assetCandidates;
     const state = { mode: 'points', targetMode: 'points', modeSeq: 0,
-                    fading: null, splat: null, mesh: null,
+                    fading: null, splat: null, mesh: null, collision: null,
                     splatSource: null,
-                    meshSource: null, meshFallback: false,
+                    meshSource: null, meshFallback: false, collisionSource: null,
                     meshNearCut: { value: 0.0 } };
     const listeners = [];
     // In-flight load promises: a slow asset (mesh.glb is ~56 MB) must never be
     // fetched twice by two racing setMode calls — that would add a second,
     // unmanaged copy to the scene.
     let meshLoading = null;
+    let collisionLoading = null;
     let splatLoading = null;
 
     // The EL cloud writes depth by design (self-occlusion). Once a fade ends
@@ -132,6 +133,50 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
         meshLoading = p;
         p.finally(() => { if (meshLoading === p) meshLoading = null; });
         return p;
+    }
+
+    function loadCollision() {
+        if (state.collision) return Promise.resolve(state.collision);
+        if (collisionLoading) return collisionLoading;
+        const p = _loadCollisionImpl();
+        collisionLoading = p;
+        p.finally(() => { if (collisionLoading === p) collisionLoading = null; });
+        return p;
+    }
+
+    async function _loadCollisionImpl() {
+        const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+        let lastErr = null;
+        for (const url of candidates('collision.glb', null, { sim })) {
+            try {
+                const gltf = await new GLTFLoader().loadAsync(url);
+                const group = gltf.scene;
+                group.name = 'apartment-collision-proxy';
+                group.userData.collisionProxy = true;
+                group.traverse((o) => {
+                    if (!o.isMesh) return;
+                    o.frustumCulled = false;
+                    o.userData.collisionProxy = true;
+                    // Material visibility suppresses rendering without disabling
+                    // Mesh.raycast. The proxy remains available in every view mode.
+                    // Scan meshes contain a mixture of winding directions (and
+                    // the dollhouse view often looks at an interior back face).
+                    // Picking must therefore be two-sided even though the proxy
+                    // never renders. Otherwise a visibly solid wall/floor can
+                    // reject the exact same screen-space click.
+                    o.material = new THREE.MeshBasicMaterial({
+                        visible: false,
+                        side: THREE.DoubleSide,
+                    });
+                });
+                apartmentRoot.add(group);
+                group.updateMatrixWorld(true);
+                state.collision = group;
+                state.collisionSource = url;
+                return group;
+            } catch (e) { lastErr = e; }
+        }
+        throw lastErr || new Error('no collision asset reachable');
     }
 
     function firstMaterial(material) {
@@ -306,9 +351,10 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
         },
 
         getMesh() { return state.mesh; },
+        getCollision() { return state.collision; },
         setMeshNearCut(v) { state.meshNearCut.value = v; },
 
-        async preload(targets = ['splat', 'mesh']) {
+        async preload(targets = ['splat', 'mesh', 'collision']) {
             const list = Array.isArray(targets) ? targets : [targets];
             const jobs = [];
             if (list.includes('splat') && !state.splat) {
@@ -320,6 +366,11 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
                 jobs.push(loadMesh()
                     .then(() => ({ mode: 'mesh', ok: true }))
                     .catch((e) => ({ mode: 'mesh', ok: false, error: String(e?.message || e) })));
+            }
+            if (list.includes('collision') && !state.collision) {
+                jobs.push(loadCollision()
+                    .then(() => ({ mode: 'collision', ok: true }))
+                    .catch((e) => ({ mode: 'collision', ok: false, error: String(e?.message || e) })));
             }
             const results = await Promise.all(jobs);
             return { ok: results.every((r) => r.ok), results };
@@ -335,6 +386,8 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
                 srParent: state.sparkRenderer ? (state.sparkRenderer.parent?.type || 'none') : 'none',
                 meshSource: state.meshSource,
                 meshFallback: state.meshFallback,
+                collision: !!state.collision,
+                collisionSource: state.collisionSource,
             };
         },
 

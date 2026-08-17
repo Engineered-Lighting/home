@@ -35,12 +35,20 @@ face. Custom surfaces retain the picked mesh face normal. Seed dimensions that
 come from a tape plus the scan are marked `source: "tape_and_scan"`; proposed
 placements remain explicitly lower-confidence.
 
-## Ceiling fixture tape records
+## Ceiling fixture position measurements
 
 Every ceiling light receives `aiming_origin: "fixture_bottom"` and a
 `fixture_calibration` worksheet. The fixture bottom is the practical origin
 for later aiming calculations; the ceiling mount is only a construction
 reference.
+
+The UI calls this workflow **Fixture position**. Two perpendicular wall tapes
+set the floor-plane location, floor-to-ceiling height plus fixture drop set the
+fixture-bottom aiming height, and an optional floor-to-bottom tape verifies the
+derived result. It changes Apartment geometry only; it does not control a Home
+Assistant light or move a gimbal. Co-located current and Engineered profiles
+reuse these measurements, with a profile-specific vertical offset required only
+when their physical fixture bottoms differ.
 
 ```json
 {
@@ -154,6 +162,13 @@ The fixture survey separates mapped ceiling fixtures, unplaced Home Assistant
 placed deliberately as either a ceiling fixture or another light. Existing
 fixtures can be relinked without changing their position or tape worksheet;
 unlinking requires confirmation, and duplicate entity links are blocked.
+
+Use **Fixture links** for live reconciliation. This workflow locks fixture,
+target, zone, and tape geometry; selecting a marker cannot drag it, unmatched
+Home Assistant lights stay visibly unplaced, and the link-only model helper
+compares spatial geometry before accepting the identity update. Use the
+separate placement and tape tools only when geometry is intentionally being
+changed.
 
 The ten seeded ceiling fixtures reconcile first by stable fixture ID and exact
 Home Assistant entity ID. A missing fixture remains an unresolved seed record

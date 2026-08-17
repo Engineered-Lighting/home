@@ -29,6 +29,12 @@ export function createPicking(camera, hostEl) {
                 ((clientX - rect.left) / rect.width) * 2 - 1,
                 -((clientY - rect.top) / rect.height) * 2 + 1,
             );
+            // beamTrace intentionally bounds this shared raycaster to the
+            // requested beam distance. Screen picking is camera-relative and
+            // must not inherit that range or a valid visible mesh can become
+            // unreachable after the first beam preview.
+            raycaster.near = 0;
+            raycaster.far = Infinity;
             raycaster.setFromCamera(ndc, camera);
             return raycaster.intersectObjects(objects, true);
         },
@@ -55,6 +61,63 @@ export function createPicking(camera, hostEl) {
                 point: [point.x, point.y, point.z],
                 normal: [normal.x, normal.y, normal.z],
                 object: hit.object,
+            };
+        },
+
+        /* Apartment-local beam ray sampling against the dedicated collision
+         * proxy. Returns the first center hit plus an exact mesh contour made
+         * from first-hit boundary rays. Sparse/grazing contours are explicitly
+         * marked partial rather than promoted to an ellipse. */
+        beamTrace(apartmentRoot, objects, originValue, directionValue, fullFwhmDeg, requestedDistance) {
+            if (!apartmentRoot || !objects || !Array.isArray(originValue) || !Array.isArray(directionValue)) return null;
+            apartmentRoot.updateMatrixWorld(true);
+            const originLocal = new THREE.Vector3(...originValue);
+            const directionLocal = new THREE.Vector3(...directionValue).normalize();
+            const originWorld = apartmentRoot.localToWorld(originLocal.clone());
+            const rootQ = new THREE.Quaternion();
+            apartmentRoot.getWorldQuaternion(rootQ);
+            const directionWorld = directionLocal.clone().applyQuaternion(rootQ).normalize();
+            const cast = (localDirection) => {
+                const worldDirection = localDirection.clone().applyQuaternion(rootQ).normalize();
+                raycaster.set(originWorld, worldDirection);
+                raycaster.near = 0.015;
+                raycaster.far = Number.isFinite(requestedDistance) ? Math.max(0.02, requestedDistance + 0.25) : Infinity;
+                const hit = raycaster.intersectObjects(Array.isArray(objects) ? objects : [objects], true)
+                    .find((candidate) => candidate.point);
+                if (!hit) return null;
+                return {
+                    point: apartmentRoot.worldToLocal(hit.point.clone()).toArray(),
+                    distance_m: hit.distance,
+                    object: hit.object,
+                };
+            };
+            const center = cast(directionLocal);
+            const helper = Math.abs(directionLocal.z) < 0.9
+                ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0);
+            const u = new THREE.Vector3().crossVectors(directionLocal, helper).normalize();
+            const w = new THREE.Vector3().crossVectors(u, directionLocal).normalize();
+            const halfAngle = THREE.MathUtils.degToRad(Math.max(0.1, Math.min(179, +fullFwhmDeg || 20)) / 2);
+            const points = [];
+            const samples = 48;
+            for (let i = 0; i < samples; i++) {
+                const phi = (i / samples) * Math.PI * 2;
+                const rim = u.clone().multiplyScalar(Math.cos(phi)).addScaledVector(w, Math.sin(phi));
+                const ray = directionLocal.clone().multiplyScalar(Math.cos(halfAngle))
+                    .addScaledVector(rim, Math.sin(halfAngle)).normalize();
+                const hit = cast(ray);
+                if (hit) points.push(hit.point);
+            }
+            const requested = Number.isFinite(requestedDistance) ? requestedDistance : null;
+            const blocked = !!(center && requested != null && center.distance_m + 0.03 < requested);
+            return {
+                center,
+                footprint: points.length >= 2 ? {
+                    kind: points.length >= samples * 0.75 ? 'ellipse' : 'partial',
+                    points,
+                    hit_fraction: points.length / samples,
+                } : null,
+                obstruction_point: blocked ? center.point : null,
+                blocked,
             };
         },
 

@@ -24,6 +24,18 @@ const SW_VERSION = readSwVersion();
 const CACHE_NAME = `home-web-static-${SW_VERSION}`;
 const SAME_ORIGIN_STATIC = /\.(?:js|jsx|css|png|jpg|jpeg|webp|svg|ico|webmanifest|wasm)$/i;
 const APP_CODE_ASSET = /\.(?:js|jsx)$/i;
+// High-risk Apartment modules are listed explicitly as a regression guard:
+// these must always stay network-bound even if the generic extension policy
+// changes. The versioned loader, not a stale service-worker cache, owns them.
+const FRESH_APARTMENT_MODULES = new Set([
+  "/home-apartment-aiming.js",
+  "/home-apartment-gimbal-telemetry.js",
+  "/home-apartment-aim.jsx",
+  "/home-apartment-data.js",
+  "/home-apartment-sim.js",
+  "/home-apartment.jsx",
+  "/home-3d/markers.js",
+]);
 const HEAVY_APARTMENT_ASSET = /^\/assets\/apartment\/.*\.(?:ply|spz|glb|wasm|jpg|jpeg|png|webp)$/i;
 const NEVER_CACHE_PREFIXES = [
   "/proxy/",
@@ -83,7 +95,8 @@ function isAppShell(request, url) {
 }
 
 function isAppCodeModule(url) {
-  return APP_CODE_ASSET.test(url.pathname) && !url.pathname.startsWith("/vendor/");
+  return FRESH_APARTMENT_MODULES.has(url.pathname)
+    || (APP_CODE_ASSET.test(url.pathname) && !url.pathname.startsWith("/vendor/"));
 }
 
 function isCacheableStatic(url) {

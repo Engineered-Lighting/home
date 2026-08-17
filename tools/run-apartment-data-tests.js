@@ -138,7 +138,9 @@ async function main() {
   assert("target/fixture helpers exported", typeof D.ensureModelShape === "function"
     && typeof D.isCeilingLight === "function" && typeof D.reconcileFixturePosition === "function");
   assert("source and fixture-mapping helpers exported", typeof D.modelSourceMeta === "function"
-    && typeof D.modelForPersistence === "function" && typeof D.buildFixtureMapping === "function");
+    && typeof D.modelForPersistence === "function" && typeof D.buildFixtureMapping === "function"
+    && typeof D.compareSpatialGeometry === "function"
+    && typeof D.reconcileFixtureEntityLink === "function");
 
   process.stdout.write("\napartment_fixture_calibration_helpers_test\n");
   const shaped = D.ensureModelShape({
@@ -403,6 +405,40 @@ async function main() {
   ] }, mappingSeed);
   assert("fixture mapping reports duplicate HA entity links", duplicateMapping.duplicateLinks.length === 1
     && duplicateMapping.duplicateLinks[0].entity_id === "light.kitchen", duplicateMapping.duplicateLinks);
+
+  const geometryLockedModel = {
+    schema_version: 1, revision: 26,
+    zones: [{ id: "kitchen", floor_polygon: [[0, 0], [4, 0], [4, 3], [0, 3]], ceiling_height_m: 2.4 }],
+    targets: [{ id: "island", category: "island", shape: "surface", pos: [2, 1.5, 0.9],
+      normal: [0, 0, 1], size_m: [1.1, 0.6] }],
+    devices: [{ id: "fixture", type: "light", name: "island left", ha_entity_id: "light.old",
+      height_preset: "ceiling", room_id: "kitchen", pos: [2.2, 1.3, 2.3], aiming_origin: "fixture_bottom",
+      fixture_calibration: { status: "proposed", wall_distances: [{ wall: "west", distance_m: null },
+        { wall: "south", distance_m: null }], floor_to_ceiling_m: null,
+        ceiling_to_fixture_bottom_m: null, floor_to_bottom_verification_m: null } }],
+  };
+  const linkOnly = D.reconcileFixtureEntityLink(
+    geometryLockedModel, "fixture", "light.island_left", "2026-08-16T00:00:00.000Z",
+  );
+  assert("link-only reconciliation preserves every spatial and tape field",
+    linkOnly.ok === true && linkOnly.geometry.unchanged === true
+      && linkOnly.model.devices[0].ha_entity_id === "light.island_left"
+      && linkOnly.model.devices[0].pos.join(",") === "2.2,1.3,2.3"
+      && D.compareSpatialGeometry(geometryLockedModel, linkOnly.model).unchanged === true,
+    linkOnly);
+  const movedGeometry = JSON.parse(JSON.stringify(linkOnly.model));
+  movedGeometry.devices[0].pos[0] += 0.1;
+  const drift = D.compareSpatialGeometry(geometryLockedModel, movedGeometry);
+  assert("spatial comparison detects coordinate drift independently from identity links",
+    drift.unchanged === false && drift.collections.devices.changed[0] === "fixture", drift);
+  const duplicateLink = D.reconcileFixtureEntityLink({ ...geometryLockedModel, devices: [
+    ...geometryLockedModel.devices,
+    { id: "other", type: "light", name: "other", ha_entity_id: "light.island_left",
+      pos: [1, 1, 2.3], height_preset: "ceiling" },
+  ] }, "fixture", "light.island_left");
+  assert("link-only reconciliation rejects duplicates without returning a mutated model",
+    duplicateLink.ok === false && duplicateLink.duplicate === true && !duplicateLink.model,
+    duplicateLink);
 
   process.stdout.write("\napartment_state_binding_and_service_test\n");
   const stateEvents = [];

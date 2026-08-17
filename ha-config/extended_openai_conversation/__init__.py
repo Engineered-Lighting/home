@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from functools import wraps
 from pathlib import Path
 
@@ -989,6 +990,131 @@ class SpatialModelView(CORSHomeAssistantView):
                          status_code=200 if result.get("ok") else 400)
 
 
+def _validate_apartment_engineered_fixtures(body: dict) -> str | None:
+    """Validate optional additive schema-v1 engineered fixture fields.
+
+    The document remains open to unrelated v1 fields. Only an explicitly
+    adopted engineered fixture is constrained here, and entity-role uniqueness
+    is enforced across all such fixtures.
+    """
+    entity_roles: dict[str, str] = {}
+    sha256 = re.compile(r"^[0-9a-fA-F]{64}$")
+    allowed_status = {"proposed", "measured", "calibrated", "verified"}
+
+    def _entity(value, label: str) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value.startswith("light."):
+            raise ValueError(f"{label} must be a light entity_id or null")
+        return value
+
+    def _claim(entity_id: str | None, role: str) -> None:
+        if not entity_id:
+            return
+        prior = entity_roles.get(entity_id)
+        if prior:
+            raise ValueError(
+                f"duplicate engineered light mapping {entity_id}: {prior} and {role}")
+        entity_roles[entity_id] = role
+
+    try:
+        for index, device in enumerate(body.get("devices", [])):
+            if not isinstance(device, dict):
+                raise ValueError(f"devices[{index}] object required")
+            kind = device.get("fixture_kind")
+            if kind is None:
+                continue
+            if kind != "engineered_gimbal_v1":
+                raise ValueError(f"devices[{index}].fixture_kind is unsupported")
+            fixture_id = str(device.get("id") or f"devices[{index}]")
+
+            spotlight = device.get("spotlight")
+            if not isinstance(spotlight, dict):
+                raise ValueError(f"{fixture_id}.spotlight object required")
+            _claim(_entity(spotlight.get("entity_id"),
+                           f"{fixture_id}.spotlight.entity_id"),
+                   f"{fixture_id}.spotlight")
+            optic = spotlight.get("optic_profile")
+            if not isinstance(optic, dict):
+                raise ValueError(f"{fixture_id}.spotlight.optic_profile object required")
+            fwhm = optic.get("configured_fwhm_deg")
+            if not isinstance(fwhm, (int, float)) or isinstance(fwhm, bool) \
+                    or not 0 < float(fwhm) < 180:
+                raise ValueError(
+                    f"{fixture_id}.spotlight.optic_profile.configured_fwhm_deg must be between 0 and 180")
+
+            gimbal = device.get("gimbal")
+            if not isinstance(gimbal, dict):
+                raise ValueError(f"{fixture_id}.gimbal object required")
+            limits = gimbal.get("limits")
+            if not isinstance(limits, dict) \
+                    or limits.get("tilt_positive") != "down":
+                raise ValueError(f"{fixture_id}.gimbal limits with positive-down tilt required")
+            for low, high in (("pan_min_deg", "pan_max_deg"),
+                              ("tilt_min_deg", "tilt_max_deg")):
+                if not isinstance(limits.get(low), (int, float)) \
+                        or not isinstance(limits.get(high), (int, float)) \
+                        or float(limits[low]) >= float(limits[high]):
+                    raise ValueError(f"{fixture_id}.gimbal invalid {low}/{high}")
+            profile = gimbal.get("product_profile_sha256")
+            if profile is not None and (not isinstance(profile, str)
+                                        or not sha256.fullmatch(profile)):
+                raise ValueError(f"{fixture_id}.gimbal.product_profile_sha256 must be a full SHA-256 or null")
+            binding = gimbal.get("device_binding")
+            if binding is not None and (not isinstance(binding, dict)
+                                        or not isinstance(binding.get("stable_id"), str)
+                                        or not binding["stable_id"].strip()):
+                raise ValueError(f"{fixture_id}.gimbal stable device binding required")
+
+            calibration = gimbal.get("visualization_calibration")
+            if calibration is not None:
+                if not isinstance(calibration, dict):
+                    raise ValueError(f"{fixture_id}.visualization_calibration object or null required")
+                if calibration.get("model") != "ideal_two_axis_pan_tilt":
+                    raise ValueError(f"{fixture_id}.visualization_calibration model is unsupported")
+                if calibration.get("pan_sign") not in (-1, 1) \
+                        or calibration.get("tilt_sign") not in (-1, 1):
+                    raise ValueError(f"{fixture_id}.visualization_calibration explicit axis signs required")
+                digest = calibration.get("collision_geometry_sha256")
+                if not isinstance(digest, str) or not sha256.fullmatch(digest):
+                    raise ValueError(f"{fixture_id}.visualization_calibration full collision SHA-256 required")
+                if calibration.get("status") not in allowed_status:
+                    raise ValueError(f"{fixture_id}.visualization_calibration invalid status")
+                if not isinstance(calibration.get("based_on_model_revision"), int):
+                    raise ValueError(f"{fixture_id}.visualization_calibration model revision required")
+
+            radial = device.get("radial_zones")
+            zones = radial.get("zones") if isinstance(radial, dict) else None
+            if not isinstance(zones, list) or len(zones) != 6:
+                raise ValueError(f"{fixture_id}.radial_zones must contain exactly six zones")
+            numbers = []
+            for zone in zones:
+                if not isinstance(zone, dict) or not isinstance(zone.get("number"), int):
+                    raise ValueError(f"{fixture_id}.radial zone number required")
+                number = zone["number"]
+                numbers.append(number)
+                _claim(_entity(zone.get("entity_id"),
+                               f"{fixture_id}.radial_zones[{number}].entity_id"),
+                       f"{fixture_id}.radial_{number}")
+            if sorted(numbers) != [1, 2, 3, 4, 5, 6]:
+                raise ValueError(f"{fixture_id}.radial zone numbers must be 1 through 6")
+            orientation = radial.get("orientation_calibration")
+            if orientation is not None:
+                if not isinstance(orientation, dict) \
+                        or orientation.get("order") not in ("clockwise", "counterclockwise") \
+                        or orientation.get("viewing_convention") != "floor_looking_up":
+                    raise ValueError(f"{fixture_id}.radial orientation convention invalid")
+                if orientation.get("status") not in allowed_status:
+                    raise ValueError(f"{fixture_id}.radial orientation status invalid")
+                if orientation.get("anchor_zone") not in (1, 2, 3, 4, 5, 6) \
+                        or not isinstance(orientation.get("fine_adjust_deg", 0), (int, float)) \
+                        or not isinstance(orientation.get("based_on_model_revision"), int):
+                    raise ValueError(f"{fixture_id}.radial orientation calibration incomplete")
+        return None
+    except ValueError as error:
+        return str(error)
+
+
 class ApartmentModelView(CORSHomeAssistantView):
     """GET  /api/extended_openai_conversation/apartment_model
     POST /api/extended_openai_conversation/apartment_model
@@ -1053,6 +1179,9 @@ class ApartmentModelView(CORSHomeAssistantView):
         if "targets" in body and not isinstance(body.get("targets"), list):
             return self.json({"error": "targets array required"},
                              status_code=400)
+        engineered_error = _validate_apartment_engineered_fixtures(body)
+        if engineered_error:
+            return self.json({"error": engineered_error}, status_code=400)
 
         def _write() -> tuple[dict, int]:
             from datetime import datetime, timezone

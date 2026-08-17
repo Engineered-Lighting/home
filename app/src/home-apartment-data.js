@@ -69,7 +69,34 @@
 
   function modelSourceMeta(model) {
     const kind = model?.source_kind || (model?.seeded ? "seed_model" : "empty");
-    return { kind, ...(MODEL_SOURCE_META[kind] || MODEL_SOURCE_META.empty) };
+    const meta = { kind, ...(MODEL_SOURCE_META[kind] || MODEL_SOURCE_META.empty) };
+    if (kind === "simulation" && Number.isInteger(model?.source_detail?.layout_revision)) {
+      meta.label = "Simulation · saved layout snapshot";
+    }
+    return meta;
+  }
+
+  // Read-only evaluation input for Simulation. This intentionally ignores the
+  // recovery draft: only the last model successfully read from the
+  // authoritative Apartment endpoint may seed a simulated spatial preview.
+  async function getSavedLayoutSnapshot() {
+    let cachedModel = null;
+    try {
+      const cached = JSON.parse(localStorage.getItem(REMOTE_CACHE_KEY) || "null");
+      if (cached && cached.source_kind !== "simulation" && !cached?.source_detail?.isolated) {
+        cachedModel = ensureModelShape(JSON.parse(JSON.stringify(cached)));
+      }
+    } catch (e) { /* continue to the local runtime recovery export */ }
+    try {
+      const response = await fetch("assets/apartment/backups/current-layout.json", { cache: "no-store" });
+      if (!response.ok) return cachedModel;
+      const backup = await response.json();
+      const model = backup?.apartment_model || backup?.model || backup;
+      const backupModel = model?.devices && model?.targets ? ensureModelShape(model) : null;
+      if (!backupModel) return cachedModel;
+      if (!cachedModel || (+backupModel.revision || 0) >= (+cachedModel.revision || 0)) return backupModel;
+      return cachedModel;
+    } catch (e) { return cachedModel; }
   }
 
   const TRANSIENT_MODEL_KEYS = new Set([
@@ -164,6 +191,76 @@
       hasChanges: changeCount > 0 || stableModelJson(local.meta || {}) !== stableModelJson(live.meta || {}),
       changeCount,
       collections,
+    };
+  }
+
+  function spatialGeometrySnapshot(model) {
+    const shaped = ensureModelShape(model);
+    const pick = (item, keys) => keys.reduce((out, key) => {
+      if (item?.[key] !== undefined) out[key] = stableModelValue(item[key]);
+      return out;
+    }, {});
+    return stableModelValue({
+      schema_version: 1,
+      zones: (shaped.zones || []).map((zone) => pick(zone,
+        ["id", "floor_polygon", "ceiling_height_m"])),
+      targets: (shaped.targets || []).map((target) => pick(target,
+        ["id", "category", "shape", "pos", "normal", "up", "size_m", "rotation_deg", "room_id"])),
+      devices: (shaped.devices || []).map((device) => pick(device,
+        ["id", "type", "pos", "yaw_rad", "room_id", "height_preset", "aiming_origin", "fixture_calibration"])),
+    });
+  }
+
+  function compareSpatialGeometry(baselineModel, candidateModel) {
+    const baseline = spatialGeometrySnapshot(baselineModel);
+    const candidate = spatialGeometrySnapshot(candidateModel);
+    const collections = {
+      zones: compareModelCollection(baseline.zones, candidate.zones),
+      targets: compareModelCollection(baseline.targets, candidate.targets),
+      devices: compareModelCollection(baseline.devices, candidate.devices),
+    };
+    const changed = Object.values(collections).reduce((total, collection) =>
+      total + collection.added.length + collection.removed.length + collection.changed.length, 0);
+    return {
+      unchanged: changed === 0,
+      changed,
+      collections,
+      baseline_json: stableModelJson(baseline),
+      candidate_json: stableModelJson(candidate),
+    };
+  }
+
+  /* Deliberate link-only mutation. Geometry is compared before returning so
+   * identity reconciliation cannot accidentally move a fixture, target, room,
+   * or tape-derived aiming origin. Names remain suggestions; this helper never
+   * chooses an entity automatically. */
+  function reconcileFixtureEntityLink(model, fixtureId, nextEntityId, timestamp = new Date().toISOString()) {
+    const entityId = String(nextEntityId || "").trim() || null;
+    const source = ensureModelShape(JSON.parse(JSON.stringify(model || EMPTY_MODEL)));
+    const fixture = (source.devices || []).find((device) => device.id === fixtureId);
+    if (!fixture || fixture.type !== "light") {
+      return { ok: false, error: "fixture not found" };
+    }
+    if (entityId && !entityId.startsWith("light.")) {
+      return { ok: false, error: "fixture links require an explicit light.* entity" };
+    }
+    const duplicate = entityId && (source.devices || []).find((device) =>
+      device.id !== fixtureId && device.ha_entity_id === entityId);
+    if (duplicate) {
+      return { ok: false, duplicate: true, error: `${entityId} is already linked to ${duplicate.name || duplicate.id}` };
+    }
+    const previousEntityId = fixture.ha_entity_id || null;
+    fixture.ha_entity_id = entityId;
+    fixture.link_updated_at = timestamp;
+    if (entityId) delete fixture.suggested_ha_entity_id;
+    else if (previousEntityId) fixture.suggested_ha_entity_id = previousEntityId;
+    const geometry = compareSpatialGeometry(model, source);
+    if (!geometry.unchanged) {
+      return { ok: false, geometry_changed: true, error: "link reconciliation changed spatial geometry", geometry };
+    }
+    return {
+      ok: true, model: source, fixture_id: fixtureId,
+      previous_entity_id: previousEntityId, entity_id: entityId, geometry,
     };
   }
 
@@ -270,10 +367,62 @@
     return {
       ...src,
       zones,
-      devices: (Array.isArray(src.devices) ? src.devices : []).map((device) =>
-        ensureFixtureCalibration(device, byId.get(device.room_id))),
+      devices: (Array.isArray(src.devices) ? src.devices : []).map((device) => {
+        const measured = ensureFixtureCalibration(device, byId.get(device.room_id));
+        return window.HomeApartmentAiming?.normalizeEngineeredFixture
+          ? window.HomeApartmentAiming.normalizeEngineeredFixture(measured)
+          : measured;
+      }),
       targets: Array.isArray(src.targets) ? src.targets : [],
     };
+  }
+
+  function adoptEngineeredFixture(device) {
+    if (!device || device.fixture_kind === "engineered_gimbal_v1") return device;
+    const defaults = window.HomeApartmentAiming?.defaultEngineeredFixtureFields?.();
+    if (!defaults) throw new Error("Apartment aiming module is unavailable");
+    return window.HomeApartmentAiming.normalizeEngineeredFixture({ ...device, ...defaults });
+  }
+
+  function validateEngineeredMappings(model) {
+    return window.HomeApartmentAiming?.validateEntityMappings?.(model?.devices || [])
+      || { ok: true, duplicates: [], uses: new Map() };
+  }
+
+  function validateEngineeredFixtureModel(model) {
+    const mapping = validateEngineeredMappings(model);
+    const errors = mapping.duplicates.map((d) => `duplicate engineered mapping ${d.entity_id}`);
+    const sha = /^[0-9a-f]{64}$/i;
+    for (const device of model?.devices || []) {
+      if (device?.fixture_kind !== "engineered_gimbal_v1") continue;
+      const fwhm = +device.spotlight?.optic_profile?.configured_fwhm_deg;
+      if (!(fwhm > 0 && fwhm < 180)) errors.push(`${device.id}: configured FWHM must be between 0 and 180 degrees`);
+      const zones = device.radial_zones?.zones;
+      if (!Array.isArray(zones) || zones.length !== 6
+          || zones.map((z) => +z.number).sort().join(",") !== "1,2,3,4,5,6") {
+        errors.push(`${device.id}: exactly six stable radial zone numbers are required`);
+      }
+      const profile = device.gimbal?.product_profile_sha256;
+      if (profile != null && !sha.test(profile)) errors.push(`${device.id}: Product profile must be a full SHA-256`);
+      const binding = device.gimbal?.device_binding;
+      if (binding != null && (typeof binding !== "object" || !String(binding.stable_id || "").trim())) {
+        errors.push(`${device.id}: stable gimbal device binding required`);
+      }
+      const cal = device.gimbal?.visualization_calibration;
+      if (cal) {
+        if (cal.pan_sign !== 1 && cal.pan_sign !== -1) errors.push(`${device.id}: explicit pan sign required`);
+        if (cal.tilt_sign !== 1 && cal.tilt_sign !== -1) errors.push(`${device.id}: explicit tilt sign required`);
+        if (!sha.test(cal.collision_geometry_sha256 || "")) errors.push(`${device.id}: full collision SHA-256 required`);
+        if (!Number.isInteger(cal.based_on_model_revision)) errors.push(`${device.id}: calibration model revision required`);
+      }
+      const radial = device.radial_zones?.orientation_calibration;
+      if (radial && (!Number.isInteger(radial.based_on_model_revision)
+          || ![1, 2, 3, 4, 5, 6].includes(+radial.anchor_zone)
+          || !["clockwise", "counterclockwise"].includes(radial.order))) {
+        errors.push(`${device.id}: radial orientation calibration is incomplete`);
+      }
+    }
+    return { ok: errors.length === 0, errors, mapping };
   }
 
   function reconcileFixturePosition(device, zone) {
@@ -438,10 +587,13 @@
     if (sim) {
       try {
         if (typeof window.__SIM_APARTMENT_MODEL_FIXTURE === "function") {
+          const savedLayout = await getSavedLayoutSnapshot();
           return withModelSource(
-            ensureModelShape(window.__SIM_APARTMENT_MODEL_FIXTURE() || EMPTY_MODEL),
+            ensureModelShape(window.__SIM_APARTMENT_MODEL_FIXTURE(savedLayout) || EMPTY_MODEL),
             "simulation",
-            { isolated: true },
+            { isolated: true, layout_source: savedLayout ? "cached_live_model" : "synthetic",
+              layout_revision: Number.isInteger(savedLayout?.revision) ? savedLayout.revision : undefined,
+              read_only_layout: !!savedLayout },
           );
         }
       } catch (e) { /* */ }
@@ -522,6 +674,8 @@
     // Simulation is fully isolated: it cannot POST to HA and cannot replace
     // the non-simulation recovery draft or last-good live cache.
     if (sim) return { ok: false, sim: true };
+    const validation = validateEngineeredFixtureModel(model);
+    if (!validation.ok) return { ok: false, validation: true, error: validation.errors.join("; ") };
     const doc = modelForPersistence(model);
     try { localStorage.setItem(DRAFT_KEY, JSON.stringify(doc)); } catch (e) { /* */ }
     if (!endpoint || !token) return { ok: false, offline: true };
@@ -769,7 +923,10 @@
     saveModel, getSeedModel, getRegistry, buildPalette,
     readStates, bindStates, callService, openTracks, EMPTY_MODEL,
     ensureModelShape, isCeilingLight, fixtureCalibrationStatus,
+    adoptEngineeredFixture, validateEngineeredMappings, validateEngineeredFixtureModel,
     reconcileFixturePosition, zoneBounds, parseTapeMeasurement, formatTapeMeasurement,
     modelSourceMeta, modelForPersistence, registryLightEntities, buildFixtureMapping,
+    spatialGeometrySnapshot, compareSpatialGeometry, reconcileFixtureEntityLink,
+    getSavedLayoutSnapshot,
   };
 })();

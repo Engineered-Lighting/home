@@ -48,9 +48,12 @@
     apartment: {
       label: "apartment",
       files: [
+        ["home-apartment-aiming.js", false],
+        ["home-apartment-gimbal-telemetry.js", false],
         ["home-apartment-data.js", false],
         ["home-apartment-sim.js", false],
         ["home-apartment-cards.jsx", true],
+        ["home-apartment-aim.jsx", true],
         ["home-apartment-calibrate.jsx", true],
         ["home-apartment-edit.jsx", true],
         ["home-apartment.jsx", true],

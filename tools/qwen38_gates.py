@@ -292,6 +292,11 @@ _APP_BOX_TAG = r"<box>\s*\[*\s*[\d,\s]*\s*\]*\s*(?:</box>|>)"
 _APP_MARKUP_RE = re.compile(                                   # lkStripMarkup
     _APP_BOX_TAG
     + r"|</?(?:ref|box)\b[^>]*>"
+    # Attribute-style tags: <bbox x1="234" y1="29" ...>. The alternative above
+    # cannot catch these — \b(?:ref|box)\b fails on "bbox" because the char
+    # before "box" is a word character. Qwen3.8 emits this form occasionally
+    # and grounded /reason is routed to it.
+    + r"|</?[a-z]{0,3}box\b[^>]*>"
     + r"|</?(?:r(?:e(?:f)?)?|b(?:o(?:x)?)?)$",
     re.IGNORECASE)
 _APP_REF_RE = re.compile(                                      # lkRenderReasoning
@@ -341,11 +346,24 @@ def app_render(text: str) -> str:
     return _APP_MARKUP_RE.sub("", t)
 
 
+# DETECTION is deliberately broader than stripping. The point of this check is
+# to notice a markup form no consumer knows about, so it must not be limited to
+# the forms we already handle. `<bbox x1="..." y1="...">` reached production on
+# 2026-08-17 when grounded /reason was routed to Qwen3.8, and BOTH the app's
+# strippers and this checker were blind to it — the gate reported clean while
+# the user would have seen raw XML. A false positive here costs a look; a false
+# negative costs the user's screen.
+_ANY_BOX_MARKUP_RE = re.compile(
+    r"<\s*/?\s*[a-z]{0,4}box\b|<\s*/?\s*ref\b|\bx1\s*=\s*[\"']", re.IGNORECASE)
+
+
 def app_residual_markup(text: str) -> list[str]:
     """Markup the app's strippers would leave on screen. Non-empty means a
     G7 FAIL regardless of how cleanly the sidecar parsed the same text —
     the user sees raw tags."""
-    return _ANY_MARKUP_RE.findall(app_render(text))
+    rendered = app_render(text)
+    return (_ANY_MARKUP_RE.findall(rendered)
+            + _ANY_BOX_MARKUP_RE.findall(rendered))
 
 
 def extract_answer_line(text: str) -> str | None:

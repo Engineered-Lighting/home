@@ -184,6 +184,14 @@ const LK_BOX_TAG_SRC = "<box>\\s*\\[*\\s*[\\d,\\s]*\\s*\\]*\\s*(?:<\\/box>|>)";
 const LK_MARKUP_RE = new RegExp(
   LK_BOX_TAG_SRC
   + "|<\\/?(?:ref|box)\\b[^>]*>"
+  // Attribute-style box tags: <bbox x1="234" y1="29" x2="456" y2="210">.
+  // Qwen3-VL never emitted this; Qwen3.8 does, occasionally, and grounded
+  // /reason is routed to it as of 2026-08-17. Note the alternative above
+  // cannot catch it — /\b(?:ref|box)\b/ fails on "bbox" because the char
+  // before "box" is a word character, so there is no boundary there.
+  // Observed once in ~27 live /reason calls; 0/15 in a targeted re-test,
+  // which at a ~4% rate proves nothing (missed with p~0.57).
+  + "|<\\/?[a-z]{0,3}box\\b[^>]*>"
   + "|<\\/?(?:r(?:e(?:f)?)?|b(?:o(?:x)?)?)$",
   "gi",
 );

@@ -493,16 +493,45 @@ positional: **`RULE 0.7b` is the last thing in the 8,682-token prompt**, it
 commands the model to check state before answering, and it says nothing
 about how to report what it finds. Recency wins.
 
-So the fix is not another brevity rule — one exists and loses. It is a
-reporting clause inside the rule that causes the enumeration:
-`tools/patch-subentry-prompt.py` (+545 chars to RULE 0.7b, dry-run by
-default, timestamped backup, config-entry reload with no HA restart,
-`--revert` to undo).
+A reporting clause was added to RULE 0.7b on that reasoning
+(`tools/patch-subentry-prompt.py`, +545 chars).
 
-⚠ **This is a prompt-surface edit and therefore OWNER-RUN.** It also
-invalidates the V-cell baseline the moment it lands, so the sequence is:
-apply → re-run the V cell → replace the G6-d and G6-b/c reference numbers
-here. Do not apply it during a soak.
+⚠ **IT DID NOT WORK. Applied, A/B-measured, and REVERTED 2026-08-16.**
+Clean A/B on identical house state, 20 runs each arm:
+
+| | p50 | p95 | reply chars (p50) | replies quoting %/K |
+|---|---|---|---|---|
+| unpatched | 2.19 s | 3.73 s | 271 | 3/20 |
+| patched | 2.31 s | 3.25 s | 232 | 4/20 |
+
+A 13% tail improvement with p50 slightly worse and **the target behaviour
+unchanged** — the model still recited "Ambient Left, Ambient Right, Dining
+Table Left, …", which the clause explicitly forbids. That is noise, not a
+fix, so the 545 chars were reverted rather than left to dilute a prompt
+that already loses instructions to recency.
+
+**What the exercise did establish, which is more useful than the patch
+would have been:**
+
+1. ⚠ **The tail is HOUSE-STATE-DEPENDENT, and 6.12 s was not typical.** The
+   same query measured **3.73 s p95 unpatched** in later conditions — inside
+   the 4 s budget. Reply length tracks how many lights are actually on, so
+   G6-d is "slow when the house is busy", not a fixed defect. The earlier
+   n=30 measurement was honest but caught a busier house.
+2. **Prompt instructions are not the lever here.** Two independent rules
+   ("How to speak", and the new clause) both tell the model to summarise,
+   and both lose on this query type. A third would very likely lose too.
+3. **The likely real lever is the TOOL layer, not the prompt.**
+   `get_attributes` hands back a row per entity and the model dutifully
+   reports what it was given. Returning a summarised payload would shorten
+   the reply without asking the model to disobey its own input. That is EOC
+   component code — live, never-deploy — so it is a Phase-2 change, not a
+   quick fix.
+
+**Consequence for the migration: none blocking.** G6-b (p50 ≤ 2.5 s) passes
+at 2.19–2.31 s, and G6-c is a paired ratio that is unaffected by the
+absolute tail. The verbosity remains worth fixing for its own sake, at the
+tool layer, after the model change settles.
 
 ⚠ **Instrument correction.** D1 named HA `/api/conversation/process` as the
 TTFT instrument. **It cannot be** — that endpoint returns a finished

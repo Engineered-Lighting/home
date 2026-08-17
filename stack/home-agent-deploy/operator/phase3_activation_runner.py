@@ -108,6 +108,21 @@ SOURCE_REFRESH_FORBIDDEN_PATHS = (
     CUTOVER_RECEIPT,
     COMPLETION_RECEIPT,
 )
+SOURCE_REBIND_ROOT = STATE_ROOT / "source-rebinds"
+REBIND_CONTRACT = "phase3-activation-source-rebind-e5ak-v1"
+REBIND_RECEIPT_NAME = re.compile(r"^[0-9a-f]{40}-[0-9a-f]{40}\.json$")
+REBIND_MAX_HOPS = 8
+REBIND_FORBIDDEN_PATHS = (
+    IDENTITY_SIGNING_STATE,
+    FINALIZER_DOCUMENT,
+    FINALIZER_RECEIPT,
+    EDGE_RECEIPT,
+    WRITER_OBSERVATION,
+    PRIVACY_OBSERVATION,
+    CUTOVER_PACKET,
+    CUTOVER_RECEIPT,
+    COMPLETION_RECEIPT,
+)
 REMOTE_EDGE_RECEIPT = "/config/.storage/home_agent_edge_privacy_policy_receipt.json"
 REMOTE_IDENTITY_DB = "/config/extended_openai_conversation/identity.db"
 REMOTE_FREEZE = (
@@ -325,6 +340,214 @@ def completion_receipt(state: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def validate_credential_receipt_shape(credential: Any) -> None:
+    """Validate the immutable credential receipt without any live-source pin."""
+
+    expected_keys = {
+        "contract",
+        "operation_id",
+        "source_commit",
+        "release_manifest_digest",
+        "migration_tool_bundle_digest",
+        "core_oci_manifest_digest",
+        "core_schema_digest",
+        "core_capability_digest",
+        "source_projection_contract_digest",
+        "policy_version",
+        "policy_digest",
+        "shadow_authorization_id",
+        "review_key_fingerprint",
+        "finalization_key_fingerprint",
+        "writer_freeze_key_fingerprint",
+        "privacy_probe_key_fingerprint",
+        "semantic_cutover_key_fingerprint",
+        "commitment_key_fingerprint",
+        "commitment_key_epoch",
+        "credential_count",
+        "status",
+        "key_source",
+    }
+    digest_keys = {
+        key
+        for key in expected_keys
+        if key.endswith("_digest") or key.endswith("_fingerprint")
+    }
+    if (
+        not isinstance(credential, Mapping)
+        or set(credential) != expected_keys
+        or credential.get("contract") != "phase3-identity-credential-receipt-e5ae-v1"
+        or source_plan.COMMIT_SHA.fullmatch(str(credential.get("source_commit", "")))
+        is None
+        or credential.get("credential_count") != len(CREDENTIAL_TARGETS)
+        or credential.get("commitment_key_epoch") != 1
+        or credential.get("status") != "provisioned"
+        or credential.get("key_source") not in {"host", "tpm2", "host+tpm2"}
+        or any(
+            not isinstance(credential.get(key), str)
+            or re.fullmatch(r"[0-9a-f]{64}", credential[key]) is None
+            for key in digest_keys
+        )
+    ):
+        raise ActivationRunnerError("identity credential receipt is invalid")
+    try:
+        operation_id = uuid.UUID(str(credential["operation_id"]))
+        shadow_id = uuid.UUID(str(credential["shadow_authorization_id"]))
+    except (ValueError, TypeError, AttributeError) as error:
+        raise ActivationRunnerError("identity credential receipt is invalid") from error
+    fingerprints = {
+        credential[key] for key in digest_keys if key.endswith("_fingerprint")
+    }
+    if (
+        operation_id.version != 7
+        or shadow_id.version not in {4, 7}
+        or len(fingerprints) != 6
+    ):
+        raise ActivationRunnerError("identity credential receipt is invalid")
+
+
+def validate_rebind_receipt(
+    receipt: Any,
+    *,
+    name: str,
+    runner_id: str,
+    credential_receipt_sha256: str,
+) -> dict[str, Any]:
+    """Validate one immutable rebind receipt against its filename and owner."""
+
+    expected_keys = {
+        "contract",
+        "runner_id",
+        "from_source_commit",
+        "to_source_commit",
+        "from_source_pack_digest",
+        "to_source_pack_digest",
+        "credential_receipt_sha256",
+        "credential_source_commit",
+        "completed_step_count",
+        "next_step",
+        "recorded_at",
+    }
+    if (
+        not isinstance(receipt, Mapping)
+        or set(receipt) != expected_keys
+        or receipt.get("contract") != REBIND_CONTRACT
+        or receipt.get("runner_id") != runner_id
+        or receipt.get("completed_step_count") != 4
+        or receipt.get("next_step") != "await_reviewed_people_packet"
+        or receipt.get("credential_receipt_sha256") != credential_receipt_sha256
+        or not isinstance(receipt.get("recorded_at"), str)
+    ):
+        raise ActivationRunnerError("activation source rebind receipt is unsafe")
+    from_commit = str(receipt.get("from_source_commit", ""))
+    to_commit = str(receipt.get("to_source_commit", ""))
+    if (
+        source_plan.COMMIT_SHA.fullmatch(from_commit) is None
+        or source_plan.COMMIT_SHA.fullmatch(to_commit) is None
+        or from_commit == to_commit
+        or name != f"{from_commit}-{to_commit}.json"
+        or source_plan.COMMIT_SHA.fullmatch(
+            str(receipt.get("credential_source_commit", ""))
+        )
+        is None
+        or any(
+            not isinstance(receipt.get(key), str)
+            or re.fullmatch(r"[0-9a-f]{64}", receipt[key]) is None
+            for key in ("from_source_pack_digest", "to_source_pack_digest")
+        )
+    ):
+        raise ActivationRunnerError("activation source rebind receipt is unsafe")
+    return dict(receipt)
+
+
+def credential_source_binding_valid(
+    credential: Mapping[str, Any],
+    state: Mapping[str, Any],
+    report: Mapping[str, Any],
+    rebind_receipts: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    """Accept the credential receipt directly or through the rebind chain."""
+
+    origin = credential.get("source_commit")
+    tail = state.get("source_commit")
+    live_commit = report.get("current_commit")
+    live_digest = report.get("source_pack_digest")
+    if not isinstance(live_digest, str) or live_commit != tail:
+        return False
+    if origin == tail:
+        return credential.get("release_manifest_digest") == live_digest
+    commit = origin
+    digest = credential.get("release_manifest_digest")
+    visited = {commit}
+    for _ in range(REBIND_MAX_HOPS):
+        receipt = rebind_receipts.get(commit)
+        if (
+            receipt is None
+            or receipt.get("credential_source_commit") != origin
+            or receipt.get("from_source_pack_digest") != digest
+        ):
+            return False
+        commit = receipt.get("to_source_commit")
+        digest = receipt.get("to_source_pack_digest")
+        if commit in visited:
+            return False
+        visited.add(commit)
+        if commit == tail:
+            return digest == live_digest
+    return False
+
+
+def read_rebind_receipts(
+    runner_id: str, credential_receipt_sha256: str
+) -> dict[str, dict[str, Any]]:
+    """Load the append-only rebind chain, refusing ambiguity and tampering."""
+
+    if not SOURCE_REBIND_ROOT.exists() and not SOURCE_REBIND_ROOT.is_symlink():
+        return {}
+    details = SOURCE_REBIND_ROOT.lstat()
+    if (
+        not stat.S_ISDIR(details.st_mode)
+        or details.st_uid != 0
+        or details.st_gid != 0
+        or stat.S_IMODE(details.st_mode) != 0o700
+    ):
+        raise ActivationRunnerError("activation source rebind directory is unsafe")
+    receipts: dict[str, dict[str, Any]] = {}
+    for item in sorted(SOURCE_REBIND_ROOT.iterdir()):
+        name = item.name
+        if name.startswith("."):
+            continue
+        if REBIND_RECEIPT_NAME.fullmatch(name) is None:
+            raise ActivationRunnerError("activation source rebind receipt is unsafe")
+        try:
+            entry_details = item.lstat()
+            value = parse_canonical_json(item.read_bytes(), maximum=4096)
+        except (OSError, VerificationError) as error:
+            raise ActivationRunnerError(
+                "activation source rebind receipt is unsafe"
+            ) from error
+        if (
+            not stat.S_ISREG(entry_details.st_mode)
+            or entry_details.st_uid != 0
+            or entry_details.st_gid != 0
+            or stat.S_IMODE(entry_details.st_mode) != 0o600
+            or entry_details.st_nlink != 1
+        ):
+            raise ActivationRunnerError("activation source rebind receipt is unsafe")
+        receipt = validate_rebind_receipt(
+            value,
+            name=name,
+            runner_id=runner_id,
+            credential_receipt_sha256=credential_receipt_sha256,
+        )
+        from_commit = receipt["from_source_commit"]
+        if from_commit in receipts:
+            raise ActivationRunnerError(
+                "activation source rebind chain is ambiguous"
+            )
+        receipts[from_commit] = receipt
+    return receipts
+
+
 class StateStore:
     def prepare(self) -> None:
         STATE_ROOT.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -489,6 +712,112 @@ class StateStore:
             os.chmod(temporary, 0o600)
             os.replace(temporary, path)
             directory = os.open(SOURCE_TRANSITION_ROOT, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+
+    def record_source_rebind(
+        self,
+        state: Mapping[str, Any],
+        new_commit: str,
+        *,
+        from_source_pack_digest: str,
+        to_source_pack_digest: str,
+        credential_receipt_sha256: str,
+        credential_source_commit: str,
+    ) -> None:
+        old_commit = str(state["source_commit"])
+        if (
+            source_plan.COMMIT_SHA.fullmatch(old_commit) is None
+            or source_plan.COMMIT_SHA.fullmatch(new_commit) is None
+            or old_commit == new_commit
+        ):
+            raise ActivationRunnerError("activation source rebind is invalid")
+        SOURCE_REBIND_ROOT.mkdir(parents=False, mode=0o700, exist_ok=True)
+        details = SOURCE_REBIND_ROOT.lstat()
+        if (
+            not stat.S_ISDIR(details.st_mode)
+            or details.st_uid != 0
+            or details.st_gid != 0
+            or stat.S_IMODE(details.st_mode) != 0o700
+        ):
+            raise ActivationRunnerError(
+                "activation source rebind directory is unsafe"
+            )
+        path = SOURCE_REBIND_ROOT / f"{old_commit}-{new_commit}.json"
+        for item in SOURCE_REBIND_ROOT.iterdir():
+            if (
+                not item.name.startswith(".")
+                and item.name.startswith(f"{old_commit}-")
+                and item.name != path.name
+            ):
+                raise ActivationRunnerError(
+                    "activation source rebind chain is ambiguous"
+                )
+        expected_static = {
+            "contract": REBIND_CONTRACT,
+            "runner_id": state["runner_id"],
+            "from_source_commit": old_commit,
+            "to_source_commit": new_commit,
+            "from_source_pack_digest": from_source_pack_digest,
+            "to_source_pack_digest": to_source_pack_digest,
+            "credential_receipt_sha256": credential_receipt_sha256,
+            "credential_source_commit": credential_source_commit,
+            "completed_step_count": 4,
+            "next_step": "await_reviewed_people_packet",
+        }
+        if path.exists() or path.is_symlink():
+            try:
+                existing_details = path.lstat()
+                existing = parse_canonical_json(path.read_bytes(), maximum=4096)
+            except (OSError, VerificationError) as error:
+                raise ActivationRunnerError(
+                    "activation source rebind receipt is unsafe"
+                ) from error
+            if (
+                not stat.S_ISREG(existing_details.st_mode)
+                or existing_details.st_uid != 0
+                or existing_details.st_gid != 0
+                or stat.S_IMODE(existing_details.st_mode) != 0o600
+                or existing_details.st_nlink != 1
+                or not isinstance(existing, Mapping)
+                or set(existing) != set(expected_static) | {"recorded_at"}
+                or any(
+                    existing.get(key) != value
+                    for key, value in expected_static.items()
+                )
+                or not isinstance(existing.get("recorded_at"), str)
+            ):
+                raise ActivationRunnerError(
+                    "activation source rebind receipt is unsafe"
+                )
+            return
+        receipt = {**expected_static, "recorded_at": _utc()}
+        temporary = path.with_name(f".{path.name}.new.{secrets.token_hex(12)}")
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            with os.fdopen(descriptor, "wb", closefd=True) as stream:
+                descriptor = -1
+                stream.write(canonical_bytes(receipt))
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chown(temporary, 0, 0)
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, path)
+            directory = os.open(SOURCE_REBIND_ROOT, os.O_RDONLY)
             try:
                 os.fsync(directory)
             finally:
@@ -1111,70 +1440,14 @@ class Backend:
             raise ActivationRunnerError(
                 "identity credential receipt is invalid"
             ) from error
-        expected_keys = {
-            "contract",
-            "operation_id",
-            "source_commit",
-            "release_manifest_digest",
-            "migration_tool_bundle_digest",
-            "core_oci_manifest_digest",
-            "core_schema_digest",
-            "core_capability_digest",
-            "source_projection_contract_digest",
-            "policy_version",
-            "policy_digest",
-            "shadow_authorization_id",
-            "review_key_fingerprint",
-            "finalization_key_fingerprint",
-            "writer_freeze_key_fingerprint",
-            "privacy_probe_key_fingerprint",
-            "semantic_cutover_key_fingerprint",
-            "commitment_key_fingerprint",
-            "commitment_key_epoch",
-            "credential_count",
-            "status",
-            "key_source",
-        }
-        digest_keys = {
-            key
-            for key in expected_keys
-            if key.endswith("_digest") or key.endswith("_fingerprint")
-        }
+        validate_credential_receipt_shape(credential)
         report = source_plan.live_report()
-        if (
-            not isinstance(credential, Mapping)
-            or set(credential) != expected_keys
-            or credential.get("contract")
-            != "phase3-identity-credential-receipt-e5ae-v1"
-            or credential.get("source_commit") != state["source_commit"]
-            or credential.get("source_commit") != report.get("current_commit")
-            or credential.get("release_manifest_digest")
-            != report.get("source_pack_digest")
-            or credential.get("credential_count") != len(CREDENTIAL_TARGETS)
-            or credential.get("commitment_key_epoch") != 1
-            or credential.get("status") != "provisioned"
-            or credential.get("key_source") not in {"host", "tpm2", "host+tpm2"}
-            or any(
-                not isinstance(credential.get(key), str)
-                or re.fullmatch(r"[0-9a-f]{64}", credential[key]) is None
-                for key in digest_keys
-            )
-        ):
-            raise ActivationRunnerError("identity credential receipt is invalid")
-        try:
-            operation_id = uuid.UUID(str(credential["operation_id"]))
-            shadow_id = uuid.UUID(str(credential["shadow_authorization_id"]))
-        except (ValueError, TypeError, AttributeError) as error:
-            raise ActivationRunnerError(
-                "identity credential receipt is invalid"
-            ) from error
-        fingerprints = {
-            credential[key] for key in digest_keys if key.endswith("_fingerprint")
-        }
-        if (
-            operation_id.version != 7
-            or shadow_id.version not in {4, 7}
-            or len(fingerprints) != 6
+        rebind_receipts = read_rebind_receipts(
+            str(state["runner_id"]),
+            hashlib.sha256(credential_raw).hexdigest(),
+        )
+        if not credential_source_binding_valid(
+            credential, state, report, rebind_receipts
         ):
             raise ActivationRunnerError("identity credential receipt is invalid")
         for target in CREDENTIAL_TARGETS:
@@ -1412,6 +1685,69 @@ class Backend:
                 pass
 
 
+def validate_shadow_receipt_on_disk(state: Mapping[str, Any]) -> None:
+    """Validate the durable shadow authorization without a live core probe."""
+
+    raw = Backend._private_document(SHADOW_AUTHORIZATION_RECEIPT)
+    try:
+        receipt = parse_canonical_json(raw, maximum=MAX_OUTPUT)
+    except VerificationError as error:
+        raise ActivationRunnerError(
+            "shadow authorization receipt is invalid"
+        ) from error
+    expected_receipt_keys = {
+        "contract",
+        "authorization_id",
+        "operator_request_id",
+        "from_mode",
+        "to_mode",
+        "rule_version",
+        "policy_version",
+        "policy_digest",
+        "input_digest",
+        "worker_kernel_version",
+        "worker_success_sequence",
+        "worker_proof_digest",
+        "readiness_evaluated_at",
+        "authorized_at",
+    }
+    operations = state.get("operation_ids")
+    expected_request = (
+        operations.get("authorize_shadow") if isinstance(operations, Mapping) else None
+    )
+    if (
+        not isinstance(receipt, Mapping)
+        or set(receipt) != expected_receipt_keys
+        or receipt.get("contract") != "rollout-authorization-receipt-v2"
+        or receipt.get("operator_request_id") != expected_request
+        or receipt.get("from_mode") != "record_only"
+        or receipt.get("to_mode") != "shadow"
+        or not isinstance(receipt.get("rule_version"), str)
+        or not isinstance(receipt.get("policy_version"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", str(receipt.get("policy_digest", "")))
+        is None
+        or re.fullmatch(r"[0-9a-f]{64}", str(receipt.get("input_digest", "")))
+        is None
+        or receipt.get("worker_kernel_version") != "worker-maintenance-cycle-v1"
+        or not isinstance(receipt.get("worker_success_sequence"), int)
+        or receipt["worker_success_sequence"] < 1
+        or re.fullmatch(
+            r"[0-9a-f]{64}", str(receipt.get("worker_proof_digest", ""))
+        )
+        is None
+    ):
+        raise ActivationRunnerError("shadow authorization receipt is invalid")
+    for key in ("authorization_id", "operator_request_id"):
+        try:
+            value = uuid.UUID(str(receipt[key]))
+        except (TypeError, ValueError, AttributeError) as error:
+            raise ActivationRunnerError(
+                "shadow authorization receipt is invalid"
+            ) from error
+        if value.version not in {4, 7}:
+            raise ActivationRunnerError("shadow authorization receipt is invalid")
+
+
 class Runner:
     def __init__(self, backend: Backend, store: StateStore) -> None:
         self.backend = backend
@@ -1486,6 +1822,105 @@ class Runner:
             self.backend.perform(step, state)
         self.store.record_source_transition(state, commit)
         state["source_commit"] = commit
+        state["status"] = "active"
+        state["pause_code"] = "none"
+        state["last_error_code"] = "none"
+        state["updated_at"] = _utc()
+        self.store.save(state)
+        return self.status()
+
+    def rebind_source(self) -> dict[str, Any]:
+        state = self.store.load()
+        if state is None:
+            raise ActivationRunnerError("activation has not started")
+        if (
+            state["completed_steps"] != list(STEPS[:4])
+            or state["next_step"] != "await_reviewed_people_packet"
+            or state["status"] not in {"active", "paused"}
+            or state["pause_code"]
+            not in {
+                "awaiting_private_people_review",
+                "awaiting_private_people_packet",
+                "none",
+            }
+            or any(
+                path.exists() or path.is_symlink()
+                for path in REBIND_FORBIDDEN_PATHS
+            )
+        ):
+            raise ActivationRunnerError(
+                "activation source cannot be rebound at this boundary"
+            )
+        credential_raw = Backend._private_document(CREDENTIAL_RECEIPT)
+        try:
+            credential = parse_canonical_json(credential_raw, maximum=MAX_OUTPUT)
+        except VerificationError as error:
+            raise ActivationRunnerError(
+                "identity credential receipt is invalid"
+            ) from error
+        validate_credential_receipt_shape(credential)
+        credential_sha256 = hashlib.sha256(credential_raw).hexdigest()
+        receipts = read_rebind_receipts(str(state["runner_id"]), credential_sha256)
+        origin = str(credential["source_commit"])
+        commit = origin
+        digest = str(credential["release_manifest_digest"])
+        visited = {commit}
+        for _ in range(REBIND_MAX_HOPS + 1):
+            if commit == state["source_commit"]:
+                break
+            receipt = receipts.get(commit)
+            if (
+                receipt is None
+                or receipt.get("credential_source_commit") != origin
+                or receipt.get("from_source_pack_digest") != digest
+            ):
+                raise ActivationRunnerError(
+                    "activation source rebind chain is broken"
+                )
+            commit = receipt["to_source_commit"]
+            digest = receipt["to_source_pack_digest"]
+            if commit in visited:
+                raise ActivationRunnerError(
+                    "activation source rebind chain is broken"
+                )
+            visited.add(commit)
+        else:
+            raise ActivationRunnerError("activation source rebind chain is broken")
+        validate_shadow_receipt_on_disk(state)
+        try:
+            report = source_plan.live_report()
+        except source_plan.SourcePlanError as error:
+            raise ActivationRunnerError(
+                "activation source is not hosted-accepted"
+            ) from error
+        new_commit = report.get("current_commit")
+        new_digest = report.get("source_pack_digest")
+        if (
+            report.get("source_acceptance_receipt_issuable") is not True
+            or report.get("blockers") != []
+            or not isinstance(new_commit, str)
+            or source_plan.COMMIT_SHA.fullmatch(new_commit) is None
+            or not isinstance(new_digest, str)
+        ):
+            raise ActivationRunnerError("activation source is not hosted-accepted")
+        if new_commit == state["source_commit"]:
+            return self.status()
+        for step in STEPS[:2]:
+            try:
+                self.backend.perform(step, state)
+            except ActivationPause as pause:
+                raise ActivationRunnerError(
+                    "activation source cannot be rebound at this boundary"
+                ) from pause
+        self.store.record_source_rebind(
+            state,
+            new_commit,
+            from_source_pack_digest=digest,
+            to_source_pack_digest=new_digest,
+            credential_receipt_sha256=credential_sha256,
+            credential_source_commit=origin,
+        )
+        state["source_commit"] = new_commit
         state["status"] = "active"
         state["pause_code"] = "none"
         state["last_error_code"] = "none"
@@ -1595,9 +2030,11 @@ def main() -> int:
         "advance",
         "contain",
         "refresh-source",
+        "rebind-source",
     }:
         print(
-            "phase3 activation runner requires status, advance, contain, or refresh-source",
+            "phase3 activation runner requires status, advance, contain, "
+            "refresh-source, or rebind-source",
             file=sys.stderr,
         )
         return 64
@@ -1608,9 +2045,9 @@ def main() -> int:
     try:
         descriptor = _lock()
         runner = Runner(Backend(), StateStore())
-        action = "refresh_source" if sys.argv[1] == "refresh-source" else sys.argv[1]
+        action = sys.argv[1].replace("-", "_")
         result = getattr(runner, action)()
-    except (ActivationRunnerError, OSError):
+    except (ActivationRunnerError, ActivationPause, OSError):
         print("phase3 activation runner failed closed", file=sys.stderr)
         return 78
     finally:
@@ -1619,7 +2056,7 @@ def main() -> int:
     print(json.dumps(result, separators=(",", ":"), sort_keys=True))
     return (
         0
-        if sys.argv[1] == "refresh-source"
+        if sys.argv[1] in {"refresh-source", "rebind-source"}
         or result["status"] in {"not_started", "complete"}
         else 3
     )

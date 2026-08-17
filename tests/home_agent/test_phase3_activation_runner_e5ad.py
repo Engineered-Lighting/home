@@ -50,6 +50,13 @@ class MemoryStore:
             "to": new_commit,
         }
 
+    def record_source_rebind(self, state, new_commit, **details):
+        self.rebind = {
+            "from": state["source_commit"],
+            "to": new_commit,
+            **details,
+        }
+
 
 class FakeBackend:
     def __init__(self, module: ModuleType) -> None:
@@ -394,6 +401,9 @@ def test_runner_contract_is_fixed_restart_safe_and_action_free() -> None:
     assert "phase3-shadow-authorization-e5ae.json" in source
     assert '"refresh-source"' in source
     assert "phase3-activation-source-transition-e5af-v1" in source
+    assert '"rebind-source"' in source
+    assert "phase3-activation-source-rebind-e5ak-v1" in source
+    assert "activation source rebind chain is ambiguous" in source
 
 
 def test_kernel_provisioners_have_distinct_isolated_compose_surfaces() -> None:
@@ -448,3 +458,420 @@ def test_status_never_discloses_operation_ids_or_private_content(monkeypatch) ->
     assert "runner_id" not in serialized
     assert "Amelia" not in serialized
     assert "Marcelo" not in serialized
+
+
+def _ceremony_module() -> ModuleType:
+    sys.path.insert(0, str(OPERATOR))
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "home_agent_phase3_identity_signing_ceremony_for_e5ad",
+            OPERATOR / "phase3_identity_signing_ceremony.py",
+        )
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        sys.path.remove(str(OPERATOR))
+
+
+def _credential_receipt(module: ModuleType, source_commit: str) -> dict[str, object]:
+    return {
+        "contract": "phase3-identity-credential-receipt-e5ae-v1",
+        "operation_id": "00000000-0000-7000-8000-000000000700",
+        "source_commit": source_commit,
+        "release_manifest_digest": "1" * 64,
+        "migration_tool_bundle_digest": "2" * 64,
+        "core_oci_manifest_digest": "3" * 64,
+        "core_schema_digest": "4" * 64,
+        "core_capability_digest": "5" * 64,
+        "source_projection_contract_digest": "6" * 64,
+        "policy_version": "home-agent-mvp-v1",
+        "policy_digest": "7" * 64,
+        "shadow_authorization_id": "00000000-0000-7000-8000-000000000999",
+        "review_key_fingerprint": "a" * 64,
+        "finalization_key_fingerprint": "b" * 64,
+        "writer_freeze_key_fingerprint": "c" * 64,
+        "privacy_probe_key_fingerprint": "d" * 64,
+        "semantic_cutover_key_fingerprint": "e" * 64,
+        "commitment_key_fingerprint": "f" * 64,
+        "commitment_key_epoch": 1,
+        "credential_count": 10,
+        "status": "provisioned",
+        "key_source": "host+tpm2",
+    }
+
+
+def _rebind_boundary_state(module: ModuleType) -> dict[str, object]:
+    state = module.new_state("b" * 40)
+    state["completed_steps"] = list(module.STEPS[:4])
+    state["next_step"] = "await_reviewed_people_packet"
+    state["status"] = "paused"
+    state["pause_code"] = "awaiting_private_people_packet"
+    state["operation_ids"]["authorize_shadow"] = (
+        "00000000-0000-7000-8000-000000000321"
+    )
+    return state
+
+
+def _rebind_fixture(module: ModuleType, monkeypatch, *, new_commit: str):
+    credential = _credential_receipt(module, "b" * 40)
+    credential_raw = module.canonical_bytes(credential)
+    monkeypatch.setattr(
+        module.Backend,
+        "_private_document",
+        staticmethod(lambda path: credential_raw),
+    )
+    monkeypatch.setattr(module, "validate_shadow_receipt_on_disk", lambda state: None)
+    monkeypatch.setattr(
+        module, "read_rebind_receipts", lambda runner_id, digest: {}
+    )
+    monkeypatch.setattr(module, "REBIND_FORBIDDEN_PATHS", ())
+    monkeypatch.setattr(
+        module.source_plan,
+        "live_report",
+        lambda: {
+            "current_commit": new_commit,
+            "source_pack_digest": "9" * 64,
+            "source_acceptance_receipt_issuable": True,
+            "blockers": [],
+        },
+    )
+    return credential, credential_raw
+
+
+def test_rebind_source_replays_prechecks_and_records_chain(monkeypatch) -> None:
+    module = _module()
+    new_commit = "c" * 40
+    credential, credential_raw = _rebind_fixture(
+        module, monkeypatch, new_commit=new_commit
+    )
+    store = MemoryStore(module)
+    store.save(_rebind_boundary_state(module))
+    backend = FakeBackend(module)
+
+    result = module.Runner(backend, store).rebind_source()
+
+    assert backend.calls == list(module.STEPS[:2])
+    assert store.rebind == {
+        "from": "b" * 40,
+        "to": new_commit,
+        "from_source_pack_digest": credential["release_manifest_digest"],
+        "to_source_pack_digest": "9" * 64,
+        "credential_receipt_sha256": (
+            __import__("hashlib").sha256(credential_raw).hexdigest()
+        ),
+        "credential_source_commit": "b" * 40,
+    }
+    assert store.value["source_commit"] == new_commit
+    assert store.value["completed_steps"] == list(module.STEPS[:4])
+    assert store.value["next_step"] == "await_reviewed_people_packet"
+    assert result["status"] == "active"
+    assert result["pause_code"] == "none"
+
+
+def test_rebind_source_rejects_wrong_boundary_or_present_artifacts(
+    monkeypatch, tmp_path
+) -> None:
+    module = _module()
+    credential, _credential_raw = _rebind_fixture(
+        module, monkeypatch, new_commit="c" * 40
+    )
+    backend = FakeBackend(module)
+
+    store = MemoryStore(module)
+    early = module.new_state("b" * 40)
+    early["completed_steps"] = list(module.STEPS[:3])
+    early["next_step"] = "provision_signing_credentials"
+    store.save(early)
+    with pytest.raises(module.ActivationRunnerError):
+        module.Runner(backend, store).rebind_source()
+
+    store = MemoryStore(module)
+    stranded = _rebind_boundary_state(module)
+    stranded["pause_code"] = "operator_recovery_required"
+    store.save(stranded)
+    with pytest.raises(module.ActivationRunnerError):
+        module.Runner(backend, store).rebind_source()
+
+    artifact = tmp_path / "identity-signing-state-e5y.json"
+    artifact.write_text("present", encoding="utf-8")
+    monkeypatch.setattr(module, "REBIND_FORBIDDEN_PATHS", (artifact,))
+    store = MemoryStore(module)
+    store.save(_rebind_boundary_state(module))
+    with pytest.raises(module.ActivationRunnerError):
+        module.Runner(backend, store).rebind_source()
+    monkeypatch.setattr(module, "REBIND_FORBIDDEN_PATHS", ())
+
+    broken = dict(_credential_receipt(module, "b" * 40))
+    broken.pop("key_source")
+    monkeypatch.setattr(
+        module.Backend,
+        "_private_document",
+        staticmethod(lambda path: module.canonical_bytes(broken)),
+    )
+    store = MemoryStore(module)
+    store.save(_rebind_boundary_state(module))
+    with pytest.raises(module.ActivationRunnerError):
+        module.Runner(backend, store).rebind_source()
+
+    monkeypatch.setattr(
+        module.Backend,
+        "_private_document",
+        staticmethod(
+            lambda path: module.canonical_bytes(_credential_receipt(module, "b" * 40))
+        ),
+    )
+
+    class PausingBackend(FakeBackend):
+        def perform(self, step, state):
+            self.calls.append(step)
+            if step == "validate_pre_authorization_prerequisites":
+                raise self.module.ActivationPause("awaiting_ha_ssh_prerequisite")
+
+    store = MemoryStore(module)
+    store.save(_rebind_boundary_state(module))
+    with pytest.raises(module.ActivationRunnerError):
+        module.Runner(PausingBackend(module), store).rebind_source()
+
+    def drifted(state):
+        raise module.ActivationRunnerError("shadow authorization receipt is invalid")
+
+    monkeypatch.setattr(module, "validate_shadow_receipt_on_disk", drifted)
+    store = MemoryStore(module)
+    store.save(_rebind_boundary_state(module))
+    with pytest.raises(module.ActivationRunnerError):
+        module.Runner(FakeBackend(module), store).rebind_source()
+
+
+def test_refresh_source_still_rejects_the_await_boundary(monkeypatch) -> None:
+    module = _module()
+    _trusted_source(module, monkeypatch)
+    store = MemoryStore(module)
+    backend = FakeBackend(module)
+    state = _rebind_boundary_state(module)
+    store.save(state)
+    with pytest.raises(module.ActivationRunnerError):
+        module.Runner(backend, store).refresh_source()
+
+
+def _hop(
+    origin: str,
+    from_commit: str,
+    to_commit: str,
+    from_digest: str,
+    to_digest: str,
+) -> dict[str, str]:
+    return {
+        "credential_source_commit": origin,
+        "from_source_commit": from_commit,
+        "to_source_commit": to_commit,
+        "from_source_pack_digest": from_digest,
+        "to_source_pack_digest": to_digest,
+    }
+
+
+def test_live_prerequisites_accept_single_and_multi_hop_rebind_chain() -> None:
+    module = _module()
+    credential = {"source_commit": "a" * 40, "release_manifest_digest": "1" * 64}
+
+    fast_state = {"source_commit": "a" * 40}
+    fast_report = {"current_commit": "a" * 40, "source_pack_digest": "1" * 64}
+    assert module.credential_source_binding_valid(
+        credential, fast_state, fast_report, {}
+    )
+
+    one_state = {"source_commit": "b" * 40}
+    one_report = {"current_commit": "b" * 40, "source_pack_digest": "2" * 64}
+    one_chain = {
+        "a" * 40: _hop("a" * 40, "a" * 40, "b" * 40, "1" * 64, "2" * 64),
+    }
+    assert module.credential_source_binding_valid(
+        credential, one_state, one_report, one_chain
+    )
+
+    two_state = {"source_commit": "c" * 40}
+    two_report = {"current_commit": "c" * 40, "source_pack_digest": "3" * 64}
+    two_chain = {
+        "a" * 40: _hop("a" * 40, "a" * 40, "b" * 40, "1" * 64, "2" * 64),
+        "b" * 40: _hop("a" * 40, "b" * 40, "c" * 40, "2" * 64, "3" * 64),
+    }
+    assert module.credential_source_binding_valid(
+        credential, two_state, two_report, two_chain
+    )
+
+
+def test_live_prerequisites_reject_broken_rebind_chain() -> None:
+    module = _module()
+    credential = {"source_commit": "a" * 40, "release_manifest_digest": "1" * 64}
+    state = {"source_commit": "c" * 40}
+    report = {"current_commit": "c" * 40, "source_pack_digest": "3" * 64}
+    good = {
+        "a" * 40: _hop("a" * 40, "a" * 40, "b" * 40, "1" * 64, "2" * 64),
+        "b" * 40: _hop("a" * 40, "b" * 40, "c" * 40, "2" * 64, "3" * 64),
+    }
+
+    assert not module.credential_source_binding_valid(credential, state, report, {})
+
+    digest_break = {
+        key: dict(value) for key, value in good.items()
+    }
+    digest_break["b" * 40]["from_source_pack_digest"] = "f" * 64
+    assert not module.credential_source_binding_valid(
+        credential, state, report, digest_break
+    )
+
+    unterminated = {"a" * 40: good["a" * 40]}
+    assert not module.credential_source_binding_valid(
+        credential, state, report, unterminated
+    )
+
+    cycle = {
+        "a" * 40: _hop("a" * 40, "a" * 40, "b" * 40, "1" * 64, "2" * 64),
+        "b" * 40: _hop("a" * 40, "b" * 40, "a" * 40, "2" * 64, "1" * 64),
+    }
+    assert not module.credential_source_binding_valid(
+        credential, state, report, cycle
+    )
+
+    foreign_origin = {
+        key: dict(value) for key, value in good.items()
+    }
+    foreign_origin["b" * 40]["credential_source_commit"] = "9" * 40
+    assert not module.credential_source_binding_valid(
+        credential, state, report, foreign_origin
+    )
+
+    untrusted_report = {"current_commit": "c" * 40, "source_pack_digest": None}
+    assert not module.credential_source_binding_valid(
+        credential, state, untrusted_report, good
+    )
+
+    moved_checkout = {"current_commit": "d" * 40, "source_pack_digest": "3" * 64}
+    assert not module.credential_source_binding_valid(
+        credential, state, moved_checkout, good
+    )
+
+    tail_digest_mismatch = {"current_commit": "c" * 40, "source_pack_digest": "e" * 64}
+    assert not module.credential_source_binding_valid(
+        credential, state, tail_digest_mismatch, good
+    )
+
+    long_chain = {}
+    previous = "a" * 40
+    previous_digest = "1" * 64
+    for index in range(module.REBIND_MAX_HOPS + 1):
+        commit = f"{index:040x}"
+        digest = f"{index + 16:064x}"
+        long_chain[previous] = _hop(
+            "a" * 40, previous, commit, previous_digest, digest
+        )
+        previous = commit
+        previous_digest = digest
+    deep_state = {"source_commit": previous}
+    deep_report = {"current_commit": previous, "source_pack_digest": previous_digest}
+    assert not module.credential_source_binding_valid(
+        credential, deep_state, deep_report, long_chain
+    )
+
+    fast_digest_mismatch = {"current_commit": "a" * 40, "source_pack_digest": "2" * 64}
+    assert not module.credential_source_binding_valid(
+        credential,
+        {"source_commit": "a" * 40},
+        fast_digest_mismatch,
+        {},
+    )
+
+
+def test_rebind_receipt_validation_rejects_foreign_or_transition_receipts() -> None:
+    module = _module()
+    runner_id = "00000000-0000-7000-8000-000000000123"
+    digest = "5" * 64
+    valid = {
+        "contract": module.REBIND_CONTRACT,
+        "runner_id": runner_id,
+        "from_source_commit": "a" * 40,
+        "to_source_commit": "b" * 40,
+        "from_source_pack_digest": "1" * 64,
+        "to_source_pack_digest": "2" * 64,
+        "credential_receipt_sha256": digest,
+        "credential_source_commit": "a" * 40,
+        "completed_step_count": 4,
+        "next_step": "await_reviewed_people_packet",
+        "recorded_at": "2026-08-16T00:00:00.000000Z",
+    }
+    name = f"{'a' * 40}-{'b' * 40}.json"
+    module.validate_rebind_receipt(
+        valid, name=name, runner_id=runner_id, credential_receipt_sha256=digest
+    )
+
+    transition_shaped = dict(valid)
+    transition_shaped["contract"] = "phase3-activation-source-transition-e5af-v1"
+    with pytest.raises(module.ActivationRunnerError):
+        module.validate_rebind_receipt(
+            transition_shaped,
+            name=name,
+            runner_id=runner_id,
+            credential_receipt_sha256=digest,
+        )
+
+    for key, value in (
+        ("runner_id", "00000000-0000-7000-8000-000000000124"),
+        ("completed_step_count", 3),
+        ("next_step", "provision_signing_credentials"),
+        ("credential_receipt_sha256", "6" * 64),
+        ("from_source_pack_digest", "zz"),
+        ("to_source_commit", "a" * 40),
+    ):
+        broken = dict(valid)
+        broken[key] = value
+        with pytest.raises(module.ActivationRunnerError):
+            module.validate_rebind_receipt(
+                broken,
+                name=name,
+                runner_id=runner_id,
+                credential_receipt_sha256=digest,
+            )
+
+    with pytest.raises(module.ActivationRunnerError):
+        module.validate_rebind_receipt(
+            valid,
+            name=f"{'a' * 40}-{'c' * 40}.json",
+            runner_id=runner_id,
+            credential_receipt_sha256=digest,
+        )
+
+
+def test_ceremony_supersession_literals_match_runner_contract() -> None:
+    module = _module()
+    ceremony = _ceremony_module()
+
+    assert ceremony.RUNNER_JOURNAL_CONTRACT == module.CONTRACT
+    assert list(ceremony.RUNNER_COMPLETED_PREFIX) == list(module.STEPS[:4])
+    assert ceremony.RUNNER_AWAIT_STEP == module.STEPS[4]
+    assert ceremony.RUNNER_JOURNAL_PATH == module.STATE_PATH
+    assert ceremony.RUNNER_COMPLETION_PATH == module.COMPLETION_RECEIPT
+    assert ceremony.RUNNER_LOCK_PATH == module.LOCK_PATH
+    assert ceremony.CREDENTIAL_RECEIPT_PATH == module.CREDENTIAL_RECEIPT
+    assert ceremony.ENVIRONMENT_PATH == module.ENVIRONMENT_PATH
+    assert ceremony.EXPECTED_DB_REVISION == module.source_plan.SOURCE_REVISION
+    assert ceremony.EXPECTED_ROLLOUT_MODE == "record_only"
+    assert ceremony.CREDENTIAL_RECEIPT_COUNT == len(module.CREDENTIAL_TARGETS)
+    assert ceremony.RUNNER_PAUSE_CODES == frozenset(
+        {"awaiting_private_people_review", "awaiting_private_people_packet"}
+    )
+    assert set(ceremony.SUPERSESSION_ABSENT_PATHS) == {
+        module.FINALIZER_DOCUMENT,
+        module.FINALIZER_RECEIPT,
+        module.EDGE_RECEIPT,
+        module.WRITER_OBSERVATION,
+        module.PRIVACY_OBSERVATION,
+        module.CUTOVER_PACKET,
+        module.CUTOVER_RECEIPT,
+        module.COMPLETION_RECEIPT,
+    }
+    assert ceremony.STATE_PATH == module.IDENTITY_SIGNING_STATE
+    assert set(module.REBIND_FORBIDDEN_PATHS) == {
+        module.IDENTITY_SIGNING_STATE,
+        *ceremony.SUPERSESSION_ABSENT_PATHS,
+    }

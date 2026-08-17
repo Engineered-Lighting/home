@@ -16,7 +16,7 @@ import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "stack" / "services" / "metrics-sidecar" / "patches"))
-from thinking_routing import route_thinking  # noqa: E402
+from thinking_routing import recover_leaked_content, route_thinking  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -100,6 +100,34 @@ check("only chat_template_kwargs is added",
       set(b) - set(before) == {"chat_template_kwargs"}, str(set(b) - set(before)))
 check("existing values unchanged",
       all(b[k] == before[k] for k in before))
+
+print("\nleak_recovery")
+R = recover_leaked_content
+# The three REAL leaked completions captured during attempts 1 and 2.
+real = [
+ "You've got nine areas set up: Kitchen, Living Room, Bedroom.\n</think>\n\n"
+ "Your home has nine areas: Kitchen, Living Room, Bedroom.\n</think>\n\n"
+ "Your home has nine areas: Kitchen, Living Room, Bedroom.",
+ "I can confirm these areas are in your home: dining room, kitchen.\n</think>\n\n"
+ "Your home has the dining room, garage, kitchen, and workshop.",
+]
+for i, t in enumerate(real):
+    r = R(t)
+    check(f"real leak {i+1} recovers clean",
+          "</think>" not in r and "<think" not in r, repr(r[:70]))
+    check(f"real leak {i+1} not duplicated",
+          not (len(r) > 80 and r.count(r[:40]) >= 2))
+check("clean text is returned byte-identical",
+      R("Yes, several lights are on.") == "Yes, several lights are on.")
+check("empty string survives", R("") == "")
+check("non-string passes through", R(None) is None)
+check("takes the LAST segment when several delimiters appear",
+      R("a</think>b</think>c") == "c")
+# Silence is worse than odd text: never return "" when there was content.
+check("empty trailing segment falls back to the head",
+      R("the kitchen light is on</think>   ") == "the kitchen light is on")
+check("unpaired opener is stripped from the tail",
+      R("x</think><think>y") == "y")
 
 print()
 if FAILURES:

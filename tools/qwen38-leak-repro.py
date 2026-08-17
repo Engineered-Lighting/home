@@ -177,6 +177,9 @@ def main() -> int:
     ap.add_argument("--only", help="comma-separated variant ids, e.g. D,E")
     ap.add_argument("--temperature", type=float, default=1.0)
     ap.add_argument("--show", action="store_true", help="print a leaking sample")
+    ap.add_argument("--capture", help="write every leaking completion to this "
+                                      "NDJSON file, and score downstream "
+                                      "recovery against all of them")
     args = ap.parse_args()
 
     tools = live_tools()
@@ -186,6 +189,7 @@ def main() -> int:
     if not tools:
         print("  ⚠ no live tool catalogue found — variants D/E/F are degraded.\n")
 
+    captured = []
     vs = variants(tools)
     picked = ([v.strip().upper() for v in args.only.split(",")]
               if args.only else list(vs))
@@ -208,6 +212,7 @@ def main() -> int:
             fields |= seen
             if gates.find_reasoning_leaks({"content": content}):
                 leaks += 1
+                captured.append({"variant": vid, "content": content})
                 if sample is None:
                     sample = (vid, content)
             if len(content) > 80 and content.count(content[:40]) >= 2:
@@ -220,6 +225,28 @@ def main() -> int:
               f"{(','.join(sorted(fields)) or 'never populated'):>16}{flag}")
         if errs:
             print(f"{'':2} {'':62} ({errs} request error(s))")
+
+    if args.capture and captured:
+        import sys as _s
+        _s.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent
+                              / "stack" / "services" / "metrics-sidecar" / "patches"))
+        from thinking_routing import recover_leaked_content
+        with open(args.capture, "w", encoding="utf-8") as f:
+            for c in captured:
+                c["recovered"] = recover_leaked_content(c["content"])
+                f.write(json.dumps(c) + "\n")
+        clean = sum(1 for c in captured
+                    if "</think>" not in c["recovered"]
+                    and "<think" not in c["recovered"])
+        nodup = sum(1 for c in captured
+                    if not (len(c["recovered"]) > 80
+                            and c["recovered"].count(c["recovered"][:40]) >= 2))
+        nonempty = sum(1 for c in captured if c["recovered"].strip())
+        print(f"\n=== downstream recovery scored on {len(captured)} REAL leaks ===")
+        print(f"  recovered free of think markup : {clean}/{len(captured)}")
+        print(f"  not duplicated                 : {nodup}/{len(captured)}")
+        print(f"  non-empty (did not lose the answer): {nonempty}/{len(captured)}")
+        print(f"  captured -> {args.capture}")
 
     print()
     if worst and worst[1] > 0:

@@ -76,6 +76,10 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--endpoint", default=SIDECAR)
     ap.add_argument("--model", default=SERVED)
+    ap.add_argument("--ha-reps", type=int, default=4,
+                    help="repeats per utterance on the HA leg (default 4 = 12 "
+                         "turns). The leakage fault is intermittent; two "
+                         "samples miss a 15%% rate most of the time.")
     ap.add_argument("--skip-ha", action="store_true",
                     help="skip the live voice checks (engine-only smoke)")
     args = ap.parse_args()
@@ -167,11 +171,22 @@ def main() -> int:
     # 5-8. live voice + vision --------------------------------------------
     if not args.skip_ha:
         tok = ha_token()
-        print("\n5. tool call end to end through Home Assistant")
+        # ⚠ REPEATED ON PURPOSE. Attempt 2 (2026-08-16) passed this leg on
+        # two samples and was then caught leaking on 3 of 20 turns. Against a
+        # ~15% intermittent failure rate, two samples miss it ~72% of the
+        # time — so the old version handed back a confident GREEN for a
+        # config that could not ship. A zero-tolerance gate must sample
+        # enough to see the failure it exists to catch: at n=12, a 15% rate
+        # is missed under 15% of the time.
+        print(f"\n5. tool call end to end through Home Assistant "
+              f"(x{args.ha_reps} per utterance — the leak is INTERMITTENT)")
         if not tok:
             warn("no HA token; skipped")
         else:
-            for utt in ("What rooms are in my home?", "Are any lights on right now?"):
+            utterances = ["What rooms are in my home?", "Are any lights on right now?",
+                          "What is the temperature in the kitchen?"]
+            ha_leaks, ha_dups, ha_lat, ha_n = 0, 0, [], 0
+            for utt in utterances * args.ha_reps:
                 body = json.dumps({"text": utt, "language": "en",
                                    "agent_id": "conversation.extended_openai_conversation"}).encode()
                 req = urllib.request.Request(
@@ -183,11 +198,17 @@ def main() -> int:
                     with urllib.request.urlopen(req, timeout=90) as r:
                         d = json.load(r)
                     dt = time.time() - s
+                    ha_lat.append(dt); ha_n += 1
                     sp = ((d.get("response", {}).get("speech", {})
                            .get("plain", {}) or {}).get("speech", ""))
                     rt = d.get("response", {}).get("response_type")
+                    # A repeated answer is the same defect wearing a
+                    # different hat: the model ran past its turn terminator.
+                    if len(sp) > 80 and sp.count(sp[:40]) >= 2:
+                        ha_dups += 1
                     leak = gates.find_reasoning_leaks({"content": sp})
                     if leak:
+                        ha_leaks += 1
                         # Show the MATCHED excerpt, never the reply's first
                         # 70 chars. On the 2026-08-16 attempt the leak sat
                         # ~150 chars in, so the prefix looked like a
@@ -202,10 +223,22 @@ def main() -> int:
                         fatal(f"voice turn failed: {utt!r}", str(rt))
                     elif dt > 20:
                         fatal(f"voice turn took {dt:.0f}s", utt)
-                    else:
-                        (ok if dt <= 8 else warn)(f"{dt:5.2f}s  {utt}", sp[:64])
                 except Exception as e:  # noqa: BLE001
                     fatal(f"voice turn errored: {utt!r}", str(e)[:70])
+            # Report the RATE, not a per-turn verdict: one clean turn proves
+            # nothing about an intermittent fault.
+            if ha_n:
+                if ha_leaks:
+                    fatal(f"reasoning leaked on {ha_leaks}/{ha_n} voice turns",
+                          "zero-tolerance; TTS speaks this aloud")
+                elif ha_dups:
+                    fatal(f"answer duplicated on {ha_dups}/{ha_n} voice turns",
+                          "model ran past its turn terminator")
+                else:
+                    p95 = capture.percentile(ha_lat, 95)
+                    (ok if p95 and p95 <= 8 else warn)(
+                        f"{ha_n} turns clean", f"p50={capture.percentile(ha_lat,50):.2f}s "
+                        f"p95={p95:.2f}s")
 
     print("\n6. grounded boxes through the PRODUCTION parsers")
     if frames:

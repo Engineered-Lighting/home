@@ -1783,6 +1783,49 @@ async def test_postgresql_e3_lifecycle_boundary_and_atomic_finalizer() -> None:
     ), "a concurrent E2 tombstone did not force the E3 finalizer to retry"
 
 
+# Deleting a run before its authorization, and both before the tables that
+# reference them. `_delete_rejected_fixture` cannot be reused here: it refuses
+# any fixture that reached a finalization, and the lifecycle test above ends
+# with one that did.
+_REVIEWED_MIGRATION_TABLES = (
+    "operations.reviewed_identity_migration_finalizations",
+    "operations.reviewed_identity_finalizer_admissions",
+    "operations.reviewed_identity_cutover_admissions",
+    "operations.reviewed_identity_migration_item_receipts",
+    "operations.reviewed_identity_migration_erasure_impacts",
+    "operations.reviewed_identity_migration_decisions",
+    "operations.reviewed_identity_migration_source_items",
+    "operations.reviewed_identity_migration_runs",
+)
+
+
+async def _clear_reviewed_migration_state(connection) -> None:
+    """Free the single record_only -> shadow authorization for a fresh seed.
+
+    `rollout_transition_once UNIQUE (from_mode, to_mode)` permits exactly one
+    such row per database, so a second `_seed_fixture` in the same phase
+    collides with whatever the lifecycle test left behind. This is a disposable
+    gate database, so clearing the chain is the cheapest correct answer — and
+    the collision is worth stating plainly, because the same one-shot rule is
+    what makes registration irreversible in production.
+    """
+
+    for table in _REVIEWED_MIGRATION_TABLES:
+        present = (
+            await connection.execute(
+                text("SELECT pg_catalog.to_regclass(:name)"), {"name": table}
+            )
+        ).scalar_one()
+        if present is not None:
+            await connection.execute(text(f"DELETE FROM {table}"))
+    await connection.execute(
+        text(
+            "DELETE FROM operations.rollout_authorizations "
+            "WHERE from_mode = 'record_only' AND to_mode = 'shadow'"
+        )
+    )
+
+
 async def _admit_through_the_production_writer(
     url: str,
     fixture: FinalizerFixture,
@@ -1830,6 +1873,7 @@ async def test_production_admission_writer_can_actually_be_finalized() -> None:
     engine = create_async_engine(owner_url)
     try:
         async with engine.begin() as connection:
+            await _clear_reviewed_migration_state(connection)
             fixture = await _seed_fixture(connection, label="writer-seam")
 
         admission_id, written = await _admit_through_the_production_writer(

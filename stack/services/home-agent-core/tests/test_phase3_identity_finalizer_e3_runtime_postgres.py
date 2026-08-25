@@ -1783,41 +1783,29 @@ async def test_postgresql_e3_lifecycle_boundary_and_atomic_finalizer() -> None:
     ), "a concurrent E2 tombstone did not force the E3 finalizer to retry"
 
 
-# Deleting a run before its authorization, and both before the tables that
-# reference them. `_delete_rejected_fixture` cannot be reused here: it refuses
-# any fixture that reached a finalization, and the lifecycle test above ends
-# with one that did.
-_REVIEWED_MIGRATION_TABLES = (
-    "operations.reviewed_identity_migration_finalizations",
-    "operations.reviewed_identity_finalizer_admissions",
-    "operations.reviewed_identity_cutover_admissions",
-    "operations.reviewed_identity_migration_item_receipts",
-    "operations.reviewed_identity_migration_erasure_impacts",
-    "operations.reviewed_identity_migration_decisions",
-    "operations.reviewed_identity_migration_source_items",
-    "operations.reviewed_identity_migration_runs",
-)
-
-
 async def _clear_reviewed_migration_state(connection) -> None:
     """Free the single record_only -> shadow authorization for a fresh seed.
 
     `rollout_transition_once UNIQUE (from_mode, to_mode)` permits exactly one
     such row per database, so a second `_seed_fixture` in the same phase
-    collides with whatever the lifecycle test left behind. This is a disposable
-    gate database, so clearing the chain is the cheapest correct answer — and
-    the collision is worth stating plainly, because the same one-shot rule is
-    what makes registration irreversible in production.
+    collides with whatever the lifecycle test left behind.
+    `_delete_rejected_fixture` cannot be reused: it refuses any fixture that
+    reached a finalization, and the lifecycle test ends with one that did.
+
+    `TRUNCATE ... CASCADE` rather than an ordered delete, deliberately. The run
+    row is referenced transitively by receipts, projection lineage, erasure
+    impacts, admissions, and finalizations; hand-ordering that graph is a
+    guessing game that a future migration would silently invalidate. This is a
+    disposable gate database, and the cascade is the schema's own answer.
+
+    The one-shot rule this works around is worth naming: it is the same
+    constraint that makes registration irreversible in production. Here it
+    costs a gate run.
     """
 
-    for table in _REVIEWED_MIGRATION_TABLES:
-        present = (
-            await connection.execute(
-                text("SELECT pg_catalog.to_regclass(:name)"), {"name": table}
-            )
-        ).scalar_one()
-        if present is not None:
-            await connection.execute(text(f"DELETE FROM {table}"))
+    await connection.execute(
+        text("TRUNCATE TABLE operations.reviewed_identity_migration_runs CASCADE")
+    )
     await connection.execute(
         text(
             "DELETE FROM operations.rollout_authorizations "

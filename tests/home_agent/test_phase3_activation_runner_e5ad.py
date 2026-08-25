@@ -1225,3 +1225,233 @@ def test_registration_manifest_refuses_unusable_ceremony_state() -> None:
     for raw in broken:
         with pytest.raises(module.ActivationRunnerError):
             module.Backend._registration_manifest(raw)
+
+
+RETIRABLE = {
+    "contract": "phase3-activation-probe-e5ac-v1",
+    "probe": "migration",
+    "reviewed_run_count": 0,
+    "finalizer_admission_count": 0,
+    "consumed_admission_count": 0,
+    "finalization_count": 0,
+    "expired_finalization_retirable": True,
+}
+
+
+def _finalized_state(module, *, expires_at: str = "2020-01-01T00:00:00.000000Z"):
+    run_id = "018f3f7a-8b4d-7abc-8def-0123456789ab"
+    return module.canonical_bytes(
+        {
+            "contract": "phase3-identity-signing-state-e5y-v1",
+            "phase": "finalized",
+            "ceremony_policy_sha256": "c" * 64,
+            "review_signature": "a" * 128,
+            "unsigned_packet": {
+                "run_id": run_id,
+                "review_signing_payload_sha256": "d" * 64,
+                "private_review_sha256": "e" * 64,
+                "unsigned_run": {"run_id": run_id, "expires_at": expires_at},
+                "source_items": [{"ordinal": 1}],
+                "decisions": [{"ordinal": 1}],
+            },
+        }
+    )
+
+
+def _retirement_backend(module, monkeypatch, *, state_bytes, probe):
+    backend = module.Backend()
+    monkeypatch.setattr(
+        module.Backend, "_private_document", staticmethod(lambda path: state_bytes)
+    )
+    monkeypatch.setattr(module.Backend, "_probe", lambda self, name: probe)
+    return backend
+
+
+def test_retirement_refuses_outside_the_finalizer_boundary() -> None:
+    """Retirement is only meaningful where the ceremony is actually stuck."""
+
+    module = _module()
+    store = MemoryStore(module)
+    runner = module.Runner(module.Backend(), store)
+    with pytest.raises(module.ActivationRunnerError):
+        runner.retire_expired_finalization()
+
+    # A fresh journal sits at the first step, not the finalizer boundary.
+    store.value = module.new_state("b" * 40)
+    with pytest.raises(module.ActivationRunnerError):
+        runner.retire_expired_finalization()
+
+
+def test_retirement_refuses_while_anything_is_registered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Registration is one-shot for the life of the database.
+
+    Retiring a packet whose run was already registered would leave a successor
+    that could never be registered at all, and no role can delete the row.
+    """
+
+    module = _module()
+    for probe in (
+        {**RETIRABLE, "reviewed_run_count": 1, "expired_finalization_retirable": False},
+        {
+            **RETIRABLE,
+            "finalizer_admission_count": 1,
+            "expired_finalization_retirable": False,
+        },
+        {**RETIRABLE, "finalization_count": 1, "expired_finalization_retirable": False},
+        # A probe that omits the verdict entirely must not be read as consent.
+        {"contract": "phase3-activation-probe-e5ac-v1", "probe": "migration"},
+    ):
+        backend = _retirement_backend(
+            module,
+            monkeypatch,
+            state_bytes=_finalized_state(module),
+            probe=probe,
+        )
+        with pytest.raises(module.ActivationRunnerError):
+            backend.retire_expired_finalization({})
+
+
+def test_retirement_refuses_a_run_that_has_not_expired(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A live run must be finalized, never retired."""
+
+    module = _module()
+    future = "2999-01-01T00:00:00.000000Z"
+    backend = _retirement_backend(
+        module,
+        monkeypatch,
+        state_bytes=_finalized_state(module, expires_at=future),
+        probe=RETIRABLE,
+    )
+    with pytest.raises(module.ActivationRunnerError):
+        backend.retire_expired_finalization({})
+
+
+def test_retirement_refuses_an_unfinalized_or_malformed_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _module()
+    good = json.loads(_finalized_state(module))
+    for broken in (
+        {**good, "phase": "staged"},
+        {**good, "phase": "review_signed"},
+        {**good, "contract": "other"},
+        {**good, "unsigned_packet": {}},
+        # The packet identifier must agree with the run it describes.
+        {
+            **good,
+            "unsigned_packet": {
+                **good["unsigned_packet"],
+                "run_id": "018f3f7a-8b4d-7abc-8def-ffffffffffff",
+            },
+        },
+    ):
+        backend = _retirement_backend(
+            module,
+            monkeypatch,
+            state_bytes=module.canonical_bytes(broken),
+            probe=RETIRABLE,
+        )
+        with pytest.raises(module.ActivationRunnerError):
+            backend.retire_expired_finalization({})
+
+
+def test_retirement_archives_the_three_artifacts_and_receipts_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _module()
+    state_bytes = _finalized_state(module)
+    run_id = "018f3f7a-8b4d-7abc-8def-0123456789ab"
+
+    signing = tmp_path / "identity-signing-state-e5y.json"
+    document = tmp_path / "identity-finalizer-document-e5y.json"
+    receipt = tmp_path / "identity-signing-receipt-e5y.json"
+    for path in (signing, document, receipt):
+        path.write_bytes(state_bytes)
+
+    monkeypatch.setattr(module, "PRIVATE_IDENTITY_ROOT", tmp_path)
+    monkeypatch.setattr(module, "IDENTITY_SIGNING_STATE", signing)
+    monkeypatch.setattr(module, "FINALIZER_DOCUMENT", document)
+    monkeypatch.setattr(module, "FINALIZER_RECEIPT", receipt)
+    backend = _retirement_backend(
+        module, monkeypatch, state_bytes=state_bytes, probe=RETIRABLE
+    )
+    receipts: list[tuple[Path, bytes]] = []
+    monkeypatch.setattr(
+        module.Backend,
+        "_atomic_private",
+        staticmethod(lambda path, raw: receipts.append((path, raw))),
+    )
+
+    result = backend.retire_expired_finalization({})
+    assert result["status"] == "retired"
+    assert result["archived_count"] == 3
+
+    # The live names are gone, so the unchanged ceremony can stage again.
+    for path in (signing, document, receipt):
+        assert not path.exists()
+        archived = path.with_name(f"{path.stem}.retired-{run_id}{path.suffix}")
+        assert archived.read_bytes() == state_bytes
+
+    assert len(receipts) == 1
+    receipt_path, receipt_raw = receipts[0]
+    assert receipt_path == (
+        tmp_path / f"identity-finalization-retirement-{run_id}-e5am.json"
+    )
+    written = json.loads(receipt_raw)
+    assert written["contract"] == "phase3-identity-finalization-retirement-e5am-v1"
+    assert written["reason_code"] == "finalized_run_expired_before_registration"
+    assert written["run_id"] == run_id
+    assert len(written["archived_names"]) == 3
+    # Content-free: identifiers and digests only.
+    assert "source_items" not in written
+    assert "decisions" not in written
+    assert "review_signature" not in written
+
+
+def test_retirement_never_overwrites_an_existing_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The private record is append-only."""
+
+    module = _module()
+    state_bytes = _finalized_state(module)
+    run_id = "018f3f7a-8b4d-7abc-8def-0123456789ab"
+    signing = tmp_path / "identity-signing-state-e5y.json"
+    signing.write_bytes(state_bytes)
+    (tmp_path / f"identity-signing-state-e5y.retired-{run_id}.json").write_bytes(
+        b"{}\n"
+    )
+
+    monkeypatch.setattr(module, "PRIVATE_IDENTITY_ROOT", tmp_path)
+    monkeypatch.setattr(module, "IDENTITY_SIGNING_STATE", signing)
+    monkeypatch.setattr(module, "FINALIZER_DOCUMENT", tmp_path / "absent-document.json")
+    monkeypatch.setattr(module, "FINALIZER_RECEIPT", tmp_path / "absent-receipt.json")
+    backend = _retirement_backend(
+        module, monkeypatch, state_bytes=state_bytes, probe=RETIRABLE
+    )
+
+    with pytest.raises(module.ActivationRunnerError):
+        backend.retire_expired_finalization({})
+    assert signing.read_bytes() == state_bytes
+
+
+def test_retirement_touches_neither_the_journal_nor_the_database() -> None:
+    source = RUNNER.read_text(encoding="utf-8")
+    body = source.split("    def retire_expired_finalization", 1)[1].split(
+        "    def _capture_edge_receipt", 1
+    )[0]
+    # Read-only towards PostgreSQL: one probe, no writer, no kernel call.
+    assert 'self._probe("migration")' in body
+    for forbidden in (
+        "AUTHORITY_ADMISSION",
+        "AUTHORITY_CEREMONY",
+        "_register_migration_run",
+        "completed_steps",
+        "next_step",
+        "store.save",
+    ):
+        assert forbidden not in body, forbidden

@@ -460,7 +460,7 @@ def test_historical_e1_catalog_is_not_rewritten_for_e4() -> None:
     assert "PENDING_E4_SYSTEM_CATALOG_SHA256" not in migration
     # E5c's dormant login changes only the reviewed database ACL fingerprint;
     # the E4 login and kernel remain absent from the historical migration.
-    assert "5f9ee4e902a42d5880545f7d619a8fb9" in migration
+    assert "deccb4dd1732566742b90b0ef2f840a5" in migration
 
 
 def test_production_pin_and_rollout_mode_remain_inert() -> None:

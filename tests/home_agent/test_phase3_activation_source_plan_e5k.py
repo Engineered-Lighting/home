@@ -43,8 +43,8 @@ def test_exact_hosted_source_pack_can_be_verified_but_never_activated() -> None:
 
     assert entries == 2
     assert report["contract"] == "phase3-activation-source-plan-e5k-v1"
-    assert report["accepted_commit"] == "4525d5a97acdb5a559ac32b45fbef6ac4c92804e"
-    assert report["accepted_postgres_run_id"] == "32812762293"
+    assert report["accepted_commit"] == "06fd4ac58d7dc166ccedcc8090a6334129ff6555"
+    assert report["accepted_postgres_run_id"] == "32822818232"
     assert report["accepted_web_run_id"] == "31906584262"
     assert report["source_pack_matches_hosted_acceptance"] is True
     assert report["fixed_migration_entrypoints_installed"] is True

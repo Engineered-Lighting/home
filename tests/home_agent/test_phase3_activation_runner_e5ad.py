@@ -403,6 +403,8 @@ def test_runner_contract_is_fixed_restart_safe_and_action_free() -> None:
     assert "phase3-activation-source-transition-e5af-v1" in source
     assert '"rebind-source"' in source
     assert "phase3-activation-source-rebind-e5ak-v1" in source
+    assert 'report.get("latest_full_backup_label")' not in source
+    assert source.count("preflight_backup_label(report)") == 2
     assert "activation source rebind chain is ambiguous" in source
     assert 'value.get("runner_id") != runner_id' in source
     assert "for _ in range(REBIND_MAX_HOPS):" in source
@@ -919,3 +921,82 @@ def test_ceremony_supersession_literals_match_runner_contract() -> None:
         module.IDENTITY_SIGNING_STATE,
         *ceremony.SUPERSESSION_ABSENT_PATHS,
     }
+
+
+def _preflight_report(label):
+    return {
+        "authoritative": False,
+        "backup": {
+            "active_topology": "local",
+            "current_erasure_gate_receipt": "valid",
+            "current_restore_receipt": "valid",
+            "latest_full_backup_label": label,
+            "off_host_receipt": "valid",
+            "repository_healthy": True,
+        },
+        "blockers": [],
+        "contract": "phase3-activation-preflight-e5j-v1",
+        "preflight_passed": True,
+    }
+
+
+def test_preflight_backup_label_reads_the_nested_backup_mapping() -> None:
+    module = _module()
+    label = "20260825-024318F"
+
+    assert module.preflight_backup_label(_preflight_report(label)) == label
+    # The preflight never publishes the label at the report root; reading it
+    # there silently yields None for every well-formed report.
+    assert module.preflight_backup_label({"latest_full_backup_label": label}) is None
+    assert module.preflight_backup_label({}) is None
+    assert module.preflight_backup_label({"backup": None}) is None
+    assert module.preflight_backup_label({"backup": {}}) is None
+    assert module.preflight_backup_label(_preflight_report(None)) is None
+
+
+def test_backup_steps_consume_the_nested_preflight_label(monkeypatch) -> None:
+    module = _module()
+    label = "20260825-024318F"
+    commands: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        commands.append([str(item) for item in command])
+        return b""
+
+    def fake_json(cls, command, **kwargs):
+        commands.append([str(item) for item in command])
+        return _preflight_report(label)
+
+    monkeypatch.setattr(module.Backend, "_run", staticmethod(fake_run))
+    monkeypatch.setattr(module.Backend, "_json", classmethod(fake_json))
+
+    backend = module.Backend()
+    backend._local_backup({})
+    assert backend.backup_label == label
+    assert [str(module.LOCAL_BACKUP), str(module.ENVIRONMENT_PATH)] in commands
+
+    drill = module.Backend()
+    drill._restore_drill({})
+    assert drill.backup_label == label
+    assert [
+        str(module.RESTORE_DRILL),
+        str(module.ENVIRONMENT_PATH),
+        label,
+    ] in commands
+
+
+def test_backup_steps_fail_closed_when_the_label_is_absent(monkeypatch) -> None:
+    module = _module()
+    monkeypatch.setattr(
+        module.Backend, "_run", staticmethod(lambda command, **kwargs: b"")
+    )
+    monkeypatch.setattr(
+        module.Backend,
+        "_json",
+        classmethod(lambda cls, command, **kwargs: _preflight_report(None)),
+    )
+
+    with pytest.raises(module.ActivationRunnerError, match="fresh backup label"):
+        module.Backend()._local_backup({})
+    with pytest.raises(module.ActivationRunnerError, match="restore backup label"):
+        module.Backend()._restore_drill({})

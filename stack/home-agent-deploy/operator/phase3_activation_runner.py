@@ -340,6 +340,22 @@ def completion_receipt(state: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def preflight_backup_label(report: Mapping[str, Any]) -> str | None:
+    """Return the newest completed full backup label from a preflight report.
+
+    The label lives inside the report's ``backup`` mapping, matching the
+    off-host writer's reader and the preflight's own contract. Reading it
+    from the report root silently yields ``None`` for every well-formed
+    report, so the lookup is shared rather than repeated per call site.
+    """
+
+    backup = report.get("backup") if isinstance(report, Mapping) else None
+    label = (
+        backup.get("latest_full_backup_label") if isinstance(backup, Mapping) else None
+    )
+    return label if isinstance(label, str) else None
+
+
 def validate_credential_receipt_shape(credential: Any) -> None:
     """Validate the immutable credential receipt without any live-source pin."""
 
@@ -1484,8 +1500,8 @@ class Backend:
             timeout=180,
             accepted=frozenset({0, 3}),
         )
-        label = report.get("latest_full_backup_label")
-        if not isinstance(label, str):
+        label = preflight_backup_label(report)
+        if label is None:
             raise ActivationRunnerError("fresh backup label is unavailable")
         self.backup_label = label
 
@@ -1499,8 +1515,8 @@ class Backend:
                 timeout=180,
                 accepted=frozenset({0, 3}),
             )
-            value = report.get("latest_full_backup_label")
-            if not isinstance(value, str):
+            value = preflight_backup_label(report)
+            if value is None:
                 raise ActivationRunnerError("restore backup label is unavailable")
             self.backup_label = value
         self._run(

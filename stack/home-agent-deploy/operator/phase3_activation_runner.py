@@ -66,6 +66,7 @@ PRIVACY_OBSERVER = OPERATOR_ROOT / "phase3_privacy_cutover_observer.py"
 FINALIZER_DOCUMENT = PRIVATE_IDENTITY_ROOT / "identity-finalizer-document-e5y.json"
 FINALIZER_RECEIPT = PRIVATE_IDENTITY_ROOT / "identity-signing-receipt-e5y.json"
 IDENTITY_SIGNING_STATE = PRIVATE_IDENTITY_ROOT / "identity-signing-state-e5y.json"
+REGISTRATION_CONTRACT = "identity-migration-registration-e5ak-v1"
 EDGE_RECEIPT = PRIVATE_IDENTITY_ROOT / "edge-privacy-policy-receipt-e5ac.json"
 WRITER_OBSERVATION = PRIVATE_IDENTITY_ROOT / "writer-freeze-observation-e5z.json"
 PRIVACY_OBSERVATION = PRIVATE_IDENTITY_ROOT / "privacy-cutover-observation-e5aa.json"
@@ -1071,6 +1072,93 @@ class Backend:
             }
         )
 
+    @staticmethod
+    def _registration_manifest(raw_state: bytes) -> tuple[str, bytes]:
+        """Return the run id and the manifest the 0008 kernel registers.
+
+        The reviewed bundle is assembled inside the signing sandbox by
+        reviewed_identity_packet_compiler.assemble_reviewed_bundle, whose bytes
+        are sealed into the credential policy and cannot be changed. This
+        rebuilds the manifest half of that bundle from the same private state,
+        so the manifest that is registered is the one the review signature
+        covers. The projections half is deliberately not sent: the registration
+        kernel accepts exactly {run, source_items, decisions}.
+        """
+
+        state = parse_canonical_json(raw_state, maximum=MAX_OUTPUT)
+        if not isinstance(state, Mapping):
+            raise ActivationRunnerError("identity signing state is invalid")
+        packet = state.get("unsigned_packet")
+        signature = state.get("review_signature")
+        if (
+            not isinstance(packet, Mapping)
+            or not isinstance(signature, str)
+            or len(signature) != 128
+            or any(character not in "0123456789abcdef" for character in signature)
+        ):
+            raise ActivationRunnerError("identity signing state is invalid")
+        run = packet.get("unsigned_run")
+        sources = packet.get("source_items")
+        decisions = packet.get("decisions")
+        if (
+            not isinstance(run, Mapping)
+            or not isinstance(sources, list)
+            or not isinstance(decisions, list)
+            or not sources
+            or not decisions
+            or "review_signature" in run
+        ):
+            raise ActivationRunnerError("identity signing state is invalid")
+        run_id = run.get("run_id")
+        if not isinstance(run_id, str):
+            raise ActivationRunnerError("identity signing state is invalid")
+        signed_run = dict(run)
+        signed_run["review_signature"] = signature
+        return run_id, canonical_bytes(
+            {
+                "run": signed_run,
+                "source_items": sources,
+                "decisions": decisions,
+            }
+        )
+
+    def _register_migration_run(self) -> str:
+        """Register the reviewed manifest immediately before it is admitted.
+
+        commit_finalizer copies its provenance out of the reviewed run row, so
+        the row has to exist before the admission is written. This is folded
+        into the same handler rather than added as a step: the journal requires
+        next_step to equal STEPS[len(completed_steps)], so inserting a step
+        would make the live journal unloadable with no repair path.
+
+        Registration is one-shot for the life of the database. There is exactly
+        one record_only -> shadow authorization, exactly one run per
+        authorization, and no role holds DELETE on the runs table. Registering
+        and then failing to finalize in the same window cannot be undone, which
+        is why the two happen back to back here with no human step between
+        them. Re-running is safe: an identical manifest replays and the kernel
+        returns the same run id.
+        """
+
+        run_id, manifest = self._registration_manifest(
+            self._private_document(IDENTITY_SIGNING_STATE)
+        )
+        request = canonical_bytes(
+            {
+                "contract": REGISTRATION_CONTRACT,
+                "run_id": run_id,
+                "manifest_b64": base64.b64encode(manifest).decode("ascii"),
+            }
+        )
+        result = self._json(
+            [sys.executable, str(AUTHORITY_CEREMONY), "register"],
+            input_bytes=request,
+            timeout=300,
+        )
+        if result.get("result_id") != run_id:
+            raise ActivationRunnerError("reviewed migration run was not registered")
+        return run_id
+
     def _probe(self, name: str) -> Mapping[str, Any]:
         return self._json(
             self._compose(
@@ -1613,6 +1701,7 @@ class Backend:
             != hashlib.sha256(document).hexdigest()
         ):
             raise ActivationRunnerError("finalizer receipt does not match")
+        self._register_migration_run()
         admission_id = str(state["operation_ids"]["commit_finalizer"])
         admission = self._request(
             "identity-finalizer-admission-e5u-v1", admission_id, document

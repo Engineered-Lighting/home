@@ -173,6 +173,13 @@ case "$role" in
     }
     exec python -m app.identity_authority_executor cutover
     ;;
+  identity-register-run)
+    [ "$#" -eq 1 ] || {
+      echo "identity migration registration accepts no arguments" >&2
+      exit 64
+    }
+    exec python -m app.identity_migration_registrar
+    ;;
   identity-admit-finalizer)
     [ "$#" -eq 1 ] || {
       echo "identity finalizer admission accepts no arguments" >&2

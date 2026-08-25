@@ -1142,3 +1142,84 @@ def test_environment_rewrite_refuses_a_duplicated_key() -> None:
             "HOME_AGENT_ROLLOUT_MODE=record_only\n",
             "0017_authenticated_binding_e5c",
         )
+
+
+def _signing_state(**overrides: object) -> bytes:
+    module = _module()
+    state = {
+        "contract": "phase3-identity-signing-state-e5y-v1",
+        "phase": "finalized",
+        "review_signature": "a" * 128,
+        "unsigned_packet": {
+            "contract": "reviewed-identity-packet-compiler-e5x-v1",
+            "run_id": "018f3f7a-8b4d-7abc-8def-0123456789ab",
+            "unsigned_run": {
+                "run_id": "018f3f7a-8b4d-7abc-8def-0123456789ab",
+                "decision_count": 2,
+                "source_item_count": 1,
+            },
+            "source_items": [{"ordinal": 1}],
+            "decisions": [{"ordinal": 1}, {"ordinal": 2}],
+            "projections": [{"ordinal": 1}],
+            "source_records": [{"ordinal": 1}],
+        },
+    }
+    state.update(overrides)
+    return module.canonical_bytes(state)
+
+
+def test_registration_manifest_is_the_signed_manifest() -> None:
+    """The runner registers exactly the manifest the review signature covers.
+
+    The sealed compiler builds {run, source_items, decisions} and inserts the
+    review signature into the run. The runner rebuilds that half from the same
+    private state because the compiler lives in the networkless signing bundle.
+    """
+
+    module = _module()
+    run_id, manifest = module.Backend._registration_manifest(_signing_state())
+    assert run_id == "018f3f7a-8b4d-7abc-8def-0123456789ab"
+    value = json.loads(manifest)
+    assert set(value) == {"run", "source_items", "decisions"}
+    assert value["run"]["review_signature"] == "a" * 128
+    assert value["run"]["run_id"] == run_id
+    assert value["source_items"] == [{"ordinal": 1}]
+    assert value["decisions"] == [{"ordinal": 1}, {"ordinal": 2}]
+    # The projections and the raw source records never leave the operator host.
+    assert "projections" not in value
+    assert "source_records" not in value
+    assert b"source_records" not in manifest
+    # Canonical bytes, so the kernel sees a stable manifest.
+    assert manifest == module.canonical_bytes(value)
+
+
+def test_registration_manifest_refuses_unusable_ceremony_state() -> None:
+    module = _module()
+    packet = json.loads(_signing_state())["unsigned_packet"]
+
+    def state(**overrides: object) -> bytes:
+        return _signing_state(**overrides)
+
+    broken = [
+        # No review signature: nothing attests the manifest.
+        state(review_signature="not-a-signature"),
+        state(review_signature="a" * 127),
+        # A run that already carries a signature is not the unsigned half.
+        state(
+            unsigned_packet={
+                **packet,
+                "unsigned_run": {**packet["unsigned_run"], "review_signature": "a" * 128},
+            }
+        ),
+        # Empty source items or decisions cannot describe a migration.
+        state(unsigned_packet={**packet, "source_items": []}),
+        state(unsigned_packet={**packet, "decisions": []}),
+        # Wrong shapes.
+        state(unsigned_packet={**packet, "unsigned_run": []}),
+        state(unsigned_packet={**packet, "source_items": {}}),
+        module.canonical_bytes({"contract": "x"}),
+        module.canonical_bytes([]),
+    ]
+    for raw in broken:
+        with pytest.raises(module.ActivationRunnerError):
+            module.Backend._registration_manifest(raw)

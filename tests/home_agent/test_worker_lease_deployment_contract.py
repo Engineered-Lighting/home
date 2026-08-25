@@ -43,7 +43,7 @@ def test_normal_migration_is_pinned_before_dormant_phase3_revisions() -> None:
 
 
 def test_runtime_and_operator_revision_pins_match_the_deployable_migration() -> None:
-    assert f'readiness_migration: str = "{REVISION}"' in read(
+    assert f'readiness_migration: ReadinessMigration = "{REVISION}"' in read(
         "stack/services/home-agent-core/app/config.py"
     )
     assert f"HOME_AGENT_EXPECTED_DB_REVISION={REVISION}" in read(

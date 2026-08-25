@@ -1082,3 +1082,63 @@ def test_runner_no_longer_discards_subprocess_diagnostics() -> None:
     assert "stderr=subprocess.DEVNULL" not in source
     assert "stderr=subprocess.PIPE" in source
     assert "diagnostic=True" in source
+
+
+def _environment(text: str, revision: str) -> dict[str, str]:
+    module = _module()
+    body = module.Backend._environment_body(text, revision)
+    return dict(
+        line.split("=", 1) for line in body.splitlines() if "=" in line
+    )
+
+
+def test_environment_rewrite_introduces_the_readiness_pin() -> None:
+    """Core reads HOME_AGENT_READINESS_MIGRATION, so the runner must write it.
+
+    An environment deployed before this key existed must still be rewritable:
+    every rewrite at or after stop_home_assistant is contained forward-only, so
+    refusing here would strand the ceremony with the Agent services stopped.
+    """
+
+    written = _environment(
+        "HOME_AGENT_EXPECTED_DB_REVISION=0006a_worker_lease_arbitration\n"
+        "HOME_AGENT_ROLLOUT_MODE=record_only\n"
+        "HOME_AGENT_PORT=8104\n",
+        "0017_authenticated_binding_e5c",
+    )
+    assert written["HOME_AGENT_EXPECTED_DB_REVISION"] == "0017_authenticated_binding_e5c"
+    assert written["HOME_AGENT_READINESS_MIGRATION"] == "0017_authenticated_binding_e5c"
+    assert written["HOME_AGENT_ROLLOUT_MODE"] == "shadow"
+    assert written["HOME_AGENT_PORT"] == "8104"
+
+
+def test_environment_rewrite_replaces_an_existing_readiness_pin() -> None:
+    module = _module()
+    body = module.Backend._environment_body(
+        "HOME_AGENT_EXPECTED_DB_REVISION=0017_authenticated_binding_e5c\n"
+        "HOME_AGENT_READINESS_MIGRATION=0017_authenticated_binding_e5c\n"
+        "HOME_AGENT_ROLLOUT_MODE=shadow\n",
+        "0021_parent_status_e5h",
+    )
+    assert body.count("HOME_AGENT_READINESS_MIGRATION=") == 1
+    assert "HOME_AGENT_READINESS_MIGRATION=0021_parent_status_e5h" in body
+
+
+def test_environment_rewrite_still_refuses_a_missing_required_key() -> None:
+    module = _module()
+    with pytest.raises(module.ActivationRunnerError):
+        module.Backend._environment_body(
+            "HOME_AGENT_ROLLOUT_MODE=record_only\n",
+            "0017_authenticated_binding_e5c",
+        )
+
+
+def test_environment_rewrite_refuses_a_duplicated_key() -> None:
+    module = _module()
+    with pytest.raises(module.ActivationRunnerError):
+        module.Backend._environment_body(
+            "HOME_AGENT_EXPECTED_DB_REVISION=0006a_worker_lease_arbitration\n"
+            "HOME_AGENT_EXPECTED_DB_REVISION=0013_identity_finalizer_e3\n"
+            "HOME_AGENT_ROLLOUT_MODE=record_only\n",
+            "0017_authenticated_binding_e5c",
+        )

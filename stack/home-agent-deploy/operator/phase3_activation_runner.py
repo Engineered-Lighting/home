@@ -1102,6 +1102,45 @@ class Backend:
         )
 
     @staticmethod
+    def _environment_body(text: str, revision: str) -> str:
+        """Return the rewritten deployment environment for one revision.
+
+        Kept separate from the file handling so the substitution rules are
+        testable without a root-owned file.
+        """
+
+        replacements = {
+            # The image entrypoint reads this one when it runs migrations.
+            "HOME_AGENT_EXPECTED_DB_REVISION": revision,
+            "HOME_AGENT_ROLLOUT_MODE": "shadow",
+            # Core itself reads this one. Without it the agent services keep the
+            # previous pin and fail closed against the migrated database.
+            "HOME_AGENT_READINESS_MIGRATION": revision,
+        }
+        # Keys this release introduced are written whether or not the deployed
+        # environment already declares them. Requiring them to pre-exist would
+        # abort the first rewrite after the upgrade, and every rewrite at or
+        # after stop_home_assistant is contained forward-only, which would
+        # strand the ceremony with the Agent services stopped.
+        introduced = frozenset({"HOME_AGENT_READINESS_MIGRATION"})
+        found: set[str] = set()
+        lines: list[str] = []
+        for line in text.splitlines():
+            name = line.split("=", 1)[0] if "=" in line else ""
+            if name in replacements:
+                if name in found:
+                    raise ActivationRunnerError("activation environment is ambiguous")
+                found.add(name)
+                lines.append(f"{name}={replacements[name]}")
+            else:
+                lines.append(line)
+        if not (set(replacements) - introduced) <= found:
+            raise ActivationRunnerError("activation environment is incomplete")
+        for name in sorted(introduced - found):
+            lines.append(f"{name}={replacements[name]}")
+        return "\n".join(lines) + "\n"
+
+    @staticmethod
     def _rewrite_environment(revision: str) -> None:
         try:
             details = ENVIRONMENT_PATH.lstat()
@@ -1118,24 +1157,7 @@ class Backend:
             or stat.S_IMODE(details.st_mode) & 0o022
         ):
             raise ActivationRunnerError("activation environment is unsafe")
-        replacements = {
-            "HOME_AGENT_EXPECTED_DB_REVISION": revision,
-            "HOME_AGENT_ROLLOUT_MODE": "shadow",
-        }
-        found: set[str] = set()
-        lines = []
-        for line in text.splitlines():
-            name = line.split("=", 1)[0] if "=" in line else ""
-            if name in replacements:
-                if name in found:
-                    raise ActivationRunnerError("activation environment is ambiguous")
-                found.add(name)
-                lines.append(f"{name}={replacements[name]}")
-            else:
-                lines.append(line)
-        if found != set(replacements):
-            raise ActivationRunnerError("activation environment is incomplete")
-        raw = ("\n".join(lines) + "\n").encode("utf-8")
+        raw = Backend._environment_body(text, revision).encode("utf-8")
         temporary = ENVIRONMENT_PATH.with_name(
             f".{ENVIRONMENT_PATH.name}.new.{secrets.token_hex(12)}"
         )

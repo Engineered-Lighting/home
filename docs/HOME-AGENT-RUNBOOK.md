@@ -1643,8 +1643,8 @@ window. In order:
 
    For that case the activation runner has `retire-expired-finalization`. It
    applies only where the ceremony actually strands: the journal parked at
-   `commit_finalizer`, a `finalized` signing state, and a reviewed run whose
-   window has lapsed. It refuses unless the read-only `migration` probe proves
+   `commit_finalizer`, a reviewed run whose window has lapsed, and a packet in
+   any phase it can strand in (`staged`, `review_signed`, or `finalized`). It refuses unless the read-only `migration` probe proves
    that no run was registered, no admission written, and nothing finalized,
    because registration is one-shot for the life of the database and no role
    can delete a run row. It archives the three private artifacts under

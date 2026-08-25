@@ -1336,8 +1336,8 @@ def test_retirement_refuses_an_unfinalized_or_malformed_state(
     module = _module()
     good = json.loads(_finalized_state(module))
     for broken in (
-        {**good, "phase": "staged"},
-        {**good, "phase": "review_signed"},
+        {**good, "phase": "superseded"},
+        {**good, "phase": ""},
         {**good, "contract": "other"},
         {**good, "unsigned_packet": {}},
         # The packet identifier must agree with the run it describes.
@@ -1353,6 +1353,65 @@ def test_retirement_refuses_an_unfinalized_or_malformed_state(
             module,
             monkeypatch,
             state_bytes=module.canonical_bytes(broken),
+            probe=RETIRABLE,
+        )
+        with pytest.raises(module.ActivationRunnerError):
+            backend.retire_expired_finalization({})
+
+
+def test_retirement_accepts_every_phase_a_packet_can_strand_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ten-minute window can lapse before `finalize`, not only after.
+
+    It holds two interactive signatures and two container round-trips. A packet
+    stranded at `staged` or `review_signed` had no recovery verb at all: this
+    command required `finalized`, and the ceremony's own `supersede-expired`
+    requires `staged` *and* a four-step journal, which is unreachable here.
+    """
+
+    module = _module()
+    good = json.loads(_finalized_state(module))
+    assert module.RETIRABLE_PHASES == {"staged", "review_signed", "finalized"}
+    monkeypatch.setattr(module, "PRIVATE_IDENTITY_ROOT", tmp_path)
+    monkeypatch.setattr(module, "IDENTITY_SIGNING_STATE", tmp_path / "absent-state.json")
+    monkeypatch.setattr(module, "FINALIZER_DOCUMENT", tmp_path / "absent-document.json")
+    monkeypatch.setattr(module, "FINALIZER_RECEIPT", tmp_path / "absent-receipt.json")
+    for phase in sorted(module.RETIRABLE_PHASES):
+        backend = _retirement_backend(
+            module,
+            monkeypatch,
+            state_bytes=module.canonical_bytes({**good, "phase": phase}),
+            probe=RETIRABLE,
+        )
+        # Reaches the database check rather than refusing on the phase.
+        recorded: list[str] = []
+        monkeypatch.setattr(
+            module.Backend,
+            "_probe",
+            lambda self, name: recorded.append(name) or RETIRABLE,
+        )
+        monkeypatch.setattr(
+            module.Backend, "_atomic_private", staticmethod(lambda path, raw: None)
+        )
+        result = backend.retire_expired_finalization({})
+        assert result["status"] == "retired", phase
+        assert recorded == ["migration"], phase
+        # A packet that never reached `finalize` simply has fewer artifacts.
+        assert result["archived_count"] == 0, phase
+
+
+def test_retirement_still_refuses_a_live_run_in_every_phase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _module()
+    good = json.loads(_finalized_state(module))
+    good["unsigned_packet"]["unsigned_run"]["expires_at"] = "2999-01-01T00:00:00.000000Z"
+    for phase in sorted(module.RETIRABLE_PHASES):
+        backend = _retirement_backend(
+            module,
+            monkeypatch,
+            state_bytes=module.canonical_bytes({**good, "phase": phase}),
             probe=RETIRABLE,
         )
         with pytest.raises(module.ActivationRunnerError):

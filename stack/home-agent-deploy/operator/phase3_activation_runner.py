@@ -71,6 +71,12 @@ RETIREMENT_CONTRACT = "phase3-identity-finalization-retirement-e5am-v1"
 RETIREMENT_REASON = "finalized_run_expired_before_registration"
 RETIREMENT_RECEIPT_PREFIX = "identity-finalization-retirement-"
 RETIREMENT_RECEIPT_SUFFIX = "-e5am.json"
+# Every phase a reviewed packet can be sitting in when its run expires. The
+# signing ceremony can only supersede an unsigned packet staged at the
+# four-step await boundary, so at this boundary all three are equally stranded
+# and equally safe to retire: the run is expired either way, and the database
+# check below is what actually establishes that nothing was consumed.
+RETIRABLE_PHASES = frozenset({"staged", "review_signed", "finalized"})
 EDGE_RECEIPT = PRIVATE_IDENTITY_ROOT / "edge-privacy-policy-receipt-e5ac.json"
 WRITER_OBSERVATION = PRIVATE_IDENTITY_ROOT / "writer-freeze-observation-e5z.json"
 PRIVACY_OBSERVATION = PRIVATE_IDENTITY_ROOT / "privacy-cutover-observation-e5aa.json"
@@ -1737,13 +1743,20 @@ class Backend:
         return path.with_name(f"{path.stem}.retired-{run_id}{path.suffix}")
 
     def retire_expired_finalization(self, state: Mapping[str, Any]) -> dict[str, Any]:
-        """Retire a finalized packet whose run expired before registration.
+        """Retire a reviewed packet whose run expired before registration.
 
         The signing ceremony can supersede only an unsigned packet staged at the
-        four-step await boundary. A packet that was review-signed and finalized,
-        whose run then expired with nothing registered, is out of scope there:
-        the runbook records that such a state "fails closed for separate owner
-        review". This command is that review's outcome.
+        four-step await boundary. A packet whose run expired at this boundary is
+        out of scope there: the runbook records that such a state "fails closed
+        for separate owner review". This command is that review's outcome.
+
+        It accepts any phase the packet can be stranded in. The ten-minute
+        window holds two interactive signatures and two container round-trips,
+        so lapsing at `staged` or `review_signed` is at least as likely as
+        lapsing at `finalized` — and those two had no recovery verb in either
+        tool. Which phase it died in changes nothing that matters here: the run
+        is expired, the database proves nothing was consumed, and a fresh packet
+        re-stages from the same private review and SQLite snapshot.
 
         It archives the three private artifacts and writes one content-free
         receipt. It never rewinds the journal, never writes to the database, and
@@ -1758,7 +1771,7 @@ class Backend:
         if (
             not isinstance(signing, Mapping)
             or signing.get("contract") != "phase3-identity-signing-state-e5y-v1"
-            or signing.get("phase") != "finalized"
+            or signing.get("phase") not in RETIRABLE_PHASES
         ):
             raise ActivationRunnerError("identity signing state refuses retirement")
         packet = signing.get("unsigned_packet")

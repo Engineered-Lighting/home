@@ -13,7 +13,11 @@ that state, so the ceremony could neither finish nor start again.
 
 The activation runner gains `retire-expired-finalization`. It applies only where
 the ceremony actually strands: the journal parked at `commit_finalizer`, a
-`finalized` signing state, and a reviewed run whose window has lapsed. It
+reviewed run whose window has lapsed, and a packet in any phase it can be
+stranded in — `staged`, `review_signed`, or `finalized`. The ten-minute window
+holds two interactive signatures and two container round-trips, so lapsing
+before `finalize` is at least as likely as lapsing after it, and those earlier
+phases previously had no recovery verb in either tool. It
 refuses unless a new read-only `migration` probe proves that no run was
 registered, no admission written, and nothing finalized — registration is
 one-shot for the life of the database, and no role can delete a run row, so

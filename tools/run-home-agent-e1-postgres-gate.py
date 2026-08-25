@@ -447,6 +447,7 @@ BUILD_CONTEXT_FILES = (
     "tests/home_agent/test_phase3_source_pin_bootstrap_e5q.py",
     "tests/home_agent/test_phase3_migration_executor_e5t.py",
     "tests/home_agent/test_identity_admission_writer_e5u.py",
+    "tests/home_agent/test_identity_migration_registrar_e5ak.py",
     "tests/home_agent/test_identity_authority_role_ceremony_e5v.py",
     "tests/home_agent/test_phase3_reviewed_people_packet_e5x.py",
     "tests/home_agent/test_reviewed_identity_packet_compiler_e5x.py",

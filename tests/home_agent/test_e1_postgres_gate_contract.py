@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import re
 import sys
 from types import SimpleNamespace
 
@@ -357,6 +358,37 @@ def test_runner_refuses_quarantined_docker_daemon_name(
     monkeypatch.setattr(runner, "_run", fake_run)
     with pytest.raises(runner.GateFailure, match="Docker daemon"):
         runner._validate_local_docker()
+
+
+def test_every_executed_host_test_node_is_in_the_build_context() -> None:
+    """Each `tests/home_agent/...` node a phase runs must be copied in.
+
+    The gate builds a minimal filtered build context, so a node added to a
+    phase's list without a matching `BUILD_CONTEXT_FILES` entry does not fail
+    at review time. It fails inside the container with "file or directory not
+    found", after several minutes of cluster setup. The two lists are
+    maintained independently and nothing cross-checked them.
+    """
+
+    runner = _load_runner()
+    source = RUNNER.read_text(encoding="utf-8")
+    # Nodes are written as adjacent string literals:
+    #     "/workspace/tests/home_agent/" "test_something.py"
+    referenced = set(
+        re.findall(
+            r'"/workspace/tests/home_agent/"\s*"([^"]+\.py)"',
+            source,
+        )
+    )
+    assert referenced, "no host test nodes found; the node syntax changed"
+    packaged = set(runner.BUILD_CONTEXT_FILES)
+    missing = sorted(
+        name for name in referenced if f"tests/home_agent/{name}" not in packaged
+    )
+    assert not missing, (
+        "these host test nodes are executed by a gate phase but are not copied "
+        f"into the build context: {missing}"
+    )
 
 
 def test_generated_build_context_is_an_exact_filtered_manifest(

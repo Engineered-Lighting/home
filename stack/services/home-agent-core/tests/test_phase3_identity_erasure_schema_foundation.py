@@ -146,7 +146,7 @@ def test_0011_admission_acl_and_downgrade_fail_closed() -> None:
     assert "PINNED_SYSTEM_CATALOG_CONTRACT_ROWS" in source
     assert "PINNED_SYSTEM_CATALOG_CONTRACT_DIGEST" in source
     assert "PINNED_SYSTEM_CATALOG_CONTRACT_ROWS = 6563" in source
-    assert "5f9ee4e902a42d5880545f7d619a8fb9" in source
+    assert "deccb4dd1732566742b90b0ef2f840a5" in source
     assert 'PINNED_SYSTEM_CATALOG_CONTRACT_DIGEST = "pending"' not in source
     assert "database_row.datacl::text" in source
     assert "namespace_row.nspacl::text" in source

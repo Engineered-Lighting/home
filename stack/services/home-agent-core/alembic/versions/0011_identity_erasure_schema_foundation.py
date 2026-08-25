@@ -40,8 +40,11 @@ KERNEL_ROLE = "home_agent_identity_erasure_kernel"
 # name-based so the contract is independent of per-cluster OIDs.  Raw ACL text
 # deliberately distinguishes NULL/default ACLs from explicitly rewritten ACLs.
 PINNED_SYSTEM_CATALOG_CONTRACT_ROWS = 6563
+# ACL entries are sorted before hashing (see canonical_acl below), so this
+# digest describes the privileges a database holds rather than the order they
+# happened to be granted in.
 PINNED_SYSTEM_CATALOG_CONTRACT_DIGEST = (
-    "5f9ee4e902a42d5880545f7d619a8fb95b10b92b203589cd530c60e835fc12a3"
+    "deccb4dd1732566742b90b0ef2f840a5ac35025267a87cbff50719917297d908"
 )
 
 PERSON_SCOPE = "privacy.person_erasure_scopes"
@@ -1320,6 +1323,29 @@ def _admit_exact_predecessor() -> None:
               JOIN pg_catalog.pg_authid AS type_owner
                 ON type_owner.oid = type_row.typowner
           ),
+          canonical_acl AS (
+            -- ACL arrays preserve the order privileges were granted in, which
+            -- carries no meaning: the same grants applied in a different order
+            -- describe the same database. A deployment that accumulated its
+            -- grants over time therefore hashed differently from a freshly
+            -- provisioned one, and no single pinned digest could satisfy both.
+            -- Sort the entries so the contract compares privileges, not history.
+            SELECT object_kind, object_identity, owner_name, object_shape,
+                   CASE
+                     WHEN raw_acl = '<NULL>' THEN raw_acl
+                     ELSE (
+                       SELECT '{{' || pg_catalog.string_agg(
+                                        acl_entry, ',' ORDER BY acl_entry
+                                      ) || '}}'
+                         FROM pg_catalog.unnest(
+                                pg_catalog.string_to_array(
+                                  pg_catalog.btrim(raw_acl, '{{}}'), ','
+                                )
+                              ) AS acl_entry
+                     )
+                   END AS raw_acl
+              FROM system_contract
+          ),
           canonical_contract AS (
             SELECT pg_catalog.count(*) AS contract_rows,
                    pg_catalog.encode(
@@ -1336,7 +1362,7 @@ def _admit_exact_predecessor() -> None:
                      ),
                      'hex'
                    ) AS contract_digest
-              FROM system_contract
+              FROM canonical_acl
           )
           SELECT contract_rows, contract_digest
             INTO STRICT system_catalog_contract_rows,

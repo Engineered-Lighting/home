@@ -39,6 +39,20 @@ PROTECTED_SERVICES = frozenset(
     {"core-api", "core-ingest", "core-worker", "bff", "edge-ingress"}
 )
 MAX_OUTPUT_BYTES = 64 * 1024
+DATABASE_URL_SECRET = "/run/secrets/database_url"
+REVISION_GUARD_SCRIPT = (
+    "set -eu\n"
+    "secret_file=$1\n"
+    "revision=$2\n"
+    '[ -z "${HOME_AGENT_DATABASE_URL:-}" ] || exit 78\n'
+    '[ -f "$secret_file" ] && [ -r "$secret_file" ] || exit 78\n'
+    'secret_value=$(cat -- "$secret_file")\n'
+    '[ -n "$secret_value" ] || exit 78\n'
+    "case $secret_value in *[[:space:]]*) exit 78 ;; esac\n"
+    "HOME_AGENT_DATABASE_URL=$secret_value\n"
+    "export HOME_AGENT_DATABASE_URL\n"
+    'exec python -m app.migration_guard "$revision"\n'
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,21 +209,36 @@ def _running_protected_services() -> frozenset[str]:
     return frozenset(services & PROTECTED_SERVICES)
 
 
-def _guard_revision(revision: str) -> None:
-    _run(
-        _compose(
-            "run",
-            "--rm",
-            "--no-deps",
-            "--entrypoint",
-            "python",
-            "migrate",
-            "-m",
-            "app.migration_guard",
-            revision,
-        ),
-        timeout=180,
+def revision_guard_arguments(revision: str) -> tuple[str, ...]:
+    """Verify one exact revision with the database secret already loaded.
+
+    The image entrypoint is the only component that materialises
+    HOME_AGENT_DATABASE_URL from HOME_AGENT_DATABASE_URL_FILE, and it dispatches
+    on a fixed role rather than offering a verify-only one, so overriding it
+    with ``python`` leaves app.migration_guard without a database URL and the
+    guard fails closed for every well-formed deployment. Load the one secret it
+    needs under the entrypoint's own rules (never both forms, present, readable,
+    non-empty, no whitespace) instead of bypassing the loader. The secret value
+    stays inside the container; only its path is ever passed as an argument.
+    """
+
+    return (
+        "run",
+        "--rm",
+        "--no-deps",
+        "--entrypoint",
+        "sh",
+        "migrate",
+        "-c",
+        REVISION_GUARD_SCRIPT,
+        "sh",
+        DATABASE_URL_SECRET,
+        revision,
     )
+
+
+def _guard_revision(revision: str) -> None:
+    _run(_compose(*revision_guard_arguments(revision)), timeout=180)
 
 
 def _migrate(stage: MigrationStage) -> None:

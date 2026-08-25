@@ -199,9 +199,28 @@ OPERATION_ID_STEPS = frozenset({"authorize_shadow", "commit_finalizer"})
 class ActivationRunnerError(RuntimeError):
     """The split activation runner failed closed."""
 
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code if code in migration_executor.DIAGNOSTIC_CODES else None
+
 
 class ActivationPause(RuntimeError):
     """The runner is safely waiting for a private human confirmation."""
+
+
+def _error_code(error: BaseException) -> str:
+    """Return the categorical journal code for a failed step.
+
+    Subprocess failures carry a code from a closed vocabulary so the journal
+    can distinguish a non-zero exit from oversized or NUL-bearing output. Every
+    other failure keeps the previous exception-name behaviour. Free text never
+    enters the journal.
+    """
+
+    code = getattr(error, "code", None)
+    if isinstance(code, str) and code in migration_executor.DIAGNOSTIC_CODES:
+        return code
+    return type(error).__name__.lower()[:96]
 
 
 def uuid7() -> uuid.UUID:
@@ -869,6 +888,7 @@ class Backend:
         input_bytes: bytes | None = None,
         timeout: int = 900,
         accepted: frozenset[int] = frozenset({0}),
+        diagnostic: bool = False,
     ) -> bytes:
         try:
             result = subprocess.run(
@@ -877,19 +897,30 @@ class Backend:
                 check=False,
                 input=input_bytes,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
                 timeout=timeout,
                 shell=False,
             )
+        except subprocess.TimeoutExpired as error:
+            raise ActivationRunnerError(
+                "activation subprocess failed", code="timeout"
+            ) from error
         except (OSError, subprocess.SubprocessError) as error:
-            raise ActivationRunnerError("activation subprocess failed") from error
-        if (
-            result.returncode not in accepted
-            or len(result.stdout) > MAX_OUTPUT
-            or b"\0" in result.stdout
-        ):
-            raise ActivationRunnerError("activation subprocess failed")
-        return result.stdout
+            raise ActivationRunnerError(
+                "activation subprocess failed", code="spawn_failed"
+            ) from error
+        if result.returncode not in accepted:
+            code = "exit_nonzero"
+        elif len(result.stdout) > MAX_OUTPUT:
+            code = "stdout_oversize"
+        elif b"\0" in result.stdout:
+            code = "stdout_nul"
+        else:
+            return result.stdout
+        migration_executor.report_diagnostic(
+            command, result.stderr, enabled=diagnostic
+        )
+        raise ActivationRunnerError("activation subprocess failed", code=code)
 
     @classmethod
     def _json(cls, command: Sequence[str], **kwargs: Any) -> Mapping[str, Any]:
@@ -1064,7 +1095,11 @@ class Backend:
             return
         except ActivationRunnerError:
             pass
-        self._json([sys.executable, str(MIGRATION_EXECUTOR), command], timeout=1200)
+        self._json(
+            [sys.executable, str(MIGRATION_EXECUTOR), command],
+            timeout=1200,
+            diagnostic=True,
+        )
 
     @staticmethod
     def _rewrite_environment(revision: str) -> None:
@@ -1127,13 +1162,18 @@ class Backend:
                 pass
 
     def _stop_agents(self) -> None:
-        self._run(self._compose("stop", *APPLICATION_SERVICES), timeout=180)
+        self._run(
+            self._compose("stop", *APPLICATION_SERVICES),
+            timeout=180,
+            diagnostic=True,
+        )
 
     def _start_agents(self, revision: str) -> None:
         self._rewrite_environment(revision)
         self._run(
             self._compose("up", "-d", "--no-deps", *APPLICATION_SERVICES),
             timeout=300,
+            diagnostic=True,
         )
         self._wait_agents_ready()
 
@@ -1169,6 +1209,7 @@ class Backend:
         self._run(
             self._compose("run", "--rm", "--no-deps", "grant-phase3-activation"),
             timeout=300,
+            diagnostic=True,
         )
 
     def perform(self, step: str, state: Mapping[str, Any]) -> None:
@@ -1286,7 +1327,7 @@ class Backend:
             or key_source.get("with_key") not in {"host", "tpm2", "host+tpm2"}
         ):
             raise ActivationPause("awaiting_signing_key_source_confirmation")
-        self._run(self._compose("config", "--quiet"), timeout=120)
+        self._run(self._compose("config", "--quiet"), timeout=120, diagnostic=True)
         try:
             ha_transport._remote("true", timeout=15)
         except Exception as error:
@@ -1970,7 +2011,7 @@ class Runner:
                 self.store.save(state)
                 return self.status()
             except Exception as error:
-                state["last_error_code"] = type(error).__name__.lower()[:96]
+                state["last_error_code"] = _error_code(error)
                 if STEPS.index(step) >= STEPS.index("stop_home_assistant"):
                     try:
                         self.backend.contain()

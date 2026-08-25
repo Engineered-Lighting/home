@@ -175,7 +175,12 @@ def test_root_bridge_passes_private_stdin_to_only_fixed_image_entrypoints() -> N
     assert "identity-admit-cutover" in source
     assert '"--no-deps"' in source
     assert "input=request" in source
-    assert "stderr=subprocess.DEVNULL" in source
+    # The bridge feeds a private People document to the container, so its
+    # stderr is captured but never echoed: only governed kernel identifiers
+    # are named, and the tail printer is not reachable from this program.
+    assert "stderr=subprocess.PIPE" in source
+    assert "activation.governed_error_codes(result.stderr)" in source
+    assert "report_diagnostic" not in source
     assert "shell=False" in source
     assert 'activation._guard_revision("0015_current_authority_e5a")' in source
     assert "identity-admit-finalizer)" in entrypoint

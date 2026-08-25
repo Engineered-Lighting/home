@@ -43,6 +43,10 @@ COMMANDS = {
 class AuthorityAdmissionError(RuntimeError):
     """The root admission bridge could not prove a safe invocation."""
 
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code if code in activation.DIAGNOSTIC_CODES else None
+
 
 def _private_request() -> bytes:
     raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
@@ -66,19 +70,40 @@ def _invoke(command: AdmissionCommand, request: bytes) -> dict[str, str]:
             check=False,
             input=request,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             timeout=180,
             shell=False,
         )
+    except subprocess.TimeoutExpired as error:
+        raise AuthorityAdmissionError(
+            "authority admission command failed", code="timeout"
+        ) from error
     except (OSError, subprocess.SubprocessError) as error:
-        raise AuthorityAdmissionError("authority admission command failed") from error
-    if (
-        result.returncode != 0
-        or not result.stdout
-        or len(result.stdout) > activation.MAX_OUTPUT_BYTES
-        or b"\0" in result.stdout
-    ):
-        raise AuthorityAdmissionError("authority admission command failed")
+        raise AuthorityAdmissionError(
+            "authority admission command failed", code="spawn_failed"
+        ) from error
+    if result.returncode != 0:
+        code = "exit_nonzero"
+    elif not result.stdout:
+        code = "stdout_empty"
+    elif len(result.stdout) > activation.MAX_OUTPUT_BYTES:
+        code = "stdout_oversize"
+    elif b"\0" in result.stdout:
+        code = "stdout_nul"
+    else:
+        code = None
+    if code is not None:
+        # The admission container reads a private People document, so its
+        # stderr is never echoed. Only governed kernel identifiers are named:
+        # they are a closed snake_case vocabulary and the writers already
+        # disable parameter echo.
+        refusals = activation.governed_error_codes(result.stderr)
+        if refusals:
+            print(
+                "authority admission refused: " + " ".join(refusals),
+                file=sys.stderr,
+            )
+        raise AuthorityAdmissionError("authority admission command failed", code=code)
     try:
         value = json.loads(result.stdout.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:

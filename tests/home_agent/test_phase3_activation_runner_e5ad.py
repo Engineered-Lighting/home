@@ -1035,3 +1035,50 @@ def test_runner_and_executor_share_one_revision_guard_definition() -> None:
         "0013_identity_finalizer_e3"
     ) == executor.revision_guard_arguments("0013_identity_finalizer_e3")
 
+
+def test_journal_error_codes_stay_categorical() -> None:
+    module = _module()
+    allowed = set("abcdefghijklmnopqrstuvwxyz_0123456789")
+    coded = module.ActivationRunnerError("failed", code="exit_nonzero")
+    plain = module.ActivationRunnerError("failed")
+    smuggled = module.ActivationRunnerError(
+        "failed", code="marcelo lives at 12 main street"
+    )
+    assert module._error_code(coded) == "exit_nonzero"
+    assert module._error_code(plain) == "activationrunnererror"
+    assert module._error_code(smuggled) == "activationrunnererror"
+    for error in (coded, plain, smuggled):
+        code = module._error_code(error)
+        assert code and len(code) <= 96
+        assert set(code) <= allowed
+
+
+def test_runner_subprocess_refusals_carry_categorical_codes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _module()
+
+    class Result:
+        def __init__(self, returncode: int, stdout: bytes) -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = b""
+
+    backend = module.Backend()
+    for expected, result in {
+        "exit_nonzero": Result(1, b"{}"),
+        "stdout_nul": Result(0, b"ok\0"),
+    }.items():
+        monkeypatch.setattr(
+            module.subprocess, "run", lambda *a, _r=result, **k: _r
+        )
+        with pytest.raises(module.ActivationRunnerError) as caught:
+            backend._run(["docker", "compose", "ps"])
+        assert caught.value.code == expected
+
+
+def test_runner_no_longer_discards_subprocess_diagnostics() -> None:
+    source = RUNNER.read_text(encoding="utf-8")
+    assert "stderr=subprocess.DEVNULL" not in source
+    assert "stderr=subprocess.PIPE" in source
+    assert "diagnostic=True" in source

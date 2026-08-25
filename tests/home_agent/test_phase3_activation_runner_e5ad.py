@@ -1000,3 +1000,38 @@ def test_backup_steps_fail_closed_when_the_label_is_absent(monkeypatch) -> None:
         module.Backend()._local_backup({})
     with pytest.raises(module.ActivationRunnerError, match="restore backup label"):
         module.Backend()._restore_drill({})
+
+
+def test_migrate_fast_path_guard_loads_the_database_secret() -> None:
+    source = RUNNER.read_text(encoding="utf-8")
+
+    # The fast-path idempotency guard used to override the image entrypoint with
+    # `python`, which skips the only component that materialises
+    # HOME_AGENT_DATABASE_URL from its _FILE secret. It therefore failed for
+    # every well-formed deployment and the runner always fell through to the
+    # executor, which fail-closed on the same defect.
+    assert "migration_executor.revision_guard_arguments(target)" in source
+    assert '"app.migration_guard",' not in source
+    assert '"--entrypoint",\n                    "python",' not in source
+
+
+def test_runner_and_executor_share_one_revision_guard_definition() -> None:
+    module = _module()
+
+    import importlib.util
+    import sys as _sys
+
+    spec = importlib.util.spec_from_file_location(
+        "home_agent_phase3_migration_executor_shared",
+        OPERATOR / "phase3_migration_executor.py",
+    )
+    assert spec is not None and spec.loader is not None
+    executor = importlib.util.module_from_spec(spec)
+    _sys.modules[spec.name] = executor
+    spec.loader.exec_module(executor)
+
+    # One definition, so the two call sites cannot drift apart again.
+    assert module.migration_executor.revision_guard_arguments(
+        "0013_identity_finalizer_e3"
+    ) == executor.revision_guard_arguments("0013_identity_finalizer_e3")
+

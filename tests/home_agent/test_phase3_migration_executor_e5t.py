@@ -129,7 +129,7 @@ def test_executor_never_builds_pulls_starts_or_uses_a_shell() -> None:
     assert "os.geteuid() != 0" in source
     assert "shell=False" in source
     assert '"--no-deps"' in source
-    assert '"app.migration_guard"' in source
+    assert "app.migration_guard" in source
     assert "_guard_revision(stage.source_revision)" in source
     assert "_guard_revision(stage.target_revision)" in source
     assert "PERMIT_MAX_AGE = timedelta(hours=4)" in source
@@ -162,3 +162,85 @@ def test_e5t_is_carried_by_the_filtered_hosted_gate() -> None:
     assert "test_phase3_migration_executor_e5t.py" in workflow
     assert "E5s/E5t/E5u/E5v/E5w/E5x PostgreSQL gate" in workflow
     assert "E5s/E5t/E5u/E5v/E5w/E5x authority gate" in workflow
+
+
+def test_revision_guard_loads_the_database_secret_instead_of_bypassing_it() -> None:
+    module = _module()
+
+    arguments = module.revision_guard_arguments("0013_identity_finalizer_e3")
+
+    # The image entrypoint is the only component that turns
+    # HOME_AGENT_DATABASE_URL_FILE into HOME_AGENT_DATABASE_URL. Overriding it
+    # with `python` left app.migration_guard without a database URL, so the
+    # guard failed closed for every well-formed deployment.
+    assert "--entrypoint" in arguments
+    assert arguments[arguments.index("--entrypoint") + 1] == "sh"
+    assert "python" not in arguments
+    assert "-m" not in arguments
+    assert arguments[-1] == "0013_identity_finalizer_e3"
+    assert arguments[-2] == module.DATABASE_URL_SECRET
+    assert "--no-deps" in arguments
+    assert "migrate" in arguments
+    for forbidden in ("build", "pull", "up", "start"):
+        assert forbidden not in arguments
+
+
+def test_revision_guard_passes_only_the_secret_path_never_its_value() -> None:
+    module = _module()
+
+    arguments = module.revision_guard_arguments("0015_current_authority_e5a")
+
+    assert module.DATABASE_URL_SECRET == "/run/secrets/database_url"
+    # Only the path may cross the command line; the value is read inside the
+    # container so it never reaches host process arguments or logs.
+    assert all("postgresql" not in argument for argument in arguments)
+    assert sum(argument == module.DATABASE_URL_SECRET for argument in arguments) == 1
+
+
+@pytest.mark.parametrize(
+    ("content", "environment", "expected"),
+    (
+        ("postgresql+psycopg://home_agent_owner:a@postgres:5432/home_agent", {}, 0),
+        (None, {}, 78),
+        ("", {}, 78),
+        ("has whitespace", {}, 78),
+        ("tab\there", {}, 78),
+        (
+            "postgresql+psycopg://home_agent_owner:a@postgres:5432/home_agent",
+            {"HOME_AGENT_DATABASE_URL": "already-set"},
+            78,
+        ),
+    ),
+)
+def test_revision_guard_script_mirrors_entrypoint_secret_rules(
+    tmp_path: Path,
+    content: str | None,
+    environment: dict[str, str],
+    expected: int,
+) -> None:
+    import os
+    import subprocess
+
+    module = _module()
+
+    secret = tmp_path / "database_url"
+    if content is not None:
+        secret.write_text(content, encoding="utf-8")
+
+    # Stub `python` so the script's final exec is observable without a database.
+    stub_directory = tmp_path / "bin"
+    stub_directory.mkdir()
+    stub = stub_directory / "python"
+    stub.write_text('#!/bin/sh\necho "$HOME_AGENT_DATABASE_URL"\n', encoding="utf-8")
+    stub.chmod(0o755)
+
+    result = subprocess.run(
+        ["sh", "-c", module.REVISION_GUARD_SCRIPT, "sh", str(secret), "0013_x"],
+        capture_output=True,
+        env={"PATH": f"{stub_directory}:{os.environ['PATH']}", **environment},
+        check=False,
+    )
+
+    assert result.returncode == expected
+    if expected == 0:
+        assert result.stdout.decode().strip() == content

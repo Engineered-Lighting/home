@@ -32,6 +32,7 @@ import uuid
 import phase3_activation_sequencer as sequencer
 import phase3_activation_source_plan as source_plan
 import phase3_activation_preflight as activation_preflight
+import phase3_migration_executor as migration_executor
 import phase3_capture_legacy_identity_snapshot as ha_transport
 from reviewed_identity_payload import (
     VerificationError,
@@ -1056,15 +1057,7 @@ class Backend:
         try:
             self._run(
                 self._compose(
-                    "run",
-                    "--rm",
-                    "--no-deps",
-                    "--entrypoint",
-                    "python",
-                    "migrate",
-                    "-m",
-                    "app.migration_guard",
-                    target,
+                    *migration_executor.revision_guard_arguments(target)
                 ),
                 timeout=180,
             )

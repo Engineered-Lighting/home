@@ -1439,6 +1439,11 @@ def _exercise_identity_authority_role_ceremony(
             "home_agent_identity_cutover",
             "postgres_identity_cutover_password",
         ),
+        (
+            "migration",
+            "home_agent_identity_migration",
+            "postgres_identity_migration_password",
+        ),
     ):
         _docker_run(
             state,
@@ -2553,6 +2558,8 @@ def _run_e3_phase(
             "tests/test_phase3_identity_finalizer_e3_runtime_postgres.py",
             "/workspace/tests/home_agent/"
             "test_identity_finalizer_e3_deployment_contract.py",
+            "/workspace/tests/home_agent/"
+            "test_identity_migration_registrar_e5ak.py",
         ],
         url_environment={
             "TEST_PHASE3_IDENTITY_FINALIZER_E3_OWNER_DATABASE_URL": BASE_DATABASE,

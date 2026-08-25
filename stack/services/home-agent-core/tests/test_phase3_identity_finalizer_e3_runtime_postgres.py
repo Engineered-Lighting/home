@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ast
+import base64
 from collections.abc import Callable
 import hashlib
 import json
@@ -10,7 +11,7 @@ import re
 import subprocess
 import sys
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from app import schema
+from app import identity_admission_writer, schema
 from app.ids import uuid7
 
 
@@ -1780,3 +1781,81 @@ async def test_postgresql_e3_lifecycle_boundary_and_atomic_finalizer() -> None:
     assert (
         fence_serialized
     ), "a concurrent E2 tombstone did not force the E3 finalizer to retry"
+
+
+async def _admit_through_the_production_writer(
+    url: str,
+    fixture: FinalizerFixture,
+) -> tuple[uuid.UUID, FinalizerFixture]:
+    """Write one admission with app.identity_admission_writer itself."""
+
+    admission_id = uuid7()
+    operation = identity_admission_writer.OPERATIONS["finalizer"]
+    request = identity_admission_writer.parse_request(
+        _canonical_bytes(
+            {
+                "contract": operation.contract,
+                "admission_id": str(admission_id),
+                "document_b64": base64.b64encode(fixture.document).decode("ascii"),
+            }
+        ),
+        operation,
+    )
+    written = await identity_admission_writer.execute(url, operation, request)
+    assert written == admission_id
+    return admission_id, replace(fixture, admission_id=admission_id)
+
+
+@pytest.mark.skipif(
+    not _required_environment(),
+    reason=(
+        "dedicated E3 owner, admin, finalizer, and E2 erasure PostgreSQL "
+        "URLs are required"
+    ),
+)
+@pytest.mark.asyncio
+async def test_production_admission_writer_can_actually_be_finalized() -> None:
+    """The real writer and the real kernel must agree about expiry.
+
+    0013 refuses an admission that outlives its run, and does not relax that for
+    an exact replay. The writer stamped every admission at now + 15 minutes
+    while the compiler stamps the run at staged + 10 minutes, so no admission
+    the writer produced could ever be finalized, for any operator timing.
+
+    Every other test in this file hand-inserts its admission row, so the seam
+    between the two was exercised nowhere. This drives the production writer.
+    """
+
+    owner_url = os.environ[OWNER_DATABASE_ENV]
+    engine = create_async_engine(owner_url)
+    try:
+        async with engine.begin() as connection:
+            fixture = await _seed_fixture(connection, label="writer-seam")
+
+        admission_id, written = await _admit_through_the_production_writer(
+            owner_url, fixture
+        )
+
+        async with engine.connect() as connection:
+            admission_expiry, run_expiry = (
+                await connection.execute(
+                    text(
+                        "SELECT admission.expires_at, run.expires_at "
+                        "FROM operations.reviewed_identity_finalizer_admissions "
+                        "AS admission "
+                        "JOIN operations.reviewed_identity_migration_runs AS run "
+                        "ON run.run_id = admission.run_id "
+                        "WHERE admission.admission_id = CAST(:admission AS uuid)"
+                    ),
+                    {"admission": admission_id},
+                )
+            ).one()
+
+        # This is exactly the predicate 0013 rejects on.
+        assert admission_expiry <= run_expiry
+
+        # And the kernel accepts it, which is the part that never held before.
+        finalization_id = await _finalize(engine, written)
+        assert isinstance(finalization_id, uuid.UUID)
+    finally:
+        await engine.dispose()

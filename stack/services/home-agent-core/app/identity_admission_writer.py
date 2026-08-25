@@ -94,6 +94,18 @@ CUTOVER_KEYS = frozenset(
     }
 )
 
+# The finalizer kernel refuses an admission that outlives its run
+# (0013_identity_finalizer_kernel.py: "admission.expires_at >
+# migration_run.expires_at"), and that comparison is not relaxed for an exact
+# replay. A fixed fifteen-minute admission therefore outlived the ten-minute
+# reviewed run for every possible operator timing, so no admission this writer
+# produced could ever be finalized. The admission now expires with the run,
+# whichever comes first.
+#
+# The run-expiry filter applies only to the INSERT, never to the replay lookup:
+# the admissions table requires expires_at > admitted_at, so LEAST() alone would
+# turn a legitimate replay against an already-expired run into a constraint
+# violation instead of returning the admission that already exists.
 FINALIZER_SQL = """
 WITH migration_run AS (
   SELECT *
@@ -128,8 +140,12 @@ WITH migration_run AS (
          core_oci_manifest_digest,core_schema_digest,core_capability_digest,
          policy_digest,signing_key_fingerprint,
          :finalization_signing_key_fingerprint,:verifier_bundle_digest,
-         transaction_timestamp() + interval '15 minutes'
+         LEAST(
+           migration_run.expires_at,
+           transaction_timestamp() + interval '15 minutes'
+         )
     FROM migration_run
+   WHERE migration_run.expires_at > transaction_timestamp()
   ON CONFLICT DO NOTHING
   RETURNING admission_id
 ), exact_existing AS (

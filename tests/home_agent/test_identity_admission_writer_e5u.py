@@ -168,6 +168,39 @@ def test_writers_are_single_statement_serializable_and_exact_replay_safe() -> No
     assert "str(error)" not in source
 
 
+def test_finalizer_admission_never_outlives_its_reviewed_run() -> None:
+    """The finalizer kernel refuses an admission that expires after its run.
+
+    0013 rejects `admission.expires_at > migration_run.expires_at`, and does not
+    relax it for an exact replay. An unconditional fifteen-minute admission
+    always outlived the ten-minute reviewed run, so no admission this writer
+    produced could ever be finalized, for any operator timing.
+    """
+
+    source = WRITER.read_text(encoding="utf-8")
+    finalizer = source.split("FINALIZER_SQL", 1)[1].split("CUTOVER_SQL", 1)[0]
+
+    # The admission expires with the run, whichever comes first.
+    assert "LEAST(" in finalizer
+    assert "migration_run.expires_at," in finalizer
+    assert "transaction_timestamp() + interval '15 minutes'" in finalizer
+
+    # A new admission is only inserted while the run is still live, because the
+    # admissions table requires expires_at > admitted_at.
+    assert "WHERE migration_run.expires_at > transaction_timestamp()" in finalizer
+
+    # The replay lookup stays unfiltered so an exact replay against an expired
+    # run still returns the admission that already exists.
+    exact_existing = finalizer.split("exact_existing AS (", 1)[1]
+    assert "expires_at > transaction_timestamp()" not in exact_existing
+
+    # The cutover kernel compares only against its own admission expiry, so the
+    # cutover statement is deliberately left alone.
+    cutover = source.split("CUTOVER_SQL", 1)[1]
+    assert "transaction_timestamp() + interval '15 minutes'" in cutover
+    assert "LEAST(" not in cutover
+
+
 def test_root_bridge_passes_private_stdin_to_only_fixed_image_entrypoints() -> None:
     source = BRIDGE.read_text(encoding="utf-8")
     entrypoint = ENTRYPOINT.read_text(encoding="utf-8")

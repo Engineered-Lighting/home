@@ -312,21 +312,52 @@ class IdentityMigrationRoleDeploymentContractTests(unittest.TestCase):
             "semantic_authority_cutovers\n      TO", manifest_grants
         )
 
-    def test_revision_remains_pinned_and_activation_is_not_implemented(self) -> None:
+    def test_revision_remains_pinned_and_activation_stays_shared_and_bounded(
+        self,
+    ) -> None:
+        """The migration login is activated only by the reviewed ceremony.
+
+        Registering a reviewed manifest requires the migration login, so the
+        role now has an activation path. It is the same root-only, permit-gated,
+        revision-gated, two-minute ceremony the finalizer and cutover logins
+        use, not a second bespoke program, and it still never touches the
+        login's password.
+        """
+
         env = read("stack/home-agent.env.example")
         roles = read("stack/home-agent-deploy/provision-roles.sh")
         documentation = read("stack/home-agent-deploy/IDENTITY-MIGRATION-ROLE.md")
+        ceremony = read("stack/home-agent-deploy/activate-identity-authority-role.sh")
         self.assertIn(
             "HOME_AGENT_EXPECTED_DB_REVISION=0006a_worker_lease_arbitration",
             env,
         )
+
+        # Expired by default: activation is an explicit, bounded act.
         self.assertIn("VALID UNTIL '1970-01-01 00:00:00+00'", roles)
         self.assertIn("persisted URL therefore cannot connect", documentation)
-        self.assertIn("provides none", documentation)
+
+        # No second activation program; the shared ceremony gained one arm.
         deployment_files = "\n".join(
             path.name for path in (ROOT / "stack/home-agent-deploy").iterdir()
         )
         self.assertNotIn("activate-identity-migration", deployment_files)
+        self.assertIn(
+            'migration) role_name="home_agent_identity_migration"', ceremony
+        )
+        self.assertIn("'home_agent_identity_migration'", ceremony)
+
+        # The bounds that make the window safe are unchanged.
+        self.assertIn("interval '2 minutes'", ceremony)
+        self.assertIn("interval '2 minutes 5 seconds'", ceremony)
+        self.assertIn("0015_current_authority_e5a", ceremony)
+        self.assertIn("identity_authority_role_session_exists", ceremony)
+
+        # Activation changes VALID UNTIL and nothing else. Rotation is still
+        # absent, so the persisted URL keeps the secret provisioning set.
+        self.assertIn("ALTER ROLE %I VALID UNTIL %L", ceremony)
+        self.assertNotIn("ALTER ROLE %I PASSWORD", ceremony)
+        self.assertIn("Password rotation is deliberately still absent", documentation)
 
 
 if __name__ == "__main__":

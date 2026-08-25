@@ -42,6 +42,12 @@ def test_role_script_is_fixed_bounded_and_force_reexpires_sessions() -> None:
     assert "activate|deactivate|status" in source
     assert 'finalizer) role_name="home_agent_identity_finalizer"' in source
     assert 'cutover) role_name="home_agent_identity_cutover"' in source
+    assert 'migration) role_name="home_agent_identity_migration"' in source
+    # The in-database allowlist must agree with the shell one, or a target the
+    # script accepts would be refused by the ceremony body.
+    assert source.count("'home_agent_identity_finalizer'") == 1
+    assert source.count("'home_agent_identity_cutover'") == 1
+    assert source.count("'home_agent_identity_migration'") == 1
     assert (
         "phase3-grant-permit-e5m-v1:"
         "0017_authenticated_binding_e5c:0021_parent_status_e5h"

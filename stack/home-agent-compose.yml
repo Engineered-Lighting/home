@@ -248,7 +248,7 @@ services:
     read_only: true
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
-    tmpfs: [/tmp:size=16m,mode=1777]
+    tmpfs: ["/tmp:size=16m,mode=1777"]
     networks: [postgres-net]
     depends_on:
       postgres: {condition: service_healthy}
@@ -276,7 +276,7 @@ services:
     read_only: true
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
-    tmpfs: [/tmp:size=16m,mode=1777]
+    tmpfs: ["/tmp:size=16m,mode=1777"]
     networks: [postgres-net]
     depends_on:
       postgres: {condition: service_healthy}

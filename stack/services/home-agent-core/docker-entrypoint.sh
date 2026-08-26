@@ -173,6 +173,27 @@ case "$role" in
     }
     exec python -m app.identity_authority_executor cutover
     ;;
+  identity-evidence-freeze)
+    [ "$#" -eq 1 ] || {
+      echo "identity writer freeze evidence accepts no arguments" >&2
+      exit 64
+    }
+    exec python -m app.identity_evidence_writer freeze
+    ;;
+  identity-evidence-privacy)
+    [ "$#" -eq 1 ] || {
+      echo "identity privacy cutover evidence accepts no arguments" >&2
+      exit 64
+    }
+    exec python -m app.identity_evidence_writer privacy
+    ;;
+  identity-evidence-cutover)
+    [ "$#" -eq 1 ] || {
+      echo "identity semantic cutover candidate accepts no arguments" >&2
+      exit 64
+    }
+    exec python -m app.identity_evidence_writer cutover
+    ;;
   identity-register-run)
     [ "$#" -eq 1 ] || {
       echo "identity migration registration accepts no arguments" >&2

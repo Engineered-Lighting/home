@@ -467,6 +467,17 @@ async def _seed() -> tuple[bytes, uuid.UUID]:
         )
 
         async with owner_engine.begin() as connection:
+            # The cutover kernel refuses an admission that predates the
+            # evidence it admits: it checks recorded_at > admitted_at for both
+            # the writer freeze and the writer evidence. Those rows are now
+            # written by a separate committed transaction, so the admission
+            # clock has to be read after it, not reused from the observation
+            # transaction that ran before it.
+            admission_time = (
+                await connection.execute(
+                    text("SELECT pg_catalog.transaction_timestamp()")
+                )
+            ).scalar_one()
 
             document_values = {
                 "contract_version": (
@@ -545,7 +556,7 @@ async def _seed() -> tuple[bytes, uuid.UUID]:
                     ":ledger_epoch,:ledger_head,'head_matched',"
                     ":release_digest,:schema_digest,:capability_digest,"
                     ":policy_digest,:signing_key,:verifier_bundle_digest,"
-                    ":fixture_time,:expires_at)"
+                    ":admission_time,:expires_at)"
                 ),
                 {
                     "admission_id": admission_id,
@@ -578,7 +589,8 @@ async def _seed() -> tuple[bytes, uuid.UUID]:
                     "signing_key": signing_key_fingerprint,
                     "verifier_bundle_digest": verifier_bundle_digest,
                     "fixture_time": fixture_time,
-                    "expires_at": fixture_time + timedelta(minutes=10),
+                    "admission_time": admission_time,
+                    "expires_at": admission_time + timedelta(minutes=10),
                 },
             )
 

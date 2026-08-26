@@ -391,6 +391,41 @@ def test_every_executed_host_test_node_is_in_the_build_context() -> None:
     )
 
 
+def test_every_executed_core_test_node_is_in_the_build_context() -> None:
+    """The same cross-check for the core image's own `tests/...` nodes.
+
+    These are carried by a context *tree* rather than by individual entries,
+    which is why the sibling guard above only had to enumerate the host half.
+    That difference is invisible at the call site — both halves are written as
+    plain node strings — so assert the covering mechanism explicitly. Drop the
+    tree and this names every node that silently stopped being copied.
+    """
+
+    runner = _load_runner()
+    source = RUNNER.read_text(encoding="utf-8")
+    # Core nodes are plain relative literals inside a `nodes=[...]` list:
+    #     "tests/test_something.py"
+    referenced = {
+        name
+        for name in re.findall(r'"tests/(test_[^"/]+\.py)"', source)
+        # `/workspace/tests/home_agent/...` is the host half, guarded above.
+        if not name.startswith("home_agent")
+    }
+    assert referenced, "no core test nodes found; the node syntax changed"
+    prefix = "stack/services/home-agent-core/tests/"
+    packaged = set(runner.BUILD_CONTEXT_FILES)
+    trees = set(runner.BUILD_CONTEXT_TREES)
+    missing = sorted(
+        name
+        for name in referenced
+        if f"{prefix}{name}" not in packaged and prefix.rstrip("/") not in trees
+    )
+    assert not missing, (
+        "these core test nodes are executed by a gate phase but are not copied "
+        f"into the build context: {missing}"
+    )
+
+
 def test_generated_build_context_is_an_exact_filtered_manifest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -753,7 +788,12 @@ def test_e4_e5_scaffold_phase_is_fresh_dormant_and_secret_file_only() -> None:
     assert 'role="home_agent_identity_cutover"' in section
     assert section.count("finally:") >= 2
     assert "VALID UNTIL 'infinity'" not in source
-    assert "interval '5 minutes'" in source
+    # The window is a parameter now, because the registration kernel needs a
+    # longer one than the E4 executors. Pin the default and the ceiling rather
+    # than a literal interval, which is what "bounded" actually means here.
+    assert "minutes: int = 5," in source
+    assert "if not 1 <= minutes <= 14:" in source
+    assert "interval '{minutes} minutes'" in source
     assert "verify bounded disposable E4 {role} login window" in source
     assert "terminate and verify disposable E4 {role} login is expired" in source
     assert "pg_terminate_backend(activity.pid, 5000)" in source
@@ -1267,3 +1307,110 @@ def test_every_nonweb_activation_source_is_in_the_hosted_gate_context() -> None:
     ).read_text(encoding="utf-8")
     assert web_workflow.count('- "app/src/home-agent/**"') == 2
     assert web_workflow.count('- "stack/services/home-agent-bff/**"') == 2
+
+
+KERNEL_TEST = (
+    ROOT
+    / "stack/services/home-agent-core/tests"
+    / "test_phase3_identity_migration_kernel_postgres.py"
+)
+
+
+def _kernel_phase_section() -> str:
+    gate = RUNNER.read_text(encoding="utf-8")
+    return gate.split("def _run_migration_kernel_contracts(", 1)[1].split(
+        "\ndef ", 1
+    )[0]
+
+
+def test_migration_kernel_phase_seeds_the_predecessor_the_test_expects() -> None:
+    """The seeded predecessor must match the kernel test's own constants.
+
+    `register_reviewed_identity_migration` matches the predecessor on four
+    values at once -- authorization id, shadow rule version, policy version and
+    policy digest -- and the caller has no API that can discover any of them.
+    The gate writes that row and the test module declares what it must be, so a
+    drift in either surfaces only as `identity_migration_predecessor_invalid`
+    from inside a container, minutes into a run. Cross-check them here.
+    """
+
+    runner = _load_runner()
+    kernel_test = KERNEL_TEST.read_text(encoding="utf-8")
+    # Read the statement the gate actually issues, not the source that builds
+    # it -- the values reach the SQL through interpolation and never appear as
+    # literals in the file.
+    seed = runner._migration_kernel_predecessor_sql()
+
+    declared = dict(
+        re.findall(
+            r"^(SHADOW_AUTHORIZATION_ID|POLICY_VERSION|POLICY_DIGEST) = (.+)$",
+            kernel_test,
+            re.MULTILINE,
+        )
+    )
+    assert set(declared) == {
+        "SHADOW_AUTHORIZATION_ID",
+        "POLICY_VERSION",
+        "POLICY_DIGEST",
+    }, declared
+
+    authorization = re.search(
+        r'uuid\.UUID\("([0-9a-f-]+)"\)', declared["SHADOW_AUTHORIZATION_ID"]
+    )
+    assert authorization, declared["SHADOW_AUTHORIZATION_ID"]
+    assert runner.MIGRATION_KERNEL_PREDECESSOR == authorization.group(1)
+    assert f"'{authorization.group(1)}'" in seed
+
+    assert f"'{declared['POLICY_VERSION'].strip(chr(34))}'" in seed
+    # POLICY_DIGEST is written as a repeated character, not a literal digest.
+    character, _, count = declared["POLICY_DIGEST"].partition("*")
+    digest = character.strip().strip('"') * int(count)
+    assert runner.MIGRATION_KERNEL_POLICY_DIGEST == digest
+    assert f"'{digest}'" in seed
+
+    rule_version = re.search(r'"shadow_rule_version": "([^"]+)"', kernel_test)
+    assert rule_version, "the kernel test stopped declaring a shadow rule version"
+    assert runner.MIGRATION_KERNEL_RULE_VERSION == rule_version.group(1)
+    assert f"'{rule_version.group(1)}'" in seed
+
+    # The row must also satisfy `worker_proof_time`, which orders maintenance
+    # <= readiness <= authorization. All three are stamped in the past.
+    assert seed.index("interval '2 minutes'") < seed.index("interval '1 minute'")
+    assert seed.index("interval '1 minute'") < seed.index("interval '30 seconds'")
+    # The E3 fixture's own authorization is what has to go, and the schema
+    # resolves the order rather than the gate hand-picking one.
+    assert seed.startswith("TRUNCATE TABLE operations.rollout_authorizations, ")
+    assert "CASCADE" in seed
+
+
+def test_migration_kernel_phase_is_isolated_and_reverts_itself() -> None:
+    """It gets its own database, and both the login and the database unwind.
+
+    The kernel node cannot join the E3 node list: `rollout_transition_once`
+    admits exactly one `record_only -> shadow` authorization per database, the
+    E3 fixture holds it, and the migration caller has no DELETE to reclaim it.
+    """
+
+    gate = RUNNER.read_text(encoding="utf-8")
+    kernel_node = "tests/test_phase3_identity_migration_kernel_postgres.py"
+
+    e3 = gate.split("def _run_e3_phase(", 1)[1].split("\ndef ", 1)[0]
+    assert kernel_node not in e3.split("_run_migration_kernel_contracts", 1)[0], (
+        "the kernel node joined the E3 node list; it would collide with that "
+        "phase's own one-shot authorization"
+    )
+    assert "_run_migration_kernel_contracts(state, secrets_directory, phase)" in e3
+
+    section = _kernel_phase_section()
+    assert f'"{kernel_node}"' in section
+    # The phase names the base database exactly twice -- as the clone source
+    # and in the guard inventory -- and never runs the test against it.
+    assert section.count("BASE_DATABASE") == 2
+    assert 'role="home_agent_identity_migration"' in section
+    # The registration kernel refuses a window wider than fifteen minutes.
+    assert "minutes=14" in section
+    assert "DROP DATABASE IF EXISTS" in section
+    # The login re-expires and the database drops even when the test fails.
+    assert section.count("finally:") == 2
+    assert "enabled=False" in section
+    assert section.index("enabled=True") < section.index("finally:")

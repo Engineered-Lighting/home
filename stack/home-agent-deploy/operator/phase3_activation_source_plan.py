@@ -22,8 +22,8 @@ from typing import Any, Mapping, Sequence
 
 CONTRACT = "phase3-activation-source-plan-e5k-v1"
 SOURCE_PIN_BOOTSTRAP_CONTRACT = "phase3-source-pin-bootstrap-e5q-v1"
-ACCEPTED_COMMIT = "3d49ecc7e2b02e82c023b59c209df55639074c09"
-ACCEPTED_POSTGRES_RUN_ID = "33013616999"
+ACCEPTED_COMMIT = "d828e0140d61d06701bb6ecb72680743ace5961c"
+ACCEPTED_POSTGRES_RUN_ID = "33019867279"
 ACCEPTED_WEB_RUN_ID = "31906584262"
 SOURCE_REVISION = "0006a_worker_lease_arbitration"
 TARGET_REVISION = "0021_parent_status_e5h"

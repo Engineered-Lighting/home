@@ -67,6 +67,16 @@ FINALIZER_DOCUMENT = PRIVATE_IDENTITY_ROOT / "identity-finalizer-document-e5y.js
 FINALIZER_RECEIPT = PRIVATE_IDENTITY_ROOT / "identity-signing-receipt-e5y.json"
 IDENTITY_SIGNING_STATE = PRIVATE_IDENTITY_ROOT / "identity-signing-state-e5y.json"
 REGISTRATION_CONTRACT = "identity-migration-registration-e5ak-v1"
+RETIREMENT_CONTRACT = "phase3-identity-finalization-retirement-e5am-v1"
+RETIREMENT_REASON = "finalized_run_expired_before_registration"
+RETIREMENT_RECEIPT_PREFIX = "identity-finalization-retirement-"
+RETIREMENT_RECEIPT_SUFFIX = "-e5am.json"
+# Every phase a reviewed packet can be sitting in when its run expires. The
+# signing ceremony can only supersede an unsigned packet staged at the
+# four-step await boundary, so at this boundary all three are equally stranded
+# and equally safe to retire: the run is expired either way, and the database
+# check below is what actually establishes that nothing was consumed.
+RETIRABLE_PHASES = frozenset({"staged", "review_signed", "finalized"})
 EDGE_RECEIPT = PRIVATE_IDENTITY_ROOT / "edge-privacy-policy-receipt-e5ac.json"
 WRITER_OBSERVATION = PRIVATE_IDENTITY_ROOT / "writer-freeze-observation-e5z.json"
 PRIVACY_OBSERVATION = PRIVATE_IDENTITY_ROOT / "privacy-cutover-observation-e5aa.json"
@@ -1720,6 +1730,135 @@ class Backend:
             timeout=300,
         )
 
+    @staticmethod
+    def _retirement_name(path: Path, run_id: str) -> Path:
+        """Archive name for one retired artifact.
+
+        Deliberately not the signing ceremony's `.superseded-` name. That one
+        means an unsigned packet whose staged review window lapsed; this means a
+        review-signed, finalized packet whose reviewed run expired before any
+        registration. Conflating the two would misdescribe the private record.
+        """
+
+        return path.with_name(f"{path.stem}.retired-{run_id}{path.suffix}")
+
+    def retire_expired_finalization(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        """Retire a reviewed packet whose run expired before registration.
+
+        The signing ceremony can supersede only an unsigned packet staged at the
+        four-step await boundary. A packet whose run expired at this boundary is
+        out of scope there: the runbook records that such a state "fails closed
+        for separate owner review". This command is that review's outcome.
+
+        It accepts any phase the packet can be stranded in. The ten-minute
+        window holds two interactive signatures and two container round-trips,
+        so lapsing at `staged` or `review_signed` is at least as likely as
+        lapsing at `finalized` — and those two had no recovery verb in either
+        tool. Which phase it died in changes nothing that matters here: the run
+        is expired, the database proves nothing was consumed, and a fresh packet
+        re-stages from the same private review and SQLite snapshot.
+
+        It archives the three private artifacts and writes one content-free
+        receipt. It never rewinds the journal, never writes to the database, and
+        refuses outright unless the database proves nothing was registered,
+        admitted, or finalized. Registration is one-shot for the life of the
+        database, so retiring a packet whose run was already registered would
+        leave a successor that could never be registered at all.
+        """
+
+        raw_state = self._private_document(IDENTITY_SIGNING_STATE)
+        signing = parse_canonical_json(raw_state, maximum=MAX_OUTPUT)
+        if (
+            not isinstance(signing, Mapping)
+            or signing.get("contract") != "phase3-identity-signing-state-e5y-v1"
+            or signing.get("phase") not in RETIRABLE_PHASES
+        ):
+            raise ActivationRunnerError("identity signing state refuses retirement")
+        packet = signing.get("unsigned_packet")
+        if not isinstance(packet, Mapping):
+            raise ActivationRunnerError("identity signing state refuses retirement")
+        run = packet.get("unsigned_run")
+        run_id = packet.get("run_id")
+        if (
+            not isinstance(run, Mapping)
+            or not isinstance(run_id, str)
+            or run_id != run.get("run_id")
+        ):
+            raise ActivationRunnerError("identity signing state refuses retirement")
+        try:
+            parsed = uuid.UUID(run_id)
+        except ValueError as error:
+            raise ActivationRunnerError(
+                "identity signing state refuses retirement"
+            ) from error
+        if parsed.version != 7 or str(parsed) != run_id:
+            raise ActivationRunnerError("identity signing state refuses retirement")
+
+        expires_text = run.get("expires_at")
+        if not isinstance(expires_text, str):
+            raise ActivationRunnerError("identity signing state refuses retirement")
+        try:
+            expires_at = datetime.fromisoformat(expires_text.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ActivationRunnerError(
+                "identity signing state refuses retirement"
+            ) from error
+        if expires_at.tzinfo is None:
+            raise ActivationRunnerError("identity signing state refuses retirement")
+        if expires_at > datetime.now(UTC):
+            # A live run must be finalized, never retired.
+            raise ActivationRunnerError("reviewed migration run has not expired")
+
+        probe = self._probe("migration")
+        if probe.get("expired_finalization_retirable") is not True:
+            raise ActivationRunnerError("reviewed migration state refuses retirement")
+
+        receipt_path = PRIVATE_IDENTITY_ROOT / (
+            f"{RETIREMENT_RECEIPT_PREFIX}{run_id}{RETIREMENT_RECEIPT_SUFFIX}"
+        )
+        archived: list[str] = []
+        for path in (IDENTITY_SIGNING_STATE, FINALIZER_DOCUMENT, FINALIZER_RECEIPT):
+            target = self._retirement_name(path, run_id)
+            if target.exists() or target.is_symlink():
+                # A previous attempt already archived this one. Never overwrite
+                # an archive: the private record is append-only.
+                if path.exists() or path.is_symlink():
+                    raise ActivationRunnerError(
+                        "identity retirement archive is ambiguous"
+                    )
+                archived.append(target.name)
+                continue
+            if not (path.exists() and not path.is_symlink()):
+                continue
+            os.rename(path, target)
+            archived.append(target.name)
+
+        if not (receipt_path.exists() or receipt_path.is_symlink()):
+            self._atomic_private(
+                receipt_path,
+                canonical_bytes(
+                    {
+                        "contract": RETIREMENT_CONTRACT,
+                        "status": "retired",
+                        "reason_code": RETIREMENT_REASON,
+                        "run_id": run_id,
+                        "expires_at": expires_text,
+                        "ceremony_policy_sha256": signing["ceremony_policy_sha256"],
+                        "retired_state_sha256": hashlib.sha256(
+                            raw_state
+                        ).hexdigest(),
+                        "archived_names": sorted(archived),
+                        "created_at": _utc(),
+                    }
+                ),
+            )
+        return {
+            "contract": CONTRACT,
+            "operation": "retire_expired_finalization",
+            "status": "retired",
+            "archived_count": len(archived),
+        }
+
     def _capture_edge_receipt(self, _state: Mapping[str, Any]) -> None:
         if EDGE_RECEIPT.exists() or EDGE_RECEIPT.is_symlink():
             self._private_document(EDGE_RECEIPT)
@@ -2148,6 +2287,19 @@ class Runner:
             self.store.save(state)
         return self.status()
 
+    def retire_expired_finalization(self) -> dict[str, Any]:
+        """Refuse unless the ceremony is parked exactly at the finalizer step."""
+
+        state = self.store.load()
+        if state is None:
+            raise ActivationRunnerError("activation has not started")
+        if (
+            state["next_step"] != "commit_finalizer"
+            or state["status"] not in {"paused", "active"}
+        ):
+            raise ActivationRunnerError("activation boundary refuses retirement")
+        return self.backend.retire_expired_finalization(state)
+
     def contain(self) -> dict[str, Any]:
         state = self.store.load()
         if state is None:
@@ -2200,10 +2352,11 @@ def main() -> int:
         "contain",
         "refresh-source",
         "rebind-source",
+        "retire-expired-finalization",
     }:
         print(
             "phase3 activation runner requires status, advance, contain, "
-            "refresh-source, or rebind-source",
+            "refresh-source, rebind-source, or retire-expired-finalization",
             file=sys.stderr,
         )
         return 64
@@ -2225,7 +2378,8 @@ def main() -> int:
     print(json.dumps(result, separators=(",", ":"), sort_keys=True))
     return (
         0
-        if sys.argv[1] in {"refresh-source", "rebind-source"}
+        if sys.argv[1]
+        in {"refresh-source", "rebind-source", "retire-expired-finalization"}
         or result["status"] in {"not_started", "complete"}
         else 3
     )

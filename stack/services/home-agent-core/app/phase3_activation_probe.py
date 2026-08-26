@@ -22,13 +22,14 @@ PASSWORD = re.compile(r"^[0-9a-f]{64}$")
 
 @dataclass(frozen=True, slots=True)
 class Probe:
-    name: Literal["authority", "binding", "parents"]
+    name: Literal["authority", "binding", "parents", "migration"]
     revision: str
 
 
 PROBES = {
     probe.name: probe
     for probe in (
+        Probe("migration", "0015_current_authority_e5a"),
         Probe("authority", "0015_current_authority_e5a"),
         Probe("binding", "0017_authenticated_binding_e5c"),
         Probe("parents", "0021_parent_status_e5h"),
@@ -81,6 +82,60 @@ async def _revision(connection) -> str:
     if len(rows) != 1 or not isinstance(rows[0], str):
         raise ActivationProbeError("activation probe revision is invalid")
     return rows[0]
+
+
+async def _migration(connection) -> dict[str, object]:
+    """Report whether any reviewed migration run has been registered.
+
+    Counts only. Registration is one-shot for the life of the database: there
+    is exactly one record_only -> shadow authorization, exactly one run per
+    authorization, and no role holds DELETE on the runs table. Retiring an
+    expired packet is only safe while these are all zero, because a fresh
+    packet would otherwise produce a run that can never be registered.
+    """
+
+    row = (
+        (
+            await connection.execute(
+                text(
+                    """
+                SELECT
+                  (SELECT count(*)::integer
+                     FROM operations.reviewed_identity_migration_runs)
+                    AS reviewed_run_count,
+                  (SELECT count(*)::integer
+                     FROM operations.reviewed_identity_finalizer_admissions)
+                    AS finalizer_admission_count,
+                  (SELECT count(*)::integer
+                     FROM operations.reviewed_identity_finalizer_admissions
+                    WHERE consumed_at IS NOT NULL)
+                    AS consumed_admission_count,
+                  (SELECT count(*)::integer
+                     FROM operations.reviewed_identity_migration_finalizations)
+                    AS finalization_count
+                """
+                )
+            )
+        )
+        .mappings()
+        .one()
+    )
+    run_count = row["reviewed_run_count"]
+    admission_count = row["finalizer_admission_count"]
+    consumed_count = row["consumed_admission_count"]
+    finalization_count = row["finalization_count"]
+    return {
+        "reviewed_run_count": run_count,
+        "finalizer_admission_count": admission_count,
+        "consumed_admission_count": consumed_count,
+        "finalization_count": finalization_count,
+        "expired_finalization_retirable": (
+            run_count == 0
+            and admission_count == 0
+            and consumed_count == 0
+            and finalization_count == 0
+        ),
+    }
 
 
 async def _authority(connection) -> dict[str, object]:
@@ -230,7 +285,9 @@ async def execute(url: str, probe: Probe) -> dict[str, object]:
                     raise ActivationProbeError(
                         "activation probe revision does not match"
                     )
-                if probe.name == "authority":
+                if probe.name == "migration":
+                    evidence = await _migration(connection)
+                elif probe.name == "authority":
                     evidence = await _authority(connection)
                 elif probe.name == "binding":
                     evidence = await _binding(connection)

@@ -1639,7 +1639,20 @@ window. In order:
    deletes nothing, and never overwrites. Interrupted runs are resumed by
    re-running the same command; after completion a re-run reports the
    existing lineage and changes nothing. An expired but review-signed state
-   is out of scope and fails closed for separate owner review.
+   is out of scope for this ceremony and still fails closed here.
+
+   For that case the activation runner has `retire-expired-finalization`. It
+   applies only where the ceremony actually strands: the journal parked at
+   `commit_finalizer`, a reviewed run whose window has lapsed, and a packet in
+   any phase it can strand in (`staged`, `review_signed`, or `finalized`). It refuses unless the read-only `migration` probe proves
+   that no run was registered, no admission written, and nothing finalized,
+   because registration is one-shot for the life of the database and no role
+   can delete a run row. It archives the three private artifacts under
+   `*.retired-<run_id>.json` beside a content-free
+   `identity-finalization-retirement-<run_id>-e5am.json` receipt, writes
+   nothing to the database, and does not rewind the journal. Afterwards the
+   unchanged ceremony can `stage` and `review` a fresh packet, and step 17
+   signs the finalizer itself when the document and receipt are absent.
 4. If the source pin moved, run the activation runner once with
    `rebind-source`. It is available only at the four-step
    `await_reviewed_people_packet` boundary with the signing chain absent;

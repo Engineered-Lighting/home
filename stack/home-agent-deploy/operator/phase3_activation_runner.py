@@ -898,7 +898,7 @@ class Backend:
                 check=False,
                 input=input_bytes,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.PIPE if diagnostic else subprocess.DEVNULL,
                 timeout=timeout,
                 shell=False,
             )

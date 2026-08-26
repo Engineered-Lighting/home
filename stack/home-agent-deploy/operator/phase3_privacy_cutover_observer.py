@@ -25,6 +25,7 @@ from typing import Any, Mapping
 import uuid
 
 import phase3_activation_source_plan as source_plan
+import phase3_migration_executor as migration_executor
 from phase3_activation_preflight import selected_environment
 from phase3_privacy_cutover_evidence import CATEGORY_ASSERTIONS, CATEGORY_ORDER
 from reviewed_identity_payload import (
@@ -45,7 +46,9 @@ WRITER_RECEIPT_PATH = PRIVATE_ROOT / "writer-freeze-evidence-receipt-e5z.json"
 EDGE_RECEIPT_PATH = PRIVATE_ROOT / "edge-privacy-policy-receipt-e5ac.json"
 OBSERVATION_PATH = PRIVATE_ROOT / "privacy-cutover-observation-e5aa.json"
 MAX_BYTES = 4 * 1024 * 1024
-MAX_EDGE_TO_FREEZE_AGE = timedelta(minutes=5)
+# How long the writer freeze may precede this observation. Both steps are
+# automated and consecutive, so this stays tight.
+MAX_FREEZE_TO_OBSERVATION_AGE = timedelta(minutes=5)
 MAX_CLOCK_SKEW = timedelta(seconds=30)
 EDGE_KEYS = frozenset(
     {
@@ -167,6 +170,7 @@ def compile_observation(
     raw_writer_receipt: bytes,
     raw_edge_receipt: bytes,
     *,
+    agent_services_running: frozenset[str],
     now: datetime,
 ) -> bytes:
     """Validate live inputs and return the exact unsigned observation."""
@@ -251,13 +255,29 @@ def compile_observation(
     }:
         raise PrivacyCutoverObserverError("HA Edge purge was not verified")
     edge_time = _time(edge["refreshed_at"], "HA Edge privacy refresh")
+    # The edge receipt must describe a moment at or before the freeze, and the
+    # freeze must not be in the future. Both are orderings, and both hold.
     if (
         edge_time > freeze_time + MAX_CLOCK_SKEW
-        or freeze_time - edge_time > MAX_EDGE_TO_FREEZE_AGE
         or freeze_time > now + MAX_CLOCK_SKEW
-        or now - freeze_time > MAX_EDGE_TO_FREEZE_AGE
+        or now - freeze_time > MAX_FREEZE_TO_OBSERVATION_AGE
     ):
         raise PrivacyCutoverObserverError("privacy cutover evidence is stale")
+    # There is deliberately no upper bound on how far the edge receipt precedes
+    # the freeze. The edge only records one by successfully fetching the privacy
+    # policy from Core, and the agent services have been stopped since step 12 —
+    # so it cannot refresh, and the policy it verified against cannot change.
+    # Elapsed time therefore carries no information here; a bound on it was a
+    # proxy for "nothing changed since", and it was unsatisfiable by
+    # construction: the step-17 confirmation sits between the stop and the
+    # freeze with no upper bound of its own.
+    #
+    # What the proxy stood for is asserted directly instead: the services that
+    # would have to run for anything to change are proven stopped.
+    if agent_services_running:
+        raise PrivacyCutoverObserverError(
+            "privacy cutover requires the agent services to be stopped"
+        )
 
     basis = {
         "source_pack_digest": source_pack_digest,
@@ -377,6 +397,23 @@ def _atomic_create(path: Path, raw: bytes) -> None:
             pass
 
 
+def _running_agent_services() -> frozenset[str]:
+    """Which agent-facing services are up, as the executor already reports.
+
+    The edge records a privacy receipt only by successfully fetching the policy
+    from Core, so while these are down it can neither refresh nor act on a
+    different policy. That is the property the removed five-minute
+    edge-to-freeze bound was standing in for.
+    """
+
+    try:
+        return migration_executor._running_protected_services()
+    except migration_executor.MigrationExecutionError as error:
+        raise PrivacyCutoverObserverError(
+            "privacy cutover service state is unavailable"
+        ) from error
+
+
 def execute() -> Mapping[str, Any]:
     if sys.platform != "linux" or os.geteuid() != 0:
         raise PrivacyCutoverObserverError("privacy observation requires root on Linux")
@@ -393,6 +430,7 @@ def execute() -> Mapping[str, Any]:
         _read_private(WRITER_EVIDENCE_PATH),
         _read_private(WRITER_RECEIPT_PATH),
         _read_private(EDGE_RECEIPT_PATH),
+        agent_services_running=_running_agent_services(),
         now=datetime.now(UTC),
     )
     _atomic_create(OBSERVATION_PATH, raw)

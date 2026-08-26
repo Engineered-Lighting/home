@@ -129,6 +129,7 @@ def _compile(**overrides) -> bytes:
         "raw_writer_evidence": writer,
         "raw_writer_receipt": receipt,
         "raw_edge_receipt": _edge(),
+        "agent_services_running": frozenset(),
         "now": NOW + timedelta(minutes=1),
     }
     values.update(overrides)
@@ -156,11 +157,51 @@ def test_observer_binds_live_edge_freeze_environment_and_source() -> None:
     assert "Marcelo" not in text
 
 
-def test_observer_rejects_stale_or_post_freeze_edge_receipts() -> None:
-    with pytest.raises(observer.PrivacyCutoverObserverError, match="stale"):
-        _compile(raw_edge_receipt=_edge(refreshed_at=NOW - timedelta(minutes=6)))
+def test_observer_accepts_an_edge_receipt_from_before_the_service_stop() -> None:
+    """A realistic timeline, not a hand-stamped one.
+
+    The edge records a receipt only by successfully fetching the privacy policy
+    from Core. The agent services stop at step 12, an unbounded human
+    confirmation sits at step 17, and the freeze happens at step 20 — so by the
+    time the freeze is taken the newest possible receipt is hours or days old.
+    On the live deployment it was twelve hours old against a five-minute bound.
+
+    That bound was unsatisfiable by construction. What it stood for — that
+    nothing changed since the edge last verified — is asserted directly by the
+    services being stopped.
+    """
+
+    raw = _compile(raw_edge_receipt=_edge(refreshed_at=NOW - timedelta(hours=12)))
+    assert payload.parse_canonical_json(raw)
+
+
+def test_observer_requires_the_agent_services_to_be_stopped() -> None:
+    with pytest.raises(observer.PrivacyCutoverObserverError, match="stopped"):
+        _compile(agent_services_running=frozenset({"core-ingest"}))
+
+
+def test_observer_rejects_post_freeze_edge_receipts() -> None:
+    """Ordering still holds: the edge cannot have observed after the freeze.
+
+    An age bound below the freeze is gone, but an observation that postdates it
+    would describe a moment the freeze does not cover.
+    """
+
     with pytest.raises(observer.PrivacyCutoverObserverError, match="stale"):
         _compile(raw_edge_receipt=_edge(refreshed_at=NOW + timedelta(minutes=1)))
+
+
+def test_observer_rejects_a_freeze_it_cannot_have_observed() -> None:
+    """The freeze must precede this observation, and not by too long.
+
+    Both steps are automated and consecutive, so this bound is satisfiable —
+    unlike the edge-to-freeze one, which spanned an unbounded human pause.
+    """
+
+    with pytest.raises(observer.PrivacyCutoverObserverError, match="stale"):
+        _compile(now=NOW + timedelta(minutes=30))
+    with pytest.raises(observer.PrivacyCutoverObserverError, match="stale"):
+        _compile(now=NOW - timedelta(minutes=5))
 
 
 def test_observer_rejects_non_record_only_or_unaccepted_source() -> None:

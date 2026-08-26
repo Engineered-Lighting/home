@@ -34,6 +34,18 @@ OWNER = "home_agent_owner"
 BASE_DATABASE = "home_agent"
 ADMIN_DATABASE = "postgres"
 ADMISSION_TEMPLATE = "e1_template_0007"
+# The registration kernel needs a database of its own. Its predecessor row is
+# unique per database (rollout_transition_once), so it cannot share one with the
+# E3 fixture, and the caller holds no DELETE to clean up after itself.
+MIGRATION_KERNEL_DATABASE = "e1_migration_kernel_0013"
+# The kernel matches its predecessor on all four of these at once, and the
+# caller has no API that can discover any of them. They are declared by
+# `test_phase3_identity_migration_kernel_postgres.py`; a contract test pins
+# them against that module rather than trusting this copy.
+MIGRATION_KERNEL_PREDECESSOR = "00000000-0000-7000-8000-000000000801"
+MIGRATION_KERNEL_RULE_VERSION = "record-only-envelope-worker-gate-v3"
+MIGRATION_KERNEL_POLICY_VERSION = "home-agent-mvp-v1"
+MIGRATION_KERNEL_POLICY_DIGEST = "a" * 64
 REVISION_0006A = "0006a_worker_lease_arbitration"
 REVISION_0007 = "0007_phase3_identity_authority"
 REVISION_0010 = "0010_identity_erasure_source"
@@ -1696,19 +1708,27 @@ def _set_disposable_e4_role_login(
     *,
     role: str,
     enabled: bool,
+    minutes: int = 5,
+    database: str | None = None,
 ) -> None:
     allowed_roles = {
         "home_agent_identity_finalizer",
         "home_agent_identity_cutover",
+        "home_agent_identity_migration",
     }
     if role not in allowed_roles:
         raise GateFailure("unreviewed disposable E4 login role")
+    # The registration kernel refuses a window wider than fifteen minutes, so
+    # this stays inside its own ceiling rather than merely being "short".
+    if not 1 <= minutes <= 14:
+        raise GateFailure("unreviewed disposable login window")
+    database = database or BASE_DATABASE
     action = "open" if enabled else "re-expire"
     if enabled:
         role_change_sql = (
             "DO $e4_bounded_login$ BEGIN "
             f"EXECUTE pg_catalog.format('ALTER ROLE {role} VALID UNTIL %L', "
-            "pg_catalog.clock_timestamp() + interval '5 minutes'); "
+            f"pg_catalog.clock_timestamp() + interval '{minutes} minutes'); "
             "END $e4_bounded_login$"
         )
     else:
@@ -1717,7 +1737,7 @@ def _set_disposable_e4_role_login(
         state,
         phase,
         secrets_directory,
-        database=BASE_DATABASE,
+        database=database,
         sql=role_change_sql,
         label=f"{action} disposable E4 {role} login",
     )
@@ -1726,13 +1746,13 @@ def _set_disposable_e4_role_login(
             state,
             phase,
             secrets_directory,
-            database=BASE_DATABASE,
+            database=database,
             sql=(
                 "SELECT count(*) FROM pg_catalog.pg_roles "
                 f"WHERE rolname='{role}' AND rolcanlogin "
                 "AND rolvaliduntil > pg_catalog.clock_timestamp() "
                 "AND rolvaliduntil <= "
-                "pg_catalog.clock_timestamp() + interval '5 minutes'"
+                f"pg_catalog.clock_timestamp() + interval '{minutes} minutes'"
             ),
             label=f"verify bounded disposable E4 {role} login window",
         )
@@ -1743,7 +1763,7 @@ def _set_disposable_e4_role_login(
         state,
         phase,
         secrets_directory,
-        database=BASE_DATABASE,
+        database=database,
         sql=(
             "SELECT pg_catalog.pg_terminate_backend(activity.pid, 5000) "
             "FROM pg_catalog.pg_stat_activity AS activity "
@@ -2531,6 +2551,154 @@ def _run_e2_phase(
         )
 
 
+def _migration_kernel_predecessor_sql() -> str:
+    """The one reviewed shadow predecessor the registration kernel demands.
+
+    `register_reviewed_identity_migration` matches this row on the manifest's
+    authorization id, shadow rule version, policy version and policy digest
+    together, so all four are pinned constants rather than anything derived at
+    run time. The row also has to satisfy `worker_proof_time`, which orders
+    maintenance <= readiness <= authorization, hence the staggered clocks.
+
+    The truncate names both tables and lets PostgreSQL resolve the order; the
+    E3 fixture's own authorization is what has to go, and hand-ordering that
+    graph would go stale with the next migration.
+    """
+
+    columns = (
+        "authorization_id,operator_request_id,from_mode,to_mode,"
+        "rule_version,policy_version,policy_digest,input_digest,"
+        "worker_instance_id,worker_success_sequence,worker_kernel_version,"
+        "worker_maintenance_succeeded_at,worker_proof_digest,"
+        "readiness_evaluated_at,authorized_at"
+    )
+    values = (
+        f"'{MIGRATION_KERNEL_PREDECESSOR}',"
+        "pg_catalog.gen_random_uuid(),'record_only','shadow',"
+        f"'{MIGRATION_KERNEL_RULE_VERSION}',"
+        f"'{MIGRATION_KERNEL_POLICY_VERSION}',"
+        f"'{MIGRATION_KERNEL_POLICY_DIGEST}',"
+        f"'{'b' * 64}',"
+        "pg_catalog.gen_random_uuid(),1,'worker-maintenance-cycle-v1',"
+        "pg_catalog.clock_timestamp() - interval '2 minutes',"
+        f"'{'c' * 64}',"
+        "pg_catalog.clock_timestamp() - interval '1 minute',"
+        "pg_catalog.clock_timestamp() - interval '30 seconds'"
+    )
+    return (
+        "TRUNCATE TABLE operations.rollout_authorizations, "
+        "operations.reviewed_identity_migration_runs CASCADE; "
+        f"INSERT INTO operations.rollout_authorizations ({columns}) "
+        f"VALUES ({values})"
+    )
+
+
+def _run_migration_kernel_contracts(
+    state: GateState,
+    secrets_directory: Path,
+    phase: Phase,
+) -> None:
+    """Call the registration kernel, which no node list has ever run.
+
+    `operations.register_reviewed_identity_migration` is what writes the
+    reviewed run row that `commit_finalizer` copies its provenance from, and
+    until now nothing in CI called it. It cannot join the E3 node list: a
+    database holds exactly one `record_only -> shadow` authorization
+    (`rollout_transition_once`), the E3 fixture consumes it, and the migration
+    caller holds no DELETE to clean up after itself. So it gets a disposable
+    database, cleared and seeded with the one predecessor the kernel requires.
+    """
+
+    _create_database_clone(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+        MIGRATION_KERNEL_DATABASE,
+    )
+    try:
+        _assert_database_revision(
+            state,
+            phase,
+            secrets_directory,
+            MIGRATION_KERNEL_DATABASE,
+            REVISION_0013,
+        )
+        _verify_cluster_guard(
+            state,
+            phase,
+            secrets_directory,
+            {
+                ADMIN_DATABASE,
+                "template0",
+                "template1",
+                BASE_DATABASE,
+                MIGRATION_KERNEL_DATABASE,
+            },
+        )
+        # Whatever the E3 fixture left behind is irrelevant here, and the
+        # authorization it holds is the one this kernel needs back.
+        _psql(
+            state,
+            phase,
+            secrets_directory,
+            database=MIGRATION_KERNEL_DATABASE,
+            sql=_migration_kernel_predecessor_sql(),
+            label="seed the registration kernel predecessor",
+        )
+        _set_disposable_e4_role_login(
+            state,
+            phase,
+            secrets_directory,
+            role="home_agent_identity_migration",
+            enabled=True,
+            minutes=14,
+            database=MIGRATION_KERNEL_DATABASE,
+        )
+        try:
+            _pytest(
+                state,
+                phase,
+                secrets_directory,
+                nodes=[
+                    "tests/test_phase3_identity_migration_kernel_postgres.py",
+                ],
+                url_environment={
+                    "TEST_PHASE3_IDENTITY_MIGRATION_OWNER_DATABASE_URL": (
+                        MIGRATION_KERNEL_DATABASE
+                    ),
+                },
+                credential_url_environment={
+                    "TEST_PHASE3_IDENTITY_MIGRATION_DATABASE_URL": (
+                        MIGRATION_KERNEL_DATABASE,
+                        "home_agent_identity_migration",
+                        "postgres_identity_migration_password",
+                    ),
+                },
+                # No harness environment: this test talks to the kernel
+                # directly and reads none of the erasure guard variables.
+                fail_fast=False,
+            )
+        finally:
+            _set_disposable_e4_role_login(
+                state,
+                phase,
+                secrets_directory,
+                role="home_agent_identity_migration",
+                enabled=False,
+                database=MIGRATION_KERNEL_DATABASE,
+            )
+    finally:
+        _psql(
+            state,
+            phase,
+            secrets_directory,
+            database=ADMIN_DATABASE,
+            sql=f'DROP DATABASE IF EXISTS "{MIGRATION_KERNEL_DATABASE}" WITH (FORCE)',
+            label=f"drop {MIGRATION_KERNEL_DATABASE}",
+        )
+
+
 def _run_e3_phase(
     state: GateState,
     secrets_directory: Path,
@@ -2583,6 +2751,7 @@ def _run_e3_phase(
         environment=guard_environment,
         fail_fast=False,
     )
+    _run_migration_kernel_contracts(state, secrets_directory, phase)
 
 
 def _run_e4_scaffold_phase(

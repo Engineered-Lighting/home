@@ -22,7 +22,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from app import identity_admission_writer, schema
+from app import identity_admission_writer, identity_authority_executor, schema
 from app.ids import uuid7
 
 
@@ -1982,6 +1982,122 @@ async def test_production_admission_writer_can_actually_be_finalized() -> None:
         finally:
             if finalizer is not None:
                 await finalizer.dispose()
+            try:
+                await _set_finalizer_valid_until(
+                    admin, datetime(1970, 1, 1, tzinfo=UTC)
+                )
+            finally:
+                await admin.dispose()
+    finally:
+        await engine.dispose()
+
+
+
+async def _finalize_through_the_production_executor(
+    url: str,
+    fixture: FinalizerFixture,
+) -> uuid.UUID:
+    """Finalize with app.identity_authority_executor itself.
+
+    Every other path in this file calls the kernel function directly over a
+    hand-built engine. That skips the module the ceremony actually runs, and
+    with it the URL pin, the request contract, the session GUCs it sets, and
+    its isolation handling.
+    """
+
+    operation = identity_authority_executor.OPERATIONS["finalize"]
+    request = identity_authority_executor.parse_request(
+        _canonical_bytes(
+            {
+                "contract": operation.contract,
+                "admission_id": str(fixture.admission_id),
+                "document_b64": base64.b64encode(fixture.document).decode("ascii"),
+            }
+        ),
+        operation,
+    )
+    return await identity_authority_executor.execute(url, operation, request)
+
+
+@pytest.mark.skipif(
+    not _required_environment(),
+    reason=(
+        "dedicated E3 owner, admin, finalizer, and E2 erasure PostgreSQL "
+        "URLs are required"
+    ),
+)
+@pytest.mark.asyncio
+async def test_production_authority_executor_can_actually_finalize() -> None:
+    """Step 17's last leg runs through the executor module; drive that.
+
+    `test_production_admission_writer_can_actually_be_finalized` proved the
+    writer against the real kernel, but still finalized over a hand-built
+    engine. So the module the ceremony invokes for the final leg -- the one
+    that pins its own database URL and sets the session GUCs the kernel
+    inspects -- was exercised against no database at all.
+
+    This drives writer and executor back to back, which is the order and the
+    pair the ceremony uses.
+    """
+
+    owner_url = os.environ[OWNER_DATABASE_ENV]
+    finalizer_url = os.environ[FINALIZER_DATABASE_ENV]
+    engine = create_async_engine(owner_url)
+    try:
+        async with engine.begin() as connection:
+            await _clear_reviewed_migration_state(connection)
+            fixture = await _seed_fixture(connection, label="executor-seam")
+            # The production writer must create the only admission; run_id is
+            # UNIQUE on that table.
+            await connection.execute(
+                delete(schema.reviewed_identity_finalizer_admissions).where(
+                    schema.reviewed_identity_finalizer_admissions.c.run_id
+                    == fixture.run_id
+                )
+            )
+
+        _, written = await _admit_through_the_production_writer(
+            engine, owner_url, fixture
+        )
+
+        admin = create_async_engine(os.environ[ADMIN_DATABASE_ENV])
+        try:
+            await _set_finalizer_valid_until(
+                admin, datetime.now(UTC) + timedelta(minutes=15)
+            )
+            # The module reads its own URL out of the environment and refuses
+            # any role, host, port or database but the pinned ones. Exercise
+            # that resolution rather than passing the URL past it.
+            previous = os.environ.get("HOME_AGENT_DATABASE_URL")
+            os.environ["HOME_AGENT_DATABASE_URL"] = finalizer_url
+            try:
+                resolved = identity_authority_executor.database_url(
+                    identity_authority_executor.OPERATIONS["finalize"]
+                )
+                assert resolved == finalizer_url
+                finalization_id = await _finalize_through_the_production_executor(
+                    resolved, written
+                )
+            finally:
+                if previous is None:
+                    os.environ.pop("HOME_AGENT_DATABASE_URL", None)
+                else:
+                    os.environ["HOME_AGENT_DATABASE_URL"] = previous
+            assert isinstance(finalization_id, uuid.UUID)
+
+            async with engine.connect() as connection:
+                stored = (
+                    await connection.execute(
+                        text(
+                            "SELECT count(*) FROM operations."
+                            "reviewed_identity_migration_finalizations "
+                            "WHERE finalization_id = CAST(:value AS uuid)"
+                        ),
+                        {"value": finalization_id},
+                    )
+                ).scalar_one()
+            assert stored == 1
+        finally:
             try:
                 await _set_finalizer_valid_until(
                     admin, datetime(1970, 1, 1, tzinfo=UTC)

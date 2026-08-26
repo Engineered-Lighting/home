@@ -2754,6 +2754,74 @@ def _run_e3_phase(
     _run_migration_kernel_contracts(state, secrets_directory, phase)
 
 
+def _run_registrar_phase(
+    state: GateState,
+    secrets_directory: Path,
+    phase: Phase,
+) -> None:
+    """Drive the registrar module against the kernel, in a cluster of its own.
+
+    Step 17 registers the reviewed run through
+    `app.identity_migration_registrar`, and nothing ever ran that module
+    against a database. It cannot borrow another phase's: it refuses any
+    database not literally named `home_agent`, which rules out the renamed
+    disposable one the kernel contracts use, and a database admits exactly one
+    `record_only -> shadow` authorization, which the E3 fixture already holds.
+    A phase of its own is a fresh cluster, so its `home_agent` carries an
+    authorization nothing else has spent.
+    """
+
+    _upgrade_e3_database(state, phase, secrets_directory)
+    _verify_cluster_guard(
+        state,
+        phase,
+        secrets_directory,
+        {ADMIN_DATABASE, "template0", "template1", BASE_DATABASE},
+    )
+    _psql(
+        state,
+        phase,
+        secrets_directory,
+        database=BASE_DATABASE,
+        sql=_migration_kernel_predecessor_sql(),
+        label="seed the registration kernel predecessor",
+    )
+    _set_disposable_e4_role_login(
+        state,
+        phase,
+        secrets_directory,
+        role="home_agent_identity_migration",
+        enabled=True,
+        minutes=14,
+    )
+    try:
+        _pytest(
+            state,
+            phase,
+            secrets_directory,
+            nodes=["tests/test_phase3_migration_registrar_postgres.py"],
+            url_environment={
+                "TEST_PHASE3_REGISTRAR_OWNER_DATABASE_URL": BASE_DATABASE,
+            },
+            credential_url_environment={
+                "TEST_PHASE3_REGISTRAR_MIGRATION_DATABASE_URL": (
+                    BASE_DATABASE,
+                    "home_agent_identity_migration",
+                    "postgres_identity_migration_password",
+                ),
+            },
+            fail_fast=False,
+        )
+    finally:
+        _set_disposable_e4_role_login(
+            state,
+            phase,
+            secrets_directory,
+            role="home_agent_identity_migration",
+            enabled=False,
+        )
+
+
 def _run_e4_scaffold_phase(
     state: GateState,
     secrets_directory: Path,
@@ -3864,49 +3932,56 @@ def main() -> int:
                 e4_fixture_directory.chmod(0o700)
             except OSError:
                 pass
-            print("[1/8] Generating the minimal filtered build context")
+            print("[1/9] Generating the minimal filtered build context")
             _prepare_build_context(build_context)
             _write_secrets(secrets_directory)
-            print("[2/8] Building the labeled pinned PostgreSQL 17 test image")
+            print("[2/9] Building the labeled pinned PostgreSQL 17 test image")
             _build_test_image(state, build_context)
             _run_edge_source_contracts(state)
-            print("[3/8] Running the production-shaped behavioral cluster")
+            print("[3/9] Running the production-shaped behavioral cluster")
             _run_phase(
                 state,
                 "behavior",
                 secrets_directory,
                 lambda phase: _run_behavior_phase(state, secrets_directory, phase),
             )
-            print("[4/8] Running the production-shaped lifecycle cluster")
+            print("[4/9] Running the production-shaped lifecycle cluster")
             _run_phase(
                 state,
                 "lifecycle",
                 secrets_directory,
                 lambda phase: _run_lifecycle_phase(state, secrets_directory, phase),
             )
-            print("[5/8] Running isolated revision-0007 admission cases")
+            print("[5/9] Running isolated revision-0007 admission cases")
             _run_phase(
                 state,
                 "admission",
                 secrets_directory,
                 lambda phase: _run_admission_phase(state, secrets_directory, phase),
             )
-            print("[6/8] Running isolated revision-0012 E2 contracts")
+            print("[6/9] Running isolated revision-0012 E2 contracts")
             _run_phase(
                 state,
                 "e2",
                 secrets_directory,
                 lambda phase: _run_e2_phase(state, secrets_directory, phase),
             )
-            print("[7/8] Running isolated dormant revision-0013 E3 contracts")
+            print("[7/9] Running isolated dormant revision-0013 E3 contracts")
             _run_phase(
                 state,
                 "e3",
                 secrets_directory,
                 lambda phase: _run_e3_phase(state, secrets_directory, phase),
             )
+            print("[8/9] Running the registrar module against the real kernel")
+            _run_phase(
+                state,
+                "registrar",
+                secrets_directory,
+                lambda phase: _run_registrar_phase(state, secrets_directory, phase),
+            )
             print(
-                "[8/8] Running isolated dormant E4 deployment scaffold "
+                "[9/9] Running isolated dormant E4 deployment scaffold "
                 "with E5a/E5b, E5c activation, E5d foundation, "
                 "E5e staging, E5f atomic commit, E5g adapter, E5h recovery, "
                 "and E5i admission preflight"

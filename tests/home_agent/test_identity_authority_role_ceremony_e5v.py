@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import re
 import sys
 from types import ModuleType
 
@@ -42,6 +43,12 @@ def test_role_script_is_fixed_bounded_and_force_reexpires_sessions() -> None:
     assert "activate|deactivate|status" in source
     assert 'finalizer) role_name="home_agent_identity_finalizer"' in source
     assert 'cutover) role_name="home_agent_identity_cutover"' in source
+    assert 'migration) role_name="home_agent_identity_migration"' in source
+    # The in-database allowlist must agree with the shell one, or a target the
+    # script accepts would be refused by the ceremony body.
+    assert source.count("'home_agent_identity_finalizer'") == 1
+    assert source.count("'home_agent_identity_cutover'") == 1
+    assert source.count("'home_agent_identity_migration'") == 1
     assert (
         "phase3-grant-permit-e5m-v1:"
         "0017_authenticated_binding_e5c:0021_parent_status_e5h"
@@ -91,8 +98,8 @@ def test_root_ceremony_binds_private_request_to_activation_and_cleanup() -> None
     assert '"identity-finalizer"' in source
     assert '"identity-cutover"' in source
     assert '"--no-deps"' in source
-    assert '_role_ceremony("activate", command.name)' in source
-    assert '_role_ceremony("deactivate", command.name)' in source
+    assert '_role_ceremony("activate", command.role)' in source
+    assert '_role_ceremony("deactivate", command.role)' in source
     assert "finally:" in source
     assert 'activation._guard_revision("0015_current_authority_e5a")' in source
     assert "activation._require_trusted_source()" in source
@@ -154,12 +161,46 @@ def test_root_ceremony_orders_guards_activation_invocation_and_reexpiry(
         "source",
         "permit",
         "guard:0015_current_authority_e5a",
-        "role:activate:finalize",
-        "role:deactivate:finalize",
+        "role:activate:finalizer",
+        "role:deactivate:finalizer",
         "guard:0015_current_authority_e5a",
         "unlock:123",
     ]
     assert result["status"] == "committed_and_reexpired"
+
+
+def test_every_ceremony_command_names_a_role_the_script_accepts() -> None:
+    """The ceremony's role must be a target the activation script allows.
+
+    The command name is not the role: the script's targets are `finalizer`,
+    `cutover`, and `migration`. Passing `command.name` sent `finalize`, which
+    the script refuses as an invalid target, so the finalize path could not
+    activate its login at all. `cutover` only worked because the two words
+    happen to coincide. Nothing caught it because this suite stubs
+    `_role_ceremony` with a fake that accepts any string, and the hosted gate
+    exercises the shell script directly rather than through this module.
+    """
+
+    module = _module()
+    script = SCRIPT.read_text(encoding="utf-8")
+    accepted = set(re.findall(r"^  ([a-z]+]?)\) role_name=", script, re.MULTILINE))
+    assert accepted == {"finalizer", "cutover", "migration"}
+    for command in module.COMMANDS.values():
+        assert command.role in accepted, command.name
+    # Each command drives a distinct login; a shared role would let one
+    # ceremony's window authorize another's writer.
+    roles = [command.role for command in module.COMMANDS.values()]
+    assert len(roles) == len(set(roles))
+
+
+def test_registration_command_targets_the_migration_login() -> None:
+    module = _module()
+    register = module.COMMANDS["register"]
+    assert register.service == "identity-registrar"
+    assert register.role == "migration"
+    assert register.expected_contract == (
+        "identity-migration-registration-result-e5ak-v1"
+    )
 
 
 def test_root_ceremony_reexpires_after_invocation_failure(monkeypatch) -> None:

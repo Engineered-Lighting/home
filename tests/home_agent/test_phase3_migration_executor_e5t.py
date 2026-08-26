@@ -244,3 +244,159 @@ def test_revision_guard_script_mirrors_entrypoint_secret_rules(
     assert result.returncode == expected
     if expected == 0:
         assert result.stdout.decode().strip() == content
+
+
+def test_subprocess_refusals_carry_distinct_categorical_codes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _module()
+
+    class Result:
+        def __init__(self, returncode: int, stdout: bytes) -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = b""
+
+    cases = {
+        "exit_nonzero": Result(1, b"{}"),
+        "stdout_oversize": Result(0, b"x" * (module.MAX_OUTPUT_BYTES + 1)),
+        "stdout_nul": Result(0, b"ok\0"),
+    }
+    for expected, result in cases.items():
+        monkeypatch.setattr(
+            module.subprocess, "run", lambda *a, _r=result, **k: _r
+        )
+        with pytest.raises(module.MigrationExecutionError) as caught:
+            module._run(["docker", "compose", "ps"])
+        assert caught.value.code == expected
+        assert str(caught.value) == "phase3 migration command failed"
+
+    def raise_timeout(*args: object, **kwargs: object) -> None:
+        raise module.subprocess.TimeoutExpired(cmd="docker", timeout=1)
+
+    monkeypatch.setattr(module.subprocess, "run", raise_timeout)
+    with pytest.raises(module.MigrationExecutionError) as caught:
+        module._run(["docker", "compose", "ps"])
+    assert caught.value.code == "timeout"
+
+    def raise_oserror(*args: object, **kwargs: object) -> None:
+        raise OSError("no such executable")
+
+    monkeypatch.setattr(module.subprocess, "run", raise_oserror)
+    with pytest.raises(module.MigrationExecutionError) as caught:
+        module._run(["docker", "compose", "ps"])
+    assert caught.value.code == "spawn_failed"
+
+
+def test_diagnostic_codes_satisfy_the_journal_character_contract() -> None:
+    module = _module()
+    allowed = set("abcdefghijklmnopqrstuvwxyz_0123456789")
+    assert module.DIAGNOSTIC_CODES
+    for code in module.DIAGNOSTIC_CODES:
+        assert code and len(code) <= 96
+        assert set(code) <= allowed
+    assert module.MigrationExecutionError("x", code="Marcelo at 12 Main").code is None
+
+
+def test_people_bearing_subprocesses_are_never_echoed() -> None:
+    module = _module()
+    for command in (
+        ["/usr/local/libexec/home-agent/local-backup.sh", "/srv/home-agent/config/home-agent.env"],
+        ["/srv/operator/isolated_restore_drill.sh", "label"],
+        ["/usr/local/sbin/home-agent-identity-signing", "finalize"],
+        ["docker", "compose", "run", "--rm", "migrate", "identity-admit-finalizer"],
+        ["docker", "compose", "run", "--rm", "migrate", "identity-admit-cutover"],
+        ["docker", "compose", "run", "--rm", "migrate", "identity-register-run"],
+        ["python3", "off_host_backup_writer.py"],
+        ["python3", "phase3_privacy_cutover_observer.py"],
+        ["python3", "phase3_capture_legacy_identity_snapshot.py"],
+        ["python3", "phase3_identity_credential_provisioner.py"],
+    ):
+        assert module.diagnosable(command) is False, command
+    for command in (
+        ["docker", "compose", "ps", "--status", "running", "--services"],
+        ["docker", "inspect", "home-agent-core"],
+        ["docker", "compose", "stop", "core-api"],
+        ["docker", "compose", "config", "--quiet"],
+        ["python3", "phase3_migration_executor.py", "migrate-current-authority"],
+    ):
+        assert module.diagnosable(command) is True, command
+
+
+def test_every_reviewed_migration_stage_stays_diagnosable() -> None:
+    module = _module()
+    for stage in module.STAGES.values():
+        command = module._compose("run", "--rm", "--no-deps", "migrate", stage.entrypoint)
+        assert module.diagnosable(command) is True, stage.entrypoint
+    guard = module._compose(*module.revision_guard_arguments("0015_current_authority_e5a"))
+    assert module.diagnosable(guard) is True
+
+
+def test_diagnostic_tail_redacts_credential_userinfo() -> None:
+    module = _module()
+    raw = b"could not connect: postgresql://owner:hunter2@postgres:5432/home_agent"
+    redacted = module.redact_diagnostic(raw)
+    assert b"hunter2" not in redacted
+    assert b"://<redacted>@" in redacted
+    assert module.redact_diagnostic(None) == b""
+
+
+def test_governed_error_codes_name_only_kernel_identifiers() -> None:
+    module = _module()
+    raw = (
+        b"psycopg.errors.RaiseException: identity_finalizer_live_run_mismatch\n"
+        b"CONTEXT:  PL/pgSQL function operations.finalize_reviewed_identity_migration"
+    )
+    assert module.governed_error_codes(raw) == (
+        "identity_finalizer_live_run_mismatch",
+    )
+    assert module.governed_error_codes(b"connection refused") == ()
+    assert module.governed_error_codes(None) == ()
+
+
+def test_report_diagnostic_is_silent_unless_explicitly_enabled(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _module()
+    module.report_diagnostic(["docker", "compose", "ps"], b"boom", enabled=False)
+    assert capsys.readouterr().err == ""
+    module.report_diagnostic(["docker", "compose", "ps"], b"boom", enabled=True)
+    assert "boom" in capsys.readouterr().err
+    module.report_diagnostic(
+        ["/usr/local/libexec/home-agent/local-backup.sh"], b"boom", enabled=True
+    )
+    assert capsys.readouterr().err == ""
+
+
+def test_executor_no_longer_discards_subprocess_diagnostics() -> None:
+    source = EXECUTOR.read_text(encoding="utf-8")
+    # Captured only where it can be shown. A subprocess whose output may never
+    # be printed is not buffered at all: the restore drill and the backup
+    # writers run for up to an hour, and their stderr can carry People rows.
+    assert "stderr=subprocess.PIPE if diagnostic else subprocess.DEVNULL" in source
+    assert "stderr=subprocess.DEVNULL," not in source
+
+
+def test_stderr_is_captured_only_when_it_can_be_shown(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Drive a real subprocess, not a stubbed result.
+
+    A subprocess whose output may never be printed is not buffered at all. The
+    restore drill and both backup writers run for up to an hour and are never
+    diagnosable, so capturing their stderr would cost memory and would read
+    household rows into this process for no reason.
+    """
+
+    module = _module()
+    noisy = ["sh", "-c", "echo diagnostic-canary >&2; exit 1"]
+
+    with pytest.raises(module.MigrationExecutionError) as quiet:
+        module._run(noisy, timeout=30)
+    assert quiet.value.code == "exit_nonzero"
+    assert capsys.readouterr().err == ""
+
+    with pytest.raises(module.MigrationExecutionError) as loud:
+        module._run(noisy, timeout=30, diagnostic=True)
+    assert loud.value.code == "exit_nonzero"
+    assert "diagnostic-canary" in capsys.readouterr().err

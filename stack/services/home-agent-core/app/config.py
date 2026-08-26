@@ -11,6 +11,23 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+# Every revision this image is able to migrate to, and therefore every
+# revision it is willing to serve. The values are the deployable default plus
+# the five Phase 3 stages declared by docker-entrypoint.sh, and a contract test
+# keeps the two lists identical. Core still cannot promote itself: the value is
+# supplied by the deployment, an unlisted one fails Settings at startup, and
+# app.main refuses to start unless the live database is at exactly this
+# revision.
+ReadinessMigration = Literal[
+    "0006a_worker_lease_arbitration",
+    "0013_identity_finalizer_e3",
+    "0015_current_authority_e5a",
+    "0017_authenticated_binding_e5c",
+    "0018_parent_relationship_e5d",
+    "0021_parent_status_e5h",
+]
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="HOME_AGENT_",
@@ -44,7 +61,7 @@ class Settings(BaseSettings):
     )
     policy_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     rollout_mode: Literal["record_only", "shadow", "canary"] = "record_only"
-    readiness_migration: str = "0006a_worker_lease_arbitration"
+    readiness_migration: ReadinessMigration = "0006a_worker_lease_arbitration"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
     @field_validator(

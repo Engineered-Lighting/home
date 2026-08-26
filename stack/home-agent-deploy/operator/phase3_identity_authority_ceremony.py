@@ -18,8 +18,12 @@ MAX_REQUEST_BYTES = 5_593_088
 
 @dataclass(frozen=True, slots=True)
 class AuthorityCommand:
-    name: Literal["finalize", "cutover"]
+    name: Literal["finalize", "cutover", "register"]
     service: str
+    # The role ceremony's target vocabulary, which is not the command name.
+    # "cutover" happens to match; "finalize" does not, and passing the command
+    # name would be refused as an invalid target.
+    role: Literal["finalizer", "cutover", "migration"]
     expected_contract: str
 
 
@@ -29,12 +33,20 @@ COMMANDS = {
         AuthorityCommand(
             "finalize",
             "identity-finalizer",
+            "finalizer",
             "identity-finalizer-result-e5n-v1",
         ),
         AuthorityCommand(
             "cutover",
             "identity-cutover",
+            "cutover",
             "identity-cutover-result-e5n-v1",
+        ),
+        AuthorityCommand(
+            "register",
+            "identity-registrar",
+            "migration",
+            "identity-migration-registration-result-e5ak-v1",
         ),
     )
 }
@@ -133,7 +145,7 @@ def execute(command: AuthorityCommand) -> dict[str, str]:
             )
         activation._guard_revision("0015_current_authority_e5a")
         private_request = _request()
-        _role_ceremony("activate", command.name)
+        _role_ceremony("activate", command.role)
         activated = True
         result = _invoke(command, private_request)
     except BaseException as error:
@@ -141,11 +153,11 @@ def execute(command: AuthorityCommand) -> dict[str, str]:
     finally:
         try:
             if activated:
-                _role_ceremony("deactivate", command.name)
+                _role_ceremony("deactivate", command.role)
             else:
                 # Prove an unsuccessful activation attempt did not leave a
                 # callable login. This is safe and idempotent.
-                _role_ceremony("deactivate", command.name)
+                _role_ceremony("deactivate", command.role)
             activation._guard_revision("0015_current_authority_e5a")
         except BaseException as cleanup_error:
             if primary_error is None:

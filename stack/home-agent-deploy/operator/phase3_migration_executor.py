@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import sys
@@ -100,8 +101,39 @@ STAGES = {
 }
 
 
+DIAGNOSTIC_TAIL_BYTES = 4 * 1024
+DIAGNOSTIC_CODES = frozenset(
+    {
+        "spawn_failed",
+        "timeout",
+        "exit_nonzero",
+        "stdout_empty",
+        "stdout_oversize",
+        "stdout_nul",
+    }
+)
+_CREDENTIAL_USERINFO = re.compile(rb"://[^@\s]*@")
+_GOVERNED_ERROR_CODE = re.compile(
+    rb"\b((?:identity|rollout|phase3)_[a-z0-9_]{3,80})\b"
+)
+_NEVER_DIAGNOSE = (
+    "backup",
+    "restore",
+    "signing",
+    "privacy",
+    "snapshot",
+    "identity-admit",
+    "identity-register",
+    "credential",
+)
+
+
 class MigrationExecutionError(RuntimeError):
     """The fixed migration ceremony could not establish trusted state."""
+
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code if code in DIAGNOSTIC_CODES else None
 
 
 def _require_root_linux() -> None:
@@ -111,11 +143,69 @@ def _require_root_linux() -> None:
         )
 
 
+def redact_diagnostic(raw: bytes | None) -> bytes:
+    """Remove credential userinfo from a diagnostic tail."""
+
+    return _CREDENTIAL_USERINFO.sub(b"://<redacted>@", raw or b"")
+
+
+def governed_error_codes(raw: bytes | None) -> tuple[str, ...]:
+    """Return only governed kernel error identifiers found in a diagnostic.
+
+    Kernel RAISE identifiers are a closed snake_case vocabulary carrying no
+    household content, and the admission writers already disable parameter
+    echo, so the identifier alone names the actual refusal without quoting any
+    surrounding text.
+    """
+
+    found: list[str] = []
+    for match in _GOVERNED_ERROR_CODE.findall(raw or b""):
+        code = match.decode("ascii", "ignore")
+        if code and code not in found:
+            found.append(code)
+    return tuple(found[:8])
+
+
+def diagnosable(command: Sequence[str]) -> bool:
+    """Refuse to echo any subprocess that can emit household People data.
+
+    Defence in depth behind the per-call-site opt-in: even a mistaken
+    ``diagnostic=True`` cannot print the restore drill, either backup writer,
+    a signing phase, the privacy observer, the legacy snapshot, or an identity
+    admission/registration container.
+    """
+
+    joined = " ".join(str(item) for item in command).lower()
+    return not any(marker in joined for marker in _NEVER_DIAGNOSE)
+
+
+def report_diagnostic(
+    command: Sequence[str], raw: bytes | None, *, enabled: bool
+) -> None:
+    """Print a redacted stderr tail to the operator terminal only.
+
+    This never reaches the activation journal. The journal is restricted to
+    categorical codes by contract, and these subprocesses emit arbitrary text.
+    """
+
+    if not enabled or not raw or not diagnosable(command):
+        return
+    tail = redact_diagnostic(raw)[-DIAGNOSTIC_TAIL_BYTES:]
+    text = tail.decode("utf-8", "replace").strip()
+    if not text:
+        return
+    name = Path(str(command[0])).name
+    print(f"--- {name} stderr (tail) ---", file=sys.stderr)
+    print(text, file=sys.stderr)
+    print("--- end stderr ---", file=sys.stderr)
+
+
 def _run(
     command: Sequence[str],
     *,
     accepted_codes: frozenset[int] = frozenset({0}),
     timeout: int = 300,
+    diagnostic: bool = False,
 ) -> bytes:
     try:
         result = subprocess.run(
@@ -124,19 +214,28 @@ def _run(
             check=False,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE if diagnostic else subprocess.DEVNULL,
             timeout=timeout,
             shell=False,
         )
+    except subprocess.TimeoutExpired as error:
+        raise MigrationExecutionError(
+            "phase3 migration command failed", code="timeout"
+        ) from error
     except (OSError, subprocess.SubprocessError) as error:
-        raise MigrationExecutionError("phase3 migration command failed") from error
-    if (
-        result.returncode not in accepted_codes
-        or len(result.stdout) > MAX_OUTPUT_BYTES
-        or b"\0" in result.stdout
-    ):
-        raise MigrationExecutionError("phase3 migration command failed")
-    return result.stdout
+        raise MigrationExecutionError(
+            "phase3 migration command failed", code="spawn_failed"
+        ) from error
+    if result.returncode not in accepted_codes:
+        code = "exit_nonzero"
+    elif len(result.stdout) > MAX_OUTPUT_BYTES:
+        code = "stdout_oversize"
+    elif b"\0" in result.stdout:
+        code = "stdout_nul"
+    else:
+        return result.stdout
+    report_diagnostic(command, result.stderr, enabled=diagnostic)
+    raise MigrationExecutionError("phase3 migration command failed", code=code)
 
 
 def _compose(*arguments: str) -> list[str]:
@@ -197,6 +296,7 @@ def _running_protected_services() -> frozenset[str]:
     raw = _run(
         _compose("ps", "--status", "running", "--services"),
         timeout=30,
+        diagnostic=True,
     )
     try:
         services = {
@@ -238,7 +338,7 @@ def revision_guard_arguments(revision: str) -> tuple[str, ...]:
 
 
 def _guard_revision(revision: str) -> None:
-    _run(_compose(*revision_guard_arguments(revision)), timeout=180)
+    _run(_compose(*revision_guard_arguments(revision)), timeout=180, diagnostic=True)
 
 
 def _migrate(stage: MigrationStage) -> None:
@@ -251,6 +351,7 @@ def _migrate(stage: MigrationStage) -> None:
             stage.entrypoint,
         ),
         timeout=900,
+        diagnostic=True,
     )
 
 

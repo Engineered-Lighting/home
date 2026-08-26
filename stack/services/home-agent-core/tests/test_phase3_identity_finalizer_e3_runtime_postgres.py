@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ast
+import base64
 from collections.abc import Callable
 import hashlib
 import json
@@ -10,7 +11,7 @@ import re
 import subprocess
 import sys
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from app import schema
+from app import identity_admission_writer, schema
 from app.ids import uuid7
 
 
@@ -1780,3 +1781,212 @@ async def test_postgresql_e3_lifecycle_boundary_and_atomic_finalizer() -> None:
     assert (
         fence_serialized
     ), "a concurrent E2 tombstone did not force the E3 finalizer to retry"
+
+
+async def _clear_reviewed_migration_state(connection) -> None:
+    """Free the single record_only -> shadow authorization for a fresh seed.
+
+    `rollout_transition_once UNIQUE (from_mode, to_mode)` permits exactly one
+    such row per database, so a second `_seed_fixture` in the same phase
+    collides with whatever the lifecycle test left behind.
+    `_delete_rejected_fixture` cannot be reused: it refuses any fixture that
+    reached a finalization, and the lifecycle test ends with one that did.
+
+    `TRUNCATE ... CASCADE` rather than an ordered delete, deliberately. The run
+    row is referenced transitively by receipts, projection lineage, erasure
+    impacts, admissions, and finalizations; hand-ordering that graph is a
+    guessing game that a future migration would silently invalidate. This is a
+    disposable gate database, and the cascade is the schema's own answer.
+
+    The one-shot rule this works around is worth naming: it is the same
+    constraint that makes registration irreversible in production. Here it
+    costs a gate run.
+    """
+
+    await connection.execute(
+        text("TRUNCATE TABLE operations.reviewed_identity_migration_runs CASCADE")
+    )
+    await connection.execute(
+        text(
+            "DELETE FROM operations.rollout_authorizations "
+            "WHERE from_mode = 'record_only' AND to_mode = 'shadow'"
+        )
+    )
+
+
+# The writer's own lookup CTE joins the run row on exactly these, so a single
+# disagreement makes the admission silently unwritable.
+_ADMISSION_LOOKUP_COLUMNS = (
+    ("logical_source_manifest_commitment", "source_manifest_commitment"),
+    ("projection_manifest_commitment", "projection_manifest_commitment"),
+    ("review_receipt_commitment", "review_receipt_commitment"),
+    ("signing_key_fingerprint", "review_signing_key_fingerprint"),
+    ("source_item_count", "source_item_count"),
+    ("decision_count", "decision_count"),
+)
+
+
+async def _assert_admission_lookup_matches(connection, request) -> None:
+    """Name the mismatching column instead of reporting a bare rejection.
+
+    The writer raises one generic error whether the run is absent, a
+    commitment disagrees, or a count is off. Comparing here turns that into a
+    specific failure. Every value is an identifier, digest, or count.
+    """
+
+    columns = ", ".join(name for name, _ in _ADMISSION_LOOKUP_COLUMNS)
+    row = (
+        await connection.execute(
+            text(
+                f"SELECT {columns}, expires_at FROM "
+                "operations.reviewed_identity_migration_runs "
+                "WHERE run_id = CAST(:run_id AS uuid)"
+            ),
+            {"run_id": request.parameters["run_id"]},
+        )
+    ).mappings().one_or_none()
+    assert row is not None, (
+        f"no reviewed run {request.parameters['run_id']}; the seed did not land"
+    )
+    mismatched = {
+        column: (row[column], request.parameters[parameter])
+        for column, parameter in _ADMISSION_LOOKUP_COLUMNS
+        if row[column] != request.parameters[parameter]
+    }
+    assert not mismatched, f"run row disagrees with the document on {mismatched}"
+    # reviewed_identity_finalizer_admissions.run_id is UNIQUE: one admission per
+    # run, ever. A pre-existing row makes the writer's insert a no-op that
+    # ON CONFLICT DO NOTHING swallows, and the caller sees a bare rejection.
+    existing = (
+        await connection.execute(
+            text(
+                "SELECT admission_id FROM "
+                "operations.reviewed_identity_finalizer_admissions "
+                "WHERE run_id = CAST(:run_id AS uuid)"
+            ),
+            {"run_id": request.parameters["run_id"]},
+        )
+    ).scalar_one_or_none()
+    assert existing is None, (
+        f"run already holds admission {existing}; the writer cannot add a second"
+    )
+    now = (await connection.execute(text("SELECT clock_timestamp()"))).scalar_one()
+    assert row["expires_at"] > now, (
+        f"run already expired: {row['expires_at']} <= {now}"
+    )
+
+
+async def _admit_through_the_production_writer(
+    engine: AsyncEngine,
+    url: str,
+    fixture: FinalizerFixture,
+) -> tuple[uuid.UUID, FinalizerFixture]:
+    """Write one admission with app.identity_admission_writer itself."""
+
+    admission_id = uuid7()
+    operation = identity_admission_writer.OPERATIONS["finalizer"]
+    request = identity_admission_writer.parse_request(
+        _canonical_bytes(
+            {
+                "contract": operation.contract,
+                "admission_id": str(admission_id),
+                "document_b64": base64.b64encode(fixture.document).decode("ascii"),
+            }
+        ),
+        operation,
+    )
+    async with engine.connect() as connection:
+        await _assert_admission_lookup_matches(connection, request)
+    written = await identity_admission_writer.execute(url, operation, request)
+    assert written == admission_id
+    return admission_id, replace(fixture, admission_id=admission_id)
+
+
+@pytest.mark.skipif(
+    not _required_environment(),
+    reason=(
+        "dedicated E3 owner, admin, finalizer, and E2 erasure PostgreSQL "
+        "URLs are required"
+    ),
+)
+@pytest.mark.asyncio
+async def test_production_admission_writer_can_actually_be_finalized() -> None:
+    """The real writer and the real kernel must agree about expiry.
+
+    0013 refuses an admission that outlives its run, and does not relax that for
+    an exact replay. The writer stamped every admission at now + 15 minutes
+    while the compiler stamps the run at staged + 10 minutes, so no admission
+    the writer produced could ever be finalized, for any operator timing.
+
+    Every other test in this file hand-inserts its admission row, so the seam
+    between the two was exercised nowhere. This drives the production writer.
+    """
+
+    owner_url = os.environ[OWNER_DATABASE_ENV]
+    engine = create_async_engine(owner_url)
+    try:
+        async with engine.begin() as connection:
+            await _clear_reviewed_migration_state(connection)
+            fixture = await _seed_fixture(connection, label="writer-seam")
+            # _seed_fixture hand-inserts an admission, and run_id is UNIQUE on
+            # that table. Drop it so the production writer creates the only one
+            # — which is the whole point of this test.
+            await connection.execute(
+                delete(schema.reviewed_identity_finalizer_admissions).where(
+                    schema.reviewed_identity_finalizer_admissions.c.run_id
+                    == fixture.run_id
+                )
+            )
+
+        admission_id, written = await _admit_through_the_production_writer(
+            engine, owner_url, fixture
+        )
+
+        async with engine.connect() as connection:
+            admission_expiry, run_expiry = (
+                await connection.execute(
+                    text(
+                        "SELECT admission.expires_at, run.expires_at "
+                        "FROM operations.reviewed_identity_finalizer_admissions "
+                        "AS admission "
+                        "JOIN operations.reviewed_identity_migration_runs AS run "
+                        "ON run.run_id = admission.run_id "
+                        "WHERE admission.admission_id = CAST(:admission AS uuid)"
+                    ),
+                    {"admission": admission_id},
+                )
+            ).one()
+
+        # This is exactly the predicate 0013 rejects on.
+        assert admission_expiry <= run_expiry
+
+        # And the kernel accepts it, which is the part that never held before.
+        # The finalizer kernel refuses any caller but its own login, so this
+        # leg needs the finalizer role, bounded the same way the lifecycle test
+        # bounds it.
+        admin = create_async_engine(os.environ[ADMIN_DATABASE_ENV])
+        finalizer = None
+        try:
+            await _set_finalizer_valid_until(
+                admin, datetime.now(UTC) + timedelta(minutes=15)
+            )
+            finalizer = create_async_engine(
+                os.environ[FINALIZER_DATABASE_ENV],
+                isolation_level="SERIALIZABLE",
+                pool_size=1,
+                max_overflow=0,
+                hide_parameters=True,
+            )
+            finalization_id = await _finalize(finalizer, written)
+            assert isinstance(finalization_id, uuid.UUID)
+        finally:
+            if finalizer is not None:
+                await finalizer.dispose()
+            try:
+                await _set_finalizer_valid_until(
+                    admin, datetime(1970, 1, 1, tzinfo=UTC)
+                )
+            finally:
+                await admin.dispose()
+    finally:
+        await engine.dispose()

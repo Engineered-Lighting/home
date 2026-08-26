@@ -16,6 +16,10 @@ x-core-environment: &core-environment
   # Read-only deployment policy. Advancing this value requires an operator
   # review and container replacement; no API can promote its own rollout mode.
   HOME_AGENT_ROLLOUT_MODE: "${HOME_AGENT_ROLLOUT_MODE:-record_only}"
+  # Which schema revision this deployment serves. The activation runner rewrites
+  # it as the ceremony advances; Core refuses to start against any other live
+  # revision, and refuses any value outside the image's own allowlist.
+  HOME_AGENT_READINESS_MIGRATION: "${HOME_AGENT_READINESS_MIGRATION:-0006a_worker_lease_arbitration}"
 
 x-core-service: &core-service
   build:
@@ -709,6 +713,37 @@ services:
         target: database_url
     tmpfs:
       - /tmp:size=16m,mode=1777
+    networks: [postgres-net]
+    depends_on:
+      grant-runtime: {condition: service_completed_successfully}
+    mem_limit: 128m
+    logging:
+      driver: none
+
+  identity-registrar:
+    image: engineered-lighting/home-agent-core:local
+    profiles: [operator]
+    # Registration reaches the 0008 kernel, which refuses every caller but the
+    # migration login. That login is provisioned expired, so this surface stays
+    # inert until a root-controlled two-minute ceremony activates it, exactly
+    # like the finalizer and cutover executors beside it.
+    restart: "no"
+    user: "10001:10001"
+    read_only: true
+    init: true
+    stdin_open: true
+    tty: false
+    command: [identity-register-run]
+    environment:
+      HOME_AGENT_DATABASE_URL_FILE: /run/secrets/database_url
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    secrets:
+      - source: database_url_identity_migration_identity_migration
+        target: database_url
+    tmpfs:
+      - "/tmp:size=16m,mode=1777"
     networks: [postgres-net]
     depends_on:
       grant-runtime: {condition: service_completed_successfully}

@@ -1035,3 +1035,193 @@ def test_runner_and_executor_share_one_revision_guard_definition() -> None:
         "0013_identity_finalizer_e3"
     ) == executor.revision_guard_arguments("0013_identity_finalizer_e3")
 
+
+def test_journal_error_codes_stay_categorical() -> None:
+    module = _module()
+    allowed = set("abcdefghijklmnopqrstuvwxyz_0123456789")
+    coded = module.ActivationRunnerError("failed", code="exit_nonzero")
+    plain = module.ActivationRunnerError("failed")
+    smuggled = module.ActivationRunnerError(
+        "failed", code="marcelo lives at 12 main street"
+    )
+    assert module._error_code(coded) == "exit_nonzero"
+    assert module._error_code(plain) == "activationrunnererror"
+    assert module._error_code(smuggled) == "activationrunnererror"
+    for error in (coded, plain, smuggled):
+        code = module._error_code(error)
+        assert code and len(code) <= 96
+        assert set(code) <= allowed
+
+
+def test_runner_subprocess_refusals_carry_categorical_codes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _module()
+
+    class Result:
+        def __init__(self, returncode: int, stdout: bytes) -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = b""
+
+    backend = module.Backend()
+    for expected, result in {
+        "exit_nonzero": Result(1, b"{}"),
+        "stdout_nul": Result(0, b"ok\0"),
+    }.items():
+        monkeypatch.setattr(
+            module.subprocess, "run", lambda *a, _r=result, **k: _r
+        )
+        with pytest.raises(module.ActivationRunnerError) as caught:
+            backend._run(["docker", "compose", "ps"])
+        assert caught.value.code == expected
+
+
+def test_runner_no_longer_discards_subprocess_diagnostics() -> None:
+    source = RUNNER.read_text(encoding="utf-8")
+    # Captured only where it can be shown, so a People-bearing subprocess's
+    # output is never read into this process at all.
+    assert "stderr=subprocess.PIPE if diagnostic else subprocess.DEVNULL" in source
+    assert "stderr=subprocess.DEVNULL," not in source
+    assert "diagnostic=True" in source
+
+
+def _environment(text: str, revision: str) -> dict[str, str]:
+    module = _module()
+    body = module.Backend._environment_body(text, revision)
+    return dict(
+        line.split("=", 1) for line in body.splitlines() if "=" in line
+    )
+
+
+def test_environment_rewrite_introduces_the_readiness_pin() -> None:
+    """Core reads HOME_AGENT_READINESS_MIGRATION, so the runner must write it.
+
+    An environment deployed before this key existed must still be rewritable:
+    every rewrite at or after stop_home_assistant is contained forward-only, so
+    refusing here would strand the ceremony with the Agent services stopped.
+    """
+
+    written = _environment(
+        "HOME_AGENT_EXPECTED_DB_REVISION=0006a_worker_lease_arbitration\n"
+        "HOME_AGENT_ROLLOUT_MODE=record_only\n"
+        "HOME_AGENT_PORT=8104\n",
+        "0017_authenticated_binding_e5c",
+    )
+    assert written["HOME_AGENT_EXPECTED_DB_REVISION"] == "0017_authenticated_binding_e5c"
+    assert written["HOME_AGENT_READINESS_MIGRATION"] == "0017_authenticated_binding_e5c"
+    assert written["HOME_AGENT_ROLLOUT_MODE"] == "shadow"
+    assert written["HOME_AGENT_PORT"] == "8104"
+
+
+def test_environment_rewrite_replaces_an_existing_readiness_pin() -> None:
+    module = _module()
+    body = module.Backend._environment_body(
+        "HOME_AGENT_EXPECTED_DB_REVISION=0017_authenticated_binding_e5c\n"
+        "HOME_AGENT_READINESS_MIGRATION=0017_authenticated_binding_e5c\n"
+        "HOME_AGENT_ROLLOUT_MODE=shadow\n",
+        "0021_parent_status_e5h",
+    )
+    assert body.count("HOME_AGENT_READINESS_MIGRATION=") == 1
+    assert "HOME_AGENT_READINESS_MIGRATION=0021_parent_status_e5h" in body
+
+
+def test_environment_rewrite_still_refuses_a_missing_required_key() -> None:
+    module = _module()
+    with pytest.raises(module.ActivationRunnerError):
+        module.Backend._environment_body(
+            "HOME_AGENT_ROLLOUT_MODE=record_only\n",
+            "0017_authenticated_binding_e5c",
+        )
+
+
+def test_environment_rewrite_refuses_a_duplicated_key() -> None:
+    module = _module()
+    with pytest.raises(module.ActivationRunnerError):
+        module.Backend._environment_body(
+            "HOME_AGENT_EXPECTED_DB_REVISION=0006a_worker_lease_arbitration\n"
+            "HOME_AGENT_EXPECTED_DB_REVISION=0013_identity_finalizer_e3\n"
+            "HOME_AGENT_ROLLOUT_MODE=record_only\n",
+            "0017_authenticated_binding_e5c",
+        )
+
+
+def _signing_state(**overrides: object) -> bytes:
+    module = _module()
+    state = {
+        "contract": "phase3-identity-signing-state-e5y-v1",
+        "phase": "finalized",
+        "review_signature": "a" * 128,
+        "unsigned_packet": {
+            "contract": "reviewed-identity-packet-compiler-e5x-v1",
+            "run_id": "018f3f7a-8b4d-7abc-8def-0123456789ab",
+            "unsigned_run": {
+                "run_id": "018f3f7a-8b4d-7abc-8def-0123456789ab",
+                "decision_count": 2,
+                "source_item_count": 1,
+            },
+            "source_items": [{"ordinal": 1}],
+            "decisions": [{"ordinal": 1}, {"ordinal": 2}],
+            "projections": [{"ordinal": 1}],
+            "source_records": [{"ordinal": 1}],
+        },
+    }
+    state.update(overrides)
+    return module.canonical_bytes(state)
+
+
+def test_registration_manifest_is_the_signed_manifest() -> None:
+    """The runner registers exactly the manifest the review signature covers.
+
+    The sealed compiler builds {run, source_items, decisions} and inserts the
+    review signature into the run. The runner rebuilds that half from the same
+    private state because the compiler lives in the networkless signing bundle.
+    """
+
+    module = _module()
+    run_id, manifest = module.Backend._registration_manifest(_signing_state())
+    assert run_id == "018f3f7a-8b4d-7abc-8def-0123456789ab"
+    value = json.loads(manifest)
+    assert set(value) == {"run", "source_items", "decisions"}
+    assert value["run"]["review_signature"] == "a" * 128
+    assert value["run"]["run_id"] == run_id
+    assert value["source_items"] == [{"ordinal": 1}]
+    assert value["decisions"] == [{"ordinal": 1}, {"ordinal": 2}]
+    # The projections and the raw source records never leave the operator host.
+    assert "projections" not in value
+    assert "source_records" not in value
+    assert b"source_records" not in manifest
+    # Canonical bytes, so the kernel sees a stable manifest.
+    assert manifest == module.canonical_bytes(value)
+
+
+def test_registration_manifest_refuses_unusable_ceremony_state() -> None:
+    module = _module()
+    packet = json.loads(_signing_state())["unsigned_packet"]
+
+    def state(**overrides: object) -> bytes:
+        return _signing_state(**overrides)
+
+    broken = [
+        # No review signature: nothing attests the manifest.
+        state(review_signature="not-a-signature"),
+        state(review_signature="a" * 127),
+        # A run that already carries a signature is not the unsigned half.
+        state(
+            unsigned_packet={
+                **packet,
+                "unsigned_run": {**packet["unsigned_run"], "review_signature": "a" * 128},
+            }
+        ),
+        # Empty source items or decisions cannot describe a migration.
+        state(unsigned_packet={**packet, "source_items": []}),
+        state(unsigned_packet={**packet, "decisions": []}),
+        # Wrong shapes.
+        state(unsigned_packet={**packet, "unsigned_run": []}),
+        state(unsigned_packet={**packet, "source_items": {}}),
+        module.canonical_bytes({"contract": "x"}),
+        module.canonical_bytes([]),
+    ]
+    for raw in broken:
+        with pytest.raises(module.ActivationRunnerError):
+            module.Backend._registration_manifest(raw)

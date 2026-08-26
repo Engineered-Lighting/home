@@ -12,6 +12,7 @@ esac
 case "$authority" in
   finalizer) role_name="home_agent_identity_finalizer" ;;
   cutover) role_name="home_agent_identity_cutover" ;;
+  migration) role_name="home_agent_identity_migration" ;;
   *) echo "identity authority role ceremony target is invalid" >&2; exit 64 ;;
 esac
 [ "$#" -eq 2 ] || {
@@ -73,7 +74,8 @@ BEGIN
   IF requested_mode NOT IN ('activate', 'deactivate', 'status')
      OR requested_role NOT IN (
        'home_agent_identity_finalizer',
-       'home_agent_identity_cutover'
+       'home_agent_identity_cutover',
+       'home_agent_identity_migration'
      ) THEN
     RAISE EXCEPTION 'identity_authority_role_request_invalid';
   END IF;

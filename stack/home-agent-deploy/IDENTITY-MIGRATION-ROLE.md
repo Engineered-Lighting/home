@@ -32,9 +32,20 @@ authority or a substitute for the finalizer.
 
 Provisioning always sets the migration login's `VALID UNTIL` to a timestamp in
 the past. The persisted URL therefore cannot connect in the deployment's
-default state, even when manifest-only `EXECUTE` ACLs exist. A later reviewed
-project must add a separate root-only, time-bounded activation and password
-rotation mechanism; this milestone intentionally provides none.
+default state, even when manifest-only `EXECUTE` ACLs exist.
+
+Root-only, time-bounded activation is now provided by
+`activate-identity-authority-role.sh migration`, the same ceremony the
+finalizer and cutover logins use. It refuses unless the database is at
+`0015_current_authority_e5a`, the E5m grant permit is armed, the role still has
+its provisioned shape, and no session is already open as that role. It grants a
+two-minute `VALID UNTIL` window, proves the window afterwards, and
+`deactivate` expires the login again and terminates any session it opened.
+
+Password rotation is deliberately still absent. The activation ceremony never
+reads or writes the migration login's password: it changes only `VALID UNTIL`,
+so the persisted URL keeps whatever secret provisioning set. A later reviewed
+project must add rotation.
 
 ## Existing installation preparation
 

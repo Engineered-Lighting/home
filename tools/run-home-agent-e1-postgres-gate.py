@@ -447,6 +447,7 @@ BUILD_CONTEXT_FILES = (
     "tests/home_agent/test_phase3_source_pin_bootstrap_e5q.py",
     "tests/home_agent/test_phase3_migration_executor_e5t.py",
     "tests/home_agent/test_identity_admission_writer_e5u.py",
+    "tests/home_agent/test_identity_migration_registrar_e5ak.py",
     "tests/home_agent/test_identity_authority_role_ceremony_e5v.py",
     "tests/home_agent/test_phase3_reviewed_people_packet_e5x.py",
     "tests/home_agent/test_reviewed_identity_packet_compiler_e5x.py",
@@ -1438,6 +1439,11 @@ def _exercise_identity_authority_role_ceremony(
             "cutover",
             "home_agent_identity_cutover",
             "postgres_identity_cutover_password",
+        ),
+        (
+            "migration",
+            "home_agent_identity_migration",
+            "postgres_identity_migration_password",
         ),
     ):
         _docker_run(
@@ -2553,6 +2559,8 @@ def _run_e3_phase(
             "tests/test_phase3_identity_finalizer_e3_runtime_postgres.py",
             "/workspace/tests/home_agent/"
             "test_identity_finalizer_e3_deployment_contract.py",
+            "/workspace/tests/home_agent/"
+            "test_identity_migration_registrar_e5ak.py",
         ],
         url_environment={
             "TEST_PHASE3_IDENTITY_FINALIZER_E3_OWNER_DATABASE_URL": BASE_DATABASE,

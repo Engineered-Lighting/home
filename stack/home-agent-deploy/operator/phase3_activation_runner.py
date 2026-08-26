@@ -66,6 +66,7 @@ PRIVACY_OBSERVER = OPERATOR_ROOT / "phase3_privacy_cutover_observer.py"
 FINALIZER_DOCUMENT = PRIVATE_IDENTITY_ROOT / "identity-finalizer-document-e5y.json"
 FINALIZER_RECEIPT = PRIVATE_IDENTITY_ROOT / "identity-signing-receipt-e5y.json"
 IDENTITY_SIGNING_STATE = PRIVATE_IDENTITY_ROOT / "identity-signing-state-e5y.json"
+REGISTRATION_CONTRACT = "identity-migration-registration-e5ak-v1"
 EDGE_RECEIPT = PRIVATE_IDENTITY_ROOT / "edge-privacy-policy-receipt-e5ac.json"
 WRITER_OBSERVATION = PRIVATE_IDENTITY_ROOT / "writer-freeze-observation-e5z.json"
 PRIVACY_OBSERVATION = PRIVATE_IDENTITY_ROOT / "privacy-cutover-observation-e5aa.json"
@@ -199,9 +200,28 @@ OPERATION_ID_STEPS = frozenset({"authorize_shadow", "commit_finalizer"})
 class ActivationRunnerError(RuntimeError):
     """The split activation runner failed closed."""
 
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code if code in migration_executor.DIAGNOSTIC_CODES else None
+
 
 class ActivationPause(RuntimeError):
     """The runner is safely waiting for a private human confirmation."""
+
+
+def _error_code(error: BaseException) -> str:
+    """Return the categorical journal code for a failed step.
+
+    Subprocess failures carry a code from a closed vocabulary so the journal
+    can distinguish a non-zero exit from oversized or NUL-bearing output. Every
+    other failure keeps the previous exception-name behaviour. Free text never
+    enters the journal.
+    """
+
+    code = getattr(error, "code", None)
+    if isinstance(code, str) and code in migration_executor.DIAGNOSTIC_CODES:
+        return code
+    return type(error).__name__.lower()[:96]
 
 
 def uuid7() -> uuid.UUID:
@@ -869,6 +889,7 @@ class Backend:
         input_bytes: bytes | None = None,
         timeout: int = 900,
         accepted: frozenset[int] = frozenset({0}),
+        diagnostic: bool = False,
     ) -> bytes:
         try:
             result = subprocess.run(
@@ -877,19 +898,30 @@ class Backend:
                 check=False,
                 input=input_bytes,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE if diagnostic else subprocess.DEVNULL,
                 timeout=timeout,
                 shell=False,
             )
+        except subprocess.TimeoutExpired as error:
+            raise ActivationRunnerError(
+                "activation subprocess failed", code="timeout"
+            ) from error
         except (OSError, subprocess.SubprocessError) as error:
-            raise ActivationRunnerError("activation subprocess failed") from error
-        if (
-            result.returncode not in accepted
-            or len(result.stdout) > MAX_OUTPUT
-            or b"\0" in result.stdout
-        ):
-            raise ActivationRunnerError("activation subprocess failed")
-        return result.stdout
+            raise ActivationRunnerError(
+                "activation subprocess failed", code="spawn_failed"
+            ) from error
+        if result.returncode not in accepted:
+            code = "exit_nonzero"
+        elif len(result.stdout) > MAX_OUTPUT:
+            code = "stdout_oversize"
+        elif b"\0" in result.stdout:
+            code = "stdout_nul"
+        else:
+            return result.stdout
+        migration_executor.report_diagnostic(
+            command, result.stderr, enabled=diagnostic
+        )
+        raise ActivationRunnerError("activation subprocess failed", code=code)
 
     @classmethod
     def _json(cls, command: Sequence[str], **kwargs: Any) -> Mapping[str, Any]:
@@ -1040,6 +1072,93 @@ class Backend:
             }
         )
 
+    @staticmethod
+    def _registration_manifest(raw_state: bytes) -> tuple[str, bytes]:
+        """Return the run id and the manifest the 0008 kernel registers.
+
+        The reviewed bundle is assembled inside the signing sandbox by
+        reviewed_identity_packet_compiler.assemble_reviewed_bundle, whose bytes
+        are sealed into the credential policy and cannot be changed. This
+        rebuilds the manifest half of that bundle from the same private state,
+        so the manifest that is registered is the one the review signature
+        covers. The projections half is deliberately not sent: the registration
+        kernel accepts exactly {run, source_items, decisions}.
+        """
+
+        state = parse_canonical_json(raw_state, maximum=MAX_OUTPUT)
+        if not isinstance(state, Mapping):
+            raise ActivationRunnerError("identity signing state is invalid")
+        packet = state.get("unsigned_packet")
+        signature = state.get("review_signature")
+        if (
+            not isinstance(packet, Mapping)
+            or not isinstance(signature, str)
+            or len(signature) != 128
+            or any(character not in "0123456789abcdef" for character in signature)
+        ):
+            raise ActivationRunnerError("identity signing state is invalid")
+        run = packet.get("unsigned_run")
+        sources = packet.get("source_items")
+        decisions = packet.get("decisions")
+        if (
+            not isinstance(run, Mapping)
+            or not isinstance(sources, list)
+            or not isinstance(decisions, list)
+            or not sources
+            or not decisions
+            or "review_signature" in run
+        ):
+            raise ActivationRunnerError("identity signing state is invalid")
+        run_id = run.get("run_id")
+        if not isinstance(run_id, str):
+            raise ActivationRunnerError("identity signing state is invalid")
+        signed_run = dict(run)
+        signed_run["review_signature"] = signature
+        return run_id, canonical_bytes(
+            {
+                "run": signed_run,
+                "source_items": sources,
+                "decisions": decisions,
+            }
+        )
+
+    def _register_migration_run(self) -> str:
+        """Register the reviewed manifest immediately before it is admitted.
+
+        commit_finalizer copies its provenance out of the reviewed run row, so
+        the row has to exist before the admission is written. This is folded
+        into the same handler rather than added as a step: the journal requires
+        next_step to equal STEPS[len(completed_steps)], so inserting a step
+        would make the live journal unloadable with no repair path.
+
+        Registration is one-shot for the life of the database. There is exactly
+        one record_only -> shadow authorization, exactly one run per
+        authorization, and no role holds DELETE on the runs table. Registering
+        and then failing to finalize in the same window cannot be undone, which
+        is why the two happen back to back here with no human step between
+        them. Re-running is safe: an identical manifest replays and the kernel
+        returns the same run id.
+        """
+
+        run_id, manifest = self._registration_manifest(
+            self._private_document(IDENTITY_SIGNING_STATE)
+        )
+        request = canonical_bytes(
+            {
+                "contract": REGISTRATION_CONTRACT,
+                "run_id": run_id,
+                "manifest_b64": base64.b64encode(manifest).decode("ascii"),
+            }
+        )
+        result = self._json(
+            [sys.executable, str(AUTHORITY_CEREMONY), "register"],
+            input_bytes=request,
+            timeout=300,
+        )
+        if result.get("result_id") != run_id:
+            raise ActivationRunnerError("reviewed migration run was not registered")
+        return run_id
+
     def _probe(self, name: str) -> Mapping[str, Any]:
         return self._json(
             self._compose(
@@ -1064,7 +1183,50 @@ class Backend:
             return
         except ActivationRunnerError:
             pass
-        self._json([sys.executable, str(MIGRATION_EXECUTOR), command], timeout=1200)
+        self._json(
+            [sys.executable, str(MIGRATION_EXECUTOR), command],
+            timeout=1200,
+            diagnostic=True,
+        )
+
+    @staticmethod
+    def _environment_body(text: str, revision: str) -> str:
+        """Return the rewritten deployment environment for one revision.
+
+        Kept separate from the file handling so the substitution rules are
+        testable without a root-owned file.
+        """
+
+        replacements = {
+            # The image entrypoint reads this one when it runs migrations.
+            "HOME_AGENT_EXPECTED_DB_REVISION": revision,
+            "HOME_AGENT_ROLLOUT_MODE": "shadow",
+            # Core itself reads this one. Without it the agent services keep the
+            # previous pin and fail closed against the migrated database.
+            "HOME_AGENT_READINESS_MIGRATION": revision,
+        }
+        # Keys this release introduced are written whether or not the deployed
+        # environment already declares them. Requiring them to pre-exist would
+        # abort the first rewrite after the upgrade, and every rewrite at or
+        # after stop_home_assistant is contained forward-only, which would
+        # strand the ceremony with the Agent services stopped.
+        introduced = frozenset({"HOME_AGENT_READINESS_MIGRATION"})
+        found: set[str] = set()
+        lines: list[str] = []
+        for line in text.splitlines():
+            name = line.split("=", 1)[0] if "=" in line else ""
+            if name in replacements:
+                if name in found:
+                    raise ActivationRunnerError("activation environment is ambiguous")
+                found.add(name)
+                lines.append(f"{name}={replacements[name]}")
+            else:
+                lines.append(line)
+        if not (set(replacements) - introduced) <= found:
+            raise ActivationRunnerError("activation environment is incomplete")
+        for name in sorted(introduced - found):
+            lines.append(f"{name}={replacements[name]}")
+        return "\n".join(lines) + "\n"
 
     @staticmethod
     def _rewrite_environment(revision: str) -> None:
@@ -1083,24 +1245,7 @@ class Backend:
             or stat.S_IMODE(details.st_mode) & 0o022
         ):
             raise ActivationRunnerError("activation environment is unsafe")
-        replacements = {
-            "HOME_AGENT_EXPECTED_DB_REVISION": revision,
-            "HOME_AGENT_ROLLOUT_MODE": "shadow",
-        }
-        found: set[str] = set()
-        lines = []
-        for line in text.splitlines():
-            name = line.split("=", 1)[0] if "=" in line else ""
-            if name in replacements:
-                if name in found:
-                    raise ActivationRunnerError("activation environment is ambiguous")
-                found.add(name)
-                lines.append(f"{name}={replacements[name]}")
-            else:
-                lines.append(line)
-        if found != set(replacements):
-            raise ActivationRunnerError("activation environment is incomplete")
-        raw = ("\n".join(lines) + "\n").encode("utf-8")
+        raw = Backend._environment_body(text, revision).encode("utf-8")
         temporary = ENVIRONMENT_PATH.with_name(
             f".{ENVIRONMENT_PATH.name}.new.{secrets.token_hex(12)}"
         )
@@ -1127,13 +1272,18 @@ class Backend:
                 pass
 
     def _stop_agents(self) -> None:
-        self._run(self._compose("stop", *APPLICATION_SERVICES), timeout=180)
+        self._run(
+            self._compose("stop", *APPLICATION_SERVICES),
+            timeout=180,
+            diagnostic=True,
+        )
 
     def _start_agents(self, revision: str) -> None:
         self._rewrite_environment(revision)
         self._run(
             self._compose("up", "-d", "--no-deps", *APPLICATION_SERVICES),
             timeout=300,
+            diagnostic=True,
         )
         self._wait_agents_ready()
 
@@ -1169,6 +1319,7 @@ class Backend:
         self._run(
             self._compose("run", "--rm", "--no-deps", "grant-phase3-activation"),
             timeout=300,
+            diagnostic=True,
         )
 
     def perform(self, step: str, state: Mapping[str, Any]) -> None:
@@ -1286,7 +1437,7 @@ class Backend:
             or key_source.get("with_key") not in {"host", "tpm2", "host+tpm2"}
         ):
             raise ActivationPause("awaiting_signing_key_source_confirmation")
-        self._run(self._compose("config", "--quiet"), timeout=120)
+        self._run(self._compose("config", "--quiet"), timeout=120, diagnostic=True)
         try:
             ha_transport._remote("true", timeout=15)
         except Exception as error:
@@ -1550,6 +1701,7 @@ class Backend:
             != hashlib.sha256(document).hexdigest()
         ):
             raise ActivationRunnerError("finalizer receipt does not match")
+        self._register_migration_run()
         admission_id = str(state["operation_ids"]["commit_finalizer"])
         admission = self._request(
             "identity-finalizer-admission-e5u-v1", admission_id, document
@@ -1970,7 +2122,7 @@ class Runner:
                 self.store.save(state)
                 return self.status()
             except Exception as error:
-                state["last_error_code"] = type(error).__name__.lower()[:96]
+                state["last_error_code"] = _error_code(error)
                 if STEPS.index(step) >= STEPS.index("stop_home_assistant"):
                     try:
                         self.backend.contain()

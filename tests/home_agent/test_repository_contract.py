@@ -194,9 +194,67 @@ class RepositoryBoundaryTests(unittest.TestCase):
         self.assertIn(f"operations.{table_name}", grants)
         self.assertIn("pg_catalog.to_regclass", grants)
         self.assertIn(
-            'readiness_migration: str = "0006a_worker_lease_arbitration"',
+            'readiness_migration: ReadinessMigration = '
+            '"0006a_worker_lease_arbitration"',
             config,
         )
+
+    def test_readiness_allowlist_matches_the_image_deployable_revisions(self) -> None:
+        """Core serves exactly the revisions its own image can migrate to.
+
+        The allowlist exists so a deployment can advance the pin as the
+        activation ceremony migrates the database, without letting Core accept
+        a revision the image was never released to handle.
+        """
+
+        config = read("stack/services/home-agent-core/app/config.py")
+        entrypoint = read("stack/services/home-agent-core/docker-entrypoint.sh")
+
+        module = ast.parse(config)
+        allowlist: tuple[str, ...] | None = None
+        for node in module.body:
+            if (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == "ReadinessMigration"
+            ):
+                allowlist = tuple(
+                    element.value
+                    for element in node.value.slice.elts
+                    if isinstance(element, ast.Constant)
+                )
+        self.assertIsNotNone(allowlist, "ReadinessMigration allowlist is absent")
+
+        declared = set(
+            re.findall(
+                r'^(?:DEPLOYABLE_MIGRATION_REVISION|PHASE3_[A-Z_]+_REVISION)'
+                r'="([^"]+)"$',
+                entrypoint,
+                re.MULTILINE,
+            )
+        )
+        self.assertEqual(set(allowlist), declared)
+        self.assertEqual(len(allowlist), len(set(allowlist)))
+
+        # The default stays the pre-Phase-3 revision: Core never promotes itself.
+        self.assertIn(
+            'readiness_migration: ReadinessMigration = '
+            '"0006a_worker_lease_arbitration"',
+            config,
+        )
+
+        # The activation runner rewrites the key Core actually reads.
+        runner = read(
+            "stack/home-agent-deploy/operator/phase3_activation_runner.py"
+        )
+        self.assertIn('"HOME_AGENT_READINESS_MIGRATION": revision', runner)
+        compose = read("stack/home-agent-compose.yml")
+        self.assertIn("HOME_AGENT_READINESS_MIGRATION:", compose)
+
+        # Every revision the runner starts agent services at must be servable.
+        for revision in re.findall(r'_grant_start\(\s*"([^"]+)"', runner):
+            self.assertIn(revision, allowlist)
 
     def test_phase3_identity_authority_foundation_remains_owner_only(self) -> None:
         migration = read(
@@ -224,7 +282,9 @@ class RepositoryBoundaryTests(unittest.TestCase):
             "runtime migration pin intentionally remains revision 0006a", migration
         )
         self.assertIn(
-            'readiness_migration: str = "0006a_worker_lease_arbitration"', config
+            'readiness_migration: ReadinessMigration = '
+            '"0006a_worker_lease_arbitration"',
+            config,
         )
         self.assertNotIn("0007_phase3_identity_authority", config)
         revoke = grants.split("Revision 0007 is an owner-only schema foundation", 1)[

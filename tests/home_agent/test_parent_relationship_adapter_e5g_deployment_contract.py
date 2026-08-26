@@ -257,7 +257,10 @@ def test_e5g_uses_split_credential_and_remains_dormant_in_production() -> None:
     assert "settings.async_binding_commit_database_url()" in main
     assert "ParentRelationshipAuthorityDatabase(" in main
     assert "AuthenticatedParentRelationshipAdapter(" in main
-    assert 'readiness_migration: str = "0006a_worker_lease_arbitration"' in config
+    assert (
+        'readiness_migration: ReadinessMigration = "0006a_worker_lease_arbitration"'
+        in config
+    )
     assert 'DEPLOYABLE_MIGRATION_REVISION="0006a_worker_lease_arbitration"' in (
         entrypoint
     )

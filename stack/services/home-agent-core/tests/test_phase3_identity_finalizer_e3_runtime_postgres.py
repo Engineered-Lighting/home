@@ -1961,7 +1961,32 @@ async def test_production_admission_writer_can_actually_be_finalized() -> None:
         assert admission_expiry <= run_expiry
 
         # And the kernel accepts it, which is the part that never held before.
-        finalization_id = await _finalize(engine, written)
-        assert isinstance(finalization_id, uuid.UUID)
+        # The finalizer kernel refuses any caller but its own login, so this
+        # leg needs the finalizer role, bounded the same way the lifecycle test
+        # bounds it.
+        admin = create_async_engine(os.environ[ADMIN_DATABASE_ENV])
+        finalizer = None
+        try:
+            await _set_finalizer_valid_until(
+                admin, datetime.now(UTC) + timedelta(minutes=15)
+            )
+            finalizer = create_async_engine(
+                os.environ[FINALIZER_DATABASE_ENV],
+                isolation_level="SERIALIZABLE",
+                pool_size=1,
+                max_overflow=0,
+                hide_parameters=True,
+            )
+            finalization_id = await _finalize(finalizer, written)
+            assert isinstance(finalization_id, uuid.UUID)
+        finally:
+            if finalizer is not None:
+                await finalizer.dispose()
+            try:
+                await _set_finalizer_valid_until(
+                    admin, datetime(1970, 1, 1, tzinfo=UTC)
+                )
+            finally:
+                await admin.dispose()
     finally:
         await engine.dispose()

@@ -48,23 +48,6 @@ def _operator_module(name: str) -> ModuleType:
         sys.path.remove(str(OPERATOR))
 
 
-def _seeded_insert_columns() -> dict[str, tuple[str, ...]]:
-    """Column lists the fixture inserts, keyed by table.
-
-    The fixture builds its SQL from adjacent string literals, so the quotes and
-    whitespace are removed before matching.
-    """
-
-    source = SEEDER.read_text(encoding="utf-8")
-    flattened = re.sub(r"\s+", "", source.replace('"', ""))
-    found = {}
-    for table, columns in re.findall(
-        r"INSERTINTOoperations\.(\w+)\(([^)]*)\)VALUES", flattened
-    ):
-        found[table] = tuple(column for column in columns.split(",") if column)
-    return found
-
-
 def _document_key_sets() -> dict[str, frozenset[str]]:
     freeze = _operator_module("phase3_writer_freeze_evidence")
     privacy = _operator_module("phase3_privacy_cutover_evidence")
@@ -99,15 +82,26 @@ def test_the_evidence_tables_have_exactly_one_production_writer() -> None:
     assert written == set(_document_key_sets())
 
 
-@pytest.mark.parametrize("table", sorted(_document_key_sets()))
-def test_signed_document_carries_its_table_columns(table: str) -> None:
-    keys = _document_key_sets()[table]
-    seeded = _seeded_insert_columns()
-    assert table in seeded, f"{table} is not inserted by the fixture"
-    assert set(seeded[table]) == set(keys), {
-        "only_in_fixture": sorted(set(seeded[table]) - set(keys)),
-        "only_in_document": sorted(set(keys) - set(seeded[table])),
-    }
+def test_the_gate_fixture_drives_the_writer_rather_than_its_own_sql() -> None:
+    """The E4 phase must prove the production path, not a parallel one.
+
+    While the fixture carried its own INSERT statements, the gate proved the
+    commit kernel against rows a test had written, and the absence of a
+    production writer was invisible from both ends. The fixture now calls
+    app.identity_evidence_writer, so the same phase exercises the real carrier.
+    """
+
+    seeder = SEEDER.read_text(encoding="utf-8")
+    for table in _document_key_sets():
+        assert f"INSERT INTO operations.{table}" not in seeder, table
+    assert "from app import identity_evidence_writer" in seeder
+    assert "identity_evidence_writer.parse_request" in seeder
+    assert "identity_evidence_writer.execute" in seeder
+    # All three arms, in the order the schema forces.
+    freeze = seeder.index('("freeze", freeze)')
+    privacy = seeder.index('("privacy", privacy)')
+    cutover = seeder.index('("cutover", cutover)')
+    assert freeze < privacy < cutover
 
 
 def _writer() -> ModuleType:

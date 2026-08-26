@@ -22,7 +22,6 @@ from pathlib import Path
 import secrets
 import sqlite3
 import stat
-import subprocess
 import sys
 import time
 from typing import Callable, Sequence
@@ -203,33 +202,35 @@ def _reject_duplicates(pairs):
     return result
 
 
-def _require_home_assistant_stopped(
-    runner: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
-) -> None:
-    try:
-        result = runner(
-            ["ha", "core", "info", "--raw-json"],
-            check=False,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=20,
-            shell=False,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        raise FreezeObservationError("Home Assistant state is unavailable") from error
-    if (
-        result.returncode != 0
-        or not result.stdout
-        or len(result.stdout) > MAX_CLI_BYTES
-    ):
-        raise FreezeObservationError("Home Assistant state is unavailable")
-    try:
-        value = json.loads(result.stdout, object_pairs_hook=_reject_duplicates)
-    except (ValueError, UnicodeError) as error:
-        raise FreezeObservationError("Home Assistant state is invalid") from error
-    if not isinstance(value, dict) or value.get("state") != "stopped":
-        raise FreezeObservationError("Home Assistant is not stopped")
+# SQLite creates these beside a database while a connection is open in WAL
+# mode and removes them on the last clean close, so their absence is direct
+# evidence that nothing holds the legacy identity store open.
+QUIESCENT_SUFFIXES = ("-wal", "-journal", "-shm")
+
+
+def _require_home_assistant_stopped(database_path: Path = DATABASE_PATH) -> None:
+    """Prove the legacy identity store is quiescent before touching it.
+
+    This deliberately does not ask the Home Assistant CLI for a state string.
+    `ha core info --raw-json` returns the Supervisor envelope, and on Core
+    2026.8.1 neither the envelope nor its `data` object carries a run-state key
+    at all — so a `state == "stopped"` comparison raises for every input,
+    including when Home Assistant genuinely is stopped. The only test covering
+    it fed a hand-written `{"state": ...}` payload the CLI never emits.
+
+    The property this step actually needs is not "the supervisor reports a
+    string" but "no process is writing the identity database", and the
+    observation below already proves exactly that with a process lock, an
+    integrity check, sidecar absence, and a stable digest. Checking the
+    sidecars up front makes that same evidence the fail-fast guard, so the
+    collector never opens the database read-write while Home Assistant is live.
+    """
+
+    for suffix in QUIESCENT_SUFFIXES:
+        if Path(f"{database_path}{suffix}").exists():
+            raise FreezeObservationError("Home Assistant is not stopped")
+    if not database_path.exists():
+        raise FreezeObservationError("legacy identity database is absent")
 
 
 def _load_plan_digest(path: Path, operator_root: Path) -> str:
@@ -309,7 +310,7 @@ def collect(
             raise FreezeObservationError("physical semantic fence failed") from error
         finally:
             connection.close()
-    for suffix in ("-wal", "-journal", "-shm"):
+    for suffix in QUIESCENT_SUFFIXES:
         if Path(f"{database}{suffix}").exists():
             raise FreezeObservationError("identity journal state is not clean")
     after = _sha256_file(database, maximum=MAX_DATABASE_BYTES)

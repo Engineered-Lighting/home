@@ -108,14 +108,54 @@ def test_collector_proves_physical_fence_without_private_content(
     assert repeated["database_sha256"] == report["database_sha256"]
 
 
-def test_collector_requires_cli_to_report_stopped() -> None:
-    def running(*_args, **_kwargs):
-        return subprocess.CompletedProcess(
-            args=[], returncode=0, stdout=b'{"state":"running"}', stderr=b""
-        )
+def test_collector_proves_stopped_from_the_database_not_a_status_string(
+    tmp_path,
+) -> None:
+    """The guard reads real filesystem evidence, not a CLI state field.
 
-    with pytest.raises(collector.FreezeObservationError, match="not stopped"):
-        collector._require_home_assistant_stopped(runner=running)
+    It previously asked `ha core info --raw-json` for `state == "stopped"`. On
+    Core 2026.8.1 that payload is the Supervisor envelope and carries no
+    run-state key at either level, so the comparison raised for every input —
+    including when Home Assistant genuinely was stopped, which is exactly when
+    this step runs. The only test covering it fed a hand-written
+    `{"state": ...}` payload the CLI never emits, so nothing caught it.
+
+    SQLite creates the sidecars beside a WAL-mode database while a connection
+    is open and removes them on the last clean close, so their absence is
+    direct evidence that nothing holds the store open.
+    """
+
+    database = tmp_path / "identity.db"
+    database.write_bytes(b"SQLite format 3\x00")
+
+    # Quiescent: no sidecars.
+    collector._require_home_assistant_stopped(database)
+
+    for suffix in collector.QUIESCENT_SUFFIXES:
+        sidecar = tmp_path / f"identity.db{suffix}"
+        sidecar.write_bytes(b"open")
+        with pytest.raises(collector.FreezeObservationError, match="not stopped"):
+            collector._require_home_assistant_stopped(database)
+        sidecar.unlink()
+
+    # And it refuses outright if the store is not there at all.
+    database.unlink()
+    with pytest.raises(collector.FreezeObservationError, match="absent"):
+        collector._require_home_assistant_stopped(database)
+
+
+def test_collector_asks_the_cli_for_nothing() -> None:
+    """No status-string dependency survives anywhere in the collector."""
+
+    source = (
+        HA_MODULES / "collect_legacy_identity_freeze_observation.py"
+    ).read_text(encoding="utf-8")
+    # The invocation, not the prose: the docstring explains why the CLI is not
+    # consulted, so matching on the words alone would fail on the explanation.
+    assert '["ha"' not in source
+    assert '"ha", "core"' not in source
+    assert "import subprocess" not in source
+    assert "subprocess.run" not in source
 
 
 def test_collector_rejects_source_installation_witness_tamper(

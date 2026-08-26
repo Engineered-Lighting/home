@@ -162,6 +162,25 @@ REMOTE_OBSERVER = (
 REMOTE_OPERATOR_ROOT = "/config/home-agent-operator"
 REMOTE_OPERATOR_MODULE = f"{REMOTE_OPERATOR_ROOT}/migrate_legacy_identity.py"
 OPERATOR_MODULE_SOURCE = OPERATOR_ROOT / "migrate_legacy_identity.py"
+EOC_SOURCE_ROOT = SOURCE_ROOT / "ha-config" / "extended_openai_conversation"
+# Every module step 20 executes on the Home Assistant host, paired with the
+# pinned source it must equal. Presence was the only thing ever checked here,
+# and presence is what a stale copy also satisfies: the freeze observer on the
+# host was three revisions behind its pinned source -- still shelling out to
+# `ha core info` for a run-state key this deployment does not return -- while a
+# readiness audit recorded it as "present". Both halves of step 20 run with
+# Home Assistant already stopped, so a mismatch has to fail before that.
+REMOTE_HA_MODULES = (
+    (OPERATOR_MODULE_SOURCE, REMOTE_OPERATOR_MODULE),
+    (
+        EOC_SOURCE_ROOT / "freeze_legacy_identity_semantics.py",
+        REMOTE_FREEZE,
+    ),
+    (
+        EOC_SOURCE_ROOT / "collect_legacy_identity_freeze_observation.py",
+        REMOTE_OBSERVER,
+    ),
+)
 MAX_OUTPUT = 6 * 1024 * 1024
 APPLICATION_SERVICES = (
     "core-api",
@@ -1444,24 +1463,29 @@ class Backend:
 
     @staticmethod
     def _require_remote_operator_module() -> None:
-        """The observer's loader must be present and byte-identical.
+        """Every module step 20 runs on the HA host must be byte-identical.
 
-        Existence alone is not enough: the observation embeds a digest of this
-        module, so a stale copy would describe code that did not run.
+        Existence alone is not enough, and never was. The observation embeds a
+        digest of the loader, so a stale copy describes code that did not run;
+        and a stale observer is worse, because it fails outright at a point
+        where Home Assistant is already stopped.
+
+        These files are pinned activation paths, so the host *checkout* is
+        already guaranteed to match. Nothing copies them onward to the Home
+        Assistant host, which is the gap this closes.
         """
 
-        try:
-            expected = hashlib.sha256(
-                OPERATOR_MODULE_SOURCE.read_bytes()
-            ).hexdigest()
-        except OSError as error:
-            raise ActivationRunnerError(
-                "activation operator module is unavailable"
-            ) from error
-        raw = ha_transport._remote("sha256sum", REMOTE_OPERATOR_MODULE, timeout=30)
-        digest = raw.decode("ascii", errors="replace").split(" ", 1)[0].strip()
-        if digest != expected:
-            raise ActivationPause("awaiting_ha_operator_module")
+        for source, remote in REMOTE_HA_MODULES:
+            try:
+                expected = hashlib.sha256(source.read_bytes()).hexdigest()
+            except OSError as error:
+                raise ActivationRunnerError(
+                    "activation operator module is unavailable"
+                ) from error
+            raw = ha_transport._remote("sha256sum", remote, timeout=30)
+            digest = raw.decode("ascii", errors="replace").split(" ", 1)[0].strip()
+            if digest != expected:
+                raise ActivationPause("awaiting_ha_operator_module")
 
     def _validate_pre_authorization_prerequisites(
         self, _state: Mapping[str, Any]

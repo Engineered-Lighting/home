@@ -61,9 +61,33 @@ foreign keys satisfied, `operations.commit_reviewed_identity_cutover` separately
 requires the candidate row, the writer freeze, the writer evidence, and exactly
 six `privacy_cutover_check_receipts` rows.
 
-**This is a missing component, not a patch.** The seeder is its specification.
-It needs its own reviewed kernel-caller and role story, in the shape of
-`identity_migration_registrar.py` / `identity_admission_writer.py`.
+**This is a missing component, not a patch.** But it is a well-shaped one, and
+smaller than "write the E4 evidence" sounds. Everything it needs already
+exists; only the bridge between the two halves is absent.
+
+*It does not invent data.* The seeder derives its provenance **from the
+database** — a join across the reviewed run, its finalization, its consumed
+finalizer admission, and `operations.erasure_ledger_state` — and supplies only
+the operator attestations as synthetic digests. That query is a usable
+specification of the read side.
+
+*The attestations already exist, signed.* `phase3_writer_freeze_evidence.py`
+emits every field the writer-evidence table requires: `evidence_strength`,
+`integrity_result`, `checkpoint_result`, `journal_result`,
+`legacy_context_cutoff_status`, `freeze_kernel_build_digest`,
+`evidence_commitment`, and `freeze_id`. The signing ceremony produces these as
+private documents today (steps 21–23 sign them). Nothing carries them into
+PostgreSQL.
+
+*The grants are already in place.* All four tables appear in the owner-scoped
+grant lists in `apply-grants.sh`, alongside the runs and admissions tables the
+existing writers use.
+
+So the component is a **third stdin-bridge writer** in the established shape of
+`app/identity_admission_writer.py` and `app/identity_migration_registrar.py`:
+one signed private document in on stdin, provenance read from the finalized
+run, one governed write out. It still needs review, tests, and a hosted-gate
+proof — but it is a known pattern applied a third time, not a new design.
 
 ## Blocker 2 — the five-minute evidence windows cannot be satisfied
 

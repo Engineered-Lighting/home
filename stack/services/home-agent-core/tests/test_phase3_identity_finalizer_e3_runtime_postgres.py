@@ -1814,7 +1814,70 @@ async def _clear_reviewed_migration_state(connection) -> None:
     )
 
 
+# The writer's own lookup CTE joins the run row on exactly these, so a single
+# disagreement makes the admission silently unwritable.
+_ADMISSION_LOOKUP_COLUMNS = (
+    ("logical_source_manifest_commitment", "source_manifest_commitment"),
+    ("projection_manifest_commitment", "projection_manifest_commitment"),
+    ("review_receipt_commitment", "review_receipt_commitment"),
+    ("signing_key_fingerprint", "review_signing_key_fingerprint"),
+    ("source_item_count", "source_item_count"),
+    ("decision_count", "decision_count"),
+)
+
+
+async def _assert_admission_lookup_matches(connection, request) -> None:
+    """Name the mismatching column instead of reporting a bare rejection.
+
+    The writer raises one generic error whether the run is absent, a
+    commitment disagrees, or a count is off. Comparing here turns that into a
+    specific failure. Every value is an identifier, digest, or count.
+    """
+
+    columns = ", ".join(name for name, _ in _ADMISSION_LOOKUP_COLUMNS)
+    row = (
+        await connection.execute(
+            text(
+                f"SELECT {columns}, expires_at FROM "
+                "operations.reviewed_identity_migration_runs "
+                "WHERE run_id = CAST(:run_id AS uuid)"
+            ),
+            {"run_id": request.parameters["run_id"]},
+        )
+    ).mappings().one_or_none()
+    assert row is not None, (
+        f"no reviewed run {request.parameters['run_id']}; the seed did not land"
+    )
+    mismatched = {
+        column: (row[column], request.parameters[parameter])
+        for column, parameter in _ADMISSION_LOOKUP_COLUMNS
+        if row[column] != request.parameters[parameter]
+    }
+    assert not mismatched, f"run row disagrees with the document on {mismatched}"
+    # reviewed_identity_finalizer_admissions.run_id is UNIQUE: one admission per
+    # run, ever. A pre-existing row makes the writer's insert a no-op that
+    # ON CONFLICT DO NOTHING swallows, and the caller sees a bare rejection.
+    existing = (
+        await connection.execute(
+            text(
+                "SELECT admission_id FROM "
+                "operations.reviewed_identity_finalizer_admissions "
+                "WHERE run_id = CAST(:run_id AS uuid)"
+            ),
+            {"run_id": request.parameters["run_id"]},
+        )
+    ).scalar_one_or_none()
+    assert existing is None, (
+        f"run already holds admission {existing}; the writer cannot add a second"
+    )
+    now = (await connection.execute(text("SELECT clock_timestamp()"))).scalar_one()
+    assert row["expires_at"] > now, (
+        f"run already expired: {row['expires_at']} <= {now}"
+    )
+
+
 async def _admit_through_the_production_writer(
+    engine: AsyncEngine,
     url: str,
     fixture: FinalizerFixture,
 ) -> tuple[uuid.UUID, FinalizerFixture]:
@@ -1832,6 +1895,8 @@ async def _admit_through_the_production_writer(
         ),
         operation,
     )
+    async with engine.connect() as connection:
+        await _assert_admission_lookup_matches(connection, request)
     written = await identity_admission_writer.execute(url, operation, request)
     assert written == admission_id
     return admission_id, replace(fixture, admission_id=admission_id)
@@ -1863,9 +1928,18 @@ async def test_production_admission_writer_can_actually_be_finalized() -> None:
         async with engine.begin() as connection:
             await _clear_reviewed_migration_state(connection)
             fixture = await _seed_fixture(connection, label="writer-seam")
+            # _seed_fixture hand-inserts an admission, and run_id is UNIQUE on
+            # that table. Drop it so the production writer creates the only one
+            # — which is the whole point of this test.
+            await connection.execute(
+                delete(schema.reviewed_identity_finalizer_admissions).where(
+                    schema.reviewed_identity_finalizer_admissions.c.run_id
+                    == fixture.run_id
+                )
+            )
 
         admission_id, written = await _admit_through_the_production_writer(
-            owner_url, fixture
+            engine, owner_url, fixture
         )
 
         async with engine.connect() as connection:

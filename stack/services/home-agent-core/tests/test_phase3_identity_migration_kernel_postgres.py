@@ -351,21 +351,41 @@ async def test_manifest_kernel_postgresql_boundary_and_replay() -> None:
             owner_connection = await owner_engine.connect()
             owner_transaction = await owner_connection.begin()
             try:
+                # The impact points at an erasure *operation*, which is what
+                # names the request; `exact_source` requires the request arm to
+                # carry the request id and leave the auto-expiry arm null.
+                operation_id = uuid7()
+                await owner_connection.execute(
+                    text(
+                        "INSERT INTO operations."
+                        "reviewed_identity_migration_erasure_operations ("
+                        "operation_id, source_kind, erasure_request_id, "
+                        "auto_expiry_schedule_id, operation_commitment"
+                        ") VALUES ("
+                        ":operation_id, 'erasure_request', "
+                        ":erasure_request_id, NULL, :operation_commitment)"
+                    ),
+                    {
+                        "operation_id": operation_id,
+                        "erasure_request_id": erasure_request_id,
+                        "operation_commitment": _digest(f"operation:{run_id}"),
+                    },
+                )
                 await owner_connection.execute(
                     text(
                         "INSERT INTO operations."
                         "reviewed_identity_migration_erasure_impacts ("
-                        "impact_id, run_id, erasure_request_id, impact_code, "
+                        "impact_id, run_id, operation_id, impact_code, "
                         "readiness_suspension, removed_leaf_commitment_count, "
                         "unlinked_projection_count, impact_commitment) VALUES ("
-                        ":impact_id, :run_id, :erasure_request_id, "
+                        ":impact_id, :run_id, :operation_id, "
                         "'linkage_unavailable', 'required', 0, 1, "
                         ":impact_commitment)"
                     ),
                     {
                         "impact_id": uuid7(),
                         "run_id": run_id,
-                        "erasure_request_id": erasure_request_id,
+                        "operation_id": operation_id,
                         "impact_commitment": _digest(f"erasure:{run_id}"),
                     },
                 )

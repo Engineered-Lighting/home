@@ -36,3 +36,11 @@ on failure.
 The build-context guard is widened to the core image's test nodes. It
 previously covered only the host half, so the other half could go missing the
 same way — failing inside the container, minutes into a run.
+
+Running it immediately earned its keep. The test's erasure-interference case
+inserted `erasure_request_id` into
+`operations.reviewed_identity_migration_erasure_impacts`, a column that table
+has never had in any revision — it carries `operation_id`, referencing the
+erasure *operation* that names the request. The test had never executed, so a
+schema mismatch sat in it undetected. It now seeds the operation row the
+foreign key requires and points the impact at it.

@@ -26,6 +26,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.ids import uuid7
+from app import identity_evidence_writer
 from app.ledger import LedgerHead, ZERO_HASH
 from app.worker import DurableWorker
 from tests.test_phase3_identity_finalizer_e3_runtime_postgres import (
@@ -138,6 +139,39 @@ async def _canonical_document(connection, values: dict[str, str]) -> bytes:
         raise RuntimeError("canonical E4 document has an invalid size")
     return document
 
+
+
+async def _write_signed_evidence(owner_url, *, freeze, privacy, cutover):
+    """Fill the four E4 evidence tables through the production writer.
+
+    Ordering is forced by the schema: the authority candidate carries
+    `writer_evidence_id` and all six check ids, so it cannot be written before
+    the evidence, the freeze, and the receipts exist.
+    """
+
+    import base64
+
+    for name, packet in (
+        ("freeze", freeze),
+        ("privacy", privacy),
+        ("cutover", cutover),
+    ):
+        operation = identity_evidence_writer.OPERATIONS[name]
+        document = json.dumps(
+            packet, separators=(",", ":"), sort_keys=True
+        ).encode("utf-8")
+        request = identity_evidence_writer.parse_request(
+            json.dumps(
+                {
+                    "contract": operation.contract,
+                    "document_b64": base64.b64encode(document).decode("ascii"),
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8"),
+            operation,
+        )
+        await identity_evidence_writer.execute(owner_url, request)
 
 async def _seed() -> tuple[bytes, uuid.UUID]:
     owner_url = os.environ.get(OWNER_DATABASE_ENV)
@@ -270,180 +304,169 @@ async def _seed() -> tuple[bytes, uuid.UUID]:
                     "synthetic E3 run is erased or retrieval-blocked"
                 )
 
-            await connection.execute(
-                text(
-                    "INSERT INTO operations.legacy_identity_writer_evidence ("
-                    "evidence_id,run_id,source_installation_id,"
-                    "semantic_generation,source_projection_commitment,"
-                    "evidence_strength,integrity_result,checkpoint_result,"
-                    "journal_result,legacy_context_cutoff_status,"
-                    "release_manifest_digest,freeze_kernel_build_digest,"
-                    "evidence_commitment,signature_algorithm,"
-                    "signing_key_fingerprint,evidence_signature,observed_at"
-                    ") VALUES ("
-                    ":evidence_id,:run_id,:source_installation_id,1,"
-                    ":projection_manifest,'operator_attested','passed',"
-                    "'complete','clean','operator_attested_cutoff',"
-                    ":release_digest,:freeze_kernel_digest,"
-                    ":evidence_commitment,'ed25519',:signing_key,"
-                    ":evidence_signature,:fixture_time)"
-                ),
-                {
-                    "evidence_id": evidence_id,
-                    "run_id": fixture.run_id,
-                    "source_installation_id": source_installation_id,
-                    "projection_manifest": evidence[
-                        "projection_manifest_commitment"
-                    ],
-                    "release_digest": evidence["release_manifest_digest"],
-                    "freeze_kernel_digest": _digest(
-                        "github-hosted-e4:freeze-kernel"
-                    ),
-                    "evidence_commitment": writer_evidence_commitment,
-                    "signing_key": signing_key_fingerprint,
-                    "evidence_signature": _signature(
-                        "github-hosted-e4:writer-evidence-signature"
-                    ),
-                    "fixture_time": fixture_time,
-                },
-            )
-            await connection.execute(
-                text(
-                    "INSERT INTO operations."
-                    "enforced_legacy_identity_writer_freezes ("
-                    "freeze_id,run_id,writer_evidence_id,contract_version,"
-                    "enforcement_status,write_probe_result,"
-                    "semantic_write_status,legacy_context_cutoff_status,"
-                    "recognition_mode,source_installation_id,"
-                    "semantic_generation,source_projection_commitment,"
-                    "e3_source_manifest_commitment,"
-                    "e3_projection_manifest_commitment,"
-                    "e3_commitment_key_epoch,writer_evidence_commitment,"
-                    "trigger_set_commitment,blocked_probe_commitment,"
-                    "release_manifest_digest,freeze_kernel_build_digest,"
-                    "policy_digest,freeze_commitment,signature_algorithm,"
-                    "signing_key_fingerprint,freeze_signature,enforced_at,"
-                    "verified_at"
-                    ") VALUES ("
-                    ":freeze_id,:run_id,:evidence_id,"
-                    "'enforced-legacy-identity-writer-freeze-v1',"
-                    "'enforced_offline','blocked','frozen',"
-                    "'enforced_cutoff','nonauthoritative_only',"
-                    ":source_installation_id,1,:projection_manifest,"
-                    ":source_manifest,:projection_manifest,:key_epoch,"
-                    ":writer_evidence_commitment,:trigger_set_commitment,"
-                    ":blocked_probe_commitment,:release_digest,"
-                    ":freeze_kernel_digest,:policy_digest,"
-                    ":freeze_commitment,'ed25519',:signing_key,"
-                    ":freeze_signature,:fixture_time,:fixture_time)"
-                ),
-                {
-                    "freeze_id": freeze_id,
-                    "run_id": fixture.run_id,
-                    "evidence_id": evidence_id,
-                    "source_installation_id": source_installation_id,
-                    "projection_manifest": evidence[
-                        "projection_manifest_commitment"
-                    ],
-                    "source_manifest": evidence[
-                        "logical_source_manifest_commitment"
-                    ],
-                    "key_epoch": evidence["commitment_key_epoch"],
-                    "writer_evidence_commitment": writer_evidence_commitment,
-                    "trigger_set_commitment": _digest(
-                        "github-hosted-e4:trigger-set"
-                    ),
-                    "blocked_probe_commitment": _digest(
-                        "github-hosted-e4:blocked-probe"
-                    ),
-                    "release_digest": evidence["release_manifest_digest"],
-                    "freeze_kernel_digest": _digest(
-                        "github-hosted-e4:freeze-kernel"
-                    ),
-                    "policy_digest": evidence["policy_digest"],
-                    "freeze_commitment": freeze_commitment,
-                    "signing_key": signing_key_fingerprint,
-                    "freeze_signature": _signature(
-                        "github-hosted-e4:freeze-signature"
-                    ),
-                    "fixture_time": fixture_time,
-                },
-            )
+        # The four evidence tables are filled by the production writer, not by
+        # this fixture. Their only implementation used to live here, which is
+        # precisely why the missing carrier stayed invisible: the gate proved
+        # the commit kernel against rows a test had inserted. Driving
+        # app.identity_evidence_writer makes this phase prove the real path.
+        #
+        # The evidence transaction above is closed first on purpose. The writer
+        # commits separately, and the admission written further down carries
+        # foreign keys to these rows — a snapshot taken before the writer
+        # committed would not see them.
+        fixture_time_text = fixture_time.astimezone(UTC).strftime(
+            "%Y-%m-%dT%H:%M:%S.%fZ"
+        )
+        projection_manifest = evidence["projection_manifest_commitment"]
+        source_manifest = evidence["logical_source_manifest_commitment"]
+        policy_digest_text = evidence["policy_digest"]
+        release_digest = evidence["release_manifest_digest"]
+        freeze_kernel_digest = _digest("github-hosted-e4:freeze-kernel")
 
-            await connection.execute(
-                text(
-                    "INSERT INTO operations.privacy_cutover_check_receipts ("
-                    "check_id,run_id,finalization_id,check_category,"
-                    "check_result,residual_code,check_commitment,"
-                    "receipt_commitment,policy_digest,checked_at"
-                    ") VALUES ("
-                    ":check_id,:run_id,:finalization_id,:category,"
-                    "'passed','none',:check_commitment,"
-                    ":receipt_commitment,:policy_digest,:fixture_time)"
+        writer_evidence_row = {
+            "evidence_id": str(evidence_id),
+            "run_id": str(fixture.run_id),
+            "source_installation_id": str(source_installation_id),
+            "semantic_generation": 1,
+            "source_projection_commitment": projection_manifest,
+            "evidence_strength": "operator_attested",
+            "integrity_result": "passed",
+            "checkpoint_result": "complete",
+            "journal_result": "clean",
+            "legacy_context_cutoff_status": "operator_attested_cutoff",
+            "release_manifest_digest": release_digest,
+            "freeze_kernel_build_digest": freeze_kernel_digest,
+            "evidence_commitment": writer_evidence_commitment,
+            "signature_algorithm": "ed25519",
+            "signing_key_fingerprint": signing_key_fingerprint,
+            "evidence_signature": _signature(
+                "github-hosted-e4:writer-evidence-signature"
+            ),
+            "observed_at": fixture_time_text,
+        }
+        enforced_freeze_row = {
+            "freeze_id": str(freeze_id),
+            "run_id": str(fixture.run_id),
+            "writer_evidence_id": str(evidence_id),
+            "contract_version": "enforced-legacy-identity-writer-freeze-v1",
+            "enforcement_status": "enforced_offline",
+            "write_probe_result": "blocked",
+            "semantic_write_status": "frozen",
+            "legacy_context_cutoff_status": "enforced_cutoff",
+            "recognition_mode": "nonauthoritative_only",
+            "source_installation_id": str(source_installation_id),
+            "semantic_generation": 1,
+            "source_projection_commitment": projection_manifest,
+            "e3_source_manifest_commitment": source_manifest,
+            "e3_projection_manifest_commitment": projection_manifest,
+            "e3_commitment_key_epoch": int(evidence["commitment_key_epoch"]),
+            "writer_evidence_commitment": writer_evidence_commitment,
+            "trigger_set_commitment": _digest("github-hosted-e4:trigger-set"),
+            "blocked_probe_commitment": _digest(
+                "github-hosted-e4:blocked-probe"
+            ),
+            "release_manifest_digest": release_digest,
+            "freeze_kernel_build_digest": freeze_kernel_digest,
+            "policy_digest": policy_digest_text,
+            "freeze_commitment": freeze_commitment,
+            "signature_algorithm": "ed25519",
+            "signing_key_fingerprint": signing_key_fingerprint,
+            "freeze_signature": _signature("github-hosted-e4:freeze-signature"),
+            "enforced_at": fixture_time_text,
+            "verified_at": fixture_time_text,
+        }
+        privacy_rows = [
+            {
+                "check_id": str(privacy_check_ids[category]),
+                "run_id": str(fixture.run_id),
+                "finalization_id": str(fixture.run_id),
+                "check_category": category,
+                "check_result": "passed",
+                "residual_code": "none",
+                "check_commitment": _digest(
+                    f"github-hosted-e4:{category}:check"
                 ),
-                [
-                    {
-                        "check_id": privacy_check_ids[category],
-                        "run_id": fixture.run_id,
-                        "finalization_id": fixture.run_id,
-                        "category": category,
-                        "check_commitment": _digest(
-                            f"github-hosted-e4:{category}:check"
-                        ),
-                        "receipt_commitment": _digest(
-                            f"github-hosted-e4:{category}:receipt"
-                        ),
-                        "policy_digest": evidence["policy_digest"],
-                        "fixture_time": fixture_time,
-                    }
-                    for category in PRIVACY_CATEGORIES
-                ],
-            )
-            await connection.execute(
-                text(
-                    "INSERT INTO operations.semantic_authority_cutovers ("
-                    "cutover_id,run_id,finalization_id,writer_evidence_id,"
-                    "contract_version,authority_status,authoritative,"
-                    "ingress_check_id,ingress_check_category,"
-                    "retrieval_check_id,retrieval_check_category,"
-                    "prompt_check_id,prompt_check_category,"
-                    "initiative_check_id,initiative_check_category,"
-                    "export_check_id,export_check_category,"
-                    "edge_block_check_id,edge_block_check_category,"
-                    "required_privacy_check_result,"
-                    "required_privacy_residual_code,"
-                    "privacy_check_set_commitment,cutover_commitment,"
-                    "policy_digest,signature_algorithm,"
-                    "signing_key_fingerprint,cutover_signature,attested_at"
-                    ") VALUES ("
-                    ":cutover_id,:run_id,:finalization_id,:evidence_id,"
-                    "'semantic-authority-cutover-candidate-v1',"
-                    "'candidate_unenforced',false,"
-                    ":ingress,'ingress',:retrieval,'retrieval',"
-                    ":prompt,'prompt',:initiative,'initiative',"
-                    ":export,'export',:edge_block,'edge_block',"
-                    "'passed','none',:privacy_set,:cutover_commitment,"
-                    ":policy_digest,'ed25519',:signing_key,"
-                    ":cutover_signature,:fixture_time)"
+                "receipt_commitment": _digest(
+                    f"github-hosted-e4:{category}:receipt"
                 ),
-                {
-                    "cutover_id": candidate_cutover_id,
-                    "run_id": fixture.run_id,
-                    "finalization_id": fixture.run_id,
-                    "evidence_id": evidence_id,
-                    **privacy_check_ids,
-                    "privacy_set": privacy_set_commitment,
-                    "cutover_commitment": _digest(
-                        "github-hosted-e4:candidate-cutover"
-                    ),
-                    "policy_digest": evidence["policy_digest"],
-                    "signing_key": signing_key_fingerprint,
-                    "cutover_signature": _signature(
-                        "github-hosted-e4:candidate-cutover-signature"
-                    ),
-                    "fixture_time": fixture_time,
-                },
+                "policy_digest": policy_digest_text,
+                "checked_at": fixture_time_text,
+            }
+            for category in PRIVACY_CATEGORIES
+        ]
+        candidate_row = {
+            "cutover_id": str(candidate_cutover_id),
+            "run_id": str(fixture.run_id),
+            "finalization_id": str(fixture.run_id),
+            "writer_evidence_id": str(evidence_id),
+            "contract_version": "semantic-authority-cutover-candidate-v1",
+            "authority_status": "candidate_unenforced",
+            "authoritative": False,
+            "required_privacy_check_result": "passed",
+            "required_privacy_residual_code": "none",
+            "privacy_check_set_commitment": privacy_set_commitment,
+            "cutover_commitment": _digest("github-hosted-e4:candidate-cutover"),
+            "policy_digest": policy_digest_text,
+            "signature_algorithm": "ed25519",
+            "signing_key_fingerprint": signing_key_fingerprint,
+            "cutover_signature": _signature(
+                "github-hosted-e4:candidate-cutover-signature"
+            ),
+            "attested_at": fixture_time_text,
+        }
+        for category in PRIVACY_CATEGORIES:
+            candidate_row[f"{category}_check_id"] = str(
+                privacy_check_ids[category]
             )
+            candidate_row[f"{category}_check_category"] = category
+
+        await _write_signed_evidence(
+            os.environ[OWNER_DATABASE_ENV],
+            freeze={
+                "contract": "phase3-writer-freeze-evidence-e5z-v1",
+                "authoritative": False,
+                "run_id": str(fixture.run_id),
+                "finalization_id": str(fixture.run_id),
+                "private_review_sha256": _digest("github-hosted-e4:review"),
+                "physical_observation_sha256": _digest(
+                    "github-hosted-e4:observation"
+                ),
+                "writer_evidence": writer_evidence_row,
+                "enforced_writer_freeze": enforced_freeze_row,
+            },
+            privacy={
+                "contract": "phase3-privacy-cutover-evidence-e5aa-v1",
+                "authoritative": False,
+                "run_id": str(fixture.run_id),
+                "finalization_id": str(fixture.run_id),
+                "freeze_id": str(freeze_id),
+                "privacy_observation": {},
+                "privacy_observation_sha256": _digest(
+                    "github-hosted-e4:privacy-observation"
+                ),
+                "attestation_algorithm": "ed25519",
+                "attestation_key_fingerprint": signing_key_fingerprint,
+                "privacy_observation_signature": _signature(
+                    "github-hosted-e4:privacy-observation-signature"
+                ),
+                "receipts": privacy_rows,
+                "privacy_check_set_commitment": privacy_set_commitment,
+            },
+            cutover={
+                "contract": "phase3-semantic-cutover-packet-e5ab-v1",
+                "authoritative": False,
+                "writer_freeze_evidence": {},
+                "privacy_cutover_evidence": {},
+                "erasure_current_receipt": {},
+                "semantic_authority_candidate": candidate_row,
+                "cutover_document": {},
+                "cutover_document_sha256": _digest(
+                    "github-hosted-e4:cutover-document"
+                ),
+            },
+        )
+
+        async with owner_engine.begin() as connection:
 
             document_values = {
                 "contract_version": (

@@ -618,9 +618,19 @@ def _roles(
         person_id = _stable_uuid(row["uuid"], "legacy role")
         if person_id not in people:
             raise MigrationError("role references an unknown identity")
+        # One relationship, spread across two columns: a closed
+        # `relationship_type` enum and a free-text `relationship_subrole`. It is
+        # one candidate, not two -- the registration kernel accepts at most one
+        # decision per kind on a source item, so emitting both makes every
+        # packet containing a subrole unregistrable.
+        #
+        # The subrole is tried first because it is the more specific term and
+        # implies its enum. Readiness detection survives that ordering: "me"
+        # only ever appears as a type (and never carries a subrole), while
+        # "parent" only ever appears as a subrole.
         candidates = (
-            ("relationship_type", row["relationship_type"]),
             ("relationship_subrole", row["relationship_subrole"]),
+            ("relationship_type", row["relationship_type"]),
         )
         for source_field, raw_label in candidates:
             label = _bounded_text(raw_label, "legacy role", maximum=64, optional=True)
@@ -642,6 +652,7 @@ def _roles(
                     candidate_id=_digest("legacy_role_candidate", snapshot),
                 )
             )
+            break
     return tuple(result)
 
 

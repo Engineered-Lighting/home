@@ -89,6 +89,27 @@ one signed private document in on stdin, provenance read from the finalized
 run, one governed write out. It still needs review, tests, and a hosted-gate
 proof — but it is a known pattern applied a third time, not a new design.
 
+### What the missing writer has to insert
+
+Four tables, fed by three ceremony steps that already sign their documents. The
+seeder inserts them in this order, and its column lists are the specification.
+
+| Table | Fed by | Shape |
+|---|---|---|
+| `legacy_identity_writer_evidence` | step 21, `phase3_writer_freeze_evidence.py` | one row |
+| `enforced_legacy_identity_writer_freezes` | step 21, same document | one row |
+| `privacy_cutover_check_receipts` | step 22, `phase3_privacy_cutover_evidence.py` | **six** rows, one per check category — ingress, retrieval, prompt, initiative, export, edge-block |
+| `semantic_authority_cutovers` | step 23, `phase3_semantic_cutover_packet.py` | one row, referencing the writer evidence and all six check ids |
+
+The existing cutover admission and the `0014` commit kernel then consume the
+last of these. Both already exist; only the four inserts above are missing.
+
+The natural shape is one writer with three arms — freeze, privacy, cutover —
+mirroring `identity_admission_writer.py`'s existing finalizer/cutover arms,
+each taking the private document that step already signs. Note the ordering
+constraint: `semantic_authority_cutovers` carries `writer_evidence_id` and the
+six `*_check_id` columns, so it cannot be written before the other three.
+
 ## Blocker 2 — the five-minute evidence windows cannot be satisfied
 
 `stack/home-agent-deploy/operator/phase3_privacy_cutover_observer.py` requires

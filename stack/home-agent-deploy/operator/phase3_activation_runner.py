@@ -143,6 +143,14 @@ REMOTE_FREEZE = (
 REMOTE_OBSERVER = (
     "/config/extended_openai_conversation/collect_legacy_identity_freeze_observation.py"
 )
+# The freeze observer imports the source-projection loader from here and hashes
+# the module's bytes into its observation, so a missing or stale copy either
+# fails the step outright or records a digest that does not describe the code
+# that ran. Nothing deployed this directory, and the step runs with Home
+# Assistant already stopped.
+REMOTE_OPERATOR_ROOT = "/config/home-agent-operator"
+REMOTE_OPERATOR_MODULE = f"{REMOTE_OPERATOR_ROOT}/migrate_legacy_identity.py"
+OPERATOR_MODULE_SOURCE = OPERATOR_ROOT / "migrate_legacy_identity.py"
 MAX_OUTPUT = 6 * 1024 * 1024
 APPLICATION_SERVICES = (
     "core-api",
@@ -1425,6 +1433,27 @@ class Backend:
             timeout=120,
         )
 
+    @staticmethod
+    def _require_remote_operator_module() -> None:
+        """The observer's loader must be present and byte-identical.
+
+        Existence alone is not enough: the observation embeds a digest of this
+        module, so a stale copy would describe code that did not run.
+        """
+
+        try:
+            expected = hashlib.sha256(
+                OPERATOR_MODULE_SOURCE.read_bytes()
+            ).hexdigest()
+        except OSError as error:
+            raise ActivationRunnerError(
+                "activation operator module is unavailable"
+            ) from error
+        raw = ha_transport._remote("sha256sum", REMOTE_OPERATOR_MODULE, timeout=30)
+        digest = raw.decode("ascii", errors="replace").split(" ", 1)[0].strip()
+        if digest != expected:
+            raise ActivationPause("awaiting_ha_operator_module")
+
     def _validate_pre_authorization_prerequisites(
         self, _state: Mapping[str, Any]
     ) -> None:
@@ -1456,6 +1485,7 @@ class Backend:
         ha_transport._remote("test", "-f", REMOTE_EDGE_RECEIPT, timeout=15)
         ha_transport._remote("test", "-f", REMOTE_FREEZE, timeout=15)
         ha_transport._remote("test", "-f", REMOTE_OBSERVER, timeout=15)
+        self._require_remote_operator_module()
         report = self._json(
             [sys.executable, str(OPERATOR_ROOT / "phase3_activation_preflight.py")],
             timeout=180,

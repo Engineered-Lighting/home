@@ -244,6 +244,39 @@ PAUSE_STEPS = frozenset(
 )
 OPERATION_ID_STEPS = frozenset({"authorize_shadow", "commit_finalizer"})
 
+# Every step downstream of ``arm_initial_permit`` runs inside a grant-permit
+# window. The permit carries a four-hour freshness bound, but the windows hold
+# two private human confirmations (``commit_finalizer``,
+# ``await_authenticated_binding``) that have no bounded duration, so a run can
+# legitimately outlive its permit at any of these steps.
+RECOVERABLE_PERMIT_STEPS = frozenset(STEPS[STEPS.index("stop_agent_services") :])
+
+# The revision each migrating step lands on. Ordered as the steps run, so the
+# last completed entry is the revision the database must currently be at.
+STEP_REVISIONS = (
+    ("migrate_finalizer", "0013_identity_finalizer_e3"),
+    ("migrate_current_authority", "0015_current_authority_e5a"),
+    ("migrate_authenticated_binding", "0017_authenticated_binding_e5c"),
+    ("migrate_parent_authority", "0018_parent_relationship_e5d"),
+    ("migrate_parent_status", "0021_parent_status_e5h"),
+)
+PRE_ACTIVATION_REVISION = "0006a_worker_lease_arbitration"
+
+
+def expected_revision(completed_steps: Sequence[str]) -> str:
+    """Return the exact revision the journal implies the database is at.
+
+    ``validate_state`` guarantees ``completed_steps`` is a prefix of ``STEPS``,
+    so scanning in step order leaves the most recent completed migration.
+    """
+
+    revision = PRE_ACTIVATION_REVISION
+    completed = frozenset(completed_steps)
+    for step, target in STEP_REVISIONS:
+        if step in completed:
+            revision = target
+    return revision
+
 
 class ActivationRunnerError(RuntimeError):
     """The split activation runner failed closed."""
@@ -2067,6 +2100,53 @@ class Backend:
             (sequencer.GRANT_PERMIT_VALUE + "\n").encode("ascii"),
         )
 
+    def recover_permit(self, state: Mapping[str, Any]) -> None:
+        """Re-arm the grant permit for a run stranded past the permit TTL.
+
+        The permit is armed once at ``arm_initial_permit`` and once more at
+        ``rearm_parent_permit``. Both windows span a private human confirmation
+        with no bounded duration, so an operator who takes longer than the
+        four-hour freshness bound is left with a run that cannot advance and no
+        verb that can refresh it: ``arm-grants`` re-runs the E5j preflight,
+        which probes a diagnostic the core disables for good once the database
+        moves past the pre-Phase-3 revision. This command is the recovery that
+        absence leaves missing.
+
+        It re-establishes the same evidence the initial arm required -- the
+        hosted source still admitted with no blockers, the grant contract still
+        installed -- and additionally pins the database to the exact revision
+        the journal says it reached. That last check is what makes refreshing
+        safe: a permit is only ever re-armed onto a database that is precisely
+        where the run left it, never one that drifted underneath.
+
+        It writes one file. It runs no migration, starts no service, confirms
+        no binding, and never advances the journal. Every human gate stays
+        where it was: ``validate_state`` admits only a prefix of ``STEPS``, so
+        a run parked in the parent window has provably already passed both
+        private confirmations, and one parked in the binding window still has
+        to reach them.
+        """
+
+        report = source_plan.live_report()
+        if (
+            report.get("source_acceptance_receipt_issuable") is not True
+            or report.get("blockers") != []
+            or not sequencer.grant_contract_installed()
+        ):
+            raise ActivationRunnerError("activation source refuses permit recovery")
+        self._run(
+            self._compose(
+                *migration_executor.revision_guard_arguments(
+                    expected_revision(state["completed_steps"])
+                )
+            ),
+            timeout=180,
+        )
+        sequencer._atomic_write(
+            sequencer.GRANT_PERMIT_PATH,
+            (sequencer.GRANT_PERMIT_VALUE + "\n").encode("ascii"),
+        )
+
     def _await_parents(self, _state: Mapping[str, Any]) -> None:
         if (
             self._probe("parents").get("exact_parent_relationship_confirmed")
@@ -2395,6 +2475,20 @@ class Runner:
             raise ActivationRunnerError("activation boundary refuses retirement")
         return self.backend.retire_expired_finalization(state)
 
+    def recover_permit(self) -> dict[str, Any]:
+        """Refuse unless a started run is parked inside a grant-permit window."""
+
+        state = self.store.load()
+        if state is None:
+            raise ActivationRunnerError("activation has not started")
+        if (
+            state["next_step"] not in RECOVERABLE_PERMIT_STEPS
+            or state["status"] not in {"paused", "active"}
+        ):
+            raise ActivationRunnerError("activation boundary refuses permit recovery")
+        self.backend.recover_permit(state)
+        return self.status()
+
     def contain(self) -> dict[str, Any]:
         state = self.store.load()
         if state is None:
@@ -2448,10 +2542,12 @@ def main() -> int:
         "refresh-source",
         "rebind-source",
         "retire-expired-finalization",
+        "recover-permit",
     }:
         print(
             "phase3 activation runner requires status, advance, contain, "
-            "refresh-source, rebind-source, or retire-expired-finalization",
+            "refresh-source, rebind-source, retire-expired-finalization, or "
+            "recover-permit",
             file=sys.stderr,
         )
         return 64
@@ -2474,7 +2570,12 @@ def main() -> int:
     return (
         0
         if sys.argv[1]
-        in {"refresh-source", "rebind-source", "retire-expired-finalization"}
+        in {
+            "refresh-source",
+            "rebind-source",
+            "retire-expired-finalization",
+            "recover-permit",
+        }
         or result["status"] in {"not_started", "complete"}
         else 3
     )

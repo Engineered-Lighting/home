@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sys
 from types import ModuleType
+from typing import Mapping, Sequence
 
 import pytest
 
@@ -1512,5 +1513,273 @@ def test_retirement_touches_neither_the_journal_nor_the_database() -> None:
         "completed_steps",
         "next_step",
         "store.save",
+    ):
+        assert forbidden not in body, forbidden
+
+
+def _parked(module: ModuleType, step: str, status: str = "paused") -> dict[str, object]:
+    """Return a journal parked exactly at one step.
+
+    ``validate_state`` admits only a prefix of ``STEPS``, so setting the cursor
+    is enough to establish everything that ran before it.
+    """
+
+    state = module.new_state("b" * 40)
+    state["completed_steps"] = list(module.STEPS[: module.STEPS.index(step)])
+    state["next_step"] = step
+    state["status"] = status
+    return state
+
+
+class RecoveryBackend:
+    """Records what a permit recovery attempted without touching the host."""
+
+    def __init__(self, module: ModuleType) -> None:
+        self.module = module
+        self.states: list[Mapping[str, object]] = []
+
+    def recover_permit(self, state):
+        self.states.append(copy.deepcopy(state))
+
+
+@pytest.mark.parametrize(
+    ("step", "revision"),
+    (
+        ("stop_agent_services", "0006a_worker_lease_arbitration"),
+        ("provision_cutover_roles", "0013_identity_finalizer_e3"),
+        ("commit_finalizer", "0015_current_authority_e5a"),
+        ("grant_and_start_binding_stage", "0017_authenticated_binding_e5c"),
+        ("provision_parent_kernel", "0018_parent_relationship_e5d"),
+        ("seal_completion", "0021_parent_status_e5h"),
+    ),
+)
+def test_expected_revision_tracks_the_last_completed_migration(
+    step: str, revision: str
+) -> None:
+    """The journal alone determines where the database must be."""
+
+    module = _module()
+    completed = module.STEPS[: module.STEPS.index(step)]
+
+    assert module.expected_revision(completed) == revision
+
+
+def test_expected_revision_covers_every_migrating_step() -> None:
+    """A migrating step with no recorded revision would guard the wrong one."""
+
+    module = _module()
+    source = RUNNER.read_text(encoding="utf-8")
+    mapped = {step for step, _ in module.STEP_REVISIONS}
+    migrating = {
+        step
+        for step in module.STEPS
+        if f'"{step}": lambda _state: self._migrate(' in source
+    }
+
+    assert migrating == mapped
+
+
+def test_permit_recovery_refuses_before_the_first_permit_window() -> None:
+    """Nothing upstream of the initial arm has a permit to refresh."""
+
+    module = _module()
+    store = MemoryStore(module)
+    runner = module.Runner(RecoveryBackend(module), store)
+
+    with pytest.raises(module.ActivationRunnerError):
+        runner.recover_permit()
+
+    for step in module.STEPS[: module.STEPS.index("stop_agent_services")]:
+        store.value = _parked(module, step)
+        with pytest.raises(module.ActivationRunnerError):
+            runner.recover_permit()
+
+
+def test_permit_recovery_refuses_a_run_that_is_not_parked() -> None:
+    """A contained or finished run is not waiting on a permit."""
+
+    module = _module()
+    store = MemoryStore(module)
+    backend = RecoveryBackend(module)
+    runner = module.Runner(backend, store)
+
+    for status in ("contained", "complete", "failed"):
+        state = _parked(module, "commit_finalizer")
+        state["status"] = status
+        store.value = state
+        with pytest.raises(module.ActivationRunnerError):
+            runner.recover_permit()
+    assert backend.states == []
+
+
+def test_permit_recovery_accepts_every_step_inside_a_permit_window() -> None:
+    """Both windows span an unbounded human pause, so both can go stale."""
+
+    module = _module()
+    store = MemoryStore(module)
+    backend = RecoveryBackend(module)
+    runner = module.Runner(backend, store)
+
+    windowed = module.STEPS[module.STEPS.index("stop_agent_services") :]
+    for step in windowed:
+        store.value = _parked(module, step)
+        runner.recover_permit()
+
+    assert [state["next_step"] for state in backend.states] == list(windowed)
+
+
+def test_permit_recovery_never_moves_a_run_past_a_private_confirmation() -> None:
+    """Refreshing a permit must not stand in for a human gate.
+
+    The prefix invariant carries this: a run parked in the parent window has
+    provably completed both confirmations, and one parked in the binding window
+    still has to reach them.
+    """
+
+    module = _module()
+    store = MemoryStore(module)
+    backend = RecoveryBackend(module)
+    runner = module.Runner(backend, store)
+
+    store.value = _parked(module, "migrate_parent_authority")
+    runner.recover_permit()
+    completed = backend.states[-1]["completed_steps"]
+
+    assert "commit_finalizer" in completed
+    assert "await_authenticated_binding" in completed
+    assert "await_parent_confirmation" not in completed
+
+
+def _recovery_backend(
+    module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    report: Mapping[str, object] | None = None,
+    contract_installed: bool = True,
+    guard_fails: bool = False,
+):
+    """A Backend whose only reachable effects are recorded, never performed."""
+
+    backend = module.Backend()
+    written: list[tuple[object, bytes]] = []
+    guarded: list[Sequence[str]] = []
+
+    monkeypatch.setattr(
+        module.source_plan,
+        "live_report",
+        lambda: dict(
+            {"source_acceptance_receipt_issuable": True, "blockers": []}
+            if report is None
+            else report
+        ),
+    )
+    monkeypatch.setattr(
+        module.sequencer, "grant_contract_installed", lambda: contract_installed
+    )
+    monkeypatch.setattr(
+        module.Backend, "_compose", lambda self, *args: ["compose", *args]
+    )
+
+    def _run(command, **kwargs):
+        guarded.append(list(command))
+        if guard_fails:
+            raise module.ActivationRunnerError("revision guard failed")
+        return b""
+
+    monkeypatch.setattr(module.Backend, "_run", staticmethod(_run))
+    monkeypatch.setattr(
+        module.sequencer,
+        "_atomic_write",
+        lambda path, raw: written.append((path, raw)),
+    )
+    return backend, written, guarded
+
+
+def test_permit_recovery_pins_the_revision_the_journal_implies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The permit is only ever refreshed onto an undrifted database."""
+
+    module = _module()
+    backend, written, guarded = _recovery_backend(module, monkeypatch)
+
+    backend.recover_permit(_parked(module, "commit_finalizer"))
+
+    assert "0015_current_authority_e5a" in guarded[-1]
+    assert written == [
+        (
+            module.sequencer.GRANT_PERMIT_PATH,
+            (module.sequencer.GRANT_PERMIT_VALUE + "\n").encode("ascii"),
+        )
+    ]
+
+
+def test_permit_recovery_writes_nothing_when_the_database_drifted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A database that moved underneath the run invalidates the evidence."""
+
+    module = _module()
+    backend, written, _ = _recovery_backend(module, monkeypatch, guard_fails=True)
+
+    with pytest.raises(module.ActivationRunnerError):
+        backend.recover_permit(_parked(module, "commit_finalizer"))
+    assert written == []
+
+
+@pytest.mark.parametrize(
+    "report",
+    (
+        {"source_acceptance_receipt_issuable": False, "blockers": []},
+        {"source_acceptance_receipt_issuable": True, "blockers": ["drift"]},
+        {"blockers": []},
+        {"source_acceptance_receipt_issuable": True},
+    ),
+)
+def test_permit_recovery_refuses_an_unadmitted_source(
+    monkeypatch: pytest.MonkeyPatch, report: Mapping[str, object]
+) -> None:
+    """Recovery re-establishes the same source evidence the initial arm did."""
+
+    module = _module()
+    backend, written, guarded = _recovery_backend(module, monkeypatch, report=report)
+
+    with pytest.raises(module.ActivationRunnerError):
+        backend.recover_permit(_parked(module, "commit_finalizer"))
+    assert written == []
+    assert guarded == []
+
+
+def test_permit_recovery_refuses_without_the_grant_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The permit means nothing if the grant service no longer mounts it."""
+
+    module = _module()
+    backend, written, _ = _recovery_backend(
+        module, monkeypatch, contract_installed=False
+    )
+
+    with pytest.raises(module.ActivationRunnerError):
+        backend.recover_permit(_parked(module, "commit_finalizer"))
+    assert written == []
+
+
+def test_permit_recovery_runs_no_migration_and_never_advances_the_journal() -> None:
+    source = RUNNER.read_text(encoding="utf-8")
+    body = source.split("    def recover_permit", 1)[1].split("    def _await_parents", 1)[0]
+
+    # The one guard call verifies a revision; it is not a migration entrypoint.
+    assert "revision_guard_arguments" in body
+    for forbidden in (
+        "MIGRATION_EXECUTOR",
+        "AUTHORITY_ADMISSION",
+        "AUTHORITY_CEREMONY",
+        "_apply_grants",
+        "_start_agents",
+        "_register_migration_run",
+        "completed_steps.append",
+        "store.save",
+        '"next_step"',
     ):
         assert forbidden not in body, forbidden

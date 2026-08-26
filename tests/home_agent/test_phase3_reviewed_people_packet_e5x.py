@@ -221,3 +221,152 @@ def test_cli_is_fixed_path_root_only_and_content_minimized() -> None:
     assert "private_review_sha256" in source
     assert '"people": people' not in source.split("def stage()", 1)[1]
     assert 'authoritative_parent_facts_created": 0' in source
+
+
+def _two_column_plan(module: ModuleType):
+    """A plan shaped like the real legacy store.
+
+    Every identity row carries a `relationship_type`, and rows that name a more
+    specific relationship also carry a `relationship_subrole`. The original
+    fixture gave each person a single candidate, so it never exercised the pair
+    that the registration kernel rejects.
+    """
+
+    migration = sys.modules["migrate_legacy_identity"]
+    plan = _plan(module)
+    people = plan.people
+    roles = (
+        # Type only -- no subrole on the legacy row.
+        migration.RoleCandidate(
+            people[0].person_id, "me", "relationship_type", 7, "a" * 64, "me-type"
+        ),
+        # Type + subrole on one row, in both orderings.
+        migration.RoleCandidate(
+            people[1].person_id,
+            "family_immediate",
+            "relationship_type",
+            4,
+            "b" * 64,
+            "amelia-type",
+        ),
+        migration.RoleCandidate(
+            people[1].person_id,
+            "parent",
+            "relationship_subrole",
+            4,
+            "b" * 64,
+            "amelia-subrole",
+        ),
+        migration.RoleCandidate(
+            people[2].person_id,
+            "parent",
+            "relationship_subrole",
+            5,
+            "c" * 64,
+            "senior-subrole",
+        ),
+        migration.RoleCandidate(
+            people[2].person_id,
+            "family_immediate",
+            "relationship_type",
+            5,
+            "c" * 64,
+            "senior-type",
+        ),
+    )
+    return migration.MigrationPlan(
+        schema_version=plan.schema_version,
+        people=people,
+        aliases=plan.aliases,
+        external_bindings=plan.external_bindings,
+        role_candidates=roles,
+        relationship_candidates=plan.relationship_candidates,
+        digest=plan.digest,
+    )
+
+
+def _labels(review) -> dict[str, list[dict]]:
+    return {
+        person["person_id"]: person["legacy_role_labels"]
+        for person in review["people"]
+    }
+
+
+def test_one_role_candidate_per_person_survives_the_two_column_legacy_shape() -> None:
+    """The 0008 kernel refuses two decisions of one kind on one source item.
+
+    A legacy row splits one relationship across `relationship_type` and
+    `relationship_subrole`. Emitting both made every packet containing a
+    subrole unregistrable.
+    """
+
+    module = _module()
+    review = module.compile_private_review(
+        _two_column_plan(module), sqlite_snapshot_sha256="a" * 64
+    )["private_review"]
+
+    for person_id, labels in _labels(review).items():
+        assert len(labels) <= 1, f"{person_id} carries {len(labels)} role candidates"
+
+
+def test_the_subrole_wins_and_the_type_is_the_fallback() -> None:
+    """The specific term carries more than the enum it implies."""
+
+    module = _module()
+    review = module.compile_private_review(
+        _two_column_plan(module), sqlite_snapshot_sha256="a" * 64
+    )["private_review"]
+    chosen = {
+        person_id: labels[0]["role_label"]
+        for person_id, labels in _labels(review).items()
+        if labels
+    }
+
+    assert chosen == {
+        "11111111-1111-4111-8111-111111111111": "me",  # type, no subrole
+        "22222222-2222-4222-8222-222222222222": "parent",  # subrole beats type
+        "33333333-3333-4333-8333-333333333333": "parent",  # order does not matter
+    }
+
+
+def test_the_collapse_keeps_both_readiness_scans_resolving() -> None:
+    """`slice_readiness` matches exact strings, and the two live on
+    opposite columns: "me" is only ever a type, "parent" only ever a subrole.
+    A collapse that dropped either column would strand the parent slice."""
+
+    module = _module()
+    review = module.compile_private_review(
+        _two_column_plan(module), sqlite_snapshot_sha256="a" * 64
+    )["private_review"]
+
+    assert review["slice_readiness"]["me_candidate_person_ids"] == [
+        "11111111-1111-4111-8111-111111111111"
+    ]
+    assert review["slice_readiness"]["parent_candidate_person_ids"] == [
+        "22222222-2222-4222-8222-222222222222",
+        "33333333-3333-4333-8333-333333333333",
+    ]
+
+
+def test_the_collapse_is_deterministic_under_input_reordering() -> None:
+    """The review is signed, so the same plan must compile byte-identically."""
+
+    module = _module()
+    migration = sys.modules["migrate_legacy_identity"]
+    plan = _two_column_plan(module)
+    reversed_plan = migration.MigrationPlan(
+        schema_version=plan.schema_version,
+        people=plan.people,
+        aliases=plan.aliases,
+        external_bindings=plan.external_bindings,
+        role_candidates=tuple(reversed(plan.role_candidates)),
+        relationship_candidates=plan.relationship_candidates,
+        digest=plan.digest,
+    )
+
+    first = module.compile_private_review(plan, sqlite_snapshot_sha256="a" * 64)
+    second = module.compile_private_review(
+        reversed_plan, sqlite_snapshot_sha256="a" * 64
+    )
+
+    assert first == second

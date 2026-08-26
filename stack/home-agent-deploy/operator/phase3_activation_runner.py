@@ -67,6 +67,11 @@ FINALIZER_DOCUMENT = PRIVATE_IDENTITY_ROOT / "identity-finalizer-document-e5y.js
 FINALIZER_RECEIPT = PRIVATE_IDENTITY_ROOT / "identity-signing-receipt-e5y.json"
 IDENTITY_SIGNING_STATE = PRIVATE_IDENTITY_ROOT / "identity-signing-state-e5y.json"
 REGISTRATION_CONTRACT = "identity-migration-registration-e5ak-v1"
+EVIDENCE_CONTRACTS = {
+    "record-freeze-evidence": "identity-writer-freeze-evidence-e5an-v1",
+    "record-privacy-evidence": "identity-privacy-cutover-evidence-e5an-v1",
+    "record-cutover-candidate": "identity-semantic-cutover-candidate-e5an-v1",
+}
 RETIREMENT_CONTRACT = "phase3-identity-finalization-retirement-e5am-v1"
 RETIREMENT_REASON = "finalized_run_expired_before_registration"
 RETIREMENT_RECEIPT_PREFIX = "identity-finalization-retirement-"
@@ -80,6 +85,12 @@ RETIRABLE_PHASES = frozenset({"staged", "review_signed", "finalized"})
 EDGE_RECEIPT = PRIVATE_IDENTITY_ROOT / "edge-privacy-policy-receipt-e5ac.json"
 WRITER_OBSERVATION = PRIVATE_IDENTITY_ROOT / "writer-freeze-observation-e5z.json"
 PRIVACY_OBSERVATION = PRIVATE_IDENTITY_ROOT / "privacy-cutover-observation-e5aa.json"
+WRITER_FREEZE_EVIDENCE = (
+    PRIVATE_IDENTITY_ROOT / "writer-freeze-evidence-e5z.json"
+)
+PRIVACY_CUTOVER_EVIDENCE = (
+    PRIVATE_IDENTITY_ROOT / "privacy-cutover-evidence-e5aa.json"
+)
 CUTOVER_PACKET = PRIVATE_IDENTITY_ROOT / "semantic-cutover-packet-e5ab.json"
 CUTOVER_RECEIPT = PRIVATE_IDENTITY_ROOT / "semantic-cutover-packet-receipt-e5ab.json"
 COMPLETION_RECEIPT = STATE_ROOT / "runner-completion-e5ad.json"
@@ -1381,9 +1392,7 @@ class Backend:
             "capture_edge_privacy_receipt": self._capture_edge_receipt,
             "stop_home_assistant": lambda _state: self._stop_ha(),
             "freeze_legacy_writer": self._freeze_legacy_writer,
-            "sign_writer_evidence": lambda _state: self._json(
-                [str(SIGNING_LAUNCHER), "freeze-evidence"], timeout=900
-            ),
+            "sign_writer_evidence": self._sign_writer_evidence,
             "sign_privacy_evidence": self._sign_privacy_evidence,
             "commit_semantic_cutover": self._commit_semantic_cutover,
             "restart_home_assistant": lambda _state: self._restart_ha(),
@@ -1924,18 +1933,50 @@ class Backend:
         raw = ha_transport._remote("python3", REMOTE_OBSERVER, timeout=300)
         self._atomic_private(WRITER_OBSERVATION, raw)
 
+    def _record_evidence(self, command: str, path: Path) -> None:
+        """Carry one signed evidence packet into the database.
+
+        The ceremony signs these to private files and, until the evidence
+        writer existed, nothing carried them any further — the semantic cutover
+        kernel reads four tables that no production code wrote. Recording
+        happens in the same step that signs, so a signed packet and its rows
+        cannot drift apart.
+        """
+
+        document = self._private_document(path)
+        request = canonical_bytes(
+            {
+                "contract": EVIDENCE_CONTRACTS[command],
+                "document_b64": base64.b64encode(document).decode("ascii"),
+            }
+        )
+        self._json(
+            [sys.executable, str(AUTHORITY_ADMISSION), command],
+            input_bytes=request,
+            timeout=300,
+        )
+
+    def _sign_writer_evidence(self, _state: Mapping[str, Any]) -> None:
+        self._json([str(SIGNING_LAUNCHER), "freeze-evidence"], timeout=900)
+        self._record_evidence("record-freeze-evidence", WRITER_FREEZE_EVIDENCE)
+
     def _sign_privacy_evidence(self, _state: Mapping[str, Any]) -> None:
         if PRIVACY_OBSERVATION.exists() or PRIVACY_OBSERVATION.is_symlink():
             self._private_document(PRIVACY_OBSERVATION)
         else:
             self._json([sys.executable, str(PRIVACY_OBSERVER)], timeout=180)
         self._json([str(SIGNING_LAUNCHER), "privacy-evidence"], timeout=900)
+        self._record_evidence("record-privacy-evidence", PRIVACY_CUTOVER_EVIDENCE)
 
     def _commit_semantic_cutover(self, _state: Mapping[str, Any]) -> None:
         probe = self._probe("authority")
         if probe.get("semantic_authority_current") is True:
             return
         self._json([str(SIGNING_LAUNCHER), "cutover-packet"], timeout=900)
+        # The authority candidate carries the writer evidence id and all six
+        # privacy check ids, so it can only be recorded after those rows exist,
+        # and the admission below carries foreign keys to it.
+        self._record_evidence("record-cutover-candidate", CUTOVER_PACKET)
         packet_raw = self._private_document(CUTOVER_PACKET)
         receipt = parse_canonical_json(
             self._private_document(CUTOVER_RECEIPT), maximum=MAX_OUTPUT

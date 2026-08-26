@@ -18,9 +18,20 @@ MAX_REQUEST_BYTES = 5_593_088
 
 @dataclass(frozen=True, slots=True)
 class AdmissionCommand:
-    name: Literal["admit-finalizer", "admit-cutover"]
+    name: Literal[
+        "admit-finalizer",
+        "admit-cutover",
+        "record-freeze-evidence",
+        "record-privacy-evidence",
+        "record-cutover-candidate",
+    ]
     entrypoint: str
     result_contract: str
+    # The evidence writer records rows rather than admitting one document, so
+    # it reports a different status and returns the identifiers it wrote.
+    result_status: str = "admitted"
+    result_key: str = "admission_id"
+    result_is_list: bool = False
 
 
 COMMANDS = {
@@ -35,6 +46,30 @@ COMMANDS = {
             "admit-cutover",
             "identity-admit-cutover",
             "identity-cutover-admission-result-e5u-v1",
+        ),
+        AdmissionCommand(
+            "record-freeze-evidence",
+            "identity-evidence-freeze",
+            "identity-writer-freeze-evidence-result-e5an-v1",
+            result_status="recorded",
+            result_key="written",
+            result_is_list=True,
+        ),
+        AdmissionCommand(
+            "record-privacy-evidence",
+            "identity-evidence-privacy",
+            "identity-privacy-cutover-evidence-result-e5an-v1",
+            result_status="recorded",
+            result_key="written",
+            result_is_list=True,
+        ),
+        AdmissionCommand(
+            "record-cutover-candidate",
+            "identity-evidence-cutover",
+            "identity-semantic-cutover-candidate-result-e5an-v1",
+            result_status="recorded",
+            result_key="written",
+            result_is_list=True,
         ),
     )
 }
@@ -111,8 +146,10 @@ def _invoke(command: AdmissionCommand, request: bytes) -> dict[str, str]:
     if (
         not isinstance(value, dict)
         or value.get("contract") != command.result_contract
-        or value.get("status") != "admitted"
-        or not isinstance(value.get("admission_id"), str)
+        or value.get("status") != command.result_status
+        or not isinstance(
+            value.get(command.result_key), list if command.result_is_list else str
+        )
     ):
         raise AuthorityAdmissionError("authority admission result is invalid")
     return value
@@ -134,10 +171,10 @@ def execute(command: AdmissionCommand) -> dict[str, str]:
     finally:
         activation._unlock_activation(descriptor)
     return {
-        "admission_id": result["admission_id"],
+        command.result_key: result[command.result_key],
         "contract": CONTRACT,
         "operation": command.name,
-        "status": "admitted",
+        "status": command.result_status,
     }
 
 

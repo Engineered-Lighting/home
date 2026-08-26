@@ -370,5 +370,33 @@ def test_report_diagnostic_is_silent_unless_explicitly_enabled(
 
 def test_executor_no_longer_discards_subprocess_diagnostics() -> None:
     source = EXECUTOR.read_text(encoding="utf-8")
-    assert "stderr=subprocess.DEVNULL" not in source
-    assert "stderr=subprocess.PIPE" in source
+    # Captured only where it can be shown. A subprocess whose output may never
+    # be printed is not buffered at all: the restore drill and the backup
+    # writers run for up to an hour, and their stderr can carry People rows.
+    assert "stderr=subprocess.PIPE if diagnostic else subprocess.DEVNULL" in source
+    assert "stderr=subprocess.DEVNULL," not in source
+
+
+def test_stderr_is_captured_only_when_it_can_be_shown(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Drive a real subprocess, not a stubbed result.
+
+    A subprocess whose output may never be printed is not buffered at all. The
+    restore drill and both backup writers run for up to an hour and are never
+    diagnosable, so capturing their stderr would cost memory and would read
+    household rows into this process for no reason.
+    """
+
+    module = _module()
+    noisy = ["sh", "-c", "echo diagnostic-canary >&2; exit 1"]
+
+    with pytest.raises(module.MigrationExecutionError) as quiet:
+        module._run(noisy, timeout=30)
+    assert quiet.value.code == "exit_nonzero"
+    assert capsys.readouterr().err == ""
+
+    with pytest.raises(module.MigrationExecutionError) as loud:
+        module._run(noisy, timeout=30, diagnostic=True)
+    assert loud.value.code == "exit_nonzero"
+    assert "diagnostic-canary" in capsys.readouterr().err

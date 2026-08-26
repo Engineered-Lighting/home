@@ -1079,8 +1079,10 @@ def test_runner_subprocess_refusals_carry_categorical_codes(
 
 def test_runner_no_longer_discards_subprocess_diagnostics() -> None:
     source = RUNNER.read_text(encoding="utf-8")
-    assert "stderr=subprocess.DEVNULL" not in source
-    assert "stderr=subprocess.PIPE" in source
+    # Captured only where it can be shown, so a People-bearing subprocess's
+    # output is never read into this process at all.
+    assert "stderr=subprocess.PIPE if diagnostic else subprocess.DEVNULL" in source
+    assert "stderr=subprocess.DEVNULL," not in source
     assert "diagnostic=True" in source
 
 

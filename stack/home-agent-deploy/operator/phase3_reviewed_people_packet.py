@@ -32,7 +32,6 @@ PRIVATE_ROOT = Path("/srv/home-agent/private/phase3-identity")
 SOURCE_PATH = PRIVATE_ROOT / "identity.db"
 REVIEW_PATH = PRIVATE_ROOT / "people-review-e5x.json"
 MAX_REVIEW_BYTES = 4 * 1024 * 1024
-SUBROLE_FIELD = "relationship_subrole"
 
 
 class ReviewPacketError(RuntimeError):
@@ -78,27 +77,9 @@ def _person_private_review(plan: MigrationPlan) -> list[dict[str, Any]]:
                 "status": binding.status,
             }
         )
-    # The legacy store expresses one relationship across two columns: a closed
-    # `relationship_type` enum and a free-text `relationship_subrole`. Emitting
-    # a candidate per column would put two `legacy_role_candidate` decisions on
-    # one source item, and the 0008 registration kernel refuses exactly that --
-    # outside `privacy_directive` a source item carries at most one decision per
-    # kind. Any legacy row with a subrole would make the packet unregistrable.
-    #
-    # Collapse to the single most specific label: the subrole when the row has
-    # one, the type otherwise. `slice_readiness` scans these labels for exact
-    # strings and both survive the collapse, because "me" only ever appears as a
-    # type and "parent" only ever as a subrole.
-    candidates_by_person: dict[str, list[Any]] = defaultdict(list)
-    for role in plan.role_candidates:
-        candidates_by_person[role.person_id].append(role)
     roles: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for person_id, candidates in candidates_by_person.items():
-        role = min(
-            candidates,
-            key=lambda item: (item.source_field != SUBROLE_FIELD, item.candidate_id),
-        )
-        roles[person_id].append(
+    for role in plan.role_candidates:
+        roles[role.person_id].append(
             {
                 "authoritative": False,
                 "candidate_id": role.candidate_id,

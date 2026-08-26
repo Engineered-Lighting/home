@@ -355,6 +355,73 @@ class LegacyIdentityMigrationTests(unittest.TestCase):
             [path for path, _body in core.posts],
         )
 
+    def test_one_role_candidate_per_identity_row(self) -> None:
+        """A legacy row is one relationship, not two.
+
+        `relationship_type` and `relationship_subrole` describe a single
+        relationship. The registration kernel accepts at most one decision per
+        kind on a source item, so emitting a candidate per column made every
+        packet containing a subrole fail with
+        `identity_migration_manifest_invalid` -- after review and signing.
+
+        The fixture already models the pair: Amelia carries
+        `family_immediate` + `parent`.
+        """
+
+        create_legacy_db(self.database)
+        plan = migration.load_plan(self.database)
+
+        per_person: dict[str, int] = {}
+        for role in plan.role_candidates:
+            per_person[role.person_id] = per_person.get(role.person_id, 0) + 1
+
+        self.assertTrue(per_person, "expected at least one role candidate")
+        for person_id, count in per_person.items():
+            self.assertEqual(count, 1, f"{person_id} produced {count} role candidates")
+
+    def test_the_subrole_is_preferred_and_the_type_is_the_fallback(self) -> None:
+        """The specific term survives; the enum it implies does not.
+
+        Readiness detection depends on this exact ordering: "me" only ever
+        appears as a type on a row with no subrole, and "parent" only ever
+        appears as a subrole.
+        """
+
+        create_legacy_db(self.database)
+        plan = migration.load_plan(self.database)
+        by_label = {role.role_label: role.source_field for role in plan.role_candidates}
+
+        # Amelia: family_immediate + parent -> the subrole wins.
+        self.assertIn("parent", by_label)
+        self.assertEqual(by_label["parent"], "relationship_subrole")
+        self.assertNotIn("family_immediate", by_label)
+
+        # Marcelo: type only, no subrole -> the type is kept.
+        self.assertIn("me", by_label)
+        self.assertEqual(by_label["me"], "relationship_type")
+
+    def test_a_skipped_subrole_falls_through_to_the_type(self) -> None:
+        """`unknown` and `do_not_identify` are not labels, so they do not win."""
+
+        create_legacy_db(self.database)
+        connection = sqlite3.connect(self.database)
+        connection.execute(
+            "UPDATE identities SET relationship_subrole = ? WHERE uuid = ?",
+            ("unknown", PARENT_ID),
+        )
+        connection.commit()
+        connection.close()
+
+        plan = migration.load_plan(self.database)
+        parent_roles = [
+            role for role in plan.role_candidates if role.person_id ==
+            migration._stable_uuid(PARENT_ID, "legacy role")
+        ]
+
+        self.assertEqual(len(parent_roles), 1)
+        self.assertEqual(parent_roles[0].role_label, "family_immediate")
+        self.assertEqual(parent_roles[0].source_field, "relationship_type")
+
     def test_partial_crash_rerun_is_exactly_idempotent(self) -> None:
         create_legacy_db(self.database)
         plan = migration.load_plan(self.database)

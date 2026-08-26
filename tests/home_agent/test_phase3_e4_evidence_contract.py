@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[2]
 OPERATOR = ROOT / "stack/home-agent-deploy/operator"
 CORE = ROOT / "stack/services/home-agent-core"
 SEEDER = CORE / "tests/seed_phase3_identity_semantic_cutover_e4_success.py"
+RUNNER = ROOT / "stack/home-agent-deploy/operator/phase3_activation_runner.py"
 CUTOVER_MIGRATION = (
     CORE / "alembic/versions/0014_identity_semantic_cutover_e4.py"
 )
@@ -327,3 +328,53 @@ def test_writer_replay_is_verified_rather_than_assumed() -> None:
     assert "hide_parameters=True" in source
     assert "print(error" not in source
     assert "str(error)" not in source
+
+
+def test_each_signing_step_records_what_it_signed() -> None:
+    """Signing and recording happen in the same step, in schema order.
+
+    The ceremony signed these packets to private files and, until the evidence
+    writer existed, nothing carried them any further. Recording in the step
+    that signs means a signed packet and its rows cannot drift apart.
+    """
+
+    runner = RUNNER.read_text(encoding="utf-8")
+
+    freeze = runner.split("def _sign_writer_evidence", 1)[1].split("def ", 1)[0]
+    assert '"freeze-evidence"' in freeze
+    assert '_record_evidence("record-freeze-evidence"' in freeze
+
+    privacy = runner.split("def _sign_privacy_evidence", 1)[1].split("def ", 1)[0]
+    assert '"privacy-evidence"' in privacy
+    assert '_record_evidence("record-privacy-evidence"' in privacy
+
+    cutover = runner.split("def _commit_semantic_cutover", 1)[1].split("\n    def ", 1)[0]
+    assert '"cutover-packet"' in cutover
+    assert '_record_evidence("record-cutover-candidate"' in cutover
+    # The candidate references the writer evidence and all six check ids, and
+    # the admission references the candidate, so the order is forced.
+    assert cutover.index("_record_evidence") < cutover.index(
+        "identity-cutover-admission"
+    )
+
+
+def test_the_bridge_reaches_every_evidence_arm() -> None:
+    """Each writer arm is reachable, and each expects the writer's own result."""
+
+    bridge = (
+        ROOT / "stack/home-agent-deploy/operator/phase3_authority_admission.py"
+    ).read_text(encoding="utf-8")
+    writer = _writer()
+    runner = RUNNER.read_text(encoding="utf-8")
+
+    for command, operation in (
+        ("record-freeze-evidence", "freeze"),
+        ("record-privacy-evidence", "privacy"),
+        ("record-cutover-candidate", "cutover"),
+    ):
+        assert f'"{command}"' in bridge, command
+        assert f'"{command}"' in runner, command
+        # The runner must send the contract the writer arm actually expects.
+        assert writer.OPERATIONS[operation].contract in runner, operation
+        assert writer.OPERATIONS[operation].result_contract in bridge, operation
+    assert '"recorded"' in bridge

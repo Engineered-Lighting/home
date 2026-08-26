@@ -1,6 +1,6 @@
 ---
 title: Install the source-projection loader the freeze observer imports
-target: deploy
+target: backend
 type: fixed
 ---
 

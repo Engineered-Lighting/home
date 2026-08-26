@@ -179,6 +179,42 @@ All four `REMOTE_*` constants the runner actually uses resolve. An earlier
 audit note also listed `legacy_identity_fence.py` as required; it is **not**
 referenced by any remote path constant, and its absence is not a blocker.
 
+## Step 17's registration is pre-verified against the real packet
+
+Separate from the blockers above, and worth recording because it removes the
+largest unknown in the timed window.
+
+The manifest the runner assembles from the live private signing state was
+checked against the `0008` kernel's rules, read-only, without touching the
+database:
+
+```
+manifest bytes : 52137
+source items   : 57
+decisions      : 79
+
+46/46 kernel structural rules pass
+```
+
+Covering the exact three-key manifest; the run's exact 30-key set; uuid7 and
+uuid4-or-7 shapes; all twelve 64-hex commitments and the 128-hex signature; the
+fixed contract and algorithm literals; numeric typing; counts matching their
+arrays; dense zero-based ordinals on both arrays; uniqueness of source ids, row
+key commitments, decision ids and decision commitments; every decision
+resolving to a source item and every source item carrying a decision; the
+source-kind by decision-kind compatibility matrix; and global uniqueness of
+`(decision_kind, candidate_commitment)` among applied decisions.
+
+The kernel's liveness gate would still reject this particular packet, whose run
+expired 2026-08-17. Every rule above is independent of expiry, so a freshly
+staged packet built the same way will satisfy them too.
+
+**Cheap follow-up worth taking:** expose that check as an untimed runner verb
+(`validate-manifest`, reusing `Backend._registration_manifest`) so the operator
+can confirm structural validity *before* starting the ten-minute window rather
+than discovering a problem inside it. The logic already exists; only the verb
+and its tests are missing.
+
 ## Also verified sound — do not re-audit
 
 - Signing-launcher arm names, and each arm's credential name set against the

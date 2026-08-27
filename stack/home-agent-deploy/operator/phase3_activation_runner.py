@@ -2233,20 +2233,25 @@ class Backend:
 
     @staticmethod
     def _writer_evidence_resumable() -> bool:
-        """Is the measurement the signed evidence is bound to still usable?
+        """Is the freeze time inside the signed evidence still usable?
 
-        Read the observation rather than the evidence: the evidence is compiled
-        from it and carries its `observed_at` verbatim as the freeze time every
-        downstream window is counted from.
+        Read the time out of the evidence rather than off the observation on
+        disk. `verified_at` is the value the step 22 observer measures and the
+        cutover kernel compares against the finalization, and taking it from
+        the signed document means no separate file has to still agree with it
+        for the answer to be right.
         """
 
         try:
-            raw = Backend._private_document(WRITER_OBSERVATION)
+            raw = Backend._private_document(WRITER_FREEZE_EVIDENCE)
             document = parse_canonical_json(raw, maximum=MAX_OUTPUT)
             if not isinstance(document, Mapping):
                 return False
-            observed_at = datetime.fromisoformat(
-                str(document["observed_at"]).replace("Z", "+00:00")
+            freeze = document["enforced_writer_freeze"]
+            if not isinstance(freeze, Mapping):
+                return False
+            verified_at = datetime.fromisoformat(
+                str(freeze["verified_at"]).replace("Z", "+00:00")
             )
         except (
             ActivationRunnerError,
@@ -2256,10 +2261,10 @@ class Backend:
             OSError,
         ):
             return False
-        if observed_at.tzinfo is None:
+        if verified_at.tzinfo is None:
             return False
-        age = (datetime.now(UTC) - observed_at).total_seconds()
-        # A measurement slightly in the future is ordinary cross-host skew.
+        age = (datetime.now(UTC) - verified_at).total_seconds()
+        # A freeze time slightly in the future is ordinary cross-host skew.
         return -60 <= age <= WRITER_EVIDENCE_RESUME_SECONDS
 
     def _sign_writer_evidence(self, state: Mapping[str, Any]) -> None:

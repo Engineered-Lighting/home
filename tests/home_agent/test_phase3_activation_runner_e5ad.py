@@ -2126,15 +2126,28 @@ def test_step_21_observes_when_no_measurement_is_on_disk(
     assert not list(tmp_path.glob("*.stale-*.json"))
 
 
+def _canonical(value) -> str:
+    return json.dumps(value, separators=(",", ":"), sort_keys=True)
+
+
 def _measure(module, age_seconds: float) -> None:
     """Write an observation stamped `age_seconds` in the past."""
 
     observed = datetime.now(UTC) - timedelta(seconds=age_seconds)
     module.WRITER_OBSERVATION.write_text(
-        json.dumps(
-            {"observed_at": observed.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"},
-            separators=(",", ":"),
-            sort_keys=True,
+        _canonical({"observed_at": observed.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"}),
+        encoding="utf-8",
+    )
+
+
+def _sign(module, age_seconds: float) -> None:
+    """Write signed evidence whose freeze time is `age_seconds` in the past."""
+
+    verified = datetime.now(UTC) - timedelta(seconds=age_seconds)
+    stamp = verified.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    module.WRITER_FREEZE_EVIDENCE.write_text(
+        _canonical(
+            {"enforced_writer_freeze": {"enforced_at": stamp, "verified_at": stamp}}
         ),
         encoding="utf-8",
     )
@@ -2155,12 +2168,11 @@ def test_step_21_pauses_rather_than_refresh_under_aged_signed_evidence(
     module = _module()
     calls = _writer_evidence_harness(module, monkeypatch, tmp_path)
     _measure(module, 4000)
-    target = (
-        module.WRITER_FREEZE_EVIDENCE
-        if existing == "evidence"
-        else module.WRITER_FREEZE_RECEIPT
-    )
-    target.write_text("{}", encoding="utf-8")
+    _sign(module, 4000)
+    if existing == "receipt":
+        # Only the receipt survived; the freeze time cannot be read at all.
+        module.WRITER_FREEZE_EVIDENCE.unlink()
+        module.WRITER_FREEZE_RECEIPT.write_text("{}", encoding="utf-8")
 
     with pytest.raises(module.ActivationPause) as caught:
         module.Backend()._sign_writer_evidence({})
@@ -2185,7 +2197,7 @@ def test_step_21_resumes_signed_evidence_that_is_still_inside_the_window(
     module = _module()
     calls = _writer_evidence_harness(module, monkeypatch, tmp_path)
     _measure(module, 5)
-    module.WRITER_FREEZE_EVIDENCE.write_text("{}", encoding="utf-8")
+    _sign(module, 5)
 
     module.Backend()._sign_writer_evidence({})
 
@@ -2198,19 +2210,39 @@ def test_step_21_resumes_signed_evidence_that_is_still_inside_the_window(
     assert not list(tmp_path.glob("*.stale-*.json"))
 
 
-def test_step_21_will_not_resume_evidence_whose_measurement_is_unreadable(
+def test_step_21_reads_the_freeze_time_out_of_the_evidence_itself(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Fail closed: an unreadable or missing measurement is not a fresh one."""
+    """A fresh observation beside stale evidence must not read as resumable.
+
+    The ceremony resumes from the evidence and never re-reads the observation,
+    so the only freeze time that matters is the one inside the signed document.
+    """
 
     module = _module()
     _writer_evidence_harness(module, monkeypatch, tmp_path)
-    module.WRITER_FREEZE_EVIDENCE.write_text("{}", encoding="utf-8")
+    _measure(module, 1)
+    _sign(module, 4000)
 
-    with pytest.raises(module.ActivationPause):
+    with pytest.raises(module.ActivationPause) as caught:
         module.Backend()._sign_writer_evidence({})
+    assert str(caught.value) == "awaiting_writer_evidence_review"
 
-    module.WRITER_OBSERVATION.write_text("{}", encoding="utf-8")
+
+@pytest.mark.parametrize(
+    "body",
+    ["{}", '{"enforced_writer_freeze":{}}', '{"enforced_writer_freeze":"x"}'],
+)
+def test_step_21_will_not_resume_evidence_it_cannot_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, body: str
+) -> None:
+    """Fail closed: an unreadable freeze time is not a fresh one."""
+
+    module = _module()
+    _writer_evidence_harness(module, monkeypatch, tmp_path)
+    _measure(module, 1)
+    module.WRITER_FREEZE_EVIDENCE.write_text(body, encoding="utf-8")
+
     with pytest.raises(module.ActivationPause):
         module.Backend()._sign_writer_evidence({})
 

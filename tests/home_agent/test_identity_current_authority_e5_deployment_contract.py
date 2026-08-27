@@ -17,7 +17,7 @@ FUNCTION = "operations.evaluate_current_identity_semantic_authority(uuid)"
 CALLER_ROLE = "home_agent_binding_operator"
 KERNEL_ROLE = "home_agent_identity_authority_kernel"
 PINNED_E3_CATALOG_SHA256 = (
-    "123326a4620d3dd123773819d95255e40813a5a949f406570252ff1f7031f29a"
+    "b85d05e7d2d45671a0107a75658474450c0ab927d86a2ec4809732169ee37192"
 )
 PINNED_E4_CATALOG_SHA256 = (
     "a96aeb68c7c5656988088ae74539760c6a811320849f01c122e02141f87eff27"

@@ -104,7 +104,7 @@ E5B_CLEANUP_DOWNGRADE_EVIDENCE_ENV = (
 CATALOG_DIGEST_CONTRACTS = (
     (
         "e3",
-        "123326a4620d3dd123773819d95255e40813a5a949f406570252ff1f7031f29a",
+        "b85d05e7d2d45671a0107a75658474450c0ab927d86a2ec4809732169ee37192",
         "identity finalizer E3 catalog manifest mismatch",
     ),
     (

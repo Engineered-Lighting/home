@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import copy
+import hashlib
 from datetime import UTC, datetime, timedelta
 import importlib.util
 import json
@@ -2355,3 +2357,116 @@ def test_the_runner_and_the_ceremony_name_the_same_writer_freeze_artifacts() -> 
     assert module.WRITER_FREEZE_EVIDENCE == ceremony.EVIDENCE_PATH
     assert module.WRITER_FREEZE_RECEIPT == ceremony.RECEIPT_PATH
     assert module.WRITER_OBSERVATION == ceremony.OBSERVATION_PATH
+
+
+def test_jsonb_text_bytes_matches_postgres_object_rendering() -> None:
+    """The E4 kernel compares against PostgreSQL's own rendering, not RFC JSON.
+
+    `jsonb` orders object keys by length and then by bytes, and separates with
+    ", " and ": ". Both differ from `canonical_bytes`, which is why the wire
+    form has its own renderer.
+    """
+
+    module = _module()
+    rendered = module.jsonb_text_bytes(
+        {"admission_id": "b", "run_id": "a", "zz": "c", "az": "d"}
+    )
+
+    # length first, then bytewise: az, zz (2) < run_id (6) < admission_id (12)
+    assert rendered == (
+        b'{"az": "d", "zz": "c", "run_id": "a", "admission_id": "b"}'
+    )
+    assert b'", "' in rendered and b'": "' in rendered
+
+
+def test_jsonb_text_bytes_differs_from_canonical_bytes() -> None:
+    """Documents why both encodings exist -- they can never coincide."""
+
+    module = _module()
+    value = {"run_id": "a", "admission_id": "b"}
+
+    assert module.jsonb_text_bytes(value) != module.canonical_bytes(value)
+    # canonical_bytes sorts lexicographically and omits whitespace
+    assert module.canonical_bytes(value) == b'{"admission_id":"b","run_id":"a"}'
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"a": 1},                      # non-string value
+        {"a": {"b": "c"}},             # nested object
+        {"a": None},
+        ["not", "a", "mapping"],
+    ],
+)
+def test_jsonb_text_bytes_refuses_anything_but_a_string_only_object(value) -> None:
+    """The ordering is only well-defined for the shape the kernel requires."""
+
+    module = _module()
+    with pytest.raises(module.ActivationRunnerError):
+        module.jsonb_text_bytes(value)
+
+
+def test_step_23_submits_the_kernel_wire_form_to_both_hops(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The admission and the execution must carry identical bytes.
+
+    The kernel compares `sha256(submitted)` against the digest the admission
+    recorded, so the two hops agree only if both are handed the same
+    rendering -- and it must be the one PostgreSQL produces.
+    """
+
+    module = _module()
+    document = {"run_id": "a" * 4, "admission_id": "01a0415b-9356-7170-80a1-6c305a3c62e5"}
+    packet = {"cutover_document": document}
+    packet_raw = module.canonical_bytes(packet)
+    canonical_document = module.canonical_bytes(document)
+    receipt = {
+        "admission_id": document["admission_id"],
+        "cutover_packet_sha256": hashlib.sha256(packet_raw).hexdigest(),
+        "cutover_document_sha256": hashlib.sha256(canonical_document).hexdigest(),
+    }
+    submitted: list[bytes] = []
+
+    monkeypatch.setattr(
+        module.Backend, "_probe", lambda self, name: {"semantic_authority_current": False}
+    )
+    monkeypatch.setattr(module.Backend, "_erasure_current", lambda self, state: None)
+    monkeypatch.setattr(module.Backend, "_record_evidence", lambda self, c, p: None)
+    monkeypatch.setattr(
+        module.Backend,
+        "_private_document",
+        staticmethod(
+            lambda path: packet_raw
+            if path == module.CUTOVER_PACKET
+            else module.canonical_bytes(receipt)
+        ),
+    )
+
+    class _Stop(RuntimeError):
+        pass
+
+    def _json(self, command, input_bytes=None, **kwargs):
+        if input_bytes is not None:
+            submitted.append(input_bytes)
+            if len(submitted) == 2:
+                raise _Stop("both hops captured")
+        return b"{}"
+
+    monkeypatch.setattr(module.Backend, "_json", _json)
+
+    with pytest.raises(_Stop):
+        module.Backend()._commit_semantic_cutover({})
+
+    assert len(submitted) == 2, "admission and execution must both be submitted"
+    payloads = [
+        module.parse_canonical_json(item, maximum=module.MAX_OUTPUT)
+        for item in submitted
+    ]
+    documents = {item["document_b64"] for item in payloads}
+    assert len(documents) == 1, "the two hops must carry identical document bytes"
+
+    wire = base64.b64decode(documents.pop())
+    assert wire == module.jsonb_text_bytes(document)
+    assert wire != canonical_document, "the wire form must not be RFC-canonical"

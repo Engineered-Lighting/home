@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import UTC, datetime, timedelta
 import importlib.util
 import json
 from pathlib import Path
@@ -1781,5 +1782,124 @@ def test_permit_recovery_runs_no_migration_and_never_advances_the_journal() -> N
         "completed_steps.append",
         "store.save",
         '"next_step"',
+    ):
+        assert forbidden not in body, forbidden
+
+
+SPENT_ADMISSION = {
+    "contract": "phase3-activation-probe-e5ac-v1",
+    "probe": "migration",
+    "reviewed_run_count": 1,
+    "finalizer_admission_count": 1,
+    "consumed_admission_count": 0,
+    "finalization_count": 0,
+    "expired_finalization_retirable": False,
+}
+
+
+def _admission_backend(module, monkeypatch, *, state_bytes=None, probe=None):
+    backend = module.Backend()
+    monkeypatch.setattr(
+        module.Backend,
+        "_private_document",
+        staticmethod(lambda path: state_bytes or _finalized_state(module)),
+    )
+    monkeypatch.setattr(
+        module.Backend, "_probe", lambda self, name: probe or SPENT_ADMISSION
+    )
+    monkeypatch.setattr(module.Backend, "_atomic_private", staticmethod(lambda p, r: None))
+    monkeypatch.setattr(module.os, "rename", lambda a, b: None)
+    monkeypatch.setattr(module.Path, "exists", lambda self: False)
+    monkeypatch.setattr(module.Path, "is_symlink", lambda self: False)
+    return backend
+
+
+def test_admission_recovery_refuses_outside_the_finalizer_boundary() -> None:
+    """The spent admission only matters where the ceremony actually strands."""
+
+    module = _module()
+    store = MemoryStore(module)
+    runner = module.Runner(module.Backend(), store)
+
+    with pytest.raises(module.ActivationRunnerError):
+        runner.recover_finalizer_admission()
+
+    store.value = module.new_state("b" * 40)
+    with pytest.raises(module.ActivationRunnerError):
+        runner.recover_finalizer_admission()
+
+
+@pytest.mark.parametrize(
+    "probe",
+    (
+        {**SPENT_ADMISSION, "finalization_count": 1},
+        {**SPENT_ADMISSION, "consumed_admission_count": 1},
+        {**SPENT_ADMISSION, "finalizer_admission_count": 0},
+    ),
+)
+def test_admission_recovery_refuses_once_the_database_acted_on_it(
+    monkeypatch: pytest.MonkeyPatch, probe
+) -> None:
+    """A finalized or consumed admission has projections behind it.
+
+    Re-minting past that would let a second run become a second semantic
+    authority, which no recovery may create.
+    """
+
+    module = _module()
+    backend = _admission_backend(module, monkeypatch, probe=probe)
+
+    with pytest.raises(module.ActivationRunnerError):
+        backend.recover_finalizer_admission(_parked(module, "commit_finalizer"))
+
+
+def test_admission_recovery_refuses_a_live_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A run still inside its window must be finalized, not recovered around."""
+
+    module = _module()
+    future = (datetime.now(UTC) + timedelta(hours=1)).strftime(
+        "%Y-%m-%dT%H:%M:%S.%f"
+    ) + "Z"
+    backend = _admission_backend(
+        module, monkeypatch, state_bytes=_finalized_state(module, expires_at=future)
+    )
+
+    with pytest.raises(module.ActivationRunnerError):
+        backend.recover_finalizer_admission(_parked(module, "commit_finalizer"))
+
+
+def test_admission_recovery_rewinds_nothing_and_touches_one_field() -> None:
+    source = RUNNER.read_text(encoding="utf-8")
+    body = source.split("    def recover_finalizer_admission", 2)[2].split(
+        "    def contain", 1
+    )[0]
+
+    assert 'state["operation_ids"]["commit_finalizer"] = outcome["replacement"]' in body
+    # Reading the cursor to gate on it is fine; writing it is not.
+    for forbidden in (
+        'state["next_step"] =',
+        'state["completed_steps"]',
+        '"completed_steps"]',
+        "_register_migration_run",
+    ):
+        assert forbidden not in body, forbidden
+
+
+def test_admission_recovery_writes_nothing_to_the_database() -> None:
+    source = RUNNER.read_text(encoding="utf-8")
+    body = source.split("    def recover_finalizer_admission", 1)[1].split(
+        "    def retire_expired_finalization", 1
+    )[0]
+
+    # One probe, read-only. No writer, no kernel call, no migration.
+    assert 'self._probe("migration")' in body
+    for forbidden in (
+        "AUTHORITY_ADMISSION",
+        "AUTHORITY_CEREMONY",
+        "MIGRATION_EXECUTOR",
+        "_apply_grants",
+        "store.save",
     ):
         assert forbidden not in body, forbidden

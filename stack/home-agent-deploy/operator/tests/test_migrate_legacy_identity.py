@@ -422,6 +422,77 @@ class LegacyIdentityMigrationTests(unittest.TestCase):
         self.assertEqual(parent_roles[0].role_label, "family_immediate")
         self.assertEqual(parent_roles[0].source_field, "relationship_type")
 
+    def _add_alias(self, person_id: str, alias: str, kind: str) -> None:
+        connection = sqlite3.connect(self.database)
+        connection.execute(
+            "INSERT INTO identity_aliases(identity_uuid, alias, alias_kind, created_at)"
+            " VALUES(?,?,?,?)",
+            (person_id, alias, kind, None),
+        )
+        connection.commit()
+        connection.close()
+
+    def test_one_alias_per_person_survives_duplicate_legacy_kinds(self) -> None:
+        """The legacy store lets one person hold one text under several kinds.
+
+        `identity.aliases` does not: UNIQUE(person_id, normalized_alias). The
+        duplicate only surfaces inside the finalizer kernel, as an opaque
+        `identity_finalizer_projection_conflict`, after the packet has been
+        reviewed, signed, and registered -- and registration cannot be undone.
+        The fixture already carries 'Mãe' as a nickname; add it again as a name,
+        which is exactly the shape that stranded the live activation.
+        """
+
+        create_legacy_db(self.database)
+        self._add_alias(PARENT_ID, "Mãe", "name")
+
+        plan = migration.load_plan(self.database)
+        keys = [
+            (alias.person_id, migration.normalized_alias(alias.alias))
+            for alias in plan.aliases
+        ]
+        mae = [a for a in plan.aliases if migration.normalized_alias(a.alias) == "mãe"]
+
+        self.assertEqual(len(keys), len(set(keys)))
+        self.assertEqual(len(mae), 1)
+        self.assertEqual(mae[0].alias_kind, "nickname")  # first row by id wins
+
+    def test_alias_dedupe_normalizes_the_way_the_column_does(self) -> None:
+        """Case and whitespace differences are the same alias to the store."""
+
+        create_legacy_db(self.database)
+        self._add_alias(PARENT_ID, "  mÃE  ", "name")
+
+        plan = migration.load_plan(self.database)
+        mae = [a for a in plan.aliases if migration.normalized_alias(a.alias) == "mãe"]
+
+        self.assertEqual(len(mae), 1)
+        self.assertEqual(mae[0].alias, "Mãe")
+        self.assertEqual(mae[0].alias_kind, "nickname")
+
+    def test_an_alias_claimed_by_two_people_fails_closed(self) -> None:
+        """Global UNIQUE(normalized_alias) makes this a conflict, not a dupe.
+
+        Choosing which person keeps the name is not the importer's decision,
+        so it refuses rather than silently dropping one.
+        """
+
+        create_legacy_db(self.database)
+        self._add_alias(CHILD_ID, "Mãe", "nickname")
+
+        with self.assertRaises(migration.MigrationError):
+            migration.load_plan(self.database)
+
+    def test_the_compiler_shares_one_alias_normalizer(self) -> None:
+        """Two copies that drift reintroduce the conflict silently."""
+
+        source = (
+            MODULE_PATH.parent / "reviewed_identity_packet_compiler.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("normalized_alias as _normalized_alias", source)
+        self.assertNotIn("def _normalized_alias", source)
+
     def test_partial_crash_rerun_is_exactly_idempotent(self) -> None:
         create_legacy_db(self.database)
         plan = migration.load_plan(self.database)

@@ -2475,7 +2475,7 @@ DECLARE
     '0021_parent_status_e5h'
   ]::text[];
   expected_e3_catalog_sha256 constant text :=
-    '123326a4620d3dd123773819d95255e40813a5a949f406570252ff1f7031f29a';
+    'b85d05e7d2d45671a0107a75658474450c0ab927d86a2ec4809732169ee37192';
   expected_finalizer_body_sha256 constant text :=
     '5578c4f0cbbaf0eb6ca69c427d113f94a24a752f67f4ba164bafde209f2594fe';
   expected_fence_body_sha256 constant text :=
@@ -3780,10 +3780,23 @@ BEGIN
              'comment', pg_catalog.obj_description(
                relation.oid, 'pg_class'
              ),
+             -- Columns are keyed and ordered by attname, never by
+             -- pg_attribute.attnum. Excluding attnum from the value is not
+             -- sufficient on its own: ordering by it would still sort the
+             -- same column set differently on the two databases. A
+             -- dropped column leaves a permanent tombstone in attnum, so
+             -- hashing it made this manifest report drift for a purely
+             -- historical DDL difference: a database that ran 0010's
+             -- ALTER TABLE ... DROP COLUMN erasure_request_id numbers the
+             -- surviving columns differently from one bootstrapped with
+             -- today's schema, which skips that ALTER via the
+             -- _validate_predecessor_shape() branch. The same reasoning
+             -- removes conkey/confkey/indkey below: those are attnum
+             -- vectors whose content is already pinned textually by
+             -- pg_get_constraintdef() and pg_get_indexdef().
              'columns', (
                SELECT pg_catalog.jsonb_agg(
                         pg_catalog.jsonb_build_array(
-                          attribute.attnum,
                           attribute.attname,
                           pg_catalog.format_type(
                             attribute.atttypid, attribute.atttypmod
@@ -3799,7 +3812,7 @@ BEGIN
                             default_row.adbin, default_row.adrelid, true
                           )
                         )
-                        ORDER BY attribute.attnum
+                        ORDER BY attribute.attname
                       )
                  FROM pg_catalog.pg_attribute AS attribute
                  LEFT JOIN pg_catalog.pg_attrdef AS default_row
@@ -3818,12 +3831,10 @@ BEGIN
                             constraint_row.condeferrable,
                             constraint_row.condeferred,
                             constraint_row.convalidated,
-                            constraint_row.conkey::text,
                             CASE
                               WHEN constraint_row.confrelid = 0 THEN NULL
                               ELSE constraint_row.confrelid::regclass::text
                             END,
-                            constraint_row.confkey::text,
                             constraint_row.confupdtype,
                             constraint_row.confdeltype,
                             constraint_row.confmatchtype,
@@ -3865,7 +3876,6 @@ BEGIN
                             index_state.indimmediate,
                             index_state.indisvalid,
                             index_state.indisready,
-                            index_state.indkey::text,
                             pg_catalog.pg_get_indexdef(
                               index_relation.oid, 0, true
                             )

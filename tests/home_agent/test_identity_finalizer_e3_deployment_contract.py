@@ -9,8 +9,8 @@ GRANTS = ROOT / "stack/home-agent-deploy/apply-grants.sh"
 COMPOSE = ROOT / "stack/home-agent-compose.yml"
 RUNNER = ROOT / "tools/run-home-agent-e1-postgres-gate.py"
 E3_CATALOG_SHA256 = (
-    "123326a4620d3dd123773819d95255e40"
-    "813a5a949f406570252ff1f7031f29a"
+    "b85d05e7d2d45671a0107a75658474450"
+    "c0ab927d86a2ec4809732169ee37192"
 )
 
 

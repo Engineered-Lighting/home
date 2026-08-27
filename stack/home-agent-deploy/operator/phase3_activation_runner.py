@@ -88,6 +88,11 @@ RETIRABLE_PHASES = frozenset({"staged", "review_signed", "finalized"})
 # refuses exactly that. Wait for the database itself rather than trusting the
 # stop call to mean quiescence.
 HA_QUIESCE_TIMEOUT_SECONDS = 120
+# How fresh the measurement under already-signed evidence has to be for a
+# resumed step 21 to re-emit it instead of parking for review. The privacy
+# observer at step 22 refuses a freeze older than five minutes and the launcher
+# and the record still have to run inside what is left.
+WRITER_EVIDENCE_RESUME_SECONDS = 120
 HA_QUIESCE_POLL_SECONDS = 3
 ADMISSION_RECOVERY_CONTRACT = "phase3-finalizer-admission-recovery-e5an-v1"
 ADMISSION_RECOVERY_REASON = "admission_spent_on_unfinalizable_packet"
@@ -2226,22 +2231,49 @@ class Backend:
         self._stop_ha()
         self._freeze_legacy_writer(state)
 
+    @staticmethod
+    def _writer_evidence_resumable() -> bool:
+        """Is the measurement the signed evidence is bound to still usable?
+
+        Read the observation rather than the evidence: the evidence is compiled
+        from it and carries its `observed_at` verbatim as the freeze time every
+        downstream window is counted from.
+        """
+
+        try:
+            raw = Backend._private_document(WRITER_OBSERVATION)
+            document = parse_canonical_json(raw, maximum=MAX_OUTPUT)
+            if not isinstance(document, Mapping):
+                return False
+            observed_at = datetime.fromisoformat(
+                str(document["observed_at"]).replace("Z", "+00:00")
+            )
+        except (ActivationRunnerError, VerificationError, KeyError, ValueError, OSError):
+            return False
+        if observed_at.tzinfo is None:
+            return False
+        age = (datetime.now(UTC) - observed_at).total_seconds()
+        # A measurement slightly in the future is ordinary cross-host skew.
+        return -60 <= age <= WRITER_EVIDENCE_RESUME_SECONDS
+
     def _sign_writer_evidence(self, state: Mapping[str, Any]) -> None:
         """Sign the physical freeze observation and record it as evidence.
 
-        The ceremony writes signed evidence before the row is recorded, so a
-        failure between the two leaves evidence on disk bound to the old
-        measurement. Refreshing the observation under it would then re-emit
-        that stale evidence from the ceremony's resume path and burn the
-        one-shot freeze rows on a time the next step rejects. Pause instead and
-        let an operator decide, from the database, which half is authoritative.
+        The ceremony writes signed evidence before the row is recorded and
+        resumes from it verbatim, so on a re-entry the two halves have to be
+        handled together. Refreshing the measurement under existing evidence
+        would re-emit the old evidence against a new observation and spend the
+        one-shot freeze rows on a time step 22 rejects; re-emitting evidence
+        whose measurement has already aged out spends them just as surely.
+
+        So resume only while the measurement is still inside the window --
+        which also covers the narrow case where the row was committed and only
+        the journal write was lost, because the evidence writer replays an
+        identical document harmlessly. Otherwise park for review: by then the
+        run needs a decision about what the database already holds, not another
+        attempt.
         """
 
-        if any(
-            path.exists() or path.is_symlink()
-            for path in (WRITER_FREEZE_EVIDENCE, WRITER_FREEZE_RECEIPT)
-        ):
-            raise ActivationPause("awaiting_writer_evidence_review")
         try:
             # Checked here as well as inside the admission below: a permit that
             # expired mid-run should pause before Home Assistant is stopped and
@@ -2249,7 +2281,14 @@ class Backend:
             migration_executor._require_fresh_permit(datetime.now(UTC))
         except migration_executor.MigrationExecutionError as error:
             raise ActivationPause("awaiting_permit_recovery") from error
-        self._refresh_writer_observation(state)
+        if any(
+            path.exists() or path.is_symlink()
+            for path in (WRITER_FREEZE_EVIDENCE, WRITER_FREEZE_RECEIPT)
+        ):
+            if not self._writer_evidence_resumable():
+                raise ActivationPause("awaiting_writer_evidence_review")
+        else:
+            self._refresh_writer_observation(state)
         self._json([str(SIGNING_LAUNCHER), "freeze-evidence"], timeout=900)
         self._record_evidence("record-freeze-evidence", WRITER_FREEZE_EVIDENCE)
 

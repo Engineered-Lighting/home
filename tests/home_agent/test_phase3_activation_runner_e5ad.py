@@ -2074,6 +2074,13 @@ def _writer_evidence_harness(module, monkeypatch, tmp_path, *, permit_fresh=True
         "_record_evidence",
         lambda self, command, path: calls.append(f"record:{command}"),
     )
+    # The real reader enforces root ownership, which a tmp_path file cannot
+    # satisfy; the freshness logic is what these tests are about.
+    monkeypatch.setattr(
+        module.Backend,
+        "_private_document",
+        staticmethod(lambda path: path.read_bytes().rstrip(b"\n")),
+    )
     return calls
 
 
@@ -2119,21 +2126,35 @@ def test_step_21_observes_when_no_measurement_is_on_disk(
     assert not list(tmp_path.glob("*.stale-*.json"))
 
 
+def _measure(module, age_seconds: float) -> None:
+    """Write an observation stamped `age_seconds` in the past."""
+
+    observed = datetime.now(UTC) - timedelta(seconds=age_seconds)
+    module.WRITER_OBSERVATION.write_text(
+        json.dumps(
+            {"observed_at": observed.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"},
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+
 @pytest.mark.parametrize("existing", ["evidence", "receipt"])
-def test_step_21_pauses_rather_than_refresh_under_signed_evidence(
+def test_step_21_pauses_rather_than_refresh_under_aged_signed_evidence(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, existing: str
 ) -> None:
-    """Signed evidence and a fresh measurement must never be combined.
+    """Signed evidence and a new measurement must never be combined.
 
     The ceremony writes evidence before the row is recorded and resumes from
-    that file, so refreshing the observation underneath it would re-emit
-    evidence bound to the old time and spend the one-shot freeze rows on a
-    time step 22 rejects.
+    that file, so refreshing the observation underneath would re-emit evidence
+    bound to the old time. Re-emitting it once the measurement has aged out
+    spends the one-shot freeze rows just as surely, so the run parks instead.
     """
 
     module = _module()
     calls = _writer_evidence_harness(module, monkeypatch, tmp_path)
-    module.WRITER_OBSERVATION.write_text("{}", encoding="utf-8")
+    _measure(module, 4000)
     target = (
         module.WRITER_FREEZE_EVIDENCE
         if existing == "evidence"
@@ -2145,8 +2166,53 @@ def test_step_21_pauses_rather_than_refresh_under_signed_evidence(
         module.Backend()._sign_writer_evidence({})
 
     assert str(caught.value) == "awaiting_writer_evidence_review"
-    assert calls == []
+    assert calls == ["permit"]
     assert module.WRITER_OBSERVATION.exists(), "the measurement must be left in place"
+    assert not list(tmp_path.glob("*.stale-*.json"))
+
+
+def test_step_21_resumes_signed_evidence_that_is_still_inside_the_window(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A lost journal write must not strand a run whose row may already exist.
+
+    Before the measurement ages out the ceremony's resume path is correct and
+    the evidence writer replays an identical document harmlessly, so the step
+    re-emits rather than parks -- and must not disturb the measurement the
+    evidence is bound to.
+    """
+
+    module = _module()
+    calls = _writer_evidence_harness(module, monkeypatch, tmp_path)
+    _measure(module, 5)
+    module.WRITER_FREEZE_EVIDENCE.write_text("{}", encoding="utf-8")
+
+    module.Backend()._sign_writer_evidence({})
+
+    assert calls == [
+        "permit",
+        "json:freeze-evidence",
+        "record:record-freeze-evidence",
+    ]
+    assert "observed_at" in module.WRITER_OBSERVATION.read_text(encoding="utf-8")
+    assert not list(tmp_path.glob("*.stale-*.json"))
+
+
+def test_step_21_will_not_resume_evidence_whose_measurement_is_unreadable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Fail closed: an unreadable or missing measurement is not a fresh one."""
+
+    module = _module()
+    _writer_evidence_harness(module, monkeypatch, tmp_path)
+    module.WRITER_FREEZE_EVIDENCE.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(module.ActivationPause):
+        module.Backend()._sign_writer_evidence({})
+
+    module.WRITER_OBSERVATION.write_text("{}", encoding="utf-8")
+    with pytest.raises(module.ActivationPause):
+        module.Backend()._sign_writer_evidence({})
 
 
 def test_step_21_pauses_on_a_stale_permit_before_stopping_home_assistant(
@@ -2168,6 +2234,7 @@ def test_step_21_pauses_on_a_stale_permit_before_stopping_home_assistant(
     assert str(caught.value) == "awaiting_permit_recovery"
     assert calls == ["permit"]
     assert module.WRITER_OBSERVATION.exists()
+    assert not list(tmp_path.glob("*.stale-*.json"))
     assert "sign_writer_evidence" in module.RECOVERABLE_PERMIT_STEPS
 
 

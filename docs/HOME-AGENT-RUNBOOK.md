@@ -1698,22 +1698,27 @@ Assistant:
 - `awaiting_permit_recovery` — the grant permit aged past its four-hour window
   before the step ran. Refresh it (`sudo touch` the permit path), run the runner
   once with `recover-permit`, then `advance`.
-- `awaiting_writer_evidence_review` — signed evidence or its receipt is already
-  on disk. The ceremony writes those before the row is recorded and resumes from
-  them, so refreshing the measurement underneath would re-emit evidence bound to
-  the old time and spend the one-shot freeze rows on a time step 22 rejects.
-  Decide from the database which half is authoritative:
+- `awaiting_writer_evidence_review` — signed evidence or its receipt is on disk
+  and the measurement it is bound to has aged past step 22's window. Inside that
+  window the step resumes on its own, including when the row was committed and
+  only the journal write was lost, because the evidence writer replays an
+  identical document harmlessly. This pause means neither half can simply be
+  reused, so establish which one the database holds:
 
   ```sql
   SELECT 1 FROM operations.enforced_legacy_identity_writer_freezes
   WHERE run_id = '<run_id>';
   ```
 
-  A row means the evidence was recorded and the resume path is correct: run
-  `advance`. No row means the evidence was signed but never recorded; archive
-  the evidence, its receipt, and the observation together by rename — the same
-  `.stale-<id>` form, all three in one move so they cannot drift apart — and
-  then `advance`, which re-establishes the whole step.
+  No row: nothing one-shot was spent. Archive the evidence, its receipt, and the
+  observation together by rename — the same `.stale-<id>` form, all three in one
+  move so they cannot drift apart — and `advance`, which re-establishes the whole
+  step from a fresh measurement.
+
+  A row: the freeze is already committed against a `verified_at` that step 22
+  will now refuse, and both the freeze row and the privacy receipts are one-shot
+  per run. The run cannot be carried forward; this is a restore, not another
+  attempt. Stop and treat it as such.
 
 A review whose projection has drifted is now refused when it is staged rather
 than at step 21. If a rebuild ever has to restage this run, regenerate the

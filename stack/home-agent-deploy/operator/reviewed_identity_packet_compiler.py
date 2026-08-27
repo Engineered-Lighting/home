@@ -22,7 +22,6 @@ import hashlib
 import secrets
 import time
 from typing import Any, Callable, Mapping, Sequence
-import unicodedata
 import uuid
 
 from cryptography.exceptions import InvalidSignature
@@ -40,6 +39,7 @@ from migrate_legacy_identity import (
     LegacySourceInventoryRow,
     MigrationError,
     MigrationPlan,
+    normalized_alias as _normalized_alias,
     prepare_apply,
 )
 from reviewed_identity_payload import (
@@ -122,10 +122,6 @@ def _capabilities() -> frozenset[tuple[str, str]]:
             ("idempotency", "exact-projection-v1"),
         }
     )
-
-
-def _normalized_alias(value: str) -> str:
-    return " ".join(unicodedata.normalize("NFKC", value).split()).casefold()
 
 
 def _projection_record(operation: ApplyOperation, decision_id: str) -> dict[str, Any]:

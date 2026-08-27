@@ -21,6 +21,7 @@ from pathlib import Path
 import sqlite3
 import stat
 import sys
+import unicodedata
 from typing import Any, Callable, Iterable, Mapping, Protocol
 import urllib.error
 import urllib.request
@@ -273,6 +274,19 @@ class PersonCandidate:
         if self.is_archived:
             requirements.append("archived_status")
         return tuple(dict.fromkeys(requirements))
+
+
+def normalized_alias(value: str) -> str:
+    """Normalize exactly as `identity.aliases.normalized_alias` is stored.
+
+    The semantic store enforces UNIQUE(normalized_alias) globally and
+    UNIQUE(person_id, normalized_alias). This is the single definition of that
+    normalization; the packet compiler imports it rather than keeping its own,
+    because two copies that drift would silently reintroduce a projection
+    conflict that only surfaces inside the finalizer kernel.
+    """
+
+    return " ".join(unicodedata.normalize("NFKC", value).split()).casefold()
 
 
 @dataclass(frozen=True, slots=True)
@@ -555,6 +569,7 @@ def _aliases(
         "SELECT identity_uuid, alias, alias_kind FROM identity_aliases ORDER BY id"
     ).fetchall()
     result: list[AliasCandidate] = []
+    seen: dict[str, str] = {}
     for row in rows:
         person_id = _stable_uuid(row["identity_uuid"], "alias")
         if person_id not in person_ids:
@@ -567,10 +582,24 @@ def _aliases(
         # never become a semantic name alias by accident.
         if kind == "frigate_name":
             continue
+        alias = str(_bounded_text(row["alias"], "alias", maximum=255))
+        normalized = normalized_alias(alias)
+        # The legacy store lets one person carry the same text under several
+        # alias kinds -- 'Peter' as both `name` and `nickname`. The semantic
+        # store does not: UNIQUE(person_id, normalized_alias). Keep the first
+        # row by id, which is stable across runs.
+        owner = seen.get(normalized)
+        if owner == person_id:
+            continue
+        # Two different people claiming one alias is not a duplicate, it is a
+        # conflict, and picking a winner is not this importer's call.
+        if owner is not None:
+            raise MigrationError("legacy alias is claimed by two identities")
+        seen[normalized] = person_id
         result.append(
             AliasCandidate(
                 person_id=person_id,
-                alias=str(_bounded_text(row["alias"], "alias", maximum=255)),
+                alias=alias,
                 alias_kind=str(kind),
             )
         )

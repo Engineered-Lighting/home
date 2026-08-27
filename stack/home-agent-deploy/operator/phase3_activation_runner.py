@@ -375,6 +375,43 @@ def new_state(commit: str) -> dict[str, Any]:
     }
 
 
+def jsonb_text_bytes(value: Mapping[str, Any]) -> bytes:
+    """Render a string-only object exactly as PostgreSQL's ``jsonb::text``.
+
+    The E4 cutover kernel binds the submitted document to PostgreSQL's own
+    rendering -- ``submitted IS DISTINCT FROM convert_to(document::jsonb::text,
+    'UTF8')`` raises ``identity_cutover_document_not_canonical``
+    (0014_identity_semantic_cutover_e4.py:526-531). That is a different
+    encoding from RFC-canonical JSON: ``jsonb`` orders object keys by length
+    and then by bytes rather than lexicographically, and separates with ", "
+    and ": ". `canonical_bytes` can therefore never satisfy it, so the bytes
+    that go on the wire are rendered here instead.
+
+    Only the wire form changes. The receipt still commits to
+    ``canonical_bytes``, and the admission writer's cutover path records the
+    digest of whatever bytes it is handed, so the admission and the kernel
+    agree as long as both hops are given this rendering.
+
+    Restricted to string-only objects, which is exactly what the kernel and
+    `identity_admission_writer._cutover_parameters` both require -- the
+    ordering below is only well-defined for that shape.
+    """
+
+    if not isinstance(value, Mapping) or not all(
+        isinstance(key, str) and isinstance(item, str)
+        for key, item in value.items()
+    ):
+        raise ActivationRunnerError("cutover document is not string-only")
+    encoded = [(key.encode("utf-8"), key, item) for key, item in value.items()]
+    encoded.sort(key=lambda entry: (len(entry[0]), entry[0]))
+    body = ", ".join(
+        f"{json.dumps(key, ensure_ascii=False)}: "
+        f"{json.dumps(item, ensure_ascii=False)}"
+        for _, key, item in encoded
+    )
+    return ("{" + body + "}").encode("utf-8")
+
+
 def validate_state(value: Any) -> dict[str, Any]:
     keys = {
         "contract",
@@ -2336,6 +2373,9 @@ class Backend:
         if not isinstance(document_value, Mapping):
             raise ActivationRunnerError("semantic cutover document is invalid")
         document = canonical_bytes(document_value)
+        # The wire form the E4 kernel demands; the receipt below still binds
+        # the canonical form, so both encodings describe the same document.
+        wire_document = jsonb_text_bytes(document_value)
         admission_id = document_value.get("admission_id")
         if (
             not isinstance(admission_id, str)
@@ -2347,7 +2387,7 @@ class Backend:
         ):
             raise ActivationRunnerError("semantic cutover receipt does not match")
         admission = self._request(
-            "identity-cutover-admission-e5u-v1", admission_id, document
+            "identity-cutover-admission-e5u-v1", admission_id, wire_document
         )
         self._json(
             [sys.executable, str(AUTHORITY_ADMISSION), "admit-cutover"],
@@ -2355,7 +2395,7 @@ class Backend:
             timeout=300,
         )
         execution = self._request(
-            "identity-cutover-execution-e5n-v1", admission_id, document
+            "identity-cutover-execution-e5n-v1", admission_id, wire_document
         )
         self._json(
             [sys.executable, str(AUTHORITY_CEREMONY), "cutover"],

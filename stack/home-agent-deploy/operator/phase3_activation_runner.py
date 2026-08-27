@@ -88,12 +88,12 @@ RETIRABLE_PHASES = frozenset({"staged", "review_signed", "finalized"})
 # refuses exactly that. Wait for the database itself rather than trusting the
 # stop call to mean quiescence.
 HA_QUIESCE_TIMEOUT_SECONDS = 120
+HA_QUIESCE_POLL_SECONDS = 3
 # How fresh the measurement under already-signed evidence has to be for a
 # resumed step 21 to re-emit it instead of parking for review. The privacy
 # observer at step 22 refuses a freeze older than five minutes and the launcher
 # and the record still have to run inside what is left.
 WRITER_EVIDENCE_RESUME_SECONDS = 120
-HA_QUIESCE_POLL_SECONDS = 3
 ADMISSION_RECOVERY_CONTRACT = "phase3-finalizer-admission-recovery-e5an-v1"
 ADMISSION_RECOVERY_REASON = "admission_spent_on_unfinalizable_packet"
 ADMISSION_RECOVERY_PREFIX = "identity-finalizer-admission-recovery-"
@@ -2248,7 +2248,13 @@ class Backend:
             observed_at = datetime.fromisoformat(
                 str(document["observed_at"]).replace("Z", "+00:00")
             )
-        except (ActivationRunnerError, VerificationError, KeyError, ValueError, OSError):
+        except (
+            ActivationRunnerError,
+            VerificationError,
+            KeyError,
+            ValueError,
+            OSError,
+        ):
             return False
         if observed_at.tzinfo is None:
             return False

@@ -2027,3 +2027,232 @@ def test_the_installer_deploys_everything_the_runner_verifies() -> None:
     for _, remote in module.REMOTE_HA_MODULES:
         name = Path(remote).name
         assert name in installer, f"{name} is verified but never installed"
+
+
+def _writer_evidence_harness(module, monkeypatch, tmp_path, *, permit_fresh=True):
+    """Drive step 21 with every side effect recorded instead of performed."""
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        module, "WRITER_OBSERVATION", tmp_path / "writer-freeze-observation-e5z.json"
+    )
+    monkeypatch.setattr(
+        module, "WRITER_FREEZE_EVIDENCE", tmp_path / "writer-freeze-evidence-e5z.json"
+    )
+    monkeypatch.setattr(
+        module,
+        "WRITER_FREEZE_RECEIPT",
+        tmp_path / "writer-freeze-evidence-receipt-e5z.json",
+    )
+
+    def _permit(now):
+        calls.append("permit")
+        assert isinstance(now, datetime), "the permit check requires a datetime"
+        if not permit_fresh:
+            raise module.migration_executor.MigrationExecutionError(
+                "phase3 migration permit is stale"
+            )
+
+    monkeypatch.setattr(
+        module.migration_executor, "_require_fresh_permit", _permit
+    )
+    monkeypatch.setattr(
+        module.Backend, "_stop_ha", staticmethod(lambda: calls.append("stop"))
+    )
+    monkeypatch.setattr(
+        module.Backend,
+        "_freeze_legacy_writer",
+        lambda self, state: calls.append("freeze"),
+    )
+    monkeypatch.setattr(
+        module.Backend,
+        "_json",
+        lambda self, command, **kwargs: calls.append(f"json:{command[-1]}") or b"{}",
+    )
+    monkeypatch.setattr(
+        module.Backend,
+        "_record_evidence",
+        lambda self, command, path: calls.append(f"record:{command}"),
+    )
+    return calls
+
+
+def test_step_21_refreshes_the_observation_it_is_about_to_sign(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Every downstream window is measured from `observed_at`.
+
+    The privacy observer refuses a freeze older than five minutes and the
+    cutover kernel refuses evidence older than the finalization, but
+    `_freeze_legacy_writer` reuses an observation that already exists. A run
+    resumed hours later could never satisfy them.
+    """
+
+    module = _module()
+    calls = _writer_evidence_harness(module, monkeypatch, tmp_path)
+    module.WRITER_OBSERVATION.write_text("{}", encoding="utf-8")
+
+    module.Backend()._sign_writer_evidence({})
+
+    assert calls == [
+        "permit",
+        "stop",
+        "freeze",
+        "json:freeze-evidence",
+        "record:record-freeze-evidence",
+    ]
+    assert not module.WRITER_OBSERVATION.exists()
+    archived = list(tmp_path.glob("writer-freeze-observation-e5z.stale-*.json"))
+    assert len(archived) == 1, "the stale measurement must be kept, not dropped"
+    assert archived[0].read_text(encoding="utf-8") == "{}"
+
+
+def test_step_21_observes_when_no_measurement_is_on_disk(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    module = _module()
+    calls = _writer_evidence_harness(module, monkeypatch, tmp_path)
+
+    module.Backend()._sign_writer_evidence({})
+
+    assert calls[:3] == ["permit", "stop", "freeze"]
+    assert not list(tmp_path.glob("*.stale-*.json"))
+
+
+@pytest.mark.parametrize("existing", ["evidence", "receipt"])
+def test_step_21_pauses_rather_than_refresh_under_signed_evidence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, existing: str
+) -> None:
+    """Signed evidence and a fresh measurement must never be combined.
+
+    The ceremony writes evidence before the row is recorded and resumes from
+    that file, so refreshing the observation underneath it would re-emit
+    evidence bound to the old time and spend the one-shot freeze rows on a
+    time step 22 rejects.
+    """
+
+    module = _module()
+    calls = _writer_evidence_harness(module, monkeypatch, tmp_path)
+    module.WRITER_OBSERVATION.write_text("{}", encoding="utf-8")
+    target = (
+        module.WRITER_FREEZE_EVIDENCE
+        if existing == "evidence"
+        else module.WRITER_FREEZE_RECEIPT
+    )
+    target.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(module.ActivationPause) as caught:
+        module.Backend()._sign_writer_evidence({})
+
+    assert str(caught.value) == "awaiting_writer_evidence_review"
+    assert calls == []
+    assert module.WRITER_OBSERVATION.exists(), "the measurement must be left in place"
+
+
+def test_step_21_pauses_on_a_stale_permit_before_stopping_home_assistant(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A pause is recoverable at this step; a containment is not cheap.
+
+    The permit is checked again inside the admission, but by then Home
+    Assistant is stopped and a fresh measurement has been spent.
+    """
+
+    module = _module()
+    calls = _writer_evidence_harness(module, monkeypatch, tmp_path, permit_fresh=False)
+    module.WRITER_OBSERVATION.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(module.ActivationPause) as caught:
+        module.Backend()._sign_writer_evidence({})
+
+    assert str(caught.value) == "awaiting_permit_recovery"
+    assert calls == ["permit"]
+    assert module.WRITER_OBSERVATION.exists()
+    assert "sign_writer_evidence" in module.RECOVERABLE_PERMIT_STEPS
+
+
+def test_step_23_refreshes_the_erasure_receipt_before_compiling_the_packet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The packet refuses an erasure receipt older than five minutes.
+
+    Nothing between step 12 and the cutover refreshes one, so a run that took
+    longer than five minutes to get here fails after the privacy rows are
+    already committed.
+    """
+
+    module = _module()
+    calls: list[str] = []
+
+    class _Stop(RuntimeError):
+        pass
+
+    monkeypatch.setattr(
+        module.Backend,
+        "_probe",
+        lambda self, name: calls.append(f"probe:{name}")
+        or {"semantic_authority_current": False},
+    )
+    monkeypatch.setattr(
+        module.Backend,
+        "_erasure_current",
+        lambda self, state: calls.append("erasure-current"),
+    )
+
+    def _json(self, command, **kwargs):
+        calls.append(f"json:{command[-1]}")
+        raise _Stop("stop after the launcher")
+
+    monkeypatch.setattr(module.Backend, "_json", _json)
+
+    with pytest.raises(_Stop):
+        module.Backend()._commit_semantic_cutover({})
+
+    assert calls == ["probe:authority", "erasure-current", "json:cutover-packet"]
+
+
+def test_step_23_skips_the_refresh_once_authority_is_current() -> None:
+    """The early return is the resume path; it must stay side-effect free."""
+
+    source = RUNNER.read_text(encoding="utf-8")
+    body = source.split("    def _commit_semantic_cutover", 1)[1]
+    early = body.split("return", 1)[0]
+
+    assert "_erasure_current" not in early
+    assert body.index("_erasure_current") < body.index('"cutover-packet"')
+
+
+def test_step_21_archives_the_stale_observation_and_never_deletes_it() -> None:
+    """A measurement that aged out is still the evidence of what was frozen."""
+
+    source = RUNNER.read_text(encoding="utf-8")
+    body = source.split("    def _refresh_writer_observation", 1)[1].split(
+        "    def _sign_writer_evidence", 1
+    )[0]
+
+    assert "os.rename" in body
+    assert "unlink" not in body
+    # stop -> fence -> observe: the observer refuses a `-shm` that only the
+    # fence run removes. Anchor on the calls, not the prose above them.
+    assert body.index("self._stop_ha()") < body.index("self._freeze_legacy_writer(")
+
+
+def test_the_runner_and_the_ceremony_name_the_same_writer_freeze_artifacts() -> None:
+    """The step-21 guard is only real if it watches the files the ceremony writes."""
+
+    module = _module()
+    sys.path.insert(0, str(OPERATOR))
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "home_agent_writer_freeze_ceremony_e5ad",
+            OPERATOR / "phase3_writer_freeze_ceremony.py",
+        )
+        assert spec is not None and spec.loader is not None
+        ceremony = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ceremony)
+    finally:
+        sys.path.remove(str(OPERATOR))
+
+    assert module.WRITER_FREEZE_EVIDENCE == ceremony.EVIDENCE_PATH
+    assert module.WRITER_FREEZE_RECEIPT == ceremony.RECEIPT_PATH
+    assert module.WRITER_OBSERVATION == ceremony.OBSERVATION_PATH

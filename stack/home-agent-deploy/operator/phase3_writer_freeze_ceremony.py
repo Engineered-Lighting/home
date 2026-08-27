@@ -159,6 +159,31 @@ def _receipt(raw: bytes, value: Mapping[str, Any]) -> Mapping[str, Any]:
     }
 
 
+def _expected_source_plan(private_review: Mapping[str, Any]) -> str:
+    """Derive the projection the evidence must match from the reviewed snapshot.
+
+    The private review's own ``source_plan_sha256`` is a review-time
+    self-report that no signing verb re-derives, so a loader change between
+    review and freeze silently invalidates it. Binding the review to the
+    snapshot and then projecting that snapshot keeps the chain
+    review -> snapshot -> plan -> physical observation closed against bytes
+    every party can recompute.
+    """
+
+    body = private_review.get("private_review")
+    reviewed_snapshot = (
+        body.get("sqlite_snapshot_sha256") if isinstance(body, Mapping) else None
+    )
+    if reviewed_snapshot != identity_ceremony._snapshot_sha256():
+        raise WriterFreezeCeremonyError("private People review snapshot drifted")
+    try:
+        return identity_ceremony.load_plan(identity_ceremony.SOURCE_PATH).digest
+    except identity_ceremony.MigrationError as error:
+        raise WriterFreezeCeremonyError(
+            "private identity snapshot could not be projected"
+        ) from error
+
+
 def execute() -> Mapping[str, Any]:
     identity_ceremony._require_root_linux()
     identity_ceremony._safe_private_root()
@@ -200,6 +225,7 @@ def execute() -> Mapping[str, Any]:
         observation = (
             observation_raw[:-1] if observation_raw.endswith(b"\n") else observation_raw
         )
+        expected_plan_digest = _expected_source_plan(private_review)
         try:
             raw = compile_writer_freeze_evidence(
                 packet,
@@ -207,6 +233,7 @@ def execute() -> Mapping[str, Any]:
                 canonical_bytes(state["finalization_envelope"]),
                 private_review,
                 observation,
+                expected_source_plan_sha256=expected_plan_digest,
                 identity_policy=policy,
                 writer_freeze_policy=writer_policy,
                 writer_freeze_private_key=_private_key(directory),

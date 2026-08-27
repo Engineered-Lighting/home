@@ -810,6 +810,16 @@ def _review_sha256() -> str:
         raise SigningCeremonyError("private People review commitment mismatch")
     if body.get("sqlite_snapshot_sha256") != _snapshot_sha256():
         raise SigningCeremonyError("private People review snapshot drifted")
+    # The review reports the projection it was written against; re-derive it so a
+    # loader change after the review cannot leave a stale plan in the chain.
+    try:
+        plan_digest = load_plan(SOURCE_PATH).digest
+    except MigrationError as error:
+        raise SigningCeremonyError(
+            "private identity snapshot could not be projected"
+        ) from error
+    if body.get("source_plan_sha256") != plan_digest:
+        raise SigningCeremonyError("private People review plan drifted")
     if (
         body.get("slice_readiness", {}).get("ready_for_private_content_review")
         is not True

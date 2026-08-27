@@ -99,6 +99,9 @@ PRIVACY_OBSERVATION = PRIVATE_IDENTITY_ROOT / "privacy-cutover-observation-e5aa.
 WRITER_FREEZE_EVIDENCE = (
     PRIVATE_IDENTITY_ROOT / "writer-freeze-evidence-e5z.json"
 )
+WRITER_FREEZE_RECEIPT = (
+    PRIVATE_IDENTITY_ROOT / "writer-freeze-evidence-receipt-e5z.json"
+)
 PRIVACY_CUTOVER_EVIDENCE = (
     PRIVATE_IDENTITY_ROOT / "privacy-cutover-evidence-e5aa.json"
 )
@@ -2187,7 +2190,66 @@ class Backend:
             timeout=300,
         )
 
-    def _sign_writer_evidence(self, _state: Mapping[str, Any]) -> None:
+    @staticmethod
+    def _stale_observation_name(path: Path) -> Path:
+        """Archive name for an observation whose freeze time expired.
+
+        Distinct from `.unfinalizable-`: nothing was spent, the measurement
+        simply aged out of the windows the privacy observer and the cutover
+        kernel enforce.
+        """
+
+        return path.with_name(f"{path.stem}.stale-{uuid7()}{path.suffix}")
+
+    def _refresh_writer_observation(self, state: Mapping[str, Any]) -> None:
+        """Re-measure the frozen writer so the evidence carries a fresh time.
+
+        Every downstream window is measured from this file's `observed_at`:
+        the privacy observer refuses a freeze older than five minutes and the
+        cutover kernel refuses evidence older than the finalization. Because
+        `_freeze_legacy_writer` reuses an observation that already exists, a
+        run resumed hours later could otherwise never satisfy them. Archive
+        the old measurement instead of reusing it -- a rename, so the bytes
+        that were on disk when the run stalled stay auditable.
+        """
+
+        if WRITER_OBSERVATION.exists() or WRITER_OBSERVATION.is_symlink():
+            target = self._stale_observation_name(WRITER_OBSERVATION)
+            if target.exists() or target.is_symlink():
+                raise ActivationRunnerError("writer freeze archive is ambiguous")
+            os.rename(WRITER_OBSERVATION, target)
+        # stop -> fence -> observe, in that order. `_stop_ha` waits only for
+        # `-wal` and `-journal` to disappear, while the observer additionally
+        # refuses a `-shm`; it is the fence run's sidecar sweep in between that
+        # removes it. Skipping the fence on an already-fenced database would
+        # leave the observer refusing a database that is genuinely stopped.
+        self._stop_ha()
+        self._freeze_legacy_writer(state)
+
+    def _sign_writer_evidence(self, state: Mapping[str, Any]) -> None:
+        """Sign the physical freeze observation and record it as evidence.
+
+        The ceremony writes signed evidence before the row is recorded, so a
+        failure between the two leaves evidence on disk bound to the old
+        measurement. Refreshing the observation under it would then re-emit
+        that stale evidence from the ceremony's resume path and burn the
+        one-shot freeze rows on a time the next step rejects. Pause instead and
+        let an operator decide, from the database, which half is authoritative.
+        """
+
+        if any(
+            path.exists() or path.is_symlink()
+            for path in (WRITER_FREEZE_EVIDENCE, WRITER_FREEZE_RECEIPT)
+        ):
+            raise ActivationPause("awaiting_writer_evidence_review")
+        try:
+            # Checked here as well as inside the admission below: a permit that
+            # expired mid-run should pause before Home Assistant is stopped and
+            # a fresh measurement is spent, not after.
+            migration_executor._require_fresh_permit(datetime.now(UTC))
+        except migration_executor.MigrationExecutionError as error:
+            raise ActivationPause("awaiting_permit_recovery") from error
+        self._refresh_writer_observation(state)
         self._json([str(SIGNING_LAUNCHER), "freeze-evidence"], timeout=900)
         self._record_evidence("record-freeze-evidence", WRITER_FREEZE_EVIDENCE)
 
@@ -2199,10 +2261,15 @@ class Backend:
         self._json([str(SIGNING_LAUNCHER), "privacy-evidence"], timeout=900)
         self._record_evidence("record-privacy-evidence", PRIVACY_CUTOVER_EVIDENCE)
 
-    def _commit_semantic_cutover(self, _state: Mapping[str, Any]) -> None:
+    def _commit_semantic_cutover(self, state: Mapping[str, Any]) -> None:
         probe = self._probe("authority")
         if probe.get("semantic_authority_current") is True:
             return
+        # The packet refuses an erasure receipt older than five minutes, and
+        # nothing between step 12 and here refreshes one. Re-verify immediately
+        # before the packet is compiled so only the launcher start separates the
+        # receipt's `verified_at` from the packet's own clock.
+        self._erasure_current(state)
         self._json([str(SIGNING_LAUNCHER), "cutover-packet"], timeout=900)
         # The authority candidate carries the writer evidence id and all six
         # privacy check ids, so it can only be recorded after those rows exist,

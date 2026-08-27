@@ -320,6 +320,7 @@ def compile_writer_freeze_evidence(
     private_review_artifact: Mapping[str, Any],
     raw_physical_observation: bytes,
     *,
+    expected_source_plan_sha256: str,
     identity_policy: VerificationPolicy,
     writer_freeze_policy: WriterFreezePolicy,
     writer_freeze_private_key: Ed25519PrivateKey,
@@ -328,6 +329,9 @@ def compile_writer_freeze_evidence(
     """Compile signed E3/E4 evidence rows without writing any authority store."""
 
     _require_key(writer_freeze_private_key, writer_freeze_policy, identity_policy)
+    expected_plan_digest = _hex64(
+        expected_source_plan_sha256, "expected source projection"
+    )
     try:
         raw_bundle = packet.assemble_reviewed_bundle(review_signature)
         finalizer = verify_expired_finalization_replay(
@@ -343,9 +347,11 @@ def compile_writer_freeze_evidence(
     document = finalizer.document
     bundle = parse_canonical_json(raw_bundle, maximum=MAX_BYTES)
     run = bundle["manifest"]["run"]
-    review_body = _private_review(private_review_artifact, packet)
+    _private_review(private_review_artifact, packet)
     observation = _parse_observation(raw_physical_observation)
-    if observation["source_plan_sha256"] != review_body.get("source_plan_sha256"):
+    if not hmac.compare_digest(
+        observation["source_plan_sha256"], expected_plan_digest
+    ):
         raise WriterFreezeEvidenceError("physical source projection drifted")
     observed_at = observation["observed_at"]
     run_id = _uuid(document["run_id"], "reviewed run")

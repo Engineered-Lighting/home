@@ -1678,6 +1678,51 @@ subject to the same future governed erasure; its receipt records the
 archived name and content digest so any later erasure is verifiable.
 
 Rerun the same `advance` command after completing the requested private action.
+
+### Resuming at `sign_writer_evidence`
+
+Step 21 measures the frozen legacy writer and signs that measurement into
+evidence. Every window downstream is counted from the measurement's
+`observed_at`: the privacy observer at step 22 refuses a freeze older than five
+minutes, and the semantic cutover kernel refuses evidence stamped before the
+finalization it belongs to. The step therefore re-measures rather than reuse an
+observation left by an earlier attempt, archiving the previous one beside it as
+`writer-freeze-observation-e5z.stale-<id>.json`. Nothing is deleted, and the
+archive stays under the same protection and future governed erasure as the
+original. Step 23 likewise re-verifies the erasure receipt immediately before it
+compiles the cutover packet, which refuses a receipt older than five minutes.
+
+Two pauses can park the step. Both are recoverable and neither stops Home
+Assistant:
+
+- `awaiting_permit_recovery` — the grant permit aged past its four-hour window
+  before the step ran. Refresh it (`sudo touch` the permit path), run the runner
+  once with `recover-permit`, then `advance`.
+- `awaiting_writer_evidence_review` — signed evidence or its receipt is already
+  on disk. The ceremony writes those before the row is recorded and resumes from
+  them, so refreshing the measurement underneath would re-emit evidence bound to
+  the old time and spend the one-shot freeze rows on a time step 22 rejects.
+  Decide from the database which half is authoritative:
+
+  ```sql
+  SELECT 1 FROM operations.enforced_legacy_identity_writer_freezes
+  WHERE run_id = '<run_id>';
+  ```
+
+  A row means the evidence was recorded and the resume path is correct: run
+  `advance`. No row means the evidence was signed but never recorded; archive
+  the evidence, its receipt, and the observation together by rename — the same
+  `.stale-<id>` form, all three in one move so they cannot drift apart — and
+  then `advance`, which re-establishes the whole step.
+
+A review whose projection has drifted is now refused when it is staged rather
+than at step 21. If a rebuild ever has to restage this run, regenerate the
+private People review first with `phase3_reviewed_people_packet.py`; `stage`,
+`review`, `finalize`, and `supersede-expired` all refuse a review whose
+`source_plan_sha256` disagrees with what the current loader derives from the
+reviewed snapshot, and the regenerated review needs its own human content
+review.
+
 The root-owned journal at
 `/srv/home-agent/private/phase3-activation/runner-state-e5ad.json` keeps only
 random identifiers, the accepted source commit, ordered step codes, attempt

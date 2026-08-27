@@ -3159,6 +3159,10 @@ def _run_e4_scaffold_phase(
         nodes=[
             "tests/test_phase3_principal_binding_kernel_e5b_schema.py",
             "tests/" "test_phase3_principal_binding_kernel_e5b_runtime_postgres.py",
+            # DIAGNOSTIC (do not merge): reports the per-relation E3 catalog
+            # manifest at this revision so a deployment mismatch can be
+            # localised instead of showing only the aggregate digest.
+            "tests/" "test_phase3_e3_catalog_manifest_diagnostic_postgres.py",
             "tests/test_principal_binding_adapter_e5c.py",
             "/workspace/tests/home_agent/"
             "test_principal_binding_kernel_e5b_deployment_contract.py",

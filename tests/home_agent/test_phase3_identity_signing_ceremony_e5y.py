@@ -442,6 +442,7 @@ def test_physical_writer_freeze_is_bound_to_reviewed_source_and_distinct_key(
         verifier.canonical_bytes(finalized["finalization_envelope"]),
         review_artifact,
         observation,
+        expected_source_plan_sha256=plan.digest,
         identity_policy=policy,
         writer_freeze_policy=freeze_policy,
         writer_freeze_private_key=freeze_private,
@@ -480,6 +481,7 @@ def test_physical_writer_freeze_is_bound_to_reviewed_source_and_distinct_key(
             verifier.canonical_bytes(finalized["finalization_envelope"]),
             review_artifact,
             observation,
+            expected_source_plan_sha256=plan.digest,
             identity_policy=policy,
             writer_freeze_policy=writer_freeze.WriterFreezePolicy(
                 public_key=review_private.public_key(),
@@ -904,3 +906,199 @@ def test_fresh_stage_after_supersession_produces_new_digest_and_window(
             state=second_state,
             state_raw=verifier.canonical_bytes(second_state) + b"\n",
         )
+
+
+def _freeze_chain(tmp_path: Path, *, review_source_plan_sha256: str | None = None):
+    """Build one finalized packet plus the artifacts the freeze evidence binds.
+
+    `review_source_plan_sha256` overrides only the projection the private review
+    reports, so a review written against an older loader can be replayed
+    against a current snapshot.
+    """
+
+    database = tmp_path / "identity.db"
+    _database(database)
+    plan = migration.load_plan(database)
+    review_body = {
+        "source_plan_sha256": (
+            plan.digest
+            if review_source_plan_sha256 is None
+            else review_source_plan_sha256
+        ),
+        "sqlite_snapshot_sha256": "a" * 64,
+    }
+    review_digest = hashlib.sha256(verifier.canonical_bytes(review_body)).hexdigest()
+    review_artifact = {
+        "contract": "phase3-reviewed-people-private-review-e5x-v1",
+        "private_review": review_body,
+        "private_review_sha256": review_digest,
+    }
+    review_private = Ed25519PrivateKey.generate()
+    finalization_private = Ed25519PrivateKey.generate()
+    freeze_private = Ed25519PrivateKey.generate()
+    policy = _policy(review_private, finalization_private)
+    freeze_public, freeze_fingerprint = _public(freeze_private)
+    freeze_policy = writer_freeze.WriterFreezePolicy(
+        public_key=freeze_public,
+        key_fingerprint=freeze_fingerprint,
+    )
+    packet = compiler.compile_unsigned_packet(
+        plan,
+        migration.load_source_inventory(database),
+        private_review_sha256=review_digest,
+        policy=policy,
+        id_factory=_Ids(),
+        now=NOW,
+    )
+    staged = ceremony.stage_state(packet, policy=policy)
+    reviewed = ceremony.approve_review(
+        staged,
+        policy=policy,
+        review_private_key=review_private,
+        approval=ceremony.review_approval_token(staged, policy),
+    )
+    finalized, _document = ceremony.approve_finalization(
+        reviewed,
+        policy=policy,
+        finalization_private_key=finalization_private,
+        approval=ceremony.finalization_approval_token(reviewed, policy, now=NOW),
+        now=NOW,
+    )
+
+    def observation(source_plan_sha256: str) -> bytes:
+        return verifier.canonical_bytes(
+            {
+                "contract": "legacy-identity-physical-freeze-observation-v1",
+                "source_installation_id": "00000000-0000-7000-8000-000000009001",
+                "semantic_generation": 2,
+                "source_plan_sha256": source_plan_sha256,
+                "database_sha256": "b" * 64,
+                "schema_digest": "sha256:" + "c" * 64,
+                "trigger_digest": "sha256:" + "d" * 64,
+                "cutover_witness_sha256": "e" * 64,
+                "home_assistant_state": "stopped",
+                "process_lock_result": "exclusive",
+                "write_probe_result": "blocked",
+                "integrity_result": "passed",
+                "checkpoint_result": "complete",
+                "journal_result": "clean",
+                "legacy_context_cutoff_status": "enforced_cutoff",
+                "recognition_mode": "nonauthoritative_only",
+                "freeze_kernel_build_digest": "f" * 64,
+                "observed_at": NOW.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            }
+        )
+
+    def compile(expected: str, observed: str) -> bytes:
+        return writer_freeze.compile_writer_freeze_evidence(
+            packet,
+            reviewed["review_signature"],
+            verifier.canonical_bytes(finalized["finalization_envelope"]),
+            review_artifact,
+            observation(observed),
+            expected_source_plan_sha256=expected,
+            identity_policy=policy,
+            writer_freeze_policy=freeze_policy,
+            writer_freeze_private_key=freeze_private,
+            id_factory=_Ids(),
+        )
+
+    return plan, compile
+
+
+def test_writer_freeze_evidence_refuses_an_observation_off_the_expected_projection(
+    tmp_path,
+) -> None:
+    plan, compile = _freeze_chain(tmp_path)
+    with pytest.raises(
+        writer_freeze.WriterFreezeEvidenceError,
+        match="physical source projection drifted",
+    ):
+        compile(plan.digest, "9" * 64)
+    with pytest.raises(
+        writer_freeze.WriterFreezeEvidenceError, match="digest is invalid"
+    ):
+        compile("not-a-digest", plan.digest)
+
+
+def test_writer_freeze_evidence_binds_the_observation_to_the_projected_snapshot(
+    tmp_path,
+) -> None:
+    """A review written before a loader change must not block the freeze.
+
+    The review reports the projection it was reviewed against and no signing
+    verb re-derives it, so a merged loader fix leaves that field describing a
+    plan that no longer exists. The evidence binds the physical observation to
+    the projection of the snapshot the packet was compiled from instead, which
+    is a value both sides can recompute.
+    """
+
+    plan, compile = _freeze_chain(tmp_path, review_source_plan_sha256="7" * 64)
+    raw = compile(plan.digest, plan.digest)
+    assert verifier.parse_canonical_json(raw)["writer_evidence"][
+        "evidence_strength"
+    ] == "observed_stopped"
+    # The review still has to belong to this packet.
+    with pytest.raises(
+        writer_freeze.WriterFreezeEvidenceError,
+        match="physical source projection drifted",
+    ):
+        compile("7" * 64, plan.digest)
+
+
+def test_review_staging_refuses_a_review_whose_projection_drifted(
+    tmp_path, monkeypatch
+) -> None:
+    """The drift closed at the freeze is refused when the review is staged.
+
+    `_review_sha256` already re-hashes the review and re-reads the snapshot it
+    names; re-deriving the plan is what stops a stale projection from reaching
+    the freeze six steps later.
+    """
+
+    database = tmp_path / "identity.db"
+    _database(database)
+    plan = migration.load_plan(database)
+
+    def review(source_plan_sha256: str) -> bytes:
+        body = {
+            "source_plan_sha256": source_plan_sha256,
+            "sqlite_snapshot_sha256": "a" * 64,
+            "slice_readiness": {"ready_for_private_content_review": True},
+        }
+        return verifier.canonical_bytes(
+            {
+                "contract": "phase3-reviewed-people-private-review-e5x-v1",
+                "private_review": body,
+                "private_review_sha256": hashlib.sha256(
+                    verifier.canonical_bytes(body)
+                ).hexdigest(),
+            }
+        )
+
+    raw = {"value": review(plan.digest)}
+    monkeypatch.setattr(ceremony, "SOURCE_PATH", database)
+    monkeypatch.setattr(ceremony, "_snapshot_sha256", lambda: "a" * 64)
+    monkeypatch.setattr(
+        ceremony, "_read_root_file", lambda *_args, **_kwargs: raw["value"]
+    )
+
+    assert ceremony._review_sha256() == hashlib.sha256(
+        verifier.canonical_bytes(
+            verifier.parse_canonical_json(raw["value"])["private_review"]
+        )
+    ).hexdigest()
+
+    raw["value"] = review("7" * 64)
+    with pytest.raises(
+        ceremony.SigningCeremonyError, match="private People review plan drifted"
+    ):
+        ceremony._review_sha256()
+
+    raw["value"] = review(plan.digest)
+    monkeypatch.setattr(ceremony, "SOURCE_PATH", tmp_path / "absent.db")
+    with pytest.raises(
+        ceremony.SigningCeremonyError,
+        match="private identity snapshot could not be projected",
+    ):
+        ceremony._review_sha256()

@@ -1678,6 +1678,56 @@ subject to the same future governed erasure; its receipt records the
 archived name and content digest so any later erasure is verifiable.
 
 Rerun the same `advance` command after completing the requested private action.
+
+### Resuming at `sign_writer_evidence`
+
+Step 21 measures the frozen legacy writer and signs that measurement into
+evidence. Every window downstream is counted from the measurement's
+`observed_at`: the privacy observer at step 22 refuses a freeze older than five
+minutes, and the semantic cutover kernel refuses evidence stamped before the
+finalization it belongs to. The step therefore re-measures rather than reuse an
+observation left by an earlier attempt, archiving the previous one beside it as
+`writer-freeze-observation-e5z.stale-<id>.json`. Nothing is deleted, and the
+archive stays under the same protection and future governed erasure as the
+original. Step 23 likewise re-verifies the erasure receipt immediately before it
+compiles the cutover packet, which refuses a receipt older than five minutes.
+
+Two pauses can park the step. Both are recoverable and neither stops Home
+Assistant:
+
+- `awaiting_permit_recovery` — the grant permit aged past its four-hour window
+  before the step ran. Refresh it (`sudo touch` the permit path), run the runner
+  once with `recover-permit`, then `advance`.
+- `awaiting_writer_evidence_review` — signed evidence or its receipt is on disk
+  and the measurement it is bound to has aged past step 22's window. Inside that
+  window the step resumes on its own, including when the row was committed and
+  only the journal write was lost, because the evidence writer replays an
+  identical document harmlessly. This pause means neither half can simply be
+  reused, so establish which one the database holds:
+
+  ```sql
+  SELECT 1 FROM operations.enforced_legacy_identity_writer_freezes
+  WHERE run_id = '<run_id>';
+  ```
+
+  No row: nothing one-shot was spent. Archive the evidence, its receipt, and the
+  observation together by rename — the same `.stale-<id>` form, all three in one
+  move so they cannot drift apart — and `advance`, which re-establishes the whole
+  step from a fresh measurement.
+
+  A row: the freeze is already committed against a `verified_at` that step 22
+  will now refuse, and both the freeze row and the privacy receipts are one-shot
+  per run. The run cannot be carried forward; this is a restore, not another
+  attempt. Stop and treat it as such.
+
+A review whose projection has drifted is now refused when it is staged rather
+than at step 21. If a rebuild ever has to restage this run, regenerate the
+private People review first with `phase3_reviewed_people_packet.py`; `stage`,
+`review`, `finalize`, and `supersede-expired` all refuse a review whose
+`source_plan_sha256` disagrees with what the current loader derives from the
+reviewed snapshot, and the regenerated review needs its own human content
+review.
+
 The root-owned journal at
 `/srv/home-agent/private/phase3-activation/runner-state-e5ad.json` keeps only
 random identifiers, the accepted source commit, ordered step codes, attempt

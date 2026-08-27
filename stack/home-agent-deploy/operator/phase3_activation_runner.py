@@ -89,6 +89,11 @@ RETIRABLE_PHASES = frozenset({"staged", "review_signed", "finalized"})
 # stop call to mean quiescence.
 HA_QUIESCE_TIMEOUT_SECONDS = 120
 HA_QUIESCE_POLL_SECONDS = 3
+# How fresh the measurement under already-signed evidence has to be for a
+# resumed step 21 to re-emit it instead of parking for review. The privacy
+# observer at step 22 refuses a freeze older than five minutes and the launcher
+# and the record still have to run inside what is left.
+WRITER_EVIDENCE_RESUME_SECONDS = 120
 ADMISSION_RECOVERY_CONTRACT = "phase3-finalizer-admission-recovery-e5an-v1"
 ADMISSION_RECOVERY_REASON = "admission_spent_on_unfinalizable_packet"
 ADMISSION_RECOVERY_PREFIX = "identity-finalizer-admission-recovery-"
@@ -98,6 +103,9 @@ WRITER_OBSERVATION = PRIVATE_IDENTITY_ROOT / "writer-freeze-observation-e5z.json
 PRIVACY_OBSERVATION = PRIVATE_IDENTITY_ROOT / "privacy-cutover-observation-e5aa.json"
 WRITER_FREEZE_EVIDENCE = (
     PRIVATE_IDENTITY_ROOT / "writer-freeze-evidence-e5z.json"
+)
+WRITER_FREEZE_RECEIPT = (
+    PRIVATE_IDENTITY_ROOT / "writer-freeze-evidence-receipt-e5z.json"
 )
 PRIVACY_CUTOVER_EVIDENCE = (
     PRIVATE_IDENTITY_ROOT / "privacy-cutover-evidence-e5aa.json"
@@ -2187,7 +2195,111 @@ class Backend:
             timeout=300,
         )
 
-    def _sign_writer_evidence(self, _state: Mapping[str, Any]) -> None:
+    @staticmethod
+    def _stale_observation_name(path: Path) -> Path:
+        """Archive name for an observation whose freeze time expired.
+
+        Distinct from `.unfinalizable-`: nothing was spent, the measurement
+        simply aged out of the windows the privacy observer and the cutover
+        kernel enforce.
+        """
+
+        return path.with_name(f"{path.stem}.stale-{uuid7()}{path.suffix}")
+
+    def _refresh_writer_observation(self, state: Mapping[str, Any]) -> None:
+        """Re-measure the frozen writer so the evidence carries a fresh time.
+
+        Every downstream window is measured from this file's `observed_at`:
+        the privacy observer refuses a freeze older than five minutes and the
+        cutover kernel refuses evidence older than the finalization. Because
+        `_freeze_legacy_writer` reuses an observation that already exists, a
+        run resumed hours later could otherwise never satisfy them. Archive
+        the old measurement instead of reusing it -- a rename, so the bytes
+        that were on disk when the run stalled stay auditable.
+        """
+
+        if WRITER_OBSERVATION.exists() or WRITER_OBSERVATION.is_symlink():
+            target = self._stale_observation_name(WRITER_OBSERVATION)
+            if target.exists() or target.is_symlink():
+                raise ActivationRunnerError("writer freeze archive is ambiguous")
+            os.rename(WRITER_OBSERVATION, target)
+        # stop -> fence -> observe, in that order. `_stop_ha` waits only for
+        # `-wal` and `-journal` to disappear, while the observer additionally
+        # refuses a `-shm`; it is the fence run's sidecar sweep in between that
+        # removes it. Skipping the fence on an already-fenced database would
+        # leave the observer refusing a database that is genuinely stopped.
+        self._stop_ha()
+        self._freeze_legacy_writer(state)
+
+    @staticmethod
+    def _writer_evidence_resumable() -> bool:
+        """Is the freeze time inside the signed evidence still usable?
+
+        Read the time out of the evidence rather than off the observation on
+        disk. `verified_at` is the value the step 22 observer measures and the
+        cutover kernel compares against the finalization, and taking it from
+        the signed document means no separate file has to still agree with it
+        for the answer to be right.
+        """
+
+        try:
+            raw = Backend._private_document(WRITER_FREEZE_EVIDENCE)
+            document = parse_canonical_json(raw, maximum=MAX_OUTPUT)
+            if not isinstance(document, Mapping):
+                return False
+            freeze = document["enforced_writer_freeze"]
+            if not isinstance(freeze, Mapping):
+                return False
+            verified_at = datetime.fromisoformat(
+                str(freeze["verified_at"]).replace("Z", "+00:00")
+            )
+        except (
+            ActivationRunnerError,
+            VerificationError,
+            KeyError,
+            ValueError,
+            OSError,
+        ):
+            return False
+        if verified_at.tzinfo is None:
+            return False
+        age = (datetime.now(UTC) - verified_at).total_seconds()
+        # A freeze time slightly in the future is ordinary cross-host skew.
+        return -60 <= age <= WRITER_EVIDENCE_RESUME_SECONDS
+
+    def _sign_writer_evidence(self, state: Mapping[str, Any]) -> None:
+        """Sign the physical freeze observation and record it as evidence.
+
+        The ceremony writes signed evidence before the row is recorded and
+        resumes from it verbatim, so on a re-entry the two halves have to be
+        handled together. Refreshing the measurement under existing evidence
+        would re-emit the old evidence against a new observation and spend the
+        one-shot freeze rows on a time step 22 rejects; re-emitting evidence
+        whose measurement has already aged out spends them just as surely.
+
+        So resume only while the measurement is still inside the window --
+        which also covers the narrow case where the row was committed and only
+        the journal write was lost, because the evidence writer replays an
+        identical document harmlessly. Otherwise park for review: by then the
+        run needs a decision about what the database already holds, not another
+        attempt.
+        """
+
+        try:
+            # Checked here as well as inside the admission below: a permit that
+            # expired mid-run should pause before Home Assistant is stopped and
+            # a fresh measurement is spent, not after.
+            migration_executor._require_fresh_permit(datetime.now(UTC))
+        except migration_executor.MigrationExecutionError as error:
+            raise ActivationPause("awaiting_permit_recovery") from error
+        if any(
+            path.exists() or path.is_symlink()
+            for path in (WRITER_FREEZE_EVIDENCE, WRITER_FREEZE_RECEIPT)
+        ):
+            if not self._writer_evidence_resumable():
+                raise ActivationPause("awaiting_writer_evidence_review")
+        else:
+            self._refresh_writer_observation(state)
         self._json([str(SIGNING_LAUNCHER), "freeze-evidence"], timeout=900)
         self._record_evidence("record-freeze-evidence", WRITER_FREEZE_EVIDENCE)
 
@@ -2199,10 +2311,15 @@ class Backend:
         self._json([str(SIGNING_LAUNCHER), "privacy-evidence"], timeout=900)
         self._record_evidence("record-privacy-evidence", PRIVACY_CUTOVER_EVIDENCE)
 
-    def _commit_semantic_cutover(self, _state: Mapping[str, Any]) -> None:
+    def _commit_semantic_cutover(self, state: Mapping[str, Any]) -> None:
         probe = self._probe("authority")
         if probe.get("semantic_authority_current") is True:
             return
+        # The packet refuses an erasure receipt older than five minutes, and
+        # nothing between step 12 and here refreshes one. Re-verify immediately
+        # before the packet is compiled so only the launcher start separates the
+        # receipt's `verified_at` from the packet's own clock.
+        self._erasure_current(state)
         self._json([str(SIGNING_LAUNCHER), "cutover-packet"], timeout=900)
         # The authority candidate carries the writer evidence id and all six
         # privacy check ids, so it can only be recorded after those rows exist,

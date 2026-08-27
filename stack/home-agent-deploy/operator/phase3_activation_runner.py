@@ -82,6 +82,13 @@ RETIREMENT_RECEIPT_SUFFIX = "-e5am.json"
 # and equally safe to retire: the run is expired either way, and the database
 # check below is what actually establishes that nothing was consumed.
 RETIRABLE_PHASES = frozenset({"staged", "review_signed", "finalized"})
+# `ha core stop` returns as soon as the supervisor accepts the request, not when
+# Home Assistant has finished flushing. The legacy identity database can still
+# carry a `-wal` sidecar for seconds afterwards, and the step 20 writer fence
+# refuses exactly that. Wait for the database itself rather than trusting the
+# stop call to mean quiescence.
+HA_QUIESCE_TIMEOUT_SECONDS = 120
+HA_QUIESCE_POLL_SECONDS = 3
 ADMISSION_RECOVERY_CONTRACT = "phase3-finalizer-admission-recovery-e5an-v1"
 ADMISSION_RECOVERY_REASON = "admission_spent_on_unfinalizable_packet"
 ADMISSION_RECOVERY_PREFIX = "identity-finalizer-admission-recovery-"
@@ -2095,17 +2102,33 @@ class Backend:
 
     @staticmethod
     def _stop_ha() -> None:
+        """Stop Home Assistant and wait for the legacy database to go quiet.
+
+        The stopped-database probe is the authoritative condition, on both
+        paths. A lost SSH response is ambiguous -- HA Core may already be
+        stopped -- but so is a successful one: `ha core stop` returns when the
+        supervisor accepts the request, not when the writer has finished. The
+        step 20 fence then refuses a database that still carries a `-wal`
+        sidecar, and reports it as an opaque transport failure with the remote
+        error discarded. Polling the probe removes that race in the one place
+        that can observe it.
+        """
+
         try:
             ha_transport._remote("ha", "core", "stop", timeout=90)
         except Exception:
-            # A lost SSH response is ambiguous: HA Core may already be stopped.
-            # The stopped-database probe below is the authoritative condition.
+            pass
+        deadline = time.monotonic() + HA_QUIESCE_TIMEOUT_SECONDS
+        while True:
             try:
                 ha_transport._require_remote_stopped_database()
+                return
             except Exception as error:
-                raise ActivationRunnerError(
-                    "Home Assistant could not be stopped"
-                ) from error
+                if time.monotonic() >= deadline:
+                    raise ActivationRunnerError(
+                        "Home Assistant could not be stopped"
+                    ) from error
+                time.sleep(HA_QUIESCE_POLL_SECONDS)
 
     def _freeze_legacy_writer(self, _state: Mapping[str, Any]) -> None:
         if WRITER_OBSERVATION.exists() or WRITER_OBSERVATION.is_symlink():

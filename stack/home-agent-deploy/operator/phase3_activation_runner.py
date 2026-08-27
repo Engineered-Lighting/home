@@ -82,6 +82,10 @@ RETIREMENT_RECEIPT_SUFFIX = "-e5am.json"
 # and equally safe to retire: the run is expired either way, and the database
 # check below is what actually establishes that nothing was consumed.
 RETIRABLE_PHASES = frozenset({"staged", "review_signed", "finalized"})
+ADMISSION_RECOVERY_CONTRACT = "phase3-finalizer-admission-recovery-e5an-v1"
+ADMISSION_RECOVERY_REASON = "admission_spent_on_unfinalizable_packet"
+ADMISSION_RECOVERY_PREFIX = "identity-finalizer-admission-recovery-"
+ADMISSION_RECOVERY_SUFFIX = "-e5an.json"
 EDGE_RECEIPT = PRIVATE_IDENTITY_ROOT / "edge-privacy-policy-receipt-e5ac.json"
 WRITER_OBSERVATION = PRIVATE_IDENTITY_ROOT / "writer-freeze-observation-e5z.json"
 PRIVACY_OBSERVATION = PRIVATE_IDENTITY_ROOT / "privacy-cutover-observation-e5aa.json"
@@ -1838,6 +1842,133 @@ class Backend:
 
         return path.with_name(f"{path.stem}.retired-{run_id}{path.suffix}")
 
+    @staticmethod
+    def _admission_recovery_name(path: Path, run_id: str) -> Path:
+        """Archive name for an artifact whose admission was spent.
+
+        Distinct from both `.retired-` and the ceremony's `.superseded-`: those
+        mean a packet that was never registered. This one means a packet that
+        was registered and then refused by the projection kernel.
+        """
+
+        return path.with_name(f"{path.stem}.unfinalizable-{run_id}{path.suffix}")
+
+    def recover_finalizer_admission(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        """Re-mint the finalizer admission id after an unfinalizable packet.
+
+        `commit_finalizer` writes its admission under a fixed operation id held
+        in the journal, and `operations.reviewed_identity_finalizer_admissions`
+        keys on that id. So one activation gets exactly one admission. If the
+        packet it was spent on can never finalize -- because the finalizer
+        kernel refuses its projections -- the run is stranded with no verb that
+        can move it: `retire-expired-finalization` requires that nothing was
+        registered, and the ceremony's `supersede-expired` requires an unsigned
+        packet still at `staged`. Neither describes a packet that was signed,
+        registered, and then rejected.
+
+        This is that gap. It re-mints the admission operation id and archives
+        the stale signing artifacts so `stage` compiles a fresh packet. It
+        writes nothing to the database, advances no step, and rewinds nothing:
+        `completed_steps` and `next_step` are untouched, and the superseded id
+        is recorded in an append-only receipt beside its successor.
+
+        It refuses unless the database proves the spent admission was never
+        acted on -- nothing finalized, nothing consumed -- because a finalized
+        run has projections behind it and a second run would be a second
+        semantic authority, which no recovery may create.
+        """
+
+        raw_state = self._private_document(IDENTITY_SIGNING_STATE)
+        signing = parse_canonical_json(raw_state, maximum=MAX_OUTPUT)
+        if (
+            not isinstance(signing, Mapping)
+            or signing.get("contract") != "phase3-identity-signing-state-e5y-v1"
+            or signing.get("phase") not in RETIRABLE_PHASES
+        ):
+            raise ActivationRunnerError("identity signing state refuses recovery")
+        packet = signing.get("unsigned_packet")
+        if not isinstance(packet, Mapping):
+            raise ActivationRunnerError("identity signing state refuses recovery")
+        run = packet.get("unsigned_run")
+        run_id = packet.get("run_id")
+        if (
+            not isinstance(run, Mapping)
+            or not isinstance(run_id, str)
+            or run_id != run.get("run_id")
+        ):
+            raise ActivationRunnerError("identity signing state refuses recovery")
+        try:
+            parsed = uuid.UUID(run_id)
+        except ValueError as error:
+            raise ActivationRunnerError(
+                "identity signing state refuses recovery"
+            ) from error
+        if parsed.version != 7 or str(parsed) != run_id:
+            raise ActivationRunnerError("identity signing state refuses recovery")
+
+        expires_text = run.get("expires_at")
+        if not isinstance(expires_text, str):
+            raise ActivationRunnerError("identity signing state refuses recovery")
+        try:
+            expires_at = datetime.fromisoformat(expires_text.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ActivationRunnerError(
+                "identity signing state refuses recovery"
+            ) from error
+        if expires_at.tzinfo is None or expires_at > datetime.now(UTC):
+            # A live run must be finalized, never recovered around.
+            raise ActivationRunnerError("reviewed migration run has not expired")
+
+        probe = self._probe("migration")
+        if (
+            probe.get("finalization_count") != 0
+            or probe.get("consumed_admission_count") != 0
+            or not isinstance(probe.get("finalizer_admission_count"), int)
+            or probe["finalizer_admission_count"] < 1
+        ):
+            raise ActivationRunnerError("reviewed migration state refuses recovery")
+
+        superseded = str(state["operation_ids"]["commit_finalizer"])
+        replacement = str(uuid7())
+        receipt_path = PRIVATE_IDENTITY_ROOT / (
+            f"{ADMISSION_RECOVERY_PREFIX}{run_id}{ADMISSION_RECOVERY_SUFFIX}"
+        )
+        archived: list[str] = []
+        for path in (IDENTITY_SIGNING_STATE, FINALIZER_DOCUMENT, FINALIZER_RECEIPT):
+            target = self._admission_recovery_name(path, run_id)
+            if target.exists() or target.is_symlink():
+                if path.exists() or path.is_symlink():
+                    raise ActivationRunnerError(
+                        "identity recovery archive is ambiguous"
+                    )
+                archived.append(target.name)
+                continue
+            if not (path.exists() and not path.is_symlink()):
+                continue
+            os.rename(path, target)
+            archived.append(target.name)
+
+        if not (receipt_path.exists() or receipt_path.is_symlink()):
+            self._atomic_private(
+                receipt_path,
+                canonical_bytes(
+                    {
+                        "contract": ADMISSION_RECOVERY_CONTRACT,
+                        "status": "recovered",
+                        "reason_code": ADMISSION_RECOVERY_REASON,
+                        "run_id": run_id,
+                        "expires_at": expires_text,
+                        "superseded_admission_id": superseded,
+                        "replacement_admission_id": replacement,
+                        "ceremony_policy_sha256": signing["ceremony_policy_sha256"],
+                        "recovered_state_sha256": hashlib.sha256(raw_state).hexdigest(),
+                        "archived_names": sorted(archived),
+                        "created_at": _utc(),
+                    }
+                ),
+            )
+        return {"replacement": replacement, "archived_count": len(archived)}
+
     def retire_expired_finalization(self, state: Mapping[str, Any]) -> dict[str, Any]:
         """Retire a reviewed packet whose run expired before registration.
 
@@ -2489,6 +2620,25 @@ class Runner:
         self.backend.recover_permit(state)
         return self.status()
 
+    def recover_finalizer_admission(self) -> dict[str, Any]:
+        """Refuse unless the ceremony is parked exactly at the finalizer step."""
+
+        state = self.store.load()
+        if state is None:
+            raise ActivationRunnerError("activation has not started")
+        if (
+            state["next_step"] != "commit_finalizer"
+            or state["status"] not in {"paused", "active"}
+        ):
+            raise ActivationRunnerError("activation boundary refuses recovery")
+        outcome = self.backend.recover_finalizer_admission(state)
+        # The only journal field this touches. The cursor, the completed steps,
+        # and every other operation id are left exactly as they were.
+        state["operation_ids"]["commit_finalizer"] = outcome["replacement"]
+        state["updated_at"] = _utc()
+        self.store.save(state)
+        return self.status()
+
     def contain(self) -> dict[str, Any]:
         state = self.store.load()
         if state is None:
@@ -2543,11 +2693,12 @@ def main() -> int:
         "rebind-source",
         "retire-expired-finalization",
         "recover-permit",
+        "recover-finalizer-admission",
     }:
         print(
             "phase3 activation runner requires status, advance, contain, "
-            "refresh-source, rebind-source, retire-expired-finalization, or "
-            "recover-permit",
+            "refresh-source, rebind-source, retire-expired-finalization, "
+            "recover-permit, or recover-finalizer-admission",
             file=sys.stderr,
         )
         return 64
@@ -2575,6 +2726,7 @@ def main() -> int:
             "rebind-source",
             "retire-expired-finalization",
             "recover-permit",
+            "recover-finalizer-admission",
         }
         or result["status"] in {"not_started", "complete"}
         else 3

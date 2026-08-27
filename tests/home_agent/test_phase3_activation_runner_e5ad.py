@@ -1903,3 +1903,83 @@ def test_admission_recovery_writes_nothing_to_the_database() -> None:
         "store.save",
     ):
         assert forbidden not in body, forbidden
+
+
+def _stop_ha_harness(module, monkeypatch, *, stop_raises=False, quiet_after):
+    """Drive _stop_ha with a probe that goes quiet after N attempts."""
+
+    calls = {"stop": 0, "probe": 0, "slept": 0.0}
+
+    def _remote(*args, **kwargs):
+        calls["stop"] += 1
+        if stop_raises:
+            raise RuntimeError("ssh response lost")
+        return b""
+
+    def _probe():
+        calls["probe"] += 1
+        if calls["probe"] <= quiet_after:
+            raise RuntimeError("legacy_identity_wal_still_present")
+        return (1, "a" * 64)
+
+    monkeypatch.setattr(module.ha_transport, "_remote", _remote)
+    monkeypatch.setattr(module.ha_transport, "_require_remote_stopped_database", _probe)
+    monkeypatch.setattr(module.time, "sleep", lambda s: calls.__setitem__("slept", calls["slept"] + s))
+    return calls
+
+
+def test_stop_ha_waits_for_the_database_to_go_quiet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`ha core stop` returning does not mean the writer has finished.
+
+    The step 20 fence refuses a database that still carries a `-wal` sidecar and
+    reports it as an opaque transport failure, so the wait has to happen here.
+    """
+
+    module = _module()
+    calls = _stop_ha_harness(module, monkeypatch, quiet_after=3)
+
+    module.Backend._stop_ha()
+
+    assert calls["stop"] == 1
+    assert calls["probe"] == 4          # three refusals, then quiet
+    assert calls["slept"] > 0           # it actually waited
+
+
+def test_stop_ha_still_accepts_a_lost_ssh_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lost response is ambiguous; the database is what settles it."""
+
+    module = _module()
+    calls = _stop_ha_harness(module, monkeypatch, stop_raises=True, quiet_after=0)
+
+    module.Backend._stop_ha()
+
+    assert calls["probe"] == 1
+
+
+def test_stop_ha_fails_closed_when_the_database_never_settles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A writer that never stops must not be treated as stopped."""
+
+    module = _module()
+    ticks = iter([0.0] + [float(i) for i in range(1, 400)])
+    monkeypatch.setattr(module.time, "monotonic", lambda: next(ticks))
+    _stop_ha_harness(module, monkeypatch, quiet_after=10_000)
+
+    with pytest.raises(module.ActivationRunnerError):
+        module.Backend._stop_ha()
+
+
+def test_stop_ha_bounds_its_wait() -> None:
+    source = RUNNER.read_text(encoding="utf-8")
+    body = source.split("    def _stop_ha", 1)[1].split("    def _freeze_legacy_writer", 1)[0]
+
+    assert "HA_QUIESCE_TIMEOUT_SECONDS" in body
+    assert "time.monotonic()" in body
+    assert "while True" in body
+    # The probe must run on the success path, not only after an SSH failure.
+    assert body.index("_require_remote_stopped_database") > body.index('"ha", "core", "stop"')

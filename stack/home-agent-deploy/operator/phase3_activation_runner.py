@@ -181,6 +181,16 @@ EOC_SOURCE_ROOT = SOURCE_ROOT / "ha-config" / "extended_openai_conversation"
 # `ha core info` for a run-state key this deployment does not return -- while a
 # readiness audit recorded it as "present". Both halves of step 20 run with
 # Home Assistant already stopped, so a mismatch has to fail before that.
+REMOTE_IDENTITY_STORE = "/config/extended_openai_conversation/identity_store.py"
+REMOTE_LEGACY_FENCE = (
+    "/config/extended_openai_conversation/legacy_identity_fence.py"
+)
+# Both step 20 scripts import these two, first as a package-relative import and
+# then as a bare module. Neither form resolves unless the file sits beside them
+# on the Home Assistant host. Verifying only the scripts let the activation pass
+# its own readiness check and then fail at the writer fence -- with Home
+# Assistant already stopped, and the remote ImportError discarded by the
+# transport.
 REMOTE_HA_MODULES = (
     (OPERATOR_MODULE_SOURCE, REMOTE_OPERATOR_MODULE),
     (
@@ -190,6 +200,14 @@ REMOTE_HA_MODULES = (
     (
         EOC_SOURCE_ROOT / "collect_legacy_identity_freeze_observation.py",
         REMOTE_OBSERVER,
+    ),
+    (
+        EOC_SOURCE_ROOT / "identity_store.py",
+        REMOTE_IDENTITY_STORE,
+    ),
+    (
+        EOC_SOURCE_ROOT / "legacy_identity_fence.py",
+        REMOTE_LEGACY_FENCE,
     ),
 )
 MAX_OUTPUT = 6 * 1024 * 1024
@@ -1562,6 +1580,8 @@ class Backend:
         ha_transport._remote("test", "-f", REMOTE_EDGE_RECEIPT, timeout=15)
         ha_transport._remote("test", "-f", REMOTE_FREEZE, timeout=15)
         ha_transport._remote("test", "-f", REMOTE_OBSERVER, timeout=15)
+        ha_transport._remote("test", "-f", REMOTE_IDENTITY_STORE, timeout=15)
+        ha_transport._remote("test", "-f", REMOTE_LEGACY_FENCE, timeout=15)
         self._require_remote_operator_module()
         report = self._json(
             [sys.executable, str(OPERATOR_ROOT / "phase3_activation_preflight.py")],

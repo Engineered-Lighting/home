@@ -1983,3 +1983,47 @@ def test_stop_ha_bounds_its_wait() -> None:
     assert "while True" in body
     # The probe must run on the success path, not only after an SSH failure.
     assert body.index("_require_remote_stopped_database") > body.index('"ha", "core", "stop"')
+
+
+def test_every_ha_host_import_is_verified_and_deployed() -> None:
+    """The two step-20 scripts import modules that must travel with them.
+
+    Both do a package-relative import and then a bare one; neither resolves
+    unless the file sits beside them on the Home Assistant host. A missing
+    dependency passed the readiness check and then failed at the writer fence,
+    with Home Assistant already stopped and the remote ImportError discarded.
+    """
+
+    module = _module()
+    eoc = ROOT / "ha-config/extended_openai_conversation"
+    imported: set[str] = set()
+    for script in (
+        "freeze_legacy_identity_semantics.py",
+        "collect_legacy_identity_freeze_observation.py",
+    ):
+        for line in (eoc / script).read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            for prefix in ("from .", "from "):
+                if stripped.startswith(prefix):
+                    name = stripped[len(prefix):].split(" ", 1)[0].lstrip(".")
+                    if (eoc / f"{name}.py").exists():
+                        imported.add(name)
+
+    assert imported, "expected the step 20 scripts to import local modules"
+
+    verified = {Path(remote).name for _, remote in module.REMOTE_HA_MODULES}
+    for name in imported:
+        assert f"{name}.py" in verified, f"{name} is imported but never verified"
+
+
+def test_the_installer_deploys_everything_the_runner_verifies() -> None:
+    """Two lists, one truth. A file verified but never copied strands a run."""
+
+    module = _module()
+    installer = (
+        ROOT / "stack/home-agent-deploy/install-ha-operator-module.sh"
+    ).read_text(encoding="utf-8")
+
+    for _, remote in module.REMOTE_HA_MODULES:
+        name = Path(remote).name
+        assert name in installer, f"{name} is verified but never installed"

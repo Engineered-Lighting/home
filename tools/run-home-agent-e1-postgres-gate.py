@@ -335,6 +335,7 @@ BUILD_CONTEXT_FILES = (
     "stack/home-agent-deploy/add-identity-cutover-role-secrets.sh",
     "stack/home-agent-deploy/add-binding-committer-role-secrets.sh",
     "stack/home-agent-deploy/preflight-identity-cutover-roles.sh",
+    "stack/home-agent-deploy/install-ha-operator-module.sh",
     "stack/home-agent-deploy/provision-identity-cutover-roles.sh",
     "stack/home-agent-deploy/provision-identity-binding-kernel-role.sh",
     "stack/home-agent-deploy/provision-parent-relationship-kernel-role.sh",

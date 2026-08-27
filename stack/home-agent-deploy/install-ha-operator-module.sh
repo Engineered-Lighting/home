@@ -81,3 +81,13 @@ install_module \
 install_module \
   "$ACTIVATION_ROOT/ha-config/extended_openai_conversation/collect_legacy_identity_freeze_observation.py" \
   "$REMOTE_EOC_ROOT/collect_legacy_identity_freeze_observation.py"
+
+# Both scripts above import these. Without them the imports fail at the writer
+# fence, after Home Assistant has already been stopped.
+install_module \
+  "$ACTIVATION_ROOT/ha-config/extended_openai_conversation/identity_store.py" \
+  "$REMOTE_EOC_ROOT/identity_store.py"
+
+install_module \
+  "$ACTIVATION_ROOT/ha-config/extended_openai_conversation/legacy_identity_fence.py" \
+  "$REMOTE_EOC_ROOT/legacy_identity_fence.py"

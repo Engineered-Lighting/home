@@ -46,13 +46,20 @@ def test_the_route_reads_an_attribute_main_actually_sets() -> None:
     assert "application.state.owner_partner_adapter" in main
 
 
-def test_the_adapter_shares_the_committer_credential() -> None:
+def test_the_adapter_uses_its_own_pool_on_the_committer_credential() -> None:
     """Only home_agent_binding_committer holds EXECUTE, so the adapter must
-    reach the database that authenticates as it."""
+    reach a database authenticating as it -- but NOT the parent-authority pool.
+
+    That pool's method set is asserted exactly by the E5g deployment contract,
+    because a pool reaching reviewed kernels must not quietly grow reach into
+    others. Sharing a credential is not a reason to share a surface.
+    """
 
     main = (APP / "main.py").read_text()
-    assert "OwnerPartnerAdapter(parent_relationship_database)" in main
-    assert "if parent_relationship_database is not None" in main
+    assert "OwnerAttestationAuthorityDatabase(" in main
+    assert "OwnerPartnerAdapter(owner_attestation_database)" in main
+    assert "OwnerPartnerAdapter(parent_relationship_database)" not in main
+    assert "binding_commit_database_url" in main
 
 
 def test_the_body_cannot_carry_authority_or_identifiers() -> None:

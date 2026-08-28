@@ -102,6 +102,16 @@ def test_the_route_avoids_the_retired_people_surface() -> None:
     assert '"/people"' not in api.split("def create_household_person")[0][-2000:]
 
 
+def test_the_adapter_uses_the_owner_attestation_pool() -> None:
+    """Not the parent-authority pool, whose method set is asserted exactly by
+    the E5g deployment contract. Sharing a credential is not a reason to share
+    a surface."""
+
+    main = (APP / "main.py").read_text()
+    assert "OwnerPersonAdapter(owner_attestation_database)" in main
+    assert "OwnerPersonAdapter(parent_relationship_database)" not in main
+
+
 def test_the_route_is_pinned_and_wired() -> None:
     api = (APP / "api.py").read_text()
     main = (APP / "main.py").read_text()

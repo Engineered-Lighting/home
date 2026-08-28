@@ -23,6 +23,7 @@ from .auth import (
 )
 from .config import Settings
 from .db import (
+    OwnerAttestationAuthorityDatabase,
     Database,
     ParentRelationshipAuthorityDatabase,
     PrincipalBindingCommitDatabase,
@@ -199,14 +200,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # home_agent_binding_committer is the only role granted EXECUTE on either
     # kernel. If that database is unavailable, neither adapter exists and the
     # routes report a capability message rather than failing on permissions.
+    # Its own pool, not the parent-authority one: that pool's method set is
+    # asserted exactly, and sharing a credential is not a reason to share a
+    # surface.
+    owner_attestation_database = (
+        OwnerAttestationAuthorityDatabase(
+            settings.binding_commit_database_url.get_secret_value()
+        )
+        if settings.binding_commit_database_url is not None
+        and settings.role in {"api", "all"}
+        else None
+    )
     owner_partner_adapter = (
-        OwnerPartnerAdapter(parent_relationship_database)
-        if parent_relationship_database is not None
+        OwnerPartnerAdapter(owner_attestation_database)
+        if owner_attestation_database is not None
         else None
     )
     owner_person_adapter = (
-        OwnerPersonAdapter(parent_relationship_database)
-        if parent_relationship_database is not None
+        OwnerPersonAdapter(owner_attestation_database)
+        if owner_attestation_database is not None
         else None
     )
     spool = (

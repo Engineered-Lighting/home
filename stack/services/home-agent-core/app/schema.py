@@ -1221,6 +1221,11 @@ fact_versions = Table(
     Column("committed_at", DateTime(timezone=True), nullable=False, server_default=NOW),
     UniqueConstraint("fact_id", "version", name="fact_version"),
     CheckConstraint(
+        "predicate <> 'partner_of' "
+        "OR (object ->> 'person_id') IS DISTINCT FROM subject_id::text",
+        name="partner_relationship_is_not_reflexive",
+    ),
+    CheckConstraint(
         "authority IN ('explicit_subject','explicit_related_party',"
         "'authorized_administrator','sensor','derived_rule','model_proposal',"
         "'legacy_unverified')",
@@ -1293,6 +1298,17 @@ fact_support = Table(
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=NOW),
     UniqueConstraint("fact_version_id", "artifact_id", name="fact_artifact_support"),
     schema="knowledge",
+)
+Index(
+    "uq_active_partner_relationship",
+    fact_versions.c.subject_id,
+    fact_versions.c.object["person_id"].astext,
+    fact_versions.c.perspective_principal_id,
+    unique=True,
+    postgresql_where=text(
+        "predicate = 'partner_of' "
+        "AND upper_inf(system_range) AND resolution = 'accepted'"
+    ),
 )
 
 preferences = Table(

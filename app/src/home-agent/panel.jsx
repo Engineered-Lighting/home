@@ -105,7 +105,10 @@ function ParentRelationshipCard({ status, busy, onStage, onConfirm }) {
   );
 }
 
-function HouseholdCard({ people, relationships, error }) {
+function HouseholdCard({
+  people, relationships, error,
+  busy, partnerChoice, onPartnerChoice, onAttestPartner,
+}) {
   // Read-only. Core applies the visibility rule -- privacy directives, edge
   // blocks and erasure -- so anything absent here is absent deliberately and
   // must never be reconstructed client-side from another response.
@@ -147,6 +150,38 @@ function HouseholdCard({ people, relationships, error }) {
       {!error && (relationships || []).length === 0 && (people || []).length > 0 && (
         <p>No confirmed relationships yet.</p>
       )}
+      {!error && onAttestPartner && (people || []).length > 0 && (
+        <>
+          <h3>Record a partner</h3>
+          <p>
+            You are recording this yourself. It is stored as your account&rsquo;s
+            statement about your household, not as something the other person
+            confirmed.
+          </p>
+          <label htmlFor="agent-partner-select">Partner</label>
+          <select
+            id="agent-partner-select"
+            value={partnerChoice || ""}
+            disabled={busy}
+            onChange={(event) => onPartnerChoice(event.target.value)}
+          >
+            <option value="">Choose someone…</option>
+            {people
+              .filter((person) => !person.is_self)
+              .map((person) => (
+                <option key={person.person_id} value={person.person_id}>
+                  {person.display_name}
+                </option>
+              ))}
+          </select>
+          <button
+            disabled={busy || !partnerChoice}
+            onClick={() => onAttestPartner(partnerChoice)}
+          >
+            {busy ? "Recording…" : "Record partner"}
+          </button>
+        </>
+      )}
     </section>
   );
 }
@@ -169,6 +204,8 @@ function HomeAgentPanel() {
   const [parentRelationship, setParentRelationship] = useState(null);
   const [household, setHousehold] = useState(null);
   const [householdError, setHouseholdError] = useState(false);
+  const [partnerChoice, setPartnerChoice] = useState("");
+  const [partnerBusy, setPartnerBusy] = useState(false);
   const [parentRelationshipBusy, setParentRelationshipBusy] = useState(false);
   const [snapshot, setSnapshot] = useState(null);
   const [containedPreferences, setContainedPreferences] = useState(null);
@@ -201,6 +238,8 @@ function HomeAgentPanel() {
     setParentRelationship(null);
     setHousehold(null);
     setHouseholdError(false);
+    setPartnerChoice("");
+    setPartnerBusy(false);
     setParentRelationshipBusy(false);
     setSnapshot(null);
     setContainedPreferences(null);
@@ -545,6 +584,37 @@ function HomeAgentPanel() {
     }
   };
 
+  const attestPartner = async (partnerPersonId) => {
+    if (!partnerPersonId) return;
+    const ticket = beginPrincipalOperation();
+    setPartnerBusy(true);
+    setError("");
+    try {
+      // The seed is a v7 so derived identifiers sort with the ceremony that
+      // produced them; the nonce is a v4 because a v7 would leak the
+      // wall-clock time of an otherwise unlinkable value. Core re-checks both.
+      await api.attestPartner({
+        ceremony_id: randomUuid7(),
+        partner_person_id: partnerPersonId,
+        attestation_nonce: crypto.randomUUID(),
+      });
+      if (!principalOperationCurrent(ticket)) return;
+      setPartnerChoice("");
+      setPartnerBusy(false);
+      // Re-read rather than patch locally: the card must never show a
+      // partnership Core did not record.
+      const edges = await api.relationships();
+      if (!principalOperationCurrent(ticket)) return;
+      setHousehold((current) =>
+        current ? { ...current, relationships: edges.relationships } : current,
+      );
+    } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
+      setPartnerBusy(false);
+      setError(cause.message || "partner_attestation_failed");
+    }
+  };
+
   const stageParentRelationship = async () => {
     const ticket = beginPrincipalOperation();
     setParentRelationshipBusy(true);
@@ -829,6 +899,10 @@ function HomeAgentPanel() {
           people={household?.people}
           relationships={household?.relationships}
           error={householdError}
+          busy={partnerBusy}
+          partnerChoice={partnerChoice}
+          onPartnerChoice={setPartnerChoice}
+          onAttestPartner={attestPartner}
         />
       )}
 

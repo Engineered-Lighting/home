@@ -176,6 +176,13 @@
         if (this.invoke) return Promise.reject(new Error("native_relationships_unavailable"));
         return this.request("/api/agent/v1/relationships");
       }
+      attestPartner(body) {
+        if (this.invoke) return Promise.reject(new Error("native_partner_attestation_unavailable"));
+        return this.request("/api/agent/v1/partner-attestation", {
+          method: "POST",
+          body,
+        });
+      }
     stageParentRelationship() {
       if (this.invoke) return Promise.reject(new Error("native_parent_relationship_unavailable"));
       return this.request("/api/agent/v1/parent-relationship-proposal", {

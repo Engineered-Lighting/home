@@ -203,6 +203,42 @@ class RelationshipEntry(StrictModel):
 
 class RelationshipsView(StrictModel):
     relationships: list[RelationshipEntry] = Field(max_length=500)
+class OwnerPartnerAttestation(StrictModel):
+    """What the owner asserts, and nothing more.
+
+    No authority field: the kernel writes 'authorized_administrator' as a
+    literal, so a caller can never claim a confirmation that did not happen.
+    No identifiers either -- the adapter derives every primary key from the
+    ceremony seed.
+    """
+
+    ceremony_id: uuid.UUID
+    partner_person_id: uuid.UUID
+    attestation_nonce: uuid.UUID
+
+    @field_validator("ceremony_id")
+    @classmethod
+    def _ceremony_is_uuid7(cls, value: uuid.UUID) -> uuid.UUID:
+        # Sortable and timestamped, matching the other ceremonies; the adapter
+        # also relies on the embedded timestamp when deriving identifiers.
+        if value.version != 7:
+            raise ValueError("ceremony_id must be a UUIDv7")
+        return value
+
+    @field_validator("attestation_nonce")
+    @classmethod
+    def _nonce_is_uuid4(cls, value: uuid.UUID) -> uuid.UUID:
+        # v4 only: a v7 nonce would leak the wall-clock time of the attestation
+        # into a value that is otherwise unlinkable.
+        if value.version != 4:
+            raise ValueError("attestation_nonce must be a UUIDv4")
+        return value
+
+
+class OwnerPartnerAttestationView(StrictModel):
+    receipt_id: uuid.UUID
+    partner_person_id: uuid.UUID
+    document_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class ReviewedPersonVerify(StrictModel):

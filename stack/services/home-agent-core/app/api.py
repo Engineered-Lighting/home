@@ -101,6 +101,7 @@ OperatorBindingStore = Annotated[CoreStore, Depends(operator_binding_store_from)
 PHASE3_SCHEMA_REVISION = "0006a_worker_lease_arbitration"
 PRINCIPAL_BINDING_ADAPTER_REVISION = "0017_authenticated_binding_e5c"
 PARENT_RELATIONSHIP_ADAPTER_REVISION = "0021_parent_status_e5h"
+OWNER_PARTNER_ADAPTER_REVISION = "0025_owner_partner_caller_e5l"
 LEGACY_IDENTITY_IMPORT_RETIRED = (
     "sequential legacy identity import is retired; use the reviewed atomic "
     "identity finalizer"
@@ -676,6 +677,41 @@ def semantic_router() -> APIRouter:
             lambda: store.create_visit(principal, value)
         )
 
+    @router.post(
+        "/partner-attestation",
+        response_model=OwnerPartnerAttestationView,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def attest_owner_partner(
+        request: Request,
+        service: Service,
+    ) -> OwnerPartnerAttestationView:
+        # Pinned to the revision that provisions the kernel's caller. Before
+        # that migration the GRANT does not exist, so the call would fail with
+        # a permission error rather than a capability message.
+        if (
+            request.app.state.settings.readiness_migration
+            != OWNER_PARTNER_ADAPTER_REVISION
+        ):
+            raise CapabilityDisabledError(
+                "owner partner attestation is not deployed"
+            )
+        adapter = getattr(request.app.state, "owner_partner_adapter", None)
+        if adapter is None:
+            raise CapabilityDisabledError(
+                "owner partner split-credential adapter is unavailable"
+            )
+        raw_body = await request.body()
+        try:
+            value = OwnerPartnerAttestation.model_validate_json(raw_body)
+        except ValidationError as exc:
+            raise ValidationDomainError(
+                "owner partner attestation body is invalid"
+            ) from exc
+        return await adapter.attest(
+            ha_user_id=service.ha_user_id,
+            value=value,
+        )
     # The People tab. Both routes take Service as well as Principal: the
     # principal row carries principal_id and person_id but not ha_user_id, and
     # the edge-block arm of the visibility filter is keyed by HA user. The API

@@ -72,6 +72,32 @@ class ParentRelationshipCommitKernelCall:
 
 
 @dataclass(frozen=True, slots=True)
+class OwnerPartnerCommitKernelCall:
+    """Every identifier is derived, never client-supplied.
+
+    A caller that could choose its own primary keys could collide two rows or
+    replay someone else's ceremony, so the adapter hashes them from the
+    ceremony seed and the kernel refuses a repeated value.
+    """
+
+    authenticated_ha_user_id: str
+    ceremony_id: uuid.UUID
+    partner_person_id: uuid.UUID
+    document_digest: str
+    memory_transaction_id: uuid.UUID
+    fact_id_self: uuid.UUID
+    fact_id_partner: uuid.UUID
+    fact_version_id_self: uuid.UUID
+    fact_version_id_partner: uuid.UUID
+    support_id_self: uuid.UUID
+    support_id_partner: uuid.UUID
+    receipt_id: uuid.UUID
+    receipt_edge_id_0: uuid.UUID
+    receipt_edge_id_1: uuid.UUID
+    attestation_artifact_id: uuid.UUID
+
+
+@dataclass(frozen=True, slots=True)
 class ParentRelationshipStatusKernelResult:
     state: str
     proposal_id: uuid.UUID | None
@@ -129,6 +155,86 @@ class PrincipalBindingCommitDatabase:
                         },
                     )
                 ).scalar_one()
+
+    async def close(self) -> None:
+        await self.engine.dispose()
+
+
+class OwnerAttestationAuthorityDatabase:
+    """A table-blind pool exposing only the owner-attested kernels.
+
+    Separate from ParentRelationshipAuthorityDatabase on purpose. That pool's
+    method set is asserted exactly, because a pool that reaches reviewed
+    kernels must not quietly grow reach into others -- even ones sharing its
+    credential. Two pools with narrow surfaces are auditable; one wide pool is
+    not.
+    """
+
+    def __init__(self, url: str) -> None:
+        self.engine: AsyncEngine = create_async_engine(
+            url,
+            pool_pre_ping=True,
+            pool_size=2,
+            max_overflow=0,
+            pool_recycle=300,
+            hide_parameters=True,
+        )
+
+    async def commit_owner_partner(
+        self, value: OwnerPartnerCommitKernelCall
+    ) -> uuid.UUID:
+        """Record an owner-attested partnership and return its receipt id.
+
+        SERIALIZABLE is not optional: the kernel refuses any other isolation
+        level, because its checks read state it then writes against.
+        """
+
+        async with self.engine.connect() as raw_connection:
+            connection = await raw_connection.execution_options(
+                isolation_level="SERIALIZABLE"
+            )
+            async with connection.begin():
+                receipt_id = (
+                    await connection.execute(
+                        text(
+                            "SELECT identity."
+                            "commit_owner_partner_relationship_e5k("
+                            ":ceremony_id,"
+                            "CAST(:ha_user_id AS text),"
+                            ":partner_person_id,"
+                            "CAST(:document_digest AS text),"
+                            ":memory_transaction_id,"
+                            ":fact_id_self,:fact_id_partner,"
+                            ":fact_version_id_self,:fact_version_id_partner,"
+                            ":support_id_self,:support_id_partner,"
+                            ":receipt_id,"
+                            ":receipt_edge_id_0,:receipt_edge_id_1,"
+                            ":attestation_artifact_id)"
+                        ),
+                        {
+                            "ceremony_id": value.ceremony_id,
+                            "ha_user_id": value.authenticated_ha_user_id,
+                            "partner_person_id": value.partner_person_id,
+                            "document_digest": value.document_digest,
+                            "memory_transaction_id": value.memory_transaction_id,
+                            "fact_id_self": value.fact_id_self,
+                            "fact_id_partner": value.fact_id_partner,
+                            "fact_version_id_self": value.fact_version_id_self,
+                            "fact_version_id_partner": (
+                                value.fact_version_id_partner
+                            ),
+                            "support_id_self": value.support_id_self,
+                            "support_id_partner": value.support_id_partner,
+                            "receipt_id": value.receipt_id,
+                            "receipt_edge_id_0": value.receipt_edge_id_0,
+                            "receipt_edge_id_1": value.receipt_edge_id_1,
+                            "attestation_artifact_id": (
+                                value.attestation_artifact_id
+                            ),
+                        },
+                    )
+                ).scalar_one()
+        return receipt_id
 
     async def close(self) -> None:
         await self.engine.dispose()

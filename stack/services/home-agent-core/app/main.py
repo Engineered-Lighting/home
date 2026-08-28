@@ -23,6 +23,7 @@ from .auth import (
 )
 from .config import Settings
 from .db import (
+    OwnerAttestationAuthorityDatabase,
     Database,
     ParentRelationshipAuthorityDatabase,
     PrincipalBindingCommitDatabase,
@@ -31,6 +32,7 @@ from .errors import DomainError
 from .ledger import EncryptedErasureLedger
 from .maintenance import WorkerMaintenanceInspector
 from .models import HealthView
+from .owner_partner_adapter import OwnerPartnerAdapter
 from .parent_relationship_adapter import (
     AuthenticatedParentRelationshipAdapter,
 )
@@ -193,6 +195,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if parent_relationship_database is not None
         else None
     )
+    # Shares the parent authority database because it shares the credential:
+    # home_agent_binding_committer is the only role granted EXECUTE on either
+    # kernel. If that database is unavailable, neither adapter exists and the
+    # routes report a capability message rather than failing on permissions.
+    # Its own pool, not the parent-authority one: that pool's method set is
+    # asserted exactly, and sharing a credential is not a reason to share a
+    # surface.
+    owner_attestation_database = (
+        OwnerAttestationAuthorityDatabase(
+            settings.binding_commit_database_url.get_secret_value()
+        )
+        if settings.binding_commit_database_url is not None
+        and settings.role in {"api", "all"}
+        else None
+    )
+    owner_partner_adapter = (
+        OwnerPartnerAdapter(owner_attestation_database)
+        if owner_attestation_database is not None
+        else None
+    )
     spool = (
         EncryptedRuntimeSpool(
             settings.runtime_spool_path,
@@ -342,6 +364,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.parent_relationship_adapter = (
         parent_relationship_adapter
     )
+    application.state.owner_partner_adapter = owner_partner_adapter
     application.state.spool = spool
     application.state.store = store
     application.state.operator_store = operator_store

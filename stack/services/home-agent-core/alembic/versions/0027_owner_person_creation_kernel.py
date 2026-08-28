@@ -38,7 +38,7 @@ from alembic import op
 
 
 revision: str = "0027_owner_person_e5n"
-down_revision: str = "0026_third_party_e5m"
+down_revision: str | None = "0026_third_party_e5m"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 

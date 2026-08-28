@@ -19,6 +19,12 @@ FIXED_STAGES = {
     # migration with no stop that reaches it is undeployable -- `migrate`
     # refuses any target but the baseline.
     "phase3-migrate-owner-person": "0027_owner_person_e5n",
+    # Reviewed addition: 0028 makes the owner-attested partner kernel
+    # executable at all -- it had the wrong owner, a duplicate overload, no
+    # privileges and no row policy. Both owner-attested routes pin to it, so
+    # without a stop that reaches it the image cannot deploy the revision they
+    # require.
+    "phase3-migrate-owner-partner-access": "0028_owner_partner_access_e5o",
 }
 
 

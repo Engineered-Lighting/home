@@ -4359,7 +4359,17 @@ BEGIN
    WHERE role_row.oid IN (finalizer_oid, kernel_oid);
   IF actual_schema_acl IS DISTINCT FROM expected_schema_acl THEN
     RAISE WARNING 'identity finalizer E3 schema ACL mismatch'
-      USING ERRCODE = '42501';
+      USING ERRCODE = '42501',
+            DETAIL = pg_catalog.format(
+              'revision=%s missing=%s unexpected=%s',
+              current_revision,
+              (SELECT pg_catalog.array_agg(entry)
+                 FROM pg_catalog.unnest(expected_schema_acl) AS entry
+                WHERE entry <> ALL (coalesce(actual_schema_acl, ARRAY[]::text[]))),
+              (SELECT pg_catalog.array_agg(entry)
+                 FROM pg_catalog.unnest(coalesce(actual_schema_acl, ARRAY[]::text[])) AS entry
+                WHERE entry <> ALL (expected_schema_acl))
+            );
   END IF;
 
   expected_table_acl := ARRAY[
@@ -4416,7 +4426,17 @@ BEGIN
      );
   IF actual_table_acl IS DISTINCT FROM expected_table_acl THEN
     RAISE WARNING 'identity finalizer E3 table ACL mismatch'
-      USING ERRCODE = '42501';
+      USING ERRCODE = '42501',
+            DETAIL = pg_catalog.format(
+              'revision=%s missing=%s unexpected=%s',
+              current_revision,
+              (SELECT pg_catalog.array_agg(entry)
+                 FROM pg_catalog.unnest(expected_table_acl) AS entry
+                WHERE entry <> ALL (coalesce(actual_table_acl, ARRAY[]::text[]))),
+              (SELECT pg_catalog.array_agg(entry)
+                 FROM pg_catalog.unnest(coalesce(actual_table_acl, ARRAY[]::text[])) AS entry
+                WHERE entry <> ALL (expected_table_acl))
+            );
   END IF;
 
   expected_column_acl := ARRAY[
@@ -4461,7 +4481,17 @@ BEGIN
      );
   IF actual_column_acl IS DISTINCT FROM expected_column_acl THEN
     RAISE EXCEPTION 'identity finalizer E3 column ACL mismatch'
-      USING ERRCODE = '42501';
+      USING ERRCODE = '42501',
+            DETAIL = pg_catalog.format(
+              'revision=%s missing=%s unexpected=%s',
+              current_revision,
+              (SELECT pg_catalog.array_agg(entry)
+                 FROM pg_catalog.unnest(expected_column_acl) AS entry
+                WHERE entry <> ALL (coalesce(actual_column_acl, ARRAY[]::text[]))),
+              (SELECT pg_catalog.array_agg(entry)
+                 FROM pg_catalog.unnest(coalesce(actual_column_acl, ARRAY[]::text[])) AS entry
+                WHERE entry <> ALL (expected_column_acl))
+            );
   END IF;
 
   expected_function_acl := ARRAY[
@@ -4490,7 +4520,17 @@ BEGIN
       );
   IF actual_function_acl IS DISTINCT FROM expected_function_acl THEN
     RAISE EXCEPTION 'identity finalizer E3 function ACL mismatch'
-      USING ERRCODE = '42501';
+      USING ERRCODE = '42501',
+            DETAIL = pg_catalog.format(
+              'revision=%s missing=%s unexpected=%s',
+              current_revision,
+              (SELECT pg_catalog.array_agg(entry)
+                 FROM pg_catalog.unnest(expected_function_acl) AS entry
+                WHERE entry <> ALL (coalesce(actual_function_acl, ARRAY[]::text[]))),
+              (SELECT pg_catalog.array_agg(entry)
+                 FROM pg_catalog.unnest(coalesce(actual_function_acl, ARRAY[]::text[])) AS entry
+                WHERE entry <> ALL (expected_function_acl))
+            );
   END IF;
 
   IF EXISTS (

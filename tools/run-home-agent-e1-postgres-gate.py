@@ -60,6 +60,8 @@ REVISION_0018 = "0018_parent_relationship_e5d"
 REVISION_0019 = "0019_parent_stage_e5e"
 REVISION_0020 = "0020_parent_commit_e5f"
 REVISION_0021 = "0021_parent_status_e5h"
+REVISION_0027 = "0027_owner_person_e5n"
+REVISION_0028 = "0028_owner_partner_access_e5o"
 E4_SUCCESS_DOCUMENT_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_DOCUMENT_B64"
 E4_SUCCESS_ADMISSION_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_ADMISSION_ID"
 E4_SCAFFOLD_OWNER_DATABASE_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_OWNER_DATABASE_URL"
@@ -97,6 +99,12 @@ E5F_OPERATOR_DATABASE_ENV = "TEST_PHASE3_PARENT_RELATIONSHIP_E5F_OPERATOR_DATABA
 E5H_OWNER_DATABASE_ENV = "TEST_PHASE3_PARENT_RELATIONSHIP_E5H_OWNER_DATABASE_URL"
 E5H_COMMITTER_DATABASE_ENV = (
     "TEST_PHASE3_PARENT_RELATIONSHIP_E5H_COMMITTER_DATABASE_URL"
+)
+E5N_OWNER_DATABASE_ENV = (
+    "TEST_PHASE3_OWNER_ATTESTED_E5N_OWNER_DATABASE_URL"
+)
+E5N_COMMITTER_DATABASE_ENV = (
+    "TEST_PHASE3_OWNER_ATTESTED_E5N_COMMITTER_DATABASE_URL"
 )
 E5B_CLEANUP_DOWNGRADE_EVIDENCE_ENV = (
     "TEST_PHASE3_PRINCIPAL_BINDING_KERNEL_E5B_CLEANUP_DOWNGRADE_EVIDENCE"
@@ -3804,6 +3812,64 @@ def _run_e4_scaffold_phase(
         },
         credential_url_environment={
             E5H_COMMITTER_DATABASE_ENV: (
+                BASE_DATABASE,
+                "home_agent_binding_committer",
+                "postgres_binding_committer_password",
+            ),
+        },
+        environment={
+            SENTINEL_ENV: state.sentinel,
+            SYSTEM_ID_ENV: phase.system_identifier,
+            ALLOWLIST_ENV: BASE_DATABASE,
+        },
+        fail_fast=True,
+    )
+
+    # 0022-0027 add the owner-attested surface: a predicate-agnostic erasure
+    # suppression, partner_of, two commit kernels and person creation. Every
+    # test below EXECUTES a kernel rather than reading its source. The static
+    # tests that shipped with those migrations assert that guard clauses are
+    # present in the migration text, which cannot catch a SQL error, a
+    # constraint violation, or a plpgsql logic fault -- and all five defects
+    # that reached production were found only by running something.
+    _alembic(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+        REVISION_0028,
+    )
+    _assert_database_revision(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+        REVISION_0028,
+    )
+    _apply_grants(
+        state,
+        phase,
+        secrets_directory,
+        BASE_DATABASE,
+    )
+    _pytest(
+        state,
+        phase,
+        secrets_directory,
+        nodes=[
+            "tests/"
+            "test_phase3_owner_partner_kernel_e5k_runtime_postgres.py",
+            "tests/"
+            "test_phase3_owner_person_kernel_e5n_runtime_postgres.py",
+            "tests/"
+            "test_phase3_predicate_agnostic_suppression_runtime_postgres.py",
+            "tests/test_people_directory_visibility_runtime_postgres.py",
+        ],
+        url_environment={
+            E5N_OWNER_DATABASE_ENV: BASE_DATABASE,
+        },
+        credential_url_environment={
+            E5N_COMMITTER_DATABASE_ENV: (
                 BASE_DATABASE,
                 "home_agent_binding_committer",
                 "postgres_binding_committer_password",

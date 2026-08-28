@@ -8772,6 +8772,84 @@ GRANT EXECUTE ON FUNCTION
   privacy.identity_principal_is_blocked(uuid)
   TO home_agent_parent_relationship_kernel;
 
+-- E5k is the owner-attested partner kernel. It is a DIFFERENT role from the
+-- parent kernel above -- partner, not parent -- and until now it held nothing:
+-- no schema USAGE, no table grant, no column grant, anywhere in the database.
+-- The one-word difference is why that went unnoticed for so long, because every
+-- privilege check written against the parent role passes.
+--
+-- The EXECUTE grants must live here rather than in a migration: the erasure
+-- quarantine block above revokes ALL PRIVILEGES on
+-- privacy.identity_person_is_blocked(uuid) from every role in pg_roles, so a
+-- grant made by alembic is removed on the next run of this script.
+GRANT USAGE ON SCHEMA identity, knowledge, operations, privacy
+  TO home_agent_partner_relationship_kernel;
+GRANT SELECT (
+  binding_id, ha_user_id, principal_id, person_id, revoked_at
+) ON identity.ha_user_bindings TO home_agent_partner_relationship_kernel;
+GRANT SELECT (
+  person_id, display_name, status, privacy_scope,
+  legacy_source_sha256, status_source_sha256
+) ON identity.people TO home_agent_partner_relationship_kernel;
+GRANT SELECT (person_id, directive, enabled)
+  ON identity.privacy_directives TO home_agent_partner_relationship_kernel;
+GRANT SELECT (
+  fact_version_id, fact_id, memory_transaction_id, perspective_principal_id,
+  subject_type, subject_id, predicate, object, version, valid_range,
+  system_range, authority, support, coverage, freshness, contradiction,
+  resolution, privacy_scope, committed_at
+), INSERT (
+  fact_version_id, fact_id, memory_transaction_id, perspective_principal_id,
+  subject_type, subject_id, predicate, object, version, valid_range,
+  system_range, authority, support, coverage, freshness, contradiction,
+  resolution, privacy_scope, committed_at
+) ON knowledge.fact_versions TO home_agent_partner_relationship_kernel;
+GRANT SELECT (
+  support_id, fact_version_id, artifact_id, root_observation_id,
+  dependency_domain, support_role, created_at
+), INSERT (
+  support_id, fact_version_id, artifact_id, root_observation_id,
+  dependency_domain, support_role, created_at
+) ON knowledge.fact_support TO home_agent_partner_relationship_kernel;
+GRANT SELECT (
+  transaction_id, principal_id, visit_id, kind, state, candidate, preview,
+  exact_text_ciphertext, exact_text_nonce, exact_text_sha256, policy_version,
+  policy_digest, verifier_results, confirmation_digest, confirmed_at,
+  created_at, updated_at
+), INSERT (
+  transaction_id, principal_id, visit_id, kind, state, candidate, preview,
+  exact_text_ciphertext, exact_text_nonce, exact_text_sha256, policy_version,
+  policy_digest, verifier_results, confirmation_digest, confirmed_at,
+  created_at, updated_at
+) ON knowledge.memory_transactions TO home_agent_partner_relationship_kernel;
+GRANT SELECT (
+  artifact_id, owner_principal_id, artifact_kind, store, external_ref,
+  content_sha256, retention_class, status, created_at
+), INSERT (
+  artifact_id, owner_principal_id, artifact_kind, store, external_ref,
+  content_sha256, retention_class, status, created_at
+) ON privacy.artifact_registry TO home_agent_partner_relationship_kernel;
+GRANT SELECT (
+  receipt_id, ceremony_id, principal_id, subject_person_id, partner_person_id,
+  contract_version, edge_count, authority_result, document_digest,
+  memory_transaction_id, assertion_scope, predicate, attested_at
+), INSERT (
+  receipt_id, ceremony_id, principal_id, subject_person_id, partner_person_id,
+  contract_version, edge_count, authority_result, document_digest,
+  memory_transaction_id, assertion_scope, predicate, attested_at
+) ON operations.partner_relationship_authority_receipts
+  TO home_agent_partner_relationship_kernel;
+GRANT SELECT (
+  receipt_edge_id, receipt_id, ordinal, fact_version_id
+), INSERT (
+  receipt_edge_id, receipt_id, ordinal, fact_version_id
+) ON operations.partner_relationship_authority_receipt_edges
+  TO home_agent_partner_relationship_kernel;
+GRANT EXECUTE ON FUNCTION
+  privacy.lock_identity_semantic_write_fence(),
+  privacy.identity_person_is_blocked(uuid)
+  TO home_agent_partner_relationship_kernel;
+
 GRANT USAGE ON SCHEMA identity TO home_agent_binding_committer;
 SET ROLE home_agent_parent_relationship_kernel;
 GRANT EXECUTE ON FUNCTION

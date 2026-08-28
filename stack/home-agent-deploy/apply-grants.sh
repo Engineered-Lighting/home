@@ -4309,14 +4309,20 @@ BEGIN
     operations.reviewed_identity_migration_projection_lineage,
     operations.reviewed_identity_migration_projection_subjects
     TO home_agent_identity_finalizer_kernel;
-  -- The kernel writes its attestation into privacy.artifact_registry. 0027
-  -- grants this at column level deliberately, and the quarantine strips it,
-  -- so it is restored at column level here rather than widened to the table.
-  GRANT INSERT (
-    artifact_id, artifact_kind, content_sha256, created_at, external_ref,
-    owner_principal_id, retention_class, status, store
-  ) ON TABLE privacy.artifact_registry
-    TO home_agent_identity_finalizer_kernel;
+  -- The person kernel writes its attestation into privacy.artifact_registry.
+  -- 0027 grants this at column level deliberately, and the quarantine above
+  -- strips it, so it is restored here -- but only once that kernel exists.
+  -- Granting it unconditionally puts a privilege on the role at revisions
+  -- before 0027, and revision 0013 refuses to apply to a role that already
+  -- holds one (identity_finalizer_e3_pregrant_authority_invalid), which breaks
+  -- a downgrade and re-upgrade of the E3 boundary.
+  IF owner_person_function IS NOT NULL THEN
+    GRANT INSERT (
+      artifact_id, artifact_kind, content_sha256, created_at, external_ref,
+      owner_principal_id, retention_class, status, store
+    ) ON TABLE privacy.artifact_registry
+      TO home_agent_identity_finalizer_kernel;
+  END IF;
   GRANT SELECT, INSERT ON TABLE identity.people
     TO home_agent_identity_finalizer_kernel;
   GRANT UPDATE (
@@ -4446,17 +4452,21 @@ BEGIN
     'home_agent_identity_finalizer_kernel|identity.people|status_source_version|UPDATE',
     'home_agent_identity_finalizer_kernel|identity.people|updated_at|UPDATE',
     'home_agent_identity_finalizer_kernel|operations.reviewed_identity_finalizer_admissions|consumed_at|UPDATE',
-    'home_agent_identity_finalizer_kernel|operations.reviewed_identity_migration_runs|expires_at|UPDATE',
-    'home_agent_identity_finalizer_kernel|privacy.artifact_registry|artifact_id|INSERT',
-    'home_agent_identity_finalizer_kernel|privacy.artifact_registry|artifact_kind|INSERT',
-    'home_agent_identity_finalizer_kernel|privacy.artifact_registry|content_sha256|INSERT',
-    'home_agent_identity_finalizer_kernel|privacy.artifact_registry|created_at|INSERT',
-    'home_agent_identity_finalizer_kernel|privacy.artifact_registry|external_ref|INSERT',
-    'home_agent_identity_finalizer_kernel|privacy.artifact_registry|owner_principal_id|INSERT',
-    'home_agent_identity_finalizer_kernel|privacy.artifact_registry|retention_class|INSERT',
-    'home_agent_identity_finalizer_kernel|privacy.artifact_registry|status|INSERT',
-    'home_agent_identity_finalizer_kernel|privacy.artifact_registry|store|INSERT'
+    'home_agent_identity_finalizer_kernel|operations.reviewed_identity_migration_runs|expires_at|UPDATE'
   ]::text[];
+  IF owner_person_function IS NOT NULL THEN
+    expected_column_acl := expected_column_acl || ARRAY[
+      'home_agent_identity_finalizer_kernel|privacy.artifact_registry|artifact_id|INSERT',
+      'home_agent_identity_finalizer_kernel|privacy.artifact_registry|artifact_kind|INSERT',
+      'home_agent_identity_finalizer_kernel|privacy.artifact_registry|content_sha256|INSERT',
+      'home_agent_identity_finalizer_kernel|privacy.artifact_registry|created_at|INSERT',
+      'home_agent_identity_finalizer_kernel|privacy.artifact_registry|external_ref|INSERT',
+      'home_agent_identity_finalizer_kernel|privacy.artifact_registry|owner_principal_id|INSERT',
+      'home_agent_identity_finalizer_kernel|privacy.artifact_registry|retention_class|INSERT',
+      'home_agent_identity_finalizer_kernel|privacy.artifact_registry|status|INSERT',
+      'home_agent_identity_finalizer_kernel|privacy.artifact_registry|store|INSERT'
+    ]::text[];
+  END IF;
   SELECT pg_catalog.array_agg(
            role_row.rolname || '|' || table_namespace.nspname || '.' ||
            table_row.relname || '|' || attribute.attname || '|' ||

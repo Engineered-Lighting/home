@@ -505,7 +505,14 @@ BEGIN
            current_revision IN (
              '0019_parent_stage_e5e',
              '0020_parent_commit_e5f',
-             '0021_parent_status_e5h'
+             '0021_parent_status_e5h',
+             '0022_fact_suppression_e5i',
+             '0023_partner_vocabulary_e5j',
+             '0024_owner_partner_e5k',
+             '0025_owner_partner_caller_e5l',
+             '0026_third_party_e5m',
+             '0027_owner_person_e5n',
+             '0028_owner_partner_access_e5o'
            )
            AND role_row.rolname =
                'home_agent_parent_relationship_kernel'
@@ -2876,7 +2883,14 @@ BEGIN
        '0018_parent_relationship_e5d',
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      ) THEN
     SELECT oid INTO STRICT authority_kernel_oid
       FROM pg_catalog.pg_roles
@@ -2888,7 +2902,14 @@ BEGIN
        '0018_parent_relationship_e5d',
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      ) THEN
     SELECT oid INTO STRICT binding_kernel_oid
       FROM pg_catalog.pg_roles
@@ -2897,7 +2918,14 @@ BEGIN
   IF current_revision IN (
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      ) THEN
     SELECT oid INTO STRICT parent_relationship_kernel_oid
       FROM pg_catalog.pg_roles
@@ -3398,7 +3426,14 @@ BEGIN
        '0018_parent_relationship_e5d',
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      )
      AND (
        (
@@ -3483,7 +3518,14 @@ BEGIN
        '0018_parent_relationship_e5d',
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      )
      AND (
        NOT EXISTS (
@@ -3571,7 +3613,14 @@ BEGIN
   IF current_revision IN (
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      )
      AND (
        (
@@ -3898,7 +3947,14 @@ BEGIN
                        '0018_parent_relationship_e5d',
                        '0019_parent_stage_e5e',
                        '0020_parent_commit_e5f',
-                       '0021_parent_status_e5h'
+                       '0021_parent_status_e5h',
+                       '0022_fact_suppression_e5i',
+                       '0023_partner_vocabulary_e5j',
+                       '0024_owner_partner_e5k',
+                       '0025_owner_partner_caller_e5l',
+                       '0026_third_party_e5m',
+                       '0027_owner_person_e5n',
+                       '0028_owner_partner_access_e5o'
                      )
                      AND relation.oid =
                            'operations.'
@@ -3938,7 +3994,14 @@ BEGIN
                        '0018_parent_relationship_e5d',
                        '0019_parent_stage_e5e',
                        '0020_parent_commit_e5f',
-                       '0021_parent_status_e5h'
+                       '0021_parent_status_e5h',
+                       '0022_fact_suppression_e5i',
+                       '0023_partner_vocabulary_e5j',
+                       '0024_owner_partner_e5k',
+                       '0025_owner_partner_caller_e5l',
+                       '0026_third_party_e5m',
+                       '0027_owner_person_e5n',
+                       '0028_owner_partner_access_e5o'
                      )
                      AND relation.oid =
                            'operations.'
@@ -4002,8 +4065,15 @@ BEGIN
                             '0018_parent_relationship_e5d',
                             '0019_parent_stage_e5e',
                             '0020_parent_commit_e5f',
-                            '0021_parent_status_e5h'
-                         )
+                            '0021_parent_status_e5h',
+                            '0022_fact_suppression_e5i',
+                            '0023_partner_vocabulary_e5j',
+                            '0024_owner_partner_e5k',
+                            '0025_owner_partner_caller_e5l',
+                            '0026_third_party_e5m',
+                            '0027_owner_person_e5n',
+                            '0028_owner_partner_access_e5o'
+                          )
                          AND policy_row.polname = e5_select_policy
                           AND policy_row.polroles =
                                 ARRAY[authority_kernel_oid]::oid[]
@@ -4015,7 +4085,14 @@ BEGIN
                             '0018_parent_relationship_e5d',
                             '0019_parent_stage_e5e',
                             '0020_parent_commit_e5f',
-                            '0021_parent_status_e5h'
+                            '0021_parent_status_e5h',
+                            '0022_fact_suppression_e5i',
+                            '0023_partner_vocabulary_e5j',
+                            '0024_owner_partner_e5k',
+                            '0025_owner_partner_caller_e5l',
+                            '0026_third_party_e5m',
+                            '0027_owner_person_e5n',
+                            '0028_owner_partner_access_e5o'
                           )
                           AND policy_row.polname = e5b_select_policy
                           AND policy_row.polroles =
@@ -4073,7 +4150,14 @@ BEGIN
                       current_revision IN (
                         '0019_parent_stage_e5e',
                         '0020_parent_commit_e5f',
-                        '0021_parent_status_e5h'
+                        '0021_parent_status_e5h',
+                        '0022_fact_suppression_e5i',
+                        '0023_partner_vocabulary_e5j',
+                        '0024_owner_partner_e5k',
+                        '0025_owner_partner_caller_e5l',
+                        '0026_third_party_e5m',
+                        '0027_owner_person_e5n',
+                        '0028_owner_partner_access_e5o'
                       )
                       AND policy_row.polname =
                             ANY (e5e_e3_policy_names)
@@ -4100,7 +4184,14 @@ BEGIN
                        '0018_parent_relationship_e5d',
                        '0019_parent_stage_e5e',
                        '0020_parent_commit_e5f',
-                       '0021_parent_status_e5h'
+                       '0021_parent_status_e5h',
+                       '0022_fact_suppression_e5i',
+                       '0023_partner_vocabulary_e5j',
+                       '0024_owner_partner_e5k',
+                       '0025_owner_partner_caller_e5l',
+                       '0026_third_party_e5m',
+                       '0027_owner_person_e5n',
+                       '0028_owner_partner_access_e5o'
                      )
                      AND policy_row.polname = e5_run_lock_policy
                      AND policy_row.polrelid =
@@ -4218,6 +4309,14 @@ BEGIN
     operations.reviewed_identity_migration_projection_lineage,
     operations.reviewed_identity_migration_projection_subjects
     TO home_agent_identity_finalizer_kernel;
+  -- The kernel writes its attestation into privacy.artifact_registry. 0027
+  -- grants this at column level deliberately, and the quarantine strips it,
+  -- so it is restored at column level here rather than widened to the table.
+  GRANT INSERT (
+    artifact_id, artifact_kind, content_sha256, created_at, external_ref,
+    owner_principal_id, retention_class, status, store
+  ) ON TABLE privacy.artifact_registry
+    TO home_agent_identity_finalizer_kernel;
   GRANT SELECT, INSERT ON TABLE identity.people
     TO home_agent_identity_finalizer_kernel;
   GRANT UPDATE (
@@ -4321,13 +4420,22 @@ BEGIN
   END IF;
 
   expected_column_acl := ARRAY[
-    'home_agent_identity_finalizer_kernel|identity.people|status|UPDATE',
     'home_agent_identity_finalizer_kernel|identity.people|status_source_ref|UPDATE',
     'home_agent_identity_finalizer_kernel|identity.people|status_source_sha256|UPDATE',
     'home_agent_identity_finalizer_kernel|identity.people|status_source_version|UPDATE',
+    'home_agent_identity_finalizer_kernel|identity.people|status|UPDATE',
     'home_agent_identity_finalizer_kernel|identity.people|updated_at|UPDATE',
     'home_agent_identity_finalizer_kernel|operations.reviewed_identity_finalizer_admissions|consumed_at|UPDATE',
-    'home_agent_identity_finalizer_kernel|operations.reviewed_identity_migration_runs|expires_at|UPDATE'
+    'home_agent_identity_finalizer_kernel|operations.reviewed_identity_migration_runs|expires_at|UPDATE',
+    'home_agent_identity_finalizer_kernel|privacy.artifact_registry|artifact_id|INSERT',
+    'home_agent_identity_finalizer_kernel|privacy.artifact_registry|artifact_kind|INSERT',
+    'home_agent_identity_finalizer_kernel|privacy.artifact_registry|content_sha256|INSERT',
+    'home_agent_identity_finalizer_kernel|privacy.artifact_registry|created_at|INSERT',
+    'home_agent_identity_finalizer_kernel|privacy.artifact_registry|external_ref|INSERT',
+    'home_agent_identity_finalizer_kernel|privacy.artifact_registry|owner_principal_id|INSERT',
+    'home_agent_identity_finalizer_kernel|privacy.artifact_registry|retention_class|INSERT',
+    'home_agent_identity_finalizer_kernel|privacy.artifact_registry|status|INSERT',
+    'home_agent_identity_finalizer_kernel|privacy.artifact_registry|store|INSERT'
   ]::text[];
   SELECT pg_catalog.array_agg(
            role_row.rolname || '|' || table_namespace.nspname || '.' ||
@@ -4956,7 +5064,14 @@ BEGIN
        '0018_parent_relationship_e5d',
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      ) THEN
     SELECT oid INTO STRICT authority_kernel_oid
       FROM pg_catalog.pg_roles
@@ -4968,7 +5083,14 @@ BEGIN
        '0018_parent_relationship_e5d',
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      ) THEN
     SELECT oid INTO STRICT binding_kernel_oid
       FROM pg_catalog.pg_roles
@@ -4977,7 +5099,14 @@ BEGIN
   IF current_revision IN (
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      ) THEN
     SELECT oid INTO STRICT parent_relationship_kernel_oid
       FROM pg_catalog.pg_roles
@@ -5107,7 +5236,14 @@ BEGIN
        '0018_parent_relationship_e5d',
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      )
      AND (
        (
@@ -5162,7 +5298,14 @@ BEGIN
        '0018_parent_relationship_e5d',
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      )
      AND (
        NOT EXISTS (
@@ -5234,7 +5377,14 @@ BEGIN
   IF current_revision IN (
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      ) THEN
     SELECT EXISTS (
          SELECT 1
@@ -5398,7 +5548,14 @@ BEGIN
                                            '0018_parent_relationship_e5d',
                                            '0019_parent_stage_e5e',
                                            '0020_parent_commit_e5f',
-                                           '0021_parent_status_e5h'
+                                           '0021_parent_status_e5h',
+                                           '0022_fact_suppression_e5i',
+                                           '0023_partner_vocabulary_e5j',
+                                           '0024_owner_partner_e5k',
+                                           '0025_owner_partner_caller_e5l',
+                                           '0026_third_party_e5m',
+                                           '0027_owner_person_e5n',
+                                           '0028_owner_partner_access_e5o'
                                          )
                                          AND target.target_relation =
                                                promotion_table
@@ -5631,7 +5788,14 @@ BEGIN
                             '0018_parent_relationship_e5d',
                             '0019_parent_stage_e5e',
                             '0020_parent_commit_e5f',
-                            '0021_parent_status_e5h'
+                            '0021_parent_status_e5h',
+                            '0022_fact_suppression_e5i',
+                            '0023_partner_vocabulary_e5j',
+                            '0024_owner_partner_e5k',
+                            '0025_owner_partner_caller_e5l',
+                            '0026_third_party_e5m',
+                            '0027_owner_person_e5n',
+                            '0028_owner_partner_access_e5o'
                           )
                           AND policy_row.polname = e5_select_policy
                           AND policy_row.polrelid IN (
@@ -5651,7 +5815,14 @@ BEGIN
                             '0018_parent_relationship_e5d',
                             '0019_parent_stage_e5e',
                             '0020_parent_commit_e5f',
-                            '0021_parent_status_e5h'
+                            '0021_parent_status_e5h',
+                            '0022_fact_suppression_e5i',
+                            '0023_partner_vocabulary_e5j',
+                            '0024_owner_partner_e5k',
+                            '0025_owner_partner_caller_e5l',
+                            '0026_third_party_e5m',
+                            '0027_owner_person_e5n',
+                            '0028_owner_partner_access_e5o'
                           )
                           AND policy_row.polname = e5b_select_policy
                           AND policy_row.polrelid = promotion_table
@@ -5666,7 +5837,14 @@ BEGIN
                           current_revision IN (
                             '0019_parent_stage_e5e',
                             '0020_parent_commit_e5f',
-                            '0021_parent_status_e5h'
+                            '0021_parent_status_e5h',
+                            '0022_fact_suppression_e5i',
+                            '0023_partner_vocabulary_e5j',
+                            '0024_owner_partner_e5k',
+                            '0025_owner_partner_caller_e5l',
+                            '0026_third_party_e5m',
+                            '0027_owner_person_e5n',
+                            '0028_owner_partner_access_e5o'
                           )
                           AND policy_row.polname =
                                 e5e_promotion_select_policy
@@ -6446,7 +6624,14 @@ BEGIN
        '0018_parent_relationship_e5d',
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      ) THEN
     SELECT oid INTO STRICT binding_kernel_oid
       FROM pg_catalog.pg_roles
@@ -6611,7 +6796,14 @@ BEGIN
        '0018_parent_relationship_e5d',
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      )
      AND (
        receipt_table IS NULL

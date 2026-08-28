@@ -73,7 +73,7 @@ from app.store import CoreStore
 OWNER_DATABASE_ENV = "TEST_PHASE3_OWNER_ATTESTED_E5N_OWNER_DATABASE_URL"
 COMMITTER_DATABASE_ENV = "TEST_PHASE3_OWNER_ATTESTED_E5N_COMMITTER_DATABASE_URL"
 HOSTED_GATE_SENTINEL_ENV = "TEST_PHASE3_IDENTITY_ERASURE_E1_RUN_SENTINEL"
-EXPECTED_REVISION = "0027_owner_person_e5n"
+EXPECTED_REVISION = "0028_owner_partner_access_e5o"
 
 # Every table the People tab reads. The committer credential must reach none of
 # them: the read path is an API-role surface, and a credential that exists to

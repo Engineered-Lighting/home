@@ -73,7 +73,7 @@ HOSTED_GATE_SYSTEM_IDENTIFIER_ENV = (
     "TEST_PHASE3_IDENTITY_ERASURE_E1_SYSTEM_IDENTIFIER"
 )
 
-TARGET_REVISION = "0027_owner_person_e5n"
+TARGET_REVISION = "0028_owner_partner_access_e5o"
 BLOCKED_FUNCTION = "privacy.identity_fact_is_blocked(text,uuid,text,jsonb,uuid)"
 PERSON_BLOCKED_FUNCTION = "privacy.identity_person_is_blocked(uuid)"
 REPLAY_CALLABLE = "privacy.replay_identity_person_retrieval_block_v2"

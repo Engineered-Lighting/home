@@ -2446,7 +2446,8 @@ DECLARE
     '0024_owner_partner_e5k',
     '0025_owner_partner_caller_e5l',
     '0026_third_party_e5m',
-    '0027_owner_person_e5n'
+    '0027_owner_person_e5n',
+    '0028_owner_partner_access_e5o'
   ]::text[];
   pre_e3_revisions constant text[] := ARRAY[
     '0001_greenfield_core',
@@ -2491,7 +2492,8 @@ DECLARE
     '0024_owner_partner_e5k',
     '0025_owner_partner_caller_e5l',
     '0026_third_party_e5m',
-    '0027_owner_person_e5n'
+    '0027_owner_person_e5n',
+    '0028_owner_partner_access_e5o'
   ]::text[];
   expected_e3_catalog_sha256 constant text :=
     'b85d05e7d2d45671a0107a75658474450c0ab927d86a2ec4809732169ee37192';
@@ -3624,7 +3626,8 @@ BEGIN
                 '0024_owner_partner_e5k',
                 '0025_owner_partner_caller_e5l',
                 '0026_third_party_e5m',
-                '0027_owner_person_e5n'
+                '0027_owner_person_e5n',
+                '0028_owner_partner_access_e5o'
               ) THEN 6
          WHEN current_revision = ANY (reviewed_e4_overlay_revisions) THEN 5
          ELSE 4
@@ -4896,7 +4899,8 @@ DECLARE
     '0024_owner_partner_e5k',
     '0025_owner_partner_caller_e5l',
     '0026_third_party_e5m',
-    '0027_owner_person_e5n'
+    '0027_owner_person_e5n',
+    '0028_owner_partner_access_e5o'
   ]::text[];
   role_count integer;
 BEGIN
@@ -6351,7 +6355,8 @@ DECLARE
     '0024_owner_partner_e5k',
     '0025_owner_partner_caller_e5l',
     '0026_third_party_e5m',
-    '0027_owner_person_e5n'
+    '0027_owner_person_e5n',
+    '0028_owner_partner_access_e5o'
   ]::text[];
   rls_relations constant text[] := ARRAY[
     'operations.semantic_authority_promotions',

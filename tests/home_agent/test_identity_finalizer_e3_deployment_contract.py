@@ -123,6 +123,7 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
                     "0025_owner_partner_caller_e5l",
                     "0026_third_party_e5m",
                     "0027_owner_person_e5n",
+                    "0028_owner_partner_access_e5o",
                 ]
     assert (
         "current_revision = ANY (reviewed_e3_catalog_revisions)"
@@ -152,6 +153,7 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
                 "0025_owner_partner_caller_e5l",
                 "0026_third_party_e5m",
                 "0027_owner_person_e5n",
+                "0028_owner_partner_access_e5o",
             ]
     assert (
         "login_role.rolvaliduntil =\n"
@@ -216,7 +218,8 @@ def test_e3_grant_replay_quarantines_before_conditional_restore() -> None:
             "                '0024_owner_partner_e5k',\n"
             "                '0025_owner_partner_caller_e5l',\n"
             "                '0026_third_party_e5m',\n"
-            "                '0027_owner_person_e5n'\n"
+            "                '0027_owner_person_e5n',\n"
+            "                '0028_owner_partner_access_e5o'\n"
             "              ) THEN 6"
         in admission
     )

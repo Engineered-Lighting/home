@@ -37,7 +37,7 @@ COMMITTER_DATABASE_ENV = (
 )
 HOSTED_GATE_SENTINEL_ENV = "TEST_PHASE3_IDENTITY_ERASURE_E1_RUN_SENTINEL"
 
-REVISION = "0027_owner_person_e5n"
+REVISION = "0028_owner_partner_access_e5o"
 CALLER_ROLE = "home_agent_binding_committer"
 KERNEL_ROLE = "home_agent_identity_finalizer_kernel"
 # 0027_owner_person_creation_kernel.py:48-51 declares this once, so restate it

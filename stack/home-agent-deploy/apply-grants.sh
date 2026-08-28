@@ -2376,6 +2376,12 @@ DECLARE
     pg_catalog.to_regprocedure(
       'privacy.fence_identity_tombstone_write()'
     );
+  owner_person_function regprocedure :=
+    pg_catalog.to_regprocedure(
+      'identity.create_owner_attested_person_e5n('
+      'uuid, text, text, text, text, text, timestamptz, text, '
+      'uuid, uuid, uuid)'
+    );
   person_blocked_function regprocedure :=
     pg_catalog.to_regprocedure(
       'privacy.identity_person_is_blocked(uuid)'
@@ -2995,7 +3001,13 @@ BEGIN
          FROM pg_catalog.pg_shdepend AS kernel_ownership
         WHERE kernel_ownership.refobjid = kernel_oid
           AND kernel_ownership.deptype = 'o'
-     ) <> 1
+     ) <> (
+       -- 0027 gave this dormant kernel a second owned function rather than
+       -- minting its own role, so from that revision the exact set is two.
+       -- Still an exact set, not a relaxed count: the identity check below
+       -- names both objects.
+       CASE WHEN owner_person_function IS NULL THEN 1 ELSE 2 END
+     )
      OR EXISTS (
        SELECT 1
          FROM pg_catalog.pg_shdepend AS kernel_ownership
@@ -3004,7 +3016,10 @@ BEGIN
           AND NOT (
             kernel_ownership.dbid = database_oid
             AND kernel_ownership.classid = 'pg_catalog.pg_proc'::regclass
-            AND kernel_ownership.objid = finalizer_function::oid
+            AND kernel_ownership.objid IN (
+              finalizer_function::oid,
+              coalesce(owner_person_function::oid, finalizer_function::oid)
+            )
             AND kernel_ownership.objsubid = 0
           )
      ) THEN

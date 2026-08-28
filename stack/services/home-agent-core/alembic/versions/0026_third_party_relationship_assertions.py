@@ -46,6 +46,13 @@ depends_on: Sequence[str] | None = None
 
 CALLER_ROLE = "home_agent_binding_committer"
 KERNEL_ROLE = "home_agent_partner_relationship_kernel"
+# Declared once. A signature restated per statement drifts silently: 0024
+# gained a parameter and left ALTER naming a function that no longer existed,
+# and the migration failed mid-run.
+SIGNATURE = (
+    "uuid, text, uuid, text, uuid, uuid, uuid, uuid, uuid, uuid, uuid, "
+    "uuid, uuid, uuid, uuid, uuid, text"
+)
 
 
 def upgrade() -> None:
@@ -373,8 +380,7 @@ def upgrade() -> None:
     op.execute(
         f"GRANT EXECUTE ON FUNCTION "
         f"identity.commit_owner_partner_relationship_e5k("
-        f"uuid, text, uuid, text, uuid, uuid, uuid, uuid, uuid, uuid, uuid, "
-        f"uuid, uuid, uuid, uuid, uuid, text) TO {CALLER_ROLE};"
+        f"{SIGNATURE}) TO {CALLER_ROLE};"
     )
 
 
@@ -382,8 +388,7 @@ def downgrade() -> None:
     op.execute(
         "DROP FUNCTION IF EXISTS "
         "identity.commit_owner_partner_relationship_e5k("
-        "uuid, text, uuid, text, uuid, uuid, uuid, uuid, uuid, uuid, uuid, "
-        "uuid, uuid, uuid, uuid, uuid, text);"
+        f"{SIGNATURE});"
     )
     op.execute(
         """

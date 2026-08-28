@@ -85,7 +85,7 @@ def test_the_erasure_hole_is_closed_before_the_predicate_lands() -> None:
     # write "down_revision: str = ...", and an assertion on the exact spelling
     # breaks on a style change while the invariant still holds.
     assert re.search(
-        r'^down_revision(: str)? = "0022_fact_suppression_e5i"$',
+        r'^down_revision(\s*:\s*[^=]+)? = "0022_fact_suppression_e5i"$',
         migration,
         re.M,
     ), "partner_of must land after the object-side suppression fix"

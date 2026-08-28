@@ -8772,6 +8772,14 @@ GRANT EXECUTE ON FUNCTION
   privacy.identity_principal_is_blocked(uuid)
   TO home_agent_parent_relationship_kernel;
 
+SELECT EXISTS (
+  SELECT 1
+    FROM pg_catalog.pg_roles
+   WHERE rolname = 'home_agent_partner_relationship_kernel'
+) AS activate_owner_partner_kernel_e5k
+\gset
+
+\if :activate_owner_partner_kernel_e5k
 -- E5k is the owner-attested partner kernel. It is a DIFFERENT role from the
 -- parent kernel above -- partner, not parent -- and until now it held nothing:
 -- no schema USAGE, no table grant, no column grant, anywhere in the database.
@@ -8849,6 +8857,7 @@ GRANT EXECUTE ON FUNCTION
   privacy.lock_identity_semantic_write_fence(),
   privacy.identity_person_is_blocked(uuid)
   TO home_agent_partner_relationship_kernel;
+\endif
 
 GRANT USAGE ON SCHEMA identity TO home_agent_binding_committer;
 SET ROLE home_agent_parent_relationship_kernel;

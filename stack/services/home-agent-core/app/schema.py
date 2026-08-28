@@ -1311,25 +1311,6 @@ Index(
     ),
 )
 
-fact_support = Table(
-    "fact_support",
-    metadata,
-    Column("support_id", UUID_PK, primary_key=True),
-    Column(
-        "fact_version_id",
-        UUID_PK,
-        ForeignKey("knowledge.fact_versions.fact_version_id"),
-        nullable=False,
-    ),
-    Column("artifact_id", UUID_PK, nullable=False),
-    Column("root_observation_id", UUID_PK),
-    Column("dependency_domain", String(128)),
-    Column("support_role", String(32), nullable=False),
-    Column("created_at", DateTime(timezone=True), nullable=False, server_default=NOW),
-    UniqueConstraint("fact_version_id", "artifact_id", name="fact_artifact_support"),
-    schema="knowledge",
-)
-
 preferences = Table(
     "preferences",
     metadata,

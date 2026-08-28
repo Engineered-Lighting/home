@@ -95,3 +95,33 @@ def test_this_revision_grants_no_ability_to_write_a_fact() -> None:
             f"{forbidden!r} in a vocabulary migration: writing a fact must not "
             "become possible as a side effect"
         )
+
+
+def test_schema_defines_each_table_exactly_once() -> None:
+    """A duplicated Table() raises only at import time, from a module far from
+    the edit that caused it.
+
+    Adding the partner index by copying the parent block dragged the following
+    fact_support definition along with it, and the failure surfaced as
+    "Table 'knowledge.fact_support' is already defined for this MetaData
+    instance" while importing app.api.
+    """
+
+    import re
+
+    schema = (
+        pathlib.Path(__file__).resolve().parents[1] / "app" / "schema.py"
+    ).read_text()
+    names = re.findall(r"^([a-z_]+) = Table\(", schema, re.M)
+    duplicates = sorted({n for n in names if names.count(n) > 1})
+    assert not duplicates, f"tables defined more than once: {duplicates}"
+
+
+def test_metadata_actually_imports() -> None:
+    """The definitive check: a duplicate raises on import, not on inspection."""
+
+    from app import schema
+
+    assert schema.fact_versions is not None
+    index_names = {index.name for index in schema.fact_versions.indexes}
+    assert {"uq_active_parent_relationship", "uq_active_partner_relationship"} <= index_names

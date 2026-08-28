@@ -62,6 +62,8 @@ from .models import (
     MemoryTransactionView,
     MemoryInspection,
     ParentPresencePersonView,
+    PeopleDirectoryEntry,
+    PeopleDirectoryView,
     ParentPresenceView,
     PersonCreate,
     PersonView,
@@ -78,6 +80,8 @@ from .models import (
     PrincipalBindingConfirmation,
     PrincipalBindingConfirmationView,
     PrincipalBindingProposalView,
+    RelationshipEntry,
+    RelationshipsView,
     OperatorPrincipalBindingProposalStage,
     OperatorPrincipalBindingProposalView,
     OperatorPrincipalBindingRequestsView,
@@ -3317,6 +3321,154 @@ class CoreStore:
         if row is None:
             raise ForbiddenError("HA user has no available confirmed principal binding")
         return dict(row)
+
+    # The People tab's visibility rule, kept as one string because it must stay
+    # literally identical to the rule the parent-relationship ceremony applies
+    # when it chooses candidates (0019_parent_relationship_stage_e5e.py:339-351).
+    # A person the ceremony refuses to name is a person the tab must not list.
+    #
+    # RLS already suppresses erased people for every role, so the erasure arm is
+    # defence in depth. The directive and edge-block arms are NOT covered by RLS
+    # and are the reason this filter has to exist at all.
+    _PERSON_VISIBLE = """
+        person.status = 'active'
+        AND NOT privacy.identity_person_is_blocked(person.person_id)
+        AND NOT EXISTS (
+          SELECT 1
+            FROM identity.privacy_directives AS directive
+           WHERE directive.person_id = person.person_id
+             AND directive.enabled
+        )
+        AND NOT EXISTS (
+          SELECT 1
+            FROM identity.edge_privacy_user_blocks AS edge_block
+           WHERE edge_block.ha_user_id = :viewer_ha_user_id
+              OR edge_block.person_id = person.person_id
+        )
+    """
+
+    # Person-to-person predicates only. place_social_descriptor is also a
+    # ContextPredicate but its object is a place, so it would not survive the
+    # join to identity.people -- naming it here would be a silent no-op that
+    # looks like support.
+    _RELATIONSHIP_PREDICATES = ("parent_of",)
+
+    async def people_directory(
+        self, principal: dict[str, Any], ha_user_id: str
+    ) -> PeopleDirectoryView:
+        """List the household as the viewer is permitted to see it.
+
+        ``ha_user_id`` comes from the authenticated header rather than the
+        principal row: the edge-block arm is keyed by HA user, and the API role
+        deliberately cannot read identity.ha_user_bindings to derive it.
+        """
+
+        self._require_rollout("shadow", "semantic_people_read")
+        async with self.database.transaction(
+            principal_id=principal["principal_id"]
+        ) as connection:
+            rows = (
+                (
+                    await connection.execute(
+                        text(
+                            f"""
+                            SELECT person.person_id,
+                                   person.display_name,
+                                   person.pronouns,
+                                   person.status,
+                                   person.privacy_scope
+                              FROM identity.people AS person
+                             WHERE {self._PERSON_VISIBLE}
+                             ORDER BY person.display_name, person.person_id
+                            """
+                        ),
+                        {"viewer_ha_user_id": ha_user_id},
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        return PeopleDirectoryView(
+            people=[
+                PeopleDirectoryEntry(
+                    person_id=row["person_id"],
+                    display_name=row["display_name"],
+                    pronouns=row["pronouns"],
+                    status=row["status"],
+                    privacy_scope=row["privacy_scope"],
+                    is_self=row["person_id"] == principal["person_id"],
+                )
+                for row in rows
+            ]
+        )
+
+    async def relationships(
+        self, principal: dict[str, Any], ha_user_id: str
+    ) -> RelationshipsView:
+        """List committed relationship facts, resolved to display names.
+
+        Both endpoints of an edge must be visible to the viewer. Hiding only the
+        blocked endpoint would still disclose that the person exists and is
+        related, which is precisely what a directive is asked to prevent.
+        """
+
+        self._require_rollout("shadow", "semantic_people_read")
+        visible_subject = self._PERSON_VISIBLE.replace("person.", "subject.")
+        visible_object = self._PERSON_VISIBLE.replace("person.", "object_person.")
+        async with self.database.transaction(
+            principal_id=principal["principal_id"]
+        ) as connection:
+            rows = (
+                (
+                    await connection.execute(
+                        text(
+                            f"""
+                            SELECT fact.fact_id,
+                                   fact.predicate,
+                                   subject.person_id     AS subject_person_id,
+                                   subject.display_name  AS subject_display_name,
+                                   object_person.person_id    AS object_person_id,
+                                   object_person.display_name AS object_display_name,
+                                   fact.authority,
+                                   fact.committed_at
+                              FROM knowledge.fact_versions AS fact
+                              JOIN identity.people AS subject
+                                ON subject.person_id = fact.subject_id
+                              JOIN identity.people AS object_person
+                                ON object_person.person_id
+                                   = (fact.object ->> 'person_id')::uuid
+                             WHERE fact.predicate = ANY(:predicates)
+                               AND upper_inf(fact.system_range)
+                               AND fact.resolution = 'accepted'
+                               AND ({visible_subject})
+                               AND ({visible_object})
+                             ORDER BY subject.display_name, object_person.display_name
+                            """
+                        ),
+                        {
+                            "viewer_ha_user_id": ha_user_id,
+                            "predicates": list(self._RELATIONSHIP_PREDICATES),
+                        },
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        return RelationshipsView(
+            relationships=[
+                RelationshipEntry(
+                    fact_id=row["fact_id"],
+                    predicate=row["predicate"],
+                    subject_person_id=row["subject_person_id"],
+                    subject_display_name=row["subject_display_name"],
+                    object_person_id=row["object_person_id"],
+                    object_display_name=row["object_display_name"],
+                    authority=row["authority"],
+                    committed_at=row["committed_at"],
+                )
+                for row in rows
+            ]
+        )
 
     async def onboarding_binding_status(
         self, ha_user_id: str

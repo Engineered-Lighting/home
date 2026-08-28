@@ -44,6 +44,11 @@ depends_on: Sequence[str] | None = None
 
 CALLER_ROLE = "home_agent_binding_committer"
 KERNEL_ROLE = "home_agent_identity_finalizer_kernel"
+# Declared once: a signature restated per statement drifts silently.
+SIGNATURE = (
+    "uuid, text, text, text, text, text, timestamptz, text, "
+    "uuid, uuid, uuid"
+)
 
 
 def upgrade() -> None:
@@ -215,26 +220,22 @@ def upgrade() -> None:
 
     op.execute(
         "ALTER FUNCTION identity.create_owner_attested_person_e5n("
-        "uuid, text, text, text, text, text, timestamptz, text, "
-        f"uuid, uuid, uuid) OWNER TO {KERNEL_ROLE};"
+        f"{SIGNATURE}) OWNER TO {KERNEL_ROLE};"
     )
     op.execute(
         "REVOKE ALL ON FUNCTION identity.create_owner_attested_person_e5n("
-        "uuid, text, text, text, text, text, timestamptz, text, "
-        "uuid, uuid, uuid) FROM PUBLIC;"
+        f"{SIGNATURE}) FROM PUBLIC;"
     )
     op.execute(
         "GRANT EXECUTE ON FUNCTION identity.create_owner_attested_person_e5n("
-        "uuid, text, text, text, text, text, timestamptz, text, "
-        f"uuid, uuid, uuid) TO {CALLER_ROLE};"
+        f"{SIGNATURE}) TO {CALLER_ROLE};"
     )
 
 
 def downgrade() -> None:
     op.execute(
         "DROP FUNCTION IF EXISTS identity.create_owner_attested_person_e5n("
-        "uuid, text, text, text, text, text, timestamptz, text, "
-        "uuid, uuid, uuid);"
+        f"{SIGNATURE});"
     )
     # The widening must not outlive the feature that justified it.
     op.execute(

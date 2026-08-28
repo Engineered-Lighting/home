@@ -47,6 +47,14 @@ depends_on: Sequence[str] | None = None
 
 CALLER_ROLE = "home_agent_binding_committer"
 KERNEL_ROLE = "home_agent_partner_relationship_kernel"
+# One definition, because a signature restated per statement drifts silently:
+# adding the attestation artifact parameter left ALTER and DROP naming a
+# fourteen-argument function that no longer existed, and the migration failed
+# mid-run with "function ... does not exist".
+SIGNATURE = (
+    "uuid, text, uuid, text, uuid, uuid, uuid, uuid, uuid, uuid, uuid, "
+    "uuid, uuid, uuid, uuid"
+)
 
 
 def upgrade() -> None:
@@ -420,8 +428,7 @@ def upgrade() -> None:
 
     op.execute(
         f"ALTER FUNCTION identity.commit_owner_partner_relationship_e5k("
-        f"uuid, text, uuid, text, uuid, uuid, uuid, uuid, uuid, uuid, uuid, "
-        f"uuid, uuid, uuid) OWNER TO {KERNEL_ROLE};"
+        f"{SIGNATURE}) OWNER TO {KERNEL_ROLE};"
     )
     # Deliberately no GRANT EXECUTE. The kernel is unreachable until a later
     # reviewed change provisions the caller, exactly as E5d left E5f dormant.
@@ -429,10 +436,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute(
-        "DROP FUNCTION IF EXISTS "
-        "identity.commit_owner_partner_relationship_e5k("
-        "uuid, text, uuid, text, uuid, uuid, uuid, uuid, uuid, uuid, uuid, "
-        "uuid, uuid, uuid);"
+        f"DROP FUNCTION IF EXISTS "
+        f"identity.commit_owner_partner_relationship_e5k({SIGNATURE});"
     )
     op.execute(
         "DROP TABLE IF EXISTS "

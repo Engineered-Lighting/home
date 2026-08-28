@@ -136,4 +136,18 @@ def test_the_new_signature_is_granted_to_the_committer() -> None:
 
     sql = _sql()
     assert "GRANT EXECUTE ON FUNCTION" in sql
-    assert "uuid, uuid, text) TO home_agent_binding_committer" in sql
+    # The signature is interpolated from a single constant now, so assert the
+    # constant covers the declared arity rather than matching literal text.
+    source = MIGRATION.read_text()
+    create = source[
+        source.index("CREATE OR REPLACE FUNCTION"): source.index("RETURNS uuid")
+    ]
+    import re as _re
+    declared = len(
+        _re.findall(r"^\s+\w+\s+(?:uuid|text)(?:\s+DEFAULT[^,\n]*)?,?$", create, _re.M)
+    )
+    constant = source[source.index("SIGNATURE = ("):]
+    constant = constant[: constant.index(")\n")]
+    named = len(_re.findall(r"\b(?:uuid|text)\b", constant))
+    assert declared == named, f"CREATE declares {declared}, SIGNATURE names {named}"
+    assert "home_agent_binding_committer" in source

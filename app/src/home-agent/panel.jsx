@@ -56,6 +56,52 @@ function containedPreferenceState(snapshot) {
   });
 }
 
+function HouseholdCard({ people, relationships, error }) {
+  // Read-only. Core applies the visibility rule -- privacy directives, edge
+  // blocks and erasure -- so anything absent here is absent deliberately and
+  // must never be reconstructed client-side from another response.
+  const edgesFor = (personId) =>
+    (relationships || []).filter(
+      (edge) => edge.subject_person_id === personId || edge.object_person_id === personId,
+    );
+  return (
+    <section className="agent-card" aria-live="polite">
+      <h2>Household</h2>
+      {error && <p>The household could not be loaded. Nothing is inferred from a failed read.</p>}
+      {!error && (people || []).length === 0 && <p>No people are visible to you.</p>}
+      {!error && (people || []).length > 0 && (
+        <ul className="agent-people">
+          {people.map((person) => {
+            const edges = edgesFor(person.person_id);
+            return (
+              <li key={person.person_id}>
+                <strong>{person.display_name}</strong>
+                {person.is_self && <span className="agent-people-self"> — you</span>}
+                {person.pronouns && <span className="agent-people-pronouns"> ({person.pronouns})</span>}
+                {edges.length > 0 && (
+                  <ul>
+                    {edges.map((edge) => (
+                      <li key={edge.fact_id}>
+                        {edge.subject_person_id === person.person_id
+                          ? `parent of ${edge.object_display_name}`
+                          : `child of ${edge.subject_display_name}`}
+                        {edge.authority === "authorized_administrator" && " (recorded by you)"}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {!error && (relationships || []).length === 0 && (people || []).length > 0 && (
+        <p>No confirmed relationships yet.</p>
+      )}
+    </section>
+  );
+}
+
 function ParentRelationshipCard({ status, busy, onStage, onConfirm }) {
   const recognized = new Set([
     "not_started",
@@ -121,6 +167,8 @@ function HomeAgentPanel() {
   const [bindingProposal, setBindingProposal] = useState(null);
   const [bindingBusy, setBindingBusy] = useState(false);
   const [parentRelationship, setParentRelationship] = useState(null);
+  const [household, setHousehold] = useState(null);
+  const [householdError, setHouseholdError] = useState(false);
   const [parentRelationshipBusy, setParentRelationshipBusy] = useState(false);
   const [snapshot, setSnapshot] = useState(null);
   const [containedPreferences, setContainedPreferences] = useState(null);
@@ -151,6 +199,8 @@ function HomeAgentPanel() {
     setBindingProposal(null);
     setBindingBusy(false);
     setParentRelationship(null);
+    setHousehold(null);
+    setHouseholdError(false);
     setParentRelationshipBusy(false);
     setSnapshot(null);
     setContainedPreferences(null);
@@ -239,6 +289,26 @@ function HomeAgentPanel() {
       }
       const nextSnapshot = await api.snapshot();
       if (!isCurrent()) return;
+      if (!api.invoke) {
+        try {
+          const [directory, edges] = await Promise.all([
+            api.peopleDirectory(),
+            api.relationships(),
+          ]);
+          if (!isCurrent()) return;
+          setHousehold({ people: directory.people, relationships: edges.relationships });
+          setHouseholdError(false);
+        } catch (loadError) {
+          if (!isCurrent()) return;
+          // A failed read shows nothing rather than something stale or partial:
+          // absence here is a privacy decision, not a rendering fallback.
+          setHousehold(null);
+          setHouseholdError(true);
+        }
+      } else {
+        setHousehold(null);
+        setHouseholdError(false);
+      }
       if (
         api.invoke
         && nextSnapshot?.capabilities?.private_locality_approval
@@ -751,6 +821,14 @@ function HomeAgentPanel() {
           busy={parentRelationshipBusy}
           onStage={stageParentRelationship}
           onConfirm={confirmParentRelationship}
+        />
+      )}
+
+      {!api.invoke && (household || householdError) && (
+        <HouseholdCard
+          people={household?.people}
+          relationships={household?.relationships}
+          error={householdError}
         />
       )}
 

@@ -64,8 +64,11 @@ def test_relationship_predicate_vocabulary_is_closed() -> None:
     }
     assert RelationshipEntry(**entry).predicate == "parent_of"
 
+    # Not "partner_of": that is scheduled to become a real member, and a test
+    # asserting today's vocabulary would fail the moment it lands. Assert on
+    # shapes that must never be admitted.
     with pytest.raises(ValidationError):
-        RelationshipEntry(**{**entry, "predicate": "partner_of"})
+        RelationshipEntry(**{**entry, "predicate": "sibling_of"})
     with pytest.raises(ValidationError):
         RelationshipEntry(
             **{

@@ -113,10 +113,22 @@ def test_the_document_digest_binds_the_partner_to_the_attester() -> None:
     assert len(base) == 64
 
 
-def test_the_route_is_pinned_to_the_provisioning_revision() -> None:
-    """Before that migration the GRANT does not exist, so an unpinned route
-    would fail with a permission error instead of a capability message."""
+def test_the_route_is_pinned_to_a_settable_revision() -> None:
+    """Pinning to the provisioning revision was wrong twice over: it is not a
+    ReadinessMigration member, so the setting could never hold it, and the
+    person route pinned to a different one -- readiness_migration holds a
+    single value, so at most one of them could ever be live.
+
+    Both now pin to the last revision in the series, which is a member.
+    """
+
+    from app.api import (
+        OWNER_PARTNER_ADAPTER_REVISION,
+        OWNER_PERSON_ADAPTER_REVISION,
+    )
+    from app.config import ReadinessMigration
 
     api = (APP / "api.py").read_text()
-    assert 'OWNER_PARTNER_ADAPTER_REVISION = "0025_owner_partner_caller_e5l"' in api
     assert "readiness_migration" in api
+    assert OWNER_PARTNER_ADAPTER_REVISION == OWNER_PERSON_ADAPTER_REVISION
+    assert OWNER_PARTNER_ADAPTER_REVISION in ReadinessMigration.__args__

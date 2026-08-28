@@ -160,8 +160,15 @@ class PrincipalBindingCommitDatabase:
         await self.engine.dispose()
 
 
-class ParentRelationshipAuthorityDatabase:
-    """A table-blind pool exposing only reviewed parent-authority kernels."""
+class OwnerAttestationAuthorityDatabase:
+    """A table-blind pool exposing only the owner-attested kernels.
+
+    Separate from ParentRelationshipAuthorityDatabase on purpose. That pool's
+    method set is asserted exactly, because a pool that reaches reviewed
+    kernels must not quietly grow reach into others -- even ones sharing its
+    credential. Two pools with narrow surfaces are auditable; one wide pool is
+    not.
+    """
 
     def __init__(self, url: str) -> None:
         self.engine: AsyncEngine = create_async_engine(
@@ -172,43 +179,6 @@ class ParentRelationshipAuthorityDatabase:
             pool_recycle=300,
             hide_parameters=True,
         )
-
-    async def stage(
-        self, value: ParentRelationshipStageKernelCall
-    ) -> ParentRelationshipStageKernelResult:
-        async with self.engine.connect() as raw_connection:
-            connection = await raw_connection.execution_options(
-                isolation_level="SERIALIZABLE"
-            )
-            async with connection.begin():
-                row = (
-                    (
-                        await connection.execute(
-                            text(
-                                "SELECT * FROM identity."
-                                "stage_authenticated_parent_relationship_e5e("
-                                "CAST(:ha_user_id AS varchar),:request_id,"
-                                ":proposal_id,:operator_request_id,"
-                                ":proposal_edge_id_0,:proposal_edge_id_1,"
-                                "CAST(:review_code_0 AS varchar),"
-                                "CAST(:review_code_1 AS varchar))"
-                            ),
-                            {
-                                "ha_user_id": value.authenticated_ha_user_id,
-                                "request_id": value.request_id,
-                                "proposal_id": value.proposal_id,
-                                "operator_request_id": value.operator_request_id,
-                                "proposal_edge_id_0": value.proposal_edge_id_0,
-                                "proposal_edge_id_1": value.proposal_edge_id_1,
-                                "review_code_0": value.review_code_0,
-                                "review_code_1": value.review_code_1,
-                            },
-                        )
-                    )
-                    .mappings()
-                    .one()
-                )
-        return ParentRelationshipStageKernelResult(**row)
 
     async def commit_owner_partner(
         self, value: OwnerPartnerCommitKernelCall
@@ -265,6 +235,60 @@ class ParentRelationshipAuthorityDatabase:
                     )
                 ).scalar_one()
         return receipt_id
+
+    async def close(self) -> None:
+        await self.engine.dispose()
+
+
+class ParentRelationshipAuthorityDatabase:
+    """A table-blind pool exposing only reviewed parent-authority kernels."""
+
+    def __init__(self, url: str) -> None:
+        self.engine: AsyncEngine = create_async_engine(
+            url,
+            pool_pre_ping=True,
+            pool_size=2,
+            max_overflow=0,
+            pool_recycle=300,
+            hide_parameters=True,
+        )
+
+    async def stage(
+        self, value: ParentRelationshipStageKernelCall
+    ) -> ParentRelationshipStageKernelResult:
+        async with self.engine.connect() as raw_connection:
+            connection = await raw_connection.execution_options(
+                isolation_level="SERIALIZABLE"
+            )
+            async with connection.begin():
+                row = (
+                    (
+                        await connection.execute(
+                            text(
+                                "SELECT * FROM identity."
+                                "stage_authenticated_parent_relationship_e5e("
+                                "CAST(:ha_user_id AS varchar),:request_id,"
+                                ":proposal_id,:operator_request_id,"
+                                ":proposal_edge_id_0,:proposal_edge_id_1,"
+                                "CAST(:review_code_0 AS varchar),"
+                                "CAST(:review_code_1 AS varchar))"
+                            ),
+                            {
+                                "ha_user_id": value.authenticated_ha_user_id,
+                                "request_id": value.request_id,
+                                "proposal_id": value.proposal_id,
+                                "operator_request_id": value.operator_request_id,
+                                "proposal_edge_id_0": value.proposal_edge_id_0,
+                                "proposal_edge_id_1": value.proposal_edge_id_1,
+                                "review_code_0": value.review_code_0,
+                                "review_code_1": value.review_code_1,
+                            },
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+        return ParentRelationshipStageKernelResult(**row)
 
     async def commit(self, value: ParentRelationshipCommitKernelCall) -> datetime:
         async with self.engine.connect() as raw_connection:

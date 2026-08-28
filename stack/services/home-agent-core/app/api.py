@@ -54,6 +54,7 @@ from .models import (
     ParentRelationshipPreviewView,
     ParentRelationshipStatusView,
     ParentPresenceView,
+    PeopleDirectoryView,
     PHASE3_FIXED_READINESS_BLOCKERS,
     Phase2ReadinessView,
     Phase3ReadinessBlocker,
@@ -67,6 +68,7 @@ from .models import (
     PrincipalBindingConfirmation,
     PrincipalBindingConfirmationView,
     PrincipalBindingProposalView,
+    RelationshipsView,
     PrincipalBindingRequestAction,
     RolloutMode,
     RolloutStatus,
@@ -673,6 +675,27 @@ def semantic_router() -> APIRouter:
         return await store.database.run_serializable(
             lambda: store.create_visit(principal, value)
         )
+
+    # The People tab. Both routes take Service as well as Principal: the
+    # principal row carries principal_id and person_id but not ha_user_id, and
+    # the edge-block arm of the visibility filter is keyed by HA user. The API
+    # role deliberately cannot read identity.ha_user_bindings to derive it, so
+    # it comes from the authenticated header.
+    @router.get("/household", response_model=PeopleDirectoryView)
+    async def household(
+        principal: Principal,
+        service: Service,
+        store: Store,
+    ) -> PeopleDirectoryView:
+        return await store.people_directory(principal, service.ha_user_id)
+
+    @router.get("/relationships", response_model=RelationshipsView)
+    async def relationships(
+        principal: Principal,
+        service: Service,
+        store: Store,
+    ) -> RelationshipsView:
+        return await store.relationships(principal, service.ha_user_id)
 
     @router.get("/snapshot", response_model=AgentSnapshot)
     async def snapshot(principal: Principal, store: Store) -> AgentSnapshot:

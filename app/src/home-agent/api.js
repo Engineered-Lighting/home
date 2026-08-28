@@ -163,6 +163,19 @@
       if (this.invoke) return Promise.reject(new Error("native_parent_relationship_unavailable"));
       return this.request("/api/agent/v1/parent-relationship-proposal");
     }
+
+      // The People tab. Browser-only by construction: these paths are in the
+      // BFF's ROUTES and the origin's BROWSER_API_ROUTES, deliberately not in
+      // NATIVE_ROUTES, so a desktop bearer must be refused here rather than
+      // discovering a 404 at the origin.
+      household() {
+        if (this.invoke) return Promise.reject(new Error("native_household_unavailable"));
+        return this.request("/api/agent/v1/household");
+      }
+      relationships() {
+        if (this.invoke) return Promise.reject(new Error("native_relationships_unavailable"));
+        return this.request("/api/agent/v1/relationships");
+      }
     stageParentRelationship() {
       if (this.invoke) return Promise.reject(new Error("native_parent_relationship_unavailable"));
       return this.request("/api/agent/v1/parent-relationship-proposal", {

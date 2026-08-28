@@ -45,6 +45,7 @@ PHASE3_CURRENT_AUTHORITY_REVISION="0015_current_authority_e5a"
 PHASE3_AUTHENTICATED_BINDING_REVISION="0017_authenticated_binding_e5c"
 PHASE3_PARENT_AUTHORITY_REVISION="0018_parent_relationship_e5d"
 PHASE3_PARENT_STATUS_REVISION="0021_parent_status_e5h"
+PHASE3_OWNER_PERSON_REVISION="0027_owner_person_e5n"
 
 required_migration_target() {
   target="${HOME_AGENT_EXPECTED_DB_REVISION:-}"
@@ -146,6 +147,13 @@ case "$role" in
       exit 64
     }
     run_phase3_migration "$PHASE3_PARENT_STATUS_REVISION"
+    ;;
+  phase3-migrate-owner-person)
+    [ "$#" -eq 1 ] || {
+      echo "phase3 owner-person migration accepts no arguments" >&2
+      exit 64
+    }
+    run_phase3_migration "$PHASE3_OWNER_PERSON_REVISION"
     ;;
   ledger-init)
     exec python -m app.cli ledger-init

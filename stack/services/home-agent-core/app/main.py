@@ -33,6 +33,7 @@ from .ledger import EncryptedErasureLedger
 from .maintenance import WorkerMaintenanceInspector
 from .models import HealthView
 from .owner_partner_adapter import OwnerPartnerAdapter
+from .owner_person_adapter import OwnerPersonAdapter
 from .parent_relationship_adapter import (
     AuthenticatedParentRelationshipAdapter,
 )
@@ -215,6 +216,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if owner_attestation_database is not None
         else None
     )
+    owner_person_adapter = (
+        OwnerPersonAdapter(owner_attestation_database)
+        if owner_attestation_database is not None
+        else None
+    )
     spool = (
         EncryptedRuntimeSpool(
             settings.runtime_spool_path,
@@ -365,6 +371,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         parent_relationship_adapter
     )
     application.state.owner_partner_adapter = owner_partner_adapter
+    application.state.owner_person_adapter = owner_person_adapter
     application.state.spool = spool
     application.state.store = store
     application.state.operator_store = operator_store

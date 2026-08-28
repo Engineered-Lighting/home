@@ -372,7 +372,14 @@ function ParentRelationshipCard({
 function HouseholdCard({
   people,
   relationships,
-  error
+  error,
+  busy,
+  partnerChoice,
+  onPartnerChoice,
+  onAttestPartner,
+  personName,
+  onPersonName,
+  onAddPerson
 }) {
   const edgesFor = personId => (relationships || []).filter(edge => edge.subject_person_id === personId || edge.object_person_id === personId);
   return React.createElement("section", {
@@ -391,7 +398,34 @@ function HouseholdCard({
     }, " (", person.pronouns, ")"), edges.length > 0 && React.createElement("ul", null, edges.map(edge => React.createElement("li", {
       key: edge.fact_id
     }, edge.subject_person_id === person.person_id ? `parent of ${edge.object_display_name}` : `child of ${edge.subject_display_name}`, edge.authority === "authorized_administrator" && " (recorded by you)"))));
-  })), !error && (relationships || []).length === 0 && (people || []).length > 0 && React.createElement("p", null, "No confirmed relationships yet."));
+  })), !error && (relationships || []).length === 0 && (people || []).length > 0 && React.createElement("p", null, "No confirmed relationships yet."), !error && onAddPerson && React.createElement(React.Fragment, null, React.createElement("h3", null, "Add someone"), React.createElement("p", null, "Adding someone records that your household knows them. It does not give them an account or any authority here."), React.createElement("label", {
+    htmlFor: "agent-person-name"
+  }, "Name"), React.createElement("input", {
+    id: "agent-person-name",
+    type: "text",
+    maxLength: 255,
+    value: personName,
+    disabled: busy,
+    onChange: event => onPersonName(event.target.value)
+  }), React.createElement("button", {
+    disabled: busy || !personName.trim(),
+    onClick: () => onAddPerson(personName)
+  }, busy ? "Adding…" : "Add to household")), !error && onAttestPartner && (people || []).length > 0 && React.createElement(React.Fragment, null, React.createElement("h3", null, "Record a partner"), React.createElement("p", null, "You are recording this yourself. It is stored as your account\u2019s statement about your household, not as something the other person confirmed."), React.createElement("label", {
+    htmlFor: "agent-partner-select"
+  }, "Partner"), React.createElement("select", {
+    id: "agent-partner-select",
+    value: partnerChoice || "",
+    disabled: busy,
+    onChange: event => onPartnerChoice(event.target.value)
+  }, React.createElement("option", {
+    value: ""
+  }, "Choose someone\u2026"), people.filter(person => !person.is_self).map(person => React.createElement("option", {
+    key: person.person_id,
+    value: person.person_id
+  }, person.display_name))), React.createElement("button", {
+    disabled: busy || !partnerChoice,
+    onClick: () => onAttestPartner(partnerChoice)
+  }, busy ? "Recording…" : "Record partner")));
 }
 function HomeAgentPanel() {
   const api = useMemo(() => new window.HomeAgentApi(""), []);
@@ -411,6 +445,9 @@ function HomeAgentPanel() {
   const [parentRelationship, setParentRelationship] = useState(null);
   const [household, setHousehold] = useState(null);
   const [householdError, setHouseholdError] = useState(false);
+  const [partnerChoice, setPartnerChoice] = useState("");
+  const [partnerBusy, setPartnerBusy] = useState(false);
+  const [personName, setPersonName] = useState("");
   const [parentRelationshipBusy, setParentRelationshipBusy] = useState(false);
   const [snapshot, setSnapshot] = useState(null);
   const [containedPreferences, setContainedPreferences] = useState(null);
@@ -442,6 +479,9 @@ function HomeAgentPanel() {
     setParentRelationship(null);
     setHousehold(null);
     setHouseholdError(false);
+    setPartnerChoice("");
+    setPartnerBusy(false);
+    setPersonName("");
     setParentRelationshipBusy(false);
     setSnapshot(null);
     setContainedPreferences(null);
@@ -722,6 +762,57 @@ function HomeAgentPanel() {
       setError(cause.message || "principal_binding_cancel_failed");
     }
   };
+  const attestPartner = async partnerPersonId => {
+    if (!partnerPersonId) return;
+    const ticket = beginPrincipalOperation();
+    setPartnerBusy(true);
+    setError("");
+    try {
+      await api.attestPartner({
+        ceremony_id: randomUuid7(),
+        partner_person_id: partnerPersonId,
+        attestation_nonce: crypto.randomUUID()
+      });
+      if (!principalOperationCurrent(ticket)) return;
+      setPartnerChoice("");
+      setPartnerBusy(false);
+      const edges = await api.relationships();
+      if (!principalOperationCurrent(ticket)) return;
+      setHousehold(current => current ? {
+        ...current,
+        relationships: edges.relationships
+      } : current);
+    } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
+      setPartnerBusy(false);
+      setError(cause.message || "partner_attestation_failed");
+    }
+  };
+  const addHouseholdPerson = async displayName => {
+    if (!displayName.trim()) return;
+    const ticket = beginPrincipalOperation();
+    setPartnerBusy(true);
+    setError("");
+    try {
+      await api.createHouseholdPerson({
+        ceremony_id: randomUuid7(),
+        display_name: displayName.trim()
+      });
+      if (!principalOperationCurrent(ticket)) return;
+      setPersonName("");
+      setPartnerBusy(false);
+      const directory = await api.household();
+      if (!principalOperationCurrent(ticket)) return;
+      setHousehold(current => current ? {
+        ...current,
+        people: directory.people
+      } : current);
+    } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
+      setPartnerBusy(false);
+      setError(cause.message || "household_person_failed");
+    }
+  };
   const stageParentRelationship = async () => {
     const ticket = beginPrincipalOperation();
     setParentRelationshipBusy(true);
@@ -963,7 +1054,14 @@ function HomeAgentPanel() {
   }), !api.invoke && (household || householdError) && React.createElement(HouseholdCard, {
     people: household?.people,
     relationships: household?.relationships,
-    error: householdError
+    error: householdError,
+    busy: partnerBusy,
+    partnerChoice: partnerChoice,
+    onPartnerChoice: setPartnerChoice,
+    onAttestPartner: attestPartner,
+    personName: personName,
+    onPersonName: setPersonName,
+    onAddPerson: addHouseholdPerson
   }), nativeInstallationMaterial && React.createElement("section", {
     className: "agent-card"
   }, React.createElement("h2", null, "Public installation enrollment material"), React.createElement("p", null, "This public key material is not proof that enrollment is complete. A private operator must bind it offline to your exact Home Assistant user UUID."), React.createElement("pre", null, JSON.stringify(nativeInstallationMaterial, null, 2))), api.invoke && new Set(["rollout_contained", "ready"]).has(phase) && (snapshot?.capabilities?.private_locality_approval || containedPreferences?.private_locality_approval) === "attested_native_confirmation_gated" && React.createElement("section", {

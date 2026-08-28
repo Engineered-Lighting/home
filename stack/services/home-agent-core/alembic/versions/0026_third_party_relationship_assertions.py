@@ -39,8 +39,8 @@ from typing import Sequence
 from alembic import op
 
 
-revision = "0026_third_party_e5m"
-down_revision = "0025_owner_partner_caller_e5l"
+revision: str = "0026_third_party_e5m"
+down_revision: str = "0025_owner_partner_caller_e5l"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 

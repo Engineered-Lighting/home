@@ -27,8 +27,8 @@ from typing import Sequence
 from alembic import op
 
 
-revision = "0025_owner_partner_caller_e5l"
-down_revision = "0024_owner_partner_e5k"
+revision: str = "0025_owner_partner_caller_e5l"
+down_revision: str = "0024_owner_partner_e5k"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 

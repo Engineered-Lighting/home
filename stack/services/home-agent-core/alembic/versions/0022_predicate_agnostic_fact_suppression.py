@@ -31,8 +31,8 @@ from typing import Sequence
 from alembic import op
 
 
-revision = "0022_fact_suppression_e5i"
-down_revision = "0021_parent_status_e5h"
+revision: str = "0022_fact_suppression_e5i"
+down_revision: str = "0021_parent_status_e5h"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 

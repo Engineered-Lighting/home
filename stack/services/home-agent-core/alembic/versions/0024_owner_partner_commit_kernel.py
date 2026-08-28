@@ -40,8 +40,8 @@ from typing import Sequence
 from alembic import op
 
 
-revision = "0024_owner_partner_e5k"
-down_revision = "0023_partner_vocabulary_e5j"
+revision: str = "0024_owner_partner_e5k"
+down_revision: str = "0023_partner_vocabulary_e5j"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 

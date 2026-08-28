@@ -4440,10 +4440,10 @@ BEGIN
   END IF;
 
   expected_column_acl := ARRAY[
+    'home_agent_identity_finalizer_kernel|identity.people|status|UPDATE',
     'home_agent_identity_finalizer_kernel|identity.people|status_source_ref|UPDATE',
     'home_agent_identity_finalizer_kernel|identity.people|status_source_sha256|UPDATE',
     'home_agent_identity_finalizer_kernel|identity.people|status_source_version|UPDATE',
-    'home_agent_identity_finalizer_kernel|identity.people|status|UPDATE',
     'home_agent_identity_finalizer_kernel|identity.people|updated_at|UPDATE',
     'home_agent_identity_finalizer_kernel|operations.reviewed_identity_finalizer_admissions|consumed_at|UPDATE',
     'home_agent_identity_finalizer_kernel|operations.reviewed_identity_migration_runs|expires_at|UPDATE',

@@ -414,3 +414,39 @@ def test_the_kernel_can_reach_the_schemas_it_reads() -> None:
     granted = match.group(1)
     for schema in ("identity", "knowledge", "operations", "privacy"):
         assert schema in granted, f"{KERNEL_ROLE} cannot reach schema {schema}"
+
+
+def test_the_kernel_grant_block_is_not_nested_in_another_revision_gate() -> None:
+    """Grants gated on someone else's revision never run.
+
+    apply-grants.sh is a single psql heredoc divided into ``\\if`` sections,
+    each keyed on the database being at a particular revision. Dropping this
+    role's grants inside the E5e section put them behind
+    ``activate_parent_relationship_stage_e5e``, which is true only at revisions
+    0019-0021 -- so at 0024 and later, where the role actually exists, they
+    would never have run at all. The block must sit at nesting depth zero.
+
+    It also broke the E5e schema test, which slices that section by splitting
+    on the first ``\\endif``. That is the cheap signal; this is the real one.
+    """
+
+    depth = 0
+    opened_at_depth: int | None = None
+    for line in APPLY_GRANTS.read_text().splitlines():
+        stripped = line.strip()
+        if stripped.startswith("\\if"):
+            if "activate_owner_partner_kernel_e5k" in stripped:
+                opened_at_depth = depth
+            depth += 1
+        elif stripped.startswith("\\endif"):
+            depth -= 1
+
+    assert opened_at_depth is not None, (
+        "the E5k grant block has no revision guard at all; below 0024 the role "
+        "does not exist and every grant aborts the script under ON_ERROR_STOP"
+    )
+    assert opened_at_depth == 0, (
+        "the E5k grant block is nested inside another section's guard, so its "
+        "grants run only at that section's revisions and never at the ones "
+        "where this role exists"
+    )

@@ -2440,7 +2440,13 @@ DECLARE
     '0018_parent_relationship_e5d',
     '0019_parent_stage_e5e',
     '0020_parent_commit_e5f',
-    '0021_parent_status_e5h'
+    '0021_parent_status_e5h',
+    '0022_fact_suppression_e5i',
+    '0023_partner_vocabulary_e5j',
+    '0024_owner_partner_e5k',
+    '0025_owner_partner_caller_e5l',
+    '0026_third_party_e5m',
+    '0027_owner_person_e5n'
   ]::text[];
   pre_e3_revisions constant text[] := ARRAY[
     '0001_greenfield_core',
@@ -2463,6 +2469,13 @@ DECLARE
   -- and ACL contract validated below. Their additive policies are validated
   -- and projected out explicitly. Every later revision must be admitted
   -- after a separate review.
+  -- The owner-attested People revisions (0022-0027) are admitted here and in
+  -- the sibling lists below. They leave every relation, function, ownership
+  -- and ACL these contracts validate untouched, and the deployed database sits
+  -- at the last of them -- so while they were missing, the grant stage of a
+  -- deploy raised 'partial identity finalizer E3 object set' instead of
+  -- applying grants. They are likewise added to the admission policy-count
+  -- branch below, which stays 6: measured on the deployed database at 0027.
   reviewed_e3_catalog_revisions constant text[] := ARRAY[
     '0013_identity_finalizer_e3',
     '0014_identity_cutover_e4',
@@ -2472,7 +2485,13 @@ DECLARE
     '0018_parent_relationship_e5d',
     '0019_parent_stage_e5e',
     '0020_parent_commit_e5f',
-    '0021_parent_status_e5h'
+    '0021_parent_status_e5h',
+    '0022_fact_suppression_e5i',
+    '0023_partner_vocabulary_e5j',
+    '0024_owner_partner_e5k',
+    '0025_owner_partner_caller_e5l',
+    '0026_third_party_e5m',
+    '0027_owner_person_e5n'
   ]::text[];
   expected_e3_catalog_sha256 constant text :=
     'b85d05e7d2d45671a0107a75658474450c0ab927d86a2ec4809732169ee37192';
@@ -3599,7 +3618,13 @@ BEGIN
                 '0018_parent_relationship_e5d',
                 '0019_parent_stage_e5e',
                 '0020_parent_commit_e5f',
-                '0021_parent_status_e5h'
+                '0021_parent_status_e5h',
+                '0022_fact_suppression_e5i',
+                '0023_partner_vocabulary_e5j',
+                '0024_owner_partner_e5k',
+                '0025_owner_partner_caller_e5l',
+                '0026_third_party_e5m',
+                '0027_owner_person_e5n'
               ) THEN 6
          WHEN current_revision = ANY (reviewed_e4_overlay_revisions) THEN 5
          ELSE 4
@@ -4865,7 +4890,13 @@ DECLARE
     '0018_parent_relationship_e5d',
     '0019_parent_stage_e5e',
     '0020_parent_commit_e5f',
-    '0021_parent_status_e5h'
+    '0021_parent_status_e5h',
+    '0022_fact_suppression_e5i',
+    '0023_partner_vocabulary_e5j',
+    '0024_owner_partner_e5k',
+    '0025_owner_partner_caller_e5l',
+    '0026_third_party_e5m',
+    '0027_owner_person_e5n'
   ]::text[];
   role_count integer;
 BEGIN
@@ -6314,7 +6345,13 @@ DECLARE
     '0018_parent_relationship_e5d',
     '0019_parent_stage_e5e',
     '0020_parent_commit_e5f',
-    '0021_parent_status_e5h'
+    '0021_parent_status_e5h',
+    '0022_fact_suppression_e5i',
+    '0023_partner_vocabulary_e5j',
+    '0024_owner_partner_e5k',
+    '0025_owner_partner_caller_e5l',
+    '0026_third_party_e5m',
+    '0027_owner_person_e5n'
   ]::text[];
   rls_relations constant text[] := ARRAY[
     'operations.semantic_authority_promotions',
@@ -9188,6 +9225,66 @@ BEGIN
 END
 $parent_relationship_e5h_active_acl$;
 \endif
+
+-- E5n owner-attested person creation. Every kernel above restores the
+-- committer's EXECUTE after the blanket revoke near the top of this script
+-- (REVOKE ALL PRIVILEGES ON ALL FUNCTIONS ... FROM home_agent_binding_committer)
+-- and E5n was the one that never got a block. 0027 grants it, but alembic runs
+-- before this script, so the grant is erased on the next run and the only path
+-- that can add a person stops working.
+--
+-- Guarded on the function existing: below 0027 it does not, and an unguarded
+-- GRANT would abort the script under ON_ERROR_STOP for every older database.
+SELECT pg_catalog.to_regprocedure(
+         'identity.create_owner_attested_person_e5n('
+         'uuid, text, text, text, text, text, timestamptz, text, '
+         'uuid, uuid, uuid)'
+       ) IS NOT NULL AS activate_owner_person_kernel_e5n
+\gset
+
+\if :activate_owner_person_kernel_e5n
+SET ROLE home_agent_identity_finalizer_kernel;
+GRANT EXECUTE ON FUNCTION
+  identity.create_owner_attested_person_e5n(
+    uuid, text, text, text, text, text, timestamptz, text,
+    uuid, uuid, uuid
+  )
+  TO home_agent_binding_committer;
+RESET ROLE;
+\endif
+
+-- E5k owner-attested partner commit. Same gap as E5n: 0025 grants the
+-- committer EXECUTE, alembic runs before this script, and the blanket revoke
+-- above erases it. Unlike the other kernels this one's ownership is in flux --
+-- 0026 recreated it with a changed signature and did not reassign the owner,
+-- and a follow-up revision repairs that -- so the grant is issued as whoever
+-- currently owns the function rather than as a hardcoded role. A plain
+-- SET ROLE would fail on exactly one side of that change.
+DO $owner_partner_e5k_committer_execute$
+DECLARE
+  target regprocedure;
+  owner_name text;
+BEGIN
+  SELECT oid INTO target
+    FROM pg_catalog.pg_proc AS candidate
+   WHERE candidate.pronamespace = 'identity'::regnamespace
+     AND candidate.proname = 'commit_owner_partner_relationship_e5k'
+   ORDER BY candidate.pronargs DESC
+   LIMIT 1;
+  IF target IS NULL THEN
+    RETURN;
+  END IF;
+  SELECT pg_catalog.pg_get_userbyid(candidate.proowner)
+    INTO STRICT owner_name
+    FROM pg_catalog.pg_proc AS candidate
+   WHERE candidate.oid = target;
+  EXECUTE pg_catalog.format('SET ROLE %I', owner_name);
+  EXECUTE pg_catalog.format(
+    'GRANT EXECUTE ON FUNCTION %s TO home_agent_binding_committer', target
+  );
+  EXECUTE 'RESET ROLE';
+END
+$owner_partner_e5k_committer_execute$;
 SQL
 
 # The broad role setup above supports old pinned revisions and creates the

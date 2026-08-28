@@ -13,6 +13,17 @@ FOUNDATION_REVISION = "0018_parent_relationship_e5d"
 STAGING_REVISION = "0019_parent_stage_e5e"
 COMMIT_REVISION = "0020_parent_commit_e5f"
 STATUS_REVISION = "0021_parent_status_e5h"
+# The owner-attested People revisions. They add no object these contracts
+# validate, but every allowlist has to admit them or apply-grants.sh raises at
+# the revision the deployed database actually reports.
+OWNER_ATTESTED_REVISIONS = [
+    "0022_fact_suppression_e5i",
+    "0023_partner_vocabulary_e5j",
+    "0024_owner_partner_e5k",
+    "0025_owner_partner_caller_e5l",
+    "0026_third_party_e5m",
+    "0027_owner_person_e5n",
+]
 FUNCTION = "operations.evaluate_current_identity_semantic_authority(uuid)"
 CALLER_ROLE = "home_agent_binding_operator"
 KERNEL_ROLE = "home_agent_identity_authority_kernel"
@@ -182,6 +193,7 @@ def test_e5_overlay_preserves_exact_e3_e4_pins_and_stop_boundary() -> None:
         STAGING_REVISION,
         COMMIT_REVISION,
         STATUS_REVISION,
+        *OWNER_ATTESTED_REVISIONS,
     ]
     assert _revision_array(e4, "reviewed_e4_catalog_revisions") == [
         DOWN_REVISION,
@@ -192,6 +204,7 @@ def test_e5_overlay_preserves_exact_e3_e4_pins_and_stop_boundary() -> None:
         STAGING_REVISION,
         COMMIT_REVISION,
         STATUS_REVISION,
+        *OWNER_ATTESTED_REVISIONS,
     ]
     for section, marker in (
         (e3, "identity finalizer E3 reviewed E5 policy mismatch"),
@@ -335,6 +348,7 @@ def test_e5_replay_quarantines_and_pins_the_complete_direct_acl_surface() -> Non
         STAGING_REVISION,
         COMMIT_REVISION,
         STATUS_REVISION,
+        *OWNER_ATTESTED_REVISIONS,
     ]
     assert "NOT current_revision = ANY (reviewed_e5_catalog_revisions)" in (admission)
     assert "function_name_count <> 1" in admission

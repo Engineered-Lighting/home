@@ -102,6 +102,7 @@ PHASE3_SCHEMA_REVISION = "0006a_worker_lease_arbitration"
 PRINCIPAL_BINDING_ADAPTER_REVISION = "0017_authenticated_binding_e5c"
 PARENT_RELATIONSHIP_ADAPTER_REVISION = "0021_parent_status_e5h"
 OWNER_PARTNER_ADAPTER_REVISION = "0025_owner_partner_caller_e5l"
+OWNER_PERSON_ADAPTER_REVISION = "0027_owner_person_e5n"
 LEGACY_IDENTITY_IMPORT_RETIRED = (
     "sequential legacy identity import is retired; use the reviewed atomic "
     "identity finalizer"
@@ -676,6 +677,34 @@ def semantic_router() -> APIRouter:
         return await store.database.run_serializable(
             lambda: store.create_visit(principal, value)
         )
+
+    @router.post(
+        "/household-person",
+        response_model=OwnerPersonView,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def create_household_person(
+        request: Request,
+        service: Service,
+    ) -> OwnerPersonView:
+        # Not "/people": that path is the retired legacy identity import, and a
+        # security boundary asserts the browser client never references it.
+        if (
+            request.app.state.settings.readiness_migration
+            != OWNER_PERSON_ADAPTER_REVISION
+        ):
+            raise CapabilityDisabledError("adding a person is not deployed")
+        adapter = getattr(request.app.state, "owner_person_adapter", None)
+        if adapter is None:
+            raise CapabilityDisabledError(
+                "owner person split-credential adapter is unavailable"
+            )
+        raw_body = await request.body()
+        try:
+            value = OwnerPersonCreate.model_validate_json(raw_body)
+        except ValidationError as exc:
+            raise ValidationDomainError("person body is invalid") from exc
+        return await adapter.create(ha_user_id=service.ha_user_id, value=value)
 
     @router.post(
         "/partner-attestation",

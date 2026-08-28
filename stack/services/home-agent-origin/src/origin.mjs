@@ -28,6 +28,8 @@ const BROWSER_API_ROUTES = Object.freeze([
   ["POST", /^\/api\/agent\/v1\/parent-relationship-proposal\/confirm$/],
   ["GET", /^\/api\/agent\/v1\/household$/],
   ["GET", /^\/api\/agent\/v1\/relationships$/],
+  ["POST", /^\/api\/agent\/v1\/partner-attestation$/],
+  ["POST", /^\/api\/agent\/v1\/household-person$/],
   ["GET", /^\/api\/agent\/v1\/snapshot$/],
   ["POST", /^\/api\/agent\/v1\/memory-transactions$/],
   ["GET", new RegExp(`^/api/agent/v1/memory-transactions/${UUID_PATH}$`, "i")],

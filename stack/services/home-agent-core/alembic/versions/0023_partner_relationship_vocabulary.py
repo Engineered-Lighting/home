@@ -44,9 +44,15 @@ def upgrade() -> None:
     # Mirrors uq_active_parent_relationship. Unique per directed edge, scoped to
     # currently-believed accepted facts, so a retracted edge does not block a
     # later re-assertion.
+    # IF NOT EXISTS because app/schema.py already declares this index and the
+    # greenfield revision builds a database with metadata.create_all(), so a
+    # fresh database has it before this revision runs. Production reached here
+    # from a database built by an older schema.py, where it did not -- which is
+    # why this only ever failed on a greenfield chain, and why it stayed
+    # invisible while the gate stopped migrating at 0021.
     op.execute(
         """
-        CREATE UNIQUE INDEX uq_active_partner_relationship
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_active_partner_relationship
             ON knowledge.fact_versions (
               subject_id,
               ((object ->> 'person_id')),

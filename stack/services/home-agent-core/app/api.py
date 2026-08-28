@@ -681,8 +681,8 @@ def semantic_router() -> APIRouter:
     # the edge-block arm of the visibility filter is keyed by HA user. The API
     # role deliberately cannot read identity.ha_user_bindings to derive it, so
     # it comes from the authenticated header.
-    @router.get("/people-directory", response_model=PeopleDirectoryView)
-    async def people_directory(
+    @router.get("/household", response_model=PeopleDirectoryView)
+    async def household(
         principal: Principal,
         service: Service,
         store: Store,

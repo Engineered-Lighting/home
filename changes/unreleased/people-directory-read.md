@@ -1,11 +1,11 @@
 ---
 title: Read the household and its relationships from the app
-target: user
+target: web
 type: added
 ---
 
 The app can now show who the system believes lives here, and the relationships
-it holds as fact. Two read-only endpoints — `GET /v1/people-directory` and
+it holds as fact. Two read-only endpoints — `GET /v1/household` and
 `GET /v1/relationships` — expose the roster and the committed relationship
 facts, resolved to display names.
 

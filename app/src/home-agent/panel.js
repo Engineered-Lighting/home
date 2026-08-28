@@ -344,30 +344,6 @@ function containedPreferenceState(snapshot) {
     private_locality_approval: snapshot?.capabilities?.private_locality_approval
   });
 }
-function HouseholdCard({
-  people,
-  relationships,
-  error
-}) {
-  const edgesFor = personId => (relationships || []).filter(edge => edge.subject_person_id === personId || edge.object_person_id === personId);
-  return React.createElement("section", {
-    className: "agent-card",
-    "aria-live": "polite"
-  }, React.createElement("h2", null, "Household"), error && React.createElement("p", null, "The household could not be loaded. Nothing is inferred from a failed read."), !error && (people || []).length === 0 && React.createElement("p", null, "No people are visible to you."), !error && (people || []).length > 0 && React.createElement("ul", {
-    className: "agent-people"
-  }, people.map(person => {
-    const edges = edgesFor(person.person_id);
-    return React.createElement("li", {
-      key: person.person_id
-    }, React.createElement("strong", null, person.display_name), person.is_self && React.createElement("span", {
-      className: "agent-people-self"
-    }, " \u2014 you"), person.pronouns && React.createElement("span", {
-      className: "agent-people-pronouns"
-    }, " (", person.pronouns, ")"), edges.length > 0 && React.createElement("ul", null, edges.map(edge => React.createElement("li", {
-      key: edge.fact_id
-    }, edge.subject_person_id === person.person_id ? `parent of ${edge.object_display_name}` : `child of ${edge.subject_display_name}`, edge.authority === "authorized_administrator" && " (recorded by you)"))));
-  })), !error && (relationships || []).length === 0 && (people || []).length > 0 && React.createElement("p", null, "No confirmed relationships yet."));
-}
 function ParentRelationshipCard({
   status,
   busy,
@@ -392,6 +368,30 @@ function ParentRelationshipCard({
   }, busy ? "Confirming both…" : "Confirm both parent relationships")), status?.state === "confirmed" && React.createElement(React.Fragment, null, React.createElement("h3", null, "Parent relationships confirmed"), React.createElement("p", null, "Core atomically committed exactly ", status.fact_count, " private relationship facts."), React.createElement("dl", {
     className: "agent-grid"
   }, React.createElement("dt", null, "Confirmed"), React.createElement("dd", null, status.confirmed_at || "unavailable"), React.createElement("dt", null, "Location memory"), React.createElement("dd", null, "off"), React.createElement("dt", null, "Travel greetings"), React.createElement("dd", null, "off"))));
+}
+function HouseholdCard({
+  people,
+  relationships,
+  error
+}) {
+  const edgesFor = personId => (relationships || []).filter(edge => edge.subject_person_id === personId || edge.object_person_id === personId);
+  return React.createElement("section", {
+    className: "agent-card",
+    "aria-live": "polite"
+  }, React.createElement("h2", null, "Household"), error && React.createElement("p", null, "The household could not be loaded. Nothing is inferred from a failed read."), !error && (people || []).length === 0 && React.createElement("p", null, "No people are visible to you."), !error && (people || []).length > 0 && React.createElement("ul", {
+    className: "agent-people"
+  }, people.map(person => {
+    const edges = edgesFor(person.person_id);
+    return React.createElement("li", {
+      key: person.person_id
+    }, React.createElement("strong", null, person.display_name), person.is_self && React.createElement("span", {
+      className: "agent-people-self"
+    }, " \u2014 you"), person.pronouns && React.createElement("span", {
+      className: "agent-people-pronouns"
+    }, " (", person.pronouns, ")"), edges.length > 0 && React.createElement("ul", null, edges.map(edge => React.createElement("li", {
+      key: edge.fact_id
+    }, edge.subject_person_id === person.person_id ? `parent of ${edge.object_display_name}` : `child of ${edge.subject_display_name}`, edge.authority === "authorized_administrator" && " (recorded by you)"))));
+  })), !error && (relationships || []).length === 0 && (people || []).length > 0 && React.createElement("p", null, "No confirmed relationships yet."));
 }
 function HomeAgentPanel() {
   const api = useMemo(() => new window.HomeAgentApi(""), []);
@@ -521,7 +521,7 @@ function HomeAgentPanel() {
       if (!isCurrent()) return;
       if (!api.invoke) {
         try {
-          const [directory, edges] = await Promise.all([api.peopleDirectory(), api.relationships()]);
+          const [directory, edges] = await Promise.all([api.household(), api.relationships()]);
           if (!isCurrent()) return;
           setHousehold({
             people: directory.people,

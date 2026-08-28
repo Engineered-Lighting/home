@@ -26,7 +26,7 @@ const BROWSER_API_ROUTES = Object.freeze([
   ["GET", /^\/api\/agent\/v1\/parent-relationship-proposal$/],
   ["POST", /^\/api\/agent\/v1\/parent-relationship-proposal$/],
   ["POST", /^\/api\/agent\/v1\/parent-relationship-proposal\/confirm$/],
-  ["GET", /^\/api\/agent\/v1\/people-directory$/],
+  ["GET", /^\/api\/agent\/v1\/household$/],
   ["GET", /^\/api\/agent\/v1\/relationships$/],
   ["GET", /^\/api\/agent\/v1\/snapshot$/],
   ["POST", /^\/api\/agent\/v1\/memory-transactions$/],

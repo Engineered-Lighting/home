@@ -56,52 +56,6 @@ function containedPreferenceState(snapshot) {
   });
 }
 
-function HouseholdCard({ people, relationships, error }) {
-  // Read-only. Core applies the visibility rule -- privacy directives, edge
-  // blocks and erasure -- so anything absent here is absent deliberately and
-  // must never be reconstructed client-side from another response.
-  const edgesFor = (personId) =>
-    (relationships || []).filter(
-      (edge) => edge.subject_person_id === personId || edge.object_person_id === personId,
-    );
-  return (
-    <section className="agent-card" aria-live="polite">
-      <h2>Household</h2>
-      {error && <p>The household could not be loaded. Nothing is inferred from a failed read.</p>}
-      {!error && (people || []).length === 0 && <p>No people are visible to you.</p>}
-      {!error && (people || []).length > 0 && (
-        <ul className="agent-people">
-          {people.map((person) => {
-            const edges = edgesFor(person.person_id);
-            return (
-              <li key={person.person_id}>
-                <strong>{person.display_name}</strong>
-                {person.is_self && <span className="agent-people-self"> — you</span>}
-                {person.pronouns && <span className="agent-people-pronouns"> ({person.pronouns})</span>}
-                {edges.length > 0 && (
-                  <ul>
-                    {edges.map((edge) => (
-                      <li key={edge.fact_id}>
-                        {edge.subject_person_id === person.person_id
-                          ? `parent of ${edge.object_display_name}`
-                          : `child of ${edge.subject_display_name}`}
-                        {edge.authority === "authorized_administrator" && " (recorded by you)"}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {!error && (relationships || []).length === 0 && (people || []).length > 0 && (
-        <p>No confirmed relationships yet.</p>
-      )}
-    </section>
-  );
-}
-
 function ParentRelationshipCard({ status, busy, onStage, onConfirm }) {
   const recognized = new Set([
     "not_started",
@@ -147,6 +101,52 @@ function ParentRelationshipCard({ status, busy, onStage, onConfirm }) {
           <dt>Travel greetings</dt><dd>off</dd>
         </dl>
       </>}
+    </section>
+  );
+}
+
+function HouseholdCard({ people, relationships, error }) {
+  // Read-only. Core applies the visibility rule -- privacy directives, edge
+  // blocks and erasure -- so anything absent here is absent deliberately and
+  // must never be reconstructed client-side from another response.
+  const edgesFor = (personId) =>
+    (relationships || []).filter(
+      (edge) => edge.subject_person_id === personId || edge.object_person_id === personId,
+    );
+  return (
+    <section className="agent-card" aria-live="polite">
+      <h2>Household</h2>
+      {error && <p>The household could not be loaded. Nothing is inferred from a failed read.</p>}
+      {!error && (people || []).length === 0 && <p>No people are visible to you.</p>}
+      {!error && (people || []).length > 0 && (
+        <ul className="agent-people">
+          {people.map((person) => {
+            const edges = edgesFor(person.person_id);
+            return (
+              <li key={person.person_id}>
+                <strong>{person.display_name}</strong>
+                {person.is_self && <span className="agent-people-self"> — you</span>}
+                {person.pronouns && <span className="agent-people-pronouns"> ({person.pronouns})</span>}
+                {edges.length > 0 && (
+                  <ul>
+                    {edges.map((edge) => (
+                      <li key={edge.fact_id}>
+                        {edge.subject_person_id === person.person_id
+                          ? `parent of ${edge.object_display_name}`
+                          : `child of ${edge.subject_display_name}`}
+                        {edge.authority === "authorized_administrator" && " (recorded by you)"}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {!error && (relationships || []).length === 0 && (people || []).length > 0 && (
+        <p>No confirmed relationships yet.</p>
+      )}
     </section>
   );
 }
@@ -292,7 +292,7 @@ function HomeAgentPanel() {
       if (!api.invoke) {
         try {
           const [directory, edges] = await Promise.all([
-            api.peopleDirectory(),
+            api.household(),
             api.relationships(),
           ]);
           if (!isCurrent()) return;

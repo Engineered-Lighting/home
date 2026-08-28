@@ -23,6 +23,7 @@ OWNER_ATTESTED_REVISIONS = [
     "0025_owner_partner_caller_e5l",
     "0026_third_party_e5m",
     "0027_owner_person_e5n",
+    "0028_owner_partner_access_e5o",
 ]
 FUNCTION = "operations.evaluate_current_identity_semantic_authority(uuid)"
 CALLER_ROLE = "home_agent_binding_operator"

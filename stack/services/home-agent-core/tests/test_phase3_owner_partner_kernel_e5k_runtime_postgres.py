@@ -393,7 +393,7 @@ async def test_e5k_is_reachable_by_the_committer_as_the_kernel() -> None:
                 await connection.execute(
                     text(
                         "SELECT bool_and("
-                        "pg_catalog.has_table_privilege("
+                        "pg_catalog.has_any_column_privilege("
                         ":kernel,target.relation,target.privilege)) "
                         "FROM (VALUES "
                         "('identity.ha_user_bindings','SELECT'),"

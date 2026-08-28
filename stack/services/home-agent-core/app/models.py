@@ -241,6 +241,53 @@ class OwnerPartnerAttestationView(StrictModel):
     document_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class OwnerPersonCreate(StrictModel):
+    """A person the owner adds, and the privacy state they are added with.
+
+    No status field: the kernel writes 'active' as a literal, so nobody can be
+    created already erased or in a state no code expects. No identifiers
+    either -- the adapter derives them.
+    """
+
+    ceremony_id: uuid.UUID
+    display_name: str = Field(min_length=1, max_length=255)
+    pronouns: str | None = Field(default=None, max_length=64)
+    privacy_scope: Literal["private", "household"] = "private"
+    directive: (
+        Literal["do_not_track", "ignored", "silent", "private", "auto_expire"] | None
+    ) = None
+    directive_expires_at: datetime | None = None
+
+    @field_validator("ceremony_id")
+    @classmethod
+    def _ceremony_is_uuid7(cls, value: uuid.UUID) -> uuid.UUID:
+        if value.version != 7:
+            raise ValueError("ceremony_id must be a UUIDv7")
+        return value
+
+    @field_validator("directive_expires_at")
+    @classmethod
+    def _expiry_is_aware(cls, value: datetime | None) -> datetime | None:
+        return None if value is None else _aware(value)
+
+    @model_validator(mode="after")
+    def _expiry_matches_directive(self) -> "OwnerPersonCreate":
+        # An auto-expiring person with no expiry never expires, which is the
+        # opposite of what was asked for. The kernel refuses this too; failing
+        # here gives a usable message instead of a database error.
+        if self.directive == "auto_expire" and self.directive_expires_at is None:
+            raise ValueError("auto_expire requires directive_expires_at")
+        if self.directive != "auto_expire" and self.directive_expires_at is not None:
+            raise ValueError("directive_expires_at applies only to auto_expire")
+        return self
+
+
+class OwnerPersonView(StrictModel):
+    person_id: uuid.UUID
+    display_name: str
+    privacy_scope: str
+
+
 class ReviewedPersonVerify(StrictModel):
     person_id: uuid.UUID
     display_name: str = Field(min_length=1, max_length=255)

@@ -176,6 +176,13 @@
         if (this.invoke) return Promise.reject(new Error("native_relationships_unavailable"));
         return this.request("/api/agent/v1/relationships");
       }
+      createHouseholdPerson(body) {
+        if (this.invoke) return Promise.reject(new Error("native_household_person_unavailable"));
+        return this.request("/api/agent/v1/household-person", {
+          method: "POST",
+          body,
+        });
+      }
       attestPartner(body) {
         if (this.invoke) return Promise.reject(new Error("native_partner_attestation_unavailable"));
         return this.request("/api/agent/v1/partner-attestation", {

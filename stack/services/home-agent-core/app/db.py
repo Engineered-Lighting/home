@@ -98,6 +98,21 @@ class OwnerPartnerCommitKernelCall:
 
 
 @dataclass(frozen=True, slots=True)
+class OwnerPersonCreateKernelCall:
+    authenticated_ha_user_id: str
+    ceremony_id: uuid.UUID
+    display_name: str
+    pronouns: str | None
+    privacy_scope: str
+    directive: str | None
+    directive_expires_at: datetime | None
+    document_digest: str
+    person_id: uuid.UUID
+    attestation_artifact_id: uuid.UUID
+    directive_id: uuid.UUID
+
+
+@dataclass(frozen=True, slots=True)
 class ParentRelationshipStatusKernelResult:
     state: str
     proposal_id: uuid.UUID | None
@@ -265,6 +280,48 @@ class ParentRelationshipAuthorityDatabase:
                     )
                 ).scalar_one()
         return receipt_id
+
+    async def create_owner_person(
+        self, value: OwnerPersonCreateKernelCall
+    ) -> uuid.UUID:
+        async with self.engine.connect() as raw_connection:
+            connection = await raw_connection.execution_options(
+                isolation_level="SERIALIZABLE"
+            )
+            async with connection.begin():
+                person_id = (
+                    await connection.execute(
+                        text(
+                            "SELECT identity.create_owner_attested_person_e5n("
+                            ":ceremony_id,"
+                            "CAST(:ha_user_id AS text),"
+                            "CAST(:display_name AS text),"
+                            "CAST(:pronouns AS text),"
+                            "CAST(:privacy_scope AS text),"
+                            "CAST(:directive AS text),"
+                            ":directive_expires_at,"
+                            "CAST(:document_digest AS text),"
+                            ":person_id,:attestation_artifact_id,"
+                            ":directive_id)"
+                        ),
+                        {
+                            "ceremony_id": value.ceremony_id,
+                            "ha_user_id": value.authenticated_ha_user_id,
+                            "display_name": value.display_name,
+                            "pronouns": value.pronouns,
+                            "privacy_scope": value.privacy_scope,
+                            "directive": value.directive,
+                            "directive_expires_at": value.directive_expires_at,
+                            "document_digest": value.document_digest,
+                            "person_id": value.person_id,
+                            "attestation_artifact_id": (
+                                value.attestation_artifact_id
+                            ),
+                            "directive_id": value.directive_id,
+                        },
+                    )
+                ).scalar_one()
+        return person_id
 
     async def commit(self, value: ParentRelationshipCommitKernelCall) -> datetime:
         async with self.engine.connect() as raw_connection:

@@ -108,6 +108,7 @@ function ParentRelationshipCard({ status, busy, onStage, onConfirm }) {
 function HouseholdCard({
   people, relationships, error,
   busy, partnerChoice, onPartnerChoice, onAttestPartner,
+  personName, onPersonName, onAddPerson,
 }) {
   // Read-only. Core applies the visibility rule -- privacy directives, edge
   // blocks and erasure -- so anything absent here is absent deliberately and
@@ -149,6 +150,30 @@ function HouseholdCard({
       )}
       {!error && (relationships || []).length === 0 && (people || []).length > 0 && (
         <p>No confirmed relationships yet.</p>
+      )}
+      {!error && onAddPerson && (
+        <>
+          <h3>Add someone</h3>
+          <p>
+            Adding someone records that your household knows them. It does not
+            give them an account or any authority here.
+          </p>
+          <label htmlFor="agent-person-name">Name</label>
+          <input
+            id="agent-person-name"
+            type="text"
+            maxLength={255}
+            value={personName}
+            disabled={busy}
+            onChange={(event) => onPersonName(event.target.value)}
+          />
+          <button
+            disabled={busy || !personName.trim()}
+            onClick={() => onAddPerson(personName)}
+          >
+            {busy ? "Adding…" : "Add to household"}
+          </button>
+        </>
       )}
       {!error && onAttestPartner && (people || []).length > 0 && (
         <>
@@ -206,6 +231,7 @@ function HomeAgentPanel() {
   const [householdError, setHouseholdError] = useState(false);
   const [partnerChoice, setPartnerChoice] = useState("");
   const [partnerBusy, setPartnerBusy] = useState(false);
+  const [personName, setPersonName] = useState("");
   const [parentRelationshipBusy, setParentRelationshipBusy] = useState(false);
   const [snapshot, setSnapshot] = useState(null);
   const [containedPreferences, setContainedPreferences] = useState(null);
@@ -240,6 +266,7 @@ function HomeAgentPanel() {
     setHouseholdError(false);
     setPartnerChoice("");
     setPartnerBusy(false);
+    setPersonName("");
     setParentRelationshipBusy(false);
     setSnapshot(null);
     setContainedPreferences(null);
@@ -584,6 +611,34 @@ function HomeAgentPanel() {
     }
   };
 
+  const addHouseholdPerson = async (displayName) => {
+    if (!displayName.trim()) return;
+    const ticket = beginPrincipalOperation();
+    setPartnerBusy(true);
+    setError("");
+    try {
+      await api.createHouseholdPerson({
+        ceremony_id: randomUuid7(),
+        display_name: displayName.trim(),
+      });
+      if (!principalOperationCurrent(ticket)) return;
+      setPersonName("");
+      setPartnerBusy(false);
+      // Re-read: Core applies the visibility rule, so a person added under a
+      // directive may correctly not appear. Patching locally would show
+      // someone the household is not permitted to see.
+      const directory = await api.household();
+      if (!principalOperationCurrent(ticket)) return;
+      setHousehold((current) =>
+        current ? { ...current, people: directory.people } : current,
+      );
+    } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
+      setPartnerBusy(false);
+      setError(cause.message || "household_person_failed");
+    }
+  };
+
   const attestPartner = async (partnerPersonId) => {
     if (!partnerPersonId) return;
     const ticket = beginPrincipalOperation();
@@ -903,6 +958,9 @@ function HomeAgentPanel() {
           partnerChoice={partnerChoice}
           onPartnerChoice={setPartnerChoice}
           onAttestPartner={attestPartner}
+          personName={personName}
+          onPersonName={setPersonName}
+          onAddPerson={addHouseholdPerson}
         />
       )}
 

@@ -25,6 +25,7 @@ ReadinessMigration = Literal[
     "0017_authenticated_binding_e5c",
     "0018_parent_relationship_e5d",
     "0021_parent_status_e5h",
+    "0027_owner_person_e5n",
 ]
 
 

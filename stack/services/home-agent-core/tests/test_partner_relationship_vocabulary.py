@@ -9,6 +9,7 @@ one cannot be added by editing a Literal alone.
 from __future__ import annotations
 
 import pathlib
+import re
 
 from app.context import ContextPredicate
 
@@ -80,9 +81,14 @@ def test_the_erasure_hole_is_closed_before_the_predicate_lands() -> None:
     """
 
     migration = MIGRATION.read_text()
-    assert 'down_revision = "0022_fact_suppression_e5i"' in migration, (
-        "partner_of must land after the object-side suppression fix"
-    )
+    # Match the ordering, not the declaration syntax: migrations in this tree
+    # write "down_revision: str = ...", and an assertion on the exact spelling
+    # breaks on a style change while the invariant still holds.
+    assert re.search(
+        r'^down_revision(: str)? = "0022_fact_suppression_e5i"$',
+        migration,
+        re.M,
+    ), "partner_of must land after the object-side suppression fix"
 
 
 def test_this_revision_grants_no_ability_to_write_a_fact() -> None:

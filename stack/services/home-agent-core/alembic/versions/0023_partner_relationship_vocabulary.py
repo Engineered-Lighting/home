@@ -34,8 +34,8 @@ from typing import Sequence
 from alembic import op
 
 
-revision = "0023_partner_vocabulary_e5j"
-down_revision = "0022_fact_suppression_e5i"
+revision: str = "0023_partner_vocabulary_e5j"
+down_revision: str = "0022_fact_suppression_e5i"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 

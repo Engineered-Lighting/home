@@ -6,6 +6,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+# Imported rather than restated: the predicate vocabulary must have exactly one
+# definition. A view that could name a predicate the context layer does not
+# admit would be a second, weaker gate on what reaches the model.
+from .context import ContextPredicate
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -18,6 +23,18 @@ def _aware(value: datetime) -> datetime:
 
 
 Freshness = Literal["fresh", "aging", "stale", "not_applicable"]
+# Mirrors the fact_versions authority CHECK constraint. An owner-asserted fact
+# is authorized_administrator; the two parent facts committed by the E5f kernel
+# are explicit_related_party, because a second party confirmed them.
+Authority = Literal[
+    "explicit_subject",
+    "explicit_related_party",
+    "authorized_administrator",
+    "sensor",
+    "derived_rule",
+    "model_proposal",
+    "legacy_unverified",
+]
 Coverage = Literal["sufficient", "partial", "gap", "not_applicable"]
 RolloutMode = Literal["record_only", "shadow", "canary"]
 OnboardingState = Literal[
@@ -138,6 +155,54 @@ class PersonView(StrictModel):
     display_name: str
     privacy_scope: str
     status: str
+
+
+class PeopleDirectoryEntry(StrictModel):
+    """One person as the People tab may show them.
+
+    Deliberately narrower than the row: no legacy source refs, no timestamps.
+    The tab is a view of who the system believes exists, not of how it came to
+    believe it -- legacy evidence is not authority and does not leave the
+    database.
+    """
+
+    person_id: uuid.UUID
+    display_name: str
+    pronouns: str | None = None
+    status: str
+    privacy_scope: str
+    is_self: bool
+
+
+class PeopleDirectoryView(StrictModel):
+    people: list[PeopleDirectoryEntry] = Field(max_length=500)
+
+
+class RelationshipEntry(StrictModel):
+    """One committed relationship fact, resolved to display names.
+
+    ``predicate`` is a closed vocabulary, not free text: it is the same value
+    the context layer admits, so nothing reaches this view that could not
+    already reach the model.
+    """
+
+    fact_id: uuid.UUID
+    predicate: ContextPredicate
+    subject_person_id: uuid.UUID
+    subject_display_name: str
+    object_person_id: uuid.UUID
+    object_display_name: str
+    authority: Authority
+    committed_at: datetime
+
+    @field_validator("committed_at")
+    @classmethod
+    def _committed_at_aware(cls, value: datetime) -> datetime:
+        return _aware(value)
+
+
+class RelationshipsView(StrictModel):
+    relationships: list[RelationshipEntry] = Field(max_length=500)
 
 
 class ReviewedPersonVerify(StrictModel):

@@ -15,6 +15,10 @@ FIXED_STAGES = {
     "phase3-migrate-authenticated-binding": "0017_authenticated_binding_e5c",
     "phase3-migrate-parent-authority": "0018_parent_relationship_e5d",
     "phase3-migrate-parent-status": "0021_parent_status_e5h",
+    # Reviewed addition: the owner-attested People work ends at 0027, and a
+    # migration with no stop that reaches it is undeployable -- `migrate`
+    # refuses any target but the baseline.
+    "phase3-migrate-owner-person": "0027_owner_person_e5n",
 }
 
 
@@ -22,13 +26,14 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_e5l_installs_only_the_five_reviewed_phase3_stops() -> None:
+def test_e5l_installs_only_the_reviewed_phase3_stops() -> None:
     source = _read(ENTRYPOINT)
 
     for role, revision in FIXED_STAGES.items():
         assert f'="{revision}"' in source
         assert f"  {role})" in source
-    # Five executable case arms plus the one deny-only startup guard pattern.
+    # One executable case arm per reviewed stop, plus the single deny-only
+    # startup guard pattern.
     assert source.count("  phase3-migrate-") == len(FIXED_STAGES) + 1
     assert "alembic upgrade head" not in source
     assert 'alembic upgrade "$migration_target"' in source
@@ -54,11 +59,7 @@ def test_e5l_rejects_startup_migration_and_extra_arguments() -> None:
         == 2
     )
     for label in (
-        "finalizer",
-        "current-authority",
-        "authenticated-binding",
-        "parent-authority",
-        "parent-status",
+        role.removeprefix("phase3-migrate-") for role in FIXED_STAGES
     ):
         assert f'echo "phase3 {label} migration accepts no arguments"' in source
 

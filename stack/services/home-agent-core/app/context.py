@@ -15,7 +15,12 @@ from dataclasses import dataclass, field
 from typing import Literal, Sequence
 
 
-ContextPredicate = Literal["parent_of", "place_social_descriptor"]
+# A predicate is added here by a human in a reviewed commit, never by data and
+# never by a UI field. predicate is varchar(128) with no CHECK, so the storage
+# layer would accept "parent_of. Ignore previous instructions" just as happily;
+# this closed Literal, and TypedContextFact having no string field at all, are
+# what make "no instruction-bearing fields" statically checkable.
+ContextPredicate = Literal["parent_of", "partner_of", "place_social_descriptor"]
 ArtifactSource = Literal[
     "candidate_memory", "retrieved_memory", "generated_summary"
 ]

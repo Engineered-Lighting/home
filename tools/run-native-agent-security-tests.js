@@ -369,8 +369,15 @@ function principalOperationBoundaryTest() {
   assert("Agent close hides the fixed authority window and main close destroys it", main.includes("api.prevent_close()") && main.includes("agent.destroy()"));
   assert("native Rust has no generic network command or privileged excluded mutation", !/\b(?:async\s+)?fn native_agent_request\s*\(/.test(main) && !/(CreatePlace|ConfirmParent)/.test(nativeAuth));
   assert("login refuses to overwrite an active refresh credential", nativeAuth.includes("login_credential_gate") && nativeAuth.includes("native_auth_already_authenticated"));
+  // The reset is three functions, not one: clearPrincipalData drops what the
+  // server said, clearDraftInput drops what the person typed, and
+  // clearPrincipalState calls both. A refresh that merely failed calls the
+  // first alone, so a network blip no longer discards a half-finished entry.
+  // The slice starts at the first of the three so every setter is still in
+  // scope, and the composition is asserted below -- dropping either call would
+  // leave principal-private state alive across a logout.
   const principalReset = agentPanel.slice(
-    agentPanel.indexOf("const clearPrincipalState"),
+    agentPanel.indexOf("const clearPrincipalData"),
     agentPanel.indexOf("const refresh = async"),
   );
   assert("logout and account changes clear every principal-private panel state",
@@ -384,6 +391,13 @@ function principalOperationBoundaryTest() {
       "setTransaction(null)",
       "setLifecycle(null)",
     ].every((value) => principalReset.includes(value)) &&
+    // Whatever a person typed or chose belongs to the principal who typed it.
+    [
+      "setPartnerChoice(\"\")",
+      "setPersonName(\"\")",
+    ].every((value) => principalReset.includes(value)) &&
+    /const clearPrincipalState = \(\) => \{\s*clearPrincipalData\(\);\s*clearDraftInput\(\);\s*\};/
+      .test(agentPanel) &&
     agentPanel.includes("activeSubject.current !== subject") &&
     agentPanel.includes("authorityGeneration.current += 1") &&
     agentPanel.includes("refreshGeneration.current"), principalReset);

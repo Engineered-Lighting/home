@@ -100,14 +100,17 @@ PERSON_KERNEL_PREDICATE = (
     f"AND NOT pg_catalog.pg_has_role(session_user, '{PERSON_KERNEL_ROLE}', 'SET')"
 )
 
-# Tables the kernel only reads. privacy_directives does not enable RLS today,
-# but E5f carries a policy for it anyway and a table that gains RLS later
-# should not silently lock the kernel out.
-READ_TABLES = (
-    ("identity.ha_user_bindings",),
-    ("identity.people",),
-    ("identity.privacy_directives",),
-)
+# Tables the kernel only reads, and only where a policy is actually required.
+# identity.people already carries identity_people_e2_acl_preservation, an ALL
+# policy to PUBLIC with USING (true), so a second permissive policy would admit
+# nothing new. identity.privacy_directives does not enable RLS at all, so a
+# policy on it is inert. Both were verified against the deployed database.
+#
+# Adding a policy is not free: the E5b catalog contract digests the policies on
+# these very tables, so every unnecessary one is a deploy that fails for no
+# gain. ha_user_bindings genuinely needs one -- it forces RLS and no existing
+# policy admits this role.
+READ_TABLES = (("identity.ha_user_bindings",),)
 
 # Tables the kernel reads and writes.
 WRITE_TABLES = (

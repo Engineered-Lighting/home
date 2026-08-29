@@ -7733,7 +7733,14 @@ BEGIN
        '0018_parent_relationship_e5d',
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      )
      OR receipt_table IS NULL
      OR binding_function IS NULL

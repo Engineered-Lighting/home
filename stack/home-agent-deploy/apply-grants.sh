@@ -505,7 +505,14 @@ BEGIN
            current_revision IN (
              '0019_parent_stage_e5e',
              '0020_parent_commit_e5f',
-             '0021_parent_status_e5h'
+             '0021_parent_status_e5h',
+             '0022_fact_suppression_e5i',
+             '0023_partner_vocabulary_e5j',
+             '0024_owner_partner_e5k',
+             '0025_owner_partner_caller_e5l',
+             '0026_third_party_e5m',
+             '0027_owner_person_e5n',
+             '0028_owner_partner_access_e5o'
            )
            AND role_row.rolname =
                'home_agent_parent_relationship_kernel'
@@ -2376,6 +2383,12 @@ DECLARE
     pg_catalog.to_regprocedure(
       'privacy.fence_identity_tombstone_write()'
     );
+  owner_person_function regprocedure :=
+    pg_catalog.to_regprocedure(
+      'identity.create_owner_attested_person_e5n('
+      'uuid, text, text, text, text, text, timestamptz, text, '
+      'uuid, uuid, uuid)'
+    );
   person_blocked_function regprocedure :=
     pg_catalog.to_regprocedure(
       'privacy.identity_person_is_blocked(uuid)'
@@ -2446,7 +2459,8 @@ DECLARE
     '0024_owner_partner_e5k',
     '0025_owner_partner_caller_e5l',
     '0026_third_party_e5m',
-    '0027_owner_person_e5n'
+    '0027_owner_person_e5n',
+    '0028_owner_partner_access_e5o'
   ]::text[];
   pre_e3_revisions constant text[] := ARRAY[
     '0001_greenfield_core',
@@ -2491,7 +2505,8 @@ DECLARE
     '0024_owner_partner_e5k',
     '0025_owner_partner_caller_e5l',
     '0026_third_party_e5m',
-    '0027_owner_person_e5n'
+    '0027_owner_person_e5n',
+    '0028_owner_partner_access_e5o'
   ]::text[];
   expected_e3_catalog_sha256 constant text :=
     'b85d05e7d2d45671a0107a75658474450c0ab927d86a2ec4809732169ee37192';
@@ -2868,7 +2883,14 @@ BEGIN
        '0018_parent_relationship_e5d',
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      ) THEN
     SELECT oid INTO STRICT authority_kernel_oid
       FROM pg_catalog.pg_roles
@@ -2880,7 +2902,14 @@ BEGIN
        '0018_parent_relationship_e5d',
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      ) THEN
     SELECT oid INTO STRICT binding_kernel_oid
       FROM pg_catalog.pg_roles
@@ -2889,7 +2918,14 @@ BEGIN
   IF current_revision IN (
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      ) THEN
     SELECT oid INTO STRICT parent_relationship_kernel_oid
       FROM pg_catalog.pg_roles
@@ -2993,7 +3029,13 @@ BEGIN
          FROM pg_catalog.pg_shdepend AS kernel_ownership
         WHERE kernel_ownership.refobjid = kernel_oid
           AND kernel_ownership.deptype = 'o'
-     ) <> 1
+     ) <> (
+       -- 0027 gave this dormant kernel a second owned function rather than
+       -- minting its own role, so from that revision the exact set is two.
+       -- Still an exact set, not a relaxed count: the identity check below
+       -- names both objects.
+       CASE WHEN owner_person_function IS NULL THEN 1 ELSE 2 END
+     )
      OR EXISTS (
        SELECT 1
          FROM pg_catalog.pg_shdepend AS kernel_ownership
@@ -3002,7 +3044,10 @@ BEGIN
           AND NOT (
             kernel_ownership.dbid = database_oid
             AND kernel_ownership.classid = 'pg_catalog.pg_proc'::regclass
-            AND kernel_ownership.objid = finalizer_function::oid
+            AND kernel_ownership.objid IN (
+              finalizer_function::oid,
+              coalesce(owner_person_function::oid, finalizer_function::oid)
+            )
             AND kernel_ownership.objsubid = 0
           )
      ) THEN
@@ -3381,7 +3426,14 @@ BEGIN
        '0018_parent_relationship_e5d',
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      )
      AND (
        (
@@ -3466,7 +3518,14 @@ BEGIN
        '0018_parent_relationship_e5d',
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      )
      AND (
        NOT EXISTS (
@@ -3554,7 +3613,14 @@ BEGIN
   IF current_revision IN (
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      )
      AND (
        (
@@ -3624,7 +3690,8 @@ BEGIN
                 '0024_owner_partner_e5k',
                 '0025_owner_partner_caller_e5l',
                 '0026_third_party_e5m',
-                '0027_owner_person_e5n'
+                '0027_owner_person_e5n',
+                '0028_owner_partner_access_e5o'
               ) THEN 6
          WHEN current_revision = ANY (reviewed_e4_overlay_revisions) THEN 5
          ELSE 4
@@ -3880,7 +3947,14 @@ BEGIN
                        '0018_parent_relationship_e5d',
                        '0019_parent_stage_e5e',
                        '0020_parent_commit_e5f',
-                       '0021_parent_status_e5h'
+                       '0021_parent_status_e5h',
+                       '0022_fact_suppression_e5i',
+                       '0023_partner_vocabulary_e5j',
+                       '0024_owner_partner_e5k',
+                       '0025_owner_partner_caller_e5l',
+                       '0026_third_party_e5m',
+                       '0027_owner_person_e5n',
+                       '0028_owner_partner_access_e5o'
                      )
                      AND relation.oid =
                            'operations.'
@@ -3920,7 +3994,14 @@ BEGIN
                        '0018_parent_relationship_e5d',
                        '0019_parent_stage_e5e',
                        '0020_parent_commit_e5f',
-                       '0021_parent_status_e5h'
+                       '0021_parent_status_e5h',
+                       '0022_fact_suppression_e5i',
+                       '0023_partner_vocabulary_e5j',
+                       '0024_owner_partner_e5k',
+                       '0025_owner_partner_caller_e5l',
+                       '0026_third_party_e5m',
+                       '0027_owner_person_e5n',
+                       '0028_owner_partner_access_e5o'
                      )
                      AND relation.oid =
                            'operations.'
@@ -3984,8 +4065,15 @@ BEGIN
                             '0018_parent_relationship_e5d',
                             '0019_parent_stage_e5e',
                             '0020_parent_commit_e5f',
-                            '0021_parent_status_e5h'
-                         )
+                            '0021_parent_status_e5h',
+                            '0022_fact_suppression_e5i',
+                            '0023_partner_vocabulary_e5j',
+                            '0024_owner_partner_e5k',
+                            '0025_owner_partner_caller_e5l',
+                            '0026_third_party_e5m',
+                            '0027_owner_person_e5n',
+                            '0028_owner_partner_access_e5o'
+                          )
                          AND policy_row.polname = e5_select_policy
                           AND policy_row.polroles =
                                 ARRAY[authority_kernel_oid]::oid[]
@@ -3997,7 +4085,14 @@ BEGIN
                             '0018_parent_relationship_e5d',
                             '0019_parent_stage_e5e',
                             '0020_parent_commit_e5f',
-                            '0021_parent_status_e5h'
+                            '0021_parent_status_e5h',
+                            '0022_fact_suppression_e5i',
+                            '0023_partner_vocabulary_e5j',
+                            '0024_owner_partner_e5k',
+                            '0025_owner_partner_caller_e5l',
+                            '0026_third_party_e5m',
+                            '0027_owner_person_e5n',
+                            '0028_owner_partner_access_e5o'
                           )
                           AND policy_row.polname = e5b_select_policy
                           AND policy_row.polroles =
@@ -4055,7 +4150,14 @@ BEGIN
                       current_revision IN (
                         '0019_parent_stage_e5e',
                         '0020_parent_commit_e5f',
-                        '0021_parent_status_e5h'
+                        '0021_parent_status_e5h',
+                        '0022_fact_suppression_e5i',
+                        '0023_partner_vocabulary_e5j',
+                        '0024_owner_partner_e5k',
+                        '0025_owner_partner_caller_e5l',
+                        '0026_third_party_e5m',
+                        '0027_owner_person_e5n',
+                        '0028_owner_partner_access_e5o'
                       )
                       AND policy_row.polname =
                             ANY (e5e_e3_policy_names)
@@ -4082,7 +4184,14 @@ BEGIN
                        '0018_parent_relationship_e5d',
                        '0019_parent_stage_e5e',
                        '0020_parent_commit_e5f',
-                       '0021_parent_status_e5h'
+                       '0021_parent_status_e5h',
+                       '0022_fact_suppression_e5i',
+                       '0023_partner_vocabulary_e5j',
+                       '0024_owner_partner_e5k',
+                       '0025_owner_partner_caller_e5l',
+                       '0026_third_party_e5m',
+                       '0027_owner_person_e5n',
+                       '0028_owner_partner_access_e5o'
                      )
                      AND policy_row.polname = e5_run_lock_policy
                      AND policy_row.polrelid =
@@ -4200,6 +4309,20 @@ BEGIN
     operations.reviewed_identity_migration_projection_lineage,
     operations.reviewed_identity_migration_projection_subjects
     TO home_agent_identity_finalizer_kernel;
+  -- The person kernel writes its attestation into privacy.artifact_registry.
+  -- 0027 grants this at column level deliberately, and the quarantine above
+  -- strips it, so it is restored here -- but only once that kernel exists.
+  -- Granting it unconditionally puts a privilege on the role at revisions
+  -- before 0027, and revision 0013 refuses to apply to a role that already
+  -- holds one (identity_finalizer_e3_pregrant_authority_invalid), which breaks
+  -- a downgrade and re-upgrade of the E3 boundary.
+  IF owner_person_function IS NOT NULL THEN
+    GRANT INSERT (
+      artifact_id, artifact_kind, content_sha256, created_at, external_ref,
+      owner_principal_id, retention_class, status, store
+    ) ON TABLE privacy.artifact_registry
+      TO home_agent_identity_finalizer_kernel;
+  END IF;
   GRANT SELECT, INSERT ON TABLE identity.people
     TO home_agent_identity_finalizer_kernel;
   GRANT UPDATE (
@@ -4242,7 +4365,17 @@ BEGIN
    WHERE role_row.oid IN (finalizer_oid, kernel_oid);
   IF actual_schema_acl IS DISTINCT FROM expected_schema_acl THEN
     RAISE WARNING 'identity finalizer E3 schema ACL mismatch'
-      USING ERRCODE = '42501';
+      USING ERRCODE = '42501',
+            DETAIL = pg_catalog.format(
+              'revision=%s missing=%s unexpected=%s',
+              current_revision,
+              (SELECT pg_catalog.array_agg(entry)
+                 FROM pg_catalog.unnest(expected_schema_acl) AS entry
+                WHERE entry <> ALL (coalesce(actual_schema_acl, ARRAY[]::text[]))),
+              (SELECT pg_catalog.array_agg(entry)
+                 FROM pg_catalog.unnest(coalesce(actual_schema_acl, ARRAY[]::text[])) AS entry
+                WHERE entry <> ALL (expected_schema_acl))
+            );
   END IF;
 
   expected_table_acl := ARRAY[
@@ -4299,7 +4432,17 @@ BEGIN
      );
   IF actual_table_acl IS DISTINCT FROM expected_table_acl THEN
     RAISE WARNING 'identity finalizer E3 table ACL mismatch'
-      USING ERRCODE = '42501';
+      USING ERRCODE = '42501',
+            DETAIL = pg_catalog.format(
+              'revision=%s missing=%s unexpected=%s',
+              current_revision,
+              (SELECT pg_catalog.array_agg(entry)
+                 FROM pg_catalog.unnest(expected_table_acl) AS entry
+                WHERE entry <> ALL (coalesce(actual_table_acl, ARRAY[]::text[]))),
+              (SELECT pg_catalog.array_agg(entry)
+                 FROM pg_catalog.unnest(coalesce(actual_table_acl, ARRAY[]::text[])) AS entry
+                WHERE entry <> ALL (expected_table_acl))
+            );
   END IF;
 
   expected_column_acl := ARRAY[
@@ -4311,6 +4454,19 @@ BEGIN
     'home_agent_identity_finalizer_kernel|operations.reviewed_identity_finalizer_admissions|consumed_at|UPDATE',
     'home_agent_identity_finalizer_kernel|operations.reviewed_identity_migration_runs|expires_at|UPDATE'
   ]::text[];
+  IF owner_person_function IS NOT NULL THEN
+    expected_column_acl := expected_column_acl || ARRAY[
+      'home_agent_identity_finalizer_kernel|privacy.artifact_registry|artifact_id|INSERT',
+      'home_agent_identity_finalizer_kernel|privacy.artifact_registry|artifact_kind|INSERT',
+      'home_agent_identity_finalizer_kernel|privacy.artifact_registry|content_sha256|INSERT',
+      'home_agent_identity_finalizer_kernel|privacy.artifact_registry|created_at|INSERT',
+      'home_agent_identity_finalizer_kernel|privacy.artifact_registry|external_ref|INSERT',
+      'home_agent_identity_finalizer_kernel|privacy.artifact_registry|owner_principal_id|INSERT',
+      'home_agent_identity_finalizer_kernel|privacy.artifact_registry|retention_class|INSERT',
+      'home_agent_identity_finalizer_kernel|privacy.artifact_registry|status|INSERT',
+      'home_agent_identity_finalizer_kernel|privacy.artifact_registry|store|INSERT'
+    ]::text[];
+  END IF;
   SELECT pg_catalog.array_agg(
            role_row.rolname || '|' || table_namespace.nspname || '.' ||
            table_row.relname || '|' || attribute.attname || '|' ||
@@ -4335,7 +4491,17 @@ BEGIN
      );
   IF actual_column_acl IS DISTINCT FROM expected_column_acl THEN
     RAISE EXCEPTION 'identity finalizer E3 column ACL mismatch'
-      USING ERRCODE = '42501';
+      USING ERRCODE = '42501',
+            DETAIL = pg_catalog.format(
+              'revision=%s missing=%s unexpected=%s',
+              current_revision,
+              (SELECT pg_catalog.array_agg(entry)
+                 FROM pg_catalog.unnest(expected_column_acl) AS entry
+                WHERE entry <> ALL (coalesce(actual_column_acl, ARRAY[]::text[]))),
+              (SELECT pg_catalog.array_agg(entry)
+                 FROM pg_catalog.unnest(coalesce(actual_column_acl, ARRAY[]::text[])) AS entry
+                WHERE entry <> ALL (expected_column_acl))
+            );
   END IF;
 
   expected_function_acl := ARRAY[
@@ -4364,7 +4530,17 @@ BEGIN
       );
   IF actual_function_acl IS DISTINCT FROM expected_function_acl THEN
     RAISE EXCEPTION 'identity finalizer E3 function ACL mismatch'
-      USING ERRCODE = '42501';
+      USING ERRCODE = '42501',
+            DETAIL = pg_catalog.format(
+              'revision=%s missing=%s unexpected=%s',
+              current_revision,
+              (SELECT pg_catalog.array_agg(entry)
+                 FROM pg_catalog.unnest(expected_function_acl) AS entry
+                WHERE entry <> ALL (coalesce(actual_function_acl, ARRAY[]::text[]))),
+              (SELECT pg_catalog.array_agg(entry)
+                 FROM pg_catalog.unnest(coalesce(actual_function_acl, ARRAY[]::text[])) AS entry
+                WHERE entry <> ALL (expected_function_acl))
+            );
   END IF;
 
   IF EXISTS (
@@ -4896,7 +5072,8 @@ DECLARE
     '0024_owner_partner_e5k',
     '0025_owner_partner_caller_e5l',
     '0026_third_party_e5m',
-    '0027_owner_person_e5n'
+    '0027_owner_person_e5n',
+    '0028_owner_partner_access_e5o'
   ]::text[];
   role_count integer;
 BEGIN
@@ -4937,7 +5114,14 @@ BEGIN
        '0018_parent_relationship_e5d',
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      ) THEN
     SELECT oid INTO STRICT authority_kernel_oid
       FROM pg_catalog.pg_roles
@@ -4949,7 +5133,14 @@ BEGIN
        '0018_parent_relationship_e5d',
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      ) THEN
     SELECT oid INTO STRICT binding_kernel_oid
       FROM pg_catalog.pg_roles
@@ -4958,7 +5149,14 @@ BEGIN
   IF current_revision IN (
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      ) THEN
     SELECT oid INTO STRICT parent_relationship_kernel_oid
       FROM pg_catalog.pg_roles
@@ -5088,7 +5286,14 @@ BEGIN
        '0018_parent_relationship_e5d',
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      )
      AND (
        (
@@ -5143,7 +5348,14 @@ BEGIN
        '0018_parent_relationship_e5d',
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      )
      AND (
        NOT EXISTS (
@@ -5215,7 +5427,14 @@ BEGIN
   IF current_revision IN (
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      ) THEN
     SELECT EXISTS (
          SELECT 1
@@ -5379,7 +5598,14 @@ BEGIN
                                            '0018_parent_relationship_e5d',
                                            '0019_parent_stage_e5e',
                                            '0020_parent_commit_e5f',
-                                           '0021_parent_status_e5h'
+                                           '0021_parent_status_e5h',
+                                           '0022_fact_suppression_e5i',
+                                           '0023_partner_vocabulary_e5j',
+                                           '0024_owner_partner_e5k',
+                                           '0025_owner_partner_caller_e5l',
+                                           '0026_third_party_e5m',
+                                           '0027_owner_person_e5n',
+                                           '0028_owner_partner_access_e5o'
                                          )
                                          AND target.target_relation =
                                                promotion_table
@@ -5612,7 +5838,14 @@ BEGIN
                             '0018_parent_relationship_e5d',
                             '0019_parent_stage_e5e',
                             '0020_parent_commit_e5f',
-                            '0021_parent_status_e5h'
+                            '0021_parent_status_e5h',
+                            '0022_fact_suppression_e5i',
+                            '0023_partner_vocabulary_e5j',
+                            '0024_owner_partner_e5k',
+                            '0025_owner_partner_caller_e5l',
+                            '0026_third_party_e5m',
+                            '0027_owner_person_e5n',
+                            '0028_owner_partner_access_e5o'
                           )
                           AND policy_row.polname = e5_select_policy
                           AND policy_row.polrelid IN (
@@ -5632,7 +5865,14 @@ BEGIN
                             '0018_parent_relationship_e5d',
                             '0019_parent_stage_e5e',
                             '0020_parent_commit_e5f',
-                            '0021_parent_status_e5h'
+                            '0021_parent_status_e5h',
+                            '0022_fact_suppression_e5i',
+                            '0023_partner_vocabulary_e5j',
+                            '0024_owner_partner_e5k',
+                            '0025_owner_partner_caller_e5l',
+                            '0026_third_party_e5m',
+                            '0027_owner_person_e5n',
+                            '0028_owner_partner_access_e5o'
                           )
                           AND policy_row.polname = e5b_select_policy
                           AND policy_row.polrelid = promotion_table
@@ -5647,7 +5887,14 @@ BEGIN
                           current_revision IN (
                             '0019_parent_stage_e5e',
                             '0020_parent_commit_e5f',
-                            '0021_parent_status_e5h'
+                            '0021_parent_status_e5h',
+                            '0022_fact_suppression_e5i',
+                            '0023_partner_vocabulary_e5j',
+                            '0024_owner_partner_e5k',
+                            '0025_owner_partner_caller_e5l',
+                            '0026_third_party_e5m',
+                            '0027_owner_person_e5n',
+                            '0028_owner_partner_access_e5o'
                           )
                           AND policy_row.polname =
                                 e5e_promotion_select_policy
@@ -6351,7 +6598,8 @@ DECLARE
     '0024_owner_partner_e5k',
     '0025_owner_partner_caller_e5l',
     '0026_third_party_e5m',
-    '0027_owner_person_e5n'
+    '0027_owner_person_e5n',
+    '0028_owner_partner_access_e5o'
   ]::text[];
   rls_relations constant text[] := ARRAY[
     'operations.semantic_authority_promotions',
@@ -6426,7 +6674,14 @@ BEGIN
        '0018_parent_relationship_e5d',
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      ) THEN
     SELECT oid INTO STRICT binding_kernel_oid
       FROM pg_catalog.pg_roles
@@ -6591,7 +6846,14 @@ BEGIN
        '0018_parent_relationship_e5d',
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      )
      AND (
        receipt_table IS NULL
@@ -7471,7 +7733,14 @@ BEGIN
        '0018_parent_relationship_e5d',
        '0019_parent_stage_e5e',
        '0020_parent_commit_e5f',
-       '0021_parent_status_e5h'
+       '0021_parent_status_e5h',
+       '0022_fact_suppression_e5i',
+       '0023_partner_vocabulary_e5j',
+       '0024_owner_partner_e5k',
+       '0025_owner_partner_caller_e5l',
+       '0026_third_party_e5m',
+       '0027_owner_person_e5n',
+       '0028_owner_partner_access_e5o'
      )
      OR receipt_table IS NULL
      OR binding_function IS NULL
@@ -9226,6 +9495,92 @@ END
 $parent_relationship_e5h_active_acl$;
 \endif
 
+SELECT EXISTS (
+  SELECT 1
+    FROM pg_catalog.pg_roles
+   WHERE rolname = 'home_agent_partner_relationship_kernel'
+) AS activate_owner_partner_kernel_e5k
+\gset
+
+\if :activate_owner_partner_kernel_e5k
+-- E5k is the owner-attested partner kernel. It is a DIFFERENT role from the
+-- parent kernel above -- partner, not parent -- and until now it held nothing:
+-- no schema USAGE, no table grant, no column grant, anywhere in the database.
+-- The one-word difference is why that went unnoticed for so long, because every
+-- privilege check written against the parent role passes.
+--
+-- The EXECUTE grants must live here rather than in a migration: the erasure
+-- quarantine block above revokes ALL PRIVILEGES on
+-- privacy.identity_person_is_blocked(uuid) from every role in pg_roles, so a
+-- grant made by alembic is removed on the next run of this script.
+GRANT USAGE ON SCHEMA identity, knowledge, operations, privacy
+  TO home_agent_partner_relationship_kernel;
+GRANT SELECT (
+  binding_id, ha_user_id, principal_id, person_id, revoked_at
+) ON identity.ha_user_bindings TO home_agent_partner_relationship_kernel;
+GRANT SELECT (
+  person_id, display_name, status, privacy_scope,
+  legacy_source_sha256, status_source_sha256
+) ON identity.people TO home_agent_partner_relationship_kernel;
+GRANT SELECT (person_id, directive, enabled)
+  ON identity.privacy_directives TO home_agent_partner_relationship_kernel;
+GRANT SELECT (
+  fact_version_id, fact_id, memory_transaction_id, perspective_principal_id,
+  subject_type, subject_id, predicate, object, version, valid_range,
+  system_range, authority, support, coverage, freshness, contradiction,
+  resolution, privacy_scope, committed_at
+), INSERT (
+  fact_version_id, fact_id, memory_transaction_id, perspective_principal_id,
+  subject_type, subject_id, predicate, object, version, valid_range,
+  system_range, authority, support, coverage, freshness, contradiction,
+  resolution, privacy_scope, committed_at
+) ON knowledge.fact_versions TO home_agent_partner_relationship_kernel;
+GRANT SELECT (
+  support_id, fact_version_id, artifact_id, root_observation_id,
+  dependency_domain, support_role, created_at
+), INSERT (
+  support_id, fact_version_id, artifact_id, root_observation_id,
+  dependency_domain, support_role, created_at
+) ON knowledge.fact_support TO home_agent_partner_relationship_kernel;
+GRANT SELECT (
+  transaction_id, principal_id, visit_id, kind, state, candidate, preview,
+  exact_text_ciphertext, exact_text_nonce, exact_text_sha256, policy_version,
+  policy_digest, verifier_results, confirmation_digest, confirmed_at,
+  created_at, updated_at
+), INSERT (
+  transaction_id, principal_id, visit_id, kind, state, candidate, preview,
+  exact_text_ciphertext, exact_text_nonce, exact_text_sha256, policy_version,
+  policy_digest, verifier_results, confirmation_digest, confirmed_at,
+  created_at, updated_at
+) ON knowledge.memory_transactions TO home_agent_partner_relationship_kernel;
+GRANT SELECT (
+  artifact_id, owner_principal_id, artifact_kind, store, external_ref,
+  content_sha256, retention_class, status, created_at
+), INSERT (
+  artifact_id, owner_principal_id, artifact_kind, store, external_ref,
+  content_sha256, retention_class, status, created_at
+) ON privacy.artifact_registry TO home_agent_partner_relationship_kernel;
+GRANT SELECT (
+  receipt_id, ceremony_id, principal_id, subject_person_id, partner_person_id,
+  contract_version, edge_count, authority_result, document_digest,
+  memory_transaction_id, assertion_scope, predicate, attested_at
+), INSERT (
+  receipt_id, ceremony_id, principal_id, subject_person_id, partner_person_id,
+  contract_version, edge_count, authority_result, document_digest,
+  memory_transaction_id, assertion_scope, predicate, attested_at
+) ON operations.partner_relationship_authority_receipts
+  TO home_agent_partner_relationship_kernel;
+GRANT SELECT (
+  receipt_edge_id, receipt_id, ordinal, fact_version_id
+), INSERT (
+  receipt_edge_id, receipt_id, ordinal, fact_version_id
+) ON operations.partner_relationship_authority_receipt_edges
+  TO home_agent_partner_relationship_kernel;
+GRANT EXECUTE ON FUNCTION
+  privacy.lock_identity_semantic_write_fence(),
+  privacy.identity_person_is_blocked(uuid)
+  TO home_agent_partner_relationship_kernel;
+\endif
 -- E5n owner-attested person creation. Every kernel above restores the
 -- committer's EXECUTE after the blanket revoke near the top of this script
 -- (REVOKE ALL PRIVILEGES ON ALL FUNCTIONS ... FROM home_agent_binding_committer)
@@ -9291,3 +9646,4 @@ SQL
 # default ACL baseline.  Always finish by narrowing online identity writes to
 # the exact column-level workflows in the separately testable SQL contract.
 psql -v ON_ERROR_STOP=1 -f "$script_dir/identity-api-acl.sql"
+

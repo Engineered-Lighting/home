@@ -256,7 +256,9 @@ function HomeAgentPanel() {
   const [localityPreview, setLocalityPreview] = useState(null);
   const [localityBusy, setLocalityBusy] = useState(false);
 
-  const clearPrincipalState = () => {
+  // What the server told us about this principal. Safe to drop whenever a
+  // refresh fails: the next successful refresh puts it back.
+  const clearPrincipalData = () => {
     authorityGeneration.current += 1;
     setOnboarding(null);
     setBindingProposal(null);
@@ -264,22 +266,31 @@ function HomeAgentPanel() {
     setParentRelationship(null);
     setHousehold(null);
     setHouseholdError(false);
-    setPartnerChoice("");
     setPartnerBusy(false);
-    setPersonName("");
     setParentRelationshipBusy(false);
     setSnapshot(null);
     setContainedPreferences(null);
     setRelationship(null);
     setPresence(null);
-    setTeaching(DEFAULT_DESCRIPTOR_TEXT);
     setTransaction(null);
-    setCorrectionText(DEFAULT_DESCRIPTOR_TEXT);
     setLifecycle(null);
     setArrivalGreeting(null);
     setArrivalGreetingDismissed(false);
     initiativePresentationRetry.current = false;
     setLocalityStatus(null);
+    setLocalityPreview(null);
+    setLocalityBusy(false);
+  };
+
+  // What the person typed or chose. Only cleared when the principal actually
+  // changes -- a transient refresh failure used to wipe it, which silently
+  // reset the partner dropdown mid-interaction and left the button disabled
+  // with no visible reason.
+  const clearDraftInput = () => {
+    setPartnerChoice("");
+    setPersonName("");
+    setTeaching(DEFAULT_DESCRIPTOR_TEXT);
+    setCorrectionText(DEFAULT_DESCRIPTOR_TEXT);
     setLocalityDraft({
       canonicalName: "Itaipava",
       latitude: "",
@@ -287,8 +298,11 @@ function HomeAgentPanel() {
       radiusM: "",
       travelGreetingEligible: false,
     });
-    setLocalityPreview(null);
-    setLocalityBusy(false);
+  };
+
+  const clearPrincipalState = () => {
+    clearPrincipalData();
+    clearDraftInput();
   };
 
   const beginPrincipalOperation = () => capturePrincipalOperation(
@@ -398,7 +412,12 @@ function HomeAgentPanel() {
       setPhase("ready");
     } catch (cause) {
       if (!isCurrent()) return;
-      clearPrincipalState();
+      // Data only. A refresh that failed says nothing about what the person
+      // was in the middle of choosing, and clearing it here reset the partner
+      // dropdown mid-interaction and disabled the button with nothing on
+      // screen to explain why. Sign-out and an actual change of principal
+      // still clear the draft, just below and above.
+      clearPrincipalData();
       activeSubject.current = null;
       if (cause.status === 401) {
         setSession(null);

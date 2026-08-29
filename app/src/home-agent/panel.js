@@ -471,7 +471,7 @@ function HomeAgentPanel() {
   });
   const [localityPreview, setLocalityPreview] = useState(null);
   const [localityBusy, setLocalityBusy] = useState(false);
-  const clearPrincipalState = () => {
+  const clearPrincipalData = () => {
     authorityGeneration.current += 1;
     setOnboarding(null);
     setBindingProposal(null);
@@ -479,22 +479,26 @@ function HomeAgentPanel() {
     setParentRelationship(null);
     setHousehold(null);
     setHouseholdError(false);
-    setPartnerChoice("");
     setPartnerBusy(false);
-    setPersonName("");
     setParentRelationshipBusy(false);
     setSnapshot(null);
     setContainedPreferences(null);
     setRelationship(null);
     setPresence(null);
-    setTeaching(DEFAULT_DESCRIPTOR_TEXT);
     setTransaction(null);
-    setCorrectionText(DEFAULT_DESCRIPTOR_TEXT);
     setLifecycle(null);
     setArrivalGreeting(null);
     setArrivalGreetingDismissed(false);
     initiativePresentationRetry.current = false;
     setLocalityStatus(null);
+    setLocalityPreview(null);
+    setLocalityBusy(false);
+  };
+  const clearDraftInput = () => {
+    setPartnerChoice("");
+    setPersonName("");
+    setTeaching(DEFAULT_DESCRIPTOR_TEXT);
+    setCorrectionText(DEFAULT_DESCRIPTOR_TEXT);
     setLocalityDraft({
       canonicalName: "Itaipava",
       latitude: "",
@@ -502,8 +506,10 @@ function HomeAgentPanel() {
       radiusM: "",
       travelGreetingEligible: false
     });
-    setLocalityPreview(null);
-    setLocalityBusy(false);
+  };
+  const clearPrincipalState = () => {
+    clearPrincipalData();
+    clearDraftInput();
   };
   const beginPrincipalOperation = () => capturePrincipalOperation(activeSubject.current, authorityGeneration.current);
   const principalOperationCurrent = ticket => principalOperationIsCurrent(ticket, activeSubject.current, authorityGeneration.current);
@@ -596,7 +602,7 @@ function HomeAgentPanel() {
       setPhase("ready");
     } catch (cause) {
       if (!isCurrent()) return;
-      clearPrincipalState();
+      clearPrincipalData();
       activeSubject.current = null;
       if (cause.status === 401) {
         setSession(null);

@@ -85,10 +85,13 @@ def test_e5h_grant_replay_quarantines_then_exactly_admits_status() -> None:
     quarantine = GRANTS.index("DO $parent_relationship_e5h_function_quarantine$")
     activation = GRANTS.index("AS activate_parent_relationship_status_e5h")
     assert quarantine < activation
-    assert (
-        "version_num = '0021_parent_status_e5h'"
-        in (GRANTS[activation - 120 : activation])
-    )
+    # Was an equality on 0021 alone; now an IN list, because the grants it
+    # activates must stay live at every later revision too. Asserted by
+    # membership rather than by the exact spelling.
+    gate = GRANTS[activation - 900 : activation]
+    assert "version_num IN (" in gate
+    for revision in ("0021_parent_status_e5h", "0028_owner_partner_access_e5o"):
+        assert f"'{revision}'" in gate
     tail = GRANTS[activation:]
     assert "identity.recover_authenticated_parent_relationship_e5h(varchar)" in tail
     assert "function_acl_count <> 3" in tail

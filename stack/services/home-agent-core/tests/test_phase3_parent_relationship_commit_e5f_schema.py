@@ -117,11 +117,17 @@ def test_grant_replay_quarantines_then_exactly_admits_e5f() -> None:
         "AS activate_parent_relationship_commit_e5f"
     )
     assert quarantine < activation
-    assert (
-        "version_num IN ('0020_parent_commit_e5f', "
-        "'0021_parent_status_e5h')"
-        in GRANTS[activation - 150 : activation]
-    )
+    # The gate is keyed on the revisions at which E5f's grants must be live.
+    # Asserted by membership rather than by the exact one-line spelling: the
+    # list grew past 0021 and a formatting pin would fail for no reason.
+    gate = GRANTS[activation - 900 : activation]
+    assert "version_num IN (" in gate
+    for revision in (
+        "0020_parent_commit_e5f",
+        "0021_parent_status_e5h",
+        "0028_owner_partner_access_e5o",
+    ):
+        assert f"'{revision}'" in gate
     assert (
         "GRANT EXECUTE ON FUNCTION\n"
         "  identity.commit_authenticated_parent_relationship_e5f("

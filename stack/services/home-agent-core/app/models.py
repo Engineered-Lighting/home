@@ -169,6 +169,21 @@ class OwnerPartnerAttestation(StrictModel):
     ceremony_id: uuid.UUID
     partner_person_id: uuid.UUID
     attestation_nonce: uuid.UUID
+    # Absent means the owner is one end of the relationship. Naming someone
+    # else makes this a third-party assertion, which the kernel records as
+    # assertion_scope = 'third_party' -- it derives that itself rather than
+    # trusting the caller to say so.
+    subject_person_id: uuid.UUID | None = None
+    # Closed on purpose. partner_of is symmetric and writes both directions;
+    # parent_of is not and writes one. Anything else is refused by the kernel
+    # too, so this only moves the refusal earlier and makes it legible.
+    predicate: Literal["partner_of", "parent_of"] = "partner_of"
+
+    @model_validator(mode="after")
+    def _no_self_edge(self) -> "OwnerPartnerAttestation":
+        if self.subject_person_id == self.partner_person_id:
+            raise ValueError("subject_person_id and partner_person_id must differ")
+        return self
 
     @field_validator("ceremony_id")
     @classmethod
@@ -193,6 +208,10 @@ class OwnerPartnerAttestationView(StrictModel):
     receipt_id: uuid.UUID
     partner_person_id: uuid.UUID
     document_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    # Echoed back so a caller can see which relationship was recorded rather
+    # than inferring it from what it sent.
+    subject_person_id: uuid.UUID | None = None
+    predicate: Literal["partner_of", "parent_of"] = "partner_of"
 class PeopleDirectoryEntry(StrictModel):
     """One person as the People tab may show them.
 

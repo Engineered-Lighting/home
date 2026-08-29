@@ -1,22 +1,11 @@
 ---
-title: Record relationships between two other household members
-target: backend
+title: Record Relationships Between Two Other People
+target: web
 type: added
 ---
 
-The owner can now assert a relationship they are not part of — Holly is a parent
-of Ben, Felipe and Ashley are partners — where before only relationships with
-one end at the account holder could be recorded.
+The owner can now record a relationship between two other people, not only one they are part of. The database has accepted this since the third-party revision landed — it works out for itself whether the person asserting is one end of the relationship, and refuses anything outside partnerships and parenthood — but nothing above it could express the request, so every call meant "my own partner" and the rest of a household could not be described.
 
-That is a weaker claim than asserting about your own life: two people are
-involved, neither has an account, and neither consented. The record does not
-flatten the difference. Receipts gain `assertion_scope`, derived rather than
-supplied: `self` when the attester is one end, `third_party` when they are not.
-Both stay `authorized_administrator` on the authority axis — that says who had
-the standing, not how close they stood — so a later review that decides
-third-party assertions need something stronger can find every one of them with a
-`WHERE` clause instead of re-deriving the graph.
+A request may now name who the relationship is about and which relationship it is; leaving both out means what it always did. The receipt says which relationship was recorded rather than leaving it to be inferred.
 
-`parent_of` is now recordable this way too, and is deliberately *not* written
-symmetrically: writing the inverse would assert that a child is a parent of
-their parent. The receipt's edge count is constrained to match the predicate.
+The document a receipt attests to now covers the whole assertion. Previously it identified only the attester, the ceremony, and one person, so a record of one person being another's parent and a record of the owner being that person's partner produced the same fingerprint. They are now distinct, and the receipt is evidence of the thing it actually recorded.

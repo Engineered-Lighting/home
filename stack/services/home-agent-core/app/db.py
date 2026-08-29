@@ -95,6 +95,11 @@ class OwnerPartnerCommitKernelCall:
     receipt_edge_id_0: uuid.UUID
     receipt_edge_id_1: uuid.UUID
     attestation_artifact_id: uuid.UUID
+    # 0026 added these with defaults, so a fifteen-argument call still means
+    # "my own partner". They are passed explicitly to keep the call
+    # unambiguous now that both overloads no longer exist.
+    subject_person_id: uuid.UUID | None = None
+    predicate: str = "partner_of"
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,7 +229,9 @@ class OwnerAttestationAuthorityDatabase:
                             ":support_id_self,:support_id_partner,"
                             ":receipt_id,"
                             ":receipt_edge_id_0,:receipt_edge_id_1,"
-                            ":attestation_artifact_id)"
+                            ":attestation_artifact_id,"
+                            ":subject_person_id,"
+                            "CAST(:predicate AS text))"
                         ),
                         {
                             "ceremony_id": value.ceremony_id,
@@ -246,6 +253,8 @@ class OwnerAttestationAuthorityDatabase:
                             "attestation_artifact_id": (
                                 value.attestation_artifact_id
                             ),
+                            "subject_person_id": value.subject_person_id,
+                            "predicate": value.predicate,
                         },
                     )
                 ).scalar_one()
@@ -287,6 +296,8 @@ class OwnerAttestationAuthorityDatabase:
                             "attestation_artifact_id": (
                                 value.attestation_artifact_id
                             ),
+                            "subject_person_id": value.subject_person_id,
+                            "predicate": value.predicate,
                             "directive_id": value.directive_id,
                         },
                     )

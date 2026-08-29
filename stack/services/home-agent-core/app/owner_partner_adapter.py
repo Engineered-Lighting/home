@@ -60,19 +60,36 @@ def _derived_uuid7(seed: uuid.UUID, *, domain: str, material: bytes) -> uuid.UUI
 
 
 def _document_digest(
-    *, ha_user_id: str, ceremony_id: uuid.UUID, partner_person_id: uuid.UUID
+    *,
+    ha_user_id: str,
+    ceremony_id: uuid.UUID,
+    partner_person_id: uuid.UUID,
+    subject_person_id: uuid.UUID | None,
+    predicate: str,
 ) -> str:
     """What the owner is attesting to, bound to who is attesting it.
 
     The kernel stores this on the receipt and on the artifact, so a receipt
-    cannot be reinterpreted as being about a different partner later.
+    cannot be reinterpreted as being about a different relationship later.
+
+    Subject and predicate are part of the document, not decoration. Without
+    them a receipt for "Holly is Ben's parent" and one for "I am Ben's
+    partner" would carry the same digest, and the receipt would no longer say
+    what was asserted. Absent subject is distinguished from any real person id
+    by a reserved all-zero block rather than by omission, so two different
+    assertions cannot hash the same bytes.
+
+    v2: v1 covered only the partner, from when this could express one thing.
     """
 
     return hashlib.sha256(
-        b"home-agent:owner-partner:e5k:document:v1\0"
+        b"home-agent:owner-partner:e5k:document:v2\0"
         + hashlib.sha256(ha_user_id.encode("utf-8")).digest()
         + ceremony_id.bytes
+        + (subject_person_id.bytes if subject_person_id else bytes(16))
         + partner_person_id.bytes
+        + b"\0"
+        + predicate.encode("utf-8")
     ).hexdigest()
 
 
@@ -83,6 +100,8 @@ def _commit_kernel_call(
         ha_user_id=ha_user_id,
         ceremony_id=value.ceremony_id,
         partner_person_id=value.partner_person_id,
+        subject_person_id=value.subject_person_id,
+        predicate=value.predicate,
     )
     material = (
         value.attestation_nonce.bytes
@@ -113,6 +132,8 @@ def _commit_kernel_call(
         support_id_partner=derived["support-partner"],
         receipt_edge_id_0=derived["receipt-edge-0"],
         receipt_edge_id_1=derived["receipt-edge-1"],
+        subject_person_id=value.subject_person_id,
+        predicate=value.predicate,
     )
 
 
@@ -147,6 +168,8 @@ class OwnerPartnerAdapter:
                     receipt_id=receipt_id,
                     partner_person_id=value.partner_person_id,
                     document_digest=call.document_digest,
+                    subject_person_id=value.subject_person_id,
+                    predicate=value.predicate,
                 )
             except DBAPIError as error:
                 sqlstate = getattr(error.orig, "sqlstate", None)

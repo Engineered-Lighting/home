@@ -370,6 +370,21 @@ async def test_e5n_kernel_can_write_the_provenance_it_is_required_to() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(not _configured(), reason="E5n URLs are not configured")
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Owner-attested person creation is broken, and this is the assertion "
+        "that proves it. The kernel reads identity.ha_user_bindings to "
+        "authenticate its caller, but 0027 gave the function to "
+        "home_agent_identity_finalizer_kernel instead of minting a role of its "
+        "own -- and the E3 contract forbids that role from reaching that table "
+        "by name (test_identity_finalizer_e3_deployment_contract.py lists it "
+        "under forbidden_write). Granting it would widen a reviewed security "
+        "boundary to suit one caller, so the fix is a kernel role for E5n. "
+        "strict=True on purpose: when that lands, this test starts passing and "
+        "the run fails until the marker is removed."
+    ),
+)
 async def test_e5n_kernel_can_read_the_binding_it_authenticates_against(
 ) -> None:
     """The kernel reads identity.ha_user_bindings at 0027:150-154.

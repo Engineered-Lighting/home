@@ -8944,7 +8944,14 @@ SELECT (
   version_num IN (
     '0019_parent_stage_e5e',
     '0020_parent_commit_e5f',
-    '0021_parent_status_e5h'
+    '0021_parent_status_e5h',
+    '0022_fact_suppression_e5i',
+    '0023_partner_vocabulary_e5j',
+    '0024_owner_partner_e5k',
+    '0025_owner_partner_caller_e5l',
+    '0026_third_party_e5m',
+    '0027_owner_person_e5n',
+    '0028_owner_partner_access_e5o'
   )
 ) AS activate_parent_relationship_stage_e5e
 FROM public.alembic_version
@@ -9198,7 +9205,17 @@ $parent_relationship_e5e_active_acl$;
 \endif
 
 SELECT (
-  version_num IN ('0020_parent_commit_e5f', '0021_parent_status_e5h')
+  version_num IN (
+    '0020_parent_commit_e5f',
+    '0021_parent_status_e5h',
+    '0022_fact_suppression_e5i',
+    '0023_partner_vocabulary_e5j',
+    '0024_owner_partner_e5k',
+    '0025_owner_partner_caller_e5l',
+    '0026_third_party_e5m',
+    '0027_owner_person_e5n',
+    '0028_owner_partner_access_e5o'
+  )
 ) AS activate_parent_relationship_commit_e5f
 FROM public.alembic_version
 \gset
@@ -9369,7 +9386,16 @@ $parent_relationship_e5f_active_acl$;
 \endif
 
 SELECT (
-  version_num = '0021_parent_status_e5h'
+  version_num IN (
+    '0021_parent_status_e5h',
+    '0022_fact_suppression_e5i',
+    '0023_partner_vocabulary_e5j',
+    '0024_owner_partner_e5k',
+    '0025_owner_partner_caller_e5l',
+    '0026_third_party_e5m',
+    '0027_owner_person_e5n',
+    '0028_owner_partner_access_e5o'
+  )
 ) AS activate_parent_relationship_status_e5h
 FROM public.alembic_version
 \gset

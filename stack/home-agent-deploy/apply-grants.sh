@@ -3419,22 +3419,7 @@ BEGIN
   -- run. Validate every policy against the E5-owned SELECT reference before
   -- projecting it out. The E5 block below pins the complete verifier catalog
   -- after its independently committed quarantine.
-  IF current_revision IN (
-       '0015_current_authority_e5a',
-       '0016_principal_binding_e5b',
-       '0017_authenticated_binding_e5c',
-       '0018_parent_relationship_e5d',
-       '0019_parent_stage_e5e',
-       '0020_parent_commit_e5f',
-       '0021_parent_status_e5h',
-       '0022_fact_suppression_e5i',
-       '0023_partner_vocabulary_e5j',
-       '0024_owner_partner_e5k',
-       '0025_owner_partner_caller_e5l',
-       '0026_third_party_e5m',
-       '0027_owner_person_e5n',
-       '0028_owner_partner_access_e5o'
-     )
+  IF current_revision >= '0015_current_authority_e5a'
      AND (
        (
          SELECT pg_catalog.count(*)
@@ -3610,18 +3595,7 @@ BEGIN
   -- E5e reads the two reviewed lineage relations through a dedicated
   -- SECURITY DEFINER kernel. Validate that exact overlay before excluding it
   -- from E3's immutable catalog proof.
-  IF current_revision IN (
-       '0019_parent_stage_e5e',
-       '0020_parent_commit_e5f',
-       '0021_parent_status_e5h',
-       '0022_fact_suppression_e5i',
-       '0023_partner_vocabulary_e5j',
-       '0024_owner_partner_e5k',
-       '0025_owner_partner_caller_e5l',
-       '0026_third_party_e5m',
-       '0027_owner_person_e5n',
-       '0028_owner_partner_access_e5o'
-     )
+  IF current_revision >= '0019_parent_stage_e5e'
      AND (
        (
          SELECT pg_catalog.count(*)
@@ -5279,22 +5253,7 @@ BEGIN
   -- E5a adds one separately owned SELECT policy to each E4 relation. Admit
   -- only the exact reviewed overlay and project it out of the still-pinned E4
   -- manifest. The E5 block below owns and pins the complete verifier catalog.
-  IF current_revision IN (
-       '0015_current_authority_e5a',
-       '0016_principal_binding_e5b',
-       '0017_authenticated_binding_e5c',
-       '0018_parent_relationship_e5d',
-       '0019_parent_stage_e5e',
-       '0020_parent_commit_e5f',
-       '0021_parent_status_e5h',
-       '0022_fact_suppression_e5i',
-       '0023_partner_vocabulary_e5j',
-       '0024_owner_partner_e5k',
-       '0025_owner_partner_caller_e5l',
-       '0026_third_party_e5m',
-       '0027_owner_person_e5n',
-       '0028_owner_partner_access_e5o'
-     )
+  IF current_revision >= '0015_current_authority_e5a'
      AND (
        (
          SELECT pg_catalog.count(*)
@@ -5424,18 +5383,7 @@ BEGIN
   -- ACLs must still be empty at this predecessor boundary; the terminal E5e
   -- activation below restores its exact column grants only after every
   -- immutable predecessor manifest has passed.
-  IF current_revision IN (
-       '0019_parent_stage_e5e',
-       '0020_parent_commit_e5f',
-       '0021_parent_status_e5h',
-       '0022_fact_suppression_e5i',
-       '0023_partner_vocabulary_e5j',
-       '0024_owner_partner_e5k',
-       '0025_owner_partner_caller_e5l',
-       '0026_third_party_e5m',
-       '0027_owner_person_e5n',
-       '0028_owner_partner_access_e5o'
-     ) THEN
+  IF current_revision >= '0019_parent_stage_e5e' THEN
     SELECT EXISTS (
          SELECT 1
            FROM pg_catalog.pg_policy AS policy_row

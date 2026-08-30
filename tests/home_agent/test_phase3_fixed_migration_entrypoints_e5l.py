@@ -25,6 +25,10 @@ FIXED_STAGES = {
     # without a stop that reaches it the image cannot deploy the revision they
     # require.
     "phase3-migrate-owner-partner-access": "0028_owner_partner_access_e5o",
+    # Reviewed addition: 0029 gives owner-attested person creation a kernel
+    # role of its own. Both owner-attested routes pin to it, so without a
+    # stop that reaches it the image cannot deploy the revision they need.
+    "phase3-migrate-owner-person-role": "0029_owner_person_role_e5p",
 }
 
 

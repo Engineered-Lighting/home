@@ -62,6 +62,7 @@ REVISION_0020 = "0020_parent_commit_e5f"
 REVISION_0021 = "0021_parent_status_e5h"
 REVISION_0027 = "0027_owner_person_e5n"
 REVISION_0028 = "0028_owner_partner_access_e5o"
+REVISION_0029 = "0029_owner_person_role_e5p"
 E4_SUCCESS_DOCUMENT_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_DOCUMENT_B64"
 E4_SUCCESS_ADMISSION_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_ADMISSION_ID"
 E4_SCAFFOLD_OWNER_DATABASE_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_OWNER_DATABASE_URL"
@@ -3837,14 +3838,14 @@ def _run_e4_scaffold_phase(
         phase,
         secrets_directory,
         BASE_DATABASE,
-        REVISION_0028,
+        REVISION_0029,
     )
     _assert_database_revision(
         state,
         phase,
         secrets_directory,
         BASE_DATABASE,
-        REVISION_0028,
+        REVISION_0029,
     )
     _apply_grants(
         state,
@@ -3859,17 +3860,8 @@ def _run_e4_scaffold_phase(
         nodes=[
             "tests/"
             "test_phase3_owner_partner_kernel_e5k_runtime_postgres.py",
-            # test_phase3_owner_person_kernel_e5n_runtime_postgres.py is
-            # deliberately not run yet. Its kernel reads
-            # identity.ha_user_bindings to authenticate the caller, but 0027
-            # gave the function to home_agent_identity_finalizer_kernel rather
-            # than minting a role of its own, and the E3 contract forbids that
-            # role from reaching that table by name. Fourteen of its seventeen
-            # tests need the kernel to execute, and several of the refusal
-            # tests would pass for the wrong reason -- permission denied
-            # carries the same SQLSTATE as the guard they assert -- so running
-            # them would report a mix of real and counterfeit results. Restore
-            # this line together with the E5n kernel role.
+            "tests/"
+            "test_phase3_owner_person_kernel_e5n_runtime_postgres.py",
             "tests/"
             "test_phase3_predicate_agnostic_suppression_runtime_postgres.py",
             "tests/test_people_directory_visibility_runtime_postgres.py",

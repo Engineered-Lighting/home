@@ -436,6 +436,7 @@ def test_grant_replay_quarantines_e4_and_pins_reviewed_catalog() -> None:
         "0026_third_party_e5m",
         "0027_owner_person_e5n",
         "0028_owner_partner_access_e5o",
+        "0029_owner_person_role_e5p",
     ]
     assert "identity_authority_e5_select" in admission
     assert "identity cutover E4 reviewed E5 policy mismatch" in admission

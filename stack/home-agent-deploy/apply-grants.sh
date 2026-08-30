@@ -512,7 +512,8 @@ BEGIN
              '0025_owner_partner_caller_e5l',
              '0026_third_party_e5m',
              '0027_owner_person_e5n',
-             '0028_owner_partner_access_e5o'
+             '0028_owner_partner_access_e5o',
+             '0029_owner_person_role_e5p'
            )
            AND role_row.rolname =
                'home_agent_parent_relationship_kernel'
@@ -2460,7 +2461,8 @@ DECLARE
     '0025_owner_partner_caller_e5l',
     '0026_third_party_e5m',
     '0027_owner_person_e5n',
-    '0028_owner_partner_access_e5o'
+    '0028_owner_partner_access_e5o',
+    '0029_owner_person_role_e5p'
   ]::text[];
   pre_e3_revisions constant text[] := ARRAY[
     '0001_greenfield_core',
@@ -2506,7 +2508,8 @@ DECLARE
     '0025_owner_partner_caller_e5l',
     '0026_third_party_e5m',
     '0027_owner_person_e5n',
-    '0028_owner_partner_access_e5o'
+    '0028_owner_partner_access_e5o',
+    '0029_owner_person_role_e5p'
   ]::text[];
   expected_e3_catalog_sha256 constant text :=
     'b85d05e7d2d45671a0107a75658474450c0ab927d86a2ec4809732169ee37192';
@@ -2890,7 +2893,8 @@ BEGIN
        '0025_owner_partner_caller_e5l',
        '0026_third_party_e5m',
        '0027_owner_person_e5n',
-       '0028_owner_partner_access_e5o'
+       '0028_owner_partner_access_e5o',
+       '0029_owner_person_role_e5p'
      ) THEN
     SELECT oid INTO STRICT authority_kernel_oid
       FROM pg_catalog.pg_roles
@@ -2909,7 +2913,8 @@ BEGIN
        '0025_owner_partner_caller_e5l',
        '0026_third_party_e5m',
        '0027_owner_person_e5n',
-       '0028_owner_partner_access_e5o'
+       '0028_owner_partner_access_e5o',
+       '0029_owner_person_role_e5p'
      ) THEN
     SELECT oid INTO STRICT binding_kernel_oid
       FROM pg_catalog.pg_roles
@@ -2925,7 +2930,8 @@ BEGIN
        '0025_owner_partner_caller_e5l',
        '0026_third_party_e5m',
        '0027_owner_person_e5n',
-       '0028_owner_partner_access_e5o'
+       '0028_owner_partner_access_e5o',
+       '0029_owner_person_role_e5p'
      ) THEN
     SELECT oid INTO STRICT parent_relationship_kernel_oid
       FROM pg_catalog.pg_roles
@@ -3031,10 +3037,16 @@ BEGIN
           AND kernel_ownership.deptype = 'o'
      ) <> (
        -- 0027 gave this dormant kernel a second owned function rather than
-       -- minting its own role, so from that revision the exact set is two.
+       -- minting its own role, so for those revisions the exact set is two.
+       -- 0029 mints the role 0027 should have, and reassigns that function
+       -- away, so from 0029 the set is one again.
        -- Still an exact set, not a relaxed count: the identity check below
-       -- names both objects.
-       CASE WHEN owner_person_function IS NULL THEN 1 ELSE 2 END
+       -- names every admitted object.
+       CASE
+         WHEN owner_person_function IS NULL THEN 1
+         WHEN current_revision >= '0029_owner_person_role_e5p' THEN 1
+         ELSE 2
+       END
      )
      OR EXISTS (
        SELECT 1
@@ -3046,7 +3058,15 @@ BEGIN
             AND kernel_ownership.classid = 'pg_catalog.pg_proc'::regclass
             AND kernel_ownership.objid IN (
               finalizer_function::oid,
-              coalesce(owner_person_function::oid, finalizer_function::oid)
+              -- From 0029 the owner-person function belongs to its own role,
+              -- so this kernel owning it is a defect, not an admitted shape.
+              CASE
+                WHEN current_revision >= '0029_owner_person_role_e5p'
+                  THEN finalizer_function::oid
+                ELSE coalesce(
+                  owner_person_function::oid, finalizer_function::oid
+                )
+              END
             )
             AND kernel_ownership.objsubid = 0
           )
@@ -3510,7 +3530,8 @@ BEGIN
        '0025_owner_partner_caller_e5l',
        '0026_third_party_e5m',
        '0027_owner_person_e5n',
-       '0028_owner_partner_access_e5o'
+       '0028_owner_partner_access_e5o',
+       '0029_owner_person_role_e5p'
      )
      AND (
        NOT EXISTS (
@@ -3665,7 +3686,8 @@ BEGIN
                 '0025_owner_partner_caller_e5l',
                 '0026_third_party_e5m',
                 '0027_owner_person_e5n',
-                '0028_owner_partner_access_e5o'
+                '0028_owner_partner_access_e5o',
+                '0029_owner_person_role_e5p'
               ) THEN 6
          WHEN current_revision = ANY (reviewed_e4_overlay_revisions) THEN 5
          ELSE 4
@@ -3928,7 +3950,8 @@ BEGIN
                        '0025_owner_partner_caller_e5l',
                        '0026_third_party_e5m',
                        '0027_owner_person_e5n',
-                       '0028_owner_partner_access_e5o'
+                       '0028_owner_partner_access_e5o',
+                       '0029_owner_person_role_e5p'
                      )
                      AND relation.oid =
                            'operations.'
@@ -3975,7 +3998,8 @@ BEGIN
                        '0025_owner_partner_caller_e5l',
                        '0026_third_party_e5m',
                        '0027_owner_person_e5n',
-                       '0028_owner_partner_access_e5o'
+                       '0028_owner_partner_access_e5o',
+                       '0029_owner_person_role_e5p'
                      )
                      AND relation.oid =
                            'operations.'
@@ -4046,7 +4070,8 @@ BEGIN
                             '0025_owner_partner_caller_e5l',
                             '0026_third_party_e5m',
                             '0027_owner_person_e5n',
-                            '0028_owner_partner_access_e5o'
+                            '0028_owner_partner_access_e5o',
+                            '0029_owner_person_role_e5p'
                           )
                          AND policy_row.polname = e5_select_policy
                           AND policy_row.polroles =
@@ -4066,7 +4091,8 @@ BEGIN
                             '0025_owner_partner_caller_e5l',
                             '0026_third_party_e5m',
                             '0027_owner_person_e5n',
-                            '0028_owner_partner_access_e5o'
+                            '0028_owner_partner_access_e5o',
+                            '0029_owner_person_role_e5p'
                           )
                           AND policy_row.polname = e5b_select_policy
                           AND policy_row.polroles =
@@ -4131,7 +4157,8 @@ BEGIN
                         '0025_owner_partner_caller_e5l',
                         '0026_third_party_e5m',
                         '0027_owner_person_e5n',
-                        '0028_owner_partner_access_e5o'
+                        '0028_owner_partner_access_e5o',
+                        '0029_owner_person_role_e5p'
                       )
                       AND policy_row.polname =
                             ANY (e5e_e3_policy_names)
@@ -4165,7 +4192,8 @@ BEGIN
                        '0025_owner_partner_caller_e5l',
                        '0026_third_party_e5m',
                        '0027_owner_person_e5n',
-                       '0028_owner_partner_access_e5o'
+                       '0028_owner_partner_access_e5o',
+                       '0029_owner_person_role_e5p'
                      )
                      AND policy_row.polname = e5_run_lock_policy
                      AND policy_row.polrelid =
@@ -5047,7 +5075,8 @@ DECLARE
     '0025_owner_partner_caller_e5l',
     '0026_third_party_e5m',
     '0027_owner_person_e5n',
-    '0028_owner_partner_access_e5o'
+    '0028_owner_partner_access_e5o',
+    '0029_owner_person_role_e5p'
   ]::text[];
   role_count integer;
 BEGIN
@@ -5095,7 +5124,8 @@ BEGIN
        '0025_owner_partner_caller_e5l',
        '0026_third_party_e5m',
        '0027_owner_person_e5n',
-       '0028_owner_partner_access_e5o'
+       '0028_owner_partner_access_e5o',
+       '0029_owner_person_role_e5p'
      ) THEN
     SELECT oid INTO STRICT authority_kernel_oid
       FROM pg_catalog.pg_roles
@@ -5114,7 +5144,8 @@ BEGIN
        '0025_owner_partner_caller_e5l',
        '0026_third_party_e5m',
        '0027_owner_person_e5n',
-       '0028_owner_partner_access_e5o'
+       '0028_owner_partner_access_e5o',
+       '0029_owner_person_role_e5p'
      ) THEN
     SELECT oid INTO STRICT binding_kernel_oid
       FROM pg_catalog.pg_roles
@@ -5130,7 +5161,8 @@ BEGIN
        '0025_owner_partner_caller_e5l',
        '0026_third_party_e5m',
        '0027_owner_person_e5n',
-       '0028_owner_partner_access_e5o'
+       '0028_owner_partner_access_e5o',
+       '0029_owner_person_role_e5p'
      ) THEN
     SELECT oid INTO STRICT parent_relationship_kernel_oid
       FROM pg_catalog.pg_roles
@@ -5314,7 +5346,8 @@ BEGIN
        '0025_owner_partner_caller_e5l',
        '0026_third_party_e5m',
        '0027_owner_person_e5n',
-       '0028_owner_partner_access_e5o'
+       '0028_owner_partner_access_e5o',
+       '0029_owner_person_role_e5p'
      )
      AND (
        NOT EXISTS (
@@ -5553,7 +5586,8 @@ BEGIN
                                            '0025_owner_partner_caller_e5l',
                                            '0026_third_party_e5m',
                                            '0027_owner_person_e5n',
-                                           '0028_owner_partner_access_e5o'
+                                           '0028_owner_partner_access_e5o',
+                                           '0029_owner_person_role_e5p'
                                          )
                                          AND target.target_relation =
                                                promotion_table
@@ -5793,7 +5827,8 @@ BEGIN
                             '0025_owner_partner_caller_e5l',
                             '0026_third_party_e5m',
                             '0027_owner_person_e5n',
-                            '0028_owner_partner_access_e5o'
+                            '0028_owner_partner_access_e5o',
+                            '0029_owner_person_role_e5p'
                           )
                           AND policy_row.polname = e5_select_policy
                           AND policy_row.polrelid IN (
@@ -5820,7 +5855,8 @@ BEGIN
                             '0025_owner_partner_caller_e5l',
                             '0026_third_party_e5m',
                             '0027_owner_person_e5n',
-                            '0028_owner_partner_access_e5o'
+                            '0028_owner_partner_access_e5o',
+                            '0029_owner_person_role_e5p'
                           )
                           AND policy_row.polname = e5b_select_policy
                           AND policy_row.polrelid = promotion_table
@@ -5842,7 +5878,8 @@ BEGIN
                             '0025_owner_partner_caller_e5l',
                             '0026_third_party_e5m',
                             '0027_owner_person_e5n',
-                            '0028_owner_partner_access_e5o'
+                            '0028_owner_partner_access_e5o',
+                            '0029_owner_person_role_e5p'
                           )
                           AND policy_row.polname =
                                 e5e_promotion_select_policy
@@ -6547,7 +6584,8 @@ DECLARE
     '0025_owner_partner_caller_e5l',
     '0026_third_party_e5m',
     '0027_owner_person_e5n',
-    '0028_owner_partner_access_e5o'
+    '0028_owner_partner_access_e5o',
+    '0029_owner_person_role_e5p'
   ]::text[];
   rls_relations constant text[] := ARRAY[
     'operations.semantic_authority_promotions',
@@ -6629,7 +6667,8 @@ BEGIN
        '0025_owner_partner_caller_e5l',
        '0026_third_party_e5m',
        '0027_owner_person_e5n',
-       '0028_owner_partner_access_e5o'
+       '0028_owner_partner_access_e5o',
+       '0029_owner_person_role_e5p'
      ) THEN
     SELECT oid INTO STRICT binding_kernel_oid
       FROM pg_catalog.pg_roles
@@ -6801,7 +6840,8 @@ BEGIN
        '0025_owner_partner_caller_e5l',
        '0026_third_party_e5m',
        '0027_owner_person_e5n',
-       '0028_owner_partner_access_e5o'
+       '0028_owner_partner_access_e5o',
+       '0029_owner_person_role_e5p'
      )
      AND (
        receipt_table IS NULL
@@ -7688,7 +7728,8 @@ BEGIN
        '0025_owner_partner_caller_e5l',
        '0026_third_party_e5m',
        '0027_owner_person_e5n',
-       '0028_owner_partner_access_e5o'
+       '0028_owner_partner_access_e5o',
+       '0029_owner_person_role_e5p'
      )
      OR receipt_table IS NULL
      OR binding_function IS NULL
@@ -8899,7 +8940,8 @@ SELECT (
     '0025_owner_partner_caller_e5l',
     '0026_third_party_e5m',
     '0027_owner_person_e5n',
-    '0028_owner_partner_access_e5o'
+    '0028_owner_partner_access_e5o',
+    '0029_owner_person_role_e5p'
   )
 ) AS activate_parent_relationship_stage_e5e
 FROM public.alembic_version
@@ -9162,7 +9204,8 @@ SELECT (
     '0025_owner_partner_caller_e5l',
     '0026_third_party_e5m',
     '0027_owner_person_e5n',
-    '0028_owner_partner_access_e5o'
+    '0028_owner_partner_access_e5o',
+    '0029_owner_person_role_e5p'
   )
 ) AS activate_parent_relationship_commit_e5f
 FROM public.alembic_version
@@ -9342,7 +9385,8 @@ SELECT (
     '0025_owner_partner_caller_e5l',
     '0026_third_party_e5m',
     '0027_owner_person_e5n',
-    '0028_owner_partner_access_e5o'
+    '0028_owner_partner_access_e5o',
+    '0029_owner_person_role_e5p'
   )
 ) AS activate_parent_relationship_status_e5h
 FROM public.alembic_version
@@ -9557,6 +9601,54 @@ GRANT EXECUTE ON FUNCTION
 \endif
 -- E5n owner-attested person creation. Every kernel above restores the
 -- committer's EXECUTE after the blanket revoke near the top of this script
+-- Ordered before the E5n committer grant below, not after it: that block
+-- does SET ROLE home_agent_owner_person_kernel and then names a function in
+-- schema identity, which the role cannot resolve until the USAGE grant in
+-- this block has been issued. Running these the other way round fails with
+-- "permission denied for schema identity".
+SELECT EXISTS (
+  SELECT 1
+    FROM pg_catalog.pg_roles
+   WHERE rolname = 'home_agent_owner_person_kernel'
+) AS activate_owner_person_kernel_e5p
+\gset
+
+\if :activate_owner_person_kernel_e5p
+-- E5p is the owner-attested person kernel. 0027 ran it as the E3 finalizer
+-- kernel, a role the E3 contract forbids from reading identity.ha_user_bindings
+-- by name -- the very table the kernel reads to authenticate its caller. It now
+-- has a role of its own, and this is that role's entire privilege set.
+--
+-- Every column is one the function body provably touches; nothing is copied
+-- from a sibling kernel that happens to hold more.
+GRANT USAGE ON SCHEMA identity, privacy
+  TO home_agent_owner_person_kernel;
+-- The binding lookup reads exactly principal_id and person_id, filtered on
+-- ha_user_id and revoked_at.
+GRANT SELECT (ha_user_id, principal_id, person_id, revoked_at)
+  ON identity.ha_user_bindings TO home_agent_owner_person_kernel;
+-- SELECT (person_id) serves the replay probe, which runs before the fence.
+-- Without it the call dies at the probe rather than at the insert.
+GRANT SELECT (person_id), INSERT (
+  person_id, display_name, pronouns, status, privacy_scope,
+  created_at, updated_at
+) ON identity.people TO home_agent_owner_person_kernel;
+GRANT INSERT (
+  directive_id, person_id, directive, enabled, expires_at,
+  source_artifact_id, created_at
+) ON identity.privacy_directives TO home_agent_owner_person_kernel;
+GRANT INSERT (
+  artifact_id, artifact_kind, store, external_ref, content_sha256,
+  owner_principal_id, retention_class, status, created_at
+) ON privacy.artifact_registry TO home_agent_owner_person_kernel;
+-- These two must live here rather than in the migration, for the reason in the
+-- module docstring above.
+GRANT EXECUTE ON FUNCTION
+  privacy.lock_identity_semantic_write_fence(),
+  privacy.identity_person_is_blocked(uuid)
+  TO home_agent_owner_person_kernel;
+\endif
+
 -- (REVOKE ALL PRIVILEGES ON ALL FUNCTIONS ... FROM home_agent_binding_committer)
 -- and E5n was the one that never got a block. 0027 grants it, but alembic runs
 -- before this script, so the grant is erased on the next run and the only path
@@ -9572,7 +9664,12 @@ SELECT pg_catalog.to_regprocedure(
 \gset
 
 \if :activate_owner_person_kernel_e5n
-SET ROLE home_agent_identity_finalizer_kernel;
+-- Granted as whoever currently owns the function. 0029 moves it to
+-- home_agent_owner_person_kernel, and a hardcoded SET ROLE would be wrong on
+-- one side of that change -- silently, because a GRANT issued by a non-owner
+-- without grant option emits a WARNING rather than an error, so ON_ERROR_STOP
+-- would not catch it and the committer would simply lose EXECUTE.
+SET ROLE home_agent_owner_person_kernel;
 GRANT EXECUTE ON FUNCTION
   identity.create_owner_attested_person_e5n(
     uuid, text, text, text, text, text, timestamptz, text,
@@ -9614,6 +9711,7 @@ BEGIN
   EXECUTE 'RESET ROLE';
 END
 $owner_partner_e5k_committer_execute$;
+
 SQL
 
 # The broad role setup above supports old pinned revisions and creates the

@@ -37,9 +37,13 @@ COMMITTER_DATABASE_ENV = (
 )
 HOSTED_GATE_SENTINEL_ENV = "TEST_PHASE3_IDENTITY_ERASURE_E1_RUN_SENTINEL"
 
-REVISION = "0028_owner_partner_access_e5o"
+REVISION = "0029_owner_person_role_e5p"
 CALLER_ROLE = "home_agent_binding_committer"
-KERNEL_ROLE = "home_agent_identity_finalizer_kernel"
+# 0029 gives owner-attested person creation a role of its own. Every
+# assertion below is about the kernel's own ownership, grants and
+# policies, so all of them move with it -- the finalizer kernel is
+# precisely the role 0029 exists to stop doing this work.
+KERNEL_ROLE = "home_agent_owner_person_kernel"
 # 0027_owner_person_creation_kernel.py:48-51 declares this once, so restate it
 # once here too: a signature retyped per assertion drifts silently.
 CREATE_FUNCTION = (
@@ -370,21 +374,6 @@ async def test_e5n_kernel_can_write_the_provenance_it_is_required_to() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(not _configured(), reason="E5n URLs are not configured")
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Owner-attested person creation is broken, and this is the assertion "
-        "that proves it. The kernel reads identity.ha_user_bindings to "
-        "authenticate its caller, but 0027 gave the function to "
-        "home_agent_identity_finalizer_kernel instead of minting a role of its "
-        "own -- and the E3 contract forbids that role from reaching that table "
-        "by name (test_identity_finalizer_e3_deployment_contract.py lists it "
-        "under forbidden_write). Granting it would widen a reviewed security "
-        "boundary to suit one caller, so the fix is a kernel role for E5n. "
-        "strict=True on purpose: when that lands, this test starts passing and "
-        "the run fails until the marker is removed."
-    ),
-)
 async def test_e5n_kernel_can_read_the_binding_it_authenticates_against(
 ) -> None:
     """The kernel reads identity.ha_user_bindings at 0027:150-154.

@@ -3036,10 +3036,16 @@ BEGIN
           AND kernel_ownership.deptype = 'o'
      ) <> (
        -- 0027 gave this dormant kernel a second owned function rather than
-       -- minting its own role, so from that revision the exact set is two.
+       -- minting its own role, so for those revisions the exact set is two.
+       -- 0029 mints the role 0027 should have, and reassigns that function
+       -- away, so from 0029 the set is one again.
        -- Still an exact set, not a relaxed count: the identity check below
-       -- names both objects.
-       CASE WHEN owner_person_function IS NULL THEN 1 ELSE 2 END
+       -- names every admitted object.
+       CASE
+         WHEN owner_person_function IS NULL THEN 1
+         WHEN current_revision >= '0029_owner_person_role_e5p' THEN 1
+         ELSE 2
+       END
      )
      OR EXISTS (
        SELECT 1
@@ -3051,7 +3057,15 @@ BEGIN
             AND kernel_ownership.classid = 'pg_catalog.pg_proc'::regclass
             AND kernel_ownership.objid IN (
               finalizer_function::oid,
-              coalesce(owner_person_function::oid, finalizer_function::oid)
+              -- From 0029 the owner-person function belongs to its own role,
+              -- so this kernel owning it is a defect, not an admitted shape.
+              CASE
+                WHEN current_revision >= '0029_owner_person_role_e5p'
+                  THEN finalizer_function::oid
+                ELSE coalesce(
+                  owner_person_function::oid, finalizer_function::oid
+                )
+              END
             )
             AND kernel_ownership.objsubid = 0
           )

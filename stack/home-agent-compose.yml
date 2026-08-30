@@ -434,7 +434,15 @@ services:
         source: /dev/null
         target: /erasure-ledger/ledger.jsonl
         read_only: true
-    networks: [postgres-net, api-net]
+    networks:
+      postgres-net: {}
+      # A fixed address on api-net. The web gateway runs on the host, outside
+      # Docker's internal DNS, so it can only reach Core by address -- and a
+      # dynamic one silently breaks the People tab the next time this container
+      # is recreated. Chosen inside the subnet but outside the dynamic range
+      # (172.23.128.0/17) so Docker can never hand it to anything else.
+      api-net:
+        ipv4_address: "${HOME_AGENT_CORE_API_IP:-172.23.0.20}"
     depends_on:
       grant-runtime: {condition: service_completed_successfully}
 

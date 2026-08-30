@@ -126,7 +126,7 @@ CREATE OR REPLACE FUNCTION identity.create_owner_attested_person_e5n(
           -- A display name is how a human will recognise this person in a
           -- confirmation later. Blank or whitespace-only is not a name.
           IF target_display_name IS NULL
-             OR pg_catalog.btrim(target_display_name) = ''
+             OR pg_catalog.btrim(target_display_name, E' \\t\\n\\r\\f\\v') = ''
              OR pg_catalog.length(target_display_name) > 255 THEN
             RAISE EXCEPTION 'owner_person_e5n_display_name_invalid'
               USING ERRCODE = '22023';
@@ -204,7 +204,7 @@ CREATE OR REPLACE FUNCTION identity.create_owner_attested_person_e5n(
             person_id, display_name, pronouns, status, privacy_scope,
             created_at, updated_at
           ) VALUES (
-            new_person_id, pg_catalog.btrim(target_display_name),
+            new_person_id, pg_catalog.btrim(target_display_name, E' \\t\\n\\r\\f\\v'),
             target_pronouns, 'active', target_privacy_scope,
             e5n_operation_time, e5n_operation_time
           );

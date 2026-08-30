@@ -73,7 +73,10 @@ HOSTED_GATE_SYSTEM_IDENTIFIER_ENV = (
     "TEST_PHASE3_IDENTITY_ERASURE_E1_SYSTEM_IDENTIFIER"
 )
 
-TARGET_REVISION = "0028_owner_partner_access_e5o"
+# The gate migrates to the newest revision, so this is "the current
+# head", not a property of 0028. It moves with each revision that
+# changes identity ownership; 0029 is the current one.
+TARGET_REVISION = "0029_owner_person_role_e5p"
 BLOCKED_FUNCTION = "privacy.identity_fact_is_blocked(text,uuid,text,jsonb,uuid)"
 PERSON_BLOCKED_FUNCTION = "privacy.identity_person_is_blocked(uuid)"
 REPLAY_CALLABLE = "privacy.replay_identity_person_retrieval_block_v2"

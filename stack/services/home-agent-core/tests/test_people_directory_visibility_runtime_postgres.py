@@ -73,7 +73,10 @@ from app.store import CoreStore
 OWNER_DATABASE_ENV = "TEST_PHASE3_OWNER_ATTESTED_E5N_OWNER_DATABASE_URL"
 COMMITTER_DATABASE_ENV = "TEST_PHASE3_OWNER_ATTESTED_E5N_COMMITTER_DATABASE_URL"
 HOSTED_GATE_SENTINEL_ENV = "TEST_PHASE3_IDENTITY_ERASURE_E1_RUN_SENTINEL"
-EXPECTED_REVISION = "0028_owner_partner_access_e5o"
+# The gate migrates to the newest revision, so this is "the current
+# head", not a property of 0028. It moves with each revision that
+# changes identity ownership; 0029 is the current one.
+EXPECTED_REVISION = "0029_owner_person_role_e5p"
 
 # Every table the People tab reads. The committer credential must reach none of
 # them: the read path is an API-role surface, and a credential that exists to

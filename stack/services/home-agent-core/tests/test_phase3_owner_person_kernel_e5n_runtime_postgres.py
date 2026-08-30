@@ -39,7 +39,11 @@ HOSTED_GATE_SENTINEL_ENV = "TEST_PHASE3_IDENTITY_ERASURE_E1_RUN_SENTINEL"
 
 REVISION = "0029_owner_person_role_e5p"
 CALLER_ROLE = "home_agent_binding_committer"
-KERNEL_ROLE = "home_agent_identity_finalizer_kernel"
+# 0029 gives owner-attested person creation a role of its own. Every
+# assertion below is about the kernel's own ownership, grants and
+# policies, so all of them move with it -- the finalizer kernel is
+# precisely the role 0029 exists to stop doing this work.
+KERNEL_ROLE = "home_agent_owner_person_kernel"
 # 0027_owner_person_creation_kernel.py:48-51 declares this once, so restate it
 # once here too: a signature retyped per assertion drifts silently.
 CREATE_FUNCTION = (

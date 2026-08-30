@@ -24,6 +24,102 @@
 
 const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
+// The agent authority speaks predicates; this view speaks the legacy
+// relationship vocabulary. Map only what is actually defined -- an unmapped
+// predicate keeps its own name rather than being coerced into a nearby one,
+// because guessing here would misdescribe someone's relationship.
+const AGENT_PREDICATE_TO_REL_TYPE = {
+  parent_of: "parent",
+  partner_of: "partner",
+  sibling_of: "sibling",
+  friend_of: "friend",
+  roommate_of: "roommate",
+  neighbor_of: "neighbor",
+  colleague_of: "colleague",
+};
+
+function agentPredicateToRelType(predicate) {
+  return AGENT_PREDICATE_TO_REL_TYPE[predicate] || String(predicate || "").replace(/_of$/, "");
+}
+
+// The agent authority does not carry the legacy per-person relationship_type,
+// so it is derived from the edges actually recorded against the account holder.
+// Anyone with no recorded edge to them stays "unknown" rather than being
+// assigned a category nobody asserted.
+function deriveRelationshipType(personId, isSelf, edges) {
+  if (isSelf) return "me";
+  const selfEdge = edges.find(
+    (edge) => edge.from_uuid === personId || edge.to_uuid === personId,
+  );
+  if (!selfEdge) return "unknown";
+  switch (selfEdge.rel_type) {
+    case "partner": return "partner";
+    case "parent": return "family_immediate";
+    case "sibling": return "family_immediate";
+    case "friend": return "friend";
+    case "roommate": return "roommate";
+    case "neighbor": return "neighbor";
+    case "colleague": return "friend";
+    default: return "unknown";
+  }
+}
+
+// Same-origin: the web gateway serves this app and proxies /api/agent to the
+// BFF, so the browser session cookie applies and no CORS is involved.
+async function fetchAgentHousehold(signal) {
+  const request = (path) =>
+    fetch(path, {
+      credentials: "include",
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+      signal,
+    });
+
+  const [householdResponse, relationshipsResponse] = await Promise.all([
+    request("/api/agent/v1/household"),
+    request("/api/agent/v1/relationships"),
+  ]);
+  if (!householdResponse.ok) {
+    const error = new Error(`agent_household_${householdResponse.status}`);
+    error.status = householdResponse.status;
+    throw error;
+  }
+  const household = await householdResponse.json();
+  // Relationships are perspective-filtered and may legitimately be refused
+  // while the roster is readable. An empty edge list is a valid household.
+  const relationships = relationshipsResponse.ok
+    ? await relationshipsResponse.json()
+    : { relationships: [] };
+
+  const edges = (relationships.relationships || []).map((edge) => ({
+    id: edge.fact_id,
+    from_uuid: edge.subject_person_id,
+    to_uuid: edge.object_person_id,
+    rel_type: agentPredicateToRelType(edge.predicate),
+    status: "active",
+  }));
+
+  const identities = (household.people || []).map((person) => ({
+    uuid: person.person_id,
+    display_name: person.display_name,
+    pronouns: person.pronouns || null,
+    relationship_type: deriveRelationshipType(
+      person.person_id, person.is_self === true, edges,
+    ),
+    relationship_subrole: null,
+    // The agent authority carries no enrolment or face data. Declaring these
+    // empty keeps the avatar and queue paths from treating absence as
+    // "not loaded yet" and retrying against a store that cannot answer.
+    enrollment_count: 0,
+    avatar_present: false,
+    source: "agent_authority",
+  }));
+
+  return { identities, edges };
+}
+
+
+
 const PEOPLE_FONT_MONO = "'Geist Mono', ui-monospace, monospace";
 const PEOPLE_FONT_SANS = "'Geist', system-ui, sans-serif";
 const EMPTY_PEOPLE_MAP = Object.freeze({});
@@ -188,6 +284,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
   // (which is a network-side failure) — `notReady` means HA is
   // reachable but the identity_store didn't initialize.
   const [notReady, setNotReady] = useState(null);
+  const [agentEdges, setAgentEdges] = useState([]);
   // Set only from the authenticated HA identity-list response. The legacy
   // People UI becomes read-only only after the explicit E4 SQLite fence is
   // present and verified server-side.
@@ -389,14 +486,37 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
       // identity_store SQLite open failed. Surface explicitly so the
       // user knows it's a setup problem, not "no identities yet".
       if (payload.ready === false) {
-        if (!publishCurrentScope()) return;
-        setNotReady({
-          error: payload.setup_error || "identity_store initialization failed",
-        });
-        setIdentities([]);
-        return;
+        // The legacy store is fenced by the E4 cutover, so it can no longer
+        // answer. The same household is readable from the agent authority,
+        // which is where these records were migrated; fall back to it rather
+        // than rendering an empty map.
+        try {
+          const fromAgent = await fetchAgentHousehold(operation.signal);
+          if (!isCurrent()) return;
+          if (!publishCurrentScope()) return;
+          setNotReady(null);
+          setAgentEdges(fromAgent.edges);
+          setIdentities(fromAgent.identities);
+          setLegacyBoundary(payload.legacy_identity_boundary || null);
+          setLoadedAt(Date.now());
+          return;
+        } catch (agentError) {
+          if (peopleOperationAborted(agentError, operation)) return;
+          // Report the legacy failure, not the fallback's: the fenced store is
+          // the actual condition, and the agent read failing on top of it is a
+          // second symptom rather than the cause.
+          if (!publishCurrentScope()) return;
+          setNotReady({
+            error: payload.setup_error || "identity_store initialization failed",
+            fallback: agentError.message || String(agentError),
+          });
+          setAgentEdges([]);
+          setIdentities([]);
+          return;
+        }
       }
       if (!publishCurrentScope()) return;
+      setAgentEdges([]);
       setIdentities(payload.identities || []);
       setLegacyBoundary(payload.legacy_identity_boundary || null);
       setFrigateDiagnostics({
@@ -854,6 +974,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
             {view === "graph" && (
               <PeopleGraphView
                 identities={identities}
+                relationships={agentEdges}
                 endpoint={endpoint}
                 avatarPresence={avatarPresence}
                 avatarBlobUrls={avatarBlobUrls}

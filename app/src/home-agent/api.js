@@ -310,6 +310,12 @@
   }
 
   global.HomeAgentApi = HomeAgentApi;
+  // panel.js loads as a separate <script> and calls randomUuid7 when recording
+  // a partner or adding a person. Without this it resolves to nothing in a
+  // browser and both handlers die on their first statement -- no request, no
+  // error banner, a button that silently does nothing. The module.exports
+  // below only runs under Node, so the tests could never catch it.
+  global.randomUuid7 = randomUuid7;
   if (typeof module !== "undefined" && module.exports) {
     module.exports = { HomeAgentApi, randomUuid7 };
   }

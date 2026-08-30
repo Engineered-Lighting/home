@@ -9587,6 +9587,54 @@ GRANT EXECUTE ON FUNCTION
 \endif
 -- E5n owner-attested person creation. Every kernel above restores the
 -- committer's EXECUTE after the blanket revoke near the top of this script
+-- Ordered before the E5n committer grant below, not after it: that block
+-- does SET ROLE home_agent_owner_person_kernel and then names a function in
+-- schema identity, which the role cannot resolve until the USAGE grant in
+-- this block has been issued. Running these the other way round fails with
+-- "permission denied for schema identity".
+SELECT EXISTS (
+  SELECT 1
+    FROM pg_catalog.pg_roles
+   WHERE rolname = 'home_agent_owner_person_kernel'
+) AS activate_owner_person_kernel_e5p
+\gset
+
+\if :activate_owner_person_kernel_e5p
+-- E5p is the owner-attested person kernel. 0027 ran it as the E3 finalizer
+-- kernel, a role the E3 contract forbids from reading identity.ha_user_bindings
+-- by name -- the very table the kernel reads to authenticate its caller. It now
+-- has a role of its own, and this is that role's entire privilege set.
+--
+-- Every column is one the function body provably touches; nothing is copied
+-- from a sibling kernel that happens to hold more.
+GRANT USAGE ON SCHEMA identity, privacy
+  TO home_agent_owner_person_kernel;
+-- The binding lookup reads exactly principal_id and person_id, filtered on
+-- ha_user_id and revoked_at.
+GRANT SELECT (ha_user_id, principal_id, person_id, revoked_at)
+  ON identity.ha_user_bindings TO home_agent_owner_person_kernel;
+-- SELECT (person_id) serves the replay probe, which runs before the fence.
+-- Without it the call dies at the probe rather than at the insert.
+GRANT SELECT (person_id), INSERT (
+  person_id, display_name, pronouns, status, privacy_scope,
+  created_at, updated_at
+) ON identity.people TO home_agent_owner_person_kernel;
+GRANT INSERT (
+  directive_id, person_id, directive, enabled, expires_at,
+  source_artifact_id, created_at
+) ON identity.privacy_directives TO home_agent_owner_person_kernel;
+GRANT INSERT (
+  artifact_id, artifact_kind, store, external_ref, content_sha256,
+  owner_principal_id, retention_class, status, created_at
+) ON privacy.artifact_registry TO home_agent_owner_person_kernel;
+-- These two must live here rather than in the migration, for the reason in the
+-- module docstring above.
+GRANT EXECUTE ON FUNCTION
+  privacy.lock_identity_semantic_write_fence(),
+  privacy.identity_person_is_blocked(uuid)
+  TO home_agent_owner_person_kernel;
+\endif
+
 -- (REVOKE ALL PRIVILEGES ON ALL FUNCTIONS ... FROM home_agent_binding_committer)
 -- and E5n was the one that never got a block. 0027 grants it, but alembic runs
 -- before this script, so the grant is erased on the next run and the only path
@@ -9650,48 +9698,6 @@ BEGIN
 END
 $owner_partner_e5k_committer_execute$;
 
-SELECT EXISTS (
-  SELECT 1
-    FROM pg_catalog.pg_roles
-   WHERE rolname = 'home_agent_owner_person_kernel'
-) AS activate_owner_person_kernel_e5p
-\gset
-
-\if :activate_owner_person_kernel_e5p
--- E5p is the owner-attested person kernel. 0027 ran it as the E3 finalizer
--- kernel, a role the E3 contract forbids from reading identity.ha_user_bindings
--- by name -- the very table the kernel reads to authenticate its caller. It now
--- has a role of its own, and this is that role's entire privilege set.
---
--- Every column is one the function body provably touches; nothing is copied
--- from a sibling kernel that happens to hold more.
-GRANT USAGE ON SCHEMA identity, privacy
-  TO home_agent_owner_person_kernel;
--- The binding lookup reads exactly principal_id and person_id, filtered on
--- ha_user_id and revoked_at.
-GRANT SELECT (ha_user_id, principal_id, person_id, revoked_at)
-  ON identity.ha_user_bindings TO home_agent_owner_person_kernel;
--- SELECT (person_id) serves the replay probe, which runs before the fence.
--- Without it the call dies at the probe rather than at the insert.
-GRANT SELECT (person_id), INSERT (
-  person_id, display_name, pronouns, status, privacy_scope,
-  created_at, updated_at
-) ON identity.people TO home_agent_owner_person_kernel;
-GRANT INSERT (
-  directive_id, person_id, directive, enabled, expires_at,
-  source_artifact_id, created_at
-) ON identity.privacy_directives TO home_agent_owner_person_kernel;
-GRANT INSERT (
-  artifact_id, artifact_kind, store, external_ref, content_sha256,
-  owner_principal_id, retention_class, status, created_at
-) ON privacy.artifact_registry TO home_agent_owner_person_kernel;
--- These two must live here rather than in the migration, for the reason in the
--- module docstring above.
-GRANT EXECUTE ON FUNCTION
-  privacy.lock_identity_semantic_write_fence(),
-  privacy.identity_person_is_blocked(uuid)
-  TO home_agent_owner_person_kernel;
-\endif
 SQL
 
 # The broad role setup above supports old pinned revisions and creates the

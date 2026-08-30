@@ -512,7 +512,8 @@ BEGIN
              '0025_owner_partner_caller_e5l',
              '0026_third_party_e5m',
              '0027_owner_person_e5n',
-             '0028_owner_partner_access_e5o'
+             '0028_owner_partner_access_e5o',
+             '0029_owner_person_role_e5p'
            )
            AND role_row.rolname =
                'home_agent_parent_relationship_kernel'
@@ -3949,7 +3950,8 @@ BEGIN
                        '0025_owner_partner_caller_e5l',
                        '0026_third_party_e5m',
                        '0027_owner_person_e5n',
-                       '0028_owner_partner_access_e5o'
+                       '0028_owner_partner_access_e5o',
+                       '0029_owner_person_role_e5p'
                      )
                      AND relation.oid =
                            'operations.'
@@ -3996,7 +3998,8 @@ BEGIN
                        '0025_owner_partner_caller_e5l',
                        '0026_third_party_e5m',
                        '0027_owner_person_e5n',
-                       '0028_owner_partner_access_e5o'
+                       '0028_owner_partner_access_e5o',
+                       '0029_owner_person_role_e5p'
                      )
                      AND relation.oid =
                            'operations.'
@@ -4067,7 +4070,8 @@ BEGIN
                             '0025_owner_partner_caller_e5l',
                             '0026_third_party_e5m',
                             '0027_owner_person_e5n',
-                            '0028_owner_partner_access_e5o'
+                            '0028_owner_partner_access_e5o',
+                            '0029_owner_person_role_e5p'
                           )
                          AND policy_row.polname = e5_select_policy
                           AND policy_row.polroles =
@@ -4087,7 +4091,8 @@ BEGIN
                             '0025_owner_partner_caller_e5l',
                             '0026_third_party_e5m',
                             '0027_owner_person_e5n',
-                            '0028_owner_partner_access_e5o'
+                            '0028_owner_partner_access_e5o',
+                            '0029_owner_person_role_e5p'
                           )
                           AND policy_row.polname = e5b_select_policy
                           AND policy_row.polroles =
@@ -4152,7 +4157,8 @@ BEGIN
                         '0025_owner_partner_caller_e5l',
                         '0026_third_party_e5m',
                         '0027_owner_person_e5n',
-                        '0028_owner_partner_access_e5o'
+                        '0028_owner_partner_access_e5o',
+                        '0029_owner_person_role_e5p'
                       )
                       AND policy_row.polname =
                             ANY (e5e_e3_policy_names)
@@ -4186,7 +4192,8 @@ BEGIN
                        '0025_owner_partner_caller_e5l',
                        '0026_third_party_e5m',
                        '0027_owner_person_e5n',
-                       '0028_owner_partner_access_e5o'
+                       '0028_owner_partner_access_e5o',
+                       '0029_owner_person_role_e5p'
                      )
                      AND policy_row.polname = e5_run_lock_policy
                      AND policy_row.polrelid =
@@ -5579,7 +5586,8 @@ BEGIN
                                            '0025_owner_partner_caller_e5l',
                                            '0026_third_party_e5m',
                                            '0027_owner_person_e5n',
-                                           '0028_owner_partner_access_e5o'
+                                           '0028_owner_partner_access_e5o',
+                                           '0029_owner_person_role_e5p'
                                          )
                                          AND target.target_relation =
                                                promotion_table
@@ -5819,7 +5827,8 @@ BEGIN
                             '0025_owner_partner_caller_e5l',
                             '0026_third_party_e5m',
                             '0027_owner_person_e5n',
-                            '0028_owner_partner_access_e5o'
+                            '0028_owner_partner_access_e5o',
+                            '0029_owner_person_role_e5p'
                           )
                           AND policy_row.polname = e5_select_policy
                           AND policy_row.polrelid IN (
@@ -5846,7 +5855,8 @@ BEGIN
                             '0025_owner_partner_caller_e5l',
                             '0026_third_party_e5m',
                             '0027_owner_person_e5n',
-                            '0028_owner_partner_access_e5o'
+                            '0028_owner_partner_access_e5o',
+                            '0029_owner_person_role_e5p'
                           )
                           AND policy_row.polname = e5b_select_policy
                           AND policy_row.polrelid = promotion_table
@@ -5868,7 +5878,8 @@ BEGIN
                             '0025_owner_partner_caller_e5l',
                             '0026_third_party_e5m',
                             '0027_owner_person_e5n',
-                            '0028_owner_partner_access_e5o'
+                            '0028_owner_partner_access_e5o',
+                            '0029_owner_person_role_e5p'
                           )
                           AND policy_row.polname =
                                 e5e_promotion_select_policy
@@ -8929,7 +8940,8 @@ SELECT (
     '0025_owner_partner_caller_e5l',
     '0026_third_party_e5m',
     '0027_owner_person_e5n',
-    '0028_owner_partner_access_e5o'
+    '0028_owner_partner_access_e5o',
+    '0029_owner_person_role_e5p'
   )
 ) AS activate_parent_relationship_stage_e5e
 FROM public.alembic_version
@@ -9192,7 +9204,8 @@ SELECT (
     '0025_owner_partner_caller_e5l',
     '0026_third_party_e5m',
     '0027_owner_person_e5n',
-    '0028_owner_partner_access_e5o'
+    '0028_owner_partner_access_e5o',
+    '0029_owner_person_role_e5p'
   )
 ) AS activate_parent_relationship_commit_e5f
 FROM public.alembic_version
@@ -9372,7 +9385,8 @@ SELECT (
     '0025_owner_partner_caller_e5l',
     '0026_third_party_e5m',
     '0027_owner_person_e5n',
-    '0028_owner_partner_access_e5o'
+    '0028_owner_partner_access_e5o',
+    '0029_owner_person_role_e5p'
   )
 ) AS activate_parent_relationship_status_e5h
 FROM public.alembic_version

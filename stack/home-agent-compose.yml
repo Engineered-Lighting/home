@@ -604,10 +604,18 @@ services:
         target: server.key
       - source: tls_client_ca
         target: client-ca.crt
+      # One nginx directive carrying Core's service credential. It arrives as a
+      # secret, like the TLS material, so the token is never written into the
+      # image, this file, or the Home Assistant host.
+      - source: edge_core_auth
+        target: core-auth.conf
     tmpfs:
       - /tmp:size=16m,mode=1777
       - /var/cache/nginx:size=16m,mode=0700,uid=101,gid=101
-    networks: [ingest-net, edge-public]
+    # api-net is what lets the four exact People-tab locations in
+    # nginx-edge.conf reach core-api. edge-ingress still publishes only 8443 to
+    # the HA host, and every other path on that listener still returns 404.
+    networks: [ingest-net, edge-public, api-net]
     depends_on:
       core-ingest: {condition: service_healthy}
     mem_limit: 64m
@@ -813,6 +821,7 @@ secrets:
   database_url_binding_committer_core_api: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-api/binding_commit_database_url"}
   knowledge_encryption_key_core_api: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-api/knowledge_encryption_key"}
   service_token_core_api: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-api/service_token"}
+  edge_core_auth: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/edge-ingress/core_auth.conf"}
   operator_token_core_api: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-api/operator_token"}
   bootstrap_token_core_api: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-api/bootstrap_token"}
   database_url_ingest_core_ingest: {file: "${HOME_AGENT_SECRETS_DIR}/runtime/core-ingest/database_url"}

@@ -1120,6 +1120,35 @@ class IdentityListView(CORSHomeAssistantView):
         # silently empty. The F-4b banner reads `ready` + `setup_error`.
         setup_error = getattr(store, "setup_error", None)
         if setup_error:
+            # The legacy store was frozen by the E4 cutover and will not serve
+            # again. The same household lives in the agent authority, so read it
+            # from there rather than returning an empty view. Reporting the
+            # legacy condition alongside the data keeps the banner honest about
+            # where these records now come from.
+            from .agent_household import (
+                AgentHouseholdClient,
+                AgentHouseholdUnavailable,
+            )
+            acting_user = request.get("hass_user")
+            if acting_user is not None:
+                try:
+                    identities, relationships = await AgentHouseholdClient(
+                        hass
+                    ).identities(acting_user.id)
+                    return self.json({
+                        "enabled": True,
+                        "ready": True,
+                        "source": "agent_authority",
+                        "legacy_setup_error": "legacy_identity_store_unavailable",
+                        "identities": identities,
+                        "relationships": relationships,
+                    })
+                except AgentHouseholdUnavailable as error:
+                    # Report the legacy failure as the condition; the agent read
+                    # failing on top of it is a second symptom, not the cause.
+                    _LOGGER.warning(
+                        "agent household fallback unavailable: %s", error
+                    )
             return self.json({
                 "enabled": True,
                 "ready": False,
@@ -1419,6 +1448,39 @@ class IdentityCreateView(CORSHomeAssistantView):
         display_name = (body.get("display_name") or "").strip()
         if not display_name:
             return self.json({"error": "display_name required"}, status_code=400)
+
+        # The legacy store is frozen, so a write there aborts. Record the person
+        # in the agent authority instead, which is where the household now
+        # lives. The kernel derives its own authority and refuses anything it
+        # was not granted, so this widens what can be recorded, not who may.
+        if getattr(store, "setup_error", None) or getattr(
+            store, "semantic_writes_frozen", False
+        ):
+            from .agent_household import (
+                AgentHouseholdClient,
+                AgentHouseholdUnavailable,
+                new_ceremony_id,
+            )
+            acting_user = request.get("hass_user")
+            if acting_user is None:
+                return self.json({"error": "unauthenticated"}, status_code=401)
+            try:
+                created = await AgentHouseholdClient(hass).create_person(
+                    acting_user.id,
+                    ceremony_id=new_ceremony_id(),
+                    display_name=display_name,
+                    pronouns=body.get("pronouns"),
+                )
+                return self.json({
+                    "ok": True,
+                    "source": "agent_authority",
+                    "uuid": created.get("person_id"),
+                })
+            except AgentHouseholdUnavailable as error:
+                _LOGGER.warning("agent household create failed: %s", error)
+                return self.json(
+                    {"error": "agent_authority_unavailable"}, status_code=503
+                )
 
         def _create() -> dict:
             try:

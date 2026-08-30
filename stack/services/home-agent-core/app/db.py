@@ -296,8 +296,6 @@ class OwnerAttestationAuthorityDatabase:
                             "attestation_artifact_id": (
                                 value.attestation_artifact_id
                             ),
-                            "subject_person_id": value.subject_person_id,
-                            "predicate": value.predicate,
                             "directive_id": value.directive_id,
                         },
                     )

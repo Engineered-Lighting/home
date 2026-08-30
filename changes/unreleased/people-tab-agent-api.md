@@ -1,18 +1,11 @@
-Render the People tab from the agent authority when the legacy store is fenced.
+---
+title: The People Tab Shows Your Household Again
+target: web
+type: fixed
+---
 
-The E4 cutover froze the legacy identity store, so the Home Assistant
-integration answers `ready: false` with an empty identity list and the People tab
-renders nothing -- no people, no relationship map. The same household was
-migrated into the agent's authority and is already served by
-`GET /api/agent/v1/household` and `/relationships`, same-origin through the web
-gateway.
+The People tab had gone blank — no people, and no relationship map. Nothing was lost: the store it had been reading from was deliberately frozen during the identity cutover, and it refuses to serve anything once frozen. The tab had no other source, so it showed an empty page.
 
-The tab now falls back to those endpoints when the legacy store reports itself
-unavailable. Nothing changes while that store is healthy.
+It now reads your household and relationships from the system's current record instead, and the relationship map draws again.
 
-Two details worth stating. The agent authority carries predicates rather than the
-legacy relationship vocabulary, so predicates are mapped explicitly and an
-unmapped one keeps its own name instead of being coerced into a nearby category.
-And it carries no per-person `relationship_type`, so that is derived from the
-edges actually recorded -- anyone with no recorded relationship stays "unknown"
-rather than being assigned a category nobody asserted.
+Two things are shown conservatively rather than filled in. Relationships are labelled from what was actually recorded, and one the app does not recognise is shown under its own name rather than being grouped under a similar-sounding one. Someone with no recorded relationship is left uncategorised, rather than being placed in a category nobody chose.

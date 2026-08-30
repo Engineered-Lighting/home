@@ -379,7 +379,10 @@ function HouseholdCard({
   onAttestPartner,
   personName,
   onPersonName,
-  onAddPerson
+  onAddPerson,
+  edgeDraft,
+  onEdgeDraft,
+  onAttestEdge
 }) {
   const edgesFor = personId => (relationships || []).filter(edge => edge.subject_person_id === personId || edge.object_person_id === personId);
   return React.createElement("section", {
@@ -425,7 +428,51 @@ function HouseholdCard({
   }, person.display_name))), React.createElement("button", {
     disabled: busy || !partnerChoice,
     onClick: () => onAttestPartner(partnerChoice)
-  }, busy ? "Recording…" : "Record partner")));
+  }, busy ? "Recording…" : "Record partner")), !error && onAttestEdge && (people || []).length > 1 && React.createElement(React.Fragment, null, React.createElement("h3", null, "Record a relationship between two people"), React.createElement("p", null, "For people other than yourself \u2014 who is whose parent, who is partnered with whom. Recorded as your account\u2019s statement, the same as above, and never as something either person confirmed."), React.createElement("label", {
+    htmlFor: "agent-edge-subject"
+  }, "Person"), React.createElement("select", {
+    id: "agent-edge-subject",
+    value: edgeDraft.subject || "",
+    disabled: busy,
+    onChange: event => onEdgeDraft({
+      subject: event.target.value
+    })
+  }, React.createElement("option", {
+    value: ""
+  }, "Choose someone\u2026"), people.map(person => React.createElement("option", {
+    key: person.person_id,
+    value: person.person_id
+  }, person.display_name))), React.createElement("label", {
+    htmlFor: "agent-edge-predicate"
+  }, "Relationship"), React.createElement("select", {
+    id: "agent-edge-predicate",
+    value: edgeDraft.predicate,
+    disabled: busy,
+    onChange: event => onEdgeDraft({
+      predicate: event.target.value
+    })
+  }, React.createElement("option", {
+    value: "parent_of"
+  }, "is a parent of"), React.createElement("option", {
+    value: "partner_of"
+  }, "is partnered with")), React.createElement("label", {
+    htmlFor: "agent-edge-object"
+  }, "Person"), React.createElement("select", {
+    id: "agent-edge-object",
+    value: edgeDraft.object || "",
+    disabled: busy,
+    onChange: event => onEdgeDraft({
+      object: event.target.value
+    })
+  }, React.createElement("option", {
+    value: ""
+  }, "Choose someone\u2026"), people.filter(person => person.person_id !== edgeDraft.subject).map(person => React.createElement("option", {
+    key: person.person_id,
+    value: person.person_id
+  }, person.display_name))), React.createElement("button", {
+    disabled: busy || !edgeDraft.subject || !edgeDraft.object || edgeDraft.subject === edgeDraft.object,
+    onClick: () => onAttestEdge(edgeDraft)
+  }, busy ? "Recording…" : "Record relationship")));
 }
 function HomeAgentPanel() {
   const api = useMemo(() => new window.HomeAgentApi(""), []);
@@ -446,6 +493,11 @@ function HomeAgentPanel() {
   const [household, setHousehold] = useState(null);
   const [householdError, setHouseholdError] = useState(false);
   const [partnerChoice, setPartnerChoice] = useState("");
+  const [edgeDraft, setEdgeDraft] = useState({
+    subject: "",
+    predicate: "parent_of",
+    object: ""
+  });
   const [partnerBusy, setPartnerBusy] = useState(false);
   const [personName, setPersonName] = useState("");
   const [parentRelationshipBusy, setParentRelationshipBusy] = useState(false);
@@ -496,6 +548,11 @@ function HomeAgentPanel() {
   };
   const clearDraftInput = () => {
     setPartnerChoice("");
+    setEdgeDraft({
+      subject: "",
+      predicate: "parent_of",
+      object: ""
+    });
     setPersonName("");
     setTeaching(DEFAULT_DESCRIPTOR_TEXT);
     setCorrectionText(DEFAULT_DESCRIPTOR_TEXT);
@@ -766,6 +823,39 @@ function HomeAgentPanel() {
       if (!principalOperationCurrent(ticket)) return;
       setBindingBusy(false);
       setError(cause.message || "principal_binding_cancel_failed");
+    }
+  };
+  const attestEdge = async draft => {
+    if (!draft?.subject || !draft?.object) return;
+    if (draft.subject === draft.object) return;
+    const ticket = beginPrincipalOperation();
+    setPartnerBusy(true);
+    setError("");
+    try {
+      await api.attestPartner({
+        ceremony_id: randomUuid7(),
+        partner_person_id: draft.object,
+        attestation_nonce: crypto.randomUUID(),
+        subject_person_id: draft.subject,
+        predicate: draft.predicate
+      });
+      if (!principalOperationCurrent(ticket)) return;
+      setEdgeDraft({
+        subject: "",
+        predicate: "parent_of",
+        object: ""
+      });
+      setPartnerBusy(false);
+      const edges = await api.relationships();
+      if (!principalOperationCurrent(ticket)) return;
+      setHousehold(current => current ? {
+        ...current,
+        relationships: edges.relationships
+      } : current);
+    } catch (cause) {
+      if (!principalOperationCurrent(ticket)) return;
+      setPartnerBusy(false);
+      setError(cause.message || "relationship_attestation_failed");
     }
   };
   const attestPartner = async partnerPersonId => {
@@ -1067,7 +1157,13 @@ function HomeAgentPanel() {
     onAttestPartner: attestPartner,
     personName: personName,
     onPersonName: setPersonName,
-    onAddPerson: addHouseholdPerson
+    onAddPerson: addHouseholdPerson,
+    edgeDraft: edgeDraft,
+    onEdgeDraft: patch => setEdgeDraft(current => ({
+      ...current,
+      ...patch
+    })),
+    onAttestEdge: attestEdge
   }), nativeInstallationMaterial && React.createElement("section", {
     className: "agent-card"
   }, React.createElement("h2", null, "Public installation enrollment material"), React.createElement("p", null, "This public key material is not proof that enrollment is complete. A private operator must bind it offline to your exact Home Assistant user UUID."), React.createElement("pre", null, JSON.stringify(nativeInstallationMaterial, null, 2))), api.invoke && new Set(["rollout_contained", "ready"]).has(phase) && (snapshot?.capabilities?.private_locality_approval || containedPreferences?.private_locality_approval) === "attested_native_confirmation_gated" && React.createElement("section", {

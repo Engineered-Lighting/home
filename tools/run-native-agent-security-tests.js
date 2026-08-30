@@ -164,6 +164,31 @@ async function browserBindingBehaviorTest() {
     Promise,
   });
   vm.runInContext(read("app/src/home-agent/api.js"), context, { filename: "api-browser.js" });
+  // panel.js is a separate <script>; it can only see what api.js puts on the
+  // global. Anything api.js exports through module.exports is invisible in a
+  // browser, because that branch only runs under Node -- which is how
+  // randomUuid7 shipped missing and killed both write handlers on their first
+  // statement, with no request and no error banner, while every test passed.
+  {
+    const source = read("app/src/home-agent/api.js");
+    const exported = (source.match(/module\.exports = \{([^}]*)\}/) || [, ""])[1]
+      .split(",")
+      .map((name) => name.trim())
+      .filter(Boolean);
+    const missing = exported.filter((name) => typeof window[name] === "undefined");
+    assert(
+      "every api.js export is reachable from a separate browser script",
+      exported.length > 0 && missing.length === 0,
+      missing.length ? `not on the global: ${missing.join(", ")}` : undefined,
+    );
+    // The two the panel actually calls, named so a rename cannot silently
+    // pass the rule above by shrinking the export list.
+    assert(
+      "the panel's cross-script dependencies exist in a browser",
+      typeof window.HomeAgentApi === "function" &&
+      typeof window.randomUuid7 === "function",
+    );
+  }
   const api = new window.HomeAgentApi();
   await api.session();
   await api.principalBindingProposal();

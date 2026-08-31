@@ -336,11 +336,16 @@ def upgrade() -> None:
         f"CHECK (predicate IN ('colleague_of', 'friend_of', 'neighbor_of', 'parent_of', 'partner_of', 'roommate_of', 'sibling_of'));"
     )
 
-    # CREATE OR REPLACE must run as the function's owner; the migration role is
-    # the kernel role's only member, with SET.
-    op.execute(f"SET ROLE {KERNEL_ROLE};")
+    # Replaced as the migration role, exactly as 0029 does. SET ROLE to the
+    # kernel first fails: that role is dormant and holds no USAGE on schema
+    # identity, so CREATE OR REPLACE raises "permission denied for schema
+    # identity". CREATE OR REPLACE preserves the existing owner, and the
+    # ALTER below restates it so the intended owner is explicit either way.
     op.execute(BODY)
-    op.execute("RESET ROLE;")
+    op.execute(
+        f"ALTER FUNCTION identity.commit_owner_partner_relationship_e5k("
+        f"{SIGNATURE}) OWNER TO {KERNEL_ROLE};"
+    )
 
     op.execute(
         f"GRANT EXECUTE ON FUNCTION "

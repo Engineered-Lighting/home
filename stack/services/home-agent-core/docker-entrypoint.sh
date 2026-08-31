@@ -48,6 +48,7 @@ PHASE3_PARENT_STATUS_REVISION="0021_parent_status_e5h"
 PHASE3_OWNER_PERSON_REVISION="0027_owner_person_e5n"
 PHASE3_OWNER_PARTNER_ACCESS_REVISION="0028_owner_partner_access_e5o"
 PHASE3_OWNER_PERSON_ROLE_REVISION="0029_owner_person_role_e5p"
+PHASE3_RELATIONSHIP_VOCABULARY_REVISION="0030_relationship_vocabulary_e5q"
 
 required_migration_target() {
   target="${HOME_AGENT_EXPECTED_DB_REVISION:-}"
@@ -170,6 +171,13 @@ case "$role" in
       exit 64
     }
     run_phase3_migration "$PHASE3_OWNER_PERSON_ROLE_REVISION"
+    ;;
+  phase3-migrate-relationship-vocabulary)
+    [ "$#" -eq 1 ] || {
+      echo "phase3 relationship-vocabulary migration accepts no arguments" >&2
+      exit 64
+    }
+    run_phase3_migration "$PHASE3_RELATIONSHIP_VOCABULARY_REVISION"
     ;;
   ledger-init)
     exec python -m app.cli ledger-init

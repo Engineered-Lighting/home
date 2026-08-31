@@ -29,6 +29,9 @@ FIXED_STAGES = {
     # role of its own. Both owner-attested routes pin to it, so without a
     # stop that reaches it the image cannot deploy the revision they need.
     "phase3-migrate-owner-person-role": "0029_owner_person_role_e5p",
+    # Reviewed addition: 0030 widens the relationship vocabulary, so it needs
+    # its own fixed stage -- the generic migrator only deploys 0006a.
+    "phase3-migrate-relationship-vocabulary": "0030_relationship_vocabulary_e5q",
 }
 
 

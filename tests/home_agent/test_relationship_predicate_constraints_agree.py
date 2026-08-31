@@ -241,3 +241,66 @@ def test_receipt_edge_counts_follow_the_kernels_symmetry() -> None:
         f"symmetric predicates in the contract: {sorted(two_edge)}, "
         f"expected {sorted(VOCABULARY - {'parent_of'})}"
     )
+
+
+_INDEX = re.compile(
+    r"CREATE\s+UNIQUE\s+INDEX(?:\s+IF\s+NOT\s+EXISTS)?\s+(?P<name>\w+)\s+"
+    r"ON\s+(?P<table>[\w.]+)\s*\((?P<key>.*?)\)\s*WHERE\s+(?P<where>.*?);",
+    re.S | re.I,
+)
+_DROP_INDEX = re.compile(
+    r"DROP\s+INDEX(?:\s+IF\s+EXISTS)?\s+(?P<name>[\w.]+)\s*;", re.S | re.I
+)
+
+
+def _final_unique_indexes() -> dict[str, tuple[str, str]]:
+    """Surviving partial unique indexes, as ``name -> (key, where)``."""
+
+    live: dict[str, tuple[str, str]] = {}
+    for _name, text in _chain():
+        for sql in _statements(text):
+            for match in _DROP_INDEX.finditer(sql):
+                live.pop(match.group("name").split(".")[-1], None)
+            for match in _INDEX.finditer(sql):
+                live[match.group("name")] = (match.group("key"), match.group("where"))
+    return live
+
+
+def test_no_unique_index_is_scoped_to_a_single_predicate() -> None:
+    """A per-predicate index goes stale silently every time the vocabulary moves.
+
+    0023 and 0026 each scoped one to a single predicate. 0030 widened the
+    vocabulary and left both, so the five new predicates had no uniqueness guard
+    at all -- the same friendship could be recorded twice with nothing to reject
+    the second. An index keyed on ``predicate`` instead cannot go stale.
+    """
+
+    stale = {}
+    for name, (key, where) in _final_unique_indexes().items():
+        scoped = set(re.findall(r"predicate\s*=\s*'(\w+_of)'", where))
+        if scoped:
+            stale[name] = sorted(scoped)
+    assert not stale, (
+        f"unique indexes scoped to one predicate: {stale}. Put predicate in the "
+        f"index key and admit the whole vocabulary in WHERE instead."
+    )
+
+
+def test_the_relationship_uniqueness_index_covers_the_vocabulary() -> None:
+    indexes = _final_unique_indexes()
+    covering = {
+        name: (key, where)
+        for name, (key, where) in indexes.items()
+        if "person_id" in key and _admitted(where)
+    }
+    assert covering, "no unique index guards relationship uniqueness"
+    for name, (key, where) in covering.items():
+        assert "predicate" in key, (
+            f"{name} does not key on predicate, so it cannot tell two "
+            f"predicates apart between the same pair of people"
+        )
+        admitted = _admitted(where)
+        assert admitted == VOCABULARY, (
+            f"{name} guards {sorted(admitted)}, missing "
+            f"{sorted(VOCABULARY - admitted)}"
+        )

@@ -76,16 +76,32 @@ def test_the_partner_index_agrees_with_the_greenfield_definition() -> None:
     the E3 catalog manifest unreachable.
     """
 
-    migration = (VERSIONS / "0023_partner_relationship_vocabulary.py").read_text()
+    # 0031 replaced 0023's and 0026's predicate-scoped indexes with a single
+    # index keyed on predicate, so the index app/schema.py declares -- and that a
+    # greenfield database therefore already carries -- is that one. The pairing
+    # this test exists to protect is unchanged: the migration that creates an
+    # index and the greenfield definition of it must not drift apart.
+    migration = (VERSIONS / "0031_relationship_uniqueness.py").read_text()
     schema = SCHEMA.read_text()
 
-    index = schema[schema.index('"uq_active_partner_relationship"'):]
+    index = schema[schema.index('"uq_active_relationship"'):]
     index = index[: index.index(")\n\n")]
 
-    for column in ("subject_id", "person_id", "perspective_principal_id"):
+    for column in ("subject_id", "predicate", "person_id", "perspective_principal_id"):
         assert column in index, f"greenfield index lost {column}"
         assert column in migration, f"migration index lost {column}"
 
-    for clause in ("partner_of", "upper_inf(system_range)", "resolution = 'accepted'"):
+    clauses = (
+        "colleague_of",
+        "friend_of",
+        "neighbor_of",
+        "parent_of",
+        "partner_of",
+        "roommate_of",
+        "sibling_of",
+        "upper_inf(system_range)",
+        "resolution = 'accepted'",
+    )
+    for clause in clauses:
         assert clause in index, f"greenfield predicate lost {clause}"
         assert clause in migration, f"migration predicate lost {clause}"

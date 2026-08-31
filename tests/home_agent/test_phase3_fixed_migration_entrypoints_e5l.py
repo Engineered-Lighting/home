@@ -32,6 +32,10 @@ FIXED_STAGES = {
     # Reviewed addition: 0030 widens the relationship vocabulary, so it needs
     # its own fixed stage -- the generic migrator only deploys 0006a.
     "phase3-migrate-relationship-vocabulary": "0030_relationship_vocabulary_e5q",
+    # Reviewed addition: 0031 gives every relationship predicate the uniqueness
+    # guard only partner_of and parent_of had. Like the others it needs its own
+    # fixed stage -- the generic migrator only deploys 0006a.
+    "phase3-migrate-relationship-uniqueness": "0031_relationship_uniqueness_e5r",
 }
 
 

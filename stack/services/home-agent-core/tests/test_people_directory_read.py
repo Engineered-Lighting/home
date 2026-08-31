@@ -64,11 +64,16 @@ def test_relationship_predicate_vocabulary_is_closed() -> None:
     }
     assert RelationshipEntry(**entry).predicate == "parent_of"
 
-    # Not "partner_of": that is scheduled to become a real member, and a test
-    # asserting today's vocabulary would fail the moment it lands. Assert on
-    # shapes that must never be admitted.
+    # Assert on shapes that must never be admitted rather than on today's
+    # vocabulary. The original form named "sibling_of" as the rejected example
+    # while deliberately avoiding "partner_of" because that was "scheduled to
+    # become a real member" -- and then sibling_of became one too, so the test
+    # failed for the very reason its comment described. A predicate that is not
+    # a predicate at all cannot be overtaken the same way.
     with pytest.raises(ValidationError):
-        RelationshipEntry(**{**entry, "predicate": "sibling_of"})
+        RelationshipEntry(**{**entry, "predicate": "not_a_predicate"})
+    with pytest.raises(ValidationError):
+        RelationshipEntry(**{**entry, "predicate": ""})
     with pytest.raises(ValidationError):
         RelationshipEntry(
             **{

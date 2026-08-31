@@ -1269,15 +1269,22 @@ Index(
         "AND upper_inf(system_range) AND resolution = 'accepted'"
     ),
 )
+# One guard for every relationship predicate, keyed on predicate rather than
+# scoped to one in the WHERE clause. The two indexes this replaces each named a
+# single predicate, so widening the vocabulary left the new predicates with no
+# uniqueness guard at all and nothing to say so.
 Index(
-    "uq_active_parent_relationship",
+    "uq_active_relationship",
     fact_versions.c.subject_id,
+    fact_versions.c.predicate,
     fact_versions.c.object["person_id"].astext,
     fact_versions.c.perspective_principal_id,
     unique=True,
     postgresql_where=text(
-        "predicate = 'parent_of' "
-        "AND upper_inf(system_range) AND resolution = 'accepted'"
+        "predicate IN ("
+        "'colleague_of', 'friend_of', 'neighbor_of', 'parent_of', "
+        "'partner_of', 'roommate_of', 'sibling_of'"
+        ") AND upper_inf(system_range) AND resolution = 'accepted'"
     ),
 )
 
@@ -1298,17 +1305,6 @@ fact_support = Table(
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=NOW),
     UniqueConstraint("fact_version_id", "artifact_id", name="fact_artifact_support"),
     schema="knowledge",
-)
-Index(
-    "uq_active_partner_relationship",
-    fact_versions.c.subject_id,
-    fact_versions.c.object["person_id"].astext,
-    fact_versions.c.perspective_principal_id,
-    unique=True,
-    postgresql_where=text(
-        "predicate = 'partner_of' "
-        "AND upper_inf(system_range) AND resolution = 'accepted'"
-    ),
 )
 
 preferences = Table(

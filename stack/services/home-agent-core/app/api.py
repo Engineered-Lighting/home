@@ -105,8 +105,8 @@ OperatorBindingStore = Annotated[CoreStore, Depends(operator_binding_store_from)
 PHASE3_SCHEMA_REVISION = "0006a_worker_lease_arbitration"
 PRINCIPAL_BINDING_ADAPTER_REVISION = "0017_authenticated_binding_e5c"
 PARENT_RELATIONSHIP_ADAPTER_REVISION = "0021_parent_status_e5h"
-OWNER_PARTNER_ADAPTER_REVISION = "0029_owner_person_role_e5p"
-OWNER_PERSON_ADAPTER_REVISION = "0029_owner_person_role_e5p"
+OWNER_PARTNER_ADAPTER_REVISION = "0030_relationship_vocabulary_e5q"
+OWNER_PERSON_ADAPTER_REVISION = "0030_relationship_vocabulary_e5q"
 LEGACY_IDENTITY_IMPORT_RETIRED = (
     "sequential legacy identity import is retired; use the reviewed atomic "
     "identity finalizer"

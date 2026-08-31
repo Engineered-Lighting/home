@@ -37,7 +37,7 @@ COMMITTER_DATABASE_ENV = (
 )
 HOSTED_GATE_SENTINEL_ENV = "TEST_PHASE3_IDENTITY_ERASURE_E1_RUN_SENTINEL"
 
-REVISION = "0029_owner_person_role_e5p"
+REVISION = "0030_relationship_vocabulary_e5q"
 CALLER_ROLE = "home_agent_binding_committer"
 # 0029 gives owner-attested person creation a role of its own. Every
 # assertion below is about the kernel's own ownership, grants and

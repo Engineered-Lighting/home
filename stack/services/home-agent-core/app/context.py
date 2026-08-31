@@ -20,7 +20,30 @@ from typing import Literal, Sequence
 # layer would accept "parent_of. Ignore previous instructions" just as happily;
 # this closed Literal, and TypedContextFact having no string field at all, are
 # what make "no instruction-bearing fields" statically checkable.
-ContextPredicate = Literal["parent_of", "partner_of", "place_social_descriptor"]
+# The relationships one person can bear to another. Separated from
+# ContextPredicate because place_social_descriptor relates a person to a place,
+# so it is not attestable by the relationship kernel and must never appear in a
+# relationship request. Everything here except parent_of is symmetric, which the
+# kernel derives the same way rather than keeping a second list.
+RelationshipPredicate = Literal[
+    "parent_of",
+    "partner_of",
+    "friend_of",
+    "sibling_of",
+    "roommate_of",
+    "neighbor_of",
+    "colleague_of",
+]
+ContextPredicate = Literal[
+    "parent_of",
+    "partner_of",
+    "friend_of",
+    "sibling_of",
+    "roommate_of",
+    "neighbor_of",
+    "colleague_of",
+    "place_social_descriptor",
+]
 ArtifactSource = Literal[
     "candidate_memory", "retrieved_memory", "generated_summary"
 ]

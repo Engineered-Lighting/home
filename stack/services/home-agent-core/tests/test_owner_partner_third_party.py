@@ -56,10 +56,25 @@ def test_the_owner_can_name_a_subject_and_a_predicate() -> None:
     assert value.predicate == "parent_of"
 
 
-def test_a_predicate_outside_the_vocabulary_is_refused() -> None:
-    """The kernel refuses these too; this only moves the refusal earlier."""
+def test_the_widened_vocabulary_is_accepted() -> None:
+    """0030 admitted the relationships the People tab has always modelled."""
 
-    for predicate in ("sibling_of", "friend_of", "partner_of; DROP TABLE", ""):
+    for predicate in ("friend_of", "sibling_of", "roommate_of",
+                      "neighbor_of", "colleague_of"):
+        value = _attestation(predicate=predicate)
+        assert value.predicate == predicate
+
+
+def test_a_predicate_outside_the_vocabulary_is_refused() -> None:
+    """The kernel refuses these too; this only moves the refusal earlier.
+
+    sibling_of and friend_of moved into the vocabulary in 0030, so the cases
+    here are the ones that must never be admitted: a predicate relating a
+    person to a place rather than to a person, an injection attempt, and empty.
+    """
+
+    for predicate in ("place_social_descriptor", "cousin_of",
+                      "partner_of; DROP TABLE", ""):
         try:
             _attestation(predicate=predicate)
         except Exception:

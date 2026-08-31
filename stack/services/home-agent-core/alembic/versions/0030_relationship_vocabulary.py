@@ -42,7 +42,12 @@ ASYMMETRIC = ('parent_of',)
 VOCABULARY = ('colleague_of', 'friend_of', 'neighbor_of', 'parent_of', 'partner_of', 'roommate_of', 'sibling_of')
 
 RECEIPT_TABLE = "operations.partner_relationship_authority_receipts"
-RECEIPT_CHECK = "partner_relationship_receipt_predicate_known"
+# 0026 named this constraint; the name is what production actually carries.
+# A different name here would add a second, permissive CHECK and leave 0026's
+# two-predicate CHECK in force -- the migration would report success while
+# every widened predicate still failed at INSERT.
+RECEIPT_CHECK = "partner_receipt_predicate"
+RECEIPT_CONTRACT = "partner_receipt_contract"
 
 BODY = f"""
         CREATE OR REPLACE FUNCTION
@@ -336,6 +341,29 @@ def upgrade() -> None:
         f"CHECK (predicate IN ('colleague_of', 'friend_of', 'neighbor_of', 'parent_of', 'partner_of', 'roommate_of', 'sibling_of'));"
     )
 
+    # The same table pins the vocabulary a second time, and more strictly: this
+    # constraint binds each predicate to the number of edges the kernel writes
+    # for it. Leaving it alone would reject every widened predicate even with
+    # the list above corrected, because no branch of it would match at all.
+    # Restated with the symmetry inverted exactly as the kernel now decides it:
+    # parent_of writes one edge, every symmetric predicate writes two.
+    op.execute(
+        f"ALTER TABLE {RECEIPT_TABLE} "
+        f"DROP CONSTRAINT IF EXISTS {RECEIPT_CONTRACT};"
+    )
+    op.execute(
+        f"ALTER TABLE {RECEIPT_TABLE} "
+        f"ADD CONSTRAINT {RECEIPT_CONTRACT} "
+        f"CHECK ("
+        f"  contract_version = 'owner-partner-attestation-v1'"
+        f"  AND authority_result = 'committed'"
+        f"  AND ("
+        f"    (predicate = 'parent_of' AND edge_count = 1)"
+        f"    OR (predicate IN ('colleague_of', 'friend_of', 'neighbor_of', 'partner_of', 'roommate_of', 'sibling_of') AND edge_count = 2)"
+        f"  )"
+        f");"
+    )
+
     # Replaced as the migration role, exactly as 0029 does. SET ROLE to the
     # kernel first fails: that role is dormant and holds no USAGE on schema
     # identity, so CREATE OR REPLACE raises "permission denied for schema
@@ -364,6 +392,10 @@ def upgrade() -> None:
     )
     op.execute(
         "ALTER TABLE knowledge.fact_versions "
+        "DROP CONSTRAINT IF EXISTS partner_relationship_is_not_reflexive;"
+    )
+    op.execute(
+        "ALTER TABLE knowledge.fact_versions "
         "ADD CONSTRAINT relationship_is_not_reflexive "
         "CHECK ("
         "  predicate NOT IN ("
@@ -379,6 +411,15 @@ def downgrade() -> None:
         "ALTER TABLE knowledge.fact_versions "
         "DROP CONSTRAINT IF EXISTS relationship_is_not_reflexive;"
     )
+    # Restore 0023's narrow form, which upgrade() removed.
+    op.execute(
+        "ALTER TABLE knowledge.fact_versions "
+        "ADD CONSTRAINT partner_relationship_is_not_reflexive "
+        "CHECK ("
+        "  predicate <> 'partner_of'"
+        "  OR (object ->> 'person_id') IS DISTINCT FROM subject_id::text"
+        ");"
+    )
     op.execute(
         f"ALTER TABLE {RECEIPT_TABLE} "
         f"DROP CONSTRAINT IF EXISTS {RECEIPT_CHECK};"
@@ -387,6 +428,22 @@ def downgrade() -> None:
         f"ALTER TABLE {RECEIPT_TABLE} "
         f"ADD CONSTRAINT {RECEIPT_CHECK} "
         f"CHECK (predicate IN ('parent_of', 'partner_of'));"
+    )
+    op.execute(
+        f"ALTER TABLE {RECEIPT_TABLE} "
+        f"DROP CONSTRAINT IF EXISTS {RECEIPT_CONTRACT};"
+    )
+    op.execute(
+        f"ALTER TABLE {RECEIPT_TABLE} "
+        f"ADD CONSTRAINT {RECEIPT_CONTRACT} "
+        f"CHECK ("
+        f"  contract_version = 'owner-partner-attestation-v1'"
+        f"  AND authority_result = 'committed'"
+        f"  AND ("
+        f"    (predicate = 'partner_of' AND edge_count = 2)"
+        f"    OR (predicate = 'parent_of' AND edge_count = 1)"
+        f"  )"
+        f");"
     )
     # The kernel body is left widened: narrowing it would make an already
     # written friend_of fact unreachable by the function that maintains it.

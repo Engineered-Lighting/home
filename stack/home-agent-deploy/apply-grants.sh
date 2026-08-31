@@ -9669,14 +9669,37 @@ SELECT pg_catalog.to_regprocedure(
 -- one side of that change -- silently, because a GRANT issued by a non-owner
 -- without grant option emits a WARNING rather than an error, so ON_ERROR_STOP
 -- would not catch it and the committer would simply lose EXECUTE.
-SET ROLE home_agent_owner_person_kernel;
-GRANT EXECUTE ON FUNCTION
-  identity.create_owner_attested_person_e5n(
-    uuid, text, text, text, text, text, timestamptz, text,
-    uuid, uuid, uuid
-  )
-  TO home_agent_binding_committer;
-RESET ROLE;
+-- The comment above prescribes exactly this and the code hardcoded the 0029
+-- role instead, which aborts on every database below 0029: the gate tests
+-- whether the FUNCTION exists (it has since 0027), while the role does not
+-- exist until 0029. This script is autocommit and has already revoked
+-- home_agent_api's identity privileges by this point, so aborting here leaves
+-- them revoked -- taking down the People tab's read path, not merely this
+-- grant. Looking the owner up is correct on both sides of 0029.
+DO
+$owner_person_e5n_committer_execute$
+DECLARE
+  target regprocedure := pg_catalog.to_regprocedure(
+    'identity.create_owner_attested_person_e5n('
+    'uuid, text, text, text, text, text, timestamptz, text, '
+    'uuid, uuid, uuid)'
+  );
+  owner_name text;
+BEGIN
+  IF target IS NULL THEN
+    RETURN;
+  END IF;
+  SELECT pg_catalog.pg_get_userbyid(candidate.proowner)
+    INTO STRICT owner_name
+    FROM pg_catalog.pg_proc AS candidate
+   WHERE candidate.oid = target;
+  EXECUTE pg_catalog.format('SET ROLE %I', owner_name);
+  EXECUTE pg_catalog.format(
+    'GRANT EXECUTE ON FUNCTION %s TO home_agent_binding_committer', target
+  );
+  EXECUTE 'RESET ROLE';
+END
+$owner_person_e5n_committer_execute$;
 \endif
 
 -- E5k owner-attested partner commit. Same gap as E5n: 0025 grants the

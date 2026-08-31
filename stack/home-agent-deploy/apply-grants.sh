@@ -514,7 +514,8 @@ BEGIN
              '0027_owner_person_e5n',
              '0028_owner_partner_access_e5o',
              '0029_owner_person_role_e5p',
-             '0030_relationship_vocabulary_e5q'
+             '0030_relationship_vocabulary_e5q',
+             '0031_relationship_uniqueness_e5r'
            )
            AND role_row.rolname =
                'home_agent_parent_relationship_kernel'
@@ -2464,7 +2465,8 @@ DECLARE
     '0027_owner_person_e5n',
     '0028_owner_partner_access_e5o',
     '0029_owner_person_role_e5p',
-    '0030_relationship_vocabulary_e5q'
+    '0030_relationship_vocabulary_e5q',
+    '0031_relationship_uniqueness_e5r'
   ]::text[];
   pre_e3_revisions constant text[] := ARRAY[
     '0001_greenfield_core',
@@ -2512,7 +2514,8 @@ DECLARE
     '0027_owner_person_e5n',
     '0028_owner_partner_access_e5o',
     '0029_owner_person_role_e5p',
-    '0030_relationship_vocabulary_e5q'
+    '0030_relationship_vocabulary_e5q',
+    '0031_relationship_uniqueness_e5r'
   ]::text[];
   expected_e3_catalog_sha256 constant text :=
     'b85d05e7d2d45671a0107a75658474450c0ab927d86a2ec4809732169ee37192';
@@ -2898,7 +2901,8 @@ BEGIN
        '0027_owner_person_e5n',
        '0028_owner_partner_access_e5o',
        '0029_owner_person_role_e5p',
-       '0030_relationship_vocabulary_e5q'
+       '0030_relationship_vocabulary_e5q',
+       '0031_relationship_uniqueness_e5r'
      ) THEN
     SELECT oid INTO STRICT authority_kernel_oid
       FROM pg_catalog.pg_roles
@@ -2919,7 +2923,8 @@ BEGIN
        '0027_owner_person_e5n',
        '0028_owner_partner_access_e5o',
        '0029_owner_person_role_e5p',
-       '0030_relationship_vocabulary_e5q'
+       '0030_relationship_vocabulary_e5q',
+       '0031_relationship_uniqueness_e5r'
      ) THEN
     SELECT oid INTO STRICT binding_kernel_oid
       FROM pg_catalog.pg_roles
@@ -2937,7 +2942,8 @@ BEGIN
        '0027_owner_person_e5n',
        '0028_owner_partner_access_e5o',
        '0029_owner_person_role_e5p',
-       '0030_relationship_vocabulary_e5q'
+       '0030_relationship_vocabulary_e5q',
+       '0031_relationship_uniqueness_e5r'
      ) THEN
     SELECT oid INTO STRICT parent_relationship_kernel_oid
       FROM pg_catalog.pg_roles
@@ -3538,7 +3544,8 @@ BEGIN
        '0027_owner_person_e5n',
        '0028_owner_partner_access_e5o',
        '0029_owner_person_role_e5p',
-       '0030_relationship_vocabulary_e5q'
+       '0030_relationship_vocabulary_e5q',
+       '0031_relationship_uniqueness_e5r'
      )
      AND (
        NOT EXISTS (
@@ -3695,7 +3702,8 @@ BEGIN
                 '0027_owner_person_e5n',
                 '0028_owner_partner_access_e5o',
                 '0029_owner_person_role_e5p',
-                '0030_relationship_vocabulary_e5q'
+                '0030_relationship_vocabulary_e5q',
+                '0031_relationship_uniqueness_e5r'
               ) THEN 6
          WHEN current_revision = ANY (reviewed_e4_overlay_revisions) THEN 5
          ELSE 4
@@ -3960,7 +3968,8 @@ BEGIN
                        '0027_owner_person_e5n',
                        '0028_owner_partner_access_e5o',
                        '0029_owner_person_role_e5p',
-                       '0030_relationship_vocabulary_e5q'
+                       '0030_relationship_vocabulary_e5q',
+                       '0031_relationship_uniqueness_e5r'
                      )
                      AND relation.oid =
                            'operations.'
@@ -4009,7 +4018,8 @@ BEGIN
                        '0027_owner_person_e5n',
                        '0028_owner_partner_access_e5o',
                        '0029_owner_person_role_e5p',
-                       '0030_relationship_vocabulary_e5q'
+                       '0030_relationship_vocabulary_e5q',
+                       '0031_relationship_uniqueness_e5r'
                      )
                      AND relation.oid =
                            'operations.'
@@ -4082,7 +4092,8 @@ BEGIN
                             '0027_owner_person_e5n',
                             '0028_owner_partner_access_e5o',
                             '0029_owner_person_role_e5p',
-                            '0030_relationship_vocabulary_e5q'
+                            '0030_relationship_vocabulary_e5q',
+                            '0031_relationship_uniqueness_e5r'
                           )
                          AND policy_row.polname = e5_select_policy
                           AND policy_row.polroles =
@@ -4104,7 +4115,8 @@ BEGIN
                             '0027_owner_person_e5n',
                             '0028_owner_partner_access_e5o',
                             '0029_owner_person_role_e5p',
-                            '0030_relationship_vocabulary_e5q'
+                            '0030_relationship_vocabulary_e5q',
+                            '0031_relationship_uniqueness_e5r'
                           )
                           AND policy_row.polname = e5b_select_policy
                           AND policy_row.polroles =
@@ -4171,7 +4183,8 @@ BEGIN
                         '0027_owner_person_e5n',
                         '0028_owner_partner_access_e5o',
                         '0029_owner_person_role_e5p',
-                        '0030_relationship_vocabulary_e5q'
+                        '0030_relationship_vocabulary_e5q',
+                        '0031_relationship_uniqueness_e5r'
                       )
                       AND policy_row.polname =
                             ANY (e5e_e3_policy_names)
@@ -4207,7 +4220,8 @@ BEGIN
                        '0027_owner_person_e5n',
                        '0028_owner_partner_access_e5o',
                        '0029_owner_person_role_e5p',
-                       '0030_relationship_vocabulary_e5q'
+                       '0030_relationship_vocabulary_e5q',
+                       '0031_relationship_uniqueness_e5r'
                      )
                      AND policy_row.polname = e5_run_lock_policy
                      AND policy_row.polrelid =
@@ -5091,7 +5105,8 @@ DECLARE
     '0027_owner_person_e5n',
     '0028_owner_partner_access_e5o',
     '0029_owner_person_role_e5p',
-    '0030_relationship_vocabulary_e5q'
+    '0030_relationship_vocabulary_e5q',
+    '0031_relationship_uniqueness_e5r'
   ]::text[];
   role_count integer;
 BEGIN
@@ -5141,7 +5156,8 @@ BEGIN
        '0027_owner_person_e5n',
        '0028_owner_partner_access_e5o',
        '0029_owner_person_role_e5p',
-       '0030_relationship_vocabulary_e5q'
+       '0030_relationship_vocabulary_e5q',
+       '0031_relationship_uniqueness_e5r'
      ) THEN
     SELECT oid INTO STRICT authority_kernel_oid
       FROM pg_catalog.pg_roles
@@ -5162,7 +5178,8 @@ BEGIN
        '0027_owner_person_e5n',
        '0028_owner_partner_access_e5o',
        '0029_owner_person_role_e5p',
-       '0030_relationship_vocabulary_e5q'
+       '0030_relationship_vocabulary_e5q',
+       '0031_relationship_uniqueness_e5r'
      ) THEN
     SELECT oid INTO STRICT binding_kernel_oid
       FROM pg_catalog.pg_roles
@@ -5180,7 +5197,8 @@ BEGIN
        '0027_owner_person_e5n',
        '0028_owner_partner_access_e5o',
        '0029_owner_person_role_e5p',
-       '0030_relationship_vocabulary_e5q'
+       '0030_relationship_vocabulary_e5q',
+       '0031_relationship_uniqueness_e5r'
      ) THEN
     SELECT oid INTO STRICT parent_relationship_kernel_oid
       FROM pg_catalog.pg_roles
@@ -5366,7 +5384,8 @@ BEGIN
        '0027_owner_person_e5n',
        '0028_owner_partner_access_e5o',
        '0029_owner_person_role_e5p',
-       '0030_relationship_vocabulary_e5q'
+       '0030_relationship_vocabulary_e5q',
+       '0031_relationship_uniqueness_e5r'
      )
      AND (
        NOT EXISTS (
@@ -5607,7 +5626,8 @@ BEGIN
                                            '0027_owner_person_e5n',
                                            '0028_owner_partner_access_e5o',
                                            '0029_owner_person_role_e5p',
-                                           '0030_relationship_vocabulary_e5q'
+                                           '0030_relationship_vocabulary_e5q',
+                                           '0031_relationship_uniqueness_e5r'
                                          )
                                          AND target.target_relation =
                                                promotion_table
@@ -5849,7 +5869,8 @@ BEGIN
                             '0027_owner_person_e5n',
                             '0028_owner_partner_access_e5o',
                             '0029_owner_person_role_e5p',
-                            '0030_relationship_vocabulary_e5q'
+                            '0030_relationship_vocabulary_e5q',
+                            '0031_relationship_uniqueness_e5r'
                           )
                           AND policy_row.polname = e5_select_policy
                           AND policy_row.polrelid IN (
@@ -5878,7 +5899,8 @@ BEGIN
                             '0027_owner_person_e5n',
                             '0028_owner_partner_access_e5o',
                             '0029_owner_person_role_e5p',
-                            '0030_relationship_vocabulary_e5q'
+                            '0030_relationship_vocabulary_e5q',
+                            '0031_relationship_uniqueness_e5r'
                           )
                           AND policy_row.polname = e5b_select_policy
                           AND policy_row.polrelid = promotion_table
@@ -5902,7 +5924,8 @@ BEGIN
                             '0027_owner_person_e5n',
                             '0028_owner_partner_access_e5o',
                             '0029_owner_person_role_e5p',
-                            '0030_relationship_vocabulary_e5q'
+                            '0030_relationship_vocabulary_e5q',
+                            '0031_relationship_uniqueness_e5r'
                           )
                           AND policy_row.polname =
                                 e5e_promotion_select_policy
@@ -6609,7 +6632,8 @@ DECLARE
     '0027_owner_person_e5n',
     '0028_owner_partner_access_e5o',
     '0029_owner_person_role_e5p',
-    '0030_relationship_vocabulary_e5q'
+    '0030_relationship_vocabulary_e5q',
+    '0031_relationship_uniqueness_e5r'
   ]::text[];
   rls_relations constant text[] := ARRAY[
     'operations.semantic_authority_promotions',
@@ -6693,7 +6717,8 @@ BEGIN
        '0027_owner_person_e5n',
        '0028_owner_partner_access_e5o',
        '0029_owner_person_role_e5p',
-       '0030_relationship_vocabulary_e5q'
+       '0030_relationship_vocabulary_e5q',
+       '0031_relationship_uniqueness_e5r'
      ) THEN
     SELECT oid INTO STRICT binding_kernel_oid
       FROM pg_catalog.pg_roles
@@ -6867,7 +6892,8 @@ BEGIN
        '0027_owner_person_e5n',
        '0028_owner_partner_access_e5o',
        '0029_owner_person_role_e5p',
-       '0030_relationship_vocabulary_e5q'
+       '0030_relationship_vocabulary_e5q',
+       '0031_relationship_uniqueness_e5r'
      )
      AND (
        receipt_table IS NULL
@@ -7756,7 +7782,8 @@ BEGIN
        '0027_owner_person_e5n',
        '0028_owner_partner_access_e5o',
        '0029_owner_person_role_e5p',
-       '0030_relationship_vocabulary_e5q'
+       '0030_relationship_vocabulary_e5q',
+       '0031_relationship_uniqueness_e5r'
      )
      OR receipt_table IS NULL
      OR binding_function IS NULL
@@ -8969,7 +8996,8 @@ SELECT (
     '0027_owner_person_e5n',
     '0028_owner_partner_access_e5o',
     '0029_owner_person_role_e5p',
-    '0030_relationship_vocabulary_e5q'
+    '0030_relationship_vocabulary_e5q',
+    '0031_relationship_uniqueness_e5r'
   )
 ) AS activate_parent_relationship_stage_e5e
 FROM public.alembic_version
@@ -9234,7 +9262,8 @@ SELECT (
     '0027_owner_person_e5n',
     '0028_owner_partner_access_e5o',
     '0029_owner_person_role_e5p',
-    '0030_relationship_vocabulary_e5q'
+    '0030_relationship_vocabulary_e5q',
+    '0031_relationship_uniqueness_e5r'
   )
 ) AS activate_parent_relationship_commit_e5f
 FROM public.alembic_version
@@ -9416,7 +9445,8 @@ SELECT (
     '0027_owner_person_e5n',
     '0028_owner_partner_access_e5o',
     '0029_owner_person_role_e5p',
-    '0030_relationship_vocabulary_e5q'
+    '0030_relationship_vocabulary_e5q',
+    '0031_relationship_uniqueness_e5r'
   )
 ) AS activate_parent_relationship_status_e5h
 FROM public.alembic_version

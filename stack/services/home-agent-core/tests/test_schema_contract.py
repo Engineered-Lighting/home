@@ -140,9 +140,23 @@ def test_fact_axes_and_active_uniqueness_are_predicate_scoped() -> None:
     scalar_where = str(
         indexes["uq_active_scalar_fact"].dialect_options["postgresql"]["where"]
     )
-    parent_where = str(
-        indexes["uq_active_parent_relationship"].dialect_options["postgresql"]["where"]
+    # One index covers every relationship predicate; the per-predicate indexes
+    # it replaced left each new predicate unguarded until someone added another.
+    relationship_where = str(
+        indexes["uq_active_relationship"].dialect_options["postgresql"]["where"]
     )
     assert "place_social_descriptor" in scalar_where
     assert "parent_of" not in scalar_where
-    assert "parent_of" in parent_where
+    # The two guards stay disjoint: a person-to-place descriptor is not a
+    # relationship, and neither index may claim the other's rows.
+    assert "place_social_descriptor" not in relationship_where
+    for predicate in (
+        "colleague_of",
+        "friend_of",
+        "neighbor_of",
+        "parent_of",
+        "partner_of",
+        "roommate_of",
+        "sibling_of",
+    ):
+        assert predicate in relationship_where, predicate

@@ -27,10 +27,21 @@ def _members() -> tuple[str, ...]:
 
 def test_partner_of_is_admitted_and_the_vocabulary_stays_closed() -> None:
     members = _members()
-    assert "partner_of" in members
-    assert "parent_of" in members
-    # Closed, and small. Growth is a reviewed decision, not a refactor.
-    assert len(members) == 3, members
+    # Closed, and named exactly. Growth is a reviewed decision, not a refactor,
+    # so this pins the whole set rather than its size: a count alone says a
+    # member was added but not which, and passes just as happily if one is
+    # swapped for another.
+    assert set(members) == {
+        "colleague_of",
+        "friend_of",
+        "neighbor_of",
+        "parent_of",
+        "partner_of",
+        "roommate_of",
+        "sibling_of",
+        # Not a relationship between people: it relates a person to a place.
+        "place_social_descriptor",
+    }, members
 
 
 def test_every_person_predicate_has_a_uniqueness_index() -> None:
@@ -40,18 +51,26 @@ def test_every_person_predicate_has_a_uniqueness_index() -> None:
     schema = (
         pathlib.Path(__file__).resolve().parents[1] / "app" / "schema.py"
     ).read_text()
-    for predicate, index in (
-        ("parent_of", "uq_active_parent_relationship"),
-        ("partner_of", "uq_active_partner_relationship"),
+    # One index guards every predicate now: the two it replaced each named a
+    # single one, so a widened vocabulary silently left the rest unguarded.
+    index = "uq_active_relationship"
+    assert index in schema, "relationships have no uniqueness index"
+    window = schema[schema.index(index): schema.index(index) + 700]
+    for predicate in (
+        "colleague_of",
+        "friend_of",
+        "neighbor_of",
+        "parent_of",
+        "partner_of",
+        "roommate_of",
+        "sibling_of",
     ):
-        assert index in schema, f"{predicate} has no uniqueness index"
-        window = schema[schema.index(index): schema.index(index) + 500]
-        assert f"predicate = '{predicate}' " in window
-        assert "upper_inf(system_range)" in window, (
-            f"{index} must be scoped to currently-believed facts, so a "
-            "retracted edge does not block re-assertion"
-        )
-        assert "resolution = 'accepted'" in window
+        assert f"'{predicate}'" in window, f"{predicate} has no uniqueness index"
+    assert "upper_inf(system_range)" in window, (
+        f"{index} must be scoped to currently-believed facts, so a "
+        "retracted edge does not block re-assertion"
+    )
+    assert "resolution = 'accepted'" in window
 
 
 def test_partner_of_cannot_be_reflexive() -> None:
@@ -130,4 +149,4 @@ def test_metadata_actually_imports() -> None:
 
     assert schema.fact_versions is not None
     index_names = {index.name for index in schema.fact_versions.indexes}
-    assert {"uq_active_parent_relationship", "uq_active_partner_relationship"} <= index_names
+    assert "uq_active_relationship" in index_names

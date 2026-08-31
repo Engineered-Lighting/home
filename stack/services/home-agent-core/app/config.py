@@ -29,6 +29,7 @@ ReadinessMigration = Literal[
     "0028_owner_partner_access_e5o",
     "0029_owner_person_role_e5p",
     "0030_relationship_vocabulary_e5q",
+    "0031_relationship_uniqueness_e5r",
 ]
 
 

@@ -76,7 +76,7 @@ HOSTED_GATE_SENTINEL_ENV = "TEST_PHASE3_IDENTITY_ERASURE_E1_RUN_SENTINEL"
 # The gate migrates to the newest revision, so this is "the current
 # head", not a property of 0028. It moves with each revision that
 # changes identity ownership; 0029 is the current one.
-EXPECTED_REVISION = "0029_owner_person_role_e5p"
+EXPECTED_REVISION = "0030_relationship_vocabulary_e5q"
 
 # Every table the People tab reads. The committer credential must reach none of
 # them: the read path is an API-role surface, and a credential that exists to

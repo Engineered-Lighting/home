@@ -63,6 +63,7 @@ REVISION_0021 = "0021_parent_status_e5h"
 REVISION_0027 = "0027_owner_person_e5n"
 REVISION_0028 = "0028_owner_partner_access_e5o"
 REVISION_0029 = "0029_owner_person_role_e5p"
+REVISION_0030 = "0030_relationship_vocabulary_e5q"
 E4_SUCCESS_DOCUMENT_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_DOCUMENT_B64"
 E4_SUCCESS_ADMISSION_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_ADMISSION_ID"
 E4_SCAFFOLD_OWNER_DATABASE_ENV = "TEST_PHASE3_IDENTITY_CUTOVER_E4_OWNER_DATABASE_URL"
@@ -3838,14 +3839,14 @@ def _run_e4_scaffold_phase(
         phase,
         secrets_directory,
         BASE_DATABASE,
-        REVISION_0029,
+        REVISION_0030,
     )
     _assert_database_revision(
         state,
         phase,
         secrets_directory,
         BASE_DATABASE,
-        REVISION_0029,
+        REVISION_0030,
     )
     _apply_grants(
         state,

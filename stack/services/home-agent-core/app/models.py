@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 # Imported rather than restated: the predicate vocabulary must have exactly one
 # definition. A view that could name a predicate the context layer does not
 # admit would be a second, weaker gate on what reaches the model.
-from .context import ContextPredicate
+from .context import ContextPredicate, RelationshipPredicate
 
 
 class StrictModel(BaseModel):
@@ -177,7 +177,7 @@ class OwnerPartnerAttestation(StrictModel):
     # Closed on purpose. partner_of is symmetric and writes both directions;
     # parent_of is not and writes one. Anything else is refused by the kernel
     # too, so this only moves the refusal earlier and makes it legible.
-    predicate: Literal["partner_of", "parent_of"] = "partner_of"
+    predicate: RelationshipPredicate = "partner_of"
 
     @model_validator(mode="after")
     def _no_self_edge(self) -> "OwnerPartnerAttestation":
@@ -211,7 +211,7 @@ class OwnerPartnerAttestationView(StrictModel):
     # Echoed back so a caller can see which relationship was recorded rather
     # than inferring it from what it sent.
     subject_person_id: uuid.UUID | None = None
-    predicate: Literal["partner_of", "parent_of"] = "partner_of"
+    predicate: RelationshipPredicate = "partner_of"
 class PeopleDirectoryEntry(StrictModel):
     """One person as the People tab may show them.
 

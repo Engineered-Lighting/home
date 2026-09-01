@@ -242,8 +242,11 @@ async function readEntityStates(entityIds) {
  *                  a long drag-with-pauses.
  *   - onCommit(v)— the debounce, OR an immediate flush on pointer-up / key-up /
  *                  blur (so the final value always lands).
+ *   - draggingRef — optional parent-owned ref, flipped true on pointer-down /
+ *                  drag and false on release, so the parent's reconcile() can
+ *                  skip overwriting `value` while the thumb is under a finger.
  * The debounce timer lives in a ref and is cleared on unmount (render-stability). */
-function ControlSlider({ kind, label, sub, value, min, max, step, unit, disabled, mixed, applying, onDrag, onCommit }) {
+function ControlSlider({ kind, label, sub, value, min, max, step, unit, disabled, mixed, applying, draggingRef, onDrag, onCommit }) {
   const debRef = React.useRef(null);
   React.useEffect(() => () => { if (debRef.current) { clearTimeout(debRef.current); debRef.current = null; } }, []);
   React.useEffect(() => {
@@ -254,6 +257,7 @@ function ControlSlider({ kind, label, sub, value, min, max, step, unit, disabled
 
   const handleChange = (e) => {
     if (disabled) return;
+    if (draggingRef) draggingRef.current = true;
     const v = Number(e.target.value);
     if (onDrag) onDrag(v);
     if (debRef.current) clearTimeout(debRef.current);
@@ -264,6 +268,7 @@ function ControlSlider({ kind, label, sub, value, min, max, step, unit, disabled
   };
   const flush = (e) => {
     if (disabled) return;
+    if (draggingRef) draggingRef.current = false;   // release BEFORE commit → commit's reconcile lands
     if (debRef.current) { clearTimeout(debRef.current); debRef.current = null; }
     if (onCommit) onCommit(Number(e.target.value));
   };
@@ -288,6 +293,7 @@ function ControlSlider({ kind, label, sub, value, min, max, step, unit, disabled
         value={value == null ? min : value}
         disabled={disabled}
         onChange={handleChange}
+        onPointerDown={() => { if (!disabled && draggingRef) draggingRef.current = true; }}
         onPointerUp={flush}
         onKeyUp={flush}
         onBlur={flush}
@@ -467,6 +473,7 @@ function LightControlCard({ ctx, lifecycle, onControlAction }) {
   const [statusMsg, setStatusMsg] = React.useState("");
   const reconcileRef = React.useRef(null);
   const fadeRef = React.useRef(null);
+  const draggingRef = React.useRef(false);   // true while a slider drag is in flight
   const mountFetchedRef = React.useRef(false);
 
   const lifeActive = lifecycle === "active" && ctx.status !== "pending";
@@ -537,8 +544,13 @@ function LightControlCard({ ctx, lifecycle, onControlAction }) {
     if (!hasEntities) return;
     if (reconcileRef.current) clearTimeout(reconcileRef.current);
     reconcileRef.current = setTimeout(async () => {
+      // Mid-drag, skip the value overwrite entirely — the thumb must never
+      // snap back under the finger. The release flush commits again, and
+      // that commit's reconcile() lands once draggingRef has cleared.
+      if (draggingRef.current) return;
       invalidateStatesCache();
       const sm = await readEntityStates(ctx.targetEntities);
+      if (draggingRef.current) return;   // a drag started while fetching
       const c = buildLightCaps(sm, ctx.targetEntities);
       setCaps(c);
       if (c.avgBrightnessPct != null) setBri(c.avgBrightnessPct);
@@ -635,6 +647,7 @@ function LightControlCard({ ctx, lifecycle, onControlAction }) {
           disabled={briDisabled}
           mixed={caps && caps.mixedBrightness}
           applying={status === "applying"}
+          draggingRef={draggingRef}
           onDrag={setBri}
           onCommit={(v) => commit({ brightness_pct: v }, `${v}%`)}
         />
@@ -645,6 +658,7 @@ function LightControlCard({ ctx, lifecycle, onControlAction }) {
           disabled={colorDisabled}
           mixed={caps && caps.mixedColorTemp}
           applying={status === "applying"}
+          draggingRef={draggingRef}
           onDrag={setKel}
           onCommit={(v) => commit({ color_temp_kelvin: v }, `${v} K`)}
         />
@@ -825,6 +839,7 @@ function MediaControlCard({ ctx, lifecycle, onControlAction }) {
   const [statusMsg, setStatusMsg] = React.useState("");
   const reconcileRef = React.useRef(null);
   const fadeRef = React.useRef(null);
+  const draggingRef = React.useRef(false);   // true while a volume drag is in flight
 
   const lifeActive = lifecycle === "active" && ctx.status !== "pending";
 
@@ -846,6 +861,7 @@ function MediaControlCard({ ctx, lifecycle, onControlAction }) {
     }
     setLiveStates(sm);
     setVolumes((prev) => {
+      if (draggingRef.current) return prev;   // never yank a slider mid-drag
       const next = { ...prev };
       for (const id of playbackEntities) {
         const ve = volEntityFor(id);
@@ -908,6 +924,9 @@ function MediaControlCard({ ctx, lifecycle, onControlAction }) {
   const reconcile = () => {
     if (reconcileRef.current) clearTimeout(reconcileRef.current);
     reconcileRef.current = setTimeout(() => {
+      // Mid-drag, skip the overwrite — the release flush commits again and
+      // that commit's reconcile() lands once draggingRef has cleared.
+      if (draggingRef.current) return;
       if (!window.__SIM_ACTIVE) invalidateStatesCache();
       refreshStates();
       setOptimisticState(null);
@@ -1046,6 +1065,7 @@ function MediaControlCard({ ctx, lifecycle, onControlAction }) {
                   min={0} max={100} step={1} unit="%"
                   disabled={!vs.available || !vs.caps.volume}
                   applying={status === "applying"}
+                  draggingRef={draggingRef}
                   onDrag={(v) => setVolumes((p) => ({ ...p, [ve]: v }))}
                   onCommit={(v) => fire({
                     domain: "media_player", service: "volume_set",

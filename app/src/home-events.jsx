@@ -514,16 +514,20 @@ function PerceptionContent({ text, snapshotUrl, imageMode, imageUnavailable = fa
     if (hasThumb) setLightboxOpen(true);
   }, [hasThumb]);
   const closeLightbox = React.useCallback(() => setLightboxOpen(false), []);
-  React.useEffect(() => {
-    if (!lightboxOpen) return undefined;
-    const onKey = (e) => {
-      if (e.key === "Escape") setLightboxOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [lightboxOpen]);
+  const lightboxRef = React.useRef(null);
+  // Overlay layer: HomeOverlay owns Escape (topmost-only) + Tab trap + focus
+  // move-in/restore — no per-lightbox window listener.
+  window.HomeOverlay.useOverlayLayer({
+    key: "perception-lightbox",
+    active: !!lightboxOpen,
+    onEscape: closeLightbox,
+    getRoot: () => lightboxRef.current,
+    trap: true,
+    initialFocus: "root",
+  });
   const lightbox = lightboxOpen && hasThumb ? (
     <div
+      ref={lightboxRef}
       role="dialog"
       aria-modal="true"
       aria-label={room ? `${room} perception image` : "perception image"}

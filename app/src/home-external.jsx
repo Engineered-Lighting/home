@@ -392,6 +392,7 @@ async function askExternal(text, callbacks, signal) {
 function ExternalKeyModal({ onClose }) {
   const [value, setValue] = React.useState("");
   const [showing, setShowing] = React.useState(false);
+  const panelRef = React.useRef(null);
   const existing = "";
   const masked = existing
     ? `${existing.slice(0, 3)}...${existing.slice(-4)} (${existing.length} chars)`
@@ -408,14 +409,26 @@ function ExternalKeyModal({ onClose }) {
     onClose && onClose({ cleared: true });
   }, [onClose]);
 
+  // Overlay layer: topmost-only Escape + focus trap (HomeOverlay owns the
+  // Escape dispatch — the component is conditionally mounted by its parent,
+  // so mount == open and active is always true).
+  window.HomeOverlay.useOverlayLayer({
+    key: "external-key",
+    active: true,
+    onEscape: () => { onClose && onClose({}); },
+    rootRef: panelRef,
+    trap: true,
+    initialFocus: "first",
+  });
+
+  // Enter→save stays on a window listener for now; a later phase scopes it.
   React.useEffect(() => {
     const onKey = (e) => {
-      if (e.key === "Escape") onClose && onClose({});
-      else if (e.key === "Enter" && value.trim()) doSave();
+      if (e.key === "Enter" && value.trim()) doSave();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [value, onClose, doSave]);
+  }, [value, doSave]);
 
   return (
     <div
@@ -428,6 +441,10 @@ function ExternalKeyModal({ onClose }) {
       }}
     >
       <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Set external provider key"
         onClick={(e) => e.stopPropagation()}
         style={{
           minWidth: 380, maxWidth: 440,

@@ -1249,12 +1249,17 @@ function SimulationControlsDialog({ open, sim, onClose }) {
     }
   }, [open, sim?.scenario]);
 
-  useEffect(() => {
-    if (!open) return undefined;
-    const onKey = (e) => { if (e.key === "Escape") onClose?.(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  // Overlay layer: topmost-only Escape + focus trap via HomeOverlay (no
+  // per-dialog window keydown listener).
+  const panelRef = useRef(null);
+  window.HomeOverlay.useOverlayLayer({
+    key: "sim-controls",
+    active: !!(open && sim?.active),
+    onEscape: () => onClose?.(),
+    rootRef: panelRef,
+    trap: true,
+    initialFocus: "first",
+  });
 
   if (!open || !sim?.active) return null;
 
@@ -1301,6 +1306,7 @@ function SimulationControlsDialog({ open, sim, onClose }) {
       style={{ position: "fixed", inset: 0, zIndex: 90, pointerEvents: "auto" }}
     >
       <div
+        ref={panelRef}
         className="hg-fade"
         onMouseDown={(e) => e.stopPropagation()}
         style={{
@@ -3228,6 +3234,16 @@ function RemoteProfileDialog({
     if (!open || !window.HomeServices) return;
     setCustomValues(window.HomeServices.getAll());
   }, [open, profile?.id]);
+  // Overlay layer: Escape close (new with HomeOverlay adoption) + focus trap.
+  const panelRef = useRef(null);
+  window.HomeOverlay.useOverlayLayer({
+    key: "remote",
+    active: !!open,
+    onEscape: () => onClose?.(),
+    rootRef: panelRef,
+    trap: true,
+    initialFocus: "first",
+  });
   if (!open || !window.HomeServices) return null;
   const profiles = window.HomeServices.profiles();
   const active = profile || window.HomeServices.getProfile();
@@ -3273,9 +3289,6 @@ function RemoteProfileDialog({
   };
   return (
     <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Remote profile"
       style={{
         position: "fixed",
         inset: 0,
@@ -3288,7 +3301,7 @@ function RemoteProfileDialog({
       }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose?.(); }}
     >
-      <div style={{
+      <div ref={panelRef} role="dialog" aria-modal="true" aria-label="Remote profile" style={{
         width: mobile ? "100vw" : "min(760px, 96vw)",
         height: mobile ? "100dvh" : "auto",
         maxHeight: mobile ? "100dvh" : "min(760px, 92vh)",
@@ -4113,6 +4126,19 @@ function availableSlashCommands({ mobile = false } = {}) {
 }
 
 function FeatureLoadingSurface({ open, title, status, error, onClose, onRetry, mobile = false, fullscreen = true }) {
+  // Overlay layer: a dismissable fullscreen load gains Escape-to-close +
+  // focus trap via HomeOverlay; the inline (non-fullscreen) variant stays a
+  // plain status region.
+  const panelRef = useRef(null);
+  const overlayActive = !!(open && fullscreen && onClose);
+  window.HomeOverlay.useOverlayLayer({
+    key: "feature-loading",
+    active: overlayActive,
+    onEscape: () => onClose(),
+    rootRef: panelRef,
+    trap: true,
+    initialFocus: "first",
+  });
   if (!open) return null;
   const state = status?.state || "idle";
   const pending = state === "loading" || state === "idle";
@@ -4137,7 +4163,13 @@ function FeatureLoadingSurface({ open, title, status, error, onClose, onRetry, m
     color: "var(--hg-fg-0)",
   };
   return (
-    <div style={panelStyle} role="status" aria-live="polite">
+    <div
+      ref={panelRef}
+      style={panelStyle}
+      role={overlayActive ? "dialog" : "status"}
+      aria-modal={overlayActive ? "true" : undefined}
+      aria-live="polite"
+    >
       <div style={{
         width: "min(420px, 100%)",
         border: "1px solid var(--hg-border)",

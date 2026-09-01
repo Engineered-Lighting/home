@@ -131,7 +131,7 @@ function hasAnyCameraLabel(labels) {
   assert("explain fixture includes routing and tool-call timeline", explain.some((e) => e.kind === "routing_decision") && explain.filter((e) => e.kind === "tool_call").length >= 3, explain);
   assert("explain fixture preserves requested conversation id", explain.every((e) => e.conv_id === "conv-test"), explain);
   const world = api.__SIM_WORLD_STATE_FIXTURE();
-  assert("world-state fixture has occupied rooms and people", world.enabled === true && world.rooms.kitchen.occupied === true && world.people.Marcelo.currently_seen === true, world);
+  assert("world-state fixture has occupied rooms and people", world.enabled === true && world.rooms.kitchen.occupied === true && world.people.Alex.currently_seen === true, world);
   const spatial = api.__SIM_SPATIAL_MODEL_FIXTURE();
   assert("spatial fixture has calibration shape", spatial.calibrated === true && Object.keys(spatial.lights || {}).length >= 12 && spatial.lights["light.island_right"].vlm_disagreement === true, spatial);
   assert("spatial fixture does not expose a real LAN URL", !/\b(?:192\.168\.|10\.|172\.(?:1[6-9]|2\d|3[0-1])\.)/.test(String(spatial.frigate_url || "")), spatial.frigate_url);

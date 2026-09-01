@@ -1021,6 +1021,10 @@ function EventContent({ e, onConfirm, onCancel, onUndo, onControlAction, lifecyc
         }
         return <ActionContent id={e.id} title={e.title} service={e.service} target={e.target} attrs={e.attrs} status={e.status} latency={e.latency} reason={e.reason} traceId={e.traceId} onConfirm={onConfirm} onCancel={onCancel} onUndo={onUndo} />;
       case "home":       return <HomeContent text={e.text} streaming={e.streaming} />;
+      // Lighting articulation events carry kind "assistant" (emitter contract
+      // — run-lighting-events-tests asserts the kind). Render them like home
+      // turns; without this case they fell through to null (empty bubbles).
+      case "assistant":  return <HomeContent text={e.text} />;
       case "external":   return <ExternalContent text={e.text} streaming={e.streaming} />;
       case "perception": return <PerceptionContent text={e.text} snapshotUrl={e.snapshotUrl} imageMode={e.imageMode} imageUnavailable={e.imageUnavailable} />;
       case "proactive":  return <ProactiveContent text={e.text} />;

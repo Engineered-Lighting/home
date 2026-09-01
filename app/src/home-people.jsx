@@ -1107,7 +1107,7 @@ function PeopleGraphView({ identities, relationships, endpoint, avatarPresence, 
       }}>
         <div style={{
           fontSize: 32, marginBottom: 12, color: "var(--hg-fg-5)",
-        }}>ï¼‹</div>
+        }}>＋</div>
         <div style={{
           fontFamily: PEOPLE_FONT_MONO, fontSize: 11, letterSpacing: "0.16em",
           textTransform: "uppercase", color: "var(--hg-fg-3)",

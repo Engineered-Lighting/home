@@ -160,7 +160,7 @@
     "turn it down a bit", "pause the music", "resume music", "lights off in the dining room",
     "show driveway camera", "is the garage locked", "good morning home",
     "what is the temperature outside", "set the workshop to focus", "movie scene please",
-    "lower the kitchen to fifty", "is marcelo home", "lock everything", "good night",
+    "lower the kitchen to fifty", "is alex home", "lock everything", "good night",
     "turn the kitchen down to fifty percent",
   ];
 
@@ -335,6 +335,26 @@
     ttfa_ms: { n: 18, p50: 685, p90: 1240, max: 1820 },
   };
 
+  // Supervisor status for the AI tab's AiStackCard. Without this the healthy
+  // sim leaves aiStackOnline/aiStackState at their live defaults (null), and
+  // the card falls through to real-infra empty states ("polling" /
+  // "AI STACK NOT CONFIGURED"). Same shape as the metrics-timeline-healthy
+  // lab scenario. (The STACK_TOKEN half of that warning is mocked at the
+  // render site — renderAi in home-app.jsx treats the token as configured
+  // while sim is active, since window.__STACK_TOKEN is not snapshot-settable.)
+  const HEALTHY_AI_STACK = {
+    overall: "ready",
+    services: [
+      { name: "vllm", container: "running", health: "healthy", probe: "ok", probe_kind: "http", detail: "qwen3-vl-30b" },
+      { name: "wyoming-parakeet", container: "running", health: "healthy", probe: "ok", probe_kind: "http" },
+      { name: "kokoro", container: "running", health: "healthy", probe: "ok", probe_kind: "http" },
+      { name: "vision-sidecar", container: "running", health: "healthy", probe: "ok", probe_kind: "http" },
+    ],
+    uptime_h: 44,
+    vllm_model_loaded: "qwen3-vl-30b",
+    expected_vllm_model: "qwen3-vl-30b",
+  };
+
   const HEALTHY_LAST_TRACE = makeTrace({});
 
   const HEALTHY_IDENTITY = {
@@ -362,7 +382,7 @@
     rooms: {
       kitchen: {
         occupied: true,
-        persons: [{ identity: { name: "Marcelo" }, age_seconds: 14 }],
+        persons: [{ identity: { name: "Alex" }, age_seconds: 14 }],
         perception_age_seconds: 28,
       },
       living_room: {
@@ -424,6 +444,8 @@
     connection:      "online",
     sidecarOnline:   true,
     bridgeOnline:    true,
+    aiStackOnline:   true,
+    aiStackState:    HEALTHY_AI_STACK,
     voice:           { state: "inactive" },
     proactive:       { phase: "idle", away: false, reason: null, room: null, person: null, sightingLevel: "none", sinceTs: 0 },
     events:          makeHealthyChatHistory(),
@@ -1334,9 +1356,9 @@
     // events) that the world-state aggregator drives in production. Lets
     // us verify the UX without standing in front of a real camera.
 
-    "marcelo-in-kitchen": {
-      id: "marcelo-in-kitchen",
-      label: "Marcelo in the kitchen",
+    "alex-in-kitchen": {
+      id: "alex-in-kitchen",
+      label: "Alex in the kitchen",
       description: "face-rec match on kitchen camera, high confidence, fresh",
       preservesChatHistory: false,
       baseline: "healthy",
@@ -1344,16 +1366,16 @@
         events: makeHealthyChatHistory(),
         voice: { state: "inactive" },
         identity: {
-          name: "Marcelo", camera: "kitchen", score: 0.92,
+          name: "Alex", camera: "kitchen", score: 0.92,
           confidence_band: "high", ts: Date.now() / 1000, first_seen_today: false,
         },
         cameraLabels: { kitchen: ["person"] },
       },
     },
 
-    "marcelo-in-office": {
-      id: "marcelo-in-office",
-      label: "Marcelo in the workshop (office)",
+    "alex-in-office": {
+      id: "alex-in-office",
+      label: "Alex in the workshop (office)",
       description: "face-rec match on workshop camera, high confidence",
       preservesChatHistory: false,
       baseline: "healthy",
@@ -1361,7 +1383,7 @@
         events: makeHealthyChatHistory(),
         voice: { state: "inactive" },
         identity: {
-          name: "Marcelo", camera: "workshop", score: 0.88,
+          name: "Alex", camera: "workshop", score: 0.88,
           confidence_band: "high", ts: Date.now() / 1000, first_seen_today: false,
         },
         cameraLabels: { workshop: ["person"] },
@@ -1386,18 +1408,18 @@
 
     "multiple-people": {
       id: "multiple-people",
-      label: "Marcelo + unknown person",
-      description: "Marcelo identified in kitchen, unknown person in living_room",
+      label: "Alex + unknown person",
+      description: "Alex identified in kitchen, unknown person in living_room",
       preservesChatHistory: false,
       baseline: "healthy",
       snapshot: {
         events: makeHealthyChatHistory().concat([
-          { id: uid(), kind: "perception", time: "now", text: "kitchen: Marcelo at the island, reading something" },
+          { id: uid(), kind: "perception", time: "now", text: "kitchen: Alex at the island, reading something" },
           { id: uid(), kind: "perception", time: "now", text: "living_room: someone standing near the window, face obscured" },
         ]),
         voice: { state: "inactive" },
         identity: {
-          name: "Marcelo", camera: "kitchen", score: 0.91,
+          name: "Alex", camera: "kitchen", score: 0.91,
           confidence_band: "high", ts: Date.now() / 1000, first_seen_today: false,
         },
         cameraLabels: { kitchen: ["person"], living_room: ["person"] },
@@ -1406,7 +1428,7 @@
 
     "stale-identity": {
       id: "stale-identity",
-      label: "Marcelo last seen 5 min ago",
+      label: "Alex last seen 5 min ago",
       description: "identity pill is dim, age suffix should be visible",
       preservesChatHistory: false,
       baseline: "healthy",
@@ -1414,7 +1436,7 @@
         events: makeHealthyChatHistory(),
         voice: { state: "inactive" },
         identity: {
-          name: "Marcelo", camera: "workshop", score: 0.87,
+          name: "Alex", camera: "workshop", score: 0.87,
           confidence_band: "high", ts: (Date.now() / 1000) - 300, first_seen_today: false,
         },
         cameraLabels: {},
@@ -1431,7 +1453,7 @@
         events: makeHealthyChatHistory(),
         voice: { state: "inactive" },
         identity: {
-          name: "Marcelo", camera: "living_room", score: 0.45,
+          name: "Alex", camera: "living_room", score: 0.45,
           confidence_band: "medium", ts: Date.now() / 1000, first_seen_today: false,
         },
         cameraLabels: { living_room: ["person"] },
@@ -1483,7 +1505,7 @@
             id: uid(),
             kind: "perception",
             time: "now",
-            text: "kitchen: Marcelo at the island reading something on a tablet",
+            text: "kitchen: Alex at the island reading something on a tablet",
             snapshotUrl: "https://picsum.photos/seed/m1-kitchen/320/200",
             source: "occupancy",
             latencyMs: 1342,
@@ -1491,7 +1513,7 @@
         ]),
         voice: { state: "inactive" },
         identity: {
-          name: "Marcelo", camera: "kitchen", score: 0.92,
+          name: "Alex", camera: "kitchen", score: 0.92,
           confidence_band: "high", ts: Date.now() / 1000, first_seen_today: false,
         },
         cameraLabels: { kitchen: ["person"] },
@@ -1510,7 +1532,7 @@
             id: uid(),
             kind: "perception",
             time: "now",
-            text: "driveway: Marcelo approaching the front door, carrying a package",
+            text: "driveway: Alex approaching the front door, carrying a package",
             snapshotUrl: "https://picsum.photos/seed/m1-driveway/320/200",
             source: "frigate_event",
             latencyMs: 1820,
@@ -1522,7 +1544,7 @@
         ]),
         voice: { state: "inactive" },
         identity: {
-          name: "Marcelo", camera: "driveway", score: 0.87,
+          name: "Alex", camera: "driveway", score: 0.87,
           confidence_band: "high", ts: Date.now() / 1000, first_seen_today: false,
         },
         cameraLabels: { driveway: ["person"] },
@@ -1541,7 +1563,7 @@
             id: uid(),
             kind: "perception",
             time: "now",
-            text: "kitchen: Marcelo at the island, reading on a tablet",
+            text: "kitchen: Alex at the island, reading on a tablet",
             snapshotUrl: "https://picsum.photos/seed/m1-kitchen-2/320/200",
             source: "frigate_event",
             latencyMs: 1200,
@@ -1567,7 +1589,7 @@
         ]),
         voice: { state: "inactive" },
         identity: {
-          name: "Marcelo", camera: "kitchen", score: 0.91,
+          name: "Alex", camera: "kitchen", score: 0.91,
           confidence_band: "high", ts: Date.now() / 1000, first_seen_today: false,
         },
         cameraLabels: { kitchen: ["person"] },
@@ -1767,7 +1789,7 @@
         key_present: true,
         dispatched: "local",
         local_reply_chars: 64,
-        local_reply_snippet: "I see Marcelo standing at the island, holding a coffee mug.",
+        local_reply_snippet: "I see Alex standing at the island, holding a coffee mug.",
         ext_status: null, ext_latency_ms: null,
         ext_reply_chars: null, ext_reply_snippet: null,
       },
@@ -1785,8 +1807,8 @@
         kind: "tool_call",
         conv_id: convId || "sim-conv-0001",
         tool: "find_person",
-        args: { name: "marcelo" },
-        result: { ok: true, latency_ms: 31, suggested_phrasing: "I see Marcelo in the kitchen.", confidence_band: "high" },
+        args: { name: "alex" },
+        result: { ok: true, latency_ms: 31, suggested_phrasing: "I see Alex in the kitchen.", confidence_band: "high" },
         latency_ms: 31,
       },
       {
@@ -1805,7 +1827,7 @@
         result: {
           ok: true, latency_ms: 4820,
           frames_captured: 4, span_s: 3.0,
-          description: "Marcelo crosses the kitchen from left to right.",
+          description: "Alex crosses the kitchen from left to right.",
         },
         latency_ms: 4820,
       },
@@ -1838,11 +1860,11 @@
           name: "kitchen",
           occupied: true,
           persons: [{
-            identity: { name: "Marcelo", confidence: 0.92, confidence_band: "high" },
+            identity: { name: "Alex", confidence: 0.92, confidence_band: "high" },
             age_seconds: 12,
             camera_entity_id: "camera.kitchen",
           }],
-          perception_summary: "Marcelo standing at the island, mug in hand.",
+          perception_summary: "Alex standing at the island, mug in hand.",
           perception_age_seconds: 30,
           frigate_labels: ["person"],
         },
@@ -1880,7 +1902,7 @@
         },
       },
       people: {
-        Marcelo: {
+        Alex: {
           ha_location: "home",
           last_visual_room: "kitchen",
           last_visual_at: tsAgo(12),
@@ -2060,7 +2082,7 @@
     __SIM_DESCRIBE_CLIP_FIXTURE: function (camera, frames, interval_s) {
       const cam = (camera || "kitchen").toLowerCase();
       const sceneByCam = {
-        kitchen:     "Marcelo crosses the kitchen from left to right and reaches for something on the counter.",
+        kitchen:     "Alex crosses the kitchen from left to right and reaches for something on the counter.",
         living_room: "The room is empty across all frames; no motion detected.",
         driveway:    "A delivery van slows at the curb in the first frames, then a person steps out and approaches the door.",
         workshop:    "Someone moves at a workbench, picking up and setting down a tool.",

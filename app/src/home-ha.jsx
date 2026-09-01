@@ -40,6 +40,13 @@ function makeEmitter() {
   };
 }
 
+/* Humanize raw protocol failures at the seam: these messages flow into chat
+ * events verbatim, so lead with plain language and keep the raw HA detail in
+ * parentheses for diagnostics. */
+function humanizeHaFailure(friendly, raw) {
+  return raw ? `${friendly} (${raw})` : friendly;
+}
+
 function buildCallServicePayload(domain, service, data = {}) {
   const targetKeys = new Set(["entity_id", "area_id", "device_id"]);
   const target = {};
@@ -167,7 +174,10 @@ class HAClient {
           this._suppressReconnect = true;
           this._connectionEmitter.emit({ state: "auth_invalid", message: msg.message });
           resolved = true;
-          reject(new Error(msg.message || "auth invalid"));
+          reject(new Error(humanizeHaFailure(
+            "Home Assistant rejected the access token — use /token to update it",
+            msg.message,
+          )));
           try { ws.close(); } catch {}
           return;
         }
@@ -184,7 +194,10 @@ class HAClient {
             this._runs.delete(msg.id);
             run.onResult({
               success: false,
-              error: { message: msg.event.data?.message || "pipeline error" },
+              error: { message: humanizeHaFailure(
+                "the voice pipeline hit an error — try again or check /metrics",
+                msg.event.data?.message,
+              ) },
             });
           }
           return;

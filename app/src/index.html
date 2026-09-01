@@ -412,7 +412,26 @@
           'white-space:pre-wrap;max-height:45vh;overflow:auto;' +
           'user-select:text;';
         (document.body || document.documentElement).appendChild(el);
-        el.textContent = msg;
+        var lead = document.createElement('div');
+        lead.textContent = "Home couldn't finish starting. Reload to try again.";
+        lead.style.cssText = 'font-weight:bold;margin-bottom:6px;';
+        el.appendChild(lead);
+        var tech = document.createElement('div');
+        tech.textContent = msg;
+        el.appendChild(tech);
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = 'Reload now';
+        btn.style.cssText =
+          'font:11px/1 Consolas,monospace;color:#0c1418;background:#8fd0e6;' +
+          'border:0;padding:6px 12px;cursor:pointer;border-radius:3px;' +
+          'margin-top:8px;';
+        btn.addEventListener('click', function () {
+          btn.textContent = 'Reloading…';
+          btn.disabled = true;
+          unregisterSwAndReload();
+        });
+        el.appendChild(btn);
       }
 
       /* Full escape hatch: unregister every service worker, then reload. Lets a
@@ -707,7 +726,8 @@
           ' · typeof HomeApp: ' + typeof window.HomeApp +
           ' · typeof __homeMount: ' + typeof window.__homeMount +
           ' · mount retries: ' + mountRetries +
-          '\nIf a component crashed during render, the error is in the console above.');
+          '\nReloading usually fixes this. If it keeps happening, a component ' +
+          'may have crashed during render — details are in the browser console.');
       }
       setTimeout(watchdog, 2000);
     })();

@@ -316,7 +316,7 @@
       const x = 8.5 + 4.5 * (0.5 - 0.5 * Math.cos(k * Math.PI * 2));
       const y = 2.0 + 3.5 * (0.5 - 0.5 * Math.cos(k * Math.PI * 4)) / 2;
       track = {
-        id: "t_sim", person: "marcelo", state: "active",
+        id: "t_sim", person: "alex", state: "active",
         pos: [Math.round(x * 100) / 100, Math.round(y * 100) / 100, 0],
         vel: null, cov: [[0.05, 0], [0, 0.06]], room: "living_room", zone: null,
         source_cams: ["living_room"], conf: 0.9, conf_reason: "good",
@@ -324,7 +324,7 @@
       };
     } else {
       track = {
-        id: "t_sim", person: "marcelo", state: "room_only",
+        id: "t_sim", person: "alex", state: "room_only",
         pos: null, vel: null, cov: null, room: "kitchen", zone: null,
         source_cams: ["kitchen"], conf: 0.6, conf_reason: "room_only",
         activity: t > 18 ? "cooking" : null, activity_conf: 0.7, activity_source: "rules",

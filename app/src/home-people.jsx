@@ -380,18 +380,18 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
     }
   }, []);
 
-  // Escape-to-close — only attaches when open
-  useEffect(() => {
-    if (!open) return undefined;
-    function onKey(e) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  // Overlay layer: topmost-only Escape + Tab trap + focus-in/restore via
+  // HomeOverlay (no per-overlay window listener — stacked layers like the
+  // detail panel and avatar modal each claim their own Escape press).
+  const peopleRootRef = useRef(null);
+  window.HomeOverlay.useOverlayLayer({
+    key: "people-root",
+    active: !!open,
+    onEscape: () => onClose(),
+    rootRef: peopleRootRef,
+    trap: true,
+    initialFocus: "root",
+  });
 
   // Initial load + refresh on open. Sim mode short-circuits to fixture data.
   const refresh = useCallback(async () => {
@@ -784,6 +784,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
 
   const overlay = (
     <div
+      ref={peopleRootRef}
       data-theme={spatialMode ? "dark" : undefined}
       style={{
         position: "fixed",
@@ -2478,6 +2479,19 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
     null,
   );
 
+  // Overlay layer: stacks above people-root so one Escape press closes only
+  // the panel, not the whole overlay. Non-trapping side panel — aria-modal
+  // stays "false".
+  const detailRootRef = useRef(null);
+  window.HomeOverlay.useOverlayLayer({
+    key: "people-detail",
+    active: !!identityUuid,
+    onEscape: () => onClose(),
+    rootRef: detailRootRef,
+    trap: false,
+    initialFocus: "root",
+  });
+
   // Load detail on mount / when uuid changes
   useEffect(() => {
     // Clear before any await so a prior principal's detail never remains
@@ -2666,6 +2680,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
 
   const panel = (
     <div
+      ref={detailRootRef}
       className="hg-scroll"
       style={{
         position: "fixed", top: 0, right: 0, bottom: 0,
@@ -3131,11 +3146,22 @@ function AvatarCropModal({ identity, endpoint, token, operationScopeKey, onClose
     `${operationScopeKey}:avatar:${identity.uuid}`,
   );
 
-  // Esc closes
+  // Overlay layer: Escape/Tab-trap/focus via HomeOverlay — topmost-only, so
+  // one press closes the modal, not the panel/overlay beneath it. The modal
+  // is mounted only while shown (showAvatarModal && ident), so active: true.
+  const modalRootRef = useRef(null);
+  window.HomeOverlay.useOverlayLayer({
+    key: "people-avatar",
+    active: true,
+    onEscape: () => onClose(),
+    rootRef: modalRootRef,
+    trap: true,
+    initialFocus: saveBtnRef,
+  });
+
+  // Arrow keys nudge the crop (= shift the image opposite direction)
   useEffect(() => {
     function onKey(e) {
-      if (e.key === "Escape") { e.preventDefault(); onClose(); return; }
-      // Arrow keys nudge the crop (= shift the image opposite direction)
       if (!hasImage) return;
       const step = e.shiftKey ? 10 : 2;
       if (e.key === "ArrowUp")    { setOffset((o) => ({ x: o.x, y: o.y + step })); e.preventDefault(); }
@@ -3145,7 +3171,7 @@ function AvatarCropModal({ identity, endpoint, token, operationScopeKey, onClose
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, hasImage]);
+  }, [hasImage]);
 
   // Focus management — move focus to Save when image is ready.
   useEffect(() => {
@@ -3336,6 +3362,7 @@ function AvatarCropModal({ identity, endpoint, token, operationScopeKey, onClose
 
   const modal = (
     <div
+      ref={modalRootRef}
       role="dialog"
       aria-modal="true"
       aria-label={`Avatar editor for ${identity.display_name}`}

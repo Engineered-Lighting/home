@@ -109,7 +109,19 @@ export function createRig(camera) {
         return d;
     }
 
+    /* prefers-reduced-motion: camera flights are full-viewport vestibular
+     * triggers CSS can't reach (WebGL) — collapse every tween to a jump cut
+     * (1ms keeps the tween-completion bookkeeping intact) and disable the
+     * ambient hover micro-pivot. Same pattern as home-3d/markers.js. */
+    function reducedMotion() {
+        try {
+            return !!(window.matchMedia
+                && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+        } catch (_) { return false; }
+    }
+
     function startTween(toAz, toEl, toRadius, dur = 450) {
+        if (reducedMotion()) dur = 1;
         tween = {
             t: 0, dur,
             fromAz: cur.az, dAz: shortestAngle(cur.az, toAz),
@@ -237,6 +249,7 @@ export function createRig(camera) {
             }
         },
         hoverPivot(nx, ny) { // normalized -1..1
+            if (reducedMotion()) { nx = 0; ny = 0; } // no ambient parallax
             state.pivot.tx = nx * PIVOT_MAX;
             state.pivot.ty = ny * PIVOT_MAX;
         },
@@ -318,6 +331,7 @@ export function createRig(camera) {
          * arrival). The pose is HELD (orbit suspended) until
          * returnToOverview() flies back and unlocks. */
         flyToPose({ position, quaternion, fov, dur = 900, projection = null }) {
+            if (reducedMotion()) dur = 1; // jump cut — the swoop is a vestibular hazard
             state.locked = true;
             const fromPos = camera.position.clone();
             const toPos = position.clone();

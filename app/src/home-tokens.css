@@ -322,3 +322,19 @@ a[href]:focus-visible,
 /* Phase 4 (screen-reader audibility): visually-hidden text for landmarks
    and labels that sighted users don't need duplicated on screen. */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* ============================================================================
+ * Reduced motion — global. Collapses every keyframe animation (caret blink,
+ * pulses, breathe/speak glows, waveform bars, fade-ups, boot pulse) and CSS
+ * transition to an imperceptible tick. Covers inline style={{animation}}
+ * usages too. The apartment view keeps its own scoped block (contract-
+ * pinned) and the WebGL camera is gated separately in home-3d/rig.js —
+ * CSS cannot reach it.
+ * ========================================================================= */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

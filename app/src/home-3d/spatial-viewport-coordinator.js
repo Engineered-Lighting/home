@@ -325,6 +325,7 @@ export function createSpatialViewportCoordinator({
             intentId: context.intentId,
             intentRevision: context.intentRevision,
           });
+          await ignoreHookFailure(targetAdapter, "cancel", context);
         }
         return Object.freeze({ status: "cancelled", intentId: context.intentId });
       }

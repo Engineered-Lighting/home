@@ -114,6 +114,15 @@ function aptConfirmedWorldAnchor(simActive) {
   }
 }
 
+function aptSpatialAvailability(scale) {
+  if (scale === "parcel") return "confirmed home marker; parcel and building data unavailable";
+  if (scale === "city") return "confirmed home marker; city detail unavailable";
+  if (scale === "country" || scale === "planet") {
+    return "bundled Natural Earth; ellipsoid terrain";
+  }
+  return "Apartment mesh or splat";
+}
+
 function aptCameraAspect(dev) {
   const size = dev?.camera?.intrinsics?.image_size;
   if (Array.isArray(size) && +size[0] > 0 && +size[1] > 0) return +size[0] / +size[1];
@@ -353,6 +362,7 @@ function aptShouldModePrewarm() {
 function AptHudButton({ label, onClick, active, disabled, title, mobile = readAptViewport().mobile }) {
   return (
     <button
+      data-apt-hud-button="1"
       onClick={onClick} disabled={disabled} title={title} className="hg-focusable"
       style={{
         background: active ? "var(--hg-ice)" : "rgba(10,12,16,0.55)",
@@ -746,10 +756,13 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
   const viewRootRef = useRef(null);
   const engineRef = useRef(null);
   const worldSurfaceRef = useRef(null);
+  const worldSurfacePendingRef = useRef(null);
   const worldSurfacePromiseRef = useRef(null);
+  const confirmedWorldAnchorRef = useRef(null);
   const worldAnchorKeyRef = useRef("");
   const spatialCoordinatorRef = useRef(null);
   const spatialCoordinatorPromiseRef = useRef(null);
+  const spatialLifecycleRevisionRef = useRef(0);
   const spatialIntentRef = useRef(0);
   const zoomRequestRef = useRef(null);
   const detachRef = useRef(null);
@@ -822,28 +835,63 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
   }, []);
 
   const ensureSpatialCoordinator = useCallback(async (confirmedAnchor) => {
+    // Keep the lifecycle adapter stable while allowing a newly confirmed site
+    // revision to replace the anchor used on the next Apartment -> world entry.
+    confirmedWorldAnchorRef.current = confirmedAnchor;
     if (spatialCoordinatorRef.current) return spatialCoordinatorRef.current;
     if (spatialCoordinatorPromiseRef.current) return spatialCoordinatorPromiseRef.current;
     const engine = engineRef.current;
     const worldHost = worldHostRef.current;
     if (!engine || !worldHost) throw new Error("Apartment viewport is not ready");
+    const lifecycleRevision = spatialLifecycleRevisionRef.current;
+    const requireCurrentLifecycle = () => {
+      if (spatialLifecycleRevisionRef.current !== lifecycleRevision) {
+        const error = new Error("Apartment spatial viewport lifecycle changed");
+        error.name = "AbortError";
+        throw error;
+      }
+    };
 
     const promise = (async () => {
       let surface = worldSurfaceRef.current;
       if (!surface) {
-        worldSurfacePromiseRef.current ||= (async () => {
-          const next = await engine.createWorldSurface();
-          await next.mount(worldHost);
-          worldSurfaceRef.current = next;
-          return next;
-        })();
-        surface = await worldSurfacePromiseRef.current;
+        let surfacePromise = worldSurfacePromiseRef.current;
+        if (!surfacePromise) {
+          surfacePromise = (async () => {
+            const next = await engine.createWorldSurface();
+            worldSurfacePendingRef.current = next;
+            try {
+              requireCurrentLifecycle();
+              await next.mount(worldHost);
+              requireCurrentLifecycle();
+              worldSurfaceRef.current = next;
+              return next;
+            } catch (error) {
+              next.dispose?.();
+              throw error;
+            } finally {
+              if (worldSurfacePendingRef.current === next) worldSurfacePendingRef.current = null;
+            }
+          })();
+          worldSurfacePromiseRef.current = surfacePromise;
+        }
+        try {
+          surface = await surfacePromise;
+        } catch (error) {
+          if (worldSurfacePromiseRef.current === surfacePromise) {
+            worldSurfacePromiseRef.current = null;
+          }
+          throw error;
+        }
       }
+      requireCurrentLifecycle();
 
       const applyAnchor = () => {
-        const key = `${confirmedAnchor.latitude}:${confirmedAnchor.longitude}:${confirmedAnchor.altitudeMeters || 0}`;
+        const activeAnchor = confirmedWorldAnchorRef.current;
+        if (!activeAnchor) throw new Error("Apartment world anchor is unavailable");
+        const key = `${activeAnchor.latitude}:${activeAnchor.longitude}:${activeAnchor.altitudeMeters || 0}`;
         if (worldAnchorKeyRef.current === key) return;
-        surface.setAnchor(confirmedAnchor);
+        surface.setAnchor(activeAnchor);
         worldAnchorKeyRef.current = key;
       };
 
@@ -865,7 +913,10 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
           engine.setRunning(false);
         },
         cancel(context) {
-          if (context.fromSurface === "world") engine.setRunning(false);
+          if (context.fromSurface === "world") {
+            engine.setRunning(false);
+            setSpatialScale(context.fromScale);
+          }
         },
       };
 
@@ -880,7 +931,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
             motion: context.durationMs === 0 ? "cut" : "animate",
             durationMs: context.durationMs,
           });
-          if (context.signal.aborted || result.status === "superseded") {
+          if (context.signal.aborted || result.status !== "settled") {
             const error = new Error("spatial viewport transition superseded");
             error.name = "AbortError";
             throw error;
@@ -888,9 +939,6 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         },
         async activate(context) {
           if (context.signal.aborted) return;
-          setCardId(null);
-          setHoverId(null);
-          setAnchors({});
           setSpatialScale(context.toScale);
           if (context.fromSurface !== context.toSurface) {
             await aptAbortableDelay(context.durationMs, context.signal);
@@ -900,7 +948,17 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
           surface.setRunning(false);
         },
         cancel(context) {
-          if (context.fromSurface === "apartment") surface.setRunning(false);
+          setSpatialScale(context.fromScale);
+          if (context.fromSurface === "apartment") {
+            surface.setRunning(false);
+            return undefined;
+          }
+          return surface.navigate({
+            intentId: `${context.intentId}-rollback`,
+            band: context.fromScale,
+            motion: "cut",
+            durationMs: 0,
+          });
         },
       };
 
@@ -910,8 +968,15 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         reducedMotion: window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true,
         onStateChange(next) {
           setSpatialTransition(next.phase);
+          if (next.phase === "idle") setSpatialScale(next.committedScale);
         },
       });
+      try {
+        requireCurrentLifecycle();
+      } catch (error) {
+        coordinator.dispose?.();
+        throw error;
+      }
       spatialCoordinatorRef.current = coordinator;
       return coordinator;
     })();
@@ -1054,12 +1119,16 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       setAimMode(false); setAimDestination(null);
       engineRef.current?.overlay?.setAimBeam?.(null);
       setEditing(false);
+      spatialLifecycleRevisionRef.current += 1;
       spatialCoordinatorRef.current?.dispose?.();
       spatialCoordinatorRef.current = null;
       spatialCoordinatorPromiseRef.current = null;
+      worldSurfacePendingRef.current?.dispose?.();
+      worldSurfacePendingRef.current = null;
       worldSurfaceRef.current?.dispose?.();
       worldSurfaceRef.current = null;
       worldSurfacePromiseRef.current = null;
+      confirmedWorldAnchorRef.current = null;
       worldAnchorKeyRef.current = "";
       setSpatialScale("apartment");
       setSpatialTransition("idle");
@@ -1652,13 +1721,19 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       coordinatorState?.committedScale !== "apartment"
       || coordinatorState?.phase !== "idle"
     )) {
-      const result = await existingCoordinator.requestSemanticZoom(direction, {
-        intentId: `apartment-viewport-${++spatialIntentRef.current}`,
-      });
-      if (result.status === "failed") {
-        showToast("world view unavailable - Apartment remains active", { tone: "error" });
+      try {
+        const result = await existingCoordinator.requestSemanticZoom(direction, {
+          intentId: `apartment-viewport-${++spatialIntentRef.current}`,
+        });
+        if (result.status === "failed") {
+          showToast("world view could not change scale", { tone: "error" });
+        }
+        return result;
+      } catch (error) {
+        console.warn("[apartment] spatial viewport zoom failed:", error?.message || error);
+        showToast("world view could not change scale", { tone: "error" });
+        return undefined;
       }
-      return result;
     }
 
     if (rig.inCameraPose?.()) {
@@ -1690,6 +1765,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       }
       return result;
     } catch (error) {
+      if (error?.name === "AbortError") return undefined;
       console.warn("[apartment] world viewport handoff failed:", error?.message || error);
       engineRef.current?.setRunning(true);
       setSpatialScale("apartment");
@@ -2146,6 +2222,11 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         @media (max-width: 699px) {
           [data-apt-aim-inspector="1"] button,
           [data-apt-aim-inspector="1"] select { min-height: 44px !important; }
+          [data-apt-hud-button="1"] { min-height: 44px !important; }
+          /* 24px view-angle dots keep their size; an invisible halo grows the
+             touch box to 44px without disturbing the row layout */
+          [data-apt-az-dot="1"] { position: relative; }
+          [data-apt-az-dot="1"]::before { content: ""; position: absolute; inset: -10px; }
         }
       `}</style>
 
@@ -2184,6 +2265,23 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         }}
       />
       <div
+        data-apt-world-chrome-scrim="1"
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          inset: 0,
+          zIndex: 3,
+          pointerEvents: "none",
+          opacity: spatialScale === "apartment" ? 0 : 1,
+          visibility: spatialScale === "apartment" && spatialTransition === "idle" ? "hidden" : "visible",
+          transition: "opacity 420ms ease",
+          background: [
+            "linear-gradient(to bottom, rgba(3,9,14,0.82) 0, rgba(3,9,14,0.58) 64px, transparent 170px)",
+            "linear-gradient(to top, rgba(3,9,14,0.86) 0, rgba(3,9,14,0.62) 76px, transparent 190px)",
+          ].join(", "),
+        }}
+      />
+      <div
         role="status"
         aria-live="polite"
         aria-atomic="true"
@@ -2198,7 +2296,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         }}
       >
         {spatialTransition === "idle"
-          ? `Spatial viewport: ${spatialScale}`
+          ? `Spatial viewport: ${spatialScale}. ${aptSpatialAvailability(spatialScale)}`
           : "Spatial viewport changing scale"}
       </div>
 
@@ -2356,12 +2454,14 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
           flexDirection: mobile ? "column" : "row",
           zIndex: 5,
         }}>
-          <div style={{ fontFamily: APT_FONT_MONO, fontSize: 9, color: "var(--hg-fg-5)",
+          <div style={{ fontFamily: APT_FONT_MONO, fontSize: 9,
+                        color: spatialScale === "apartment" ? "var(--hg-fg-5)" : "var(--hg-fg-2)",
                         letterSpacing: "0.08em", lineHeight: 1.6, minWidth: mobile ? 0 : 170,
-                        display: mobile ? "none" : "block" }}>
+                        textAlign: mobile ? "center" : "left",
+                        display: mobile && spatialScale === "apartment" ? "none" : "block" }}>
             {spatialScale !== "apartment" ? (<>
-              world · {spatialScale} · bundled planet
-              <br />terrain · ellipsoid · parcel unclaimed
+              world · {spatialScale}
+              <br />{aptSpatialAvailability(spatialScale).replace(/;/g, " ·")}
             </>) : stats && (<>
               {Math.round(stats.fps)} fps · {(stats.points / 1000).toFixed(0)}k pts · dpr {stats.pixelRatio}
               {stats.calls != null ? ` · ${stats.calls} dc` : ""}
@@ -2409,10 +2509,11 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
               {modeLoading ? `loading ${modeLoading === "splat" ? "photo" : modeLoading}` : modeError.message}
             </div>
           )}
-          <div style={{ textAlign: "right", pointerEvents: "auto", display: mobile ? "none" : "block" }}>
-            <div style={{ display: "flex", gap: 5, justifyContent: "flex-end", marginBottom: 6 }}>
+          <div style={{ textAlign: "right", pointerEvents: "auto", maxWidth: "100%" }}>
+            <div style={{ display: "flex", gap: mobile ? 12 : 5, flexWrap: "wrap",
+                          justifyContent: mobile ? "center" : "flex-end", marginBottom: 6 }}>
               {Array.from({ length: 8 }).map((_, i) => (
-                <button key={i} className="hg-focusable"
+                <button key={i} className="hg-focusable" data-apt-az-dot="1"
                   aria-label={"view angle " + (i + 1) + " of 8"}
                   aria-pressed={i === azIdx}
                   disabled={spatialScale !== "apartment"}
@@ -2424,7 +2525,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
               ))}
             </div>
             <span style={{ fontFamily: APT_FONT_MONO, fontSize: 8.5, color: "var(--hg-fg-5)",
-                           letterSpacing: "0.1em" }}>
+                           letterSpacing: "0.1em", display: mobile ? "none" : "inline" }}>
               {spatialScale === "apartment"
                 ? "drag · wheel zoom · ←→↑↓ · h home · dbl-click toggles lights · n/p select device"
                 : "wheel zoom · + / - scale · zoom in to return to apartment"}
@@ -2621,6 +2722,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
           liveReview={liveReview}
           liveComparison={liveComparison}
           onCompareLive={compareLiveModel}
+          mobile={mobile}
         />
       )}
 

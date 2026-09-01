@@ -1255,7 +1255,7 @@ function DiagModal({ open, onClose, bridgeHealth, visionHealth, traceSummary, la
             letterSpacing: "0.22em", textTransform: "uppercase",
             fontSize: 10,
           }}>diagnostics</span>
-          <button aria-label="close diagnostics" onClick={onClose} className="hg-focusable" style={{
+          <button aria-label="close diagnostics" className="hg-focusable hg-mobile-touch" onClick={onClose} style={{
             background: "transparent", border: "none",
             color: "var(--hg-fg-3)", fontSize: 14, cursor: "pointer",
             padding: 4,

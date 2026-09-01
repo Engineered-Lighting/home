@@ -976,7 +976,7 @@
             <button
               type="button"
               onClick={(ev) => runAction("acknowledge", ev)}
-              className="hg-focusable"
+              className="hg-focusable hg-mobile-touch"
               style={{
                 background: "transparent",
                 border: "1px solid var(--hg-border-soft)",
@@ -991,7 +991,7 @@
             <button
               type="button"
               onClick={(ev) => runAction("dismiss", ev)}
-              className="hg-focusable"
+              className="hg-focusable hg-mobile-touch"
               style={{
                 background: "transparent",
                 border: "1px solid var(--hg-border-soft)",

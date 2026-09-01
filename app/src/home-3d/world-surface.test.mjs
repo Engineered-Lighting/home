@@ -15,6 +15,14 @@ import {
 
 const surfacePath = fileURLToPath(new URL('./world-surface.js', import.meta.url));
 const surfaceSource = readFileSync(surfacePath, 'utf8');
+const naturalEarthTilemapPath = fileURLToPath(new URL(
+    '../spatial-spike/vendor/cesium/Assets/Textures/NaturalEarthII/tilemapresource.xml',
+    import.meta.url,
+));
+const cesiumNoticePath = fileURLToPath(new URL(
+    '../spatial-spike/vendor/licenses/cesium-LICENSE.md',
+    import.meta.url,
+));
 
 test('camera bands form the reversible parcel-to-planet sequence', () => {
     assert.deepEqual(WORLD_CAMERA_BAND_ORDER, ['parcel', 'city', 'country', 'planet']);
@@ -113,21 +121,40 @@ test('surface owns only a canvas layer and never replaces Apartment viewport con
     assert.doesNotMatch(surfaceSource, /replaceChildren|innerHTML|outerHTML/);
     assert.doesNotMatch(surfaceSource, /createElement\(['"](?:button|form|input|select|textarea|nav|aside)['"]\)/);
     assert.match(surfaceSource, /screenSpaceCameraController\.enableInputs = false/);
+    assert.match(surfaceSource, /pointerEvents: 'none'/);
+    assert.match(surfaceSource, /blurActiveElementOnCanvasFocus: false/);
+    assert.match(surfaceSource, /showRenderLoopErrors: false/);
+    assert.doesNotMatch(surfaceSource, /outline:\s*['"]none['"]/);
 });
 
 test('default rendering path is local-only and makes no provider request', () => {
     assert.match(surfaceSource, /\.\.\/spatial-spike\/vendor\/cesium\//);
-    assert.match(surfaceSource, /\.\.\/spatial-spike\/vendor\/fixtures\/offline-planet\.png/);
+    assert.match(surfaceSource, /Assets\/Textures\/NaturalEarthII\//);
     assert.match(surfaceSource, /baseLayer: false/);
-    assert.match(surfaceSource, /SingleTileImageryProvider\.fromUrl/);
+    assert.match(surfaceSource, /TileMapServiceImageryProvider\.fromUrl/);
+    assert.doesNotMatch(surfaceSource, /SingleTileImageryProvider\.fromUrl|offline-planet\.png/);
     assert.doesNotMatch(surfaceSource, /\bfetch\s*\(|XMLHttpRequest|WebSocket|EventSource/);
     assert.doesNotMatch(surfaceSource, /https?:\/\//i);
     assert.doesNotMatch(surfaceSource, /OpenStreetMap|BingMaps|GoogleMaps|ArcGis/i);
 });
 
+test('bundled Natural Earth tiles and their public-domain notice are present', () => {
+    const tilemap = readFileSync(naturalEarthTilemapPath, 'utf8');
+    const notice = readFileSync(cesiumNoticePath, 'utf8');
+    assert.match(tilemap, /<SRS>EPSG:4326<\/SRS>/);
+    assert.match(tilemap, /<TileSet href="2"/);
+    assert.match(notice, /Public domain data from Natural Earth/);
+});
+
 test('parcel rendering explicitly refuses geometry and accuracy claims', () => {
     assert.match(surfaceSource, /parcelGeometry: 'not-provided'/);
     assert.match(surfaceSource, /No parcel outline,[\s\S]*accuracy claim is synthesized/);
-    assert.match(surfaceSource, /imagery: 'bundled-offline-planet'/);
+    assert.match(surfaceSource, /imagery: 'bundled-natural-earth'/);
     assert.match(surfaceSource, /terrain: 'ellipsoid'/);
+});
+
+test('invalid navigation input is rejected before it can supersede camera authority', () => {
+    const validation = surfaceSource.indexOf("navigation durationMs must be finite");
+    const ownership = surfaceSource.indexOf("intentAuthority.begin({ intentId, band })");
+    assert.ok(validation > 0 && ownership > validation);
 });

@@ -373,7 +373,7 @@ function QuickChip({ label, onClick, disabled }) {
     <button
       disabled={disabled}
       onClick={disabled ? undefined : onClick}
-      className="hg-focusable"
+      className="hg-focusable hg-mobile-touch"
       style={{
         background: "transparent",
         border: "1px solid var(--hg-border)",
@@ -665,7 +665,7 @@ function LightControlCard({ ctx, lifecycle, onControlAction }) {
           {status === "error" && (
             <button
               onClick={() => { setStatus("idle"); setStatusMsg(""); }}
-              className="hg-focusable"
+              className="hg-focusable hg-mobile-touch"
               style={{ marginLeft: 8, background: "transparent", border: "1px solid var(--hg-border)", color: "var(--hg-fg-3)", padding: "1px 7px", borderRadius: 3, fontFamily: HC_MONO, fontSize: 9, cursor: "pointer", textTransform: "uppercase", letterSpacing: "0.08em" }}
             >dismiss</button>
           )}
@@ -744,7 +744,7 @@ function TransportBtn({ children, onClick, primary, disabled, ariaLabel }) {
       aria-label={ariaLabel}
       disabled={disabled}
       onClick={disabled ? undefined : onClick}
-      className="hg-focusable"
+      className="hg-focusable hg-mobile-touch"
       style={{
         width: sz, height: sz, borderRadius: "50%", padding: 0,
         display: "inline-flex", alignItems: "center", justifyContent: "center",
@@ -764,7 +764,7 @@ function MuteBtn({ muted, onClick, disabled }) {
       aria-pressed={muted}
       disabled={disabled}
       onClick={disabled ? undefined : onClick}
-      className="hg-focusable"
+      className="hg-focusable hg-mobile-touch"
       title={muted ? "unmute" : "mute"}
       style={{
         background: "transparent",
@@ -783,7 +783,7 @@ function SpeakerChip({ label, on, disabled, onClick }) {
     <button
       disabled={disabled}
       onClick={disabled ? undefined : onClick}
-      className="hg-focusable"
+      className="hg-focusable hg-mobile-touch"
       style={{
         display: "inline-flex", alignItems: "center", gap: 5,
         background: "transparent",
@@ -1094,7 +1094,7 @@ function MediaControlCard({ ctx, lifecycle, onControlAction }) {
           {status === "error" && (
             <button
               onClick={() => { setStatus("idle"); setStatusMsg(""); }}
-              className="hg-focusable"
+              className="hg-focusable hg-mobile-touch"
               style={{ marginLeft: 8, background: "transparent", border: "1px solid var(--hg-border)", color: "var(--hg-fg-3)", padding: "1px 7px", borderRadius: 3, fontFamily: HC_MONO, fontSize: 9, cursor: "pointer", textTransform: "uppercase", letterSpacing: "0.08em" }}
             >dismiss</button>
           )}

@@ -53,7 +53,7 @@ function WsSection({ title, count, defaultOpen = true, children }) {
     }}>
       <button
         onClick={() => setOpen(o => !o)}
-        className="hg-focusable"
+        className="hg-focusable hg-mobile-touch"
         style={{
           background: "transparent", border: "none", padding: 0,
           color: "var(--hg-fg-2)",
@@ -468,6 +468,7 @@ function HomeWorldStateDrawer({ open, onClose, endpoint, token, sim, refreshInte
             }}>
               <span>room: {roomFilter}</span>
               <button
+                className="hg-mobile-touch"
                 onClick={() => setRoomFilter(null)}
                 title="clear room filter"
                 style={{
@@ -516,7 +517,7 @@ function HomeWorldStateDrawer({ open, onClose, endpoint, token, sim, refreshInte
           <button
             onClick={refreshManual}
             title="Refresh now"
-            className="hg-focusable"
+            className="hg-focusable hg-mobile-touch"
             style={{
               background: "transparent", border: "1px solid var(--hg-border-soft)",
               color: "var(--hg-fg-3)", padding: "4px 9px",
@@ -527,7 +528,7 @@ function HomeWorldStateDrawer({ open, onClose, endpoint, token, sim, refreshInte
           <button
             onClick={onClose}
             aria-label="Close"
-            className="hg-focusable"
+            className="hg-focusable hg-mobile-touch"
             style={{
               background: "transparent", border: "1px solid var(--hg-border-soft)",
               color: "var(--hg-fg-2)", padding: "4px 11px",

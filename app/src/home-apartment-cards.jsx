@@ -108,6 +108,9 @@ function AptControlCard({ device, state, screen, bounds, onClose, onService, onF
   const y = Math.min(Math.max(screen.y - 30, mobile ? 74 : 56), Math.max(mobile ? 74 : 56, maxHeight - (mobile ? 260 : 220)));
 
   const row = { display: "flex", alignItems: "center", gap: 8, marginTop: 8 };
+  /* phones: the .hg-slider thumb/track hit is padding-based, so the slider
+     rows only need to guarantee the 44px vertical touch box */
+  const sliderRow = mobile ? { ...row, minHeight: 44 } : row;
   const stopCardEvent = (e) => { e?.stopPropagation?.(); };
   const commitBri = (e) => {
     stopCardEvent(e);
@@ -170,7 +173,7 @@ function AptControlCard({ device, state, screen, bounds, onClose, onService, onF
           onPointerUp={stopCardEvent}
           onTouchStart={stopCardEvent}
           onClick={(e) => { stopCardEvent(e); onClose?.(); }}
-          className="hg-focusable" style={{
+          className="hg-focusable hg-mobile-touch" style={{
           marginLeft: 10, background: "transparent", border: "none",
           color: "var(--hg-fg-4)", cursor: "pointer", fontFamily: CARD_FONT_MONO,
         }}>×</button>
@@ -193,7 +196,7 @@ function AptControlCard({ device, state, screen, bounds, onClose, onService, onF
                 { entity_id: device.ha_entity_id }), true)}
           </div>
           {isLight && on && (
-            <div style={row}>
+            <div style={sliderRow}>
               <span style={{ fontFamily: CARD_FONT_MONO, fontSize: 9, color: "var(--hg-fg-4)" }}>bri</span>
               <input type="range" min="1" max="100" value={bri}
                 aria-label="brightness" className="hg-slider"
@@ -222,7 +225,7 @@ function AptControlCard({ device, state, screen, bounds, onClose, onService, onF
               onService("media_player", mediaOff ? "turn_on" : "turn_off",
                 { entity_id: device.ha_entity_id }))}
           </div>
-          <div style={row}>
+          <div style={sliderRow}>
             <span style={{ fontFamily: CARD_FONT_MONO, fontSize: 9, color: "var(--hg-fg-4)" }}>vol</span>
             <input type="range" min="0" max="100" value={vol}
               aria-label="volume" className="hg-slider"

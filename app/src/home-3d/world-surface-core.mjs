@@ -17,19 +17,19 @@ const CAMERA_BAND_DEFINITIONS = {
         rangeMeters: 42_000,
         pitchDegrees: -80,
         durationMs: 1_050,
-        representation: 'offline-planet',
+        representation: 'bundled-natural-earth',
     },
     country: {
-        rangeMeters: 1_650_000,
+        rangeMeters: 4_800_000,
         pitchDegrees: -88,
         durationMs: 1_250,
-        representation: 'offline-planet',
+        representation: 'bundled-natural-earth',
     },
     planet: {
         rangeMeters: 18_000_000,
         pitchDegrees: -90,
         durationMs: 1_450,
-        representation: 'offline-planet',
+        representation: 'bundled-natural-earth',
     },
 };
 

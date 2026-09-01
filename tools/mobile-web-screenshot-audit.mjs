@@ -492,7 +492,10 @@ async function closeOverlays(page) {
 }
 
 async function commandInput(page) {
-  const byPlaceholder = page.locator('input[placeholder="type or /command"]');
+  // The placeholder is reactive (cleared while a slash command is typed), so
+  // prefer the stable accessible name; keep the placeholder as fallback.
+  const byLabel = page.locator('input[aria-label="Command input"]');
+  const byPlaceholder = byLabel.or(page.locator('input[placeholder="type or /command"]'));
   if (await byPlaceholder.count()) return byPlaceholder.last();
   return page.locator("input").last();
 }
@@ -1533,7 +1536,7 @@ const DOM_HELPERS = `
     return true;
   };
   const input = () => {
-    const exact = document.querySelector('input[placeholder="type or /command"]');
+    const exact = document.querySelector('input[aria-label="Command input"]') || document.querySelector('input[placeholder="type or /command"]');
     if (exact) return exact;
     const inputs = Array.from(document.querySelectorAll("input"));
     return inputs[inputs.length - 1] || null;
@@ -2126,7 +2129,7 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors, profile = 
       await step("05-slash-palette", "Slash command palette", async () => {
         const ok = await cdpEval(client, `(() => {
           const inputs = Array.from(document.querySelectorAll("input"));
-          const el = document.querySelector('input[placeholder="type or /command"]') || inputs[inputs.length - 1];
+          const el = document.querySelector('input[aria-label="Command input"]') || document.querySelector('input[placeholder="type or /command"]') || inputs[inputs.length - 1];
           if (!el) return false;
           el.focus();
           const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
@@ -2215,7 +2218,7 @@ async function runViewportAuditCdp(appUrl, viewport, outRoot, errors, profile = 
     await step("08-slash-palette", "Slash command palette", async () => {
       const ok = await cdpEval(client, `(() => {
         const inputs = Array.from(document.querySelectorAll("input"));
-        const el = document.querySelector('input[placeholder="type or /command"]') || inputs[inputs.length - 1];
+        const el = document.querySelector('input[aria-label="Command input"]') || document.querySelector('input[placeholder="type or /command"]') || inputs[inputs.length - 1];
         if (!el) return false;
         el.focus();
         const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;

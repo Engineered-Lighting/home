@@ -263,7 +263,7 @@ function ActionContent({ id, title, service, target, attrs = {}, status = "pendi
       >
         <button
           type="button"
-          className="hg-focusable"
+          className="hg-focusable hg-mobile-touch"
           aria-expanded={open}
           aria-label={`${title || service || "action"} details`}
           onClick={() => setOpen(o => !o)}
@@ -307,7 +307,7 @@ function ActionContent({ id, title, service, target, attrs = {}, status = "pendi
                 setUndoFiring(false);
               }
             }}
-            className="hg-focusable"
+            className="hg-focusable hg-mobile-touch"
             style={{
               background: "transparent",
               border: "1px solid var(--hg-border)",
@@ -349,12 +349,12 @@ function ActionContent({ id, title, service, target, attrs = {}, status = "pendi
           </div>
           {needsConfirm && (
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-              <button onClick={() => onConfirm && onConfirm(id)} className="hg-focusable" style={{
+              <button onClick={() => onConfirm && onConfirm(id)} className="hg-focusable hg-mobile-touch" style={{
                 background: "transparent", border: "1px solid var(--hg-ice)",
                 color: "var(--hg-ice-bright)", padding: "4px 10px", cursor: "pointer",
                 fontFamily: HG_MONO, fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase",
               }}>confirm ↵</button>
-              <button onClick={() => onCancel && onCancel(id)} className="hg-focusable" style={{
+              <button onClick={() => onCancel && onCancel(id)} className="hg-focusable hg-mobile-touch" style={{
                 background: "transparent", border: "1px solid var(--hg-border)",
                 color: "var(--hg-fg-2)", padding: "4px 10px", cursor: "pointer",
                 fontFamily: HG_MONO, fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase",

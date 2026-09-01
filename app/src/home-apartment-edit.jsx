@@ -54,13 +54,16 @@ function uniqueZoneId(name, zones) {
 
 function EdButton({ label, onClick, active, danger, disabled, title, ariaLabel }) {
   return (
+    // hg-mobile-touch activates only inside the ≤699px media query: 44px
+    // touch targets on phones, byte-identical rendering on desktop.
     <button type="button" onClick={onClick} disabled={disabled} title={title} aria-label={ariaLabel}
-      className="hg-focusable" style={{
+      className="hg-focusable hg-mobile-touch" style={{
       background: active ? "var(--hg-ice)" : "transparent",
       border: "1px solid " + (danger ? "var(--hg-crit)" : active ? "var(--hg-ice)" : "var(--hg-border-soft)"),
       color: danger ? "var(--hg-crit)" : active ? "#0b0d11" : disabled ? "var(--hg-fg-5)" : "var(--hg-fg-1)",
       padding: "4px 10px", fontFamily: ED_MONO, fontSize: 9.5, letterSpacing: "0.08em",
       textTransform: "lowercase", cursor: disabled ? "default" : "pointer",
+      whiteSpace: "nowrap", flexShrink: 0,
     }}>{label}</button>
   );
 }
@@ -212,10 +215,28 @@ function refreshRoomAssignments(model) {
   }
 }
 
+/* ≤699px: the two 230px absolute side rails cannot fit next to the canvas,
+   so both sections render stacked inside one scrollable bottom sheet —
+   mirroring the aim inspector's mobile bottom-sheet branch in
+   home-apartment-aim.jsx. Desktop renders the children untouched. */
+function EdMobileSheet({ mobile, children }) {
+  if (!mobile) return <>{children}</>;
+  return (
+    <div data-apt-edit-ui="mobile-sheet" className="hg-mobile-scroll" style={{
+      position: "fixed", left: 0, right: 0, bottom: 0, width: "100%", zIndex: 6,
+      maxHeight: "45dvh", overflowY: "auto", overflowX: "hidden",
+      background: "rgba(10,12,16,0.94)", borderTop: "1px solid var(--hg-border)",
+      backdropFilter: "blur(10px)",
+      paddingBottom: "env(safe-area-inset-bottom, 0px)",
+      fontFamily: ED_MONO,
+    }}>{children}</div>
+  );
+}
+
 function HomeApartmentEdit({
   engine, model, onModel, seedModel, registry, onSave, onDirtyChange,
   onExit, sim, connection, sourceMeta, saveStatus, saving,
-  liveReview, liveComparison, onCompareLive,
+  liveReview, liveComparison, onCompareLive, mobile = false,
 }) {
   const [tool, setTool] = useState("select");          // select | add | targets | links | measure | zones
   const [placing, setPlacing] = useState(null);        // palette item being placed
@@ -1005,7 +1026,14 @@ function HomeApartmentEdit({
     && selected.fixture_calibration.ceiling_to_fixture_bottom_m
       > selected.fixture_calibration.floor_to_ceiling_m;
 
-  const panel = {
+  /* Desktop: two absolute 230px side rails. Mobile: the same sections become
+     static full-width blocks stacked inside the EdMobileSheet container. */
+  const panel = mobile ? {
+    position: "relative", width: "100%",
+    background: "transparent", border: 0,
+    padding: "10px 14px",
+    fontFamily: ED_MONO,
+  } : {
     position: "absolute", top: 52, bottom: 64, width: 230,
     zIndex: 4,
     background: "rgba(10,12,16,0.88)", border: "1px solid var(--hg-border-soft)",
@@ -1032,8 +1060,15 @@ function HomeApartmentEdit({
 
   return (
     <>
-      {/* toolbar */}
-      <div style={{
+      {/* toolbar — centered on desktop; a full-width horizontally scrollable
+          strip on phones (EdButton opts out of flex shrink, so the ~9 buttons
+          scroll instead of wrapping or overlapping the canvas) */}
+      <div className={mobile ? "hg-mobile-scroll" : undefined} style={mobile ? {
+        position: "absolute", top: "calc(8px + env(safe-area-inset-top, 0px))",
+        left: 0, right: 0, padding: "0 10px",
+        display: "flex", gap: 6, alignItems: "center", zIndex: 4,
+        overflowX: "auto", flexWrap: "nowrap",
+      } : {
         position: "absolute", top: 10, left: "50%", transform: "translateX(-50%)",
         display: "flex", gap: 6, alignItems: "center", zIndex: 4,
       }} data-apt-edit-ui="toolbar">
@@ -1088,7 +1123,9 @@ function HomeApartmentEdit({
           matters. Keep this visually quiet so it reads as an instrument, not
           another primary toolbar. */}
       <div role="group" aria-label="Apartment edit orbit controls" data-apt-edit-ui="orbit-controls" style={{
-        position: "absolute", bottom: 16, left: "50%", transform: "translateX(-50%)",
+        position: "absolute", left: "50%", transform: "translateX(-50%)",
+        bottom: mobile ? "calc(45dvh + 12px)" : 16,
+        maxWidth: mobile ? "calc(100vw - 12px)" : "none",
         display: "flex", alignItems: "center", gap: 8, zIndex: 5,
         padding: "6px 8px", background: "rgba(10,12,16,0.86)",
         border: "1px solid var(--hg-border-soft)", backdropFilter: "blur(8px)",
@@ -1097,13 +1134,17 @@ function HomeApartmentEdit({
         <EdButton label="←" ariaLabel="Orbit room left" title="Orbit room 45° left"
           onClick={() => engine?.rig.stepAzimuth(-1)} />
         <span style={{ color: "var(--hg-fg-4)", fontSize: 8.5, letterSpacing: "0.08em",
-          whiteSpace: "nowrap" }}>drag canvas to orbit · click surface to place</span>
+          whiteSpace: "nowrap", minWidth: 0, overflow: "hidden",
+          textOverflow: "ellipsis" }}>drag canvas to orbit · click surface to place</span>
         <EdButton label="→" ariaLabel="Orbit room right" title="Orbit room 45° right"
           onClick={() => engine?.rig.stepAzimuth(1)} />
       </div>
 
+      {/* left rail + right inspector — side panels on desktop, stacked inside
+          one fixed bottom sheet on phones */}
+      <EdMobileSheet mobile={mobile}>
       {/* left: task rail */}
-      <div style={{ ...panel, left: 72 }} data-apt-edit-ui="targets-and-palette">
+      <div style={mobile ? panel : { ...panel, left: 72 }} data-apt-edit-ui="targets-and-palette">
         <div role="status" data-apartment-source={sourceMeta?.kind || "empty"} style={{
           margin: "0 0 8px", padding: "7px 8px", border: `1px solid ${sourceMeta?.live
             ? "rgba(145,230,189,0.35)" : sourceMeta?.kind === "simulation"
@@ -1495,7 +1536,9 @@ function HomeApartmentEdit({
       </div>
 
       {/* right: inspector */}
-      <div style={{ ...panel, right: 12 }} data-apt-edit-ui="inspector">
+      <div style={mobile
+        ? { ...panel, borderTop: "1px solid var(--hg-border-soft)" }
+        : { ...panel, right: 12 }} data-apt-edit-ui="inspector">
         {tool === "zones" && zoneDrawing && zoneNaming ? (
           <>
             <div style={heading}>new room name</div>
@@ -1909,6 +1952,7 @@ function HomeApartmentEdit({
           </>
         )}
       </div>
+      </EdMobileSheet>
     </>
   );
 }

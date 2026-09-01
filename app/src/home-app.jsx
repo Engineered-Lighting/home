@@ -4591,6 +4591,7 @@ function VoiceBanner({ voice, onRetry }) {
         <StatusDot tone="error" size={5} />
         <span>{voice.message || "voice error"}</span>
         <button
+          className="hg-focusable hg-mobile-touch"
           onClick={onRetry}
           style={{
             marginLeft: "auto",
@@ -4598,7 +4599,7 @@ function VoiceBanner({ voice, onRetry }) {
             border: "1px solid var(--hg-warn)",
             color: "var(--hg-warn)",
             fontFamily: "'Geist Mono', monospace",
-            fontSize: 9,
+            fontSize: 10.5,
             letterSpacing: "0.16em",
             textTransform: "uppercase",
             padding: "2px 6px",

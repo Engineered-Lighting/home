@@ -831,7 +831,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
           <button
             onClick={refresh}
             title="Refresh"
-            className="hg-focusable"
+            className="hg-focusable hg-mobile-touch"
             style={{
               background: "transparent", border: "1px solid var(--hg-border-soft)",
               color: "var(--hg-fg-3)", padding: "4px 9px",
@@ -842,7 +842,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
           <button
             onClick={onClose}
             aria-label="Close"
-            className="hg-focusable"
+            className="hg-focusable hg-mobile-touch"
             style={{
               background: "transparent", border: "1px solid var(--hg-border-soft)",
               color: "var(--hg-fg-2)", padding: "4px 11px",
@@ -862,6 +862,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
         {(legacyMutationsReadOnly ? ["graph", "list"] : ["graph", "list", "queue"]).map((v) => (
           <button
             key={v}
+            className="hg-mobile-touch"
             onClick={() => setView(v)}
             style={{
               background: "transparent", border: "none",
@@ -921,7 +922,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
             </span>
             <button
               onClick={() => refresh()}
-              className="hg-focusable"
+              className="hg-focusable hg-mobile-touch"
               style={{
                 background: "transparent", border: "1px solid var(--hg-warn)",
                 color: "var(--hg-warn)", padding: "4px 11px",
@@ -2001,7 +2002,7 @@ function PeopleQueueCard({ identity, endpoint, token, operationScopeKey, sim, av
         <button
           onClick={save}
           disabled={saving || !dirty}
-          className="hg-focusable"
+          className="hg-focusable hg-mobile-touch"
           style={{
             flex: 1,
             background: dirty ? "var(--hg-ice)" : "transparent",
@@ -3156,7 +3157,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
             <button
               onClick={save}
               disabled={!dirty || saving}
-              className="hg-focusable"
+              className="hg-focusable hg-mobile-touch"
               style={{
                 flex: 1,
                 background: dirty ? "var(--hg-ice)" : "transparent",
@@ -3171,7 +3172,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
             <button
               onClick={armOrDelete}
               disabled={saving}
-              className="hg-focusable"
+              className="hg-focusable hg-mobile-touch"
               title={`Removes ${payload?.identity?.display_name || "this identity"}, all preferences, and queues a delete to Frigate`}
               style={{
                 background: "transparent",
@@ -3597,7 +3598,7 @@ function AvatarCropModal({ identity, endpoint, token, operationScopeKey, onClose
                 }}
               >change image</button>
               <button onClick={deleteAvatar} disabled={busy}
-                className="hg-focusable"
+                className="hg-focusable hg-mobile-touch"
                 style={{
                   background: "transparent",
                   border: "1px solid var(--hg-crit)",
@@ -3610,7 +3611,7 @@ function AvatarCropModal({ identity, endpoint, token, operationScopeKey, onClose
                 }}
               >remove</button>
               <button ref={saveBtnRef} onClick={save} disabled={busy}
-                className="hg-focusable"
+                className="hg-focusable hg-mobile-touch"
                 style={{
                   flex: 1,
                   background: "var(--hg-ice)",
@@ -3773,7 +3774,7 @@ function PreferencesSection({ identityUuid, preferences, endpoint, token, operat
           {!adding && !readOnly && (
             <button
               onClick={() => setAdding(true)}
-              className="hg-focusable"
+              className="hg-focusable hg-mobile-touch"
               style={{
                 background: "transparent", border: "1px solid var(--hg-border-soft)",
                 color: "var(--hg-fg-2)",
@@ -3906,7 +3907,7 @@ function PreferencesSection({ identityUuid, preferences, endpoint, token, operat
             <div role="status" style={{ color: "var(--hg-crit)", fontSize: 10 }}>{error}</div>
           )}
           <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-            <button onClick={save} disabled={saving} className="hg-focusable" style={{
+            <button onClick={save} disabled={saving} className="hg-focusable hg-mobile-touch" style={{
               flex: 1, background: "var(--hg-ice)",
               border: "1px solid var(--hg-ice)",
               color: "var(--hg-bg-0)",

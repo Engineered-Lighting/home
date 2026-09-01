@@ -78,6 +78,38 @@ function AimTextInput({ value, onCommit, label, placeholder, type = "text", min,
   </label>;
 }
 
+/* Rolling-commit range slider (ControlSlider-style, home-control.jsx). The
+ * rendered value tracks every onChange tick 1:1 in local state; the HA service
+ * call is funneled through a 120ms rolling debounce with a guaranteed flush on
+ * pointer-up / key-up / blur, so a drag fires a handful of calls instead of one
+ * per tick. While a drag is in flight, live-state prop updates never yank the
+ * thumb back under the finger. */
+function AimServiceSlider({ value, onServiceValue, ...rest }) {
+  const [draft, setDraft] = useState(() => +value);
+  const draggingRef = useRef(false);
+  const debounceRef = useRef(null);
+  const pendingRef = useRef(false);
+  useEffect(() => { if (!draggingRef.current) setDraft(+value); }, [value]);
+  useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
+  const send = (v) => { pendingRef.current = false; onServiceValue(v); };
+  const handleChange = (e) => {
+    const v = +e.target.value;
+    draggingRef.current = true;
+    pendingRef.current = true;
+    setDraft(v);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => { debounceRef.current = null; send(v); }, 120);
+  };
+  const flush = (e) => {
+    draggingRef.current = false;
+    if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null; }
+    if (pendingRef.current) send(+e.target.value);
+  };
+  return <input type="range" {...rest} value={draft} onChange={handleChange}
+    onPointerDown={() => { draggingRef.current = true; }}
+    onPointerUp={flush} onKeyUp={flush} onBlur={flush} />;
+}
+
 function entityName(entity, states) {
   return states?.[entity.entity_id]?.attributes?.friendly_name || entity.name || entity.original_name || entity.entity_id;
 }
@@ -690,14 +722,14 @@ function HomeApartmentAim({
           </div>
           {primaryCapabilities.brightness && <label style={{ display: "grid", gap: 5, fontFamily: AIM_SANS, fontSize: 11, color: "var(--hg-fg-3)" }}>
             <span style={{ display: "flex", justifyContent: "space-between" }}><span>Brightness</span><span>{Math.round((+primaryState?.attributes?.brightness || 0) / 2.55)}%</span></span>
-            <input aria-label="Current light brightness" type="range" min="1" max="255" value={+primaryState?.attributes?.brightness || 1}
-              onChange={(e) => sendLights([primaryEntity], "turn_on", { brightness: +e.target.value }, "primary")} />
+            <AimServiceSlider aria-label="Current light brightness" min="1" max="255" value={+primaryState?.attributes?.brightness || 1}
+              onServiceValue={(v) => sendLights([primaryEntity], "turn_on", { brightness: v }, "primary")} />
           </label>}
           {primaryCapabilities.color_temp && <label style={{ display: "grid", gap: 5, fontFamily: AIM_SANS, fontSize: 11, color: "var(--hg-fg-3)" }}>
             <span style={{ display: "flex", justifyContent: "space-between" }}><span>Warmth</span><span>{primaryState?.attributes?.color_temp_kelvin || "—"} K</span></span>
-            <input aria-label="Current light color temperature" type="range" min={Math.round(primaryCapabilities.min_kelvin || 1800)}
+            <AimServiceSlider aria-label="Current light color temperature" min={Math.round(primaryCapabilities.min_kelvin || 1800)}
               max={Math.round(primaryCapabilities.max_kelvin || 6500)} value={+primaryState?.attributes?.color_temp_kelvin || 3000}
-              onChange={(e) => sendLights([primaryEntity], "turn_on", { color_temp_kelvin: +e.target.value }, "primary")} />
+              onServiceValue={(v) => sendLights([primaryEntity], "turn_on", { color_temp_kelvin: v }, "primary")} />
           </label>}
           <div style={{ fontFamily: AIM_MONO, fontSize: 11, color: "var(--hg-fg-3)", lineHeight: 1.45 }}>
             Existing Home Assistant light · shares this mount and its Fixture position measurements.
@@ -723,14 +755,14 @@ function HomeApartmentAim({
           </div>
           {spotlightCapabilities.brightness && <label style={{ display: "grid", gap: 5, fontFamily: AIM_SANS, fontSize: 11, color: "var(--hg-fg-3)" }}>
             <span style={{ display: "flex", justifyContent: "space-between" }}><span>Brightness</span><span>{Math.round((+spotlightHaState?.attributes?.brightness || 0) / 2.55)}%</span></span>
-            <input aria-label="Spotlight brightness" type="range" min="1" max="255" value={+spotlightHaState?.attributes?.brightness || 1}
-              onChange={(e) => sendLights([spotlightEntity], "turn_on", { brightness: +e.target.value }, "spotlight")} />
+            <AimServiceSlider aria-label="Spotlight brightness" min="1" max="255" value={+spotlightHaState?.attributes?.brightness || 1}
+              onServiceValue={(v) => sendLights([spotlightEntity], "turn_on", { brightness: v }, "spotlight")} />
           </label>}
           {spotlightCapabilities.color_temp && <label style={{ display: "grid", gap: 5, fontFamily: AIM_SANS, fontSize: 11, color: "var(--hg-fg-3)" }}>
             <span style={{ display: "flex", justifyContent: "space-between" }}><span>Warmth</span><span>{spotlightHaState?.attributes?.color_temp_kelvin || "—"} K</span></span>
-            <input aria-label="Spotlight color temperature" type="range" min={Math.round(spotlightCapabilities.min_kelvin || 1800)}
+            <AimServiceSlider aria-label="Spotlight color temperature" min={Math.round(spotlightCapabilities.min_kelvin || 1800)}
               max={Math.round(spotlightCapabilities.max_kelvin || 6500)} value={+spotlightHaState?.attributes?.color_temp_kelvin || 3000}
-              onChange={(e) => sendLights([spotlightEntity], "turn_on", { color_temp_kelvin: +e.target.value }, "spotlight")} />
+              onServiceValue={(v) => sendLights([spotlightEntity], "turn_on", { color_temp_kelvin: v }, "spotlight")} />
           </label>}
         </section>
         <section style={{ display: "grid", gap: 7 }}>
@@ -928,14 +960,14 @@ function HomeApartmentAim({
             </div>
             {cap.brightness && <label style={{ display: "grid", gap: 5, fontFamily: AIM_SANS, fontSize: 11, color: "var(--hg-fg-3)" }}>
               <span style={{ display: "flex", justifyContent: "space-between" }}><span>Brightness</span><span>{Math.round((+zoneState?.attributes?.brightness || 0) / 2.55)}%</span></span>
-              <input aria-label={`Radial zone ${zone.number} brightness`} type="range" min="1" max="255" value={+zoneState?.attributes?.brightness || 1}
-                onChange={(e) => sendLights([zone.entity_id], "turn_on", { brightness: +e.target.value }, `zone-${zone.number}`)} />
+              <AimServiceSlider aria-label={`Radial zone ${zone.number} brightness`} min="1" max="255" value={+zoneState?.attributes?.brightness || 1}
+                onServiceValue={(v) => sendLights([zone.entity_id], "turn_on", { brightness: v }, `zone-${zone.number}`)} />
             </label>}
             {cap.color_temp && <label style={{ display: "grid", gap: 5, fontFamily: AIM_SANS, fontSize: 11, color: "var(--hg-fg-3)" }}>
               <span style={{ display: "flex", justifyContent: "space-between" }}><span>Warmth</span><span>{zoneState?.attributes?.color_temp_kelvin || "—"} K</span></span>
-              <input aria-label={`Radial zone ${zone.number} color temperature`} type="range" min={Math.round(cap.min_kelvin || 1800)} max={Math.round(cap.max_kelvin || 6500)}
+              <AimServiceSlider aria-label={`Radial zone ${zone.number} color temperature`} min={Math.round(cap.min_kelvin || 1800)} max={Math.round(cap.max_kelvin || 6500)}
                 value={+zoneState?.attributes?.color_temp_kelvin || 3000}
-                onChange={(e) => sendLights([zone.entity_id], "turn_on", { color_temp_kelvin: +e.target.value }, `zone-${zone.number}`)} />
+                onServiceValue={(v) => sendLights([zone.entity_id], "turn_on", { color_temp_kelvin: v }, `zone-${zone.number}`)} />
             </label>}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7 }}>
               <AimButton onClick={() => identifyZone(zone)} disabled={!cap.available || !cap.brightness}>Identify</AimButton>

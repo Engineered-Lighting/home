@@ -5069,9 +5069,20 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     debugMode: false,   // Show internal diag events ([parakeet], [direct], [kokoro], etc.) in feed
   }), []);
   const initialEventsFromStorage = useMemo(
-    () => coalesceAssistantTurnEvents(
-      (initialEvents ? initialEvents : loadEvents()).map(sanitizeChatEventForStorage),
-    ),
+    () => {
+      const restored = coalesceAssistantTurnEvents(
+        (initialEvents ? initialEvents : loadEvents()).map(sanitizeChatEventForStorage),
+      );
+      // Rehydrate the module-level id counter past any restored `e-N` ids.
+      // The counter resets to 0 on reload while restored events keep their
+      // old ids — without this, freshly minted ids collide with restored
+      // ones and React list keys duplicate.
+      for (const e of restored) {
+        const m = /^e-(\d+)$/.exec(typeof e?.id === "string" ? e.id : "");
+        if (m) _id = Math.max(_id, parseInt(m[1], 10));
+      }
+      return restored;
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
@@ -5863,12 +5874,27 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "light" ? "#EFE9DC" : "#050606");
   }, [theme]);
 
-  /* Auto-scroll to bottom on new events. `bootPhase` is in the deps because
-   * the feed div is unmounted during boot — without it the scroll-to-bottom
-   * never fires on the → "ready" transition and returning users would land
-   * at the top of their history. */
+  /* Auto-scroll to bottom on new events — but only while the reader is
+   * pinned to the bottom (within 40px). Streamed tokens used to yank the
+   * scroll position on every chunk; now scrolling up to read history
+   * sticks until the user returns to the bottom. `bootPhase` is in the
+   * deps because the feed div is unmounted during boot — on the → "ready"
+   * transition we force a re-pin + scroll so returning users land at the
+   * bottom of their history (this also fixes the mobile boot scroll). */
+  const pinnedRef = useRef(true);
+  const prevBootPhaseRef = useRef(null);
+  const onFeedScroll = useCallback(() => {
+    const el = feedRef.current;
+    if (!el) return;
+    pinnedRef.current = (el.scrollHeight - el.scrollTop - el.clientHeight) < 40;
+  }, []);
   useEffect(() => {
-    if (feedRef.current) feedRef.current.scrollTop = feedRef.current.scrollHeight;
+    const becameReady = bootPhase === "ready" && prevBootPhaseRef.current !== "ready";
+    prevBootPhaseRef.current = bootPhase;
+    if (becameReady) pinnedRef.current = true;
+    if (pinnedRef.current && feedRef.current) {
+      feedRef.current.scrollTop = feedRef.current.scrollHeight;
+    }
   }, [events, bootPhase]);
 
   /* Persist prefs whenever they change. Note: `s2sMode` is deliberately
@@ -5878,16 +5904,25 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     savePrefs({ endpoint, model, theme, metricsBase, s2sBase, s2sVoice, kokoroVoice, debugMode });
   }, [endpoint, model, theme, metricsBase, s2sBase, s2sVoice, kokoroVoice, debugMode]);
 
-  /* Persist events on change (debounced via rAF — cheap enough at our scale).
+  /* Persist events on change, throttled to at most one write per 500ms
+   * (trailing edge). The full-array sanitize/coalesce map is too heavy to
+   * run on every streamed token. The pending timer is never gated on
+   * streaming state — the last change always leaves a timer that fires
+   * within 500ms, so a hung run cannot starve persistence.
    * Onboarding-injected hints (`e.onboarding`) are session-scoped UI, not
    * chat history — filtered out so they never persist or stack across launches. */
+  const lastPersistRef = useRef(0);
   useEffect(() => {
-    const id = requestAnimationFrame(() => saveEvents(
-      coalesceAssistantTurnEvents(
-        events.filter((e) => !e.onboarding).map(sanitizeChatEventForStorage),
-      ),
-    ));
-    return () => cancelAnimationFrame(id);
+    const wait = Math.max(0, 500 - (Date.now() - lastPersistRef.current));
+    const id = setTimeout(() => {
+      lastPersistRef.current = Date.now();
+      saveEvents(
+        coalesceAssistantTurnEvents(
+          events.filter((e) => !e.onboarding).map(sanitizeChatEventForStorage),
+        ),
+      );
+    }, wait);
+    return () => clearTimeout(id);
   }, [events]);
 
   useEffect(() => {
@@ -5908,6 +5943,19 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   /* Persist conversation_id whenever it changes */
   useEffect(() => { saveConversationId(conversationId); }, [conversationId]);
 
+  /* Feed grouping + windowing. Grouping is memoized (it used to re-run
+   * inline in the JSX on every render), and only the last `feedWindowSize`
+   * groups render — a "show earlier messages" control raises the window.
+   * The window resets when the conversation changes. */
+  const [feedWindowSize, setFeedWindowSize] = useState(120);
+  useEffect(() => { setFeedWindowSize(120); }, [conversationId]);
+  const feedGroups = useMemo(
+    () => groupEventsBySpeaker(
+      debugMode ? events : events.filter((e) => e.kind !== "diag")
+    ),
+    [events, debugMode],
+  );
+
   /* Helpers to push events */
   const addEvent = useCallback((ev) => {
     // Apply ASR correction to bubble text so the rendered text never
@@ -5918,7 +5966,10 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       : ev;
     setEvents((prev) => {
       if (isRecentDuplicateEvent(prev, corrected)) return prev;
-      return [...prev, { id: nextId(), time: fmtTime(), ...corrected }];
+      const next = [...prev, { id: nextId(), time: fmtTime(), ...corrected }];
+      // In-memory cap: long sessions otherwise grow without bound.
+      // Storage caps separately (200 on save); the live array keeps 600.
+      return next.length > 600 ? next.slice(-600) : next;
     });
   }, []);
 
@@ -8507,13 +8558,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // "<name> — <desc>" so the user can scan + paste back the whole
         // list for inclusion in a prompt or doc.
         const totalCount = TOOL_CATALOG.reduce((a, g) => a + g.tools.length, 0);
-        addEvent({ kind: "system", text: `agent-tools · ${totalCount} tools registered (see ha-config/extended_openai_conversation/const.py for live spec):`, tone: "info" });
+        // One multi-line system event (not ~31 separate ones) — bulk
+        // per-line addEvent calls forced a render per line.
+        const lines = [`agent-tools · ${totalCount} tools registered (see ha-config/extended_openai_conversation/const.py for live spec):`];
         for (const group of TOOL_CATALOG) {
-          addEvent({ kind: "system", text: `── ${group.group} (${group.tools.length}) ──` });
+          lines.push(`── ${group.group} (${group.tools.length}) ──`);
           for (const [name, desc] of group.tools) {
-            addEvent({ kind: "system", text: `  ${name} — ${desc}` });
+            lines.push(`  ${name} — ${desc}`);
           }
         }
+        addEvent({ kind: "system", text: lines.join("\n"), tone: "info" });
         return true;
       }
       case "describe-clip":
@@ -8938,12 +8992,16 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
               addEvent({ kind: "system", text: "route-log · no routing entries yet", tone: "info" });
               return;
             }
-            addEvent({ kind: "system", text: `route-log · ${entries.length} entries (raw JSONL — select-all + copy):`, tone: "info" });
+            // One multi-line system event (not up to ~201 separate ones —
+            // bulk per-line addEvent calls forced a render per entry).
+            // Each entry stays raw single-line JSON, intentionally NOT
+            // pretty-printed so the pasted text is parseable JSONL
+            // (one entry per line).
+            const lines = [`route-log · ${entries.length} entries (raw JSONL — select-all + copy):`];
             for (const e of entries) {
-              // Raw single-line JSON, intentionally NOT pretty-printed
-              // so the pasted text is parseable JSONL (one entry per line).
-              addEvent({ kind: "system", text: JSON.stringify(e) });
+              lines.push(JSON.stringify(e));
             }
+            addEvent({ kind: "system", text: lines.join("\n"), tone: "info" });
           } catch (err) {
             addEvent({ kind: "system", text: `route-log · fetch failed: ${err?.message || err}`, tone: "error" });
           }
@@ -11535,6 +11593,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         ref={feedRef}
         className="hg-scroll"
         tabIndex={0}
+        onScroll={onFeedScroll}
         style={{
           flex: 1, overflowY: "auto",
           background: "var(--hg-bg-0)",
@@ -11572,14 +11631,43 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             margin: "0 auto",
           }}>
             {!isSpatialWide && <BootBanner metrics={metrics} />}
-            {groupEventsBySpeaker(
-              debugMode ? events : events.filter((e) => e.kind !== "diag")
-            ).map((g, i) => (
-              <TurnBlock key={i} group={g} density={isSpatialWide ? "compact" : density}
-                onConfirmAction={confirmAction} onCancelAction={cancelAction}
-                onUndoAction={undoAction}
-                onControlAction={onControlAction} controlLifecycles={controlLifecycles}
-                onWhy={(cid) => openRightSlot("explain", () => setExplainConvId(cid))} />
+            {feedGroups.length > feedWindowSize && (
+              <button
+                type="button"
+                className="hg-focusable"
+                onClick={() => setFeedWindowSize((s) => s + 200)}
+                style={{
+                  display: "block",
+                  margin: "10px auto",
+                  padding: "5px 12px",
+                  background: "var(--hg-input-bg)",
+                  border: "1px solid var(--hg-border)",
+                  borderRadius: 5,
+                  cursor: "pointer",
+                  color: "var(--hg-fg-1)",
+                  fontFamily: "'Geist Mono', monospace",
+                  fontSize: 10,
+                  letterSpacing: "0.08em",
+                }}
+              >show earlier messages ({feedGroups.length - feedWindowSize} hidden)</button>
+            )}
+            {/* Keyed by turn identity — turnKey is stable across the
+              * thinking-stub → bubble transition (the first event id churns
+              * there); the speaker prefix disambiguates the user echo from
+              * the assistant reply, which share one turnKey. The wrapper's
+              * contentVisibility lets the browser skip layout/paint of
+              * off-screen turns. */}
+            {feedGroups.slice(-feedWindowSize).map((g, i) => (
+              <div
+                key={`${g.speaker}:${g.events[0]?.turnKey ?? g.events[0]?.id ?? i}`}
+                style={{ contentVisibility: "auto", containIntrinsicSize: "auto 90px" }}
+              >
+                <TurnBlock group={g} density={isSpatialWide ? "compact" : density}
+                  onConfirmAction={confirmAction} onCancelAction={cancelAction}
+                  onUndoAction={undoAction}
+                  onControlAction={onControlAction} controlLifecycles={controlLifecycles}
+                  onWhy={(cid) => openRightSlot("explain", () => setExplainConvId(cid))} />
+              </div>
             ))}
           </div>
         )}

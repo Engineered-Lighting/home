@@ -1141,3 +1141,4 @@ Object.assign(window, {
   HelpContent, HelpRow,
   groupEventsBySpeaker, speakerOf,
 });
+window.TurnBlock = React.memo(TurnBlock); // memoized: unchanged turns skip re-render during streaming

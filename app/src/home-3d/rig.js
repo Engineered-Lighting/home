@@ -246,9 +246,17 @@ export function createRig(camera) {
             state.previewEl = THREE.MathUtils.clamp((-dyPx / 600) * DRAG_RESIST, -0.12, 0.12);
         },
         dragRelease(dxPx, dyPx, vxPxPerMs) {
+            const capturedPreviewAz = state.previewAz;
+            const capturedPreviewEl = state.previewEl;
             state.previewAz = 0;
             state.previewEl = 0;
             if (state.locked) return;
+            // Fold the on-screen preview offset into the rig's current pose so
+            // the settle tween starts FROM what the user sees — zeroing the
+            // preview alone would jump the camera backward by the whole offset
+            // in one frame before the tween begins.
+            cur.az += capturedPreviewAz;
+            cur.el = THREE.MathUtils.clamp(cur.el + capturedPreviewEl, 0.05, Math.PI / 2 - 0.02);
             if (Math.abs(dyPx) > Math.abs(dxPx) && Math.abs(dyPx) > ELEV_PX) {
                 rig.stepElevation(dyPx < 0 ? 1 : -1);
                 return;

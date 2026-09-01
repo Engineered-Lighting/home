@@ -201,6 +201,10 @@
         ['home-fetch-with-retry.js', false],
         ['home-perf.js', false],
         ['home-feature-loader.js', false],
+        // Overlay layer stack + focus manager (window.HomeOverlay). Its
+        // capture-phase listener must install before any overlay component
+        // file loads — keep this entry here and never defer it.
+        ['home-overlay.js', false],
         ['home-people-prewarm.js', false],
         ['home-tauri.jsx', true],
         ['home-ha.jsx', true],

@@ -781,9 +781,10 @@ process.stdout.write("\n[1mpeople overlay interaction contract (DOC-S83)[0m\n");
 (() => {
   assert("overlay refresh button is wired to refresh loader",
     /<button[\s\S]*onClick=\{refresh\}[\s\S]*>refresh<\/button>/.test(peopleSource));
-  assert("overlay close button and Escape both call onClose",
-    peopleSource.includes('if (e.key === "Escape")') &&
-    peopleSource.includes("onClose();") &&
+  assert("overlay close button and HomeOverlay Escape layer both call onClose",
+    peopleSource.includes("useOverlayLayer") &&
+    peopleSource.includes('key: "people-root"') &&
+    peopleSource.includes("onEscape: () => onClose()") &&
     /aria-label="Close"[\s\S]*onClick=\{onClose\}/.test(peopleSource));
   assert("graph/list/queue tabs switch view without clearing selected identity",
     /\(legacyMutationsReadOnly \? \["graph", "list"\] : \["graph", "list", "queue"\]\)\.map\(\(v\) => \([\s\S]*onClick=\{\(\) => setView\(v\)\}/.test(peopleSource) &&

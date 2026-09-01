@@ -686,6 +686,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
   const viewport = useAptViewport();
   const mobile = viewport.mobile;
   const hostRef = useRef(null);
+  const viewRootRef = useRef(null);
   const engineRef = useRef(null);
   const detachRef = useRef(null);
   const wasMaximizedRef = useRef(null);
@@ -1335,23 +1336,12 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
     }, 820);
   }, []);
 
-  /* keyboard */
+  /* keyboard — rig keys only; Escape is owned by the HomeOverlay layers below */
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (e) => {
       if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
       const rig = engineRef.current?.rig;
-      if (e.key === "Escape") {
-        if (aimMode) { setAimMode(false); setAimDestination(null); return; }
-        if (cardId) { setCardId(null); return; }
-        if (engineRef.current?.rig.inCameraPose?.()) {
-          exitCameraPose();
-          return;
-        }
-        if (editing) { setEditing(false); return; }
-        if (embedded) return;
-        onClose?.(); return;
-      }
       if (!rig) return;
       if (e.key === "ArrowLeft") rig.stepAzimuth(-1);
       else if (e.key === "ArrowRight") rig.stepAzimuth(1);
@@ -1363,7 +1353,40 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose, editing, aimMode, cardId, exitCameraPose, embedded]);
+  }, [open]);
+
+  /* Overlay layers: topmost-only Escape + focus trap via HomeOverlay (no
+     per-view window Escape listener). Non-embedded is a genuine modal;
+     embedded registers passively and PASSES the final Escape (returns
+     false) so the base surface keeps its own behavior. */
+  window.HomeOverlay.useOverlayLayer({
+    key: "apartment",
+    active: !!(open && !embedded),
+    onEscape: () => {
+      if (aimMode) { setAimMode(false); setAimDestination(null); return; }
+      if (cardId) { setCardId(null); return; }
+      if (engineRef.current?.rig?.inCameraPose?.()) { exitCameraPose(); return; }
+      if (editing) { setEditing(false); return; }
+      onClose?.();
+    },
+    rootRef: viewRootRef,
+    trap: true,
+    initialFocus: "root",
+  });
+  window.HomeOverlay.useOverlayLayer({
+    key: "apartment-embedded",
+    active: !!(open && embedded),
+    passive: true,
+    initialFocus: "none",
+    onEscape: () => {
+      if (aimMode) { setAimMode(false); setAimDestination(null); return; }
+      if (cardId) { setCardId(null); return; }
+      if (engineRef.current?.rig?.inCameraPose?.()) { exitCameraPose(); return; }
+      if (editing) { setEditing(false); return; }
+      return false;
+    },
+    getRoot: () => viewRootRef.current,
+  });
 
   const refitMobileOverview = useCallback((dur = 520) => {
     const engine = engineRef.current;
@@ -1822,6 +1845,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
 
   return (
     <div
+      ref={viewRootRef}
       data-home-apartment-view="1"
       role={embedded ? "region" : "dialog"}
       aria-modal={embedded ? undefined : true}

@@ -69,6 +69,7 @@ const MAP = [
   [/^app\/src\/simulation(-data)?\.jsx$/, ["run-simulation-scenario-tests"]],
   [/^app\/src\/index\.html$/, ["run-lab-tests", "run-bootstrap-tests", "run-resilience-tests"]],
   [/^app\/src\/home-tokens\.css$/, ["run-focus-visibility-tests"]],
+  [/^app\/src\/home-overlay\.js$/, ["run-overlay-stack-tests"]],
   [/^app\/src\/.*\.(jsx|js)$/, ["run-focus-visibility-tests"]],
   [/^web-gateway\//, [
     "run-resilience-tests", "run-web-gateway-grounded-vision-tests",

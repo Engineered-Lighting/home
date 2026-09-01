@@ -239,6 +239,13 @@ button {
 }
 .hg-fade { animation: hg-fade-up 360ms cubic-bezier(0.16, 1, 0.3, 1) both; }
 
+/* Escape-hint honesty: while any blocking overlay layer is open
+ * (HomeOverlay stamps <html data-hg-overlay-open>), Escape goes to the
+ * overlay — dim "esc" hints on chrome behind it so the label doesn't lie. */
+[data-hg-overlay-open] .hg-esc-hint {
+  opacity: 0.35;
+}
+
 /* Focus — single technical ring.
  * The ring is GLOBAL for keyboard focus (:focus-visible never fires on plain
  * mouse clicks, so this adds no pointer noise). .hg-focusable is kept for

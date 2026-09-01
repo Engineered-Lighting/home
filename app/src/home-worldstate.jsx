@@ -319,13 +319,14 @@ function HomeWorldStateDrawer({ open, onClose, endpoint, token, sim, refreshInte
     };
   }, [open, fetchSnapshot]);
 
-  // Escape closes
-  useEffect(() => {
-    if (!open) return undefined;
-    const onKey = (e) => { if (e.key === "Escape") onClose && onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  // Overlay layer: topmost-only Escape + focus management via HomeOverlay.
+  const wsRootRef = React.useRef(null);
+  window.HomeOverlay.useOverlayLayer({
+    key: "world",
+    active: !!open,
+    onEscape: () => { onClose && onClose(); },
+    rootRef: wsRootRef,
+  });
 
   // Tick "now" every second so the age badges decay live (cheap;
   // only one timer, only when drawer open).
@@ -409,8 +410,9 @@ function HomeWorldStateDrawer({ open, onClose, endpoint, token, sim, refreshInte
 
   return (
     <div
+      ref={wsRootRef}
       role="dialog"
-      aria-modal="true"
+      aria-modal="false"
       aria-label="World state inspector"
       style={{
         position: "fixed",

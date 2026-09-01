@@ -1213,12 +1213,16 @@ function RoomRow({ room, occupant, ageS, media }) {
  * in the tab bar. Click backdrop or ESC to close.
  */
 function DiagModal({ open, onClose, bridgeHealth, visionHealth, traceSummary, lastTrace, networkMetrics }) {
-  React.useEffect(() => {
-    if (!open) return undefined;
-    const onKey = (e) => { if (e.key === "Escape") onClose?.(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  // Overlay layer: topmost-only Escape + focus trap via HomeOverlay.
+  const diagRootRef = React.useRef(null);
+  window.HomeOverlay.useOverlayLayer({
+    key: "diag",
+    active: !!open,
+    onEscape: () => onClose?.(),
+    rootRef: diagRootRef,
+    trap: true,
+    initialFocus: "first",
+  });
   if (!open) return null;
   return (
     <>
@@ -1228,7 +1232,7 @@ function DiagModal({ open, onClose, bridgeHealth, visionHealth, traceSummary, la
         zIndex: 80,
         animation: "hg-fade-up 200ms ease-out",
       }} />
-      <div className="hg-scroll" style={{
+      <div ref={diagRootRef} role="dialog" aria-modal="true" aria-label="diagnostics" className="hg-scroll" style={{
         position: "fixed", top: 0, right: 0, bottom: 0,
         width: 360, maxWidth: "100vw",
         background: "var(--hg-bg-1)",

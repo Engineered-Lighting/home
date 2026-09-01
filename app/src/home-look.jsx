@@ -314,15 +314,14 @@ function HomeLookDrawer({ open, onClose, metricsBase, sim,
     };
   }, [open, initialCamera, initialQuestion, runLook]);
 
-  // Escape closes.
-  useEffect(function () {
-    if (!open) return undefined;
-    const onKey = function (e) {
-      if (e.key === "Escape") onClose && onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return function () { window.removeEventListener("keydown", onKey); };
-  }, [open, onClose]);
+  // Overlay layer: topmost-only Escape + focus management via HomeOverlay.
+  const lkRootRef = React.useRef(null);
+  window.HomeOverlay.useOverlayLayer({
+    key: "look",
+    active: !!open,
+    onEscape: function () { onClose && onClose(); },
+    rootRef: lkRootRef,
+  });
 
   if (!open) return null;
 
@@ -338,7 +337,8 @@ function HomeLookDrawer({ open, onClose, metricsBase, sim,
 
   return (
     <div
-      role="dialog" aria-modal="true" aria-label="Look — visual primitives"
+      ref={lkRootRef}
+      role="dialog" aria-modal="false" aria-label="Look — visual primitives"
       style={{
         position: "fixed", top: 0, right: 0, bottom: 0,
         width: "min(720px, 100vw)", background: "var(--hg-bg-0)",

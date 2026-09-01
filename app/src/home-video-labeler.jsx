@@ -3129,25 +3129,21 @@ function HomeVideoLabelerOverlay({ open, onClose, sim, spatialMode = false }) {
     };
   }, [open, spatialMode]);
 
-  /* Escape: capture-phase + stopImmediatePropagation — the app's own
-     window-level Escape handler mutates chat state (pending confirms) and
-     must NOT see this press. Input-focus guard: never steal Escape from a
-     focused field. Editor surfaces (picker/merge prompt/cheat sheet) get
-     first claim via escInterceptRef. */
-  useEffect(() => {
-    if (!open) return undefined;
-    const onKey = (e) => {
-      if (e.key !== "Escape") return;
-      const t = e.target;
-      if (t && (/INPUT|TEXTAREA|SELECT/.test(t.tagName) || t.isContentEditable)) return;
-      e.stopImmediatePropagation();
-      e.preventDefault();
+  /* Overlay layer: HomeOverlay owns the capture-phase Escape (topmost-only,
+     scoped input guard) — no per-overlay window listener. Editor surfaces
+     (picker/merge prompt/cheat sheet) get first claim via escInterceptRef. */
+  const overlayRootRef = useRef(null);
+  window.HomeOverlay.useOverlayLayer({
+    key: "labeler-root",
+    active: !!open,
+    onEscape: () => {
       if (escInterceptRef.current && escInterceptRef.current()) return;
       onClose?.();
-    };
-    window.addEventListener("keydown", onKey, { capture: true });
-    return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [open, onClose]);
+    },
+    rootRef: overlayRootRef,
+    trap: true,
+    initialFocus: "root",
+  });
 
   const importInbox = useCallback(async () => {
     setImporting(true);
@@ -3215,6 +3211,7 @@ function HomeVideoLabelerOverlay({ open, onClose, sim, spatialMode = false }) {
 
   const overlay = (
     <div
+      ref={overlayRootRef}
       data-theme={spatialMode ? "dark" : undefined}
       style={{
         position: "fixed",

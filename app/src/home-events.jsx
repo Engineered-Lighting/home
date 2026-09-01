@@ -340,7 +340,7 @@ function ActionContent({ id, title, service, target, attrs = {}, status = "pendi
                 background: "transparent", border: "1px solid var(--hg-border)",
                 color: "var(--hg-fg-2)", padding: "4px 10px", cursor: "pointer",
                 fontFamily: HG_MONO, fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase",
-              }}>cancel esc</button>
+              }}>cancel <span className="hg-esc-hint">esc</span></button>
             </div>
           )}
           {/* F.1: undo button moved to header row above; show only the
@@ -514,16 +514,20 @@ function PerceptionContent({ text, snapshotUrl, imageMode, imageUnavailable = fa
     if (hasThumb) setLightboxOpen(true);
   }, [hasThumb]);
   const closeLightbox = React.useCallback(() => setLightboxOpen(false), []);
-  React.useEffect(() => {
-    if (!lightboxOpen) return undefined;
-    const onKey = (e) => {
-      if (e.key === "Escape") setLightboxOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [lightboxOpen]);
+  const lightboxRef = React.useRef(null);
+  // Overlay layer: HomeOverlay owns Escape (topmost-only) + Tab trap + focus
+  // move-in/restore — no per-lightbox window listener.
+  window.HomeOverlay.useOverlayLayer({
+    key: "perception-lightbox",
+    active: !!lightboxOpen,
+    onEscape: closeLightbox,
+    getRoot: () => lightboxRef.current,
+    trap: true,
+    initialFocus: "root",
+  });
   const lightbox = lightboxOpen && hasThumb ? (
     <div
+      ref={lightboxRef}
       role="dialog"
       aria-modal="true"
       aria-label={room ? `${room} perception image` : "perception image"}

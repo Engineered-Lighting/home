@@ -26,7 +26,7 @@ export { WORLD_CAMERA_BANDS, WORLD_CAMERA_BAND_ORDER } from './world-surface-cor
 const REQUIRED_CESIUM_VERSION = '1.144.0';
 const VENDORED_CESIUM_ROOT = '../spatial-spike/vendor/cesium/';
 const VENDORED_CESIUM_ENTRY = `${VENDORED_CESIUM_ROOT}index.js`;
-const BUNDLED_OFFLINE_PLANET = '../spatial-spike/vendor/fixtures/offline-planet.png';
+const BUNDLED_NATURAL_EARTH = `${VENDORED_CESIUM_ROOT}Assets/Textures/NaturalEarthII/`;
 
 let runtimePromise = null;
 
@@ -71,6 +71,7 @@ function styleSurfaceElement(surface) {
         background: '#07111a',
         contain: 'strict',
         touchAction: 'none',
+        pointerEvents: 'none',
     });
     surface.setAttribute('aria-hidden', 'true');
     surface.dataset.apartmentWorldSurface = 'cesium';
@@ -91,7 +92,7 @@ function styleCesiumCanvas(widget, surface) {
         display: 'block',
         width: '100%',
         height: '100%',
-        outline: 'none',
+        pointerEvents: 'none',
     });
     widget.canvas.tabIndex = -1;
     widget.canvas.setAttribute('aria-hidden', 'true');
@@ -116,6 +117,7 @@ export function createWorldSurface() {
     let surface = null;
     let Cesium = null;
     let widget = null;
+    let pendingWidget = null;
     let anchorPoints = null;
     let anchor = null;
     let mounted = false;
@@ -234,8 +236,8 @@ export function createWorldSurface() {
                 nextCesium.Ion.defaultAccessToken = undefined;
                 const detachedCredits = documentRef.createElement('div');
                 nextWidget = new nextCesium.CesiumWidget(nextSurface, {
-                    animation: false,
                     baseLayer: false,
+                    blurActiveElementOnCanvasFocus: false,
                     creditContainer: detachedCredits,
                     creditViewport: detachedCredits,
                     contextOptions: {
@@ -247,21 +249,20 @@ export function createWorldSurface() {
                     },
                     globe: new nextCesium.Globe(nextCesium.Ellipsoid.WGS84),
                     maximumRenderTimeChange: Infinity,
-                    moon: false,
                     requestRenderMode: true,
                     scene3DOnly: true,
+                    showRenderLoopErrors: false,
                     skyAtmosphere: false,
                     skyBox: false,
-                    sun: false,
                     terrainProvider: new nextCesium.EllipsoidTerrainProvider(),
                     useBrowserRecommendedResolution: true,
                     useDefaultRenderLoop: false,
                 });
+                pendingWidget = nextWidget;
                 styleCesiumCanvas(nextWidget, nextSurface);
 
-                const offlinePlanet = await nextCesium.SingleTileImageryProvider.fromUrl(
-                    new URL(BUNDLED_OFFLINE_PLANET, import.meta.url).href,
-                    { rectangle: nextCesium.Rectangle.fromDegrees(-180, -90, 180, 90) },
+                const naturalEarth = await nextCesium.TileMapServiceImageryProvider.fromUrl(
+                    new URL(BUNDLED_NATURAL_EARTH, import.meta.url).href,
                 );
                 if (disposed || lifecycleRevision !== mountRevision) {
                     throw new Error('world surface mount was cancelled');
@@ -269,7 +270,8 @@ export function createWorldSurface() {
 
                 Cesium = nextCesium;
                 widget = nextWidget;
-                widget.imageryLayers.addImageryProvider(offlinePlanet);
+                pendingWidget = null;
+                widget.imageryLayers.addImageryProvider(naturalEarth);
                 widget.scene.backgroundColor = Cesium.Color.fromCssColorString('#07111a');
                 widget.scene.fog.enabled = false;
                 widget.scene.globe.baseColor = Cesium.Color.fromCssColorString('#0a2030');
@@ -285,6 +287,7 @@ export function createWorldSurface() {
                 return api;
             } catch (error) {
                 if (nextWidget && !nextWidget.isDestroyed()) nextWidget.destroy();
+                if (pendingWidget === nextWidget) pendingWidget = null;
                 nextSurface.remove();
                 if (surface === nextSurface) surface = null;
                 host = null;
@@ -323,6 +326,15 @@ export function createWorldSurface() {
             if (!anchor) throw new Error('world surface requires a confirmed anchor before navigation');
             requireWorldCameraBand(band);
 
+            const definition = WORLD_CAMERA_BANDS[band];
+            const numericDuration = durationMs == null
+                ? definition.durationMs
+                : Number(durationMs);
+            if (!Number.isFinite(numericDuration)) {
+                throw new TypeError('navigation durationMs must be finite');
+            }
+            const requestedDuration = Math.max(0, Math.min(5_000, numericDuration));
+
             const { token } = intentAuthority.begin({ intentId, band });
             const previous = activeNavigation;
             if (previous) {
@@ -333,14 +345,6 @@ export function createWorldSurface() {
                 widget.camera.cancelFlight();
             }
 
-            const definition = WORLD_CAMERA_BANDS[band];
-            const requestedDuration = durationMs == null
-                ? definition.durationMs
-                : Math.max(0, Math.min(5_000, Number(durationMs)));
-            if (!Number.isFinite(requestedDuration)) {
-                intentAuthority.complete(token);
-                throw new TypeError('navigation durationMs must be finite');
-            }
             const cut = !running || motionShouldCut(surface, motion) || requestedDuration === 0;
 
             return new Promise((resolve, reject) => {
@@ -441,7 +445,7 @@ export function createWorldSurface() {
                     ? widget.scene.requestRenderMode
                     : true,
                 renderHoldCount: renderHolds.size(),
-                imagery: 'bundled-offline-planet',
+                imagery: 'bundled-natural-earth',
                 terrain: 'ellipsoid',
                 parcelGeometry: 'not-provided',
             });
@@ -453,6 +457,8 @@ export function createWorldSurface() {
             cancelActiveNavigation('cancelled', 'surface-disposed');
             running = false;
             renderHolds.clear();
+            if (pendingWidget && !pendingWidget.isDestroyed()) pendingWidget.destroy();
+            pendingWidget = null;
             if (widget && !widget.isDestroyed()) {
                 widget.useDefaultRenderLoop = false;
                 widget.destroy();

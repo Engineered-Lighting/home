@@ -1,7 +1,8 @@
 # Internal spatial renderer gate
 
-This subtree is isolated, nonshipping test instrumentation. It is not a product
-screen and must never be linked from the Apartment tab. The shipping product
+This subtree is isolated, compile/debug-gated test instrumentation. It is not a
+product screen and must never be linked from the Apartment tab. A release
+artifact contents gate must prove this lab is omitted before shipping. The product
 keeps the existing Apartment chrome and controls; only its current viewport may
 hand off at the exterior zoom boundary. This lab tests the contract around
 a future outer-world renderer without importing or changing Apartment View.

@@ -1070,6 +1070,19 @@
               borderRadius: 5,
               background: "var(--hg-bg-0)",
             }}>
+              <style>{`
+                .intel-atlas-minimap-point::before {
+                  /* invisible hit-area halo: dot min 8px + 2*8px >= 24px,
+                     widened to >= 44px under the mobile breakpoint. */
+                  content: "";
+                  position: absolute;
+                  inset: -8px;
+                  border-radius: 999px;
+                }
+                @media (max-width: 699px) {
+                  .intel-atlas-minimap-point::before { inset: -18px; }
+                }
+              `}</style>
               {Object.entries(activityColors).slice(0, 12).map(([label, color], i) => (
                 <span key={label} style={{
                   position: "absolute",
@@ -1088,7 +1101,7 @@
                 return (
                   <button
                     key={point.id}
-                    className="hg-focusable"
+                    className="intel-atlas-minimap-point hg-focusable"
                     title={`${point.activity} · ${point.zone || "unknown"} · ${fmtTime(point.event_ts)}`}
                     onClick={() => onSelect(point)}
                     style={{
@@ -3459,7 +3472,9 @@
                   color,
                   opacity: alpha,
                 }}
-              />
+              >
+                {point.human_corrected ? <span className="intel-atlas-point-mark" aria-hidden="true" /> : null}
+              </button>
             );
           })}
 
@@ -4867,6 +4882,14 @@
             cursor: pointer;
             transition: transform 140ms ease, box-shadow 140ms ease, opacity 140ms ease;
           }
+          .intel-atlas-point::before {
+            /* invisible hit-area halo: keeps the visual dot small while the
+               tap target stays >=24px (>=44px under 699px). */
+            content: "";
+            position: absolute;
+            inset: -6px;
+            border-radius: inherit;
+          }
           .intel-atlas-point::after {
             content: "";
             position: absolute;
@@ -4895,8 +4918,7 @@
             border-style: dashed;
             opacity: 0.52;
           }
-          .intel-atlas-point.human::before {
-            content: "";
+          .intel-atlas-point-mark {
             position: absolute;
             right: -3px;
             top: -3px;
@@ -4905,6 +4927,7 @@
             border-radius: 999px;
             background: #fff;
             box-shadow: 0 0 8px rgba(255,255,255,0.82);
+            pointer-events: none;
           }
           .intel-atlas-connector {
             position: absolute;
@@ -5790,7 +5813,7 @@
               0 0 40px currentColor,
               0 18px 50px rgba(76, 62, 32, 0.22);
           }
-          [data-theme="light"] .intel-atlas-point.human::before {
+          [data-theme="light"] .intel-atlas-point-mark {
             background: var(--hg-blue);
             box-shadow: 0 0 8px rgba(31, 79, 168, 0.45);
           }
@@ -5914,7 +5937,7 @@
             }
             .intel-atlas-title h1 { font-size: 18px; }
             .intel-atlas-actions { gap: 5px; }
-            .intel-atlas-actions > :nth-child(n+4) { display: none; }
+            .intel-atlas-actions > .intel-atlas-status-chip { display: none; }
             .intel-atlas-guide {
               left: 14px;
               right: 14px;
@@ -5995,6 +6018,15 @@
             }
             .intel-atlas-rail {
               display: none;
+            }
+          }
+          @media (max-width: 699px) {
+            .intel-atlas-button {
+              min-height: 44px;
+            }
+            .intel-atlas-point::before {
+              /* dot min 13px + 2*16px halo >= 44px touch target */
+              inset: -16px;
             }
           }
         `}</style>

@@ -1544,11 +1544,25 @@ function LabChartSvgHistory({ turns, samplesShared, onSegmentClick, onSegmentHov
     // slow keeps the semantic amber with its baked-in alpha.
     const stroke = s.slow ? "rgba(255,178,90,0.85)" : "var(--hg-fg-0)";
     const strokeOp = s.slow ? 1 : 0.18;
+    // Phase 9 (mobile pass): segments are focusable + tappable — the
+    // tooltip readout was hover-only, which excluded keyboard and touch
+    // users entirely. Focus/tap pins the same tooltip the mouse hover
+    // shows (blur clears it); Enter/Space mirrors click. Focus events
+    // carry no client coords, so pinning synthesizes them from the
+    // rect's viewport box.
+    const turnLabel = s.turnIdx === N - 1 ? "now" : `${N - 1 - s.turnIdx} turns ago`;
+    const pinTooltip = (e) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      onSegmentHover?.(s, { clientX: r.left + r.width / 2, clientY: r.top });
+    };
     return <rect
       key={i}
       x={s.x.toFixed(2)} y={2} width={s.w.toFixed(2)} height={STACK_H}
       fill={fillProps.fill} fillOpacity={fillProps.fillOpacity}
       stroke={stroke} strokeOpacity={strokeOp} strokeWidth={0.5}
+      tabIndex={0}
+      role="button"
+      aria-label={`${s.stage} · ${turnLabel} · ${Math.round(s.ms)} ms`}
       style={{ cursor: "pointer", transition: "opacity 120ms" }}
       onMouseEnter={(e) => {
         e.currentTarget.style.opacity = 0.8;
@@ -1558,7 +1572,18 @@ function LabChartSvgHistory({ turns, samplesShared, onSegmentClick, onSegmentHov
         e.currentTarget.style.opacity = 1;
         onSegmentHover?.(null, e);
       }}
-      onClick={() => onSegmentClick?.(s.turn, s.turnIdx)}
+      onFocus={pinTooltip}
+      onBlur={(e) => onSegmentHover?.(null, e)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSegmentClick?.(s.turn, s.turnIdx);
+        }
+      }}
+      onClick={(e) => {
+        pinTooltip(e);
+        onSegmentClick?.(s.turn, s.turnIdx);
+      }}
     />;
   });
 
@@ -1661,6 +1686,8 @@ function LabChartSvgHistory({ turns, samplesShared, onSegmentClick, onSegmentHov
         <svg
           width={SVG_W} height={SVG_H} viewBox={`0 0 ${SVG_W} ${SVG_H}`}
           preserveAspectRatio="none" style={{ display: "block" }}
+          role="img"
+          aria-label={`voice turn history: ${N} turns as per-stage timing bars over ${metricsCfg.map((m) => m.label).join(", ")} resource lines`}
         >
           {/* Per-row clipPath defs. SVG paths can otherwise overshoot
               their row's y-band (stroke half-width straddles the
@@ -2099,6 +2126,44 @@ function LabTooltip({ data, position }) {
     : tip;
 }
 
+/* Phase 9 (mobile pass): compact stage legend for the history chart.
+ * The stack bars encode stages purely as fg-0 opacity steps plus the
+ * cyan tool family — with no key anywhere, that reads as arbitrary
+ * shading, especially on touch where hover discovery doesn't exist.
+ * Swatches reuse the exact STAGE_TINT entries via tintFillProps (same
+ * fill + fillOpacity as the chart rects) so the legend cannot drift
+ * from the rendering; "tool" is appended for the cyan tool family.
+ * Rendered by LabChartCard in history view only. */
+function LabStageLegend() {
+  const entries = Object.keys(STAGE_TINT)
+    .map((key) => ({ key, spec: STAGE_TINT[key] }))
+    .concat([{ key: "tool", spec: TOOL_DEFAULT_TINT }]);
+  return (
+    <div style={{
+      display: "flex", flexWrap: "wrap", alignItems: "center",
+      gap: "4px 10px", marginTop: 10,
+      fontFamily: HG_FONT_MONO, fontSize: 10.5,
+      color: "var(--hg-fg-3)", letterSpacing: "0.04em",
+    }}>
+      {entries.map(({ key, spec }) => {
+        const fillProps = tintFillProps(spec);
+        return (
+          <span key={key} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+            <svg width={9} height={9} aria-hidden="true" style={{ display: "block", flexShrink: 0 }}>
+              {/* Outline mirrors the segment rects' fg-0 hairline so the
+                  faintest tints (ambient 0.05) stay visible as swatches. */}
+              <rect x={0.5} y={0.5} width={8} height={8}
+                    fill={fillProps.fill} fillOpacity={fillProps.fillOpacity}
+                    stroke="var(--hg-fg-0)" strokeOpacity={0.18} strokeWidth={1} />
+            </svg>
+            {key}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 /* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
  * Sub-component: LabChartCard
  * â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
@@ -2300,6 +2365,7 @@ function LabChartCard({ turns, samplesShared, tier, baseline, view, setView, sel
         onSegmentHover={onSegmentHover}
         onLineHover={onLineHover}
       />
+      {view === "history" && <LabStageLegend />}
       <LabTooltip data={tooltipData} position={tooltipPos} />
 
       <div style={{

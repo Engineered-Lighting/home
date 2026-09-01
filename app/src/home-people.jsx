@@ -1937,7 +1937,6 @@ function PeopleQueueCard({ identity, endpoint, token, operationScopeKey, sim, av
           padding: "7px 10px",
           fontFamily: PEOPLE_FONT_SANS,
           fontSize: 14, color: "var(--hg-fg-0)",
-          outline: "none",
         }}
       />
 
@@ -1954,7 +1953,6 @@ function PeopleQueueCard({ identity, endpoint, token, operationScopeKey, sim, av
           fontFamily: PEOPLE_FONT_MONO,
           fontSize: 11, color: "var(--hg-fg-1)",
           letterSpacing: "0.04em",
-          outline: "none",
           cursor: saving ? "default" : "pointer",
         }}
       >
@@ -2215,7 +2213,6 @@ function UnlinkedFaceBucketCard({ bucket, endpoint, token, operationScopeKey, si
           fontFamily: PEOPLE_FONT_SANS,
           fontSize: 14,
           color: "var(--hg-fg-0)",
-          outline: "none",
         }}
       />
       <select
@@ -2231,7 +2228,6 @@ function UnlinkedFaceBucketCard({ bucket, endpoint, token, operationScopeKey, si
           fontSize: 11,
           color: "var(--hg-fg-1)",
           letterSpacing: "0.04em",
-          outline: "none",
           cursor: saving ? "default" : "pointer",
         }}
       >
@@ -2813,8 +2809,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
                 padding: "7px 10px",
                 fontFamily: PEOPLE_FONT_SANS,
                 fontSize: 14, color: "var(--hg-fg-0)",
-                outline: "none",
-              }}
+                    }}
             />
           </div>
 
@@ -2838,8 +2833,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
                 fontFamily: PEOPLE_FONT_MONO,
                 fontSize: 11, color: "var(--hg-fg-1)",
                 letterSpacing: "0.04em",
-                outline: "none",
-                cursor: (saving || readOnly) ? "default" : "pointer",
+                      cursor: (saving || readOnly) ? "default" : "pointer",
               }}
             >
               {REL_TYPE_OPTIONS.map((o) => (
@@ -2869,8 +2863,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
                 padding: "6px 9px",
                 fontFamily: PEOPLE_FONT_MONO,
                 fontSize: 11, color: "var(--hg-fg-1)",
-                outline: "none",
-              }}
+                    }}
             />
           </div>
 
@@ -2895,8 +2888,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
                 padding: "6px 9px",
                 fontFamily: PEOPLE_FONT_MONO,
                 fontSize: 11, color: "var(--hg-fg-1)",
-                outline: "none",
-              }}
+                    }}
             />
           </div>
 
@@ -2951,7 +2943,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
                 padding: "7px 10px",
                 fontFamily: PEOPLE_FONT_SANS,
                 fontSize: 12, color: "var(--hg-fg-1)",
-                outline: "none", resize: "vertical",
+                resize: "vertical",
               }}
             />
           </div>
@@ -3719,7 +3711,7 @@ function PreferencesSection({ identityUuid, preferences, endpoint, token, operat
                 border: "1px solid var(--hg-border-soft)",
                 padding: "5px 8px",
                 fontFamily: PEOPLE_FONT_MONO, fontSize: 11,
-                color: "var(--hg-fg-1)", outline: "none",
+                color: "var(--hg-fg-1)",
               }}
             />
             <datalist id="pref-key-suggestions">
@@ -3745,7 +3737,7 @@ function PreferencesSection({ identityUuid, preferences, endpoint, token, operat
                 border: "1px solid var(--hg-border-soft)",
                 padding: "5px 8px",
                 fontFamily: PEOPLE_FONT_MONO, fontSize: 11,
-                color: "var(--hg-fg-1)", outline: "none",
+                color: "var(--hg-fg-1)",
               }}
             />
           </div>
@@ -3768,7 +3760,7 @@ function PreferencesSection({ identityUuid, preferences, endpoint, token, operat
                 border: "1px solid var(--hg-border-soft)",
                 padding: "5px 8px",
                 fontFamily: PEOPLE_FONT_MONO, fontSize: 11,
-                color: "var(--hg-fg-1)", outline: "none",
+                color: "var(--hg-fg-1)",
               }}
             />
           </div>

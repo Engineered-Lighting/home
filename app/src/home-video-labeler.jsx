@@ -498,7 +498,7 @@ const VL_INPUT = {
   background: "var(--hg-input-bg)", border: "1px solid var(--hg-border-soft)",
   color: "var(--hg-fg-1)", padding: "4px 7px",
   fontFamily: VL_FONT_MONO, fontSize: 10.5, width: "100%",
-  outline: "none", boxSizing: "border-box",
+  boxSizing: "border-box",
 };
 
 const VL_SECTION_TITLE = {

@@ -107,8 +107,13 @@ async function main() {
     },
   });
   const tauriRes = await tauri.window.tauriFetch("http://ha.local/api/states", { headers: { A: "B" } });
-  assert("Tauri HTTP plugin is preferred when present", tauriCalls.length === 1 && tauriCalls[0].via === "tauri", tauriCalls);
-  assert("Tauri HTTP response is returned", tauriRes.status === 202 && (await tauriRes.json()).via === "tauri");
+  // Security contract: inside Tauri, raw HTTP is refused — native code must
+  // use the typed transport. The HTTP plugin must NOT be called.
+  assert("Tauri raw HTTP is refused (typed transport required)",
+    tauriCalls.length === 0 && tauriRes.ok === false && tauriRes.status === 0 &&
+    tauriRes.statusText === "native-typed-transport-required", tauriCalls);
+  assert("Tauri refusal response is inert JSON",
+    JSON.stringify(await tauriRes.json()) === "{}" && (await tauriRes.text()) === "");
 
   const sim = loadModule({
     sim: true,
@@ -133,21 +138,22 @@ async function main() {
   prefs.localStorage.setItem("hg-prefs", "{bad json");
   assert("loadPrefs falls back on corrupt JSON", prefs.window.loadPrefs({ ok: 1 }).ok === 1);
 
+  // Privacy contract (governed-agent work): conversation/event content in the
+  // Tauri glue is session-only — saveEvents/saveConversationId are no-ops and
+  // the loaders return empty defaults. (The browser web runtime keeps its own
+  // localStorage persistence — see home-web-runtime.js.)
   const manyEvents = Array.from({ length: 205 }, (_, i) => ({ id: i, streaming: i % 2 === 0 }));
   prefs.window.saveEvents(manyEvents);
-  const savedEvents = JSON.parse(prefs.localStorage.getItem("hg-events"));
-  assert("saveEvents trims to the newest 200", savedEvents.length === 200 && savedEvents[0].id === 5 && savedEvents[199].id === 204, savedEvents.slice(0, 2));
-  assert("saveEvents strips transient streaming flags", savedEvents.every((e) => !Object.prototype.hasOwnProperty.call(e, "streaming")));
-  assert("loadEvents returns trimmed stored events", prefs.window.loadEvents().length === 200);
-  prefs.localStorage.setItem("hg-events", JSON.stringify({ nope: true }));
-  assert("loadEvents ignores non-array payloads", prefs.window.loadEvents().length === 0);
+  assert("saveEvents is session-only (writes nothing)",
+    prefs.localStorage.getItem("hg-events") === null);
+  assert("loadEvents returns an empty session default",
+    Array.isArray(prefs.window.loadEvents()) && prefs.window.loadEvents().length === 0);
 
   process.stdout.write("\ntauri_glue_conversation_and_onboarding_test\n");
   assert("loadConversationId defaults null", prefs.window.loadConversationId() === null);
   prefs.window.saveConversationId("conv-1");
-  assert("saveConversationId stores id", prefs.window.loadConversationId() === "conv-1");
-  prefs.window.saveConversationId(null);
-  assert("saveConversationId removes falsey id", prefs.window.loadConversationId() === null);
+  assert("saveConversationId is session-only (id not persisted)",
+    prefs.window.loadConversationId() === null);
   assert("loadOnboarding returns defaults when empty", prefs.window.loadOnboarding({ seen: false }).seen === false);
   prefs.window.saveOnboarding({ seen: true, step: "voice" });
   prefs.window.saveOnboarding({ step: "lights" });

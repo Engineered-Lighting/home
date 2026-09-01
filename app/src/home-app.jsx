@@ -4028,7 +4028,7 @@ const SLASH_CMD_CATEGORIES = [
 ];
 
 const SLASH_CMDS = [
-  { cmd: "/agent", hint: "", desc: "open the governed Home Agent surface", category: "navigation" },
+  { cmd: "/agent", hint: "", desc: "open the governed Home Agent surface", category: "agent" },
   // ── connection ────────────────────────────────────────────────
   { cmd: "/connect",  hint: "<url> [<token>]", desc: "connect to a Home Assistant endpoint", category: "connection" },
   { cmd: "/endpoint", hint: "<url>",   desc: "change endpoint url", category: "connection" },

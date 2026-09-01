@@ -329,6 +329,9 @@ async function testHealthz() {
       HOME_WEB_PORT: String(port),
       HOME_WEB_AUTH_REQUIRED: "0",
       HOME_WEB_HA_TARGET: `http://127.0.0.1:${blackholePort}`,
+      // The legacy HA proxy is capability-gated (governed hardening); the
+      // timeout tests exercise that proxy so it must be enabled here.
+      HOME_WEB_ENABLE_LEGACY_HA_PROXY: "1",
       HOME_WEB_PROXY_RESPONSE_TIMEOUT_MS: "120",
     },
     stdio: ["ignore", "ignore", "pipe"],

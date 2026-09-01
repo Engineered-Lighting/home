@@ -746,12 +746,6 @@ function HomeApartmentEdit({
         e.preventDefault();
         finishZone();
       }
-      if (e.key === "Escape" && tool === "zones" && zoneDrawing) {
-        e.preventDefault();
-        setZoneDraft([]);
-        setZoneDrawing(false);
-        setNotice("new zone cancelled · existing room boundaries were not changed");
-      }
       if (e.key === "z" && (e.ctrlKey || e.metaKey) && !e.shiftKey) { e.preventDefault(); undo(); }
       if (e.key === "z" && (e.ctrlKey || e.metaKey) && e.shiftKey) { e.preventDefault(); redo(); }
     };
@@ -770,6 +764,20 @@ function HomeApartmentEdit({
     };
   }, [engine, tool, placing, placingTarget, moveTargetId, zoneDrawing, finishZone,
     mutate, roomAt, undo, redo, model.zones, model.targets]);
+
+  /* Overlay layer: while a new zone is being drawn, Escape cancels the draft
+     via HomeOverlay (topmost-only — no more double-firing with the view's
+     own Escape chain). */
+  window.HomeOverlay.useOverlayLayer({
+    key: "apartment-zones",
+    active: !!(tool === "zones" && zoneDrawing),
+    onEscape: () => {
+      setZoneDraft([]);
+      setZoneDrawing(false);
+      setNotice("new zone cancelled · existing room boundaries were not changed");
+    },
+    initialFocus: "none",
+  });
 
   const setHeight = (h, preset) => mutate((m) => {
     const dev = (m.devices || []).find((x) => x.id === selectedId);

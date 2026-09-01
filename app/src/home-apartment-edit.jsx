@@ -97,6 +97,35 @@ function EdTapeInput({ meters, onCommit, optional = false, label }) {
   );
 }
 
+function EdZoneNameInput({ suggested, onCommit, onCancel }) {
+  const [draft, setDraft] = useState(suggested);
+  const doneRef = useRef(false);
+  useEffect(() => { setDraft(suggested); doneRef.current = false; }, [suggested]);
+  const commit = () => {
+    if (doneRef.current) return;
+    doneRef.current = true;
+    onCommit(draft);
+  };
+  return (
+    <input value={draft} autoFocus placeholder="e.g. living room"
+      aria-label="new zone name" className="hg-focusable"
+      onChange={(e) => setDraft(e.target.value)} onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); e.currentTarget.blur(); }
+        if (e.key === "Escape") {
+          // stopPropagation: the HomeOverlay zones layer must not also see this
+          // Escape and cancel the drawn boundary along with the name prompt.
+          e.preventDefault();
+          e.stopPropagation();
+          doneRef.current = true;
+          onCancel();
+        }
+      }}
+      style={{ width: "100%", background: "var(--hg-bg-0)", border: "1px solid var(--hg-border-soft)",
+               color: "var(--hg-fg-0)", fontFamily: ED_SANS, fontSize: 12, padding: "5px 6px" }} />
+  );
+}
+
 function targetDisplayName(preset, targets) {
   const base = preset.category === "custom"
     ? (preset.shape === "point" ? "point" : "surface")
@@ -199,6 +228,7 @@ function HomeApartmentEdit({
   const [selectedZoneVertex, setSelectedZoneVertex] = useState(null);
   const [zoneDraft, setZoneDraft] = useState([]);      // [[x,y]...] while drawing
   const [zoneDrawing, setZoneDrawing] = useState(false);
+  const [zoneNaming, setZoneNaming] = useState(null);  // { suggested } while the inline name input is open
   const [notice, setNotice] = useState("");
   const [dirty, setDirty] = useState(false);
   const [pendingLinkEntity, setPendingLinkEntity] = useState("");
@@ -341,17 +371,21 @@ function HomeApartmentEdit({
     return zoneIdAt(model.zones, x, y);
   }, [model.zones]);
 
+  /* Finish opens an inline name input in the inspector instead of the native
+     blocking prompt() — WebView2 can suppress prompt(), which used to leave
+     zones nameless. The create-zone continuation runs when the input commits. */
   const finishZone = useCallback(() => {
     if (zoneDraft.length < 3) {
       setNotice("a room zone needs at least three corners");
       return;
     }
-    const response = prompt("zone name (e.g. living room)");
-    if (response == null) {
-      setNotice("Finish cancelled · the new boundary is still available");
-      return;
-    }
-    const name = response.trim() || `zone ${(model.zones || []).length + 1}`;
+    setZoneNaming({ suggested: `zone ${(model.zones || []).length + 1}` });
+    setNotice("name the new room in the inspector · Enter creates it · Escape keeps drawing");
+  }, [zoneDraft.length, model.zones]);
+
+  const createZoneFromDraft = useCallback((rawName) => {
+    if (zoneDraft.length < 3) { setZoneNaming(null); return; }
+    const name = String(rawName || "").trim() || `zone ${(model.zones || []).length + 1}`;
     const id = uniqueZoneId(name, model.zones);
     const draft = zoneDraft.map((point) => [...point]);
     mutate((m) => {
@@ -363,12 +397,18 @@ function HomeApartmentEdit({
       });
       refreshRoomAssignments(m);
     });
+    setZoneNaming(null);
     setZoneDraft([]);
     setZoneDrawing(false);
     setSelectedZone(id);
     setSelectedZoneVertex(null);
     setNotice(`${name} created · drag its corners to match the scan`);
   }, [zoneDraft, model.zones, mutate]);
+
+  const cancelZoneNaming = useCallback(() => {
+    setZoneNaming(null);
+    setNotice("Finish cancelled · the new boundary is still available");
+  }, []);
 
   /* canvas interactions while edit mode is active */
   useEffect(() => {
@@ -742,6 +782,11 @@ function HomeApartmentEdit({
       try { host.releasePointerCapture?.(e.pointerId); } catch (err) { /* optional */ }
     };
     const onKey = (e) => {
+      // Standard input-focus guard: while the editor's own text fields have
+      // focus, native typing-undo wins — never hijack Ctrl+Z into a silent
+      // geometry revert.
+      const t = e.target;
+      if (t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable)) return;
       if (e.key === "Enter" && tool === "zones" && zoneDrawing) {
         e.preventDefault();
         finishZone();
@@ -774,6 +819,7 @@ function HomeApartmentEdit({
     onEscape: () => {
       setZoneDraft([]);
       setZoneDrawing(false);
+      setZoneNaming(null);
       setNotice("new zone cancelled · existing room boundaries were not changed");
     },
     initialFocus: "none",
@@ -1019,7 +1065,7 @@ function HomeApartmentEdit({
           setNotice("");
         }} />
         <EdButton label="zones" active={tool === "zones"} onClick={() => {
-          setTool("zones"); setZoneDraft([]); setZoneDrawing(false);
+          setTool("zones"); setZoneDraft([]); setZoneDrawing(false); setZoneNaming(null);
           setSelectedId(null); setSelectedTargetId(null); setMoveTargetId(null);
           setSelectedZone((current) => current || model.zones?.[0]?.id || null);
           setSelectedZoneVertex(null);
@@ -1393,7 +1439,7 @@ function HomeApartmentEdit({
                   onClick={() => {
                     setSelectedZone(candidate.id); setSelectedZoneVertex(null);
                     setSelectedId(null); setSelectedTargetId(null);
-                    setZoneDrawing(false); setZoneDraft([]);
+                    setZoneDrawing(false); setZoneDraft([]); setZoneNaming(null);
                     setNotice(`${candidate.name} selected · drag a corner or the shaded interior`);
                   }} style={{
                     display: "grid", gridTemplateColumns: "9px 1fr auto", gap: 7, alignItems: "center",
@@ -1418,19 +1464,26 @@ function HomeApartmentEdit({
                 <div style={{ color: "var(--hg-fg-4)", fontFamily: ED_SANS, fontSize: 9, lineHeight: 1.45, marginTop: 5 }}>
                   Click floor corners in order. Add at least three, then finish the boundary.
                 </div>
-                <div style={{ display: "flex", gap: 5, marginTop: 8 }}>
-                  <EdButton label="Finish zone" active disabled={zoneDraft.length < 3} onClick={finishZone} />
-                  <EdButton label="Cancel" onClick={() => {
-                    setZoneDraft([]); setZoneDrawing(false);
-                    setSelectedZone(model.zones?.[0]?.id || null);
-                    setNotice("new zone cancelled · existing room boundaries were not changed");
-                  }} />
-                </div>
+                {zoneNaming ? (
+                  <div style={{ marginTop: 8, color: "var(--hg-ice)", fontSize: 8.5, lineHeight: 1.5 }}>
+                    name the new room in the inspector · Enter creates it · Escape resumes drawing
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", gap: 5, marginTop: 8 }}>
+                    <EdButton label="Finish zone" active disabled={zoneDraft.length < 3} onClick={finishZone} />
+                    <EdButton label="Cancel" onClick={() => {
+                      setZoneDraft([]); setZoneDrawing(false); setZoneNaming(null);
+                      setSelectedZone(model.zones?.[0]?.id || null);
+                      setNotice("new zone cancelled · existing room boundaries were not changed");
+                    }} />
+                  </div>
+                )}
               </div>
             ) : (
               <div style={{ marginTop: 10 }}>
                 <EdButton label="+ new zone" onClick={() => {
-                  setZoneDrawing(true); setZoneDraft([]); setSelectedZone(null); setSelectedZoneVertex(null);
+                  setZoneDrawing(true); setZoneDraft([]); setZoneNaming(null);
+                  setSelectedZone(null); setSelectedZoneVertex(null);
                   setNotice("click the first floor corner · Finish zone becomes available after three corners");
                 }} />
               </div>
@@ -1443,7 +1496,19 @@ function HomeApartmentEdit({
 
       {/* right: inspector */}
       <div style={{ ...panel, right: 12 }} data-apt-edit-ui="inspector">
-        {selectedTarget ? (
+        {tool === "zones" && zoneDrawing && zoneNaming ? (
+          <>
+            <div style={heading}>new room name</div>
+            <div style={{ color: "var(--hg-fg-4)", fontFamily: ED_SANS, fontSize: 9, lineHeight: 1.45, marginBottom: 7 }}>
+              Name the room you just outlined. Enter or clicking away creates it; Escape keeps the boundary so you can keep drawing.
+            </div>
+            <EdZoneNameInput suggested={zoneNaming.suggested}
+              onCommit={createZoneFromDraft} onCancel={cancelZoneNaming} />
+            <div style={{ fontSize: 8.5, color: "var(--hg-fg-5)", lineHeight: 1.5, marginTop: 7 }}>
+              {zoneDraft.length} corners recorded · the room gets a color and a 2.4 m ceiling you can adjust after creation
+            </div>
+          </>
+        ) : selectedTarget ? (
           <>
             <div style={heading}>named target</div>
             <input value={selectedTarget.name}

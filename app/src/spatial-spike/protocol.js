@@ -1,5 +1,10 @@
 export const PROTOCOL_VERSION = "home.spatial-spike.v1";
 export const CONNECTION_TYPE = "home.spatial-spike/connect";
+export const RENDERER_ADAPTER_IDS = Object.freeze([
+  "deterministic-dom",
+  "cesium-separate",
+  "maplibre-sandbox",
+]);
 
 export const HOST_TO_FRAME = Object.freeze({
   INIT: "home.spatial-spike/init",
@@ -27,11 +32,17 @@ export const FRAME_ERROR_CODES = Object.freeze({
   UNSUPPORTED_COMMAND: "unsupported-command",
   COMMAND_FAILED: "command-failed",
   MESSAGE_UNREADABLE: "message-unreadable",
+  UNKNOWN_SITE: "unknown-site",
+  INVALID_NAVIGATION: "invalid-navigation",
+  ADAPTER_LOAD_FAILED: "adapter-load-failed",
+  RUNTIME_AUTHORITY_EXPOSED: "runtime-authority-exposed",
+  BENCHMARK_FAILED: "benchmark-failed",
 });
 
 const HOST_TYPES = new Set(Object.values(HOST_TO_FRAME));
 const FRAME_TYPES = new Set(Object.values(FRAME_TO_HOST));
 const FRAME_ERROR_CODE_VALUES = new Set(Object.values(FRAME_ERROR_CODES));
+const RENDERER_ADAPTER_ID_VALUES = new Set(RENDERER_ADAPTER_IDS);
 const ID_PATTERN = /^[a-z0-9][a-z0-9._:-]{0,95}$/i;
 const FORBIDDEN_KEYS = new Set([
   "address",
@@ -129,14 +140,15 @@ export function validateEnvironment(environment) {
 function validateHostPayload(type, payload) {
   switch (type) {
     case HOST_TO_FRAME.INIT:
-      return hasExactKeys(payload, ["sites", "environment", "reducedMotion"])
+      return hasExactKeys(payload, ["sites", "environment", "reducedMotion", "adapterId"])
         && !hasForbiddenKey(payload)
         && Array.isArray(payload.sites)
         && payload.sites.length > 0
         && payload.sites.length <= 12
         && payload.sites.every(validateSyntheticSite)
         && validateEnvironment(payload.environment)
-        && typeof payload.reducedMotion === "boolean";
+        && typeof payload.reducedMotion === "boolean"
+        && RENDERER_ADAPTER_ID_VALUES.has(payload.adapterId);
     case HOST_TO_FRAME.SET_SITES:
       return hasExactKeys(payload, ["sites"])
         && !hasForbiddenKey(payload)
@@ -179,7 +191,7 @@ function validateFramePayload(type, payload) {
   switch (type) {
     case FRAME_TO_HOST.READY:
       return hasExactKeys(payload, ["adapterId", "fixtureOnly"])
-        && validId(payload.adapterId)
+        && RENDERER_ADAPTER_ID_VALUES.has(payload.adapterId)
         && payload.fixtureOnly === true;
     case FRAME_TO_HOST.STATE:
     case FRAME_TO_HOST.SNAPSHOT:
@@ -234,8 +246,8 @@ function validateFramePayload(type, payload) {
         && (payload.journey.intentId === null || validId(payload.journey.intentId))
         && new Set(["planet", "interior"]).has(payload.journey.destination)
         && new Set(["auto", "manual"]).has(payload.journey.playback)
-        && finiteBetween(payload.journey.elapsedMs, 0, 6000)
-        && finiteBetween(payload.journey.durationMs, 0, 6000)
+        && finiteBetween(payload.journey.elapsedMs, 0, 4000)
+        && finiteBetween(payload.journey.durationMs, 0, 4000)
         && Number.isSafeInteger(payload.journey.keyframeIndex)
         && finiteBetween(payload.journey.keyframeIndex, 0, 7)
         && finiteBetween(payload.journey.progress, 0, 1)

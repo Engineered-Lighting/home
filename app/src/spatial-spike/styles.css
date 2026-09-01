@@ -271,6 +271,13 @@ iframe {
   color: var(--mist-100);
 }
 
+.control-note {
+  margin: 7px 0 19px;
+  color: var(--mist-500);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
 .host-site-option input:checked + label::before {
   border-color: var(--survey);
   background: var(--survey);
@@ -476,3 +483,19 @@ select {
   }
 }
 
+@media (forced-colors: active) {
+  .frame-panel,
+  .control-panel,
+  .protocol-state,
+  .host-site-option label,
+  .quiet-action,
+  select {
+    border-color: CanvasText;
+  }
+
+  .protocol-light,
+  .host-site-option input:checked + label::before {
+    background: Highlight;
+    box-shadow: none;
+  }
+}

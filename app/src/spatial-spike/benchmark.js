@@ -26,19 +26,26 @@ export function installRuntimeInstrumentation(globalRef = globalThis) {
   const contextRecords = [];
   let workersCreated = 0;
   let workersTerminated = 0;
+  let webglTrackingInstalled = false;
+  let workerTrackingInstalled = false;
   const activeWorkers = new Set();
   const Canvas = globalRef.HTMLCanvasElement;
   const originalGetContext = Canvas?.prototype?.getContext;
 
   if (originalGetContext) {
-    Canvas.prototype.getContext = function observedGetContext(kind, ...args) {
-      const context = originalGetContext.call(this, kind, ...args);
-      if (context && WEBGL_KINDS.has(String(kind).toLowerCase())) {
-        const known = contextRecords.some((record) => record.context === context);
-        if (!known) contextRecords.push({ canvas: this, context });
-      }
-      return context;
-    };
+    try {
+      Canvas.prototype.getContext = function observedGetContext(kind, ...args) {
+        const context = originalGetContext.call(this, kind, ...args);
+        if (context && WEBGL_KINDS.has(String(kind).toLowerCase())) {
+          const known = contextRecords.some((record) => record.context === context);
+          if (!known) contextRecords.push({ canvas: this, context });
+        }
+        return context;
+      };
+      webglTrackingInstalled = Canvas.prototype.getContext !== originalGetContext;
+    } catch {
+      webglTrackingInstalled = false;
+    }
   }
 
   const OriginalWorker = globalRef.Worker;
@@ -55,7 +62,12 @@ export function installRuntimeInstrumentation(globalRef = globalThis) {
         return super.terminate();
       }
     }
-    globalRef.Worker = ObservedWorker;
+    try {
+      globalRef.Worker = ObservedWorker;
+      workerTrackingInstalled = globalRef.Worker === ObservedWorker;
+    } catch {
+      workerTrackingInstalled = false;
+    }
   }
 
   const instrumentation = Object.freeze({
@@ -69,6 +81,10 @@ export function installRuntimeInstrumentation(globalRef = globalThis) {
         return counts;
       }, { observed: contextRecords.length, live: 0, attached: 0, detached: 0 });
       return Object.freeze({
+        tracking: Object.freeze({
+          workers: workerTrackingInstalled,
+          webgl: webglTrackingInstalled,
+        }),
         workers: Object.freeze({
           created: workersCreated,
           terminated: workersTerminated,

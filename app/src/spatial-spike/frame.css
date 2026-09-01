@@ -282,6 +282,14 @@ h2 {
   overflow: hidden;
 }
 
+.renderer-surface > .cesium-viewer,
+.renderer-surface > .maplibregl-map,
+.renderer-surface .cesium-widget,
+.renderer-surface canvas {
+  width: 100%;
+  height: 100%;
+}
+
 .fixture-world {
   position: absolute;
   inset: 0;
@@ -516,6 +524,7 @@ h2 {
 
 .journey-controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin-top: 9px;
@@ -534,6 +543,18 @@ h2 {
   text-transform: uppercase;
 }
 
+.benchmark-result {
+  display: block;
+  margin-top: 9px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  background: rgba(9, 17, 22, 0.7);
+  color: var(--muted);
+  font-family: Consolas, "SFMono-Regular", monospace;
+  font-size: 0.64rem;
+  line-height: 1.45;
+}
+
 .frame-footer {
   padding-top: 15px;
   border-top: 1px solid var(--line);
@@ -541,7 +562,7 @@ h2 {
 
 .state-readout {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 10px;
   margin: 0;
 }
@@ -639,3 +660,26 @@ h2 {
   animation: none !important;
 }
 
+@media (forced-colors: active) {
+  .status-chip,
+  .site-option,
+  .primary-action,
+  .quiet-action,
+  .renderer-wrap,
+  .range-rail,
+  .benchmark-result {
+    border-color: CanvasText;
+  }
+
+  .site-option.is-selected,
+  .range-stop.is-current,
+  .scale-readout {
+    color: Highlight;
+  }
+
+  .fixture-marker-core,
+  .site-option.is-selected::before {
+    background: Highlight;
+    box-shadow: none;
+  }
+}

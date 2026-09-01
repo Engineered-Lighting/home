@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; font-src 'self'; media-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; worker-src 'self'; font-src 'self'; media-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>Spatial renderer sandbox fixture</title>
   <link rel="stylesheet" href="./frame.css">
 </head>
@@ -15,6 +15,7 @@
         <h1>World-to-room handoff</h1>
       </div>
       <div class="status-cluster" aria-label="Runtime status">
+        <span class="status-chip" id="renderer-status">Deterministic fallback</span>
         <span class="status-chip" id="network-status">Network online</span>
         <span class="status-chip" id="provider-status">Provider live</span>
       </div>
@@ -56,23 +57,26 @@
         <div class="journey-controls" aria-label="Deterministic journey controls">
           <button class="quiet-action" id="step-journey" type="button">Step keyframe</button>
           <button class="quiet-action" id="cancel-journey" type="button">Cancel journey</button>
+          <button class="quiet-action" id="run-lifecycle" type="button">Run 20-cycle check</button>
           <span class="journey-progress" id="journey-progress">Idle</span>
         </div>
+        <output class="benchmark-result" id="benchmark-result" aria-live="polite">Lifecycle evidence has not been sampled.</output>
       </section>
     </div>
 
     <footer class="frame-footer">
       <dl class="state-readout">
+        <div><dt>Renderer</dt><dd id="renderer-readout">Deterministic fallback</dd></div>
+        <div><dt>Cold useful</dt><dd id="startup-readout">Pending</dd></div>
         <div><dt>Selected</dt><dd id="selected-readout">—</dd></div>
         <div><dt>Scene owner</dt><dd id="owner-readout">World adapter</dd></div>
         <div><dt>AI</dt><dd id="ai-readout">Available</dd></div>
         <div><dt>Motion</dt><dd id="motion-readout">Standard</dd></div>
       </dl>
-      <p class="fixture-note">No map tiles, addresses, credentials, remote code, or Apartment renderer are loaded.</p>
+      <p class="fixture-note">Only the bundled synthetic raster is loaded. No provider tiles, addresses, credentials, remote code, or Apartment renderer are available.</p>
     </footer>
   </main>
   <div class="visually-hidden" id="live-region" role="status" aria-live="polite" aria-atomic="true"></div>
   <script type="module" src="./frame-main.js"></script>
 </body>
 </html>
-

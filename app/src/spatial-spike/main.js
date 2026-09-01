@@ -2,6 +2,7 @@ import { ENVIRONMENT_PRESETS, SYNTHETIC_SITES } from "./fixtures.js";
 import {
   FRAME_TO_HOST,
   HOST_TO_FRAME,
+  RENDERER_ADAPTER_IDS,
   createConnectionEnvelope,
   createEnvelope,
   parseEnvelope,
@@ -14,11 +15,13 @@ const protocolState = protocolStatus.closest(".protocol-state");
 const ledger = document.getElementById("protocol-ledger");
 const siteOptions = document.getElementById("host-site-options");
 const environmentSelect = document.getElementById("environment-select");
+const rendererSelect = document.getElementById("renderer-select");
 const reducedMotion = document.getElementById("reduced-motion");
 const controls = [
   document.getElementById("host-enter"),
   document.getElementById("host-planet"),
   document.getElementById("host-step"),
+  rendererSelect,
   environmentSelect,
   reducedMotion,
   document.getElementById("request-snapshot"),
@@ -29,6 +32,10 @@ let ready = false;
 let requestSequence = 0;
 let activeIntentId = null;
 let selectedSiteId = SYNTHETIC_SITES[0].id;
+let activeAdapterId = rendererSelect.value;
+let initSent = false;
+
+const adapterLabel = (adapterId) => rendererSelect.querySelector(`option[value="${CSS.escape(adapterId)}"]`)?.textContent || adapterId;
 
 const nextId = (prefix) => `${prefix}-${String(++requestSequence).padStart(4, "0")}`;
 
@@ -62,7 +69,7 @@ function appendLedger(direction, envelope) {
 }
 
 function send(type, payload = {}, requestId = nextId("host")) {
-  if (!ready || !port) return null;
+  if (!port) return null;
   const envelope = createEnvelope(type, requestId, payload);
   port.postMessage(envelope);
   appendLedger("→", envelope);
@@ -124,14 +131,23 @@ function handleFrameMessage(event) {
   appendLedger("←", envelope);
 
   if (envelope.type === FRAME_TO_HOST.READY) {
-    setReady(true, "Sandbox connected");
-    const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    reducedMotion.checked = prefersReducedMotion;
-    send(HOST_TO_FRAME.INIT, {
-      sites: SYNTHETIC_SITES,
-      environment: ENVIRONMENT_PRESETS.nominal,
-      reducedMotion: prefersReducedMotion,
-    });
+    if (!initSent) {
+      initSent = true;
+      setReady(false, `Loading ${adapterLabel(activeAdapterId)}`);
+      const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      reducedMotion.checked = prefersReducedMotion;
+      send(HOST_TO_FRAME.INIT, {
+        sites: SYNTHETIC_SITES,
+        environment: ENVIRONMENT_PRESETS.nominal,
+        reducedMotion: prefersReducedMotion,
+        adapterId: activeAdapterId,
+      });
+    } else if (envelope.payload.adapterId === activeAdapterId) {
+      setReady(true, `${adapterLabel(activeAdapterId)} ready`);
+    } else {
+      setReady(false, "Protocol error: renderer identity mismatch");
+      rendererSelect.disabled = false;
+    }
     return;
   }
 
@@ -140,14 +156,16 @@ function handleFrameMessage(event) {
   }
 
   if (envelope.type === FRAME_TO_HOST.ERROR) {
+    setReady(false, `Frame error: ${envelope.payload.code}`);
     protocolState.classList.add("is-error");
-    protocolStatus.textContent = `Frame error: ${envelope.payload.code}`;
+    rendererSelect.disabled = false;
   }
 }
 
 function connectFrame() {
   if (!frame.contentWindow) return;
   if (port) port.close();
+  initSent = false;
   setReady(false, "Opening sandbox channel");
   const channel = new MessageChannel();
   port = channel.port1;
@@ -177,7 +195,16 @@ reducedMotion.addEventListener("change", () => {
   send(HOST_TO_FRAME.SET_REDUCED_MOTION, { reducedMotion: reducedMotion.checked });
 });
 
+rendererSelect.addEventListener("change", () => {
+  if (!RENDERER_ADAPTER_IDS.includes(rendererSelect.value)) return;
+  activeAdapterId = rendererSelect.value;
+  activeIntentId = null;
+  if (port) port.close();
+  port = null;
+  setReady(false, `Recreating sandbox for ${adapterLabel(activeAdapterId)}`);
+  frame.src = frame.getAttribute("src");
+});
+
 frame.addEventListener("load", connectFrame);
 renderSiteOptions();
 setReady(false, "Waiting for sandbox");
-

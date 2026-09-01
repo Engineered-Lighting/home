@@ -494,6 +494,29 @@ const VL_REVIEW_RESULT = {
   needs_review: "needs_review", exclude: "excluded_from_export",
 };
 
+/* P7 destructive-action guard (protected-positive: undo-first, single-key
+ * throughput preserved).
+ *
+ * Canonical A/R/N/X: the server review call now lands an undo entry on the
+ * existing stack. Ctrl+Z restores the prior lane snapshot AND issues the
+ * compensating review action below (prior review_state → action); 'reviewed'
+ * has no server action (REVIEW_ACTIONS lands on it from nowhere), so that
+ * restore rides the dirty doc — review_state is part of the PUT payload and
+ * reconciles on the next save.
+ *
+ * Suggestion A/R/N/X: graduation is irreversible server-side (nothing can
+ * set review_state back to 'prelabel'; the PUT rejects it as reserved), so
+ * there is NO compensating endpoint — those verbs get the Pattern B1
+ * arm→confirm instead (see confirmSuggestionVerb in VLEditor): the FIRST
+ * use of a verb per app session shows a "press again to <verb>" hint near
+ * the status bar and must be repeated within 3s; confirmed verbs keep full
+ * single-key speed for the rest of the session. */
+const VL_REVIEW_COMPENSATE = {
+  accepted: "accept", rejected: "reject",
+  needs_review: "needs_review", excluded_from_export: "exclude",
+};
+const VL_CONFIRMED_REVIEW_VERBS = {}; // verb → true once confirmed (app session)
+
 const VL_INPUT = {
   background: "var(--hg-input-bg)", border: "1px solid var(--hg-border-soft)",
   color: "var(--hg-fg-1)", padding: "4px 7px",
@@ -599,8 +622,9 @@ function vlRemapAxes(axes, idMap) {
 }
 
 function vlRemapStack(stack, idMap) {
+  /* spread keeps the review compensation marker (server ids — never remapped) */
   return (stack || []).map((e) => ({
-    axis: e.axis, before: vlRemapList(e.before, idMap), after: vlRemapList(e.after, idMap),
+    ...e, before: vlRemapList(e.before, idMap), after: vlRemapList(e.after, idMap),
   }));
 }
 
@@ -685,13 +709,19 @@ function vlEditorReducer(state, a) {
       };
     }
     /* server-applied review: patches the segment + adopts the bumped
-       revision WITHOUT touching rev/savedRev (it isn't a local edit) */
+       revision WITHOUT touching rev/savedRev (it isn't a local edit).
+       a.undoEntry (P7): the verdict still lands on the undo stack so a
+       stray A/R/N/X is recoverable — UNDO restores the prior lane (its
+       rev bump marks the doc dirty, so the restored review_state syncs
+       on save) and the caller issues the compensating review call. */
     case "APPLY_REVIEW": {
       const lane = (state.doc.axes[a.axis] || []).map((s) => s.id === a.segId ? { ...s, ...a.patch } : s);
       return {
         ...state,
         doc: { axes: { ...state.doc.axes, [a.axis]: lane } },
         revision: a.revision != null ? a.revision : state.revision,
+        undo: a.undoEntry ? state.undo.concat([a.undoEntry]).slice(-50) : state.undo,
+        redo: a.undoEntry ? [] : state.redo,
       };
     }
     /* M3 — a reviewed suggestion graduated server-side; PROJECT it into the
@@ -1720,13 +1750,14 @@ const VL_CHEAT_ROWS = [
   ["c", "create custom label"], ["i / o", "set start / end to playhead"],
   ["s", "split at playhead"], ["m", "merge with next"],
   [", / .", "nudge nearest boundary ∓/± 1 frame (shift ×10)"],
-  ["del", "delete segment"], ["a / r / n / x", "accept / reject / needs review / exclude"],
-  ["shift+a", "accept all suggestions overlapping selection"],
+  ["del", "delete segment"],
+  ["a / r / n / x", "accept / reject / needs review / exclude (segments: ctrl+z undoes · suggestions: first use per session asks to press again)"],
+  ["shift+a", "accept all suggestions overlapping selection (first use per session asks to press again)"],
   ["g", "toggle person you ↔ p2 (activity/posture)"],
   ["p", "toggle private_skip over selection"],
   ["u / shift+u", "next / prev unreviewed (falls back to suggestions)"],
   ["f · + / −", "fit · zoom (ctrl+wheel on timeline)"],
-  ["ctrl+z / y", "undo / redo"], ["ctrl+s", "save"], ["ctrl+enter", "save and next"],
+  ["ctrl+z / y", "undo / redo (edits + segment reviews)"], ["ctrl+s", "save"], ["ctrl+enter", "save and next"],
 ];
 
 function VLCheatSheet({ onClose }) {
@@ -1805,6 +1836,15 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
   const calibrationRef = useRef(calibration);
   calibrationRef.current = calibration;
   const bulkBusyRef = useRef(false); // serializes Shift+A / bulk-accept runs
+  /* P7 — Pattern B1 (home-ai-stack confirmOrDispatch): arm→confirm with 3s
+     expiry for suggestion review verbs (no compensating endpoint exists) */
+  const confirmVerbRef = useRef(null);
+  const confirmTimerRef = useRef(null);
+  useEffect(() => () => {
+    if (confirmTimerRef.current) {
+      try { clearTimeout(confirmTimerRef.current); } catch (e) { /* */ }
+    }
+  }, []);
 
   const fps = (video && video.fps) || 30;
   const minDur = Math.max(0.2, 3 / fps); // plan: max(0.2s, 3/fps)
@@ -2265,18 +2305,93 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
     }
     const r = await D.reviewSegment(video.id, sel.id, action);
     if (r.ok && r.data) {
+      const applied = (r.data.segment && r.data.segment.review_state) || localState;
+      /* P7: inverse entry — before = current lane (post-await), after = the
+         patched lane; review marker drives the compensating call on undo.
+         prevState reads from `before` so the compensation always matches
+         the exact state the undo restores. */
+      const before = laneOf(axis);
+      const prior = before.find((x) => x.id === sel.id);
       dispatch({
         type: "APPLY_REVIEW", axis, segId: sel.id,
-        patch: { review_state: (r.data.segment && r.data.segment.review_state) || localState },
+        patch: { review_state: applied },
         revision: r.data.revision,
+        undoEntry: {
+          axis,
+          before,
+          after: before.map((x) => x.id === sel.id ? { ...x, review_state: applied } : x),
+          review: {
+            segId: sel.id,
+            prevState: ((prior || sel).review_state) || null,
+            action,
+          },
+        },
       });
-      showToast(localState.replace(/_/g, " "));
+      showToast(localState.replace(/_/g, " ") + " · ctrl+z undoes");
     } else {
       showToast("review failed · " + (r.error || "service unreachable"));
     }
   }, [selectedSeg, laneOf, commitLane, video.id, showToast]);
 
+  /* Ctrl+Z/Y — the reducer restores the doc as before; an entry carrying a
+     review marker (server-applied A/R/N/X) additionally compensates the
+     verdict server-side: undo re-issues the action the PRIOR review_state
+     maps to, redo re-issues the original action. 'reviewed'/null map to no
+     action — the restored doc is dirty (UNDO bumps rev) and review_state
+     rides the next PUT, same channel the local/tmp review path uses. A
+     failed compensating call degrades to exactly that save-sync path. */
+  const undoRedo = useCallback(async (type) => {
+    const s = stateRef.current;
+    const entry = type === "UNDO" ? s.undo[s.undo.length - 1] : s.redo[s.redo.length - 1];
+    dispatch({ type });
+    const rv = entry && entry.review;
+    if (!rv || vlIsTempId(rv.segId) || labelsApiRef.current.status !== "ok") return;
+    const action = type === "UNDO" ? VL_REVIEW_COMPENSATE[rv.prevState] : rv.action;
+    if (!action) return;
+    const r = await D.reviewSegment(video.id, rv.segId, action);
+    if (r.ok && r.data) {
+      dispatch({
+        type: "APPLY_REVIEW", axis: entry.axis, segId: rv.segId,
+        patch: {
+          review_state: (r.data.segment && r.data.segment.review_state)
+            || VL_REVIEW_RESULT[action] || rv.prevState,
+        },
+        revision: r.data.revision,
+      });
+    } else {
+      showToast("review " + (type === "UNDO" ? "undone" : "redone") + " locally · syncs on save");
+    }
+  }, [video.id, showToast]);
+
   /* ---------- M3: suggestion review (accept graduates into the lane) ---- */
+
+  /* P7 — Pattern B1 gate for suggestion verbs (graduation is irreversible:
+     nothing restores review_state='prelabel'). FIRST use of a verb per app
+     session arms it — a transient "press again to <verb>" hint lands near
+     the status bar — and the same verb within 3s executes; every later use
+     that session runs at full single-key speed. */
+  const confirmSuggestionVerb = useCallback((verb, label) => {
+    if (VL_CONFIRMED_REVIEW_VERBS[verb]) return true;
+    if (confirmVerbRef.current === verb) {
+      if (confirmTimerRef.current) {
+        try { clearTimeout(confirmTimerRef.current); } catch (e) { /* */ }
+        confirmTimerRef.current = null;
+      }
+      confirmVerbRef.current = null;
+      VL_CONFIRMED_REVIEW_VERBS[verb] = true;
+      return true;
+    }
+    confirmVerbRef.current = verb;
+    if (confirmTimerRef.current) {
+      try { clearTimeout(confirmTimerRef.current); } catch (e) { /* */ }
+    }
+    confirmTimerRef.current = setTimeout(() => {
+      if (confirmVerbRef.current === verb) confirmVerbRef.current = null;
+      confirmTimerRef.current = null;
+    }, 3000);
+    showToast("press again to " + label + " — suggestion reviews can't be undone");
+    return false;
+  }, [showToast]);
 
   /* A/R/N/X with a SUGGESTION selected. Suggestions are server rows only —
      no local/tmp path — so the labels API must be reachable. accept /
@@ -2298,6 +2413,10 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
       showToast("review unavailable · " + (labelsApiRef.current.reason || "labels API offline"));
       return;
     }
+    const verbLabel = action === "needs_review"
+      ? "mark this suggestion needs-review"
+      : action + " this suggestion"; // accept | reject | exclude
+    if (!confirmSuggestionVerb(action, verbLabel)) return;
     const r = await D.reviewSegment(video.id, seg.id, action);
     if (!(r.ok && r.data)) {
       showToast("review failed · " + (r.error || "service unreachable"));
@@ -2325,7 +2444,7 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
         + " · " + vlValueText(seg.value)
         + (wantDup && clean.id ? " · +" + dupSlot : ""));
     }
-  }, [video.id, minDur, removeSuggestionIds, showToast]);
+  }, [video.id, minDur, removeSuggestionIds, confirmSuggestionVerb, showToast]);
 
   /* sequential accepts over a target list — shared by Shift+A and the
      (calibration-gated) bulk button; failures collect into ONE toast */
@@ -2375,6 +2494,7 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
     }
     const anchor = (suggestionsRef.current[sel.axis] || []).find((x) => x.id === sel.segId);
     if (!anchor) return;
+    if (!confirmSuggestionVerb("accept_all", "accept every overlapping suggestion")) return;
     const targets = [];
     for (const ax of VL_AXIS_ORDER) {
       for (const seg of suggestionsRef.current[ax] || []) {
@@ -2384,7 +2504,7 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
       }
     }
     acceptList(targets);
-  }, [acceptList, showToast]);
+  }, [acceptList, confirmSuggestionVerb, showToast]);
 
   /* bulk accept — NEVER enabled unless the server's calibration doc says
      bulk_ok for an axis; then accepts that axis's conf ≥ 0.8 suggestions */
@@ -2637,8 +2757,8 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
     if (picker || mergePrompt) return;       // modal editor surfaces own the keyboard
     if (ctrl) {
       const k = key.length === 1 ? key.toLowerCase() : key;
-      if (k === "z") { handled(); dispatch({ type: e.shiftKey ? "REDO" : "UNDO" }); return; }
-      if (k === "y") { handled(); dispatch({ type: "REDO" }); return; }
+      if (k === "z") { handled(); undoRedo(e.shiftKey ? "REDO" : "UNDO"); return; }
+      if (k === "y") { handled(); undoRedo("REDO"); return; }
       if (k === "s") { handled(); doSave(false); return; }
       if (key === "Enter") { handled(); doSave(true); return; }
       if (key === "ArrowLeft") { handled(); tr.skip(-10); return; }

@@ -421,15 +421,6 @@ function ExternalKeyModal({ onClose }) {
     initialFocus: "first",
   });
 
-  // Enter→save stays on a window listener for now; a later phase scopes it.
-  React.useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === "Enter" && value.trim()) doSave();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [value, doSave]);
-
   return (
     <div
       onClick={() => onClose && onClose({})}
@@ -480,6 +471,11 @@ function ExternalKeyModal({ onClose }) {
           type={showing ? "text" : "password"}
           value={value}
           onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            // Enter is scoped to this input only — buttons keep their
+            // native Enter-clicks-the-focused-button behavior.
+            if (e.key === "Enter" && value.trim()) doSave();
+          }}
           placeholder="sk-..."
           autoFocus
           name="external-api-key"

@@ -724,11 +724,23 @@ function FrozenCard({ title, subtitle, intro, knobs, fileLocation, whyFrozen, cu
 
 // ── Main drawer component ──────────────────────────────────────────────
 
+/* Two-click arm→confirm label (Pattern B1, copied from home-ai-stack.jsx's
+ * _aiStackConfirmButtonLabel). Armed buttons swap to an explicit confirm
+ * label that names the verb; un-armed buttons keep their resting label. */
+function _lightsConfirmButtonLabel(confirmVerb, verb, confirmLabel, label) {
+  return confirmVerb === verb ? confirmLabel : label;
+}
+
 function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askExternal, spatialMode = false }) {
   const [zone, setZone] = useState("office");
   const [states, setStates] = useState(() => seedTravelModeState({}));  // { entity_id: { state, attributes } }
   const [error, setError] = useState(null);
   const [travelModeBusy, setTravelModeBusy] = useState(false);
+  // Inline two-click confirmation for the destructive footer reset
+  // (Pattern B1, copied from home-ai-stack.jsx confirmOrDispatch): first
+  // click arms, second click within 3 s runs, otherwise the arm expires.
+  const [confirmVerb, setConfirmVerb] = useState(null);
+  const confirmTimerRef = useRef(null);
   const subRef = useRef(null);
   // Ref + scroll helper for the "tune ToD ↑" buttons on per-modifier
   // cards (where the CT slider used to live). Each modifier card carries
@@ -739,6 +751,36 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
   const jumpToToD = useCallback(() => {
     todSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
+
+  // Cleanup any pending arm-expiry timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (confirmTimerRef.current) {
+        try { clearTimeout(confirmTimerRef.current); } catch {}
+        confirmTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const confirmOrRun = useCallback((verb, run) => {
+    if (confirmVerb !== verb) {
+      setConfirmVerb(verb);
+      if (confirmTimerRef.current) {
+        try { clearTimeout(confirmTimerRef.current); } catch {}
+      }
+      confirmTimerRef.current = setTimeout(() => {
+        setConfirmVerb((current) => (current === verb ? null : current));
+        confirmTimerRef.current = null;
+      }, 3000);
+      return;
+    }
+    if (confirmTimerRef.current) {
+      try { clearTimeout(confirmTimerRef.current); } catch {}
+      confirmTimerRef.current = null;
+    }
+    setConfirmVerb(null);
+    run();
+  }, [confirmVerb]);
   const haOnline = !!client && (connection == null || connection === "online");
   const offlineWriteMessage = "Home Assistant is reconnecting; light controls are disabled until it is online.";
   const mobile = typeof window !== "undefined" && window.innerWidth <= 699;
@@ -1463,7 +1505,7 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
                    opacity: haOnline ? 1 : 0.45 }}>
           ✕ clear cooldowns
         </button>
-        <button disabled={!haOnline} onClick={() => {
+        <button disabled={!haOnline} onClick={() => confirmOrRun("reset_all", () => {
           // Reset all promoted constants + bias knobs to defaults
           const resets = [
             ["input_number.living_lights_working_hours_floor_pct", 80],
@@ -1496,12 +1538,13 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
           ];
           for (const [eid, v] of resets) setNum(eid, v);
           setText("input_text.living_lights_bias_zone_scope", "all");
-        }}
+        })}
+          title="Reset every promoted constant + bias knob to defaults (~24 HA writes). First click arms; click again within 3 s to confirm."
           style={{ background: "transparent", border: "1px solid var(--hg-border)", borderRadius: 4,
                    color: "var(--hg-fg-1)", padding: "5px 10px",
                    fontFamily: FONT_MONO, fontSize: 11, cursor: haOnline ? "pointer" : "not-allowed",
                    opacity: haOnline ? 1 : 0.45 }}>
-          ↺ reset all to defaults
+          {_lightsConfirmButtonLabel(confirmVerb, "reset_all", "✓ confirm reset", "↺ reset all…")}
         </button>
         </div>
         <span style={{ fontFamily: FONT_MONO, fontSize: 10, color: "var(--hg-fg-2)" }}>

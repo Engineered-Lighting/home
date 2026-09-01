@@ -52,13 +52,13 @@ export const SCALE_STOPS = deepFreeze([
 
 const ENTRY_KEYFRAMES = [
   { atMs: 0, scale: "planet", owner: "world", heightKm: 18000, pitchDeg: -88, bearingDeg: 0, anchorBlend: 0 },
-  { atMs: 800, scale: "country", owner: "world", heightKm: 4200, pitchDeg: -78, bearingDeg: 4, anchorBlend: 0.42 },
-  { atMs: 1600, scale: "region", owner: "world", heightKm: 780, pitchDeg: -68, bearingDeg: 9, anchorBlend: 0.7 },
-  { atMs: 2500, scale: "city", owner: "world", heightKm: 96, pitchDeg: -56, bearingDeg: 14, anchorBlend: 0.88 },
-  { atMs: 3400, scale: "neighborhood", owner: "world", heightKm: 8.4, pitchDeg: -45, bearingDeg: 18, anchorBlend: 0.96 },
-  { atMs: 4300, scale: "exterior", owner: "world", heightKm: 0.32, pitchDeg: -31, bearingDeg: 22, anchorBlend: 1 },
-  { atMs: 5200, scale: "handoff", owner: "coordinator", heightKm: 0.08, pitchDeg: -20, bearingDeg: 24, anchorBlend: 1 },
-  { atMs: 6000, scale: "interior", owner: "interior-placeholder", heightKm: 0.012, pitchDeg: -8, bearingDeg: 24, anchorBlend: 1 },
+  { atMs: 450, scale: "country", owner: "world", heightKm: 4200, pitchDeg: -78, bearingDeg: 4, anchorBlend: 0.42 },
+  { atMs: 900, scale: "region", owner: "world", heightKm: 780, pitchDeg: -68, bearingDeg: 9, anchorBlend: 0.7 },
+  { atMs: 1350, scale: "city", owner: "world", heightKm: 96, pitchDeg: -56, bearingDeg: 14, anchorBlend: 0.88 },
+  { atMs: 1800, scale: "neighborhood", owner: "world", heightKm: 8.4, pitchDeg: -45, bearingDeg: 18, anchorBlend: 0.96 },
+  { atMs: 2250, scale: "exterior", owner: "world", heightKm: 0.32, pitchDeg: -31, bearingDeg: 22, anchorBlend: 1 },
+  { atMs: 2750, scale: "handoff", owner: "coordinator", heightKm: 0.08, pitchDeg: -20, bearingDeg: 24, anchorBlend: 1 },
+  { atMs: 3200, scale: "interior", owner: "interior-placeholder", heightKm: 0.012, pitchDeg: -8, bearingDeg: 24, anchorBlend: 1 },
 ];
 
 const reverseJourney = (frames) => {
@@ -130,4 +130,3 @@ export const ENVIRONMENT_PRESETS = deepFreeze({
 });
 
 export const FIXTURE_VERSION = "spatial-spike-fixtures-v1";
-

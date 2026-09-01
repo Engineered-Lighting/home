@@ -157,7 +157,12 @@ async function expectReject(name, promise, pattern) {
     source.includes('<button disabled={!haOnline} onClick={() => setText("input_text.living_lights_bias_zone_scope", zone)}'));
   assert("footer write buttons disable while HA is offline",
     source.includes("<button disabled={!haOnline} onClick={clearAllCooldowns}") &&
-    source.includes("<button disabled={!haOnline} onClick={() => {"));
+    source.includes('<button disabled={!haOnline} onClick={() => confirmOrRun("reset_all", () => {'));
+  assert("footer reset requires two-click arm→confirm (Pattern B1)",
+    source.includes("const confirmOrRun = useCallback((verb, run) => {") &&
+    source.includes("}, 3000);"));
+  assert("footer reset labels signal arming and name the confirm verb",
+    source.includes('{_lightsConfirmButtonLabel(confirmVerb, "reset_all", "✓ confirm reset", "↺ reset all…")}'));
   assert("cooldown sweeper does not write while HA is offline",
     source.includes("if (!open || !haOnline) return undefined;") &&
     source.includes("}, [open, client, haOnline]);"));

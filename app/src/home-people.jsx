@@ -2495,6 +2495,12 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
   const [error, setError] = useState(null);
   const [dirty, setDirty] = useState(null);   // pending patch object, or null
   const [saving, setSaving] = useState(false);
+  // Destructive-action guard (Pattern C, mirrors the apartment-edit
+  // remove-link two-step): closing the panel with unsaved edits arms an
+  // inline confirm strip instead of discarding silently. First close/Escape
+  // → strip shows; "discard" closes, "keep editing" dismisses; a second
+  // close/Escape while the strip shows confirms the discard.
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   // Addendum 24 Phase 3: avatar crop modal toggle
   const [showAvatarModal, setShowAvatarModal] = useState(false);
   const H = (typeof window !== "undefined" && window.HomePeopleHelpers) || null;
@@ -2506,6 +2512,29 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
     null,
   );
 
+  // Disarm whenever the edits themselves go away (save success, identity
+  // switch, discard) so a stale arm can never swallow a later first Escape.
+  useEffect(() => {
+    if (!dirty) setConfirmDiscard(false);
+  }, [dirty]);
+
+  // Guarded close: every panel close path (close button + the people-detail
+  // layer's Escape) funnels through here so unsaved edits are never
+  // dropped without an explicit second step.
+  const discardAndClose = () => {
+    setConfirmDiscard(false);
+    setDirty(null);
+    onClose();
+  };
+  const requestClose = () => {
+    if (dirty) {
+      if (!confirmDiscard) { setConfirmDiscard(true); return; }
+      discardAndClose();
+      return;
+    }
+    onClose();
+  };
+
   // Overlay layer: stacks above people-root so one Escape press closes only
   // the panel, not the whole overlay. Non-trapping side panel — aria-modal
   // stays "false".
@@ -2513,7 +2542,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
   window.HomeOverlay.useOverlayLayer({
     key: "people-detail",
     active: !!identityUuid,
-    onEscape: () => onClose(),
+    onEscape: () => requestClose(),
     rootRef: detailRootRef,
     trap: false,
     initialFocus: "root",
@@ -2658,12 +2687,31 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
     }
   }
 
+  /* Pattern B1 two-click arm→confirm (3s expiry) — replaces the native
+   * window.confirm, which WebView2 script-dialog suppression can swallow
+   * (the delete would then be silently impossible on desktop). */
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const confirmDeleteTimerRef = useRef(null);
+  useEffect(() => () => {
+    if (confirmDeleteTimerRef.current) clearTimeout(confirmDeleteTimerRef.current);
+  }, []);
+  function armOrDelete() {
+    if (!confirmingDelete) {
+      setConfirmingDelete(true);
+      confirmDeleteTimerRef.current = setTimeout(() => {
+        setConfirmingDelete(false);
+        confirmDeleteTimerRef.current = null;
+      }, 3000);
+      return;
+    }
+    if (confirmDeleteTimerRef.current) { clearTimeout(confirmDeleteTimerRef.current); confirmDeleteTimerRef.current = null; }
+    setConfirmingDelete(false);
+    deletePerson();
+  }
+
   async function deletePerson() {
     if (readOnly) return;
     if (!payload) return;
-    if (!window.confirm(`Delete ${payload.identity.display_name}? This removes the identity, all preferences, and queues a delete to Frigate.`)) {
-      return;
-    }
     const operation = beginOperation("delete");
     setSaving(true);
     setError(null);
@@ -2731,7 +2779,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
         borderBottom: "1px solid var(--hg-border-soft)",
       }}>
         <button
-          onClick={onClose}
+          onClick={requestClose}
           className="hg-focusable"
           aria-label="Close panel"
           style={{
@@ -2762,6 +2810,41 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
           }}>legacy read-only · cutover pending</span>
         )}
       </div>
+
+      {/* Pattern C guard strip — a close attempt with unsaved edits lands
+          here instead of silently discarding them. */}
+      {confirmDiscard && dirty && (
+        <div role="alert" style={{
+          display: "flex", alignItems: "center", gap: 8,
+          margin: "14px 14px 0", padding: "8px 12px",
+          border: "1px solid var(--hg-warn)",
+          background: "color-mix(in oklab, var(--hg-warn) 6%, transparent)",
+          color: "var(--hg-warn)",
+          fontSize: 10, letterSpacing: "0.04em",
+        }}>
+          <span style={{ flex: 1 }}>unsaved changes</span>
+          <button
+            className="hg-focusable"
+            onClick={discardAndClose}
+            style={{
+              background: "transparent", border: "1px solid var(--hg-warn)",
+              color: "var(--hg-warn)", padding: "4px 9px",
+              fontFamily: PEOPLE_FONT_MONO, fontSize: 10, letterSpacing: "0.12em",
+              cursor: "pointer", textTransform: "lowercase", whiteSpace: "nowrap",
+            }}
+          >discard</button>
+          <button
+            className="hg-focusable"
+            onClick={() => setConfirmDiscard(false)}
+            style={{
+              background: "transparent", border: "1px solid var(--hg-border-soft)",
+              color: "var(--hg-fg-2)", padding: "4px 9px",
+              fontFamily: PEOPLE_FONT_MONO, fontSize: 10, letterSpacing: "0.12em",
+              cursor: "pointer", textTransform: "lowercase", whiteSpace: "nowrap",
+            }}
+          >keep editing</button>
+        </div>
+      )}
 
       {loading && (
         <div style={{ padding: 18, color: "var(--hg-fg-3)", fontSize: 11 }}>
@@ -3086,9 +3169,10 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
               }}
             >{saving ? "saving…" : "save changes"}</button>
             <button
-              onClick={deletePerson}
+              onClick={armOrDelete}
               disabled={saving}
               className="hg-focusable"
+              title={`Removes ${payload?.identity?.display_name || "this identity"}, all preferences, and queues a delete to Frigate`}
               style={{
                 background: "transparent",
                 border: "1px solid var(--hg-crit)",
@@ -3098,7 +3182,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
                 letterSpacing: "0.16em", textTransform: "lowercase",
                 cursor: saving ? "default" : "pointer",
               }}
-            >delete</button>
+            >{confirmingDelete ? "✓ confirm delete" : "delete…"}</button>
           </div>}
         </div>
       )}

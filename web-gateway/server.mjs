@@ -55,6 +55,10 @@ if (!agentOriginBoundary.valid) {
 if (!nativeAgentOriginBoundary.valid) {
   console.warn("[agent-origin] HOME_WEB_NATIVE_AGENT_ORIGIN is missing or invalid; native Agent routes are disabled");
 }
+const PROXY_RESPONSE_TIMEOUT_MS = Math.max(
+  250,
+  Number(process.env.HOME_WEB_PROXY_RESPONSE_TIMEOUT_MS || 5000) || 5000,
+);
 const PACKAGE_JSON = (() => {
   try {
     return JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
@@ -393,6 +397,7 @@ function gatewayHealth() {
     commit: BUILD_COMMIT,
     assetVersion: BUILD_ASSET_VERSION,
     host: HOST,
+    proxyResponseTimeoutMs: PROXY_RESPONSE_TIMEOUT_MS,
     port: PORT,
     auth: {
       enabled: authState.enabled,
@@ -1431,10 +1436,14 @@ function proxyHttp(req, res, route) {
     return;
   }
   const client = targetUrl.protocol === "https:" ? https : http;
+  let receivedResponse = false;
+  let responseTimer = null;
   const upstream = client.request(targetUrl, {
     method: req.method,
     headers: proxyHeaders(req.headers, route, suffix),
   }, (upstreamRes) => {
+    receivedResponse = true;
+    if (responseTimer) clearTimeout(responseTimer);
     let headers = { ...upstreamRes.headers };
     delete headers["content-security-policy"];
     if (route.transformResponseHeaders) {
@@ -1450,8 +1459,34 @@ function proxyHttp(req, res, route) {
   });
 
   upstream.on("error", (err) => {
-    res.writeHead(502, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ ok: false, error: err.message }));
+    if (responseTimer) clearTimeout(responseTimer);
+    if (res.headersSent || res.destroyed || res.writableEnded) return;
+    const timedOut = err?.code === "HOME_WEB_PROXY_RESPONSE_TIMEOUT";
+    res.writeHead(timedOut ? 504 : 502, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+    });
+    res.end(JSON.stringify({
+      ok: false,
+      error: timedOut ? "upstream response timeout" : err.message,
+    }));
+  });
+
+  // A down optional sidecar must not monopolize one of the browser's small
+  // HTTP/1.1 connection pool indefinitely. Limit the wait for response
+  // headers, then clear the timer so healthy SSE/download responses may stay
+  // open for as long as they need.
+  responseTimer = setTimeout(() => {
+    if (receivedResponse || upstream.destroyed) return;
+    const err = new Error(`upstream response timeout after ${PROXY_RESPONSE_TIMEOUT_MS} ms`);
+    err.code = "HOME_WEB_PROXY_RESPONSE_TIMEOUT";
+    upstream.destroy(err);
+  }, PROXY_RESPONSE_TIMEOUT_MS);
+  responseTimer.unref?.();
+
+  res.on("close", () => {
+    if (responseTimer) clearTimeout(responseTimer);
+    if (!res.writableEnded && !upstream.destroyed) upstream.destroy();
   });
 
   req.pipe(upstream);

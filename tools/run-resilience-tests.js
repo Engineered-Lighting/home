@@ -315,9 +315,25 @@ async function waitForGateway(port, child) {
 async function testHealthz() {
   process.stdout.write("\ngateway_healthz_test\n");
   const port = await freePort();
+  const blackholePort = await freePort();
+  const blackhole = http.createServer(() => {});
+  await new Promise((resolve, reject) => {
+    blackhole.once("error", reject);
+    blackhole.listen(blackholePort, "127.0.0.1", resolve);
+  });
   const child = childProcess.spawn(process.execPath, [SERVER], {
     cwd: REPO,
-    env: { ...process.env, HOME_WEB_HOST: "127.0.0.1", HOME_WEB_PORT: String(port), HOME_WEB_AUTH_REQUIRED: "0" },
+    env: {
+      ...process.env,
+      HOME_WEB_HOST: "127.0.0.1",
+      HOME_WEB_PORT: String(port),
+      HOME_WEB_AUTH_REQUIRED: "0",
+      HOME_WEB_HA_TARGET: `http://127.0.0.1:${blackholePort}`,
+      // The legacy HA proxy is capability-gated (governed hardening); the
+      // timeout tests exercise that proxy so it must be enabled here.
+      HOME_WEB_ENABLE_LEGACY_HA_PROXY: "1",
+      HOME_WEB_PROXY_RESPONSE_TIMEOUT_MS: "120",
+    },
     stdio: ["ignore", "ignore", "pipe"],
   });
   try {
@@ -355,8 +371,21 @@ async function testHealthz() {
       reset.body.slice(0, 200));
     assert("GET /reset-cache reloads a fresh build URL",
       reset.body.includes("/?fresh="), reset.body.slice(0, 200));
+
+    const proxyStarted = Date.now();
+    const timedOut = await request(port, "/proxy/ha/api/states", "GET");
+    const proxyElapsed = Date.now() - proxyStarted;
+    assert("unresponsive proxy upstreams return 504",
+      timedOut.status === 504, timedOut.status);
+    assert("unresponsive proxy upstreams release the request promptly",
+      proxyElapsed < 1500, proxyElapsed);
+    let timeoutBody = null;
+    try { timeoutBody = JSON.parse(timedOut.body); } catch { /* leave null */ }
+    assert("proxy timeout response is explicit JSON",
+      timeoutBody?.ok === false && timeoutBody?.error === "upstream response timeout", timeoutBody);
   } finally {
     if (child.exitCode == null) child.kill();
+    await new Promise((resolve) => blackhole.close(resolve));
   }
 }
 

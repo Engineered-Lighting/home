@@ -225,8 +225,8 @@ async function expectReject(name, promise, pattern) {
 
   process.stdout.write("\nheader_menu_wiring_test\n");
   const appSource = fs.readFileSync(path.join(REPO, "app", "src", "home-app.jsx"), "utf8");
-  assert("HomeHeader accepts lights menu opener", appSource.includes("onOpenApartment, onOpenLights, onOpenSimulationControls"));
-  assert("hamburger menu includes lowercase lights item", appSource.includes("onClick={() => runMenuAction(onOpenLights)}>lights</button>"));
+  assert("HomeHeader accepts lights menu opener", appSource.includes("onOpenLights, onOpenSimulationControls"));
+  assert("hamburger menu includes lowercase lights item", appSource.includes('onClick={() => runMenuAction(onOpenLights)}>{mobile ? "lights + travel mode" : "lights"}</button>'));
   assert("app passes /lights opener into HomeHeader", appSource.includes("onOpenLights={isSpatialWide ? null : openLightsFeature}"));
 
   if (fails) {

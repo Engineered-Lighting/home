@@ -1186,8 +1186,14 @@ process.stdout.write("\n[1mindex.html cache-busting loader[0m\n");
   const srcDir = path.join(__dirname, "..", "app", "src");
   const srcFiles = fs.readdirSync(srcDir)
     .filter((f) => (f.endsWith(".jsx") || f.endsWith(".js")) &&
-                   !f.endsWith(".test.js") && f !== "babel-config.js");
-  const missing = srcFiles.filter((f) => !src.includes("'" + f + "'") && !src.includes('"' + f + '"'));
+                   !f.endsWith(".test.js") && f !== "babel-config.js" &&
+                   // Registered from home-web-runtime.js, never via index.html.
+                   f !== "home-service-worker.js");
+  const missing = srcFiles.filter((f) =>
+    !src.includes("'" + f + "'") && !src.includes('"' + f + '"') &&
+    // Head-loaded scripts and the service worker are referenced with a ./
+    // prefix (<script src="./x.js"> / register("./x.js?...")) — count those.
+    !src.includes("'./" + f) && !src.includes('"./' + f));
   assert("every JSX/JS in app/src is listed in index.html loader",
     missing.length === 0,
     { missing });

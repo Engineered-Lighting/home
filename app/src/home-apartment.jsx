@@ -11,7 +11,7 @@
  * cached on window.__APT_ENGINE for instant warm reopen.
  */
 
-const { useState, useEffect, useRef, useCallback } = React;
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
 const APT_FONT_MONO = '"Geist Mono", "JetBrains Mono", monospace';
 const APT_FONT_SANS = '"Geist", "Inter", sans-serif';
@@ -682,7 +682,7 @@ function AptUndistortedFeed({ src, snapshotSrc, snapshotIntervalMs = 0, alt, int
   );
 }
 
-function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = false }) {
+function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "disconnected", embedded = false }) {
   const viewport = useAptViewport();
   const mobile = viewport.mobile;
   const hostRef = useRef(null);
@@ -702,12 +702,18 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const [toast, setToast] = useState(null);
   const [azIdx, setAzIdx] = useState(1);
   const [editing, setEditing] = useState(false);
+  const [aimMode, setAimMode] = useState(false);
+  const [aimFixtureId, setAimFixtureId] = useState(null);
+  const [aimDestination, setAimDestination] = useState(null);
   const [model, setModel] = useState(window.HomeApartmentData.EMPTY_MODEL);
+  const [seedModel, setSeedModel] = useState(null);
   const [registry, setRegistry] = useState({ entities: [], areas: [], devices: [], states: {} });
   const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState({ state: "idle", detail: "not edited" });
+  const [liveReview, setLiveReview] = useState({ state: "idle", live: null, detail: "" });
   const [track, setTrack] = useState(null);          // primary person track
   const [trackerStatus, setTrackerStatus] = useState("connecting");
-  const [, setServicePulse] = useState(0);
+  const [servicePulse, setServicePulse] = useState(0);
   const [hoverId, setHoverId] = useState(null);
   const [cardId, setCardId] = useState(null);
   const [inCamPose, setInCamPose] = useState(false);
@@ -725,6 +731,13 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   const simActive = !!(sim && sim.active);
   const [serviceEpoch, setServiceEpoch] = useState(0);
   const modePrewarmRef = useRef(null);
+  const sourceMeta = window.HomeApartmentData.modelSourceMeta?.(model)
+    || { kind: simActive ? "simulation" : "empty", label: simActive ? "Simulation" : "No model" };
+  const liveComparison = useMemo(() => (
+    liveReview.state === "ready" && liveReview.live
+      ? window.HomeApartmentData.compareApartmentModels?.(model, liveReview.live) || null
+      : null
+  ), [model, liveReview]);
 
   useEffect(() => {
     const bump = () => setServiceEpoch((n) => n + 1);
@@ -736,6 +749,12 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     setToast(text);
     setTimeout(() => setToast(null), 2800);
   }, []);
+
+  const markModelDirty = useCallback(() => {
+    setSaveStatus(simActive
+      ? { state: "simulation", detail: "unsaved simulation change · live model untouched" }
+      : { state: "unsaved", detail: "changes not yet saved" });
+  }, [simActive]);
 
   useEffect(() => {
     if (!embedded) return undefined;
@@ -864,6 +883,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
       // state here or a live feed / calibration overlay / control card
       // resurrects the next time the view opens
       setLiveCam(null); setLiveOn(false); setLiveFeedStatus("idle"); setCameraPoseReady(false); setCalibCam(null); setCardId(null);
+      setAimMode(false); setAimDestination(null);
+      engineRef.current?.overlay?.setAimBeam?.(null);
       setEditing(false);
       const eng = engineRef.current;
       if (eng) {
@@ -918,12 +939,13 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         const result = await cb();
         if (!cancelled) {
           completed += 1;
-          token.done = completed >= 2;
+          token.done = completed >= 3;
           window.dispatchEvent(new CustomEvent("home-apartment-mode-prewarm", { detail: result }));
         }
       }, timeout), delay));
     };
 
+    schedule(40, 1200, () => engine.modes.preload(["collision"]));
     schedule(mobile ? 450 : 700, 2500, () => engine.modes.preload(["splat"]));
     schedule(mobile ? 2600 : 1600, 4500, () => engine.modes.preload(["mesh"]));
 
@@ -942,7 +964,11 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
   useEffect(() => {
     if (!open) return undefined;
     let dead = false;
+    setLiveReview({ state: "idle", live: null, detail: "" });
     (async () => {
+      const seed = await window.HomeApartmentData.getSeedModel?.();
+      if (!dead) setSeedModel(seed || null);
+      if (simActive && !dead) setRegistry({ entities: [], areas: [], devices: [], states: {} });
       // retry until a true remote load lands — the first attempt can race
       // tauriFetch readiness and fall back to a cached/seed copy, which the
       // user reads as "my saves were overwritten"
@@ -950,19 +976,43 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         const m = await window.HomeApartmentData.getModel({ endpoint, token, sim: simActive });
         if (dead) return;
         setModel(m);
-        const fromRemote = typeof m.revision === "number" && !m.remote_cached
-          && !m.offline_draft && !m.seeded;
+        const meta = window.HomeApartmentData.modelSourceMeta?.(m) || {};
+        setSaveStatus(meta.kind === "simulation"
+          ? { state: "simulation", detail: "isolated · cannot save live" }
+          : meta.kind === "live_ha_model"
+            ? { state: "saved", detail: `revision ${m.revision}` }
+            : meta.kind === "local_draft"
+              ? { state: "offline", detail: "local draft · not saved to Home Assistant" }
+              : { state: "idle", detail: meta.label || "loaded" });
+        const fromRemote = meta.kind === "live_ha_model"
+          || (meta.kind === "seed_model" && Number.isInteger(m.source_detail?.authoritative_revision));
         if (fromRemote || simActive || !token) break;
         await new Promise((r) => setTimeout(r, 2500));
-      }
-      const client = window.__hav_haClient;
-      if (client && !simActive) {
-        const reg = await window.HomeApartmentData.getRegistry(client);
-        if (!dead) setRegistry(reg);
       }
     })();
     return () => { dead = true; };
   }, [open, endpoint, token, simActive]);
+
+  /* Registry inventory follows the authenticated HA connection separately
+     from the Apartment document. Reconnecting must refresh all real lights,
+     but must never reload the model over unsaved editor changes. */
+  useEffect(() => {
+    if (!open) return undefined;
+    if (simActive) {
+      setRegistry({ entities: [], areas: [], devices: [], states: {} });
+      return undefined;
+    }
+    if (connection !== "online") return undefined;
+    const client = window.__hav_haClient;
+    if (!client) return undefined;
+    let dead = false;
+    window.HomeApartmentData.getRegistry(client).then((nextRegistry) => {
+      if (!dead) setRegistry(nextRegistry);
+    }).catch(() => {
+      if (!dead) setRegistry({ entities: [], areas: [], devices: [], states: {} });
+    });
+    return () => { dead = true; };
+  }, [open, simActive, connection, endpoint, token, serviceEpoch]);
 
   /* correspondence pick: NATIVE capture-phase listener — the rig's input
      handlers stop propagation, so React synthetic events never fire on the
@@ -1059,12 +1109,57 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     if (!engine || phase !== "ready") return;
     engine.overlay.setDevices(model.devices || []);
     engine.overlay.setZones(model.zones || []);
+    engine.overlay.setTargets?.(model.targets || []);
     for (const [eid, st] of Object.entries(statesRef.current)) {
       const dev = (model.devices || []).find((d) => d.ha_entity_id === eid);
       if (dev) engine.overlay.setDeviceState(dev.id, st);
     }
     if (editing) engine.overlay.setZonesVisible(0.7);
   }, [model, phase, editing]);
+
+  /* Quiet simulation beams are part of the spatial overview, not a selection
+     artifact. Aim mode replaces these with the emphasized current/preview
+     solve, then this layer returns when the inspector closes. */
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!engine?.overlay?.setAimBeams || phase !== "ready" || aimMode) return;
+    if (!simActive || editing) { engine.overlay.setAimBeams([]); return; }
+    const A = window.HomeApartmentAiming;
+    const runtimeByFixture = window.__SIM_APARTMENT_AIM_RUNTIME?.readAll?.() || {};
+    const targetById = new Map((model.targets || []).map((target) => [target.id, target]));
+    const specs = (model.devices || []).filter((device) => device.fixture_kind === A?.ENGINEERED_KIND).map((fixture) => {
+      const runtime = runtimeByFixture[fixture.id];
+      const runtimeDestination = runtime?.current_destination;
+      const target = runtimeDestination?.pos ? runtimeDestination : targetById.get(fixture.gimbal?.default_target_id);
+      let direction = [0, 0, -1], distance = Math.max(0.35, +fixture.pos?.[2] || 2.3), currentMode = null;
+      if (runtimeDestination?.kind === "mirror") {
+        direction = [0, 0, 1]; distance = 0.2; currentMode = "mirror_bounce";
+      } else if (target?.pos) {
+        const delta = target.pos.map((value, index) => value - fixture.pos[index]);
+        distance = Math.hypot(...delta); direction = delta.map((value) => value / distance);
+      }
+      const footprintCandidate = !currentMode && target?.normal
+        ? A.projectBeamToPlane({ origin: fixture.pos, direction, plane_point: target.pos,
+          plane_normal: target.normal, full_fwhm_deg: fixture.spotlight?.optic_profile?.configured_fwhm_deg || 20 })
+        : null;
+      const footprint = footprintCandidate?.kind === "ellipse" ? footprintCandidate : null;
+      const calibration = fixture.radial_zones?.orientation_calibration;
+      const radial = calibration ? fixture.radial_zones.zones.map((zone) => ({
+        number: zone.number, angle_deg: A.radialZoneAngle(zone.number, calibration),
+        active: runtime?.zones?.[zone.number]?.state === "on",
+        color_temp_kelvin: runtime?.zones?.[zone.number]?.color_temp_kelvin,
+      })) : [];
+      return { fixture_id: fixture.id, origin: fixture.pos,
+        color_temp_kelvin: runtime?.spotlight?.color_temp_kelvin,
+        current: { origin: fixture.pos, direction, distance_m: distance,
+          full_fwhm_deg: fixture.spotlight?.optic_profile?.configured_fwhm_deg || 20,
+          state: runtime?.spotlight?.state || "unknown",
+          color_temp_kelvin: runtime?.spotlight?.color_temp_kelvin, mode: currentMode,
+          footprint: footprint?.points?.length ? footprint : null,
+          surface_aligned: footprint?.kind === "ellipse" }, radial };
+    });
+    engine.overlay.setAimBeams(specs, "__none__");
+  }, [open, phase, model, simActive, editing, aimMode, servicePulse]);
 
   /* HA entity state binding */
   useEffect(() => {
@@ -1092,28 +1187,89 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     });
   }, [open, phase, simActive, serviceEpoch]);
 
-  /* hover + click picking (view mode only) */
+  /* hover + click picking (view and side-effect-free Aim mode) */
   useEffect(() => {
     if (!open || phase !== "ready" || editing) return undefined;
     const engine = engineRef.current;
     const host = hostRef.current;
     if (!engine || !host) return undefined;
     let raf = 0;
+    let gesture = null;
+    const onDown = (e) => { gesture = { x: e.clientX, y: e.clientY, moved: false }; };
     const onMove = (e) => {
+      if (gesture && Math.hypot(e.clientX - gesture.x, e.clientY - gesture.y) > 8) gesture.moved = true;
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
         const hits = engine.picking.pick(engine.overlay.pickObjects(), e.clientX, e.clientY);
         const id = hits.length ? hits[0].object.userData.deviceId : null;
         setHoverId(id);
         engine.overlay.setHover(id);
-        host.style.cursor = id ? "pointer" : "grab";
+        const targetHits = aimMode ? engine.picking.pick(engine.overlay.targetPickObjects?.() || [], e.clientX, e.clientY) : [];
+        const targetId = targetHits.length ? targetHits[0].object.userData.targetId : null;
+        engine.overlay.setTargetHover?.(targetId, aimDestination?.kind === "named" ? aimDestination.id : null);
+        host.style.cursor = id || targetId || aimMode ? "crosshair" : "grab";
       });
     };
     const onClick = (e) => {
+      if (gesture?.moved) { gesture = null; return; }
+      gesture = null;
       const hits = engine.picking.pick(engine.overlay.pickObjects(), e.clientX, e.clientY);
-      setCardId(hits.length ? hits[0].object.userData.deviceId : null);
+      const deviceId = hits.length ? hits[0].object.userData.deviceId : null;
+      if (aimMode) {
+        const radialHits = engine.picking.pick(engine.overlay.aimRadialPickObjects?.() || [], e.clientX, e.clientY);
+        if (radialHits.length) {
+          const { fixtureId, zoneNumber } = radialHits[0].object.userData || {};
+          const radialFixture = (model.devices || []).find((device) => device.id === fixtureId);
+          const radialZone = radialFixture?.radial_zones?.zones?.find((zone) => +zone.number === +zoneNumber);
+          setAimFixtureId(fixtureId);
+          if (simActive) {
+            const next = window.__SIM_APARTMENT_AIM_RUNTIME?.toggleZone?.(fixtureId, +zoneNumber);
+            setServicePulse((value) => value + 1);
+            showToast(`radial ${zoneNumber} · ${next?.zones?.[zoneNumber]?.state || "updated"} · simulation`);
+          } else if (radialZone?.entity_id) {
+            callSvc("light", "toggle", { entity_id: radialZone.entity_id });
+            showToast(`radial ${zoneNumber} · command accepted`);
+          } else {
+            showToast(`radial ${zoneNumber} is not mapped to Home Assistant`);
+          }
+          return;
+        }
+        if (deviceId) {
+          setAimFixtureId(deviceId);
+          setCardId(null);
+          return;
+        }
+        const targetHits = engine.picking.pick(engine.overlay.targetPickObjects?.() || [], e.clientX, e.clientY);
+        const targetId = targetHits.length ? targetHits[0].object.userData.targetId : null;
+        const target = (model.targets || []).find((item) => item.id === targetId);
+        if (target) {
+          setAimDestination({ kind: "named", id: target.id, name: target.name, pos: target.pos,
+            normal: target.normal, target });
+          return;
+        }
+        const collision = engine.modes?.getCollision?.();
+        if (!collision) { showToast("collision proxy is still loading"); return; }
+        const hit = engine.picking.surfaceHit(engine.apartmentRoot, [collision], e.clientX, e.clientY)
+          || (engine.modes?.getMesh?.()
+            ? engine.picking.surfaceHit(engine.apartmentRoot, [engine.modes.getMesh()], e.clientX, e.clientY)
+            : null);
+        if (hit) setAimDestination({ kind: "mesh", id: `mesh-${hit.point.map((v) => v.toFixed(3)).join("-")}`,
+          name: "exact mesh point", pos: hit.point, normal: hit.normal });
+        else showToast("no collision surface at that point · orbit or select a named target");
+        return;
+      }
+      const clickedDevice = (model.devices || []).find((device) => device.id === deviceId);
+      if (clickedDevice?.fixture_kind === window.HomeApartmentAiming?.ENGINEERED_KIND) {
+        setCardId(null);
+        setAimFixtureId(clickedDevice.id);
+        setAimDestination(null);
+        setAimMode(true);
+        return;
+      }
+      setCardId(deviceId);
     };
     const onDbl = (e) => {
+      if (aimMode) return;
       const hits = engine.picking.pick(engine.overlay.pickObjects(), e.clientX, e.clientY);
       if (!hits.length) return;
       const dev = (model.devices || []).find((d) => d.id === hits[0].object.userData.deviceId);
@@ -1122,16 +1278,18 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         callSvc(dev.ha_entity_id.split(".")[0], "toggle", { entity_id: dev.ha_entity_id });
       }
     };
+    host.addEventListener("pointerdown", onDown);
     host.addEventListener("pointermove", onMove);
     host.addEventListener("click", onClick);
     host.addEventListener("dblclick", onDbl);
     return () => {
+      host.removeEventListener("pointerdown", onDown);
       host.removeEventListener("pointermove", onMove);
       host.removeEventListener("click", onClick);
       host.removeEventListener("dblclick", onDbl);
       cancelAnimationFrame(raf);
     };
-  }, [open, phase, editing, model]);
+  }, [open, phase, editing, model, aimMode, aimDestination?.id, showToast, simActive]);
 
   /* label/card screen anchors — updated on a light timer (rAF-driven HUD) */
   useEffect(() => {
@@ -1184,6 +1342,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
       if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
       const rig = engineRef.current?.rig;
       if (e.key === "Escape") {
+        if (aimMode) { setAimMode(false); setAimDestination(null); return; }
         if (cardId) { setCardId(null); return; }
         if (engineRef.current?.rig.inCameraPose?.()) {
           exitCameraPose();
@@ -1204,7 +1363,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose, editing, cardId, exitCameraPose, embedded]);
+  }, [open, onClose, editing, aimMode, cardId, exitCameraPose, embedded]);
 
   const refitMobileOverview = useCallback((dur = 520) => {
     const engine = engineRef.current;
@@ -1309,22 +1468,90 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     }
   }, [simActive, showToast, model.devices]);
 
-  const saveModel = useCallback(async () => {
+  const compareLiveModel = useCallback(async () => {
+    if (simActive) return { ok: false, sim: true };
+    if (connection !== "online" || !endpoint || !token) {
+      const detail = "connect Home Assistant with a valid long-lived token first";
+      setLiveReview({ state: "error", live: null, detail });
+      setSaveStatus({ state: "offline", detail: `local draft preserved · ${detail}` });
+      showToast("connect Home Assistant before comparing the live model");
+      return { ok: false, credentials_required: true };
+    }
+    setLiveReview({ state: "loading", live: null, detail: "reading authoritative Apartment model" });
+    const result = await window.HomeApartmentData.getAuthoritativeModel({ endpoint, token });
+    if (!result.ok) {
+      const detail = result.status === 401
+        ? "Home Assistant rejected the token"
+        : result.error || "live Apartment model unavailable";
+      setLiveReview({ state: "error", live: null, detail });
+      setSaveStatus({ state: "offline", detail: `local draft preserved · ${detail}` });
+      showToast(`live comparison failed · ${detail}`);
+      return result;
+    }
+    const comparison = window.HomeApartmentData.compareApartmentModels(model, result.model);
+    setLiveReview({ state: "ready", live: result.model, detail: "read-only comparison complete" });
+    if (comparison.sameRevision) {
+      setSaveStatus({ state: "reviewed", detail: `live revision ${comparison.liveRevision} reviewed · ready for explicit publish` });
+      showToast(`live revision ${comparison.liveRevision} reviewed · publish is now available`);
+    } else {
+      setSaveStatus({ state: "conflict", detail: `draft revision ${comparison.localRevision} · live revision ${comparison.liveRevision} · no write performed` });
+      showToast("revision conflict · local draft preserved; nothing was written");
+    }
+    return { ...result, comparison };
+  }, [simActive, connection, endpoint, token, model, showToast]);
+
+  const saveModel = useCallback(async ({ reviewedDraft = false } = {}) => {
+    const currentSource = window.HomeApartmentData.modelSourceMeta?.(model) || {};
+    if (currentSource.kind === "local_draft" && connection === "online" && !reviewedDraft) {
+      return compareLiveModel();
+    }
+    if (currentSource.kind === "local_draft" && reviewedDraft) {
+      if (liveReview.state !== "ready" || !liveReview.live) return compareLiveModel();
+      const comparison = window.HomeApartmentData.compareApartmentModels(model, liveReview.live);
+      if (!comparison.sameRevision) {
+        setSaveStatus({ state: "conflict", detail: `draft revision ${comparison.localRevision} · live revision ${comparison.liveRevision} · no write performed` });
+        showToast("live revision changed · compare again before publishing");
+        return { ok: false, conflict: true, stored: liveReview.live };
+      }
+    }
     setSaving(true);
+    setSaveStatus({ state: "saving", detail: "writing authoritative Apartment model" });
     const res = await window.HomeApartmentData.saveModel(model, { endpoint, token, sim: simActive });
     setSaving(false);
     if (res.ok) {
-      setModel((m) => ({ ...m, revision: res.revision }));
+      setModel((m) => ({
+        ...m, revision: res.revision, updated_at: res.updated_at,
+        source_kind: "live_ha_model",
+        source_detail: { endpoint, revision: res.revision },
+      }));
+      setLiveReview({ state: "idle", live: null, detail: "" });
+      setSaveStatus({ state: "saved", detail: `revision ${res.revision}` });
       showToast(`saved · revision ${res.revision}`);
     } else if (res.conflict) {
-      showToast("model changed elsewhere — reloaded server copy (your draft is kept locally)");
-      setModel(res.stored);
+      setSaveStatus({ state: "conflict", detail: `server revision ${res.stored?.revision ?? "changed"} · local draft preserved` });
+      showToast("model changed elsewhere · local draft preserved; nothing was overwritten");
+      if (res.stored) {
+        setLiveReview({
+          state: "ready",
+          live: { ...res.stored, source_kind: "live_ha_model",
+            source_detail: { endpoint, revision: res.stored?.revision, read_only: true } },
+          detail: "server conflict copy loaded for read-only comparison",
+        });
+      }
+    } else if (res.validation) {
+      setSaveStatus({ state: "validation", detail: res.error || "engineered fixture metadata is incomplete" });
+      showToast(`cannot save · ${res.error}`);
     } else if (res.offline || res.sim) {
+      setSaveStatus(res.sim
+        ? { state: "simulation", detail: "isolated · live model untouched" }
+        : { state: "offline", detail: "local draft · Home Assistant unavailable" });
       showToast("offline — kept as local draft");
     } else {
+      setSaveStatus({ state: "offline", detail: res.error || "save failed · local draft preserved" });
       showToast(`save failed — ${res.error}`);
     }
-  }, [model, endpoint, token, simActive, showToast]);
+    return res;
+  }, [model, endpoint, token, simActive, connection, liveReview, compareLiveModel, showToast]);
 
   const revealCameraFeedWhenReady = useCallback((dev, seq) => {
     const started = performance.now();
@@ -1444,6 +1671,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         fit: engineRef.current?.debugFit?.() || null,
         modes: engineRef.current?.modes?.debugInfo?.() || null,
       }),
+      modelSnapshot: () => JSON.parse(JSON.stringify(model)),
       apartmentFit: () => engineRef.current?.debugFit?.() || null,
       setMode: pickMode,
       zoomIn: () => zoomApartment(1),
@@ -1477,7 +1705,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     return () => {
       if (window.__havApartmentDebug === api) delete window.__havApartmentDebug;
     };
-  }, [open, phase, mode, liveOn, liveFeedStatus, liveCam, cameraPoseReady, mobile, viewport, model.devices, pickMode, zoomApartment, flyToDeviceView]);
+  }, [open, phase, mode, liveOn, liveFeedStatus, liveCam, cameraPoseReady, mobile, viewport, model, pickMode, zoomApartment, flyToDeviceView]);
 
   const liveHaEntity = aptCameraEntity(liveCam);
   const liveHaBase = endpoint || aptServiceBase("homeAssistantUrl", "HG_DEFAULT_HA_BASE", "http://192.168.0.125:8123");
@@ -1586,9 +1814,15 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
     ? liveCam?.camera?.intrinsics || null
     : null;
   const liveSnapshotIntervalMs = liveSnapshotSrc ? 1100 : 0;
+  const sourceColor = sourceMeta.kind === "live_ha_model" ? "#91e6bd"
+    : sourceMeta.kind === "simulation" ? "var(--hg-warn)"
+      : sourceMeta.kind === "tracker_live" ? "var(--hg-ice)"
+        : sourceMeta.kind === "seed_model" ? "#f2cf87" : "var(--hg-fg-4)";
+  const revisionLabel = Number.isInteger(model.revision) ? ` · rev ${model.revision}` : "";
 
   return (
     <div
+      data-home-apartment-view="1"
       role={embedded ? "region" : "dialog"}
       aria-modal={embedded ? undefined : true}
       aria-label="3d apartment"
@@ -1606,6 +1840,14 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         @keyframes apt-fade-in { from { opacity: 0; } to { opacity: 1; } }
         @keyframes apt-toast-in { from { transform: translateY(8px); opacity: 0; }
                                   to { transform: translateY(0); opacity: 1; } }
+        @media (prefers-reduced-motion: reduce) {
+          [data-home-apartment-view] *, [data-home-apartment-view] *::before,
+          [data-home-apartment-view] *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+        }
+        @media (max-width: 699px) {
+          [data-apt-aim-inspector="1"] button,
+          [data-apt-aim-inspector="1"] select { min-height: 44px !important; }
+        }
       `}</style>
 
       {/* engine canvas is appended imperatively (persistent across mounts —
@@ -1646,6 +1888,31 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
                            color: "var(--hg-warn)", border: "1px solid var(--hg-border-soft)",
                            padding: "3px 8px", marginLeft: 6 }}>sim</span>
           )}
+          {!mobileCameraSnap && (
+            <span style={{ fontFamily: APT_FONT_MONO, fontSize: 8.5, letterSpacing: "0.08em",
+              color: sourceColor, border: `1px solid ${sourceColor}`,
+              padding: "3px 7px", maxWidth: mobile ? "100%" : 260,
+              whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+              title={`${sourceMeta.label}${revisionLabel}`}>
+              source · {sourceMeta.label}{revisionLabel}
+            </span>
+          )}
+          {!mobileCameraSnap && sourceMeta.kind !== "simulation" && (
+            <span style={{ fontFamily: APT_FONT_MONO, fontSize: 8.5, letterSpacing: "0.08em",
+              color: connection === "online" ? "#91e6bd" : "var(--hg-fg-5)" }}>
+              ha · {connection === "online" ? "connected" : connection}
+            </span>
+          )}
+          {!mobileCameraSnap && (
+            <span style={{ fontFamily: APT_FONT_MONO, fontSize: 8.5, letterSpacing: "0.08em",
+              color: saveStatus.state === "conflict" || saveStatus.state === "validation" ? "var(--hg-crit)"
+                : saveStatus.state === "saved" ? "#91e6bd"
+                  : saveStatus.state === "unsaved" || saveStatus.state === "offline"
+                    ? "var(--hg-warn)" : "var(--hg-fg-5)" }}
+              title={saveStatus.detail}>
+              save · {saveStatus.state}
+            </span>
+          )}
           <span style={{ fontFamily: APT_FONT_MONO, fontSize: 8.5, letterSpacing: "0.1em",
                          color: trackerStatus === "live" ? "var(--hg-ice)" : "var(--hg-fg-5)",
                          marginLeft: mobileCameraSnap ? 0 : mobile ? 0 : 8,
@@ -1678,7 +1945,13 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
               }} mobile={mobile} />
             )}
             {!cameraTop && (
-              <AptHudButton label="edit" onClick={() => { setCardId(null); setEditing(true); }} mobile={mobile} />
+              <>
+                <AptHudButton label="aim light" active={aimMode} onClick={() => {
+                  setCardId(null); setAimMode((value) => !value);
+                  if (aimMode) setAimDestination(null);
+                }} mobile={mobile} />
+                <AptHudButton label="edit" onClick={() => { setAimMode(false); setAimDestination(null); setCardId(null); setEditing(true); }} mobile={mobile} />
+              </>
             )}
             {!embedded && <AptHudButton label={(mobile || mobileCameraSnap) ? "close" : "close · esc"} onClick={onClose} mobile={mobile} />}
           </span>
@@ -1928,7 +2201,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
             <window.AptPersonLabel track={track} screen={anchors.__person} />
           )}
           {track && !track.pos && <window.AptRoomChip track={track} />}
-          {cardDevice && (
+          {cardDevice && !aimMode && (
             <window.AptControlCard
               device={cardDevice}
               state={cardState}
@@ -1943,17 +2216,53 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, embedded = fal
         </>
       )}
 
+      {aimMode && phase === "ready" && !editing && window.HomeApartmentAim && (
+        <window.HomeApartmentAim
+          model={model}
+          registry={registry}
+          states={statesRef.current}
+          sim={simActive}
+          connection={connection}
+          engine={engineRef.current}
+          fixtureId={aimFixtureId}
+          onFixtureId={setAimFixtureId}
+          destination={aimDestination}
+          onDestination={setAimDestination}
+          onModel={setModel}
+          onDirty={markModelDirty}
+          onSave={saveModel}
+          saveStatus={saveStatus}
+          saving={saving}
+          onStateReadback={(latest) => {
+            Object.assign(statesRef.current, latest || {});
+            setServicePulse((n) => n + 1);
+          }}
+          onClose={() => {
+            setAimMode(false); setAimDestination(null);
+          }}
+          mobile={mobile}
+        />
+      )}
+
       {/* edit mode */}
       {editing && phase === "ready" && window.HomeApartmentEdit && (
         <window.HomeApartmentEdit
           engine={engineRef.current}
           model={model}
           onModel={setModel}
+          seedModel={seedModel}
           registry={registry}
           onSave={saveModel}
+          onDirtyChange={markModelDirty}
           onExit={() => setEditing(false)}
           sim={simActive}
+          connection={connection}
+          sourceMeta={sourceMeta}
+          saveStatus={saveStatus}
           saving={saving}
+          liveReview={liveReview}
+          liveComparison={liveComparison}
+          onCompareLive={compareLiveModel}
         />
       )}
 

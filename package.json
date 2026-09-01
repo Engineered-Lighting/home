@@ -24,6 +24,7 @@
     "test:native-agent-security": "node tools/build-home-agent-panel.js && node tools/run-native-agent-security-tests.js && node tools/run-agent-origin-boundary-tests.mjs && node tools/run-native-agent-gateway-tests.js && node tools/run-web-gateway-path-security-tests.mjs",
     "test:resilience": "node tools/run-resilience-tests.js",
     "test:apartment3d": "node tools/run-apartment-3d-contract-tests.js",
+    "test:apartment-aiming": "node tools/run-apartment-aiming-tests.js",
     "test:chat-dedupe": "node tools/run-chat-dedupe-tests.js",
     "test:natural-look": "node tools/run-natural-look-routing-tests.js",
     "test:frigate-perception": "node tools/run-frigate-perception-tests.js",

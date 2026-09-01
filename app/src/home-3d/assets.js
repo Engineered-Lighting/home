@@ -36,12 +36,16 @@ function overrideBase() {
 
 function browserDevBase() {
     try {
+        const loc = window.location;
+        const loopback = loc && (loc.hostname === '127.0.0.1' || loc.hostname === 'localhost' || loc.hostname === '::1');
+        // The static dev server cannot expose app/data/apartment. Prefer the
+        // companion runtime asset service even when home-web-runtime has set
+        // HG_WEB_MODE; otherwise /assets/apartment resolves to the tiny
+        // bundled simulation fixtures and exact target dragging has no mesh.
+        if (loopback && (loc.port === '5180' || loc.port === '5173')) return 'http://127.0.0.1:5190';
         if (window.HG_WEB_MODE && window.HG_DEFAULT_APARTMENT_ASSET_BASE) {
             return String(window.HG_DEFAULT_APARTMENT_ASSET_BASE).replace(/\/+$/, '');
         }
-        const loc = window.location;
-        const loopback = loc && (loc.hostname === '127.0.0.1' || loc.hostname === 'localhost' || loc.hostname === '::1');
-        if (loopback && (loc.port === '5180' || loc.port === '5173')) return 'http://127.0.0.1:5190';
         if (!window.IS_TAURI && !window.__TAURI__) return 'assets/apartment';
     } catch (e) { /* */ }
     return null;

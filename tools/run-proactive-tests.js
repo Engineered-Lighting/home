@@ -150,12 +150,14 @@ async function main() {
       sightingLevel: "none",
       sinceTs: midday(),
     });
+    // Privacy contract (governed-agent work): person/room/arrival state is
+    // session-only — save is a no-op, load returns the default and clears
+    // any stored key. This test used to assert persistence across reload.
     const restored = api.loadProactivePending(idleState);
-    assert("active proactive state persists across reload",
-      restored.phase === "speaking_proactive_message" &&
-        restored.room === "kitchen" &&
-        restored.person === "Marcelo" &&
-        restored.restored === true,
+    assert("proactive pending state is session-only (load returns default)",
+      restored.phase === "idle" &&
+        restored.person === null &&
+        api.localStorage.getItem("hg-proactive-pending") === null,
       restored);
     api.saveProactivePending({ phase: "idle", sinceTs: midday() });
     assert("idle proactive state clears persisted pending notification",

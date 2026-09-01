@@ -34,6 +34,13 @@ const CACHE = path.join(os.tmpdir(),
 
 function getBabelSource() {
   return new Promise((resolve, reject) => {
+    // The exact pinned build is vendored for the app itself — prefer it so
+    // the check works offline and in CI without touching the network.
+    const vendored = path.join(SRC, "vendor", "babel-" + BABEL_VERSION, "babel.min.js");
+    if (fs.existsSync(vendored)) {
+      resolve(fs.readFileSync(vendored, "utf8"));
+      return;
+    }
     if (fs.existsSync(CACHE)) {
       resolve(fs.readFileSync(CACHE, "utf8"));
       return;

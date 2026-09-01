@@ -174,7 +174,7 @@ function AptControlCard({ device, state, screen, bounds, onClose, onService, onF
           color: "var(--hg-fg-4)", cursor: "pointer", fontFamily: CARD_FONT_MONO,
         }}>×</button>
       </div>
-      <div style={{ fontFamily: CARD_FONT_MONO, fontSize: 8.5, color: "var(--hg-fg-5)",
+      <div style={{ fontFamily: CARD_FONT_MONO, fontSize: 10.5, color: "var(--hg-fg-3)",
                     letterSpacing: "0.1em", marginTop: 2 }}>
         {device.ha_entity_id || "unbound"}
       </div>

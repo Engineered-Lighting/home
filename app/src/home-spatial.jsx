@@ -73,7 +73,7 @@ function spDrawnStatus(rec) {
   if (rec && rec.human_verdict === "hand_drawn") {
     return { key: "empty", label: "no footprint", color: "var(--hg-fg-4)" };
   }
-  return { key: "todo", label: "not drawn", color: "var(--hg-fg-5)" };
+  return { key: "todo", label: "not drawn", color: "var(--hg-fg-3)" };
 }
 
 // ── Status dot ──────────────────────────────────────────────────────
@@ -102,7 +102,7 @@ function SpTabStrip() {
         paddingBottom: 4,
       }}>draw</span>
       <span style={{
-        fontSize: 9, letterSpacing: "0.12em", color: "var(--hg-fg-5)",
+        fontSize: 10.5, letterSpacing: "0.12em", color: "var(--hg-fg-3)",
       }}>zones · gradient · predict — later phases</span>
     </div>
   );
@@ -366,7 +366,7 @@ function SpLightRow({ entity, rec, cam, selected, onSelect }) {
       {cam && (
         <span style={{ color: "var(--hg-fg-4)", fontSize: 9.5 }}>{cam}</span>
       )}
-      <span style={{ color: st.color, fontSize: 8.5, letterSpacing: "0.1em",
+      <span style={{ color: st.color, fontSize: 10.5, letterSpacing: "0.1em",
                      textTransform: "uppercase", flex: "0 0 auto" }}>
         {st.label}
       </span>

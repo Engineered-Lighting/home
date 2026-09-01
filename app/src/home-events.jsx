@@ -29,6 +29,7 @@ const HG_FG        = { color: "var(--hg-fg-1)" };
 const HG_MUTE      = { color: "var(--hg-fg-2)" };
 const HG_DIM       = { color: "var(--hg-fg-3)" };
 const HG_FAINT     = { color: "var(--hg-fg-4)" };
+const HG_META      = { color: "var(--hg-fg-3)" }; // information-carrying keys/labels — readable rung
 const HG_GHOST     = { color: "var(--hg-fg-5)" };
 const HG_ICE       = { color: "var(--hg-ice)" };
 const HG_WARN      = { color: "var(--hg-warn)" };
@@ -183,7 +184,7 @@ function ToolContent({ name, args = {}, status = "success", latency }) {
           color: "var(--hg-fg-3)",
         }}>
           {Object.entries(args).map(([k, v]) => (
-            <div key={k}><span style={HG_FAINT}>{k.padEnd(9, "\u00a0")}</span><span style={HG_MUTE}>{v}</span></div>
+            <div key={k}><span style={HG_META}>{k.padEnd(9, "\u00a0")}</span><span style={HG_MUTE}>{v}</span></div>
           ))}
         </div>
       )}
@@ -323,7 +324,7 @@ function ActionContent({ id, title, service, target, attrs = {}, status = "pendi
           <div style={{ ...T_SYNTAX, display: "grid", rowGap: 2 }}>
             {rows.map(([k, v]) => (
               <div key={k} style={{ display: "grid", gridTemplateColumns: `${keyWidth + 3}ch minmax(0,1fr)`, columnGap: 4 }}>
-                <span style={HG_FAINT}>{k}</span>
+                <span style={HG_META}>{k}</span>
                 <span style={{ ...(k === "reason" ? HG_WARN : HG_MUTE), wordBreak: "break-word" }}>{v}</span>
               </div>
             ))}
@@ -616,10 +617,10 @@ function PerceptionContent({ text, snapshotUrl, imageMode, imageUnavailable = fa
             alignItems: "baseline",
           }}>
             <span style={{
-              ...HG_FAINT,
+              ...HG_META,
               fontWeight: 400,
               letterSpacing: "0.06em",
-              color: "var(--hg-fg-4)",
+              color: "var(--hg-fg-3)",
             }}>{room ? room : "perceived"}</span>
             <span style={{
               color: "var(--hg-fg-2)",
@@ -698,10 +699,10 @@ function PerceptionContent({ text, snapshotUrl, imageMode, imageUnavailable = fa
           />
         )}
         <span style={{
-          ...HG_FAINT,
+          ...HG_META,
           fontWeight: 400,
           letterSpacing: "0.06em",
-          color: "var(--hg-fg-4)",
+          color: "var(--hg-fg-3)",
         }}>{room ? room : "perceived"}</span>
         <span style={{
           color: "var(--hg-fg-2)",

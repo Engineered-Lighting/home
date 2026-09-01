@@ -822,8 +822,8 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
             color: "var(--hg-fg-0)", letterSpacing: "-0.02em",
           }}>people</span>
           <span style={{
-            fontSize: spatialMode ? 8 : 8.5, letterSpacing: "0.24em", fontWeight: 500,
-            color: "var(--hg-fg-4)", marginTop: 3,
+            fontSize: 10.5, letterSpacing: "0.24em", fontWeight: 500,
+            color: "var(--hg-fg-3)", marginTop: 3,
           }}>identities · relationships · preferences</span>
         </div>
         <span style={{ marginLeft: "auto", display: "inline-flex", gap: 8, alignItems: "center" }}>
@@ -880,8 +880,8 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
         {loadedAt && (
           <span style={{
             display: "inline-flex", alignItems: "center",
-            fontSize: 9, letterSpacing: "0.18em", textTransform: "uppercase",
-            color: "var(--hg-fg-4)",
+            fontSize: 10.5, letterSpacing: "0.18em", textTransform: "uppercase",
+            color: "var(--hg-fg-3)",
           }}>
             {identities ? `${identities.length} identities` : "loading"}
           </span>
@@ -1685,9 +1685,9 @@ function PeopleGraphView({ identities, relationships, endpoint, avatarPresence, 
                 x={tw - 10} y={editHintY}
                 textAnchor="end"
                 fontFamily={PEOPLE_FONT_MONO}
-                fontSize={8}
+                fontSize={10.5}
                 letterSpacing="0.12em"
-                fill="var(--hg-fg-4)"
+                fill="var(--hg-fg-3)"
               >click to edit</text>
             </g>
           );
@@ -3437,7 +3437,7 @@ function AvatarCropModal({ identity, endpoint, token, operationScopeKey, onClose
             </div>
 
             <div style={{
-              fontSize: 9, color: "var(--hg-fg-4)", textAlign: "center",
+              fontSize: 10.5, color: "var(--hg-fg-3)", textAlign: "center",
               letterSpacing: "0.08em",
             }}>
               drag to reposition · arrow keys to nudge · saves as 256×256 JPEG
@@ -3668,14 +3668,14 @@ function PreferencesSection({ identityUuid, preferences, endpoint, token, operat
               </span>
               {p.source === "inferred" && (
                 <span style={{
-                  fontSize: 8, letterSpacing: "0.16em", color: "var(--hg-fg-4)",
+                  fontSize: 10.5, letterSpacing: "0.16em", color: "var(--hg-fg-3)",
                   textTransform: "uppercase",
                   title: p.confidence ? `confidence ${(p.confidence * 100).toFixed(0)}%` : null,
                 }}>inferred{p.confidence ? ` ${(p.confidence * 100).toFixed(0)}%` : ""}</span>
               )}
               {Object.keys(p.scope || {}).length > 0 && (
                 <span style={{
-                  fontSize: 8, color: "var(--hg-fg-4)",
+                  fontSize: 10.5, color: "var(--hg-fg-3)",
                   title: JSON.stringify(p.scope),
                 }}>scoped</span>
               )}
@@ -3723,7 +3723,7 @@ function PreferencesSection({ identityUuid, preferences, endpoint, token, operat
             <label style={{
               display: "block", fontSize: 9, letterSpacing: "0.16em",
               textTransform: "uppercase", color: "var(--hg-fg-4)", marginBottom: 3,
-            }}>value <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--hg-fg-5)" }}>(JSON or plain string)</span></label>
+            }}>value <span style={{ textTransform: "none", letterSpacing: 0, fontSize: 10.5, color: "var(--hg-fg-3)" }}>(JSON or plain string)</span></label>
             <input
               type="text"
               value={newValue}
@@ -3746,7 +3746,7 @@ function PreferencesSection({ identityUuid, preferences, endpoint, token, operat
             <label style={{
               display: "block", fontSize: 9, letterSpacing: "0.16em",
               textTransform: "uppercase", color: "var(--hg-fg-4)", marginBottom: 3,
-            }}>scope <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--hg-fg-5)" }}>(optional JSON object)</span></label>
+            }}>scope <span style={{ textTransform: "none", letterSpacing: 0, fontSize: 10.5, color: "var(--hg-fg-3)" }}>(optional JSON object)</span></label>
             <input
               type="text"
               value={newScope}

@@ -963,7 +963,7 @@
             {label}
           </span>
           {actionable && (
-            <span style={{ color: "var(--hg-fg-5)", fontSize: 9, letterSpacing: "0.08em" }}>
+            <span style={{ color: "var(--hg-fg-3)", fontSize: 10.5, letterSpacing: "0.08em" }}>
               {expanded ? "close" : "actions"}
             </span>
           )}

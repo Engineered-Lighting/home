@@ -365,7 +365,15 @@ export async function createEngine({ canvas, hostEl, sim = false }) {
             pointsMaterial.uniforms.uPixelRatio.value = renderer.getPixelRatio();
             if (points && !rig.inCameraPose?.()) fitNow({ dur: 0 });
         },
-        attachInput(el) { return rigM.attachInput(el, rig); },
+        attachInput(el, options = {}) { return rigM.attachInput(el, rig, options); },
+        async createSpatialViewportCoordinator(options) {
+            const module = await sib('spatial-viewport-coordinator.js');
+            return module.createSpatialViewportCoordinator(options);
+        },
+        async createWorldSurface(options) {
+            const module = await sib('world-surface.js');
+            return module.createWorldSurface(options);
+        },
         refit(options = {}) { fitNow(options); },
         debugFit() { return projectedFitBounds(); },
 

@@ -4,16 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; frame-src 'self'; img-src 'self' data:; connect-src 'none'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
-  <title>Home spatial handoff lab</title>
+  <title>Internal spatial renderer gate — not product UI</title>
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
   <main class="lab-shell">
     <header class="lab-header">
       <div class="title-lockup">
-        <p class="lab-eyebrow">Phase 0 · renderer-neutral spike</p>
-        <h1>Spatial handoff lab</h1>
-        <p class="lab-intro">Exercise deterministic camera journeys, failure states, keyboard navigation, and the sandbox protocol before a world renderer is selected.</p>
+        <p class="lab-eyebrow">Internal test instrumentation · not product UI</p>
+        <h1>Renderer gate</h1>
+        <p class="lab-intro">This separate window measures candidate renderers and failure cases only. The shipping experience remains the existing Apartment tab; its viewport alone crosses the exterior boundary into parcel, city, country, and planet scales.</p>
       </div>
       <div class="protocol-state" role="status" aria-live="polite">
         <span class="protocol-light" id="protocol-light"></span>

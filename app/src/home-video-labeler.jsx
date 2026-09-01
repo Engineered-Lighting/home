@@ -3358,7 +3358,7 @@ function HomeVideoLabelerOverlay({ open, onClose, sim, spatialMode = false }) {
   const overlay = (
     <div
       ref={overlayRootRef}
-      data-theme={spatialMode ? "dark" : undefined}
+      data-theme="dark"
       style={{
         position: "fixed",
         ...(spatialMode

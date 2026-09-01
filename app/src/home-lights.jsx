@@ -240,7 +240,7 @@ function Slider({ label, value, min, max, step, unit, defaultValue, onChange, di
         onPointerUp={flush}
         onBlur={flush}
         disabled={disabled}
-        style={{ width: "100%", accentColor: "var(--hg-accent, #3aa6ff)" }}
+        style={{ width: "100%", accentColor: "var(--hg-accent)" }}
       />
       {hint && (
         <span style={{ fontFamily: FONT_SANS, fontSize: 11, color: "var(--hg-fg-2)" }}>{hint}</span>
@@ -386,7 +386,7 @@ function CTOverrideSlider({ label, override, todValue, min = 1800, max = 4500, s
         onChange={handle}
         onPointerUp={flush}
         onBlur={flush}
-        style={{ width: "100%", accentColor: isInherit ? "var(--hg-fg-2)" : "var(--hg-accent, #3aa6ff)" }}
+        style={{ width: "100%", accentColor: isInherit ? "var(--hg-fg-2)" : "var(--hg-accent)" }}
       />
       {hint && (
         <span style={{ fontFamily: FONT_SANS, fontSize: 11, color: "var(--hg-fg-2)" }}>{hint}</span>
@@ -434,7 +434,7 @@ function ToggleRow({ label, state, onToggle, hint, disabled }) {
           onClick={onToggle}
           disabled={disabled}
           style={{
-            background: isOn ? "var(--hg-accent, #3aa6ff)" : "var(--hg-bg-2)",
+            background: isOn ? "var(--hg-accent)" : "var(--hg-bg-2)",
             color: isOn ? "var(--hg-bg-0)" : "var(--hg-fg-1)",
             border: "1px solid " + (isOn ? "transparent" : "var(--hg-border)"),
             borderRadius: 12, padding: "3px 10px",
@@ -453,8 +453,8 @@ function CascadeCard({ title, subtitle, intro, winning, locked, children }) {
   return (
     <div style={{
       margin: "8px 16px",
-      border: "1px solid " + (winning ? "var(--hg-accent, #3aa6ff)" : "var(--hg-border)"),
-      borderLeft: "3px solid " + (locked ? "var(--hg-fg-2)" : winning ? "var(--hg-accent, #3aa6ff)" : "var(--hg-border)"),
+      border: "1px solid " + (winning ? "var(--hg-accent)" : "var(--hg-border)"),
+      borderLeft: "3px solid " + (locked ? "var(--hg-fg-2)" : winning ? "var(--hg-accent)" : "var(--hg-border)"),
       borderRadius: 6,
       background: "var(--hg-bg-1)",
       overflow: "hidden",
@@ -467,7 +467,7 @@ function CascadeCard({ title, subtitle, intro, winning, locked, children }) {
           {subtitle && <span style={{ fontFamily: FONT_SANS, fontSize: 12, color: "var(--hg-fg-1)" }}>{subtitle}</span>}
         </div>
         {winning && (
-          <span style={{ fontFamily: FONT_MONO, fontSize: 10, color: "var(--hg-accent, #3aa6ff)", whiteSpace: "nowrap" }}>
+          <span style={{ fontFamily: FONT_MONO, fontSize: 10, color: "var(--hg-accent)", whiteSpace: "nowrap" }}>
             ◀ winning
           </span>
         )}
@@ -518,7 +518,7 @@ function TravelModeCard({ active, available, cached, busy, disabled, onToggle, c
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-          <span style={{ fontFamily: FONT_MONO, fontSize: 10, color: active ? "#e88c30" : "var(--hg-fg-2)", textTransform: "uppercase", letterSpacing: 0.8 }}>
+          <span style={{ fontFamily: FONT_MONO, fontSize: 10, color: active ? "var(--hg-warn)" : "var(--hg-fg-2)", textTransform: "uppercase", letterSpacing: 0.8 }}>
             travel mode
           </span>
           <span style={{ fontFamily: FONT_SANS, fontSize: compact ? 15 : 16, color: "var(--hg-fg-0)", lineHeight: 1.2 }}>
@@ -530,9 +530,9 @@ function TravelModeCard({ active, available, cached, busy, disabled, onToggle, c
           disabled={disabled || busy}
           onClick={() => onToggle(!active)}
           style={{
-            background: active ? "#e88c30" : "var(--hg-bg-2)",
+            background: active ? "var(--hg-warn)" : "var(--hg-bg-2)",
             color: active ? "#110b04" : "var(--hg-fg-1)",
-            border: "1px solid " + (active ? "#e88c30" : "var(--hg-border)"),
+            border: "1px solid " + (active ? "var(--hg-warn)" : "var(--hg-border)"),
             borderRadius: 999,
             padding: "7px 12px",
             fontFamily: FONT_MONO,
@@ -578,7 +578,7 @@ function AdaptiveLightingDiagnosticsCard({ states, haOnline }) {
         marginTop: 3,
         fontFamily: FONT_MONO,
         fontSize: 12,
-        color: tone === "danger" ? "#ff7777" : tone === "ok" ? "var(--hg-accent, #3aa6ff)" : "var(--hg-fg-0)",
+        color: tone === "danger" ? "var(--hg-crit)" : tone === "ok" ? "var(--hg-accent)" : "var(--hg-fg-0)",
         whiteSpace: "nowrap",
         overflow: "hidden",
         textOverflow: "ellipsis",
@@ -612,7 +612,7 @@ function AdaptiveLightingDiagnosticsCard({ states, haOnline }) {
         <div style={{
           flex: "0 0 auto",
           border: "1px solid " + (danger ? "rgba(255,119,119,0.7)" : "var(--hg-border)"),
-          color: danger ? "#ff7777" : "var(--hg-fg-1)",
+          color: danger ? "var(--hg-crit)" : "var(--hg-fg-1)",
           padding: "5px 8px",
           fontFamily: FONT_MONO,
           fontSize: 10,
@@ -706,7 +706,7 @@ function FrozenCard({ title, subtitle, intro, knobs, fileLocation, whyFrozen, cu
           onClick={submit}
           style={{
             alignSelf: "flex-end",
-            background: "var(--hg-accent, #3aa6ff)",
+            background: "var(--hg-accent)",
             color: "var(--hg-bg-0)",
             border: "1px solid transparent",
             borderRadius: 4,
@@ -1111,8 +1111,8 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
 
   // Winning modifier styling
   const winningColor = {
-    ok: "var(--hg-accent, #3aa6ff)",
-    warn: "#e88c30",
+    ok: "var(--hg-accent)",
+    warn: "var(--hg-warn)",
     info: "var(--hg-fg-1)",
     muted: "var(--hg-fg-2)",
   }[winning.severity] || "var(--hg-fg-1)";
@@ -1171,7 +1171,7 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
 
       {error && (
         <div role="status" style={{ padding: "8px 18px", borderBottom: "1px solid var(--hg-border-soft)", background: "var(--hg-bg-1)",
-                      fontFamily: FONT_MONO, fontSize: 11, color: "#e88c30" }}>
+                      fontFamily: FONT_MONO, fontSize: 11, color: "var(--hg-warn)" }}>
           {error} <button onClick={() => setError(null)} style={{ background: "transparent", border: "none", color: "var(--hg-fg-2)", cursor: "pointer", fontFamily: FONT_MONO, fontSize: 11 }}>dismiss</button>
         </div>
       )}
@@ -1232,7 +1232,7 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
             </span>
             <div style={{ display: "flex", gap: 4 }}>
               <button disabled={!haOnline} onClick={() => setText("input_text.living_lights_bias_zone_scope", "all")}
-                style={{ background: scopeIsAll ? "var(--hg-accent, #3aa6ff)" : "var(--hg-bg-2)",
+                style={{ background: scopeIsAll ? "var(--hg-accent)" : "var(--hg-bg-2)",
                          color: scopeIsAll ? "var(--hg-bg-0)" : "var(--hg-fg-1)",
                          border: "1px solid " + (scopeIsAll ? "transparent" : "var(--hg-border)"),
                           borderRadius: 4, padding: "2px 8px",
@@ -1241,7 +1241,7 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
                 all zones
               </button>
               <button disabled={!haOnline} onClick={() => setText("input_text.living_lights_bias_zone_scope", zone)}
-                style={{ background: scopeIsThisZone ? "var(--hg-accent, #3aa6ff)" : "var(--hg-bg-2)",
+                style={{ background: scopeIsThisZone ? "var(--hg-accent)" : "var(--hg-bg-2)",
                          color: scopeIsThisZone ? "var(--hg-bg-0)" : "var(--hg-fg-1)",
                          border: "1px solid " + (scopeIsThisZone ? "transparent" : "var(--hg-border)"),
                           borderRadius: 4, padding: "2px 8px",

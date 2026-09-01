@@ -66,6 +66,16 @@ assert("legacy .hg-focusable ring is preserved", tokens.includes(".hg-focusable:
 assert("engine-neutral slider focus ring exists (Firefox has no thumb glow)",
   /\.hg-slider:focus-visible\s*\{[^}]*outline:/.test(tokens));
 
+process.stdout.write("\nreduced_motion_test\n");
+assert("tokens.css has the global prefers-reduced-motion block",
+  tokens.includes("@media (prefers-reduced-motion: reduce)") &&
+  /prefers-reduced-motion[\s\S]{0,400}animation-duration: 0\.01ms !important/.test(tokens));
+const rig = fs.readFileSync(path.join(SRC, "home-3d", "rig.js"), "utf8");
+assert("3D rig gates camera tweens and hover pivot on reduced motion",
+  rig.includes("prefers-reduced-motion") &&
+  /function reducedMotion\(\)/.test(rig) &&
+  /flyToPose\([\s\S]{0,200}reducedMotion\(\)/.test(rig));
+
 process.stdout.write("\nfocus_shortcut_test\n");
 const appSource = fs.readFileSync(path.join(SRC, "home-app.jsx"), "utf8");
 assert("Ctrl+K targets the command input by accessible name, not class",

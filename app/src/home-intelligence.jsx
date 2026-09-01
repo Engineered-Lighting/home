@@ -2729,27 +2729,30 @@
       loadPacket(packets[0]);
     }, [open, selectedId, packets, loadPacket, autoSelected]);
 
-    useEffect(() => {
-      if (!open) return undefined;
-      function onKey(e) {
-        if (e.key === "Escape") {
-          e.preventDefault();
-          if (lightboxIndex != null) setLightboxIndex(null);
-          else if (infoOpen) setInfoOpen(false);
-          else if (globalPanel) setGlobalPanel(null);
-          else if (expandedOpen) setExpandedOpen(false);
-          else if (selectedId) {
-            setSelectedId(null);
-            setDetail(null);
-            setLabelEditorOpen(false);
-            setAutoSelected(true);
-          }
-          else onClose?.();
+    // Overlay layer: topmost-only Escape + focus trap via HomeOverlay. The
+    // hook keeps onEscape in a fresh ref, so the layered close chain reads
+    // current state without a 7-dep resubscribe.
+    const atlasRootRef = React.useRef(null);
+    window.HomeOverlay.useOverlayLayer({
+      key: "intel-root",
+      active: !!open,
+      onEscape: () => {
+        if (lightboxIndex != null) setLightboxIndex(null);
+        else if (infoOpen) setInfoOpen(false);
+        else if (globalPanel) setGlobalPanel(null);
+        else if (expandedOpen) setExpandedOpen(false);
+        else if (selectedId) {
+          setSelectedId(null);
+          setDetail(null);
+          setLabelEditorOpen(false);
+          setAutoSelected(true);
         }
-      }
-      window.addEventListener("keydown", onKey);
-      return () => window.removeEventListener("keydown", onKey);
-    }, [open, onClose, expandedOpen, selectedId, lightboxIndex, infoOpen, globalPanel]);
+        else onClose?.();
+      },
+      rootRef: atlasRootRef,
+      trap: true,
+      initialFocus: "root",
+    });
 
     const auditPacket = useCallback(async (action, body = {}, note = null, options = {}) => {
       if (!base || !selectedPacket?.id) return;
@@ -2969,6 +2972,7 @@
 
     const overlay = (
       <div
+        ref={atlasRootRef}
         className={`intel-atlas${spatialMode ? " spatial" : ""}`}
         data-theme={spatialMode ? "dark" : undefined}
         role="dialog"
@@ -4147,7 +4151,11 @@
           )}
 
         {lightboxFrame && (
-          <div className="intel-atlas-lightbox" role="dialog" aria-modal="true" aria-label="Observation frame preview">
+          {/* aria-modal honesty: focus is trapped at the atlas ROOT layer
+              (intel-root), not here — this inner dialog must not claim
+              modality it doesn't enforce. Escape still closes it first via
+              the root layer's chain. */}
+          <div className="intel-atlas-lightbox" role="dialog" aria-modal="false" aria-label="Observation frame preview">
             <div className="intel-atlas-lightbox-card">
               <div className="intel-atlas-lightbox-head">
                 <div>

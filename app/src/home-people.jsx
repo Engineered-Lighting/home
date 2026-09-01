@@ -894,7 +894,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
         flex: 1, overflow: "auto", padding: "24px 32px",
       }}>
         {reconnecting != null && !error && (
-          <div style={{
+          <div role="status" style={{
             border: "1px solid var(--hg-ice)",
             background: "color-mix(in oklab, var(--hg-ice) 6%, transparent)",
             padding: "10px 14px",
@@ -907,7 +907,7 @@ function HomePeopleOverlay({ open, onClose, endpoint, token, client = null, conn
           </div>
         )}
         {error && (
-          <div style={{
+          <div role="alert" style={{
             border: "1px solid var(--hg-warn)",
             background: "color-mix(in oklab, var(--hg-warn) 6%, transparent)",
             padding: "10px 14px",
@@ -1963,7 +1963,7 @@ function PeopleQueueCard({ identity, endpoint, token, operationScopeKey, sim, av
       </select>
 
       {error && (
-        <div style={{
+        <div role="status" style={{
           color: "var(--hg-crit)", fontSize: 10,
           padding: "4px 0",
         }}>{error}</div>
@@ -2237,7 +2237,7 @@ function UnlinkedFaceBucketCard({ bucket, endpoint, token, operationScopeKey, si
         ))}
       </select>
       {error && (
-        <div style={{ color: "var(--hg-crit)", fontSize: 10, lineHeight: 1.4 }}>{error}</div>
+        <div role="status" style={{ color: "var(--hg-crit)", fontSize: 10, lineHeight: 1.4 }}>{error}</div>
       )}
       <div style={{
         display: "grid",
@@ -2743,7 +2743,7 @@ function PeopleDetailPanel({ identityUuid, endpoint, token, operationScopeKey, s
       )}
 
       {error && (
-        <div style={{
+        <div role="status" style={{
           margin: 14, padding: "8px 12px",
           border: "1px solid var(--hg-crit)",
           color: "var(--hg-crit)", fontSize: 10,
@@ -3517,7 +3517,7 @@ function AvatarCropModal({ identity, endpoint, token, operationScopeKey, onClose
         )}
 
         {error && (
-          <div style={{
+          <div role="status" style={{
             color: "var(--hg-crit)", fontSize: 10,
             padding: "4px 0",
           }}>{error}</div>
@@ -3792,7 +3792,7 @@ function PreferencesSection({ identityUuid, preferences, endpoint, token, operat
             />
           </div>
           {error && (
-            <div style={{ color: "var(--hg-crit)", fontSize: 10 }}>{error}</div>
+            <div role="status" style={{ color: "var(--hg-crit)", fontSize: 10 }}>{error}</div>
           )}
           <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
             <button onClick={save} disabled={saving} className="hg-focusable" style={{

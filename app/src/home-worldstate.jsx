@@ -556,7 +556,7 @@ function HomeWorldStateDrawer({ open, onClose, endpoint, token, sim, refreshInte
 
         {/* Error */}
         {error && data !== null && (
-          <div style={{
+          <div role="status" style={{
             padding: "20px 24px", color: "var(--hg-crit)", fontSize: 11,
             display: "flex", alignItems: "center", gap: 12,
           }}>

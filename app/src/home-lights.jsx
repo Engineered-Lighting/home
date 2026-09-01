@@ -233,6 +233,8 @@ function Slider({ label, value, min, max, step, unit, defaultValue, onChange, di
       </div>
       <input
         type="range" min={min} max={max} step={step}
+        aria-label={label}
+        aria-valuetext={displayValue}
         value={draft == null ? min : draft}
         onChange={handle}
         onPointerUp={flush}
@@ -378,6 +380,8 @@ function CTOverrideSlider({ label, override, todValue, min = 1800, max = 4500, s
       </div>
       <input
         type="range" min={min} max={max} step={step}
+        aria-label={label}
+        aria-valuetext={`${draft} K`}
         value={draft}
         onChange={handle}
         onPointerUp={flush}
@@ -684,6 +688,7 @@ function FrozenCard({ title, subtitle, intro, knobs, fileLocation, whyFrozen, cu
       <div style={{ padding: "8px 16px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
         <input
           type="text"
+          aria-label="What would you like changed"
           placeholder={placeholder || "What would you like changed?"}
           value={intent}
           onChange={(e) => setIntent(e.target.value)}
@@ -1123,7 +1128,7 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
       </div>
 
       {error && (
-        <div style={{ padding: "8px 18px", borderBottom: "1px solid var(--hg-border-soft)", background: "var(--hg-bg-1)",
+        <div role="status" style={{ padding: "8px 18px", borderBottom: "1px solid var(--hg-border-soft)", background: "var(--hg-bg-1)",
                       fontFamily: FONT_MONO, fontSize: 11, color: "#e88c30" }}>
           {error} <button onClick={() => setError(null)} style={{ background: "transparent", border: "none", color: "var(--hg-fg-2)", cursor: "pointer", fontFamily: FONT_MONO, fontSize: 11 }}>dismiss</button>
         </div>
@@ -1156,7 +1161,7 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
                       background: "var(--hg-bg-1)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
             <span style={{ fontFamily: FONT_MONO, fontSize: 10, color: "var(--hg-fg-2)", textTransform: "uppercase", letterSpacing: 0.8 }}>right now</span>
-            <select value={zone} onChange={(e) => setZone(e.target.value)}
+            <select aria-label="Zone" value={zone} onChange={(e) => setZone(e.target.value)}
               style={{ background: "var(--hg-bg-0)", color: "var(--hg-fg-0)", border: "1px solid var(--hg-border)", borderRadius: 4,
                        padding: "2px 6px", fontFamily: FONT_MONO, fontSize: 11 }}>
               {LIGHTS_ZONES.map(z => <option key={z.slug} value={z.slug}>{z.friendly}</option>)}

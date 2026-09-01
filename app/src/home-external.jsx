@@ -482,6 +482,10 @@ function ExternalKeyModal({ onClose }) {
           onChange={(e) => setValue(e.target.value)}
           placeholder="sk-..."
           autoFocus
+          name="external-api-key"
+          autoComplete="off"
+          spellCheck={false}
+          aria-label="External provider API key"
           style={{
             width: "100%",
             background: "var(--hg-bg-1, rgba(255,255,255,0.04))",

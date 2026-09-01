@@ -319,7 +319,7 @@ function MetricCard({ label, value, max = 100, unit, history = [],
         </div>
       )}
       {hint && (
-        <div style={{
+        <div role="status" style={{
           fontFamily: HM_FONT_MONO, fontSize: 9,
           color: "var(--hg-fg-5)", marginTop: 2,
         }}>{hint}</div>
@@ -1255,7 +1255,7 @@ function DiagModal({ open, onClose, bridgeHealth, visionHealth, traceSummary, la
             letterSpacing: "0.22em", textTransform: "uppercase",
             fontSize: 10,
           }}>diagnostics</span>
-          <button onClick={onClose} className="hg-focusable" style={{
+          <button aria-label="close diagnostics" onClick={onClose} className="hg-focusable" style={{
             background: "transparent", border: "none",
             color: "var(--hg-fg-3)", fontSize: 14, cursor: "pointer",
             padding: 4,

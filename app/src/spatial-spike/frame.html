@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; font-src 'self'; media-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Spatial renderer sandbox fixture</title>
+  <link rel="stylesheet" href="./frame.css">
+</head>
+<body>
+  <main class="frame-shell">
+    <header class="frame-header">
+      <div>
+        <p class="frame-eyebrow">Isolated renderer frame · synthetic data</p>
+        <h1>World-to-room handoff</h1>
+      </div>
+      <div class="status-cluster" aria-label="Runtime status">
+        <span class="status-chip" id="network-status">Network online</span>
+        <span class="status-chip" id="provider-status">Provider live</span>
+      </div>
+    </header>
+
+    <div class="degraded-banner" id="degraded-banner" role="status" hidden></div>
+
+    <div class="frame-workspace">
+      <nav class="site-navigator" aria-labelledby="site-nav-title">
+        <div class="section-heading">
+          <span class="section-kicker">Targets</span>
+          <h2 id="site-nav-title">Synthetic homes</h2>
+        </div>
+        <p class="navigator-help" id="site-nav-help">Use arrow keys to move. Press Enter to select.</p>
+        <div class="site-list" id="site-list" role="listbox" aria-describedby="site-nav-help"></div>
+
+        <div class="navigator-actions" aria-label="Camera journey actions">
+          <button class="primary-action" id="enter-home" type="button">Enter selected home</button>
+          <button class="quiet-action" id="return-planet" type="button">Return to planet</button>
+        </div>
+      </nav>
+
+      <section class="world-viewport" aria-labelledby="viewport-title">
+        <div class="viewport-heading">
+          <div>
+            <span class="section-kicker">Deterministic fixture</span>
+            <h2 id="viewport-title">Spatial range</h2>
+          </div>
+          <p class="scale-readout" id="scale-readout">Planet</p>
+        </div>
+
+        <div class="renderer-wrap">
+          <div class="renderer-surface" id="renderer-surface" role="img" aria-label="Abstract world renderer fixture showing two synthetic home targets"></div>
+          <aside class="range-rail" aria-label="Spatial scale journey">
+            <ol id="scale-rail"></ol>
+          </aside>
+        </div>
+
+        <div class="journey-controls" aria-label="Deterministic journey controls">
+          <button class="quiet-action" id="step-journey" type="button">Step keyframe</button>
+          <button class="quiet-action" id="cancel-journey" type="button">Cancel journey</button>
+          <span class="journey-progress" id="journey-progress">Idle</span>
+        </div>
+      </section>
+    </div>
+
+    <footer class="frame-footer">
+      <dl class="state-readout">
+        <div><dt>Selected</dt><dd id="selected-readout">—</dd></div>
+        <div><dt>Scene owner</dt><dd id="owner-readout">World adapter</dd></div>
+        <div><dt>AI</dt><dd id="ai-readout">Available</dd></div>
+        <div><dt>Motion</dt><dd id="motion-readout">Standard</dd></div>
+      </dl>
+      <p class="fixture-note">No map tiles, addresses, credentials, remote code, or Apartment renderer are loaded.</p>
+    </footer>
+  </main>
+  <div class="visually-hidden" id="live-region" role="status" aria-live="polite" aria-atomic="true"></div>
+  <script type="module" src="./frame-main.js"></script>
+</body>
+</html>
+

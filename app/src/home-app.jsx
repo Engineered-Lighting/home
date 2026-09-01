@@ -817,7 +817,7 @@ function HomeHeader({
     </span>
   );
   return (
-    <div
+    <header
       data-tauri-drag-region
       style={{
         display: "flex", alignItems: mobile ? "center" : "baseline", gap: mobile ? 6 : 12,
@@ -866,7 +866,7 @@ function HomeHeader({
             when HA itself is online but a downstream service (sidecar
             chat-tee OR bridge for voice) is unreachable. */}
         {showWarn && (
-          <span title={warnText} style={{
+          <span role="status" title={warnText} style={{
             display: "inline-flex", alignItems: "center", gap: 5,
             border: "1px solid var(--hg-warn)",
             color: "var(--hg-warn)",
@@ -925,7 +925,7 @@ function HomeHeader({
           const isCrit = summary.worst_status === "offline";
           const color = isCrit ? "var(--hg-crit)" : "var(--hg-warn)";
           return (
-            <span title={summary.tooltip_text} style={{
+            <span role="status" title={summary.tooltip_text} style={{
               display: mobile ? "none" : "inline-flex", alignItems: "center", gap: 5,
               border: `1px solid ${color}`,
               color,
@@ -1115,7 +1115,7 @@ function HomeHeader({
           </>
         )}
       </span>
-    </div>
+    </header>
   );
 }
 
@@ -1618,6 +1618,7 @@ function WelcomeBanner({ identity, arrival, onDismiss }) {
   return (
     <div
       key={bannerKey}
+      role="status"
       style={{
         padding: "10px 20px",
         borderBottom: "1px solid var(--hg-border-soft)",
@@ -2943,10 +2944,10 @@ function MetricsStrip({
                 source={voiceState === "speaking" ? "player" : "mic"}
                 bars={14} height={8}
               />
-              <span style={{ color: "var(--hg-ice)", fontWeight: 600 }}>{voiceState}…</span>
+              <span role="status" style={{ color: "var(--hg-ice)", fontWeight: 600 }}>{voiceState}…</span>
             </>
           ) : aiIsTransient ? (
-            <span style={{ color: "var(--hg-ice)", fontWeight: 600 }}>{voiceState}…</span>
+            <span role="status" style={{ color: "var(--hg-ice)", fontWeight: 600 }}>{voiceState}…</span>
           ) : (
             <span style={{ color: "var(--hg-fg-1)", fontWeight: 600 }}>{aiPhrase}</span>
           )}
@@ -4271,7 +4272,7 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
   return (
     <div style={{ position: "relative", flexShrink: 0 }}>
       {showMenu && (
-        <div style={{
+        <div role="listbox" id="hg-slash-listbox" aria-label="Slash commands" style={{
           position: "absolute", bottom: "100%", left: mobile ? 8 : spatialMode ? 10 : 12, right: mobile ? 8 : spatialMode ? 10 : 12,
           maxHeight: mobile ? "min(270px, 36dvh)" : spatialMode ? "min(260px, 34vh)" : "min(420px, 46vh)",
           overflowY: "auto",
@@ -4301,6 +4302,9 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
           </div>
           {matches.map((m, i) => (
             <div key={m.cmd}
+              role="option"
+              aria-selected={i === sel}
+              id={"hg-slash-opt-" + i}
               onMouseEnter={() => setSel(i)}
               onMouseDown={(e) => { e.preventDefault(); complete(m.cmd); }}
               style={{
@@ -4358,6 +4362,11 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
             ref={inputRef}
             className="hg-focusable"
             aria-label="Command input"
+            role="combobox"
+            aria-expanded={showMenu}
+            aria-controls="hg-slash-listbox"
+            aria-activedescendant={showMenu ? "hg-slash-opt-" + sel : undefined}
+            aria-autocomplete="list"
             placeholder={isSlash ? "" : "type or /command"}
             value={value}
             onChange={(e) => onChange(e.target.value)}
@@ -4437,7 +4446,7 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
 
 function MicButton({ state, onClick, mobile = false }) {
   const isOff = state === "inactive";
-  const isErr = state === "no-mic";
+  const isErr = state === "no-mic" || state === "error";
   const isListening = state === "listening";
   const isProcessing = state === "processing";
   const isSpeaking = state === "speaking";
@@ -4460,7 +4469,8 @@ function MicButton({ state, onClick, mobile = false }) {
 
   return (
     <button
-      aria-label="Toggle voice mode"
+      aria-label={state === "inactive" ? "Start voice mode" : "Stop voice mode (" + state + ")"}
+      aria-pressed={state !== "inactive"}
       className="hg-focusable"
       onClick={onClick}
       style={{
@@ -4525,7 +4535,7 @@ function VoiceBanner({ voice, onRetry }) {
   };
   if (voice.state === "no-mic") {
     return (
-      <div style={{ ...base, color: "var(--hg-warn)" }}>
+      <div role="status" style={{ ...base, color: "var(--hg-warn)" }}>
         <StatusDot tone="error" size={5} />
         mic unavailable — using text
       </div>
@@ -4533,7 +4543,7 @@ function VoiceBanner({ voice, onRetry }) {
   }
   if (voice.state === "error") {
     return (
-      <div style={{ ...base, color: "var(--hg-warn)" }}>
+      <div role="status" style={{ ...base, color: "var(--hg-warn)" }}>
         <StatusDot tone="error" size={5} />
         <span>{voice.message || "voice error"}</span>
         <button
@@ -4557,7 +4567,7 @@ function VoiceBanner({ voice, onRetry }) {
   }
   if (voice.state === "ready") {
     return (
-      <div style={{ ...base, color: "var(--hg-fg-3)" }}>
+      <div role="status" style={{ ...base, color: "var(--hg-fg-3)" }}>
         <StatusDot tone="ok" size={5} />
         <span style={{ letterSpacing: "0.12em" }}>voice mode</span>
         <span style={{ marginLeft: "auto", color: "var(--hg-fg-4)" }}>tap mic to speak</span>
@@ -4566,7 +4576,7 @@ function VoiceBanner({ voice, onRetry }) {
   }
   if (voice.state === "transcribing") {
     return (
-      <div style={{ ...base, color: "var(--hg-ice)" }}>
+      <div role="status" style={{ ...base, color: "var(--hg-ice)" }}>
         <StatusDot tone="info" size={5} />
         <span>transcribing…</span>
       </div>
@@ -4574,7 +4584,7 @@ function VoiceBanner({ voice, onRetry }) {
   }
   if (voice.state === "thinking") {
     return (
-      <div style={{ ...base, color: "var(--hg-ice)" }}>
+      <div role="status" style={{ ...base, color: "var(--hg-ice)" }}>
         <span style={{
           display: "inline-block",
           width: 14, height: 4,
@@ -11396,7 +11406,8 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           onComplete={handleBootComplete}
         />
       ) : (
-      <div className="hg-fade" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+      <div className="hg-fade" role="main" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+      <h1 className="sr-only">Home</h1>
       {/* F.3 revised: latency lives inside MetricsStrip now (expanded view)
           alongside GPU/VRAM. No separate floating panel. */}
       <WelcomeBanner
@@ -11421,6 +11432,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       <div
         ref={feedRef}
         className="hg-scroll"
+        tabIndex={0}
         style={{
           flex: 1, overflowY: "auto",
           background: "var(--hg-bg-0)",
@@ -11451,7 +11463,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
             onNativeAuth={openAgentSurface}
           />
         ) : (
-          <div style={{
+          <div role="log" aria-label="conversation" style={{
             // Phase 1.5 item 7: chat widens with the window past 700px,
             // capped at 1200px so very wide displays still feel readable.
             maxWidth: isSpatialWide ? "100%" : wideMode ? "min(1200px, 95vw)" : 640,

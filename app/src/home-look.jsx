@@ -423,6 +423,7 @@ function HomeLookDrawer({ open, onClose, metricsBase, sim,
               if (e.key === "Enter" && canRun) runLook(camera, question);
             }}
             placeholder="ask a spatial question — e.g. what is on the counter?"
+            aria-label="Ask about this camera"
             style={{
               flex: 1, minWidth: 0, background: "var(--hg-bg-1)",
               border: "1px solid var(--hg-border-soft)",
@@ -461,7 +462,7 @@ function HomeLookDrawer({ open, onClose, metricsBase, sim,
 
         {/* Error */}
         {error && (
-          <div style={{
+          <div role="status" style={{
             margin: "0 22px 8px", padding: "7px 11px",
             border: "1px solid var(--hg-crit)", color: "var(--hg-crit)",
             fontFamily: LK_FONT_MONO, fontSize: 10.5, borderRadius: 3,

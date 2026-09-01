@@ -237,7 +237,7 @@
     return `${Math.round(n)} B`;
   }
 
-  function Chip({ children, tone = "default", title, ariaLabel, className = "", onClick }) {
+  function Chip({ children, tone = "default", title, ariaLabel, role, className = "", onClick }) {
     const color = tone === "warn" ? "var(--hg-warn)"
       : tone === "ok" ? "var(--hg-ice-bright)"
       : tone === "crit" ? "var(--hg-crit)"
@@ -247,6 +247,7 @@
     return (
       <Tag
         type={interactive ? "button" : undefined}
+        role={role}
         onClick={onClick}
         className={className}
         title={title}
@@ -1481,7 +1482,7 @@
           <Metric label="memory next" value={fmtTime(scheduler.next_memory_at)} />
           <Metric label="last tick" value={fmtTime(scheduler.last_tick_at)} />
         </div>
-        {scheduler.last_error && <Chip tone="crit">{scheduler.last_error}</Chip>}
+        {scheduler.last_error && <Chip role="status" tone="crit">{scheduler.last_error}</Chip>}
         <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: scheduler.last_error ? 8 : 0 }}>
           {jobs.slice(0, 5).map((job) => (
             <div key={job.id} style={{
@@ -1571,7 +1572,7 @@
                   ingested {fmtTime(source.latest_ingested_ts || source.last_success_at)}
                 </span>
                 {source.last_error && (
-                  <span style={{ color: "var(--hg-warn)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <span role="status" style={{ color: "var(--hg-warn)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {source.last_error}
                   </span>
                 )}
@@ -3049,7 +3050,7 @@
             >
               {promptGateLabel(promptGateBody, labelEvalStatus)}
             </Chip>
-            {error && <Chip tone="crit">{error}</Chip>}
+            {error && <Chip role="status" tone="crit">{error}</Chip>}
             {loading && <Chip tone="warn">loading</Chip>}
             <button className="intel-atlas-button hg-focusable" title="Reload Atlas packets, source health, and labeling status." onClick={refresh}>refresh</button>
             <button className="intel-atlas-button hg-focusable" title="Close the Intelligence Atlas. Esc also closes it." onClick={onClose}>close / esc</button>
@@ -6519,7 +6520,7 @@
           }}>
             {base} {lastJob ? `last ${lastJob.status} at ${fmtTime(lastJob.finished_at || lastJob.started_at)}` : ""}
           </div>
-          {error && <Chip tone="crit">{error}</Chip>}
+          {error && <Chip role="status" tone="crit">{error}</Chip>}
           {loading && <Chip tone="warn">loading</Chip>}
           <button className="hg-focusable" onClick={refresh} style={buttonStyle}>refresh</button>
           <button className="hg-focusable" onClick={runIngest} style={buttonStyle}>ingest</button>

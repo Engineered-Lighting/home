@@ -134,7 +134,7 @@ function HomeContent({ text, streaming }) {
     }
   })();
   return (
-    <div style={{ ...T_PROSE, ...HG_FG_BRIGHT }}>
+    <div aria-live={streaming ? "off" : undefined} style={{ ...T_PROSE, ...HG_FG_BRIGHT }}>
       {displayText}
       {streaming && <span className="hg-caret" />}
     </div>
@@ -170,7 +170,7 @@ function ToolContent({ name, args = {}, status = "success", latency }) {
         <span style={{ color: "var(--hg-fg-4)" }}>{caret}</span>
         <span style={HG_DIM}>tool</span>
         <span style={HG_FG}>{name}</span>
-        <span style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+        <span role="status" style={{ textAlign: "right", whiteSpace: "nowrap" }}>
           <StatusText status={status} latency={latency} />
         </span>
       </div>
@@ -265,6 +265,7 @@ function ActionContent({ id, title, service, target, attrs = {}, status = "pendi
           style={{ ...(isErr ? HG_WARN : HG_FG), cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
         >{title || service || ""}</span>
         <span
+          role="status"
           onClick={() => setOpen(o => !o)}
           style={{ textAlign: "right", whiteSpace: "nowrap", cursor: "pointer" }}
         >
@@ -775,7 +776,7 @@ function DiagContent({ text, channel }) {
  * chunks arrive. See home-external.jsx + the routing plan. */
 function ExternalContent({ text, streaming }) {
   return (
-    <div style={{
+    <div aria-live={streaming ? "off" : undefined} style={{
       ...T_PROSE, ...HG_FG_BRIGHT,
       display: "flex", alignItems: "baseline", gap: 8,
     }}>

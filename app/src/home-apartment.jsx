@@ -746,9 +746,12 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
     return () => window.removeEventListener("home-services-change", bump);
   }, []);
 
-  const showToast = useCallback((text) => {
-    setToast(text);
-    setTimeout(() => setToast(null), 2800);
+  const toastTimerRef = useRef(null);
+  const showToast = useCallback((text, opts) => {
+    const sticky = !!(opts && (opts.sticky || opts.tone === "error"));
+    if (toastTimerRef.current) { clearTimeout(toastTimerRef.current); toastTimerRef.current = null; }
+    setToast({ text, sticky });
+    if (!sticky) toastTimerRef.current = setTimeout(() => setToast(null), 2800);
   }, []);
 
   const markModelDirty = useCallback(() => {
@@ -1428,7 +1431,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         detail: `${e?.message || String(e || "asset load failed")} - ${assetHint}`,
       });
       showToast(m === "splat" ? "photo unavailable — check apartment.spz asset"
-                              : "mesh unavailable — check collision.glb asset");
+                              : "mesh unavailable — check collision.glb asset", { tone: "error" });
     } finally {
       setModeLoading(null);
       refitMobileOverview(m === "points" ? 360 : 520);
@@ -1475,7 +1478,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
             if (verified && aptStateMatchesExpected(verified, expected)) break;
           }
           if (verified && expected && !aptStateMatchesExpected(verified, expected)) {
-            showToast(`${dev?.name || entityId} is still ${verified.state} in Home Assistant`);
+            showToast(`${dev?.name || entityId} is still ${verified.state} in Home Assistant`, { tone: "error" });
           }
         } catch (e) {
           console.warn("[apartment] service state readback failed", e);
@@ -1487,7 +1490,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         if (dev) engineRef.current?.overlay.setDeviceState(dev.id, prev);
         setServicePulse((n) => n + 1);
       }
-      showToast(`${entityId || domain} didn't respond`);
+      showToast(`${entityId || domain} didn't respond`, { tone: "error" });
     }
   }, [simActive, showToast, model.devices]);
 
@@ -1508,7 +1511,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
         : result.error || "live Apartment model unavailable";
       setLiveReview({ state: "error", live: null, detail });
       setSaveStatus({ state: "offline", detail: `local draft preserved · ${detail}` });
-      showToast(`live comparison failed · ${detail}`);
+      showToast(`live comparison failed · ${detail}`, { tone: "error" });
       return result;
     }
     const comparison = window.HomeApartmentData.compareApartmentModels(model, result.model);
@@ -1518,7 +1521,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       showToast(`live revision ${comparison.liveRevision} reviewed · publish is now available`);
     } else {
       setSaveStatus({ state: "conflict", detail: `draft revision ${comparison.localRevision} · live revision ${comparison.liveRevision} · no write performed` });
-      showToast("revision conflict · local draft preserved; nothing was written");
+      showToast("revision conflict · local draft preserved; nothing was written", { tone: "error" });
     }
     return { ...result, comparison };
   }, [simActive, connection, endpoint, token, model, showToast]);
@@ -1533,7 +1536,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       const comparison = window.HomeApartmentData.compareApartmentModels(model, liveReview.live);
       if (!comparison.sameRevision) {
         setSaveStatus({ state: "conflict", detail: `draft revision ${comparison.localRevision} · live revision ${comparison.liveRevision} · no write performed` });
-        showToast("live revision changed · compare again before publishing");
+        showToast("live revision changed · compare again before publishing", { tone: "error" });
         return { ok: false, conflict: true, stored: liveReview.live };
       }
     }
@@ -1552,7 +1555,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       showToast(`saved · revision ${res.revision}`);
     } else if (res.conflict) {
       setSaveStatus({ state: "conflict", detail: `server revision ${res.stored?.revision ?? "changed"} · local draft preserved` });
-      showToast("model changed elsewhere · local draft preserved; nothing was overwritten");
+      showToast("model changed elsewhere · local draft preserved; nothing was overwritten", { tone: "error" });
       if (res.stored) {
         setLiveReview({
           state: "ready",
@@ -1563,15 +1566,15 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       }
     } else if (res.validation) {
       setSaveStatus({ state: "validation", detail: res.error || "engineered fixture metadata is incomplete" });
-      showToast(`cannot save · ${res.error}`);
+      showToast(`cannot save · ${res.error}`, { tone: "error" });
     } else if (res.offline || res.sim) {
       setSaveStatus(res.sim
         ? { state: "simulation", detail: "isolated · live model untouched" }
         : { state: "offline", detail: "local draft · Home Assistant unavailable" });
-      showToast("offline — kept as local draft");
+      showToast("offline — kept as local draft", { tone: "error" });
     } else {
       setSaveStatus({ state: "offline", detail: res.error || "save failed · local draft preserved" });
-      showToast(`save failed — ${res.error}`);
+      showToast(`save failed — ${res.error}`, { tone: "error" });
     }
     return res;
   }, [model, endpoint, token, simActive, connection, liveReview, compareLiveModel, showToast]);
@@ -1642,8 +1645,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
           message: "mesh unavailable",
           detail: `${e?.message || String(e || "asset load failed")} - check mesh.glb / collision.glb`,
         });
-        if (!hasFeed) showToast("camera snap needs mesh - check mesh.glb asset");
-        else showToast("mesh unavailable - flying with current scan");
+        if (!hasFeed) showToast("camera snap needs mesh - check mesh.glb asset", { tone: "error" });
+        else showToast("mesh unavailable - flying with current scan", { tone: "error" });
       }
       try {
         if (seq !== flySeqRef.current) return;
@@ -1660,12 +1663,12 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
           message: "mesh unavailable",
           detail: `${e?.message || String(e || "camera pose failed")} - check camera calibration`,
         });
-        if (!hasFeed) showToast("camera snap needs mesh - check mesh.glb asset");
+        if (!hasFeed) showToast("camera snap needs mesh - check mesh.glb asset", { tone: "error" });
         else {
           setCameraPoseReady(true);
           setLiveFeedStatus((current) => aptLiveFeedSettled(current) ? current : "connecting");
           setLiveOn(true);
-          showToast("camera pose failed - showing camera feed only");
+          showToast("camera pose failed - showing camera feed only", { tone: "error" });
         }
       }
     })();
@@ -2089,6 +2092,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
             <div style={{ display: "flex", gap: 5, justifyContent: "flex-end", marginBottom: 6 }}>
               {Array.from({ length: 8 }).map((_, i) => (
                 <button key={i} className="hg-focusable"
+                  aria-label={"view angle " + (i + 1) + " of 8"}
+                  aria-pressed={i === azIdx}
                   onClick={() => engineRef.current?.rig.goTo({ az: i, dur: 600 })}
                   style={{ width: 24, height: 24, borderRadius: 24, padding: 0, cursor: "pointer",
                            border: "1px solid var(--hg-border)",
@@ -2291,12 +2296,21 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       )}
 
       {toast && (
-        <div style={{
+        <div role="status" style={{
           position: "absolute", bottom: 74, left: "50%", transform: "translateX(-50%)",
           fontFamily: APT_FONT_MONO, fontSize: 10, color: "var(--hg-fg-1)",
           background: "rgba(10,12,16,0.85)", border: "1px solid var(--hg-border-soft)",
           padding: "7px 13px", animation: "apt-toast-in 180ms ease-out", zIndex: 6,
-        }}>{toast}</div>
+        }}>
+          {toast.text}
+          {toast.sticky && (
+            <button type="button" className="hg-focusable" aria-label="dismiss message"
+              onClick={() => setToast(null)}
+              style={{ marginLeft: 9, padding: "0 4px", background: "transparent", border: "none",
+                       color: "var(--hg-fg-3)", cursor: "pointer",
+                       fontFamily: APT_FONT_MONO, fontSize: 11 }}>×</button>
+          )}
+        </div>
       )}
     </div>
   );

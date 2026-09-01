@@ -14,8 +14,8 @@ const AIM_AMBER = "#ffb45f";
 const AIM_GREEN = "#91e6bd";
 const AIM_RED = "#ff625f";
 
-function AimButton({ children, onClick, active, disabled, danger, title, style }) {
-  return <button type="button" className="hg-focusable" onClick={onClick} disabled={disabled} title={title}
+function AimButton({ children, onClick, active, disabled, danger, title, style, ...rest }) {
+  return <button type="button" className="hg-focusable" onClick={onClick} disabled={disabled} title={title} {...rest}
     style={{ minHeight: 40, padding: "9px 12px", borderRadius: 9,
       minWidth: 0, overflow: "hidden", textOverflow: "ellipsis",
       border: `1px solid ${danger ? AIM_RED : active ? AIM_CYAN : "var(--hg-border-soft)"}`,
@@ -606,7 +606,7 @@ function HomeApartmentAim({
           style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: 3,
             padding: 3, borderRadius: 10, background: "rgba(0,0,0,0.22)" }}>
           {[["auto", "Auto"], ["current", "Current"], ["engineered", "Engineered"], ["both", "Both"]].map(([mode, label]) =>
-            <AimButton key={mode} active={profileView === mode}
+            <AimButton key={mode} active={profileView === mode} aria-pressed={profileView === mode}
               disabled={!engineeredConfigured && ["engineered", "both"].includes(mode)}
               title={!engineeredConfigured && ["engineered", "both"].includes(mode)
                 ? "Add an Engineered profile at this mount first" : undefined}
@@ -623,10 +623,23 @@ function HomeApartmentAim({
               : `${profileView === "current" ? "Current light" : "Engineered lighting"} view selected.`}
         </div>
       </section>}
-      <div role="tablist" aria-label="Lighting inspector sections" style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 5,
+      <div role="tablist" aria-label="Lighting inspector sections"
+        onKeyDown={(e) => {
+          if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+          e.preventDefault();
+          const tabs = Array.from(e.currentTarget.querySelectorAll('[role="tab"]'));
+          if (!tabs.length) return;
+          let idx = tabs.indexOf(document.activeElement);
+          if (idx < 0) idx = tabs.findIndex((t) => t.getAttribute("aria-selected") === "true");
+          if (idx < 0) idx = 0;
+          const next = tabs[(idx + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length];
+          next?.focus();
+          next?.click();
+        }}
+        style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 5,
         padding: 3, borderRadius: 11, background: "rgba(255,255,255,0.035)" }}>
         {[["aim", "Light"], ["zones", "Radials"], ["setup", "Setup"]].map(([name, label]) =>
-          <AimButton key={name} active={tab === name} onClick={() => {
+          <AimButton key={name} active={tab === name} role="tab" aria-selected={tab === name} onClick={() => {
             setTab(name);
             if (name === "zones" && engineeredConfigured) setProfileView("engineered");
           }} style={{ border: 0, minHeight: 36 }}>{label}</AimButton>)}
@@ -945,8 +958,8 @@ function HomeApartmentAim({
             Ideal axes cannot correct mounting roll, a nonvertical pan axis, or mechanical nonorthogonality.
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5 }}>
-            <AimButton active={calDraft.pan_sign === 1} onClick={() => setCalDraft((d) => ({ ...d, pan_sign: d.pan_sign * -1 }))}>pan sign · {calDraft.pan_sign > 0 ? "+" : "−"}</AimButton>
-            <AimButton active={calDraft.tilt_sign === 1} onClick={() => setCalDraft((d) => ({ ...d, tilt_sign: d.tilt_sign * -1 }))}>tilt sign · {calDraft.tilt_sign > 0 ? "+" : "−"}</AimButton>
+            <AimButton active={calDraft.pan_sign === 1} aria-pressed={calDraft.pan_sign === 1} onClick={() => setCalDraft((d) => ({ ...d, pan_sign: d.pan_sign * -1 }))}>pan sign · {calDraft.pan_sign > 0 ? "+" : "−"}</AimButton>
+            <AimButton active={calDraft.tilt_sign === 1} aria-pressed={calDraft.tilt_sign === 1} onClick={() => setCalDraft((d) => ({ ...d, tilt_sign: d.tilt_sign * -1 }))}>tilt sign · {calDraft.tilt_sign > 0 ? "+" : "−"}</AimButton>
           </div>
           {sim && <AimButton onClick={() => {
             if (!destination) return setNotice("select a known destination first");

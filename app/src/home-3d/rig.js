@@ -198,7 +198,19 @@ export function createRig(camera) {
         goTo,
         stepAzimuth(dir, dur = 450) { if (!state.locked) goTo({ az: state.az + dir, dur }); },
         stepElevation(dir, dur = 450) { if (!state.locked) goTo({ el: state.el + dir, dur }); },
-        stepZoom(dir, dur = 350) { if (!state.locked) goTo({ zoom: state.zoom + dir, dur }); },
+        stepZoom(dir, dur = 350) {
+            if (state.locked) return { accepted: false, reason: 'locked', zoom: state.zoom };
+            const next = THREE.MathUtils.clamp(state.zoom + dir, 0, ZOOM_FACTORS.length - 1);
+            if (next === state.zoom) {
+                return {
+                    accepted: false,
+                    reason: dir < 0 ? 'world-boundary' : 'interior-boundary',
+                    zoom: state.zoom,
+                };
+            }
+            goTo({ zoom: next, dur });
+            return { accepted: true, zoom: state.zoom };
+        },
         snapHome(dur = 500) { if (!state.locked) goTo({ ...HOME, dur }); },
 
         /* Fit the apartment bounds (world space). Desktop keeps the established
@@ -308,6 +320,9 @@ export function createRig(camera) {
 
         isTweening() { return !!tween; },
         azimuthIndex() { return state.az; },
+        elevationIndex() { return state.el; },
+        zoomIndex() { return state.zoom; },
+        atWorldBoundary() { return !state.locked && state.zoom === 0; },
         currentRadius() { return cur.radius; },
 
         /* Edit mode stays inside the detent system so pointer drag, keyboard
@@ -395,7 +410,7 @@ export function createRig(camera) {
 }
 
 /* Attach constrained pointer/wheel input to a host element. Returns detach(). */
-export function attachInput(el, rig) {
+export function attachInput(el, rig, { onZoomStep = null } = {}) {
     let drag = null;
     let wheelAt = 0;
 
@@ -429,7 +444,9 @@ export function attachInput(el, rig) {
         const now = performance.now();
         if (now - wheelAt < 150) return; // one detent per gesture
         wheelAt = now;
-        rig.stepZoom(e.deltaY > 0 ? -1 : 1);
+        const direction = e.deltaY > 0 ? -1 : 1;
+        if (typeof onZoomStep === 'function') onZoomStep(direction, { source: 'wheel' });
+        else rig.stepZoom(direction);
     };
     const onLeave = () => rig.hoverPivot(0, 0);
 

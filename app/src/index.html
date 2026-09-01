@@ -14,8 +14,8 @@
   <style>
     html, body, #root { height: 100%; width: 100%; margin: 0; }
     body {
-      background: #050606;
-      color: #f4f2ec;
+      background: var(--hg-bg-0, #050606);
+      color: var(--hg-fg-0, #f4f2ec);
       overflow: hidden;
       user-select: none;
       -webkit-user-select: none;
@@ -409,7 +409,8 @@
           'position:fixed;top:0;left:0;right:0;z-index:99999;' +
           'background:#3b0d0d;color:#ffd7d7;font:12px/1.5 Consolas,monospace;' +
           'padding:10px 14px;border-bottom:1px solid #a33;' +
-          'white-space:pre-wrap;max-height:45vh;overflow:auto;';
+          'white-space:pre-wrap;max-height:45vh;overflow:auto;' +
+          'user-select:text;';
         (document.body || document.documentElement).appendChild(el);
         el.textContent = msg;
       }
@@ -449,7 +450,8 @@
           'position:fixed;top:0;left:0;right:0;z-index:99999;' +
           'background:#12222b;color:#cfe8f2;font:12px/1.5 Consolas,monospace;' +
           'padding:10px 14px;border-bottom:1px solid #2f6d84;' +
-          'display:flex;align-items:center;gap:12px;flex-wrap:wrap;';
+          'display:flex;align-items:center;gap:12px;flex-wrap:wrap;' +
+          'user-select:text;';
         (document.body || document.documentElement).appendChild(el);
         var msg = document.createElement('span');
         msg.textContent = 'Reconnecting to home… waiting for the network ' +

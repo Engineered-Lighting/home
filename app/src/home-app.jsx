@@ -751,7 +751,7 @@ function HomeHeader({
           height: mobile ? 38 : 32,
           border: "1px solid var(--hg-border)",
           borderRadius: mobile ? 6 : 5,
-          background: "rgba(255,255,255,0.025)",
+          background: "var(--hg-input-bg)",
         }}
       >
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -4218,9 +4218,9 @@ function FeatureLoadingSurface({ open, title, status, error, onClose, onRetry, m
       <div style={{
         width: "min(420px, 100%)",
         border: "1px solid var(--hg-border)",
-        background: "rgba(7,9,13,0.96)",
+        background: "var(--hg-bg-1)",
         padding: mobile ? "18px" : "22px",
-        boxShadow: "0 18px 54px rgba(0,0,0,0.42)",
+        boxShadow: "var(--hg-app-shadow)",
         fontFamily: "'Geist Mono', monospace",
       }}>
         <div style={{
@@ -4236,7 +4236,7 @@ function FeatureLoadingSurface({ open, title, status, error, onClose, onRetry, m
           {onClose && (
             <button type="button" onClick={onClose} style={{
               border: "1px solid var(--hg-border)",
-              background: "rgba(255,255,255,0.03)",
+              background: "var(--hg-input-bg)",
               color: "var(--hg-fg-2)",
               padding: "8px 10px",
               fontFamily: "'Geist Mono', monospace",
@@ -5855,10 +5855,11 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   // churn its hold-timeout (see BootSequence). setBootPhase is stable.
   const handleBootComplete = useCallback(() => setBootPhase("settling"), []);
 
-  /* Theme → DOM */
+  /* Theme → DOM (+ keep the browser-chrome theme-color in sync) */
   useEffect(() => {
     if (rootRef.current) rootRef.current.dataset.theme = theme;
     document.documentElement.dataset.theme = theme;
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "light" ? "#EFE9DC" : "#050606");
   }, [theme]);
 
   /* Auto-scroll to bottom on new events. `bootPhase` is in the deps because

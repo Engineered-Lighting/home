@@ -644,6 +644,7 @@ function AiStackCard({
               whiteSpace: "pre-wrap",
               wordBreak: "break-all",
               lineHeight: 1.4,
+              userSelect: "text",
             }}>
               {lastFew.map((ln, i) => <div key={i}>{ln}</div>)}
             </div>
@@ -715,6 +716,7 @@ function AiStackCard({
               whiteSpace: "pre-wrap",
               wordBreak: "break-all",
               lineHeight: 1.4,
+              userSelect: "text",
             }}>
               {(expanded ? logLines : logLines.slice(-6)).map((ln, i) => <div key={i}>{ln}</div>)}
             </div>

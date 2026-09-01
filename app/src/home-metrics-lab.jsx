@@ -23,33 +23,38 @@ const { useState, useEffect, useRef, useCallback, useMemo } = React;
  * â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 const STAGE_TINT = {
-  // Pure neutral whites â€” matches the AI tab "LAST VOICE TURN" card,
+  // Pure neutral ink â€” matches the AI tab "LAST VOICE TURN" card,
   // which uses the same gray/white stack with no blue accent. Color
   // (amber / red) is reserved exclusively for tier-driven warn/crit
   // signals via STAGE_TINT_SLOW.
-  stt:      "rgba(255,255,255,0.18)",
-  llm:      "rgba(255,255,255,0.40)",
-  synth:    "rgba(255,255,255,0.55)",
-  audio:    "rgba(255,255,255,0.75)",
+  // Phase 8 (theme pinning): entries are { color, opacity } consumed
+  // as SVG fill + fillOpacity (see tintFillProps). color is the fg-0
+  // ink token, so dark renders pixel-identical to the former
+  // rgba(255,255,255,a) fills and the light "paper" theme renders
+  // ink-on-paper instead of invisible white-on-white.
+  stt:      { color: "var(--hg-fg-0)", opacity: 0.18 },
+  llm:      { color: "var(--hg-fg-0)", opacity: 0.40 },
+  synth:    { color: "var(--hg-fg-0)", opacity: 0.55 },
+  audio:    { color: "var(--hg-fg-0)", opacity: 0.75 },
   // 2026-05-18: typed-turn stages derived from sidecar ttft_observed_ms.
   // prefill = model loading prompt â†’ first token (mostly KV-cache work).
   // gen     = token-by-token streaming after first token. Brighter than
   // prefill so visually you read "thinking â†’ speaking" left-to-right.
-  prefill:  "rgba(255,255,255,0.28)",
-  gen:      "rgba(255,255,255,0.62)",
+  prefill:  { color: "var(--hg-fg-0)", opacity: 0.28 },
+  gen:      { color: "var(--hg-fg-0)", opacity: 0.62 },
   // External-routed turns: same neutral palette but lower opacity so
   // the bar reads as a dimmer/ghosted version of a local turn â€”
   // visually conveys "local stack was idle, this was off-box work".
-  ext_req:  "rgba(255,255,255,0.10)",
-  ext_api:  "rgba(255,255,255,0.22)",
-  ext_recv: "rgba(255,255,255,0.35)",
-  external: "rgba(255,255,255,0.28)",
+  ext_req:  { color: "var(--hg-fg-0)", opacity: 0.10 },
+  ext_api:  { color: "var(--hg-fg-0)", opacity: 0.22 },
+  ext_recv: { color: "var(--hg-fg-0)", opacity: 0.35 },
+  external: { color: "var(--hg-fg-0)", opacity: 0.28 },
   // Ambient â€” pre-turn background-activity segment. Very dim so the
   // user reads it as "context, not the actual LLM call". The line
   // graphs use the same window so background GPU/CPU spikes from
   // perception dispatches (which don't have their own bar) surface
   // in the bar that came right after them.
-  ambient:  "rgba(255,255,255,0.05)",
+  ambient:  { color: "var(--hg-fg-0)", opacity: 0.05 },
 };
 
 // Addendum 29 Change 4: tool segments spliced between LLM rounds get
@@ -97,6 +102,19 @@ const STAGE_TINT_SLOW = {
   external: "rgba(255,178,90,0.35)",
   ambient:  "rgba(255,200,120,0.06)",
 };
+
+/* Phase 8: resolve a stage-tint spec to SVG fill props. Token-based
+ * STAGE_TINT entries are { color, opacity } â†’ fill + fillOpacity so the
+ * ink token re-themes per theme while the alpha stays the dark-mode
+ * value. Legacy string specs (amber STAGE_TINT_SLOW + the cyan tool
+ * family â€” semantic hues) pass through with their alpha baked into the
+ * rgba and no fillOpacity attribute. */
+function tintFillProps(spec) {
+  if (spec && typeof spec === "object") {
+    return { fill: spec.color, fillOpacity: spec.opacity };
+  }
+  return { fill: spec, fillOpacity: undefined };
+}
 
 const LAB_THRESHOLDS = {
   vram: { warn: 0.85, crit: 0.95 },
@@ -485,7 +503,7 @@ function LabActionButton({ action, onAction }) {
         textTransform: "lowercase", color: styleVariant.color,
         cursor: "pointer", transition: "color 120ms, border-color 120ms, background 120ms",
       }}
-      onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.03)"; }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = "color-mix(in oklab, var(--hg-fg-0) 3%, transparent)"; }}
       onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
     >
       <span style={{
@@ -511,7 +529,8 @@ function LabProgressRow({ progress }) {
     }}>
       <span style={{ color: "var(--hg-fg-0)", fontWeight: 500 }}>{progress.step}</span>
       <div style={{
-        flex: 1, height: 4, background: "rgba(255,255,255,0.06)",
+        flex: 1, height: 4,
+        background: "color-mix(in oklab, var(--hg-fg-0) 6%, transparent)",
         position: "relative", overflow: "hidden",
       }}>
         <div style={{
@@ -1287,7 +1306,7 @@ function LabStackPane({ services, metrics }) {
               onClick={() => setView(v)}
               style={{
                 padding: "3px 12px",
-                background: view === v ? "rgba(255,255,255,0.045)" : "transparent",
+                background: view === v ? "color-mix(in oklab, var(--hg-fg-0) 4.5%, transparent)" : "transparent",
                 border: "none",
                 fontFamily: HG_FONT_MONO, fontSize: 9.5,
                 letterSpacing: "0.14em", textTransform: "lowercase",
@@ -1520,11 +1539,16 @@ function LabChartSvgHistory({ turns, samplesShared, onSegmentClick, onSegmentHov
     } else {
       tint = s.slow ? STAGE_TINT_SLOW[s.stage] : STAGE_TINT[s.stage];
     }
-    const stroke = s.slow ? "rgba(255,178,90,0.85)" : "rgba(255,255,255,0.18)";
+    const fillProps = tintFillProps(tint);
+    // Segment outline: fg-0 ink at the old white alpha (dual-theme);
+    // slow keeps the semantic amber with its baked-in alpha.
+    const stroke = s.slow ? "rgba(255,178,90,0.85)" : "var(--hg-fg-0)";
+    const strokeOp = s.slow ? 1 : 0.18;
     return <rect
       key={i}
       x={s.x.toFixed(2)} y={2} width={s.w.toFixed(2)} height={STACK_H}
-      fill={tint} stroke={stroke} strokeWidth={0.5}
+      fill={fillProps.fill} fillOpacity={fillProps.fillOpacity}
+      stroke={stroke} strokeOpacity={strokeOp} strokeWidth={0.5}
       style={{ cursor: "pointer", transition: "opacity 120ms" }}
       onMouseEnter={(e) => {
         e.currentTarget.style.opacity = 0.8;
@@ -1547,8 +1571,8 @@ function LabChartSvgHistory({ turns, samplesShared, onSegmentClick, onSegmentHov
       key={`inflight-${i}`}
       x={s.x.toFixed(2)} y={2}
       width={s.w.toFixed(2)} height={STACK_H}
-      fill="rgba(184,216,255,0.45)"
-      stroke="rgba(184,216,255,0.85)" strokeWidth={0.8}
+      fill="var(--hg-ice)" fillOpacity={0.45}
+      stroke="var(--hg-ice)" strokeOpacity={0.85} strokeWidth={0.8}
       data-testid="hm-inflight-bar"
       style={{ animation: "hmLabInflightPulse 1.4s ease-in-out infinite" }}
     />
@@ -1558,18 +1582,23 @@ function LabChartSvgHistory({ turns, samplesShared, onSegmentClick, onSegmentHov
     const cs = (i + callPad) * PER_CALL;
     const ce = (i + 1 - callPad) * PER_CALL;
     const isSlow = !!t.slow;
-    const stroke = isSlow ? "rgba(255,178,90,0.85)" : "rgba(255,255,255,0.30)";
-    const shine = isSlow ? "rgba(255,230,180,0.55)" : "rgba(255,255,255,0.45)";
+    // Neutral outline/shine/label inks are fg-0 + the old white alpha
+    // (dual-theme); slow keeps the semantic amber rgba literals.
+    const stroke = isSlow ? "rgba(255,178,90,0.85)" : "var(--hg-fg-0)";
+    const strokeOp = isSlow ? 1 : 0.30;
+    const shine = isSlow ? "rgba(255,230,180,0.55)" : "var(--hg-fg-0)";
+    const shineOp = isSlow ? 1 : 0.45;
     const labelText = i === N - 1 ? "now" : `-${N - 1 - i}`;
     return (
       <g key={`outline-${i}`}>
-        <rect x={cs.toFixed(2)} y={2} width={(ce - cs).toFixed(2)} height={1} fill={shine} />
+        <rect x={cs.toFixed(2)} y={2} width={(ce - cs).toFixed(2)} height={1}
+              fill={shine} fillOpacity={shineOp} />
         <rect x={cs.toFixed(2)} y={2} width={(ce - cs).toFixed(2)} height={STACK_H}
-              fill="none" stroke={stroke} strokeWidth={0.6} />
+              fill="none" stroke={stroke} strokeOpacity={strokeOp} strokeWidth={0.6} />
         {!mobile && (
           <text x={((cs + ce) / 2).toFixed(1)} y={STACK_H + 12}
                 textAnchor="middle" fontFamily="Geist Mono" fontSize={8}
-                fill="rgba(255,255,255,0.42)" letterSpacing="0.16em">{labelText}</text>
+                fill="var(--hg-fg-0)" fillOpacity={0.42} letterSpacing="0.16em">{labelText}</text>
         )}
       </g>
     );
@@ -1625,7 +1654,7 @@ function LabChartSvgHistory({ turns, samplesShared, onSegmentClick, onSegmentHov
         className="hg-scroll"
         style={{
           overflowX: "auto", overflowY: "hidden",
-          background: "rgba(255,255,255,0.02)",
+          background: "color-mix(in oklab, var(--hg-fg-0) 2%, transparent)",
           position: "relative",
         }}
       >
@@ -1819,12 +1848,15 @@ function LabChartSvgNow({ turn, onSegmentHover, onLineHover }) {
     } else {
       tint = s.slow ? STAGE_TINT_SLOW[s.stage] : STAGE_TINT[s.stage];
     }
-    const stroke = (s.slow && s.stage === "audio") ? "rgba(255,178,90,0.85)" : "rgba(255,255,255,0.20)";
+    const fillProps = tintFillProps(tint);
+    const stroke = (s.slow && s.stage === "audio") ? "rgba(255,178,90,0.85)" : "var(--hg-fg-0)";
+    const strokeOp = (s.slow && s.stage === "audio") ? 1 : 0.20;
     const showLbl = !mobile && s.w > 60;
     return (
       <g key={i}>
         <rect x={s.x.toFixed(2)} y={2} width={s.w.toFixed(2)} height={STACK_H}
-              fill={tint} stroke={stroke} strokeWidth={0.6}
+              fill={fillProps.fill} fillOpacity={fillProps.fillOpacity}
+              stroke={stroke} strokeOpacity={strokeOp} strokeWidth={0.6}
               style={{ cursor: "pointer", transition: "opacity 120ms" }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.opacity = 0.8;
@@ -1876,7 +1908,8 @@ function LabChartSvgNow({ turn, onSegmentHover, onLineHover }) {
       </div>
 
       <div style={{
-        overflowX: "hidden", background: "rgba(255,255,255,0.02)",
+        overflowX: "hidden",
+        background: "color-mix(in oklab, var(--hg-fg-0) 2%, transparent)",
         position: "relative",
       }}>
         <svg width="100%" viewBox={`0 0 ${SVG_W} ${SVG_H}`}
@@ -2222,7 +2255,7 @@ function LabChartCard({ turns, samplesShared, tier, baseline, view, setView, sel
         <div style={{ display: "inline-flex", border: "1px solid var(--hg-border-soft)", flexShrink: 0 }}>
           {["history", "now"].map((v) => (
             <button key={v} onClick={() => setView(v)} style={{
-              padding: "4px 11px", background: view === v ? "rgba(255,255,255,0.04)" : "transparent",
+              padding: "4px 11px", background: view === v ? "color-mix(in oklab, var(--hg-fg-0) 4%, transparent)" : "transparent",
               border: "none", fontFamily: HG_FONT_MONO, fontSize: 10,
               letterSpacing: "0.10em", textTransform: "lowercase",
               color: view === v ? "var(--hg-fg-0)" : "var(--hg-fg-3)",
@@ -2367,7 +2400,8 @@ function LabResPills({ metrics }) {
             }}>{p.unit}</span>
           </span>
           <div style={{
-            marginTop: 8, height: 3, background: "rgba(255,255,255,0.06)",
+            marginTop: 8, height: 3,
+            background: "color-mix(in oklab, var(--hg-fg-0) 6%, transparent)",
             position: "relative",
           }}>
             <div style={{
@@ -2582,7 +2616,7 @@ function LabLogFilter({ filters = DEFAULT_LAB_LOG_FILTERS, onToggle }) {
           padding: "3px 8px",
           border: `1px solid ${filters[k] ? "var(--hg-border)" : "var(--hg-border-soft)"}`,
           color: filters[k] ? "var(--hg-fg-0)" : "var(--hg-fg-3)",
-          background: filters[k] ? "rgba(255,255,255,0.05)" : "transparent",
+          background: filters[k] ? "color-mix(in oklab, var(--hg-fg-0) 5%, transparent)" : "transparent",
           cursor: "pointer", textTransform: "lowercase",
           font: "inherit", letterSpacing: "inherit",
         }}>{k}</button>
@@ -2598,7 +2632,7 @@ function LabLogPane({ lines }) {
   if (!lines || lines.length === 0) {
     return (
       <div style={{
-        background: "rgba(255,255,255,0.02)",
+        background: "color-mix(in oklab, var(--hg-fg-0) 2%, transparent)",
         border: "1px solid var(--hg-border-soft)",
         padding: "20px 14px",
         fontFamily: HG_FONT_MONO, fontSize: 10.5,
@@ -2608,7 +2642,7 @@ function LabLogPane({ lines }) {
   }
   return (
     <div style={{
-      background: "rgba(255,255,255,0.02)",
+      background: "color-mix(in oklab, var(--hg-fg-0) 2%, transparent)",
       border: "1px solid var(--hg-border-soft)",
       padding: "10px 14px",
       fontFamily: HG_FONT_MONO, fontSize: 10.5,

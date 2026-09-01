@@ -1138,9 +1138,15 @@ process.stdout.write("\n[1mSTAGE_TINT palette discipline[0m\n");
 
   // External tints must be DIMMER than their local equivalents (visual
   // language: external = ghosted / off-box). Extract opacity values.
+  // Phase 8 (theme pinning): STAGE_TINT entries are token-based
+  // `{ color: "var(--hg-fg-0)", opacity: N }` objects (fill +
+  // fillOpacity) so the light "paper" theme renders ink-on-paper.
+  // Parse that form first; fall back to the legacy rgba-string form
+  // (still used by the semantic amber STAGE_TINT_SLOW palette).
   function opacity(block, label) {
-    const re = new RegExp(label + "\\s*:\\s*\"rgba\\([^,]+,[^,]+,[^,]+,([\\d.]+)\\)\"");
-    const m = block.match(re);
+    let m = block.match(new RegExp(label + "\\s*:\\s*\\{[^}]*\\bopacity:\\s*([\\d.]+)"));
+    if (m) return parseFloat(m[1]);
+    m = block.match(new RegExp(label + "\\s*:\\s*\"rgba\\([^,]+,[^,]+,[^,]+,([\\d.]+)\\)\""));
     return m ? parseFloat(m[1]) : null;
   }
   const audioOp = opacity(tintBlock, "audio");

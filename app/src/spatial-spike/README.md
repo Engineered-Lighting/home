@@ -1,6 +1,9 @@
-# Spatial handoff lab
+# Internal spatial renderer gate
 
-This subtree is an isolated Phase 0 frontend spike. It tests the contract around
+This subtree is isolated, nonshipping test instrumentation. It is not a product
+screen and must never be linked from the Apartment tab. The shipping product
+keeps the existing Apartment chrome and controls; only its current viewport may
+hand off at the exterior zoom boundary. This lab tests the contract around
 a future outer-world renderer without importing or changing Apartment View.
 Everything runs as precompiled native ESM from `app/src`; there is no runtime
 transpilation. CesiumJS 1.144.0 and MapLibre GL JS 6.6.0 are pinned, vendored,

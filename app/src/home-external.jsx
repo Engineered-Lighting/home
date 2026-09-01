@@ -474,7 +474,6 @@ function ExternalKeyModal({ onClose }) {
             fontFamily: HG_FONT_MONO_EXT,
             fontSize: 11,
             marginBottom: 10,
-            outline: "none",
             boxSizing: "border-box",
           }}
         />

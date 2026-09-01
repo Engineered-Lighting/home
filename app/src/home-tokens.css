@@ -236,8 +236,22 @@ button {
 }
 .hg-fade { animation: hg-fade-up 360ms cubic-bezier(0.16, 1, 0.3, 1) both; }
 
-/* Focus — single technical ring */
-.hg-focusable:focus-visible {
+/* Focus — single technical ring.
+ * The ring is GLOBAL for keyboard focus (:focus-visible never fires on plain
+ * mouse clicks, so this adds no pointer noise). .hg-focusable is kept for
+ * back-compat but is no longer required — every native control, link, and
+ * tabindex element gets the ring. Never suppress it with inline styles
+ * (`outline: "none"` / `all: "unset"` at inline priority defeats any
+ * stylesheet rule — that bug once made keyboard focus invisible app-wide). */
+.hg-focusable:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+a[href]:focus-visible,
+[tabindex]:focus-visible,
+[role="button"]:focus-visible {
   outline: 1px solid var(--hg-blue);
   outline-offset: 1px;
 }
@@ -275,6 +289,12 @@ button {
 }
 .hg-slider:active::-webkit-slider-thumb { transform: scale(1.18); }
 .hg-slider:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 2px var(--hg-blue); }
+/* Engine-neutral slider focus ring — the thumb glow above is WebKit-only;
+ * without this, Firefox keyboard users get zero focus indication on sliders. */
+.hg-slider:focus-visible {
+  outline: 1px solid var(--hg-blue);
+  outline-offset: 3px;
+}
 .hg-slider:disabled { opacity: 0.4; cursor: default; }
 .hg-slider:disabled::-webkit-slider-thumb { background: var(--hg-fg-4); box-shadow: none; }
 .hg-slider:disabled::-moz-range-thumb { background: var(--hg-fg-4); box-shadow: none; }

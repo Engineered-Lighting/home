@@ -655,7 +655,13 @@ function HomeHeader({
     boxSizing: "border-box",
   };
   const navChipBtn = {
-    all: "unset",
+    /* Explicit reset — never use the all-properties inline reset: at inline
+       priority it defeats the .hg-focusable focus ring and .hg-mobile-touch
+       target size (audit: keyboard focus was invisible app-wide). */
+    appearance: "none",
+    margin: 0,
+    font: "inherit",
+    textAlign: "inherit",
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
@@ -678,7 +684,13 @@ function HomeHeader({
   const unhover     = (e) => { e.currentTarget.style.color = "var(--hg-fg-3)"; };
   const chipMax = mobile ? "min(142px, 36vw)" : "none";
   const actionMenuItem = {
-    all: "unset",
+    appearance: "none",
+    background: "none",
+    border: "none",
+    margin: 0,
+    font: "inherit",
+    color: "inherit",
+    textAlign: "inherit",
     minHeight: mobile ? 40 : 36,
     padding: mobile ? "0 13px" : "0 12px",
     display: "flex",
@@ -944,7 +956,10 @@ function HomeHeader({
             onClick={onUnmuteClick}
             title={`Jarvis muted (${muteState.reason || "active"}) — click to clear manual/timer mute`}
             style={{
-              all: "unset",
+              appearance: "none",
+              background: "none",
+              margin: 0,
+              font: "inherit",
               display: "inline-flex", alignItems: "center", gap: 5,
               border: "1px solid var(--hg-fg-3)",
               color: "var(--hg-fg-2)",
@@ -978,7 +993,12 @@ function HomeHeader({
             title="Simulation Mode - open controls"
             className="hg-focusable hg-mobile-touch"
             style={{
-              all: "unset",
+              appearance: "none",
+              background: "none",
+              border: "none",
+              margin: 0,
+              padding: 0,
+              font: "inherit",
               display: "inline-flex",
               alignItems: "center",
               cursor: "pointer",
@@ -2784,7 +2804,6 @@ function MetricsStrip({
               fontSize: 10, letterSpacing: "0.16em",
               textTransform: "uppercase",
               color: "var(--hg-fg-4)",
-              outline: "none",
               fontWeight: 400,
             }}>unifi diagnostics · {allDevices.length} devices</summary>
             <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
@@ -3691,7 +3710,7 @@ function FirstRun({
               placeholder="http://192.168.0.125:8123"
               autoCapitalize="off" autoCorrect="off" spellCheck={false}
               style={{
-                flex: 1, background: "transparent", border: "none", outline: "none",
+                flex: 1, background: "transparent", border: "none",
                 fontFamily: "'Geist Mono', monospace", fontSize: 13,
                 color: "var(--hg-fg-0)", caretColor: "var(--hg-fg-0)",
               }}
@@ -3707,7 +3726,7 @@ function FirstRun({
               type="password"
               autoCapitalize="off" autoCorrect="off" spellCheck={false}
               style={{
-                flex: 1, background: "transparent", border: "none", outline: "none",
+                flex: 1, background: "transparent", border: "none",
                 fontFamily: "'Geist Mono', monospace", fontSize: 13,
                 color: "var(--hg-fg-0)", caretColor: "var(--hg-fg-0)",
               }}
@@ -4314,7 +4333,7 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
             style={{
               fontFamily: isSlash ? "'Geist Mono', monospace" : "'Geist', system-ui, sans-serif",
               fontSize: mobile ? 16 : isSlash ? 13 : 14,
-              flex: 1, background: "transparent", border: "none", outline: "none",
+              flex: 1, background: "transparent", border: "none",
               color: "var(--hg-fg-0)",
               caretColor: "var(--hg-fg-0)",
             }}
@@ -9053,7 +9072,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         e.preventDefault();
         // The InputRow's inner <input> is the only text field at top level.
         // Avoids needing a ref to thread through the component tree.
-        document.querySelector('.hg-focusable input, input.hg-focusable, input[placeholder]')?.focus?.();
+        // Target the command input by its accessible name — the old
+        // class-based selector re-targeted whenever hg-focusable spread.
+        document.querySelector('input[aria-label="Command input"], input[placeholder]')?.focus?.();
         return;
       }
       if (e.key === "Escape") {

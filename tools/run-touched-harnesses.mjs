@@ -68,6 +68,8 @@ const MAP = [
   [/^app\/src\/simulation-controls\.jsx$/, ["run-simulation-control-tests"]],
   [/^app\/src\/simulation(-data)?\.jsx$/, ["run-simulation-scenario-tests"]],
   [/^app\/src\/index\.html$/, ["run-lab-tests", "run-bootstrap-tests", "run-resilience-tests"]],
+  [/^app\/src\/home-tokens\.css$/, ["run-focus-visibility-tests"]],
+  [/^app\/src\/.*\.(jsx|js)$/, ["run-focus-visibility-tests"]],
   [/^web-gateway\//, [
     "run-resilience-tests", "run-web-gateway-grounded-vision-tests",
     "run-web-gateway-stack-token-tests", "run-native-agent-gateway-tests",
@@ -139,16 +141,30 @@ for (const name of list) {
 
 if (touchedAppSrc) {
   process.stdout.write("  RUN  check-jsx ... ");
-  const extra = files
-    .map((f) => f.replace(/\\/g, "/"))
-    .filter((f) => /^app\/src\/(home-3d|home-agent)\/.*\.(js|jsx)$/.test(f))
-    .map((f) => path.join(REPO, f));
-  const res = spawnSync(process.execPath, [path.join(TOOLS, "check-jsx.js"), ...extra], { cwd: REPO, encoding: "utf8", timeout: 180000 });
+  const res = spawnSync(process.execPath, [path.join(TOOLS, "check-jsx.js")], { cwd: REPO, encoding: "utf8", timeout: 180000 });
   if (res.status === 0) console.log("ok");
   else {
     console.log("FAIL");
     console.log(`${res.stdout || ""}\n${res.stderr || ""}`.trim().split(/\r?\n/).slice(-15).join("\n").replace(/^/gm, "       "));
     failed.push("check-jsx");
+  }
+
+  // home-3d/ and home-agent/ are real ES modules — check-jsx's Function-based
+  // parse can't read them; node --check can.
+  const esmFiles = files
+    .map((f) => f.replace(/\\/g, "/"))
+    .filter((f) => /^app\/src\/(home-3d|home-agent)\/.*\.js$/.test(f))
+    .filter((f) => fs.existsSync(path.join(REPO, f)));
+  for (const f of esmFiles) {
+    process.stdout.write(`  RUN  esm-check ${f} ... `);
+    const src = fs.readFileSync(path.join(REPO, f), "utf8");
+    const r = spawnSync(process.execPath, ["--input-type=module", "--check"], { cwd: REPO, encoding: "utf8", timeout: 60000, input: src });
+    if (r.status === 0) console.log("ok");
+    else {
+      console.log("FAIL");
+      console.log(`${r.stderr || ""}`.trim().split(/\r?\n/).slice(-6).join("\n").replace(/^/gm, "       "));
+      failed.push(`node-check:${f}`);
+    }
   }
 }
 

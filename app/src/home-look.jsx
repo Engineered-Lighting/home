@@ -428,7 +428,6 @@ function HomeLookDrawer({ open, onClose, metricsBase, sim,
               border: "1px solid var(--hg-border-soft)",
               color: "var(--hg-fg-0)", padding: "7px 10px",
               fontFamily: LK_FONT_SANS, fontSize: 12, borderRadius: 3,
-              outline: "none",
             }}
           />
           <button

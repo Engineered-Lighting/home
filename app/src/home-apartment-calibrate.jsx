@@ -69,6 +69,7 @@
         useEffect(() => { onPickRequest(!!pendingPx); }, [!!pendingPx]);
         useEffect(() => { onPairsChanged && onPairsChanged(pairs); }, [pairs]);
         const [imgNat, setImgNat] = useState([1280, 720]);
+        const [kbPt, setKbPt] = useState(null);   // keyboard crosshair, fraction of frame [0..1]
 
         const clickImage = (e) => {
             const img = imgRef.current;
@@ -76,6 +77,29 @@
             const u = ((e.clientX - r.left) / r.width) * img.naturalWidth;
             const v = ((e.clientY - r.top) / r.height) * img.naturalHeight;
             setPendingPx([Math.round(u), Math.round(v)]);
+        };
+
+        // keyboard point placement: arrows move the crosshair (Shift = 5%),
+        // Enter commits through the same clickImage path as the mouse.
+        const keyPlace = (e) => {
+            if (e.key === "Enter" && kbPt) {
+                e.preventDefault(); e.stopPropagation();
+                const img = imgRef.current;
+                if (!img) return;
+                const r = img.getBoundingClientRect();
+                clickImage({ clientX: r.left + kbPt[0] * r.width,
+                             clientY: r.top + kbPt[1] * r.height });
+                return;
+            }
+            const step = e.shiftKey ? 0.05 : 0.01;
+            const move = { ArrowLeft: [-step, 0], ArrowRight: [step, 0],
+                           ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+            if (!move) return;
+            e.preventDefault(); e.stopPropagation();
+            setKbPt((p) => [
+                Math.min(1, Math.max(0, (p ? p[0] : 0.5) + move[0])),
+                Math.min(1, Math.max(0, (p ? p[1] : 0.5) + move[1])),
+            ]);
         };
 
         const solve = async () => {
@@ -129,14 +153,22 @@
                     style: { height: 74, border: t.n ? "1px solid #4a8" : "1px solid #844" },
                 }))),
             React.createElement("div", { style: { position: "relative", width: "100%" } },
-                React.createElement("img", {
-                    ref: imgRef, onClick: clickImage,
-                    onLoad: () => imgRef.current && setImgNat(
-                        [imgRef.current.naturalWidth, imgRef.current.naturalHeight]),
-                    src: `${trackerBase}/calib/${cam}/snapshot`,
-                    style: { width: "100%", display: "block", border: "1px solid #2a3242",
-                             cursor: "crosshair", opacity: pendingPx ? 0.7 : 1 },
-                }),
+                React.createElement("button", {
+                    type: "button", className: "hg-focusable",
+                    "aria-label": "snapshot of " + cam + " — activate then use arrow keys to place the point",
+                    onKeyDown: keyPlace,
+                    style: { display: "block", width: "100%", padding: 0, border: "none",
+                             background: "transparent", cursor: "crosshair" },
+                },
+                    React.createElement("img", {
+                        ref: imgRef, onClick: clickImage,
+                        alt: `camera snapshot of ${cam}`,
+                        onLoad: () => imgRef.current && setImgNat(
+                            [imgRef.current.naturalWidth, imgRef.current.naturalHeight]),
+                        src: `${trackerBase}/calib/${cam}/snapshot`,
+                        style: { width: "100%", display: "block", border: "1px solid #2a3242",
+                                 cursor: "crosshair", opacity: pendingPx ? 0.7 : 1 },
+                    })),
                 pairs.map((p, i) => React.createElement("div", {
                     key: i,
                     style: { position: "absolute",
@@ -156,6 +188,14 @@
                              transform: "translate(-50%, -50%)",
                              width: 16, height: 16, borderRadius: 9,
                              border: "2px solid #ffd479", pointerEvents: "none" },
+                }),
+                kbPt && React.createElement("div", {
+                    style: { position: "absolute",
+                             left: `${kbPt[0] * 100}%`,
+                             top: `${kbPt[1] * 100}%`,
+                             transform: "translate(-50%, -50%)",
+                             width: 18, height: 18, borderRadius: 9,
+                             border: "1px dashed #7db4ff", pointerEvents: "none" },
                 })),
             pendingPx && React.createElement("div",
                 { style: { ...mono, color: "#ffd479" } },

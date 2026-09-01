@@ -901,34 +901,40 @@ function VLLabelPicker({ axisTitle, values, createMode, onApply, onCreateCustom,
           />
           <div className="hg-scroll" style={{ maxHeight: 240, overflowY: "auto" }}>
             {matches.map((v, i) => (
-              <div
+              <button
                 key={String(v.value)}
+                type="button"
+                className="hg-focusable"
                 onMouseEnter={() => setHi(i)}
                 onClick={() => choose(i)}
                 style={{
-                  display: "flex", alignItems: "center", gap: 7,
+                  display: "flex", alignItems: "center", gap: 7, width: "100%",
+                  border: "none", font: "inherit", textAlign: "inherit",
                   padding: "5px 7px", cursor: "pointer", fontSize: 10.5,
                   background: hi === i ? "var(--hg-bg-3)" : "transparent",
                   color: v.inactive ? "var(--hg-fg-5)" : "var(--hg-fg-1)",
                 }}
               >
                 <span style={{ width: 8, height: 8, background: v.color, flex: "none" }} />
-                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v.label}</span>
+                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left" }}>{v.label}</span>
                 {v.isCustom && <VLChip label="custom" tone="dim" />}
                 {v.inactive && <VLChip label="inactive" tone="dim" />}
-              </div>
+              </button>
             ))}
             {showCreateRow && (
-              <div
+              <button
+                type="button"
+                className="hg-focusable"
                 onMouseEnter={() => setHi(matches.length)}
                 onClick={() => choose(matches.length)}
                 style={{
-                  display: "flex", alignItems: "center", gap: 7,
+                  display: "flex", alignItems: "center", gap: 7, width: "100%",
+                  border: "none", font: "inherit", textAlign: "left",
                   padding: "5px 7px", cursor: "pointer", fontSize: 10.5,
                   background: hi === matches.length ? "var(--hg-bg-3)" : "transparent",
                   color: "var(--hg-ice)",
                 }}
-              >+ create custom "{q.trim()}"</div>
+              >+ create custom "{q.trim()}"</button>
             )}
             {rowCount === 0 && (
               <div style={{ padding: "6px 7px", fontSize: 10, color: "var(--hg-fg-5)" }}>no matches</div>
@@ -1016,21 +1022,25 @@ function VLCustomLabelManager({ ontology, refreshOntology, canonicalInfo, showTo
         const promoteTargets = info.active.concat(info.rest);
         return (
           <div key={c.slug} style={{ borderBottom: "1px solid var(--hg-border-soft)" }}>
-            <div
+            <button
+              type="button"
+              className="hg-focusable"
+              aria-expanded={open}
               onClick={() => { setExpanded(open ? null : c.slug); setMergeInto(""); setPromoteTo(""); }}
               style={{
-                display: "flex", alignItems: "center", gap: 6,
+                display: "flex", alignItems: "center", gap: 6, width: "100%",
+                background: "transparent", border: "none", font: "inherit",
                 padding: "5px 2px", cursor: "pointer", fontSize: 10,
                 color: c.status === "active" ? "var(--hg-fg-2)" : "var(--hg-fg-5)",
               }}
             >
               <span style={{ width: 8, height: 8, background: color, flex: "none" }} />
-              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left" }}>
                 {c.name || c.slug}
               </span>
               <span style={{ fontSize: 8.5, color: "var(--hg-fg-5)" }}>{c.axis} · {c.usage_count ?? 0}×</span>
               {c.status !== "active" && <VLChip label={c.status} tone="dim" />}
-            </div>
+            </button>
             {open && c.status === "active" && (
               <div style={{ display: "flex", flexDirection: "column", gap: 5, padding: "2px 2px 8px 14px" }}>
                 <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
@@ -1287,15 +1297,20 @@ function VLNeighborsPanel({ segId, videoId, videos, onSeek }) {
         const act = n.labels && n.labels.activity;
         const pos = n.labels && n.labels.posture;
         return (
-          <div
+          <button
             key={n.window_id}
+            type="button"
+            className="hg-focusable"
+            disabled={!(same && onSeek)}
             onClick={same && onSeek ? () => onSeek(n.t_center) : undefined}
             title={same
               ? "this video · click to seek to " + D.fmtDuration(n.t_center)
               : shortName(n.video_id) + " @ " + D.fmtDuration(n.t_center)
                 + " — cross-video navigation not available yet"}
             style={{
-              display: "flex", alignItems: "center", gap: 7,
+              display: "flex", alignItems: "center", gap: 7, width: "100%",
+              background: "transparent", border: "none", font: "inherit",
+              color: "inherit", textAlign: "inherit",
               padding: "4px 0", borderBottom: "1px solid var(--hg-border-soft)",
               cursor: same ? "pointer" : "default",
               opacity: same ? 1 : 0.85,
@@ -1340,7 +1355,7 @@ function VLNeighborsPanel({ segId, videoId, videos, onSeek }) {
             }} title={"cosine distance " + Number(n.distance).toFixed(4)}>
               {sim}%
             </span>
-          </div>
+          </button>
         );
       })}
     </div>
@@ -1700,7 +1715,7 @@ function VLInspector({
 /* keyboard cheat sheet — toggled with ? */
 const VL_CHEAT_ROWS = [
   ["space", "play / pause"], ["← / →", "±1 frame (shift ±1s · ctrl ±10s)"],
-  ["↑ / ↓", "select prev / next segment"], ["tab", "cycle active lane"],
+  ["↑ / ↓", "select prev / next segment"], ["[ / ]", "prev / next lane"],
   ["1-9 0", "palette — apply / create at playhead"], ["e", "label picker"],
   ["c", "create custom label"], ["i / o", "set start / end to playhead"],
   ["s", "split at playhead"], ["m", "merge with next"],
@@ -1717,7 +1732,15 @@ const VL_CHEAT_ROWS = [
 function VLCheatSheet({ onClose }) {
   return (
     <div
+      tabIndex={0}
+      role="button"
       onClick={onClose}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          if (e.key === " ") e.preventDefault();
+          onClose();
+        }
+      }}
       style={{
         position: "absolute", right: 16, top: 16, zIndex: 12, width: 330,
         background: "var(--hg-bg-1)", border: "1px solid var(--hg-border)",
@@ -2629,7 +2652,6 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
       case "ArrowRight": handled(); if (e.shiftKey) tr.skip(1); else tr.stepFrame(1); return;
       case "ArrowUp": handled(); selectAdjacent(-1); return;
       case "ArrowDown": handled(); selectAdjacent(1); return;
-      case "Tab": handled(); cycleAxis(e.shiftKey ? -1 : 1); return;
       default: break;
     }
     if (key.length === 1 && key >= "0" && key <= "9") {
@@ -2643,6 +2665,8 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
     switch (k) {
       case "e": handled(); setPicker({ axis: stateRef.current.activeAxis, create: false }); return;
       case "c": handled(); setPicker({ axis: stateRef.current.activeAxis, create: true }); return;
+      case "[": handled(); cycleAxis(-1); return;
+      case "]": handled(); cycleAxis(1); return;
       case "i": handled(); setEdgeToPlayhead("start"); return;
       case "o": handled(); setEdgeToPlayhead("end"); return;
       case "s": handled(); splitAtPlayhead(); return;
@@ -2692,7 +2716,9 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
          never fire while typing in a field */
       const t = e.target;
       if (t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable)) return;
-      if (t && t.tagName === "BUTTON" && (e.key === " " || e.key === "Enter")) return;
+      if (t && (t.tagName === "BUTTON"
+          || (t.getAttribute && t.getAttribute("role") === "button"))
+        && (e.key === " " || e.key === "Enter")) return;
       if (keyHandlerRef.current) keyHandlerRef.current(e);
     };
     window.addEventListener("keydown", onKey, { capture: true });

@@ -155,7 +155,10 @@ function ToolContent({ name, args = {}, status = "success", latency }) {
   const caret = open ? "▾" : "▸";
   return (
     <div>
-      <div
+      <button
+        type="button"
+        className="hg-focusable"
+        aria-expanded={open}
         onClick={() => setOpen(o => !o)}
         style={{
           ...T_SYNTAX,
@@ -165,6 +168,12 @@ function ToolContent({ name, args = {}, status = "success", latency }) {
           alignItems: "baseline",
           cursor: "pointer",
           userSelect: "none",
+          width: "100%",
+          background: "transparent",
+          border: "none",
+          padding: 0,
+          color: "inherit",
+          textAlign: "inherit",
         }}
       >
         <span style={{ color: "var(--hg-fg-4)" }}>{caret}</span>
@@ -173,7 +182,7 @@ function ToolContent({ name, args = {}, status = "success", latency }) {
         <span role="status" style={{ textAlign: "right", whiteSpace: "nowrap" }}>
           <StatusText status={status} latency={latency} />
         </span>
-      </div>
+      </button>
       {open && Object.keys(args).length > 0 && (
         <div style={{
           ...T_SYNTAX,
@@ -252,10 +261,18 @@ function ActionContent({ id, title, service, target, attrs = {}, status = "pendi
           userSelect: "none",
         }}
       >
-        <span
+        <button
+          type="button"
+          className="hg-focusable"
+          aria-expanded={open}
+          aria-label={`${title || service || "action"} details`}
           onClick={() => setOpen(o => !o)}
-          style={{ color: "var(--hg-fg-4)", cursor: "pointer" }}
-        >{caret}</span>
+          style={{
+            color: "var(--hg-fg-4)", cursor: "pointer",
+            background: "transparent", border: "none", padding: 0,
+            font: "inherit", textAlign: "inherit",
+          }}
+        >{caret}</button>
         <span
           onClick={() => setOpen(o => !o)}
           style={{ ...(isErr ? HG_WARN : HG_DIM), cursor: "pointer" }}
@@ -601,7 +618,16 @@ function PerceptionContent({ text, snapshotUrl, imageMode, imageUnavailable = fa
     return (
       <React.Fragment>
         <div
+          role="button"
+          tabIndex={0}
+          aria-expanded={expanded}
           onClick={() => setExpanded((v) => !v)}
+          onKeyDown={(ev) => {
+            if (ev.target !== ev.currentTarget) return;
+            if (ev.key !== "Enter" && ev.key !== " ") return;
+            if (ev.key === " ") ev.preventDefault();
+            setExpanded((v) => !v);
+          }}
           style={{
             ...T_SYNTAX,
             display: "grid",
@@ -642,24 +668,31 @@ function PerceptionContent({ text, snapshotUrl, imageMode, imageUnavailable = fa
               }}>image unavailable</span>
             )}
           </div>
-          <img
-            src={snapshotUrl}
-            alt={room ? `${room} segmented view` : "segmented perception view"}
-            loading="lazy"
-            decoding="async"
+          <button
+            type="button"
+            className="hg-focusable"
+            aria-label="view snapshot fullscreen"
             onClick={openLightbox}
-            onError={(e) => { e.currentTarget.style.display = "none"; }}
-            style={{
-              width: "100%",
-              maxHeight: expanded ? "62vh" : "min(360px, 46vh)",
-              objectFit: "contain",
-              borderRadius: 5,
-              border: "1px solid var(--hg-border)",
-              background: "rgba(0,0,0,0.35)",
-              display: "block",
-              cursor: "zoom-in",
-            }}
-          />
+            style={{ display: "block", width: "100%", padding: 0, background: "none", border: "none" }}
+          >
+            <img
+              src={snapshotUrl}
+              alt={room ? `${room} segmented view` : "segmented perception view"}
+              loading="lazy"
+              decoding="async"
+              onError={(e) => { e.currentTarget.style.display = "none"; }}
+              style={{
+                width: "100%",
+                maxHeight: expanded ? "62vh" : "min(360px, 46vh)",
+                objectFit: "contain",
+                borderRadius: 5,
+                border: "1px solid var(--hg-border)",
+                background: "rgba(0,0,0,0.35)",
+                display: "block",
+                cursor: "zoom-in",
+              }}
+            />
+          </button>
         </div>
         {lightbox}
       </React.Fragment>
@@ -668,7 +701,17 @@ function PerceptionContent({ text, snapshotUrl, imageMode, imageUnavailable = fa
   return (
     <React.Fragment>
       <div
+        role={clickable ? "button" : undefined}
+        tabIndex={clickable ? 0 : undefined}
+        aria-expanded={clickable ? expanded : undefined}
         onClick={() => clickable && setExpanded((v) => !v)}
+        onKeyDown={(ev) => {
+          if (!clickable) return;
+          if (ev.target !== ev.currentTarget) return;
+          if (ev.key !== "Enter" && ev.key !== " ") return;
+          if (ev.key === " ") ev.preventDefault();
+          setExpanded((v) => !v);
+        }}
         style={{
           ...T_SYNTAX,
           display: "grid",
@@ -683,25 +726,32 @@ function PerceptionContent({ text, snapshotUrl, imageMode, imageUnavailable = fa
         }}
       >
         {hasThumb && (
-          <img
-            src={snapshotUrl}
-            alt={room ? `${room} snapshot` : "perception snapshot"}
-            loading="lazy"
-            decoding="async"
+          <button
+            type="button"
+            className="hg-focusable"
+            aria-label="view snapshot fullscreen"
             onClick={openLightbox}
-            onError={(e) => { e.currentTarget.style.display = "none"; }}
-            style={{
-              width: expanded ? "min(100%, 280px)" : thumbSize,
-              height: expanded ? "auto" : thumbSize * 0.6,
-              maxHeight: expanded ? "42vh" : undefined,
-              objectFit: expanded ? "contain" : "cover",
-              borderRadius: 3,
-              border: "1px solid var(--hg-border)",
-              display: "block",
-              cursor: "zoom-in",
-              background: "rgba(0,0,0,0.35)",
-            }}
-          />
+            style={{ display: "block", padding: 0, background: "none", border: "none" }}
+          >
+            <img
+              src={snapshotUrl}
+              alt={room ? `${room} snapshot` : "perception snapshot"}
+              loading="lazy"
+              decoding="async"
+              onError={(e) => { e.currentTarget.style.display = "none"; }}
+              style={{
+                width: expanded ? "min(100%, 280px)" : thumbSize,
+                height: expanded ? "auto" : thumbSize * 0.6,
+                maxHeight: expanded ? "42vh" : undefined,
+                objectFit: expanded ? "contain" : "cover",
+                borderRadius: 3,
+                border: "1px solid var(--hg-border)",
+                display: "block",
+                cursor: "zoom-in",
+                background: "rgba(0,0,0,0.35)",
+              }}
+            />
+          </button>
         )}
         <span style={{
           ...HG_META,
@@ -1005,6 +1055,32 @@ function EventContent({ e, onConfirm, onCancel, onUndo, onControlAction, lifecyc
       className="hg-why-clickable"
     >
       {inner}
+      {/* Phase 5: real keyboard/discoverability path for the drawer — the
+          wrapper div stays pointer-clickable but can't be a <button> (action
+          bubbles nest their own confirm/cancel/undo buttons). */}
+      <button
+        type="button"
+        className="hg-focusable"
+        title="click to see why · routing + tool calls + timing"
+        onClick={(ev) => {
+          ev.stopPropagation();
+          onWhy(e.convId, e);
+        }}
+        style={{
+          background: "transparent",
+          border: "none",
+          borderBottom: "1px dotted var(--hg-fg-4)",
+          padding: 0,
+          marginTop: 2,
+          cursor: "pointer",
+          color: "var(--hg-fg-4)",
+          fontFamily: HG_MONO,
+          fontSize: 9,
+          letterSpacing: "0.12em",
+          textTransform: "lowercase",
+          lineHeight: 1.5,
+        }}
+      >why?</button>
     </div>
   );
 }

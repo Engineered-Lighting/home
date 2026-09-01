@@ -578,10 +578,16 @@ function HomeVisionCard({
               {cameras.map((c, i) => {
                 const on = i === idx;
                 return (
-                  <div
+                  <button
                     key={c.id}
+                    type="button"
+                    className="hg-focusable"
+                    aria-pressed={on}
                     onClick={() => setIdx(i)}
                     style={{
+                      background: "transparent",
+                      border: "none",
+                      font: "inherit",
                       flex: "0 0 auto",
                       padding: spatialMode ? "7px 8px 6px" : "8px 10px 7px",
                       position: "relative",
@@ -602,7 +608,7 @@ function HomeVisionCard({
                         background: "var(--hg-ice)",
                       }}/>
                     )}
-                  </div>
+                  </button>
                 );
               })}
             </div>
@@ -632,8 +638,11 @@ function HomeVisionCard({
               const isActive = i === idx;
               const tileVisible = wideMode || isActive;
               return (
-                <div
+                <button
                   key={c.id}
+                  type="button"
+                  className="hg-focusable"
+                  aria-pressed={isActive}
                   ref={(el) => (tileRefs.current[i] = el)}
                   onMouseEnter={() => setHoverPausedCameraId(c.id)}
                   onMouseLeave={() => setHoverPausedCameraId((cameraId) => (cameraId === c.id ? null : cameraId))}
@@ -649,6 +658,12 @@ function HomeVisionCard({
                     } catch (e) { /* noop */ }
                   } : undefined}
                   style={wideMode ? {
+                    background: "transparent",
+                    border: "none",
+                    padding: 0,
+                    font: "inherit",
+                    color: "inherit",
+                    textAlign: "inherit",
                     flex: "0 0 auto",
                     width: "min(38vw, 560px)",
                     scrollSnapAlign: "center",
@@ -668,6 +683,12 @@ function HomeVisionCard({
                     /* In portrait, non-active tiles are display:none
                        so they stay MOUNTED (MJPEG streams alive) but
                        invisible. Active tile fills width naturally. */
+                    background: "transparent",
+                    border: "none",
+                    padding: 0,
+                    font: "inherit",
+                    color: "inherit",
+                    textAlign: "inherit",
                     display: tileVisible ? "block" : "none",
                     width: "100%",
                     position: "relative",
@@ -714,7 +735,7 @@ function HomeVisionCard({
                       {c.name}
                     </div>
                   )}
-                </div>
+                </button>
               );
             })}
           </div>

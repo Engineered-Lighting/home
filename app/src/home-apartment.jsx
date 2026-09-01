@@ -1353,10 +1353,21 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       else if (e.key === "h" || e.key === "Home") rig.snapHome();
       else if (e.key === "+" || e.key === "=") rig.stepZoom(1);
       else if (e.key === "-") rig.stepZoom(-1);
+      else if ((e.key === "n" || e.key === "p") && !editing) {
+        // n/p cycle the same marker list pointer picking selects from
+        // (devices with a position get a 3D marker) and open the same card.
+        const list = (model.devices || []).filter((d) => Array.isArray(d.pos));
+        if (!list.length) return;
+        const i = list.findIndex((d) => d.id === cardId);
+        const next = e.key === "n"
+          ? list[(i + 1) % list.length]
+          : list[((i < 0 ? 0 : i) - 1 + list.length) % list.length];
+        setCardId(next.id);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
+  }, [open, editing, model, cardId]);
 
   /* Overlay layers: topmost-only Escape + focus trap via HomeOverlay (no
      per-view window Escape listener). Non-embedded is a genuine modal;
@@ -2103,7 +2114,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
             </div>
             <span style={{ fontFamily: APT_FONT_MONO, fontSize: 8.5, color: "var(--hg-fg-5)",
                            letterSpacing: "0.1em" }}>
-              drag · wheel zoom · ←→↑↓ · h home · dbl-click toggles lights
+              drag · wheel zoom · ←→↑↓ · h home · dbl-click toggles lights · n/p select device
             </span>
           </div>
         </div>

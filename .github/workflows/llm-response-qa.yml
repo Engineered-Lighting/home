@@ -15,6 +15,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so the touched-harness job can diff against the base.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -34,3 +37,7 @@ jobs:
 
       - name: App-shell smoke
         run: node tools/qa-browser-smoke.js
+
+      - name: Touched-surface harnesses
+        if: github.event_name == 'pull_request'
+        run: node tools/run-touched-harnesses.mjs --base "origin/${{ github.base_ref }}"

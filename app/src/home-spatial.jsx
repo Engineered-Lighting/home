@@ -889,7 +889,7 @@ function HomeSpatialDrawer({ open, onClose, endpoint, token, sim }) {
             )}
 
             {error && (
-              <div style={{
+              <div role="status" style={{
                 margin: "8px 24px 0", padding: "7px 11px",
                 border: "1px solid var(--hg-crit)", color: "var(--hg-crit)",
                 fontFamily: SP_FONT_MONO, fontSize: 10.5, borderRadius: 3,

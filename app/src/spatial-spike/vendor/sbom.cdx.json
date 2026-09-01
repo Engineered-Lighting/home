@@ -1,0 +1,64 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "name": "home-spatial-renderer-spike",
+      "version": "phase-0"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "cesium",
+      "version": "1.144.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "8354d7d772af4d4857f738e524d9f70dee41c2e1f2cee433a75fb5213a462499883910869f154a022bbdfce9100724d63582a036da04b8f2eb9d61619746a8e6"
+        }
+      ],
+      "purl": "pkg:npm/cesium@1.144.0",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/CesiumGS/cesium"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "maplibre-gl",
+      "version": "6.6.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "110aa5e9e6583e16c7bc9a6a638030a22b8b9147d715104793aed2f260edccda3517f8c0a3bc40c6e9c8cceee0275bf04dc3cc82b2bd6fae1da8a1ef9e44e50d"
+        }
+      ],
+      "purl": "pkg:npm/maplibre-gl@6.6.0",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/maplibre/maplibre-gl-js"
+        }
+      ]
+    }
+  ]
+}

@@ -360,7 +360,7 @@ function StatusChip({ status }) {
   };
   const s = map[status] || map.idle;
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+    <span role="status" style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
       <window.StatusDot tone={s.tone} size={5} />
       <span style={{ fontFamily: HC_MONO, fontSize: 8.5, color: "var(--hg-fg-4)", letterSpacing: "0.1em", textTransform: "uppercase" }}>{s.word}</span>
     </span>
@@ -660,7 +660,7 @@ function LightControlCard({ ctx, lifecycle, onControlAction }) {
       </div>
 
       {statusMsg && (
-        <div style={{ marginTop: 8, fontFamily: HC_MONO, fontSize: 9.5, color: status === "error" ? "var(--hg-warn)" : "var(--hg-fg-4)" }}>
+        <div role="status" style={{ marginTop: 8, fontFamily: HC_MONO, fontSize: 9.5, color: status === "error" ? "var(--hg-warn)" : "var(--hg-fg-4)" }}>
           {statusMsg}
           {status === "error" && (
             <button
@@ -737,10 +737,11 @@ function resolveArtUrl(art) {
 }
 
 /* ── Media sub-components ─────────────────────────────────────────────── */
-function TransportBtn({ children, onClick, primary, disabled }) {
+function TransportBtn({ children, onClick, primary, disabled, ariaLabel }) {
   const sz = primary ? 38 : 30;
   return (
     <button
+      aria-label={ariaLabel}
       disabled={disabled}
       onClick={disabled ? undefined : onClick}
       className="hg-focusable"
@@ -759,6 +760,8 @@ function TransportBtn({ children, onClick, primary, disabled }) {
 function MuteBtn({ muted, onClick, disabled }) {
   return (
     <button
+      aria-label={muted ? "unmute" : "mute"}
+      aria-pressed={muted}
       disabled={disabled}
       onClick={disabled ? undefined : onClick}
       className="hg-focusable"
@@ -1015,13 +1018,13 @@ function MediaControlCard({ ctx, lifecycle, onControlAction }) {
       {/* transport — acts on all targeted speakers */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, margin: "2px 0 11px" }}>
         {coord.caps.prev && (
-          <TransportBtn onClick={() => skip("prev")}><window.IconSkipPrev size={13} fill="currentColor" /></TransportBtn>
+          <TransportBtn ariaLabel="previous track" onClick={() => skip("prev")}><window.IconSkipPrev size={13} fill="currentColor" /></TransportBtn>
         )}
-        <TransportBtn primary onClick={togglePlay}>
+        <TransportBtn primary ariaLabel={playing ? "pause" : "play"} onClick={togglePlay}>
           {playing ? <window.IconPause size={15} fill="currentColor" /> : <window.IconPlay size={15} fill="currentColor" />}
         </TransportBtn>
         {coord.caps.next && (
-          <TransportBtn onClick={() => skip("next")}><window.IconSkipNext size={13} fill="currentColor" /></TransportBtn>
+          <TransportBtn ariaLabel="next track" onClick={() => skip("next")}><window.IconSkipNext size={13} fill="currentColor" /></TransportBtn>
         )}
       </div>
 
@@ -1086,7 +1089,7 @@ function MediaControlCard({ ctx, lifecycle, onControlAction }) {
 
       {/* footer status */}
       {statusMsg && (
-        <div style={{ marginTop: 9, fontFamily: HC_MONO, fontSize: 9.5, color: status === "error" ? "var(--hg-warn)" : "var(--hg-fg-4)" }}>
+        <div role="status" style={{ marginTop: 9, fontFamily: HC_MONO, fontSize: 9.5, color: status === "error" ? "var(--hg-warn)" : "var(--hg-fg-4)" }}>
           {statusMsg}
           {status === "error" && (
             <button

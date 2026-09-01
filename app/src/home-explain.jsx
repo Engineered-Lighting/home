@@ -242,7 +242,7 @@ function ToolCallRow({ entry, highlighted, onHover }) {
       {open && (
         <div style={{ marginTop: 8, paddingLeft: 18, fontSize: 11, color: "var(--hg-fg-2)" }}>
           {errMsg && (
-            <div style={{ color: "var(--hg-crit)", marginBottom: 6 }}>
+            <div role="status" style={{ color: "var(--hg-crit)", marginBottom: 6 }}>
               error: {errMsg}
             </div>
           )}
@@ -482,7 +482,7 @@ function HomeExplainDrawer({ open, onClose, convId, endpoint, token, sim }) {
 
         {/* Error state */}
         {error && entries !== null && (
-          <div style={{
+          <div role="status" style={{
             padding: "20px 24px", color: "var(--hg-crit)", fontSize: 11,
             display: "flex", alignItems: "center", gap: 12,
           }}>

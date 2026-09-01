@@ -108,6 +108,7 @@ function StatusDot({ tone = "live", size = 6 }) {
   const isPulse = tone === "live" || tone === "pending";
   return (
     <span
+      aria-hidden="true"
       style={{
         display: "inline-block",
         width: size, height: size,
@@ -134,7 +135,7 @@ function IconBulb({ size = 14, stroke = "currentColor" }) {
 
 function IconPlay({ size = 14, fill = "currentColor" }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill={fill}>
+    <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill={fill}>
       <path d="M8 5v14l11-7z" />
     </svg>
   );
@@ -142,7 +143,7 @@ function IconPlay({ size = 14, fill = "currentColor" }) {
 
 function IconPause({ size = 14, fill = "currentColor" }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill={fill}>
+    <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill={fill}>
       <rect x="6" y="5" width="4" height="14" rx="1" />
       <rect x="14" y="5" width="4" height="14" rx="1" />
     </svg>
@@ -151,7 +152,7 @@ function IconPause({ size = 14, fill = "currentColor" }) {
 
 function IconSkipNext({ size = 14, fill = "currentColor" }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill={fill}>
+    <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill={fill}>
       <path d="M6 5v14l9-7z" />
       <rect x="16" y="5" width="2.5" height="14" rx="1" />
     </svg>
@@ -160,7 +161,7 @@ function IconSkipNext({ size = 14, fill = "currentColor" }) {
 
 function IconSkipPrev({ size = 14, fill = "currentColor" }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill={fill}>
+    <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill={fill}>
       <rect x="5.5" y="5" width="2.5" height="14" rx="1" />
       <path d="M18 5v14l-9-7z" />
     </svg>

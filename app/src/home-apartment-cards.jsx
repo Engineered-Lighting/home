@@ -165,6 +165,7 @@ function AptControlCard({ device, state, screen, bounds, onClose, onService, onF
           {state?.state || "unknown"}
         </span>
         <button type="button"
+          aria-label="close card"
           onPointerDown={stopCardEvent}
           onPointerUp={stopCardEvent}
           onTouchStart={stopCardEvent}
@@ -195,6 +196,7 @@ function AptControlCard({ device, state, screen, bounds, onClose, onService, onF
             <div style={row}>
               <span style={{ fontFamily: CARD_FONT_MONO, fontSize: 9, color: "var(--hg-fg-4)" }}>bri</span>
               <input type="range" min="1" max="100" value={bri}
+                aria-label="brightness" className="hg-slider"
                 onPointerDown={stopCardEvent}
                 onPointerUp={commitBri}
                 onTouchStart={stopCardEvent}
@@ -223,6 +225,7 @@ function AptControlCard({ device, state, screen, bounds, onClose, onService, onF
           <div style={row}>
             <span style={{ fontFamily: CARD_FONT_MONO, fontSize: 9, color: "var(--hg-fg-4)" }}>vol</span>
             <input type="range" min="0" max="100" value={vol}
+              aria-label="volume" className="hg-slider"
               onPointerDown={stopCardEvent}
               onPointerUp={commitVol}
               onTouchStart={stopCardEvent}

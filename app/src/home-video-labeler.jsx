@@ -1737,10 +1737,10 @@ function VLCheatSheet({ onClose }) {
 }
 
 /* thin banner used for draft restore / 409 conflict / merge prompt */
-function VLBanner({ tone, children }) {
+function VLBanner({ tone, role, children }) {
   const color = tone === "warn" ? "var(--hg-warn)" : "var(--hg-ice)";
   return (
-    <div style={{
+    <div role={role} style={{
       display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
       padding: "7px 12px", flex: "none",
       borderBottom: "1px solid var(--hg-border-soft)",
@@ -2812,7 +2812,7 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
         display: "flex", flexDirection: "column", position: "relative",
       }}>
         {draftBanner && (
-          <VLBanner tone="ice">
+          <VLBanner tone="ice" role="status">
             <span>
               unsaved draft from {new Date(draftBanner.ts || Date.now()).toLocaleString()}
               {" · "}{draftBanner.count} segments
@@ -2829,7 +2829,7 @@ function VLEditor({ video, videos, ontology, refreshOntology, onPickVideo, showT
           </VLBanner>
         )}
         {conflict && (
-          <VLBanner tone="warn">
+          <VLBanner tone="warn" role="status">
             <span>save conflict — the server is at revision {conflict.revision} (yours: {state.revision})</span>
             <button style={VL_BTN_SM} onClick={reloadFromConflict}>reload server copy</button>
             <button style={{ ...VL_BTN_SM, color: "var(--hg-warn)" }} onClick={overwriteConflict}
@@ -2948,7 +2948,7 @@ function VLJobsPanel({ showToast }) {
   return (
     <div className="hg-scroll" style={{ flex: 1, overflow: "auto", padding: "18px 24px", fontFamily: VL_FONT_MONO }}>
       {err && (
-        <div style={{
+        <div role="alert" style={{
           border: "1px solid var(--hg-warn)",
           background: "color-mix(in oklab, var(--hg-warn) 6%, transparent)",
           padding: "10px 14px", color: "var(--hg-warn)",
@@ -3454,7 +3454,7 @@ function HomeVideoLabelerOverlay({ open, onClose, sim, spatialMode = false }) {
       </div>
 
       {toast && (
-        <div style={{
+        <div role="status" style={{
           position: "absolute", bottom: 48, left: "50%", transform: "translateX(-50%)",
           fontFamily: VL_FONT_MONO, fontSize: 10, color: "var(--hg-fg-1)",
           background: "rgba(10,12,16,0.85)", border: "1px solid var(--hg-border-soft)",

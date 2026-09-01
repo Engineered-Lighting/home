@@ -1058,7 +1058,7 @@ function HomeApartmentEdit({
 
       {/* left: task rail */}
       <div style={{ ...panel, left: 72 }} data-apt-edit-ui="targets-and-palette">
-        <div data-apartment-source={sourceMeta?.kind || "empty"} style={{
+        <div role="status" data-apartment-source={sourceMeta?.kind || "empty"} style={{
           margin: "0 0 8px", padding: "7px 8px", border: `1px solid ${sourceMeta?.live
             ? "rgba(145,230,189,0.35)" : sourceMeta?.kind === "simulation"
               ? "rgba(255,180,95,0.4)" : "var(--hg-border-soft)"}`,
@@ -1135,7 +1135,7 @@ function HomeApartmentEdit({
                   }} />;
               })}
             </div>
-            {notice && <div style={{ margin: "10px 0", padding: "7px 8px", borderLeft: "2px solid var(--hg-ice)",
+            {notice && <div role="status" style={{ margin: "10px 0", padding: "7px 8px", borderLeft: "2px solid var(--hg-ice)",
                                     color: "var(--hg-fg-3)", fontSize: 8.5, lineHeight: 1.5 }}>{notice}</div>}
             {(placingTarget || targetDraftId) && (
               <div style={{ display: "flex", gap: 6, margin: "8px 0 12px" }}>
@@ -1375,7 +1375,7 @@ function HomeApartmentEdit({
               <span style={{ color: "var(--hg-fg-2)", fontFamily: ED_MONO }}>+ Add smart-home device</span><br />
               <span style={{ color: "var(--hg-fg-4)", fontSize: 9 }}>place an unplaced Home Assistant entity</span>
             </button>
-            {notice && <div style={{ marginTop: 10, padding: "7px 8px", borderLeft: "2px solid var(--hg-ice)",
+            {notice && <div role="status" style={{ marginTop: 10, padding: "7px 8px", borderLeft: "2px solid var(--hg-ice)",
               color: "var(--hg-fg-3)", fontSize: 8.5, lineHeight: 1.5 }}>{notice}</div>}
             {sim && <div style={{ marginTop: 12, color: SURVEY_ORANGE, fontSize: 8.5, lineHeight: 1.5 }}>
               source · Simulation · 5 mock devices, including 2 mock lights. Live inventory is intentionally hidden.
@@ -1435,7 +1435,7 @@ function HomeApartmentEdit({
                 }} />
               </div>
             )}
-            {notice && <div style={{ marginTop: 10, padding: "7px 8px", borderLeft: "2px solid var(--hg-ice)",
+            {notice && <div role="status" style={{ marginTop: 10, padding: "7px 8px", borderLeft: "2px solid var(--hg-ice)",
               color: "var(--hg-fg-3)", fontSize: 8.5, lineHeight: 1.5 }}>{notice}</div>}
           </>
         )}
@@ -1716,6 +1716,7 @@ function HomeApartmentEdit({
                   ))}
                 </div>
                 <input type="range" min="0" max="3" step="0.05" value={selected.pos[2]}
+                  aria-label="device height" className="hg-slider hg-focusable"
                   onChange={(e) => mutate((m) => {
                     const d = m.devices.find((x) => x.id === selectedId);
                     if (d) { d.pos[2] = +e.target.value; d.height_preset = "custom"; }
@@ -1729,6 +1730,7 @@ function HomeApartmentEdit({
                   aim · {Math.round(((selected.yaw_rad || 0) * 180 / Math.PI + 360) % 360)}°
                 </div>
                 <input type="range" min="-180" max="180" step="2"
+                  aria-label="device yaw" className="hg-slider hg-focusable"
                   value={Math.round((selected.yaw_rad || 0) * 180 / Math.PI)}
                   onChange={(e) => mutate((m) => {
                     const d = m.devices.find((x) => x.id === selectedId);

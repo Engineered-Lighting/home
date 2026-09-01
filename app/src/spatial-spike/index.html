@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; frame-src 'self'; img-src 'self' data:; connect-src 'none'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Home spatial handoff lab</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="lab-shell">
+    <header class="lab-header">
+      <div class="title-lockup">
+        <p class="lab-eyebrow">Phase 0 · renderer-neutral spike</p>
+        <h1>Spatial handoff lab</h1>
+        <p class="lab-intro">Exercise deterministic camera journeys, failure states, keyboard navigation, and the sandbox protocol before a world renderer is selected.</p>
+      </div>
+      <div class="protocol-state" role="status" aria-live="polite">
+        <span class="protocol-light" id="protocol-light"></span>
+        <span id="protocol-status">Waiting for sandbox</span>
+      </div>
+    </header>
+
+    <section class="lab-grid" aria-label="Spatial spike harness">
+      <div class="frame-panel">
+        <div class="panel-label">
+          <span>Sandbox frame</span>
+          <code>allow-scripts</code>
+        </div>
+        <iframe
+          id="spatial-frame"
+          src="./frame.html"
+          title="Synthetic spatial renderer test frame"
+          sandbox="allow-scripts"
+          referrerpolicy="no-referrer"
+        ></iframe>
+      </div>
+
+      <aside class="control-panel" aria-labelledby="scenario-title">
+        <div class="panel-section">
+          <p class="section-kicker">Scenario driver</p>
+          <h2 id="scenario-title">Absolute intents</h2>
+          <p class="section-copy">Each action replaces older navigation work. The latest intent wins.</p>
+
+          <fieldset class="site-fieldset">
+            <legend>Target home</legend>
+            <div id="host-site-options"></div>
+          </fieldset>
+
+          <div class="button-stack">
+            <button class="primary-action" id="host-enter" type="button" disabled>Journey to interior</button>
+            <button class="quiet-action" id="host-planet" type="button" disabled>Return to planet</button>
+            <button class="quiet-action" id="host-step" type="button" disabled>Step one keyframe</button>
+          </div>
+        </div>
+
+        <div class="panel-section">
+          <p class="section-kicker">Resilience</p>
+          <label for="environment-select">Runtime condition</label>
+          <select id="environment-select" disabled>
+            <option value="nominal">Nominal</option>
+            <option value="offline">Fully offline</option>
+            <option value="providerDegraded">Map provider degraded</option>
+            <option value="oneSiteOffline">One HA site offline</option>
+            <option value="aiOffline">AI unavailable</option>
+          </select>
+
+          <label class="toggle-row" for="reduced-motion">
+            <span>
+              <strong>Reduced motion</strong>
+              <small>Resolve at the destination without animation.</small>
+            </span>
+            <input id="reduced-motion" type="checkbox" disabled>
+          </label>
+        </div>
+
+        <div class="panel-section protocol-ledger-section">
+          <div class="ledger-heading">
+            <div>
+              <p class="section-kicker">Contract trace</p>
+              <h2>Message ledger</h2>
+            </div>
+            <button class="text-action" id="request-snapshot" type="button" disabled>Snapshot</button>
+          </div>
+          <ol class="protocol-ledger" id="protocol-ledger" aria-live="polite"></ol>
+        </div>
+      </aside>
+    </section>
+
+    <footer class="lab-footer">
+      <p><strong>Fixture boundary:</strong> two synthetic country-centre anchors; zero external requests.</p>
+      <p>Protocol <code>home.spatial-spike.v1</code> · native ESM · no build step</p>
+    </footer>
+  </main>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

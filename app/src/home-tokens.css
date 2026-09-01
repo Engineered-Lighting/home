@@ -319,3 +319,6 @@ a[href]:focus-visible,
 }
 /* Applying — thumb pulses while a commit is in flight. */
 .hg-slider--applying::-webkit-slider-thumb { animation: hg-pulse-dot 1.1s ease-in-out infinite; }
+/* Phase 4 (screen-reader audibility): visually-hidden text for landmarks
+   and labels that sighted users don't need duplicated on screen. */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }

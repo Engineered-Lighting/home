@@ -58,6 +58,18 @@ rollback() {
   fi
 }
 
+# Local gateway env (agent-origin boundary etc.) — the same file the systemd
+# unit loads via its 30-agent-origins.conf drop-in. Kept out of the repo so
+# tailnet hostnames stay private; sourced here so `npm run web:check`
+# validates the same configuration the service will actually run with.
+local_env="${HOME}/.config/EngineeredLightingHome/web-gateway.env"
+if [[ -f "${local_env}" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "${local_env}"
+  set +a
+fi
+
 git fetch origin "${branch}"
 git pull --ff-only origin "${branch}"
 new_commit="$(git rev-parse HEAD)"

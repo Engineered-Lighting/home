@@ -2456,7 +2456,13 @@ function MetricsStrip({
             aiStackOnline={aiStackOnline}
             aiStackState={aiStackState}
             aiStackStatusError={aiStackStatusError}
-            tokenConfigured={!!_stackToken}
+            /* Sim Mode: scenarios mock the supervisor via aiStackOnline /
+               aiStackState; window.__STACK_TOKEN is real-infra config with no
+               sim meaning, so treat the token as configured — otherwise the
+               real "AI STACK NOT CONFIGURED / STACK_TOKEN" warning leaks into
+               simulated snapshots. Dispatches stay safe: HomeStackActions
+               goes through tauriFetch, which is blocked under __SIM_ACTIVE. */
+            tokenConfigured={simActive || !!_stackToken}
             supervisorUrl={_supervisorUrl}
             stackToken={_stackToken}
           />
@@ -4104,39 +4110,39 @@ const SLASH_CMD_CATEGORIES = [
 ];
 
 const SLASH_CMDS = [
-  { cmd: "/agent", hint: "", desc: "open the governed Home Agent surface", category: "agent" },
-  // ── connection ────────────────────────────────────────────────
-  { cmd: "/connect",  hint: "<url> [<token>]", desc: "connect to a Home Assistant endpoint", category: "connection" },
-  { cmd: "/endpoint", hint: "<url>",   desc: "change endpoint url", category: "connection" },
-  { cmd: "/token",    hint: "<token>", desc: "update the HA long-lived access token", category: "connection" },
-  { cmd: "/stack-token", hint: "", desc: "disabled: stack credentials are server-side only", category: "connection" },
-  { cmd: "/metrics",  hint: "<url>",   desc: "set the metrics-sidecar base url", category: "connection" },
-  { cmd: "/s2s",      hint: "<url> | token <hex> | voice <name>", desc: "configure s2s bridge — url, token, or per-session voice override", category: "connection" },
-  { cmd: "/profile",  hint: "status|lan|tailscale|custom", desc: "switch or inspect the active service profile", category: "connection" },
-  { cmd: "/remote",   hint: "check", desc: "test every configured Home service endpoint", category: "connection" },
-  { cmd: "/travel",   hint: "check|status|recovery|bundle", desc: "check travel readiness and copy recovery/debug details", category: "connection" },
+  // Phase 11 (palette order): everyday commands lead; setup/infra
+  // (connection) sits at the end. /help output is unaffected — it groups
+  // by `category` in SLASH_CMD_CATEGORIES order, not by array order.
+  // ── everyday: lights, cameras, world ──────────────────────────
+  { cmd: "/lights",     hint: "",           desc: "open the Living Lights tuning drawer — 'right now' status, quick warmth/brightness bias sliders, and grouped knobs for the cascade (ToD, working hours, asleep, gaming, movie, defaults). No long chat required.", category: "world" },
+  { cmd: "/cameras",    hint: "",            desc: "show a thumbnail snapshot of every configured camera (from the M1 cache or live)", category: "vision" },
+  { cmd: "/describe-clip", hint: "<camera> [frames] [interval_s]", desc: "watch a multi-frame clip from a camera and describe motion. e.g. /describe-clip kitchen, /describe-clip driveway 6 1.5", category: "vision" },
+  { cmd: "/find-clips", hint: "<query>",    desc: "search Frigate clips via semantic-search CLIP (e.g. 'package on porch'). Returns recent matches with thumbnails.", category: "vision" },
+  { cmd: "/world-state",hint: "[<room>|--raw]", desc: "open world-state drawer. <room> pre-filters to one room (click × to clear). '--raw' dumps full JSON inline instead.", category: "world" },
+  { cmd: "/recap",      hint: "[hours]",    desc: "summarize recent home activity. e.g. /recap (last 6h) · /recap 24 (today) · /recap 168 (past week)", category: "world" },
+  { cmd: "/look",       hint: "<camera> <question>", desc: "ask the vision model a spatial question about a camera — it reasons by 'pointing' (boxing what it sees), rendered as the paper's two-panel figure. e.g. /look kitchen what is on the counter", category: "vision" },
+  { cmd: "/apartment",  hint: "prewarm|status", desc: "open the 3d apartment, or warm/check its cached scan assets before opening. alias: /3d", category: "vision" },
+  { cmd: "/spatial",    hint: "",           desc: "open the light-footprint map — Addendum 38 Phase 1 calibration review: which lights illuminate which space", category: "vision" },
+  { cmd: "/home2",      hint: "on|off",     desc: "toggle the Home 2 spatial layout: real apartment primary, chat docked on the right", category: "vision" },
+  { cmd: "/labeler",    hint: "[base <url>]", desc: "open the video timeline labeler — review footage, edit segment labels. alias: /vl", category: "vision" },
+  { cmd: "/why",        hint: "[conv-id]",  desc: "open explainability drawer — routing decision + tool calls + final text for the most recent (or specified) conv_id", category: "world" },
+  { cmd: "/why-light",  hint: "<zone>",     desc: "explain the last lighting decision for a zone — current classifier state, recent manual overrides (last 24h), and the last few state transitions from the shadow log. Pass no zone to list available zones.", category: "world" },
+  { cmd: "/help",       hint: "",           desc: "list commands grouped by category (click any entry to fill the input)", category: "meta" },
+  // ── modes + lifecycle ─────────────────────────────────────────
+  { cmd: "/simulation", hint: "[scenario | off]", desc: "enter design-review mode (no real services — mocked everything)", category: "mode" },
+  { cmd: "/sim",        hint: "<scenario>", desc: "switch simulation scenario · /sim scenarios to list", category: "mode" },
+  { cmd: "/proactive",  hint: "[mode on|off | test … | reset]", desc: "proactive-assistant status, mode overrides, and no-leave event tests", category: "mode" },
+  { cmd: "/demo",     hint: "",        desc: "play the scripted demo conversation", category: "mode" },
+  { cmd: "/clear",    hint: "",        desc: "clear the conversation", category: "mode" },
+  { cmd: "/undo-clear", hint: "",      desc: "restore the conversation cleared this session", category: "mode" },
   // ── ask the agent ─────────────────────────────────────────────
+  { cmd: "/agent", hint: "", desc: "open the governed Home Agent surface", category: "agent" },
   { cmd: "/ask",        hint: "<text>",     desc: "force external/general provider for this question (bypasses classifier)", category: "agent" },
   { cmd: "/local",      hint: "<text>",     desc: "force local home agent for this question (bypasses classifier)", category: "agent" },
   { cmd: "/route",      hint: "<text>",     desc: "show how the classifier would route this text (no dispatch)", category: "agent" },
   { cmd: "/external",   hint: "on|off|status|set-key", desc: "external provider config + auto-routing toggle", category: "agent" },
   { cmd: "/agent-tools", hint: "",            desc: "list every LLM tool the agent can call (grouped by capability)", category: "agent" },
   { cmd: "/model",    hint: "<name>",  desc: "switch active model", category: "agent" },
-  // ── vision + cameras ──────────────────────────────────────────
-  { cmd: "/home2",      hint: "on|off",     desc: "toggle the Home 2 spatial layout: real apartment primary, chat docked on the right", category: "vision" },
-  { cmd: "/cameras",    hint: "",            desc: "show a thumbnail snapshot of every configured camera (from the M1 cache or live)", category: "vision" },
-  { cmd: "/describe-clip", hint: "<camera> [frames] [interval_s]", desc: "watch a multi-frame clip from a camera and describe motion. e.g. /describe-clip kitchen, /describe-clip driveway 6 1.5", category: "vision" },
-  { cmd: "/find-clips", hint: "<query>",    desc: "search Frigate clips via semantic-search CLIP (e.g. 'package on porch'). Returns recent matches with thumbnails.", category: "vision" },
-  { cmd: "/spatial",    hint: "",           desc: "open the light-footprint map — Addendum 38 Phase 1 calibration review: which lights illuminate which space", category: "vision" },
-  { cmd: "/apartment",  hint: "prewarm|status", desc: "open the 3d apartment, or warm/check its cached scan assets before opening. alias: /3d", category: "vision" },
-  { cmd: "/labeler",    hint: "[base <url>]", desc: "open the video timeline labeler — review footage, edit segment labels. alias: /vl", category: "vision" },
-  { cmd: "/look",       hint: "<camera> <question>", desc: "ask the vision model a spatial question about a camera — it reasons by 'pointing' (boxing what it sees), rendered as the paper's two-panel figure. e.g. /look kitchen what is on the counter", category: "vision" },
-  // ── world + recap ─────────────────────────────────────────────
-  { cmd: "/world-state",hint: "[<room>|--raw]", desc: "open world-state drawer. <room> pre-filters to one room (click × to clear). '--raw' dumps full JSON inline instead.", category: "world" },
-  { cmd: "/recap",      hint: "[hours]",    desc: "summarize recent home activity. e.g. /recap (last 6h) · /recap 24 (today) · /recap 168 (past week)", category: "world" },
-  { cmd: "/why",        hint: "[conv-id]",  desc: "open explainability drawer — routing decision + tool calls + final text for the most recent (or specified) conv_id", category: "world" },
-  { cmd: "/why-light",  hint: "<zone>",     desc: "explain the last lighting decision for a zone — current classifier state, recent manual overrides (last 24h), and the last few state transitions from the shadow log. Pass no zone to list available zones.", category: "world" },
-  { cmd: "/lights",     hint: "",           desc: "open the Living Lights tuning drawer — 'right now' status, quick warmth/brightness bias sliders, and grouped knobs for the cascade (ToD, working hours, asleep, gaming, movie, defaults). No long chat required.", category: "world" },
   // ── voice + audio ─────────────────────────────────────────────
   { cmd: "/mute",     hint: "[2h|30m|movie]", desc: "mute Jarvis (manual, or for a duration, or for a movie). 'Hey Jarvis, stop' works by voice.", category: "voice" },
   { cmd: "/unmute",   hint: "",        desc: "clear manual mute (TV-active + movie_mode auto-signals still apply)", category: "voice" },
@@ -4150,16 +4156,18 @@ const SLASH_CMDS = [
   { cmd: "/route-log",  hint: "[tail]",     desc: "dump recent external-routing decisions as JSONL. alias: /routes", category: "debug" },
   { cmd: "/lab-dump",       hint: "",       desc: "dump labSamplesRef + labTurnsRef + anchor stats as JSON (Addendum 32 evidence-gathering for line-graph flatness bug)", category: "debug" },
   { cmd: "/lab-dump-watch", hint: "<sec>|stop", desc: "auto-dump every N seconds for 12 iterations (timing-window evidence)", category: "debug" },
-  // ── modes + lifecycle ─────────────────────────────────────────
-  { cmd: "/simulation", hint: "[scenario | off]", desc: "enter design-review mode (no real services — mocked everything)", category: "mode" },
-  { cmd: "/sim",        hint: "<scenario>", desc: "switch simulation scenario · /sim scenarios to list", category: "mode" },
-  { cmd: "/proactive",  hint: "[mode on|off | test … | reset]", desc: "proactive-assistant status, mode overrides, and no-leave event tests", category: "mode" },
-  { cmd: "/demo",     hint: "",        desc: "play the scripted demo conversation", category: "mode" },
-  { cmd: "/clear",    hint: "",        desc: "clear the conversation", category: "mode" },
-  { cmd: "/undo-clear", hint: "",      desc: "restore the conversation cleared this session", category: "mode" },
   // ── meta ──────────────────────────────────────────────────────
   { cmd: "/about",    hint: "",        desc: "show version + repo info", category: "meta" },
-  { cmd: "/help",       hint: "",           desc: "list commands grouped by category (click any entry to fill the input)", category: "meta" },
+  // ── setup / infra: connection ─────────────────────────────────
+  { cmd: "/connect",  hint: "<url> [<token>]", desc: "connect to a Home Assistant endpoint", category: "connection" },
+  { cmd: "/endpoint", hint: "<url>",   desc: "change endpoint url", category: "connection" },
+  { cmd: "/token",    hint: "<token>", desc: "update the HA long-lived access token", category: "connection" },
+  { cmd: "/stack-token", hint: "", desc: "disabled: stack credentials are server-side only", category: "connection" },
+  { cmd: "/metrics",  hint: "<url>",   desc: "set the metrics-sidecar base url", category: "connection" },
+  { cmd: "/s2s",      hint: "<url> | token <hex> | voice <name>", desc: "configure s2s bridge — url, token, or per-session voice override", category: "connection" },
+  { cmd: "/profile",  hint: "status|lan|tailscale|custom", desc: "switch or inspect the active service profile", category: "connection" },
+  { cmd: "/remote",   hint: "check", desc: "test every configured Home service endpoint", category: "connection" },
+  { cmd: "/travel",   hint: "check|status|recovery|bundle", desc: "check travel readiness and copy recovery/debug details", category: "connection" },
 ];
 
 function isMobileHiddenCommand(cmd) {
@@ -5191,28 +5199,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   // and answered -> offer it; probed and refused -> hide it; unable to probe
   // -> offer it, and say in the tooltip that it has not been verified.
   const [benchConsole, setBenchConsole] = useState("down");
-  useEffect(() => {
-    let live = true;
-    const url = "http://127.0.0.1:8765";
-    const canProbe = !(window.HG_WEB_MODE && window.location.protocol === "https:");
-    if (!canProbe) { setBenchConsole("unprobed"); return undefined; }
-    const probe = async () => {
-      try {
-        const f = (window.IS_TAURI || window.__TAURI__) && window.tauriFetch ? window.tauriFetch : fetch;
-        const r = await f(`${url}/healthz`, { cache: "no-store" });
-        const j = r.ok ? await r.json() : null;
-        // The service name, not just a 200. Something else answering on 8765
-        // would otherwise light a control that opens a page which is not the
-        // console.
-        if (live) setBenchConsole(j && j.service === "bench-console" ? "up" : "down");
-      } catch {
-        if (live) setBenchConsole("down");
-      }
-    };
-    probe();
-    const iv = setInterval(probe, 15000);
-    return () => { live = false; clearInterval(iv); };
-  }, []);
+  // (The reachability probe effect lives below the useSimulation call so it
+  // can early-return on sim.active — a poll before that hook initializes
+  // would hit the temporal dead zone on `sim`.)
   const openBenchConsole = useCallback(() => {
     window.open("http://127.0.0.1:8765/", "_blank", "noopener");
   }, []);
@@ -5795,6 +5784,32 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     setFrigateMetrics(null);
     setRoomContext(null);
   }, [connection, sim.active]);
+  // Bench-console reachability probe (state + rationale comment above, next
+  // to `benchConsole`). Lives here so Simulation Mode can suppress it —
+  // SIMULATION_MODE.md promises no real network calls while sim is active.
+  useEffect(() => {
+    if (sim.active) return undefined; // Sim Mode: no real reachability probes
+    let live = true;
+    const url = "http://127.0.0.1:8765";
+    const canProbe = !(window.HG_WEB_MODE && window.location.protocol === "https:");
+    if (!canProbe) { setBenchConsole("unprobed"); return undefined; }
+    const probe = async () => {
+      try {
+        const f = (window.IS_TAURI || window.__TAURI__) && window.tauriFetch ? window.tauriFetch : fetch;
+        const r = await f(`${url}/healthz`, { cache: "no-store" });
+        const j = r.ok ? await r.json() : null;
+        // The service name, not just a 200. Something else answering on 8765
+        // would otherwise light a control that opens a page which is not the
+        // console.
+        if (live) setBenchConsole(j && j.service === "bench-console" ? "up" : "down");
+      } catch {
+        if (live) setBenchConsole("down");
+      }
+    };
+    probe();
+    const iv = setInterval(probe, 15000);
+    return () => { live = false; clearInterval(iv); };
+  }, [sim.active]);
 
   const feedRef = useRef(null);
   const timers = useRef([]);
@@ -6283,6 +6298,9 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * one that returns /healthz. Helps when the AI box is on a different
    * host than HA (the typical case). */
   const probeMetricsBase = useCallback(async (haUrl) => {
+    // Sim Mode guard — never let the candidate scan hit the network during
+    // simulation playback (same posture as askExternal in home-external.jsx).
+    if (typeof window !== "undefined" && window.__SIM_ACTIVE === true) return null;
     const webMetricsBase = window.HG_WEB_MODE ? webDefaultBase("HG_DEFAULT_METRICS_BASE") : "";
     if (webMetricsBase) return webMetricsBase;
     const candidates = [];
@@ -9469,9 +9487,18 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
    * (no HA TTS, no Voice PE). Chat-tee teeing keeps text turns in
    * the same conversation feed. */
   const s2sRunRef = useRef(null);
+  // Id of the "listening… (s2s)" placeholder bubble until the first user
+  // transcript claims it. Lets the stop/failure paths remove a still-unclaimed
+  // placeholder instead of leaving a stray "listening…" line in the chat.
+  const s2sPlaceholderRef = useRef(null);
   const stopS2sMode = useCallback((newState = "inactive") => {
     try { s2sRunRef.current?.stop?.(); } catch (e) { /* noop */ }
     s2sRunRef.current = null;
+    const staleId = s2sPlaceholderRef.current;
+    if (staleId != null) {
+      s2sPlaceholderRef.current = null;
+      setEvents((prev) => prev.filter((e) => e.id !== staleId));
+    }
     setVoice({ state: newState });
     setS2sMode(false);
   }, []);
@@ -9488,6 +9515,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     setS2sMode(true);
     setVoice({ state: "listening" });
     const placeholderId = nextId();
+    s2sPlaceholderRef.current = placeholderId;
     setEvents((prev) => [...prev, {
       id: placeholderId, kind: "voice", time: fmtTime(), text: "listening… (s2s)",
     }]);
@@ -9499,174 +9527,202 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     // for every transcript and each new utterance overwrote the last —
     // so the chat appeared to "replace what I said with my next question".
     let placeholderClaimed = false;
-    const run = await window.startS2SRun({
-      s2sBase: base,
-      s2sToken: s2sToken || undefined,
-      voicePrompt: s2sVoice || undefined,
-      kokoroVoice: kokoroVoice || undefined,
-      conversationId,
-      onState: (state, message) => {
-        // Forward states from the bridge. New states from May 2026:
-        //   transcribing → Parakeet end-of-utterance, transcript in flight
-        //   thinking     → LLM is generating the response
-        //   ready        → voice mode active but idle (banner shows
-        //                  "voice mode — tap mic to speak")
-        //   error        → mic/WS/TTS failure — banner shows retry CTA
-        // `processing` from older bridges maps to `thinking` for clarity.
-        if (state === "listening") setVoice({ state: "listening" });
-        else if (state === "transcribing") setVoice({ state: "transcribing" });
-        else if (state === "thinking" || state === "processing") setVoice({ state: "thinking" });
-        else if (state === "speaking") setVoice({ state: "speaking" });
-        else if (state === "ready") setVoice({ state: "ready" });
-        else if (state === "error") setVoice({ state: "error", message: message || "voice error" });
-        else if (state === "idle" || state === "inactive") setVoice({ state: "inactive" });
-      },
-      onTranscript: (role, rawText, partial) => {
-        if (!rawText) return;
-        // Apply Tauri-side ASR correction at the s2s bridge transcript
-        // entry point so the same canonical text reaches the dedup
-        // helpers regardless of which source fires first (s2s bridge
-        // vs HA WS conversation.finished). Without this, the bridge's
-        // raw Parakeet output ("Marcella") and HA's corrected output
-        // ("Marcelo") render as two different bubbles for one utterance.
-        const text = normalizeChatEventText(rawText);
-        if (role === "user") {
-          // User-side partials still ignored: the Parakeet transcript
-          // arrives all at once at end-of-utterance, no streaming.
-          if (partial) return;
-          lastUserText = text;
-          if (!placeholderClaimed) {
-            // First utterance — replace the "listening…" placeholder.
-            placeholderClaimed = true;
-            setEvents((prev) => prev.map((e) =>
-              e.id === placeholderId ? { ...e, text } : e
-            ));
-          } else {
-            // Subsequent utterance — append a fresh voice bubble so the
-            // previous transcript stays in the chat. Dedup against
-            // recent user bubbles to avoid double-render when both the
-            // bridge SSE and conversation.finished WS fire.
-            setEvents((prev) => {
-              if (findRecentUserIdx(prev, text, 8) !== -1) return prev;
-              return [...prev, {
-                id: nextId(), kind: "voice", time: fmtTime(), text,
-              }];
-            });
+    let run;
+    try {
+      run = await window.startS2SRun({
+        s2sBase: base,
+        s2sToken: s2sToken || undefined,
+        voicePrompt: s2sVoice || undefined,
+        kokoroVoice: kokoroVoice || undefined,
+        conversationId,
+        onState: (state, message) => {
+          // Forward states from the bridge. New states from May 2026:
+          //   transcribing → Parakeet end-of-utterance, transcript in flight
+          //   thinking     → LLM is generating the response
+          //   ready        → voice mode active but idle (banner shows
+          //                  "voice mode — tap mic to speak")
+          //   error        → mic/WS/TTS failure — banner shows retry CTA
+          // `processing` from older bridges maps to `thinking` for clarity.
+          if (state === "listening") setVoice({ state: "listening" });
+          else if (state === "transcribing") setVoice({ state: "transcribing" });
+          else if (state === "thinking" || state === "processing") setVoice({ state: "thinking" });
+          else if (state === "speaking") setVoice({ state: "speaking" });
+          else if (state === "ready") setVoice({ state: "ready" });
+          else if (state === "error") setVoice({ state: "error", message: message || "voice error" });
+          else if (state === "idle" || state === "inactive") setVoice({ state: "inactive" });
+        },
+        onTranscript: (role, rawText, partial) => {
+          if (!rawText) return;
+          // Apply Tauri-side ASR correction at the s2s bridge transcript
+          // entry point so the same canonical text reaches the dedup
+          // helpers regardless of which source fires first (s2s bridge
+          // vs HA WS conversation.finished). Without this, the bridge's
+          // raw Parakeet output ("Marcella") and HA's corrected output
+          // ("Marcelo") render as two different bubbles for one utterance.
+          const text = normalizeChatEventText(rawText);
+          if (role === "user") {
+            // User-side partials still ignored: the Parakeet transcript
+            // arrives all at once at end-of-utterance, no streaming.
+            if (partial) return;
+            lastUserText = text;
+            if (!placeholderClaimed) {
+              // First utterance — replace the "listening…" placeholder. Clear
+              // the ref too: once claimed it is a real transcript bubble and
+              // stopS2sMode must not remove it.
+              placeholderClaimed = true;
+              s2sPlaceholderRef.current = null;
+              setEvents((prev) => prev.map((e) =>
+                e.id === placeholderId ? { ...e, text } : e
+              ));
+            } else {
+              // Subsequent utterance — append a fresh voice bubble so the
+              // previous transcript stays in the chat. Dedup against
+              // recent user bubbles to avoid double-render when both the
+              // bridge SSE and conversation.finished WS fire.
+              setEvents((prev) => {
+                if (findRecentUserIdx(prev, text, 8) !== -1) return prev;
+                return [...prev, {
+                  id: nextId(), kind: "voice", time: fmtTime(), text,
+                }];
+              });
+            }
+            return;
           }
-          return;
-        }
-        // Assistant transcript: stream partials so the UI updates as
-        // PersonaPlex speaks instead of dumping the whole utterance at
-        // end-of-speech (PersonaPlex can ramble for 60+ seconds).
-        if (role === "assistant") {
-          const cleanText = normalizeChatEventText(text || "");
-          if (partial) {
+          // Assistant transcript: stream partials so the UI updates as
+          // PersonaPlex speaks instead of dumping the whole utterance at
+          // end-of-speech (PersonaPlex can ramble for 60+ seconds).
+          if (role === "assistant") {
+            const cleanText = normalizeChatEventText(text || "");
+            if (partial) {
+              setEvents((prev) => {
+                // Append/replace the live streaming home event for this turn.
+                const last = prev[prev.length - 1];
+                if (last && last.kind === "home" && last.streaming) {
+                  return [...prev.slice(0, -1), { ...last, text: cleanText }];
+                }
+                const newId = nextId();
+                streamingIds.current.add(newId);
+                return [...prev, {
+                  id: newId,
+                  kind: "home",
+                  time: fmtTime(),
+                  text: cleanText,
+                  streaming: true,
+                }];
+              });
+              return;
+            }
+            // Final: lock in the last streaming home event (or add a new
+            // one if none exists yet).
             setEvents((prev) => {
-              // Append/replace the live streaming home event for this turn.
               const last = prev[prev.length - 1];
               if (last && last.kind === "home" && last.streaming) {
-                return [...prev.slice(0, -1), { ...last, text: cleanText }];
+                streamingIds.current.delete(last.id);
+                return [...prev.slice(0, -1), { ...last, text: cleanText, streaming: false }];
               }
-              const newId = nextId();
-              streamingIds.current.add(newId);
+              // Dedup against recent assistant bubbles: HA WS event and
+              // s2s bridge can both fire for the same turn.
+              const existingIdx = findAssistantDuplicateIdx(prev, cleanText, "home", 60);
+              if (existingIdx !== -1) {
+                const existing = prev[existingIdx];
+                if (existing?.streaming) streamingIds.current.delete(existing.id);
+                return prev.map((e, i) => i === existingIdx
+                  ? { ...e, text: settleAssistantFinalText(e.text, cleanText), streaming: false }
+                  : e);
+              }
               return [...prev, {
-                id: newId,
+                id: nextId(),
                 kind: "home",
                 time: fmtTime(),
                 text: cleanText,
-                streaming: true,
               }];
             });
+            setMetrics((prev) => ({
+              ...prev,
+              e2e: Math.round(performance.now() - t0),
+            }));
+          }
+        },
+        onError: (msg) => {
+          addEvent({ kind: "system", text: `s2s · ${msg}`, tone: "error" });
+          setVoice({ state: "inactive" });
+        },
+        onIdentity: (msg) => {
+          // Phase 1: face-rec match (or identity_clear when name is null).
+          if (!msg.name) {
+            // identity_clear — drop the pill if it's for the current camera.
+            setIdentity((cur) => (cur && cur.camera === msg.camera ? null : cur));
             return;
           }
-          // Final: lock in the last streaming home event (or add a new
-          // one if none exists yet).
-          setEvents((prev) => {
-            const last = prev[prev.length - 1];
-            if (last && last.kind === "home" && last.streaming) {
-              streamingIds.current.delete(last.id);
-              return [...prev.slice(0, -1), { ...last, text: cleanText, streaming: false }];
-            }
-            // Dedup against recent assistant bubbles: HA WS event and
-            // s2s bridge can both fire for the same turn.
-            const existingIdx = findAssistantDuplicateIdx(prev, cleanText, "home", 60);
-            if (existingIdx !== -1) {
-              const existing = prev[existingIdx];
-              if (existing?.streaming) streamingIds.current.delete(existing.id);
-              return prev.map((e, i) => i === existingIdx
-                ? { ...e, text: settleAssistantFinalText(e.text, cleanText), streaming: false }
-                : e);
-            }
-            return [...prev, {
-              id: nextId(),
-              kind: "home",
-              time: fmtTime(),
-              text: cleanText,
-            }];
-          });
-          setMetrics((prev) => ({
-            ...prev,
-            e2e: Math.round(performance.now() - t0),
-          }));
-        }
-      },
-      onError: (msg) => {
-        addEvent({ kind: "system", text: `s2s · ${msg}`, tone: "error" });
-        setVoice({ state: "inactive" });
-      },
-      onIdentity: (msg) => {
-        // Phase 1: face-rec match (or identity_clear when name is null).
-        if (!msg.name) {
-          // identity_clear — drop the pill if it's for the current camera.
-          setIdentity((cur) => (cur && cur.camera === msg.camera ? null : cur));
-          return;
-        }
-        setIdentity({
-          name: msg.name,
-          camera: msg.camera,
-          score: msg.score,
-          confidence_band: msg.confidence_band,
-          ts: msg.ts,
-          first_seen_today: !!msg.first_seen_today,
-        });
-      },
-      onPresence: (msg) => {
-        // Phase 1: person.<X> arrival. Triggers WelcomeBanner with the
-        // strong arrival path (always fires, ignores welcomedAt cooldown).
-        if (msg.event === "arrived") {
-          setArrival({
-            display_name: msg.display_name,
-            person: msg.person,
+          setIdentity({
+            name: msg.name,
+            camera: msg.camera,
+            score: msg.score,
+            confidence_band: msg.confidence_band,
             ts: msg.ts,
+            first_seen_today: !!msg.first_seen_today,
           });
-        }
-      },
-      onMedia: (msg) => {
-        // Phase 2: media_player.* state change broadcast from bridge.
-        if (msg.event === "active" && msg.room) {
-          setMedia((cur) => ({
-            ...cur,
-            [msg.room]: {
-              entity_id: msg.entity_id,
-              state: msg.state,
-              app_name: msg.app_name,
-              title: msg.title,
-              artist: msg.artist,
-              category: msg.category,
+        },
+        onPresence: (msg) => {
+          // Phase 1: person.<X> arrival. Triggers WelcomeBanner with the
+          // strong arrival path (always fires, ignores welcomedAt cooldown).
+          if (msg.event === "arrived") {
+            setArrival({
+              display_name: msg.display_name,
+              person: msg.person,
               ts: msg.ts,
-            },
-          }));
-        } else if (msg.event === "cleared" && msg.room) {
-          setMedia((cur) => {
-            if (cur[msg.room] && cur[msg.room].entity_id === msg.entity_id) {
-              const { [msg.room]: _drop, ...rest } = cur;
-              return rest;
-            }
-            return cur;
-          });
-        }
-      },
-    });
+            });
+          }
+        },
+        onMedia: (msg) => {
+          // Phase 2: media_player.* state change broadcast from bridge.
+          if (msg.event === "active" && msg.room) {
+            setMedia((cur) => ({
+              ...cur,
+              [msg.room]: {
+                entity_id: msg.entity_id,
+                state: msg.state,
+                app_name: msg.app_name,
+                title: msg.title,
+                artist: msg.artist,
+                category: msg.category,
+                ts: msg.ts,
+              },
+            }));
+          } else if (msg.event === "cleared" && msg.room) {
+            setMedia((cur) => {
+              if (cur[msg.room] && cur[msg.room].entity_id === msg.entity_id) {
+                const { [msg.room]: _drop, ...rest } = cur;
+                return rest;
+              }
+              return cur;
+            });
+          }
+        },
+      });
+    } catch (err) {
+      // Bridge/WS/mic startup failure. Without this guard the UI stayed
+      // stuck on "listening…" forever — voice state never reset and the
+      // placeholder bubble never cleared (audit: s2s stuck-listening).
+      s2sRunRef.current = null;
+      s2sPlaceholderRef.current = null;
+      const raw = (err && err.message) || String(err || "");
+      const reason = raw.replace(/^\s*\w*Error:\s*/, "").trim() || "unknown error";
+      setEvents((prev) => {
+        const errEvent = {
+          id: nextId(), kind: "system", time: fmtTime(), tone: "error",
+          text: `voice session failed — ${reason}; tap the mic to retry`,
+        };
+        // Replace the still-unclaimed placeholder in place; if it was
+        // already claimed by a real transcript, append instead.
+        const idx = placeholderClaimed ? -1 : prev.findIndex((e) => e.id === placeholderId);
+        if (idx === -1) return [...prev, errEvent];
+        return prev.map((e, i) => (i === idx ? errEvent : e));
+      });
+      setVoice({ state: "inactive" });
+      setS2sMode(false);
+      return;
+    }
     s2sRunRef.current = run;
   }, [s2sBase, s2sToken, s2sVoice, kokoroVoice, endpoint, conversationId, addEvent]);
 

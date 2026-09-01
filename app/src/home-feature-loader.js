@@ -114,6 +114,29 @@
     });
   }
 
+  // Humanize raw transport failures at the seam: the recorded `error` string
+  // surfaces verbatim in the UI (FeatureLoadingSurface), so map wire-level
+  // messages to plain language and keep the raw detail in parentheses for
+  // diagnostics.
+  function humanizeLoadError(raw) {
+    const detail = " (" + raw + ")";
+    const statusMatch = /^HTTP status (\d+)/.exec(raw);
+    if (statusMatch) {
+      const code = Number(statusMatch[1]);
+      if (code === 0) return "couldn't reach the home server — retry when it's reachable" + detail;
+      if (code === 404) return "this feature's files are missing on the server" + detail;
+      if (code >= 500) return "the home server had a problem loading this feature" + detail;
+      return "the home server refused the request for this feature" + detail;
+    }
+    if (/^(timeout|network error) loading /.test(raw)) {
+      return "couldn't reach the home server — retry when it's reachable" + detail;
+    }
+    if (/^aborted loading /.test(raw)) {
+      return "loading this feature was interrupted" + detail;
+    }
+    return raw;
+  }
+
   async function fetchWithRetry(name, attempts) {
     try {
       return await fetchText(name);
@@ -213,7 +236,7 @@
       } catch (err) {
         const message = (err && err.message) || String(err);
         const next = emit(feature, "error", {
-          error: message,
+          error: humanizeLoadError(message),
           failedAt: Date.now(),
           durationMs: Math.round((now() - start) * 10) / 10,
         });

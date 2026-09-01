@@ -4,10 +4,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { CANDIDATE_RUNTIME_MANIFEST, assertCandidateAdapter } from "../candidate-adapter.js";
+import { installRuntimeInstrumentation } from "../benchmark.js";
 import { ENVIRONMENT_PRESETS, SCALE_STOPS, SYNTHETIC_SITES } from "../fixtures.js";
 import {
   FRAME_TO_HOST,
   HOST_TO_FRAME,
+  RENDERER_ADAPTER_IDS,
   createConnectionEnvelope,
   createEnvelope,
   isConnectionEnvelope,
@@ -44,6 +46,7 @@ const validInit = () => createEnvelope(HOST_TO_FRAME.INIT, "test-init", {
   sites: SYNTHETIC_SITES,
   environment: ENVIRONMENT_PRESETS.nominal,
   reducedMotion: false,
+  adapterId: "deterministic-dom",
 });
 
 test("fixtures are synthetic US/Canada records only", () => {
@@ -208,11 +211,44 @@ test("adapter contract fails closed on incomplete candidates", () => {
   assert.throws(() => assertCandidateAdapter({ apiVersion: "home.spatial-renderer-adapter.v1", id: "broken" }));
 });
 
+test("lifecycle instrumentation reports whether worker and WebGL hooks are installed", () => {
+  const context = { isContextLost: () => false };
+  class FakeCanvas {
+    constructor() {
+      this.isConnected = true;
+    }
+
+    getContext() {
+      return context;
+    }
+  }
+  class FakeWorker {
+    terminate() {}
+  }
+  const fakeGlobal = { HTMLCanvasElement: FakeCanvas, Worker: FakeWorker };
+  const instrumentation = installRuntimeInstrumentation(fakeGlobal);
+  const canvas = new fakeGlobal.HTMLCanvasElement();
+  canvas.getContext("webgl2");
+  const worker = new fakeGlobal.Worker("fixture-worker.js");
+  let snapshot = instrumentation.snapshot();
+  assert.deepEqual(snapshot.tracking, { workers: true, webgl: true });
+  assert.equal(snapshot.webgl.live, 1);
+  assert.equal(snapshot.workers.active, 1);
+  worker.terminate();
+  snapshot = instrumentation.snapshot();
+  assert.equal(snapshot.workers.active, 0);
+});
+
 test("candidate set is deterministic fallback plus Cesium and sandboxed MapLibre", () => {
   assert.deepEqual(
     CANDIDATE_RUNTIME_MANIFEST.candidates.map((candidate) => candidate.id),
     ["deterministic-dom", "cesium-separate", "maplibre-sandbox"],
   );
+  assert.deepEqual(RENDERER_ADAPTER_IDS, ["deterministic-dom", "cesium-separate", "maplibre-sandbox"]);
+  assert.ok(CANDIDATE_RUNTIME_MANIFEST.candidates.every((candidate) => candidate.status === "available"));
+  assert.ok(fs.existsSync(path.join(spikeRoot, "cesium-adapter.js")));
+  assert.ok(fs.existsSync(path.join(spikeRoot, "maplibre-adapter.js")));
+  assert.ok(fs.existsSync(path.join(spikeRoot, "benchmark.js")));
 });
 
 test("host iframe uses the narrow sandbox and no referrer", () => {
@@ -233,6 +269,17 @@ test("frame exposes keyboard/list, live-region, and reduced-motion hooks", () =>
   assert.match(script, /ArrowUp/);
   assert.match(script, /event\.key === "Enter"/);
   assert.match(css, /prefers-reduced-motion: reduce/);
+  assert.match(css, /forced-colors: active/);
+  assert.match(html, /connect-src 'self'/);
+  assert.match(html, /worker-src 'self'/);
+  assert.match(html, /Run 20-cycle check/);
+});
+
+test("aria-hidden decorative globe contains no focusable marker controls", () => {
+  const adapter = fs.readFileSync(path.join(spikeRoot, "deterministic-adapter.js"), "utf8");
+  assert.match(adapter, /world\.setAttribute\("aria-hidden", "true"\)/);
+  assert.match(adapter, /createElement\(documentRef, "div", "fixture-marker"\)/);
+  assert.doesNotMatch(adapter, /createElement\(documentRef, "button", "fixture-marker"\)/);
 });
 
 test("owned runtime source contains no remote URL literals", () => {

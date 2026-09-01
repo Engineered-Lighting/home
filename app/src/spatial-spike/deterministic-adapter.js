@@ -7,7 +7,7 @@ const createElement = (documentRef, tag, className, text) => {
   return element;
 };
 
-export function createDeterministicAdapter({ onActivateSite = () => {} } = {}) {
+export function createDeterministicAdapter() {
   let surface = null;
   let world = null;
   let markerLayer = null;
@@ -66,17 +66,14 @@ export function createDeterministicAdapter({ onActivateSite = () => {} } = {}) {
       markerById.clear();
       const documentRef = surface.ownerDocument;
       for (const site of sites) {
-        const marker = createElement(documentRef, "button", "fixture-marker");
-        marker.type = "button";
+        const marker = createElement(documentRef, "div", "fixture-marker");
         marker.dataset.siteId = site.id;
-        marker.setAttribute("aria-label", `Select ${site.label}`);
         marker.style.setProperty("--marker-x", `${((site.anchor.longitude + 180) / 360) * 100}%`);
         marker.style.setProperty("--marker-y", `${((90 - site.anchor.latitude) / 180) * 100}%`);
         marker.append(
           createElement(documentRef, "span", "fixture-marker-pulse"),
           createElement(documentRef, "span", "fixture-marker-core"),
         );
-        marker.addEventListener("click", () => onActivateSite(site.id));
         markerLayer.append(marker);
         markerById.set(site.id, marker);
       }
@@ -111,7 +108,6 @@ export function createDeterministicAdapter({ onActivateSite = () => {} } = {}) {
         if (!marker) continue;
         const active = site.id === nextSnapshot.selectedSiteId;
         marker.classList.toggle("is-selected", active);
-        marker.setAttribute("aria-pressed", String(active));
         marker.dataset.health = nextSnapshot.environment.siteHealth[site.id] || "unknown";
       }
     },
@@ -135,4 +131,3 @@ export function createDeterministicAdapter({ onActivateSite = () => {} } = {}) {
 
   return defineCandidateAdapter(adapter);
 }
-

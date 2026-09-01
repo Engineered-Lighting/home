@@ -56,6 +56,14 @@
 
         <div class="panel-section">
           <p class="section-kicker">Resilience</p>
+          <label for="renderer-select">Renderer under test</label>
+          <select id="renderer-select">
+            <option value="deterministic-dom">Deterministic fallback</option>
+            <option value="cesium-separate">CesiumJS 1.144.0</option>
+            <option value="maplibre-sandbox">MapLibre GL JS 6.6.0</option>
+          </select>
+          <p class="control-note">Changing renderer recreates the opaque sandbox and its lifecycle.</p>
+
           <label for="environment-select">Runtime condition</label>
           <select id="environment-select" disabled>
             <option value="nominal">Nominal</option>

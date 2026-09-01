@@ -848,6 +848,12 @@
     return { primary_activity: reasons.length > 0, reasons: Array.from(new Set(reasons)), reviewed: false };
   }
 
+  /* Two-click confirm label for the destructive frame delete (Pattern B1,
+   * mirrors _aiStackConfirmButtonLabel in home-ai-stack.jsx). */
+  function _intelDeleteFramesLabel(confirmDeleteId, packetId) {
+    return confirmDeleteId === packetId ? "✓ confirm delete" : "delete frames";
+  }
+
   function ObservationExplorer({
     base,
     status,
@@ -867,6 +873,44 @@
     onAudit,
     onDeleteFrames,
   }) {
+    // Inline two-click confirmation for the destructive "delete frames"
+    // action (Pattern B1: arm -> "✓ confirm delete" -> 3s expiry). Keyed by
+    // packet id so switching packets never carries an armed state over.
+    const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+    const confirmDeleteTimerRef = React.useRef(null);
+
+    // Clear any pending confirm-expiry timer on unmount.
+    useEffect(() => {
+      return () => {
+        if (confirmDeleteTimerRef.current) {
+          try { clearTimeout(confirmDeleteTimerRef.current); } catch {}
+          confirmDeleteTimerRef.current = null;
+        }
+      };
+    }, []);
+
+    const confirmOrDeleteFrames = useCallback((packet) => {
+      const packetId = packet?.id;
+      if (!packetId) return;
+      if (confirmDeleteId !== packetId) {
+        setConfirmDeleteId(packetId);
+        if (confirmDeleteTimerRef.current) {
+          try { clearTimeout(confirmDeleteTimerRef.current); } catch {}
+        }
+        confirmDeleteTimerRef.current = setTimeout(() => {
+          setConfirmDeleteId((current) => (current === packetId ? null : current));
+          confirmDeleteTimerRef.current = null;
+        }, 3000);
+        return;
+      }
+      if (confirmDeleteTimerRef.current) {
+        try { clearTimeout(confirmDeleteTimerRef.current); } catch {}
+        confirmDeleteTimerRef.current = null;
+      }
+      setConfirmDeleteId(null);
+      onDeleteFrames(packet);
+    }, [confirmDeleteId, onDeleteFrames]);
+
     const points = map?.points || [];
     const selectedId = detail?.packet?.id;
     const selectedLabels = detail?.latest_label?.labels || detail?.packet?.latest_labels || {};
@@ -1175,7 +1219,7 @@
                   <button className="hg-focusable" onClick={() => onAudit(detail.packet, "ignore_observation")} style={buttonStyle}>ignore</button>
                   <button className="hg-focusable" onClick={() => onAudit(detail.packet, "do_not_learn_context")} style={buttonStyle}>do not learn</button>
                   <button className="hg-focusable" onClick={() => onCreateManifest(detail.packet)} style={buttonStyle}>clip manifest</button>
-                  <button className="hg-focusable" onClick={() => onDeleteFrames(detail.packet)} style={buttonStyle}>delete frames</button>
+                  <button className="hg-focusable" onClick={() => confirmOrDeleteFrames(detail.packet)} style={buttonStyle}>{_intelDeleteFramesLabel(confirmDeleteId, detail.packet.id)}</button>
                 </div>
                 <div style={{
                   borderTop: "1px solid var(--hg-border-soft)",

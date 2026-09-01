@@ -364,30 +364,6 @@ function computeBaseline(turns) {
   return { p10, p50, p90, trend, trendPct, hasBaseline: true };
 }
 
-/* confirmAct â€” two-click "arm â†’ confirm" pattern on a DOM button.
- * Resets after 3s if confirm doesn't fire. Pure DOM (no React state)
- * so it can attach to any button via onClick={(e) => confirmAct(e.currentTarget, label, fn)}. */
-function confirmAct(btn, label, action) {
-  if (!btn) return;
-  if (btn.dataset.armed === "1") {
-    btn.dataset.armed = "";
-    btn.innerHTML = btn.dataset.original || btn.innerHTML;
-    delete btn.dataset.original;
-    if (typeof action === "function") action();
-    return;
-  }
-  btn.dataset.original = btn.innerHTML;
-  btn.dataset.armed = "1";
-  btn.innerHTML = `<span style="margin-right:6px;color:var(--hg-warn)">âœ“</span>confirm`;
-  setTimeout(() => {
-    if (btn.dataset.armed === "1") {
-      btn.innerHTML = btn.dataset.original || btn.innerHTML;
-      btn.dataset.armed = "";
-      delete btn.dataset.original;
-    }
-  }, 3000);
-}
-
 /* Stage extraction from raw trace (live trace shape uses t_*; LabTurn
  * shape uses stages[]). Both supported. */
 function extractStages(turnOrTrace) {
@@ -461,8 +437,37 @@ function LabSummaryHeader({ tier, onAction }) {
   );
 }
 
-/* LabActionButton â€” applies confirm-act pattern when action.confirm===true. */
+/* LabActionButton â€” two-click arm â†’ confirm guard when action.confirm===true.
+ * Pattern B1 (home-ai-stack.jsx confirmOrDispatch): the armed flag lives in
+ * React state, NOT in DOM dataset/innerHTML, so a poll-driven re-render
+ * cannot restore the resting label while a stale armed flag makes the next
+ * click destructive. First click arms (label reads "✓ confirm"); second
+ * click within 3s fires; otherwise arming expires. */
 function LabActionButton({ action, onAction }) {
+  const [armed, setArmed] = useState(false);
+  const confirmTimerRef = useRef(null);
+  const clearConfirmTimer = () => {
+    if (confirmTimerRef.current) {
+      try { clearTimeout(confirmTimerRef.current); } catch {}
+      confirmTimerRef.current = null;
+    }
+  };
+  useEffect(() => clearConfirmTimer, []);
+  const handleClick = () => {
+    if (!action.confirm) { onAction?.(action.verb); return; }
+    if (!armed) {
+      clearConfirmTimer();
+      setArmed(true);
+      confirmTimerRef.current = setTimeout(() => {
+        setArmed(false);
+        confirmTimerRef.current = null;
+      }, 3000);
+      return;
+    }
+    clearConfirmTimer();
+    setArmed(false);
+    onAction?.(action.verb);
+  };
   const styleVariant = {
     cool: { color: "var(--hg-ice)", borderColor: "var(--hg-ice)" },
     warn: { color: "var(--hg-warn)", borderColor: "var(--hg-warn)" },
@@ -471,13 +476,7 @@ function LabActionButton({ action, onAction }) {
   }[action.style || "default"];
   return (
     <button
-      onClick={(e) => {
-        if (action.confirm) {
-          confirmAct(e.currentTarget, action.label, () => onAction?.(action.verb));
-        } else {
-          onAction?.(action.verb);
-        }
-      }}
+      onClick={handleClick}
       style={{
         display: "inline-flex", alignItems: "center", gap: 6,
         padding: "5px 11px", border: `1px solid ${styleVariant.borderColor}`,
@@ -489,8 +488,11 @@ function LabActionButton({ action, onAction }) {
       onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.03)"; }}
       onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
     >
-      <span style={{ fontFamily: HG_FONT_MONO, color: "var(--hg-fg-3)" }}>{action.glyph}</span>
-      {action.label}
+      <span style={{
+        fontFamily: HG_FONT_MONO,
+        color: armed ? "var(--hg-warn)" : "var(--hg-fg-3)",
+      }}>{armed ? "✓" : action.glyph}</span>
+      {armed ? "confirm" : action.label}
     </button>
   );
 }
@@ -2500,7 +2502,36 @@ function LabDiagPane({ services, supervisorUrl, stackToken, tokenConfigured, onA
   );
 }
 
+/* DiagBtn â€” Pattern B1 two-click arm â†’ confirm when `confirm` is set.
+ * Armed flag is React state (per-instance useState + timer ref), replacing
+ * the legacy DOM confirmAct helper whose dataset armed flag silently
+ * survived poll-driven re-renders after the label was repainted. */
 function DiagBtn({ label, glyph, tone, small, confirm, onClick, disabled }) {
+  const [armed, setArmed] = useState(false);
+  const confirmTimerRef = useRef(null);
+  const clearConfirmTimer = () => {
+    if (confirmTimerRef.current) {
+      try { clearTimeout(confirmTimerRef.current); } catch {}
+      confirmTimerRef.current = null;
+    }
+  };
+  useEffect(() => clearConfirmTimer, []);
+  const handleClick = () => {
+    if (disabled) return;
+    if (!confirm) { onClick?.(); return; }
+    if (!armed) {
+      clearConfirmTimer();
+      setArmed(true);
+      confirmTimerRef.current = setTimeout(() => {
+        setArmed(false);
+        confirmTimerRef.current = null;
+      }, 3000);
+      return;
+    }
+    clearConfirmTimer();
+    setArmed(false);
+    onClick?.();
+  };
   const colorMap = {
     danger: { color: "var(--hg-crit)", borderColor: "var(--hg-crit)" },
     warn: { color: "var(--hg-warn)", borderColor: "var(--hg-warn)" },
@@ -2511,14 +2542,7 @@ function DiagBtn({ label, glyph, tone, small, confirm, onClick, disabled }) {
     <button
       disabled={disabled}
       title={disabled ? "STACK_TOKEN required â€” use /stack-token" : ""}
-      onClick={(e) => {
-        if (disabled) return;
-        if (confirm) {
-          confirmAct(e.currentTarget, label, onClick);
-        } else {
-          onClick?.();
-        }
-      }}
+      onClick={handleClick}
       style={{
         display: "inline-flex", alignItems: "center", gap: 6,
         padding: small ? "4px 9px" : "5px 11px",
@@ -2533,8 +2557,10 @@ function DiagBtn({ label, glyph, tone, small, confirm, onClick, disabled }) {
         transition: "color 120ms, border-color 120ms, background 120ms",
       }}
     >
-      <span style={{ color: disabled ? "var(--hg-fg-5)" : "var(--hg-fg-3)" }}>{glyph}</span>
-      {label}
+      <span style={{
+        color: disabled ? "var(--hg-fg-5)" : (armed ? "var(--hg-warn)" : "var(--hg-fg-3)"),
+      }}>{armed ? "✓" : glyph}</span>
+      {armed ? "confirm" : label}
     </button>
   );
 }
@@ -2861,7 +2887,6 @@ window.HmLabTab = HmLabTab;
 window.deriveLabTier = deriveLabTier;
 window.computeBaseline = computeBaseline;
 window.extractStages = extractStages;
-window.confirmAct = confirmAct;
 window.LAB_THRESHOLDS = LAB_THRESHOLDS;
 window.STAGE_TINT = STAGE_TINT;
 window.STAGE_TINT_SLOW = STAGE_TINT_SLOW;

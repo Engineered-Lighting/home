@@ -2,14 +2,24 @@
 
 This subtree is an isolated Phase 0 frontend spike. It tests the contract around
 a future outer-world renderer without importing or changing Apartment View.
-Everything runs as precompiled native ESM from `app/src`; there is no build step
-and the deterministic adapter has no runtime dependency.
+Everything runs as precompiled native ESM from `app/src`; there is no runtime
+transpilation. CesiumJS 1.144.0 and MapLibre GL JS 6.6.0 are pinned, vendored,
+and compared against the same synthetic inputs. The deterministic DOM adapter
+has no runtime dependency and remains the canvas-free contract fixture.
 
 ## Open the harness
 
-Run the repository's normal static development server and open
-`/spatial-spike/`. The host loads `frame.html` with exactly
-`sandbox="allow-scripts"` and `referrerpolicy="no-referrer"`.
+The production-shaped path is the feature- and environment-gated Tauri window:
+
+```powershell
+$env:HOME_SPATIAL_SPIKE = "1"
+cargo run --manifest-path app/src-tauri/Cargo.toml --features spatial-spike
+```
+
+The host loads `frame.html` with exactly `sandbox="allow-scripts"` and
+`referrerpolicy="no-referrer"`. The native custom protocol serves only exact
+frontend allowlist entries and exact files in the checked-in vendor manifest.
+See `docs/HOME-SPATIAL-PHASE0.md` for the complete evidence runbook.
 
 The frame can also run by itself. Its local controls remain useful before the
 host channel connects.
@@ -28,7 +38,13 @@ host channel connects.
 - `adapter-loader.js` is the only adapter selection seam.
 - `deterministic-adapter.js` is the dependency-free fallback renderer used by
   the harness.
-- `vendor/` is separately owned. The fallback does not import or execute it.
+- `cesium-adapter.js` and `maplibre-adapter.js` load their pinned local ESM,
+  worker, CSS, and synthetic raster through the native protocol only.
+- `benchmark.js` provides corroborating in-frame lifecycle evidence; WPR/ETW
+  remains authoritative for process memory and GPU accounting.
+- `vendor/` contains checksummed runtime inputs, notices, an SBOM, and the
+  first-party synthetic offline raster. The deterministic adapter does not
+  import or execute vendor code.
 
 The one initial `window.postMessage` transfers a dedicated `MessagePort` into
 the opaque-origin sandbox. After that handshake, all traffic uses the port.
@@ -50,17 +66,11 @@ An adapter must expose:
 - `getSnapshot()`
 - `dispose()`
 
-To add a real candidate after its reviewed local runtime exists:
-
-1. Implement the adapter beside `deterministic-adapter.js`; it must not fetch
-   remote scripts, credentials, addresses, or provider configuration.
-2. Register its factory in `adapter-loader.js`.
-3. Change its candidate status only after its local artifacts and tests pass.
-4. Keep `frame-main.js` as the sole lifecycle owner. It calls `mount`,
-   `setSites`, `render`, and `dispose`; renderer-specific UI must stay behind
-   the adapter.
-5. Version the protocol before adding adapter-specific host messages. Do not
-   put renderer objects or precise camera coordinates into postMessage state.
+`frame-main.js` is the sole lifecycle owner. It calls `mount`, `setSites`,
+`render`, and `dispose`; renderer-specific UI stays behind the adapter. The
+protocol must be versioned before adding adapter-specific host messages, and
+renderer objects or precise camera coordinates must never enter public
+postMessage state.
 
 The current comparison set is a separate Cesium outer-world renderer versus a
 sandboxed MapLibre outer-world renderer. The deterministic DOM adapter remains
@@ -68,8 +78,8 @@ the always-available offline and contract fixture.
 
 ## Accessibility and resilience fixtures
 
-- Home targets are available as a roving-tabindex listbox and as focusable
-  visual markers.
+- Home targets are available through a roving-tabindex listbox. Canvas and
+  decorative globe markers are removed from the accessibility tree.
 - Arrow keys, Home, End, Enter, and Space work in the site list.
 - Reduced motion resolves an absolute intent at its destination immediately.
 - Nominal, fully offline, provider-degraded, one-site-offline, and AI-offline
@@ -87,5 +97,6 @@ node app/src/spatial-spike/tests/run-spatial-spike-tests.mjs
 
 The suite covers fixtures, exact protocol parsing, privacy rejection, adapter
 shape, deterministic journey/reversal, reduced motion, degraded states,
-static sandbox attributes, CSP, and accessibility hooks.
-
+static sandbox attributes, CSP, vendored-runtime integrity, native routing,
+and accessibility hooks. Passing it does not select a renderer; selection
+requires the packaged Windows/GPU/accessibility evidence in the runbook.

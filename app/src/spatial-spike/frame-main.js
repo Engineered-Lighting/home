@@ -1,6 +1,15 @@
 import { SCALE_STOPS, SYNTHETIC_SITES, DEFAULT_ENVIRONMENT } from "./fixtures.js";
 import { createCandidateAdapter } from "./adapter-loader.js";
 import {
+  afterVisualSettlement,
+  installRuntimeInstrumentation,
+  memorySample,
+  resourceTotals,
+  startFrameSampler,
+  summarizeDurations,
+} from "./benchmark.js";
+import {
+  FRAME_ERROR_CODES,
   FRAME_TO_HOST,
   HOST_TO_FRAME,
   createEnvelope,
@@ -22,6 +31,11 @@ import {
 
 const elements = {
   surface: document.getElementById("renderer-surface"),
+  rendererStatus: document.getElementById("renderer-status"),
+  rendererReadout: document.getElementById("renderer-readout"),
+  startupReadout: document.getElementById("startup-readout"),
+  runLifecycle: document.getElementById("run-lifecycle"),
+  benchmarkResult: document.getElementById("benchmark-result"),
   siteList: document.getElementById("site-list"),
   scaleRail: document.getElementById("scale-rail"),
   scaleReadout: document.getElementById("scale-readout"),
@@ -42,16 +56,73 @@ let frameSequence = 0;
 let animationFrame = null;
 let previousAnimationTime = null;
 let lastAnnouncedRevision = -1;
+let activeAdapterId = "deterministic-dom";
+let coldUsefulMs = null;
+let benchmarkJourneyResolve = null;
+let benchmarkRunning = false;
 const siteButtonById = new Map();
 const scaleStopById = new Map();
+const runtimeInstrumentation = installRuntimeInstrumentation();
 
 const nextId = (prefix) => `${prefix}-${String(++frameSequence).padStart(4, "0")}`;
 
-const adapter = createCandidateAdapter("deterministic-dom", {
-  onActivateSite: (siteId) => activateSite(siteId, { focus: false, emit: true }),
+const ADAPTER_LABELS = Object.freeze({
+  "deterministic-dom": "Deterministic fallback",
+  "cesium-separate": "CesiumJS 1.144.0",
+  "maplibre-sandbox": "MapLibre GL JS 6.6.0",
 });
+
+function nativeAuthorityVisible() {
+  const authorityNames = [
+    ["__", "TAURI", "__"],
+    ["__", "TAURI", "_INTERNALS__"],
+  ].map((parts) => parts.join(""));
+  return authorityNames.some((name) => Object.hasOwn(globalThis, name));
+}
+
+function adapterOptions() {
+  return {
+    onActivateSite: (siteId) => activateSite(siteId, { focus: false, emit: true }),
+  };
+}
+
+let adapter = createCandidateAdapter("deterministic-dom", adapterOptions());
 adapter.mount(elements.surface);
 adapter.setSites(state.sites);
+
+async function mountAdapter(adapterId, { disposeCurrent = true } = {}) {
+  if (nativeAuthorityVisible()) throw new Error(FRAME_ERROR_CODES.RUNTIME_AUTHORITY_EXPOSED);
+  if (disposeCurrent) {
+    adapter.dispose();
+    await afterVisualSettlement(1);
+  }
+  const nextAdapter = createCandidateAdapter(adapterId, adapterOptions());
+  const started = performance.now();
+  try {
+    await nextAdapter.mount(elements.surface);
+    nextAdapter.setSites(state.sites);
+    nextAdapter.render(publicSnapshot(state));
+    await afterVisualSettlement(2);
+  } catch (error) {
+    nextAdapter.dispose();
+    throw error;
+  }
+  adapter = nextAdapter;
+  activeAdapterId = adapterId;
+  coldUsefulMs = performance.now() - started;
+  elements.surface.dataset.adapter = adapterId;
+  return adapter;
+}
+
+async function restoreDeterministicAdapter() {
+  adapter = createCandidateAdapter("deterministic-dom", adapterOptions());
+  await adapter.mount(elements.surface);
+  adapter.setSites(state.sites);
+  adapter.render(publicSnapshot(state));
+  activeAdapterId = "deterministic-dom";
+  coldUsefulMs = null;
+  elements.surface.dataset.adapter = activeAdapterId;
+}
 
 function emit(type, payload, requestId = nextId("frame")) {
   if (!port) return;
@@ -152,6 +223,10 @@ function render() {
   renderSites();
   renderEnvironment();
   const selected = state.sites.find((site) => site.id === state.selectedSiteId);
+  const adapterLabel = ADAPTER_LABELS[activeAdapterId] || activeAdapterId;
+  elements.rendererStatus.textContent = adapterLabel;
+  elements.rendererReadout.textContent = adapterLabel;
+  elements.startupReadout.textContent = coldUsefulMs === null ? "Fixture" : `${Math.round(coldUsefulMs)} ms`;
   elements.scaleReadout.textContent = SCALE_STOPS.find((stop) => stop.id === state.scale)?.label || state.scale;
   elements.selectedReadout.textContent = selected?.label || "Unknown fixture";
   elements.ownerReadout.textContent = state.owner === "world"
@@ -206,7 +281,7 @@ function activateSite(siteId, { focus, emit: shouldEmit }) {
       emitState();
     }
   } catch {
-    emitError("unknown-site", "The requested synthetic site is unavailable.");
+    emitError(FRAME_ERROR_CODES.UNKNOWN_SITE);
   }
 }
 
@@ -236,7 +311,12 @@ function animationTick(now) {
     emitState();
   }
   if (state.journey.status === "running") animationFrame = requestAnimationFrame(animationTick);
-  else stopAnimation();
+  else {
+    stopAnimation();
+    const resolveJourney = benchmarkJourneyResolve;
+    benchmarkJourneyResolve = null;
+    resolveJourney?.();
+  }
 }
 
 function beginJourney({ intentId, siteId, destination, playback }) {
@@ -250,7 +330,7 @@ function beginJourney({ intentId, siteId, destination, playback }) {
       animationFrame = requestAnimationFrame(animationTick);
     }
   } catch {
-    emitError("invalid-navigation", "The absolute navigation intent was rejected.");
+    emitError(FRAME_ERROR_CODES.INVALID_NAVIGATION);
   }
 }
 
@@ -270,16 +350,129 @@ function stepJourney(intentId) {
   }
 }
 
-function handleHostEnvelope(envelope) {
+async function initializeRenderer(payload, requestId) {
+  stopAnimation();
+  state = createSpatialState(payload);
+  try {
+    await mountAdapter(payload.adapterId);
+  } catch (error) {
+    await restoreDeterministicAdapter();
+    render();
+    const code = error?.message === FRAME_ERROR_CODES.RUNTIME_AUTHORITY_EXPOSED
+      ? FRAME_ERROR_CODES.RUNTIME_AUTHORITY_EXPOSED
+      : FRAME_ERROR_CODES.ADAPTER_LOAD_FAILED;
+    emitError(code, requestId);
+    return;
+  }
+  render();
+  emit(FRAME_TO_HOST.READY, { adapterId: activeAdapterId, fixtureOnly: true }, requestId);
+  emitState(requestId);
+}
+
+async function measureCameraJourney() {
+  const restoreReducedMotion = state.reducedMotion;
+  if (restoreReducedMotion) state = setReducedMotion(state, false);
+  const sampler = startFrameSampler();
+  const completion = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      benchmarkJourneyResolve = null;
+      sampler.stop();
+      reject(new Error("camera-sample-timeout"));
+    }, 5_000);
+    benchmarkJourneyResolve = () => {
+      clearTimeout(timeout);
+      resolve(sampler.stop());
+    };
+  });
+  beginJourney({
+    intentId: nextId("benchmark-intent"),
+    siteId: state.selectedSiteId,
+    destination: "interior",
+    playback: "auto",
+  });
+  try {
+    return await completion;
+  } finally {
+    if (restoreReducedMotion) {
+      state = setReducedMotion(state, true);
+      render();
+    }
+  }
+}
+
+async function runLifecycleBenchmark() {
+  if (benchmarkRunning) return;
+  benchmarkRunning = true;
+  const buttons = [...document.querySelectorAll("button")];
+  const disabledBefore = buttons.map((button) => button.disabled);
+  buttons.forEach((button) => { button.disabled = true; });
+  elements.benchmarkResult.dataset.status = "running";
+  elements.benchmarkResult.textContent = "Sampling one camera journey and 20 dispose/recreate cycles…";
+
+  const candidateId = activeAdapterId;
+  const initialColdUseful = coldUsefulMs;
+  try {
+    const frameTimes = await measureCameraJourney();
+    const before = runtimeInstrumentation.snapshot();
+    const memoryBefore = memorySample();
+    const resourceStart = performance.now();
+    const warmUseful = [];
+
+    for (let cycle = 0; cycle < 20; cycle += 1) {
+      await mountAdapter(candidateId);
+      warmUseful.push(coldUsefulMs);
+    }
+
+    const resources = resourceTotals(performance, resourceStart);
+    const after = runtimeInstrumentation.snapshot();
+    const memoryAfter = memorySample();
+    const warm = summarizeDurations(warmUseful);
+    const workerDelta = after.tracking.workers
+      ? after.workers.active - before.workers.active
+      : null;
+    const contextDelta = after.tracking.webgl
+      ? after.webgl.live - before.webgl.live
+      : null;
+    const heapDelta = memoryBefore.supported && memoryAfter.supported
+      ? memoryAfter.usedHeapBytes - memoryBefore.usedHeapBytes
+      : null;
+    const concerns = resources.otherHostEntries > 0
+      || workerDelta === null
+      || contextDelta === null
+      || workerDelta !== 0
+      || contextDelta !== 0;
+    elements.benchmarkResult.dataset.status = concerns ? "attention" : "sampled";
+    elements.benchmarkResult.textContent = [
+      `${ADAPTER_LABELS[candidateId]} — 20 warm recreations`,
+      `warm useful p95 ${warm.p95Ms ?? "n/a"} ms`,
+      `camera p95 frame ${frameTimes.p95Ms ?? "n/a"} ms (${frameTimes.fpsAtP95 ?? "n/a"} FPS)`,
+      `active workers Δ ${workerDelta ?? "unavailable"}`,
+      `live WebGL contexts Δ ${contextDelta ?? "unavailable"}`,
+      `other-host resources ${resources.otherHostEntries}`,
+      `decoded runtime bytes ${resources.decodedBytes}`,
+      `JS heap Δ ${heapDelta ?? "unsupported"}`,
+      "Confirm process memory and GPU budget with WPR/ETW.",
+    ].join(" · ");
+    coldUsefulMs = initialColdUseful;
+    render();
+  } catch {
+    elements.benchmarkResult.dataset.status = "attention";
+    elements.benchmarkResult.textContent = "Lifecycle sample failed. The candidate remains unqualified; inspect the local native trace.";
+    emitError(FRAME_ERROR_CODES.BENCHMARK_FAILED);
+    if (!adapter?.getSnapshot?.()?.mounted) await restoreDeterministicAdapter();
+    render();
+  } finally {
+    benchmarkRunning = false;
+    buttons.forEach((button, index) => { button.disabled = disabledBefore[index]; });
+  }
+}
+
+async function handleHostEnvelope(envelope) {
   const { type, payload, requestId } = envelope;
   try {
     switch (type) {
       case HOST_TO_FRAME.INIT:
-        stopAnimation();
-        state = createSpatialState(payload);
-        adapter.setSites(state.sites);
-        render();
-        emitState(requestId);
+        await initializeRenderer(payload, requestId);
         break;
       case HOST_TO_FRAME.SET_SITES:
         state = replaceSites(state, payload.sites);
@@ -326,7 +519,7 @@ function handlePortMessage(event) {
     emitError(parsed.code);
     return;
   }
-  handleHostEnvelope(parsed.value);
+  void handleHostEnvelope(parsed.value);
 }
 
 window.addEventListener("message", (event) => {
@@ -362,6 +555,9 @@ document.getElementById("cancel-journey").addEventListener("click", () => {
   stopAnimation();
   render();
   emitState();
+});
+elements.runLifecycle.addEventListener("click", () => {
+  void runLifecycleBenchmark();
 });
 
 render();

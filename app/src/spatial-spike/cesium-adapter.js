@@ -2,6 +2,7 @@ import { ADAPTER_API_VERSION, defineCandidateAdapter } from "./candidate-adapter
 
 const RUNTIME_ROOT = new URL("./runtime/cesium/", import.meta.url);
 const RUNTIME_ENTRY = new URL("index.js", RUNTIME_ROOT);
+const RUNTIME_STYLE = new URL("Widgets/widgets.css", RUNTIME_ROOT);
 const OFFLINE_RASTER = new URL("./runtime/fixtures/offline-planet.png", import.meta.url);
 
 let runtimePromise = null;
@@ -10,6 +11,15 @@ function loadRuntime() {
   globalThis.CESIUM_BASE_URL = RUNTIME_ROOT.href;
   runtimePromise ||= import(RUNTIME_ENTRY.href);
   return runtimePromise;
+}
+
+function ensureRuntimeStyle(documentRef) {
+  if (documentRef.querySelector("link[data-spatial-cesium-style]")) return;
+  const link = documentRef.createElement("link");
+  link.rel = "stylesheet";
+  link.href = RUNTIME_STYLE.href;
+  link.dataset.spatialCesiumStyle = "true";
+  documentRef.head.append(link);
 }
 
 export function createCesiumAdapter() {
@@ -30,6 +40,7 @@ export function createCesiumAdapter() {
       }
       surface = host;
       surface.replaceChildren();
+      ensureRuntimeStyle(host.ownerDocument);
       Cesium = await loadRuntime();
       Cesium.Ion.defaultAccessToken = undefined;
 
@@ -68,7 +79,7 @@ export function createCesiumAdapter() {
       viewer.scene.screenSpaceCameraController.enableInputs = false;
 
       const imagery = await Cesium.SingleTileImageryProvider.fromUrl(OFFLINE_RASTER.href, {
-        rectangle: Cesium.Rectangle.MAX_VALUE,
+        rectangle: Cesium.Rectangle.fromDegrees(-180, -90, 180, 90),
       });
       viewer.imageryLayers.addImageryProvider(imagery);
       mounted = true;

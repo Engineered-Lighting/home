@@ -4156,6 +4156,7 @@ const SLASH_CMDS = [
   { cmd: "/proactive",  hint: "[mode on|off | test … | reset]", desc: "proactive-assistant status, mode overrides, and no-leave event tests", category: "mode" },
   { cmd: "/demo",     hint: "",        desc: "play the scripted demo conversation", category: "mode" },
   { cmd: "/clear",    hint: "",        desc: "clear the conversation", category: "mode" },
+  { cmd: "/undo-clear", hint: "",      desc: "restore the conversation cleared this session", category: "mode" },
   // ── meta ──────────────────────────────────────────────────────
   { cmd: "/about",    hint: "",        desc: "show version + repo info", category: "meta" },
   { cmd: "/help",       hint: "",           desc: "list commands grouped by category (click any entry to fill the input)", category: "meta" },
@@ -7210,7 +7211,32 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   }, []);
 
   /* ── Confirm / cancel a pending-confirm action ────────────────────── */
+  // Latest events array for id→event lookups inside stable callbacks.
+  // confirmAction must keep a stable identity (action cards receive it as
+  // onConfirmAction), so it reads this ref instead of depending on `events`.
+  const eventsSnapshotRef = useRef(events);
+  useEffect(() => { eventsSnapshotRef.current = events; }, [events]);
+  // One-shot restore buffer for the guarded conversation clear: holds the
+  // wiped events array until /undo-clear consumes it (session-local only).
+  const clearedEventsRef = useRef(null);
   const confirmAction = useCallback((id) => {
+    const ev = eventsSnapshotRef.current?.find?.((e) => e.id === id);
+    if (ev?.service === "home.clear_conversation") {
+      // Phase 7 destructive guard: the armed clear card was confirmed —
+      // perform the wipe that Ctrl+L / /clear used to run instantly.
+      stopStreaming();
+      clearedEventsRef.current = eventsSnapshotRef.current.filter(
+        (e) => !(e.kind === "action" && e.service === "home.clear_conversation")
+      );
+      setEvents([]);
+      setConversationId(null);
+      // A confirmed clear is a fresh start — reset the persisted flag so
+      // onboarding teaches again next launch (parity with the old /clear).
+      saveOnboarding({ seenHelpHint: false });
+      addEvent({ kind: "system", tone: "ok",
+        text: "conversation cleared — type /undo-clear within this session to restore" });
+      return;
+    }
     // For Phase 1 the HA agent doesn't gate destructive ops yet, so this
     // just flips the status as if HA acknowledged it. Real wiring is Phase 2.
     setEvents((prev) => prev.map((e) => e.id === id ? { ...e, status: "pending" } : e));
@@ -7218,10 +7244,22 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       setEvents((prev) => prev.map((e) => e.id === id ? { ...e, status: "success", latency: "84ms" } : e));
     }, 700);
     timers.current.push(t);
-  }, []);
+  }, [addEvent, stopStreaming]);
   const cancelAction = useCallback((id) => {
     setEvents((prev) => prev.map((e) => e.id === id ? { ...e, status: "cancelled" } : e));
   }, []);
+  // Phase 7 destructive guard: Ctrl+L and /clear both arm this card instead
+  // of wiping directly. confirmAction's home.clear_conversation branch does
+  // the wipe; cancelAction / Escape dismisses the card with nothing lost.
+  const requestClearConfirm = useCallback(() => {
+    addEvent({
+      kind: "action",
+      title: "clear conversation",
+      service: "home.clear_conversation",
+      status: "pending-confirm",
+      attrs: {},
+    });
+  }, [addEvent]);
 
   // Master plan F.1: undo a successful action by firing its inverse
   // service against the original target.
@@ -7794,17 +7832,27 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         return true;
       }
       case "clear":
-        stopStreaming();
-        setEvents([]);
-        setConversationId(null);
-        // /clear is a fresh start — re-show the /help hint, and reset the
-        // persisted flag so onboarding teaches again next launch too.
-        saveOnboarding({ seenHelpHint: false });
-        if (connection === "online") {
-          addEvent({ kind: "system", tone: "info", onboarding: "help-hint",
-            text: "Connected. Type /help to learn what you can do." });
-        }
+        // Phase 7 destructive guard: /clear routes through the same
+        // pending-confirm card as Ctrl+L instead of wiping directly. The
+        // wipe (and the onboarding reset) runs in confirmAction's
+        // home.clear_conversation branch when the user confirms the card;
+        // Escape/cancel leaves the conversation intact.
+        requestClearConfirm();
         return true;
+      case "undo-clear": {
+        // One-shot restore for the conversation wiped by a confirmed clear
+        // this session. Consumes the snapshot, so a second /undo-clear
+        // reports "nothing to restore".
+        const snapshot = clearedEventsRef.current;
+        if (!snapshot || snapshot.length === 0) {
+          addEvent({ kind: "system", text: "nothing to restore", tone: "info" });
+          return true;
+        }
+        clearedEventsRef.current = null;
+        setEvents(snapshot);
+        addEvent({ kind: "system", text: "conversation restored", tone: "ok" });
+        return true;
+      }
       case "demo":
         playScript();
         return true;
@@ -8911,7 +8959,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     // CALL time, by which point it's defined. Its identity is stable
     // (its own deps are [addEvent], itself stable), so omitting it
     // doesn't cause a memoization correctness issue.
-  }, [addEvent, announceTravelReadiness, applyServiceProfile, connectTo, copyDebugBundle, copyRecoveryCommands, copyTravelBundle, currentTravelReadiness, debugMode, endpoint, ensureFeature, events, kokoroVoice, metricsBase, openAgentSurface, playScript, runRemoteCheck, runTravelCheck, s2sBase, s2sToken, s2sVoice, sendToHA, spatialLayout, stopStreaming, syncServiceStateFromResolver, token]);
+  }, [addEvent, announceTravelReadiness, applyServiceProfile, connectTo, copyDebugBundle, copyRecoveryCommands, copyTravelBundle, currentTravelReadiness, debugMode, endpoint, ensureFeature, events, kokoroVoice, metricsBase, openAgentSurface, playScript, requestClearConfirm, runRemoteCheck, runTravelCheck, s2sBase, s2sToken, s2sVoice, sendToHA, spatialLayout, syncServiceStateFromResolver, token]);
 
   /* ── External Reasoning dispatch (see home-external.jsx) ─────────────
    *
@@ -9135,16 +9183,25 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
   useEffect(() => {
     const onKey = (e) => {
       const cmd = e.metaKey || e.ctrlKey;
+      // Input-focus guard (labeler semantics — home-video-labeler.jsx):
+      // while an INPUT/TEXTAREA/SELECT/contenteditable owns the keys, only
+      // the Cmd/Ctrl+K jump-to-input branch may still run. Ctrl+L and
+      // Cmd+. must never fire from inside a text field.
+      const t = e.target;
+      const editing = !!t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable);
+      if (editing && !(cmd && (e.key === "k" || e.key === "K"))) return;
       if (cmd && e.key === ".") {
         e.preventDefault();
         stopStreaming();
         return;
       }
-      if (cmd && (e.key === "l" || e.key === "L")) {
+      // Phase 7 destructive guard: Ctrl/Cmd+L no longer wipes instantly —
+      // it arms a pending-confirm action card (confirm executes the wipe,
+      // Escape/cancel dismisses it). On the web gateway the browser owns
+      // Ctrl+L (address bar), so the branch is skipped entirely.
+      if (cmd && (e.key === "l" || e.key === "L") && !window.HG_WEB_MODE) {
         e.preventDefault();
-        stopStreaming();
-        setEvents([]);
-        setConversationId(null);
+        requestClearConfirm();
         return;
       }
       if (cmd && (e.key === "k" || e.key === "K")) {
@@ -9172,7 +9229,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [stopStreaming]);
+  }, [requestClearConfirm, stopStreaming]);
 
   // HomeOverlay's last-resort focus-restore target (used when a closing
   // overlay's opener has unmounted): the command input.

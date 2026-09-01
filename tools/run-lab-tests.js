@@ -2433,8 +2433,11 @@ process.stdout.write("\n\x1b[1mlab diagnostics service operations\x1b[0m\n");
  *
  * The documented button sweep expects the pane toggle, log filter, service logs,
  * and all four global actions to be wired. The log filter must feed the log pane
- * rather than living as decorative local state, and every global action must use
- * the shared two-click confirm helper.
+ * rather than living as decorative local state, and every global action must arm
+ * through DiagBtn's React-state two-click confirm (Pattern B1). The legacy DOM
+ * confirmAct helper (dataset.armed + innerHTML rewrite) is banned: an audit
+ * found poll-driven re-renders repainted the resting label while dataset.armed
+ * stayed "1", so the next click fired destructively with no visible armed state.
  * ------------------------------------------------------------------------ */
 process.stdout.write("\n\x1b[1mDOC-S86 lab diagnostics interactions\x1b[0m\n");
 
@@ -2447,12 +2450,26 @@ process.stdout.write("\n\x1b[1mDOC-S86 lab diagnostics interactions\x1b[0m\n");
     const re = new RegExp(`DiagBtn label="${label}"[\\s\\S]*?confirm`);
     assert(`${label} global is confirm-gated`, re.test(LAB_SRC));
   }
+  assert("DiagBtn confirm arming lives in React state, not DOM dataset",
+    /function DiagBtn\(\{[\s\S]*?const \[armed, setArmed\] = useState\(false\)/.test(LAB_SRC) &&
+      !LAB_SRC.includes("dataset.armed") &&
+      !LAB_SRC.includes("window.confirmAct"),
+    "DiagBtn must hold [armed, setArmed] React state; the legacy confirmAct DOM helper is removed (dataset.armed survived re-renders invisibly)");
+  assert("DiagBtn armed state swaps the label to ✓ confirm via ternary",
+    /function DiagBtn\(\{[\s\S]*?\{armed \? "✓" : glyph\}[\s\S]*?\{armed \? "confirm" : label\}/.test(LAB_SRC),
+    "an armed DiagBtn must visibly read ✓ confirm from React state until it fires or expires");
+  assert("DiagBtn armed state expires after 3s",
+    /function DiagBtn\(\{[\s\S]*?confirmTimerRef\.current = setTimeout\([\s\S]*?, 3000\)/.test(LAB_SRC),
+    "arming must self-expire so a stale armed flag cannot linger");
+  assert("LabActionButton confirm actions arm through the same React-state pattern",
+    /function LabActionButton\(\{[\s\S]*?const \[armed, setArmed\] = useState\(false\)[\s\S]*?\{armed \? "confirm" : action\.label\}/.test(LAB_SRC),
+    "tier-action buttons with action.confirm===true must use Pattern B1 arming, not DOM mutation");
   assert("pause perception stops vision-sidecar through the shared action module",
     !LAB_SRC.includes('error: "not wired"') &&
       /verb === "pausePerception"[\s\S]*HSA\.pausePerception\(\{ supervisorUrl, stackToken \}\)/.test(LAB_SRC),
     "pause perception should dispatch a real supervisor action, not an unsupported local error");
   assert("pause perception requires STACK_TOKEN before dispatch",
-    /DiagBtn label="pause perception"[\s\S]*disabled=\{!tokenConfigured\}/.test(LAB_SRC),
+    /DiagBtn label="pause perception"[\s\S]*?disabled=\{!tokenConfigured\}/.test(LAB_SRC),
     "pause perception stops a service and must be token-gated like other supervisor mutations");
   assert("clear cache clears local diagnostic log lines",
     LAB_SRC.includes('if (verb === "clearCache")') &&

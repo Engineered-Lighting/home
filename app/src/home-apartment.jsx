@@ -689,7 +689,6 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
   const viewRootRef = useRef(null);
   const engineRef = useRef(null);
   const detachRef = useRef(null);
-  const wasMaximizedRef = useRef(null);
   const flyTimerRef = useRef(null);     // pending feed-reveal timeout
   const flySeqRef = useRef(0);
   const preSnapModeRef = useRef(null);  // render mode to restore after a camera snap
@@ -726,6 +725,8 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
   const calibPickRef = useRef(false);
   const calibApiRef = useRef(null);
   const calibPointsRef = useRef(null);
+  const calibPairCountRef = useRef(0);  // banked correspondence pairs (Esc discard guard)
+  const calibEscArmRef = useRef(0);     // timestamp of the arming Esc; 0 = disarmed
   const [anchors, setAnchors] = useState({});        // id -> {x, y, visible}
   const [hostSize, setHostSize] = useState({ width: 0, height: 0 });
   const statesRef = useRef({});                      // entity_id -> ha state
@@ -784,15 +785,6 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
 
     (async () => {
       try {
-        try {
-          const w = await window.getTauriWindow?.();
-          if (w && !embedded && !cancelled) {
-            wasMaximizedRef.current = await w.isMaximized?.();
-            if (!wasMaximizedRef.current && !cancelled) await w.maximize?.();
-          }
-        } catch (e) { /* browser mode */ }
-        if (cancelled) return;
-
         // The engine canvas is created ONCE and owned imperatively, not by
         // React: the resident renderer is permanently bound to it, so every
         // view OPEN must re-attach THIS node — a React-owned <canvas> would
@@ -901,14 +893,6 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
           if (eng.modes.mode !== back) eng.modes.setMode(back, { duration: 0 }).catch(() => {});
         }
         eng.setRunning(false);
-      }
-      if (!embedded) {
-        (async () => {
-          try {
-            const w = await window.getTauriWindow?.();
-            if (w && wasMaximizedRef.current === false) await w.unmaximize?.();
-          } catch (e) { /* */ }
-        })();
       }
     };
   }, [open, simActive, showToast, embedded]);
@@ -1327,6 +1311,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
     if (flyTimerRef.current) { clearTimeout(flyTimerRef.current); flyTimerRef.current = null; }
     flySeqRef.current += 1;
     setLiveCam(null); setLiveOn(false); setLiveFeedStatus("idle"); setCameraPoseReady(false); setCalibCam(null);
+    calibPairCountRef.current = 0; calibEscArmRef.current = 0;
     const e = engineRef.current;
     if (!e) return;
     const back = preSnapModeRef.current;
@@ -1381,6 +1366,19 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       if (cardId) { setCardId(null); return; }
       if (engineRef.current?.rig?.inCameraPose?.()) { exitCameraPose(); return; }
       if (editing) { setEditing(false); return; }
+      // unsaved calibration pairs: first Esc warns + arms, second Esc within
+      // 5s proceeds with the close (any capture disarms — see onPairsChanged)
+      if (calibCam && calibPairCountRef.current > 0) {
+        const now = Date.now();
+        if (!calibEscArmRef.current || now - calibEscArmRef.current > 5000) {
+          calibEscArmRef.current = now;
+          showToast(`calibration in progress — Esc again discards ${calibPairCountRef.current} pairs`, { tone: "error" });
+          return;
+        }
+        calibEscArmRef.current = 0;
+        calibPairCountRef.current = 0;
+        setToast(null);
+      }
       onClose?.();
     },
     rootRef: viewRootRef,
@@ -1397,6 +1395,18 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
       if (cardId) { setCardId(null); return; }
       if (engineRef.current?.rig?.inCameraPose?.()) { exitCameraPose(); return; }
       if (editing) { setEditing(false); return; }
+      // same discard guard as the modal layer before the Escape is passed on
+      if (calibCam && calibPairCountRef.current > 0) {
+        const now = Date.now();
+        if (!calibEscArmRef.current || now - calibEscArmRef.current > 5000) {
+          calibEscArmRef.current = now;
+          showToast(`calibration in progress — Esc again discards ${calibPairCountRef.current} pairs`, { tone: "error" });
+          return;
+        }
+        calibEscArmRef.current = 0;
+        calibPairCountRef.current = 0;
+        setToast(null);
+      }
       return false;
     },
     getRoot: () => viewRootRef.current,
@@ -1979,6 +1989,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
                 // snapped pose sits point-blank in the geometry — pull back to
                 // the overview so the room is visible and orbit/zoom unlock
                 e?.rig.returnToOverview();
+                calibPairCountRef.current = 0; calibEscArmRef.current = 0;
                 setCalibCam(liveCam);
               }} mobile={mobile} />
             )}
@@ -2211,7 +2222,11 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
               return next;
             });
           },
-          onPairsChanged: (pairs) => { syncCalibMarkers(pairs); },
+          onPairsChanged: (pairs) => {
+            calibPairCountRef.current = (pairs || []).length;
+            calibEscArmRef.current = 0;   // any capture disarms the Esc-discard confirm
+            syncCalibMarkers(pairs);
+          },
           onDone: (result) => {
             // persist the solved extrinsics into the camera device
             if (result && (result.q || result.R || result.C)) {
@@ -2226,6 +2241,7 @@ function HomeApartmentView({ open, onClose, endpoint, token, sim, connection = "
               });
             }
             calibPickRef.current = false; setCalibCam(null);
+            calibPairCountRef.current = 0; calibEscArmRef.current = 0;
             syncCalibMarkers([]);
           },
           registerApi: (api) => { calibApiRef.current = api; },

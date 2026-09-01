@@ -441,6 +441,9 @@ function HomeSpatialDrawer({ open, onClose, endpoint, token, sim }) {
   const [selectedLight, setSelectedLight] = useState(null);
   const [polygon, setPolygon] = useState([]);  // working polygon, norm [0,1]
   const [dirty, setDirty] = useState(false);
+  // Inline dirty-discard confirm (Pattern C): { run } holds the guarded
+  // continuation; null = no strip shown.
+  const [pendingDiscard, setPendingDiscard] = useState(null);
   const [posting, setPosting] = useState(false);
   const [nonce, setNonce] = useState(0);
   const [showZones, setShowZones] = useState(true);
@@ -541,6 +544,7 @@ function HomeSpatialDrawer({ open, onClose, endpoint, token, sim }) {
     setSelectedCamera(null);
     setPolygon([]);
     setDirty(false);
+    setPendingDiscard(null);
     setFlashedLight(null);
     setLivingLightsPrior(null);
     setError(null);
@@ -550,21 +554,27 @@ function HomeSpatialDrawer({ open, onClose, endpoint, token, sim }) {
     };
   }, [open, fetchModel]);
 
+  // Dirty-discard guard on the drawer's exit paths: the first Escape (or
+  // close click) with an unsaved polygon draft arms the discard strip; a
+  // second Escape / close click (or [discard]) closes for real.
+  const requestClose = useCallback(function () {
+    if (dirty && polygon.length > 0 && !pendingDiscard) {
+      setPendingDiscard({ run: function () { onClose && onClose(); } });
+      return;
+    }
+    onClose && onClose();
+  }, [dirty, polygon, pendingDiscard, onClose]);
+
   // Overlay layer: topmost-only Escape + focus management via HomeOverlay.
   const spRootRef = React.useRef(null);
   window.HomeOverlay.useOverlayLayer({
     key: "spatialD",
     active: !!open,
-    onEscape: function () { onClose && onClose(); },
+    onEscape: function () { requestClose(); },
     rootRef: spRootRef,
   });
 
-  const selectLight = useCallback(function (entity) {
-    if (entity === selectedLight) return;
-    if (dirty &&
-        !window.confirm("Discard the unsaved drawing for the current light?")) {
-      return;
-    }
+  const applyLightSelection = useCallback(function (entity) {
     // Turn off any flashed light so the room is neutral for the next draw.
     if (flashedLight) {
       haService(_spDomain(flashedLight), "turn_off",
@@ -581,14 +591,22 @@ function HomeSpatialDrawer({ open, onClose, endpoint, token, sim }) {
     const poly = (cam && Array.isArray(fp[cam])) ? fp[cam] : [];
     setPolygon(poly.map(function (p) { return [p[0], p[1]]; }));
     setDirty(false);
-  }, [selectedLight, dirty, flashedLight, model, haService]);
+    setPendingDiscard(null);
+  }, [flashedLight, model, haService]);
 
-  const selectCamera = useCallback(function (cam) {
-    if (cam === selectedCamera) return;
-    if (dirty &&
-        !window.confirm("Discard the unsaved drawing for this camera?")) {
+  const selectLight = useCallback(function (entity) {
+    if (entity === selectedLight) return;
+    if (dirty) {
+      // Unsaved draw: arm the inline discard strip instead of switching.
+      setPendingDiscard({
+        run: function () { applyLightSelection(entity); },
+      });
       return;
     }
+    applyLightSelection(entity);
+  }, [selectedLight, dirty, applyLightSelection]);
+
+  const applyCameraSelection = useCallback(function (cam) {
     setSelectedCamera(cam);
     const rec = selectedLight && model && model.lights &&
       model.lights[selectedLight];
@@ -596,7 +614,20 @@ function HomeSpatialDrawer({ open, onClose, endpoint, token, sim }) {
     const poly = Array.isArray(fp[cam]) ? fp[cam] : [];
     setPolygon(poly.map(function (p) { return [p[0], p[1]]; }));
     setDirty(false);
-  }, [selectedCamera, dirty, selectedLight, model]);
+    setPendingDiscard(null);
+  }, [selectedLight, model]);
+
+  const selectCamera = useCallback(function (cam) {
+    if (cam === selectedCamera) return;
+    if (dirty) {
+      // Unsaved draw: arm the inline discard strip instead of switching.
+      setPendingDiscard({
+        run: function () { applyCameraSelection(cam); },
+      });
+      return;
+    }
+    applyCameraSelection(cam);
+  }, [selectedCamera, dirty, applyCameraSelection]);
 
   const updatePolygon = useCallback(function (next) {
     setPolygon(next);
@@ -814,7 +845,7 @@ function HomeSpatialDrawer({ open, onClose, endpoint, token, sim }) {
             }}
           >refresh</button>
           <button
-            onClick={onClose} aria-label="Close" className="hg-focusable"
+            onClick={requestClose} aria-label="Close" className="hg-focusable"
             style={{
               background: "transparent",
               border: "1px solid var(--hg-border-soft)",
@@ -830,6 +861,50 @@ function HomeSpatialDrawer({ open, onClose, endpoint, token, sim }) {
       </div>
 
       <SpTabStrip />
+
+      {/* Inline discard confirm (Pattern C) — replaces the old native
+          window.confirm dialogs. Always visible (outside the scroll body). */}
+      {pendingDiscard && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+          margin: "8px 24px 0", padding: "7px 11px",
+          border: "1px solid var(--hg-warn)", background: "var(--hg-bg-1)",
+          borderRadius: 3, fontFamily: SP_FONT_MONO,
+        }}>
+          <span style={{ color: "var(--hg-warn)", fontSize: 10.5 }}>
+            discard unsaved drawing?
+          </span>
+          <span style={{ marginLeft: "auto", display: "inline-flex", gap: 6 }}>
+            <button
+              className="hg-focusable"
+              onClick={function () {
+                const pd = pendingDiscard;
+                setPendingDiscard(null);
+                if (pd && typeof pd.run === "function") pd.run();
+              }}
+              style={{
+                background: "transparent",
+                border: "1px solid var(--hg-warn)", color: "var(--hg-warn)",
+                padding: "4px 10px", fontFamily: SP_FONT_MONO, fontSize: 10,
+                letterSpacing: "0.08em", textTransform: "lowercase",
+                cursor: "pointer",
+              }}
+            >discard</button>
+            <button
+              className="hg-focusable"
+              onClick={function () { setPendingDiscard(null); }}
+              style={{
+                background: "transparent",
+                border: "1px solid var(--hg-border-soft)",
+                color: "var(--hg-fg-1)",
+                padding: "4px 10px", fontFamily: SP_FONT_MONO, fontSize: 10,
+                letterSpacing: "0.08em", textTransform: "lowercase",
+                cursor: "pointer",
+              }}
+            >keep drawing</button>
+          </span>
+        </div>
+      )}
 
       {/* Body — `hg-scroll` class applies the themed thin scrollbar. */}
       <div className="hg-scroll" style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>

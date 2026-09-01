@@ -399,12 +399,15 @@ function VLTimeline({
           {laneList.map((lane) => {
             const active = lane.axis === activeAxis;
             return (
-              <div
+              <button
                 key={lane.axis}
+                type="button"
+                className="hg-focusable"
                 onClick={() => onSelect && onSelect(lane.axis, null)}
-                title={"activate " + (lane.title || lane.axis) + " lane (Tab cycles)"}
+                title={"activate " + (lane.title || lane.axis) + " lane ([ / ] cycles)"}
                 style={{
-                  height: VL_LANE_H, boxSizing: "border-box",
+                  width: "100%", height: VL_LANE_H, boxSizing: "border-box",
+                  border: "none", font: "inherit", color: "inherit", textAlign: "inherit",
                   borderBottom: "1px solid var(--hg-border-soft)",
                   borderLeft: active ? "2px solid var(--hg-ice)" : "2px solid transparent",
                   background: active ? "var(--hg-bg-1)" : "transparent",
@@ -426,7 +429,7 @@ function VLTimeline({
                   {((suggestions && suggestions[lane.axis]) || []).length > 0
                     ? " · " + suggestions[lane.axis].length + " sug" : ""}
                 </span>
-              </div>
+              </button>
             );
           })}
         </div>
@@ -785,8 +788,17 @@ function VLThumbStrip({ video, manifest, onSeek }) {
       {tiles.map((tile) => (
         <div
           key={tile.i}
+          tabIndex={0}
+          role="button"
+          aria-label={"seek to " + (D ? D.fmtDuration(tile.i * interval) : tile.i * interval + "s")}
           title={D ? D.fmtDuration(tile.i * interval) : ""}
           onClick={() => onSeek && onSeek(tile.i * interval + interval / 2)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              if (e.key === " ") e.preventDefault();
+              if (onSeek) onSeek(tile.i * interval + interval / 2);
+            }
+          }}
           style={{
             flex: "none", width: tileW, height: tileH, cursor: "pointer",
             backgroundImage: tile.url ? "url(" + JSON.stringify(tile.url) + ")" : "none",

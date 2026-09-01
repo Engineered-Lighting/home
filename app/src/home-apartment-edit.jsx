@@ -1826,11 +1826,13 @@ function HomeApartmentEdit({
           <>
             <div style={heading}>zones</div>
             {(model.zones || []).map((z) => (
-              <div key={z.id} onClick={() => { setSelectedZone(z.id); setSelectedId(null); }}
-                style={{ padding: "4px 6px", cursor: "pointer", fontSize: 10,
-                         color: "var(--hg-fg-2)" }}>
+              <button type="button" key={z.id} className="hg-focusable"
+                onClick={() => { setSelectedZone(z.id); setSelectedId(null); }}
+                style={{ display: "block", width: "100%", padding: "4px 6px", cursor: "pointer",
+                         textAlign: "left", background: "transparent", border: "none",
+                         fontFamily: "inherit", fontSize: 10, color: "var(--hg-fg-2)" }}>
                 <span style={{ color: z.color }}>■</span> {z.name}
-              </div>
+              </button>
             ))}
             <div style={{ fontSize: 9, color: "var(--hg-fg-5)", marginTop: 10, lineHeight: 1.6 }}>
               {tool === "zones"

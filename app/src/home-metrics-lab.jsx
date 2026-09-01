@@ -2552,13 +2552,14 @@ function LabLogFilter({ filters = DEFAULT_LAB_LOG_FILTERS, onToggle }) {
         color: "var(--hg-fg-4)", marginRight: 4,
       }}>filter</span>
       {["all", "info", "warn", "err", "dbg"].map((k) => (
-        <span key={k} onClick={() => toggle(k)} style={{
+        <button key={k} type="button" className="hg-focusable" aria-pressed={!!filters[k]} onClick={() => toggle(k)} style={{
           padding: "3px 8px",
           border: `1px solid ${filters[k] ? "var(--hg-border)" : "var(--hg-border-soft)"}`,
           color: filters[k] ? "var(--hg-fg-0)" : "var(--hg-fg-3)",
           background: filters[k] ? "rgba(255,255,255,0.05)" : "transparent",
           cursor: "pointer", textTransform: "lowercase",
-        }}>{k}</span>
+          font: "inherit", letterSpacing: "inherit",
+        }}>{k}</button>
       ))}
       <span style={{
         marginLeft: "auto", color: "var(--hg-fg-4)", fontSize: 9.5,

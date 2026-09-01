@@ -1518,8 +1518,21 @@ function PeopleGraphView({ identities, relationships, endpoint, avatarPresence, 
                  transition: "transform 180ms ease, opacity 180ms ease",
                }}
                onClick={() => onNodeClick?.(id)}
+               tabIndex={0}
+               role="button"
+               onKeyDown={(ev) => {
+                 if (ev.key === "Enter" || ev.key === " ") {
+                   if (ev.key === " ") ev.preventDefault();
+                   onNodeClick?.(id);
+                 }
+               }}
                onPointerEnter={(ev) => handleHoverEnter(node.uuid, ev.nativeEvent)}
                onPointerLeave={handleHoverLeave}
+               /* :focus-visible outlines don't apply reliably to SVG <g>,
+                  so keyboard focus reuses the hover-highlight state —
+                  the brightened stroke + scale acts as the focus ring. */
+               onFocus={() => handleHoverEnter(node.uuid)}
+               onBlur={handleHoverLeave}
                aria-label={`${id?.display_name || "unknown"}, ${id?.relationship_type || "?"}`}>
               <circle
                 r={node.size / 2}
@@ -1731,6 +1744,14 @@ function PeopleListView({ identities, endpoint, avatarPresence, avatarBlobUrls, 
         {identities.map((i) => (
           <tr key={i.uuid}
               onClick={() => onRowClick?.(i)}
+              tabIndex={0}
+              role="button"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  if (e.key === " ") e.preventDefault();
+                  onRowClick?.(i);
+                }
+              }}
               style={{
                 borderBottom: "1px solid var(--hg-border-soft)",
                 color: i.is_archived ? "var(--hg-fg-4)" : "var(--hg-fg-1)",
@@ -1740,6 +1761,12 @@ function PeopleListView({ identities, endpoint, avatarPresence, avatarBlobUrls, 
                 if (onRowClick) e.currentTarget.style.background = "var(--hg-bg-2)";
               }}
               onMouseLeave={(e) => {
+                if (onRowClick) e.currentTarget.style.background = "transparent";
+              }}
+              onFocus={(e) => {
+                if (onRowClick) e.currentTarget.style.background = "var(--hg-bg-2)";
+              }}
+              onBlur={(e) => {
                 if (onRowClick) e.currentTarget.style.background = "transparent";
               }}>
             <td style={{ padding: "8px 12px" }}>

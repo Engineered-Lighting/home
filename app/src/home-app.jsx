@@ -623,6 +623,32 @@ function HomeHeader({
   serviceProfile, onOpenRemoteProfile, peopleButtonRef, mobile = false,
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  // Phase 5: the header dropdown is an overlay layer — topmost-only Escape
+  // closes it and focus lands on the first menuitem on open. trap:false so
+  // Tab leaves the menu naturally; ArrowUp/Down/Home/End roam menuitems via
+  // onMenuKeyDown on the menu container (menuitem buttons stay untouched).
+  const menuRef = useRef(null);
+  window.HomeOverlay.useOverlayLayer({
+    key: "header-menu",
+    active: menuOpen,
+    onEscape: () => setMenuOpen(false),
+    rootRef: menuRef,
+    trap: false,
+    initialFocus: "first",
+  });
+  const onMenuKeyDown = (e) => {
+    const root = menuRef.current;
+    if (!root) return;
+    const items = Array.from(root.querySelectorAll('[role="menuitem"]'));
+    if (!items.length) return;
+    const idx = items.indexOf(document.activeElement);
+    let next = null;
+    if (e.key === "ArrowDown") next = idx < 0 ? items[0] : items[(idx + 1) % items.length];
+    else if (e.key === "ArrowUp") next = idx < 0 ? items[items.length - 1] : items[(idx - 1 + items.length) % items.length];
+    else if (e.key === "Home") next = items[0];
+    else if (e.key === "End") next = items[items.length - 1];
+    if (next) { e.preventDefault(); next.focus(); }
+  };
   const isLive = voice.state !== "inactive" && voice.state !== "no-mic";
   // Phase B F0-08: surface sidecar/bridge offline as a warning pill.
   // sidecarOnline = false means SSE chat-tee is broken → assistant
@@ -747,6 +773,8 @@ function HomeHeader({
           />
           <div
             role="menu"
+            ref={menuRef}
+            onKeyDown={onMenuKeyDown}
             style={{
               position: "absolute",
               top: mobile ? "calc(100% + 6px)" : "calc(100% + 8px)",
@@ -2875,9 +2903,24 @@ function MetricsStrip({
           onPointerMove={onTrayHandlePointerMove}
           onPointerUp={onTrayHandlePointerUp}
           onPointerCancel={onTrayHandlePointerUp}
+          onKeyDown={(e) => {
+            // Phase 5 keyboard path: ArrowUp grows the tray, ArrowDown
+            // shrinks it (matching drag direction); Shift = coarse step.
+            if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+            e.preventDefault();
+            const step = e.shiftKey ? 96 : 24;
+            const delta = e.key === "ArrowUp" ? step : -step;
+            const maxH = Math.floor(window.innerHeight * TRAY_MAX_HEIGHT_VH);
+            setTrayHeight((h) => Math.max(TRAY_MIN_HEIGHT, Math.min(maxH, h + delta)));
+          }}
           title="Drag to resize"
           aria-label="Resize metrics tray"
           role="separator"
+          tabIndex={0}
+          aria-orientation="horizontal"
+          aria-valuenow={trayHeight}
+          aria-valuemin={TRAY_MIN_HEIGHT}
+          aria-valuemax={Math.floor((typeof window !== "undefined" ? window.innerHeight || 760 : 760) * TRAY_MAX_HEIGHT_VH)}
           style={{
             height: 6,
             width: "100%",

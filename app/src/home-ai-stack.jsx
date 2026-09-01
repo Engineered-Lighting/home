@@ -625,12 +625,14 @@ function AiStackCard({
                "in progress..."}
             </span>
             {logLines.length > 0 && (
-              <span
+              <button
+                type="button"
+                className="hg-focusable"
                 onClick={() => setExpanded((x) => !x)}
-                style={{ cursor: "pointer", color: "var(--hg-fg-5)" }}
+                style={{ background: "transparent", border: "none", padding: 0, font: "inherit", letterSpacing: "inherit", textTransform: "inherit", cursor: "pointer", color: "var(--hg-fg-5)" }}
               >
                 {expanded ? "[ collapse ]" : `[ ${logLines.length} lines ]`}
-              </span>
+              </button>
             )}
           </div>
           {lastFew.length > 0 && (
@@ -718,20 +720,30 @@ function AiStackCard({
             </div>
           )}
           <div style={{ marginTop: 6 }}>
-            <span
+            <button
+              type="button"
+              className="hg-focusable"
               onClick={() => setAction({ kind: "idle" })}
               style={{
+                background: "transparent",
+                border: "none",
+                padding: 0,
                 fontFamily: HG_FONT_MONO, fontSize: 9.5,
                 color: "var(--hg-fg-5)",
                 cursor: "pointer",
                 letterSpacing: "0.12em",
                 textTransform: "uppercase",
               }}
-            >[ dismiss ]</span>
+            >[ dismiss ]</button>
             {logLines.length > 6 && (
-              <span
+              <button
+                type="button"
+                className="hg-focusable"
                 onClick={() => setExpanded((x) => !x)}
                 style={{
+                  background: "transparent",
+                  border: "none",
+                  padding: 0,
                   fontFamily: HG_FONT_MONO, fontSize: 9.5,
                   color: "var(--hg-fg-5)",
                   cursor: "pointer",
@@ -739,7 +751,7 @@ function AiStackCard({
                   letterSpacing: "0.12em",
                   textTransform: "uppercase",
                 }}
-              >{expanded ? "[ collapse logs ]" : "[ show all logs ]"}</span>
+              >{expanded ? "[ collapse logs ]" : "[ show all logs ]"}</button>
             )}
           </div>
         </div>

@@ -371,13 +371,14 @@ function HomeExplainDrawer({ open, onClose, convId, endpoint, token, sim }) {
     };
   }, [open, convId, endpoint, token, simFixture, reloadNonce]);
 
-  // Escape closes
-  useEffect(() => {
-    if (!open) return undefined;
-    const onKey = (e) => { if (e.key === "Escape") onClose && onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  // Overlay layer: topmost-only Escape + focus-in/restore (HomeOverlay owns
+  // the keydown dispatch — no per-drawer window listener).
+  window.HomeOverlay.useOverlayLayer({
+    key: "explain",
+    active: !!open,
+    onEscape: () => { onClose && onClose(); },
+    rootRef: containerRef,
+  });
 
   const partitioned = useMemo(
     () => partitionEntries(entries || []),
@@ -398,7 +399,7 @@ function HomeExplainDrawer({ open, onClose, convId, endpoint, token, sim }) {
     <div
       ref={containerRef}
       role="dialog"
-      aria-modal="true"
+      aria-modal="false"
       aria-label="Why did the assistant do this?"
       style={{
         position: "fixed",

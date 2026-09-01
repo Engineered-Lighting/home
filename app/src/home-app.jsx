@@ -9078,7 +9078,12 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         return;
       }
       if (e.key === "Escape") {
-        // Cancel any pending-confirm cards.
+        // Cancel any pending-confirm cards — but only when no overlay layer
+        // is up. With a drawer/overlay open, Escape belongs to that layer
+        // (HomeOverlay consumes it in capture phase; this guard covers the
+        // one path it deliberately yields — a focused editable inside the
+        // layer — so a card behind an overlay is never cancelled blind).
+        if (window.HomeOverlay?.hasBlockingLayer?.()) return;
         setEvents((prev) => prev.map((ev) =>
           ev.kind === "action" && ev.status === "pending-confirm"
             ? { ...ev, status: "cancelled" }
@@ -9089,6 +9094,12 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [stopStreaming]);
+
+  // HomeOverlay's last-resort focus-restore target (used when a closing
+  // overlay's opener has unmounted): the command input.
+  useEffect(() => {
+    window.HomeOverlay?.setFallbackFocus?.('input[aria-label="Command input"]');
+  }, []);
 
   /* ── Voice mode: mic → HA STT → pipeline → HA TTS → speakers ─────────── */
   const voiceCtxRef = useRef(null);

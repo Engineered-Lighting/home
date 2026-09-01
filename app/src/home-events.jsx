@@ -340,7 +340,7 @@ function ActionContent({ id, title, service, target, attrs = {}, status = "pendi
                 background: "transparent", border: "1px solid var(--hg-border)",
                 color: "var(--hg-fg-2)", padding: "4px 10px", cursor: "pointer",
                 fontFamily: HG_MONO, fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase",
-              }}>cancel esc</button>
+              }}>cancel <span className="hg-esc-hint">esc</span></button>
             </div>
           )}
           {/* F.1: undo button moved to header row above; show only the

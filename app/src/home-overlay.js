@@ -45,6 +45,16 @@
   var _fallbackFocus = null; // fn -> element|selector, or selector string
 
   function _emit() {
+    // CSS hook: <html data-hg-overlay-open> while any blocking layer is up.
+    // Lets chrome behind an overlay dim affordances (e.g. the action card's
+    // "esc" hint, which Escape no longer reaches) without React plumbing.
+    if (HAS_DOM) {
+      try {
+        var root = document.documentElement;
+        if (hasBlockingLayer()) root.setAttribute("data-hg-overlay-open", "1");
+        else root.removeAttribute("data-hg-overlay-open");
+      } catch (e) { /* stubbed DOM in tests may lack documentElement */ }
+    }
     for (var i = 0; i < _subscribers.length; i++) {
       try { _subscribers[i](_stack.length, top() ? top().key : null); } catch (e) { /* subscriber error is not ours */ }
     }
@@ -150,8 +160,14 @@
       var raf = window.requestAnimationFrame || function (f) { setTimeout(f, 16); };
       raf(function () {
         // Only if still the topmost active layer — a fast open/close or a
-        // stacked push must not steal focus backward.
-        if (top() === layer) _moveFocusIn(layer);
+        // stacked push must not steal focus backward. Lazily-loaded surfaces
+        // can attach their root a commit later; retry once on a second frame.
+        if (top() !== layer) return;
+        if (_rootOf(layer) || (layer.initialFocus && typeof layer.initialFocus === "object")) {
+          _moveFocusIn(layer);
+        } else {
+          raf(function () { if (top() === layer) _moveFocusIn(layer); });
+        }
       });
     }
     _emit();

@@ -818,13 +818,14 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
     };
   }, [open, client, connection]);
 
-  // Esc to close
-  useEffect(() => {
-    if (!open) return undefined;
-    const h = (e) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", h);
-    return () => window.removeEventListener("keydown", h);
-  }, [open, onClose]);
+  // Overlay layer: topmost-only Escape + focus management via HomeOverlay.
+  const lightsRootRef = React.useRef(null);
+  window.HomeOverlay.useOverlayLayer({
+    key: "lights",
+    active: !!open,
+    onEscape: () => onClose(),
+    rootRef: lightsRootRef,
+  });
 
   // While the drawer is open, treat it as "tuning mode" — actively
   // suppress the per-zone manual-override cooldown. The pilot's brightness
@@ -1080,7 +1081,7 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
 
   // ── Render ──────────────────────────────────────────────────────────
   return (
-    <div role="dialog" aria-modal="true" aria-label="Living Lights tuning"
+    <div ref={lightsRootRef} role="dialog" aria-modal="false" aria-label="Living Lights tuning"
       data-theme={spatialMode ? "dark" : undefined}
       style={{
         position: "fixed",

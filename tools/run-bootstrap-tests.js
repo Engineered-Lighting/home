@@ -14,6 +14,7 @@ const AUDIT = path.join(REPO, "tools", "qa-registry-audit.py");
 
 const indexSource = fs.readFileSync(INDEX, "utf8");
 const runtimeSource = fs.readFileSync(path.join(SRC_DIR, "home-web-runtime.js"), "utf8");
+const featureLoaderSource = fs.readFileSync(path.join(SRC_DIR, "home-feature-loader.js"), "utf8");
 const serviceWorkerSource = fs.readFileSync(path.join(SRC_DIR, "home-service-worker.js"), "utf8");
 const mountSource = fs.readFileSync(MOUNT, "utf8");
 const appSource = fs.readFileSync(HOME_APP, "utf8");
@@ -82,6 +83,50 @@ function sliceBetween(source, startNeedle, endNeedle) {
   const end = endNeedle ? source.indexOf(endNeedle, start + startNeedle.length) : -1;
   return end >= 0 ? source.slice(start, end) : source.slice(start);
 }
+
+process.stdout.write("\napartment_network_priority_contract_test\n");
+const metricsPollBlock = sliceBetween(appSource, "/* ── Metrics polling", "/* ── HA conversation");
+const sidecarSseBlock = sliceBetween(appSource, "/* ── Single source of truth", "/* ── Phase B F0-08");
+const serviceHealthBlock = sliceBetween(appSource, "/* ── Phase B F0-08", "/* ── Voice PE activity");
+const roomPollBlock = sliceBetween(appSource, "/* ── Tray v3: bridge /rooms", "/* ── Phase 2: vision-sidecar");
+const visionPollBlock = sliceBetween(appSource, "/* ── Phase 2: vision-sidecar", "const isSpatialWide");
+assert("web Apartment state owns an explicit network-priority gate",
+  appSource.includes("const apartmentNetworkPriority = !!window.HG_WEB_MODE && (apartmentOpen || spatialLayout);"));
+assert("optional metrics and chat SSE pause while Apartment has priority",
+  metricsPollBlock.includes("if (apartmentNetworkPriority) return undefined;") &&
+    sidecarSseBlock.includes("if (apartmentNetworkPriority) return undefined;") &&
+    metricsPollBlock.includes("apartmentNetworkPriority]") &&
+    sidecarSseBlock.includes("apartmentNetworkPriority]"));
+assert("optional service, room, and vision health polls pause while Apartment has priority",
+  serviceHealthBlock.includes("if (apartmentNetworkPriority) return undefined;") &&
+    roomPollBlock.includes("if (apartmentNetworkPriority) return undefined;") &&
+    visionPollBlock.includes("if (apartmentNetworkPriority) return undefined;"));
+assert("queued optional fetches abort when Apartment opens",
+  [metricsPollBlock, serviceHealthBlock, roomPollBlock, visionPollBlock].every((block) =>
+    block.includes("new AbortController()") &&
+    block.includes("signal: controller.signal") &&
+    block.includes("controller?.abort()")
+  ));
+
+process.stdout.write("\nfeature_loader_recovery_contract_test\n");
+const loadingSurfaceSource = sliceBetween(appSource, "function FeatureLoadingSurface", "function InputRow");
+assert("failed lazy features expose an explicit retry action",
+  loadingSurfaceSource.includes("onRetry") &&
+    loadingSurfaceSource.includes("!pending && onRetry") &&
+    loadingSurfaceSource.includes(">retry</button>"));
+assert("apartment retry reuses the authoritative feature loader",
+  appSource.includes('onRetry={() => ensureFeature("apartment", "apartment", "retry")}'));
+assert("feature bundles fetch concurrently and execute in declaration order",
+  featureLoaderSource.includes("await Promise.all(") &&
+    featureLoaderSource.includes("def.files.map((item) => fetchFile") &&
+    featureLoaderSource.includes("for (const file of files) executeFile(feature, file)"));
+const apartmentMounts = appSource.match(/<window\.HomeApartmentView[\s\S]*?\/>/g) || [];
+assert("Apartment receives the live Home Assistant connection state",
+  apartmentMounts.length === 2 && apartmentMounts.every((mount) =>
+    (mount.match(/connection=\{connection\}/g) || []).length === 1));
+assert("retry guidance does not require a cache or full-page reload",
+  loadingSurfaceSource.includes("retry when the local gateway is available") &&
+    !loadingSurfaceSource.includes("/perf lazy off and reload"));
 
 process.stdout.write("\nbootstrap_inventory_contract_test\n");
 assert("boot chain has the expected module scale", entries.length >= 40, entries.length);

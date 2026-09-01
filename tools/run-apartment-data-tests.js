@@ -128,15 +128,74 @@ async function main() {
   const base = loadModule();
   const D = base.D;
   assert("HomeApartmentData exported", D && typeof D === "object");
-  assert("model helpers exported", typeof D.getModel === "function" && typeof D.saveModel === "function");
+  assert("model helpers exported", typeof D.getModel === "function"
+    && typeof D.getAuthoritativeModel === "function"
+    && typeof D.compareApartmentModels === "function"
+    && typeof D.saveModel === "function");
   assert("HA helpers exported", typeof D.getRegistry === "function" && typeof D.readStates === "function" && typeof D.bindStates === "function" && typeof D.callService === "function");
   assert("tracker helper exported", typeof D.openTracks === "function");
-  assert("EMPTY_MODEL has stable shape", D.EMPTY_MODEL.schema_version === 1 && D.EMPTY_MODEL.revision === 0 && Array.isArray(D.EMPTY_MODEL.devices));
+  assert("EMPTY_MODEL has stable shape", D.EMPTY_MODEL.schema_version === 1 && D.EMPTY_MODEL.revision === 0 && Array.isArray(D.EMPTY_MODEL.devices) && Array.isArray(D.EMPTY_MODEL.targets));
+  assert("target/fixture helpers exported", typeof D.ensureModelShape === "function"
+    && typeof D.isCeilingLight === "function" && typeof D.reconcileFixturePosition === "function");
+  assert("source and fixture-mapping helpers exported", typeof D.modelSourceMeta === "function"
+    && typeof D.modelForPersistence === "function" && typeof D.buildFixtureMapping === "function"
+    && typeof D.compareSpatialGeometry === "function"
+    && typeof D.reconcileFixtureEntityLink === "function");
+
+  process.stdout.write("\napartment_fixture_calibration_helpers_test\n");
+  const shaped = D.ensureModelShape({
+    zones: [{ id: "room", floor_polygon: [[0, 0], [4, 0], [4, 3], [0, 3]] }],
+    devices: [
+      { id: "ceiling", type: "light", ha_entity_id: "light.ceiling", height_preset: "ceiling", room_id: "room", pos: [3.2, 0.7, 2.3] },
+      { id: "lamp", type: "light", ha_entity_id: "switch.lamp", height_preset: "custom", room_id: "room", pos: [1, 1, 0.8] },
+    ],
+  });
+  assert("model normalization adds targets array", Array.isArray(shaped.targets) && shaped.targets.length === 0, shaped);
+  assert("every ceiling light gets a proposed fixture-bottom worksheet",
+    shaped.devices[0].aiming_origin === "fixture_bottom"
+      && shaped.devices[0].fixture_calibration.status === "proposed"
+      && shaped.devices[0].fixture_calibration.wall_distances.length === 2,
+    shaped.devices[0]);
+  assert("default wall references are the closest perpendicular pair",
+    shaped.devices[0].fixture_calibration.wall_distances[0].wall === "east"
+      && shaped.devices[0].fixture_calibration.wall_distances[1].wall === "south",
+    shaped.devices[0].fixture_calibration.wall_distances);
+  assert("switch-backed lamps are not ceiling fixtures", !D.isCeilingLight(shaped.devices[1])
+    && !shaped.devices[1].fixture_calibration, shaped.devices[1]);
+  assert("tape parser accepts feet/inches and metric",
+    Math.abs(D.parseTapeMeasurement("8' 0\"") - 2.4384) < 1e-9
+      && Math.abs(D.parseTapeMeasurement("243.84 cm") - 2.4384) < 1e-9
+      && Number.isNaN(D.parseTapeMeasurement("nope")));
+  assert("tape formatter emits feet and inches", D.formatTapeMeasurement(2.4384) === "8′ 0.0″",
+    D.formatTapeMeasurement(2.4384));
+  const calibratedDevice = JSON.parse(JSON.stringify(shaped.devices[0]));
+  calibratedDevice.fixture_calibration.wall_distances = [
+    { wall: "east", distance_m: 0.8 }, { wall: "south", distance_m: 0.7 },
+  ];
+  calibratedDevice.fixture_calibration.floor_to_ceiling_m = 2.4384;
+  calibratedDevice.fixture_calibration.ceiling_to_fixture_bottom_m = 0.1384;
+  calibratedDevice.fixture_calibration.floor_to_bottom_verification_m = 2.3;
+  const reconciled = D.reconcileFixturePosition(calibratedDevice, shaped.zones[0]);
+  assert("two wall tapes solve fixture x/y", Math.abs(reconciled.pos[0] - 3.2) < 1e-9
+    && Math.abs(reconciled.pos[1] - 0.7) < 1e-9, reconciled.pos);
+  assert("fixture bottom is the derived practical aiming height", Math.abs(reconciled.pos[2] - 2.3) < 1e-9
+    && reconciled.fixture_calibration.status === "verified"
+    && Math.abs(reconciled.fixture_calibration.verification_error_m) < 1e-9, reconciled);
+  const impossibleDrop = JSON.parse(JSON.stringify(calibratedDevice));
+  impossibleDrop.fixture_calibration.ceiling_to_fixture_bottom_m = 2.5;
+  const rejectedDrop = D.reconcileFixturePosition(impossibleDrop, shaped.zones[0]);
+  assert("fixture drops larger than the ceiling height stay measured/incomplete and do not move z",
+    rejectedDrop.fixture_calibration.status === "measured"
+      && rejectedDrop.fixture_calibration.derived_floor_to_bottom_m === null
+      && Math.abs(rejectedDrop.pos[2] - calibratedDevice.pos[2]) < 1e-9,
+    rejectedDrop);
 
   process.stdout.write("\napartment_model_load_test\n");
-  const fixture = { schema_version: 1, revision: 7, exists: true, zones: [{ id: "sim_zone" }], devices: [] };
+  const fixture = { schema_version: 1, revision: 7, exists: true, zones: [{ id: "sim_zone" }], devices: [], targets: [{ id: "table" }] };
   const simFixture = loadModule({ simModelFixture: () => fixture });
-  assert("sim getModel returns fixture", (await simFixture.D.getModel({ sim: true })).zones[0].id === "sim_zone");
+  assert("sim getModel returns isolated fixture", (await simFixture.D.getModel({ sim: true })).zones[0].id === "sim_zone"
+    && (await simFixture.D.getModel({ sim: true })).source_kind === "simulation");
+  assert("sim getModel preserves named targets", (await simFixture.D.getModel({ sim: true })).targets[0].id === "table");
   const simDefault = await D.getModel({ sim: true });
   assert("sim getModel defaults to existing empty model", simDefault.exists === true && simDefault.revision === 0, simDefault);
 
@@ -144,8 +203,53 @@ async function main() {
   const remoteModel = await remote.D.getModel({ endpoint: "http://ha.local:8123///", token: "tok" });
   assert("remote getModel uses tauriFetch when available", remote.tauriCalls.length === 1, remote.tauriCalls);
   assert("remote getModel trims endpoint and uses auth/no-store", remote.tauriCalls[0].url === "http://ha.local:8123/api/extended_openai_conversation/apartment_model" && remote.tauriCalls[0].init.headers.Authorization === "Bearer tok" && remote.tauriCalls[0].init.cache === "no-store", remote.tauriCalls[0]);
-  assert("remote getModel returns revisioned model", remoteModel.revision === 9 && remoteModel.zones[0].id === "remote", remoteModel);
+  assert("remote getModel returns revisioned live HA model", remoteModel.revision === 9
+    && remoteModel.zones[0].id === "remote" && remoteModel.source_kind === "live_ha_model", remoteModel);
   assert("remote getModel caches last good remote doc", JSON.parse(remote.localStorage.getItem("apartment3d.remoteCache")).revision === 9);
+
+  const reconnectWithDraft = loadModule({
+    withTauriFetch: true,
+    localStorage: makeLocalStorage({
+      "apartment3d.modelDraft": JSON.stringify({ schema_version: 1, revision: 8, zones: [{ id: "recovered" }], devices: [] }),
+    }),
+  });
+  const recoveredModel = await reconnectWithDraft.D.getModel({ endpoint: "http://ha.local:8123", token: "tok" });
+  assert("recovery draft survives reload and reconnect", recoveredModel.offline_draft === true
+    && recoveredModel.zones[0].id === "recovered" && recoveredModel.source_kind === "local_draft", recoveredModel);
+  assert("recovery draft is not replaced by an automatic live read", reconnectWithDraft.tauriCalls.length === 0,
+    reconnectWithDraft.tauriCalls);
+
+  const authoritativeDraftStorage = makeLocalStorage({
+    "apartment3d.modelDraft": JSON.stringify({ schema_version: 1, revision: 26, zones: [{ id: "local" }], devices: [], targets: [{ id: "art" }] }),
+  });
+  const authoritativeRead = loadModule({
+    localStorage: authoritativeDraftStorage,
+    tauriFetch: async () => okJson({ schema_version: 1, revision: 26, zones: [{ id: "live" }], devices: [], targets: [] }),
+  });
+  const authoritativeResult = await authoritativeRead.D.getAuthoritativeModel({ endpoint: "http://ha.local///", token: "tok" });
+  assert("authoritative read bypasses draft precedence without replacing the draft",
+    authoritativeResult.ok === true && authoritativeResult.model.source_kind === "live_ha_model"
+      && authoritativeResult.model.zones[0].id === "live"
+      && JSON.parse(authoritativeDraftStorage.getItem("apartment3d.modelDraft")).zones[0].id === "local"
+      && authoritativeDraftStorage.getItem("apartment3d.remoteCache") === null,
+    { authoritativeResult, draft: authoritativeDraftStorage.getItem("apartment3d.modelDraft") });
+  const comparison = authoritativeRead.D.compareApartmentModels(
+    { schema_version: 1, revision: 26, zones: [{ id: "live" }, { id: "office" }], devices: [{ id: "fixture", pos: [1, 2, 3] }], targets: [{ id: "art" }] },
+    { schema_version: 1, revision: 26, zones: [{ id: "live" }], devices: [{ id: "fixture", pos: [1, 2, 2] }], targets: [] },
+  );
+  assert("model comparison reports revision safety and per-collection changes",
+    comparison.canPublish === true && comparison.changeCount === 3
+      && comparison.collections.zones.added[0] === "office"
+      && comparison.collections.targets.added[0] === "art"
+      && comparison.collections.devices.changed[0] === "fixture",
+    comparison);
+  const revisionConflict = authoritativeRead.D.compareApartmentModels(
+    { revision: 25, zones: [], devices: [], targets: [] },
+    { revision: 26, zones: [], devices: [], targets: [] },
+  );
+  assert("model comparison blocks publish when authoritative revision changed",
+    revisionConflict.canPublish === false && revisionConflict.sameRevision === false,
+    revisionConflict);
 
   const emptyRemote = loadModule({
     tauriFetch: async () => okJson({ schema_version: 1, revision: 3, zones: [], devices: [] }),
@@ -166,7 +270,8 @@ async function main() {
       : okJson({ zones: [{ id: "seed_zone" }], devices: [{ id: "seed_device" }] }),
   });
   const offlineModel = await offline.D.getModel();
-  assert("offline fallback prefers last-good remote cache over draft", offlineModel.remote_cached === true && offlineModel.zones[0].id === "cached", offlineModel);
+  assert("recovery draft outranks cached live data", offlineModel.offline_draft === true
+    && offlineModel.zones[0].id === "draft" && offlineModel.source_kind === "local_draft", offlineModel);
 
   const draftFallback = loadModule({
     localStorage: makeLocalStorage({
@@ -175,7 +280,8 @@ async function main() {
     fetch: async () => ({ ok: false, status: 404, json: async () => ({}) }),
   });
   const draftModel = await draftFallback.D.getModel();
-  assert("offline fallback uses draft before seed", draftModel.offline_draft === true && draftModel.zones[0].id === "draft", draftModel);
+  assert("offline fallback uses draft before seed", draftModel.offline_draft === true
+    && draftModel.zones[0].id === "draft" && draftModel.source_kind === "local_draft", draftModel);
 
   const seedFallback = loadModule({
     fetch: async (url) => String(url).includes("/model")
@@ -185,7 +291,8 @@ async function main() {
       : okJson({ zones: [{ id: "seed_only" }], devices: [] }),
   });
   const seedModel = await seedFallback.D.getModel();
-  assert("offline fallback uses generated seed when no cache/draft", seedModel.seeded === true && seedModel.zones[0].id === "seed_only", seedModel);
+  assert("offline fallback uses generated seed when no cache/draft", seedModel.seeded === true
+    && seedModel.zones[0].id === "seed_only" && seedModel.source_kind === "seed_model", seedModel);
 
   process.stdout.write("\napartment_model_save_test\n");
   const saveOffline = loadModule();
@@ -195,6 +302,8 @@ async function main() {
   assert("saveModel without endpoint/token reports offline", offlineSave.ok === false && offlineSave.offline === true, offlineSave);
   const simSave = await saveOffline.D.saveModel({ revision: 1, zones: [], devices: [] }, { sim: true });
   assert("saveModel sim mode does not report live success", simSave.ok === false && simSave.sim === true, simSave);
+  assert("saveModel sim mode cannot replace the non-simulation draft",
+    JSON.parse(saveOffline.localStorage.getItem("apartment3d.modelDraft")).revision === 1);
 
   const saveCalls = [];
   const saveRemote = loadModule({
@@ -207,6 +316,9 @@ async function main() {
   assert("saveModel posts remote document", saveCalls[0].url === "http://ha.local/api/extended_openai_conversation/apartment_model" && saveCalls[0].init.method === "POST", saveCalls[0]);
   assert("saveModel remote request has auth and json body", saveCalls[0].init.headers.Authorization === "Bearer tok" && saveCalls[0].init.headers["Content-Type"] === "application/json" && JSON.parse(saveCalls[0].init.body).schema_version === 1, saveCalls[0]);
   assert("saveModel returns revision on success", saveOk.ok === true && saveOk.revision === 12 && saveOk.updated_at === "now", saveOk);
+  assert("successful save refreshes live cache and clears recovery draft",
+    JSON.parse(saveRemote.localStorage.getItem("apartment3d.remoteCache")).source_kind === "live_ha_model"
+      && saveRemote.localStorage.getItem("apartment3d.modelDraft") === null);
 
   const conflict = loadModule({ tauriFetch: async () => ({ ok: false, status: 409, json: async () => ({ revision: 99 }) }) });
   const conflictRes = await conflict.D.saveModel({ revision: 1, zones: [], devices: [] }, { endpoint: "http://ha", token: "tok" });
@@ -250,6 +362,83 @@ async function main() {
   assert("buildPalette groups by entity area", palette.Kitchen.some((e) => e.entity_id === "light.kitchen" && e.domain === "light"), palette);
   assert("buildPalette groups by device area and friendly name", palette["Living Room"].some((e) => e.entity_id === "camera.living_room" && e.name === "Living Cam"), palette);
   assert("buildPalette excludes bound, hidden, and unsupported entities", !JSON.stringify(palette).includes("media_player.bound") && !JSON.stringify(palette).includes("switch.hidden") && !JSON.stringify(palette).includes("sensor.temp"), palette);
+  const mappingRegistry = {
+    entities: [
+      { entity_id: "light.kitchen", area_id: "kitchen", name: "Kitchen" },
+      { entity_id: "light.dining", area_id: "dining", name: "Dining light" },
+      { entity_id: "light.floor_lamp", area_id: "living", name: "Floor lamp" },
+    ],
+    areas: [
+      { area_id: "kitchen", name: "Kitchen" },
+      { area_id: "dining", name: "Dining Room" },
+      { area_id: "living", name: "Living Room" },
+    ],
+    devices: [], states: {},
+  };
+  const mappingModel = { devices: [
+    { id: "fixture-kitchen", type: "light", name: "kitchen", ha_entity_id: "light.kitchen", height_preset: "ceiling", pos: [1, 1, 2.3] },
+    { id: "floor-lamp", type: "light", name: "floor lamp", ha_entity_id: "switch.floor_lamp", height_preset: "custom", pos: [2, 2, 0.8] },
+  ] };
+  const mappingSeed = { devices: [
+    { id: "fixture-kitchen", type: "light", name: "kitchen", ha_entity_id: "light.kitchen", height_preset: "ceiling", pos: [1, 1, 2.3] },
+    { id: "fixture-dining", type: "light", name: "dining fixture", ha_entity_id: "light.dining", height_preset: "ceiling", pos: [3, 3, 2.3] },
+  ] };
+  const mapping = D.buildFixtureMapping(mappingRegistry, mappingModel, mappingSeed);
+  assert("fixture mapping separates mapped fixtures, unplaced HA lights, and non-fixture lights",
+    mapping.mappedFixtures.length === 1 && mapping.nonFixtureLights.length === 1
+      && mapping.unplacedLights.map((entity) => entity.entity_id).join(",") === "light.dining,light.floor_lamp", mapping);
+  assert("fixture mapping resolves seed fixtures by stable id/entity and leaves unmatched fixtures for review",
+    mapping.unresolvedSeedFixtures.length === 1
+      && mapping.unresolvedSeedFixtures[0].seed.id === "fixture-dining"
+      && mapping.unresolvedSeedFixtures[0].suggestions[0].entity_id === "light.dining", mapping.unresolvedSeedFixtures);
+  const unresolvedMapping = D.buildFixtureMapping(mappingRegistry, { devices: [
+    { id: "fixture-unlinked", type: "light", name: "Dining", ha_entity_id: null, height_preset: "ceiling", pos: [2, 1, 2.3] },
+    { id: "fixture-stale", type: "light", name: "Old name", ha_entity_id: "light.missing", height_preset: "ceiling", pos: [3, 1, 2.3] },
+  ] }, mappingSeed);
+  assert("fixture mapping flags unlinked and missing live entity links for manual review",
+    unresolvedMapping.unresolvedFixtureLinks.map((entry) => entry.reason).join(",") === "unlinked,entity_not_found"
+      && unresolvedMapping.unresolvedFixtureLinks[0].suggestions[0].entity_id === "light.dining",
+    unresolvedMapping.unresolvedFixtureLinks);
+  const duplicateMapping = D.buildFixtureMapping(mappingRegistry, { devices: [
+    ...mappingModel.devices,
+    { id: "duplicate", type: "light", ha_entity_id: "light.kitchen", height_preset: "ceiling", pos: [2, 1, 2.3] },
+  ] }, mappingSeed);
+  assert("fixture mapping reports duplicate HA entity links", duplicateMapping.duplicateLinks.length === 1
+    && duplicateMapping.duplicateLinks[0].entity_id === "light.kitchen", duplicateMapping.duplicateLinks);
+
+  const geometryLockedModel = {
+    schema_version: 1, revision: 26,
+    zones: [{ id: "kitchen", floor_polygon: [[0, 0], [4, 0], [4, 3], [0, 3]], ceiling_height_m: 2.4 }],
+    targets: [{ id: "island", category: "island", shape: "surface", pos: [2, 1.5, 0.9],
+      normal: [0, 0, 1], size_m: [1.1, 0.6] }],
+    devices: [{ id: "fixture", type: "light", name: "island left", ha_entity_id: "light.old",
+      height_preset: "ceiling", room_id: "kitchen", pos: [2.2, 1.3, 2.3], aiming_origin: "fixture_bottom",
+      fixture_calibration: { status: "proposed", wall_distances: [{ wall: "west", distance_m: null },
+        { wall: "south", distance_m: null }], floor_to_ceiling_m: null,
+        ceiling_to_fixture_bottom_m: null, floor_to_bottom_verification_m: null } }],
+  };
+  const linkOnly = D.reconcileFixtureEntityLink(
+    geometryLockedModel, "fixture", "light.island_left", "2026-08-16T00:00:00.000Z",
+  );
+  assert("link-only reconciliation preserves every spatial and tape field",
+    linkOnly.ok === true && linkOnly.geometry.unchanged === true
+      && linkOnly.model.devices[0].ha_entity_id === "light.island_left"
+      && linkOnly.model.devices[0].pos.join(",") === "2.2,1.3,2.3"
+      && D.compareSpatialGeometry(geometryLockedModel, linkOnly.model).unchanged === true,
+    linkOnly);
+  const movedGeometry = JSON.parse(JSON.stringify(linkOnly.model));
+  movedGeometry.devices[0].pos[0] += 0.1;
+  const drift = D.compareSpatialGeometry(geometryLockedModel, movedGeometry);
+  assert("spatial comparison detects coordinate drift independently from identity links",
+    drift.unchanged === false && drift.collections.devices.changed[0] === "fixture", drift);
+  const duplicateLink = D.reconcileFixtureEntityLink({ ...geometryLockedModel, devices: [
+    ...geometryLockedModel.devices,
+    { id: "other", type: "light", name: "other", ha_entity_id: "light.island_left",
+      pos: [1, 1, 2.3], height_preset: "ceiling" },
+  ] }, "fixture", "light.island_left");
+  assert("link-only reconciliation rejects duplicates without returning a mutated model",
+    duplicateLink.ok === false && duplicateLink.duplicate === true && !duplicateLink.model,
+    duplicateLink);
 
   process.stdout.write("\napartment_state_binding_and_service_test\n");
   const stateEvents = [];

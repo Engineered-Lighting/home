@@ -81,6 +81,120 @@
    "source": "seed"
   }
  ],
+ "targets": [
+  {
+   "id": "target-dining-table",
+   "name": "dining table",
+   "category": "table",
+   "shape": "surface",
+   "pos": [
+    5.0,
+    1.5,
+    0.75
+   ],
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "up": [
+    0,
+    1,
+    0
+   ],
+   "size_m": [
+    1.8479,
+    0.9
+   ],
+   "room_id": "dining_room",
+   "source": "tape_and_scan",
+   "confidence": 0.8
+  },
+  {
+   "id": "target-coffee-table",
+   "name": "coffee table",
+   "category": "table",
+   "shape": "surface",
+   "pos": [
+    10.5,
+    3.5,
+    0.3747
+   ],
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "up": [
+    0,
+    1,
+    0
+   ],
+   "size_m": [
+    0.9271,
+    0.6223
+   ],
+   "room_id": "living_room",
+   "source": "tape_and_scan",
+   "confidence": 0.8
+  },
+  {
+   "id": "target-kitchen-island",
+   "name": "kitchen island",
+   "category": "island",
+   "shape": "surface",
+   "pos": [
+    4.7,
+    3.6,
+    0.9
+   ],
+   "normal": [
+    0,
+    0,
+    1
+   ],
+   "up": [
+    0,
+    1,
+    0
+   ],
+   "size_m": [
+    1.1938,
+    0.6477
+   ],
+   "room_id": "kitchen",
+   "source": "tape_and_scan",
+   "confidence": 0.8
+  },
+  {
+   "id": "target-living-room-art",
+   "name": "living room art",
+   "category": "art",
+   "shape": "surface",
+   "pos": [
+    13.55,
+    3.4,
+    1.45
+   ],
+   "normal": [
+    -1,
+    0,
+    0
+   ],
+   "up": [
+    0,
+    0,
+    1
+   ],
+   "size_m": [
+    1.2,
+    0.8
+   ],
+   "room_id": "living_room",
+   "source": "proposed",
+   "confidence": 0.5
+  }
+ ],
  "devices": [
   {
    "id": "dev-light_dining_table_left",
@@ -97,7 +211,27 @@
    "room_id": "dining_room",
    "controllable": true,
    "confidence": 0.5,
-   "source": "proposed"
+   "source": "proposed",
+   "aiming_origin": "fixture_bottom",
+   "fixture_calibration": {
+    "aiming_origin": "fixture_bottom",
+    "status": "proposed",
+    "wall_distances": [
+     {
+      "wall": "west",
+      "distance_m": null
+     },
+     {
+      "wall": "south",
+      "distance_m": null
+     }
+    ],
+    "floor_to_ceiling_m": null,
+    "ceiling_to_fixture_bottom_m": null,
+    "floor_to_bottom_verification_m": null,
+    "derived_floor_to_bottom_m": null,
+    "verification_error_m": null
+   }
   },
   {
    "id": "dev-light_dining_table_right",
@@ -114,7 +248,27 @@
    "room_id": "dining_room",
    "controllable": true,
    "confidence": 0.5,
-   "source": "proposed"
+   "source": "proposed",
+   "aiming_origin": "fixture_bottom",
+   "fixture_calibration": {
+    "aiming_origin": "fixture_bottom",
+    "status": "proposed",
+    "wall_distances": [
+     {
+      "wall": "east",
+      "distance_m": null
+     },
+     {
+      "wall": "south",
+      "distance_m": null
+     }
+    ],
+    "floor_to_ceiling_m": null,
+    "ceiling_to_fixture_bottom_m": null,
+    "floor_to_bottom_verification_m": null,
+    "derived_floor_to_bottom_m": null,
+    "verification_error_m": null
+   }
   },
   {
    "id": "dev-light_island_left",
@@ -131,7 +285,27 @@
    "room_id": "kitchen",
    "controllable": true,
    "confidence": 0.5,
-   "source": "proposed"
+   "source": "proposed",
+   "aiming_origin": "fixture_bottom",
+   "fixture_calibration": {
+    "aiming_origin": "fixture_bottom",
+    "status": "proposed",
+    "wall_distances": [
+     {
+      "wall": "west",
+      "distance_m": null
+     },
+     {
+      "wall": "south",
+      "distance_m": null
+     }
+    ],
+    "floor_to_ceiling_m": null,
+    "ceiling_to_fixture_bottom_m": null,
+    "floor_to_bottom_verification_m": null,
+    "derived_floor_to_bottom_m": null,
+    "verification_error_m": null
+   }
   },
   {
    "id": "dev-light_island_right",
@@ -148,7 +322,27 @@
    "room_id": "kitchen",
    "controllable": true,
    "confidence": 0.5,
-   "source": "proposed"
+   "source": "proposed",
+   "aiming_origin": "fixture_bottom",
+   "fixture_calibration": {
+    "aiming_origin": "fixture_bottom",
+    "status": "proposed",
+    "wall_distances": [
+     {
+      "wall": "west",
+      "distance_m": null
+     },
+     {
+      "wall": "south",
+      "distance_m": null
+     }
+    ],
+    "floor_to_ceiling_m": null,
+    "ceiling_to_fixture_bottom_m": null,
+    "floor_to_bottom_verification_m": null,
+    "derived_floor_to_bottom_m": null,
+    "verification_error_m": null
+   }
   },
   {
    "id": "dev-light_sink",
@@ -165,7 +359,27 @@
    "room_id": "kitchen",
    "controllable": true,
    "confidence": 0.5,
-   "source": "proposed"
+   "source": "proposed",
+   "aiming_origin": "fixture_bottom",
+   "fixture_calibration": {
+    "aiming_origin": "fixture_bottom",
+    "status": "proposed",
+    "wall_distances": [
+     {
+      "wall": "west",
+      "distance_m": null
+     },
+     {
+      "wall": "north",
+      "distance_m": null
+     }
+    ],
+    "floor_to_ceiling_m": null,
+    "ceiling_to_fixture_bottom_m": null,
+    "floor_to_bottom_verification_m": null,
+    "derived_floor_to_bottom_m": null,
+    "verification_error_m": null
+   }
   },
   {
    "id": "dev-light_front_left",
@@ -182,7 +396,27 @@
    "room_id": "living_room",
    "controllable": true,
    "confidence": 0.5,
-   "source": "proposed"
+   "source": "proposed",
+   "aiming_origin": "fixture_bottom",
+   "fixture_calibration": {
+    "aiming_origin": "fixture_bottom",
+    "status": "proposed",
+    "wall_distances": [
+     {
+      "wall": "west",
+      "distance_m": null
+     },
+     {
+      "wall": "north",
+      "distance_m": null
+     }
+    ],
+    "floor_to_ceiling_m": null,
+    "ceiling_to_fixture_bottom_m": null,
+    "floor_to_bottom_verification_m": null,
+    "derived_floor_to_bottom_m": null,
+    "verification_error_m": null
+   }
   },
   {
    "id": "dev-light_front_right",
@@ -199,7 +433,27 @@
    "room_id": "living_room",
    "controllable": true,
    "confidence": 0.5,
-   "source": "proposed"
+   "source": "proposed",
+   "aiming_origin": "fixture_bottom",
+   "fixture_calibration": {
+    "aiming_origin": "fixture_bottom",
+    "status": "proposed",
+    "wall_distances": [
+     {
+      "wall": "west",
+      "distance_m": null
+     },
+     {
+      "wall": "south",
+      "distance_m": null
+     }
+    ],
+    "floor_to_ceiling_m": null,
+    "ceiling_to_fixture_bottom_m": null,
+    "floor_to_bottom_verification_m": null,
+    "derived_floor_to_bottom_m": null,
+    "verification_error_m": null
+   }
   },
   {
    "id": "dev-light_rear_left",
@@ -216,7 +470,27 @@
    "room_id": "living_room",
    "controllable": true,
    "confidence": 0.5,
-   "source": "proposed"
+   "source": "proposed",
+   "aiming_origin": "fixture_bottom",
+   "fixture_calibration": {
+    "aiming_origin": "fixture_bottom",
+    "status": "proposed",
+    "wall_distances": [
+     {
+      "wall": "east",
+      "distance_m": null
+     },
+     {
+      "wall": "north",
+      "distance_m": null
+     }
+    ],
+    "floor_to_ceiling_m": null,
+    "ceiling_to_fixture_bottom_m": null,
+    "floor_to_bottom_verification_m": null,
+    "derived_floor_to_bottom_m": null,
+    "verification_error_m": null
+   }
   },
   {
    "id": "dev-light_rear_right",
@@ -233,7 +507,27 @@
    "room_id": "living_room",
    "controllable": true,
    "confidence": 0.5,
-   "source": "proposed"
+   "source": "proposed",
+   "aiming_origin": "fixture_bottom",
+   "fixture_calibration": {
+    "aiming_origin": "fixture_bottom",
+    "status": "proposed",
+    "wall_distances": [
+     {
+      "wall": "east",
+      "distance_m": null
+     },
+     {
+      "wall": "south",
+      "distance_m": null
+     }
+    ],
+    "floor_to_ceiling_m": null,
+    "ceiling_to_fixture_bottom_m": null,
+    "floor_to_bottom_verification_m": null,
+    "derived_floor_to_bottom_m": null,
+    "verification_error_m": null
+   }
   },
   {
    "id": "dev-light_office",
@@ -250,7 +544,27 @@
    "room_id": "living_room",
    "controllable": true,
    "confidence": 0.5,
-   "source": "proposed"
+   "source": "proposed",
+   "aiming_origin": "fixture_bottom",
+   "fixture_calibration": {
+    "aiming_origin": "fixture_bottom",
+    "status": "proposed",
+    "wall_distances": [
+     {
+      "wall": "west",
+      "distance_m": null
+     },
+     {
+      "wall": "north",
+      "distance_m": null
+     }
+    ],
+    "floor_to_ceiling_m": null,
+    "ceiling_to_fixture_bottom_m": null,
+    "floor_to_bottom_verification_m": null,
+    "derived_floor_to_bottom_m": null,
+    "verification_error_m": null
+   }
   },
   {
    "id": "dev-switch_ambient_light_left_mss110_main_channel",

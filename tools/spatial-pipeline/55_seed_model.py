@@ -30,6 +30,29 @@ ZONES = [
      "ceiling_height_m": 2.4, "frigate_camera": "dining_room", "source": "seed"},
 ]
 
+# Named lighting aim targets sit on real scan surfaces. Dimensions below use
+# the tape-measure ground truth recorded by 12_verify_scale_user.py where it
+# exists; art remains a proposed wall placement to refine against the mesh in
+# Apartment edit mode.
+TARGETS = [
+    {"id": "target-dining-table", "name": "dining table", "category": "table",
+     "shape": "surface", "pos": [5.0, 1.5, 0.75], "normal": [0, 0, 1],
+     "up": [0, 1, 0], "size_m": [1.8479, 0.9], "room_id": "dining_room",
+     "source": "tape_and_scan", "confidence": 0.8},
+    {"id": "target-coffee-table", "name": "coffee table", "category": "table",
+     "shape": "surface", "pos": [10.5, 3.5, 0.3747], "normal": [0, 0, 1],
+     "up": [0, 1, 0], "size_m": [0.9271, 0.6223], "room_id": "living_room",
+     "source": "tape_and_scan", "confidence": 0.8},
+    {"id": "target-kitchen-island", "name": "kitchen island", "category": "island",
+     "shape": "surface", "pos": [4.7, 3.6, 0.9], "normal": [0, 0, 1],
+     "up": [0, 1, 0], "size_m": [1.1938, 0.6477], "room_id": "kitchen",
+     "source": "tape_and_scan", "confidence": 0.8},
+    {"id": "target-living-room-art", "name": "living room art", "category": "art",
+     "shape": "surface", "pos": [13.55, 3.4, 1.45], "normal": [-1, 0, 0],
+     "up": [0, 0, 1], "size_m": [1.2, 0.8], "room_id": "living_room",
+     "source": "proposed", "confidence": 0.5},
+]
+
 # ---- lights: explicit reasoned spots (entity -> pos) ----
 LIGHTS = {
     # dining: the oval table sits lower-center-left
@@ -77,6 +100,32 @@ def slug(s):
     return "".join(c if c.isalnum() else "_" for c in s.lower()).strip("_")
 
 
+def fixture_calibration(pos, room_id):
+    """Unmeasured tape worksheet; never infer tape values from seed poses."""
+    zone = next((z for z in ZONES if z["id"] == room_id), None)
+    refs = ["west", "south"]
+    if zone:
+        xs = [p[0] for p in zone["floor_polygon"]]
+        ys = [p[1] for p in zone["floor_polygon"]]
+        refs = [
+            "west" if abs(pos[0] - min(xs)) <= abs(max(xs) - pos[0]) else "east",
+            "south" if abs(pos[1] - min(ys)) <= abs(max(ys) - pos[1]) else "north",
+        ]
+    return {
+        "aiming_origin": "fixture_bottom",
+        "status": "proposed",
+        "wall_distances": [
+            {"wall": refs[0], "distance_m": None},
+            {"wall": refs[1], "distance_m": None},
+        ],
+        "floor_to_ceiling_m": None,
+        "ceiling_to_fixture_bottom_m": None,
+        "floor_to_bottom_verification_m": None,
+        "derived_floor_to_bottom_m": None,
+        "verification_error_m": None,
+    }
+
+
 def main():
     legacy = {}
     p = MODEL / "spatial_model_legacy.json"
@@ -96,6 +145,9 @@ def main():
             "height_preset": "ceiling" if pos[2] > 2 else "custom",
             "room_id": room or room_of(pos[0], pos[1]),
             "controllable": True, "confidence": 0.5, "source": "proposed",
+            **({"aiming_origin": "fixture_bottom",
+                "fixture_calibration": fixture_calibration(pos, room or room_of(pos[0], pos[1]))}
+               if ent.startswith("light.") else {}),
         })
 
     for cam in CAMERAS:
@@ -110,7 +162,8 @@ def main():
             "camera": {"frigate_name": cam["id"]},
         })
 
-    seed = {"schema_version": 1, "seeded": True, "zones": ZONES, "devices": devices}
+    seed = {"schema_version": 1, "seeded": True, "zones": ZONES,
+            "targets": TARGETS, "devices": devices}
     for d in (APP_SIM, APP_DATA):
         (d / "seed-model.json").write_text(json.dumps(seed, indent=1), encoding="utf-8")
     print(f"seed v2: {len(ZONES)} zones, {len(devices)} devices "

@@ -17,7 +17,7 @@ const WORLD_UP = new THREE.Vector3(0, 1, 0);
 
 const MAX_PREVIEW = THREE.MathUtils.degToRad(20);
 const DRAG_RESIST = 0.35;
-const COMMIT_PX = 60;
+const COMMIT_PX = 24;
 const ELEV_PX = 36;
 const PIVOT_MAX = 0.010;              // rad — EL feel, slightly amplified
 const TAU_PIVOT = 0.55;               // s (EL 0.003/frame ≈ 5.5 s is too dreamy for a dashboard at first paint; 10× faster, still soft)
@@ -88,6 +88,7 @@ export function createRig(camera) {
     let tween = null;
     let poseTween = null;   // absolute-pose flight (camera snap)
     let heldPose = null;    // held camera pose after arrival
+    let editReturn = null;  // detented pose restored when Apartment editing ends
     const BASE_FOV = camera.fov;
 
     function applyCustomProjection(matrix) {
@@ -152,6 +153,14 @@ export function createRig(camera) {
         camera.rotateY(p.dx);
         camera.rotateX(p.dy);
         camera.updateMatrixWorld(true);
+    }
+
+    function clearAbsolutePose() {
+        poseTween = null;
+        heldPose = null;
+        state.locked = false;
+        camera.fov = BASE_FOV;
+        camera.updateProjectionMatrix();
     }
 
     function goTo({ az = state.az, el = state.el, zoom = state.zoom, dur = 450 }) {
@@ -288,16 +297,20 @@ export function createRig(camera) {
         azimuthIndex() { return state.az; },
         currentRadius() { return cur.radius; },
 
-        /* Edit-mode pose: near-top-down north-up, outside the detent system.
-         * locked=true suspends drag/wheel input; exitPose() returns to the
-         * last detented pose. 85° (not 89.5+) keeps lookAt's up-vector sane. */
-        goEditPose(dur = 600) {
-            state.locked = true;
-            startTween(azRad(0), THREE.MathUtils.degToRad(85), state.fitDistance * 1.05, dur);
+        /* Edit mode stays inside the detent system so pointer drag, keyboard
+         * arrows, and explicit orbit controls all remain useful. Keep the
+         * current azimuth and use the 35-degree isometric elevation so wall
+         * faces are visible from the first editor frame. */
+        goEditPose(dur = 0) {
+            if (!editReturn) editReturn = { az: state.az, el: state.el, zoom: state.zoom };
+            clearAbsolutePose();
+            goTo({ az: state.az, el: 0, zoom: 0, dur });
         },
         exitEditPose(dur = 600) {
             state.locked = false;
-            goTo({ dur });
+            const previous = editReturn;
+            editReturn = null;
+            goTo(previous ? { ...previous, dur } : { dur });
         },
 
         /* Absolute-pose flight (P4 camera snap): tween to a world pose with
@@ -334,6 +347,7 @@ export function createRig(camera) {
                 toFov: BASE_FOV,
             };
             heldPose = null;
+            editReturn = null;
         },
         inCameraPose() { return !!(heldPose || (poseTween && poseTween.hold)); },
         cameraPoseFlying() { return !!(poseTween && poseTween.hold); },

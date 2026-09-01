@@ -22,7 +22,7 @@ const DOMAIN_TYPE = { light: "light", media_player: "speaker", camera: "camera",
 const ZONE_COLORS = ["#b8d8ff", "#a8ffd8", "#ffe2a8", "#d8a8ff", "#ffb8c8", "#c8ffb8"];
 const SURVEY_ORANGE = "#ffb45f";
 const FIXTURE_STATUS = {
-  proposed: { symbol: "○", color: "var(--hg-fg-5)", detail: "seeded or estimated position · no tape entered" },
+  proposed: { symbol: "○", color: "var(--hg-fg-3)", detail: "seeded or estimated position · no tape entered" },
   measured: { symbol: "◔", color: "#f2cf87", detail: "some tape values entered · calibration incomplete" },
   calibrated: { symbol: "◐", color: SURVEY_ORANGE, detail: "two walls + vertical measurements solve fixture bottom" },
   verified: { symbol: "●", color: "#91e6bd", detail: "optional floor-to-bottom check recorded" },
@@ -1177,15 +1177,15 @@ function HomeApartmentEdit({
             </div>
             {tool === "links" && <div data-apartment-geometry-lock="active" style={{
               padding: "7px 8px", marginBottom: 9, border: "1px solid rgba(145,230,189,0.34)",
-              background: "rgba(145,230,189,0.05)", color: "#91e6bd", fontSize: 8, lineHeight: 1.5,
+              background: "rgba(145,230,189,0.05)", color: "#91e6bd", fontSize: 11, lineHeight: 1.5,
             }}>
               fixture, target, zone, and tape geometry cannot be changed in this workflow
             </div>}
             {tool === "measure" && <div style={{ display: "grid", gap: 4, marginBottom: 9, paddingBottom: 8,
               borderBottom: "1px solid var(--hg-border-soft)" }}>
               {Object.entries(FIXTURE_STATUS).map(([status, meta]) => (
-                <div key={status} style={{ display: "grid", gridTemplateColumns: "10px 58px 1fr", gap: 5,
-                  alignItems: "start", fontSize: 7.8, lineHeight: 1.35, color: "var(--hg-fg-5)" }}>
+                <div key={status} style={{ display: "grid", gridTemplateColumns: "10px 72px 1fr", gap: 5,
+                  alignItems: "start", fontSize: 11, lineHeight: 1.35, color: "var(--hg-fg-3)" }}>
                   <span style={{ color: meta.color }}>{meta.symbol}</span>
                   <span style={{ color: meta.color }}>{status}</span>
                   <span>{meta.detail}</span>
@@ -1208,10 +1208,10 @@ function HomeApartmentEdit({
                 <span style={{ color: statusMeta.color }}>{statusMeta.symbol}</span>
                 <span style={{ minWidth: 0 }}>
                   <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis" }}>{light.name}</span>
-                  <span style={{ display: "block", color: "var(--hg-fg-5)", fontSize: 7.2,
+                  <span style={{ display: "block", color: "var(--hg-fg-3)", fontSize: 10.5,
                     overflow: "hidden", textOverflow: "ellipsis" }}>{light.ha_entity_id || "unlinked"}</span>
                 </span>
-                <span style={{ fontSize: 7.5, color: "var(--hg-fg-5)" }}>{status}</span>
+                <span style={{ fontSize: 10.5, color: "var(--hg-fg-3)" }}>{status}</span>
               </button>;
             })}
             {fixtureMapping.unresolvedFixtureLinks.length > 0 && (
@@ -1397,7 +1397,7 @@ function HomeApartmentEdit({
                   }}>
                   <span style={{ width: 7, height: 7, background: candidate.color, display: "block" }} />
                   <span>{candidate.name}</span>
-                  <span style={{ color: "var(--hg-fg-5)", fontSize: 7.5 }}>
+                  <span style={{ color: "var(--hg-fg-3)", fontSize: 10.5 }}>
                     {(candidate.floor_polygon || []).length} corners
                   </span>
                 </button>

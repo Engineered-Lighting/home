@@ -262,7 +262,7 @@
         borderRadius: 3,
         color,
         fontFamily: "'Geist Mono', ui-monospace, monospace",
-        fontSize: 9.5,
+        fontSize: 10,
         letterSpacing: "0.04em",
         whiteSpace: "nowrap",
         background: "transparent",
@@ -462,7 +462,7 @@
   function Metric({ label, value }) {
     return (
       <div style={{ minWidth: 0 }}>
-        <div style={{ color: "var(--hg-fg-5)", fontSize: 9 }}>{label}</div>
+        <div style={{ color: "var(--hg-fg-3)", fontSize: 10 }}>{label}</div>
         <div style={{ color: "var(--hg-fg-1)", fontWeight: 600 }}>{value}</div>
       </div>
     );

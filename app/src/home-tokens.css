@@ -16,8 +16,8 @@
   --hg-fg-1: #EDEDED;
   --hg-fg-2: #A1A1A1;
   --hg-fg-3: #8F8F8F;
-  --hg-fg-4: #666666;
-  --hg-fg-5: #404040;
+  --hg-fg-4: #767676;
+  --hg-fg-5: #404040;   /* decorative/disabled ONLY — ~2:1, never informative text */
   --hg-border-soft: rgba(255, 255, 255, 0.06);
   --hg-border: rgba(255, 255, 255, 0.10);
   --hg-border-strong: rgba(255, 255, 255, 0.18);
@@ -25,6 +25,7 @@
   --hg-ice-bright: #DDEAFF;
   --hg-ice-glow: rgba(184, 216, 255, 0.32);
   --hg-blue: #4D9CFF;
+  --hg-accent: var(--hg-blue);
   --hg-warn: #FFB224;
   --hg-crit: #E15553;          /* used sparingly — genuine error/critical only */
   --hg-input-bg: rgba(255, 255, 255, 0.025);
@@ -41,8 +42,8 @@
   --hg-fg-1: #EDEDED;
   --hg-fg-2: #A1A1A1;
   --hg-fg-3: #8F8F8F;
-  --hg-fg-4: #666666;
-  --hg-fg-5: #404040;
+  --hg-fg-4: #767676;
+  --hg-fg-5: #404040;   /* decorative/disabled ONLY — ~2:1, never informative text */
   --hg-border-soft: rgba(255, 255, 255, 0.06);
   --hg-border: rgba(255, 255, 255, 0.10);
   --hg-border-strong: rgba(255, 255, 255, 0.18);
@@ -50,6 +51,7 @@
   --hg-ice-bright: #DDEAFF;
   --hg-ice-glow: rgba(184, 216, 255, 0.32);
   --hg-blue: #4D9CFF;
+  --hg-accent: var(--hg-blue);
   --hg-warn: #FFB224;
   --hg-crit: #E15553;
   --hg-input-bg: rgba(255, 255, 255, 0.025);
@@ -68,9 +70,9 @@
   --hg-fg-0: #1A1812;
   --hg-fg-1: #28251C;
   --hg-fg-2: #6A6353;
-  --hg-fg-3: #8E8775;
-  --hg-fg-4: #ADA694;
-  --hg-fg-5: #C7BFAD;
+  --hg-fg-3: #6A6454;   /* ≥4.5:1 on every light surface (bg-0..bg-3) */
+  --hg-fg-4: #8A8270;   /* large/decorative only */
+  --hg-fg-5: #C7BFAD;   /* decorative/disabled ONLY */
   --hg-border-soft: rgba(26, 24, 18, 0.06);
   --hg-border: rgba(26, 24, 18, 0.12);
   --hg-border-strong: rgba(26, 24, 18, 0.22);
@@ -78,7 +80,8 @@
   --hg-ice-bright: #143C8C;
   --hg-ice-glow: rgba(31, 79, 168, 0.16);
   --hg-blue: #1F4FA8;
-  --hg-warn: #B96A1D;
+  --hg-accent: #1F4FA8;
+  --hg-warn: #8A4E13;
   --hg-crit: #B33A37;          /* used sparingly — genuine error/critical only */
   --hg-input-bg: rgba(26, 24, 18, 0.04);
   --hg-app-shadow: 0 0 0 1px var(--hg-border), 0 24px 60px rgba(60, 50, 30, 0.18);

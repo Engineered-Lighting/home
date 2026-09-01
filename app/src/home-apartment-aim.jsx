@@ -600,7 +600,7 @@ function HomeApartmentAim({
         border: "1px solid rgba(255,255,255,0.085)", background: "rgba(255,255,255,0.025)", display: "grid", gap: 9 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
           <span style={{ fontFamily: AIM_SANS, fontSize: 12, fontWeight: 570 }}>One ceiling position</span>
-          <span style={{ marginLeft: "auto", fontFamily: AIM_MONO, fontSize: 8, color: "var(--hg-fg-5)" }}>shared measurements</span>
+          <span style={{ marginLeft: "auto", fontFamily: AIM_MONO, fontSize: 10.5, color: "var(--hg-fg-3)" }}>shared measurements</span>
         </div>
         <div data-apt-profile-view={profileView} role="group" aria-label="Lighting profile view"
           style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: 3,
@@ -617,7 +617,7 @@ function HomeApartmentAim({
           <ProfileStatus label={currentProfileName} {...currentProfileStatus} />
           <ProfileStatus label="Engineered lighting" {...engineeredProfileStatus} />
         </div>
-        <div style={{ fontFamily: AIM_MONO, fontSize: 7.8, lineHeight: 1.4, color: "var(--hg-fg-5)" }}>
+        <div style={{ fontFamily: AIM_MONO, fontSize: 11, lineHeight: 1.4, color: "var(--hg-fg-3)" }}>
           {profileView === "auto" ? `Auto is showing ${profileResolution.resolved === "current" ? "the current light" : "Engineered lighting"} · status remains visible for both.`
             : profileView === "both" ? "Both identities share this exact mount; no second fixture is created."
               : `${profileView === "current" ? "Current light" : "Engineered lighting"} view selected.`}
@@ -686,7 +686,7 @@ function HomeApartmentAim({
               max={Math.round(primaryCapabilities.max_kelvin || 6500)} value={+primaryState?.attributes?.color_temp_kelvin || 3000}
               onChange={(e) => sendLights([primaryEntity], "turn_on", { color_temp_kelvin: +e.target.value }, "primary")} />
           </label>}
-          <div style={{ fontFamily: AIM_MONO, fontSize: 8, color: "var(--hg-fg-5)", lineHeight: 1.45 }}>
+          <div style={{ fontFamily: AIM_MONO, fontSize: 11, color: "var(--hg-fg-3)", lineHeight: 1.45 }}>
             Existing Home Assistant light · shares this mount and its Fixture position measurements.
           </div>
         </section>}
@@ -721,7 +721,7 @@ function HomeApartmentAim({
           </label>}
         </section>
         <section style={{ display: "grid", gap: 7 }}>
-          <div style={{ fontFamily: AIM_MONO, fontSize: 8, color: "var(--hg-fg-5)", letterSpacing: "0.12em" }}>DESTINATION</div>
+          <div style={{ fontFamily: AIM_MONO, fontSize: 9.5, color: "var(--hg-fg-3)", letterSpacing: "0.12em" }}>DESTINATION</div>
           <div style={{ fontFamily: AIM_SANS, fontSize: 13, color: destination ? AIM_CYAN : "var(--hg-fg-4)", lineHeight: 1.35 }}>{targetLabel(destination)}{destination?.kind === "mirror" ? " · approximate soft reflection" : ""}</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, maxHeight: 122, overflowY: "auto" }}>
             <AimButton active={destination?.kind === "mirror"}
@@ -822,7 +822,7 @@ function HomeApartmentAim({
         </section>
 
         <AimButton onClick={() => window.open("http://127.0.0.1:8765/", "_blank", "noopener")}>open bench console</AimButton>
-        <div style={{ fontFamily: AIM_MONO, fontSize: 8, color: "var(--hg-fg-5)", lineHeight: 1.45 }}>
+        <div style={{ fontFamily: AIM_MONO, fontSize: 11, color: "var(--hg-fg-3)", lineHeight: 1.45 }}>
           FWHM is the half-maximum contour. Cone falloff and screen color temperature are qualitative, not photometric claims.
         </div>
         </details>

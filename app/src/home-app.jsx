@@ -1191,7 +1191,7 @@ function SpatialModeRail({
               gap: 4,
               cursor: "pointer",
               fontFamily: "'Geist Mono', monospace",
-              fontSize: 7.5,
+              fontSize: 9.5,
               lineHeight: 1,
               letterSpacing: "0.04em",
               textTransform: "lowercase",
@@ -4177,9 +4177,9 @@ function FeatureLoadingSurface({ open, title, status, error, onClose, onRetry, m
         {!pending && onRetry && (
           <button type="button" onClick={onRetry} style={{
             marginTop: 16,
-            border: "1px solid var(--hg-accent)",
-            background: "var(--hg-accent)",
-            color: "#07101a",
+            border: "1px solid var(--hg-ice)",
+            background: "var(--hg-ice)",
+            color: "var(--hg-bg-0)",
             padding: "9px 14px",
             fontFamily: "'Geist Mono', monospace",
             fontSize: 11,

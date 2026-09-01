@@ -440,7 +440,7 @@ function VLPlayer({ video, editor }) {
           ))}
           {(editor.palette || []).length === 0 && (
             <span style={{
-              fontFamily: VL_FONT_MONO, fontSize: 9, color: "var(--hg-fg-5)",
+              fontFamily: VL_FONT_MONO, fontSize: 10.5, color: "var(--hg-fg-3)",
               letterSpacing: "0.08em",
             }}>no values for this lane yet — press C to create a custom label</span>
           )}
@@ -1690,7 +1690,7 @@ function VLInspector({
         />
       </div>
 
-      <div style={{ fontSize: 8.5, color: "var(--hg-fg-5)", letterSpacing: "0.08em", marginTop: "auto" }}>
+      <div style={{ fontSize: 10.5, color: "var(--hg-fg-3)", letterSpacing: "0.08em", marginTop: "auto" }}>
         ? shortcuts · E picker · S split · M merge · G person · U next unreviewed
       </div>
     </div>
@@ -3395,7 +3395,7 @@ function HomeVideoLabelerOverlay({ open, onClose, sim, spatialMode = false }) {
               )}
               {queueFilter !== "all" && (
                 <div style={{
-                  padding: "6px 12px", color: "var(--hg-fg-5)", fontSize: 8.5,
+                  padding: "6px 12px", color: "var(--hg-fg-3)", fontSize: 10.5,
                   letterSpacing: "0.08em", borderBottom: "1px solid var(--hg-border-soft)",
                 }}>
                   sorted by loaded suggestion data — open a video to load its counts
@@ -3440,7 +3440,7 @@ function HomeVideoLabelerOverlay({ open, onClose, sim, spatialMode = false }) {
       <div style={{
         display: "flex", alignItems: "center", gap: 14,
         padding: "7px 24px", borderTop: "1px solid var(--hg-border-soft)",
-        fontFamily: VL_FONT_MONO, fontSize: 9, letterSpacing: "0.1em",
+        fontFamily: VL_FONT_MONO, fontSize: 10.5, letterSpacing: "0.1em",
         color: "var(--hg-fg-4)", flex: "none",
       }}>
         <span>base · {base || "sim — service calls disabled"}</span>
@@ -3451,7 +3451,7 @@ function HomeVideoLabelerOverlay({ open, onClose, sim, spatialMode = false }) {
             · {healthInfo.jobs_running ?? 0} jobs running
           </span>
         )}
-        <span style={{ marginLeft: "auto", color: "var(--hg-fg-5)" }}>
+        <span style={{ marginLeft: "auto", color: "var(--hg-fg-3)" }}>
           /labeler base &lt;url&gt; to change the service base
         </span>
       </div>

@@ -445,7 +445,7 @@ function ExternalKeyModal({ onClose }) {
         }}>set external provider key</div>
 
         <div style={{
-          fontSize: 10, color: "var(--hg-fg-4)",
+          fontSize: 10, color: "var(--hg-fg-3)",
           lineHeight: 1.55, marginBottom: 10,
         }}>
           OpenAI API key. Stored in this workstation's localStorage only.
@@ -453,7 +453,7 @@ function ExternalKeyModal({ onClose }) {
         </div>
 
         <div style={{
-          fontSize: 9.5, color: "var(--hg-fg-5)",
+          fontSize: 10.5, color: "var(--hg-fg-3)",
           marginBottom: 8, letterSpacing: "0.08em",
         }}>
           current: <span style={{ color: existing ? "var(--hg-fg-2)" : "var(--hg-warn)" }}>{masked}</span>
@@ -482,7 +482,7 @@ function ExternalKeyModal({ onClose }) {
           <span
             onClick={() => setShowing((s) => !s)}
             style={{
-              fontSize: 9, color: "var(--hg-fg-5)",
+              fontSize: 10.5, color: "var(--hg-fg-3)",
               cursor: "pointer", letterSpacing: "0.08em",
               textTransform: "uppercase",
             }}
@@ -505,7 +505,7 @@ function ExternalKeyModal({ onClose }) {
             style={{
               fontFamily: HG_FONT_MONO_EXT, fontSize: 10.5,
               letterSpacing: "0.12em", textTransform: "uppercase",
-              color: "var(--hg-fg-5)", background: "transparent",
+              color: "var(--hg-fg-3)", background: "transparent",
               border: "1px solid var(--hg-fg-5)",
               padding: "4px 10px", cursor: "pointer",
             }}

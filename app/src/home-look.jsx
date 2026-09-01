@@ -437,7 +437,7 @@ function HomeLookDrawer({ open, onClose, metricsBase, sim,
               background: canRun ? "var(--hg-ice)" : "transparent",
               border: "1px solid " + (canRun ? "var(--hg-ice)"
                                              : "var(--hg-border-soft)"),
-              color: canRun ? "var(--hg-bg-0)" : "var(--hg-fg-5)",
+              color: canRun ? "var(--hg-bg-0)" : "var(--hg-fg-3)",
               padding: "7px 16px", fontFamily: LK_FONT_MONO, fontSize: 10.5,
               letterSpacing: "0.08em", textTransform: "lowercase",
               cursor: canRun ? "pointer" : "default", flex: "0 0 auto",

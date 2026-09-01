@@ -431,7 +431,7 @@ function ToggleRow({ label, state, onToggle, hint, disabled }) {
           disabled={disabled}
           style={{
             background: isOn ? "var(--hg-accent, #3aa6ff)" : "var(--hg-bg-2)",
-            color: isOn ? "white" : "var(--hg-fg-1)",
+            color: isOn ? "var(--hg-bg-0)" : "var(--hg-fg-1)",
             border: "1px solid " + (isOn ? "transparent" : "var(--hg-border)"),
             borderRadius: 12, padding: "3px 10px",
             fontFamily: FONT_MONO, fontSize: 11, cursor: disabled ? "not-allowed" : "pointer",
@@ -702,7 +702,7 @@ function FrozenCard({ title, subtitle, intro, knobs, fileLocation, whyFrozen, cu
           style={{
             alignSelf: "flex-end",
             background: "var(--hg-accent, #3aa6ff)",
-            color: "white",
+            color: "var(--hg-bg-0)",
             border: "1px solid transparent",
             borderRadius: 4,
             padding: "5px 12px",
@@ -1185,7 +1185,7 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
             <div style={{ display: "flex", gap: 4 }}>
               <button disabled={!haOnline} onClick={() => setText("input_text.living_lights_bias_zone_scope", "all")}
                 style={{ background: scopeIsAll ? "var(--hg-accent, #3aa6ff)" : "var(--hg-bg-2)",
-                         color: scopeIsAll ? "white" : "var(--hg-fg-1)",
+                         color: scopeIsAll ? "var(--hg-bg-0)" : "var(--hg-fg-1)",
                          border: "1px solid " + (scopeIsAll ? "transparent" : "var(--hg-border)"),
                           borderRadius: 4, padding: "2px 8px",
                           fontFamily: FONT_MONO, fontSize: 10, cursor: haOnline ? "pointer" : "not-allowed",
@@ -1194,7 +1194,7 @@ function HomeLightsDrawer({ open, onClose, client, connection = null, sim, askEx
               </button>
               <button disabled={!haOnline} onClick={() => setText("input_text.living_lights_bias_zone_scope", zone)}
                 style={{ background: scopeIsThisZone ? "var(--hg-accent, #3aa6ff)" : "var(--hg-bg-2)",
-                         color: scopeIsThisZone ? "white" : "var(--hg-fg-1)",
+                         color: scopeIsThisZone ? "var(--hg-bg-0)" : "var(--hg-fg-1)",
                          border: "1px solid " + (scopeIsThisZone ? "transparent" : "var(--hg-border)"),
                           borderRadius: 4, padding: "2px 8px",
                           fontFamily: FONT_MONO, fontSize: 10, cursor: haOnline ? "pointer" : "not-allowed",

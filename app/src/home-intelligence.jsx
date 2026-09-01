@@ -4151,10 +4151,10 @@
           )}
 
         {lightboxFrame && (
-          {/* aria-modal honesty: focus is trapped at the atlas ROOT layer
-              (intel-root), not here — this inner dialog must not claim
-              modality it doesn't enforce. Escape still closes it first via
-              the root layer's chain. */}
+          /* aria-modal honesty: focus is trapped at the atlas ROOT layer
+             (intel-root), not here — this inner dialog must not claim
+             modality it doesn't enforce. Escape still closes it first via
+             the root layer's chain. */
           <div className="intel-atlas-lightbox" role="dialog" aria-modal="false" aria-label="Observation frame preview">
             <div className="intel-atlas-lightbox-card">
               <div className="intel-atlas-lightbox-head">

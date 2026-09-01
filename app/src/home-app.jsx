@@ -8036,7 +8036,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       }
       case "spatial": {
         // Addendum 38 Phase 1 — open the light-footprint Map drawer.
-        setSpatialDrawerOpen(true);
+        openRightSlot("spatialD", () => setSpatialDrawerOpen(true));
         ensureFeature("spatial", "spatial", "slash");
         return true;
       }
@@ -8093,9 +8093,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           ensureFeature("apartment", "apartment", "spatial-layout");
           return true;
         }
-        setVideoLabelerOpen(false);
-        setApartmentOpen(true);
-        ensureFeature("apartment", "apartment", "slash");
+        openSurface("apartment", "slash");
         return true;
       }
       case "labeler":
@@ -8127,11 +8125,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           }
           return true;
         }
-        setPeopleOpen(false);
-        setIntelligenceOpen(false);
-        setApartmentOpen(false);
-        setVideoLabelerOpen(true);
-        ensureFeature("videoLabeler", "video labeler", "slash");
+        openSurface("labeler", "slash");
         return true;
       }
       case "look": {
@@ -8147,7 +8141,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           question: parsed.question,
           nonce: Date.now(),
         });
-        setLookDrawerOpen(true);
+        openRightSlot("look", () => setLookDrawerOpen(true));
         if (!window.HomeLookDrawer || !window.HomeLookParseArg) {
           ensureFeature("look", "look", "slash").then((ok) => {
             if (ok && window.HomeLookParseArg) {
@@ -8177,7 +8171,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         if (!wantsRaw && !argSansFlags) {
           // No room arg, no --raw → open the drawer with full view
           setWorldStateInitialRoom(null);
-          setWorldStateDrawerOpen(true);
+          openRightSlot("world", () => setWorldStateDrawerOpen(true));
           ensureFeature("world", "world state", "slash");
           return true;
         }
@@ -8185,7 +8179,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           // Room arg without --raw → open the drawer pre-filtered to
           // that room. User can ×-clear the filter to widen.
           setWorldStateInitialRoom(argSansFlags);
-          setWorldStateDrawerOpen(true);
+          openRightSlot("world", () => setWorldStateDrawerOpen(true));
           ensureFeature("world", "world state", "slash");
           return true;
         }
@@ -8542,7 +8536,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
         // unknown).
         const id = arg.trim();
         if (id) {
-          setExplainConvId(id);
+          openRightSlot("explain", () => setExplainConvId(id));
           return true;
         }
         // No arg: walk the events list right-to-left for the most
@@ -8552,7 +8546,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
           addEvent({ kind: "system", text: "why · no recent turns with conv_id (try after a voice/typed turn)", tone: "warn" });
           return true;
         }
-        setExplainConvId(recent.convId);
+        openRightSlot("explain", () => setExplainConvId(recent.convId));
         return true;
       }
       case "lights": {
@@ -10831,32 +10825,57 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       window.__HOME_APARTMENT_EMBEDDED_API?.closeCards?.();
     } catch (e) { /* best-effort spatial cleanup */ }
   };
+  /* ── Surface mutual-exclusion policy — ONE table, replacing six hand-
+   * rolled copies that had drifted apart (the /apartment slash case forgot
+   * to close people/intel, letting two inset-0 takeovers stack).
+   * Policy: the full-screen takeovers (people / intel / labeler / apartment)
+   * close each other; apartment additionally closes every drawer; the four
+   * right-anchored drawers (explain / world / spatialD / look — all
+   * z-index 1100 on the same edge) are exclusive with each other, retiring
+   * the old "explain wins by DOM order" comment. people/intel/labeler
+   * deliberately do NOT close lights or the right-slot drawers. */
+  const SURFACE_CLOSERS = {
+    people: () => setPeopleOpen(false),
+    intel: () => setIntelligenceOpen(false),
+    labeler: () => setVideoLabelerOpen(false),
+    apartment: () => setApartmentOpen(false),
+    lights: () => setLightsOpen(false),
+    explain: () => setExplainConvId(null),
+    world: () => setWorldStateDrawerOpen(false),
+    spatialD: () => setSpatialDrawerOpen(false),
+    look: () => setLookDrawerOpen(false),
+  };
+  const RIGHT_SLOT = ["explain", "world", "spatialD", "look"];
+  const SURFACE_POLICY = {
+    people: { closes: ["intel", "labeler", "apartment"], open: () => setPeopleOpen(true), feature: ["people", "people"] },
+    intel: { closes: ["people", "labeler", "apartment"], open: () => setIntelligenceOpen(true), feature: ["intelligence", "intelligence"] },
+    labeler: { closes: ["people", "intel", "apartment"], open: () => setVideoLabelerOpen(true), feature: ["videoLabeler", "video labeler"] },
+    apartment: { closes: ["people", "intel", "labeler", "lights", ...RIGHT_SLOT], open: () => setApartmentOpen(true), feature: ["apartment", "apartment"] },
+    lights: { closes: ["people", "intel", "labeler", "apartment"], open: () => setLightsOpen(true), feature: ["lights", "lights"] },
+  };
+  const closeSurfaces = (keys) => { keys.forEach((k) => SURFACE_CLOSERS[k]()); };
+  const openSurface = (key, source) => {
+    const policy = SURFACE_POLICY[key];
+    closeSurfaces(policy.closes);
+    policy.open();
+    ensureFeature(policy.feature[0], policy.feature[1], source || "header");
+  };
+  /* Right-slot drawers share one edge — opening one closes its siblings. */
+  const openRightSlot = (key, openFn) => {
+    closeSurfaces(RIGHT_SLOT.filter((k) => k !== key));
+    openFn();
+  };
   const closeSpatialToolSurfaces = () => {
     cleanEmbeddedApartmentState();
-    setPeopleOpen(false);
-    setIntelligenceOpen(false);
-    setVideoLabelerOpen(false);
-    setLightsOpen(false);
-    setWorldStateDrawerOpen(false);
-    setSpatialDrawerOpen(false);
-    setLookDrawerOpen(false);
-    setExplainConvId(null);
+    closeSurfaces(["people", "intel", "labeler", "lights", ...RIGHT_SLOT]);
   };
-  const openPeopleFeature = () => {
-    setVideoLabelerOpen(false);
-    setIntelligenceOpen(false);
-    setApartmentOpen(false);
-    setPeopleOpen(true);
-    ensureFeature("people", "people", "header");
-  };
-  const openIntelligenceFeature = () => {
-    setVideoLabelerOpen(false);
-    setPeopleOpen(false);
-    setApartmentOpen(false);
-    setIntelligenceOpen(true);
-    ensureFeature("intelligence", "intelligence", "header");
-  };
-  const openVideoLabelerFeature = () => {
+  /* Named header-wiring helpers — names are pinned by run-bootstrap-tests /
+   * run-lights-drawer-tests / qa-browser-smoke; they may be invoked as
+   * onClick handlers, so a non-string arg means "header". */
+  const srcOf = (source) => (typeof source === "string" ? source : "header");
+  const openPeopleFeature = (source) => openSurface("people", srcOf(source));
+  const openIntelligenceFeature = (source) => openSurface("intel", srcOf(source));
+  const openVideoLabelerFeature = (source) => {
     if (!videoLabelerAvailable) {
       addEvent({
         kind: "system",
@@ -10865,32 +10884,10 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
       });
       return;
     }
-    setPeopleOpen(false);
-    setIntelligenceOpen(false);
-    setApartmentOpen(false);
-    setVideoLabelerOpen(true);
-    ensureFeature("videoLabeler", "video labeler", "header");
+    openSurface("labeler", srcOf(source));
   };
-  const openLightsFeature = () => {
-    setPeopleOpen(false);
-    setIntelligenceOpen(false);
-    setVideoLabelerOpen(false);
-    setApartmentOpen(false);
-    setLightsOpen(true);
-    ensureFeature("lights", "lights", "header");
-  };
-  const openApartmentFromHeader = () => {
-    setPeopleOpen(false);
-    setIntelligenceOpen(false);
-    setVideoLabelerOpen(false);
-    setLightsOpen(false);
-    setWorldStateDrawerOpen(false);
-    setSpatialDrawerOpen(false);
-    setLookDrawerOpen(false);
-    setExplainConvId(null);
-    setApartmentOpen(true);
-    ensureFeature("apartment", "apartment", "header");
-  };
+  const openLightsFeature = (source) => openSurface("lights", srcOf(source));
+  const openApartmentFromHeader = (source) => openSurface("apartment", srcOf(source));
   const metricsStrip = (
     <MetricsStrip
       metrics={metrics}
@@ -11436,7 +11433,7 @@ function HomeApp({ density = "airy", metricsStyle = "ticker", initialEvents, voi
                 onConfirmAction={confirmAction} onCancelAction={cancelAction}
                 onUndoAction={undoAction}
                 onControlAction={onControlAction} controlLifecycles={controlLifecycles}
-                onWhy={(cid) => setExplainConvId(cid)} />
+                onWhy={(cid) => openRightSlot("explain", () => setExplainConvId(cid))} />
             ))}
           </div>
         )}

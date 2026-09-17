@@ -139,18 +139,22 @@ automation:
           - present
           - pass_through
       # Manual-touch cooldown gate (R5-aligned, vacant-15-min semantics). Reads
-      # input_datetime directly. State-bypass + asleep-bypass + sentinel-aware
-      # — matches the pilot's cooldown gate exactly.
+      # input_datetime directly. State-bypass + sentinel-aware — matches the
+      # pilot's cooldown gate exactly. Until 2026-09-17 this gate also
+      # bypassed the cooldown while asleep, so a manual touch on a sofa light
+      # at night was overwritten by the gradient within 6 s; the pilot never
+      # bypassed on asleep, and now neither does the gradient.
       - condition: template
         value_template: >-
           {% set state = states('sensor.living_room_sofa_lighting_state') %}
-          {% set asleep = is_state('input_boolean.living_lights_asleep', 'on') %}
-          {% if state not in ['vacant', 'present', 'pass_through'] or asleep %}true
+          {% if state not in ['vacant', 'present', 'pass_through', 'asleep'] %}true
           {% else %}
             {% set lm = states('input_datetime.living_lights_zone_sofa_last_manual_at') %}
             {% if not lm or lm in ['unknown', 'unavailable', 'none', ''] %}true
             {% else %}
-              {% set manual_dt = as_datetime(lm | string) %}
+              {# as_local matches the pilot: the naive input_datetime string must
+                 carry a tz before it is compared with last_changed and now(). #}
+              {% set manual_dt = as_datetime(lm | string) | as_local %}
               {% if manual_dt.year < 2000 %}true
               {% else %}
                 {% set stable_obj = states.binary_sensor.living_room_sofa_person_occupancy_stable %}

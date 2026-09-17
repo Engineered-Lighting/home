@@ -132,14 +132,16 @@ ASLEEP_CAP_PCT = 30        # occupied-zone ceiling while asleep: navigable,
 STABLE_OCCUPANCY_HOLD_SECONDS = 90
 
 # Extra quiet blockers for the overnight asleep latch. The canonical latch
-# signal is still Living Lights Any Occupied, but these raw Frigate room-level
-# signals catch the case where the zone/person classifier flickers during a
-# walk path while the camera is clearly still seeing motion or a person.
+# signal is still Living Lights Any Occupied, but these Frigate person
+# occupancy signals catch the case where the zone/person classifier flickers
+# during a walk path while the camera is clearly still seeing a person.
+#
+# 2026-09-17: the four raw `binary_sensor.<room>_motion` blockers were
+# removed. Frigate motion at night (screen flicker, IR noise, shadows) is not
+# a person, and over 2026-09-02..16 the latch fired on only 5 of 15 nights,
+# leaving every vacant zone at the 20 % night floor. Person occupancy is the
+# credible-person signal; motion belongs to the classifier, not the latch.
 ASLEEP_QUIET_BLOCKERS = [
-    "binary_sensor.living_room_motion",
-    "binary_sensor.kitchen_motion",
-    "binary_sensor.dining_room_motion",
-    "binary_sensor.workshop_motion",
     "binary_sensor.living_room_person_occupancy",
     "binary_sensor.kitchen_person_occupancy",
     "binary_sensor.dining_room_person_occupancy",
@@ -1244,14 +1246,23 @@ def emit_automations() -> str:
         "      - condition: state",
         "        entity_id: binary_sensor.living_lights_any_occupied",
         '        state: "off"',
+        # Quiet must have LASTED ASLEEP_IDLE_MINUTES on every path, including
+        # the /5 tick. The tick used to test only the current instant, which
+        # latched asleep at 22:42 on 2026-09-13 while the owner was up. A
+        # blocker is active while 'on', or while 'off' for less than the idle
+        # window; unknown/unavailable sensors never block (Frigate being down
+        # must not hold the latch off all night). expand() skips entities that
+        # do not exist.
         "      - condition: template",
         "        value_template: >-",
+        f"          {{% set idle_s = {ASLEEP_IDLE_MINUTES * 60} %}}",
+        "          {% set any_occ = states.binary_sensor.living_lights_any_occupied %}",
+        "          {% set ns = namespace(active=(any_occ is none or any_occ.state != 'off' or (now() - any_occ.last_changed).total_seconds() < idle_s)) %}",
         "          {% set blockers = [",
         asleep_quiet_blockers_jinja,
         "          ] %}",
-        "          {% set ns = namespace(active=false) %}",
-        "          {% for entity_id in blockers %}",
-        "            {% if is_state(entity_id, 'on') %}",
+        "          {% for obj in expand(blockers) %}",
+        "            {% if obj.state == 'on' or (obj.state == 'off' and (now() - obj.last_changed).total_seconds() < idle_s) %}",
         "              {% set ns.active = true %}",
         "            {% endif %}",
         "          {% endfor %}",
@@ -1370,6 +1381,12 @@ def emit_automations() -> str:
         '        state: "on"',
         "      - condition: state",
         "        entity_id: input_boolean.living_lights_woke_up_today",
+        '        state: "off"',
+        # A 05:30 bathroom trip while asleep is on is not a wake-up: the
+        # asleep-OFF automation must clear the latch first (10 min of
+        # sustained occupancy) before the morning latch can arm. Story S.
+        "      - condition: state",
+        "        entity_id: input_boolean.living_lights_asleep",
         '        state: "off"',
         "      - condition: template",
         "        value_template: \"{{ 5 <= now().hour < 12 }}\"",
@@ -1558,22 +1575,28 @@ def emit_automations() -> str:
         "      - condition: state",
         "        entity_id: input_boolean.living_lights_travel_mode",
         '        state: "off"',
+        # Only lights that are already ON receive the CT push. Before
+        # 2026-09-17 this was an unconditional light.turn_on on all eight
+        # lights, so the 20:00 and 22:30 bucket boundaries relit a dark room
+        # (a film in progress, or a house asleep) at its last brightness.
         "    actions:",
-        "      - action: light.turn_on",
-        "        target:",
-        "          entity_id:",
-        "            - light.office",
-        "            - light.front_left",
-        "            - light.front_right",
-        "            - light.rear_left",
-        "            - light.rear_right",
-        "            - light.sink",
-        "            - light.island_left",
-        "            - light.island_right",
-        "        data:",
-        "          color_temp_kelvin: >",
-        "            {{ state_attr('sensor.living_room_office_lighting_state', 'predicted_color_temp_kelvin') | int(2700) }}",
-        "          transition: 3",
+        "      - variables:",
+        "          lit_lights: >-",
+        "            {{ expand(['light.office', 'light.front_left', 'light.front_right',",
+        "                       'light.rear_left', 'light.rear_right', 'light.sink',",
+        "                       'light.island_left', 'light.island_right'])",
+        "               | selectattr('state', 'eq', 'on') | map(attribute='entity_id') | list }}",
+        "      - if:",
+        "          - condition: template",
+        "            value_template: \"{{ lit_lights | count > 0 }}\"",
+        "        then:",
+        "          - action: light.turn_on",
+        "            target:",
+        "              entity_id: \"{{ lit_lights }}\"",
+        "            data:",
+        "              color_temp_kelvin: >",
+        "                {{ state_attr('sensor.living_room_office_lighting_state', 'predicted_color_temp_kelvin') | int(2700) }}",
+        "              transition: 3",
         # ── Session-boundary cooldown wipe on user_at_home transitions ──
         # Treats leaving and returning as natural reset points for the
         # per-zone manual-override cooldowns. Solves the specific failure

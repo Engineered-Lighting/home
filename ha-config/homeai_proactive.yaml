@@ -310,6 +310,12 @@ script:
       - condition: state
         entity_id: input_boolean.living_lights_travel_mode
         state: "off"
+      # Story S: a presence flip while the house is asleep (GPS or bridge
+      # jitter at 03:00) must not light the living room. A real arrival
+      # clears the latch through the asleep-OFF automation first.
+      - condition: state
+        entity_id: input_boolean.living_lights_asleep
+        state: "off"
       - choose:
           # NIGHT (after 22:00 or before 06:00) — low + very warm,
           # just the living room + ambient strips.

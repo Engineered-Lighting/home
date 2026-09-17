@@ -36,6 +36,11 @@ automation:
       - condition: state
         entity_id: input_boolean.user_at_home
         state: "on"
+      # Never energize a house that is still asleep (story S): the latch can
+      # arm from a restart catch-up or a brief night excursion.
+      - condition: state
+        entity_id: input_boolean.living_lights_asleep
+        state: "off"
       # Only greet in a plausible morning window (no "good morning" if the
       # latch is armed by an afternoon HA restart).
       - condition: template

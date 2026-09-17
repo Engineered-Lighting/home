@@ -3961,26 +3961,6 @@ automation:
         for:
           minutes: 15
       - trigger: state
-        entity_id: binary_sensor.living_room_motion
-        to: "off"
-        for:
-          minutes: 15
-      - trigger: state
-        entity_id: binary_sensor.kitchen_motion
-        to: "off"
-        for:
-          minutes: 15
-      - trigger: state
-        entity_id: binary_sensor.dining_room_motion
-        to: "off"
-        for:
-          minutes: 15
-      - trigger: state
-        entity_id: binary_sensor.workshop_motion
-        to: "off"
-        for:
-          minutes: 15
-      - trigger: state
         entity_id: binary_sensor.living_room_person_occupancy
         to: "off"
         for:
@@ -4040,11 +4020,10 @@ automation:
         state: "off"
       - condition: template
         value_template: >-
+          {% set idle_s = 900 %}
+          {% set any_occ = states.binary_sensor.living_lights_any_occupied %}
+          {% set ns = namespace(active=(any_occ is none or any_occ.state != 'off' or (now() - any_occ.last_changed).total_seconds() < idle_s)) %}
           {% set blockers = [
-              'binary_sensor.living_room_motion',
-              'binary_sensor.kitchen_motion',
-              'binary_sensor.dining_room_motion',
-              'binary_sensor.workshop_motion',
               'binary_sensor.living_room_person_occupancy',
               'binary_sensor.kitchen_person_occupancy',
               'binary_sensor.dining_room_person_occupancy',
@@ -4054,9 +4033,8 @@ automation:
               'binary_sensor.whole_dining_room_person_occupancy',
               'binary_sensor.workshop_zone_person_occupancy',
           ] %}
-          {% set ns = namespace(active=false) %}
-          {% for entity_id in blockers %}
-            {% if is_state(entity_id, 'on') %}
+          {% for obj in expand(blockers) %}
+            {% if obj.state == 'on' or (obj.state == 'off' and (now() - obj.last_changed).total_seconds() < idle_s) %}
               {% set ns.active = true %}
             {% endif %}
           {% endfor %}
@@ -4151,6 +4129,9 @@ automation:
         state: "on"
       - condition: state
         entity_id: input_boolean.living_lights_woke_up_today
+        state: "off"
+      - condition: state
+        entity_id: input_boolean.living_lights_asleep
         state: "off"
       - condition: template
         value_template: "{{ 5 <= now().hour < 12 }}"
@@ -4288,21 +4269,23 @@ automation:
         entity_id: input_boolean.living_lights_travel_mode
         state: "off"
     actions:
-      - action: light.turn_on
-        target:
-          entity_id:
-            - light.office
-            - light.front_left
-            - light.front_right
-            - light.rear_left
-            - light.rear_right
-            - light.sink
-            - light.island_left
-            - light.island_right
-        data:
-          color_temp_kelvin: >
-            {{ state_attr('sensor.living_room_office_lighting_state', 'predicted_color_temp_kelvin') | int(2700) }}
-          transition: 3
+      - variables:
+          lit_lights: >-
+            {{ expand(['light.office', 'light.front_left', 'light.front_right',
+                       'light.rear_left', 'light.rear_right', 'light.sink',
+                       'light.island_left', 'light.island_right'])
+               | selectattr('state', 'eq', 'on') | map(attribute='entity_id') | list }}
+      - if:
+          - condition: template
+            value_template: "{{ lit_lights | count > 0 }}"
+        then:
+          - action: light.turn_on
+            target:
+              entity_id: "{{ lit_lights }}"
+            data:
+              color_temp_kelvin: >
+                {{ state_attr('sensor.living_room_office_lighting_state', 'predicted_color_temp_kelvin') | int(2700) }}
+              transition: 3
   - alias: "Living Lights — cooldown wipe on user_at_home transition"
     id: living_lights_cooldown_wipe_on_user_at_home
     mode: restart

@@ -1,0 +1,12 @@
+{
+  "schema": "lighting-egress-record/v1",
+  "enabled": false,
+  "scopes": ["public_eval"],
+  "signed_by": "<owner name, redacted>",
+  "signed_at": "<YYYY-MM-DD, written by the owner when signing>",
+  "purpose": "Ladder level 1: Charades description rows through the five lighting questions to reject bad wordings before any household prose. Extend scopes only by re-signing this record.",
+  "data_classes": ["public_dataset_text"],
+  "model_id": "<pinned from models.list(), for example jev-1.13.0; never an alias>",
+  "kill_switch": "<Home Assistant input_boolean entity id of the egress toggle, mirrored to the publisher>",
+  "notes": "Redacted example. The real record lives outside the repo in the directory the publisher reads (group-readable by uid 10001), enabled true only for the listed scopes. Allowed scopes so far: public_eval (level 1). household_shadow and household_live must be added in a new signing with their own dates and call counts."
+}

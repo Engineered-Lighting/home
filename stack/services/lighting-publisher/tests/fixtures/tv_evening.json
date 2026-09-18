@@ -1,0 +1,31 @@
+{
+  "schema": "lighting-beliefs-state/v1",
+  "cameras": {
+    "living_room": {
+      "coverage": {"status": "fresh", "age_s": 4},
+      "occupancy": {"zones": {"sofa": "occupied", "front_left": "clear", "weights": "clear", "office": "clear", "front_door": "clear", "whole_living_room": "occupied"}},
+      "people": [{"track": "p1", "position": "sofa", "posture": "reclined", "activities": ["watching screen"]}],
+      "claims": ["One person reclined on the sofa facing the screen, still, blanket over legs.", "activity hypothesis: watching screen"],
+      "account": "The person settled on the sofa a while ago and has not moved much since; the screen is playing.",
+      "objects": {"person_adjacent": ["remote", "blanket"]}
+    },
+    "kitchen": {
+      "coverage": {"status": "fresh", "age_s": 5},
+      "occupancy": {"zones": {"sink": "clear", "island_left": "clear", "island_right": "clear", "whole_kitchen": "clear"}},
+      "people": [],
+      "claims": ["Kitchen empty; counter clear."],
+      "account": null,
+      "objects": {"person_adjacent": []}
+    },
+    "dining_room": {
+      "coverage": {"status": "fresh", "age_s": 6},
+      "occupancy": {"zones": {"dining_left": "clear", "dining_right": "clear", "whole_dining_room": "clear"}},
+      "people": [],
+      "claims": ["Dining room empty."],
+      "account": null,
+      "objects": {"person_adjacent": []}
+    }
+  },
+  "devices": {"media": [{"role": "tv", "state": "playing", "source_kind": "streaming", "age_s": 1240}]},
+  "quiet": {"credible_activity_age_s": 45}
+}

@@ -1,0 +1,31 @@
+{
+  "schema": "lighting-beliefs-state/v1",
+  "cameras": {
+    "living_room": {
+      "coverage": {"status": "fresh", "age_s": 3},
+      "occupancy": {"zones": {"sofa": "clear", "front_left": "clear", "weights": "clear", "office": "clear", "front_door": "clear", "whole_living_room": "clear"}},
+      "people": [],
+      "claims": ["Living room empty and dark; no movement."],
+      "account": null,
+      "objects": {"person_adjacent": []}
+    },
+    "kitchen": {
+      "coverage": {"status": "fresh", "age_s": 4},
+      "occupancy": {"zones": {"sink": "clear", "island_left": "clear", "island_right": "clear", "whole_kitchen": "clear"}},
+      "people": [],
+      "claims": ["Kitchen empty."],
+      "account": null,
+      "objects": {"person_adjacent": []}
+    },
+    "dining_room": {
+      "coverage": {"status": "stale", "age_s": 95},
+      "occupancy": {"zones": {"dining_left": "unknown", "dining_right": "unknown", "whole_dining_room": "unknown"}},
+      "people": [],
+      "claims": [],
+      "account": null,
+      "objects": {"person_adjacent": []}
+    }
+  },
+  "devices": {"media": [{"role": "tv", "state": "off", "source_kind": "unknown", "age_s": 7200}]},
+  "quiet": {"credible_activity_age_s": 2700}
+}

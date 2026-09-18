@@ -1,0 +1,25 @@
+# Packaging for lighting_beliefs, the lighting belief publisher's core package.
+# The scaffold has no runtime dependency beyond the standard library. The
+# TypeSafe SDK is an optional extra so the offline tests, the leak guard and
+# the egress gate can be installed and run without any network client present.
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lighting_beliefs"
+version = "0.1.0"
+description = "Questions, probability reduction, packet builder, leak guard and egress gate for the Living Lights belief publisher (M3 scaffold, no network code)."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+# typesafe-sdk 0.6.0 is the latest release on PyPI as of 2026-09-15 (Score
+# criteria became a positional list in 0.6.0). Nothing in this package imports
+# it yet; the pin exists so the cloud runner installs a reviewed version.
+cloud = ["typesafe-sdk==0.6.0"]
+
+[tool.setuptools.packages.find]
+include = ["lighting_beliefs*"]

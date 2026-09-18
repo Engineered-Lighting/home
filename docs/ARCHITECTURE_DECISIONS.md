@@ -14,6 +14,7 @@ the detailed evidence lives.
 | ADR-002 | Keep PersonaPlex/Moshi speech-to-speech out of the default stack. | S2S services are behind the `s2s` profile or commented experimental blocks; default voice path uses split STT/LLM/TTS services. | `docs/EXPERIMENTS-S2S.md`, `stack/docker-compose.yml` |
 | ADR-003 | Use Chatterbox as primary TTS and Kokoro as fallback while preserving the `wyoming-kokoro` service identity for HA pairing stability. | Chatterbox is the default TTS engine; Kokoro stays available as fallback. | `stack/docker-compose.yml`, `docs/HOME_SYSTEM_OVERVIEW.md`, `docs/RUNBOOK.md` |
 | ADR-004 | Use Qwen3-VL-30B-A3B-Instruct-FP8 for the local home agent instead of the smaller 4B swap. | 30B MoE FP8 is the default served model; 4B was reverted after natural command misses. | `stack/docker-compose.yml`, `docs/EXPERIMENTS-S2S.md` |
+| ADR-005 | Allow bounded outbound calls to TypeSafe from the lighting belief publisher, behind a signed egress record, an environment flag and a Home Assistant kill switch. | Draft; pending owner review and the first signed record. | `stack/services/lighting-publisher/`, `docs/ARCHITECTURE_DECISIONS.md#adr-005` |
 
 ## ADR-001: Markov Predictor To Kinematic Anticipator
 
@@ -119,3 +120,67 @@ depends on it.
 **Evidence:** `stack/docker-compose.yml` records the swap-back rationale and
 current vLLM command. `docs/EXPERIMENTS-S2S.md` records the Phase 2.1 4B swap
 and the surrounding VRAM/latency context.
+
+## ADR-005: Bounded Outbound Calls To TypeSafe From The Lighting Belief Publisher
+
+**Status:** Draft for owner review (plan rev 5, milestone M3). Not in force
+until the owner signs the first egress record.
+
+**Decision:** The lighting belief publisher (`stack/services/lighting-publisher`,
+package `lighting_beliefs`) may make bounded outbound HTTPS calls to
+TypeSafe's System One endpoint to obtain calibrated probabilities for five
+observational questions over a house-level packet. This is the only sanctioned
+outbound path from the AI stack. It amends the sentence "No other outbound
+traffic." in `docs/ARCHITECTURE.md` (the "Home desktop app" section, around
+line 67), which was written for the desktop app's two connections and has been
+read as a stack-wide rule. The proposed replacement wording is:
+
+> No other outbound traffic from the desktop app. On the AI host, the only
+> outbound path is the lighting belief publisher's bounded calls to TypeSafe,
+> governed by ADR-005: a signed egress record, an environment flag, a Home
+> Assistant kill switch, a leak guard, and a journal.
+
+`docs/ARCHITECTURE.md` itself is edited only once the owner accepts this ADR.
+
+**Rationale:** Jev supplies narrow semantic judgments (is someone attending to
+the TV, is the house settling) with probabilities that code can threshold,
+which the deterministic generator cannot derive from occupancy alone. The
+model never generates text and never controls anything: the publisher reduces
+answers to probabilities, the generator keeps every guard, and the stories are
+proven on the offline simulator and a public-dataset ladder before household
+prose is ever sent.
+
+**Bounds:**
+
+- The packet is `lighting-beliefs-state/v1` only: per-camera coverage, zone
+  occupancy, anonymous tracks with position and posture, short fallible
+  claims, one short account, person-adjacent object labels, media role and
+  state, and a quiet age. No names, relationships, entity ids, modes, light
+  levels, presence flags, clock or absolute timestamps; free text capped at
+  240 characters; keys enforced by a recursive allow-list.
+- `leak_guard.assert_clean()` runs on every packet and blocks on any hit
+  (entity ids, `hav-*` containers, LAN addresses, JWT prefixes, model names,
+  the OS username, RTSP and HTTP URLs, digit runs, emails, ISO timestamps,
+  household names from a 0600 roster). There is no redaction helper.
+- `EgressGate` allows a call only when the egress record exists with
+  `enabled: true` and lists the scope, `TYPESAFE_EGRESS=1`, and the HA kill
+  switch mirror reads `on` and is fresher than 300 s; at most six calls a
+  minute, one in flight; every decision is journaled with its reason.
+- Scopes are added only by re-signing the record: `public_eval` (ladder level
+  1, public dataset text), then `household_shadow`, then `household_live`,
+  each with dates and call counts in the record.
+- The observer repository stays loopback-only; the publisher is the sole
+  egress point and holds no Home Assistant token.
+
+**Rollback path:** three independent rungs, any one of which stops egress:
+set `enabled: false` in the record, turn the HA kill switch off (or let its
+mirror go stale), or unset `TYPESAFE_EGRESS`. The generator's belief path is
+itself behind `input_boolean.living_lights_actuate_from_belief_changes` and
+falls back to the deterministic packages when the publisher's heartbeat goes
+stale.
+
+**Evidence:** `stack/services/lighting-publisher/README.md`,
+`stack/services/lighting-publisher/egress-record.example.json`, the gate
+matrix and leak-guard tests under `stack/services/lighting-publisher/tests/`,
+`docs/RUNBOOK.md` ("External reasoning provider", the privacy test this guard
+extends), and plan rev 5 milestone M3.

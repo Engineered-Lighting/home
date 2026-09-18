@@ -58,6 +58,32 @@ TOGGLES_OFF = ["input_boolean.living_lights_shadow", "input_boolean.living_light
 TZ = "America/Los_Angeles"
 
 
+MIN_AVAILABLE_GIB = float(__import__("os").environ.get("LL_SIM_MIN_AVAIL_GIB", "12"))
+
+
+def require_memory_headroom(min_gib: float = MIN_AVAILABLE_GIB) -> None:
+    """Refuse to start a simulator instance when the host is short of memory.
+
+    On 2026-09-17 the kernel's out-of-memory killer took down the resident
+    vLLM engine (35 GB host RSS) while several simulator instances and other
+    work ran alongside it, which stopped the observer. Each instance holds
+    about 1 GB; this guard keeps a burst of parallel runs from being the
+    straw. Override with LL_SIM_MIN_AVAIL_GIB, never below 8.
+    """
+    try:
+        for line in pathlib.Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                available = int(line.split()[1]) / (1024 * 1024)
+                break
+        else:  # pragma: no cover
+            return
+    except OSError:  # pragma: no cover
+        return
+    if available < max(min_gib, 8.0):
+        raise RuntimeError(f"host memory headroom {available:.1f} GiB is below {max(min_gib, 8.0):.0f} GiB; "
+                           "not starting a simulator instance (see harness.require_memory_headroom)")
+
+
 def load_packages(root: pathlib.Path) -> dict[str, Any]:
     """Merge every package the way Home Assistant's packages loader does for
     the domains the simulation supports (lists concatenate, dicts merge)."""
@@ -223,6 +249,7 @@ async def setup_sim(hass: HomeAssistant, packages_root: pathlib.Path,
     automations exist, so their creation is not seen as a state change: a
     person entity created as `home` would otherwise fire the return-home
     backstop 90 s into every scenario."""
+    require_memory_headroom()
     if hasattr(hass.config, "async_set_time_zone"):
         await hass.config.async_set_time_zone(TZ)
     else:  # pragma: no cover

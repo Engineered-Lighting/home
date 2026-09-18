@@ -72,6 +72,7 @@
       ]
     },
     "aggregate_light_controllers": {},
-    "sofa_gradient_keys": {}
+    "sofa_gradient_keys": {},
+    "ambient_lights": []
   }
 }

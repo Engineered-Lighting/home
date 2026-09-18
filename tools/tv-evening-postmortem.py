@@ -115,12 +115,28 @@ UNATTENDED = "UNATTENDED"
 
 # Mirrors ZONE_CAMERA in tools/build-living-lights-actuators.py: the entity ids
 # the observability package generates are "<camera>_<zone>_<suffix>".
-ZONE_CAMERA = {
-    "dining_left": "dining_room", "dining_right": "dining_room",
-    "sink": "kitchen", "island_left": "kitchen", "island_right": "kitchen",
-    "sofa": "living_room", "front_left": "living_room", "weights": "living_room",
-    "office": "living_room", "front_door": "living_room",
-}
+def _house():
+    """The one house file (tools/house.py), shared with the generators.
+
+    This tool used to keep its own copy of the zone map. So did the simulator,
+    the replay tool and the other post-mortem: five copies, hand-synchronised,
+    with nothing checking they agreed. A zone that drifted between them did not
+    fail; it produced a report about a house that does not exist.
+    """
+    import importlib.util
+    import pathlib as _p
+    here = _p.Path(__file__).resolve().parent
+    root = here if (here / "house.py").exists() else here.parent
+    spec = importlib.util.spec_from_file_location("_ll_house", str(root / "house.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_HOUSE = _house()
+
+
+ZONE_CAMERA = dict(_HOUSE.ZONE_CAMERA)
 
 
 def _load_module(name, path):

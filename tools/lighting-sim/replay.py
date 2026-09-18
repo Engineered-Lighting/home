@@ -69,13 +69,28 @@ EVENING_END_HOUR = 1     # next day
 # not cover it (the observer runs in sessions; a missed edge would otherwise
 # read as "no change").
 MEMORY_GAP_S = 30 * 60
-ZONE_CAMERA = {
-    "dining_left": "dining_room", "dining_right": "dining_room", "whole_dining_room": "dining_room",
-    "sink": "kitchen", "island_left": "kitchen", "island_right": "kitchen", "whole_kitchen": "kitchen",
-    "sofa": "living_room", "front_left": "living_room", "weights": "living_room", "office": "living_room",
-    "front_door": "living_room", "whole_living_room": "living_room",
-    "workshop_zone": "workshop", "e28": "driveway",
-}
+def _house():
+    """The one house file (tools/house.py), shared with the generators.
+
+    This tool used to keep its own copy of the zone map. So did the simulator,
+    the replay tool and the other post-mortem: five copies, hand-synchronised,
+    with nothing checking they agreed. A zone that drifted between them did not
+    fail; it produced a report about a house that does not exist.
+    """
+    import importlib.util
+    import pathlib as _p
+    here = _p.Path(__file__).resolve().parent
+    root = here if (here / "house.py").exists() else here.parent
+    spec = importlib.util.spec_from_file_location("_ll_house", str(root / "house.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_HOUSE = _house()
+
+
+ZONE_CAMERA = dict(_HOUSE.ZONE_CAMERA)
 OCCUPIED_STATES = {"present", "pass_through"}
 TV = "media_player.lg_tv"
 ASLEEP = "input_boolean.living_lights_asleep"

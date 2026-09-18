@@ -65,21 +65,34 @@ from typing import Any, Callable, Iterable
 
 TV_OFF_STATES = ("off", "standby", "unavailable", "unknown")
 TV_WATCHING = "binary_sensor.living_lights_tv_watching"
-TV_ENTITY = "media_player.lg_tv"
-SOFA = "binary_sensor.sofa_person_occupancy"
+def _house():
+    """The one house file, shared with the generators (tools/house.py).
+
+    This module used to hold its own copy of the zone map and the light list.
+    So did the harness, the replay tool and both post-mortems: five copies,
+    hand-synchronised, with nothing checking they agreed. A zone that drifted
+    between them did not fail; it produced a report about a house that does
+    not exist.
+    """
+    import importlib.util
+    import pathlib as _p
+    spec = importlib.util.spec_from_file_location(
+        "_ll_house", str(_p.Path(__file__).resolve().parents[1] / "house.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_HOUSE = _house()
+
+
+TV_ENTITY = _HOUSE.TV_ENTITY
+SOFA = _HOUSE.SOFA_OCCUPANCY
 ROUTE_HELPER = "input_number.living_lights_tv_route_pct"
 DEFAULT_ROUTE_PCT = 30
-LIVING_ROOM_LIGHTS = ("light.office", "light.front_left", "light.front_right", "light.rear_left",
-                      "light.rear_right", "light.living_room_lights")
-ZONE_LIGHTS = {   # from the pilots' "Actuates [...]" lines; zones without a pilot drive no light
-    "dining_left": ["light.dining_table_left"], "dining_right": ["light.dining_table_right"],
-    "front_door": ["light.front_right"], "front_left": ["light.front_left"],
-    "island_left": ["light.island_left"], "island_right": ["light.island_right"],
-    "office": ["light.office"], "sink": ["light.sink"],
-    "sofa": ["light.front_left", "light.front_right", "light.rear_left", "light.rear_right"],
-    "weights": ["light.front_right", "light.rear_right"],
-}
-LIVING_ROOM_ZONES = ("sofa", "front_left", "weights", "office", "front_door", "whole_living_room")
+LIVING_ROOM_LIGHTS = _HOUSE.LIVING_ROOM_LIGHTS
+ZONE_LIGHTS = {z: list(v) for z, v in _HOUSE.ZONE_LIGHTS.items()}
+LIVING_ROOM_ZONES = _HOUSE.LIVING_ROOM_ZONES
 ERRAND_ZONES = tuple(z for z in ZONE_LIGHTS if z not in LIVING_ROOM_ZONES)
 FLICKER_WINDOW_S = 120
 ROUTE_SLACK_S = 150

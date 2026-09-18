@@ -299,6 +299,11 @@
       "light.front_right": "front_right_pct",
       "light.rear_left": "rear_left_pct",
       "light.rear_right": "rear_right_pct"
-    }
+    },
+    "ambient_lights": [
+      "light.ambient_light_left_mss110_main_channel",
+      "light.ambient_light_right_mss110_main_channel",
+      "light.outdoor_light"
+    ]
   }
 }

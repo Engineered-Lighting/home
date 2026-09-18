@@ -172,3 +172,42 @@ class TheHouseFileIsValidated(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NoToolKeepsItsOwnCopy(unittest.TestCase):
+    """Five files used to hold the same zone map, hand-synchronised.
+
+    Nothing checked they agreed, and a zone that drifted between them did not
+    fail: it produced a report about a house that does not exist. They all read
+    ``tools/house.py`` now, and this test is what stops a copy coming back.
+    """
+
+    CONSUMERS = (
+        "tools/lighting-sim/harness.py",
+        "tools/lighting-sim/analyze_evening.py",
+        "tools/lighting-sim/replay.py",
+        "tools/tv-evening-postmortem.py",
+        "tools/night-postmortem-join.py",
+        "tools/build-living-lights-actuators.py",
+    )
+
+    def test_none_of_them_names_a_zone_of_this_house(self):
+        zones = json.loads(LA_HOUSE.read_text())["zones"]
+        for name in self.CONSUMERS:
+            text = (REPO / name).read_text(encoding="utf-8")
+            for zone in zones:
+                with self.subTest(tool=name, zone=zone):
+                    self.assertNotRegex(
+                        text, r'^\s+[\'"]' + re.escape(zone) + r'[\'"]\s*:',
+                        f"{name} has its own copy of the zone map again")
+
+    def test_they_all_read_the_shared_house(self):
+        """Either directly through tools/house.py, or through the generator
+        that loads the same file. What matters is that none of them holds the
+        building itself."""
+        for name in self.CONSUMERS:
+            text = (REPO / name).read_text(encoding="utf-8")
+            with self.subTest(tool=name):
+                self.assertTrue(
+                    "house.py" in text or "build-living-lights-yaml.py" in text,
+                    f"{name} does not read the shared house from anywhere")

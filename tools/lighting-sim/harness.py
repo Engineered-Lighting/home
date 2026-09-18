@@ -26,19 +26,30 @@ from pytest_homeassistant_custom_component.common import async_fire_time_changed
 SKIP_DOMAINS = {"mqtt", "shell_command", "adaptive_lighting", "logger", "sensor", "rest", "homeassistant"}
 SETUP_ORDER = ["input_boolean", "input_number", "input_text", "input_datetime", "input_select",
                "template", "script", "automation"]
-ZONE_CAMERA = {
-    "dining_left": "dining_room", "dining_right": "dining_room", "whole_dining_room": "dining_room",
-    "sink": "kitchen", "island_left": "kitchen", "island_right": "kitchen", "whole_kitchen": "kitchen",
-    "sofa": "living_room", "front_left": "living_room", "weights": "living_room", "office": "living_room",
-    "front_door": "living_room", "whole_living_room": "living_room",
-    "workshop_zone": "workshop", "e28": "driveway",
-}
+def _house():
+    """The one house file, shared with the generators (tools/house.py).
+
+    This module used to hold its own copy of the zone map and the light list.
+    So did the harness, the replay tool and both post-mortems: five copies,
+    hand-synchronised, with nothing checking they agreed. A zone that drifted
+    between them did not fail; it produced a report about a house that does
+    not exist.
+    """
+    import importlib.util
+    import pathlib as _p
+    spec = importlib.util.spec_from_file_location(
+        "_ll_house", str(_p.Path(__file__).resolve().parents[1] / "house.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_HOUSE = _house()
+
+
+ZONE_CAMERA = dict(_HOUSE.ZONE_CAMERA)
 CAMERAS = sorted(set(ZONE_CAMERA.values()))
-LIGHTS = ["light.office", "light.front_left", "light.front_right", "light.rear_left", "light.rear_right",
-          "light.sink", "light.island_left", "light.island_right", "light.dining_table_left",
-          "light.dining_table_right", "light.living_room_lights", "light.kitchen_lights", "light.kitchen",
-          "light.dining_room_lights", "light.dining_room", "light.outdoor_light",
-          "light.ambient_light_left_mss110_main_channel", "light.ambient_light_right_mss110_main_channel"]
+LIGHTS = list(_HOUSE.EVERY_LIGHT)
 MOCKED_SERVICES = [("logbook", "log"), ("conversation", "process"), ("assist_satellite", "announce"),
                    ("media_player", "media_pause"), ("mqtt", "publish"),
                    ("notify", "notify"), ("notify", "mobile_app_iphone"), ("homeassistant", "update_entity")]
